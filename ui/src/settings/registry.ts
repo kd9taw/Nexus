@@ -216,7 +216,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     neededInHourOne: true,
     keywords: ['sound card', 'soundcard', 'audio device', 'input', 'output', 'codec', 'mic',
       'microphone', 'speaker', 'usb audio', 'cm108', 'dax', 'tx level', 'rx gain', 'drive',
-      'alc', 'power', 'levels'],
+      'alc', 'power', 'levels', 'pc mic', 'computer microphone'],
   },
   {
     id: 'headphone-monitor',

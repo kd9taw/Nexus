@@ -174,6 +174,25 @@ pub const TCI_OVER: MicMode = MicMode {
 
 const _: () = assert!(TCI_OVER.max_push_ms <= TCI_OVER.ahead_ms);
 
+/// The station computer's own microphone, fed to the radio while the operator holds Phone's PTT
+/// (`engine/pc_mic.rs`): the same machinery with a sound card's numbers. Everything is the browser
+/// microphone's but the gap: 300 ms against 200, because a capture device delivers its audio in
+/// blocks of up to 100 ms ([`MicMode::gap_ms`] must outlast one late block, never two). A device
+/// that the OS reports dead ends the over on the tick it is reported, not after the gap.
+pub const PC_MIC: MicMode = MicMode {
+    name: "Computer microphone",
+    max_latch_ms: 10 * 60 * 1000,
+    gap_ms: 300,
+    lead_in_ms: 60,
+    ahead_ms: 40,
+    max_push_ms: 40,
+    rate_hz: 12_000,
+    feed_cap: 25,
+    max_early_ms: 500,
+};
+
+const _: () = assert!(PC_MIC.max_push_ms <= PC_MIC.ahead_ms);
+
 /// One decoded frame of the page's microphone.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MicFrame {

@@ -1150,6 +1150,9 @@ pub struct CpalBackend {
     /// progress. `None` = no mic stream (recordings read the shared input). Opening /
     /// closing it never touches the main capture/TX streams.
     voice_mic: Option<CaptureStream>,
+    /// The computer's microphone for Phone, opened via [`AudioBackend::set_pc_mic`] only while
+    /// its over is armed or keyed. Never touches the main capture/TX streams.
+    pc_mic: Option<PcMicStream>,
     /// Optional TX-audio tee (Flex native DAX): when set it REPLACES the sound card as the route
     /// for transmit audio — [`Self::play`] hands the 12 kHz samples to the tee and queues nothing.
     /// See [`crate::backend::TxTee`] for why it is exclusive rather than parallel.
@@ -1521,9 +1524,11 @@ fn build_voice_stream<T: DeviceSample + Send + 'static>(
     cfg: &cpal::SupportedStreamConfig,
     ch: usize,
     ring: &Arc<Mutex<VecDeque<f32>>>,
+    err: impl FnMut(cpal::Error) + Clone + Send + 'static,
 ) -> Result<Stream, String> {
     open_capture_with_fallback(capture_config(cfg), |cfg_out| {
         let ring_cb = ring.clone();
+        let err = err.clone();
         dev.build_input_stream(
             cfg_out,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
@@ -1532,7 +1537,7 @@ fn build_voice_stream<T: DeviceSample + Send + 'static>(
                     r.push_back(frame.iter().map(|&s| s.to_unit()).sum::<f32>() / ch as f32);
                 }
             },
-            err_fn,
+            err,
             None,
         )
     })
@@ -1561,7 +1566,8 @@ impl CaptureStream {
             &dev,
             &cfg,
             ch.max(1),
-            &ring
+            &ring,
+            err_fn
         )?;
         stream.play().map_err(|e| e.to_string())?;
         Ok(Self {
@@ -1580,6 +1586,80 @@ impl CaptureStream {
             ring.drain(..).collect()
         };
         resample_linear(&dev, self.rate, MODEM_RATE)
+    }
+}
+
+/// The computer's microphone for Phone (`tempo_app::engine::pc_mic`): a named mono capture
+/// stream, open only while an over is armed or keyed. Unlike [`CaptureStream`] it says when the OS
+/// kills it (the device unplugged, its driver stopped it), because the over it feeds must unkey on
+/// that tick, and it resamples through the stateful anti-aliased [`CaptureResampler`]: this is
+/// audio on the air, not a recording.
+pub(crate) struct PcMicStream {
+    _stream: Stream,
+    ring: Arc<Mutex<VecDeque<f32>>>,
+    resampler: CaptureResampler,
+    /// What the OS said when it killed the stream; `None` while it lives.
+    dead: Arc<Mutex<Option<String>>>,
+    device: String,
+}
+
+impl PcMicStream {
+    /// Open the named input device. The caller MUST already hold [`AUDIO_HOST_LOCK`]. Never the
+    /// system default: a missing named device is an `Err`, because on a radio station the default
+    /// input is often the radio's own receive audio, and putting that on the air is no microphone.
+    pub(crate) fn open(name: &str) -> Result<Self, String> {
+        let host = cpal::default_host();
+        let dev = pick_device(host.input_devices().ok(), Some(name), None)
+            .ok_or_else(|| format!("microphone {name:?} not found"))?;
+        let cfg = dev.default_input_config().map_err(|e| e.to_string())?;
+        let rate = cfg.sample_rate();
+        let ch = cfg.channels() as usize;
+        let ring = Arc::new(Mutex::new(VecDeque::<f32>::new()));
+        let dead = Arc::new(Mutex::new(None::<String>));
+        let slot = dead.clone();
+        // A lost-samples report (`Xrun`) is a glitch the stream lives through, never a death.
+        let err = move |e: cpal::Error| {
+            if e.kind() == cpal::ErrorKind::Xrun {
+                return;
+            }
+            let mut held = slot.lock().unwrap_or_else(|p| p.into_inner());
+            if held.is_none() {
+                tempo_core::applog::error("audio", &format!("microphone stream: {e}"));
+                *held = Some(e.to_string());
+            }
+        };
+        let stream = dispatch_format!(
+            cfg.sample_format(),
+            build_voice_stream,
+            "microphone input",
+            &dev,
+            &cfg,
+            ch.max(1),
+            &ring,
+            err
+        )?;
+        stream.play().map_err(|e| e.to_string())?;
+        Ok(Self {
+            _stream: stream,
+            ring,
+            resampler: CaptureResampler::new(rate, MODEM_RATE),
+            dead,
+            device: name.to_string(),
+        })
+    }
+
+    /// What the microphone delivered since the last call, at 12 kHz mono, or `Err` once the OS
+    /// has killed the stream.
+    pub(crate) fn drain(&mut self) -> Result<Vec<f32>, String> {
+        let dead = self.dead.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(why) = dead {
+            return Err(why);
+        }
+        let dev: Vec<f32> = {
+            let mut ring = self.ring.lock().unwrap_or_else(|e| e.into_inner());
+            ring.drain(..).collect()
+        };
+        Ok(self.resampler.process(&dev))
     }
 }
 
@@ -1781,6 +1861,7 @@ impl CpalBackend {
             capture_input,
             in_rate,
             voice_mic: None,
+            pc_mic: None,
             tx_tee: None,
             health_seen: audio_health(),
             tx_pending: VecDeque::new(),
@@ -2211,6 +2292,7 @@ impl AudioBackend for CpalBackend {
         let _host_guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         self.monitor.release_locked();
         self.voice_mic = None;
+        self.pc_mic = None;
         self._in_stream = None;
         // Both halves of the TX output go: the running stream AND the deferred device handle.
         // (On cpal 0.18 the ALSA `Device` holds no PCM at all — see `TxOutput` — but the handle is
@@ -2407,6 +2489,36 @@ impl AudioBackend for CpalBackend {
             .as_ref()
             .map(CaptureStream::drain)
             .unwrap_or_default()
+    }
+
+    /// Open (`Some(name)`) or close (`None`) the computer's microphone, under [`AUDIO_HOST_LOCK`]
+    /// like every cpal entry point. A second open on the same device is a no-op.
+    fn set_pc_mic(&mut self, device: Option<&str>) -> Result<(), String> {
+        match device.map(str::trim).filter(|d| !d.is_empty()) {
+            None => {
+                if self.pc_mic.is_some() {
+                    let _guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                    self.pc_mic = None;
+                }
+                Ok(())
+            }
+            Some(name) => {
+                if self.pc_mic.as_ref().is_some_and(|m| m.device == name) {
+                    return Ok(());
+                }
+                let _guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+                self.pc_mic = None;
+                self.pc_mic = Some(PcMicStream::open(name)?);
+                Ok(())
+            }
+        }
+    }
+
+    fn pc_mic_capture(&mut self) -> Result<Vec<f32>, String> {
+        match self.pc_mic.as_mut() {
+            Some(m) => m.drain(),
+            None => Ok(Vec::new()),
+        }
     }
 }
 

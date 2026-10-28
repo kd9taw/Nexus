@@ -8172,6 +8172,19 @@ export const EN = {
   'settings.audio.rxGain.aria': 'RX capture gain',
   'settings.audio.rxGain.hint':
     'Boost a quiet interface until RX Level reads around 30 dB — the meter responds as you release the slider. Leave at ×1.0 unless the meter reads low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much.',
+  // The computer microphone for Phone, per radio (crates/tempo-app/src/engine/pc_mic.rs).
+  'settings.audio.pcMic.title': 'Computer microphone (Phone)',
+  'settings.audio.pcMic.label': 'Use this computer\'s microphone',
+  'settings.audio.pcMic.hint':
+    'On: while you hold PTT in Phone, Nexus sends this computer\'s microphone to this radio through its transmit audio (the output device above, or TCI audio on a TCI radio) and keys the radio for computer audio. Off (the default): PTT keys the radio\'s own microphone, as before. Phone only; the digital modes never use it. Releasing PTT, Stop TX or TX Off cuts it at once.',
+  'settings.audio.pcMic.device.label': 'Microphone',
+  'settings.audio.pcMic.device.none': 'Choose a microphone…',
+  'settings.audio.pcMic.device.hint':
+    'Never the system default, and never this radio\'s receive input. If the microphone goes away during an over, the radio unkeys.',
+  'settings.audio.pcMic.gain.label': 'Microphone gain',
+  'settings.audio.pcMic.gain.value': '{{db}} dB',
+  'settings.audio.pcMic.gain.hint':
+    'Set it so your voice drives the radio without ALC on the peaks. Your voice is not played back to you.',
   // Under BOTH sliders above, in place of their own hints, while the form edits a radio that is not
   // the one in use: the sliders then set that radio's stored levels and act on nothing live, so
   // "the SAME control as the cockpit Pwr" and "the meter responds" are not true there. `{{radio}}`
@@ -13218,6 +13231,22 @@ export const EN = {
   'shell.lane.pttRefused.message': 'PTT REFUSED',
   'shell.lane.pttRefused.detail':
     'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
+  // A computer-microphone over that ended, or never keyed, for a reason the operator did not
+  // choose (features/pcMic.ts). `{{why}}` is one of the sentences after it.
+  'shell.lane.pcMic.message': 'COMPUTER MIC',
+  'shell.lane.pcMic.detail': 'At {{time}} UTC: {{why}}',
+  'shell.lane.pcMic.noDevice':
+    'no microphone is chosen for this radio, so nothing was sent. Choose one in Settings ▸ Radio ▸ Audio.',
+  'shell.lane.pcMic.sameAsReceive':
+    'the chosen microphone is this radio\'s receive input, so nothing was sent: that would put the band back on the air. Choose your microphone in Settings ▸ Radio ▸ Audio.',
+  'shell.lane.pcMic.openFailed':
+    'the microphone would not open, so nothing was sent. Check that it is plugged in and not held by another program.',
+  'shell.lane.pcMic.deviceLost':
+    'the microphone went away during the over, so Nexus unkeyed the radio.',
+  'shell.lane.pcMic.noAudio': 'no audio came from the microphone, so Nexus unkeyed the radio.',
+  'shell.lane.pcMic.ceiling': 'the over reached its 10-minute limit, so Nexus unkeyed the radio.',
+  'shell.lane.pcMic.watchdog':
+    'the TX watchdog tripped, so Nexus unkeyed the radio and turned TX off.',
   // A voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone at the
   // shack, native audio on): the radio did not switch its transmit audio to DAX within 2 seconds,
   // or something else keyed it first. Never played later; the next message the keyer accepts
