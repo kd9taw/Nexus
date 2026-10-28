@@ -544,7 +544,7 @@ describe('the band board colours itself, and shouts when two positions collide',
   })
 })
 
-describe("the torn-off board lists the host's club log too", () => {
+describe("the torn-off board lists the club log too", () => {
   const LOG: FdClubLog = {
     total: 2,
     rows: [
@@ -568,16 +568,18 @@ describe("the torn-off board lists the host's club log too", () => {
     expect(rows.map((r) => r.classList.contains('dupe'))).toEqual([true, false])
   })
 
-  it('on a joined laptop, none: it holds no rows, and never asks for them', async () => {
-    vi.mocked(fdClubLogNewest).mockClear()
+  it('on a joined laptop, the same list, as the host sent it', async () => {
+    vi.mocked(fdClubLogNewest).mockResolvedValue(LOG)
     mockedSubscribe.mockImplementation((cb: (s: AppSnapshot) => void) => {
       cb(snapWithClub({ ...CLUB, hosting: false } as FdClubStatus))
       return () => {}
     })
     render(<DetachedPanel panel="fdclub" />)
     await settle()
-    expect(screen.getByLabelText('Club sync')).toBeTruthy()
-    expect(screen.queryByRole('region', { name: 'Club log' })).toBeNull()
-    expect(fdClubLogNewest).not.toHaveBeenCalled()
+    const list = screen.getByRole('region', { name: 'Club log' })
+    expect(screen.getByLabelText('Club sync').contains(list)).toBe(true)
+    const rows = Array.from(list.querySelectorAll('.fd-log-row'))
+    expect(rows.map((r) => r.querySelector('.fd-col.pos')?.textContent)).toEqual(['GOTA tent', 'CW tent'])
+    expect(rows.map((r) => r.classList.contains('dupe'))).toEqual([true, false])
   })
 })

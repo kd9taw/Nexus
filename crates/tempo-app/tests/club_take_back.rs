@@ -643,11 +643,11 @@ fn a_position_away_when_it_takes_back_catches_the_club_up_when_it_returns() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// ⭐ **An older Nexus is turned away in words** by a v4 host, and its contacts never reach the
+/// ⭐ **An older Nexus is turned away in words** by a current host, and its contacts never reach the
 /// club. The lines are the bytes those builds write: a v3 test build's JOIN (it proves its
 /// position with a key, and cannot take a contact back) and 1.17.0's (v2: no contest, no
-/// role, no key). The other direction — a v4 position at an older host — is
-/// `fdsync::tests::a_v4_position_joining_an_older_host_gets_that_hosts_refusal_verbatim`.
+/// role, no key). The other direction — a current position at an older host — is
+/// `fdsync::tests::a_v5_position_joining_an_older_host_gets_that_hosts_refusal_verbatim`.
 #[test]
 fn an_older_nexus_is_turned_away_in_words_and_sends_nothing_into_the_club() {
     let (dir, path) = journal("older");
@@ -671,8 +671,10 @@ fn an_older_nexus_is_turned_away_in_words_and_sends_nothing_into_the_club() {
         });
         let said = said.unwrap_or_else(|| panic!("v{v}: no words: {got:?}"));
         assert!(
-            said.contains("needs club sync v4 on every laptop")
-                && said.contains(&format!("this Nexus speaks v{v}"))
+            said.contains(&format!(
+                "needs club sync v{} on every laptop",
+                fdsync::PROTO_VERSION
+            )) && said.contains(&format!("this Nexus speaks v{v}"))
                 && said.contains("Update Nexus on this laptop"),
             "v{v}: {said}"
         );
@@ -687,7 +689,7 @@ fn an_older_nexus_is_turned_away_in_words_and_sends_nothing_into_the_club() {
     let ok = raw_peer(&host.addr, &[join_line("ffff0008")], 600);
     assert!(
         ok.iter()
-            .any(|m| matches!(m, fdsync::Msg::Welcome { v: 4, .. })),
+            .any(|m| matches!(m, fdsync::Msg::Welcome { v, .. } if *v == fdsync::PROTO_VERSION)),
         "{ok:?}"
     );
     host.stop();

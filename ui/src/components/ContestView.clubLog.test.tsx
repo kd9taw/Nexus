@@ -6,9 +6,10 @@
 // `fd_club_log_newest`), newest first, each with the position that logged it, and marks a duplicate
 // exactly as this station's own log marks one: the same row, its `dupe` class and its title.
 //
-// The host's alone: a joined laptop holds the club's counts and keys, never its rows, so its club
-// block lists nothing and never asks; and the Remote page's contest view (an observation) neither
-// shows the list nor asks for it. That the list IS the club's files is the engine's property test
+// And on every joined laptop, N3FJP's networked model, where every station sees the combined log: the
+// host sends each laptop the same list over club sync, and the laptop's engine answers it, so its club
+// block lists it the same way, view only, under a tooltip that says where the list comes from. The
+// Remote page's contest view (an observation) neither shows the list nor asks for it. That the list IS the club's files is the engine's property test
 // (`engine::club_log_tests`); here the screen renders what the engine answered, as it answered it.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, act, within } from '@testing-library/react'
@@ -212,12 +213,35 @@ describe("the club log on the host's own screen", () => {
     expect(readLog.mock.calls.length).toBeGreaterThan(before)
   })
 
-  it("is the host's alone: a joined laptop's club block lists nothing and never asks", async () => {
+  it("is on every joined laptop too: the same list, as the host sent it, view only", async () => {
+    render(<ContestView fieldDay={fd({ ...HOST, hosting: false })} onSetMode={() => {}} />)
+    await settle()
+    const list = clubLog()
+    expect(list).not.toBeNull()
+    expect(readLog).toHaveBeenCalled()
+    const rows = Array.from(list!.querySelectorAll('.fd-log-row'))
+    expect(rows.map((r) => cells(r, 'call'))).toEqual(['W2DEF', 'K1ABC', 'N0XYZ', 'K1ABC', 'W1AW'])
+    expect(rows.map((r) => cells(r, 'pos'))).toEqual(['CW tent', 'SSB tent', 'SSB tent', 'CW tent', 'HQ'])
+    expect(rows.map((r) => r.classList.contains('dupe'))).toEqual([false, true, false, false, false])
+    // Nothing on a row is pressed: view only.
+    expect(list!.querySelectorAll('button')).toHaveLength(0)
+    // The tooltip says the list is the host's, sent to every laptop; the host's own says this host.
+    const head = within(list as HTMLElement).getByText('Club log').parentElement!
+    expect(head.getAttribute('title')).toContain('The host sends this list to every laptop')
+    expect(head.getAttribute('title')).toContain('View only')
+    cleanup()
+    render(<ContestView fieldDay={fd(HOST)} onSetMode={() => {}} />)
+    await settle()
+    const own = within(clubLog()!).getByText('Club log').parentElement!
+    expect(own.getAttribute('title')).toContain('as this host merged them')
+  })
+
+  it('shows nothing on a joined laptop the host has sent no list yet', async () => {
+    readLog.mockResolvedValue(null)
     render(<ContestView fieldDay={fd({ ...HOST, hosting: false })} onSetMode={() => {}} />)
     await settle()
     expect(screen.getByLabelText('Club sync')).toBeTruthy()
     expect(clubLog()).toBeNull()
-    expect(readLog).not.toHaveBeenCalled()
   })
 
   it("is not on Remote: the Remote page's contest view neither shows the club log nor asks for it", async () => {

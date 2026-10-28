@@ -381,6 +381,11 @@ a club sync worked.*
 
 - Each logged contact streams to the host the moment it lands; the host merges
   everything into one club log and pushes the club totals back.
+- Every laptop shows the **club log**: the club's contacts, newest first, with
+  the position that logged each and another position's repeat marked as a dupe,
+  the same list the host shows, updated as contacts reach the host. A laptop
+  back from a dropout catches up as it rejoins. It is view only: each laptop
+  takes back only its own contacts.
 - Every position gets a **club dupe warning while typing** — if another tent
   already worked that call on this band and mode (and, at a QSO party, from
   the county you have typed), you're told before you call. It's a warning, not

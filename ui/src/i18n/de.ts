@@ -5637,6 +5637,7 @@ export const DE: PartialCatalog = {
   "fieldDay.club.board.heard.never": "(seit dem Start dieses Nexus nicht gehört)",
   "fieldDay.club.log.head": "Log des Clubs",
   "fieldDay.club.log.title": "Die Kontakte aller Positionen, wie dieser Host sie zusammengeführt hat, die neuesten zuerst, mit der Position, die jeden geloggt hat: das Log des Clubs, aus dem Club-ADIF und Club-Cabrillo geschrieben werden. Ein Dupe ist markiert wie in Ihrem eigenen Log. Ein langer Contest listet nur seine neuesten Kontakte, damit dieser Bildschirm nie langsamer wird; jeder Kontakt steht in den Dateien des Clubs.",
+  "fieldDay.club.log.title.joined": "Die Kontakte aller Positionen, wie der Host des Clubs sie zusammengeführt hat, die neuesten zuerst, mit der Position, die jeden geloggt hat: das Log des Clubs, aus dem der Host Club-ADIF und Club-Cabrillo schreibt. Der Host sendet diese Liste an jeden Laptop, sie ändert sich hier also, sobald Kontakte beim Host ankommen. Ein Dupe ist markiert wie in Ihrem eigenen Log. Nur zur Ansicht: Sie nehmen nur Ihre eigenen Kontakte zurück, aus Ihrem eigenen Log. Ein langer Contest listet nur seine neuesten Kontakte; jeder Kontakt steht in den Dateien des Clubs auf dem Host.",
   "fieldDay.club.log.count": { "one": "{{count}} Kontakt", "other": "{{count}} Kontakte" },
   "fieldDay.club.log.newest": "die neuesten {{shown}} von {{total}} Kontakten",
   "fieldDay.club.log.empty": "Noch keine Kontakte im Log des Clubs.",

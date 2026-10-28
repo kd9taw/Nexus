@@ -3410,6 +3410,13 @@ pub struct Engine {
     /// itself over its loopback self-connection, so every role reads club
     /// state the same way). Meaningful only while sync is configured.
     fd_mirror: crate::fdevent::ClubMirror,
+    /// The club list every connection is sent, built once per change
+    /// ([`Self::fd_club_list`]): the club log's stamp and the received slots it was read under.
+    fd_club_list_cache: Option<(
+        u64,
+        &'static [&'static str],
+        std::sync::Arc<tempo_net::fdsync::ClubListView>,
+    )>,
     /// ⭐ **The contest log the mode left, kept for club sync, and when it left it**
     /// ([`Self::fd_sync_log`]).
     ///
@@ -6615,6 +6622,7 @@ impl Engine {
             mode: Mode::Chat,
             fd_club: None,
             fd_mirror: crate::fdevent::ClubMirror::default(),
+            fd_club_list_cache: None,
             fd_left_log: None,
             fd_link_gen: 0,
             fd_host_lan: Vec::new(),
@@ -15621,7 +15629,7 @@ impl Engine {
         self.fd_club.as_ref()
     }
 
-    /// ⭐ **The host's club log, as its own screen lists it** — the newest
+    /// ⭐ **The club log, as the contest screen lists it** — the newest
     /// [`CLUB_LOG_SHOWN`](crate::fdevent::CLUB_LOG_SHOWN) of the club's merged contacts, newest
     /// first ([`crate::fdevent::ClubLog::newest`]), each with the position that logged it, named as
     /// the host's board names it, and whether it is a duplicate, beside how many the club holds.
@@ -15630,26 +15638,109 @@ impl Engine {
     /// dedupe every snapshot's board already runs ([`crate::fdevent::ClubLog::board_rows`]) and a
     /// sort of the rows by time.
     ///
-    /// `None` unless this Nexus is hosting: a joined position holds the club's counts and keys,
-    /// never its rows ([`crate::fdevent::ClubMirror`]).
+    /// ⭐ **On a joined laptop, the same list as the host sent it** ([`Self::fd_club_list`] there,
+    /// `ClubMirror::list` here), so every laptop lists exactly what the host lists. `None` while
+    /// this Nexus neither hosts nor has been sent one.
     ///
-    /// ⛔ The host's own screens only: no Remote query or operation reads it, and none of it rides
-    /// the snapshot, the club line every position is sent or the TV board.
+    /// ⛔ The station's own screens only: no Remote query or operation reads it, and none of it
+    /// rides the snapshot or the TV board.
     pub fn fd_club_log_newest(&self) -> Option<crate::dto::FdClubLogDto> {
-        let club = self.fd_club.as_ref()?;
-        // The log table's columns: Field Day's class and section, and for any other contest one
-        // per received slot of the club's session, as the screen's own log has. A session Settings
-        // can no longer build (the export names why) leaves those columns blank, not guessed.
-        let receives: &[&str] = match club.field_day_event() {
+        let Some(club) = self.fd_club.as_ref() else {
+            let list = self.fd_mirror.list.as_ref()?;
+            return Some(crate::dto::FdClubLogDto {
+                total: list.total,
+                rows: list
+                    .rows
+                    .iter()
+                    .map(|r| crate::dto::FdClubLogRow {
+                        call: r.call.clone(),
+                        class: r.class.clone(),
+                        section: r.sect.clone(),
+                        rcvd: r.rcvd.clone(),
+                        band: r.band.clone(),
+                        mode: r.mode.clone(),
+                        submode: r.sub.clone(),
+                        when_unix: r.when,
+                        posid: r.pos.clone(),
+                        seq: r.seq,
+                        pos_name: r.name.clone(),
+                        dupe: r.dupe,
+                    })
+                    .collect(),
+            });
+        };
+        let receives = self.fd_club_receives(club);
+        Some(crate::dto::FdClubLogDto {
+            total: club.qsos_raw(),
+            rows: Self::fd_club_log_rows(club, receives)
+                .into_iter()
+                .map(|(_, row)| row)
+                .collect(),
+        })
+    }
+
+    /// ⭐ **The club list every connection is sent** (`fdsync::ClubBackend::club_list`): the host's
+    /// own list ([`Self::fd_club_log_newest`]) on the wire, each row with its merge order. Built
+    /// once per change of the club log or of the slots it is read under, and handed out again
+    /// while it stands, so twenty laptops asking at every tick cost one build. Empty, under a
+    /// stamp of its own, while this Nexus hosts no club.
+    pub fn fd_club_list(&mut self) -> std::sync::Arc<tempo_net::fdsync::ClubListView> {
+        let Some(club) = self.fd_club.as_ref() else {
+            return std::sync::Arc::default();
+        };
+        let (stamp, receives) = (club.list_stamp(), self.fd_club_receives(club));
+        if let Some((s, r, view)) = &self.fd_club_list_cache {
+            if *s == stamp && *r == receives {
+                return view.clone();
+            }
+        }
+        let view = std::sync::Arc::new(tempo_net::fdsync::ClubListView {
+            stamp: crate::fdevent::next_list_stamp(),
+            total: club.qsos_raw(),
+            rows: Self::fd_club_log_rows(club, receives)
+                .into_iter()
+                .map(|(ord, r)| tempo_net::fdsync::WireLogRow {
+                    pos: r.posid,
+                    seq: r.seq,
+                    ord,
+                    call: r.call,
+                    class: r.class,
+                    sect: r.section,
+                    rcvd: r.rcvd,
+                    band: r.band,
+                    mode: r.mode,
+                    sub: r.submode,
+                    when: r.when_unix,
+                    name: r.pos_name,
+                    dupe: r.dupe,
+                })
+                .collect(),
+        });
+        self.fd_club_list_cache = Some((stamp, receives, view.clone()));
+        view
+    }
+
+    /// The received slots the club list's columns are read under: none for Field Day (its two ride
+    /// `class` and `section`), and for any other contest one per received slot of the club's
+    /// session, as the screen's own log has. A session Settings can no longer build (the export
+    /// names why) leaves those columns blank, not guessed.
+    fn fd_club_receives(&self, club: &crate::fdevent::ClubLog) -> &'static [&'static str] {
+        match club.field_day_event() {
             Some(_) => &[],
             None => self
                 .fd_club_session(club)
                 .map(|session| session.role().receives)
                 .unwrap_or(&[]),
-        };
+        }
+    }
+
+    /// The club list's rows, newest first, each with its merge order ([`Self::fd_club_log_newest`]).
+    fn fd_club_log_rows(
+        club: &crate::fdevent::ClubLog,
+        receives: &[&str],
+    ) -> Vec<(u64, crate::dto::FdClubLogRow)> {
         let shown = club.shown_names();
-        let rows = club
-            .newest(crate::fdevent::CLUB_LOG_SHOWN)
+        club.newest(crate::fdevent::CLUB_LOG_SHOWN)
             .into_iter()
             .map(|e| {
                 let raw = |key: &str| {
@@ -15658,7 +15749,7 @@ impl Engine {
                         .map(|v| v.raw.clone())
                         .unwrap_or_default()
                 };
-                crate::dto::FdClubLogRow {
+                let row = crate::dto::FdClubLogRow {
                     call: e.row.call.clone(),
                     class: raw("CLASS"),
                     section: raw("SECTION"),
@@ -15672,13 +15763,10 @@ impl Engine {
                     seq: e.row.seq,
                     pos_name: shown.get(e.row.posid.as_str()).cloned().unwrap_or_default(),
                     dupe: e.dupe,
-                }
+                };
+                (e.ord, row)
             })
-            .collect();
-        Some(crate::dto::FdClubLogDto {
-            total: club.qsos_raw(),
-            rows,
-        })
+            .collect()
     }
 
     /// THE SCOREBOARD SEAM: the bounded clone the scoreboard server renders.

@@ -5610,11 +5610,14 @@ export const EN = {
   'fieldDay.club.board.link.removed': 'Removed',
   'fieldDay.club.board.heard': '(heard {{ago}})',
   'fieldDay.club.board.heard.never': '(not heard since this Nexus started)',
-  // The host's club log on its own screen (ContestView's ClubLogList): every position's contacts
-  // as the host merged them, newest first, with the position that logged each.
+  // The club log on the host's own screen and every joined laptop's (ContestView's ClubLogList): every
+  // position's contacts as the host merged them, newest first, with the position that logged each.
+  // `.title.joined` is the laptop's tooltip: the same list, sent by the host, view only.
   'fieldDay.club.log.head': 'Club log',
   'fieldDay.club.log.title':
     "Every position's contacts as this host merged them, newest first, with the position that logged each: the club's log, which Club ADIF and Club Cabrillo are written from. A duplicate is marked as in your own log. A long contest lists its newest contacts only, so this screen never slows; every contact is in the club's files.",
+  'fieldDay.club.log.title.joined':
+    "Every position's contacts as the club's host merged them, newest first, with the position that logged each: the club's log, which the host writes Club ADIF and Club Cabrillo from. The host sends this list to every laptop, so it changes here as contacts reach the host. A duplicate is marked as in your own log. View only: you take back only your own contacts, from your own log. A long contest lists its newest contacts only; every contact is in the club's files on the host.",
   'fieldDay.club.log.count': {
     one: '{{count}} contact',
     other: '{{count}} contacts',

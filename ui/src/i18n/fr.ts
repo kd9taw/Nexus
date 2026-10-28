@@ -2234,6 +2234,7 @@ export const FR: PartialCatalog = {
   "fieldDay.club.board.heard.never": "(pas entendue depuis le démarrage de ce Nexus)",
   "fieldDay.club.log.head": "Log du club",
   "fieldDay.club.log.title": "Les contacts de toutes les positions tels que cet hôte les a fusionnés, les plus récents en premier, avec la position qui a enregistré chacun : le log du club, d'où sont écrits l'ADIF du club et le Cabrillo du club. Un doublon est marqué comme dans votre propre journal. Un long concours n'affiche que ses contacts les plus récents, pour que cet écran ne ralentisse jamais ; chaque contact est dans les fichiers du club.",
+  "fieldDay.club.log.title.joined": "Les contacts de toutes les positions tels que l'hôte du club les a fusionnés, les plus récents en premier, avec la position qui a enregistré chacun : le log du club, d'où l'hôte écrit l'ADIF du club et le Cabrillo du club. L'hôte envoie cette liste à chaque portable, elle change donc ici dès que des contacts arrivent à l'hôte. Un doublon est marqué comme dans votre propre journal. Consultation seulement : vous ne retirez que vos propres contacts, depuis votre propre journal. Un long concours n'affiche que ses contacts les plus récents ; chaque contact est dans les fichiers du club sur l'hôte.",
   "fieldDay.club.log.count": { "one": "{{count}} contact", "other": "{{count}} contacts" },
   "fieldDay.club.log.newest": "les {{shown}} plus récents sur {{total}} contacts",
   "fieldDay.club.log.empty": "Aucun contact dans le log du club pour l'instant.",

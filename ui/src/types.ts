@@ -4481,9 +4481,10 @@ export interface FdClubStatus {
   clubCode?: string
 }
 
-/** The host's club log, as its own screen lists it (`fdClubLogNewest`, Rust `FdClubLogDto`): how
- *  many contacts the club holds, and the newest of them, newest first. The HOST's alone, and its
- *  own screens': nothing of it rides the snapshot, so Remote is sent none of it. */
+/** The club log, as the host's own screen lists it (`fdClubLogNewest`, Rust `FdClubLogDto`): how
+ *  many contacts the club holds, and the newest of them, newest first. A joined laptop answers the
+ *  same list, as the host sent it over club sync. Nothing of it rides the snapshot, so Remote is sent
+ *  none of it. */
 export interface FdClubLog {
   /** Every contact in the club's log, duplicates included: the count the club line says. */
   total: number

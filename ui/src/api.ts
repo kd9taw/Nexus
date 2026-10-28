@@ -1156,9 +1156,9 @@ export async function fdClubExport(format: 'cabrillo' | 'adif'): Promise<string>
   return invoke<string>('fd_club_export', { format })
 }
 
-/** The host's club log for its own screen: the newest contacts its club merged, newest first,
- *  each with the position that logged it, and how many the club holds. `null` when this instance
- *  is not hosting. A read; never on Remote. */
+/** The club log for this screen: the newest contacts the club merged, newest first, each with the
+ *  position that logged it, and how many the club holds; on a joined laptop, as the host last sent
+ *  it. `null` when this instance neither hosts nor has been sent one. A read; never on Remote. */
 export async function fdClubLogNewest(): Promise<FdClubLog | null> {
   return invoke<FdClubLog | null>('fd_club_log_newest')
 }
