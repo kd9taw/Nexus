@@ -3167,10 +3167,21 @@ export function SettingsPanel({
   // One list another writer adds to while the form is open: the 55-minute rule puts the stations it
   // stops on the JS8 "never acknowledge" list. The form's edit of it goes over the list as it is now
   // (`mergeListEdit`), so a station the rule added since Settings opened is never written away.
+  //
+  // While the form shows a radio other than the one in use, its baseline holds THAT radio's fields
+  // (`showRadio`), and a station-wide payload holds the radio in use's copy (`withActiveRadioConfig`).
+  // Every field where the two radios differ would read as a change and put the copy back over the
+  // radio in use: the cockpit's drive, a sound card set since. So the radio fields are left out of
+  // the changes then (`stationWideChanges`), for every caller: Save, Test CAT, Auto-test and the two
+  // confirmation downloads.
+  const stationWideChanges = (payload: NonNullable<typeof form>): Partial<Settings> => {
+    const changes = changedSince(savedRef.current, payload)
+    return editingRadioId != null && editingRadioId !== payload.activeRadio ? splitRadioFields(changes).rest : changes
+  }
   const saveForm = (
     payload: NonNullable<typeof form>,
     forced: Partial<Settings> = {},
-    changes: Partial<Settings> = changedSince(savedRef.current, payload),
+    changes: Partial<Settings> = stationWideChanges(payload),
   ) => {
     return patchSettings((live) => {
       const whole: Partial<Settings> = {

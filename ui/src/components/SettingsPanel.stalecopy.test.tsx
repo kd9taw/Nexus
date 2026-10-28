@@ -491,6 +491,27 @@ describe("a radio's settings changed elsewhere survive a save of the form", () =
     expect([radioNamed(0).audioOut, station.audioOut]).toEqual(['out-0', 'out-0'])
   })
 
+  // The two confirmation downloads save the form first, station-wide only. With another radio open
+  // for Edit, the form's copy of the radio in use differs from the radio on the form, so every field
+  // where the two radios differ read as a change and the copy went back over the radio in use: the
+  // cockpit's drive and a sound card set since, reverted by a download.
+  it.each([['Download confirmations'], ['Sync eQSL now']])(
+    '%s while another radio is open for Edit leaves the radio in use as it is now',
+    async (button) => {
+      openOn({ radios: [FTDX10, { ...IC7300, txLevel: 0.8 }] as never })
+      await loaded()
+      await editIc7300()
+      applyToRadio(0, { txLevel: 0.5, audioOut: 'out-setup' })
+      await turnOnQrzUpload()
+      const writes = api.get('setSettings').mock.calls.length
+      fireEvent.click(await screen.findByRole('button', { name: button }))
+      await waitFor(() => expect(api.get('setSettings').mock.calls.length).toBe(writes + 1))
+      expect(station.qrzLogbookUpload).toBe(true)
+      expect([station.txLevel, station.audioOut, station.serialPort, station.rigModel]).toEqual([0.5, 'out-setup', 'COM3', 1042])
+      expect([radioNamed(0).txLevel, radioNamed(0).audioOut]).toEqual([0.5, 'out-setup'])
+    },
+  )
+
   it("a sound card set in the radio setup shows in the form, and the form's next Save keeps it", async () => {
     openOn()
     await loaded()
