@@ -16,10 +16,13 @@
 //!   burst. The wait is cancellable.
 //! - **The cap is per 24 hours, across runs** ([`Limits::daily_cap`]). Before each network
 //!   lookup, what it would cost ([`Callbook::cost`]: the stroked call and its base are two) is
-//!   added to what was spent — the larger of the station's own tally ([`Callbook::spent`], kept on
-//!   disk) and QRZ's own count of the account's lookups, when an answer this run carried one — and
-//!   a lookup that would pass the cap is not made: the run stops, [`Stop::Limit`]. QRZ publishes
-//!   no daily number, so the cap is the operator's setting, 250 by default.
+//!   added to what this station spent ([`Callbook::spent`], kept on disk), and a lookup that would
+//!   pass the cap is not made: the run stops, [`Stop::Limit`]. QRZ publishes no daily number, so
+//!   the cap is the operator's setting, 250 by default. ⚠️ **QRZ's own count of the account's
+//!   lookups never holds the cap** (operator ruling 954): it counts every program on the account,
+//!   so another program's day of lookups stopped every run before its first (a user report: QRZ
+//!   said 16,191 against a cap of 6,000, above the setting's maximum). It is shown to the operator
+//!   as information only; a QRZ that does refuse is caught by the refusal streak below.
 //! - **A sign-in counts too**: a lookup that had to sign in again ([`Asked::logins`]) notes each
 //!   sign-in against the cap once it is made, so the next lookup is held to it. Whether a lookup
 //!   will sign in is not known before it is made, so the last lookup's sign-in can take the tally
@@ -72,6 +75,7 @@ pub enum Looked {
 pub struct Asked {
     pub looked: Looked,
     /// QRZ's own count of the account's lookups in the last 24 hours, when its answer carried one.
+    /// Shown to the operator; never counted against the cap (see the module header).
     pub qrz_count: Option<usize>,
     /// QRZ was asked for the call and gave no record for it: an unknown call, or a refusal.
     pub qrz_without_record: bool,
@@ -182,8 +186,6 @@ pub fn look_up(
             ..Progress::default()
         },
     };
-    // QRZ's own count, once an answer this run carried one.
-    let mut qrz_count: Option<usize> = None;
     // The calls QRZ answered with no record, in a row, and of those the ones listed as unknown.
     let mut streak = 0;
     let mut streak_unknown: Vec<String> = Vec::new();
@@ -199,7 +201,7 @@ pub fn look_up(
             progress(&out.progress);
             continue;
         }
-        let spent = callbook.spent().max(qrz_count.unwrap_or(0));
+        let spent = callbook.spent();
         out.progress.spent = spent;
         let cost = callbook.cost(call);
         if spent + cost > limits.daily_cap {
@@ -220,10 +222,7 @@ pub fn look_up(
         if asked.logins > 0 {
             callbook.note_spent(asked.logins);
         }
-        if asked.qrz_count.is_some() {
-            qrz_count = asked.qrz_count;
-        }
-        out.progress.spent = callbook.spent().max(qrz_count.unwrap_or(0));
+        out.progress.spent = callbook.spent();
         if asked.qrz_without_record {
             streak += 1;
         } else {
@@ -438,13 +437,15 @@ mod tests {
         assert_eq!((run.stop, cb.lookups.len()), (Stop::Limit, 0));
     }
 
-    /// QRZ's own count, when its answers carry one, holds the cap too: lookups made elsewhere
-    /// (another program on the same account) count.
+    /// ★ QRZ's own count never holds the cap (operator ruling 954): it counts every program on
+    /// the account, so another program's lookups stopped every run at none (a user report: QRZ
+    /// said 16,191 against a cap of 6,000). Only this station's own lookups count; a QRZ that
+    /// refuses is still caught by the refusal streak.
     #[test]
-    fn qrzs_own_count_holds_the_cap() {
+    fn qrzs_own_count_does_not_hold_the_cap() {
         let mut cb = Script {
             known: vec!["A1A", "B1B", "C1C", "D1D"],
-            qrz_base: Some(8),
+            qrz_base: Some(16_191),
             ..Script::default()
         };
         let run = look_up(
@@ -453,10 +454,28 @@ mod tests {
             &mut cb,
             &mut |_| {},
         );
-        // First lookup: QRZ says 9. Second: 10. The third would be 11.
-        assert_eq!(run.stop, Stop::Limit);
-        assert_eq!(cb.lookups.len(), 2);
-        assert_eq!(run.progress.spent, 10);
+        assert_eq!(run.stop, Stop::Done);
+        assert_eq!(cb.lookups.len(), 4);
+        assert_eq!(run.answers.len(), 4);
+        assert_eq!(
+            run.progress.spent, 4,
+            "the station's own tally, not QRZ's 16,195"
+        );
+
+        // The station's own tally still holds it, whatever QRZ says.
+        let mut cb = Script {
+            known: vec!["A1A", "B1B", "C1C", "D1D"],
+            qrz_base: Some(0),
+            spent_before: 8,
+            ..Script::default()
+        };
+        let run = look_up(
+            &calls(&["A1A", "B1B", "C1C", "D1D"]),
+            limits(10),
+            &mut cb,
+            &mut |_| {},
+        );
+        assert_eq!((run.stop, cb.lookups.len()), (Stop::Limit, 2));
     }
 
     /// ★ Cache hits cost nothing: no wait and no count, whatever the cap.

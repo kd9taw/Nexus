@@ -3310,6 +3310,7 @@ export const FR: PartialCatalog = {
   "logbook.tools.callbook.applyUpTo": { "one": "Compléter jusqu’à {{count}} contact", "other": "Compléter jusqu’à {{count}} contacts" },
   "logbook.tools.callbook.stroked": { "one": "Un indicatif avec une barre est recherché une seconde fois sous son indicatif de base : jusqu’à {{count}} recherche en tout.", "other": "Un indicatif avec une barre est recherché une seconde fois sous son indicatif de base : jusqu’à {{count}} recherches en tout." },
   "logbook.tools.callbook.qrzCount": { "one": "QRZ a compté {{count}} recherche sur votre compte au cours du dernier jour.", "other": "QRZ a compté {{count}} recherches sur votre compte au cours du dernier jour." },
+  "logbook.tools.callbook.qrzCountNote": "Cela compte tous les programmes qui utilisent votre identifiant QRZ ; seules les recherches de Nexus comptent dans la limite ci-dessus.",
   "logbook.tools.callbook.waitingForTx": "En attente de la fin de l’émission avant de modifier les contacts…",
   "logbook.tools.callbook.end.refused": "Arrêté : QRZ a répondu à 3 indicatifs de suite sans fiche, ce qui est sa façon de refuser des recherches (limite quotidienne, abonnement expiré ou compte suspendu). Ce qui a été trouvé est rempli. Vérifiez votre compte QRZ avant de relancer.",
   "logbook.tools.callbook.resume": { "one": "{{count}} indicatif pas encore recherché : relancez la mise à jour pour continuer.", "other": "{{count}} indicatifs pas encore recherchés : relancez la mise à jour pour continuer." },
