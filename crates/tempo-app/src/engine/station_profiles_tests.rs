@@ -1466,3 +1466,392 @@ fn a_club_run_never_keys_once_the_call_is_home_whatever_moved_it() {
     e.start_cq(None).unwrap();
     assert_eq!(keyed(&mut e, 10..14), vec!["CQ KD9TAW EN52".to_string(); 2]);
 }
+
+// --- The keying-time call check on a station with no profiles ------------------------------------
+//
+// The check runs on every station. With no profiles the call changes in Settings: a message made
+// before the edit is not sent under the old call. A call stored with other capitals or spaces is the
+// same call and keys.
+
+/// The operator edits the callsign in Settings and saves, while a message waits.
+fn settings_call_edit(e: &mut Engine, call: &str) {
+    let mut s = e.settings().clone();
+    s.mycall = call.into();
+    e.apply_settings(s);
+    assert_eq!(e.settings.mycall, call, "premise: the save took the call");
+}
+
+/// One mode family on a station with no profiles: a message made under KD9TAW and waiting
+/// (`make`), whether the next try keys it (`key`), and what its cockpit says (`notice`).
+struct Waiting {
+    name: &'static str,
+    make: fn() -> Engine,
+    key: fn(&mut Engine) -> bool,
+    notice: fn(&Engine) -> Option<String>,
+}
+
+fn plain_ft8() -> Engine {
+    let mut e = station();
+    e.set_tier(Tier::Ft8);
+    e.set_frequency(14.074, "20m", "USB");
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    e
+}
+
+fn plain_ft8_run() -> Engine {
+    let mut e = plain_ft8();
+    e.start_cq(None).unwrap();
+    assert_eq!(tx_now(&e), "CQ KD9TAW EN52", "premise");
+    e
+}
+
+fn plain_field_day_run() -> Engine {
+    let mut e = plain_ft8();
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_class = "3A".into();
+    s.fd_section = "WI".into();
+    e.apply_settings(s);
+    e.set_mode("fieldday-run").unwrap();
+    assert!(matches!(e.mode, Mode::FieldDay { .. }), "premise");
+    e
+}
+
+fn ft_notice(e: &Engine) -> Option<String> {
+    e.snapshot().radio.tx_refusal
+}
+
+fn plain_rtty_auto_between_overs() -> Engine {
+    let mut e = station();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    e.set_operating_mode("rtty", false);
+    e.set_frequency(14.080, "20m", "LSB");
+    e.set_rtty_auto(true).unwrap();
+    e.rtty_auto_cq().unwrap();
+    assert!(e.poll_rtty_one().is_some(), "premise: the CQ keys");
+    e.rtty_auto_service();
+    rtty_heard(&mut e, "KD9TAW DE W1AW W1AW K\n");
+    e.rtty_auto_service();
+    assert!(e.poll_rtty_one().is_some(), "premise: our reply keys");
+    e.rtty_auto_service();
+    assert!(e.rtty_queue.is_empty(), "premise: between overs");
+    e
+}
+
+fn plain_jtty() -> Engine {
+    let mut e = station();
+    e.set_operating_mode("jtty", false);
+    e.set_frequency(14.090, "20m", "USB");
+    e.set_tx_enabled(true);
+    let m = std::sync::Mutex::new(e);
+    crate::engine::jtty_tx::send_text(&m, "CQ CQ DE KD9TAW K", "").unwrap();
+    m.into_inner().unwrap()
+}
+
+/// Every mode family that keys a message made earlier under the station's call.
+const WAITING: &[Waiting] = &[
+    Waiting {
+        name: "FT8 run",
+        make: plain_ft8_run,
+        key: |e| keyed(e, 0..4).len() == 2,
+        notice: ft_notice,
+    },
+    Waiting {
+        name: "Field Day",
+        make: plain_field_day_run,
+        key: |e| overs(e, 0..4) == 2,
+        notice: ft_notice,
+    },
+    Waiting {
+        name: "JS8",
+        make: || {
+            let mut e = station();
+            e.js8_enter();
+            e.set_frequency(14.078, "20m", "USB");
+            e.set_tx_offset(1500.0);
+            e.set_tx_enabled(true);
+            e.js8_send(None, "HELLO FROM HOME".into()).unwrap();
+            e
+        },
+        key: |e| {
+            let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
+            let slot = tempo_core::timing::now_unix_ms() as u64 / period_ms + 1;
+            e.plan_tx(slot).is_some()
+        },
+        notice: |e| e.js8_state().last_error,
+    },
+    Waiting {
+        name: "RTTY Auto",
+        make: plain_rtty_auto_between_overs,
+        key: |e| w1aw_sends_the_exchange(e).is_some(),
+        notice: |e| e.rtty_state().keyer_error,
+    },
+    Waiting {
+        name: "RTTY text",
+        make: || {
+            let mut e = station();
+            e.set_operating_mode("rtty", false);
+            e.set_frequency(14.080, "20m", "LSB");
+            e.rtty_send_text("CQ CQ DE KD9TAW KD9TAW K").unwrap();
+            e
+        },
+        key: |e| e.poll_rtty_one().is_some(),
+        notice: |e| e.rtty_state().keyer_error,
+    },
+    Waiting {
+        name: "PSK",
+        make: || {
+            let mut e = station();
+            e.set_operating_mode("keyboard", false);
+            e.set_frequency(14.070, "20m", "USB");
+            e.psk_send_text("cq cq de kd9taw kd9taw k").unwrap();
+            e
+        },
+        key: |e| e.poll_psk_one().is_some(),
+        notice: |e| e.psk_state().keyer_error,
+    },
+    Waiting {
+        name: "CW",
+        make: || {
+            let mut e = station();
+            e.set_operating_mode("cw", false);
+            e.set_frequency(14.030, "20m", "CW");
+            e.send_cw("CQ DE {MYCALL} K");
+            assert!(e.cw_queue.contains(&ME.to_string()), "premise");
+            e
+        },
+        key: |e| e.poll_cw_word().is_some(),
+        notice: |e| e.cw_keyer_error(),
+    },
+    Waiting {
+        name: "SSTV picture",
+        make: || {
+            let mut e = station();
+            e.set_frequency(14.230, "20m", "USB");
+            e.set_operating_mode("phone", false);
+            e.sstv_send_as(vec![0.0; 24_000], "PD-120".into(), ME)
+                .unwrap();
+            e
+        },
+        key: |e| e.poll_sstv_tx().is_some(),
+        notice: |e| e.sstv_tx_notice().map(String::from),
+    },
+    Waiting {
+        name: "SSTV preset text",
+        make: station,
+        key: |e| e.sstv_overlay_call_refusal(&[ME.to_string()]).is_none(),
+        notice: |e| {
+            e.sstv_overlay_call_refusal(&[ME.to_string()])
+                .map(String::from)
+        },
+    },
+    Waiting {
+        name: "APRS",
+        make: || {
+            let mut e = station();
+            e.set_operating_mode("phone", false);
+            e.aprs_tune(144.390).unwrap();
+            e.aprs_beacon(43.0, -89.4, '/', '>', "test", &[]).unwrap();
+            e
+        },
+        key: |e| e.poll_aprs_tx().is_some(),
+        notice: |e| e.aprs_tx_notice().map(String::from),
+    },
+    Waiting {
+        name: "JTTY",
+        make: plain_jtty,
+        key: |e| {
+            matches!(
+                e.poll_jtty(true, 0.0),
+                crate::engine::jtty_tx::JttyTick::Frame(_)
+            )
+        },
+        notice: |e| e.jtty_state().tx.notice,
+    },
+];
+
+/// What each family does on a station with no profiles after `change`: keyed, and the notice.
+fn waiting_after(change: fn(&mut Engine)) -> Vec<(&'static str, bool, Option<String>)> {
+    WAITING
+        .iter()
+        .map(|w| {
+            let mut e = (w.make)();
+            assert!(
+                e.settings.station_profiles.is_empty(),
+                "premise: no profiles"
+            );
+            change(&mut e);
+            let keyed = (w.key)(&mut e);
+            (w.name, keyed, (w.notice)(&e))
+        })
+        .collect()
+}
+
+fn every_family(keyed: bool, notice: Option<&str>) -> Vec<(&'static str, bool, Option<String>)> {
+    WAITING
+        .iter()
+        .map(|w| (w.name, keyed, notice.map(String::from)))
+        .collect()
+}
+
+/// ⛔ No profiles: the callsign is edited in Settings (KD9TAW to KD9TAW/P) while a message made
+/// under KD9TAW waits. In every mode family that message is not keyed, and its cockpit says why.
+#[test]
+fn without_profiles_a_settings_call_edit_drops_the_message_made_under_the_old_call() {
+    assert_eq!(
+        waiting_after(|e| settings_call_edit(e, "KD9TAW/P")),
+        every_family(false, Some(CALL_CHANGED))
+    );
+}
+
+/// CONTROL for the test above: no profiles, the call unchanged (a Settings save that leaves it as it
+/// is included), and every family keys its message with no notice.
+#[test]
+fn without_profiles_an_unchanged_call_keys_every_family() {
+    assert_eq!(waiting_after(|_| {}), every_family(true, None));
+    assert_eq!(
+        waiting_after(|e| settings_call_edit(e, ME)),
+        every_family(true, None)
+    );
+}
+
+/// ⛔ No false refusal: the stored call differs from the one the message was made under only by
+/// capitals and surrounding spaces. That is the same call, and every family keys.
+#[test]
+fn without_profiles_a_call_stored_in_other_capitals_or_spaces_still_keys() {
+    assert_eq!(
+        waiting_after(|e| e.settings.mycall = "  kd9taw ".into()),
+        every_family(true, None)
+    );
+}
+
+/// ⛔ The RTTY Auto contact under way when the call is edited ends without logging anything under
+/// the new call. CONTROL: unchanged, the contact goes on.
+#[test]
+fn without_profiles_rtty_auto_logs_nothing_under_an_edited_call() {
+    let mut control = plain_rtty_auto_between_overs();
+    assert!(w1aw_sends_the_exchange(&mut control).is_some(), "CONTROL");
+    let mut e = plain_rtty_auto_between_overs();
+    settings_call_edit(&mut e, "KD9TAW/P");
+    assert_eq!(
+        (
+            w1aw_sends_the_exchange(&mut e),
+            e.rtty_state().seq_state,
+            e.stored_log().len()
+        ),
+        (None, "idle".to_string(), 0)
+    );
+}
+
+/// The check by value: the calls compared as the transmit path reads them.
+#[test]
+fn the_call_check_compares_calls_as_the_transmit_path_reads_them() {
+    let cases: &[(&str, &str)] = &[
+        ("KD9TAW", "KD9TAW"),
+        ("kd9taw ", " KD9TAW"),
+        ("<KD9TAW/P>", "KD9TAW/P"),
+        ("PJ4/KD9TAW", "pj4/kd9taw"),
+        ("", "KD9TAW"),
+        ("", ""),
+        ("KD9TAW", "KD9TAW/P"),
+        ("KD9TAW/P", "KD9TAW"),
+        ("PJ4/KD9TAW", "KD9TAW"),
+        ("KD9TAW", ""),
+    ];
+    let mut e = station();
+    let got: Vec<_> = cases
+        .iter()
+        .map(|(built, now)| {
+            e.settings.mycall = (*now).into();
+            e.sent_call_refusal(built)
+        })
+        .collect();
+    let refused = Some(CALL_CHANGED);
+    assert_eq!(
+        got,
+        vec![None, None, None, None, None, None, refused, refused, refused, refused]
+    );
+}
+
+/// ⛔ A compound call, no profiles: a CQ run under PJ4/KD9TAW and the contact a caller starts with
+/// it (our call hashed in the report) key as before. Then a Settings edit to KD9TAW stops the run.
+#[test]
+fn without_profiles_a_compound_call_keys_and_an_edit_away_from_it_does_not() {
+    let make = || {
+        let mut e = plain_ft8();
+        e.settings.mycall = "PJ4/KD9TAW".into();
+        e.app.set_identity("PJ4/KD9TAW", "EN52");
+        e.set_mode("qso-run").unwrap();
+        e
+    };
+    let mut e = make();
+    let mut sent = keyed(&mut e, 0..1);
+    e.ingest_decodes_for_test(&[dec_snr("<PJ4/KD9TAW> W1AW FN31", -8)], 1);
+    sent.extend(keyed(&mut e, 2..3));
+    assert_eq!(
+        (sent, ft_notice(&e)),
+        (
+            vec![
+                "CQ PJ4/KD9TAW".to_string(),
+                "W1AW <PJ4/KD9TAW> -08".to_string()
+            ],
+            None
+        )
+    );
+    let mut e = make();
+    settings_call_edit(&mut e, "KD9TAW");
+    assert_eq!(
+        (keyed(&mut e, 0..4), ft_notice(&e)),
+        (Vec::<String>::new(), Some(CALL_CHANGED.to_string()))
+    );
+}
+
+/// ⛔ Field Day, no profiles: the exchange that carries the call (our answer to a caller) keys when
+/// the stored call differs only in capitals and spaces.
+#[test]
+fn without_profiles_a_field_day_exchange_keys_under_a_call_stored_in_other_capitals() {
+    /// Field Day overs keyed in `slots`, as their text.
+    fn fd_keyed(e: &mut Engine, slots: std::ops::Range<u64>) -> Vec<String> {
+        let mut sent = Vec::new();
+        for slot in slots {
+            let text = match &e.mode {
+                Mode::FieldDay { station, .. } => station.outgoing().map(|m| m.to_text()),
+                _ => None,
+            };
+            if !e.poll_tx(slot).is_empty() {
+                sent.push(text.unwrap_or_default());
+            }
+        }
+        sent
+    }
+    let mut e = plain_field_day_run();
+    e.settings.mycall = " kd9taw".into();
+    let mut sent = fd_keyed(&mut e, 0..1);
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW 2A CT", -8)], 1);
+    sent.extend(fd_keyed(&mut e, 2..3));
+    assert_eq!(sent.len(), 2, "both overs key: {sent:?}");
+    assert!(sent[1].contains("W1AW KD9TAW"), "the exchange: {sent:?}");
+    assert_eq!(ft_notice(&e), None);
+}
+
+/// ⛔ A station that had no call yet: what it queued then carries no call and is not refused once the
+/// call is set; a run started after the call is set keys under it.
+#[test]
+fn a_message_queued_before_the_call_was_set_is_not_refused_for_it() {
+    let mut e = Engine::new("", "EN52", 0);
+    e.set_operating_mode("cw", false);
+    e.set_frequency(14.030, "20m", "CW");
+    e.send_cw("TEST");
+    assert_eq!(
+        e.cw_queue_call.as_deref(),
+        Some(""),
+        "premise: queued with no call"
+    );
+    settings_call_edit(&mut e, ME);
+    assert_eq!(
+        (e.poll_cw_word().map(|w| w.0), e.cw_keyer_error()),
+        (Some("TEST".to_string()), None)
+    );
+}

@@ -27701,14 +27701,15 @@ contact yourself."
     /// says why, as it does for its other refusals, and changes nothing else: no timing, no
     /// sequence, no other message.
     ///
-    /// It only ever refuses. With no station profiles it refuses nothing, so a station that never
-    /// makes one transmits exactly as before.
+    /// It only ever refuses, and it runs on every station, with station profiles or without (the
+    /// operator's decision, 2026-10-28): a call edited in Settings while a message waits is a
+    /// change of call like a profile switch. The calls are compared as the transmit path reads
+    /// them, without surrounding spaces and in any capitals, so a stored call that differs only so
+    /// is the same call; a portable or other compound form is another call. A message made while
+    /// the station had no call yet carries none, and nothing is refused for it.
     pub fn sent_call_refusal(&self, built: &str) -> Option<&'static str> {
-        if self.settings.station_profiles.is_empty() {
-            return None;
-        }
         let built = tempo_core::message::unhash_call(built).trim();
-        (!built.eq_ignore_ascii_case(self.settings.mycall.trim()))
+        (!built.is_empty() && !built.eq_ignore_ascii_case(self.settings.mycall.trim()))
             .then_some(crate::settings::STATION_CALL_CHANGED_TX_REFUSED)
     }
 
