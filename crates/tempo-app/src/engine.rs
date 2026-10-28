@@ -15591,7 +15591,28 @@ impl Engine {
         text: &str,
         posid: &str,
     ) -> Result<crate::dto::FdClubImportDto, String> {
-        let now = now_unix_secs();
+        let plan = self.fd_club_import_plan(text, posid)?;
+        let read = plan.read(text);
+        self.fd_club_import_merge(read)
+    }
+
+    /// The first half of [`Self::fd_club_import`], taken under the Engine lock and let go: the
+    /// file's size, the club's call and session, and the position its contacts are from, checked
+    /// and kept for [`FdClubImportPlan::read`], which reads the file with the lock released.
+    pub fn fd_club_import_plan(&self, text: &str, posid: &str) -> Result<FdClubImportPlan, String> {
+        if text.len() > FD_CLUB_IMPORT_MAX_BYTES {
+            return Err(format!(
+                "This file is {:.1} MB, and a laptop's contest file is read up to {} MB: pick that laptop's fieldday_backup file",
+                text.len() as f64 / 1e6,
+                FD_CLUB_IMPORT_MAX_BYTES / 1_000_000
+            ));
+        }
+        self.fd_club_import_checks(posid)
+    }
+
+    /// The club hosted, the position one Nexus makes and not removed, and the club's session:
+    /// checked before a laptop's file is read and again before it is merged.
+    fn fd_club_import_checks(&self, posid: &str) -> Result<FdClubImportPlan, String> {
         let club = self
             .fd_club
             .as_ref()
@@ -15605,15 +15626,42 @@ impl Engine {
         if club.is_removed(&posid) {
             return Err("you removed that position from the club event: Allow back first".into());
         }
-        let session = self.fd_club_session(club)?;
-        let club_call = self.fd_club_call();
-        let mut log = tempo_core::fieldday::FieldDayLog::new(&club_call, session, "");
-        let read = log.restore_journal(text, 0, now);
+        Ok(FdClubImportPlan {
+            session: self.fd_club_session(club)?,
+            club_call: self.fd_club_call(),
+            posid,
+            now: now_unix_secs(),
+        })
+    }
+
+    /// The last half of [`Self::fd_club_import`], under the Engine lock again: the contacts
+    /// [`FdClubImportPlan::read`] read, merged into the club's log. Checked again first, as the
+    /// lock was let go: a club no longer hosted, a position removed meanwhile, or a club whose call
+    /// or session changed is refused, and nothing is merged.
+    pub fn fd_club_import_merge(
+        &mut self,
+        read: FdClubImportRead,
+    ) -> Result<crate::dto::FdClubImportDto, String> {
+        let FdClubImportRead {
+            plan,
+            log,
+            unreadable,
+        } = read;
+        let again = self.fd_club_import_checks(&plan.posid)?;
+        if again.club_call != plan.club_call || again.session != plan.session {
+            return Err("the club event changed while the file was read: import it again".into());
+        }
+        let FdClubImportPlan {
+            posid,
+            club_call,
+            now,
+            ..
+        } = plan;
         let (other_contest, other_running) = log.held();
         let mut dto = crate::dto::FdClubImportDto {
             other_contest,
             other_running,
-            unreadable: read.unreadable,
+            unreadable,
             taken_back: log.removed().iter().map(|r| r.rows.len()).sum(),
             ..Default::default()
         };
@@ -34561,6 +34609,66 @@ fn follow_tx_selection_into(start: &mut Option<u64>, logged: bool, ntx: Option<u
 pub(crate) fn wsjtx_qso_on(now: u64, ntx: u64, period_s: f64) -> u64 {
     let back = ntx.saturating_sub(2) * period_s as u64 + ((now % 60) as f64 % period_s) as u64;
     now.saturating_sub(back)
+}
+
+/// The largest laptop's contest file the host's "Import a laptop's file…" reads. A laptop's
+/// journal is a few hundred bytes a contact, so a whole Field Day is well under a megabyte; a file
+/// past this is not one, and is refused before it is read.
+pub const FD_CLUB_IMPORT_MAX_BYTES: usize = 16_000_000;
+
+/// What the host's "Import a laptop's file…" reads a file with, taken under the Engine lock
+/// ([`Engine::fd_club_import_plan`]) and read with it let go ([`Self::read`]).
+#[derive(Debug, Clone)]
+pub struct FdClubImportPlan {
+    posid: String,
+    club_call: String,
+    session: ContestSession,
+    now: u64,
+}
+
+impl FdClubImportPlan {
+    /// The file read as that laptop's own restart reads its journal, under the club's session
+    /// ([`tempo_core::fieldday::FieldDayLog::restore_journal`]). Needs no Engine, so the radio
+    /// loop is never kept waiting on a large file.
+    pub fn read(self, text: &str) -> FdClubImportRead {
+        let mut log =
+            tempo_core::fieldday::FieldDayLog::new(&self.club_call, self.session.clone(), "");
+        let unreadable = log.restore_journal(text, 0, self.now).unreadable;
+        FdClubImportRead {
+            plan: self,
+            log,
+            unreadable,
+        }
+    }
+}
+
+/// A laptop's file read, for [`Engine::fd_club_import_merge`] to merge.
+pub struct FdClubImportRead {
+    plan: FdClubImportPlan,
+    log: tempo_core::fieldday::FieldDayLog,
+    unreadable: usize,
+}
+
+/// ⭐ **The host's "Import a laptop's file…", with the Engine lock held only to check and to
+/// merge** ([`Engine::fd_club_import`]): the file is read with the lock let go, so a large file
+/// never keeps the radio loop, which unkeys under that lock, waiting.
+pub fn fd_club_import_in(
+    engine: &std::sync::Mutex<Engine>,
+    text: &str,
+    posid: &str,
+) -> Result<crate::dto::FdClubImportDto, String> {
+    fd_club_import_with(engine, text, posid, FdClubImportPlan::read)
+}
+
+fn fd_club_import_with(
+    engine: &std::sync::Mutex<Engine>,
+    text: &str,
+    posid: &str,
+    read: impl FnOnce(FdClubImportPlan, &str) -> FdClubImportRead,
+) -> Result<crate::dto::FdClubImportDto, String> {
+    let plan = engine_lock(engine).fd_club_import_plan(text, posid)?;
+    let read = read(plan, text);
+    engine_lock(engine).fd_club_import_merge(read)
 }
 
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
@@ -54551,6 +54659,62 @@ mod tests {
             host.fd_club_import(&file, "bbbb0002").map(|r| r.already_in),
             Ok(2),
             "CONTROL: let back, it is read again"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A laptop's file is read with the Engine lock let go**: the radio loop unkeys under that
+    /// lock, so a large file must never keep it waiting. The read is watched from inside: the lock
+    /// is free while it runs, and the contacts it read are still merged.
+    #[test]
+    fn a_laptops_file_is_read_with_the_engine_lock_let_go() {
+        let dir = import_dir("unlocked");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let mut free = None;
+        let got = super::fd_club_import_with(&host, &file, "bbbb0002", |plan, text| {
+            free = Some(super::engine_try_lock(&host).is_ok());
+            plan.read(text)
+        })
+        .unwrap();
+        assert_eq!(
+            free,
+            Some(true),
+            "the Engine lock was held while the file was read"
+        );
+        assert_eq!((got.added, got.dupes, got.already_in), (2, 0, 0), "{got:?}");
+        assert_eq!(
+            super::engine_lock(&host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw()),
+            Some(2),
+            "CONTROL: the contacts read are merged"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A file far larger than any laptop's contest file is refused, with a sentence**, before
+    /// it is read; one at the limit is read.
+    #[test]
+    fn a_very_large_club_file_is_refused_before_it_is_read() {
+        let dir = import_dir("cap");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA"]);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let pad = |len: usize| format!("{file}{}", " ".repeat(len - file.len()));
+        let big = pad(super::FD_CLUB_IMPORT_MAX_BYTES + 1);
+        let err = super::fd_club_import_in(&host, &big, "bbbb0002").unwrap_err();
+        assert!(err.contains("MB"), "{err}");
+        assert_eq!(
+            super::engine_lock(&host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw()),
+            Some(0)
+        );
+        let at = pad(super::FD_CLUB_IMPORT_MAX_BYTES);
+        let got = super::fd_club_import_in(&host, &at, "bbbb0002").unwrap();
+        assert_eq!(
+            got.added, 1,
+            "CONTROL: a file at the limit is read: {got:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
