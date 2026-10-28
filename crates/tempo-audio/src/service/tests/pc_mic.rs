@@ -21,6 +21,8 @@ struct PcScene {
     backend: MockBackend,
     rig: Rig,
     origin: Instant,
+    /// The last tick's time, ms.
+    now: f64,
 }
 
 impl PcScene {
@@ -48,6 +50,7 @@ impl PcScene {
             backend: MockBackend::new(),
             rig: Rig::vox(),
             origin,
+            now: 0.0,
         }
     }
 
@@ -59,7 +62,7 @@ impl PcScene {
         }
         let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();
-        let _ = self.origin;
+        self.now = t;
         self.state
             .step(
                 &self.engine,
@@ -85,6 +88,26 @@ impl PcScene {
 
     fn ptt(&mut self, on: bool) {
         self.engine.lock().unwrap().set_ptt(on);
+    }
+
+    /// The operator lets go of PTT at the last tick's time (on the loop's clock).
+    fn release(&mut self) {
+        let at = self.origin + Duration::from_secs_f64(self.now / 1000.0);
+        self.release_at(at);
+    }
+
+    /// The operator let go of PTT so long ago that the release's tail is spent: the next tick
+    /// ends the over, the way the release used to end it at once.
+    fn release_spent(&mut self) {
+        let at = self.origin + Duration::from_secs_f64(self.now / 1000.0)
+            - Duration::from_millis(tempo_app::engine::pc_mic::RELEASE_TAIL_MS);
+        self.release_at(at);
+    }
+
+    fn release_at(&mut self, at: Instant) {
+        let mut e = self.engine.lock().unwrap();
+        e.release_pc_mic_at(at);
+        e.set_ptt(false); // the cockpit's release: it never moves the tail's bound
     }
 
     /// Press at 0 ms and run to `until`: a keyed over, fed.
@@ -137,30 +160,103 @@ fn the_microphone_is_open_and_on_the_air_only_while_ptt_is_held() {
         s.backend.monitor_tx_muted,
         "the headphone monitor plays on under the microphone"
     );
-    // The release: ONE tick later the rig is unkeyed, the queue flushed and the microphone closed.
-    s.ptt(false);
+    // The release: what the over already holds plays out (the end of the last word), at most
+    // 200 ms of it; nothing captured after the release (0.9) is sent; then the rig unkeys, the
+    // queue is flushed and the microphone closed.
+    s.release();
+    let r = t;
     let flushes = s.backend.flush_calls;
     let played = s.backend.played.len();
-    t += 20.0;
-    s.tick(t, 0.5);
-    assert!(!s.rig.keyed, "PTT stayed up after the release");
+    let mut off = None;
+    while t < r + 400.0 {
+        t += 20.0;
+        s.tick(t, 0.9);
+        if !s.rig.keyed {
+            off = Some(t);
+            break;
+        }
+    }
+    let off = off.expect("PTT stayed up after the release");
+    assert!(
+        off - r <= tempo_app::engine::pc_mic::RELEASE_TAIL_MS as f64,
+        "unkeyed {} ms after the release",
+        off - r
+    );
+    assert!(
+        s.backend.played[played..].contains(&0.5),
+        "the end of the last word was cut: nothing played after the release"
+    );
+    assert!(
+        !s.backend.played.contains(&0.9),
+        "audio captured after the release was sent"
+    );
     assert!(
         s.backend.flush_calls > flushes,
-        "the queued voice was not flushed"
+        "the queued voice was not flushed at the unkey"
     );
     assert!(
         !s.backend.pc_mic_open,
-        "the microphone stayed open after the release"
+        "the microphone stayed open after the unkey"
+    );
+    assert!(s.state.tx_until_ms.is_none());
+    let played = s.backend.played.len();
+    t += 20.0;
+    s.tick(t, 0.9);
+    assert_eq!(
+        s.backend.played.len(),
+        played,
+        "audio played after the unkey"
+    );
+    assert!(
+        !s.backend.monitor_tx_muted,
+        "the monitor stayed muted after the release"
+    );
+}
+
+/// ⛔ The release's tail is the release's alone: Stop TX, TX Off, a radio handoff and a watchdog
+/// trip during it unkey and flush on the next tick, and a loop that comes back late (wedged) past
+/// the 200 ms bound unkeys on that tick, playing nothing more.
+#[test]
+fn every_other_stop_during_the_release_tail_unkeys_at_once() {
+    type Stop = fn(&mut PcScene);
+    let stops: [(&str, Stop); 4] = [
+        ("Stop TX", |s| s.engine.lock().unwrap().halt_tx()),
+        ("TX Off", |s| s.engine.lock().unwrap().set_tx_enabled(false)),
+        ("a radio handoff", |s| s.state.handoff_deferred = true),
+        ("a watchdog trip", |s| {
+            s.engine.lock().unwrap().trip_tx_watchdog_for_test()
+        }),
+    ];
+    for (name, stop) in stops {
+        let mut s = PcScene::keyed(600.0);
+        s.release();
+        s.tick(620.0, 0.9);
+        assert!(s.rig.keyed, "{name}: premise: the tail is playing");
+        let flushes = s.backend.flush_calls;
+        stop(&mut s);
+        let played = s.backend.played.len();
+        s.tick(640.0, 0.9);
+        assert!(!s.rig.keyed, "{name}: the tail outlived the stop");
+        assert!(
+            s.backend.flush_calls > flushes,
+            "{name}: nothing was flushed"
+        );
+        assert_eq!(s.backend.played.len(), played, "{name}: audio played on");
+        assert!(!s.backend.pc_mic_open, "{name}: the microphone stayed open");
+    }
+    // Wedged: released at 600 ms, the loop's next tick is at 1100 ms.
+    let mut s = PcScene::keyed(600.0);
+    s.release();
+    let played = s.backend.played.len();
+    s.tick(1_100.0, 0.9);
+    assert!(
+        !s.rig.keyed,
+        "a late loop held the key past the release's bound"
     );
     assert_eq!(
         s.backend.played.len(),
         played,
-        "audio played after the release"
-    );
-    assert!(s.state.tx_until_ms.is_none());
-    assert!(
-        !s.backend.monitor_tx_muted,
-        "the monitor stayed muted after the release"
+        "a late loop played the tail late"
     );
 }
 
@@ -168,7 +264,7 @@ fn the_microphone_is_open_and_on_the_air_only_while_ptt_is_held() {
 fn every_stop_unkeys_flushes_and_closes_the_microphone_within_a_tick() {
     type Stop = fn(&mut PcScene);
     let stops: [(&str, Stop); 6] = [
-        ("PTT release", |s| s.ptt(false)),
+        ("PTT release, its tail spent", |s| s.release_spent()),
         ("Stop TX", |s| s.engine.lock().unwrap().halt_tx()),
         ("TX Off", |s| s.engine.lock().unwrap().set_tx_enabled(false)),
         ("the microphone went away", |s| {
@@ -270,7 +366,7 @@ fn off_by_default_the_press_keys_the_radios_own_microphone_as_before() {
 /// The stops of a keyed over, each applied between two loop ticks.
 type Stop = fn(&mut PcScene);
 const STOPS: [(&str, Stop); 7] = [
-    ("PTT release", |s| s.ptt(false)),
+    ("PTT release, its tail spent", |s| s.release_spent()),
     ("Stop TX", |s| s.engine.lock().unwrap().halt_tx()),
     ("TX Off", |s| s.engine.lock().unwrap().set_tx_enabled(false)),
     ("the microphone went away", |s| {
@@ -316,6 +412,51 @@ fn every_stop_unkeys_before_the_microphone_is_closed() {
         );
         assert!(!s.rig.keyed, "{name}: the rig stayed keyed");
     }
+}
+
+/// ⛔ UNKEY FIRST, THEN CLOSE THE MICROPHONE, when a release's tail plays out by itself: the
+/// radio's `T 0` and the flush come before the microphone's close, and the close comes only once
+/// the tail is over (the microphone stays open, its audio discarded, while the tail plays).
+#[test]
+fn a_release_tail_unkeys_before_the_microphone_is_closed() {
+    let (addr, log) = mock_rigctld_ptt(14_200_000, false, "0\n");
+    let mut s = PcScene::new(true);
+    s.rig = Rig::rigctld(&addr);
+    s.backend.events = Some(Arc::clone(&log));
+    let mut s = PcScene::keyed_from(s, 600.0);
+    log.lock().unwrap().clear();
+    s.release();
+    let mut t = 600.0;
+    while s.rig.keyed {
+        assert!(
+            t < 1_000.0,
+            "the tail never ended: {:?}",
+            log.lock().unwrap()
+        );
+        t += 20.0;
+        s.tick(t, 0.9);
+        if s.rig.keyed {
+            assert!(
+                s.backend.pc_mic_open,
+                "the microphone closed under the tail"
+            );
+        }
+    }
+    let log = log.lock().unwrap().clone();
+    let at = |what: &str| log.iter().position(|l| l == what);
+    let (unkey, flush, close) = (at("T 0"), at("flush"), at("pc_mic close"));
+    assert!(
+        unkey.is_some() && flush.is_some() && close.is_some(),
+        "missing an unkey, flush or close: {log:?}"
+    );
+    assert!(
+        unkey < close && flush < close,
+        "the microphone closed before the unkey: {log:?}"
+    );
+    assert!(
+        !s.backend.played.contains(&0.9),
+        "audio captured after the release was sent"
+    );
 }
 
 /// A release and a new press inside one loop tick: the old over is unkeyed and flushed, the
@@ -552,7 +693,11 @@ impl PcScene {
 fn a_stop_during_the_key_unkeys_before_the_microphone_is_closed() {
     type EngineStop = fn(&mut Engine);
     let stops: [(&str, EngineStop); 3] = [
-        ("PTT release", |e| e.set_ptt(false)),
+        // Stamped with its tail already spent, so the next tick ends the over as a stop does.
+        ("PTT release", |e| {
+            e.release_pc_mic_at(Instant::now() - Duration::from_secs(1));
+            e.set_ptt(false);
+        }),
         ("Stop TX", |e| e.halt_tx()),
         ("TX Off", |e| e.set_tx_enabled(false)),
     ];

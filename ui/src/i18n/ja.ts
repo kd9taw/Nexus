@@ -5297,7 +5297,7 @@ export const JA: PartialCatalog = {
   "settings.audio.rxGain.hint": "入力の小さいインターフェースを、RXレベルが30 dB前後になるまで増幅します。メーターはスライダーを離すと反応します。メーターが低い（約15 dB未満）場合を除き×1.0のままにしてください。FT8は小さい信号でもデコードできるため、大きく上げる必要はほとんどありません。",
   "settings.audio.pcMic.title": "このコンピューターのマイク（Phone）",
   "settings.audio.pcMic.label": "このコンピューターのマイクを使う",
-  "settings.audio.pcMic.hint": "オン：PhoneでPTTを押している間、Nexusはこのコンピューターのマイクを送信オーディオ（上の出力デバイス、TCI無線機ではTCIオーディオ）でこの無線機に送り、コンピューター音声用に送信状態にします。オフ（既定）：PTTはこれまでどおり無線機自身のマイクで送信します。Phoneのみで、デジタルモードでは使いません。PTTを離す、Stop TX、TX Offで即座に止まります。",
+  "settings.audio.pcMic.hint": "オン：PhoneでPTTを押している間、Nexusはこのコンピューターのマイクを送信オーディオ（上の出力デバイス、TCI無線機ではTCIオーディオ）でこの無線機に送り、コンピューター音声用に送信状態にします。オフ（既定）：PTTはこれまでどおり無線機自身のマイクで送信します。Phoneのみで、デジタルモードでは使いません。Stop TX、TX Offで即座に止まります。PTTを離すと、最後の言葉の終わり（最大 0.2 秒）を送ってから送信を止めます。",
   "settings.audio.pcMic.device.label": "マイク",
   "settings.audio.pcMic.device.none": "マイクを選択…",
   "settings.audio.pcMic.device.hint": "システムの既定デバイスやこの無線機の受信入力は使いません。送信中にマイクが外れると、無線機は受信に戻ります。",

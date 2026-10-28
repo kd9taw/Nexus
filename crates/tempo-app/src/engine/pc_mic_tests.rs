@@ -122,32 +122,36 @@ fn audio_reaches_the_transmitter_only_between_press_and_release() {
         }
     }
     assert!(heard, "the operator's voice never reached the transmitter");
-    // The release: dropped now, abort armed, and nothing after it reaches the transmitter.
-    e.set_ptt(false);
+    // The release: what the over holds may play out (the tail's own tests below), nothing
+    // captured after it reaches the transmitter, and by the bound the over is over.
+    let r = t1 + ms(20 * 19);
+    e.release_pc_mic_at(r);
+    let t2 = r + ms(RELEASE_TAIL_MS);
+    e.push_pc_mic(&audio(100, 0.9), t2);
+    assert_eq!(e.poll_pc_mic(t2, TICK, 1), MicTick::Idle);
     assert!(!e.pc_mic_armed());
     assert!(
         e.take_pc_mic_abort(),
-        "the release did not arm the flush + unkey"
+        "the release's bound did not arm the flush + unkey"
     );
     assert_eq!(
         e.pc_mic_source(),
         None,
         "the microphone stayed open after the release"
     );
-    let t2 = t1 + ms(500);
-    e.push_pc_mic(&audio(100, 0.5), t2);
-    assert_eq!(e.poll_pc_mic(t2, TICK, 1), MicTick::Idle);
+    e.push_pc_mic(&audio(100, 0.9), t2 + ms(20));
+    assert_eq!(e.poll_pc_mic(t2 + ms(20), TICK, 1), MicTick::Idle);
 }
 
 #[test]
 fn every_stop_ends_a_keyed_over_within_one_tick() {
     type Stop = fn(&mut Engine);
     // `true`: the stop itself ends the over, before any tick (the operator's own stops and a lost
-    // microphone); `false`: the next tick's gates end it.
-    let stops: [(&str, bool, Stop); 8] = [
+    // microphone); `false`: the next tick's gates end it. The PTT release is not here: it lets the
+    // over's audio play out for up to `RELEASE_TAIL_MS` (its own tests, below).
+    let stops: [(&str, bool, Stop); 7] = [
         ("Stop TX (halt_tx)", true, |e| e.halt_tx()),
         ("TX Off (the latch)", true, |e| e.set_tx_enabled(false)),
-        ("PTT release", true, |e| e.set_ptt(false)),
         ("the microphone went away", true, |e| {
             e.pc_mic_device_failed(true)
         }),
@@ -711,4 +715,296 @@ fn a_new_press_is_a_new_capture() {
     assert_eq!(first.device, second.device);
     assert_ne!(first.gen, second.gen, "the re-press reuses the old capture");
     assert!(e.take_pc_mic_abort(), "the old over's unkey was lost");
+}
+
+// ---- The release tail (operator ruling: "Let ≤200 ms finish") ----
+//
+// On the operator's PTT release only, the microphone audio already taken before the release plays
+// out, at most `RELEASE_TAIL_MS` of it, bounded by the wall clock from the release, and then the
+// radio unkeys. Every other stop stays a hard cut. The scenes below put a known amount of audio in
+// the over before the release: it all arrives at the key (`t0`, as one capture block), and the
+// release falls at `t0 + 100 ms`, the moment the over's first sample is on the air (the 60 ms
+// lead-in plus the 40 ms look-ahead), so everything taken is still to be heard at the release.
+
+/// The level of the operator's voice before the release, and of anything captured after it.
+const VOICE: f32 = 0.5;
+const AFTER: f32 = 0.9;
+
+/// A keyed over holding `queued_ms` of `VOICE` at the release; returns the engine, `t0`, the
+/// release moment, and every sample fed before the release.
+fn tail_scene(queued_ms: u64) -> (Engine, Instant, Instant, Vec<f32>) {
+    let mut e = station();
+    let t0 = Instant::now();
+    e.set_ptt(true);
+    assert_eq!(e.poll_pc_mic(t0, TICK, 1), MicTick::Armed);
+    e.push_pc_mic(&audio(queued_ms, VOICE), t0);
+    assert_eq!(
+        e.poll_pc_mic(t0, TICK, 1),
+        MicTick::Key,
+        "premise: audio keys"
+    );
+    let mut fed = Vec::new();
+    let mut t = 10;
+    while t < 100 {
+        if let MicTick::Samples(s) = e.poll_pc_mic(t0 + ms(t), 40.0, 1) {
+            fed.extend(s);
+        }
+        t += 10;
+    }
+    (e, t0, t0 + ms(100), fed)
+}
+
+/// After the release at `r`: poll every 10 ms up to `r + until_ms`, the microphone still
+/// delivering `AFTER` audio at each poll. Returns the samples fed after the release and the time
+/// (ms after `r`) of the poll that ended the over, with its abort armed, if it ended.
+fn run_tail(e: &mut Engine, r: Instant, until_ms: u64) -> (Vec<f32>, Option<u64>) {
+    run_tail_every(e, r, until_ms, 10)
+}
+
+/// [`run_tail`], polling every `step` ms (a loop whose ticks do not fall on the bound).
+fn run_tail_every(e: &mut Engine, r: Instant, until_ms: u64, step: u64) -> (Vec<f32>, Option<u64>) {
+    let mut fed = Vec::new();
+    let mut k = 0;
+    while k <= until_ms {
+        let t = r + ms(k);
+        e.push_pc_mic(&audio(10, AFTER), t);
+        match e.poll_pc_mic(t, 40.0, 1) {
+            MicTick::Samples(s) => fed.extend(s),
+            MicTick::Idle => {
+                assert!(
+                    !e.pc_mic_armed(),
+                    "Idle at {k} ms with the over still armed"
+                );
+                assert!(
+                    e.take_pc_mic_abort(),
+                    "ended at {k} ms with no flush + unkey"
+                );
+                return (fed, Some(k));
+            }
+            _ => {}
+        }
+        k += step;
+    }
+    (fed, None)
+}
+
+fn count(samples: &[f32], level: f32) -> usize {
+    samples.iter().filter(|&&x| x == level).count()
+}
+
+/// 150 ms queued at the release: all of it is sent, then the radio unkeys, when it has played
+/// (150 ms after the release, and never past 200 ms). Nothing captured after the release is sent.
+#[test]
+fn a_release_with_150_ms_queued_sends_those_150_ms_then_unkeys() {
+    let (mut e, _t0, r, before) = tail_scene(150);
+    e.release_pc_mic_at(r);
+    assert!(e.pc_mic_armed(), "the release cut the queued audio off");
+    assert!(!e.take_pc_mic_abort(), "the release armed a flush");
+    let (after, ended) = run_tail(&mut e, r, 400);
+    let sent = count(&before, VOICE) + count(&after, VOICE);
+    assert_eq!(
+        sent,
+        PC_MIC.samples(150) as usize,
+        "not exactly the 150 ms queued were sent"
+    );
+    assert_eq!(
+        count(&after, AFTER),
+        0,
+        "audio captured after the release was sent"
+    );
+    let ended = ended.expect("the over never ended");
+    assert!(
+        (150..=200).contains(&ended),
+        "unkeyed {ended} ms after the release (want when the 150 ms have played, by 200)"
+    );
+    assert_eq!(
+        e.snapshot().radio.pc_mic_ended,
+        None,
+        "the release is the operator's own"
+    );
+}
+
+/// 400 ms queued at the release: at most 200 ms of it is sent, and the radio unkeys 200 ms after
+/// the release by the wall clock, never "when the queue empties".
+#[test]
+fn a_release_with_400_ms_queued_sends_at_most_200_ms_then_unkeys() {
+    let (mut e, _t0, r, before) = tail_scene(400);
+    e.release_pc_mic_at(r);
+    let (after, ended) = run_tail(&mut e, r, 600);
+    let sent = count(&before, VOICE) + count(&after, VOICE);
+    assert_eq!(
+        sent,
+        PC_MIC.samples(RELEASE_TAIL_MS) as usize,
+        "not exactly 200 ms of the 400 ms queued were sent"
+    );
+    assert_eq!(
+        count(&after, AFTER),
+        0,
+        "audio captured after the release was sent"
+    );
+    assert_eq!(
+        ended,
+        Some(RELEASE_TAIL_MS),
+        "not unkeyed at 200 ms by the clock"
+    );
+    // A loop ticking every 30 ms, off the bound: still nothing past 200 ms is fed, and it unkeys
+    // on its first tick at or after the bound.
+    let (mut e, _t0, r, before) = tail_scene(400);
+    e.release_pc_mic_at(r);
+    let (after, ended) = run_tail_every(&mut e, r, 600, 30);
+    assert_eq!(
+        count(&before, VOICE) + count(&after, VOICE),
+        PC_MIC.samples(RELEASE_TAIL_MS) as usize,
+        "30 ms ticks: more than 200 ms was sent"
+    );
+    assert_eq!(
+        ended,
+        Some(210),
+        "30 ms ticks: not unkeyed on the first tick past the bound"
+    );
+}
+
+/// ⛔ Stop TX, TX Off, a radio handoff and the watchdog during the tail cut it at once: the over
+/// ends at the stop itself (or on the watchdog's tick), with the flush + unkey armed, and nothing
+/// more is fed.
+#[test]
+fn every_other_stop_during_the_tail_is_immediate() {
+    type Stop = fn(&mut Engine);
+    let stops: [(&str, Stop); 3] = [
+        ("Stop TX", |e| e.halt_tx()),
+        ("TX Off", |e| e.set_tx_enabled(false)),
+        ("a radio handoff", |e| e.pc_mic_interrupted()),
+    ];
+    for (name, stop) in stops {
+        let (mut e, _t0, r, _) = tail_scene(400);
+        e.release_pc_mic_at(r);
+        let (_, ended) = run_tail(&mut e, r, 50);
+        assert_eq!(ended, None, "{name}: premise: the tail is playing");
+        stop(&mut e);
+        assert!(!e.pc_mic_armed(), "{name}: the tail outlived the stop");
+        assert!(e.take_pc_mic_abort(), "{name}: no flush + unkey");
+        assert_eq!(e.poll_pc_mic(r + ms(60), 40.0, 1), MicTick::Idle, "{name}");
+        // The over was ending by the operator's own release: no fault is named for it.
+        assert_eq!(
+            lane(&e),
+            None,
+            "{name}: named as a fault in the release's tail"
+        );
+    }
+    // The watchdog: its tick ends the tail, turns TX off and says so.
+    let (mut e, _t0, r, _) = tail_scene(400);
+    e.release_pc_mic_at(r);
+    let (_, ended) = run_tail(&mut e, r, 50);
+    assert_eq!(ended, None, "premise: the tail is playing");
+    e.settings.tx_watchdog_min = 1;
+    e.tx_watchdog_start = Some(now_unix_secs() - 120);
+    assert_eq!(e.poll_pc_mic(r + ms(60), 40.0, 1), MicTick::Idle);
+    assert!(
+        !e.pc_mic_armed() && e.take_pc_mic_abort(),
+        "the watchdog did not cut the tail"
+    );
+    assert!(!e.tx_enabled(), "the watchdog left TX on");
+    assert_eq!(lane(&e), Some(PcMicCause::Watchdog));
+}
+
+/// ⛔ A loop that stops ticking after the release (wedged, or late) feeds nothing more when it
+/// comes back past the bound: that tick ends the over with the flush + unkey, at once.
+#[test]
+fn a_wedged_loop_still_unkeys_within_the_bound() {
+    for (queued, back_at) in [(400, 500), (150, 210), (400, RELEASE_TAIL_MS)] {
+        let (mut e, _t0, r, _) = tail_scene(queued);
+        e.release_pc_mic_at(r);
+        e.push_pc_mic(&audio(20, AFTER), r + ms(back_at));
+        assert_eq!(
+            e.poll_pc_mic(r + ms(back_at), 40.0, 1),
+            MicTick::Idle,
+            "{queued} ms queued, back at {back_at} ms: the tail carried on"
+        );
+        assert!(
+            !e.pc_mic_armed() && e.take_pc_mic_abort(),
+            "{queued}/{back_at}: no unkey"
+        );
+    }
+}
+
+/// The over's gap (no audio for 300 ms) is no fault in the tail: the operator stopped speaking on
+/// purpose, and the wall clock bounds it. A tail whose last audio arrived 250 ms before the release
+/// still plays its 200 ms out, and the lane stays quiet.
+#[test]
+fn the_tail_is_not_cut_by_the_gap() {
+    let mut e = station();
+    let t0 = Instant::now();
+    e.set_ptt(true);
+    assert_eq!(e.poll_pc_mic(t0, TICK, 1), MicTick::Armed);
+    e.push_pc_mic(&audio(440, VOICE), t0);
+    assert_eq!(e.poll_pc_mic(t0, TICK, 1), MicTick::Key);
+    let mut fed = Vec::new();
+    let mut t = 10;
+    while t < 250 {
+        if let MicTick::Samples(s) = e.poll_pc_mic(t0 + ms(t), 40.0, 1) {
+            fed.extend(s);
+        }
+        t += 10;
+    }
+    let r = t0 + ms(250);
+    e.release_pc_mic_at(r);
+    let (after, ended) = run_tail(&mut e, r, 400);
+    assert_eq!(
+        ended,
+        Some(RELEASE_TAIL_MS),
+        "the tail did not play to its bound"
+    );
+    // Media 0 played at t0 + 100 ms: by r + 200 ms, 350 ms of the voice has been sent.
+    assert_eq!(
+        count(&fed, VOICE) + count(&after, VOICE),
+        PC_MIC.samples(350) as usize
+    );
+    assert_eq!(lane(&e), None, "the release's tail was named as a fault");
+}
+
+/// A press during the tail cuts the tail (flush + unkey) and starts a fresh over, which keys on
+/// its own audio, never on the old over's.
+#[test]
+fn a_press_during_the_tail_starts_a_fresh_over() {
+    let (mut e, _t0, r, _) = tail_scene(400);
+    let gen = e.pc_mic_source().expect("premise: an over").gen;
+    e.release_pc_mic_at(r);
+    let (_, ended) = run_tail(&mut e, r, 20);
+    assert_eq!(ended, None);
+    e.set_ptt(true);
+    assert!(e.take_pc_mic_abort(), "the old over was not unkeyed");
+    assert!(e.pc_mic_armed() && !e.pc_mic_keyed(), "no fresh over armed");
+    assert_eq!(e.pc_mic_source().map(|s| s.gen), Some(gen + 1));
+    assert_eq!(e.poll_pc_mic(r + ms(30), TICK, 1), MicTick::Armed);
+    e.push_pc_mic(&audio(20, AFTER), r + ms(40));
+    assert_eq!(e.poll_pc_mic(r + ms(40), TICK, 1), MicTick::Key);
+}
+
+/// The operator's PTT release (`set_ptt(false)`) starts the tail on the wall clock at the release,
+/// and a second release never moves it; an over that never keyed ends at once.
+#[test]
+fn the_release_is_timed_from_the_moment_ptt_is_let_go() {
+    let mut e = station();
+    let t0 = Instant::now();
+    keyed(&mut e, t0);
+    let before = Instant::now();
+    e.set_ptt(false);
+    let after = Instant::now();
+    let until = e.pc_mic.tail.expect("the release played no tail");
+    assert!(
+        until >= before + ms(RELEASE_TAIL_MS) && until <= after + ms(RELEASE_TAIL_MS),
+        "the tail is not timed from the release"
+    );
+    e.release_pc_mic_at(after + ms(50));
+    assert_eq!(
+        e.pc_mic.tail,
+        Some(until),
+        "a second release moved the bound"
+    );
+    // Armed, never keyed: nothing is on the air, so the release ends it at once.
+    let mut e = station();
+    e.set_ptt(true);
+    assert!(e.pc_mic_armed() && !e.pc_mic_keyed());
+    e.set_ptt(false);
+    assert!(!e.pc_mic_armed() && !e.take_pc_mic_abort());
 }

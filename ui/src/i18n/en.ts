@@ -8315,7 +8315,7 @@ export const EN = {
   'settings.audio.pcMic.title': 'Computer microphone (Phone)',
   'settings.audio.pcMic.label': 'Use this computer\'s microphone',
   'settings.audio.pcMic.hint':
-    'On: while you hold PTT in Phone, Nexus sends this computer\'s microphone to this radio through its transmit audio (the output device above, or TCI audio on a TCI radio) and keys the radio for computer audio. Off (the default): PTT keys the radio\'s own microphone, as before. Phone only; the digital modes never use it. Releasing PTT, Stop TX or TX Off cuts it at once.',
+    'On: while you hold PTT in Phone, Nexus sends this computer\'s microphone to this radio through its transmit audio (the output device above, or TCI audio on a TCI radio) and keys the radio for computer audio. Off (the default): PTT keys the radio\'s own microphone, as before. Phone only; the digital modes never use it. Stop TX or TX Off cuts it at once; releasing PTT lets the end of your last word finish (at most 0.2 s), then unkeys.',
   'settings.audio.pcMic.device.label': 'Microphone',
   'settings.audio.pcMic.device.none': 'Choose a microphone…',
   'settings.audio.pcMic.device.hint':

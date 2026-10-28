@@ -14,15 +14,17 @@
 //! ## The safety rules, and where each is held
 //!
 //! - **Only while the operator's PTT is held.** The press arms ([`Engine::arm_pc_mic`], from
-//!   [`Engine::set_ptt`]); the release ends the over at once ([`Engine::release_pc_mic`]): the feed
-//!   closes, the queued audio is flushed and the radio unkeys on the next tick. No tail is played
-//!   out: the operator let go. The microphone is not even open while no over is armed.
+//!   [`Engine::set_ptt`]); the release closes the feed at once, so nothing captured after it is
+//!   sent, and lets what the over already holds play out for at most [`RELEASE_TAIL_MS`] by the
+//!   wall clock before the flush + unkey ([`Engine::release_pc_mic_at`]), so the end of the last
+//!   word is not clipped. The microphone is not even open while no over is armed.
 //! - **Never keys by itself.** An armed over keys on the first audio the microphone delivers after
 //!   the press, and on nothing else; a press that never gets audio keys nothing.
 //! - **Every TX gate, every tick.** The TX-enable latch, the licence privileges, no tune, the Phone
 //!   section, this radio's switch still on, the same radio, the same transmit route, the 10-minute
-//!   ceiling and the wall-clock TX watchdog. Stop TX ([`Engine::halt_tx`]) and TX Off
-//!   ([`Engine::set_tx_enabled`]) drop it through the one kill path, [`Engine::drop_pc_mic`].
+//!   ceiling and the wall-clock TX watchdog, the release's tail included. Stop TX
+//!   ([`Engine::halt_tx`]) and TX Off ([`Engine::set_tx_enabled`]) drop it through the one kill
+//!   path, [`Engine::drop_pc_mic`], at once, tail or no tail.
 //! - **A microphone that goes away unkeys.** The loop reports a capture stream the OS killed
 //!   ([`Engine::pc_mic_device_failed`]) and the over ends on that tick; one that just stops
 //!   delivering ends at [`PC_MIC`]'s gap; one that sends only digital silence keys nothing, and
@@ -54,6 +56,9 @@ const GAIN_DB_MAX: f32 = 20.0;
 /// a stalled or muted device that keeps calling back with zeros still ends the over here.
 const DIGITAL_SILENCE_LIMIT_MS: u64 = 4_000;
 
+/// The most of the microphone's audio a PTT release lets play out before the radio unkeys.
+pub const RELEASE_TAIL_MS: u64 = 200;
+
 /// The computer microphone's over and what it needs.
 pub(crate) struct PcMicState {
     pub(crate) over: MicLatch,
@@ -76,6 +81,10 @@ pub(crate) struct PcMicState {
     silent_since: Option<Instant>,
     /// Why the last over ended or never keyed, when the operator did not choose it (the status lane).
     pub(crate) ended: Option<PcMicEnded>,
+    /// The PTT release's bound on the wall clock: the keyed over unkeys by then at the latest.
+    pub(crate) tail: Option<Instant>,
+    /// What the feed held at the release (captured before it), for the next tick.
+    held: Vec<MicFrame>,
 }
 
 impl Default for PcMicState {
@@ -92,6 +101,8 @@ impl Default for PcMicState {
             gen: 0,
             silent_since: None,
             ended: None,
+            tail: None,
+            held: Vec::new(),
         }
     }
 }
@@ -137,7 +148,12 @@ impl Engine {
     /// transmitter.
     pub(super) fn arm_pc_mic(&mut self) -> bool {
         if self.pc_mic.over.active() {
-            return true;
+            if self.pc_mic.tail.is_none() {
+                return true;
+            }
+            // A press during the release's tail: the tail is cut (flush + unkey) and a fresh over
+            // arms, on its own capture, as a quick re-press always has.
+            self.drop_pc_mic();
         }
         if !self.pc_mic_wanted()
             || !self.tx_enabled
@@ -194,9 +210,46 @@ impl Engine {
         true
     }
 
-    /// The operator let go of PTT: the over ends NOW, with no tail played out.
+    /// The operator let go of PTT: the end of the last word plays out, then the radio unkeys
+    /// ([`Self::release_pc_mic_at`], timed from now on the wall clock).
     pub fn release_pc_mic(&mut self) {
-        self.drop_pc_mic();
+        self.release_pc_mic_at(Instant::now());
+    }
+
+    /// ⛔ THE RELEASE TAIL (operator ruling, 2026-10-28: "Let ≤200 ms finish"). The operator let go
+    /// of PTT at `at`: the microphone audio the over already holds plays out, then the radio
+    /// unkeys, so the end of the last word is not clipped. Bounded three ways, none of them "until
+    /// the queue empties":
+    /// - nothing captured after the release is sent: the feed closes HERE (what arrived before the
+    ///   release, the part of a frame included, is kept for the over);
+    /// - no sample that would play [`RELEASE_TAIL_MS`] or more after `at` is ever fed
+    ///   ([`MicLatch::release_by`]);
+    /// - [`Self::poll_pc_mic`] ends the over (flush + unkey) at `at + RELEASE_TAIL_MS` by the wall
+    ///   clock whatever is left, and on the first tick after a late or wedged loop comes back.
+    ///
+    /// Only the release. Stop TX, TX Off, the watchdog, a gate going down, a handoff and every other
+    /// stop still end the over at once ([`Self::drop_pc_mic`]), tail or no tail; a new press cuts
+    /// the tail and starts a fresh over. An over that never keyed has put nothing on the air and
+    /// ends now. A second release never moves the bound.
+    pub fn release_pc_mic_at(&mut self, at: Instant) {
+        if self.pc_mic.tail.is_some() {
+            return;
+        }
+        if !self.pc_mic.over.keyed() {
+            self.drop_pc_mic();
+            return;
+        }
+        // The part of a frame captured before the release, made whole with silence.
+        if !self.pc_mic.partial.is_empty() {
+            let mut frame = std::mem::take(&mut self.pc_mic.partial);
+            frame.resize(FRAME, 0.0);
+            self.offer_pc_mic_frame(frame, at);
+        }
+        self.pc_mic.held = self.pc_mic.feed.take();
+        self.pc_mic.feed.close();
+        let until = at + std::time::Duration::from_millis(RELEASE_TAIL_MS);
+        self.pc_mic.over.release_by(until);
+        self.pc_mic.tail = Some(until);
     }
 
     /// End the computer-microphone over NOW: the ONE kill path. The feed closes first, so nothing
@@ -204,6 +257,8 @@ impl Engine {
     pub fn drop_pc_mic(&mut self) {
         self.pc_mic.feed.close();
         self.pc_mic.partial.clear();
+        self.pc_mic.held.clear();
+        self.pc_mic.tail = None;
         self.pc_mic.radio = None;
         if self.pc_mic.over.drop_latch() {
             self.pc_mic.abort = true;
@@ -212,9 +267,12 @@ impl Engine {
 
     /// [`Self::drop_pc_mic`], recording why for the operator.
     fn drop_pc_mic_for(&mut self, cause: PcMicCause) {
-        let was_active = self.pc_mic.over.active();
+        // In the release's tail the over was ending by the operator's own act: only a watchdog
+        // trip, which also turned TX off, is worth the operator's attention.
+        let note = self.pc_mic.over.active()
+            && (self.pc_mic.tail.is_none() || cause == PcMicCause::Watchdog);
         self.drop_pc_mic();
-        if was_active {
+        if note {
             self.note_pc_mic(cause);
         }
     }
@@ -347,30 +405,38 @@ impl Engine {
         while self.pc_mic.partial.len() >= FRAME {
             let rest = self.pc_mic.partial.split_off(FRAME);
             let frame = std::mem::replace(&mut self.pc_mic.partial, rest);
-            self.pc_mic.seq += 1;
-            let media = self.pc_mic.media;
-            self.pc_mic.media += FRAME as u64;
             // Digital silence (every sample exactly zero) never STARTS an over: a stalled or muted
             // device that keeps calling back with zeros keys nothing. Once the over is keyed it is
             // the pause between words of a gated microphone, so it holds the gap like any audio;
             // an unbroken run of it ends the over at `DIGITAL_SILENCE_LIMIT_MS` (`poll_pc_mic`).
             if frame.iter().all(|&x| x == 0.0) {
                 if !self.pc_mic.over.keyed() {
+                    // Its moment passes on the microphone's clock all the same.
+                    self.pc_mic.seq += 1;
+                    self.pc_mic.media += FRAME as u64;
                     continue;
                 }
                 self.pc_mic.silent_since.get_or_insert(at);
             } else {
                 self.pc_mic.silent_since = None;
             }
-            // A frame the feed refuses (full: the loop stopped reading) is a moment of silence, as
-            // a lost one is; the gap ends an over that gets none.
-            let _ = self.pc_mic.feed.push(MicFrame {
-                seq: self.pc_mic.seq,
-                media,
-                arrived: at,
-                samples: frame,
-            });
+            self.offer_pc_mic_frame(frame, at);
         }
+    }
+
+    /// Offer one whole frame to the over's feed, next on its sample clock. A frame the feed
+    /// refuses (closed, or full: the loop stopped reading) is a moment of silence, as a lost one
+    /// is; the gap ends an over that gets none.
+    fn offer_pc_mic_frame(&mut self, samples: Vec<f32>, at: Instant) {
+        self.pc_mic.seq += 1;
+        let media = self.pc_mic.media;
+        self.pc_mic.media += FRAME as u64;
+        let _ = self.pc_mic.feed.push(MicFrame {
+            seq: self.pc_mic.seq,
+            media,
+            arrived: at,
+            samples,
+        });
     }
 
     /// One radio-loop tick of the computer-microphone over: the ONLY path from the microphone to
@@ -401,14 +467,37 @@ impl Engine {
             watchdog_limit_secs: self.settings.tx_watchdog_min as u64 * 60,
             watchdog_start_secs: self.tx_watchdog_start,
         };
-        let arrived = self.pc_mic.feed.take();
+        let mut arrived = std::mem::take(&mut self.pc_mic.held);
+        arrived.extend(self.pc_mic.feed.take());
         let budget_ms = budget_ms.clamp(0.0, PC_MIC.max_push_ms as f64);
         let budget = (budget_ms * f64::from(PC_MIC.rate_hz) / 1000.0) as usize;
         let mut res = self.pc_mic.over.tick(gates, arrived, budget);
         if let Some(start) = res.watchdog_start {
             self.tx_watchdog_start = Some(start);
         }
+        // The release's tail ([`Self::release_pc_mic_at`]). The latch has already judged every
+        // gate, the ceiling and the watchdog on this tick; a drop it raised stands.
+        if let Some(until) = self.pc_mic.tail {
+            if res.drop.is_none() && now >= until {
+                // ⛔ The wall clock: off the air now, whatever is left, and nothing more is fed
+                // (this tick's audio is not played; the loop gets `Idle` and the abort).
+                res.drop = Some(MicDrop::Drained);
+                res.tick = MicTick::Idle;
+            } else if res.drop == Some(MicDrop::Drained)
+                && now < until
+                && self
+                    .pc_mic
+                    .over
+                    .fed_until()
+                    .is_some_and(|played| now < played)
+            {
+                // Everything is fed and still playing: stay keyed until it has.
+                res.drop = None;
+                res.tick = MicTick::Ahead;
+            }
+        }
         if res.drop.is_none()
+            && self.pc_mic.tail.is_none()
             && self.pc_mic.over.keyed()
             && self.pc_mic.silent_since.is_some_and(|since| {
                 now.saturating_duration_since(since)
@@ -437,8 +526,9 @@ impl Engine {
                 MicDrop::GateDown | MicDrop::DeviceChanged => {
                     self.drop_pc_mic_for(PcMicCause::GateDown)
                 }
-                // Never raised here: the hold is the operator's own (`presence` is always up), and
-                // nothing releases this over gracefully. Ended all the same.
+                // The release's tail has played out, or reached its bound: the flush + unkey, with
+                // nothing left to flush but what the clock cut. (`Presence` is never raised here:
+                // the hold is the operator's own.)
                 MicDrop::Presence | MicDrop::Drained => self.drop_pc_mic(),
             }
             tempo_core::applog::info("tx", &format!("{} over ended: {why:?}", PC_MIC.name));

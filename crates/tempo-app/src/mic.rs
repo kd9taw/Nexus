@@ -461,6 +461,9 @@ struct Over {
     end: u64,
     /// The owner let go ([`MicLatch::release`]): play out what was accepted, then end.
     released: bool,
+    /// A release bounded by a moment ([`MicLatch::release_by`]): the cursor no sample is fed
+    /// beyond, the sample that plays at that moment.
+    play_until: Option<u64>,
 }
 
 impl Over {
@@ -538,6 +541,42 @@ impl MicLatch {
                 self.phase = Phase::Idle;
                 false
             }
+        }
+    }
+
+    /// The owner let go of a keyed over that must be off the air by `until` (the computer
+    /// microphone's PTT release): [`Self::release`], and in addition no sample that would play at or
+    /// after `until` is ever fed, and the gap is no fault in it (the owner stopped sending on
+    /// purpose, and `until` bounds it). The CALLER holds the wall clock: it ends the over at `until`
+    /// whatever is left. An over
+    /// that never keyed ends now. Returns whether the over plays on.
+    pub fn release_by(&mut self, until: Instant) -> bool {
+        let mode = self.mode;
+        match &mut self.phase {
+            Phase::Keyed(over) => {
+                over.released = true;
+                over.play_until =
+                    Some(mode.samples_in(until.saturating_duration_since(over.start)));
+                true
+            }
+            _ => {
+                self.phase = Phase::Idle;
+                false
+            }
+        }
+    }
+
+    /// When everything fed to the transmitter so far has played: the keyed over's playout clock at
+    /// its cursor. `None` when not keyed.
+    pub fn fed_until(&self) -> Option<Instant> {
+        match &self.phase {
+            Phase::Keyed(over) => Some(
+                over.start
+                    + Duration::from_nanos(
+                        over.cursor * 1_000_000_000 / u64::from(self.mode.rate_hz),
+                    ),
+            ),
+            _ => None,
         }
     }
 
@@ -663,6 +702,7 @@ impl MicLatch {
                 in_hole: 0,
                 end: first.end(),
                 released: false,
+                play_until: None,
             };
             over.count_voice(&mode, &first);
             over.frames.push_back(first);
@@ -683,9 +723,11 @@ impl MicLatch {
         if over.released && over.position(&mode) >= over.end as i128 {
             return MicTickResult::dropped(MicDrop::Drained);
         }
-        // G6 (M2): the gap, from the arrival of the last frame the over accepted.
-        if gates.now.saturating_duration_since(over.last_arrival)
-            >= Duration::from_millis(mode.gap_ms)
+        // G6 (M2): the gap, from the arrival of the last frame the over accepted. Not in a bounded
+        // release, whose bound is the caller's wall clock.
+        if over.play_until.is_none()
+            && gates.now.saturating_duration_since(over.last_arrival)
+                >= Duration::from_millis(mode.gap_ms)
         {
             return MicTickResult::dropped(MicDrop::AudioGap);
         }
@@ -748,7 +790,9 @@ impl Over {
         let elapsed = mode.samples_in(now - self.start);
         // The moments that went by while the loop was not feeding are gone.
         self.cursor = self.cursor.max(elapsed);
-        let end = (elapsed + mode.samples(mode.ahead_ms)).min(self.cursor + budget as u64);
+        let end = (elapsed + mode.samples(mode.ahead_ms))
+            .min(self.cursor + budget as u64)
+            .min(self.play_until.unwrap_or(u64::MAX));
         if end <= self.cursor {
             return None; // fed as far ahead as it may be
         }
