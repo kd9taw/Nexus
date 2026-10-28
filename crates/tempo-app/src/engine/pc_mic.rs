@@ -25,7 +25,8 @@
 //!   ([`Engine::set_tx_enabled`]) drop it through the one kill path, [`Engine::drop_pc_mic`].
 //! - **A microphone that goes away unkeys.** The loop reports a capture stream the OS killed
 //!   ([`Engine::pc_mic_device_failed`]) and the over ends on that tick; one that just stops
-//!   delivering ends at [`PC_MIC`]'s gap.
+//!   delivering ends at [`PC_MIC`]'s gap; one that sends only digital silence keys nothing, and
+//!   ends a keyed over after [`DIGITAL_SILENCE_LIMIT_MS`] of it.
 //! - **The digital modes never take it.** Only Phone arms it, and leaving Phone drops it.
 //! - **No feedback path.** The microphone's audio goes to the transmit route and nowhere else: never
 //!   to the headphone monitor, which plays only received audio. A microphone that is the radio's own
@@ -47,6 +48,12 @@ const FRAME: usize = PC_MIC.samples(20) as usize;
 const GAIN_DB_MIN: f32 = -20.0;
 const GAIN_DB_MAX: f32 = 20.0;
 
+/// How long a KEYED over may receive nothing but digital silence (every sample exactly zero) before
+/// it ends as no audio. A microphone with a noise gate (a headset's own, or a noise-suppressing
+/// virtual microphone) sends exact zeros between words, so those count as audio for the over's gap;
+/// a stalled or muted device that keeps calling back with zeros still ends the over here.
+const DIGITAL_SILENCE_LIMIT_MS: u64 = 4_000;
+
 /// The computer microphone's over and what it needs.
 pub(crate) struct PcMicState {
     pub(crate) over: MicLatch,
@@ -65,6 +72,8 @@ pub(crate) struct PcMicState {
     /// Moves at every arm: the radio loop closes and reopens the microphone for a new over, so
     /// nothing captured before a quick re-press reaches it, and the old over's stop is taken first.
     gen: u64,
+    /// When the keyed over's unbroken run of digital silence began ([`DIGITAL_SILENCE_LIMIT_MS`]).
+    silent_since: Option<Instant>,
     /// Why the last over ended or never keyed, when the operator did not choose it (the status lane).
     pub(crate) ended: Option<PcMicEnded>,
 }
@@ -81,6 +90,7 @@ impl Default for PcMicState {
             seq: 0,
             partial: Vec::new(),
             gen: 0,
+            silent_since: None,
             ended: None,
         }
     }
@@ -169,6 +179,7 @@ impl Engine {
         self.pc_mic.media = 0;
         self.pc_mic.seq = 0;
         self.pc_mic.partial.clear();
+        self.pc_mic.silent_since = None;
         // A press is an operator action: the unattended-transmit clock restarts here.
         self.reset_tx_watchdog();
         true
@@ -307,12 +318,17 @@ impl Engine {
             self.pc_mic.seq += 1;
             let media = self.pc_mic.media;
             self.pc_mic.media += FRAME as u64;
-            // Digital silence (every sample exactly zero) is no audio: a live microphone always
-            // carries some noise, and a stalled or muted device that keeps calling back with zeros
-            // must not hold the radio keyed. It keys nothing, and the gap ends an over that gets
-            // only that.
+            // Digital silence (every sample exactly zero) never STARTS an over: a stalled or muted
+            // device that keeps calling back with zeros keys nothing. Once the over is keyed it is
+            // the pause between words of a gated microphone, so it holds the gap like any audio;
+            // an unbroken run of it ends the over at `DIGITAL_SILENCE_LIMIT_MS` (`poll_pc_mic`).
             if frame.iter().all(|&x| x == 0.0) {
-                continue;
+                if !self.pc_mic.over.keyed() {
+                    continue;
+                }
+                self.pc_mic.silent_since.get_or_insert(at);
+            } else {
+                self.pc_mic.silent_since = None;
             }
             // A frame the feed refuses (full: the loop stopped reading) is a moment of silence, as
             // a lost one is; the gap ends an over that gets none.
@@ -356,9 +372,21 @@ impl Engine {
         let arrived = self.pc_mic.feed.take();
         let budget_ms = budget_ms.clamp(0.0, PC_MIC.max_push_ms as f64);
         let budget = (budget_ms * f64::from(PC_MIC.rate_hz) / 1000.0) as usize;
-        let res = self.pc_mic.over.tick(gates, arrived, budget);
+        let mut res = self.pc_mic.over.tick(gates, arrived, budget);
         if let Some(start) = res.watchdog_start {
             self.tx_watchdog_start = Some(start);
+        }
+        if res.drop.is_none()
+            && self.pc_mic.over.keyed()
+            && self.pc_mic.silent_since.is_some_and(|since| {
+                now.saturating_duration_since(since)
+                    >= std::time::Duration::from_millis(DIGITAL_SILENCE_LIMIT_MS)
+            })
+        {
+            // Nothing but digital silence for the limit: the device has stalled, as far as anyone
+            // can tell. This tick's audio is not played (the loop gets `Idle` and the abort).
+            res.drop = Some(MicDrop::AudioGap);
+            res.tick = MicTick::Idle;
         }
         if let Some(why) = res.drop {
             match why {

@@ -578,38 +578,91 @@ fn an_over_ended_by_a_gate_says_so() {
     }
 }
 
-/// ⛔ Digital silence is no audio: a microphone that keeps calling back with nothing but zeros
-/// (stalled, muted in hardware, asleep) keys nothing, and ends a keyed over at the gap.
-/// CONTROL: a quiet microphone's noise keeps the over up.
+/// ⛔ Digital silence (every sample exactly zero) never STARTS an over: a microphone that keeps
+/// calling back with nothing but zeros (stalled, muted in hardware, asleep) keys nothing.
 #[test]
-fn a_microphone_delivering_only_digital_silence_is_no_audio() {
+fn digital_silence_never_keys() {
     let mut e = station();
     let t0 = Instant::now();
     e.set_ptt(true);
-    for k in 0..30 {
+    for k in 0..300 {
         let t = t0 + ms(k * 20);
         e.push_pc_mic(&audio(20, 0.0), t);
         let tick = e.poll_pc_mic(t, TICK, 1);
         assert_ne!(tick, MicTick::Key, "digital silence keyed the radio");
     }
+    // CONTROL: the first real audio keys it.
+    let t = t0 + ms(6_000);
+    e.push_pc_mic(&audio(20, 0.25), t);
+    assert_eq!(
+        e.poll_pc_mic(t, TICK, 1),
+        MicTick::Key,
+        "CONTROL: audio keys"
+    );
+}
+
+/// Once keyed, digital silence is the pause between words of a microphone with a noise gate: a
+/// second of it holds the over (it used to end at the 300 ms gap, mid-sentence), and the voice
+/// after it goes out.
+#[test]
+fn a_gated_microphones_pause_does_not_end_the_over() {
     let mut e = station();
+    let t0 = Instant::now();
     keyed(&mut e, t0);
-    let mut ended = None;
-    for k in 11..60u64 {
+    for k in 11..=60u64 {
         let t = t0 + ms(k * 20);
         e.push_pc_mic(&audio(20, 0.0), t);
         let _ = e.poll_pc_mic(t, TICK, 1);
-        if !e.pc_mic_armed() && ended.is_none() {
-            ended = Some(k * 20);
+        assert!(
+            e.pc_mic_keyed(),
+            "a {} ms pause ended the over",
+            k * 20 - 200
+        );
+    }
+    let mut voice = false;
+    for k in 61..80u64 {
+        let t = t0 + ms(k * 20);
+        e.push_pc_mic(&audio(20, 0.25), t);
+        if let MicTick::Samples(buf) = e.poll_pc_mic(t, TICK, 1) {
+            voice |= buf.contains(&0.25);
         }
     }
-    let at = ended.expect("a keyed over stayed up on digital silence");
-    assert!(at <= 200 + PC_MIC.gap_ms + 20, "ended only at {at} ms");
+    assert!(e.pc_mic_keyed(), "the voice after the pause did not hold");
+    assert!(voice, "the voice after the pause never went out");
+    assert!(!e.take_pc_mic_abort());
+}
+
+/// ⛔ An unbroken run of digital silence under a keyed over ends it at the silence limit, as no
+/// audio: a stuck all-zero stream cannot hold the radio keyed. CONTROL: a quiet microphone's noise
+/// floor holds the over past the same point.
+#[test]
+fn a_stuck_all_zero_microphone_ends_the_over_at_the_silence_limit() {
+    let mut e = station();
+    let t0 = Instant::now();
+    keyed(&mut e, t0);
+    let first_zero = 220; // the first delivery after `keyed`'s last audio
+    let mut ended = None;
+    for k in 11..400u64 {
+        let t = t0 + ms(k * 20);
+        e.push_pc_mic(&audio(20, 0.0), t);
+        let tick = e.poll_pc_mic(t, TICK, 1);
+        if !e.pc_mic_armed() {
+            assert_eq!(tick, MicTick::Idle, "audio was due on the ending tick");
+            ended = Some(k * 20 - first_zero);
+            break;
+        }
+    }
+    let after = ended.expect("a keyed over stayed up on digital silence");
+    assert!(
+        (DIGITAL_SILENCE_LIMIT_MS..=DIGITAL_SILENCE_LIMIT_MS + 20).contains(&after),
+        "ended {after} ms into the silence"
+    );
+    assert!(e.take_pc_mic_abort(), "no unkey");
     assert_eq!(lane(&e), Some(PcMicCause::NoAudio));
     // CONTROL: a quiet microphone (its noise floor) holds the over.
     let mut e = station();
     keyed(&mut e, t0);
-    for k in 11..60u64 {
+    for k in 11..400u64 {
         let t = t0 + ms(k * 20);
         e.push_pc_mic(&audio(20, 1e-4), t);
         let _ = e.poll_pc_mic(t, TICK, 1);
