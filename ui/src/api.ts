@@ -2111,6 +2111,32 @@ export async function applyLogFixes(fixes: LogFix[]): Promise<ToolRun> {
   return invoke<ToolRun>('apply_log_fixes', { fixes })
 }
 
+/** A contact logged with no grid, and the grid Nexus knows for its station: `heard`, the one it
+ *  sent on the air; `callbook`, its home QTH from a callbook lookup already made (for the distance
+ *  and the map only). `uploaded`: a service already has the contact. */
+export interface LogGridOffer {
+  id: string
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+  grid: string
+  source: 'heard' | 'callbook'
+  uploaded: boolean
+}
+
+/** The blank-grid contacts with a grid known (`blank`: how many contacts have no grid). Changes nothing. */
+export async function findLogGridOffers(): Promise<{ blank: number; offers: LogGridOffer[] }> {
+  return invoke('log_grid_offers')
+}
+
+/** Fill the ticked contacts' grids, as ONE change; a contact given a grid since is left out. */
+export async function fillLogGrids(
+  picks: Array<Pick<LogGridOffer, 'id' | 'grid' | 'source'>>,
+): Promise<ToolRun> {
+  return invoke<ToolRun>('log_grid_fill', { picks })
+}
+
 /** Mark the contact `target` QSL-sent (operator-declared): a card or request went out `via`
  *  "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT a confirmation — this never
  *  moves `confirmed`/`awardConfirmed`. `via: null` WITHDRAWS the mark (#180): sending is once-only,

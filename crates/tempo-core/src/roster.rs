@@ -51,6 +51,28 @@ pub struct HeardStation {
 #[derive(Debug, Default)]
 pub struct Roster {
     stations: HashMap<String, HeardStation>,
+    /// The grid each station last SENT ON THE AIR this session (its CQ, its call to anyone, its
+    /// beacon), keyed by callsign as decoded, with the UTC second it was heard. Unlike `stations`
+    /// it survives [`Self::clear`]: a band or mode change moves the operator, not the station, so
+    /// a station heard calling CQ on 20 m and worked with a bare report on 17 m still logs the
+    /// grid it sent ([`Self::sent_grid`]). Bounded by [`SENT_GRIDS_CAP`].
+    sent_grids: HashMap<String, (String, u64)>,
+}
+
+/// The most stations [`Roster::sent_grid`] remembers in one session: far more than a day on the
+/// bands hears; past it a station not yet remembered is not added (one already is still updated).
+pub const SENT_GRIDS_CAP: usize = 50_000;
+
+/// ★ How far apart in time a grid a station sent and a contact with it may be for the contact to
+/// take that grid as the station's own: 24 hours, which takes in the whole UTC day. Further apart,
+/// a portable or roving station, or one that has moved, may well be somewhere else (operator
+/// decision, 2026-10-27). Nexus is often left running for days, so a grid heard this session is
+/// held to it too ([`Roster::sent_grid`]).
+pub const SENT_GRID_MAX_AGE_SECS: u64 = 86_400;
+
+/// Whether a grid heard at `heard` may be taken for a contact at `when` ([`SENT_GRID_MAX_AGE_SECS`]).
+pub fn heard_near(heard: u64, when: u64) -> bool {
+    heard.abs_diff(when) <= SENT_GRID_MAX_AGE_SECS
 }
 
 impl Roster {
@@ -59,13 +81,38 @@ impl Roster {
     }
 
     /// Forget every heard station — a band QSY makes the old band's roster
-    /// stale (those stations aren't on the new frequency).
+    /// stale (those stations aren't on the new frequency). The grids they sent stay
+    /// ([`Self::sent_grid`]).
     pub fn clear(&mut self) {
         self.stations.clear();
     }
 
-    /// Update the roster from a decode heard at `slot`.
+    /// The grid `call` last sent on the air this session, if it sent one within
+    /// [`SENT_GRID_MAX_AGE_SECS`] of `now_unix`: what a contact logged with no grid in the exchange
+    /// takes, and counts as any logged grid (it is the station's own word, as the exchange's would
+    /// be). An older one is the station's word about where it was then, not now.
+    pub fn sent_grid(&self, call: &str, now_unix: u64) -> Option<&str> {
+        self.sent_grid_heard(call)
+            .filter(|(at, _)| heard_near(*at, now_unix))
+            .map(|(_, g)| g)
+    }
+
+    /// The grid `call` last sent on the air this session, and the UTC second it was heard,
+    /// however long ago.
+    pub fn sent_grid_heard(&self, call: &str) -> Option<(u64, &str)> {
+        self.sent_grids.get(call).map(|(g, at)| (*at, g.as_str()))
+    }
+
+    /// Update the roster from a decode heard at `slot`, now.
     pub fn observe(&mut self, d: &Decode, slot: u64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |t| t.as_secs());
+        self.observe_at(d, slot, now);
+    }
+
+    /// [`Self::observe`], heard at the UTC second `now_unix`.
+    pub fn observe_at(&mut self, d: &Decode, slot: u64, now_unix: u64) {
         // #55/#101d: a WSPR spot is "CALL GRID DBM" — a different grammar entirely.
         // Through the FT8 parser the trailing dBm (typ. 23–47, inside the −50..=49
         // report range) reads as a signal report and the GRID lands in the sender
@@ -133,6 +180,12 @@ impl Roster {
         entry.cq_dir = cq_dir; // same rule, including back to None
         entry.mode = d.mode; // last-heard protocol wins (FT8→FT1 re-tags as Tempo)
         entry.freq_hz = Some(d.freq.round() as i32); // last heard HERE on the waterfall
+        if let Some(g) = &grid {
+            if self.sent_grids.len() < SENT_GRIDS_CAP || self.sent_grids.contains_key(&entry.call) {
+                self.sent_grids
+                    .insert(entry.call.clone(), (g.clone(), now_unix));
+            }
+        }
         if grid.is_some() {
             entry.grid = grid;
         }
@@ -300,5 +353,45 @@ mod tests {
         assert_eq!(r.by_recent()[0].call, "W9XYZ");
         assert!(r.is_active("K2DEF", 4, 10));
         assert!(!r.is_active("K2DEF", 100, 10));
+    }
+
+    /// The grid a station sent survives the roster's clear (a band or mode change), and the last
+    /// one it sent wins; a frame with no grid takes none away.
+    #[test]
+    fn the_grid_a_station_sent_survives_a_clear() {
+        const NOW: u64 = 1_767_268_800;
+        let mut r = Roster::new();
+        r.observe_at(&dec("CQ K2DEF FN31", -12), 1, NOW);
+        r.observe_at(&dec("W9XYZ K2DEF -07", -12), 2, NOW);
+        r.clear();
+        assert!(r.get("K2DEF").is_none(), "premise: cleared");
+        assert_eq!(r.sent_grid("K2DEF", NOW), Some("FN31"));
+        r.observe_at(&dec("W9XYZ K2DEF FN32", -12), 3, NOW + 60);
+        assert_eq!(
+            r.sent_grid("K2DEF", NOW + 60),
+            Some("FN32"),
+            "its call to anyone"
+        );
+        assert_eq!(r.sent_grid("W9XYZ", NOW), None);
+    }
+
+    /// ★ A grid a station sent is its word for 24 hours: a session left running for days does not
+    /// give a contact made days later the grid it sent then (operator decision, 2026-10-27).
+    #[test]
+    fn the_grid_a_station_sent_holds_for_a_day() {
+        const NOW: u64 = 1_767_268_800;
+        let mut r = Roster::new();
+        r.observe_at(&dec("CQ K2DEF FN31", -12), 1, NOW);
+        assert_eq!(
+            r.sent_grid("K2DEF", NOW + SENT_GRID_MAX_AGE_SECS),
+            Some("FN31")
+        );
+        assert_eq!(r.sent_grid("K2DEF", NOW + SENT_GRID_MAX_AGE_SECS + 1), None);
+        assert_eq!(r.sent_grid("K2DEF", NOW + 3 * 86_400), None, "days later");
+        assert_eq!(
+            r.sent_grid_heard("K2DEF"),
+            Some((NOW, "FN31")),
+            "still known, with when"
+        );
     }
 }

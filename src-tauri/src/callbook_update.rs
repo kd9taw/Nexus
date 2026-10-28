@@ -282,7 +282,11 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 /// The kept answer for `call` while it is fresh, as the log takes it. Never the network.
-fn kept(cache: &SharedCallbookCache, call: &str, max_age: i64) -> Option<CallbookAnswer> {
+pub(crate) fn kept(
+    cache: &SharedCallbookCache,
+    call: &str,
+    max_age: i64,
+) -> Option<CallbookAnswer> {
     let (dto, fetched_at) = cache.get(call)?;
     tempo_core::callbook_cache::CachedAnswer {
         answer: String::new(),

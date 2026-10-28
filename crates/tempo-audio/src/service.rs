@@ -15595,7 +15595,9 @@ fn wsjtx_qso_of<'a>(
     WsjtxQso {
         time_off: q.time_off_unix.unwrap_or(q.when_unix) as i64,
         dx_call: &q.call,
-        dx_grid: q.grid.as_deref().unwrap_or(""),
+        // Never a grid for the distance and the map only: a logger would upload it
+        // (`tempo_core::logbook::counted_grid`).
+        dx_grid: tempo_core::logbook::counted_grid(q).unwrap_or(""),
         // The contact's own frequency, not the rig's current dial — by the time this drains the
         // operator may have moved on, and a logger stamping the wrong band on a contact is worse
         // than one stamping none. On the air: dial + Tx audio, as WSJT-X sends it.
@@ -18666,6 +18668,33 @@ mod tests {
                 &c.exchange_rcvd,
             ),
         )
+    }
+
+    /// A grid for the distance and the map only never reaches a logger's `QSOLogged` datagram (a
+    /// logger would upload it: `counted_grid`); the same grid with no mark, or with today's
+    /// callbook mark alone, does, as it always did.
+    #[test]
+    fn a_map_only_grid_is_not_in_the_logged_datagram() {
+        let mut r = tempo_core::logbook::parse_adif(
+            "<CALL:4>W1AW<BAND:3>20m<FREQ:9>14.075500<MODE:3>FT8<GRIDSQUARE:4>FN31<EOR>",
+        )
+        .remove(0);
+        let grid = |r: &tempo_core::logbook::QsoRecord| {
+            wsjtx_qso_of(r, &WsjtxText::of(r), "W9XYZ", "EN53", "", "")
+                .dx_grid
+                .to_string()
+        };
+        assert_eq!(grid(&r), "FN31", "the control");
+        r.extra.push((
+            tempo_core::logbook::callbook::CALLBOOK_FILLED_FIELD.into(),
+            "GRIDSQUARE".into(),
+        ));
+        assert_eq!(grid(&r), "FN31", "today's mark: sent as before");
+        r.extra.push((
+            tempo_core::logbook::callbook::MAP_ONLY_GRID_FIELD.into(),
+            "Y".into(),
+        ));
+        assert_eq!(grid(&r), "");
     }
 
     /// The N1MM context for a session running `event_id`.

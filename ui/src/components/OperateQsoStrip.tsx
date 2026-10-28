@@ -449,22 +449,31 @@ export function OperateQsoStrip({
           className="cq-log"
           onClick={onLog}
           disabled={!dxcall && waiting === 0}
-          title={t('operate.strip.log.title')}
+          title={
+            waiting > 0
+              ? t('operate.strip.log.titleWaiting', { count: waiting })
+              : t('operate.strip.log.title')
+          }
+          aria-label={
+            waiting > 0 ? t('operate.strip.log.ariaWaiting', { count: waiting }) : undefined
+          }
         >
           {t('operate.strip.log.label')}
         </button>
         {/* On the button's corner and out of the flow, so a count never moves or wraps Log or
-            anything beside it. It takes no clicks: Log is under its edge. */}
+            anything beside it. It takes no clicks (Log is under its edge), so it carries no
+            tooltip of its own: Log's says it. Hidden from a screen reader, which hears it in
+            Log's name and from the status below. */}
         {waiting > 0 && (
-          <span
-            className="cq-log-waiting"
-            role="status"
-            aria-label={t('operate.strip.log.waiting', { count: waiting })}
-            title={t('operate.strip.log.waiting', { count: waiting })}
-          >
+          <span className="cq-log-waiting" aria-hidden="true">
             {waiting}
           </span>
         )}
+        {/* Always mounted, so the count's first appearance is announced (a live region added
+            with its text is often not), and politely, as a sentence rather than a bare number. */}
+        <span className="sr-only" role="status" aria-live="polite">
+          {waiting > 0 ? t('operate.strip.log.waiting', { count: waiting }) : ''}
+        </span>
       </form>
 
       <span className="cq-spacer" />

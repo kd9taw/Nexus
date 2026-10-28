@@ -32,6 +32,19 @@ use super::{extra_value, record_field, set_extra, valid_iota, QsoRecord};
 /// (see the module header). App-private, never sent.
 pub const CALLBOOK_FILLED_FIELD: &str = "APP_NEXUS_CALLBOOK_FILLED";
 
+/// ★ **A grid for the distance and the map only**, `Y`: the callbook's grid filled into a contact
+/// logged with no grid of its own, by [`fill_gridless_from_callbook`] (an FT8/FT4 contact the
+/// station gave no grid in, and the Blank grids clean-up's callbook offers). A callbook says where
+/// the licence is, not where the contact was made, so this grid counts toward no grid award, fills
+/// no GRID need and is sent to no service (`counted_grid`; operator decision, 2026-10-27).
+///
+/// It is NOT [`CALLBOOK_FILLED_FIELD`] naming `GRIDSQUARE` alone: a grid that mark alone names (a
+/// callsign-card lookup at log time, Update from callbook) counts and is sent as it always was,
+/// so no log loses a grid it already counted. This mark rides beside that one and goes with it:
+/// an edit of the grid, or LoTW's own grid, takes both off ([`unmark_callbook_filled`]).
+/// App-private, never sent.
+pub const MAP_ONLY_GRID_FIELD: &str = "APP_NEXUS_MAP_ONLY_GRID";
+
 /// Whether the station confirms by LoTW, by eQSL and by paper card, `Y` or `N`, as its callbook
 /// entry said when the contact was logged. ADIF has no field for any of them.
 pub const LOTW_USER_FIELD: &str = "APP_NEXUS_LOTW_USER";
@@ -84,6 +97,11 @@ pub fn is_callbook_filled(r: &QsoRecord, tag: &str) -> bool {
     callbook_filled(r).contains(&tag)
 }
 
+/// Whether the record's grid is for the distance and the map only ([`MAP_ONLY_GRID_FIELD`]).
+pub fn is_map_only_grid(r: &QsoRecord) -> bool {
+    extra_value(r, MAP_ONLY_GRID_FIELD).is_some_and(|v| v.trim().eq_ignore_ascii_case("Y"))
+}
+
 /// Rewrite the mark: sorted, deduplicated, and gone when empty.
 fn set_callbook_filled(r: &mut QsoRecord, mut tags: Vec<String>) {
     tags.sort();
@@ -94,6 +112,10 @@ fn set_callbook_filled(r: &mut QsoRecord, mut tags: Vec<String>) {
 
 /// Take `tag` off the mark: the value is no longer the callbook's.
 pub(crate) fn unmark_callbook_filled(r: &mut QsoRecord, tag: &str) {
+    // The grid's map-only mark goes with the callbook's: it is no longer the callbook's grid.
+    if tag == "GRIDSQUARE" {
+        set_extra(r, MAP_ONLY_GRID_FIELD, None);
+    }
     if !is_callbook_filled(r, tag) {
         return;
     }
@@ -130,6 +152,17 @@ pub(crate) fn unmark_edited(old: &QsoRecord, rec: &mut QsoRecord) {
         if !same {
             unmark_callbook_filled(rec, tag);
         }
+    }
+}
+
+/// [`fill_from_callbook`] for a contact logged with no grid of its own: a grid it fills is for the
+/// distance and the map only, and carries [`MAP_ONLY_GRID_FIELD`] beside the callbook's mark.
+/// Every other field is filled, and marked, exactly as [`fill_from_callbook`] fills it.
+pub fn fill_gridless_from_callbook(rec: &mut QsoRecord, a: &CallbookAnswer) {
+    let had_grid = value_of(rec, "GRIDSQUARE").is_some() || is_callbook_filled(rec, "GRIDSQUARE");
+    fill_from_callbook(rec, a);
+    if !had_grid && is_callbook_filled(rec, "GRIDSQUARE") {
+        set_extra(rec, MAP_ONLY_GRID_FIELD, Some("Y".into()));
     }
 }
 

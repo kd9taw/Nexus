@@ -110,7 +110,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::callbook::{self, CALLBOOK_FILLED_FIELD};
+use super::callbook::{self, CALLBOOK_FILLED_FIELD, MAP_ONLY_GRID_FIELD};
 use super::offer;
 use super::{
     canonical, extra_value, self_filled, set_extra, set_self_filled, QslRcvd, QsoRecord, RecordId,
@@ -591,7 +591,10 @@ fn exchange(slots: &[(String, String)]) -> String {
 /// The passthrough fields that are marks about OTHER fields: they follow the values they mark,
 /// never merged as values of their own.
 fn is_mark(name: &str) -> bool {
-    name == SELF_FILLED_FIELD || name == CALLBOOK_FILLED_FIELD || name == offer::SPOT_FILLED_FIELD
+    name == SELF_FILLED_FIELD
+        || name == CALLBOOK_FILLED_FIELD
+        || name == offer::SPOT_FILLED_FIELD
+        || name == MAP_ONLY_GRID_FIELD
 }
 
 /// How much a copy holds: the default copy to keep is the fullest.
@@ -847,12 +850,23 @@ pub fn merge(copies: &[QsoRecord], keep: usize, choices: &HashMap<String, Record
     set_self_filled(&mut out, own);
     looked.sort();
     looked.dedup();
+    // The grid is for the map only when every copy holding the merged grid holds it so: a copy
+    // that counted it keeps it counted.
+    let map_only = looked.iter().any(|t| t == "GRIDSQUARE")
+        && order
+            .iter()
+            .filter(|r| {
+                mark_value(r, "GRIDSQUARE").is_some()
+                    && mark_value(r, "GRIDSQUARE") == mark_value(&out, "GRIDSQUARE")
+            })
+            .all(|r| callbook::is_map_only_grid(r));
     set_extra(
         &mut out,
         CALLBOOK_FILLED_FIELD,
         (!looked.is_empty()).then(|| looked.join(",")),
     );
     offer::set_spot_filled(&mut out, spotted);
+    set_extra(&mut out, MAP_ONLY_GRID_FIELD, map_only.then(|| "Y".into()));
 
     // ★ Every field of the record, named — no `..`: a field added to `QsoRecord` does not compile
     // here until it has a rule. The rules, field by field:

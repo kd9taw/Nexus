@@ -22376,7 +22376,10 @@ button.cq-skiptx1.on {
 }
 /* How many contacts wait for Log QSO: a count on the Log button's top-right corner (Log is the
    last item in .cq-free), absolutely placed so it takes no room in the strip and never moves or
-   wraps a control; it takes no clicks, so Log under its edge still gets them. */
+   wraps a control; it takes no clicks, so Log under its edge still gets them. The number is the
+   theme's own text on its own ground, the pair every theme and skin keeps readable (WCAG AA,
+   4.5:1, checked by the logwaiting browser probe), ringed in Log's green; the light theme's
+   ground on that green was 4.1:1. */
 .cq-log-waiting {
   position: absolute;
   top: -6px;
@@ -22386,11 +22389,12 @@ button.cq-skiptx1.on {
   padding: 0 var(--space-1);
   box-sizing: border-box;
   border-radius: 8px;
-  background: var(--state-good, #29c281);
-  color: var(--bg);
+  border: 1px solid var(--state-good, #29c281);
+  background: var(--bg);
+  color: var(--text);
   font-size: 0.62rem;
   font-weight: 800;
-  line-height: 15px;
+  line-height: 13px;
   text-align: center;
   font-variant-numeric: tabular-nums;
   pointer-events: none;

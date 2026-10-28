@@ -267,7 +267,17 @@ pub const EQSL_AG_FIELD: &str = "APP_EQSL_AG";
 /// And `STATE`, which no passthrough holds: asked for here, the narrow read brings a merged
 /// contest contact's exchange `STATE` with it, the state its upload carries and WAS counts
 /// ([`record_field`]).
-pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD, EQSL_AG_FIELD, "STATE"];
+///
+/// And the map-only mark ([`callbook::MAP_ONLY_GRID_FIELD`]): a grid a callbook filled for a
+/// contact logged with none is for the distance and the map, and counts toward nothing
+/// ([`counted_grid`]).
+pub const AWARD_EXTRAS: &[&str] = &[
+    "CQZ",
+    LOTW_DXCC_FIELD,
+    EQSL_AG_FIELD,
+    "STATE",
+    callbook::MAP_ONLY_GRID_FIELD,
+];
 
 /// A passthrough field's value, by its (uppercased) ADIF name.
 fn extra_value<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
@@ -293,6 +303,25 @@ pub fn record_lotw_dxcc(r: &QsoRecord) -> Option<u32> {
 /// qualifies the record's eQSL confirmation and means nothing without one.
 pub fn record_eqsl_ag(r: &QsoRecord) -> bool {
     extra_value(r, EQSL_AG_FIELD).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
+}
+
+/// ★ The worked station's grid as the awards, the needs and every service count it: the grid the
+/// contact carries in its own field, as it is, **unless it is for the distance and the map only**
+/// ([`callbook::MAP_ONLY_GRID_FIELD`]): a callbook's grid filled into a contact logged with no grid
+/// of its own (an FT8/FT4 contact, the Blank grids clean-up). A callbook says where the station's
+/// licence is, its home QTH, not where the contact was made: that grid is kept on the contact for
+/// the distance and the map, and never counts toward a grid award (VUCC, the grid counts), never
+/// fills a GRID need and is never sent to a logging service (operator decision, 2026-10-27).
+///
+/// ⚠️ Keyed on that mark ONLY, never on the callbook's own mark ([`callbook::CALLBOOK_FILLED_FIELD`]):
+/// a grid a callsign-card lookup or Update from callbook filled counts and is sent as it always
+/// was, so no log's totals drop. An edit takes the mark off ([`callbook::unmark_edited`]), and so
+/// does LoTW's own grid (`reconcile::keep_lotw_detail`).
+pub fn counted_grid(r: &QsoRecord) -> Option<&str> {
+    if callbook::is_map_only_grid(r) {
+        return None;
+    }
+    r.grid.as_deref()
 }
 
 /// ⭐ **A field's value by its (uppercased) ADIF name, wherever the record keeps it** — the value
@@ -3450,6 +3479,20 @@ pub fn adif_record_own_log(r: &QsoRecord) -> String {
     adif_record_for(r, Audience::OwnLog)
 }
 
+/// ★ The operator's own record for a logging program on their own machine (DXKeeper, HRD
+/// Logbook): [`adif_record_own_log`], private note included, but **never a grid for the distance
+/// and the map only** ([`counted_grid`]), nor its marks. Such a program counts the grid toward
+/// VUCC and its own totals, and can upload the contact itself (operator decision, 2026-10-27).
+pub fn adif_record_own_logger(r: &QsoRecord) -> String {
+    if !callbook::is_map_only_grid(r) {
+        return adif_record_own_log(r);
+    }
+    let mut kept = r.clone();
+    kept.grid = None;
+    callbook::unmark_callbook_filled(&mut kept, "GRIDSQUARE");
+    adif_record_own_log(&kept)
+}
+
 /// One QSO as an ADIF record, **safe to send** — the private note is withheld.
 ///
 /// This is the default on purpose; see [`Audience`]. To write the operator's own log, say so
@@ -3466,7 +3509,14 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     out.push_str(&field("CALL", &r.call));
     // `Some("")` is the same malformed shape as an empty MODE below — an import that
     // carried the tag with nothing in it. Filter rather than emit `<GRIDSQUARE:0>`.
-    if let Some(g) = r.grid.as_ref().filter(|g| !g.trim().is_empty()) {
+    // A grid for the distance and the map only stays in the operator's own log and goes to no
+    // service ([`counted_grid`]).
+    let withheld = audience == Audience::Outbound && callbook::is_map_only_grid(r);
+    if let Some(g) = r
+        .grid
+        .as_ref()
+        .filter(|g| !g.trim().is_empty() && !withheld)
+    {
         out.push_str(&field("GRIDSQUARE", g));
     }
     if let Some(c) = &r.country {
@@ -3739,11 +3789,12 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         }
         // Which own-station fields Nexus filled itself is for its own LoTW upload, never a
         // service's business ([`SELF_FILLED_FIELD`]); nor is which fields a callbook filled
-        // ([`callbook::CALLBOOK_FILLED_FIELD`]).
+        // ([`callbook::CALLBOOK_FILLED_FIELD`], [`callbook::MAP_ONLY_GRID_FIELD`]).
         if audience == Audience::Outbound
             && (k == SELF_FILLED_FIELD
                 || k == callbook::CALLBOOK_FILLED_FIELD
-                || k == offer::SPOT_FILLED_FIELD)
+                || k == offer::SPOT_FILLED_FIELD
+                || k == callbook::MAP_ONLY_GRID_FIELD)
         {
             continue;
         }
@@ -5836,6 +5887,63 @@ mod tests {
             "identical-timestamp duplicate must dedup to one"
         );
         assert_eq!(skipped2, 1);
+    }
+
+    /// A grid a callbook filled for a contact logged with none stays in the operator's own log,
+    /// is sent to no service, and counts toward nothing ([`counted_grid`]); the same grid with no
+    /// mark is sent and counted. An edit of it makes it the operator's: sent and counted.
+    #[test]
+    fn a_map_only_grid_is_kept_counted_by_nothing_and_never_sent() {
+        let mut plain = rec("W1AW", "20m", 100);
+        plain.grid = Some("FN31pr".into());
+        let mut filled = plain.clone();
+        filled.grid = None;
+        callbook::fill_gridless_from_callbook(
+            &mut filled,
+            &callbook::CallbookAnswer {
+                call: "W1AW".into(),
+                grid: Some("FN31pr".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(filled.grid.as_deref(), Some("FN31pr"), "premise: filled");
+        assert!(callbook::is_map_only_grid(&filled), "premise: map only");
+        assert_eq!(counted_grid(&filled), None);
+        assert!(
+            !adif_record(&filled).contains(callbook::MAP_ONLY_GRID_FIELD),
+            "the mark is never sent"
+        );
+        assert!(adif_record_own_log(&filled).contains(callbook::MAP_ONLY_GRID_FIELD));
+        assert!(!adif_record(&filled).contains("<GRIDSQUARE:"), "never sent");
+        assert!(
+            adif_record_own_log(&filled).contains("<GRIDSQUARE:6>FN31pr"),
+            "kept"
+        );
+        assert_eq!(counted_grid(&plain), Some("FN31pr"));
+        assert!(adif_record(&plain).contains("<GRIDSQUARE:6>FN31pr"));
+        let mut edited = filled.clone();
+        edited.grid = Some("FN32".into());
+        callbook::unmark_edited(&filled, &mut edited);
+        assert!(!callbook::is_map_only_grid(&edited));
+        assert_eq!(counted_grid(&edited), Some("FN32"), "the operator's now");
+        assert!(adif_record(&edited).contains("<GRIDSQUARE:4>FN32"));
+    }
+
+    /// ★ A grid a callbook filled before the map-only mark existed (today's mark: a callsign-card
+    /// lookup at log time, or Update from callbook) counts and is sent exactly as it always was:
+    /// nobody's totals drop on update (operator decision, 2026-10-27).
+    #[test]
+    fn a_grid_with_todays_callbook_mark_counts_and_is_sent_as_before() {
+        let mut r = rec("W1AW", "20m", 100);
+        set_extra(
+            &mut r,
+            callbook::CALLBOOK_FILLED_FIELD,
+            Some("GRIDSQUARE".into()),
+        );
+        r.grid = Some("FN31pr".into());
+        assert!(callbook::is_callbook_filled(&r, "GRIDSQUARE"), "premise");
+        assert_eq!(counted_grid(&r), Some("FN31pr"));
+        assert!(adif_record(&r).contains("<GRIDSQUARE:6>FN31pr"), "sent");
     }
 
     fn rec(call: &str, band: &str, when: u64) -> QsoRecord {

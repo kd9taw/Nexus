@@ -6271,7 +6271,7 @@ fn local_data_dir() -> PathBuf {
 /// location WSJT-X uses for its own ALL.TXT. Written only when `settings.write_all_txt` is on;
 /// the Settings panel surfaces this path + a "Reveal" button
 /// (`all_txt_location`/`reveal_all_txt`).
-fn all_txt_path() -> PathBuf {
+pub(crate) fn all_txt_path() -> PathBuf {
     local_data_dir().join("ALL.TXT")
 }
 
@@ -30908,8 +30908,39 @@ mod upload_record_tests {
         }
         let launch = body(src, "start_on_the_logbook");
         assert!(launch.contains("wire_country_resolvers(&mut eng);"));
-        assert!(launch.contains("adif_record_own_log(&log_queries::sent(rec.clone()))"));
+        assert!(launch.contains("dxkeeper_push_async(host, base, uploads, dxkeeper_adif(&rec));"));
+        assert!(body(src, "dxkeeper_adif").contains("log_queries::sent(rec.clone())"));
         assert_eq!(launch.matches("dxkeeper_push_async(").count(), 1);
+    }
+
+    /// DXKeeper gets the operator's own record, private note included, but never a grid kept for
+    /// the distance and the map only (`tempo_core::logbook::counted_grid`): DXKeeper counts it
+    /// toward VUCC and can upload the contact itself (operator decision, 2026-10-27). A grid with
+    /// the callbook's mark alone (a callsign lookup, Update from callbook) is sent as before.
+    #[test]
+    fn dxkeeper_never_gets_a_map_only_grid() {
+        let parse = |adif: &str| tempo_core::logbook::parse_adif(adif).remove(0);
+        let map_only = parse(
+            "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <GRIDSQUARE:6>FN31pr<NOTES:4>mine<APP_NEXUS_CALLBOOK_FILLED:10>GRIDSQUARE\
+             <APP_NEXUS_MAP_ONLY_GRID:1>Y<EOR>",
+        );
+        assert!(
+            tempo_core::logbook::callbook::is_map_only_grid(&map_only),
+            "premise"
+        );
+        let sent = super::dxkeeper_adif(&map_only);
+        assert!(!sent.contains("<GRIDSQUARE:"), "{sent}");
+        assert!(!sent.contains("APP_NEXUS_MAP_ONLY_GRID"), "{sent}");
+        assert!(
+            sent.contains("<NOTES:4>mine"),
+            "still their own record: {sent}"
+        );
+        let todays = parse(
+            "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <GRIDSQUARE:6>FN31pr<APP_NEXUS_CALLBOOK_FILLED:10>GRIDSQUARE<EOR>",
+        );
+        assert!(super::dxkeeper_adif(&todays).contains("<GRIDSQUARE:6>FN31pr"));
     }
 }
 
@@ -32062,6 +32093,14 @@ fn hrd_send_connected(addr: &str, bytes: &[u8]) -> bool {
     }
     std::thread::sleep(std::time::Duration::from_millis(15));
     !matches!(sock.take_error(), Ok(Some(_)) | Err(_))
+}
+
+/// The record DXKeeper is sent for `rec`: the operator's own, private note included (the push's
+/// comment says why), its `COUNTRY` the one its DXCC number gives it ([`log_queries::sent`]), and
+/// never a grid for the distance and the map only, which DXKeeper would count and could upload
+/// (`adif_record_own_logger`).
+fn dxkeeper_adif(rec: &tempo_core::logbook::QsoRecord) -> String {
+    tempo_core::logbook::adif_record_own_logger(&log_queries::sent(rec.clone()))
 }
 
 fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String) {
@@ -39415,12 +39454,7 @@ fn start_on_the_logbook(
                     // vs a service or a broadcast — flip this one word if the operator wants it
                     // drawn elsewhere. Its COUNTRY is the one its DXCC number gives it, as
                     // every service's is (`log_queries::sent`).
-                    dxkeeper_push_async(
-                        host,
-                        base,
-                        uploads,
-                        tempo_core::logbook::adif_record_own_log(&log_queries::sent(rec.clone())),
-                    );
+                    dxkeeper_push_async(host, base, uploads, dxkeeper_adif(&rec));
                 }
                 let failed = auto_push_one(
                     &push_engine,
@@ -40919,6 +40953,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_tools::bulk_edit_apply,
         log_tools::check_logbook,
         log_tools::apply_log_fixes,
+        log_tools::log_grid_offers,
+        log_tools::log_grid_fill,
         callbook_update::callbook_update_preview,
         callbook_update::callbook_update_start,
         callbook_update::callbook_update_status,

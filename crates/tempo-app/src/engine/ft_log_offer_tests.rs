@@ -1448,3 +1448,154 @@ fn log_qso_in_chat_reaches_only_a_contact_waiting_for_log_qso() {
     assert!(e.log_current_qso(), "a press there takes it");
     assert_eq!(calls_logged(&e), ["W2XYZ"]);
 }
+
+/// With both off, a FINISHED contact a band change ends waits for Log QSO with the others:
+/// counted beside Log, journaled across a restart, and logged by a press with no contact shown,
+/// on the band and frequency it was made on.
+#[test]
+fn a_finished_contact_a_band_change_ends_with_both_off_is_counted_kept_and_logged() {
+    let path = std::env::temp_dir().join(format!(
+        "nexus-log-qso-waiting-{}-{}.json",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    e.set_pending_qso_path(path.clone());
+    let made_on = e.log_frequencies();
+    work_dx_to_73(&mut e, 11);
+    e.set_frequency(7.074, "40m", "USB");
+    assert_eq!(e.snapshot().log_qso_waiting, 1, "counted beside Log");
+    assert!(path.exists(), "journaled");
+    assert!(e.stored_log().is_empty() && e.pending_logs.is_empty());
+    let mut r = ft8();
+    r.settings.auto_log = false;
+    r.settings.prompt_to_log = false;
+    r.set_pending_qso_path(path.clone());
+    r.set_frequency(7.074, "40m", "USB");
+    r.restore_pending_qso_journal(now_unix_secs() as i64);
+    assert_eq!(r.snapshot().log_qso_waiting, 1, "kept across a restart");
+    assert!(
+        r.snapshot().pending_log.is_none(),
+        "nothing opens by itself"
+    );
+    assert!(r.log_current_qso(), "a press with no contact shown logs it");
+    let rec = r.stored_log()[0].clone();
+    assert_eq!((rec.call.as_str(), rec.band.as_str()), (DX, "20m"));
+    assert_eq!(
+        (rec.freq_mhz, rec.freq_rx_mhz),
+        made_on,
+        "on its own frequency"
+    );
+    assert_eq!(
+        (rec.rst_sent.as_deref(), rec.rst_rcvd.as_deref()),
+        (Some("-09"), Some("-15"))
+    );
+    assert_eq!(r.snapshot().log_qso_waiting, 0);
+    assert!(!r.log_current_qso(), "once");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// …and our 73 to a roger the operator clicked, set aside by a band change with both off, is
+/// counted too, and still only offered.
+#[test]
+fn a_roger_contact_a_band_change_ends_with_both_off_is_counted_and_offered() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    click_their_rr73_send_73_and_change_band(&mut e);
+    assert_eq!(e.snapshot().log_qso_waiting, 1, "counted");
+    assert!(e.log_current_qso(), "Log QSO takes it");
+    assert!(e.stored_log().is_empty(), "offered, not logged");
+    assert!(e.pending_logs[0].confirm_only, "offer-only");
+    assert_eq!(e.snapshot().log_qso_waiting, 0);
+}
+
+/// A press with no contact shown takes a counted contact before an unfinished one a band change
+/// set aside, which is not counted: the count it invites names what it logs. The run's give-up
+/// still comes first (any log ends it, so it would be lost behind another), and none is lost.
+#[test]
+fn a_press_with_no_contact_shown_takes_a_counted_contact_before_a_band_change_one() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    work_dx_to_73(&mut e, 11);
+    e.set_mode("qso-run").expect("Call CQ");
+    assert_eq!(e.snapshot().log_qso_waiting, 1, "premise: one counted");
+    e.qso_report_sent = Some(-3);
+    e.band_change_qso = Some(e.set_aside(
+        "W2XYZ".into(),
+        None,
+        Some(-4),
+        (String::from("40m"), (7.075_5, None)),
+    ));
+    e.qso_report_sent = None;
+    e.set_mode("qso-monitor")
+        .expect("premise: no contact shown");
+    assert!(e.log_current_qso());
+    assert_eq!(calls_logged(&e), [DX], "the counted contact first");
+    assert_eq!(e.snapshot().log_qso_waiting, 0);
+    assert!(e.log_current_qso());
+    assert_eq!(calls_logged(&e), [DX, "W2XYZ"], "then the band change's");
+    // A give-up and a counted contact: the give-up first, and then the counted one, not lost.
+    let made_on = (e.settings.band.clone(), e.log_frequencies());
+    work_to_73(&mut e, "K1JT", 41);
+    e.set_mode("qso-run").expect("Call CQ");
+    e.qso_report_sent = Some(-3);
+    e.stalled_qso = Some(e.set_aside("K2ABC".into(), None, Some(-5), made_on));
+    e.qso_report_sent = None;
+    e.set_mode("qso-monitor")
+        .expect("premise: no contact shown");
+    assert!(e.log_current_qso() && e.log_current_qso());
+    assert_eq!(
+        calls_logged(&e),
+        [DX, "W2XYZ", "K2ABC", "K1JT"],
+        "neither lost"
+    );
+    assert!(!e.log_current_qso());
+}
+
+/// With both off, a tier change that ends the contact (away from a tier whose overs run long,
+/// with TX on) sets the finished contact aside for Log QSO before the station is replaced: TX is
+/// halted there anyway, and the contact is logged as the one it was.
+#[test]
+fn a_tier_change_that_ends_a_finished_contact_with_both_off_keeps_it_for_log_qso() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    e.set_tier(Tier::Q65);
+    let mode = e.adif_mode_for_tier().to_string();
+    work_dx_to_73(&mut e, 11);
+    assert!(e.tx_enabled, "premise: TX on");
+    e.set_tier(Tier::Ft8);
+    assert!(!e.tx_enabled, "premise: TX halted by the switch, as before");
+    assert_eq!(e.snapshot().log_qso_waiting, 1, "kept, counted");
+    assert!(e.log_current_qso(), "Log QSO logs it");
+    let rec = e.stored_log()[0].clone();
+    assert_eq!((rec.call.as_str(), rec.mode.as_str()), (DX, mode.as_str()));
+    assert_eq!(
+        (rec.rst_sent.as_deref(), rec.rst_rcvd.as_deref()),
+        (Some("-09"), Some("-15"))
+    );
+}
+
+/// …and on the band and frequency it was made on when the rig is read back on another band
+/// (a listen to WWV between): the dial has already left them when the band change is seen.
+#[test]
+fn a_finished_contact_kept_at_a_band_change_at_the_rig_logs_on_the_band_left() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.settings.prompt_to_log = false;
+    e.observe_rig_freq(14_074_000);
+    let made_on = e.log_frequencies();
+    work_dx_to_73(&mut e, 11);
+    e.observe_rig_freq(10_000_000);
+    e.observe_rig_freq(7_074_000);
+    assert_eq!(e.snapshot().log_qso_waiting, 1, "counted");
+    assert!(e.log_current_qso());
+    let rec = e.stored_log()[0].clone();
+    assert_eq!((rec.call.as_str(), rec.band.as_str()), (DX, "20m"));
+    assert_eq!((rec.freq_mhz, rec.freq_rx_mhz), made_on);
+}
