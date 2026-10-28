@@ -2846,7 +2846,7 @@ function App() {
       ids: ProfileId[],
       landing: View,
       modes: FeatureId[],
-      license: string,
+      license: string | null,
       draft: WizardDraft,
       experience: ExperienceLevel | null,
     ) => {
@@ -2854,10 +2854,16 @@ function App() {
       // (licenseClass included), so a concurrent set_license_class would be
       // reverted by the stale class riding in the merge (review catch — the
       // wizard's own TX-lockout promise silently undone). Draft first, class
-      // second; failures surface instead of a false-success close.
+      // second; failures surface instead of a false-success close. The class only when the wizard
+      // changed it (null = the class the station holds), and App's copy follows it so the next
+      // run opens on it, as the experience answer's does.
       void applyWizardDraft(draft)
-        .then(() => setLicenseClass(license))
-        .then((s) => s && setSnap(s))
+        .then(() => (license ? setLicenseClass(license) : null))
+        .then((s) => {
+          if (!s || !license) return
+          setSnap(s)
+          setSettings((prev) => (prev ? { ...prev, licenseClass: license } : prev))
+        })
         // The experience answer has its own writer; a later form save keeps it. Only an answer
         // given in this run is written: none leaves the station's (absent = never asked).
         .then(() => (experience ? apiSetExperienceLevel(experience) : null))
