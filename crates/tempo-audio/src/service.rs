@@ -1678,8 +1678,9 @@ pub struct RadioConfig {
     /// Upload heard stations to PSK Reporter.
     pub pskreporter: bool,
     /// The app's version (tauri.conf.json's, as the app reports it), which PSK Reporter shows
-    /// beside "Nexus". NOT this crate's `CARGO_PKG_VERSION`, which is tempo-audio's own and has
-    /// never been released. Empty = unknown: PSK Reporter is then sent "Nexus" alone.
+    /// beside "Nexus" and the WSJT-X Heartbeat announces. NOT this crate's `CARGO_PKG_VERSION`,
+    /// which is tempo-audio's own and has never been released. Empty = unknown: PSK Reporter is
+    /// then sent "Nexus" alone.
     pub app_version: String,
     /// Input (capture) device name. Empty = system default input.
     pub audio_in: String,
@@ -1978,7 +1979,7 @@ fn send_logged_contact(server: &WsjtxServer, qso: &WsjtxQso, adif_record: &str) 
     let _ = server.send_logged_adif(adif_record);
 }
 
-fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
+fn build_wsjtx_server(enabled: bool, addr: &str, app_version: &str) -> Option<WsjtxServer> {
     if !enabled {
         return None;
     }
@@ -1995,11 +1996,9 @@ fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
     };
     match WsjtxServer::new_multi(bind.parse().unwrap(), targets) {
         Ok(s) => {
-            // ⚠️ `CARGO_PKG_VERSION` here is TEMPO-AUDIO's version (0.2.0), not the
-            // app's — so this heartbeat announces a version that was never released.
-            // Left as-is rather than fixed blind: the app version is not reachable from
-            // this crate, and threading it is its own change.
-            let _ = s.send_heartbeat(3, env!("CARGO_PKG_VERSION"), "Nexus");
+            // The APP's version (`RadioConfig::app_version`), as WSJT-X sends its own:
+            // `env!("CARGO_PKG_VERSION")` here would be TEMPO-AUDIO's 0.2.0, never released.
+            let _ = s.send_heartbeat(3, app_version, "Nexus");
             Some(s)
         }
         Err(e) => {
@@ -2197,7 +2196,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // retargets the WSJT-X address — otherwise a GridTracker/PSK setup done AFTER launch
     // never connects (the reported "needs a Nexus restart" bug). `*_applied` tracks what
     // the current emitters were built for so the loop rebuilds only on a real change.
-    let mut wsjtx = build_wsjtx_server(cfg.wsjtx_udp, &cfg.wsjtx_addr);
+    let mut wsjtx = build_wsjtx_server(cfg.wsjtx_udp, &cfg.wsjtx_addr, &cfg.app_version);
     let mut wsjtx_applied = (cfg.wsjtx_udp, cfg.wsjtx_addr.clone());
     let mut psk = cfg.pskreporter.then(PskReporter::new);
     let mut psk_applied = cfg.pskreporter;
@@ -2334,7 +2333,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str())
                 != (wsjtx_applied.0, wsjtx_applied.1.as_str())
             {
-                wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr);
+                wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr, &cfg.app_version);
                 wsjtx_applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
             }
             // The EFFECTIVE upload: the setting, unless a contest that allows spotting only
@@ -15026,8 +15025,7 @@ impl RadioLoop {
                 //
                 // The version is the APP's, handed in through `RadioConfig::app_version`:
                 // `env!("CARGO_PKG_VERSION")` here is TEMPO-AUDIO's (0.2.0), a number that has
-                // never been released. (The WSJT-X heartbeat at the top of this file still sends
-                // that one — see the note there.)
+                // never been released.
                 let _ = reporter.send_spots(
                     &rx_call,
                     &rx_grid,
@@ -20122,16 +20120,40 @@ mod tests {
         );
     }
 
+    /// The WSJT-X Heartbeat announces the APP's version, as WSJT-X announces its own ("3.0.2",
+    /// `version()` in its MessageClient), never tempo-audio's 0.2.0. Every other field keeps
+    /// its shape: max schema 3, then the version, then the revision "Nexus".
+    #[test]
+    fn the_wsjtx_heartbeat_announces_the_app_version() {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let _server = build_wsjtx_server(true, &addr, "1.21.0").expect("a bound emitter");
+        let mut buf = [0u8; 512];
+        let (n, _) = listener.recv_from(&mut buf).unwrap();
+        let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);
+        assert_eq!(r.read_u32(), Some(0xADBC_CBDA), "magic");
+        r.read_u32().expect("schema");
+        assert_eq!(r.read_u32(), Some(0), "a Heartbeat");
+        r.read_utf8().expect("id");
+        assert_eq!(r.read_u32(), Some(3), "max schema");
+        assert_eq!(r.read_utf8(), Some(Some("1.21.0".to_string())), "version");
+        assert_eq!(r.read_utf8(), Some(Some("Nexus".to_string())), "revision");
+        assert_eq!(r.remaining(), 0);
+    }
+
     #[test]
     fn build_wsjtx_server_gates_on_enable_and_valid_addr() {
         // Disabled → no socket regardless of address (the state before a toggle-on).
-        assert!(build_wsjtx_server(false, "127.0.0.1:2237").is_none());
+        assert!(build_wsjtx_server(false, "127.0.0.1:2237", "1.21.0").is_none());
         // Enabled but unparseable target → None, not a panic.
-        assert!(build_wsjtx_server(true, "not-an-address").is_none());
-        assert!(build_wsjtx_server(true, "").is_none());
+        assert!(build_wsjtx_server(true, "not-an-address", "1.21.0").is_none());
+        assert!(build_wsjtx_server(true, "", "1.21.0").is_none());
         // Enabled + valid loopback target → a bound emitter (this is what a live
         // toggle-on rebuilds; the opening Heartbeat to :2237 is harmless if unheard).
-        assert!(build_wsjtx_server(true, "127.0.0.1:2237").is_some());
+        assert!(build_wsjtx_server(true, "127.0.0.1:2237", "1.21.0").is_some());
     }
 
     #[test]
