@@ -35,6 +35,12 @@ describe('what the settings hold', () => {
     })
     for (const junk of [null, undefined, 'x', [], { light: 'x', fonts: [] }]) expect(parseJs8PaneStyle(junk)).toEqual(emptyJs8PaneStyle())
   })
+
+  // Operator decision: no pill colours (Nexus's pills are a tint behind the input's one text colour).
+  it('has no pill colours, and drops one a settings file names', () => {
+    expect(Object.values(JS8_PANE_COLORS).flat().filter((k) => /pill/i.test(k))).toEqual([])
+    expect(parseJs8PaneStyle({ dark: { pillBg: '#123456', composeBg: '#101010' } }).dark, 'control: its neighbour is kept').toEqual({ composeBg: '#101010' })
+  })
 })
 
 describe('the custom properties the cockpit sets', () => {

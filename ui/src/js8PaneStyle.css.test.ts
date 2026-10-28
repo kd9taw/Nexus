@@ -50,4 +50,18 @@ describe('the JS8 panes’ colours and fonts in styles.css', () => {
     expect(missing).toEqual([])
     expect(rootTokensFrom(RULES, 'dark').has('--js8-rx-bg'), 'control: an operator property is never a theme token').toBe(false)
   })
+
+  // Nexus's order, kept (operator decision): a CQ or highlight row keeps its tint when selected, the accent bar marking the
+  // selection; JS8Call lets the selection win. The rules weigh the same (a class, a type, a class: `:is()` counts as its one
+  // class), so the later one paints: every selected-row fill must come before every tint.
+  it('draws the CQ and highlight tints over the selected row', () => {
+    const fills = (r: (typeof RULES)[number]) => r.decls.some((d) => d.prop === 'background' && !d.value.includes('!important'))
+    const selected = RULES.filter((r) => /\btr\.selected$/.test(r.selector) && r.decls.some((d) => d.prop === 'background'))
+    const tints = RULES.filter((r) => /^\.js8-table tr\.(cq|hl-secondary|hl-primary)$/.test(r.selector) && fills(r))
+    expect(selected.length, 'positive control: the selected row’s fills are found').toBeGreaterThanOrEqual(2)
+    expect(selected.every(fills), 'no selected fill outweighs a tint by !important').toBe(true)
+    expect(selected.every((r) => !r.selector.includes('#')), 'nor by an id').toBe(true)
+    expect(tints.map((r) => r.selector).sort()).toEqual(['.js8-table tr.cq', '.js8-table tr.hl-primary', '.js8-table tr.hl-secondary'])
+    for (const tint of tints) for (const sel of selected) expect(tint.order, `${tint.selector} after ${sel.selector}`).toBeGreaterThan(sel.order)
+  })
 })
