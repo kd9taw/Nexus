@@ -15630,6 +15630,7 @@ impl Engine {
         Ok(FdClubImportPlan {
             session: self.fd_club_session(club)?,
             club_call: self.fd_club_call(),
+            hold: club.hold(&posid),
             posid,
             now: now_unix_secs(),
         })
@@ -15642,11 +15643,29 @@ impl Engine {
     /// a club no longer hosted, a position removed meanwhile, or a club whose call or session
     /// changed is refused, and nothing more is merged. Stopping there is safe: the contacts already
     /// merged are the club's, by `(position, seq)`, so importing the file again adds the rest.
+    ///
+    /// Only what the file was read with counts as a session change
+    /// ([`FdClubImportPlan::reads_the_same`]): the host working a station meanwhile changes its
+    /// live session, and stops nothing. A Give of the position meanwhile stops the import with
+    /// its own sentence: the Give took that position's contacts out of the club's log, so the
+    /// rest of the old laptop's file must not go into the given position.
     pub fn fd_club_import_merge(&mut self, read: &mut FdClubImportRead) -> Result<bool, String> {
         let plan = &read.plan;
         let total = read.log.qsos().len();
-        let why = match self.fd_club_import_checks(&plan.posid) {
-            Ok(again) if again.club_call == plan.club_call && again.session == plan.session => None,
+        let again = self.fd_club_import_checks(&plan.posid);
+        if again.as_ref().is_ok_and(|again| again.hold != plan.hold) {
+            return Err(if read.next == 0 {
+                "you gave that position to another laptop while the file was read: nothing was added"
+                    .to_string()
+            } else {
+                format!(
+                    "the import stopped after {} of the file's {total} contacts: you gave that position to another laptop, and a Give takes the position's contacts out of the club's log, the {} this import added included",
+                    read.next, read.dto.added
+                )
+            });
+        }
+        let why = match again {
+            Ok(again) if again.club_call == plan.club_call && again.reads_the_same(plan) => None,
             Ok(_) if read.next == 0 => {
                 Some("the club event changed while the file was read: import it again".to_string())
             }
@@ -34629,11 +34648,30 @@ pub const FD_CLUB_IMPORT_CHUNK: usize = 256;
 pub struct FdClubImportPlan {
     posid: String,
     club_call: String,
+    /// The position's hold ([`crate::fdevent::ClubLog::hold`]): how often the host gave it to
+    /// another laptop, so a Give during the import is seen.
+    hold: u64,
     session: ContestSession,
     now: u64,
 }
 
 impl FdClubImportPlan {
+    /// Is the file read under `other`'s session as it is under this one? Only what the read
+    /// ([`Self::read`], `restore_journal`) uses counts: the contest and the running it picks
+    /// (`event_id`, `contest_id`, `rules_year`), the exchange, where the station is (which picks
+    /// the role), and the exchange it sends (for a row written without one). The contact in
+    /// progress and the serials given out change as the host works stations, and the merge
+    /// reads none of them.
+    fn reads_the_same(&self, other: &Self) -> bool {
+        let (a, b) = (&self.session, &other.session);
+        a.event_id == b.event_id
+            && a.contest_id == b.contest_id
+            && a.rules_year == b.rules_year
+            && a.exchange == b.exchange
+            && a.my_location == b.my_location
+            && a.my_exchange == b.my_exchange
+    }
+
     /// The file read as that laptop's own restart reads its journal, under the club's session
     /// ([`tempo_core::fieldday::FieldDayLog::restore_journal`]). Needs no Engine, so the radio
     /// loop is never kept waiting on a large file.
@@ -54776,6 +54814,12 @@ mod tests {
     /// import is held there while a second thread locks the Engine, which must get in within a
     /// bound far longer than any CI pause. That thread also counts the club's log, so each hold
     /// is seen to merge no more than [`super::FD_CLUB_IMPORT_CHUNK`].
+    ///
+    /// This proves the lock is let go between merges, not that a waiting thread gets its turn:
+    /// the importer is held here by hand. The 1 ms pause after each merge is what gives the radio
+    /// loop that turn in a real import, and whether a woken thread runs before the importer locks
+    /// again is the scheduler's choice, so no test can turn red on the pause going without
+    /// turning red, now and then, on a loaded machine with it in place.
     #[test]
     fn a_large_import_lets_the_engine_lock_go_between_merges() {
         let dir = import_dir("chunks");
@@ -54996,6 +55040,218 @@ mod tests {
         for kept in ["K9CCC", "KKDDD", "K9EEE", "K1ABC"] {
             assert!(!cab.contains(kept), "{kept} kept out:\n{cab}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// How many of position `posid`'s contacts the host's club log holds.
+    fn club_rows_of(host: &std::sync::Mutex<Engine>, posid: &str) -> usize {
+        super::engine_lock(host)
+            .fd_club_log()
+            .map_or(0, |c| c.rows().iter().filter(|r| r.posid == posid).count())
+    }
+
+    /// The host's Give of position `posid` to a second laptop, turned away because a first one
+    /// holds it: the host's own Give button on its turned-away list.
+    fn give_to_another_laptop(e: &mut Engine, posid: &str) {
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut join = |key: &str| e.fd_club_join(v, posid, "tent", "W9XYZ", "ilqp", "", key);
+        join(&club_key_hash("the first laptop")).expect("the first laptop holds the position");
+        join(&club_key_hash("the second laptop")).expect_err("the second is turned away");
+        let handle = e
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .and_then(|c| c.refused.iter().find_map(|r| r.handle))
+            .expect("the turned-away laptop can be given the position");
+        e.fd_club_give_position(handle).unwrap();
+    }
+
+    /// The host's live contest session, changed as `change` changes it.
+    fn change_session(e: &mut Engine, change: impl FnOnce(&mut ContestSession)) {
+        match &mut e.mode {
+            Mode::FieldDay { station, .. } => change(&mut station.log.session),
+            _ => panic!("the host runs the party"),
+        }
+    }
+
+    /// ⭐ **A Give of the position a file is imported under stops the import**: the Give takes
+    /// that position's contacts out of the club's log and starts it afresh for the laptop given
+    /// it, so the rest of the old laptop's file must not merge into the new one's position, where
+    /// its `(position, seq)` slots would turn the new laptop's own contacts away. Given while the
+    /// file is read, nothing is merged; given between two merges, nothing more is.
+    #[test]
+    fn a_give_of_the_position_during_an_import_stops_it() {
+        let dir = import_dir("give");
+        let calls = many_calls(super::FD_CLUB_IMPORT_CHUNK + 44);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &calls);
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let err =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                give_to_another_laptop(&mut super::engine_lock(&host), "bbbb0002")
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts: you gave that position to another laptop, and a Give takes the position's contacts out of the club's log, the {chunk} this import added included",
+                calls.len()
+            )
+        );
+        assert_eq!(
+            club_rows_of(&host, "bbbb0002"),
+            0,
+            "nothing of the old laptop's file is in the given position"
+        );
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("read")));
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                give_to_another_laptop(&mut super::engine_lock(&host), "bbbb0002");
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "you gave that position to another laptop while the file was read: nothing was added"
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), 0);
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("control")));
+        let got = super::fd_club_import_in(&host, &file, "bbbb0002").unwrap();
+        assert_eq!(got.added, calls.len(), "CONTROL: no Give, all of it merges");
+        assert_eq!(club_rows_of(&host, "bbbb0002"), calls.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host working stations during an import does not stop it**: a contact in progress
+    /// and one logged between two merges change the host's live session, but nothing the file
+    /// is read with. A change to what it is read with (where the host is, which picks the
+    /// exchange's role) still stops it.
+    #[test]
+    fn the_host_working_stations_during_an_import_does_not_stop_it() {
+        let dir = import_dir("working");
+        let calls = many_calls(2 * super::FD_CLUB_IMPORT_CHUNK + 88);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &calls);
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let mut turn = 0;
+        let got =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                let mut e = super::engine_lock(&host);
+                turn += 1;
+                if turn == 1 {
+                    e.contest_working("N9ZZZ").unwrap();
+                } else {
+                    party_contact(&mut e, "N9ZZZ");
+                }
+            })
+            .unwrap();
+        assert_eq!(
+            turn, 2,
+            "CONTROL: the host worked a station between both merges"
+        );
+        assert_eq!((got.added, got.already_in), (calls.len(), 0), "{got:?}");
+        assert_eq!(club_rows_of(&host, "bbbb0002"), calls.len());
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("moved")));
+        let err =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                change_session(&mut super::engine_lock(&host), |s| {
+                    s.my_location.state = "WI".into()
+                })
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts ({chunk} added): the club event changed; import the file again for the rest",
+                calls.len()
+            )
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), chunk);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **What the re-check before each merge catches, each by its own sentence**: the club's
+    /// session changed or the position removed while the file was read merges nothing, and the
+    /// club stopped between two merges says how far the import got (a sentence only the re-check
+    /// writes).
+    #[test]
+    fn the_recheck_before_each_merge_names_what_changed() {
+        let dir = import_dir("recheck");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                change_session(&mut super::engine_lock(&host), |s| {
+                    s.my_location.state = "WI".into()
+                });
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "the club event changed while the file was read: import it again"
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), 0, "a session change");
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("removed")));
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                let mut e = super::engine_lock(&host);
+                let v = tempo_net::fdsync::PROTO_VERSION;
+                let key = club_key_hash("bbbb0002");
+                e.fd_club_join(v, "bbbb0002", "tent", "W9XYZ", "ilqp", "", &key)
+                    .expect("the club knows the position");
+                e.fd_club_remove_position("bbbb0002").unwrap();
+                drop(e);
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "you removed that position from the club event: Allow back first"
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), 0, "a position removed");
+
+        let calls = many_calls(super::FD_CLUB_IMPORT_CHUNK + 44);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, big) = party_laptop(&dir.join("big"), "bbbb0002", &calls);
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+        let host = std::sync::Mutex::new(party_host(&dir.join("stopped")));
+        let err =
+            super::fd_club_import_with(&host, &big, "bbbb0002", FdClubImportPlan::read, || {
+                super::engine_lock(&host).fd_host_stop()
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts ({chunk} added): this station is not hosting a club event; import the file again for the rest",
+                calls.len()
+            )
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
