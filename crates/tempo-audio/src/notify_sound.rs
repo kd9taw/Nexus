@@ -25,8 +25,10 @@
 //! actually opened, so a TX device changed after the sound device was picked is caught at the next
 //! sound. Off Linux two devices are compared by name, case-blind, the way the headphone monitor's
 //! guard compares them, and without the " #N" a device list adds to a second identically named
-//! codec: two identically named codecs are therefore one device here, which refuses more rather
-//! than less.
+//! codec and the "N- " Windows numbers it by inside its name ("Speakers (2- USB Audio CODEC)"). On
+//! Linux a second card with a taken id is `<id>_N` (`CODEC_1`), and it is compared without the
+//! `_N`. Two identically named codecs are therefore one device here, whichever number each has
+//! today (the numbers move when one is unplugged), which refuses more rather than less.
 //! The refusal says which of these it was ([`PlayRefusal`]), so the operator is told what to change.
 //!
 //! The pure pieces (the guard, the built-in tones) build without the `device` feature so they are
@@ -187,7 +189,8 @@ enum Route {
     /// from nothing.
     Pcm(String),
     /// Windows / macOS: its base name, lower-cased, without the " #N" ordinal that tells two
-    /// identically named codecs apart in a list — they are one device here.
+    /// identically named codecs apart in a list, and without the "N- " Windows numbers a second
+    /// one by inside its name ("Speakers (2- USB Audio CODEC)") — they are one device here.
     Named(String),
 }
 
@@ -203,12 +206,9 @@ fn route(name: &str, naming: Naming, card_id: &dyn Fn(u32) -> Option<String>) ->
     let name = name.trim();
     let lower = name.to_ascii_lowercase();
     if naming == Naming::Endpoint {
-        return Route::Named(
-            crate::audiodev::split_device_ordinal(&lower)
-                .0
-                .trim()
-                .to_string(),
-        );
+        return Route::Named(without_instance_numbers(
+            crate::audiodev::split_device_ordinal(&lower).0.trim(),
+        ));
     }
     let (plugin, args) = lower.split_once(':').unwrap_or((&lower, ""));
     if CARD_PLUGINS.contains(&plugin) || plugin.starts_with("surround") {
@@ -220,7 +220,9 @@ fn route(name: &str, naming: Naming, card_id: &dyn Fn(u32) -> Option<String>) ->
             Some(card) => Some(card),
             None => args.split(',').next().filter(|a| !a.contains('=')),
         };
-        if let Some(card) = card.map(str::trim).filter(|c| !c.is_empty()) {
+        // ALSA takes a quoted argument too (`hw:CARD="CODEC"`): the same card.
+        let card = card.map(|c| c.trim().trim_matches(|q| q == '"' || q == '\'').trim());
+        if let Some(card) = card.filter(|c| !c.is_empty()) {
             return Route::Card(card_ref(card, card_id));
         }
     }
@@ -228,6 +230,51 @@ fn route(name: &str, naming: Naming, card_id: &dyn Fn(u32) -> Option<String>) ->
         return Route::Server;
     }
     Route::Pcm(lower)
+}
+
+/// `name` without the "N- " Windows puts before a second identically named device's name, at the
+/// start or just inside a parenthesis ("Speakers (2- USB Audio CODEC)" is "Speakers (USB Audio
+/// CODEC)"). Windows renumbers the twins when one is unplugged, so the number does not tell them
+/// apart over time.
+fn without_instance_numbers(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut rest = name;
+    loop {
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 && rest[digits..].starts_with("- ") {
+            rest = &rest[digits + 2..];
+        }
+        match rest.find('(') {
+            Some(i) => {
+                out.push_str(&rest[..=i]);
+                rest = &rest[i + 1..];
+            }
+            None => {
+                out.push_str(rest);
+                return out;
+            }
+        }
+    }
+}
+
+/// An ALSA card id as the card it names, whichever of identically named cards it is. A second
+/// card whose id is taken gets `<id>_N` (`CODEC_1`), the id cut short to keep it within 15
+/// characters (`USBAudioCODEC_1` for a second `USBAudioCODEC12`), and the numbers move when a
+/// card is unplugged. So two ids are one card when they match without the `_N`, or when one was
+/// cut short for it and the other starts with what was left.
+fn same_card_id(x: &str, y: &str) -> bool {
+    fn base(id: &str) -> (&str, bool) {
+        match id.rsplit_once('_') {
+            Some((b, n))
+                if !b.is_empty() && !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()) =>
+            {
+                (b, id.len() == 15)
+            }
+            _ => (id, false),
+        }
+    }
+    let ((bx, cut_x), (by, cut_y)) = (base(x), base(y));
+    bx == by || (cut_x && by.starts_with(bx)) || (cut_y && bx.starts_with(by))
 }
 
 fn card_ref(token: &str, card_id: &dyn Fn(u32) -> Option<String>) -> Card {
@@ -240,14 +287,15 @@ fn card_ref(token: &str, card_id: &dyn Fn(u32) -> Option<String>) -> Card {
 }
 
 /// Whether two routes may be one device. `None` ONLY where they are proven different: two
-/// different cards (by id, or by number), or two different endpoint names. Every other pair —
+/// different cards (by id, or by number), or two different endpoint names. Identically named
+/// twins are one device ([`same_card_id`], [`without_instance_numbers`]). Every other pair —
 /// the sound server against anything else, a config-file PCM against anything but its own name,
 /// a card by id against one by a number nobody resolved — is unsure, and refuses.
 fn collide(a: &Route, b: &Route) -> Option<Collision> {
     match (a, b) {
         (Route::Server, Route::Server) => Some(Collision::Same),
         (Route::Card(x), Route::Card(y)) => match (x, y) {
-            (Card::Id(x), Card::Id(y)) if x == y => Some(Collision::Same),
+            (Card::Id(x), Card::Id(y)) if same_card_id(x, y) => Some(Collision::Same),
             (Card::Number(x), Card::Number(y)) if x == y => Some(Collision::Same),
             (Card::Id(_), Card::Id(_)) | (Card::Number(_), Card::Number(_)) => None,
             (Card::Id(_), Card::Number(_)) | (Card::Number(_), Card::Id(_)) => {
@@ -748,6 +796,108 @@ mod tests {
         assert!(
             !ep("Speakers #2", &tx, Some("Speakers")),
             "control: a second pair of speakers is not the codec"
+        );
+    }
+
+    /// Windows numbers a second identically named codec INSIDE its endpoint name ("Speakers (2- USB
+    /// Audio CODEC)"), and renumbers it when the first is unplugged, so a stale TX name and the
+    /// sound's name can be one codec under two numbers: twins are one device here.
+    #[test]
+    fn a_renumbered_twin_codec_is_the_same_device_on_windows() {
+        let tx = s(&["Speakers (2- USB Audio CODEC)"]);
+        assert_eq!(
+            ep_refuse(
+                "Speakers (USB Audio CODEC)",
+                "",
+                &tx,
+                Some("Speakers (Realtek)")
+            ),
+            Err(PlayRefusal::TxDevice),
+            "the TX codec, renumbered after its twin was unplugged"
+        );
+        assert!(
+            ep(
+                "Speakers (3- USB Audio CODEC)",
+                &s(&["Speakers (USB Audio CODEC)"]),
+                None
+            ),
+            "and the other way round"
+        );
+        assert!(
+            ep("2- USB Audio CODEC", &s(&["USB Audio CODEC"]), None),
+            "a bare name"
+        );
+        assert!(
+            !ep("Speakers (Realtek)", &tx, Some("Speakers (Realtek)")),
+            "control: another device plays"
+        );
+        assert!(
+            !ep("Headphones (USB Audio CODEC)", &tx, None),
+            "control: another endpoint of another name plays"
+        );
+        assert!(
+            !ep("Speakers (Line 2- Out)", &s(&["Speakers (Line Out)"]), None),
+            "control: a number inside a word is part of the name"
+        );
+    }
+
+    /// Linux names a second card with a taken id `<id>_N` (`CODEC_1`), cutting the id short to
+    /// keep it within 15 characters, and renumbers it when the first is unplugged: twins are one
+    /// card here.
+    #[test]
+    fn a_renumbered_twin_card_is_the_same_card_on_linux() {
+        let tx = s(&["plughw:CARD=CODEC_1,DEV=0"]);
+        assert_eq!(
+            alsa_refuse("hw:CARD=CODEC,DEV=0", "", &tx, None),
+            Err(PlayRefusal::TxDevice)
+        );
+        assert!(
+            alsa("front:CODEC_2", &s(&["hw:CARD=CODEC"]), None),
+            "the other way round"
+        );
+        assert_eq!(
+            verdict_with(
+                "hw:1,0",
+                "",
+                &s(&["hw:CARD=CODEC"]),
+                None,
+                Naming::Alsa,
+                &|n| { (n == 1).then(|| "CODEC_1".to_string()) }
+            ),
+            Some(PlayRefusal::TxDevice),
+            "by number, resolved to the twin's id"
+        );
+        assert!(
+            alsa(
+                "hw:CARD=USBAudioCODEC12",
+                &s(&["hw:CARD=USBAudioCODEC_1"]),
+                None
+            ),
+            "a 15-character id cut short for its number"
+        );
+        assert!(
+            !alsa("hw:CARD=PCH,DEV=0", &tx, None),
+            "control: another card plays"
+        );
+        assert!(
+            !alsa("hw:CARD=CODECPRO", &s(&["hw:CARD=CODEC_1"]), None),
+            "control: a twin id not cut short is not a prefix match"
+        );
+    }
+
+    /// ALSA accepts a quoted card argument (`hw:CARD="CODEC"`): it names the same card.
+    #[test]
+    fn a_quoted_card_argument_is_the_card() {
+        let tx = s(&["plughw:CARD=CODEC,DEV=0"]);
+        assert!(alsa("hw:CARD=\"CODEC\",DEV=0", &tx, None));
+        assert!(alsa("hw:'CODEC',0", &tx, None), "positional, single quotes");
+        assert!(
+            alsa("hw:CARD=CODEC", &s(&["dmix:CARD=\"CODEC\""]), None),
+            "a quoted TX"
+        );
+        assert!(
+            !alsa("hw:CARD=\"PCH\",DEV=0", &tx, None),
+            "control: another card, quoted, plays"
         );
     }
 

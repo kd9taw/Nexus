@@ -59,7 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. The
   device the radio actually opened for TX audio is refused too, while the radio holds it: with TX audio set to the
   system default, a sound is not played on that device after the system default moves to another one. Two
-  identically named sound cards count as one device. On Linux, the sound server's default output (default, PulseAudio,
+  identically named sound cards count as one device, whatever number Windows or Linux gives each ("Speakers (2- USB
+  Audio CODEC)", CODEC_1), since the numbers move when one is unplugged. On Linux, the sound server's default output (default, PulseAudio,
   PipeWire) may be the radio's card, so the sounds play only on a sound card picked by name, and only while the radio's
   TX audio is set to its own, different card by name. A device whose route is set in a sound configuration file (one of
   your own from ~/.asoundrc, or plug:, oss, a bare dmix) may reach any card, so a sound is refused against it either way
