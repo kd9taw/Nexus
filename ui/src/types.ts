@@ -4975,6 +4975,10 @@ export interface Settings {
   icomNativeCat: boolean
   /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
   icomDataMode: number
+  /** This radio's waterfall source where Nexus streams an Icom's own scope: 'auto' (the default,
+   * the radio's scope) or 'audio' (the sound card's audio waterfall; the scope stream stops and
+   * CI-V keeps serving CAT). Per radio (flat mirror of `RadioProfile.nativeScope`); absent = 'auto'. */
+  nativeScope?: string
   /** "Transmit audio source (CAT PTT)" (#381): 'front' keys as every release has (`T 1`, the MIC
    * input on most radios), 'rear' keys the DATA input (`T 3`). Offered only for CAT PTT on a radio
    * whose Hamlib driver has mic/data PTT (`getPttMicDataRigModels`). Per radio; absent = 'front'. */
@@ -5871,7 +5875,7 @@ export interface RadioProfile {
   lastDialMhz: number
   lastBand: string
   lastSideband: string
-  /** Native panadapter: "auto" | "none" | "flex" | "civ". */
+  /** Waterfall source where Nexus streams an Icom scope: "auto" (the radio's scope, default) or "audio". */
   nativeScope: string
   /** This radio's FlexRadio LAN IP (SmartSDR API :4992) — per-radio since 2026-08-18. */
   flexRadioIp?: string

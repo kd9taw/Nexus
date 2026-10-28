@@ -8222,6 +8222,11 @@ export const EN = {
   'settings.rigControl.icomNative.label': 'Native Icom CI-V (early access)',
   'settings.rigControl.icomNative.hint':
     'Nexus drives this Icom\'s CI-V directly instead of launching rigctld — unlocking the rig\'s real spectrum scope in the waterfall ("CI-V RF") and instant dial tracking. The scope needs <b>115200 baud, set the same on BOTH the radio and Nexus</b>: (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" = <b>115200</b>; (2) on the rig, same menu, "CI-V USB Port" = "Unlink from [REMOTE]"; (3) the <b>Baud</b> field above = <b>115200</b> to match. Below that the rig refuses to stream the scope (CAT still works; the panadapter just stays off). Save to apply; turn off any time to return to the classic Hamlib path.',
+  "settings.rigControl.waterfallSource.label": "Waterfall source",
+  "settings.rigControl.waterfallSource.radio": "Radio's scope",
+  "settings.rigControl.waterfallSource.audio": "Audio (sound card)",
+  "settings.rigControl.waterfallSource.hint": "Which waterfall this radio draws. Radio's scope is the radio's own spectrum scope, as before. Audio is the sound card's waterfall, as on the Hamlib path: finer close to the dial than a radio scope at a wide span. With Audio the radio stops sending its scope, and native CI-V stays connected for CAT. Save to apply.",
+  "settings.rigControl.waterfallSource.needsNative": "Needs the native CI-V connection above: through Hamlib the waterfall is already the audio one.",
   'settings.rigControl.flexPan.label': 'Flex native panadapter (Beta)',
   'settings.rigControl.flexPan.hint':
     "Stream this FlexRadio's real SmartSDR panadapter (VITA-49 FFT) into the cockpit scope — the RF spectrum around your dial, with the Flex-pan span/ref controls. Beta and <b>unverified on hardware</b>, so it's opt-in: needs the Flex IP set (from Find Radios) and SmartSDR reachable on this network. If the scope stays blank or the app hitches, turn it back off. Save to apply.",

@@ -207,7 +207,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'keys at launch', 'transmits at startup', 'stuck ptt', 'stuck transmit',
       // The Flex client's Beta setting for CW, Tune and the ATU, under the words for what it
       // switches on: an operator looking for it asks how to get CW or the tuner through the client.
-      'flex cw', 'cwx', 'flex tune', 'flex atu'],
+      'flex cw', 'cwx', 'flex tune', 'flex atu',
+      // #417: the waterfall source, under what the operator sees — a coarse Icom scope waterfall.
+      'waterfall source', 'audio waterfall', 'icom scope', 'scope resolution'],
   },
   {
     id: 'audio',

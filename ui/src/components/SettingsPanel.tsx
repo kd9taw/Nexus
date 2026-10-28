@@ -3250,6 +3250,8 @@ export function SettingsPanel({
       // form's copy of every field it had not touched went back over the newer value: a sound card
       // or keying method set in the radio setup since was gone at the next Save of anything. Its
       // fields are kept out of the station-wide save, which describes the radio in use.
+      // The radio's waterfall source (`nativeScope`) is one of those fields: a choice made in
+      // the form is sent to the edited radio, never restored from its profile.
       const mycall = next.mycall.trim().toUpperCase()
       const { radio, rest } = splitRadioFields(changedSince(savedRef.current, { ...next, mycall }))
       await saveForm({ ...withActiveRadioConfig(next), mycall }, forced, rest)
@@ -6873,6 +6875,32 @@ export function SettingsPanel({
                       : NATIVE_CIV_MODELS.includes(form.rigModel)
                         ? 'Needs the native CI-V connection above: through Hamlib the radio always lands on D1.'
                         : 'Needs the Icom network connection: through Hamlib the radio always lands on D1.'}
+                  </span>
+                </label>
+              )}
+
+              {/* #417: WHICH WATERFALL this radio draws where Nexus streams the Icom's own scope —
+                  the radio's scope (the default, as every release has) or the sound card's audio
+                  waterfall, finer close in. Per radio. Offered where the CI-V engine can stream a
+                  scope (the native switch's scope radios, or the Icom network connection), and
+                  disabled with the reason when the native switch is off: on Hamlib the waterfall is
+                  already the audio one. Read as Rust reads it (`native_scope_is_audio`). */}
+              {(NATIVE_CIV_MODELS.includes(form.rigModel) || form.rigConn === 'icomlan') && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rigControl.waterfallSource.label')}</span>
+                  <select
+                    className="settings-input"
+                    value={(form.nativeScope ?? '').trim().toLowerCase() === 'audio' ? 'audio' : 'auto'}
+                    disabled={!civAppliesDataMode}
+                    onChange={(e) => update('nativeScope', e.target.value)}
+                  >
+                    <option value="auto">{t('settings.rigControl.waterfallSource.radio')}</option>
+                    <option value="audio">{t('settings.rigControl.waterfallSource.audio')}</option>
+                  </select>
+                  <span className="settings-hint">
+                    {civAppliesDataMode
+                      ? t('settings.rigControl.waterfallSource.hint')
+                      : t('settings.rigControl.waterfallSource.needsNative')}
                   </span>
                 </label>
               )}
