@@ -168,6 +168,7 @@ import {
   useSingleRadio,
   resendChat,
   type RadioLaunchInfo,
+  type IotaOfferData,
   focusWindow,
 } from './api'
 import {
@@ -1720,8 +1721,8 @@ function App() {
   }, [])
 
   const handleConfirmLog = useCallback(
-    (record: LoggedQso) => {
-      void apiConfirmPendingLog(record, snap?.pendingQsoLogKey)
+    (record: LoggedQso, iotaOffer?: IotaOfferData | null) => {
+      void apiConfirmPendingLog(record, snap?.pendingQsoLogKey, iotaOffer)
         .then((s) => {
           setSnap(s)
           refreshNeeds() // drop the just-worked station from the roster/needs immediately

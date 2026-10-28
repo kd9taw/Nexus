@@ -42,6 +42,18 @@ describe('confirming or discarding a held contact names it, on every transport',
     })
   })
 
+  it('carries the IOTA offer the operator took, and nothing when none was', async () => {
+    const offer = { reference: 'EU-028', source: 'spot' as const }
+    await api.confirmPendingLog(record, 'hold-1', offer)
+    await api.logQso(record, 'operator', offer)
+    await api.logQso(record, 'operator', null)
+    expect(calls.map((c) => c.args)).toEqual([
+      { record, expectedKey: 'hold-1', iotaOffer: offer },
+      { record, stateSource: 'operator', iotaOffer: offer },
+      { record, stateSource: 'operator' },
+    ])
+  })
+
   it('sends it when discarding too', async () => {
     await api.discardPendingLog('hold-1')
     expect(calls).toHaveLength(1)

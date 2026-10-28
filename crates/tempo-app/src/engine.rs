@@ -128,6 +128,8 @@ mod grid_fill_tests;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
 mod held_form_tests;
+#[cfg(test)]
+mod iota_offer_tests;
 /// JS8's send mechanics: the TX offset moved while a message goes out.
 #[cfg(test)]
 mod js8_send_tests;
@@ -11789,8 +11791,9 @@ impl Engine {
     }
 
     /// The answer a lookup gave this session for exactly this call, if one did. Exact call, as
-    /// for the name: a lookup of `W1AW/P` is not one of `W1AW`.
-    fn callbook_answer(
+    /// for the name: a lookup of `W1AW/P` is not one of `W1AW`. Also what the log-time IOTA offer
+    /// reads (`tempo_core::logbook::offer::iota_offer`).
+    pub fn callbook_answer(
         &self,
         call: &str,
     ) -> Option<&tempo_core::logbook::callbook::CallbookAnswer> {
@@ -17492,7 +17495,7 @@ impl Engine {
                 None => {}
             }
         }
-        // WHAT A CALLBOOK LOOKUP ALREADY SAID of this station — county, IOTA, zones, position,
+        // WHAT A CALLBOOK LOOKUP ALREADY SAID of this station — county, zones, position,
         // e-mail, QSL route, and the name, QTH, grid and state where the record has none — on
         // every path, the FT auto-log included. Only an answer a lookup already returned this
         // session for exactly this call (the callsign card's, the log strip's): never a lookup
@@ -17500,6 +17503,10 @@ impl Engine {
         // after the park and the state above have had their say, and before DISTANCE below, which
         // reads the grid. The rules, and the mark that lets a LoTW value replace a callbook one,
         // are `tempo_core::logbook::callbook`'s.
+        //
+        // Never its IOTA reference: that is OFFERED on the log form and in the popup, and written
+        // only when the operator takes it (`tempo_core::logbook::offer`; operator decision,
+        // 2026-10-27). An FT contact auto-logged with no popup logs without one.
         //
         // An FT8/FT4 contact the station gave no grid in takes the callbook's grid for the
         // distance and the map only (`fill_gridless_from_callbook`): it counts toward no award
@@ -19148,6 +19155,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// fields the desktop popup extends with COMMENT (#371). `rec` arrives through the UI's `LoggedQso`, which carries neither TIME_OFF nor the split
     /// FREQ_RX, so logging it as sent dropped both from every confirmed contact.
     pub fn confirm_pending_log(&mut self, expected_key: &str, rec: QsoRecord) -> bool {
+        self.confirm_pending_log_with_offer(expected_key, rec, None)
+    }
+
+    /// [`Self::confirm_pending_log`], with the IOTA offer the operator took in the popup
+    /// (`tempo_core::logbook::offer::accept_iota_offer`): written into the held record's IOTA only
+    /// when it has none, and held back from uploads until the operator touches it.
+    pub fn confirm_pending_log_with_offer(
+        &mut self,
+        expected_key: &str,
+        rec: QsoRecord,
+        iota_offer: Option<&tempo_core::logbook::offer::IotaOffer>,
+    ) -> bool {
         if self.pending_qso_log_key().as_deref() != Some(expected_key) {
             return false;
         }
@@ -19188,6 +19207,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         tempo_core::logbook::settle_popup_my_grid(&mut held, &was.record);
         self.take_popup_prop_mode(&mut held, rec.prop_mode.as_deref());
         let dropped = self.rederive_after_edits(&mut held, &was.record, was.grid_source);
+        if let Some(offer) = iota_offer {
+            tempo_core::logbook::offer::accept_iota_offer(&mut held, offer);
+        }
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
         self.log_held_qso(held, was.gridless || dropped);

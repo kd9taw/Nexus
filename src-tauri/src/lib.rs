@@ -22824,11 +22824,13 @@ const PENDING_LOG_MOVED_ON: &str = "pendingLogMovedOn";
 /// Confirm-and-log the contact the prompt-to-log popup is showing. `record` is the
 /// (possibly edited) contact and `expected_key` the snapshot's `pendingQsoLogKey` it was
 /// shown with. Returns the refreshed snapshot, whose `pendingLog` is the next held contact.
+/// `iota_offer` is the IOTA offer the operator took in the popup, if any ([`get_iota_offer`]).
 #[tauri::command]
 async fn confirm_pending_log(
     state: State<'_, SharedEngine>,
     record: LoggedQso,
     expected_key: Option<String>,
+    iota_offer: Option<tempo_core::logbook::offer::IotaOffer>,
 ) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
@@ -22838,7 +22840,7 @@ async fn confirm_pending_log(
             // is confirming cannot be allowed to log one (review R2).
             let key = expected_key.unwrap_or_default();
             let prop_mode_was = eng.settings().log_prop_mode.clone();
-            if !eng.confirm_pending_log(&key, record.into()) {
+            if !eng.confirm_pending_log_with_offer(&key, record.into(), iota_offer.as_ref()) {
                 return Err(PENDING_LOG_MOVED_ON.into());
             }
             // The popup's propagation mode is remembered for the next contact
@@ -22874,6 +22876,7 @@ fn discard_pending_log(
 /// `state_source` is where the form's STATE came from ("operator", "callbook" or "park"; see
 /// [`tempo_app::engine::StateSource`]); absent is the operator's. A park or summit the record
 /// carries is placed here, before the Engine lock ([`ota_park_places`]).
+/// `iota_offer` is the IOTA offer the operator took on the form, if any ([`get_iota_offer`]).
 #[tauri::command]
 async fn log_qso(
     state: State<'_, SharedEngine>,
@@ -22881,6 +22884,7 @@ async fn log_qso(
     parks: State<'_, SharedParks>,
     record: LoggedQso,
     state_source: Option<String>,
+    iota_offer: Option<tempo_core::logbook::offer::IotaOffer>,
 ) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     let call = record.call.clone();
@@ -22897,7 +22901,13 @@ async fn log_qso(
     let (snap, wav) = durable_command(move || {
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            eng.log_form_qso(record.into(), source, park_places);
+            let mut rec: tempo_core::logbook::QsoRecord = record.into();
+            // The IOTA offer the operator took on the form ([`get_iota_offer`]): written into an
+            // empty field only, and held back from uploads until they touch it.
+            if let Some(offer) = &iota_offer {
+                tempo_core::logbook::offer::accept_iota_offer(&mut rec, offer);
+            }
+            eng.log_form_qso(rec, source, park_places);
             // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
             // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
             let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
@@ -25731,6 +25741,66 @@ fn callbook_iota_for_call(call: &str) -> Option<String> {
         .rev()
         .find(|(c, _)| *c == call)
         .map(|(_, i)| i.clone())
+}
+
+/// The IOTA reference the DX cluster's recent spots of exactly `call` name in their comments, for
+/// the log-time offer: the one group they name, or none when none names one or two name different
+/// groups (an old trip's re-spot, or a typo, is not this activation; the comment parser refuses a
+/// comment naming two groups the same way).
+fn spot_iota_for(recent: &[tempo_net::cluster::ClusterSpot], call: &str) -> Option<String> {
+    let call = call.trim();
+    let mut named: Option<String> = None;
+    for cs in recent
+        .iter()
+        .filter(|cs| cs.dx_call.trim().eq_ignore_ascii_case(call))
+    {
+        let Some(r) = propagation::iota::in_comment(&cs.comment) else {
+            continue;
+        };
+        match &named {
+            Some(n) if *n != r => return None,
+            Some(_) => {}
+            None => named = Some(r),
+        }
+    }
+    named
+}
+
+/// What IOTA reference to OFFER the contact the log form, or the confirm-before-log popup, holds
+/// for `call` (`tempo_core::logbook::offer::iota_offer`; operator decision, 2026-10-27): the group
+/// the spot comments for that call name (the Spots board's window, never in an unassisted contest
+/// entry), else the group a callbook lookup this session answered for exactly that call. Nothing
+/// when the form already holds a reference (`held`), and with the island list held, nothing it
+/// lacks. An offer writes nothing: the operator takes it, and `log_qso` / `confirm_pending_log`
+/// then write it, held back from uploads until the operator touches it.
+#[tauri::command(async)]
+fn get_iota_offer(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    call: String,
+    held: Option<String>,
+) -> Option<tempo_core::logbook::offer::IotaOffer> {
+    let spot_iota = if unassisted() {
+        None
+    } else {
+        spots.lock().ok().and_then(|buf| {
+            spot_iota_for(
+                &buf.recent_within(
+                    std::time::Instant::now(),
+                    std::time::Duration::from_secs(1200),
+                ),
+                &call,
+            )
+        })
+    };
+    let answer = engine_lock(&state).callbook_answer(&call).cloned();
+    tempo_core::logbook::offer::iota_offer(
+        &call,
+        held.as_deref(),
+        spot_iota.as_deref(),
+        answer.as_ref(),
+        Some(&iota_list::known),
+    )
 }
 
 /// The US state each heard station is scored in for Worked All States. An activator live at a
@@ -41079,6 +41149,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         iota_list::get_iota_list_status,
         iota_list::set_iota_list_consent,
         iota_list::get_iota_groups,
+        get_iota_offer,
         fetch_lotw_users,
         get_fcc_states_status,
         fetch_fcc_states,
@@ -46762,13 +46833,13 @@ mod tests {
         load_tle_snapshot_from, migrate_sstv_gallery_between, own_decode_heards, parse_sstv_mode,
         profile_dir_name, qso_is_sat, reconcile_gallery, rect_lands_on_work_area,
         redact_for_backup, resolve_bird, resolve_birds, roster_local_spots, roster_spot_age_secs,
-        run_sat_track, sanitize_profile, sat_excluded, set_operator_qth, spotter_evidence_rank,
-        spotter_evidence_rank_at, tle_absorb_foreign, tle_act_gate, tle_extend_aliases,
-        tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor,
-        tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
-        AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun,
-        SatnogsFetchState, SharedEngine, TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN,
-        TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
+        run_sat_track, sanitize_profile, sat_excluded, set_operator_qth, spot_iota_for,
+        spotter_evidence_rank, spotter_evidence_rank_at, tle_absorb_foreign, tle_act_gate,
+        tle_extend_aliases, tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed,
+        tle_seed_floor, tle_seed_path, tle_set_currency, view_passes, write_json_atomic,
+        write_qso_wav_in, AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto,
+        SatTrackLoss, SatTrackRun, SatnogsFetchState, SharedEngine, TleFlightGuard, TleSnapshot,
+        SAT_TRACK, SAT_TRACK_GEN, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -47427,6 +47498,42 @@ mod tests {
             .is_empty(),
             "a JA station only EU and AS heard must not reach the board"
         );
+    }
+
+    /// The log-time offer's spot side: the group the spots of exactly this call name, none when
+    /// two name different groups, and never another call's.
+    #[test]
+    fn the_offer_takes_the_one_group_the_calls_spots_name() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        // Spots of one call within a few kHz merge into one row; these are on separate bands.
+        let mk = |call: &str, freq_khz: f64, comment: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz,
+            comment: comment.into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let mut buf = SpotBuffer::new(100);
+        buf.push(mk("IA5X", 14025.0, "IOTA EU-028 up 1"));
+        buf.push(mk("IA5X", 7025.0, "loud"));
+        buf.push(mk("IA5X/P", 21025.0, "IOTA EU-031"));
+        buf.push(mk("IT9ABC", 14030.0, "IOTA EU-025"));
+        buf.push(mk("IT9ABC", 21030.0, "op from EU-017"));
+        let recent = buf.recent_within(
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(900),
+        );
+        assert_eq!(spot_iota_for(&recent, "ia5x").as_deref(), Some("EU-028"));
+        assert_eq!(spot_iota_for(&recent, "IA5X/P").as_deref(), Some("EU-031"));
+        assert_eq!(
+            spot_iota_for(&recent, "IT9ABC"),
+            None,
+            "two groups name neither"
+        );
+        assert_eq!(spot_iota_for(&recent, "K1ABC"), None);
     }
 
     /// The evidence ranking is the locality question the board asks OF THAT BAND, and

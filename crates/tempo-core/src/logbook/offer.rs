@@ -1,4 +1,5 @@
-//! An IOTA reference OFFERED to a contact at log time, and the mark a spot's reference carries.
+//! An IOTA reference OFFERED to a contact at log time, and the mark a reference taken from an offer
+//! carries.
 //!
 //! **Offered, never stamped.** A DX-cluster spot's comment and a callbook answer both name island
 //! groups ("IOTA EU-131"), and both can be wrong: a spotter's typo, a stale comment re-spotted
@@ -8,15 +9,17 @@
 //! [`accept_iota_offer`] write it — and only into an empty IOTA field, so a reference the
 //! operator typed is never replaced.
 //!
-//! **A spot's reference is held back from every upload ([`SPOT_FILLED_FIELD`]) until the operator
-//! touches it.** Confirming an offer at log time is a glance at a chip during a pileup; the
-//! reference stays in the operator's own log and its exports, but nothing Nexus sends off the
-//! machine ([`super::Audience::Outbound`]) carries it while the mark names it. Editing the
-//! field, or confirming it on the contact card (which takes the mark off,
-//! [`super::FieldEdit`] allows exactly that removal), makes it the operator's. Modelled on the
-//! callbook's mark ([`super::callbook::CALLBOOK_FILLED_FIELD`]): an app-private list in `extra`,
-//! never sent itself. A callbook-sourced offer is marked as a callbook fill, as the rest of the
-//! callbook's answer is.
+//! **A reference taken from an offer is held back from every upload ([`OFFER_HELD_FIELD`]) until
+//! the operator touches it**, whichever source it came from (operator decision, 2026-10-27).
+//! Confirming an offer at log time is a glance at a chip during a pileup; the reference stays in
+//! the operator's own log and its exports, but nothing Nexus sends off the machine
+//! ([`super::Audience::Outbound`]) carries it while the mark names it. Editing the field, or
+//! confirming it on the contact card (which takes the mark off, [`super::FieldEdit`] allows
+//! exactly that removal), makes it the operator's. Modelled on the callbook's mark
+//! ([`super::callbook::CALLBOOK_FILLED_FIELD`]): an app-private list in `extra`, never sent
+//! itself. A callbook-sourced offer is also marked as a callbook fill, as the rest of the
+//! callbook's answer is; that mark alone, on a contact logged before offers existed, holds
+//! nothing back.
 //!
 //! **The engine's seam.** The log-time half is the engine's to call (it holds the spot the
 //! contact came from and the session's callbook answers): `iota_offer` while the log form is
@@ -26,9 +29,10 @@ use super::callbook::{CallbookAnswer, CALLBOOK_FILLED_FIELD};
 use super::{extra_value, set_extra, valid_iota, QsoRecord};
 use serde::{Deserialize, Serialize};
 
-/// The fields a spot's comment filled on this contact, comma-separated ADIF names. App-private,
-/// never sent; while it names `IOTA` the reference itself is withheld from uploads.
-pub const SPOT_FILLED_FIELD: &str = "APP_NEXUS_SPOT_FILLED";
+/// The fields filled on this contact from an offer the operator took at log time (a spot's
+/// comment's, or a callbook's), comma-separated ADIF names. App-private, never sent; while it names
+/// `IOTA` the reference itself is withheld from uploads.
+pub const OFFER_HELD_FIELD: &str = "APP_NEXUS_OFFER_HELD";
 
 /// Where an offered reference came from — what the chip says, and which mark it gets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,13 +108,15 @@ pub fn accept_iota_offer(rec: &mut QsoRecord, offer: &IotaOffer) -> bool {
         return false;
     };
     rec.ota.iota = Some(r);
-    let field = match offer.source {
-        OfferSource::Spot => SPOT_FILLED_FIELD,
-        OfferSource::Callbook => CALLBOOK_FILLED_FIELD,
+    let fields: &[&str] = match offer.source {
+        OfferSource::Spot => &[OFFER_HELD_FIELD],
+        OfferSource::Callbook => &[OFFER_HELD_FIELD, CALLBOOK_FILLED_FIELD],
     };
-    let mut tags: Vec<String> = marked(rec, field).into_iter().map(str::to_string).collect();
-    tags.push("IOTA".to_string());
-    set_mark(rec, field, tags);
+    for field in fields {
+        let mut tags: Vec<String> = marked(rec, field).into_iter().map(str::to_string).collect();
+        tags.push("IOTA".to_string());
+        set_mark(rec, field, tags);
+    }
     true
 }
 
@@ -133,51 +139,51 @@ fn set_mark(r: &mut QsoRecord, field: &str, mut tags: Vec<String>) {
     set_extra(r, field, (!tags.is_empty()).then(|| tags.join(",")));
 }
 
-/// The fields a spot filled on this record ([`SPOT_FILLED_FIELD`]).
-pub fn spot_filled(r: &QsoRecord) -> Vec<&str> {
-    marked(r, SPOT_FILLED_FIELD)
+/// The fields taken from an offer on this record ([`OFFER_HELD_FIELD`]).
+pub fn offer_held(r: &QsoRecord) -> Vec<&str> {
+    marked(r, OFFER_HELD_FIELD)
 }
 
-/// Whether a spot filled `tag` on this record and the operator has not touched it since.
-pub fn is_spot_filled(r: &QsoRecord, tag: &str) -> bool {
-    spot_filled(r).contains(&tag)
+/// Whether `tag` on this record was taken from an offer and the operator has not touched it since.
+pub fn is_offer_held(r: &QsoRecord, tag: &str) -> bool {
+    offer_held(r).contains(&tag)
 }
 
-/// Take `tag` off the spot mark: the value is the operator's (or LoTW's) now.
-pub fn unmark_spot_filled(r: &mut QsoRecord, tag: &str) {
-    if !is_spot_filled(r, tag) {
+/// Take `tag` off the held mark: the value is the operator's (or LoTW's) now.
+pub fn unmark_offer_held(r: &mut QsoRecord, tag: &str) {
+    if !is_offer_held(r, tag) {
         return;
     }
-    let tags = spot_filled(r)
+    let tags = offer_held(r)
         .into_iter()
         .filter(|t| *t != tag)
         .map(str::to_string)
         .collect();
-    set_mark(r, SPOT_FILLED_FIELD, tags);
+    set_mark(r, OFFER_HELD_FIELD, tags);
 }
 
-/// Set the spot mark to exactly `tags` (a merge carrying the marks of the copies it keeps).
-pub(crate) fn set_spot_filled(r: &mut QsoRecord, tags: Vec<String>) {
-    set_mark(r, SPOT_FILLED_FIELD, tags);
+/// Set the held mark to exactly `tags` (a merge carrying the marks of the copies it keeps).
+pub(crate) fn set_offer_held(r: &mut QsoRecord, tags: Vec<String>) {
+    set_mark(r, OFFER_HELD_FIELD, tags);
 }
 
-/// An edit that changed a field a spot filled makes it the operator's: it comes off the mark, as
+/// An edit that changed a field taken from an offer makes it the operator's: it comes off the mark, as
 /// a callbook-filled one does ([`super::callbook::unmark_edited`]). `old` before the edit, `rec` after.
 pub(crate) fn unmark_edited(old: &QsoRecord, rec: &mut QsoRecord) {
     let norm = |v: Option<&str>| {
         v.map(|v| v.trim().to_ascii_uppercase())
             .filter(|v| !v.is_empty())
     };
-    if is_spot_filled(old, "IOTA") && norm(rec.ota.iota.as_deref()) != norm(old.ota.iota.as_deref())
+    if is_offer_held(old, "IOTA") && norm(rec.ota.iota.as_deref()) != norm(old.ota.iota.as_deref())
     {
-        unmark_spot_filled(rec, "IOTA");
+        unmark_offer_held(rec, "IOTA");
     }
 }
 
-/// Whether an outbound copy of `r` must leave its IOTA reference out: a spot filled it and the
-/// operator has not touched it ([`SPOT_FILLED_FIELD`]).
+/// Whether an outbound copy of `r` must leave its IOTA reference out: it was taken from an offer
+/// and the operator has not touched it ([`OFFER_HELD_FIELD`]).
 pub fn withhold_iota(r: &QsoRecord) -> bool {
-    is_spot_filled(r, "IOTA")
+    is_offer_held(r, "IOTA")
 }
 
 #[cfg(test)]
@@ -253,7 +259,7 @@ mod tests {
         let mut r = rec("IA5X");
         assert!(accept_iota_offer(&mut r, &spot("eu-028")));
         assert_eq!(r.ota.iota.as_deref(), Some("EU-028"));
-        assert!(is_spot_filled(&r, "IOTA"));
+        assert!(is_offer_held(&r, "IOTA"));
         // A second offer never replaces it.
         assert!(!accept_iota_offer(&mut r, &spot("EU-031")));
         assert_eq!(r.ota.iota.as_deref(), Some("EU-028"));
@@ -264,7 +270,8 @@ mod tests {
             source: OfferSource::Callbook,
         };
         assert!(accept_iota_offer(&mut c, &from_cb));
-        assert!(!is_spot_filled(&c, "IOTA"));
+        // Held back as a spot's is, and marked as the callbook's.
+        assert!(is_offer_held(&c, "IOTA"));
         assert!(crate::logbook::callbook::is_callbook_filled(&c, "IOTA"));
     }
 
@@ -276,10 +283,10 @@ mod tests {
         accept_iota_offer(&mut r, &spot("EU-028"));
         let own = adif_record_own_log(&r);
         assert!(own.contains("<IOTA:6>EU-028"), "{own}");
-        assert!(own.contains(SPOT_FILLED_FIELD), "{own}");
+        assert!(own.contains(OFFER_HELD_FIELD), "{own}");
         let out = adif_record(&r);
         assert!(!out.contains("IOTA:"), "{out}");
-        assert!(!out.contains(SPOT_FILLED_FIELD), "{out}");
+        assert!(!out.contains(OFFER_HELD_FIELD), "{out}");
         // Typed by the operator, it goes out like any field.
         let mut typed = rec("IA5X");
         typed.ota.iota = Some("EU-028".into());
@@ -292,13 +299,45 @@ mod tests {
         accept_iota_offer(&mut old, &spot("EU-028"));
         // An edit that leaves it as it was keeps it held back…
         let same = edited(&old, old.clone());
-        assert!(is_spot_filled(&same, "IOTA"));
+        assert!(is_offer_held(&same, "IOTA"));
         // …one that corrects it sends the correction.
         let mut fix = old.clone();
         fix.ota.iota = Some("EU-031".into());
         let fixed = edited(&old, fix);
-        assert!(!is_spot_filled(&fixed, "IOTA"));
+        assert!(!is_offer_held(&fixed, "IOTA"));
         assert!(adif_record(&fixed).contains("<IOTA:6>EU-031"));
+    }
+
+    /// A reference taken from the CALLBOOK's offer is held back exactly as a spot's is (operator
+    /// decision, 2026-10-27), and still says it is the callbook's.
+    #[test]
+    fn a_callbook_reference_taken_from_the_offer_is_withheld_from_every_upload() {
+        let mut r = rec("IA5X");
+        let from_cb = IotaOffer {
+            reference: "EU-025".into(),
+            source: OfferSource::Callbook,
+        };
+        assert!(accept_iota_offer(&mut r, &from_cb));
+        assert!(crate::logbook::callbook::is_callbook_filled(&r, "IOTA"));
+        let own = adif_record_own_log(&r);
+        assert!(own.contains("<IOTA:6>EU-025"), "{own}");
+        let out = adif_record(&r);
+        assert!(!out.contains("IOTA:"), "{out}");
+        assert!(!out.contains(OFFER_HELD_FIELD), "{out}");
+        // Confirmed on the card, it goes out.
+        fields_set(&mut r, &[(OFFER_HELD_FIELD.to_string(), None)]);
+        assert!(adif_record(&r).contains("<IOTA:6>EU-025"));
+    }
+
+    /// A contact logged before offers existed, whose IOTA a callbook lookup filled at log time,
+    /// is unchanged: its reference goes out as it always did.
+    #[test]
+    fn an_older_callbook_filled_reference_still_goes_out() {
+        let mut r = rec("IA5X");
+        r.ota.iota = Some("EU-025".into());
+        set_extra(&mut r, CALLBOOK_FILLED_FIELD, Some("IOTA,NAME".into()));
+        assert!(!withhold_iota(&r));
+        assert!(adif_record(&r).contains("<IOTA:6>EU-025"));
     }
 
     /// Confirming on the contact card takes the mark off (the one APP_NEXUS_ field a card may
@@ -308,19 +347,19 @@ mod tests {
         let mut r = rec("IA5X");
         accept_iota_offer(&mut r, &spot("EU-028"));
         let take_off = FieldEdit {
-            tag: SPOT_FILLED_FIELD.into(),
+            tag: OFFER_HELD_FIELD.into(),
             old: Some("IOTA".into()),
             new: None,
         };
         assert!(take_off.check().is_ok());
         let set_it = FieldEdit {
-            tag: SPOT_FILLED_FIELD.into(),
+            tag: OFFER_HELD_FIELD.into(),
             old: None,
             new: Some("IOTA".into()),
         };
         assert!(set_it.check().is_err(), "a card never writes the mark");
-        fields_set(&mut r, &[(SPOT_FILLED_FIELD.to_string(), None)]);
-        assert!(!is_spot_filled(&r, "IOTA"));
+        fields_set(&mut r, &[(OFFER_HELD_FIELD.to_string(), None)]);
+        assert!(!is_offer_held(&r, "IOTA"));
         assert!(adif_record(&r).contains("<IOTA:6>EU-028"));
     }
 }

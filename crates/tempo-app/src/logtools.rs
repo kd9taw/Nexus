@@ -722,16 +722,16 @@ pub fn bulk_edit(
 pub const LOCATION_MAX_AGE_SECS: u64 = 365 * 86_400;
 
 /// The fields the callbook rule ([`callbook::fill_from_callbook`]) derives from where the station
-/// is now — its "location fields", by ADIF name: the grid, QTH, state, county, IOTA, the CQ and ITU
-/// zones, the position and the UTC offset. "Update from callbook" fills them only on a contact
+/// is now — its "location fields", by ADIF name: the grid, QTH, state, county, the CQ and ITU
+/// zones, the position and the UTC offset. Never the IOTA reference: a callbook's is offered at log
+/// time, never filled (`tempo_core::logbook::offer`). "Update from callbook" fills them only on a contact
 /// from the last [`LOCATION_MAX_AGE_SECS`]; the name, e-mail, web page, QSL route and the
 /// LoTW/eQSL/paper-QSL habits go on any contact.
-pub const LOCATION_FIELDS: [&str; 10] = [
+pub const LOCATION_FIELDS: [&str; 9] = [
     "GRIDSQUARE",
     "QTH",
     "STATE",
     "CNTY",
-    "IOTA",
     "CQZ",
     "ITUZ",
     "LAT",

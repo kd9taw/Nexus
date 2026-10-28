@@ -3162,7 +3162,7 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
         unmark_self_filled(&mut rec, "MY_STATE");
     }
     // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]),
-    // and for an IOTA reference a spot's comment filled ([`offer::SPOT_FILLED_FIELD`]).
+    // and for an IOTA reference taken from a log-time offer ([`offer::OFFER_HELD_FIELD`]).
     callbook::unmark_edited(old, &mut rec);
     offer::unmark_edited(old, &mut rec);
     // The same resurrection, for a park. A side's OTHER programme's reference rides
@@ -3752,9 +3752,9 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         &r.ota.their_ref,
     ));
     // IOTA island-group reference — the standard ADIF `IOTA` field, so exports round-trip
-    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it). One a spot's comment filled that
+    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it). One taken from a log-time offer that
     // the operator has not touched since stays in their own log and is sent nowhere
-    // ([`offer::SPOT_FILLED_FIELD`]).
+    // ([`offer::OFFER_HELD_FIELD`]).
     if let Some(iota) = r
         .ota
         .iota
@@ -3793,7 +3793,7 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         if audience == Audience::Outbound
             && (k == SELF_FILLED_FIELD
                 || k == callbook::CALLBOOK_FILLED_FIELD
-                || k == offer::SPOT_FILLED_FIELD
+                || k == offer::OFFER_HELD_FIELD
                 || k == callbook::MAP_ONLY_GRID_FIELD)
         {
             continue;

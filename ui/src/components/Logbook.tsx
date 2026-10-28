@@ -98,7 +98,7 @@ import { failureText, pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
 import { callCardTrigger, qrzPageOf } from './CallCard'
-import { IotaReferenceNote } from './Iota'
+import { IotaOfferChip, IotaReferenceNote, useIotaOffer } from './Iota'
 import type { FieldEdit, QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
 
 interface Props {
@@ -508,6 +508,12 @@ export function Logbook({
   const syncRef = useRef<HTMLInputElement>(null)
   const potaRef = useRef<HTMLInputElement>(null)
 
+  // The IOTA reference the station offers a contact being ADDED here (a spot comment's, or the
+  // callbook's), taken with the chip, never stamped by itself (operator decision, 2026-10-27). None
+  // while the IOTA box holds one, and none for a contact being edited: its log entry is unchanged.
+  const [lookupTick, setLookupTick] = useState(0)
+  const iotaOffer = useIotaOffer(draft.call, draft.iota, lookupTick, !showForm || editing != null)
+
   // QRZ lookup for the QSO being logged: fills grid (subscriber-only) + shows the
   // operator name. On-demand (QRZ free tier is ~100/day), one lookup per click.
   const onQrzLookup = async () => {
@@ -517,6 +523,7 @@ export function Logbook({
     const r = await withErrorToast(() => qrzLookup(call), t('callbook.lookupFailed'))
     setQrzBusy(false)
     if (r) {
+      setLookupTick((n) => n + 1)
       if (r.grid && !draft.grid.trim()) setField('grid', r.grid)
       const preferredName = r.nickname || r.name
       if (preferredName && !draft.name.trim()) setField('name', preferredName)
@@ -1897,7 +1904,7 @@ export function Logbook({
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', iota: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
       return
     }
-    const snap = await withErrorToast(() => logQso(record), t('logbook.form.logFailed'))
+    const snap = await withErrorToast(() => logQso(record, undefined, iotaOffer.taken), t('logbook.form.logFailed'))
     if (snap) {
       load()
       setShowForm(false)
@@ -2589,6 +2596,7 @@ export function Logbook({
                 title={t('logbook.field.iota.title')}
               />
               <IotaReferenceNote reference={draft.iota} />
+              <IotaOfferChip state={iotaOffer} />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.name.label')}</span>
