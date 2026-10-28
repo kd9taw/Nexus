@@ -6324,7 +6324,7 @@ export const ES: PartialCatalog = {
   "scope.rows.sweep.title": "Una fila por barrido — la cascada solo avanza cuando la radio envía un barrido nuevo, así que un espectro lento se desplaza despacio y a saltos, y cada fila es nueva. Pulsa para desplazamiento suave.",
   "scope.hidef.label": "HiDef",
   "scope.fast.label": "Fast",
-  "scope.hidef.on.title": "HiDef — la banda de paso de CW se analiza por separado: una portadora fija se ve de unos 3 Hz de ancho, dos señales a 10 Hz siguen separadas y la manipulación conserva sus huecos. La imagen va un tercio de segundo por detrás del audio. Pulsa para Fast.",
+  "scope.hidef.on.title": "HiDef — la banda de paso de CW se analiza por separado: una portadora fija se ve de unos 4–5 Hz de ancho, dos señales a 10 Hz siguen separadas y la manipulación conserva sus huecos. La imagen va un cuarto de segundo por detrás del audio. Pulsa para Fast.",
   "scope.hidef.off.title": "Fast — el espectro se analiza como cualquier otra pantalla: la imagen sigue de cerca al audio y las portadoras se ven más anchas (la resolución está en ⚙). Pulsa para HiDef.",
   "scope.zero.aria": "Cero visual del espectro (suelo)",
   "scope.zero.title": "Cero visual — súbelo (derecha) para oscurecer el suelo de ruido, bájalo (izquierda) para sacar la textura débil",

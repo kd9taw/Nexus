@@ -46,7 +46,7 @@ export interface ScaleSettings {
   /** The analysis window (FFT size): Fast 1024, Balanced 2048, Sharp 4096. */
   window: ScopeWindow
   /** The CW scope's HiDef/Fast switch: HiDef is the backend's zoom FFT of the CW passband (a
-   *  steady carrier ~3 Hz wide); Fast is the window above. Only the CW scope offers or reads it. */
+   *  steady carrier ~4–5 Hz wide); Fast is the window above. Only the CW scope offers or reads it. */
   hiDef: boolean
 }
 

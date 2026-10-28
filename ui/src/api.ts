@@ -5244,7 +5244,7 @@ export type ScopeWindow = 'fast' | 'balanced' | 'sharp'
 
 /**
  * What the rig scope's row is computed with: one of the windows above, or `hidef`, the CW scope's
- * zoom FFT of its own passband (a steady carrier ~3 Hz wide, ~340 ms behind the audio). Mirrors
+ * zoom FFT of its own passband (a steady carrier ~4–5 Hz wide, ~256 ms behind the audio). Mirrors
  * `tempo_core::spectrum::ScopeAnalysis`; a backend that does not know `hidef` draws `balanced`.
  */
 export type ScopeAnalysis = ScopeWindow | 'hidef'

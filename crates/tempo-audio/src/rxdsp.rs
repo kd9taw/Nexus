@@ -277,7 +277,7 @@ impl RxDsp {
         // request expires on its own, so this costs nothing when no scope is up.
         //
         // HiDef (the CW scope's zoom FFT) is fed THIS tick's new samples and nothing else: it
-        // keeps its own decimated history, 683 ms long, which the 341 ms rolling window could
+        // keeps its own decimated history, 512 ms long, which the 341 ms rolling window could
         // not hold. It reads `pcm`, never writes `self.window`, so the row above and the
         // zero-beat reading are untouched by it. Cost: see `scope_row_hidef`.
         match feed.scope_request() {
@@ -671,7 +671,7 @@ mod tests {
 
     /// ⭐ THE CW SCOPE IN HiDef, END TO END, AND NOTHING ELSE MOVES. Two identical pipelines are
     /// fed identical audio; one has the CW scope up in HiDef. Its scope row draws a carrier
-    /// ≤ 4 Hz wide at -6 dB, while the audio row every other display reads and the zero-beat
+    /// ≤ 5 Hz wide at -6 dB, while the audio row every other display reads and the zero-beat
     /// reading stay bit-identical to the pipeline with no scope at all. Then the same scope in
     /// Fast draws today's ~12 Hz carrier.
     #[test]
@@ -727,7 +727,7 @@ mod tests {
         assert_eq!((hidef.lo_hz, hidef.hi_hz), (300.0, 1100.0));
         assert_eq!(hidef.row.len(), 512, "still 512 display bins over the span");
         let w = width_6db_hz(&hidef.row, hidef.lo_hz, hidef.hi_hz);
-        assert!(w <= 4.0, "HiDef carrier is {w:.2} Hz wide at -6 dB");
+        assert!(w <= 5.0, "HiDef carrier is {w:.2} Hz wide at -6 dB");
 
         // Fast: the scope's plain window, today's picture.
         feed.scope_row(300.0, 1100.0, WindowN::Balanced);
@@ -1062,7 +1062,7 @@ mod tests {
     ///
     /// THE CW SCOPE'S HiDef (operator decision, 2026-10-27: zoom FFT, on by default for the CW
     /// scope only) is outside this pin by its LATENCY, not its smear: it draws the instant at the
-    /// centre of a 683 ms window, ~340 ms ago, but edges at that instant come from a 43 ms window,
+    /// centre of a 512 ms window, ~256 ms ago, but edges at that instant come from a 43 ms window,
     /// so keying stays sharp. The time resolution is pinned below; the backend's default
     /// (`WindowN::Balanced`, what an unknown tag gets) does not move.
     #[test]

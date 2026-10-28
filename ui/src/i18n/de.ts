@@ -8945,7 +8945,7 @@ export const DE: PartialCatalog = {
   "scope.rows.sweep.title": "Eine Zeile je Durchlauf — der Wasserfall bewegt sich nur, wenn das Funkgerät einen neuen Durchlauf sendet. Ein langsames Scope läuft deshalb langsam und in Schritten, und jede Zeile ist neu. Klicken für gleichmäßigen Lauf.",
   "scope.hidef.label": "HiDef",
   "scope.fast.label": "Schnell",
-  "scope.hidef.on.title": "HiDef — der CW-Durchlassbereich wird für sich analysiert: Ein stehender Träger ist etwa 3 Hz breit, zwei Signale im Abstand von 10 Hz bleiben getrennt, und die Tastung behält ihre Lücken. Das Bild läuft etwa eine Drittelsekunde hinter dem Audio her. Klicken für Schnell.",
+  "scope.hidef.on.title": "HiDef — der CW-Durchlassbereich wird für sich analysiert: Ein stehender Träger ist etwa 4–5 Hz breit, zwei Signale im Abstand von 10 Hz bleiben getrennt, und die Tastung behält ihre Lücken. Das Bild läuft etwa eine Viertelsekunde hinter dem Audio her. Klicken für Schnell.",
   "scope.hidef.off.title": "Schnell — das Scope wird wie jede andere Anzeige analysiert: Das Bild folgt dem Audio eng, Träger erscheinen breiter (die Auflösung steht unter ⚙). Klicken für HiDef.",
   "fastGraph.aria": "Fast Graph — Signalleistung über die Sende-/Empfangsperiode; Pings zeichnen sich als Spitzen",
   "meters.rx.label": "RX-Pegel",

@@ -13886,7 +13886,7 @@ export const EN = {
   'scope.hidef.label': 'HiDef',
   'scope.fast.label': 'Fast',
   'scope.hidef.on.title':
-    'HiDef — the CW passband is analysed on its own: a steady carrier draws about 3 Hz wide, two signals 10 Hz apart stay apart, and keying keeps its gaps. The picture runs about a third of a second behind the audio. Click for Fast.',
+    'HiDef — the CW passband is analysed on its own: a steady carrier draws about 4–5 Hz wide, two signals 10 Hz apart stay apart, and keying keeps its gaps. The picture runs about a quarter of a second behind the audio. Click for Fast.',
   'scope.hidef.off.title':
     'Fast — the scope is analysed like every other display: the picture follows the audio closely and carriers draw wider (the resolution is under ⚙). Click for HiDef.',
 

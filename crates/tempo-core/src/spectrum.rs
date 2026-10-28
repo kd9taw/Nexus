@@ -381,16 +381,17 @@ pub fn iq_power(iq: &[f32], win: WindowN, power: &mut [f32]) -> bool {
 //
 // HiDef zooms the ANALYSIS instead. The span is mixed down to baseband, low-passed and decimated
 // by [`HIDEF_DECIM`] (12 kHz → 1.5 kHz complex), and FFT'd over [`HIDEF_N`] decimated samples:
-// 683 ms of audio, 1.46 Hz bins, a 2.9 Hz -6 dB width. Still 512 display bins over the span.
+// 512 ms of audio, 1.95 Hz bins, a 3.9 Hz -6 dB lobe, drawn 3.9–4.9 Hz wide (see [`HIDEF_N`]).
+// Still 512 display bins over the span.
 //
 // ⚠️ A WINDOW THAT LONG CANNOT, BY ITSELF, SHOW THE GAPS IN KEYED CW: 25 wpm puts a 48 ms gap
-// between elements, and no 683 ms window resolves that. So the row is the MINIMUM of two power
+// between elements, and no 512 ms window resolves that. So the row is the MINIMUM of two power
 // estimates over the same instant: the long window (narrow in frequency) and a 43 ms window
 // ([`HIDEF_SHORT_N`]) taken from the long window's CENTRE (sharp in time). A steady carrier is
 // bright in both and takes the long one's narrow lobe; a gap is dark in the short one and stays
 // dark. Taking the minimum of estimates never invents energy — every value drawn is at most what
 // one real measurement saw. The price is latency: the instant drawn is the long window's
-// centre, ~340 ms ago, against ~85 ms for the 2048-sample window.
+// centre, ~256 ms ago, against ~85 ms for the 2048-sample window.
 
 /// What the rig scope's row is computed with: a plain FFT window over the 12 kHz capture, or the
 /// CW scope's zoom FFT. The scope request carries this; every other row ignores it.
@@ -432,8 +433,14 @@ impl ScopeAnalysis {
 
 /// Decimation from the 12 kHz analysis rate: 1.5 kHz complex, ±750 Hz round the span's centre.
 pub const HIDEF_DECIM: usize = 8;
-/// The long window, in decimated samples: 683 ms at 1.5 kHz, Hann bins of 1.46 Hz.
-pub const HIDEF_N: usize = 1024;
+/// The long window, in decimated samples: 512 ms at 1.5 kHz, Hann bins of 1.95 Hz, so a carrier
+/// is ~3.9 Hz wide at -6 dB and the picture is ~256 ms behind the audio. DRAWN, it is 3.9–4.9 Hz:
+/// each 1.5625 Hz display bin peak-holds the 0.73 Hz FFT samples in it, which widens the -6 dB
+/// crossing by up to about one display bin depending on where the carrier falls (measured over 200
+/// carrier positions on the 800 Hz span). The operator's choice
+/// (2026-10-27) over 1024 samples (2.9 Hz, ~340 ms): a little wider, a quarter less lag. Not a
+/// power of two: the window is zero-padded into the 2048-point FFT.
+pub const HIDEF_N: usize = 768;
 /// The long window's FFT, zero-padded 2x so the lobe is drawn from exact samples of the
 /// spectrum rather than repeated across display bins. Padding adds samples, never resolution.
 const HIDEF_PAD: usize = 2048;
@@ -1637,11 +1644,11 @@ mod tests {
         (right - left) * bin_hz
     }
 
-    /// ⭐ THE OPERATOR'S REPORT, MEASURED: a steady carrier on the CW scope is ≤ 4 Hz wide at
-    /// -6 dB in HiDef, where today's row (the 2048 window over the same span) is ~12 Hz.
+    /// ⭐ THE OPERATOR'S REPORT, MEASURED: a steady carrier on the CW scope is ≤ 5 Hz wide at
+    /// -6 dB in HiDef (3.9 Hz lobe; drawn 3.9–4.9 Hz depending on where it falls on the grid), where today's row (the 2048 window over the same span) is ~12 Hz.
     /// Several pitches, none on a bin centre, so no lucky alignment flatters the number.
     #[test]
-    fn hidef_draws_a_steady_carrier_under_4_hz_wide() {
+    fn hidef_draws_a_steady_carrier_under_5_hz_wide() {
         for f in [700.0f32, 701.3, 733.7, 662.2] {
             let mut audio = tones(&[(f, 0.5)], 12_000.0, 18_000);
             for (a, n) in audio.iter_mut().zip(noise(18_000, 0.0005)) {
@@ -1665,7 +1672,7 @@ mod tests {
                 "today's row is the wide one ({fast:.2} Hz at {f})"
             );
             assert!(
-                hidef <= 4.0,
+                hidef <= 5.0,
                 "HiDef carrier at {f} Hz is {hidef:.2} Hz wide at -6 dB"
             );
         }
