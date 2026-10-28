@@ -14801,10 +14801,16 @@ mod contest_session_tests {
         })
         .to_string();
         let mut ui_saved = None;
-        let restored = restore_settings_bundle(&engine, text, Default::default, |ui| {
-            ui_saved = Some(ui);
-            true
-        });
+        let restored = restore_settings_bundle(
+            &engine,
+            text,
+            Default::default,
+            |ui| {
+                ui_saved = Some(ui);
+                true
+            },
+            forget_no_key,
+        );
         assert_eq!(
             restored.map(|_| ()),
             Err(tempo_app::engine::SESSION_BUSY.to_string()),
@@ -15081,6 +15087,7 @@ mod contest_session_tests {
                     saved = Some(ui);
                     true
                 },
+                forget_no_key,
             )
             .unwrap();
             let s = engine_lock(&engine).settings().clone();
@@ -15318,6 +15325,7 @@ mod contest_session_tests {
                     saved = Some(ui);
                     true
                 },
+                forget_no_key,
             )
             .unwrap();
             let s = engine_lock(&engine).settings().clone();
@@ -15400,6 +15408,274 @@ mod contest_session_tests {
             keys(&profiles["CHARLIE"]),
             (Some(serde_json::json!("")), Some(serde_json::json!(""))),
             "CONTROL: no namesake"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A made-up keychain for a restore's `forget_key`: the entries it holds, and the accounts a
+    /// restore removed, in order. Nothing here reaches the OS keychain.
+    struct FakeKeychain {
+        held: std::collections::BTreeMap<String, String>,
+        forgot: Vec<String>,
+    }
+
+    impl FakeKeychain {
+        fn holding(accounts: &[&str]) -> Self {
+            FakeKeychain {
+                held: accounts
+                    .iter()
+                    .map(|a| (a.to_string(), format!("PLANTED-{a}")))
+                    .collect(),
+                forgot: Vec::new(),
+            }
+        }
+        fn forget(&mut self, account: &str) -> Result<(), String> {
+            self.forgot.push(account.to_string());
+            self.held.remove(account);
+            Ok(())
+        }
+    }
+
+    /// Whether the Connections log holds `message` from `connector`.
+    fn connection_log_says(connector: &str, message: &str) -> bool {
+        get_connection_log()
+            .iter()
+            .any(|e| e.connector == connector && e.message == message)
+    }
+
+    /// ★ A RESTORED BACKUP THAT POINTS CLOUDLOG AT ANOTHER ADDRESS REMOVES THE KEY KEPT FOR THE
+    /// STATION'S: the keychain entry goes, the key left in the settings waiting for the keychain
+    /// goes (the engine does not put it back), a saved profile that moves its URL keeps no key,
+    /// and the Connections log says once to enter it again. The scheme, the host, the port and
+    /// the path each move it. CONTROL: the same URL, or the same written another way (case of
+    /// the scheme and host, the scheme's own port, a trailing `/`), removes nothing; the Club Log
+    /// key, sent to one fixed host, is kept either way.
+    #[test]
+    fn a_restored_backup_that_moves_cloudlog_removes_its_key() {
+        const STATION_LOG: &str = "https://log.station.example/cloudlog";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-cloudlog", 0);
+        let profiles_key = crate::command_dispatch::PROFILES;
+        // The station: its URL, its key waiting for the keychain ("STATION-TOP-CLOUDLOG") and its
+        // profiles' URLs, ALPHA's and BRAVO's own.
+        let station_ui = || {
+            let mut ui = with_station_keys_set(&engine, "STATION");
+            let mut s = engine_lock(&engine).settings().clone();
+            s.cloudlog_url = STATION_LOG.into();
+            engine_lock(&engine).apply_restored_settings(s);
+            let mut list: Vec<serde_json::Value> = serde_json::from_str(&ui[profiles_key]).unwrap();
+            for p in &mut list {
+                let url = format!("{STATION_LOG}/{}", p["name"].as_str().unwrap());
+                p["settings"]["cloudlogUrl"] = serde_json::json!(url);
+            }
+            ui.insert(profiles_key.into(), serde_json::to_string(&list).unwrap());
+            ui
+        };
+        // A backup of the station, its URL and ALPHA's set to `top` and `alpha`.
+        let restore = |top: &str, alpha: &str| {
+            let ui = station_ui();
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, ui.clone(), None).unwrap()).unwrap();
+            v["settings"]["cloudlogUrl"] = serde_json::json!(top);
+            let mut list: Vec<serde_json::Value> =
+                serde_json::from_str(v["uiState"][profiles_key].as_str().unwrap()).unwrap();
+            for p in &mut list {
+                if p["name"] == "ALPHA" {
+                    p["settings"]["cloudlogUrl"] = serde_json::json!(alpha);
+                }
+            }
+            v["uiState"][profiles_key] = serde_json::json!(serde_json::to_string(&list).unwrap());
+            let mut keychain =
+                FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER, CLUBLOG_KEYCHAIN_USER]);
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || ui,
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+                |account: &str| keychain.forget(account),
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let profiles = bundle_profiles(&serde_json::to_value(saved.unwrap()).unwrap());
+            (s, profiles, keychain)
+        };
+        let keys = |p: &serde_json::Value| {
+            (
+                p.get("cloudlogKey").cloned(),
+                p.get("clublogApiKey").cloned(),
+            )
+        };
+        let kept = |name: &str| {
+            (
+                Some(serde_json::json!(format!("STATION-{name}-CLOUDLOG"))),
+                Some(serde_json::json!(format!("STATION-{name}-CLUBLOG"))),
+            )
+        };
+        let station_keychain =
+            FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER, CLUBLOG_KEYCHAIN_USER]);
+
+        // CONTROL: the same URLs, as the station writes them and written another way.
+        for (top, alpha) in [
+            (STATION_LOG.to_string(), format!("{STATION_LOG}/ALPHA")),
+            (
+                "  HTTPS://Log.Station.EXAMPLE:443/cloudlog/".to_string(),
+                "https://LOG.station.example/cloudlog/ALPHA//".to_string(),
+            ),
+        ] {
+            let (s, profiles, keychain) = restore(&top, &alpha);
+            assert_eq!(
+                keychain.forgot,
+                Vec::<String>::new(),
+                "CONTROL {top}: nothing removed"
+            );
+            assert_eq!(keychain.held, station_keychain.held, "CONTROL {top}");
+            assert_eq!(
+                (
+                    s.cloudlog_url.as_str(),
+                    s.cloudlog_key.as_str(),
+                    s.clublog_api_key.as_str()
+                ),
+                (top.as_str(), "STATION-TOP-CLOUDLOG", "STATION-TOP-CLUBLOG"),
+                "CONTROL {top}: the keys kept"
+            );
+            assert_eq!(keys(&profiles["ALPHA"]), kept("ALPHA"), "CONTROL {top}");
+            assert_eq!(keys(&profiles["BRAVO"]), kept("BRAVO"), "CONTROL {top}");
+        }
+
+        // Another host, scheme, port or path: the key goes, everywhere it was kept for the station.
+        for top in [
+            "https://log.other.example/cloudlog",
+            "http://log.station.example/cloudlog",
+            "https://log.station.example:8443/cloudlog",
+            "https://log.station.example/wavelog",
+        ] {
+            let alpha = format!("{top}/ALPHA");
+            let (s, profiles, keychain) = restore(top, &alpha);
+            assert_eq!(
+                keychain.forgot,
+                vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+                "{top}: the Cloudlog entry alone removed"
+            );
+            assert_eq!(
+                keychain.held.keys().collect::<Vec<_>>(),
+                vec![CLUBLOG_KEYCHAIN_USER],
+                "{top}: the Club Log entry kept"
+            );
+            assert_eq!(
+                (
+                    s.cloudlog_url.as_str(),
+                    s.cloudlog_key.as_str(),
+                    s.clublog_api_key.as_str()
+                ),
+                (top, "", "STATION-TOP-CLUBLOG"),
+                "{top}: the URL restored, the waiting key gone, the Club Log key kept"
+            );
+            assert_eq!(
+                keys(&profiles["ALPHA"]),
+                (None, kept("ALPHA").1),
+                "{top}: the profile that moved keeps no Cloudlog key"
+            );
+            assert_eq!(
+                keys(&profiles["BRAVO"]),
+                kept("BRAVO"),
+                "{top}: BRAVO did not move"
+            );
+            assert!(
+                connection_log_says("Cloudlog", CLOUDLOG_KEY_FORGOTTEN),
+                "{top}: the operator is told"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORED BACKUP THAT POINTS AN ICOM NETWORK RADIO AT ANOTHER ADDRESS REMOVES THAT
+    /// RADIO'S SAVED PASSWORD, and no other radio's: by the radio's id, its host or its port
+    /// moved, or a radio the station does not have. The Connections log names the radio.
+    /// CONTROL: the same addresses, a host written in another case among them, remove nothing.
+    #[test]
+    fn a_restored_backup_that_moves_an_icom_radio_removes_its_password() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-icom", 0);
+        let radio = |id: u32, name: &str, host: &str| tempo_app::settings::RadioProfile {
+            id,
+            name: name.into(),
+            icom_lan_host: host.into(),
+            icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
+            ..Default::default()
+        };
+        let mut station = engine_lock(&engine).settings().clone();
+        station.radios = vec![
+            radio(0, "Restore Test IC-705", "192.168.1.20"),
+            radio(1, "Restore Test IC-9700", "Radio-B.local"),
+            // The active radio, so the flat mirror a restore folds into it is none of the two.
+            radio(2, "Restore Test FTDX10", ""),
+        ];
+        station.active_radio = 2;
+        station.sync_flat_from_active();
+        let accounts = [
+            icom_lan_account(0),
+            icom_lan_account(1),
+            icom_lan_account(7),
+        ];
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = |edit: &dyn Fn(&mut Vec<serde_json::Value>)| {
+            engine_lock(&engine).apply_restored_settings(station.clone());
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            let mut radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            edit(&mut radios);
+            v["settings"]["radios"] = serde_json::json!(radios);
+            let mut keychain = FakeKeychain::holding(&all);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |account: &str| keychain.forget(account),
+            )
+            .unwrap();
+            keychain.forgot
+        };
+
+        // CONTROL: as the station has them, and radio 1's host in another case.
+        assert_eq!(
+            restore(&|_| {}),
+            Vec::<String>::new(),
+            "CONTROL: as they are"
+        );
+        assert_eq!(
+            restore(&|r| r[1]["icomLanHost"] = serde_json::json!(" radio-b.LOCAL ")),
+            Vec::<String>::new(),
+            "CONTROL: the host in another case"
+        );
+
+        assert_eq!(
+            restore(&|r| r[0]["icomLanHost"] = serde_json::json!("192.168.1.99")),
+            vec![icom_lan_account(0)],
+            "radio 0's host moved: its password alone"
+        );
+        assert!(connection_log_says(
+            "Icom network",
+            &icom_password_forgotten("Restore Test IC-705")
+        ));
+        assert_eq!(
+            restore(&|r| r[1]["icomLanPort"] = serde_json::json!(50002)),
+            vec![icom_lan_account(1)],
+            "radio 1's port moved"
+        );
+        assert_eq!(
+            restore(&|r| {
+                let mut new = r[1].clone();
+                new["id"] = serde_json::json!(7);
+                new["name"] = serde_json::json!("Restore Test IC-7610");
+                r.push(new);
+            }),
+            vec![icom_lan_account(7)],
+            "a radio the station does not have keeps no password"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -16002,6 +16278,7 @@ fn import_settings_bundle(
         text,
         || ui_state_read(&ui_state_path(), false).unwrap_or_default(),
         ui_state_save,
+        forget_keychain_entry,
     )
 }
 
@@ -16045,8 +16322,10 @@ fn keep_the_stations_paths(
 /// A bundle's saved profiles with each stored key (`command_dispatch::SECRET_SETTINGS`) a profile
 /// has blank or leaves out put back as this station's saved profile of the same name in
 /// `station_ui` holds it: a backup carries none ([`redact_profile_for_backup`]), and restoring one
-/// never clears a key saved here. A key the bundle does carry (one written before keys were left
-/// out) restores as it is. A list that does not read is left as it is.
+/// never clears a key saved here, unless the bundle's profile points Cloudlog at another address
+/// than the station's profile ([`address_moved`]): then its Cloudlog key stays blank, to be typed
+/// again. A key the bundle does carry (one written before keys were left out) restores as it is.
+/// A list that does not read is left as it is.
 fn keep_the_stations_profile_keys(
     bundle: &mut serde_json::Value,
     station_ui: &std::collections::BTreeMap<String, String>,
@@ -16072,7 +16351,15 @@ fn keep_the_stations_profile_keys(
                 .and_then(serde_json::Value::as_str)
                 .is_none_or(|k| k.trim().is_empty());
             let own = held.get(name).and_then(|h| h.get(key));
-            if let (true, Some(own)) = (blank, own) {
+            let url = |s: Option<&serde_json::Map<String, serde_json::Value>>| {
+                s.and_then(|s| s.get("cloudlogUrl"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let moved =
+                key == "cloudlogKey" && address_moved(&url(Some(&*s)), &url(held.get(name)));
+            if let (true, Some(own), false) = (blank, own, moved) {
                 s.insert(key.into(), own.clone());
             }
         }
@@ -16084,12 +16371,16 @@ fn keep_the_stations_profile_keys(
 
 /// [`import_settings_bundle`] on `engine`, the UI state the bundle carries handed to `save_ui`
 /// ([`ui_state_save`]) once the restore goes through. `station_ui` reads this station's own UI
-/// state, for a bundle exported from afar ([`keep_the_stations_paths`]).
+/// state, for a bundle exported from afar ([`keep_the_stations_paths`]). `forget_key` removes one
+/// keychain entry by its account ([`forget_keychain_entry`]): a restore that points Cloudlog or an
+/// Icom network radio at another address than the station's removes the key kept for it
+/// ([`forget_moved_keys`]).
 fn restore_settings_bundle(
     engine: &SharedEngine,
     text: String,
     station_ui: impl FnOnce() -> std::collections::BTreeMap<String, String>,
     save_ui: impl FnOnce(std::collections::BTreeMap<String, String>) -> bool,
+    forget_key: impl FnMut(&str) -> Result<(), String>,
 ) -> Result<AppSnapshot, String> {
     let mut v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
@@ -16114,18 +16405,27 @@ fn restore_settings_bundle(
     keep_the_stations_profile_keys(&mut v, &station_ui);
     let mut settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
     // A backup carries no stored key (`redact_for_backup`): one it has blank or leaves out stays
-    // as this station has it.
-    for (_, field) in command_dispatch::SECRET_SETTINGS {
-        if field(&mut settings).trim().is_empty() {
+    // as this station has it, except a Cloudlog key when the backup points Cloudlog at another
+    // address: the station's key never goes to a server the backup names.
+    let cloudlog_moved = address_moved(&settings.cloudlog_url, &own.cloudlog_url);
+    for (key, field) in command_dispatch::SECRET_SETTINGS {
+        let moved = key == "cloudlogKey" && cloudlog_moved;
+        if field(&mut settings).trim().is_empty() && !moved {
             field(&mut settings).clone_from(field(&mut own));
         }
     }
+    // ...nor does the one the engine holds waiting to move to the keychain, which every apply
+    // keeps. A key the backup does carry (an old one) is the backup's own, and stays.
+    let forget_pending_cloudlog_key = cloudlog_moved && settings.cloudlog_key.trim().is_empty();
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
     // which is right for a form and wrong for a restore. A bundle that opens a contest session
     // opens it as a Save does, its rows read first, and a logbook too busy to read them refuses
     // the restore whole: nothing below runs, the UI state included.
-    tempo_app::engine::restore_with_session_rows(engine, settings, |eng| {
+    let moved = tempo_app::engine::restore_with_session_rows(engine, settings, |eng| {
+        if forget_pending_cloudlog_key {
+            eng.forget_pending_cloudlog_key();
+        }
         // UI state is best-effort: a bundle whose settings are good but whose ui-state is not
         // should still restore the radios. The half that failed is named rather than swallowed.
         if let Some(ui) = v.get("uiState").cloned() {
@@ -16153,10 +16453,123 @@ fn restore_settings_bundle(
         // ...and into the base config, or the launch picker keeps offering the OLD roster.
         persist_roster_to_base(&eng.settings().radios);
         persist_routing_to_base(eng.settings());
-        Ok(())
+        // The radios the restore points at another Icom network address, by the roster it
+        // landed (an old backup's flat radio is in it by now).
+        Ok(eng
+            .settings()
+            .radios
+            .iter()
+            .filter(|r| icom_address_moved(r, own.radios.iter().find(|p| p.id == r.id)))
+            .map(|r| (r.id, r.name.clone()))
+            .collect::<Vec<_>>())
     })??;
+    forget_moved_keys(cloudlog_moved, &moved, forget_key);
     let snap = { engine_lock(engine).snapshot() };
     Ok(snap)
+}
+
+/// A service's address as a restore compares it ([`address_moved`]): the spaces around it, any
+/// trailing `/`, the case of the scheme and the host, and the scheme's own port (`:80` for http,
+/// `:443` for https) make no difference. The path keeps its case, as a server may.
+fn service_address(url: &str) -> (String, String, String) {
+    let url = url.trim().trim_end_matches('/');
+    let (scheme, rest) = url
+        .split_once("://")
+        .map_or((String::new(), url), |(s, r)| (s.to_ascii_lowercase(), r));
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let mut host = host.to_ascii_lowercase();
+    let own_port = match scheme.as_str() {
+        "http" => Some(":80"),
+        "https" => Some(":443"),
+        _ => None,
+    };
+    if let Some(bare) = own_port.and_then(|p| host.strip_suffix(p)) {
+        host = bare.to_string();
+    }
+    (scheme, host, path.to_string())
+}
+
+/// Whether a restored backup points a service at another address than the station's
+/// ([`service_address`]), so the key kept here for the station's must not go there. A backup with
+/// no address for it moves nothing: then it is sent nowhere.
+fn address_moved(restored: &str, station: &str) -> bool {
+    !restored.trim().is_empty() && service_address(restored) != service_address(station)
+}
+
+/// Whether a restored radio's Icom network address (host, any case, and port) is another than the
+/// station's radio of the same id has, or the station has no such radio. A radio with no network
+/// host moves nothing.
+fn icom_address_moved(
+    restored: &tempo_app::settings::RadioProfile,
+    station: Option<&tempo_app::settings::RadioProfile>,
+) -> bool {
+    let host = restored.icom_lan_host.trim();
+    !host.is_empty()
+        && station.is_none_or(|s| {
+            !s.icom_lan_host.trim().eq_ignore_ascii_case(host)
+                || s.icom_lan_port != restored.icom_lan_port
+        })
+}
+
+/// After a restore: remove the Cloudlog key (`cloudlog_moved`) and each radio's Icom network
+/// password (`radios`, id and name) kept for the station's address, through `forget_key`, and say
+/// once in the Connections log what to enter again. A removal that fails says so instead.
+fn forget_moved_keys(
+    cloudlog_moved: bool,
+    radios: &[(u32, String)],
+    mut forget_key: impl FnMut(&str) -> Result<(), String>,
+) {
+    if cloudlog_moved {
+        match forget_key(CLOUDLOG_KEYCHAIN_USER) {
+            Ok(()) => conn_log("Cloudlog", "info", CLOUDLOG_KEY_FORGOTTEN),
+            Err(e) => conn_log(
+                "Cloudlog",
+                "error",
+                format!(
+                    "The restored backup points Cloudlog/Wavelog at a different address, but \
+                     the API key saved here could not be removed ({e}). Clear it in Settings."
+                ),
+            ),
+        }
+    }
+    for (id, name) in radios {
+        match forget_key(&icom_lan_account(*id)) {
+            Ok(()) => conn_log("Icom network", "info", icom_password_forgotten(name)),
+            Err(e) => conn_log(
+                "Icom network",
+                "error",
+                format!(
+                    "The restored backup points {name} at a different network address, but its \
+                     saved network password could not be removed ({e}). Clear it in Settings."
+                ),
+            ),
+        }
+    }
+}
+
+/// What the Connections log says after a restore removed the Cloudlog key ([`forget_moved_keys`]).
+const CLOUDLOG_KEY_FORGOTTEN: &str = "The restored backup points Cloudlog/Wavelog at a different \
+     address, so the API key saved here was removed. Enter the key for that address in Settings.";
+
+/// What the Connections log says after a restore removed radio `name`'s Icom network password.
+fn icom_password_forgotten(name: &str) -> String {
+    format!(
+        "The restored backup points {name} at a different network address, so its saved network \
+         password was removed. Enter it again in Settings."
+    )
+}
+
+/// A restore's `forget_key` in a test whose backup moves no address: it is never called.
+#[cfg(test)]
+fn forget_no_key(account: &str) -> Result<(), String> {
+    panic!("a restore that moves no address removed the keychain entry {account}")
+}
+
+/// Remove the OS keychain entry under `account` (service "tempo"), as the clear buttons do.
+fn forget_keychain_entry(account: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, account)
+        .map_err(|e| format!("couldn't open the system keychain: {e}"))?;
+    clear_keychain_entry(&entry)
 }
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what

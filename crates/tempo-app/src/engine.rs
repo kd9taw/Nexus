@@ -7346,6 +7346,13 @@ impl Engine {
         self.apply_settings_inner(s, false);
     }
 
+    /// Drop the Cloudlog key waiting to move to the keychain, which every apply keeps
+    /// (`apply_settings_inner`). Only for a restored backup that points Cloudlog at another
+    /// address: the key was typed for this station's server and must not go to that one.
+    pub fn forget_pending_cloudlog_key(&mut self) {
+        self.settings.cloudlog_key.clear();
+    }
+
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         self.remote_readings.invalidate();
         // The address the club link line is about, before the save: a save that moves it
@@ -7531,6 +7538,7 @@ impl Engine {
         // is the ONLY session-time wholesale replace of `self.settings`, so preserving it here closes
         // every save path — form Save, reset AND restore — at their one common point (round 10 Finding 1;
         // three earlier partial fixes each patched only the path their author was testing).
+        // A restore that moves the Cloudlog URL drops it afterwards (`forget_pending_cloudlog_key`).
         let live_cloudlog_key = std::mem::take(&mut self.settings.cloudlog_key);
         // The forward-compatibility catch-all (`Settings::unknown`) — the keys a NEWER build
         // wrote into settings.json that this build has no field for. Same one-writer shape as
