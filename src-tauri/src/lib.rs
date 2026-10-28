@@ -34627,7 +34627,8 @@ fn fd_club_import(
     text: String,
     posid: String,
 ) -> Result<tempo_app::dto::FdClubImportDto, String> {
-    engine_lock(&state).fd_club_import(&text, &posid)
+    // The file is read with the Engine lock let go: the lock is taken only to check and to merge.
+    tempo_app::engine::fd_club_import_in(&state, &text, &posid)
 }
 
 /// What the host's Give button did: the position given, or why nothing changed.
@@ -43800,7 +43801,7 @@ mod tests {
     }
 
     /// ⭐ The host's "Import a laptop's file…" reaches the engine only if its command is REGISTERED
-    /// and goes through `Engine::fd_club_import`, and no Remote dispatcher names either: a club
+    /// and goes through `engine::fd_club_import_in`, and no Remote dispatcher names either: a club
     /// change is refused from afar. POSITIVE CONTROL: the dispatchers read here do name the engine
     /// calls they make.
     #[test]
@@ -43824,7 +43825,10 @@ mod tests {
             .split_once("\n}\n")
             .expect("the end of the command")
             .0;
-        assert!(body.contains(".fd_club_import(&text, &posid)"), "{body}");
+        assert!(
+            body.contains("engine::fd_club_import_in(&state, &text, &posid)"),
+            "{body}"
+        );
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
