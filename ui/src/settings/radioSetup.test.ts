@@ -81,6 +81,20 @@ describe('the radio setup answers', () => {
       rules: null,
       defaultRadio: null,
       policy: 'tell',
+      radios: [],
     })
   })
+
+  it("a radio's sound cards and keying: only what changed, per radio", () => {
+    const s = station()
+    s.radios = s.radios!.map((r) => ({ ...r, audioIn: 'in-0', audioOut: 'out-0', pttMethod: 'cat' }))
+    const a = answersFrom(s, BANDS)
+    expect(planIsEmpty(finishPlan(s, a, BANDS))).toBe(true)
+    a.kit[1] = { ...a.kit[1], audioOut: 'out-9' }
+    a.kit[2] = { ...a.kit[2], pttMethod: 'cat' }
+    const plan = finishPlan(s, a, BANDS)
+    expect(plan.radios).toEqual([{ id: 1, changes: { audioOut: 'out-9' } }])
+    expect(planIsEmpty(plan)).toBe(false)
+  })
 })
+

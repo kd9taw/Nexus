@@ -34,8 +34,8 @@
  * `setSettings` is imported directly only by the modules `writers.test.ts` lists, each of which
  * reads the settings immediately before it writes; every other writer goes through here.
  */
-import { getSettings, setSettings } from '../api'
-import type { AppSnapshot, Settings } from '../types'
+import { getSettings, setSettings, updateRadioProfile, type RadioProfilePatch } from '../api'
+import type { AppSnapshot, RadioProfile, Settings } from '../types'
 
 /** The last patch this window started: the next one reads only after it has been written. */
 let previous: Promise<unknown> = Promise.resolve()
@@ -47,6 +47,21 @@ export function patchSettings(edit: (current: Settings) => Partial<Settings>): P
     return setSettings({ ...current, ...edit(current) })
   })
   // A failed patch rejects for its caller and must not hold up the next one.
+  previous = write.catch(() => undefined)
+  return write
+}
+
+/** Save `edit`'s fields over ONE radio as the backend holds it now, through the per-radio verb
+ *  (`update_radio_profile`), which takes a radio's every field. The same rule as `patchSettings`, for
+ *  a radio's own settings: the fields a writer did not change come from the radio as it is now, never
+ *  from a copy, so a sound card or keying method set elsewhere since (the radio setup, Settings' Edit
+ *  of that radio) is kept. In the same queue as `patchSettings`. Nothing is written for a radio the
+ *  station no longer has. */
+export function patchRadio(id: number, edit: (current: RadioProfile) => RadioProfilePatch): Promise<AppSnapshot | null> {
+  const write = previous.then(async () => {
+    const current = (await getSettings()).radios?.find((r) => r.id === id)
+    return current ? updateRadioProfile(id, edit(current)) : null
+  })
   previous = write.catch(() => undefined)
   return write
 }

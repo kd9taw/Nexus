@@ -84,6 +84,8 @@ describe('the radio setup', () => {
         if (screen.queryByRole('combobox', { name: '2m Weak-signal digital' }))
           fireEvent.change(screen.getByRole('combobox', { name: '2m Weak-signal digital' }), { target: { value: '1' } })
         if (screen.queryByRole('radio', { name: 'Tell me, with Undo' })) fireEvent.click(screen.getByRole('radio', { name: 'Tell me, with Undo' }))
+        if (screen.queryAllByRole('combobox', { name: 'PTT Method' }).length)
+          fireEvent.change(screen.getAllByRole('combobox', { name: 'PTT Method' })[1], { target: { value: 'vox' } })
         if (!screen.queryByRole('button', { name: 'Next' })) break
         next()
       }
@@ -151,5 +153,41 @@ describe('the radio setup', () => {
     expect(api.spies.testCat).toHaveBeenCalledTimes(1)
     expect(api.spies.testRadioCat).toHaveBeenCalledTimes(1)
     expect(writes()).toEqual([])
+  })
+
+  it('Audio and keying: Finish writes only the fields changed, to that radio, over the radio as stored then', async () => {
+    // The station as it is when Finish writes: radio 1's receive sound card was set elsewhere (Settings'
+    // Edit of it) after the setup opened. The setup changed only its transmit sound card.
+    const later = station()
+    later.radios = later.radios!.map((r) => (r.id === 1 ? { ...r, audioIn: 'in-elsewhere' } : r))
+    api.get('getSettings').mockResolvedValue(later)
+    api.get('getAudioDevices').mockResolvedValue({
+      input: [{ name: 'in-a', label: 'USB Audio CODEC (A)' }],
+      output: [{ name: 'out-b', label: 'USB Audio CODEC (B)' }],
+    })
+    const onClose = vi.fn()
+    render(<RadioSetupWizard settings={station()} bands={BANDS} onClose={onClose} />)
+    while (!screen.queryByRole('heading', { name: 'Audio and keying' })) next()
+    const tx = screen.getAllByRole('combobox', { name: 'Output Device (TX)' })
+    await within(tx[1]).findByRole('option', { name: 'USB Audio CODEC (B)' })
+    fireEvent.change(tx[1], { target: { value: 'out-b' } })
+    fireEvent.change(screen.getAllByRole('combobox', { name: 'PTT Method' })[2], { target: { value: 'vox' } })
+    // A change made and taken back is no change.
+    fireEvent.change(tx[0], { target: { value: 'out-b' } })
+    fireEvent.change(tx[0], { target: { value: '' } })
+    while (screen.queryByRole('button', { name: 'Next' })) next()
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(writes()).toEqual(['updateRadioProfile'])
+    const calls = api.spies.updateRadioProfile.mock.calls as [number, Record<string, unknown>][]
+    expect(calls.map(([id]) => id)).toEqual([1, 2])
+    expect([calls[0][1].audioOut, calls[0][1].audioIn, calls[0][1].pttMethod]).toEqual(['out-b', 'in-elsewhere', 'cat'])
+    expect([calls[1][1].audioOut, calls[1][1].audioIn, calls[1][1].pttMethod]).toEqual(['', '', 'vox'])
+  })
+
+  it('from a computer driving the station, the keying method is shown, not offered', () => {
+    render(<RadioSetupWizard settings={{ ...station(), stationOnlySettings: ['pttMethod'] }} bands={BANDS} onClose={() => {}} />)
+    while (!screen.queryByRole('heading', { name: 'Audio and keying' })) next()
+    for (const box of screen.getAllByRole('combobox', { name: /PTT Method/ })) expect((box as HTMLSelectElement).disabled).toBe(true)
   })
 })

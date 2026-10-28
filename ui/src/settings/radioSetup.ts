@@ -10,11 +10,21 @@
 //     A rule the cells fully restate (plain mode rules naming only shared bands) is replaced by them;
 //     every other rule (satellite rules, rules with no band list, rules naming another band) is kept,
 //     in its order, below.
+//   - "Audio and keying" is each radio's receive and transmit sound card and keying method: the same
+//     per-radio fields Settings' Edit of that radio writes, through the same per-radio verb.
 // An untouched setup writes nothing: every part of the plan below is the difference from what is
 // stored, and the rules are rebuilt only when a cell was changed.
 import type { RadioProfile, RadioSwitchPolicy, RouteMode, RoutingRule, Settings } from '../types'
 import type { RoutingDraft } from '../api'
 import { ROUTE_MODES } from './describeRouting'
+
+/** A radio's sound cards and keying method, as the "Audio and keying" step edits them. */
+export interface RadioKit {
+  audioIn: string
+  audioOut: string
+  pttMethod: string
+}
+export const KIT_FIELDS: readonly (keyof RadioKit)[] = ['audioIn', 'audioOut', 'pttMethod']
 
 export interface RadioSetupAnswers {
   /** Radio ids, in the station's order. */
@@ -29,6 +39,8 @@ export interface RadioSetupAnswers {
   cellsEdited: boolean
   defaultRadio: number | null
   policy: RadioSwitchPolicy
+  /** Each radio's sound cards and keying method. */
+  kit: Record<number, RadioKit>
 }
 
 const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x, i) => x === b[i])
@@ -54,6 +66,8 @@ export function sharedBands(a: RadioSetupAnswers, order: readonly string[]): str
   return order.filter((band) => a.ids.filter((id) => a.enabled[id] && a.bands[id]?.includes(band)).length >= 2)
 }
 
+const kitOf = (r: RadioProfile): RadioKit => ({ audioIn: r.audioIn ?? '', audioOut: r.audioOut ?? '', pttMethod: r.pttMethod ?? '' })
+
 /** The answers the stored settings already give: what the setup opens on. */
 export function answersFrom(s: Settings, order: readonly string[]): RadioSetupAnswers {
   const radios: RadioProfile[] = s.radios ?? []
@@ -66,6 +80,7 @@ export function answersFrom(s: Settings, order: readonly string[]): RadioSetupAn
     cellsEdited: false,
     defaultRadio: s.defaultRadio ?? null,
     policy: s.radioSwitchPolicy ?? 'act',
+    kit: Object.fromEntries(radios.map((r) => [r.id, kitOf(r)])),
   }
   return withCells(a, s.routingRules ?? [], order)
 }
@@ -123,6 +138,9 @@ export interface FinishPlan {
   /** The new default (null = stay on the radio in use), or undefined to leave it. */
   defaultRadio?: number | null
   policy?: RadioSwitchPolicy
+  /** Per radio, the sound card and keying fields changed: only those are written, over the radio as
+   *  stored when Finish writes it. */
+  radios: { id: number; changes: Partial<RadioKit> }[]
 }
 
 const sameRule = (x: RoutingRule, y: RoutingRule) =>
@@ -142,6 +160,15 @@ export function finishPlan(s: Settings, a: RadioSetupAnswers, order: readonly st
       .map((r) => ({ id: r.id, enabled: a.enabled[r.id] })),
     bands: radios.filter((r) => !sameBands(a.bands[r.id] ?? [], r.bands)).map((r) => ({ id: r.id, bands: a.bands[r.id] })),
     rules: rulesChanged ? rules : null,
+    radios: radios
+      .map((r) => {
+        const now = a.kit[r.id]
+        const was = kitOf(r)
+        const changes: Partial<RadioKit> = {}
+        if (now) for (const f of KIT_FIELDS) if (now[f] !== was[f]) changes[f] = now[f]
+        return { id: r.id, changes }
+      })
+      .filter((x) => Object.keys(x.changes).length > 0),
   }
   if ((s.defaultRadio ?? null) !== a.defaultRadio) plan.defaultRadio = a.defaultRadio
   if ((s.radioSwitchPolicy ?? 'act') !== a.policy) plan.policy = a.policy
@@ -153,6 +180,7 @@ export function planIsEmpty(p: FinishPlan): boolean {
     !p.renames.length &&
     !p.enabled.length &&
     !p.bands.length &&
+    !p.radios.length &&
     p.rules == null &&
     p.defaultRadio === undefined &&
     p.policy === undefined

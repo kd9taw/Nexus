@@ -6,7 +6,8 @@
 //   3. Shared bands     where two radios list a band: which one for each mode class (skipped if none).
 //   4. Everything else  the default radio for a band no radio lists.
 //   5. Switching        what happens when Nexus needs the other radio: switch and say so, or silently.
-//   6. Audio, keying    per radio, what it uses, and a Test CAT for each one.
+//   6. Audio, keying    per radio, its receive and transmit sound cards and keying method, and a
+//                       Test CAT for each one.
 //   7. Check            "Where would this go?" and every rule Finish writes, in plain words. Finish.
 //
 // It is OFFERED, never forced: Settings ▸ Radio ▸ Radios has the button, and the first-run setup offers
@@ -19,19 +20,22 @@
 // monitor's next reading of it and never selects, switches or keys a radio).
 //
 // ⭐ FINISH WRITES WHAT CHANGED, THROUGH THE VERBS SETTINGS USES: rename_radio, set_radio_enabled,
-// set_radio_bands, set_routing_rules, set_default_radio, set_radio_switch_policy. Never a whole
-// settings save (the flat-mirror and stale-form hazards). An untouched setup writes nothing.
+// set_radio_bands, set_routing_rules, set_default_radio, set_radio_switch_policy, and for a radio's
+// sound cards and keying update_radio_profile with only the fields changed laid over the radio as
+// stored (`patchRadio`, as Settings' Edit of a radio saves). Never a whole settings save (the
+// flat-mirror and stale-form hazards). An untouched setup writes nothing.
 //
 // ⛔ NO TRANSMIT BEHAVIOUR CHANGES HERE. A radio switch Nexus makes by itself is the engine's as
 // before: it stops transmitting, and a contact in progress ends with its log line set aside (Restore
-// brings it back). This page only says so. Audio devices and keying are shown, not edited: they are
-// changed with the radio's Edit button, where the per-radio form writes them.
+// brings it back). This page only says so. It sets which sound card and keying method a radio uses,
+// the same stored choice Settings sets; how a radio keys or plays audio is not changed here.
 // ---------------------------------------------------------------------------
 import { useEffect, useMemo, useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { t } from '../i18n'
-import type { AppSnapshot, RouteMode, Settings } from '../types'
+import type { AppSnapshot, AudioDevices, RouteMode, Settings } from '../types'
 import {
+  getAudioDevices,
   getSnapshot,
   renameRadio,
   routePreviewDraft,
@@ -53,7 +57,10 @@ import {
   withCells,
   type FinishPlan,
   type RadioSetupAnswers,
+  type RadioKit,
 } from '../settings/radioSetup'
+import { patchRadio } from '../settings/patch'
+import { radioPatch } from './SettingsPanel'
 
 type Step = 'radios' | 'bands' | 'shared' | 'rest' | 'switching' | 'audio' | 'check'
 /** A step's name on the step dots. Literal keys, so the catalog guards read every one. */
@@ -112,10 +119,14 @@ export function RadioSetupWizard({
   const active = settings.activeRadio ?? radios[0]?.id ?? 0
   const name = (id: number) => a.names[id]?.trim() || radios.find((r) => r.id === id)?.name || `#${id}`
 
+  const [devices, setDevices] = useState<AudioDevices>({ input: [], output: [] })
   useEffect(() => {
     let live = true
     void getSnapshot()
       .then((s) => live && setSnap(s))
+      .catch(() => {})
+    void getAudioDevices()
+      .then((d) => live && d && setDevices(d))
       .catch(() => {})
     return () => {
       live = false
@@ -202,6 +213,7 @@ export function RadioSetupWizard({
     setError(null)
     try {
       for (const r of plan.renames) await renameRadio(r.id, r.name)
+      for (const r of plan.radios) await patchRadio(r.id, (stored) => radioPatch({ ...stored, ...r.changes }))
       // On first, so a rule or default can name a radio switched back on; off after.
       for (const e of plan.enabled.filter((x) => x.enabled)) await setRadioEnabled(e.id, true)
       for (const b of plan.bands) await setRadioBands(b.id, b.bands)
@@ -244,6 +256,32 @@ export function RadioSetupWizard({
     radios: a.ids.map((id) => ({ id, name: name(id), bands: a.bands[id] ?? [], enabled: a.enabled[id] !== false })),
     routingRules: rules,
     defaultRadio: a.defaultRadio,
+  }
+  const setKit = (id: number, field: keyof RadioKit, value: string) =>
+    setA((prev) => ({ ...prev, kit: { ...prev.kit, [id]: { ...prev.kit[id], [field]: value } } }))
+  // From a computer driving the station, the keying method is kept as the station has it (as in Settings).
+  const pttLocked = settings.stationOnlySettings?.includes('pttMethod') === true
+  /** A sound card picker's choices: the system default, the devices the computer lists, and the
+   *  stored one even when it is not plugged in now. */
+  const deviceOptions = (kind: 'input' | 'output', value: string) => {
+    const listed = devices[kind]
+    return [
+      <option key="" value="">
+        {t('settings.audio.device.systemDefault')}
+      </option>,
+      ...(value && !listed.some((d) => d.name === value)
+        ? [
+            <option key={value} value={value}>
+              {t('settings.audio.device.notInList', { device: value })}
+            </option>,
+          ]
+        : []),
+      ...listed.map((d) => (
+        <option key={d.name} value={d.name}>
+          {d.label || d.name}
+        </option>
+      )),
+    ]
   }
   const live = (id: number) => snap?.radios?.find((r) => r.id === id)
   const catNow = (id: number): string => {
@@ -440,17 +478,39 @@ export function RadioSetupWizard({
           <div className="radio-setup-cards">
             {radios.map((r) => {
               const c = cat[r.id]
+              const kit = a.kit[r.id] ?? { audioIn: r.audioIn ?? '', audioOut: r.audioOut ?? '', pttMethod: r.pttMethod ?? '' }
               return (
                 <div key={r.id} className="radio-setup-card">
                   <strong>{name(r.id)}</strong>
-                  <p className="settings-hint">
-                    {t('radioSetup.audio.devices', {
-                      rx: r.audioIn || t('settings.radios.card.audioDefault'),
-                      tx: r.audioOut || t('settings.radios.card.audioDefault'),
-                    })}
-                  </p>
-                  <p className="settings-hint">{t('radioSetup.audio.keying', { ptt: pttLabel(r.pttMethod) })}</p>
-                  {/ #\d+$/.test(r.audioIn) && <p className="settings-hint radio-setup-warn">{t('radioSetup.audio.sameName')}</p>}
+                  <label className="wizard-field">
+                    <span>{t('settings.audio.input.label')}</span>
+                    <select className="settings-input" value={kit.audioIn} onChange={(e) => setKit(r.id, 'audioIn', e.target.value)}>
+                      {deviceOptions('input', kit.audioIn)}
+                    </select>
+                  </label>
+                  <label className="wizard-field">
+                    <span>{t('settings.audio.output.label')}</span>
+                    <select className="settings-input" value={kit.audioOut} onChange={(e) => setKit(r.id, 'audioOut', e.target.value)}>
+                      {deviceOptions('output', kit.audioOut)}
+                    </select>
+                  </label>
+                  <label className="wizard-field">
+                    <span>{t('settings.rigControl.ptt.label')}</span>
+                    <select
+                      className="settings-input"
+                      value={kit.pttMethod}
+                      disabled={pttLocked}
+                      onChange={(e) => setKit(r.id, 'pttMethod', e.target.value)}
+                    >
+                      {[...PTT_METHODS, ...(PTT_METHODS.includes(kit.pttMethod) ? [] : [kit.pttMethod])].map((m) => (
+                        <option key={m} value={m}>
+                          {pttLabel(m)}
+                        </option>
+                      ))}
+                    </select>
+                    {pttLocked && <span className="settings-hint">{t('settings.stationOnly.hint')}</span>}
+                  </label>
+                  {/ #\d+$/.test(kit.audioIn) && <p className="settings-hint radio-setup-warn">{t('radioSetup.audio.sameName')}</p>}
                   <div className="radio-setup-test">
                     <button
                       type="button"
@@ -577,6 +637,9 @@ export function RadioSetupWizard({
     </Dialog>
   )
 }
+
+/** The keying methods Settings offers, as the persisted tokens. */
+const PTT_METHODS = ['cat', 'rts', 'dtr', 'vox']
 
 function pttLabel(m: string): string {
   switch (m) {

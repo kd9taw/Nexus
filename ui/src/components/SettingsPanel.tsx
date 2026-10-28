@@ -100,7 +100,6 @@ import {
   setRadioSwitchPolicy,
   setExperienceLevel,
   routePreview,
-  updateRadioProfile,
   type RadioProfilePatch,
   testCat,
   probeCatPorts,
@@ -258,7 +257,7 @@ import { EXPERIENCE_LEVELS, featurePreset, foldsSettings, screensTurnedOff, star
 import { describeRadioRouting, ROUTE_MODES, ROUTE_MODE_LABEL, type RouteLine } from '../settings/describeRouting'
 import { RadioSetupWizard } from './RadioSetupWizard'
 import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
-import { changedSince, mergeListEdit, patchSettings } from '../settings/patch'
+import { changedSince, mergeListEdit, patchRadio, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
 // the cockpit's canvas/waterfall/api surface into every SettingsPanel test's `../api` mock.
 import { FSK_ID_SECONDS_LABEL, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvModes'
@@ -971,6 +970,21 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     tciPan: s.tciPan ?? false,
     tciSpots: s.tciSpots ?? false,
   }
+}
+
+/** The per-radio fields: the ones the rig form shows for ONE radio, which a save sends to that radio. */
+const RADIO_FIELDS = Object.keys(radioPatch({})) as (keyof RadioProfilePatch)[]
+/** `changes` split into the radio's own fields and the rest. */
+function splitRadioFields(changes: Partial<Settings>): { radio: Partial<RadioProfilePatch>; rest: Partial<Settings> } {
+  const radio: Record<string, unknown> = {}
+  const rest: Record<string, unknown> = { ...changes }
+  for (const key of RADIO_FIELDS) {
+    if (key in rest) {
+      radio[key] = rest[key]
+      delete rest[key]
+    }
+  }
+  return { radio: radio as Partial<RadioProfilePatch>, rest: rest as Partial<Settings> }
 }
 
 /**
@@ -2604,6 +2618,36 @@ export function SettingsPanel({
   const openRadioSetup = () => {
     void withErrorToast(() => getSettings(), t('radioSetup.load.failed')).then((s) => s && setRadioSetup(s))
   }
+  // The form's rig fields now describe radio `r`, and so does the baseline a Save is diffed against:
+  // only what the operator then changes is that radio's edit (`persistRadioForm`).
+  const showRadio = (r: Partial<RadioProfilePatch>) => {
+    const fields = radioPatch(r)
+    setForm((prev) => (prev ? { ...prev, ...fields } : prev))
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...fields }
+  }
+  // After the radio setup's Finish: each field of the radio on the form that the form has NOT changed
+  // takes the value the station holds now, in the form and its baseline, so the form shows a sound
+  // card or keying method the setup set. A field the operator has changed here keeps the edit.
+  const adoptStoredRadioFields = () => {
+    const id = editingRadioId
+    void getSettings().then((s) => {
+      const stored = s.radios?.find((r) => r.id === (id ?? s.activeRadio))
+      const was = savedRef.current
+      if (!stored || !was) return
+      const now = radioPatch(stored) as unknown as Record<string, unknown>
+      const base = was as unknown as Record<string, unknown>
+      setForm((prev) => {
+        if (!prev) return prev
+        const shown = prev as unknown as Record<string, unknown>
+        const fresh: Record<string, unknown> = {}
+        for (const key of RADIO_FIELDS) {
+          if (JSON.stringify(shown[key]) === JSON.stringify(base[key])) fresh[key] = now[key]
+        }
+        savedRef.current = { ...was, ...fresh }
+        return { ...prev, ...fresh }
+      })
+    })
+  }
   const reloadRadios = () => {
     void getSettings().then((s) => {
       setForm((prev) =>
@@ -2649,7 +2693,7 @@ export function SettingsPanel({
       // …with ITS config in the form, as Edit loads one. Selected without it, the form still held
       // the radio it was editing before, and the first Save copied that radio's port, baud and
       // sound card onto the new one (two Yaesus on a Mac, 2026-10-14).
-      setForm((prev) => (prev ? { ...prev, ...radioPatch(added) } : prev))
+      showRadio(added)
       setEditingRadioId(added.id)
       dirtyRef.current = false
     })
@@ -2677,7 +2721,7 @@ export function SettingsPanel({
       if (editingRadioId === id) {
         const fresh = await getSettings()
         const operating = fresh.radios?.find((p) => p.id === (activeRadioId ?? fresh.activeRadio))
-        if (operating) setForm((prev) => (prev ? { ...prev, ...radioPatch(operating) } : prev))
+        if (operating) showRadio(operating)
         dirtyRef.current = false
       }
       // If the deleted radio was the one the rig form is editing, retarget the form: a
@@ -2919,7 +2963,7 @@ export function SettingsPanel({
     }
     const r = form?.radios?.find((p) => p.id === id)
     if (!r) return
-    setForm((prev) => (prev ? { ...prev, ...radioPatch(r) } : prev))
+    showRadio(r)
     setEditingRadioId(id)
     dirtyRef.current = false
   }
@@ -3123,8 +3167,11 @@ export function SettingsPanel({
   // One list another writer adds to while the form is open: the 55-minute rule puts the stations it
   // stops on the JS8 "never acknowledge" list. The form's edit of it goes over the list as it is now
   // (`mergeListEdit`), so a station the rule added since Settings opened is never written away.
-  const saveForm = (payload: NonNullable<typeof form>, forced: Partial<Settings> = {}) => {
-    const changes = changedSince(savedRef.current, payload)
+  const saveForm = (
+    payload: NonNullable<typeof form>,
+    forced: Partial<Settings> = {},
+    changes: Partial<Settings> = changedSince(savedRef.current, payload),
+  ) => {
     return patchSettings((live) => {
       const whole: Partial<Settings> = {
         ...payload,
@@ -3169,25 +3216,19 @@ export function SettingsPanel({
     // contest role preview, which is why it reads this rather than the form.
     setSavedTick((n) => n + 1)
     if (editingRadioId != null && editingRadioId !== next.activeRadio) {
-      const edited = next.radios?.find((r) => r.id === editingRadioId)
       // `withActiveRadioConfig` puts the ACTIVE radio's own config back in the flat fields, so
       // the backend's flat→active fold is a no-op and the edited radio's ports/model/audio
       // cannot be stamped onto the one being operated (the 2026-07-25 report).
-      await saveForm(
-        {
-          ...withActiveRadioConfig(next),
-          mycall: next.mycall.trim().toUpperCase(),
-        },
-        forced,
-      )
-      await updateRadioProfile(
-        editingRadioId,
-        radioPatch({
-          ...next,
-          rotctldPort: edited?.rotctldPort ?? next.rigctldPort + 1,
-          nativeScope: edited?.nativeScope ?? 'auto',
-        }),
-      )
+      //
+      // The edited radio gets what the operator changed in its fields, over that radio as the
+      // station holds it now (`patchRadio`): every other field is sent as stored. Sent whole, the
+      // form's copy of every field it had not touched went back over the newer value: a sound card
+      // or keying method set in the radio setup since was gone at the next Save of anything. Its
+      // fields are kept out of the station-wide save, which describes the radio in use.
+      const mycall = next.mycall.trim().toUpperCase()
+      const { radio, rest } = splitRadioFields(changedSince(savedRef.current, { ...next, mycall }))
+      await saveForm({ ...withActiveRadioConfig(next), mycall }, forced, rest)
+      await patchRadio(editingRadioId, (stored) => radioPatch({ ...stored, ...radio }))
     } else {
       await saveForm({ ...next, mycall: next.mycall.trim().toUpperCase() }, forced)
     }
@@ -3198,17 +3239,14 @@ export function SettingsPanel({
     const { radios } = await getSettings()
     setForm((prev) => (prev ? { ...prev, radios } : prev))
     // The baseline the next Save is diffed against (`saveForm`) holds the radio fields as the form
-    // now holds them. With another radio open the flat fields hold THAT radio, while a station-wide
-    // save sends the radio in use's own config from `radios` (`withActiveRadioConfig`), so the
-    // baseline holds the same. With the edited radio's fields there, or an older copy than `radios`,
-    // a field of the radio in use read as a change, and the next Save sent that copy's drive and
-    // gain back over the cockpit's newer ones. Test CAT and Auto-test save through here too, so the
-    // radio fields move here for every caller; `commitSave` then takes the whole of what this returns.
+    // now holds them: the radio on the form, whichever it is, so only the operator's next edit of it
+    // reads as a change. (The station-wide save of a form showing another radio leaves the radio
+    // fields out, so the radio in use's drive and gain, moved in the cockpit since, are not sent.)
+    // Test CAT and Auto-test save through here too, so the radio fields move here for every caller;
+    // `commitSave` then takes the whole of what this returns.
     const saved = { ...next, radios }
-    const baseline =
-      editingRadioId != null && editingRadioId !== next.activeRadio ? withActiveRadioConfig(saved) : saved
-    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(baseline), radios }
-    return baseline
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(saved), radios }
+    return saved
   }
 
   // A station-wide save (LoTW/eQSL credentials, config profiles) that must NOT carry the rig
@@ -5790,6 +5828,7 @@ export function SettingsPanel({
                   if (savedRef.current) savedRef.current = { ...savedRef.current, radioSwitchPolicy: policy }
                 }
                 reloadRadios()
+                if (plan.radios.length) adoptStoredRadioFields()
               }}
             />
           )}

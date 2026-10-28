@@ -428,3 +428,85 @@ describe('an edit made in any section of Settings is saved', () => {
     expect(saved(station)).toEqual(expected)
   })
 })
+
+// A RADIO'S OWN SETTINGS ARE CHANGED ELSEWHERE TOO: the radio setup's "Audio and keying" step writes
+// a radio's sound cards and keying through the per-radio verb while this form is open. Saving the
+// form sent the radio it describes whole, so its copy of each of that radio's fields went back over
+// the newer ones — a sound card picked in the setup was gone at the next Save of anything at all.
+// The per-radio verb here is a live one too: it applies the patch to that radio, and to the flat
+// copy when the radio is the one in use, as `Engine::update_radio_profile` does.
+describe("a radio's settings changed elsewhere survive a save of the form", () => {
+  const applyToRadio = (id: number, change: Record<string, unknown>) => {
+    const radios = (station.radios as Record<string, unknown>[]).map((r) => (r.id === id ? { ...r, ...structuredClone(change) } : r))
+    station = { ...station, radios, ...(station.activeRadio === id ? structuredClone(change) : {}) }
+  }
+  beforeEach(() => {
+    api.get('updateRadioProfile').mockImplementation((id: number, patch: Record<string, unknown>) => {
+      applyToRadio(id, patch)
+      return Promise.resolve(null)
+    })
+  })
+  const radioNamed = (id: number) => (station.radios as Record<string, unknown>[]).find((r) => r.id === id)!
+  const editIc7300 = async () => {
+    fireEvent.click(screen.getByRole('tab', { name: 'Radio' }))
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Edit' }))[0])
+    await screen.findByText(/Editing IC-7300/)
+  }
+  /** The footer Save, and the whole of it: the per-radio write follows the settings write. */
+  const saveAll = async () => {
+    await save()
+    await screen.findByText('Saved')
+  }
+
+  it('the radio being edited, not the one in use: its transmit sound card set elsewhere stays', async () => {
+    openOn()
+    await loaded()
+    await editIc7300()
+    applyToRadio(1, { audioOut: 'out-setup' })
+    await turnOnQrzUpload()
+    await saveAll()
+    expect(station.qrzLogbookUpload).toBe(true)
+    expect(radioNamed(1).audioOut).toBe('out-setup')
+  })
+
+  it('the radio in use: its transmit sound card set elsewhere stays', async () => {
+    openOn()
+    await loaded()
+    applyToRadio(0, { audioOut: 'out-setup' })
+    await turnOnQrzUpload()
+    await saveAll()
+    expect(station.qrzLogbookUpload).toBe(true)
+    expect([radioNamed(0).audioOut, station.audioOut]).toEqual(['out-setup', 'out-setup'])
+  })
+
+  it("the operator's own edit of the radio is saved, and only that field of it", async () => {
+    openOn()
+    await loaded()
+    await editIc7300()
+    applyToRadio(1, { audioIn: 'in-setup', pttMethod: 'vox' })
+    fireEvent.change(within(document.getElementById('settings-audio')!).getAllByRole('combobox')[1], { target: { value: '' } })
+    await saveAll()
+    expect([radioNamed(1).audioOut, radioNamed(1).audioIn, radioNamed(1).pttMethod]).toEqual(['', 'in-setup', 'vox'])
+    // …and the radio in use is not touched by it.
+    expect([radioNamed(0).audioOut, station.audioOut]).toEqual(['out-0', 'out-0'])
+  })
+
+  it("a sound card set in the radio setup shows in the form, and the form's next Save keeps it", async () => {
+    openOn()
+    await loaded()
+    await editIc7300()
+    fireEvent.click(screen.getByRole('button', { name: 'Set up radios…' }))
+    await screen.findByRole('heading', { name: 'Your radios' })
+    while (!screen.queryByRole('heading', { name: 'Audio and keying' })) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.change(screen.getAllByRole('combobox', { name: 'Output Device (TX)' })[1], { target: { value: '' } })
+    while (screen.queryByRole('button', { name: 'Next' })) fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Finish' }))
+    await waitFor(() => expect(radioNamed(1).audioOut).toBe(''))
+    const tx = () => within(document.getElementById('settings-audio')!).getAllByRole('combobox')[1] as HTMLSelectElement
+    await waitFor(() => expect(tx().value).toBe(''))
+    await turnOnQrzUpload()
+    await saveAll()
+    expect([station.qrzLogbookUpload, radioNamed(1).audioOut]).toEqual([true, ''])
+  })
+})
+
