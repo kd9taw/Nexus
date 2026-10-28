@@ -30,8 +30,10 @@ use tempo_app::dto::LoggedQso;
 use tempo_app::engine::Engine;
 use tempo_app::logstore::LogRows;
 use tempo_app::station::{MadeRow, RowRefusal};
-use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Scope};
-use tempo_core::logbook::{FieldEdit, LogOp, QsoEdit, QsoRecord, RecordId};
+use tempo_core::logbook::sqlite::{call_norm_of, Narrow, Order, Scope};
+use tempo_core::logbook::{
+    qsl_card_queued, FieldEdit, LogOp, QsoEdit, QsoRecord, RecordId, QSL_QUEUE_FIELD,
+};
 
 mod picture;
 
@@ -329,6 +331,77 @@ pub(crate) async fn delete_row(engine: SharedEngine, target: RowRef) -> Result<R
     change_row(engine, target, LogOp::Delete).await
 }
 
+/// Put the contact `target` in the cards-to-send queue (`queued`: ADIF `QSL_SENT=Q`) or take it
+/// out. A field kept as written ([`LogOp::SetFields`]), so it is recorded in the contact's history
+/// and undone as any other. Marking the card sent takes it out as well
+/// ([`crate::mark_qsl_sent`]).
+#[tauri::command]
+pub async fn queue_qsl_card_by_id(
+    state: State<'_, SharedEngine>,
+    target: RowRef,
+    queued: bool,
+) -> Result<RowAnswer, String> {
+    queue_card(Arc::clone(&state), target, queued).await
+}
+
+pub(crate) async fn queue_card(
+    engine: SharedEngine,
+    target: RowRef,
+    queued: bool,
+) -> Result<RowAnswer, String> {
+    change_row(engine, target, move |id| LogOp::SetFields {
+        id,
+        fields: vec![(QSL_QUEUE_FIELD.to_string(), queued.then(|| "Q".to_string()))],
+    })
+    .await
+}
+
+/// The contacts whose paper QSL card is still to go out ([`qsl_card_queued`]: `QSL_SENT` `Q` or
+/// `R`, not marked sent), in log order, each with the key a change to it must send.
+#[tauri::command]
+pub async fn qsl_card_queue(state: State<'_, SharedEngine>) -> Result<Vec<KeyedRow>, String> {
+    let engine = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || card_queue(&engine))
+        .await
+        .map_err(|e| format!("the logbook read did not finish: {e}"))?
+}
+
+/// What the cards-to-send pass reads of each row: the sent mark, and the field the queue is.
+const CARD_QUEUE: Narrow = Narrow {
+    columns: &["qsl_sent"],
+    uploads: false,
+};
+
+pub(crate) fn card_queue(engine: &SharedEngine) -> Result<Vec<KeyedRow>, String> {
+    // Handles under the lock; the reads after it is released.
+    let rows = tempo_app::engine::engine_lock(engine).log_rows();
+    let mut ids = Vec::new();
+    rows.each_with(
+        CARD_QUEUE,
+        &[QSL_QUEUE_FIELD],
+        Scope::All,
+        Order::Log,
+        &mut |r| {
+            if qsl_card_queued(r) {
+                ids.extend(r.id);
+            }
+            std::ops::ControlFlow::Continue(())
+        },
+    )
+    .map_err(|e| e.to_string())?
+    .or_refuse()?;
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (whole, fresh) = rows.rows_by_ids(&ids).map_err(|e| e.to_string())?;
+    fresh.or_refuse()?;
+    Ok(whole
+        .iter()
+        .filter(|r| qsl_card_queued(r))
+        .map(keyed)
+        .collect())
+}
+
 // ── A row the log view showed, found again by its content ───────────────────────────────────
 //
 // The view hands back the row it showed (`LoggedQso`), never a position; these find the contact
@@ -481,9 +554,11 @@ mod tests {
     use tempo_app::engine::engine_lock;
     use tempo_core::logbook::{QslVia, UploadOutcome};
 
-    const COMMANDS: [&str; 6] = [
+    const COMMANDS: [&str; 8] = [
         "edit_qso_by_id",
         "mark_qsl_sent_by_id",
+        "queue_qsl_card_by_id",
+        "qsl_card_queue",
         "mark_qsl_card_by_id",
         "set_sat_tag_by_id",
         "set_dxcc_by_id",
@@ -632,6 +707,71 @@ mod tests {
             Ok(RowAnswer::Deleted {})
         );
         assert!(on_disk(&dir, &target.id).is_none(), "deleted on disk");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ The cards-to-send queue end to end, on disk: a queued contact is listed, and only it;
+    /// marking its card sent takes it off the list and writes `QSL_SENT=Y` in place of the `Q`,
+    /// and nothing else about the contact moves. Taking a card out of the queue lists it no more.
+    #[test]
+    fn a_queued_card_is_listed_until_it_is_marked_sent_and_nothing_else_moves() {
+        let (dir, engine) = engine_on_store("card-queue", 6);
+        let rt = runtime();
+        assert!(card_queue(&engine).expect("read").is_empty());
+
+        let (target, before) = row_ref(&engine, 2);
+        let now = current(
+            rt.block_on(queue_card(engine.clone(), target.clone(), true))
+                .expect("made"),
+        );
+        let listed = card_queue(&engine).expect("read");
+        assert_eq!(
+            listed.iter().map(|k| k.row.id.clone()).collect::<Vec<_>>(),
+            vec![Some(target.id.clone())]
+        );
+        assert_eq!(
+            listed[0].edit_key, now.edit_key,
+            "listed with the key a change must send"
+        );
+        let queued = on_disk(&dir, &target.id).expect("held");
+        assert!(qsl_card_queued(&queued));
+
+        let next = RowRef {
+            id: target.id.clone(),
+            edit_key: listed[0].edit_key.clone(),
+        };
+        current(
+            rt.block_on(qsl_sent(engine.clone(), next, Some("B".into())))
+                .expect("made"),
+        );
+        assert!(
+            card_queue(&engine).expect("read").is_empty(),
+            "sent: off the list"
+        );
+        let sent = on_disk(&dir, &target.id).expect("held");
+        let mut expect = before.clone();
+        expect.qsl_sent = sent.qsl_sent;
+        assert_eq!(sent, expect, "only the QSL-sent mark moved");
+        assert!(sent.qsl_sent.sent);
+        let adif = tempo_core::logbook::adif_record(&sent);
+        assert_eq!(adif.matches("QSL_SENT:").count(), 1, "{adif}");
+
+        // Queued and taken out again: listed no more, and the contact as it was.
+        let (target, before) = row_ref(&engine, 4);
+        let now = current(
+            rt.block_on(queue_card(engine.clone(), target.clone(), true))
+                .expect("made"),
+        );
+        let back = RowRef {
+            id: target.id.clone(),
+            edit_key: now.edit_key,
+        };
+        current(
+            rt.block_on(queue_card(engine.clone(), back, false))
+                .expect("made"),
+        );
+        assert!(card_queue(&engine).expect("read").is_empty());
+        assert_eq!(on_disk(&dir, &target.id).expect("held").extra, before.extra);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

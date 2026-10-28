@@ -1348,6 +1348,53 @@ export const EN = {
     other: '{{count}} contacts now hold their park’s state',
   },
   'logbook.parkStates.failed': 'Could not check park states',
+  // "Cards to send" (QslCardsToSend): the contacts queued for a paper QSL card, printed as labels and
+  // marked sent only once the operator says the labels printed. The label stocks' names are
+  // product names and stay as they are.
+  'logbook.qslCards.button': 'Cards to send',
+  'logbook.qslCards.buttonTitle':
+    'Print QSL labels for the contacts queued for a paper card, then mark them sent',
+  'logbook.qslCards.title': 'Cards to send',
+  'logbook.qslCards.intro':
+    'The contacts queued for a paper QSL card. Tick the ones to print and print their labels. Nexus then asks whether the labels printed, and marks the cards sent only when you say they did.',
+  'logbook.qslCards.reading': 'Reading your log…',
+  'logbook.qslCards.none':
+    'No cards are queued. Queue one from a contact’s QSL menu in the Logbook.',
+  'logbook.qslCards.failed': 'Could not read the cards to send',
+  'logbook.qslCards.format': 'Label stock',
+  'logbook.qslCards.start': 'Start at label',
+  'logbook.qslCards.startTitle':
+    'On a part-used sheet: the first label still on it, counted across, then down',
+  'logbook.qslCards.combine': 'Put several contacts with the same station on one label',
+  'logbook.qslCards.summary': 'Labels: {{labels}} · Sheets: {{pages}}',
+  'logbook.qslCards.close': 'Close',
+  'logbook.qslCards.print': {
+    one: 'Print {{count}} label',
+    other: 'Print {{count}} labels',
+  },
+  'logbook.qslCards.printFailed': 'Could not open the label sheet',
+  'logbook.qslCards.question':
+    'Did the labels print correctly? Only then are these cards marked sent.',
+  'logbook.qslCards.via': 'Sent via',
+  'logbook.qslCards.yes': {
+    one: 'Yes, mark {{count}} card sent',
+    other: 'Yes, mark {{count}} cards sent',
+  },
+  'logbook.qslCards.no': 'No, keep them queued',
+  'logbook.qslCards.done': {
+    one: '{{count}} card marked sent',
+    other: '{{count}} cards marked sent',
+  },
+  'logbook.qslCards.partial':
+    'Marked {{done}} of {{count}} cards sent. The rest changed meanwhile and stay queued.',
+  'logbook.qslCards.sheet.title': 'QSL labels',
+  'logbook.qslCards.sheet.help':
+    'Print at 100 % (actual size) with no margins, on the label stock chosen in Nexus. The dashed outlines show on screen only.',
+  'logbook.qslCards.sheet.print': 'Print',
+  'logbook.row.qslQueue.add': 'Queue a paper card',
+  'logbook.row.qslQueue.remove': 'Remove from cards to send',
+  'logbook.qsl.queued': 'Card queued for {{call}}',
+  'logbook.qsl.unqueued': 'Card no longer queued for {{call}}',
   // "Check confirmations" (ConfirmationReview): contacts holding a LoTW, eQSL or QRZ confirmation,
   // or LoTW's upload mark, that the service's own records give another contact, or none. LoTW,
   // eQSL, QRZ, calls, bands and modes are invariant tokens; `{{service}}` is one of the three.

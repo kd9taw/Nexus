@@ -3194,9 +3194,15 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
 /// really posts a card gets an ordinary monotonic sent mark back, not one permanently
 /// shadowed by their own correction.
 ///
+/// A card that goes out leaves the cards-to-send queue ([`qsl_card_queued`]): ADIF holds one
+/// `QSL_SENT`, and `Y` replaces the `Q` or `R` it held. A withdrawal leaves the queue as it is.
+///
 /// ★ THE one implementation of [`LogOp::MarkQslSent`] (SPEC-2 v3 §4.6), in the in-memory log and
 /// in a plan made on the row read from the store alike.
 pub(crate) fn qsl_sent_marked(rec: &mut QsoRecord, via: Option<QslVia>, date_unix: u64) {
+    if via.is_some() {
+        set_extra(rec, QSL_QUEUE_FIELD, None);
+    }
     rec.qsl_sent = match via {
         Some(via) => QslSent {
             sent: true,
@@ -3752,6 +3758,11 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         // the station sent, and the file then carried two, which can disagree. The exchange's
         // is the one [`record_field`] reads; the other stays in the store.
         if contest_adif.iter().any(|(t, cv)| t == k && !cv.is_empty()) {
+            continue;
+        }
+        // A card still to go and a sent mark cannot both be written: ADIF holds one `QSL_SENT`,
+        // and a sent mark is the later truth ([`qsl_card_queued`]).
+        if r.qsl_sent.sent && k == QSL_QUEUE_FIELD {
             continue;
         }
         out.push_str(&field(k, v));
@@ -4530,6 +4541,32 @@ fn take_yes(f: &mut std::collections::HashMap<String, String>, k: &str) -> bool 
     f.remove(k).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
 }
 
+/// Consume `QSL_SENT`: `Y` is the sent mark. A card still TO GO — `Q` (queued) or `R` (the other
+/// station asked for one), ADIF's own spellings — is left in the record's passthrough, written
+/// back as it came and read by [`qsl_card_queued`]: the cards-to-send list, and another logger's
+/// queue, survive an import. Anything else (`N`, `I`) is the absence of a mark, as before.
+fn take_qsl_sent(f: &mut std::collections::HashMap<String, String>) -> bool {
+    if f.get("QSL_SENT").is_some_and(|v| is_card_queue_value(v)) {
+        return false;
+    }
+    take_yes(f, "QSL_SENT")
+}
+
+/// The passthrough field that holds a card still to go out (ADIF `QSL_SENT` = `Q` or `R`).
+pub const QSL_QUEUE_FIELD: &str = "QSL_SENT";
+
+/// A `QSL_SENT` value that means a paper card is still to go out: `Q` (queued) or `R` (requested).
+fn is_card_queue_value(v: &str) -> bool {
+    let v = v.trim();
+    v.eq_ignore_ascii_case("Q") || v.eq_ignore_ascii_case("R")
+}
+
+/// Whether a paper QSL card is waiting to go out for `r`: its `QSL_SENT` says `Q` or `R` and it
+/// is not marked sent. A sent mark always wins — a card that went out is not still to go.
+pub fn qsl_card_queued(r: &QsoRecord) -> bool {
+    !r.qsl_sent.sent && extra_value(r, QSL_QUEUE_FIELD).is_some_and(is_card_queue_value)
+}
+
 /// Consume a `*_QSL_RCVD` flag. ADIF's `QSL_Rcvd` enumeration spells a confirmation
 /// the importer HOLDS two ways, not one: `Y` (received) and `V` (verified — an award
 /// credit has been granted against it), the value Club Log and DXKeeper write for a
@@ -4960,7 +4997,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     // Operator-declared OUTBOUND QSL request. Absent fields ⇒ default (not sent),
     // matching the QslRcvd legacy tolerance. QSLSDATE is date-only → UTC midnight.
     let qsl_sent = QslSent {
-        sent: take_yes(f, "QSL_SENT"),
+        sent: take_qsl_sent(f),
         via: f.remove("QSL_SENT_VIA").and_then(|v| QslVia::from_code(&v)),
         date_unix: f.remove("QSLSDATE").filter(|s| s.len() >= 8).map(|s| {
             let (sy, smo, sd) = (
@@ -7965,6 +8002,77 @@ mod tests {
         assert!(!r.confirmed && !r.award_confirmed && !r.qsl_rcvd.any());
         // Out-of-range is a no-op false.
         assert!(!lb.mark_qsl_sent(9, Some(QslVia::Bureau), 1_700_000_000));
+    }
+
+    /// A card still to go out — ADIF `QSL_SENT` `Q` (queued) or `R` (requested) — survives an
+    /// import and is written back as it came; `N` is still the absence of a mark.
+    #[test]
+    fn a_queued_or_requested_card_survives_the_round_trip() {
+        for value in ["Q", "R", "q"] {
+            let adif = format!(
+                "<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<QSO_DATE:8>20240101<QSL_SENT:1>{value}<EOR>\n"
+            );
+            let back = &parse_adif(&adif)[0];
+            assert!(!back.qsl_sent.sent, "{value} is not a sent mark");
+            assert!(qsl_card_queued(back), "{value} is a card to send");
+            let out = adif_record(back);
+            assert!(
+                out.contains(&format!("<QSL_SENT:1>{value}")),
+                "{value}: {out}"
+            );
+            assert_eq!(out.matches("QSL_SENT:").count(), 1, "{out}");
+        }
+        let no = &parse_adif("<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<QSL_SENT:1>N<EOR>\n")[0];
+        assert!(!qsl_card_queued(no) && !no.qsl_sent.sent);
+        assert!(!adif_record(no).contains("QSL_SENT"));
+    }
+
+    /// Marking a queued card sent ends the queue, and changes nothing else about the contact.
+    #[test]
+    fn sending_a_queued_card_ends_the_queue_and_nothing_else() {
+        let mut queued = rec("W1AW", "20m", 1_700_000_000);
+        queued.rst_sent = Some("599".into());
+        queued.extra = vec![
+            ("CNTY".into(), "MA,MIDDLESEX".into()),
+            (QSL_QUEUE_FIELD.into(), "Q".into()),
+            ("QSL_VIA".into(), "W1XYZ".into()),
+        ];
+        let mut lb = Logbook::new();
+        lb.add(queued);
+        let before = lb.records()[0].as_ref().clone();
+        assert!(qsl_card_queued(&before));
+
+        assert!(lb.mark_qsl_sent(0, Some(QslVia::Bureau), 1_700_086_400));
+        let after = lb.records()[0].as_ref().clone();
+        assert!(after.qsl_sent.sent && !qsl_card_queued(&after));
+        let mut expect = before.clone();
+        expect.qsl_sent = after.qsl_sent;
+        expect.extra.retain(|(k, _)| k != QSL_QUEUE_FIELD);
+        assert_eq!(after, expect, "only the QSL-sent mark moved");
+        let out = adif_record(&after);
+        assert!(
+            out.contains("<QSL_SENT:1>Y") && out.matches("QSL_SENT:").count() == 1,
+            "{out}"
+        );
+
+        // A withdrawal leaves a queue alone.
+        let mut lb = Logbook::new();
+        lb.add(before.clone());
+        assert!(lb.mark_qsl_sent(0, None, 1_700_086_400));
+        assert!(qsl_card_queued(&lb.records()[0]));
+    }
+
+    /// A contact holding a sent mark AND a stale queue value (a merge of two copies) is sent: it is
+    /// not listed to send, and its ADIF carries one `QSL_SENT`, the `Y`.
+    #[test]
+    fn a_sent_mark_outranks_a_stale_queue_value() {
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.qsl_sent.sent = true;
+        r.extra = vec![(QSL_QUEUE_FIELD.into(), "Q".into())];
+        assert!(!qsl_card_queued(&r));
+        let out = adif_record(&r);
+        assert_eq!(out.matches("QSL_SENT:").count(), 1, "{out}");
+        assert!(out.contains("<QSL_SENT:1>Y"), "{out}");
     }
 
     /// #163 — `FREQ_RX` round-trips through ADIF, and is ABSENT when there is nothing to say.
