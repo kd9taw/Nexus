@@ -78,7 +78,9 @@ pub fn build_contact_json(
     if let Some(v) = r.rst_rcvd.as_deref().filter(|s| !s.is_empty()) {
         put("rstRcvd", v.to_string().into());
     }
-    if let Some(v) = r.grid.as_deref().filter(|s| !s.is_empty()) {
+    // Never a grid a callbook filled: it is for the operator's own distance and map
+    // ([`crate::logbook::counted_grid`]).
+    if let Some(v) = crate::logbook::counted_grid(r).filter(|s| !s.is_empty()) {
         put("gridsquare", v.to_string().into());
     }
     if let Some(v) = r.state.as_deref().filter(|s| !s.is_empty()) {
@@ -299,6 +301,21 @@ mod tests {
         for gone in ["rstSent", "rstRcvd", "gridsquare", "logbookId"] {
             assert!(!o.contains_key(gone), "{gone} was emitted");
         }
+    }
+
+    /// A grid a callbook filled is never sent (`counted_grid`); the same grid with no mark is.
+    #[test]
+    fn a_grid_a_callbook_filled_is_never_sent() {
+        let mut r = rec();
+        r.grid = Some("FN31".into());
+        let sent = |r: &QsoRecord| build_contact_json(r, "KD9TAW", None).contains("\"gridsquare\"");
+        assert!(sent(&r), "the control");
+        crate::logbook::set_extra(
+            &mut r,
+            crate::logbook::callbook::CALLBOOK_FILLED_FIELD,
+            Some("GRIDSQUARE".into()),
+        );
+        assert!(!sent(&r));
     }
 
     /// The stable error codes → the funnel's outcomes. AuthFail re-prompts for the

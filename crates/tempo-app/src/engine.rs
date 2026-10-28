@@ -121,6 +121,10 @@ mod ft_nonstandard_tests;
 /// FT8/FT4 never key an over the encoder refuses, on every path that queues an operator's text.
 #[cfg(test)]
 mod ft_refused_text_tests;
+/// A contact logged with no grid: the grid the station sent on the air, else a callbook's, which
+/// counts toward nothing and is sent nowhere.
+#[cfg(test)]
+mod grid_fill_tests;
 /// Every contact held in one form: one band, one phone mode, whichever way it came in.
 #[cfg(test)]
 mod held_form_tests;
@@ -3084,7 +3088,10 @@ pub fn n1mm_contact_for(
         mode: rec.mode.to_uppercase(),
         timestamp: tempo_net::n1mm::utc_timestamp(rec.when_unix),
         section: String::new(),
-        gridsquare: rec.grid.clone().unwrap_or_default(),
+        // Never a grid a callbook filled (`tempo_core::logbook::counted_grid`).
+        gridsquare: tempo_core::logbook::counted_grid(rec)
+            .unwrap_or_default()
+            .to_string(),
         points: 0,
         contestname: tempo_net::n1mm::GENERAL_LOG.to_string(),
         freq_10hz: (rec.freq_mhz * 1e5) as u64,
@@ -32051,8 +32058,25 @@ contact yourself."
             .and_then(|h| h.grid.clone())
             .filter(|g| !g.trim().is_empty())
             .or_else(|| {
-                // Third and last: a grid we LOGGED for this station before. The session roster
-                // only remembers stations heard since launch, so a station worked on a previous
+                // Then the grid it SENT ON THE AIR earlier this session, on any band and in any
+                // mode: the roster forgets a station at a band or mode change, the station's own
+                // word does not change with it (operator decision, 2026-10-27). It counts as any
+                // logged grid, being the station's own.
+                self.app
+                    .inbox
+                    .roster
+                    .sent_grid(dxcall)
+                    .filter(|g| !g.trim().is_empty())
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                // Last: a grid we LOGGED for this station before — never one a callbook filled,
+                // which counts toward nothing (`tempo_core::logbook::counted_grid`). A station
+                // with none logs blank here, and the callbook's answer, if a lookup gave one this
+                // session, fills it for the distance and the map only (`log_qso_inner`).
+                //
+                // The session roster only remembers stations heard since launch, so a station
+                // worked on a previous
                 // day whose CQ we haven't decoded this session still logged with a blank grid —
                 // and a blank grid means `worked_grids` never learns it, so NewGrid keeps firing
                 // for a grid already worked. Same shape as the NewState defect, and fixed the

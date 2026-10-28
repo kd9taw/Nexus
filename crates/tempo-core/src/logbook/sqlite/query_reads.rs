@@ -12,8 +12,8 @@
 //! caller took through `LogReader` / the app's `StoreReads`, which do both.
 
 use super::{
-    contest_is_empty, record_from_row, with_submode, Error, LogDb, Result, Rows, QSO_COLUMNS,
-    SUBMODE_JOIN, SUBMODE_VALUE,
+    contest_is_empty, extra_columns, extras_width, record_from_row, with_extras, with_submode,
+    Error, LogDb, Result, Rows, QSO_COLUMNS, SUBMODE_JOIN, SUBMODE_VALUE,
 };
 use crate::logbook::{QsoRecord, RecordId};
 use rusqlite::params_from_iter;
@@ -88,7 +88,20 @@ impl LogDb {
         after: u32,
         each: &mut dyn FnMut(u32, &QsoRecord),
     ) -> Result<()> {
-        self.narrow_after(columns, after, false, each)
+        self.narrow_after(columns, &[], after, false, each)
+    }
+
+    /// [`Self::each_narrow_after`], each row with the passthrough fields `extras` names as well, as
+    /// [`LogDb::each_narrow_with`] reads them: the callbook's mark the hot index reads beside the
+    /// grid (`hot::STORE_EXTRAS`).
+    pub fn each_narrow_after_with(
+        &self,
+        columns: &[&str],
+        extras: &[&str],
+        after: u32,
+        each: &mut dyn FnMut(u32, &QsoRecord),
+    ) -> Result<()> {
+        self.narrow_after(columns, extras, after, false, each)
     }
 
     /// [`Self::each_narrow_after`], each row with its SUBMODE as well: what the Logbook's search
@@ -99,19 +112,23 @@ impl LogDb {
         after: u32,
         each: &mut dyn FnMut(u32, &QsoRecord),
     ) -> Result<()> {
-        self.narrow_after(columns, after, true, each)
+        self.narrow_after(columns, &[], after, true, each)
     }
 
     /// The statement [`Self::each_narrow_after`] runs, with the SUBMODE joined beside the columns
     /// when `submode`. Its own function so a test can ask SQLite how it plans exactly this one.
-    fn narrow_after_sql(&self, columns: &[&str], submode: bool) -> Result<String> {
+    /// The passthrough fields `extras` names are joined after the SUBMODE, as
+    /// [`LogDb::each_narrow_with`] joins them.
+    fn narrow_after_sql(&self, columns: &[&str], extras: &[&str], submode: bool) -> Result<String> {
         let (value, join) = if submode {
             (SUBMODE_VALUE, SUBMODE_JOIN)
         } else {
             ("", "")
         };
+        let (extra_values, extra_joins) = extra_columns(extras)?;
         Ok(format!(
-            "SELECT {}{value}, q.rowid FROM qso q{join} WHERE q.rowid > ?1 ORDER BY q.rowid",
+            "SELECT {}{value}{extra_values}, q.rowid FROM qso q{join}{extra_joins} \
+             WHERE q.rowid > ?1 ORDER BY q.rowid",
             self.narrow_projection(columns)?
         ))
     }
@@ -119,15 +136,17 @@ impl LogDb {
     fn narrow_after(
         &self,
         columns: &[&str],
+        extras: &[&str],
         after: u32,
         submode: bool,
         each: &mut dyn FnMut(u32, &QsoRecord),
     ) -> Result<()> {
         let mut stmt = self
             .conn
-            .prepare(&self.narrow_after_sql(columns, submode)?)?;
+            .prepare(&self.narrow_after_sql(columns, extras, submode)?)?;
         let mut rows = stmt.query([i64::from(after)])?;
-        let rowid_at = QSO_COLUMNS.len() + usize::from(submode);
+        let extras_at = QSO_COLUMNS.len() + usize::from(submode);
+        let rowid_at = extras_at + extras_width(extras);
         while let Some(row) = rows.next()? {
             let rowid = rowid_u32(row.get(rowid_at)?)?;
             let mut rec = record_from_row(row)?;
@@ -137,6 +156,7 @@ impl LogDb {
             if submode {
                 with_submode(&mut rec, row.get(QSO_COLUMNS.len())?);
             }
+            with_extras(&mut rec, row, extras_at, extras)?;
             crate::logbook::canonical::contact(&mut rec);
             each(rowid, &rec);
         }
@@ -509,7 +529,7 @@ mod tests {
         })
         .unwrap();
         // The search's read looks the SUBMODE up by `qso_extra`'s key, one lookup per row.
-        let sql = db.narrow_after_sql(ORDER_COLUMNS, true).unwrap();
+        let sql = db.narrow_after_sql(ORDER_COLUMNS, &[], true).unwrap();
         let mut stmt = db
             .conn
             .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))

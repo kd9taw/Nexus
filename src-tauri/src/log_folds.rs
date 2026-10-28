@@ -117,6 +117,14 @@ const AWARDS_EXTRAS: &[&str] = &[
     "WWFF_REF",
     "QSL_VIA",
     "STATE",
+    tempo_core::logbook::callbook::CALLBOOK_FILLED_FIELD,
+];
+
+/// The passthrough fields [`journey_qso`] reads beside [`JOURNEY`]: the state a merged contest
+/// contact's exchange carries, and the callbook's mark (`counted_grid`).
+const JOURNEY_EXTRAS: &[&str] = &[
+    "STATE",
+    tempo_core::logbook::callbook::CALLBOOK_FILLED_FIELD,
 ];
 
 /// [`journey_qso`]'s inputs.
@@ -271,7 +279,8 @@ fn needs_add(needs: &mut propagation::LogNeeds, q: &QsoRecord) {
         &q.call,
         &q.band,
         &q.mode,
-        q.grid.as_deref(),
+        // Never a grid a callbook filled: it fills no GRID need (`counted_grid`).
+        tempo_core::logbook::counted_grid(q),
         // The state its upload carries: a merged contest contact's exchange, unless the
         // operator has edited it (`record_field`).
         tempo_core::logbook::record_field(q, "STATE"),
@@ -488,7 +497,8 @@ fn award_add(awards: &mut propagation::Awards, q: &QsoRecord) {
         q.qsl_rcvd.card,
         // The state its upload carries (`record_field`), as the WAS needs and custom awards read.
         tempo_core::logbook::record_field(q, "STATE"),
-        q.grid.as_deref(),
+        // Never a grid a callbook filled: it counts toward no grid award (`counted_grid`).
+        tempo_core::logbook::counted_grid(q),
         q.ota.iota.as_deref(),
         qso_is_sat(q.prop_mode.as_deref()),
         award_fields(q),
@@ -574,7 +584,9 @@ pub(crate) fn custom_add(fold: &mut propagation::custom::CustomAwards, q: &QsoRe
         call: &q.call,
         band: &q.band,
         mode: &q.mode,
-        grid: tempo_core::logbook::record_field(q, "GRIDSQUARE"),
+        // Never a grid a callbook filled (`counted_grid`).
+        grid: tempo_core::logbook::record_field(q, "GRIDSQUARE")
+            .filter(|_| !tempo_core::logbook::callbook::is_callbook_filled(q, "GRIDSQUARE")),
         refs: &refs,
         field: &field,
         lotw_card: q.award_confirmed,
@@ -646,7 +658,7 @@ pub(crate) fn journey_kept(
     tempo_core::logbook::io_fence::whole_log_off_engine_lock("the Journey fold");
     let mut qsos: Vec<propagation::JourneyQso> = Vec::new();
     let fresh = rows
-        .each_with(JOURNEY, &["STATE"], Scope::All, Order::Log, &mut |r| {
+        .each_with(JOURNEY, JOURNEY_EXTRAS, Scope::All, Order::Log, &mut |r| {
             qsos.push(journey_qso(r));
             ControlFlow::Continue(())
         })
@@ -711,7 +723,8 @@ pub(crate) fn journey_qso(r: &QsoRecord) -> propagation::JourneyQso {
     };
     propagation::JourneyQso {
         call: r.call.clone(),
-        grid: r.grid.clone(),
+        // Never a grid a callbook filled (`counted_grid`).
+        grid: tempo_core::logbook::counted_grid(r).map(str::to_string),
         // The state its upload carries: a merged contest contact's exchange (`record_field`).
         state: tempo_core::logbook::record_field(r, "STATE").map(str::to_string),
         band: Band::from_label(&r.band),
@@ -2201,6 +2214,60 @@ mod tests {
             assert!(!new_mode("JTTY"), "{spelling}: JTTY is worked");
             assert!(new_mode("JS8"), "{spelling}: JS8 is not");
         }
+    }
+
+    /// ★ A grid a callbook filled (the contact's grid marked as the callbook's) counts toward no
+    /// grid award and fills no GRID need, read from the store as the awards and the needed board
+    /// read it (the narrow reads carry the mark); the same grid sent on the air, unmarked, counts
+    /// toward both (operator decision, 2026-10-27).
+    #[test]
+    fn a_grid_a_callbook_filled_counts_toward_no_award_and_no_need() {
+        let d = Dir::new("callbook-grid");
+        let row = |call: &str, grid: &str, fields: &str| {
+            format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20261027<TIME_ON:6>123400<BAND:2>2m<MODE:3>FT8\
+                 <GRIDSQUARE:{}>{grid}<LOTW_QSL_RCVD:1>Y{fields}<EOR>\n",
+                call.len(),
+                grid.len()
+            )
+        };
+        std::fs::write(
+            d.log(),
+            format!(
+                "{}{}{}",
+                tempo_core::logbook::adif_header(),
+                row("W1AW", "FN31", "<APP_NEXUS_CALLBOOK_FILLED:10>GRIDSQUARE"),
+                row("K2ABC", "EM12", ""),
+            ),
+        )
+        .unwrap();
+        let e = launch(&d);
+        let tallies = LogTallies::default();
+        let held = records(&e);
+        assert_eq!(held.len(), 2, "premise: both contacts converted");
+        assert!(
+            tempo_core::logbook::callbook::is_callbook_filled(&held[0], "GRIDSQUARE"),
+            "premise: W1AW's grid is the callbook's"
+        );
+        let awards = awards_kept(&e, &tallies).unwrap();
+        assert_eq!(
+            *awards,
+            awards_for_records(&held, MY_CALL),
+            "the store's narrow read carries the mark the whole record does"
+        );
+        assert_eq!(
+            (awards.vucc.worked, awards.vucc.confirmed),
+            (1, 1),
+            "EM12 only: {:?}",
+            awards.vucc
+        );
+        let needs = needs_kept(&e, &tallies).unwrap();
+        let worked: Vec<_> = needs.worked_grids().iter().cloned().collect();
+        assert_eq!(
+            worked,
+            [("EM12".to_string(), propagation::model::Band::B2)],
+            "FN31 stays a GRID need on 2 m"
+        );
     }
 
     /// ★ The Needed board judges what the log holds by the entity, zone and state the awards

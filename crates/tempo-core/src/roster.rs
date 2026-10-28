@@ -51,7 +51,17 @@ pub struct HeardStation {
 #[derive(Debug, Default)]
 pub struct Roster {
     stations: HashMap<String, HeardStation>,
+    /// The grid each station last SENT ON THE AIR this session (its CQ, its call to anyone, its
+    /// beacon), keyed by callsign as decoded. Unlike `stations` it survives [`Self::clear`]: a
+    /// band or mode change moves the operator, not the station, so a station heard calling CQ
+    /// on 20 m and worked with a bare report on 17 m still logs the grid it sent
+    /// ([`Self::sent_grid`]). Bounded by [`SENT_GRIDS_CAP`].
+    sent_grids: HashMap<String, String>,
 }
+
+/// The most stations [`Roster::sent_grid`] remembers in one session: far more than a day on the
+/// bands hears; past it a station not yet remembered is not added (one already is still updated).
+pub const SENT_GRIDS_CAP: usize = 50_000;
 
 impl Roster {
     pub fn new() -> Self {
@@ -59,9 +69,17 @@ impl Roster {
     }
 
     /// Forget every heard station — a band QSY makes the old band's roster
-    /// stale (those stations aren't on the new frequency).
+    /// stale (those stations aren't on the new frequency). The grids they sent stay
+    /// ([`Self::sent_grid`]).
     pub fn clear(&mut self) {
         self.stations.clear();
+    }
+
+    /// The grid `call` last sent on the air this session, if it sent one: what a contact logged
+    /// with no grid in the exchange takes, and counts as any logged grid (it is the station's
+    /// own word, as the exchange's would be).
+    pub fn sent_grid(&self, call: &str) -> Option<&str> {
+        self.sent_grids.get(call).map(String::as_str)
     }
 
     /// Update the roster from a decode heard at `slot`.
@@ -133,6 +151,11 @@ impl Roster {
         entry.cq_dir = cq_dir; // same rule, including back to None
         entry.mode = d.mode; // last-heard protocol wins (FT8→FT1 re-tags as Tempo)
         entry.freq_hz = Some(d.freq.round() as i32); // last heard HERE on the waterfall
+        if let Some(g) = &grid {
+            if self.sent_grids.len() < SENT_GRIDS_CAP || self.sent_grids.contains_key(&entry.call) {
+                self.sent_grids.insert(entry.call.clone(), g.clone());
+            }
+        }
         if grid.is_some() {
             entry.grid = grid;
         }
@@ -300,5 +323,20 @@ mod tests {
         assert_eq!(r.by_recent()[0].call, "W9XYZ");
         assert!(r.is_active("K2DEF", 4, 10));
         assert!(!r.is_active("K2DEF", 100, 10));
+    }
+
+    /// The grid a station sent survives the roster's clear (a band or mode change), and the last
+    /// one it sent wins; a frame with no grid takes none away.
+    #[test]
+    fn the_grid_a_station_sent_survives_a_clear() {
+        let mut r = Roster::new();
+        r.observe(&dec("CQ K2DEF FN31", -12), 1);
+        r.observe(&dec("W9XYZ K2DEF -07", -12), 2);
+        r.clear();
+        assert!(r.get("K2DEF").is_none(), "premise: cleared");
+        assert_eq!(r.sent_grid("K2DEF"), Some("FN31"));
+        r.observe(&dec("W9XYZ K2DEF FN32", -12), 3);
+        assert_eq!(r.sent_grid("K2DEF"), Some("FN32"), "its call to anyone");
+        assert_eq!(r.sent_grid("W9XYZ"), None);
     }
 }

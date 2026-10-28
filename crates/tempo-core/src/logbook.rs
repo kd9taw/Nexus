@@ -267,7 +267,16 @@ pub const EQSL_AG_FIELD: &str = "APP_EQSL_AG";
 /// And `STATE`, which no passthrough holds: asked for here, the narrow read brings a merged
 /// contest contact's exchange `STATE` with it, the state its upload carries and WAS counts
 /// ([`record_field`]).
-pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD, EQSL_AG_FIELD, "STATE"];
+///
+/// And the callbook's mark ([`callbook::CALLBOOK_FILLED_FIELD`]): a grid a callbook filled is
+/// for distance and the map, and counts toward nothing ([`counted_grid`]).
+pub const AWARD_EXTRAS: &[&str] = &[
+    "CQZ",
+    LOTW_DXCC_FIELD,
+    EQSL_AG_FIELD,
+    "STATE",
+    callbook::CALLBOOK_FILLED_FIELD,
+];
 
 /// A passthrough field's value, by its (uppercased) ADIF name.
 fn extra_value<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
@@ -293,6 +302,22 @@ pub fn record_lotw_dxcc(r: &QsoRecord) -> Option<u32> {
 /// qualifies the record's eQSL confirmation and means nothing without one.
 pub fn record_eqsl_ag(r: &QsoRecord) -> bool {
     extra_value(r, EQSL_AG_FIELD).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
+}
+
+/// ★ The worked station's grid as the awards, the needs and every service count it: the grid the
+/// contact carries in its own field, as it is, **unless a callbook filled it**
+/// ([`callbook::CALLBOOK_FILLED_FIELD`] names `GRIDSQUARE`). A callbook says where the station's
+/// licence is, its home QTH, not where the contact was made: it is kept on the contact for the
+/// distance and the map, and never counts toward a grid award (VUCC, the grid counts), never fills
+/// a GRID need and is never sent to a logging service (operator decision, 2026-10-27). A grid the
+/// station sent on the air, LoTW's, or one the operator typed or edited is counted as always; an
+/// edit takes the callbook's mark off ([`callbook::unmark_edited`]), and so does LoTW's own grid
+/// (`reconcile::keep_lotw_detail`).
+pub fn counted_grid(r: &QsoRecord) -> Option<&str> {
+    if callbook::is_callbook_filled(r, "GRIDSQUARE") {
+        return None;
+    }
+    r.grid.as_deref()
 }
 
 /// ⭐ **A field's value by its (uppercased) ADIF name, wherever the record keeps it** — the value
@@ -3456,7 +3481,14 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     out.push_str(&field("CALL", &r.call));
     // `Some("")` is the same malformed shape as an empty MODE below — an import that
     // carried the tag with nothing in it. Filter rather than emit `<GRIDSQUARE:0>`.
-    if let Some(g) = r.grid.as_ref().filter(|g| !g.trim().is_empty()) {
+    // A grid a callbook filled stays in the operator's own log and goes to no service
+    // ([`counted_grid`]).
+    let withheld = audience == Audience::Outbound && callbook::is_callbook_filled(r, "GRIDSQUARE");
+    if let Some(g) = r
+        .grid
+        .as_ref()
+        .filter(|g| !g.trim().is_empty() && !withheld)
+    {
         out.push_str(&field("GRIDSQUARE", g));
     }
     if let Some(c) = &r.country {
@@ -5790,6 +5822,39 @@ mod tests {
             "identical-timestamp duplicate must dedup to one"
         );
         assert_eq!(skipped2, 1);
+    }
+
+    /// A grid a callbook filled stays in the operator's own log and is sent to no service, and
+    /// counts toward nothing ([`counted_grid`]); the same grid with no mark is sent and counted.
+    /// An edit of it makes it the operator's: sent and counted.
+    #[test]
+    fn a_grid_a_callbook_filled_is_kept_counted_by_nothing_and_never_sent() {
+        let mut plain = rec("W1AW", "20m", 100);
+        plain.grid = Some("FN31pr".into());
+        let mut filled = plain.clone();
+        filled.grid = None;
+        callbook::fill_from_callbook(
+            &mut filled,
+            &callbook::CallbookAnswer {
+                call: "W1AW".into(),
+                grid: Some("FN31pr".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(filled.grid.as_deref(), Some("FN31pr"), "premise: filled");
+        assert_eq!(counted_grid(&filled), None);
+        assert!(!adif_record(&filled).contains("<GRIDSQUARE:"), "never sent");
+        assert!(
+            adif_record_own_log(&filled).contains("<GRIDSQUARE:6>FN31pr"),
+            "kept"
+        );
+        assert_eq!(counted_grid(&plain), Some("FN31pr"));
+        assert!(adif_record(&plain).contains("<GRIDSQUARE:6>FN31pr"));
+        let mut edited = filled.clone();
+        edited.grid = Some("FN32".into());
+        callbook::unmark_edited(&filled, &mut edited);
+        assert_eq!(counted_grid(&edited), Some("FN32"), "the operator's now");
+        assert!(adif_record(&edited).contains("<GRIDSQUARE:4>FN32"));
     }
 
     fn rec(call: &str, band: &str, when: u64) -> QsoRecord {

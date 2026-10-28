@@ -1087,18 +1087,28 @@ impl LogQueries {
                     ],
                     uploads: false,
                 };
-                rows.each_with(VUCC, &[], Scope::All, Order::Log, &mut |r| {
-                    let band = r.band.trim().to_ascii_lowercase();
-                    if !crate::qso_is_sat(r.prop_mode.as_deref()) && vucc_bands.contains(&band) {
-                        if let Some(sq) = r.grid.as_deref().and_then(vucc_square) {
-                            if r.award_confirmed {
-                                confirmed.insert((band.clone(), sq.clone()));
+                rows.each_with(
+                    VUCC,
+                    &[tempo_core::logbook::callbook::CALLBOOK_FILLED_FIELD],
+                    Scope::All,
+                    Order::Log,
+                    &mut |r| {
+                        let band = r.band.trim().to_ascii_lowercase();
+                        if !crate::qso_is_sat(r.prop_mode.as_deref()) && vucc_bands.contains(&band)
+                        {
+                            // Never a grid a callbook filled (`counted_grid`).
+                            if let Some(sq) =
+                                tempo_core::logbook::counted_grid(r).and_then(vucc_square)
+                            {
+                                if r.award_confirmed {
+                                    confirmed.insert((band.clone(), sq.clone()));
+                                }
+                                worked.insert((band, sq));
                             }
-                            worked.insert((band, sq));
                         }
-                    }
-                    ControlFlow::Continue(())
-                })
+                        ControlFlow::Continue(())
+                    },
+                )
                 .map_err(unreadable)?;
                 for (band, sq) in worked.difference(&confirmed) {
                     open.entry(band.clone()).or_default().insert(sq.clone());
@@ -1235,8 +1245,7 @@ fn needed(
                 _ => n.vucc_bands.contains(&label),
             };
             !sat && on_band
-                && r.grid
-                    .as_deref()
+                && tempo_core::logbook::counted_grid(r)
                     .and_then(vucc_square)
                     .is_some_and(|sq| on(&label).is_some_and(|open| open.contains(&sq)))
         }
