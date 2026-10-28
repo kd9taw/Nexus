@@ -1,7 +1,7 @@
 //! The Logbook's clean-up tools as the app makes them: the duplicate finder and its merge, the bulk
-//! edit, and the check with its fixes. The rules are the store's ([`tempo_core::logbook::cleanup`]);
-//! this module reads the rows, decides with those rules, and makes each change through the log's
-//! one write path.
+//! edit, the check with its fixes, and the blank grids ([`grids`]). The rules are the store's
+//! ([`tempo_core::logbook::cleanup`]); this module reads the rows, decides with those rules, and
+//! makes each change through the log's one write path.
 //!
 //! # Every change is the log's own
 //!
@@ -50,6 +50,8 @@
 //!   ([`station::push_target`]).
 //! - **a fix** changes a grid, a band, a DXCC number, a reference or an end time, never a call:
 //!   every stamp stays.
+//! - **a blank grid filled** ([`fill_grids`]) changes a grid the contact did not have, never a
+//!   call: every stamp stays.
 //! - **an update from the callbook** ([`callbook_fill`]) fills empty fields only, by the log's own
 //!   callbook rule, never a call, a stamp or a confirmation: every stamp stays. Where the station
 //!   is ([`LOCATION_FIELDS`]) goes only on contacts from the last 12 months.
@@ -1246,6 +1248,13 @@ pub fn apply_fixes(engine: &Mutex<Engine>, fixes: &[Fix]) -> (Result<ToolRun, St
         (pairs, refused)
     })
 }
+
+// ── blank grids ────────────────────────────────────────────────────────────────────────────────
+
+mod grids;
+pub use grids::{
+    fill_grids, grid_offers, heard_at, heard_grids_in, GridFrom, GridOffer, GridPick, HeardGrids,
+};
 
 #[cfg(test)]
 mod tests;

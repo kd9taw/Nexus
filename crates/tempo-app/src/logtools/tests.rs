@@ -2374,3 +2374,197 @@ fn the_single_contact_fill_has_no_age_gate() {
         ]
     );
 }
+
+// ── blank grids ─────────────────────────────────────────────────────────────────────────────────
+
+/// ★ The blank-grid offer: each contact with no grid for which a grid is known — the one the
+/// station sent on the air first (the grid heard nearest the contact's time), else the callbook's
+/// for a call with no stroke and no park from the last 12 months — and nothing for a contact with a
+/// grid, a stroked call, a park's contact or an old one with only a callbook answer. Only the
+/// ticked are filled, as one run its undo takes back: the heard grid as the contact's own, the
+/// callbook's with the callbook's mark (counted toward nothing, sent nowhere). An uploaded contact
+/// keeps its stamps, and nothing is queued to a service. A contact given a grid since is left out.
+#[test]
+fn blank_grids_are_offered_and_only_the_ticked_are_filled() {
+    let d = Dir::new("tools-grids");
+    let engine = shared(
+        &d,
+        &[
+            adif("W1AW", "120000", ""),
+            adif("K1ABC", "120100", ""),
+            adif("K1ABC/P", "120200", ""),
+            adif("N0XYZ", "120300", "<SIG:4>POTA<SIG_INFO:7>US-0001"),
+            adif("VE3AA", "120400", "<GRIDSQUARE:4>FN03"),
+            adif("G4AAA", "120500", ""),
+            adif("JA1AA", "120600", ""),
+        ],
+    );
+    let now = 1_767_270_000; // 1 January 2026, after the contacts.
+                             // The decode log heard W1AW send FN31 (and nothing else asked of it); this session, JA1AA PM95.
+    let mut heard = |calls: &HashSet<String>| {
+        assert!(
+            calls.contains("W1AW") && !calls.contains("VE3AA"),
+            "the blank ones asked"
+        );
+        HashMap::from([("W1AW".to_string(), vec![(0, "FN31".to_string())])])
+    };
+    let session = |call: &str| (call == "JA1AA").then(|| "PM95".to_string());
+    let answer = |call: &str, grid: &str| CallbookAnswer {
+        call: call.into(),
+        grid: Some(grid.into()),
+        ..CallbookAnswer::default()
+    };
+    let asked = RefCell::new(Vec::new());
+    let mut kept = |key: &str| {
+        asked.borrow_mut().push(key.to_string());
+        match key {
+            "W1AW" => Some(answer("W1AW", "AA00")),
+            "K1ABC" => Some(answer("K1ABC", "FN42ab")),
+            // A callbook record of the stroked call itself: still no grid for it.
+            "K1ABC/P" => Some(answer("K1ABC/P", "FN42ab")),
+            "N0XYZ" => Some(answer("N0XYZ", "EN34")),
+            "G4AAA" => Some(answer("G4AAA", "IO91")),
+            _ => None,
+        }
+    };
+    let (blank, offers) = grid_offers(&engine, &mut heard, &session, &mut kept, now).unwrap();
+    assert_eq!(blank, 6, "every contact with no grid");
+    let seen: Vec<(&str, &str, GridFrom)> = offers
+        .iter()
+        .map(|o| (o.call.as_str(), o.grid.as_str(), o.source))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("W1AW", "FN31", GridFrom::Heard),
+            ("K1ABC", "FN42ab", GridFrom::Callbook),
+            ("G4AAA", "IO91", GridFrom::Callbook),
+            ("JA1AA", "PM95", GridFrom::Heard),
+        ],
+        "heard first; the callbook only with no stroke and no park"
+    );
+    assert!(
+        !asked.borrow().contains(&"W1AW".to_string()),
+        "heard: no callbook asked"
+    );
+    // A year on, the callbook says where a station is now, not then: only the heard grid.
+    let (_, later) =
+        grid_offers(&engine, &mut heard, &session, &mut kept, now + 400 * 86_400).unwrap();
+    assert_eq!(later.len(), 2);
+
+    let w1aw = by_call(&engine, "W1AW")[0].clone();
+    stamp(&engine, &w1aw, UploadService::Qrz, 1_767_270_100);
+    let (_, offers) = grid_offers(&engine, &mut heard, &session, &mut kept, now).unwrap();
+    assert!(
+        offers[0].uploaded && !offers[1].uploaded,
+        "the uploaded one says so"
+    );
+    let w1aw = by_call(&engine, "W1AW")[0].clone();
+    // JA1AA is given a grid by the operator before the fill: left out.
+    let ja = by_call(&engine, "JA1AA")[0].clone();
+    let mut edit = QsoEdit::project(&ja);
+    edit.grid = Some("PM96".into());
+    let (m, dd) = logwrite::edit_row(&engine, ja.id.unwrap(), &QsoEdit::project(&ja).key(), &edit);
+    m.unwrap().unwrap();
+    dd.wait(DURABLE_WAIT).unwrap();
+    let pick = |o: &GridOffer| GridPick {
+        id: o.id,
+        grid: o.grid.clone(),
+        source: o.source,
+    };
+    let before = rows(&engine);
+    let ticked: Vec<GridPick> = offers.iter().map(pick).collect();
+    let (made, dur) = fill_grids(&engine, &ticked);
+    let made = made.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert_eq!(made.changed, 3);
+    assert_eq!(made.refused, vec![(ja.id.unwrap(), "changed")]);
+    let after_w1 = by_call(&engine, "W1AW")[0].clone();
+    assert_eq!(after_w1.grid.as_deref(), Some("FN31"));
+    assert_eq!(
+        tempo_core::logbook::counted_grid(&after_w1),
+        Some("FN31"),
+        "heard: counted"
+    );
+    assert_eq!(after_w1.upload, w1aw.upload, "its upload stamps stay");
+    let k1 = by_call(&engine, "K1ABC")[0].clone();
+    assert_eq!(k1.grid.as_deref(), Some("FN42ab"));
+    assert!(
+        callbook::is_callbook_filled(&k1, "GRIDSQUARE"),
+        "the callbook's mark"
+    );
+    assert_eq!(
+        tempo_core::logbook::counted_grid(&k1),
+        None,
+        "counted toward nothing"
+    );
+    assert!(
+        !tempo_core::logbook::adif_record(&k1).contains("<GRIDSQUARE:"),
+        "sent nowhere"
+    );
+    assert_eq!(
+        by_call(&engine, "JA1AA")[0].grid.as_deref(),
+        Some("PM96"),
+        "the edit stands"
+    );
+    assert!(
+        engine_lock(&engine).take_pending_uploads().is_empty(),
+        "nothing queued to a service"
+    );
+    // One run: its undo puts every contact back.
+    let (undone, dur) = undo_run(&engine, made.run.as_deref().unwrap());
+    undone.unwrap();
+    dur.wait(DURABLE_WAIT).unwrap();
+    settle(&engine);
+    assert_eq!(rows(&engine), before, "the undo takes the whole fill back");
+    // A grid that is no locator is refused whole.
+    let bad = vec![GridPick {
+        id: w1aw.id.unwrap(),
+        grid: "NOPE".into(),
+        source: GridFrom::Heard,
+    }];
+    assert!(fill_grids(&engine, &bad).0.is_err());
+    assert_eq!(rows(&engine), before);
+}
+
+/// ALL.TXT's lines as WSJT-X writes them: each CQ, or call to anyone, that carries the sender's
+/// grid, as (when, grid), a run of one grid kept once; transmissions, reports, free text and
+/// other lines passed over. The grid in effect at a time is the last sent at or before it.
+#[test]
+fn the_grids_heard_are_read_from_all_txt() {
+    let text = "\
+260101_120000    14.074 Rx FT8    -10  0.2 1500 CQ W1AW FN31
+260101_120015    14.074 Rx FT8    -10  0.2 1500 CQ W1AW FN31
+260101_120030    14.074 Tx FT8      0  0.0 1500 CQ K1ABC FN42
+260101_120045    14.074 Rx FT8    -12  0.1  900 KD9TAW W1AW -07
+260101_120100    14.074 Rx FT8    -12  0.1  900 K2DEF W1AW FN32
+260101_120115    14.074 Rx FT8    -12  0.1  900 TNX FER QSO
+garbage line
+260102_120000     7.074 Rx FT4    -10  0.2 1500 CQ DX G4AAA IO91
+";
+    let wanted: HashSet<String> = ["W1AW", "G4AAA", "K1ABC"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let got = heard_grids_in(text.as_bytes(), &wanted);
+    let w1 = &got["W1AW"];
+    assert_eq!(
+        w1,
+        &vec![
+            (1_767_268_800, "FN31".to_string()),
+            (1_767_268_860, "FN32".to_string())
+        ]
+    );
+    assert_eq!(got["G4AAA"], vec![(1_767_355_200, "IO91".to_string())]);
+    assert!(
+        !got.contains_key("K1ABC"),
+        "our own transmission is not heard"
+    );
+    assert_eq!(heard_at(w1, 1_767_268_850), Some("FN31"));
+    assert_eq!(heard_at(w1, 1_767_268_900), Some("FN32"));
+    assert_eq!(
+        heard_at(w1, 1_700_000_000),
+        Some("FN31"),
+        "before any: the first"
+    );
+}

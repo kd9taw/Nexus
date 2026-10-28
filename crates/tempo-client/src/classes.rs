@@ -334,6 +334,8 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("leave_client_mode",              RunsHere,    "Starts this computer's Nexus again as itself."),
     ("log_activations",                RunsAtShack, "From the shack's logbook."),
     ("log_current_qso",                RunsAtShack, "Logs the current contact at the shack."),
+    ("log_grid_fill",                  RefusedHere, "Changes many contacts of the shack's logbook at once, as large as a purge."),
+    ("log_grid_offers",                RunsAtShack, "Reads the shack's logbook and decode log for the grids it could fill; changes nothing."),
     ("log_operators",                  RunsAtShack, "From the shack's logbook."),
     ("log_qso",                        RunsAtShack, "Logs a contact at the shack."),
     ("logbook_save_choice",            RunsHere,    "This computer's own quit-time question."),

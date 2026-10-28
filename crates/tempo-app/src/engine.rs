@@ -32028,6 +32028,12 @@ contact yourself."
         }
     }
 
+    /// The grid `call` last sent on the air this session, as decoded (`Roster::sent_grid`): what
+    /// the Logbook's blank-grid offer takes for a contact the decode log does not cover.
+    pub fn sent_grid(&self, call: &str) -> Option<String> {
+        self.app.inbox.roster.sent_grid(call).map(str::to_string)
+    }
+
     /// The DX's grid for a contact: what the exchange itself carried, else what we decoded
     /// from that station earlier this session.
     ///

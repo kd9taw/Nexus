@@ -1,6 +1,7 @@
 // CLEAN UP — the Logbook's three clean-up tools in one dialog: Duplicates (find contacts logged
 // more than once, merge each into one), Bulk edit (set or clear fields on many contacts at once)
-// and Check (list problems, each with a proposed fix, and make only the ones ticked) — and Update
+// and Check (list problems, each with a proposed fix, and make only the ones ticked), Blank grids
+// (fill a grid Nexus knows into contacts logged with none, only those ticked: LogGridFill.tsx) — and Update
 // from callbook, which fills the empty fields of many contacts from callbook lookups
 // (LogCallbookUpdate.tsx).
 //
@@ -21,8 +22,9 @@ import { LogDupes } from './LogDupes'
 import { LogBulkEdit } from './LogBulkEdit'
 import { LogCheck } from './LogCheck'
 import { LogCallbookUpdate } from './LogCallbookUpdate'
+import { LogGridFill } from './LogGridFill'
 
-export type LogTool = 'dupes' | 'bulk' | 'check' | 'callbook'
+export type LogTool = 'dupes' | 'bulk' | 'check' | 'grids' | 'callbook'
 
 export function LogTools({
   open,
@@ -60,7 +62,7 @@ export function LogTools({
       className="log-tools-dialog"
     >
       <div className="log-tools-tabs" role="tablist" aria-label={t('logbook.tools.title')}>
-        {(['dupes', 'bulk', 'check', 'callbook'] as const).map((id) => (
+        {(['dupes', 'bulk', 'check', 'grids', 'callbook'] as const).map((id) => (
           <button
             key={id}
             type="button"
@@ -72,6 +74,7 @@ export function LogTools({
             {id === 'dupes' ? t('logbook.tools.tab.dupes')
               : id === 'bulk' ? t('logbook.tools.tab.bulk')
               : id === 'check' ? t('logbook.tools.tab.check')
+              : id === 'grids' ? t('logbook.tools.tab.grids')
               : t('logbook.tools.tab.callbook')}
           </button>
         ))}
@@ -82,6 +85,7 @@ export function LogTools({
         <LogBulkEdit onChanged={onChanged} afar={afar} picked={picked} query={query} shown={shown} />
       )}
       {open && tool === 'check' && <LogCheck onChanged={onChanged} afar={afar} />}
+      {open && tool === 'grids' && <LogGridFill onChanged={onChanged} afar={afar} />}
       {open && tool === 'callbook' && (
         <LogCallbookUpdate onStarted={onCallbookStarted} afar={afar} picked={picked} query={query} shown={shown} />
       )}

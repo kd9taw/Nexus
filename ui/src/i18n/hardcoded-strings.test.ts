@@ -163,6 +163,7 @@ const MIGRATED = [
   'components/LogDupes.tsx',
   'components/LogBulkEdit.tsx',
   'components/LogCheck.tsx',
+  'components/LogGridFill.tsx',
   'components/LogCallbookUpdate.tsx',
   'features/logCleanup.ts',
   // The Logbook's country picker — born migrated: the entity names and numbers it lists are data.

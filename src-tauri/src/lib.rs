@@ -6264,7 +6264,7 @@ fn local_data_dir() -> PathBuf {
 /// location WSJT-X uses for its own ALL.TXT. Written only when `settings.write_all_txt` is on;
 /// the Settings panel surfaces this path + a "Reveal" button
 /// (`all_txt_location`/`reveal_all_txt`).
-fn all_txt_path() -> PathBuf {
+pub(crate) fn all_txt_path() -> PathBuf {
     local_data_dir().join("ALL.TXT")
 }
 
@@ -40744,6 +40744,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_tools::bulk_edit_apply,
         log_tools::check_logbook,
         log_tools::apply_log_fixes,
+        log_tools::log_grid_offers,
+        log_tools::log_grid_fill,
         callbook_update::callbook_update_preview,
         callbook_update::callbook_update_start,
         callbook_update::callbook_update_status,
