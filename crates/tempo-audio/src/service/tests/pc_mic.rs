@@ -12,7 +12,8 @@ use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tempo_app::mic::PC_MIC;
 
-const DEVICE: &str = "Desk Microphone";
+/// The microphone, by a card name every host's naming tells apart from the receive cards below.
+const DEVICE: &str = "plughw:CARD=Headset,DEV=0";
 
 struct PcScene {
     engine: Arc<Mutex<Engine>>,
@@ -25,12 +26,18 @@ struct PcScene {
 impl PcScene {
     /// Phone, TX armed, the computer's microphone switched on (`on`) for the radio.
     fn new(on: bool) -> Self {
+        Self::with(on, |_| {})
+    }
+
+    /// [`Self::new`] with `edit` applied to the settings first.
+    fn with(on: bool, edit: fn(&mut Settings)) -> Self {
         let origin = Instant::now();
-        let settings = Settings {
+        let mut settings = Settings {
             pc_mic: on,
             pc_mic_device: DEVICE.into(),
             ..Settings::default()
         };
+        edit(&mut settings);
         let engine = Arc::new(Mutex::new(Engine::with_settings(settings)));
         engine.lock().unwrap().set_operating_mode("phone", false);
         let mut state = loop_state();
@@ -65,6 +72,15 @@ impl PcScene {
                 &mut station,
             )
             .unwrap();
+    }
+
+    /// Three idle ticks (0–40 ms), then TX armed again as entering Phone arms it: the loop has
+    /// taken up the settings it was built with.
+    fn settle(&mut self) {
+        for k in 0..3 {
+            self.tick(k as f64 * 20.0, 0.0);
+        }
+        self.engine.lock().unwrap().set_tx_enabled(true);
     }
 
     fn ptt(&mut self, on: bool) {
@@ -340,47 +356,119 @@ fn a_quick_re_press_starts_a_fresh_over() {
     assert_eq!(e.snapshot().radio.pc_mic_ended, None);
 }
 
-/// ⛔ The input the sound card opened for receive (here the system default, none being set) is
-/// never opened as the microphone: the over ends before the open, keys nothing, and says why.
-/// CONTROL: a different receive input opens it.
+/// ⛔ No input that may carry the band is opened as the microphone, judged by THE device guard the
+/// notification sounds use (`notify_sound::same_input`): the input the sound card opened for receive,
+/// the station's receive input and this radio's under another name for the same card, another
+/// radio's, and a sound server's route. The over ends before the open, keys nothing, and says why.
+/// CONTROL: a microphone on a card proven different from every receive input opens and keys.
 #[test]
-fn the_microphone_is_never_the_input_receive_opened() {
-    let mut s = PcScene::new(true);
-    s.backend.capture_input = Some(crate::receive_audio::CaptureInput {
-        device: "desk microphone ".into(),
-        system_default: true,
-    });
-    s.ptt(true);
-    for k in 0..20 {
-        s.tick(k as f64 * 20.0, 0.5);
+fn the_microphone_is_never_an_input_that_may_carry_the_band() {
+    use tempo_app::dto::PcMicCause;
+    type Edit = fn(&mut Settings);
+    /// Radio 0 (this one) and radio 7, with these receive inputs.
+    fn radios(s: &mut Settings, this: &str, other: &str) {
+        let radio = |id: u32, audio_in: &str| tempo_app::settings::RadioProfile {
+            id,
+            audio_in: audio_in.into(),
+            pc_mic: true,
+            pc_mic_device: DEVICE.into(),
+            ..Default::default()
+        };
+        s.radios = vec![radio(0, this), radio(7, other)];
+        s.active_radio = 0;
     }
-    assert!(
-        s.backend.pc_mic_calls.is_empty(),
-        "the receive input was opened as the microphone"
-    );
-    assert!(!s.rig.keyed && s.backend.played.is_empty());
-    assert_eq!(
-        s.engine
-            .lock()
-            .unwrap()
-            .snapshot()
-            .radio
-            .pc_mic_ended
-            .map(|x| x.cause),
-        Some(tempo_app::dto::PcMicCause::SameAsReceive)
-    );
-    let mut s = PcScene::new(true);
+    let cases: [(&str, Option<&str>, Edit, PcMicCause); 6] = [
+        (
+            "the input receive opened, by another spelling",
+            Some(" PLUGHW:CARD=headset,DEV=0 "),
+            |_| {},
+            PcMicCause::SameAsReceive,
+        ),
+        (
+            "the station's receive input, by its other ALSA name",
+            None,
+            |s| s.audio_in = "hw:CARD=Headset,DEV=0".into(),
+            PcMicCause::SameAsReceive,
+        ),
+        (
+            "this radio's receive input",
+            None,
+            |s| radios(s, "dsnoop:CARD=Headset", "hw:CARD=Codec2"),
+            PcMicCause::SameAsReceive,
+        ),
+        (
+            "another radio's receive input",
+            None,
+            |s| radios(s, "hw:CARD=Codec", "hw:CARD=Headset"),
+            PcMicCause::RadioReceive,
+        ),
+        (
+            "a sound server's route as the microphone",
+            None,
+            |s| s.pc_mic_device = "pipewire".into(),
+            PcMicCause::Unsure,
+        ),
+        (
+            "the microphone's twin, numbered by Nexus",
+            None,
+            |s| s.audio_in = "plughw:CARD=Headset_1,DEV=0".into(),
+            PcMicCause::SameAsReceive,
+        ),
+    ];
+    for (what, opened, edit, cause) in cases {
+        let mut s = PcScene::with(true, edit);
+        s.backend.capture_input = opened.map(|device| crate::receive_audio::CaptureInput {
+            device: device.into(),
+            system_default: true,
+        });
+        // The loop takes up the receive input it is given (a reopen, which halts TX for the
+        // change) before the press.
+        s.settle();
+        s.ptt(true);
+        for k in 3..23 {
+            s.tick(k as f64 * 20.0, 0.5);
+        }
+        assert!(
+            s.backend.pc_mic_calls.is_empty(),
+            "{what}: opened as the microphone"
+        );
+        assert!(!s.rig.keyed && s.backend.played.is_empty(), "{what}: keyed");
+        assert!(
+            !s.engine.lock().unwrap().pc_mic_armed(),
+            "{what}: still armed"
+        );
+        assert_eq!(
+            s.engine
+                .lock()
+                .unwrap()
+                .snapshot()
+                .radio
+                .pc_mic_ended
+                .map(|x| x.cause),
+            Some(cause),
+            "{what}"
+        );
+    }
+    // CONTROL: receive on its own card, by name everywhere: the microphone opens and keys.
+    let mut s = PcScene::with(true, |s| {
+        s.audio_in = "plughw:CARD=Codec,DEV=0".into();
+        radios(s, "plughw:CARD=Codec,DEV=0", "hw:CARD=Codec2");
+    });
     s.backend.capture_input = Some(crate::receive_audio::CaptureInput {
-        device: "Radio Codec".into(),
+        device: "hw:CARD=Codec,DEV=0".into(),
         system_default: false,
     });
+    s.settle();
     s.ptt(true);
-    s.tick(0.0, 0.5);
+    for k in 3..13 {
+        s.tick(k as f64 * 20.0, 0.5);
+    }
     assert_eq!(
         s.backend.pc_mic_calls,
         vec![Some(DEVICE.to_string())],
-        "CONTROL: another receive input"
+        "CONTROL: a microphone on its own card"
     );
+    assert!(s.rig.keyed, "CONTROL: it keys");
 }
 
 /// A handoff (the rig not the operator's to key this tick) under a keyed over unkeys and says so.

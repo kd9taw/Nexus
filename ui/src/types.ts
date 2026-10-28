@@ -6524,6 +6524,7 @@ export type PcMicCause =
   | 'gateDown'
   | 'interrupted'
   | 'keyRefused'
+  | 'unsure'
 
 export interface PcMicEnded {
   /** When, in Unix seconds. */

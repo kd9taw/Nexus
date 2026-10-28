@@ -40,6 +40,8 @@ function why(cause: PcMicCause): string {
       return t('shell.lane.pcMic.interrupted')
     case 'keyRefused':
       return t('shell.lane.pcMic.keyRefused')
+    case 'unsure':
+      return t('shell.lane.pcMic.unsure')
   }
 }
 

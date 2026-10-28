@@ -303,15 +303,6 @@ fn a_missing_or_receive_microphone_is_refused_and_said() {
         e.snapshot().radio.pc_mic_ended.map(|x| x.cause),
         Some(PcMicCause::NoDevice)
     );
-    e.set_ptt(false);
-    // The radio's own receive input as the "microphone" would put the band on the air.
-    e.settings.pc_mic_device = "Radio Codec".into();
-    e.set_ptt(true);
-    assert!(!e.pc_mic_armed());
-    assert_eq!(
-        e.snapshot().radio.pc_mic_ended.map(|x| x.cause),
-        Some(PcMicCause::SameAsReceive)
-    );
 }
 
 #[test]
@@ -433,120 +424,126 @@ fn the_voice_keyer_and_the_computer_microphone_exclude_each_other() {
     );
 }
 
-/// ⛔ No feedback path: the microphone is refused, with the reason, whenever it may carry receive
-/// audio or Nexus's own: the radio's receive input under another ALSA name or ordinal, another
-/// radio's receive input, a Flex DAX receive channel, and a loopback or virtual cable.
-/// CONTROL: an ordinary microphone arms, and the exact-name case still refuses.
+/// ⛔ No feedback path, by name at the press: a Flex DAX receive channel and a loopback or virtual
+/// cable are refused with the reason, and nothing arms. CONTROL: an ordinary microphone arms.
 #[test]
-fn a_microphone_that_may_carry_receive_or_transmit_audio_is_refused() {
-    let cases: [(&str, &str, PcMicCause); 16] = [
-        ("Radio Codec", "Radio Codec", PcMicCause::SameAsReceive),
-        ("radio codec #2", "Radio Codec", PcMicCause::SameAsReceive),
-        (
-            "plughw:CARD=Codec,DEV=0",
-            "hw:CARD=Codec,DEV=0",
-            PcMicCause::SameAsReceive,
-        ),
-        ("dsnoop:1,0", "hw:1,0", PcMicCause::SameAsReceive),
-        // One card by number, the other by id: not provably different.
-        ("hw:1,0", "hw:CARD=Codec,DEV=0", PcMicCause::SameAsReceive),
-        ("plughw:CARD=Codec", "dsnoop:2,0", PcMicCause::SameAsReceive),
-        // A sound server's route captures whatever the server defaults to: maybe the codec.
-        ("default", "hw:CARD=Codec,DEV=0", PcMicCause::SameAsReceive),
-        ("pulse", "hw:CARD=Codec,DEV=0", PcMicCause::SameAsReceive),
-        (
-            " PipeWire ",
-            "hw:CARD=Codec,DEV=0",
-            PcMicCause::SameAsReceive,
-        ),
-        ("jack", "Radio Codec", PcMicCause::SameAsReceive),
-        ("sysdefault", "Radio Codec", PcMicCause::SameAsReceive),
-        ("Second Codec", "Radio Codec", PcMicCause::RadioReceive),
+fn a_microphone_named_as_receive_or_loopback_audio_is_refused_at_the_press() {
+    let cases: [(&str, PcMicCause); 4] = [
         (
             "DAX Audio RX 1 (FlexRadio Systems DAX Audio)",
-            "Radio Codec",
             PcMicCause::RadioReceive,
         ),
         (
             "CABLE Output (VB-Audio Virtual Cable)",
-            "Radio Codec",
             PcMicCause::Loopback,
         ),
-        (
-            "Stereo Mix (Realtek(R) Audio)",
-            "Radio Codec",
-            PcMicCause::Loopback,
-        ),
+        ("Stereo Mix (Realtek(R) Audio)", PcMicCause::Loopback),
         (
             "Monitor of Built-in Audio Analog Stereo",
-            "Radio Codec",
             PcMicCause::Loopback,
         ),
     ];
-    for (mic, rx, cause) in cases {
+    for (mic, cause) in cases {
         let mut e = station();
-        e.settings.audio_in = rx.into();
-        e.settings.radios[0].audio_in = rx.into();
-        e.settings.radios[1].audio_in = "Second Codec".into();
         e.settings.pc_mic_device = mic.into();
         e.set_ptt(true);
-        assert!(!e.pc_mic_armed(), "{mic:?} armed beside {rx:?}");
-        assert_eq!(lane(&e), Some(cause), "{mic:?} beside {rx:?}");
+        assert!(!e.pc_mic_armed(), "{mic:?} armed");
+        assert_eq!(lane(&e), Some(cause), "{mic:?}");
     }
     let mut e = station();
-    e.settings.radios[1].audio_in = "Second Codec".into();
     e.set_ptt(true);
     assert!(e.pc_mic_armed(), "CONTROL: an ordinary microphone");
-    // CONTROL: cards proven different (both by id, both by number; a card's own default) arm.
-    for (mic, rx) in [
-        ("hw:CARD=Headset,DEV=0", "hw:CARD=Codec,DEV=0"),
-        ("plughw:2,0", "hw:1,0"),
-        ("sysdefault:CARD=Headset", "hw:CARD=Codec,DEV=0"),
-    ] {
-        let mut e = station();
-        e.settings.audio_in = rx.into();
-        e.settings.radios[0].audio_in = rx.into();
-        e.settings.radios[1].audio_in = "Second Codec".into();
-        e.settings.pc_mic_device = mic.into();
-        e.set_ptt(true);
-        assert!(e.pc_mic_armed(), "CONTROL: {mic:?} beside {rx:?}");
-    }
 }
 
+/// The device guard's answer named for the operator ([`Engine::pc_mic_receive_refusal`]), with a
+/// guard that knows exactly which names are one device: the system default input, the station's
+/// receive input, this radio's, another radio's and the one the sound card opened are each asked;
+/// one device names whose receive it is, and outranks an unsure answer from another input; an
+/// unsure answer alone is `Unsure`. CONTROL: an input the guard calls different refuses nothing.
 #[test]
-fn device_names_compare_as_the_same_input_when_in_doubt() {
-    use super::same_audio_device as same;
-    assert!(same("USB Audio CODEC ", "usb audio codec"));
-    assert!(same("USB Audio CODEC #2", "USB Audio CODEC"));
-    assert!(same("hw:CARD=Device,DEV=0", "default:CARD=Device"));
-    assert!(same("plughw:2,0", "hw:2"));
-    assert!(!same("hw:CARD=Device,DEV=0", "hw:CARD=Other,DEV=0"));
-    assert!(!same("hw:1,0", "hw:2,0"));
-    // One card by number, the other by id: not provably different, so the same.
-    assert!(same("hw:1,0", "hw:CARD=CODEC,DEV=0"));
-    assert!(same("plughw:CARD=Device", "dsnoop:0"));
-    assert!(!same("Desk Microphone", "USB Audio CODEC"));
-    assert!(!same("", ""), "no device is no device");
-    assert!(
-        !same("Desk Microphone", ""),
-        "an unset receive input is the loop's to check"
+fn the_device_guards_answer_is_named_for_whose_receive_it_is() {
+    // "same:<x>" is one device with the microphone "<x>"; "unsure" cannot be told apart from it.
+    let guard = |mic: &str, input: &str| -> Option<SameInput> {
+        if input == "unsure" || (input.is_empty() && mic == "server") {
+            Some(SameInput::Unsure)
+        } else if input.strip_prefix("same:") == Some(mic) {
+            Some(SameInput::Same)
+        } else {
+            None
+        }
+    };
+    let mut e = station();
+    e.settings.audio_in = "Radio Codec".into();
+    e.settings.radios[0].audio_in = "Radio Codec".into();
+    e.settings.radios[1].audio_in = "Second Codec".into();
+    let ask =
+        |e: &Engine, mic: &str, opened: Option<&str>| e.pc_mic_receive_refusal(mic, opened, &guard);
+    assert_eq!(
+        ask(&e, "mic", None),
+        None,
+        "CONTROL: different from every input"
+    );
+    assert_eq!(
+        ask(&e, "server", None),
+        Some(PcMicCause::Unsure),
+        "the system default input"
+    );
+    assert_eq!(
+        ask(&e, "mic", Some("same:mic")),
+        Some(PcMicCause::SameAsReceive),
+        "the input the sound card opened"
+    );
+    assert_eq!(ask(&e, "mic", Some("unsure")), Some(PcMicCause::Unsure));
+    e.settings.audio_in = "same:mic".into();
+    assert_eq!(
+        ask(&e, "mic", None),
+        Some(PcMicCause::SameAsReceive),
+        "the station's"
+    );
+    e.settings.audio_in = "Radio Codec".into();
+    e.settings.radios[0].audio_in = "same:mic".into();
+    assert_eq!(
+        ask(&e, "mic", None),
+        Some(PcMicCause::SameAsReceive),
+        "this radio's"
+    );
+    e.settings.radios[0].audio_in = "Radio Codec".into();
+    e.settings.radios[1].audio_in = "same:mic".into();
+    assert_eq!(
+        ask(&e, "mic", None),
+        Some(PcMicCause::RadioReceive),
+        "another radio's"
+    );
+    // One device outranks unsure, whichever is asked first.
+    assert_eq!(
+        ask(&e, "mic", Some("unsure")),
+        Some(PcMicCause::RadioReceive),
+        "the same device outranks an unsure one"
+    );
+    e.settings.radios[1].audio_in = "Second Codec".into();
+    e.settings.audio_in = "unsure".into();
+    assert_eq!(
+        ask(&e, "mic", Some("same:mic")),
+        Some(PcMicCause::SameAsReceive),
+        "the same device outranks an unsure one asked before it"
     );
 }
 
-/// ⛔ The loop's check of the input the sound card actually opened (the system default when none
-/// is set) ends the over before the microphone opens, and says why.
+/// ⛔ The loop's refusal ends the armed over before the microphone opens, keys nothing, arms no
+/// abort, and says why.
 #[test]
-fn the_input_receive_actually_opened_is_refused_at_the_loop() {
+fn a_refusal_at_the_loop_ends_the_over_before_the_microphone_opens() {
     let mut e = station();
     e.set_ptt(true);
     assert!(e.pc_mic_armed());
-    e.pc_mic_is_receive();
+    e.pc_mic_refused(PcMicCause::Unsure);
     assert!(!e.pc_mic_armed());
+    assert_eq!(e.pc_mic_source(), None, "the loop would still open it");
     assert!(
         !e.take_pc_mic_abort(),
         "nothing was keyed, nothing to unkey"
     );
-    assert_eq!(lane(&e), Some(PcMicCause::SameAsReceive));
+    assert_eq!(lane(&e), Some(PcMicCause::Unsure));
 }
 
 /// ⛔ Nexus's own Flex client giving the radio its own mic: the press arms nothing and says why

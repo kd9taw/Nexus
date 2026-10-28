@@ -105,6 +105,15 @@ pub struct PcMicSource {
     pub gen: u64,
 }
 
+/// What the device guard says of two input names (`tempo_audio::notify_sound::same_input`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SameInput {
+    /// One device, under these names.
+    Same,
+    /// Not provably different: refused as if the same.
+    Unsure,
+}
+
 impl Engine {
     /// Whether the operator's PTT press feeds this computer's microphone: the active radio's switch
     /// is on, and the station is in Phone. Nothing else (FT, CW, the keyboard modes) ever does.
@@ -221,31 +230,12 @@ impl Engine {
         });
     }
 
-    /// Why `device` may not be this computer's microphone, if it may not: it carries receive audio
-    /// or Nexus's own, which would go back out on the air (a feedback path). Refuses when in doubt:
-    /// any radio's receive input, under any name for the same card ([`same_audio_device`]); a Flex
-    /// DAX receive channel; and anything named like a loopback or a virtual cable. The input the
-    /// sound card ACTUALLY opened for receive (the system default when none is set) is checked by
-    /// the radio loop before it opens the microphone ([`Self::pc_mic_is_receive`]).
+    /// Why `device` may not be this computer's microphone by its NAME alone, if it may not: it
+    /// carries receive audio or Nexus's own, which would go back out on the air (a feedback path).
+    /// A Flex DAX receive channel, and anything named like a loopback or a virtual cable. Whether
+    /// it is a receive input under another name is the device guard's to say, asked by the radio
+    /// loop before it opens the microphone ([`Self::pc_mic_receive_refusal`]).
     fn pc_mic_feedback(&self, device: &str) -> Option<PcMicCause> {
-        // A Linux sound server's route (or ALSA's own default) is whatever input the server
-        // defaults to, which may be the radio's receive codec: not provably the operator's
-        // microphone, so refused. The operator picks the microphone by its own card name instead.
-        if is_sound_server_route(device) {
-            return Some(PcMicCause::SameAsReceive);
-        }
-        if same_audio_device(device, &self.settings.audio_in) {
-            return Some(PcMicCause::SameAsReceive);
-        }
-        for radio in &self.settings.radios {
-            if same_audio_device(device, &radio.audio_in) {
-                return Some(if radio.id == self.settings.active_radio {
-                    PcMicCause::SameAsReceive
-                } else {
-                    PcMicCause::RadioReceive
-                });
-            }
-        }
         let name = device.to_lowercase();
         if DAX_RECEIVE.iter().any(|n| name.contains(n)) {
             return Some(PcMicCause::RadioReceive);
@@ -256,10 +246,46 @@ impl Engine {
         None
     }
 
-    /// The radio loop found the microphone is the input the sound card opened for receive (the
-    /// system default, when no receive input is set): the over ends before the microphone opens.
-    pub fn pc_mic_is_receive(&mut self) {
-        self.drop_pc_mic_for(PcMicCause::SameAsReceive);
+    /// ⛔ Why the armed over's microphone `device` may not be opened, if it may not: it may be an
+    /// input that carries the band. `same_input` is THE device guard (the one the notification
+    /// sounds are refused by, `tempo_audio::notify_sound::same_input`), asked against the system
+    /// default input (`""`), this station's receive input, every radio's, and the input the sound
+    /// card actually opened for receive (`opened_receive`). A device that IS one of them names
+    /// whose receive it is; one the guard cannot tell apart from one of them is refused as unsure.
+    pub fn pc_mic_receive_refusal(
+        &self,
+        device: &str,
+        opened_receive: Option<&str>,
+        same_input: &dyn Fn(&str, &str) -> Option<SameInput>,
+    ) -> Option<PcMicCause> {
+        let mut inputs = vec![
+            ("", PcMicCause::SameAsReceive),
+            (self.settings.audio_in.as_str(), PcMicCause::SameAsReceive),
+        ];
+        inputs.extend(self.settings.radios.iter().map(|radio| {
+            let cause = if radio.id == self.settings.active_radio {
+                PcMicCause::SameAsReceive
+            } else {
+                PcMicCause::RadioReceive
+            };
+            (radio.audio_in.as_str(), cause)
+        }));
+        inputs.extend(opened_receive.map(|rx| (rx, PcMicCause::SameAsReceive)));
+        let mut unsure = false;
+        for (input, cause) in inputs {
+            match same_input(device, input) {
+                Some(SameInput::Same) => return Some(cause),
+                Some(SameInput::Unsure) => unsure = true,
+                None => {}
+            }
+        }
+        unsure.then_some(PcMicCause::Unsure)
+    }
+
+    /// The radio loop refused the armed over's microphone before opening it
+    /// ([`Self::pc_mic_receive_refusal`]): the over ends, nothing keyed, and the lane says why.
+    pub fn pc_mic_refused(&mut self, cause: PcMicCause) {
+        self.drop_pc_mic_for(cause);
     }
 
     /// The radio loop could not carry the over on: something else unkeyed the radio under it, the
@@ -445,85 +471,6 @@ const LOOPBACK: [&str; 13] = [
     "blackhole",
     "soundflower",
 ];
-
-/// Whether two saved device names may be the same input. Refuses when in doubt: names compare
-/// trimmed and case-blind, without the ` #N` ordinal Nexus adds to identically named devices (two
-/// codecs of one name are not told apart), and ALSA names of one card compare equal under any
-/// access path (`hw:` / `plughw:` / `dsnoop:` / `default:` / `sysdefault:` …, by `CARD=` or by card
-/// number). One card given by number and the other by id (`hw:1,0` against `hw:CARD=CODEC`) cannot
-/// be proven different from the names alone, so they compare as the same. An empty name is no
-/// device.
-///
-/// ⛔ INTERIM. This and `is_sound_server_route` are a stand-in for the one
-/// shared fail-safe device guard the notification sounds use (`tempo_audio::notify_sound`'s
-/// route/collision rules: sound-server routes, card ids resolved from card numbers, config-file
-/// PCMs). When that guard is on main, this check must be replaced by it, so the two features never
-/// answer "is this the same device?" differently.
-pub fn same_audio_device(a: &str, b: &str) -> bool {
-    let (a, b) = (device_base(a), device_base(b));
-    if a.is_empty() || b.is_empty() {
-        return false;
-    }
-    if a == b {
-        return true;
-    }
-    match (alsa_card(&a), alsa_card(&b)) {
-        (Some(x), Some(y)) => x == y || is_card_number(&x) != is_card_number(&y),
-        _ => false,
-    }
-}
-
-/// An ALSA card token that is the card's number (`1` of `hw:1,0`), not its id.
-fn is_card_number(card: &str) -> bool {
-    !card.is_empty() && card.chars().all(|c| c.is_ascii_digit())
-}
-
-/// Whether a device name is a Linux sound server's route or ALSA's bare default (`default`,
-/// `sysdefault`, `pulse`, `pipewire`, `jack`): it captures whatever input the server defaults to,
-/// so what it carries cannot be told from its name.
-fn is_sound_server_route(name: &str) -> bool {
-    const ROUTES: [&str; 5] = ["default", "sysdefault", "pulse", "pipewire", "jack"];
-    ROUTES.contains(&device_base(name).as_str())
-}
-
-/// A saved name trimmed, lower case, without a trailing ` #N` ordinal.
-fn device_base(name: &str) -> String {
-    let name = name.trim();
-    let base = match name.rsplit_once(" #") {
-        Some((base, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => base,
-        _ => name,
-    };
-    base.trim().to_lowercase()
-}
-
-/// The card an ALSA device name addresses (lower case), whatever its access path: the `CARD=`
-/// token's value, or the card number of `hw:1,0`. `None` for a name that is no ALSA PCM name.
-fn alsa_card(name: &str) -> Option<String> {
-    if let Some(at) = name.find("card=") {
-        let rest = &name[at + 5..];
-        return Some(
-            rest[..rest.find(',').unwrap_or(rest.len())]
-                .trim()
-                .to_string(),
-        );
-    }
-    let (path, rest) = name.split_once(':')?;
-    const PATHS: [&str; 8] = [
-        "hw",
-        "plughw",
-        "dsnoop",
-        "dmix",
-        "default",
-        "sysdefault",
-        "front",
-        "iec958",
-    ];
-    if !PATHS.contains(&path.trim()) {
-        return None;
-    }
-    let card = rest[..rest.find(',').unwrap_or(rest.len())].trim();
-    (!card.is_empty()).then(|| card.to_string())
-}
 
 #[cfg(test)]
 #[path = "pc_mic_tests.rs"]

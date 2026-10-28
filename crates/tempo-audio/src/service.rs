@@ -12852,13 +12852,17 @@ impl RadioLoop {
             }
             if let Some((device, gen)) = want.filter(|_| !keyed_here && self.pc_mic_open.is_none())
             {
-                // The input the sound card opened for receive (the system default, when none is
-                // set) is never the microphone, under any of its names: its audio is the band.
-                let is_receive = backend.capture_input().is_some_and(|rx| {
-                    tempo_app::engine::pc_mic::same_audio_device(&rx.device, &device)
-                });
-                if is_receive {
-                    engine_lock(engine).pc_mic_is_receive();
+                // ⛔ No input that may carry the band is ever the microphone: every receive input
+                // the settings name, the system default input and the one the sound card actually
+                // opened for receive, judged by THE device guard the notification sounds use.
+                let opened_receive = backend.capture_input().map(|rx| rx.device);
+                let refused = engine_lock(engine).pc_mic_receive_refusal(
+                    &device,
+                    opened_receive.as_deref(),
+                    &crate::notify_sound::same_input,
+                );
+                if let Some(cause) = refused {
+                    engine_lock(engine).pc_mic_refused(cause);
                 } else {
                     match backend.set_pc_mic(Some(&device)) {
                         Ok(()) => self.pc_mic_open = Some((device, gen)),

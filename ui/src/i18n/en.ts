@@ -13528,6 +13528,8 @@ export const EN = {
     'the radio was unkeyed or taken over during the over (a radio switch, a CAT hold, or an unkey from elsewhere), so Nexus ended it. Press PTT again.',
   'shell.lane.pcMic.keyRefused':
     'the radio did not accept the key, so nothing was sent.',
+  'shell.lane.pcMic.unsure':
+    'the chosen microphone cannot be told apart from an input that may carry the band (a sound server\'s default input such as default, pulse or pipewire, receive set to the system default, or an input named in a sound configuration file), so nothing was sent: that could put the band on the air. Pick the microphone by its own sound card, and give this radio\'s receive input its own card, in Settings ▸ Radio ▸ Audio.',
   // A voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone at the
   // shack, native audio on): the radio did not switch its transmit audio to DAX within 2 seconds,
   // or something else keyed it first. Never played later; the next message the keyer accepts
