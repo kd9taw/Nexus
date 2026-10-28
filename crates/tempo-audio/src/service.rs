@@ -1677,6 +1677,11 @@ pub struct RadioConfig {
     pub wsjtx_addr: String,
     /// Upload heard stations to PSK Reporter.
     pub pskreporter: bool,
+    /// The app's version (tauri.conf.json's, as the app reports it), which PSK Reporter shows
+    /// beside "Nexus" and the WSJT-X Heartbeat announces. NOT this crate's `CARGO_PKG_VERSION`,
+    /// which is tempo-audio's own and has never been released. Empty = unknown: PSK Reporter is
+    /// then sent "Nexus" alone.
+    pub app_version: String,
     /// Input (capture) device name. Empty = system default input.
     pub audio_in: String,
     /// Output (playback) device name. Empty = system default output.
@@ -1726,6 +1731,7 @@ impl Default for RadioConfig {
             wsjtx_udp: false,
             wsjtx_addr: "127.0.0.1:2237".to_string(),
             pskreporter: false,
+            app_version: String::new(),
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -1973,7 +1979,7 @@ fn send_logged_contact(server: &WsjtxServer, qso: &WsjtxQso, adif_record: &str) 
     let _ = server.send_logged_adif(adif_record);
 }
 
-fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
+fn build_wsjtx_server(enabled: bool, addr: &str, app_version: &str) -> Option<WsjtxServer> {
     if !enabled {
         return None;
     }
@@ -1990,11 +1996,9 @@ fn build_wsjtx_server(enabled: bool, addr: &str) -> Option<WsjtxServer> {
     };
     match WsjtxServer::new_multi(bind.parse().unwrap(), targets) {
         Ok(s) => {
-            // ⚠️ `CARGO_PKG_VERSION` here is TEMPO-AUDIO's version (0.2.0), not the
-            // app's — so this heartbeat announces a version that was never released.
-            // Left as-is rather than fixed blind: the app version is not reachable from
-            // this crate, and threading it is its own change.
-            let _ = s.send_heartbeat(3, env!("CARGO_PKG_VERSION"), "Nexus");
+            // The APP's version (`RadioConfig::app_version`), as WSJT-X sends its own:
+            // `env!("CARGO_PKG_VERSION")` here would be TEMPO-AUDIO's 0.2.0, never released.
+            let _ = s.send_heartbeat(3, app_version, "Nexus");
             Some(s)
         }
         Err(e) => {
@@ -2192,7 +2196,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // retargets the WSJT-X address — otherwise a GridTracker/PSK setup done AFTER launch
     // never connects (the reported "needs a Nexus restart" bug). `*_applied` tracks what
     // the current emitters were built for so the loop rebuilds only on a real change.
-    let mut wsjtx = build_wsjtx_server(cfg.wsjtx_udp, &cfg.wsjtx_addr);
+    let mut wsjtx = build_wsjtx_server(cfg.wsjtx_udp, &cfg.wsjtx_addr, &cfg.app_version);
     let mut wsjtx_applied = (cfg.wsjtx_udp, cfg.wsjtx_addr.clone());
     let mut psk = cfg.pskreporter.then(PskReporter::new);
     let mut psk_applied = cfg.pskreporter;
@@ -2206,7 +2210,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     state.after_the_launch_open(&rig, init_ok);
     // Station-wide sinks live OUTSIDE the per-radio loop (multi-radio Phase 1 boundary):
     // one PSK buffer and one Field Day / club-board cursor for the whole station.
-    let mut station = StationSinks::new();
+    let mut station = StationSinks::for_app(&cfg.app_version);
     // Seed last_dial from the READ dial when present: seed_rig_dial moved
     // settings.dial_hz() to the same value, so `dial != last_dial` must not fire a
     // command on tick 1. last_mode deliberately stays cfg.mode (the app's BELIEF) —
@@ -2329,7 +2333,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str())
                 != (wsjtx_applied.0, wsjtx_applied.1.as_str())
             {
-                wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr);
+                wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr, &cfg.app_version);
                 wsjtx_applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
             }
             // The EFFECTIVE upload: the setting, unless a contest that allows spotting only
@@ -3627,6 +3631,8 @@ struct StationSinks {
     /// The WSJT-X UDP Status last sent, so the loop sends another on each change between slot
     /// boundaries, as WSJT-X does ([`wsjtx_status_change`]). `None` until the first boundary.
     wsjtx_status: Option<WsjtxStatusOwned>,
+    /// The reporting software sent to PSK Reporter with every upload ([`psk_software`]).
+    psk_software: String,
 }
 
 impl StationSinks {
@@ -3640,7 +3646,26 @@ impl StationSinks {
             last_reported_bm: String::new(),
             fd_was_active: false,
             wsjtx_status: None,
+            psk_software: "Nexus".to_string(),
         }
+    }
+
+    /// The station's sinks for the app at `app_version`: PSK Reporter names it with it.
+    fn for_app(app_version: &str) -> Self {
+        Self {
+            psk_software: psk_software(app_version),
+            ..Self::new()
+        }
+    }
+}
+
+/// The reporting software PSK Reporter shows for the app at `app_version`: "Nexus v1.21.0", as
+/// other programs send their name with their version. "Nexus" alone when the version is unknown.
+fn psk_software(app_version: &str) -> String {
+    if app_version.is_empty() {
+        "Nexus".to_string()
+    } else {
+        format!("Nexus v{app_version}")
     }
 }
 
@@ -14998,12 +15023,15 @@ impl RadioLoop {
                 // pskreporter.info as a Tempo user — the rebrand missed the one identifier that
                 // is visible to everyone but us (operator report, 2026-08-26).
                 //
-                // No version deliberately: `env!("CARGO_PKG_VERSION")` here is TEMPO-AUDIO's
-                // version (0.2.0), not the app's, so appending it would report a number that has
-                // never been released. A bare, correct name beats a decorated wrong one. (The
-                // WSJT-X heartbeat at the top of this file makes exactly that mistake — see the
-                // note there.)
-                let _ = reporter.send_spots(&rx_call, &rx_grid, "Nexus", &station.psk_spots);
+                // The version is the APP's, handed in through `RadioConfig::app_version`:
+                // `env!("CARGO_PKG_VERSION")` here is TEMPO-AUDIO's (0.2.0), a number that has
+                // never been released.
+                let _ = reporter.send_spots(
+                    &rx_call,
+                    &rx_grid,
+                    &station.psk_software,
+                    &station.psk_spots,
+                );
                 station.psk_spots.clear();
                 station.last_psk_flush = now;
             }
@@ -20121,16 +20149,40 @@ mod tests {
         );
     }
 
+    /// The WSJT-X Heartbeat announces the APP's version, as WSJT-X announces its own ("3.0.2",
+    /// `version()` in its MessageClient), never tempo-audio's 0.2.0. Every other field keeps
+    /// its shape: max schema 3, then the version, then the revision "Nexus".
+    #[test]
+    fn the_wsjtx_heartbeat_announces_the_app_version() {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let _server = build_wsjtx_server(true, &addr, "1.21.0").expect("a bound emitter");
+        let mut buf = [0u8; 512];
+        let (n, _) = listener.recv_from(&mut buf).unwrap();
+        let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);
+        assert_eq!(r.read_u32(), Some(0xADBC_CBDA), "magic");
+        r.read_u32().expect("schema");
+        assert_eq!(r.read_u32(), Some(0), "a Heartbeat");
+        r.read_utf8().expect("id");
+        assert_eq!(r.read_u32(), Some(3), "max schema");
+        assert_eq!(r.read_utf8(), Some(Some("1.21.0".to_string())), "version");
+        assert_eq!(r.read_utf8(), Some(Some("Nexus".to_string())), "revision");
+        assert_eq!(r.remaining(), 0);
+    }
+
     #[test]
     fn build_wsjtx_server_gates_on_enable_and_valid_addr() {
         // Disabled → no socket regardless of address (the state before a toggle-on).
-        assert!(build_wsjtx_server(false, "127.0.0.1:2237").is_none());
+        assert!(build_wsjtx_server(false, "127.0.0.1:2237", "1.21.0").is_none());
         // Enabled but unparseable target → None, not a panic.
-        assert!(build_wsjtx_server(true, "not-an-address").is_none());
-        assert!(build_wsjtx_server(true, "").is_none());
+        assert!(build_wsjtx_server(true, "not-an-address", "1.21.0").is_none());
+        assert!(build_wsjtx_server(true, "", "1.21.0").is_none());
         // Enabled + valid loopback target → a bound emitter (this is what a live
         // toggle-on rebuilds; the opening Heartbeat to :2237 is harmless if unheard).
-        assert!(build_wsjtx_server(true, "127.0.0.1:2237").is_some());
+        assert!(build_wsjtx_server(true, "127.0.0.1:2237", "1.21.0").is_some());
     }
 
     #[test]
@@ -22251,6 +22303,95 @@ mod tests {
                 1
             )]
         );
+    }
+
+    /// PSK Reporter shows the reporting software beside every spot, and other programs send
+    /// their name with their version. The radio loop's upload names Nexus with the APP's version,
+    /// the one handed in through `RadioConfig::app_version`, never tempo-audio's own; with no
+    /// version known it is "Nexus" alone.
+    #[test]
+    fn a_psk_reporter_upload_names_nexus_with_the_app_version() {
+        let software_sent = |station: StationSinks| {
+            let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            listener
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .unwrap();
+            let reporter = PskReporter::with_target(&listener.local_addr().unwrap().to_string());
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let (addr, _log) = mock_rigctld_on(14_074_000, false);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state();
+            let sinks = Sinks {
+                wsjtx: None,
+                psk: Some(&reporter),
+            };
+            let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+            let mut station = station;
+            let d = tempo_core::modes::Decode {
+                snr: -7,
+                freq: 1200.0,
+                ..heard_on("CQ W1AW FN31", None)
+            };
+            let heard = build_spot(&d, "FT8", 14_074_000, 1_700_000_000, ("KD9TAW", "EN52"));
+            station.psk_spots = heard.into_iter().collect();
+            let now = 1_000_000.0;
+            station.last_psk_flush = now - PSK_FLUSH_SECS * 1000.0 - 1.0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            let mut buf = [0u8; 2048];
+            let (n, _) = listener.recv_from(&mut buf).unwrap();
+            uploaded_receiver(&buf[..n]).2
+        };
+        let cfg = RadioConfig {
+            app_version: "1.21.0".to_string(),
+            ..RadioConfig::default()
+        };
+        assert_eq!(
+            software_sent(StationSinks::for_app(&cfg.app_version)),
+            "Nexus v1.21.0"
+        );
+        // A tester build's version keeps its suffix, as the app reports it.
+        assert_eq!(
+            software_sent(StationSinks::for_app("1.22.0-beta.1")),
+            "Nexus v1.22.0-beta.1"
+        );
+        assert_eq!(
+            software_sent(StationSinks::for_app(&RadioConfig::default().app_version)),
+            "Nexus"
+        );
+    }
+
+    /// The receiver record PSK Reporter receives in `dgram`: (callsign, locator, software).
+    fn uploaded_receiver(dgram: &[u8]) -> (String, String, String) {
+        let u16at = |o: usize| u16::from_be_bytes([dgram[o], dgram[o + 1]]) as usize;
+        let mut off = 16;
+        while off + 4 <= dgram.len() {
+            let (id, len) = (u16at(off), u16at(off + 2));
+            if id == 0x50E2 {
+                let body = &dgram[off + 4..off + len];
+                let s = |i: &mut usize| {
+                    let n = body[*i] as usize;
+                    let v = String::from_utf8_lossy(&body[*i + 1..*i + 1 + n]).into_owned();
+                    *i += 1 + n;
+                    v
+                };
+                let mut i = 0;
+                return (s(&mut i), s(&mut i), s(&mut i));
+            }
+            off += len;
+        }
+        panic!("no receiver record");
     }
 
     /// `message` as the radio loop's decoder hands it over: heard on `mode` at 1500 Hz audio and
