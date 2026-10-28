@@ -471,6 +471,8 @@ function needColor(tag: NeedTag | undefined): string | null {
   switch (tag) {
     case 'NewEntity':
       return '#f23ec0' // magenta — all-time-new one (ATNO)
+    case 'NewIota':
+      return '#fb7185' // coral — new IOTA island group
     case 'NewZone':
       return '#c084fc' // violet — new zone
     case 'NewBand':

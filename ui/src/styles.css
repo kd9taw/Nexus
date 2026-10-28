@@ -7978,6 +7978,7 @@ select optgroup {
   --need-mode: #22d3ee; /* cyan — new mode */
   --need-grid: #34d399; /* green — new grid */
   --need-state: #2dd4bf; /* teal — new US state (WAS) */
+  --need-iota: #fb7185; /* coral — new IOTA island group */
   --need-confirm: #9ca3af; /* grey — worked, needs a confirmation */
   --need-dxped: #38bdf8; /* sky — active DXpedition */
   --need-pota: #4ade80; /* green — live POTA activator */
@@ -8018,6 +8019,7 @@ select optgroup {
   --need-mode: #0d6f8a;
   --need-grid: #047857;
   --need-state: #0f766e; /* teal — new US state (WAS) */
+  --need-iota: #be123c; /* coral — new IOTA island group */
   --need-confirm: #64748b;
   --need-dxped: #0369a1;
   /* Two steps darker than the #15803d it was. The first (operator, 2026-10-05: "Add a brightness difference
@@ -8095,6 +8097,9 @@ select optgroup {
 }
 .need-state {
   --need-color: var(--need-state);
+}
+.need-iota {
+  --need-color: var(--need-iota);
 }
 .need-watch {
   --need-color: var(--need-watch);
@@ -17560,6 +17565,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-left: 3px solid var(--need-state);
   background: color-mix(in srgb, var(--need-state) 16%, transparent);
 }
+.decode-row.need-iota {
+  border-left: 3px solid var(--need-iota);
+  background: color-mix(in srgb, var(--need-iota) 18%, transparent);
+}
 .decode-row.need-confirm {
   border-left: 3px solid var(--need-confirm);
   background: color-mix(in srgb, var(--need-confirm) 14%, transparent);
@@ -17583,6 +17592,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .decode-row.need-mode .need-chip.need-mode,
 .decode-row.need-grid .need-chip.need-grid,
 .decode-row.need-state .need-chip.need-state,
+.decode-row.need-iota .need-chip.need-iota,
 .decode-row.need-confirm .need-chip.need-confirm,
 .decode-row.need-pota .need-chip.need-pota {
   background: transparent;
@@ -21430,6 +21440,24 @@ button.cq-skiptx1.on {
 .sp-row.contest-dupe .qrz-link-call {
   text-decoration: line-through;
 }
+/* The IOTA island group a spot's comment names: plain while it is no need, the need's chip while it is
+   one (`need-chip need-iota`, whose ink and tint NeedChip.contrast.test.tsx holds). */
+.sp-iota {
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: calc(9px * var(--text-scale));
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.sp-iota.need-chip {
+  font-size: calc(9px * var(--text-scale));
+  padding: 1px 6px;
+  border: 1px solid var(--need-color);
+}
 .sp-worked {
   margin-right: 6px;
   padding: 1px 6px;
@@ -21523,6 +21551,9 @@ button.cq-skiptx1.on {
 }
 .np-row.need-zone {
   box-shadow: inset 3px 0 0 var(--need-zone);
+}
+.np-row.need-iota {
+  box-shadow: inset 3px 0 0 var(--need-iota);
 }
 .np-row.need-band {
   box-shadow: inset 3px 0 0 var(--need-band);
@@ -33610,4 +33641,39 @@ td.aw-cc {
   flex-direction: column;
   gap: 2px;
   color: var(--text-dim);
+}
+
+/* IOTA beside a reference (components/Iota.tsx): the group's name with IOTA Ltd's credit, the
+   consent line, the "not on the list" warning, and the offer chip. Plain text styles only; no
+   sizing (the hosts own their boxes). */
+.iota-name,
+.iota-unknown {
+  display: block;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.iota-unknown {
+  color: var(--state-warn);
+}
+.iota-credit {
+  color: var(--text-faint);
+  font-size: calc(10px * var(--text-scale));
+}
+.iota-consent,
+.iota-offer,
+.iota-card-held {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
+}
+.iota-consent-line {
+  flex: 1 1 16em;
+  min-width: 0;
+}
+.iota-offer-from {
+  color: var(--text-faint);
 }

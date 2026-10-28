@@ -6,13 +6,14 @@ The Needed board ranks every station currently on the air by what it is worth to
 
 ## What the Board Ranks
 
-Twelve need tags are recognized. Each carries a fixed numeric priority tier that determines row
+Thirteen need tags are recognized. Each carries a fixed numeric priority tier that determines row
 sort order and color (`ui/src/features/needs.ts`, `NEED_TIER`):
 
 | Need tag | Priority |
 |-----------|----------|
 | `Wanted` — on your watch list (Settings ▸ Spots & Alerts), heard, worked or not | 120 |
 | `NewEntity` — ATNO, an all-time new DXCC entity | 100 |
+| `NewIota` — new IOTA island group, any band | 80 |
 | `NewZone` — new CQ zone (WAZ) | 70 |
 | `NewState` — new state (WAS) | 60 |
 | `NewGrid` — new Maidenhead square | 55 |
@@ -25,6 +26,8 @@ sort order and color (`ui/src/features/needs.ts`, `NEED_TIER`):
 | `Sota` — SOTA activator chip | 0 |
 
 The chips at 0 do not rank a row on their own; the award tag alongside them does.
+
+`NewIota` fires only when the station's island group is known: a DX-cluster spot whose comment names exactly one reference (`IOTA EU-131`, `OC-146 QSL via …`), or a callbook lookup made this session for exactly that call (never a stroked call such as `W1ABC/P`, whose callbook entry is the licensee's home). A comment naming two different groups names neither. The IOTA award counts each group once, so a group worked on any band clears the need, and one worked but confirmed by neither card nor LoTW raises a Confirm instead. With **Settings ▸ Logbook ▸ IOTA island list** turned on, Nexus downloads IOTA Ltd's island-group list from iota-world.org onto your computer (never shipped with Nexus; refreshed at most monthly) and shows each group's name beside a reference, with IOTA Ltd's credit.
 
 DXpedition, POTA, and SOTA are chips appended to a row that already has an award tier; the chip itself is priority-neutral. The +15 DXpedition bump *can* cross a tier boundary where adjacent tiers sit only 10 points apart — a DXpedition-bumped New band (50 + 15 = 65) outranks a plain New grid (60).
 

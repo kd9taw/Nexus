@@ -75,6 +75,9 @@ mod contest_spot;
 mod data_folder_location;
 /// Band map frequency markers: a dial and a call to come back to, per contest session, local only.
 mod freq_markers;
+/// The IOTA island-group list on this machine: downloaded only with the operator's yes, never
+/// shipped, refreshed at most monthly.
+mod iota_list;
 /// JS8Call's API for other programs on this computer: TCP and UDP on 127.0.0.1, read-only, off
 /// until the operator turns a side on. What each line says is `tempo_app::engine::js8_api`.
 mod js8_api;
@@ -327,6 +330,7 @@ mod whole_log_reader_tests {
                 qso_is_sat(q.prop_mode.as_deref()),
                 crate::log_folds::award_fields(&q),
             );
+            needs.add_iota(q.ota.iota.as_deref(), q.award_confirmed);
         }
         needs
     }
@@ -770,6 +774,7 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
             .chain(&sp.corroborators)
             .cloned()
             .collect(),
+        iota: propagation::iota::in_comment(&sp.comment),
     });
 }
 
@@ -1064,6 +1069,7 @@ fn own_decode_heards(
             // US state hint (drives WAS NewState): FCC baseline refined by this live decode grid —
             // a precise 6-char grid that disagrees with the license means a rover. See us_state_hint.
             us_state: us_state_hint(&s.call, s.grid.as_deref()),
+            iota: None, // a decode names no island; `place_iotas` reads a callbook answer
         })
         .collect()
 }
@@ -1085,6 +1091,7 @@ fn jtty_heards(heard: &[tempo_app::dto::JttyHeard]) -> Vec<propagation::Heard> {
             evidence: Some("decoded by YOUR radio in JTTY, in two separate messages".to_string()),
             grid: h.grid.clone(),
             us_state: us_state_hint(&h.call, h.grid.as_deref()),
+            iota: None,
         })
         .collect()
 }
@@ -23805,6 +23812,11 @@ struct SpotRow {
     /// Seconds since the spot was received; -1 if unknown (no receive stamp).
     age_secs: i64,
     comment: String,
+    /// The IOTA island group the comment names, when it names exactly one
+    /// ([`propagation::iota::in_comment`]) — the Spots board's IOTA chip, and the same reading the
+    /// Needed board scores the spot's New IOTA by.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iota: Option<String>,
     /// True when the operator's license class may TRANSMIT at this spot's frequency in
     /// its mode (privileges::tx_allowed; `Open` class ⇒ always true). Drives the Spots
     /// panel's "my privileges" filter — computed here so the legal band data has ONE
@@ -23980,6 +23992,7 @@ fn program_spot_row(
         spotter: String::new(),
         corroborators: Vec::new(),
         age_secs: (now - spot.heard_unix).max(0),
+        iota: propagation::iota::in_comment(&spot.text),
         comment: spot.text,
         licensed,
         // A program is no voice on a continent: never hidden by the locality filter.
@@ -24257,6 +24270,7 @@ fn read_spots_with(
                 spotter: cs.spotter.clone(),
                 corroborators: cs.corroborators.clone(),
                 age_secs,
+                iota: propagation::iota::in_comment(&cs.comment),
                 comment: cs.comment.clone(),
                 licensed,
                 spotter_local: {
@@ -24442,6 +24456,8 @@ fn cluster_spot_heards(
                 )),
                 grid: None,     // cluster/RBN spots carry no grid…
                 us_state: None, // …and `get_need_alerts` fills the FCC state hint in
+                // The island group the spotter named, if the comment names exactly one.
+                iota: propagation::iota::in_comment(&cs.comment),
             });
         }
     }
@@ -25602,6 +25618,71 @@ fn ambiguous_activation_note(candidates: &[(String, String)]) -> String {
     )
 }
 
+/// The IOTA island group each heard station is on, for the New IOTA need, where its own evidence
+/// named none: the group a callbook lookup this session answered for exactly that call
+/// ([`callbook_iota_for_call`]). A spot comment's group, already on the row, is kept: it describes
+/// this activation, the callbook the licensee's record. `lookup` is that answer for a call — the
+/// session's on the board and in Pounce, a test's own in a test. `known` is the island-group list's
+/// check ([`iota_list::known`]): with the list held, a reference it lacks is a misreading, not an
+/// island, and raises no need; without it every reference of the right shape counts.
+fn place_iotas(
+    heard: &mut [propagation::Heard],
+    lookup: impl Fn(&str) -> Option<String>,
+    known: impl Fn(&str) -> bool,
+) {
+    for h in heard.iter_mut() {
+        if h.iota.is_none() {
+            h.iota = lookup(&h.call);
+        }
+        if h.iota.as_deref().is_some_and(|r| !known(r)) {
+            h.iota = None;
+        }
+    }
+}
+
+/// The IOTA group each callbook lookup this session answered with, by the call asked for — the
+/// heard side of the New IOTA need for a station no spot comment placed ([`place_iotas`]). Only an
+/// answer that is the asked call's own record and a plain call: a lookup of `W1ABC/P` answers with
+/// the licensee's home, not where they are (the log's callbook fill keeps the same rule). Bounded;
+/// in memory only, as the engine's own callbook answers are.
+static CALLBOOK_IOTA: std::sync::LazyLock<
+    std::sync::RwLock<std::collections::VecDeque<(String, String)>>,
+> = std::sync::LazyLock::new(Default::default);
+const CALLBOOK_IOTA_CAP: usize = 512;
+
+fn note_callbook_iota(call: &str, answer: &tempo_core::logbook::callbook::CallbookAnswer) {
+    let call = call.trim().to_ascii_uppercase();
+    if call.is_empty() {
+        return;
+    }
+    let iota = answer
+        .iota
+        .as_deref()
+        .and_then(propagation::iota::canonical)
+        .filter(|_| !call.contains('/') && answer.call.trim().eq_ignore_ascii_case(&call));
+    let Ok(mut kept) = CALLBOOK_IOTA.write() else {
+        return;
+    };
+    kept.retain(|(c, _)| *c != call);
+    if let Some(iota) = iota {
+        if kept.len() >= CALLBOOK_IOTA_CAP {
+            kept.pop_front();
+        }
+        kept.push_back((call, iota));
+    }
+}
+
+fn callbook_iota_for_call(call: &str) -> Option<String> {
+    let call = call.trim().to_ascii_uppercase();
+    CALLBOOK_IOTA
+        .read()
+        .ok()?
+        .iter()
+        .rev()
+        .find(|(c, _)| *c == call)
+        .map(|(_, i)| i.clone())
+}
+
 /// The US state each heard station is scored in for Worked All States. An activator live at a
 /// park or summit (`live`, the hunter feed's current rows) is where that is: a contact hunted there
 /// logs the park's state ([`ota_park_places`]), so its need is the park's whatever its licence or
@@ -25782,6 +25863,7 @@ fn read_need_alerts(
         .map(|cache| live_ota_spots(&cache, now).cloned().collect())
         .unwrap_or_default();
     place_heards(&mut heard, &live_spots, &needs, fcc_state_for_call);
+    place_iotas(&mut heard, callbook_iota_for_call, iota_list::known);
     let mut alerts = propagation::rank_needs(&heard, &*needs, &needs.slots());
     // The Confirm (worked-but-unconfirmed / LoTW opportunity) tier is opt-out. This is
     // the ONE seam both surfaces share — the Needed board and the decode/roster chips
@@ -29931,7 +30013,9 @@ fn callbook_answer(
 /// this call on any path, the FT auto-log included, takes it into its empty fields. As for the
 /// name, the lookup already happened; the logging path never makes one.
 fn note_lookup_answer(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::QrzLookupDto) {
-    engine_lock(engine).note_callbook_answer(call, callbook_answer(dto));
+    let answer = callbook_answer(dto);
+    note_callbook_iota(call, &answer);
+    engine_lock(engine).note_callbook_answer(call, answer);
 }
 
 /// What [`callbook_lookup_live`] answers when every callbook it asked holds no such call — the one
@@ -38687,6 +38771,9 @@ fn start_on_the_logbook(
             std::thread::sleep(std::time::Duration::from_secs(subsec_jitter(120)));
             maybe_kick_tle_refresh(false);
         });
+        // The IOTA island-group list: the copy the operator chose to download, refreshed when a
+        // month old. Nothing at all without their yes (`iota_list`).
+        iota_list::load_at_startup();
         // LoTW-user marks: restore the persisted ARRL activity list (if the
         // operator ever fetched it) and wire the recency-windowed resolver.
         if let Ok(csv) = std::fs::read_to_string(lotw_users_path()) {
@@ -40856,6 +40943,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         freq_markers::remove_freq_marker,
         freq_markers::freq_marker_qsy,
         get_lotw_users_status,
+        iota_list::get_iota_list_status,
+        iota_list::set_iota_list_consent,
+        iota_list::get_iota_groups,
         fetch_lotw_users,
         get_fcc_states_status,
         fetch_fcc_states,
@@ -47170,6 +47260,82 @@ mod tests {
     /// The band is the load-bearing part: the same skimmer is rank 2 on 2 m and rank 1
     /// on 6 m, because `near_me_radius_km` is 800 km on one and 250 km on the other and
     /// the gate counts by that radius, not by the widest one.
+    #[test]
+    fn a_spot_comment_and_a_callbook_answer_place_the_station_on_its_island() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let mk = |call: &str, comment: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz: 14025.0,
+            comment: comment.into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let mut buf = SpotBuffer::new(100);
+        buf.push(mk("IA5X", "IOTA EU-028 up 1"));
+        buf.push(mk("IT9ABC", "loud"));
+        let recent = buf.recent_within(
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(900),
+        );
+        let mut heard = cluster_spot_heards(
+            &recent,
+            propagation::geo::maidenhead_to_latlon("EN52"),
+            "KD9TAW",
+            tempo_app::settings::LicenseClass::Extra,
+        );
+        let iota_of = |heard: &[propagation::Heard], call: &str| {
+            heard
+                .iter()
+                .find(|h| h.call == call)
+                .and_then(|h| h.iota.clone())
+        };
+        assert_eq!(iota_of(&heard, "IA5X").as_deref(), Some("EU-028"));
+        assert_eq!(iota_of(&heard, "IT9ABC"), None);
+        // A callbook answer fills a station the comment did not place — and never replaces a
+        // group the comment named.
+        let lookup =
+            |call: &str| (call == "IT9ABC" || call == "IA5X").then(|| "EU-025".to_string());
+        crate::place_iotas(&mut heard, lookup, |_| true);
+        assert_eq!(iota_of(&heard, "IT9ABC").as_deref(), Some("EU-025"));
+        assert_eq!(iota_of(&heard, "IA5X").as_deref(), Some("EU-028"));
+        // With the island list held, a group it lacks is no island: no need is raised on it.
+        crate::place_iotas(&mut heard, lookup, |r| r != "EU-028");
+        assert_eq!(iota_of(&heard, "IA5X"), None);
+        assert_eq!(iota_of(&heard, "IT9ABC").as_deref(), Some("EU-025"));
+    }
+
+    /// The session's callbook answers place a station only by its own plain call: a stroked call's
+    /// answer is the licensee's home, and an answer that is another call's record says nothing.
+    #[test]
+    fn a_callbook_island_counts_only_for_its_own_plain_call() {
+        let answer = |call: &str| tempo_core::logbook::callbook::CallbookAnswer {
+            call: call.into(),
+            iota: Some("oc-146".into()),
+            ..Default::default()
+        };
+        crate::note_callbook_iota("vk9xx", &answer("VK9XX"));
+        crate::note_callbook_iota("VK9YY/P", &answer("VK9YY/P"));
+        crate::note_callbook_iota("VK9ZZ", &answer("VK9ZY"));
+        assert_eq!(
+            crate::callbook_iota_for_call("VK9XX").as_deref(),
+            Some("OC-146")
+        );
+        assert_eq!(crate::callbook_iota_for_call("VK9YY/P"), None);
+        assert_eq!(crate::callbook_iota_for_call("VK9ZZ"), None);
+        // A later answer with no island forgets the earlier one.
+        crate::note_callbook_iota(
+            "VK9XX",
+            &tempo_core::logbook::callbook::CallbookAnswer {
+                call: "VK9XX".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(crate::callbook_iota_for_call("VK9XX"), None);
+    }
+
     #[test]
     fn spotter_evidence_rank_matches_the_gates_it_feeds() {
         let en52 = propagation::geo::maidenhead_to_latlon("EN52");
@@ -54442,6 +54608,7 @@ mod tests {
             evidence: None,
             grid: None,
             us_state: state.map(|st| (st.into(), Grid)),
+            iota: None,
         };
         let live = |call: &str, states: &[&str]| {
             let mut sp = ota_spot(call, "US-0001");
@@ -54498,6 +54665,7 @@ mod tests {
             evidence: None,
             grid: None,
             us_state: None,
+            iota: None,
         };
         let mut park = ota_spot("KL7ACT", "US-0001");
         park.states = codes(&["US-WA"]);

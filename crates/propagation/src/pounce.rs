@@ -37,8 +37,9 @@ pub enum PounceThreshold {
     Atno,
     /// ATNO plus a new CQ zone — for zone chasers working 5BWAZ.
     AtnoOrZone,
-    /// ATNO, zone, or a new US state. The widest tier; expect it to fire often enough that it
-    /// stops being an interrupt and starts being a feed.
+    /// ATNO, zone, a new US state or a new IOTA island group. The widest tier; expect it to fire
+    /// often enough that it stops being an interrupt and starts being a feed. (The name predates
+    /// IOTA and is kept: it is what a stored setting says.)
     AtnoZoneOrState,
 }
 
@@ -52,7 +53,10 @@ impl PounceThreshold {
             PounceThreshold::Atno => has(NeedTag::NewEntity),
             PounceThreshold::AtnoOrZone => has(NeedTag::NewEntity) || has(NeedTag::NewZone),
             PounceThreshold::AtnoZoneOrState => {
-                has(NeedTag::NewEntity) || has(NeedTag::NewZone) || has(NeedTag::NewState)
+                has(NeedTag::NewEntity)
+                    || has(NeedTag::NewZone)
+                    || has(NeedTag::NewState)
+                    || has(NeedTag::NewIota)
             }
         }
     }
@@ -202,6 +206,7 @@ mod tests {
             state_from: None,
             wpx_need: None,
             wae_need: None,
+            iota: None,
         }
     }
 
@@ -239,6 +244,22 @@ mod tests {
                 "{tags:?} is not an ATNO — the default tier must stay quiet"
             );
         }
+    }
+
+    /// A new island group pounces at the widest tier only: the narrower ones are the entity
+    /// and zone chaser's, and stay as quiet as they were.
+    #[test]
+    fn a_new_iota_pounces_at_the_widest_tier_only() {
+        let a = alert("IA5X", "20m", "CW", vec![NeedTag::NewIota]);
+        for th in [PounceThreshold::Atno, PounceThreshold::AtnoOrZone] {
+            assert!(
+                PounceGate::new().admit(&a, th, 100, 100).is_none(),
+                "{th:?}"
+            );
+        }
+        assert!(PounceGate::new()
+            .admit(&a, PounceThreshold::AtnoZoneOrState, 100, 100)
+            .is_some());
     }
 
     #[test]

@@ -158,6 +158,7 @@ const MIGRATED = [
   'components/RecentlyDeleted.tsx',
   // The import preview and its no-loss report's words — born migrated.
   'components/ImportPreview.tsx',
+  'components/Iota.tsx',
   'features/logImport.ts',
   'components/LogTools.tsx',
   'components/LogDupes.tsx',

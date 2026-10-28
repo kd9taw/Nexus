@@ -95,6 +95,7 @@ import { failureText, pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
 import { callCardTrigger, qrzPageOf } from './CallCard'
+import { IotaReferenceNote } from './Iota'
 import type { FieldEdit, QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
 
 interface Props {
@@ -2560,6 +2561,7 @@ export function Logbook({
                 aria-invalid={!!draft.iota.trim() && !IOTA_RE.test(draft.iota.trim().toUpperCase())}
                 title={t('logbook.field.iota.title')}
               />
+              <IotaReferenceNote reference={draft.iota} />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.name.label')}</span>

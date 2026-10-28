@@ -80,6 +80,7 @@ const NEEDS: Narrow = Narrow {
         "qrz_status_raw",
         "prop_mode",
         "dxcc",
+        "ota_iota",
     ],
     uploads: false,
 };
@@ -279,6 +280,8 @@ fn needs_add(needs: &mut propagation::LogNeeds, q: &QsoRecord) {
         qso_is_sat(q.prop_mode.as_deref()),
         award_fields(q),
     );
+    // The island group, confirmed as IOTA credits it (a card or LoTW: the award-grade gate).
+    needs.add_iota(q.ota.iota.as_deref(), q.award_confirmed);
 }
 
 /// The award-needs model of the whole log, folded again only when the log's content moves.
@@ -1294,6 +1297,7 @@ mod tests {
                 // the whole record — the store's narrow read must carry them to match it.
                 award_fields(q),
             );
+            needs.add_iota(q.ota.iota.as_deref(), q.award_confirmed);
         }
         needs
     }
@@ -1476,6 +1480,8 @@ mod tests {
             sorted(n.confirmed_zones().iter()),
             sorted(n.confirmed_grids().iter()),
             sorted(n.confirmed_states().iter()),
+            sorted(n.worked_iota().iter()),
+            sorted(n.confirmed_iota().iter()),
         ];
         let mut entities: Vec<String> = n.worked_entity_names().iter().cloned().collect();
         entities.extend(["Japan".to_string(), "Nowhere".to_string()]);
@@ -2252,6 +2258,7 @@ mod tests {
             evidence: None,
             grid: None,
             us_state: state.map(|s| (s.to_string(), propagation::StateSource::License)),
+            iota: None,
         };
         let spots = [
             // Navassa: K1N's record, zone 8 with it.

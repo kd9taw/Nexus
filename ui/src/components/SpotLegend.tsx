@@ -59,6 +59,7 @@ export const BEACON_BADGE: Record<BeaconKind, { ch: string; cls: string; word: s
 const LEGEND_NEEDS: NeedTag[] = [
   'Wanted',
   'NewEntity',
+  'NewIota',
   'NewZone',
   'NewState',
   'NewGrid',

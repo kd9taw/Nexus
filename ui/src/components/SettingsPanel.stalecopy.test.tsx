@@ -396,6 +396,7 @@ describe('an edit made in any section of Settings is saved', () => {
     connections: 'the credential verbs; the rest is connection status',
     'callsign-state': 'a download verb',
     'country-file': 'a download verb',
+    'iota-list': 'its own consent verb, kept beside the downloaded list',
     workspace: 'display preferences kept on this computer',
     theme: 'display preferences kept on this computer',
     colours: 'display preferences kept on this computer',

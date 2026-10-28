@@ -3060,6 +3060,9 @@ export type NeedTag =
   | 'NewMode'
   | 'NewGrid'
   | 'NewState'
+  /** An IOTA island group never worked, on any band. Set only when the station's group is known:
+   * a spot comment that names it, or a callbook answer for exactly that call (needalert.rs). */
+  | 'NewIota'
   /** A POTA/SOTA reference not yet worked in the activation running right now — a genuine
    * need, unlike the Pota/Sota labels below. See HuntedActivations (needalert.rs). */
   | 'NewPark'
@@ -3121,6 +3124,9 @@ export interface NeedAlert {
   /** The WAE country this station would be new in on this band in this mode class. Sent only
    *  while "Show WAE country needs" is on (off as it ships); the board shows a WAE chip for it. */
   waeNeed?: string | null
+  /** The IOTA island group the station is on, when its spot's comment or a callbook answer named
+   * one — present on a NewIota row, and on a Confirm row the group raised. */
+  iota?: string | null
 }
 
 /** One raw cluster/RBN spot for the Spots panel (the firehose).
@@ -3152,6 +3158,8 @@ export interface SpotRow {
   /** Seconds since received; -1 if unknown. */
   ageSecs: number
   comment: string
+  /** The IOTA island group the comment names, when it names exactly one (`iota::in_comment`). */
+  iota?: string
   /** Operator may transmit at this freq+mode (license privileges; Open class ⇒ true). */
   licensed: boolean
   /** At least one voice for this spot — the spotter or a corroborator — is on the operator's

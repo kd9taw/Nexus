@@ -527,6 +527,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['cty', 'cty.dat', 'dxcc', 'country file', 'entities', 'ad1c', 'prefix',
       'country'],
   },
+  {
+    id: 'iota-list',
+    label: 'IOTA island list',
+    tab: 'logbook',
+    keywords: ['iota', 'islands on the air', 'island', 'island group', 'island names', 'download'],
+  },
 
   // ---- Logging & Connectors ----------------------------------------------------
   {

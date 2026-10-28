@@ -61,6 +61,11 @@ export { WORKED_WINDOWS, isWorkedWindow, workedWithin, type WorkedWindow } from 
  * nothing about a 20 m spot), then keep the row if anything that survives is a real NEED. An
  * activity label (POTA/SOTA/DXpedition) is not: being a DXpedition is not something you can need.
  */
+/** Whether the Needed board holds a New IOTA need for this station's group. */
+export function iotaNeeded(alerts: NeedAlert[] | undefined, iota: string): boolean {
+  return (alerts ?? []).some((a) => a.tags.includes('NewIota') && a.iota === iota)
+}
+
 export function neededHere(alerts: NeedAlert[] | undefined, band: string, mode: string): boolean {
   return alertsForSurface(alerts, band, mode).some((a) => a.tags.some((tag) => !isActivityTag(tag)))
 }
@@ -837,6 +842,20 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
                       title={markWords.join(' · ')}
                     >
                       {multTag === 'predicted' ? t('contestSpot.tag.predicted') : t('contestSpot.tag.mult')}
+                    </span>
+                  )}
+                  {/* The island group the comment names (`iota::in_comment`, the reading the Needed
+                      board scores New IOTA by), in the need's colour while it is one. */}
+                  {s.iota && (
+                    <span
+                      className={`sp-iota${iotaNeeded(needsByCall.get(s.call.toUpperCase()), s.iota) ? ' need-chip need-iota' : ''}`}
+                      title={
+                        iotaNeeded(needsByCall.get(s.call.toUpperCase()), s.iota)
+                          ? t('spots.row.iota.needed', { ref: s.iota })
+                          : t('spots.row.iota.title', { ref: s.iota })
+                      }
+                    >
+                      {s.iota}
                     </span>
                   )}
                   {/* What Hide worked would drop, said on the row itself — so turning the chip

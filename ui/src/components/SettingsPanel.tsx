@@ -286,6 +286,7 @@ import { ARRL_SECTIONS_BY_DIVISION, RETIRED_SECTIONS } from '../features/arrlSec
 import { IS_MAC, IS_WINDOWS } from '../platform'
 import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from '../settings/ampAddress'
 import { normaliseTyped, upperTyped } from '../typedInput'
+import { IotaListSettings } from './Iota'
 
 interface Props {
   /** The live contest session, for the READ-ONLY role read-out on the Contesting tab.
@@ -11826,6 +11827,11 @@ export function SettingsPanel({
                 )}
               <span className="settings-hint">{t('settings.countryFile.hint')}</span>
             </div>
+          </fieldset>
+          {/* The IOTA island-group list: IOTA Ltd's, downloaded only with the operator's yes. */}
+          <fieldset className="settings-section" id="settings-iota-list">
+            <legend>{t('settings.iotaList.legend')}</legend>
+            <IotaListSettings />
           </fieldset>
           </>
           )}

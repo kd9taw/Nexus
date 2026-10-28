@@ -13,6 +13,7 @@ export type NeedTypeFilter =
   | 'newZone'
   | 'newGrid'
   | 'newState'
+  | 'newIota'
   | 'newPark'
   | 'confirm'
   | 'dxped'
@@ -52,6 +53,7 @@ const TAG_TO_BUCKET: Record<NeedTag, NeedTypeFilter> = {
   NewZone:   'newZone',
   NewGrid:   'newGrid',
   NewState:  'newState',
+  NewIota:   'newIota',
   NewPark:   'newPark',
   Confirm:   'confirm',
   Dxped:     'dxped',
@@ -63,7 +65,7 @@ const TAG_TO_BUCKET: Record<NeedTag, NeedTypeFilter> = {
  * from an older build; an unknown value must fall back to 'all', not silently
  * empty the board with no active chip. */
 export const NEED_TYPE_VALUES: readonly NeedTypeFilter[] = [
-  'all', 'wanted', 'atno', 'newBand', 'newMode', 'newZone', 'newGrid', 'newState', 'newPark', 'confirm', 'dxped', 'pota', 'sota',
+  'all', 'wanted', 'atno', 'newBand', 'newMode', 'newZone', 'newGrid', 'newState', 'newIota', 'newPark', 'confirm', 'dxped', 'pota', 'sota',
 ]
 
 /** True when the alert matches the given filter set (all filters AND together). */

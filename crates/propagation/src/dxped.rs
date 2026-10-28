@@ -182,6 +182,10 @@ pub struct LogNeeds {
     /// here whatever band its label names).
     worked_grids_sat: HashSet<String>,
     confirmed_grids_sat: HashSet<String>,
+    /// IOTA island groups worked / confirmed, any band (the award counts each group once) —
+    /// the New IOTA need's log side ([`Self::add_iota`]).
+    worked_iota: HashSet<String>,
+    confirmed_iota: HashSet<String>,
 }
 
 impl LogNeeds {
@@ -363,6 +367,31 @@ impl LogNeeds {
         &self.confirmed_states
     }
 
+    /// Fold one logged contact's IOTA reference in: the island group it worked, and whether the
+    /// contact is confirmed the way IOTA credits it (a card or LoTW — the log's award-grade
+    /// confirmation). Read through [`crate::iota::canonical`], the resolver the heard side scores
+    /// by, so a group logged in any spelling clears the need for that group; a reference that is
+    /// not one counts nothing.
+    pub fn add_iota(&mut self, iota: Option<&str>, confirmed: bool) {
+        let Some(r) = iota.and_then(crate::iota::canonical) else {
+            return;
+        };
+        if confirmed {
+            self.confirmed_iota.insert(r.clone());
+        }
+        self.worked_iota.insert(r);
+    }
+
+    /// IOTA groups the operator has worked, any band (the New IOTA need).
+    pub fn worked_iota(&self) -> &HashSet<String> {
+        &self.worked_iota
+    }
+
+    /// IOTA groups the operator has CONFIRMED by card or LoTW (the IOTA Confirm opportunity).
+    pub fn confirmed_iota(&self) -> &HashSet<String> {
+        &self.confirmed_iota
+    }
+
     /// The worked+confirmed zone/grid/state slots the need scorer consults, bundled so
     /// callers pass one argument instead of six.
     pub fn slots(&self) -> crate::needalert::AwardSlots<'_> {
@@ -373,6 +402,8 @@ impl LogNeeds {
             confirmed_grids: &self.confirmed_grids,
             worked_states: &self.worked_states,
             confirmed_states: &self.confirmed_states,
+            worked_iota: &self.worked_iota,
+            confirmed_iota: &self.confirmed_iota,
         }
     }
 }

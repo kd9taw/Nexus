@@ -33,6 +33,7 @@ pub mod gettingout;
 pub mod gridrarity;
 pub mod gridstate;
 pub mod insight;
+pub mod iota;
 pub mod journey;
 pub mod kc2g;
 pub mod kpforecast;
