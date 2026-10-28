@@ -7453,6 +7453,7 @@ export const FR: PartialCatalog = {
   "js8.sound.file.notAFile": "ce n’est pas un fichier",
   "js8.sound.file.badFormat": "Nexus ne sait pas lire son format, ou il est tronqué",
   "js8.sound.file.notPicked": "il n’a pas été choisi pour ce son dans les Réglages",
+  "js8.sound.file.network": "il est sur un autre ordinateur : Nexus n’ouvre pas les fichiers son d’un partage réseau, ce qui peut envoyer votre connexion Windows à cet ordinateur ; copiez-le sur cet ordinateur",
   "js8.sound.txDevice": "Un son JS8 n’a pas été joué : sa sortie est un périphérique par lequel votre radio émet, et un son à cet endroit pourrait la passer en émission par VOX. Choisissez une autre sortie dans Réglages ▸ Numérique ▸ JS8 ▸ Sons.",
   "js8.sound.txDefault": "Un son JS8 n’a pas été joué : un périphérique audio TX (celui de la station, ou celui d’un profil radio qui n’en a pas) est réglé sur la sortie par défaut du système, donc un son à cet endroit pourrait passer une radio en émission par VOX. Choisissez une sortie précise dans Réglages ▸ Numérique ▸ JS8 ▸ Sons.",
   "js8.sound.txUnsure": "Un son JS8 n’a pas été joué : Nexus ne peut pas distinguer sa sortie d’un périphérique par lequel votre radio émet (la sortie par défaut du serveur de son peut être la carte son de la radio). Choisissez par son nom la carte son où jouer dans Réglages ▸ Numérique ▸ JS8 ▸ Sons, et réglez l’audio TX de la radio sur sa propre carte, par son nom.",

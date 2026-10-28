@@ -2,6 +2,9 @@
 //! checked before a sample of it is played. Pure: no device, no engine.
 //!
 //! What is read is bounded at every step, so a path pointing anywhere costs a refusal at most:
+//! - never a file on another computer: a Windows network path (`\\server\share\…`, `//server/…`,
+//!   `\\?\UNC\…`), or a link on this computer that leads to one, is refused before anything at it is
+//!   touched, because opening a file on a share can send the Windows sign-in to that server;
 //! - only a regular file (never a folder, a device, a pipe or a socket: a pipe would block the read);
 //! - at most [`MAX_SOUND_FILE_BYTES`], checked before reading and enforced while reading, so a file
 //!   that grows meanwhile is still cut off;
@@ -13,7 +16,7 @@
 //!
 //! The bytes never leave this module: the caller gets mono samples to play, or why not.
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The largest sound file read: a notification is a second or two, and 10 MiB is a minute of
 /// CD-quality stereo.
@@ -46,6 +49,10 @@ pub enum SoundFileRefusal {
     /// A WAV file whose header is cut short or garbled, whose format is not a plausible sound, or
     /// whose samples stop early.
     BadFormat,
+    /// On another computer: a Windows network path (`\\server\share\…`, `//server/…`), or a
+    /// link that leads to one. Never opened: opening a file on a network share can send the
+    /// Windows sign-in to that server.
+    Network,
 }
 
 /// A sound ready to play: mono samples in -1..=1 at `rate`.
@@ -61,6 +68,10 @@ pub fn read_sound_file(path: &Path) -> Result<SoundClip, SoundFileRefusal> {
         std::io::ErrorKind::NotFound => SoundFileRefusal::Missing,
         _ => SoundFileRefusal::Unreadable,
     };
+    // Before anything at the path is touched: opening a share sends the sign-in to its server.
+    if reaches_network(path, 0) {
+        return Err(SoundFileRefusal::Network);
+    }
     // Before opening: opening a pipe for reading blocks until something writes to it.
     let meta = std::fs::metadata(path).map_err(refused)?;
     if !meta.is_file() {
@@ -82,6 +93,70 @@ pub fn read_sound_file(path: &Path) -> Result<SoundClip, SoundFileRefusal> {
         return Err(SoundFileRefusal::TooLarge);
     }
     decode_sound(&bytes)
+}
+
+/// Whether `path` is spelled as a Windows network path: two leading separators of either kind
+/// (`\\server\share`, `//server/share`, `\\?\UNC\…`, `\\.\…`), or the NT `\??\` prefix. A
+/// local Windows path starts with a drive letter, so nothing the file picker returns for a local
+/// file is refused here.
+fn is_network_spelling(path: &Path) -> bool {
+    let text = path.to_string_lossy();
+    let text = text.trim_start();
+    let sep = |c: char| c == '\\' || c == '/';
+    let mut chars = text.chars();
+    let two_separators = chars.next().is_some_and(sep) && chars.next().is_some_and(sep);
+    two_separators || text.starts_with(r"\??\")
+}
+
+/// The most links followed while looking for a share: a chain longer than this is refused rather
+/// than followed (a loop is one).
+const MAX_LINK_HOPS: u32 = 16;
+
+/// Whether reading `path` would reach another computer: its spelling, or any link along it (a
+/// file link, or a folder link part way down) whose target is a network path. Links are read with
+/// `read_link`, which reads the link itself and never what it points at, and a part of the path is
+/// only looked at once every part before it is known to be local. A part that does not exist ends
+/// the walk: the read then says the file is missing.
+fn reaches_network(path: &Path, hops: u32) -> bool {
+    if is_network_spelling(path) {
+        return true;
+    }
+    if hops > MAX_LINK_HOPS {
+        return true;
+    }
+    let parts: Vec<_> = path.components().collect();
+    let mut so_far = PathBuf::new();
+    for (i, part) in parts.iter().enumerate() {
+        so_far.push(part);
+        let Ok(meta) = std::fs::symlink_metadata(&so_far) else {
+            return false;
+        };
+        if !meta.file_type().is_symlink() {
+            continue;
+        }
+        let Ok(target) = std::fs::read_link(&so_far) else {
+            return true; // a link that cannot be read could lead anywhere
+        };
+        // Windows may hand a link to a share back as `UNC\server\share`, without its leading
+        // separators.
+        let unc = target
+            .to_string_lossy()
+            .get(..4)
+            .is_some_and(|head| head.eq_ignore_ascii_case(r"UNC\"));
+        if unc {
+            return true;
+        }
+        let mut next = if is_network_spelling(&target) || target.is_absolute() {
+            target
+        } else {
+            so_far.parent().unwrap_or(Path::new("")).join(target)
+        };
+        for rest in &parts[i + 1..] {
+            next.push(rest);
+        }
+        return reaches_network(&next, hops + 1);
+    }
+    false
 }
 
 /// Check a WAV file's bytes and give back its samples downmixed to mono.
@@ -182,6 +257,78 @@ mod tests {
 
     fn i16s(v: &[i16]) -> Vec<u8> {
         v.iter().flat_map(|s| s.to_le_bytes()).collect()
+    }
+
+    /// A network path is refused by its shape, before anything at it is touched (opening it can
+    /// send the Windows sign-in to that server): every spelling Windows reads as a share.
+    #[test]
+    fn a_network_path_is_refused_unopened() {
+        for path in [
+            r"\\server\share\cq.wav",
+            "//server/share/cq.wav",
+            r"\/server/share/cq.wav",
+            r"/\server\share\cq.wav",
+            r"\\?\UNC\server\share\cq.wav",
+            r"\\.\UNC\server\share\cq.wav",
+            r"\??\UNC\server\share\cq.wav",
+            r"  \\server\share\cq.wav",
+        ] {
+            assert_eq!(
+                read_sound_file(Path::new(path)),
+                Err(SoundFileRefusal::Network),
+                "{path}"
+            );
+        }
+        let dir = scratch("local");
+        let cq = dir.join("cq.wav");
+        std::fs::write(&cq, wav(1, 8_000, 16, 1, &i16s(&[0, 1]))).unwrap();
+        assert!(read_sound_file(&cq).is_ok(), "control: a local file plays");
+        assert_eq!(
+            read_sound_file(Path::new(r"C:\Sounds\nothing-here.wav")),
+            Err(SoundFileRefusal::Missing),
+            "control: a drive path is not a share"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A link on this computer that leads to a share is refused the same way, through a folder
+    /// link as well as a file link; a link to a local file plays.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_network_path_is_refused() {
+        use std::os::unix::fs::symlink;
+        let dir = scratch("links");
+        let real = dir.join("real.wav");
+        std::fs::write(&real, wav(1, 8_000, 16, 1, &i16s(&[0, 1]))).unwrap();
+        symlink(&real, dir.join("local.wav")).unwrap();
+        assert!(
+            read_sound_file(&dir.join("local.wav")).is_ok(),
+            "control: a link to a local file plays"
+        );
+        symlink(r"\\server\share\cq.wav", dir.join("share.wav")).unwrap();
+        assert_eq!(
+            read_sound_file(&dir.join("share.wav")),
+            Err(SoundFileRefusal::Network)
+        );
+        symlink("//server/share", dir.join("folder")).unwrap();
+        assert_eq!(
+            read_sound_file(&dir.join("folder").join("cq.wav")),
+            Err(SoundFileRefusal::Network),
+            "a folder link to a share"
+        );
+        symlink(r"UNC\server\share\cq.wav", dir.join("bare.wav")).unwrap();
+        assert_eq!(
+            read_sound_file(&dir.join("bare.wav")),
+            Err(SoundFileRefusal::Network),
+            "a share as Windows may report a link's target"
+        );
+        symlink(dir.join("share.wav"), dir.join("chain.wav")).unwrap();
+        assert_eq!(
+            read_sound_file(&dir.join("chain.wav")),
+            Err(SoundFileRefusal::Network),
+            "a link to a link to a share"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

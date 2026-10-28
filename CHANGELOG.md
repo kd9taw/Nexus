@@ -52,7 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ACK for you, a message to you, a message in your Inbox, a new callsign, one you have worked) now play whichever screen is
   showing while JS8 is the mode, as JS8Call's do, so a CQ sounds while the Logbook is open. Each plays its own tone or a
   WAV file you choose in Settings ▸ Digital ▸ JS8 ▸ Sounds (Choose…, Reset to built-in, Test); a file that cannot be played
-  plays the tone and Nexus says so once. **Play the sounds on** picks the output, the system default unless you pick one.
+  plays the tone and Nexus says so once. A file on a network share (`\\server\share`, or a link to one) is never opened,
+  since opening it can send your Windows sign-in to that computer: the tone plays and Nexus asks you to copy the file to
+  this computer. **Play the sounds on** picks the output, the system default unless you pick one.
   Nexus never plays a sound on a device your radio transmits from, where it could key a rig on VOX: it checks at every
   sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. The
   device the radio actually opened for TX audio is refused too, while the radio holds it: with TX audio set to the

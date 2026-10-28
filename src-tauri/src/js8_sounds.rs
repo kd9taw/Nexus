@@ -83,6 +83,9 @@ pub enum SoundRefusal {
     TooLarge,
     NotWav,
     BadFormat,
+    /// On another computer (a Windows network share, or a link to one): never opened, since
+    /// opening it can send the Windows sign-in to that server.
+    Network,
     /// A path the operator did not choose (not in Settings for that event, not picked this run).
     NotPicked,
     // Nothing played.
@@ -110,6 +113,7 @@ impl From<SoundFileRefusal> for SoundRefusal {
             SoundFileRefusal::TooLarge => Self::TooLarge,
             SoundFileRefusal::NotWav => Self::NotWav,
             SoundFileRefusal::BadFormat => Self::BadFormat,
+            SoundFileRefusal::Network => Self::Network,
         }
     }
 }
@@ -397,6 +401,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A sound file on a network share is never opened, even when it is the operator's own saved
+    /// choice: the tone plays, and the window is told why.
+    #[test]
+    fn a_chosen_file_on_a_network_share_plays_the_tone_unopened() {
+        let share = r"\\server\share\cq.wav".to_string();
+        let mut settings = Settings::default();
+        settings.js8_sound_files.insert("cq".into(), share.clone());
+        let (clip, why) = clip_for(&settings, Js8SoundEvent::Cq, Some(&share), &BTreeSet::new());
+        assert_eq!(why, Some(SoundRefusal::Network));
+        assert_eq!(clip.rate, tempo_audio_rate(), "the tone instead");
+        let picked: BTreeSet<String> = ["//server/share/cq.wav".to_string()].into();
+        let (_, why) = clip_for(
+            &Settings::default(),
+            Js8SoundEvent::Cq,
+            Some("//server/share/cq.wav"),
+            &picked,
+        );
+        assert_eq!(why, Some(SoundRefusal::Network), "picked this run");
+    }
+
     /// The window reads each refusal by name (`ui/src/features/js8Sounds.ts`).
     #[test]
     fn a_refusal_reaches_the_window_by_name() {
@@ -407,6 +431,7 @@ mod tests {
             SoundRefusal::TooLarge,
             SoundRefusal::NotWav,
             SoundRefusal::BadFormat,
+            SoundRefusal::Network,
             SoundRefusal::NotPicked,
             SoundRefusal::TxDevice,
             SoundRefusal::TxDefault,
@@ -426,6 +451,7 @@ mod tests {
                 "\"tooLarge\"",
                 "\"notWav\"",
                 "\"badFormat\"",
+                "\"network\"",
                 "\"notPicked\"",
                 "\"txDevice\"",
                 "\"txDefault\"",

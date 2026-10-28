@@ -160,6 +160,9 @@ describe('the sound a sound plays: the operator’s WAV file, else the built-in 
     expect(await reason('notAFile')).toContain('(it is not a file)')
     expect(await reason('badFormat')).toContain('(its format is not one Nexus can play, or it is cut short)')
     expect(await reason('notPicked')).toContain('(it was not chosen for this sound in Settings)')
+    expect(await reason('network')).toContain(
+      '(it is on another computer: Nexus does not open sound files on a network share, which can send your Windows sign-in to that computer; copy it to this computer)',
+    )
   })
 
   it('nothing played because the output is a TX audio device: said once, every time from Test, never another output', async () => {

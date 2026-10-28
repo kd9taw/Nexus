@@ -7453,6 +7453,7 @@ export const ES: PartialCatalog = {
   "js8.sound.file.notAFile": "no es un archivo",
   "js8.sound.file.badFormat": "Nexus no puede reproducir su formato, o está incompleto",
   "js8.sound.file.notPicked": "no se eligió para este sonido en Ajustes",
+  "js8.sound.file.network": "está en otro ordenador: Nexus no abre archivos de sonido en una carpeta compartida de red, porque eso puede enviar su inicio de sesión de Windows a ese ordenador; cópielo a este ordenador",
   "js8.sound.txDevice": "Un sonido de JS8 no se reprodujo: su salida es un dispositivo desde el que transmite su radio, y un sonido ahí podría activar la radio por VOX. Elija otra salida en Ajustes ▸ Digital ▸ JS8 ▸ Sonidos.",
   "js8.sound.txDefault": "Un sonido de JS8 no se reprodujo: un dispositivo de audio TX (el de la estación, o el de un perfil de radio que no tiene ninguno) está configurado como la salida predeterminada del sistema, así que un sonido ahí podría activar una radio por VOX. Elija una salida concreta en Ajustes ▸ Digital ▸ JS8 ▸ Sonidos.",
   "js8.sound.txUnsure": "Un sonido de JS8 no se reprodujo: Nexus no puede distinguir su salida de un dispositivo desde el que transmite su radio (la salida predeterminada del servidor de sonido puede ser la tarjeta de sonido de la radio). Elija por su nombre la tarjeta de sonido en la que sonar en Ajustes ▸ Digital ▸ JS8 ▸ Sonidos, y configure el audio TX de la radio con su propia tarjeta por su nombre.",

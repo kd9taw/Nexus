@@ -6387,6 +6387,7 @@ export const DE: PartialCatalog = {
   "js8.sound.file.notAFile": "es ist keine Datei",
   "js8.sound.file.badFormat": "ihr Format kann Nexus nicht abspielen, oder sie ist abgeschnitten",
   "js8.sound.file.notPicked": "sie wurde in den Einstellungen nicht für diesen Ton gewählt",
+  "js8.sound.file.network": "sie liegt auf einem anderen Computer: Nexus öffnet keine Tondateien auf einer Netzwerkfreigabe, weil das Ihre Windows-Anmeldung an diesen Computer senden kann; kopieren Sie sie auf diesen Computer",
   "js8.sound.txDevice": "Ein JS8-Ton wurde nicht abgespielt: Sein Ausgang ist ein Gerät, über das Ihr Funkgerät sendet, und ein Ton dort könnte das Funkgerät per VOX tasten. Wählen Sie einen anderen Ausgang unter Einstellungen ▸ Digital ▸ JS8 ▸ Töne.",
   "js8.sound.txDefault": "Ein JS8-Ton wurde nicht abgespielt: Ein TX-Audiogerät (das der Station oder das eines Funkgeräteprofils ohne eigenes) ist auf den Systemstandard-Ausgang gestellt, daher könnte ein Ton dort ein Funkgerät per VOX tasten. Wählen Sie einen bestimmten Ausgang unter Einstellungen ▸ Digital ▸ JS8 ▸ Töne.",
   "js8.sound.txUnsure": "Ein JS8-Ton wurde nicht abgespielt: Nexus kann seinen Ausgang nicht von einem Gerät unterscheiden, über das Ihr Funkgerät sendet (der Standardausgang des Soundservers kann die Soundkarte des Funkgeräts sein). Wählen Sie die Soundkarte für die Töne namentlich unter Einstellungen ▸ Digital ▸ JS8 ▸ Töne und stellen Sie das TX-Audio des Funkgeräts namentlich auf dessen eigene Karte.",

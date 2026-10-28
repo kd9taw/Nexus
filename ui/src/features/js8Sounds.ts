@@ -129,6 +129,8 @@ function whyNot(reason: unknown): string {
       return t('js8.sound.file.badFormat')
     case 'notPicked':
       return t('js8.sound.file.notPicked')
+    case 'network':
+      return t('js8.sound.file.network')
     default:
       return t('js8.sound.file.unreadable')
   }
