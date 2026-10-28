@@ -3992,10 +3992,6 @@ pub struct Engine {
     /// The radio name the active radio's TCI server reported (`device:`), for `MY_RIG`: a TCI
     /// radio's model name is the protocol's, "TCI". `None` when no TCI session has said.
     tci_device: Option<String>,
-    /// The station profile the station was on before an activation picked its park's
-    /// ([`Self::pick_station_profile_for_activation`]): what Stop goes back to. Not kept across a
-    /// restart.
-    station_profile_before_activation: Option<(String, String)>,
     /// QSOs awaiting the HRD Logbook datagram (F4MQS: HRD closed at log time lost the
     /// contact silently). The shell worker drains this each tick — connect-and-send so a
     /// closed HRD is DETECTABLE on localhost (ICMP unreachable → ConnectionRefused), sets
@@ -6895,7 +6891,6 @@ impl Engine {
             pending_udp_qsos: std::collections::VecDeque::new(),
             space_weather: None,
             tci_device: None,
-            station_profile_before_activation: None,
             hrd_pending: std::collections::VecDeque::new(),
             hrd_link_up: None,
             cq_dir: None,
@@ -17437,10 +17432,12 @@ impl Engine {
         // The activation, then the station as it is now — operator, radio, power, grid, state — on
         // a contact made now ([`Self::stamp_activation`], [`Self::stamp_station_now`]). A held
         // contact's activation was decided when it was held.
+        // The station profile's the same way: a held contact took the profile it was made under
+        // when it was held, and a switch before the confirm does not re-stamp it.
         if !from_hold {
             self.stamp_activation(&mut rec);
+            self.stamp_station_profile(&mut rec);
         }
-        self.stamp_station_profile(&mut rec);
         self.stamp_station_now(&mut rec);
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs. One that arrives
@@ -29341,6 +29338,8 @@ contact yourself."
         s.active_radio_id = self.settings.active_radio;
         s.radio_pegged = self.settings.radio_pegged;
         (s.station_profiles, s.active_station_profile) = self.station_profile_choices();
+        s.station_profile_locked =
+            !s.station_profiles.is_empty() && self.station_profile_switch_refusal().is_some();
         s.auto_radio_switch = self.auto_radio_switch.clone();
         // No AI copy or status from an unassisted entry, however it was declared (`cw_decode`).
         let decoding = self.settings.cw_decoder_active();
@@ -33465,17 +33464,34 @@ contact yourself."
         self.station.note_upload(note, ok)
     }
 
-    /// See [`StationCore::set_activation`].
+    /// See [`StationCore::set_activation`]. At the station: a profile that names the park is
+    /// picked ([`Self::set_activation_from`]).
     pub fn set_activation(
         &mut self,
         program: &str,
         reference: &str,
         places: Vec<String>,
     ) -> Result<(String, String), String> {
+        self.set_activation_from(program, reference, places, false)
+    }
+
+    /// See [`StationCore::set_activation`], and the station profile it picks
+    /// (`pick_station_profile_for_activation`). `from_afar`: started from a computer driving the
+    /// station, which may not switch the call the station transmits under.
+    pub fn set_activation_from(
+        &mut self,
+        program: &str,
+        reference: &str,
+        places: Vec<String>,
+        from_afar: bool,
+    ) -> Result<(String, String), String> {
+        // Where a running activation's Stop would have gone back to: the new one keeps it.
+        let back = self.station.activation_station_profile_return();
         let started = self.station.set_activation(program, reference, places);
         self.sync_fd_activation();
         if started.is_ok() {
-            self.pick_station_profile_for_activation();
+            self.station.set_activation_station_profile_return(back);
+            self.pick_station_profile_for_activation(from_afar);
         }
         started
     }
@@ -33497,11 +33513,19 @@ contact yourself."
         self.station.activation_state()
     }
 
-    /// See [`StationCore::clear_activation`].
+    /// See [`StationCore::clear_activation`]. At the station ([`Self::clear_activation_from`]).
     pub fn clear_activation(&mut self) {
+        self.clear_activation_from(false);
+    }
+
+    /// See [`StationCore::clear_activation`], and the station profile it goes back to
+    /// (`return_from_activation_station_profile`). `from_afar`: stopped from a computer driving
+    /// the station, which may not switch the call the station transmits under.
+    pub fn clear_activation_from(&mut self, from_afar: bool) {
+        let back = self.station.activation_station_profile_return();
         self.station.clear_activation();
         self.sync_fd_activation();
-        self.return_from_activation_station_profile();
+        self.return_from_activation_station_profile(back, from_afar);
     }
 
     /// See [`StationCore::resume_activation`].

@@ -14237,7 +14237,7 @@ fn settings_read(
         settings: s,
         saved_at_the_station,
         // From afar, which settings the save keeps as the shack has them, so the form says so.
-        set_at_the_station: command_dispatch::station_only_settings(afar),
+        set_at_the_station: command_dispatch::station_only_settings(afar, shack),
     }
 }
 
@@ -14388,11 +14388,11 @@ fn apply_and_persist(
     let cluster_active = settings.cluster_active();
     let node_config = cluster_nodes::NodeConfig::of(&settings);
     let cluster_ssid = settings.cluster_ssid.clone();
-    let mycall = settings.mycall.clone();
-    let mygrid = settings.mygrid.clone();
     let opening_regional = settings.opening_regional;
-    // The engine lock is released again before the feed threads are touched.
-    let snap = save_and_publish(&state, settings, authoritative_roster)?;
+    // The engine lock is released again before the feed threads are touched. The call and grid
+    // the feeds bind to are the station's after the save, not the form's: with station profiles a
+    // form loaded before a switch carries the call the station has left (`save_and_publish`).
+    let (snap, mycall, mygrid) = save_and_publish(&state, settings, authoritative_roster)?;
     // Resolve the authoritative merged profile after the Engine commit.
     sync_rotctld(&state);
 
@@ -14470,11 +14470,16 @@ fn apply_and_persist(
 /// form keeps what the operator typed. So is a form save that would put a daemon of Nexus's, or
 /// its CAT broker, on a NET rigctl radio's Network Address
 /// ([`tempo_app::engine::Engine::port_clash_a_save_introduces`]), with words naming the port.
+///
+/// With the snapshot, the station's call and grid once the save is applied: what the feeds and the
+/// spot ranking's QTH bind to. Not the form's: with "My station" profiles a form loaded before a
+/// switch carries the call the station has left, and the save keeps the station on its profile
+/// (`Settings::keep_station_form`).
 fn save_and_publish(
     engine: &SharedEngine,
     mut settings: Settings,
     authoritative_roster: bool,
-) -> Result<AppSnapshot, String> {
+) -> Result<(AppSnapshot, String, String), String> {
     let published = settings.clone();
     let snap = tempo_app::engine::with_session_rows(
         engine,
@@ -14547,7 +14552,12 @@ fn save_and_publish(
             if active_profile().is_some() {
                 persist_simultaneous_to_base(eng.settings().simultaneous_radios);
             }
-            Ok(eng.snapshot())
+            let station = eng.settings();
+            Ok((
+                eng.snapshot(),
+                station.mycall.clone(),
+                station.mygrid.clone(),
+            ))
         },
     )??;
     // Live, so an operator can start a diagnostic session mid-flight without restarting — the
@@ -14567,8 +14577,9 @@ fn save_and_publish(
     journal_assistance(&published, "settings saved", false);
     // The spot buffer's voice ranking is QTH-relative and the feed threads outlive a
     // save, so it reads this mirror rather than a spawn-time capture.
-    set_operator_qth(&published.mycall, &published.mygrid);
-    Ok(snap)
+    let (snap, mycall, mygrid) = snap;
+    set_operator_qth(&mycall, &mygrid);
+    Ok((snap, mycall, mygrid))
 }
 
 /// A command that opens a contest session, and the launch that resumes one, when the logbook is
@@ -34589,16 +34600,46 @@ fn clear_hunt_target(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Stri
 }
 
 /// Begin an activation — subsequent logged QSOs are tagged (your side). Validates +
-/// normalizes the reference; returns the activation state.
+/// normalizes the reference; returns the activation state. A station profile it puts the station
+/// on is applied and saved exactly as the top bar's picker does it ([`switch_station_profile`]),
+/// so the feeds bound to the call follow it. `afar`: started from a computer driving the station,
+/// which may not switch the call the station transmits under.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn set_activation(
     state: State<'_, SharedEngine>,
     ota_cache: State<'_, SharedOtaSpots>,
     parks: State<'_, SharedParks>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
     program: String,
     reference: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::ActivationDto, String> {
-    set_activation_on(&state, &ota_cache, &parks, &program, &reference)
+    let (dto, moved) = set_activation_on(
+        &state,
+        &ota_cache,
+        &parks,
+        &program,
+        &reference,
+        afar.as_ref(),
+    )?;
+    if let Some(settings) = moved {
+        apply_and_persist(
+            state,
+            spots,
+            live_paths,
+            region_paths,
+            health,
+            cache,
+            settings,
+            false,
+        )?;
+    }
+    Ok(dto)
 }
 
 /// [`set_activation`]'s body, over plain handles so a test drives exactly what the command runs.
@@ -34610,13 +34651,17 @@ fn set_activation(
 /// And the grid it is activated from: the park directory's grid of its first park
 /// ([`ota_park_grid`]), carried as the contacts' `MY_GRIDSQUARE` instead of the home grid. A park
 /// the directory does not hold starts with none; the strip takes one typed.
+///
+/// With it, the settings to apply and save when the start put the station on another station
+/// profile (a profile naming the park), `None` when the profile stayed.
 fn set_activation_on(
     engine: &SharedEngine,
     ota_cache: &SharedOtaSpots,
     parks: &SharedParks,
     program: &str,
     reference: &str,
-) -> Result<tempo_app::dto::ActivationDto, String> {
+    afar: Option<&command_dispatch::Afar>,
+) -> Result<(tempo_app::dto::ActivationDto, Option<Settings>), String> {
     let refs: Vec<&str> = reference
         .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
         .filter(|one| !one.is_empty())
@@ -34633,12 +34678,19 @@ fn set_activation_on(
         .first()
         .and_then(|first| ota_park_grid(parks, program, first));
     let mut eng = engine_lock(engine);
-    eng.set_activation(program, reference, places)?;
+    let profile = eng.settings().active_station_profile.clone();
+    eng.set_activation_from(program, reference, places, afar.is_some())?;
     if let Some(grid) = grid {
         // A directory grid that is not a locator is left out, never the activation refused.
         let _ = eng.set_activation_grid(&grid);
     }
-    Ok(activation_now(&eng))
+    Ok((activation_now(&eng), profile_moved(&eng, &profile)))
+}
+
+/// The settings to apply and save when the station profile is no longer `before`: an activation's
+/// start or stop moved it ([`set_activation`], [`clear_activation`]).
+fn profile_moved(eng: &tempo_app::engine::Engine, before: &str) -> Option<Settings> {
+    (eng.settings().active_station_profile != before).then(|| eng.settings().clone())
 }
 
 /// The park directory's grid for a POTA park, if it holds one. A summit has none here.
@@ -34679,15 +34731,47 @@ fn set_activation_grid(
     Ok(activation_now(&eng))
 }
 
-/// End the current activation (subsequent QSOs untagged).
+/// End the current activation (subsequent QSOs untagged). The station profile it goes back to
+/// is applied and saved as [`set_activation`]'s is. `afar`: stopped from a computer driving the
+/// station, which may not switch the call the station transmits under.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn clear_activation(
     state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::ActivationDto, String> {
-    let mut eng = engine_lock(&state);
-    eng.clear_activation();
+    let (dto, moved) = clear_activation_on(&state, afar.as_ref());
+    if let Some(settings) = moved {
+        apply_and_persist(
+            state,
+            spots,
+            live_paths,
+            region_paths,
+            health,
+            cache,
+            settings,
+            false,
+        )?;
+    }
+    Ok(dto)
+}
+
+/// [`clear_activation`]'s body, over the plain handle: the activation now, and the settings to
+/// apply and save when the stop moved the station profile.
+fn clear_activation_on(
+    engine: &SharedEngine,
+    afar: Option<&command_dispatch::Afar>,
+) -> (tempo_app::dto::ActivationDto, Option<Settings>) {
+    let mut eng = engine_lock(engine);
+    let profile = eng.settings().active_station_profile.clone();
+    eng.clear_activation_from(afar.is_some());
     self_spot::activation_ended();
-    Ok(activation_now(&eng))
+    (activation_now(&eng), profile_moved(&eng, &profile))
 }
 
 /// The operator's "Still activating": an activation taken up at launch, paused until now, stamps
@@ -52483,14 +52567,16 @@ mod tests {
         line.reference = "US-0003".into();
         let cache = hunter_cache(&[("POTA", &[state_spot("K0ABC", 14_285.0, &["US-ND"]), line])]);
         let parks = crate::SharedParks::default();
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001")
-            .expect("the activation starts");
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", None)
+            .expect("the activation starts")
+            .0;
         assert_eq!(
             (dto.states, dto.my_state),
             (codes(&["US-ND"]), Some("ND".to_string()))
         );
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003")
-            .expect("the activation starts");
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003", None)
+            .expect("the activation starts")
+            .0;
         assert_eq!(
             (dto.states, dto.my_state),
             (codes(&["US-MT", "US-ND"]), None)
@@ -52519,17 +52605,93 @@ mod tests {
             ),
         ));
         let home = engine_lock(&engine).settings().mygrid.clone();
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "us-0001, US-0002")
-            .expect("the activation starts");
+        let dto =
+            crate::set_activation_on(&engine, &cache, &parks, "POTA", "us-0001, US-0002", None)
+                .expect("the activation starts")
+                .0;
         assert_eq!(dto.reference.as_deref(), Some("US-0001,US-0002"));
         assert_eq!(dto.grid.as_deref(), Some("EN07AB"), "the first park's grid");
         assert_eq!(dto.states, codes(&["US-ND", "US-MT"]));
         assert_eq!(dto.my_state, None, "two states: asked, never guessed");
         assert_eq!(dto.parks.len(), 2);
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003")
-            .expect("the activation starts");
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003", None)
+            .expect("the activation starts")
+            .0;
         assert_eq!(dto.grid, None, "a park the directory does not hold");
         assert_eq!(engine_lock(&engine).settings().mygrid, home);
+    }
+
+    /// A station with Home (KD9TAW) and a park profile (KD9TAW/P at US-0001).
+    fn station_with_a_park_profile() -> (SharedEngine, String) {
+        let engine = fresh_engine();
+        let id = engine_lock(&engine)
+            .save_station_profile(tempo_app::settings::StationProfile {
+                name: "Park".into(),
+                call: "KD9TAW/P".into(),
+                grid: "EN43".into(),
+                park: "US-0001".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        (engine, id)
+    }
+
+    /// ⭐ POTA Start that puts the station on the park's profile hands its settings to the same
+    /// apply-and-save the top bar's picker uses, so the switch is written to disk and the feeds log
+    /// in again under the new call; Stop that goes back does the same. One that moves nothing hands
+    /// nothing. From a computer driving the station, the call does not change and nothing is handed,
+    /// while the activation itself starts and ends.
+    #[test]
+    fn pota_start_and_stop_hand_a_profile_switch_to_the_save() {
+        let (engine, park) = station_with_a_park_profile();
+        let cache = hunter_cache(&[]);
+        let parks = crate::SharedParks::default();
+        let afar = crate::command_dispatch::Afar {
+            stand_down: 0,
+            starts_voided: 0,
+        };
+        let (dto, moved) =
+            crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", Some(&afar))
+                .expect("the activation starts");
+        assert_eq!(
+            dto.reference.as_deref(),
+            Some("US-0001"),
+            "started from afar"
+        );
+        assert!(moved.is_none(), "from afar: the call stays");
+        assert_eq!(engine_lock(&engine).settings().mycall, "KD9TAW");
+        let (_, moved) = crate::clear_activation_on(&engine, Some(&afar));
+        assert!(moved.is_none());
+        let (_, moved) = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", None)
+            .expect("the activation starts");
+        let moved = moved.expect("the switch is handed to the save");
+        assert_eq!(
+            (moved.mycall.as_str(), moved.active_station_profile.as_str()),
+            ("KD9TAW/P", park.as_str())
+        );
+        let (dto, moved) = crate::clear_activation_on(&engine, None);
+        assert_eq!(dto.reference, None, "stopped");
+        let moved = moved.expect("going back is handed to the save");
+        assert_eq!(moved.mycall, "KD9TAW");
+        let (_, moved) = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0002", None)
+            .expect("another park starts");
+        assert!(
+            moved.is_none(),
+            "CONTROL: no profile names it, nothing handed"
+        );
+    }
+
+    /// A Settings form loaded on Home and saved after a switch to the park profile keeps the station
+    /// on the profile, and the feeds and the spot ranking bind to the station's call, KD9TAW/P, not
+    /// the form's.
+    #[test]
+    fn a_stale_form_save_binds_the_feeds_to_the_stations_call() {
+        let (engine, park) = station_with_a_park_profile();
+        let stale = engine_lock(&engine).settings().clone();
+        engine_lock(&engine).switch_station_profile(&park).unwrap();
+        let (_, mycall, mygrid) = crate::save_and_publish(&engine, stale, false).expect("saved");
+        assert_eq!((mycall.as_str(), mygrid.as_str()), ("KD9TAW/P", "EN43"));
+        assert_eq!(engine_lock(&engine).settings().mycall, "KD9TAW/P");
     }
 
     /// The log form places a typed park by the states its lookup names, read by the hunter feed's
@@ -58954,7 +59116,11 @@ mod secrets_toward_remote_tests {
         let read = serde_json::to_value(settings_read(&shack, Some(&afar), false)).unwrap();
         assert_eq!(
             read[command_dispatch::SET_AT_THE_STATION],
-            serde_json::json!(command_dispatch::station_only_settings(Some(&afar)).unwrap())
+            serde_json::json!(command_dispatch::station_only_settings(
+                Some(&afar),
+                &Settings::default()
+            )
+            .unwrap())
         );
         assert_eq!(
             read.to_string()

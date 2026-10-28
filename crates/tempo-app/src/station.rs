@@ -2364,6 +2364,11 @@ pub struct Activation {
     /// home since are not the park's. Not kept: every launch asks again.
     #[serde(skip)]
     pub restored: bool,
+    /// The station profile the station was on before this activation put it on its park's, and
+    /// the one it put it on: Stop goes back to the first while the station is still on the
+    /// second. Kept in the file with the activation, so Stop after a restart still goes back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub station_profile_return: Option<(String, String)>,
 }
 
 impl Activation {
@@ -3940,6 +3945,7 @@ impl StationCore {
             grid: None,
             started_at: now_unix_secs(),
             restored: false,
+            station_profile_return: None,
         };
         let out = (activation.program.clone(), activation.my_ref());
         self.activation = Some(activation);
@@ -4018,6 +4024,22 @@ impl StationCore {
     pub fn activation(&self) -> Option<(String, String)> {
         self.live_activation()
             .map(|a| (a.program.clone(), a.my_ref()))
+    }
+
+    /// Where Stop takes the station profile back to ([`Activation::station_profile_return`]).
+    pub fn activation_station_profile_return(&self) -> Option<(String, String)> {
+        self.activation
+            .as_ref()
+            .and_then(|a| a.station_profile_return.clone())
+    }
+
+    /// Note where Stop takes the station profile back to, and keep it on disk with the
+    /// activation. Nothing with no activation.
+    pub fn set_activation_station_profile_return(&mut self, back: Option<(String, String)>) {
+        if let Some(activation) = self.activation.as_mut() {
+            activation.station_profile_return = back;
+            self.persist_activation();
+        }
     }
 
     /// The activation, whole, paused or not — what the screen shows.

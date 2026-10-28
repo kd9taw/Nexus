@@ -11,7 +11,10 @@ use std::path::Path;
 pub mod station_profiles;
 pub mod writer;
 
-pub use station_profiles::{StationProfile, HOME_STATION_PROFILE, STATION_PROFILE_CALL_TX_REFUSED};
+pub use station_profiles::{
+    StationProfile, HOME_STATION_PROFILE, STATION_PROFILE_CALL_TX_REFUSED,
+    STATION_PROFILE_SWITCH_REFUSED,
+};
 
 /// What kind of operating the active section is doing — the per-section rig-mode
 /// policy. **Digital** OBEYS the rig (max compatibility; FT8/FT4 live in an audio

@@ -5102,6 +5102,11 @@ pub struct AppSnapshot {
     /// The id of the profile the station is on (one of `station_profiles`); empty with none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub active_station_profile: String,
+    /// The profile cannot change now: a run, a contact or an over is under way
+    /// (`Engine::station_profile_switch_refusal`). The top bar's picker waits, saying why. Never
+    /// set (and absent on the wire) for a station with no profiles.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub station_profile_locked: bool,
     /// The last time Nexus switched the active radio BY ITSELF, for the switch notice. Absent
     /// until a band or mode the routing hands to another radio has switched one this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]

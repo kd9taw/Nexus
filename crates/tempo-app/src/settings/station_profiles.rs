@@ -43,6 +43,11 @@ pub const HOME_STATION_PROFILE: &str = "home";
 /// where that call has no privileges. So it does not guess.
 pub const STATION_PROFILE_CALL_TX_REFUSED: &str = "This station profile uses another callsign than your Home profile. Your licence class in Settings ▸ Station is for your own call, and Nexus will not guess the privileges of another, so it will not transmit. Switch to a profile with your own call to transmit.";
 
+/// ⛔ Why the station profile does not change now: a run, a contact or an over is under way. The
+/// FT sequencer sends the call it was started with, so a switch now would put one call on the air
+/// and log the contact under another (`Engine::station_profile_switch_refusal`).
+pub const STATION_PROFILE_SWITCH_REFUSED: &str = "The station profile changes only between contacts. Stop transmitting and end the run or contact (S&P) first, then switch.";
+
 /// One named station setup. Every field but the id and name is optional: blank means "not
 /// stated", and a blank field stamps nothing on a contact.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

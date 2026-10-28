@@ -194,6 +194,12 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
 /// switch, and no save moves them at all: `Engine::apply_settings`.)
 pub(crate) const SETTINGS_FROM_AFAR: [&str; 2] = ["set_settings", "update_radio_profile"];
 
+/// ⛔ The POTA Start and Stop, from afar. Each may move the station onto a "My station" profile and
+/// back (`Engine::set_activation_from`, `Engine::clear_activation_from`); from afar never onto
+/// another call, which, like the top bar's picker (`switch_station_profile`), is set at the shack
+/// only. The activation itself starts and ends as asked.
+pub(crate) const ACTIVATION_FROM_AFAR: [&str; 2] = ["clear_activation", "set_activation"];
+
 /// What a settings save from afar may not change ([`SETTINGS_FROM_AFAR`]): each is put back into
 /// `save` as the shack has it. From the shack's own screen (`None`) the save is taken as it came.
 pub(crate) fn keep_the_shacks_transmit_settings(
@@ -439,7 +445,27 @@ pub(crate) fn keep_the_shacks_settings(
     keep_the_shacks_transmit_settings(shack, save, afar);
     keep_the_shacks_credential_addresses(shack, save, afar);
     keep_the_shacks_secret_settings(shack, save, afar);
+    keep_the_shacks_profile_call(shack, save, afar);
 }
+
+/// ⛔ With "My station" profiles, the call is the one the shack's profile transmits under, and a
+/// whole save writes its call into that profile (`Settings::keep_station_form`). So while the shack
+/// has profiles, a save from afar keeps the shack's call ([`PROFILE_CALL_SETTING`]): the call is
+/// switched and edited at the shack only, as the profiles themselves are. With none, a save from
+/// afar takes the call as before.
+pub(crate) fn keep_the_shacks_profile_call(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    afar: Option<&Afar>,
+) {
+    if afar.is_some() && !shack.station_profiles.is_empty() {
+        save.mycall.clone_from(&shack.mycall);
+    }
+}
+
+/// The call's name on the wire, set at the station only while the shack has station profiles
+/// ([`keep_the_shacks_profile_call`]).
+pub(crate) const PROFILE_CALL_SETTING: &str = "mycall";
 
 /// ⛔ Every setting a whole save from afar keeps as the shack has it ([`keep_the_shacks_settings`]),
 /// by its name on the wire, the stored keys ([`SECRET_SETTINGS`]) aside: the transmit settings and
@@ -511,20 +537,26 @@ pub(crate) const SET_AT_THE_STATION: &str = "stationOnlySettings";
 /// What a settings read from afar says is set at the station only: [`STATION_ONLY_SETTINGS`] and
 /// the stored keys ([`SECRET_SETTINGS`]), by name. From the shack's own screen (`None`) every
 /// setting is its own to set, and there is nothing to say.
-pub(crate) fn station_only_settings(afar: Option<&Afar>) -> Option<Vec<&'static str>> {
+pub(crate) fn station_only_settings(
+    afar: Option<&Afar>,
+    shack: &tempo_app::settings::Settings,
+) -> Option<Vec<&'static str>> {
     afar?;
     Some(
         STATION_ONLY_SETTINGS
             .into_iter()
             .chain(SECRET_SETTINGS.iter().map(|(name, _)| *name))
+            // …and the call, while the shack has station profiles ([`keep_the_shacks_profile_call`]).
+            .chain((!shack.station_profiles.is_empty()).then_some(PROFILE_CALL_SETTING))
             .collect(),
     )
 }
 
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
 /// the held press and the Lock, which never run as commands, each section entry ([`ENTRIES`]), the work
-/// bound to presence ([`PRESENCE_BOUND`]), the settings save ([`SETTINGS_FROM_AFAR`]) and the
-/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]). A test holds this to the handlers that take it.
+/// bound to presence ([`PRESENCE_BOUND`]), the settings save ([`SETTINGS_FROM_AFAR`]), the
+/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]) and the POTA Start and Stop
+/// ([`ACTIVATION_FROM_AFAR`]). A test holds this to the handlers that take it.
 pub(crate) fn takes_afar(cmd: &str) -> bool {
     matches!(
         transmit_from_afar(cmd),
@@ -543,6 +575,7 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
         || PRESENCE_BOUND.contains(&cmd)
         || SETTINGS_FROM_AFAR.contains(&cmd)
         || SECRETS_WITHHELD_FROM_AFAR.contains(&cmd)
+        || ACTIVATION_FROM_AFAR.contains(&cmd)
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit

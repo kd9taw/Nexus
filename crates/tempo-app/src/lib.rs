@@ -1026,6 +1026,7 @@ impl AppState {
             radio_pegged: false,
             station_profiles: Vec::new(),
             active_station_profile: String::new(),
+            station_profile_locked: false,
             auto_radio_switch: None,
             b4_match_mode: false,
             link: self.link.clone(),
