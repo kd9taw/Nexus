@@ -6528,7 +6528,7 @@ Click for internet feed controls.","{{detail}}
 "5","aprs.card.track.label","Track","Трек","",""
 "5","aprs.card.track.value","{{dist}} in {{age}}","{{dist}} за {{age}}","{{dist}} | {{age}}",""
 "5","aprs.card.follow","Follow","Следить","",""
-"5","aprs.card.unfollow","Stop following","Прекратить слежение","",""
+"5","aprs.card.unfollow","Stop following","Остановить слежение","",""
 "5","aprs.card.follow.title","Keep this station in the middle of the map as it moves","Держать эту станцию в центре карты, пока она движется","",""
 "5","aprs.card.aria","Station {{call}}","Станция {{call}}","{{call}}",""
 "5","aprs.card.symbol.unknown","Unrecognised symbol","Неопознанный символ","",""

@@ -5956,7 +5956,7 @@ export const RU: PartialCatalog = {
   "aprs.card.track.label": "Трек",
   "aprs.card.track.value": "{{dist}} за {{age}}",
   "aprs.card.follow": "Следить",
-  "aprs.card.unfollow": "Прекратить слежение",
+  "aprs.card.unfollow": "Остановить слежение",
   "aprs.card.follow.title": "Держать эту станцию в центре карты, пока она движется",
   "aprs.card.aria": "Станция {{call}}",
   "aprs.card.symbol.unknown": "Неопознанный символ",

@@ -7365,7 +7365,7 @@ export const DE: PartialCatalog = {
   "aprs.card.track.label": "Spur",
   "aprs.card.track.value": "{{dist}} in {{age}}",
   "aprs.card.follow": "Verfolgen",
-  "aprs.card.unfollow": "Nicht mehr verfolgen",
+  "aprs.card.unfollow": "Verfolgen beenden",
   "aprs.card.follow.title": "Diese Station beim Bewegen in der Kartenmitte halten",
   "aprs.card.age.hours": "{{hours}} h",
   "aprs.card.age.days": "{{days}} d",

@@ -7044,7 +7044,7 @@ export const JA: PartialCatalog = {
   "aprs.card.track.label": "軌跡",
   "aprs.card.track.value": "{{age}} で {{dist}}",
   "aprs.card.follow": "追尾",
-  "aprs.card.unfollow": "追尾をやめる",
+  "aprs.card.unfollow": "追尾を終了",
   "aprs.card.follow.title": "移動するこの局を地図の中央に保つ",
   "aprs.card.age.hours": "{{hours}} 時間",
   "aprs.card.age.days": "{{days}} 日",
