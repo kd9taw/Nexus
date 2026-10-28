@@ -41104,6 +41104,83 @@ mod tests {
         );
     }
 
+    /// ⭐ ISSUE #417 on the HAMLIB connection: *"when you set the radio frequency using Nexus, it
+    /// unilaterally changes the FIL setting to 2"* (IC-7300). An Icom mode write without a filter
+    /// byte selects the mode's default filter, and Hamlib only leaves the filter alone when it is
+    /// asked for `RIG_PASSBAND_NOCHANGE` (`-1`): Hamlib 4.7.1 `rig_set_mode` returns without a
+    /// write when the mode is already right and no width is asked, and `icom_set_mode` re-sends
+    /// the filter it just read on a real mode change. Driving the bundled 4.7.1 against a modelled
+    /// IC-7300 showed FIL1 held through every `-1` write below.
+    ///
+    /// So the Phone and CW scenes the reporter works — in-band QSYs, a band change that flips the
+    /// sideband, a band change with the mode unchanged, a CW click — must put `-1` on EVERY `M`.
+    /// A width here (or `0`, "the mode's default") is the FIL2 jump.
+    #[test]
+    fn no_phone_or_cw_retune_asks_the_radio_for_a_filter() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            e.set_license_class("extra");
+            e.set_operating_mode("phone", true);
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        let (addr, log) = mock_stateful_rigctld(14_250_000, false);
+        let mut rig = Rig::rigctld(&addr);
+        let mut backend = MockBackend::new();
+        let mut state = loop_state_for(&engine);
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 0.0;
+        let mut run = |state: &mut RadioLoop, rig: &mut Rig, backend: &mut MockBackend, t: f64| {
+            state
+                .step(
+                    &engine,
+                    backend,
+                    rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+        };
+
+        run(&mut state, &mut rig, &mut backend, t);
+        let scene: [(f64, &str, &str); 4] = [
+            (14.260, "20m", "USB"), // in-band QSY, mode already right
+            (7.200, "40m", "LSB"),  // band change that flips the sideband
+            (7.180, "40m", "LSB"),  // in-band again
+            (3.850, "80m", "LSB"),  // band change, mode unchanged
+        ];
+        for (mhz, band, mode) in scene {
+            t += 20.0;
+            engine.lock().unwrap().set_frequency(mhz, band, mode);
+            run(&mut state, &mut rig, &mut backend, t);
+        }
+        t += 20.0;
+        engine.lock().unwrap().set_operating_mode("cw", true);
+        run(&mut state, &mut rig, &mut backend, t);
+
+        let modes: Vec<String> = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.starts_with("M "))
+            .cloned()
+            .collect();
+        for word in ["M USB ", "M LSB ", "M CW "] {
+            assert!(
+                modes.iter().any(|m| m.starts_with(word)),
+                "control: the scene must command {word:?} or it proves nothing: {modes:?}"
+            );
+        }
+        assert!(
+            modes.iter().all(|m| m.ends_with(" -1")),
+            "every Phone/CW mode write carries RIG_PASSBAND_NOCHANGE, so an Icom keeps its filter: {modes:?}"
+        );
+    }
+
     // ---- APRS Tune vs a running FT8 session (operator report, 0.21.1) ----
     //
     // "I clicked APRS Tune while FT8 was running and the radio did not move. No error." The
