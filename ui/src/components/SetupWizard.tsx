@@ -520,19 +520,29 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     pttSerialPort: setPttSerialPort,
   }
   const radio1 = (s: Settings) => s.activeRadio ?? s.radios?.[0]?.id ?? 0
+  // Every unsaved per-radio choice on this page (model, port, connection, baud as well as the sound
+  // cards and keying), so the setup's checks and hints for radio 1 judge the radio this page will
+  // save, not the one stored before it. Only the sound cards and keying are ever written from there
+  // (`finishPlan` compares those alone, over a fresh read), so the rest only informs.
   const openRadioSetup = () => {
     const d = draft()
-    const unsaved = Object.fromEntries(KIT_FIELDS.filter((f) => d[f] !== undefined).map((f) => [f, d[f]]))
+    const perRadio = Object.keys(radioPatch({}))
+    const unsaved = Object.fromEntries(Object.entries(d).filter(([k, v]) => perRadio.includes(k) && v !== undefined))
     void getSettings()
       .then((s) => setRadioSetup({ ...s, radios: (s.radios ?? []).map((r) => (r.id === radio1(s) ? { ...r, ...unsaved } : r)) }))
       .catch(() => {})
   }
-  const adoptRadioSetup = (plan: FinishPlan) => {
+  // A Finish refused partway may have stopped before radio 1's write: then only what the station
+  // holds now comes back, so this page does not take up a change that was never saved.
+  const adoptRadioSetup = async (plan: FinishPlan, complete: boolean) => {
     if (!radioSetup) return
-    const changes = plan.radios.find((r) => r.id === radio1(radioSetup))?.changes ?? {}
+    const id = radio1(radioSetup)
+    const changes = plan.radios.find((r) => r.id === id)?.changes ?? {}
+    const stored = complete ? null : (await getSettings().catch(() => null))?.radios?.find((r) => r.id === id)
+    if (!complete && !stored) return
     for (const f of KIT_FIELDS) {
       const value = changes[f]
-      if (value !== undefined) kitSetters[f](value)
+      if (value !== undefined && (complete || stored?.[f] === value)) kitSetters[f](value)
     }
   }
 
@@ -1437,7 +1447,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 <RadioSetupWizard
                   settings={radioSetup}
                   bands={FREQ_BANDS}
-                  onFinished={adoptRadioSetup}
+                  onFinished={(plan, complete) => void adoptRadioSetup(plan, complete)}
                   onClose={() => setRadioSetup(null)}
                 />
               )}

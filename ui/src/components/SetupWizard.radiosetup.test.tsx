@@ -85,7 +85,10 @@ afterEach(() => cleanup())
 
 /** The first-run setup, on the rig step, with radio 1 picked (the FTDX10 row: CODEC A, CAT) and a
  *  second radio added; then "Set up radios" opened from it, at its Audio and keying step. */
-async function openRadioSetupFromFirstRun() {
+async function openRadioSetupFromFirstRun(
+  pick = async () => fireEvent.click(await screen.findByRole('button', { name: /FTDX10/ })),
+  atNames?: (dialog: HTMLElement) => void,
+) {
   const onApply = vi.fn()
   render(
     <>
@@ -94,10 +97,11 @@ async function openRadioSetupFromFirstRun() {
     </>,
   )
   fireEvent.click(screen.getByRole('button', { name: /Next/ })) // → rig step
-  fireEvent.click(await screen.findByRole('button', { name: /FTDX10/ }))
+  await pick()
   fireEvent.click(await screen.findByRole('button', { name: /second radio/ }))
   fireEvent.click(await screen.findByRole('button', { name: /Set up which radio does what/ }))
   const dialog = await screen.findByRole('dialog', { name: 'Set up radios' })
+  atNames?.(dialog)
   while (!within(dialog).queryByRole('heading', { name: 'Audio and keying' })) {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Next' }))
   }
@@ -134,5 +138,83 @@ describe("first run: radio 1's sound cards and keying in Set up radios", () => {
     expect(draft.pttMethod ?? station.pttMethod).toBe('vox')
     // Radio 1's receive card, not changed in the radio setup, is still the page's pick.
     expect(draft.audioIn).toBe('CODEC A')
+  })
+
+  // The page's unsaved rig model, port and connection for radio 1 are what the setup checks.
+  const CAT_NO_MODEL = /PTT is set to CAT but the rig model is None\/VOX/
+  const finishSetup = (dialog: HTMLElement) => {
+    while (within(dialog).queryByRole('button', { name: 'Next' })) fireEvent.click(within(dialog).getByRole('button', { name: 'Next' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Finish' }))
+  }
+  const storedRadio1 = (patch: Record<string, unknown>) => {
+    station = { ...station, ...patch, radios: [{ ...(station.radios as Record<string, unknown>[])[0], ...patch }] }
+  }
+
+  it("CAT for radio 1 is not refused when the page has picked a model, though the stored one is None/VOX", async () => {
+    // Stored: a port, model 0 and RTS keying (so picking the FTDX10 on the page keeps RTS).
+    storedRadio1({ rigModel: 0, pttMethod: 'rts' })
+    const { dialog } = await openRadioSetupFromFirstRun()
+    expect(radio1Keying(dialog).value).toBe('rts')
+    fireEvent.change(radio1Keying(dialog), { target: { value: 'cat' } })
+    expect(within(dialog).queryByText(CAT_NO_MODEL)).toBeNull()
+    finishSetup(dialog)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Set up radios' })).toBeNull())
+    expect((station.radios as Record<string, unknown>[])[0].pttMethod).toBe('cat')
+  })
+
+  it('CAT for radio 1 is refused when the page has taken its model off, though the stored one has a model', async () => {
+    // Stored: TCI (its own model number) on COM5, RTS keying. The page goes back to USB / Serial,
+    // which takes TCI's model number off, unsaved: model 0 on a serial port.
+    storedRadio1({ rigConn: 'tci', rigModel: 7, serialPort: 'COM5', pttMethod: 'rts' })
+    const { dialog } = await openRadioSetupFromFirstRun(async () =>
+      fireEvent.click(await screen.findByRole('button', { name: /USB \/ Serial/ })),
+    )
+    fireEvent.change(radio1Keying(dialog), { target: { value: 'cat' } })
+    finishSetup(dialog)
+    expect((await within(dialog).findByRole('alert')).textContent).toMatch(CAT_NO_MODEL)
+    expect((station.radios as Record<string, unknown>[])[0].pttMethod).toBe('rts')
+    expect(api.spies.updateRadioProfile.mock.calls.some(([id]) => id === 0)).toBe(false)
+  })
+
+  it("a Finish refused before radio 1's write does not bring its change back into the page", async () => {
+    // The rename of radio 2 lands, then radio 1's write is refused: its new sound card was not saved.
+    const { onApply, dialog } = await openRadioSetupFromFirstRun(undefined, (d) =>
+      fireEvent.change(within(d).getAllByRole('textbox')[1], { target: { value: 'FT-991 shack' } }),
+    )
+    api.get('updateRadioProfile').mockImplementation((id: number) =>
+      id === 0 ? Promise.reject(new Error('the station refused it')) : Promise.resolve(null),
+    )
+    fireEvent.change(radio1Tx(dialog), { target: { value: 'CODEC B OUT' } })
+    finishSetup(dialog)
+    await within(dialog).findByText(/the station refused it/)
+    expect(api.spies.renameRadio).toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: /Next/ })) // → log
+    fireEvent.click(screen.getByRole('button', { name: /Next/ })) // → goals
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
+    expect((onApply.mock.calls[0][4] as Record<string, unknown>).audioOut).toBe('CODEC A OUT')
+  })
+
+  it("positive control: a Finish refused after radio 1's write brings its saved change back into the page", async () => {
+    const { onApply, dialog } = await openRadioSetupFromFirstRun()
+    // Radio 1's write lands, then radio 2's is refused.
+    api.get('updateRadioProfile').mockImplementation((id: number, patch: Record<string, unknown>) => {
+      if (id !== 0) return Promise.reject(new Error('the station refused it'))
+      station = {
+        ...station,
+        radios: (station.radios as Record<string, unknown>[]).map((r) => (r.id === id ? { ...r, ...structuredClone(patch) } : r)),
+      }
+      return Promise.resolve(null)
+    })
+    fireEvent.change(radio1Tx(dialog), { target: { value: 'CODEC B OUT' } })
+    fireEvent.change(within(dialog).getAllByRole('combobox', { name: 'PTT Method' })[1], { target: { value: 'rts' } })
+    finishSetup(dialog)
+    await within(dialog).findByText(/the station refused it/)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: /Next/ })) // → log
+    fireEvent.click(screen.getByRole('button', { name: /Next/ })) // → goals
+    fireEvent.click(screen.getByRole('button', { name: /Finish — everything on/ }))
+    await waitFor(() => expect(onApply).toHaveBeenCalled())
+    expect((onApply.mock.calls[0][4] as Record<string, unknown>).audioOut).toBe('CODEC B OUT')
   })
 })
