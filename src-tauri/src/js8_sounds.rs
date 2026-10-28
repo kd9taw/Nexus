@@ -134,7 +134,7 @@ fn chosen(
     settings
         .js8_sound_files
         .get(event.key())
-        .map(String::as_str)
+        .map(|saved| saved.trim())
         == Some(path)
         || picked.contains(path)
 }
@@ -350,6 +350,25 @@ mod tests {
             (12_000, None),
             "picked this run, before Save"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The window's path is trimmed before it is matched, so the saved one is too: a saved path
+    /// with spaces around it is the operator's choice, not a path nobody chose.
+    #[test]
+    fn a_saved_path_with_spaces_around_it_is_still_the_one_chosen() {
+        let dir = scratch("trimmed");
+        let cq = dir.join("cq.wav");
+        std::fs::write(&cq, tiny_wav()).unwrap();
+        let cq = cq.to_string_lossy().into_owned();
+        let mut settings = Settings::default();
+        settings
+            .js8_sound_files
+            .insert("cq".into(), format!(" {cq}\t"));
+        let (clip, why) = clip_for(&settings, Js8SoundEvent::Cq, Some(&cq), &BTreeSet::new());
+        assert_eq!((clip.rate, why), (12_000, None));
+        let (_, why) = clip_for(&settings, Js8SoundEvent::Hb, Some(&cq), &BTreeSet::new());
+        assert_eq!(why, Some(SoundRefusal::NotPicked), "control: another event");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
