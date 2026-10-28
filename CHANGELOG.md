@@ -54,7 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WAV file you choose in Settings ▸ Digital ▸ JS8 ▸ Sounds (Choose…, Reset to built-in, Test); a file that cannot be played
   plays the tone and Nexus says so once. A file on a network share (`\\server\share`, or a link to one) is never opened,
   since opening it can send your Windows sign-in to that computer: the tone plays and Nexus asks you to copy the file to
-  this computer. **Play the sounds on** picks the output, the system default unless you pick one.
+  this computer. A drive letter mapped to a share (or a `subst` drive) is not recognised: a file there is read like
+  one on this computer, so keep sound files on a local drive. **Play the sounds on** picks the output, the system
+  default unless you pick one.
   Nexus never plays a sound on a device your radio transmits from, where it could key a rig on VOX: it checks at every
   sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. The
   device the radio actually opened for TX audio is refused too, while the radio holds it: with TX audio set to the

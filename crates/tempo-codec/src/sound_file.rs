@@ -2,9 +2,11 @@
 //! checked before a sample of it is played. Pure: no device, no engine.
 //!
 //! What is read is bounded at every step, so a path pointing anywhere costs a refusal at most:
-//! - never a file on another computer: a Windows network path (`\\server\share\…`, `//server/…`,
+//! - never a network path: a Windows network path (`\\server\share\…`, `//server/…`,
 //!   `\\?\UNC\…`), or a link on this computer that leads to one, is refused before anything at it is
-//!   touched, because opening a file on a share can send the Windows sign-in to that server;
+//!   touched, because opening a file on a share can send the Windows sign-in to that server.
+//!   A drive letter mapped to a share (`net use Z:`), a `subst` drive on one, or a relative path
+//!   while the working folder is on one is NOT detected: it is read like a local file;
 //! - only a regular file (never a folder, a device, a pipe or a socket: a pipe would block the read);
 //! - at most [`MAX_SOUND_FILE_BYTES`], checked before reading and enforced while reading, so a file
 //!   that grows meanwhile is still cut off;
@@ -49,9 +51,9 @@ pub enum SoundFileRefusal {
     /// A WAV file whose header is cut short or garbled, whose format is not a plausible sound, or
     /// whose samples stop early.
     BadFormat,
-    /// On another computer: a Windows network path (`\\server\share\…`, `//server/…`), or a
-    /// link that leads to one. Never opened: opening a file on a network share can send the
-    /// Windows sign-in to that server.
+    /// A Windows network path (`\\server\share\…`, `//server/…`), or a link that leads to one.
+    /// Never opened: opening a file on a network share can send the Windows sign-in to that server.
+    /// A drive letter mapped to a share is not recognised, so it never gives this.
     Network,
 }
 

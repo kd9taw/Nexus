@@ -189,7 +189,7 @@ describe('the sound a sound plays: the operator’s WAV file, else the built-in 
     play.mockRejectedValue('txUnsure')
     await playJs8Sound('cq', null, true)
     expect(said()[1]).toBe(
-      'A JS8 sound did not play: Nexus cannot tell its output apart from a device your radio transmits from (the sound server’s default output may be the radio’s sound card). Choose the sound card to play on by name in Settings ▸ Digital ▸ JS8 ▸ Sounds, and set the radio’s TX audio to its own card by name.',
+      'A JS8 sound did not play: Nexus cannot tell its output apart from a device your radio transmits from. The sound server’s default output may be the radio’s sound card, and Nexus cannot see where a device set up in ~/.asoundrc, or another custom ALSA device, sends its sound. Choose the sound card to play on by its card name in Settings ▸ Digital ▸ JS8 ▸ Sounds, and set the radio’s TX audio to its own, different card by its card name too.',
     )
     expect(said().some((m) => m.includes('its output is a device your radio transmits from')), 'not called a TX device').toBe(false)
   })

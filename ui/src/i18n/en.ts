@@ -9391,7 +9391,7 @@ export const EN = {
   'js8.sound.file.network': 'it is on another computer: Nexus does not open sound files on a network share, which can send your Windows sign-in to that computer; copy it to this computer',
   'js8.sound.txDevice': 'A JS8 sound did not play: its output is a device your radio transmits from, and a sound there could key the radio on VOX. Choose another output in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
   'js8.sound.txDefault': 'A JS8 sound did not play: a TX audio device (the station’s, or a radio profile’s that has none) is set to the system default output, so a sound there could key a radio on VOX. Choose a specific output in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
-  'js8.sound.txUnsure': 'A JS8 sound did not play: Nexus cannot tell its output apart from a device your radio transmits from (the sound server’s default output may be the radio’s sound card). Choose the sound card to play on by name in Settings ▸ Digital ▸ JS8 ▸ Sounds, and set the radio’s TX audio to its own card by name.',
+  'js8.sound.txUnsure': 'A JS8 sound did not play: Nexus cannot tell its output apart from a device your radio transmits from. The sound server’s default output may be the radio’s sound card, and Nexus cannot see where a device set up in ~/.asoundrc, or another custom ALSA device, sends its sound. Choose the sound card to play on by its card name in Settings ▸ Digital ▸ JS8 ▸ Sounds, and set the radio’s TX audio to its own, different card by its card name too.',
   'js8.sound.noDevice': 'A JS8 sound did not play: its output is not on this computer now. Choose another in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
   'js8.sound.failed': 'A JS8 sound did not play: its output would not open.',
   'settings.js8.sound.device.label': 'Play the sounds on',
