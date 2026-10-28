@@ -6307,6 +6307,51 @@ pub struct WsjtxTxStatus {
     pub tx_message: String,
 }
 
+/// [`Engine::sent_call_refusal`]'s comparison: `built`, the call a message was made under, against
+/// `now`, the call the station transmits under. Unhashed, without surrounding spaces and in any
+/// capitals; a message made with no call is never refused for it.
+fn call_changed_refusal(built: &str, now: &str) -> Option<&'static str> {
+    let built = tempo_core::message::unhash_call(built).trim();
+    (!built.is_empty() && !built.eq_ignore_ascii_case(now.trim()))
+        .then_some(crate::settings::STATION_CALL_CHANGED_TX_REFUSED)
+}
+
+/// ⛔ The keying-time call check for an FT over of the QSO sequencer (or a Chat-tier frame), `text`.
+///
+/// Only an over Nexus made from the station's call is judged (the operator's decision,
+/// 2026-10-28): one whose sender (`Msg::sender`) is one of the station's own calls, that is the
+/// call it transmits under `now`, the call its sequencer was made with (`built`), a stored
+/// station profile's call, or the sender of the one over owed to a partner the run has left
+/// (`owed`, made by the sequencer). Each is compared by its base call (`same_call`), so a
+/// portable or other compound form of one of them is one of them. Such an over is refused when
+/// its sender is not the call of `now` ([`call_changed_refusal`]). Text the operator typed (Tx 5,
+/// the free text, a logger's free text) whose sender is another station's call, or that reads as
+/// one ("W1AW 5NN 73", "CQ DX EN52"), is the operator's own words and goes out as before.
+fn ft_over_call_refusal(
+    text: &str,
+    now: &str,
+    built: &str,
+    profiles: &[crate::settings::StationProfile],
+    owed: Option<&Msg>,
+) -> Option<&'static str> {
+    let msg = Msg::parse(text);
+    let de = msg.sender()?;
+    let own = |call: &str| !call.trim().is_empty() && same_call(de, call);
+    let ours = own(now)
+        || own(built)
+        || profiles.iter().any(|p| own(&p.call))
+        || owed.and_then(Msg::sender).is_some_and(own);
+    ours.then(|| call_changed_refusal(de, now)).flatten()
+}
+
+/// ⛔ The keying-time call check for a contest over (`Mode::FieldDay`): every over the contest
+/// sequencer sends is made under the call it was started with (`FieldDayLog::mycall`), the ARRL
+/// VHF contests' rogered grid ("W1AW KD9TAW R EN52", free text to `Msg::parse`) included, so it is
+/// judged by that call.
+fn contest_over_call_refusal(built: &str, now: &str) -> Option<&'static str> {
+    call_changed_refusal(built, now)
+}
+
 /// The Tx Message WSJT-X reports for an over: `m_currentMessage = QString::fromLatin1 (msgsent)`
 /// (mainwindow.cpp:8072-8073), the generator's fixed-width Fortran string, blank-padded. The
 /// 77-bit modes' `msgsent` is `character*37` (lib/ft8/genft8.f90:7, lib/ft4/genft4.f90:22, and
@@ -27708,9 +27753,7 @@ contact yourself."
     /// is the same call; a portable or other compound form is another call. A message made while
     /// the station had no call yet carries none, and nothing is refused for it.
     pub fn sent_call_refusal(&self, built: &str) -> Option<&'static str> {
-        let built = tempo_core::message::unhash_call(built).trim();
-        (!built.is_empty() && !built.eq_ignore_ascii_case(self.settings.mycall.trim()))
-            .then_some(crate::settings::STATION_CALL_CHANGED_TX_REFUSED)
+        call_changed_refusal(built, &self.settings.mycall)
     }
 
     /// [`Self::sent_call_refusal`] for an SSTV picture's own text: the station calls its presets
@@ -27720,12 +27763,26 @@ contact yourself."
         calls.iter().find_map(|call| self.sent_call_refusal(call))
     }
 
-    /// [`Self::sent_call_refusal`] for an FT over about to key, by the call that sends it when its
-    /// text names one (`Msg::sender`). Free text names none and is the operator's own words.
+    /// [`Self::sent_call_refusal`] for an FT over about to key (`text`), judged as `plan_tx` judges
+    /// it before it counts the over as sent: a contest over by the call its sequencer was made under
+    /// ([`contest_over_call_refusal`]), any other by its sender when that is one of the station's
+    /// own calls ([`ft_over_call_refusal`]).
     fn ft_sent_call_refusal(&self, text: &str) -> Option<&'static str> {
-        Msg::parse(text)
-            .sender()
-            .and_then(|de| self.sent_call_refusal(de))
+        let now = &self.settings.mycall;
+        let owed = self.recent_partner.as_ref().and_then(|p| p.owed.as_ref());
+        match &self.mode {
+            Mode::FieldDay { station, .. } => contest_over_call_refusal(&station.log.mycall, now),
+            Mode::Qso { station, .. } => ft_over_call_refusal(
+                text,
+                now,
+                &station.mycall,
+                &self.settings.station_profiles,
+                owed,
+            ),
+            Mode::Chat => {
+                ft_over_call_refusal(text, now, "", &self.settings.station_profiles, owed)
+            }
+        }
     }
 
     /// The FT or Field Day sequencer's next over, judged by [`Self::sent_call_refusal`]: the reason
@@ -27740,8 +27797,7 @@ contact yourself."
             Mode::FieldDay { station, .. } => station.pending.as_ref(),
             Mode::Chat => None,
         };
-        next.and_then(Msg::sender)
-            .and_then(|de| self.sent_call_refusal(de))
+        next.and_then(|m| self.ft_sent_call_refusal(&m.to_text()))
     }
 
     /// Is the licence lock the phone MODE alone? The Phone section is refused, upper sideband is
@@ -30506,6 +30562,29 @@ contact yourself."
                 {
                     self.recent_partner = None;
                 }
+                // ⛔ THE KEYING-TIME CALL CHECK COMES FIRST (the operator's decision, 2026-10-28):
+                // an over refused for its call is not sent, so it is not spent or counted either.
+                // Every over below is judged here, before the sequencer's bookkeeping; the
+                // refusals after this `match` stay where they are.
+                let call_refusal = |m: &Msg, built: &str, owed: Option<&Msg>| {
+                    ft_over_call_refusal(
+                        &m.to_text(),
+                        &self.settings.mycall,
+                        built,
+                        &self.settings.station_profiles,
+                        owed,
+                    )
+                };
+                if let Some(why) = self
+                    .recent_partner
+                    .as_ref()
+                    .and_then(|p| p.owed.as_ref())
+                    .and_then(|m| call_refusal(m, &station.mycall, Some(m)))
+                {
+                    tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                    self.app.set_transmitting(false);
+                    return None;
+                }
                 if let Some(m) = self.recent_partner.as_mut().and_then(|p| p.owed.take()) {
                     self.recent_partner = None;
                     self.cq_pause_until = None;
@@ -30513,7 +30592,16 @@ contact yourself."
                     // IR-HARQ to escalate redundancy over.
                     break 'qso_over Some(m.to_text());
                 }
-                match station.outgoing_rv() {
+                let next = station.outgoing_rv();
+                if let Some(why) = next
+                    .as_ref()
+                    .and_then(|(m, _)| call_refusal(m, &station.mycall, None))
+                {
+                    tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                    self.app.set_transmitting(false);
+                    return None;
+                }
+                match next {
                     Some((m, rv)) => {
                         // Something is going out, so no pause is in force — either the run just
                         // resumed, or (the case that matters) somebody ANSWERED and this is the
@@ -30628,6 +30716,15 @@ contact yourself."
                     station.outgoing()
                 };
                 if m.is_some() {
+                    // ⛔ The keying-time call check, before the station counts the over as sent
+                    // (as the QSO arm above).
+                    if let Some(why) =
+                        contest_over_call_refusal(&station.log.mycall, &self.settings.mycall)
+                    {
+                        tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                        self.app.set_transmitting(false);
+                        return None;
+                    }
                     station.after_tx();
                     // Stock "Disable Tx after sending 73" after a contact the operator picked (a
                     // double-click on its CQ, a logger's Reply to it): the over leaving NOW closes

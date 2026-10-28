@@ -1855,3 +1855,457 @@ fn a_message_queued_before_the_call_was_set_is_not_refused_for_it() {
         (Some("TEST".to_string()), None)
     );
 }
+
+// --- A refused FT over is never switched in, counted, logged or followed (no profiles) ----------
+
+/// Key `slot`'s FT over as the radio loop does (plan, build, commit); the text that went out.
+fn key_over(e: &mut Engine, slot: u64) -> Option<String> {
+    let plan = e.plan_tx(slot)?;
+    let TxWaveform::Native { text, .. } = &plan.waveform else {
+        panic!("an FT plan is a native waveform");
+    };
+    let text = text.clone();
+    let wave = plan.waveform.build();
+    (!e.commit_tx(&plan, wave, slot).is_empty()).then_some(text)
+}
+
+/// The radio loop's mid-over switch `ms` into `slot` (FT8), with a route that takes it: what the
+/// switch answered, and the text of the over the route was handed in place of the rest ("" when
+/// it was handed nothing).
+fn switch_mid_over(
+    e: &mut Engine,
+    slot: u64,
+    ms: f64,
+    clicked: bool,
+) -> (Option<super::ft_midover::FtSwitch>, bool) {
+    let mut handed = false;
+    let got = e.ft_midover_switch(slot, slot as f64 * 15_000.0 + ms, clicked, |tail| {
+        handed = !tail(40_000, 0).is_empty();
+        true
+    });
+    (got, handed)
+}
+
+fn tx_count(e: &Engine) -> u32 {
+    match &e.mode {
+        Mode::Qso { station, .. } => station.tx_count,
+        _ => panic!("premise: a QSO"),
+    }
+}
+
+/// No profiles, FT8 at 1500 Hz with ALL.TXT on: Call CQ as KD9TAW, W1AW answers, and our report
+/// "W1AW KD9TAW -05" is on the air in slot 102.
+fn report_on_the_air() -> Engine {
+    let mut e = plain_ft8();
+    e.set_tx_offset(1500.0);
+    e.settings.write_all_txt = true;
+    e.start_cq(None).unwrap();
+    let _ = e.take_immediate_tx();
+    assert_eq!(
+        key_over(&mut e, 100).as_deref(),
+        Some("CQ KD9TAW EN52"),
+        "premise: the CQ"
+    );
+    e.hear_for_test("KD9TAW W1AW FN31", -5, 102);
+    assert_eq!(
+        key_over(&mut e, 102).as_deref(),
+        Some("W1AW KD9TAW -05"),
+        "premise: our report keys under KD9TAW"
+    );
+    let _ = e.take_all_txt_pending();
+    e
+}
+
+/// What a mid-over switch did and left behind: what it answered, whether the audio route was
+/// handed a new rest of the over, the Tx rows it wrote, the WSJT-X Status's Tx Message, and the
+/// sequencer's count of the step.
+fn after_switch(
+    e: &mut Engine,
+    (got, handed): (Option<super::ft_midover::FtSwitch>, bool),
+) -> (
+    Option<super::ft_midover::FtSwitch>,
+    bool,
+    usize,
+    String,
+    u32,
+) {
+    let rows = e
+        .take_all_txt_pending()
+        .iter()
+        .filter(|r| r.contains(" Tx "))
+        .count();
+    (got, handed, rows, e.tx_message.clone(), tx_count(e))
+}
+
+/// ⛔ C1. No profiles: our report is on the air under KD9TAW when the operator saves the call as
+/// KD9TAW/P. Then W1AW's roger folds late (the sequencer moves to RR73 under KD9TAW), or the
+/// operator clicks the RR73 row: the rest of the over is NOT switched to a message made under the
+/// old call. The over on the air goes out as it was keyed, nothing is written to ALL.TXT, the
+/// Status still reports the report, and nothing is counted. CONTROL: with the call unchanged the
+/// same late roger switches the rest of the over to RR73.
+#[test]
+fn without_profiles_a_call_edit_mid_over_never_switches_in_a_message_made_under_the_old_call() {
+    use super::ft_midover::FtSwitch;
+    let mut control = report_on_the_air();
+    control.hear_for_test("KD9TAW W1AW R-07", -5, 102);
+    let got = switch_mid_over(&mut control, 102, 3_000.0, false);
+    let status = super::wsjtx_msgsent(
+        Tier::Ft8,
+        &TxWaveform::Native {
+            kind: modes::ModeKind::Ft8,
+            text: "W1AW KD9TAW RR73".into(),
+            f0: 1500.0,
+        },
+    );
+    assert_eq!(
+        after_switch(&mut control, got),
+        (
+            Some(FtSwitch::Switched {
+                from: "W1AW KD9TAW -05".into(),
+                to: "W1AW KD9TAW RR73".into()
+            }),
+            true,
+            1,
+            status,
+            1
+        ),
+        "CONTROL: the call unchanged, the rest of the over is RR73"
+    );
+
+    // A late decode moves the sequencer.
+    let mut e = report_on_the_air();
+    let status = e.tx_message.clone();
+    settings_call_edit(&mut e, "KD9TAW/P");
+    e.hear_for_test("KD9TAW W1AW R-07", -5, 102);
+    assert_eq!(
+        tx_now(&e),
+        "W1AW KD9TAW RR73",
+        "premise: moved, under KD9TAW"
+    );
+    let got = switch_mid_over(&mut e, 102, 3_000.0, false);
+    assert_eq!(
+        after_switch(&mut e, got),
+        (None, false, 0, status, 0),
+        "late decode"
+    );
+
+    // A Tx-row click asks for the switch.
+    let mut e = report_on_the_air();
+    let status = e.tx_message.clone();
+    settings_call_edit(&mut e, "KD9TAW/P");
+    e.override_next_tx("W1AW", Some("FN31"), "W1AW KD9TAW RR73");
+    assert!(
+        e.take_ft_restart(),
+        "premise: the click asks for the switch"
+    );
+    let got = switch_mid_over(&mut e, 102, 3_000.0, true);
+    assert_eq!(
+        after_switch(&mut e, got),
+        (None, false, 0, status, 0),
+        "Tx-row click"
+    );
+}
+
+/// No profiles, auto-log on and the popup off: a CQ run as KD9TAW, W1AW answers and our report
+/// goes out; the call is saved as KD9TAW/P when `edit`; W1AW rogers ("KD9TAW W1AW R-07") and the
+/// station queues its RR73 under KD9TAW.
+fn run_at_their_roger(edit: bool) -> Engine {
+    let mut e = plain_ft8();
+    e.start_cq(None).unwrap();
+    let _ = e.take_immediate_tx();
+    assert_eq!(key_over(&mut e, 100).as_deref(), Some("CQ KD9TAW EN52"));
+    e.hear_for_test("KD9TAW W1AW FN31", -5, 102);
+    assert_eq!(key_over(&mut e, 102).as_deref(), Some("W1AW KD9TAW -05"));
+    if edit {
+        settings_call_edit(&mut e, "KD9TAW/P");
+    }
+    e.hear_for_test("KD9TAW W1AW R-07", -5, 104);
+    assert_eq!(tx_now(&e), "W1AW KD9TAW RR73", "premise: our RR73 queued");
+    e
+}
+
+/// What the RR73 slot and the fold after it did: keyed, the step count, the calls logged with
+/// their STATION_CALLSIGN, the uploads queued and the contacts waiting in the popup.
+type Rr73Outcome = (
+    Option<String>,
+    u32,
+    Vec<(String, Option<String>)>,
+    usize,
+    usize,
+);
+
+fn rr73_outcome(e: &mut Engine) -> Rr73Outcome {
+    let keyed = key_over(e, 104);
+    let count = tx_count(e);
+    e.hear_for_test("CQ K1ABC FN42", -5, 106);
+    let logged = e
+        .stored_log()
+        .iter()
+        .map(|r| (r.call.clone(), r.station_callsign.clone()))
+        .collect();
+    (
+        keyed,
+        count,
+        logged,
+        e.take_pending_uploads().len(),
+        e.pending_logs.len(),
+    )
+}
+
+/// ⛔ H1 (the review's sequence). No profiles: the call is edited mid-contact, W1AW rogers, and
+/// our RR73 is refused at the key. The refused RR73 is not counted as sent, so the contact is not
+/// logged (it never closed on the air, and would have carried KD9TAW/P while the air carried
+/// KD9TAW) and nothing is queued for upload. CONTROL: unchanged, the RR73 keys and the contact
+/// logs itself under KD9TAW and is queued for upload.
+#[test]
+fn without_profiles_a_refused_rr73_is_not_counted_logged_or_uploaded() {
+    let mut control = run_at_their_roger(false);
+    assert_eq!(
+        rr73_outcome(&mut control),
+        (
+            Some("W1AW KD9TAW RR73".into()),
+            1,
+            vec![("W1AW".into(), Some(ME.into()))],
+            1,
+            0
+        ),
+        "CONTROL"
+    );
+    let mut e = run_at_their_roger(true);
+    assert_eq!(rr73_outcome(&mut e), (None, 0, vec![], 0, 0));
+    assert_eq!(ft_notice(&e).as_deref(), Some(CALL_CHANGED));
+}
+
+/// ⛔ H1 and L2: an S&P contact's final 73 refused at the key (the call saved as KD9TAW/P after
+/// W1AW's RR73 queued it under KD9TAW) is not counted as sent, so "Disable Tx after sending 73"
+/// is not armed and no CW ID follows it, in FT8 and FT4 and in Q65, FST4 and MSK144 (which keep
+/// the CW ID). CONTROL: unchanged, the 73 keys, TX is to go off, and the three keep their CW ID.
+#[test]
+fn without_profiles_a_refused_final_73_arms_neither_disable_tx_nor_a_cw_id() {
+    let tiers = [Tier::Ft8, Tier::Ft4, Tier::Q65, Tier::Fst4, Tier::Msk144];
+    let mut got = Vec::new();
+    let mut want = Vec::new();
+    for tier in tiers {
+        for edit in [false, true] {
+            let mut e = station();
+            e.settings.cw_id_after_73 = true;
+            e.settings.disable_tx_after_73 = true;
+            e.set_tier(tier);
+            e.call_station("W1AW");
+            e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -7)], 1);
+            e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW RR73", -7)], 3);
+            assert_eq!(tx_now(&e), "W1AW KD9TAW 73", "{tier:?}: premise");
+            if edit {
+                settings_call_edit(&mut e, "KD9TAW/P");
+            }
+            let keyed = !e.poll_tx(4).is_empty();
+            got.push((
+                tier,
+                edit,
+                keyed,
+                tx_count(&e),
+                e.take_pending_tx_disable(),
+                e.take_pending_cw_id(),
+            ));
+            let keeps_id = matches!(tier, Tier::Q65 | Tier::Fst4 | Tier::Msk144);
+            want.push(if edit {
+                (tier, edit, false, 0, false, false)
+            } else {
+                (tier, edit, true, 1, true, keeps_id)
+            });
+        }
+    }
+    assert_eq!(got, want);
+}
+
+/// No profiles: an ARRL VHF contest, running on FT8, our CQ keyed under KD9TAW and W1AW's grid
+/// heard, so the next over is our rogered grid (WSJT-X's grid-contest Tx3), saved as KD9TAW/P
+/// first when `edit`.
+fn vhf_run_at_our_rogered_grid(edit: bool) -> Engine {
+    let mut e = station();
+    let mut s = e.settings().clone();
+    s.fd_event = "arrlvhf_jan".into();
+    s.fd_active = true;
+    s.tx_even = true;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.set_frequency(50.313, "6m", "USB");
+    e.set_mode("fieldday-run").unwrap();
+    e.set_tx_enabled(true);
+    assert_eq!(key_over(&mut e, 0).as_deref(), Some("CQ TEST KD9TAW EN52"));
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW EN37", -7)], 2);
+    let next = match &e.mode {
+        Mode::FieldDay { station, .. } => station.outgoing().map(|m| m.to_text()),
+        _ => None,
+    };
+    assert_eq!(next.as_deref(), Some("W1AW KD9TAW R EN52"), "premise");
+    if edit {
+        settings_call_edit(&mut e, "KD9TAW/P");
+    }
+    e
+}
+
+/// ⛔ H2. The ARRL VHF contests' rogered grid ("W1AW KD9TAW R EN52", free text to the message
+/// reader) is made under the station's call like every contest over: after a call edit it is not
+/// keyed, and the cockpit says why. CONTROL: unchanged, it keys.
+#[test]
+fn without_profiles_the_vhf_contests_rogered_grid_is_not_keyed_under_an_edited_call() {
+    let mut control = vhf_run_at_our_rogered_grid(false);
+    assert_eq!(
+        (key_over(&mut control, 2), ft_notice(&control)),
+        (Some("W1AW KD9TAW R EN52".into()), None),
+        "CONTROL"
+    );
+    let mut e = vhf_run_at_our_rogered_grid(true);
+    assert_eq!(
+        ft_notice(&e).as_deref(),
+        Some(CALL_CHANGED),
+        "said before the key"
+    );
+    assert_eq!(
+        (key_over(&mut e, 2), ft_notice(&e)),
+        (None, Some(CALL_CHANGED.into()))
+    );
+}
+
+/// ⛔ L1 (the operator's ruling): the check is for messages Nexus made from the station's call.
+/// Text the operator types goes out as before, even where it reads as another station's message:
+/// Tx 5 "W1AW 5NN 73" ("5NN" reads as a sender), the strip's free text "CQ DX EN52" ("DX" reads
+/// as a sender), and a logger's free text. Nothing else changes: the run's CQ made under KD9TAW is
+/// still refused once the call is KD9TAW/P.
+#[test]
+fn without_profiles_typed_text_that_reads_as_another_sender_keys_as_before() {
+    let mut e = plain_ft8();
+    e.call_station("W1AW");
+    e.override_next_tx("W1AW", None, "W1AW 5NN 73");
+    assert_eq!(
+        (keyed(&mut e, 0..2), ft_notice(&e)),
+        (vec!["W1AW 5NN 73".to_string()], None),
+        "Tx 5 typed"
+    );
+
+    let mut e = plain_ft8_run();
+    e.qso_freetext("CQ DX EN52");
+    assert_eq!(
+        (keyed(&mut e, 0..2), ft_notice(&e)),
+        (vec!["CQ DX EN52".to_string()], None),
+        "the strip's free text"
+    );
+
+    let mut e = plain_ft8();
+    e.call_station("W1AW");
+    e.udp_free_text("W1AW 5NN 73", true).unwrap();
+    assert_eq!(
+        (keyed(&mut e, 0..2), ft_notice(&e)),
+        (vec!["W1AW 5NN 73".to_string()], None),
+        "a logger's free text"
+    );
+
+    let mut e = plain_ft8_run();
+    settings_call_edit(&mut e, "KD9TAW/P");
+    assert_eq!(
+        (keyed(&mut e, 0..4), ft_notice(&e)),
+        (Vec::<String>::new(), Some(CALL_CHANGED.into())),
+        "a message made under the old call is still refused"
+    );
+}
+
+/// No profiles, "Disable Tx after sending 73" on: an ARRL VHF contest's S&P, the operator
+/// double-clicks W1AW's CQ, our grid keys under KD9TAW and W1AW's rogered grid queues our RR73,
+/// the contact's closing over; saved as KD9TAW/P first when `edit`.
+fn vhf_pick_at_our_rr73(edit: bool) -> Engine {
+    let mut e = station();
+    let mut s = e.settings().clone();
+    s.fd_event = "arrlvhf_jan".into();
+    s.fd_active = true;
+    s.tx_even = true;
+    s.disable_tx_after_73 = true;
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.set_frequency(50.313, "6m", "USB");
+    e.set_mode("fieldday-sp").unwrap();
+    e.set_tx_enabled(true);
+    e.ingest_decodes_for_test(&[dec_snr("CQ TEST W1AW EN37", -7)], 0);
+    e.work_station(
+        "W1AW",
+        Some("EN37"),
+        Some("CQ TEST W1AW EN37"),
+        Some(-7),
+        None,
+    )
+    .expect("premise: the double-click is taken");
+    assert_eq!(key_over(&mut e, 0).as_deref(), Some("W1AW KD9TAW EN52"));
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW R EN37", -7)], 2);
+    if edit {
+        settings_call_edit(&mut e, "KD9TAW/P");
+    }
+    e
+}
+
+/// What the contest's closing over did: keyed, "Disable Tx after sending 73" armed, and the
+/// message the contest sequencer still holds.
+fn contest_closing(e: &mut Engine) -> (Option<String>, bool, Option<String>) {
+    let keyed = key_over(e, 2);
+    let held = match &e.mode {
+        Mode::FieldDay { station, .. } => station.outgoing().map(|m| m.to_text()),
+        _ => None,
+    };
+    (keyed, e.take_pending_tx_disable(), held)
+}
+
+/// ⛔ H1 in a contest: the closing RR73 of a contact the operator picked, refused for its call,
+/// is not counted as sent: "Disable Tx after sending 73" is not armed and the sequencer still
+/// holds the RR73 (as it holds any over that did not go). CONTROL: unchanged, the RR73 keys,
+/// is cleared once sent, and TX is to go off after it.
+#[test]
+fn without_profiles_a_refused_contest_rr73_is_not_counted_as_sent() {
+    assert_eq!(
+        contest_closing(&mut vhf_pick_at_our_rr73(false)),
+        (Some("W1AW KD9TAW RR73".into()), true, None),
+        "CONTROL"
+    );
+    assert_eq!(
+        contest_closing(&mut vhf_pick_at_our_rr73(true)),
+        (None, false, Some("W1AW KD9TAW RR73".into()))
+    );
+}
+
+/// ⛔ L1's bound, with profiles: a Tx row whose sender is the call of another of the station's
+/// profiles (the row a screen drew before the switch) is the station's own call, not another
+/// station's, and is refused; one under the call in use keys, and so does typed text naming a
+/// sender that is none of the station's calls.
+#[test]
+fn a_tx_row_naming_another_profiles_call_is_refused() {
+    let typed = |row: &str| {
+        let (mut e, _) = ft8_station();
+        let mut club = portable();
+        club.name = "Club".into();
+        club.call = "W9ABC".into();
+        let club = e.save_station_profile(club).unwrap();
+        e.switch_station_profile(&club).unwrap();
+        assert_eq!(e.settings.mycall, "W9ABC", "premise");
+        e.call_station("W1AW");
+        e.override_next_tx("W1AW", None, row);
+        (keyed(&mut e, 0..2), ft_notice(&e))
+    };
+    assert_eq!(
+        typed("W1AW KD9TAW 73"),
+        (Vec::<String>::new(), Some(CALL_CHANGED.into())),
+        "Home's call"
+    );
+    assert_eq!(
+        typed("W1AW KD9TAW/P 73"),
+        (Vec::<String>::new(), Some(CALL_CHANGED.into())),
+        "the portable profile's call"
+    );
+    assert_eq!(
+        typed("W1AW W9ABC 73"),
+        (vec!["W1AW W9ABC 73".to_string()], None),
+        "CONTROL: the call in use"
+    );
+    assert_eq!(
+        typed("W1AW 5NN 73"),
+        (vec!["W1AW 5NN 73".to_string()], None),
+        "typed, none of the station's calls"
+    );
+}

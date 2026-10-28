@@ -204,6 +204,20 @@ impl Engine {
         if to == on.text {
             return None;
         }
+        // ⛔ The keying-time call check, as at a key (`plan_tx`): a message made under another
+        // call than the station's now (a call saved during the over) never replaces the rest of
+        // it. Refused like every reason above: the over goes out as it was keyed, and nothing is
+        // counted, written or reported.
+        if let Some(why) = self.ft_sent_call_refusal(&to) {
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "over not switched mid-air: {why} The over goes out as {:?}.",
+                    on.text
+                ),
+            );
+            return None;
+        }
         if matches!(self.mode, Mode::FieldDay { .. })
             && !addressee(&on.text)
                 .zip(addressee(&to))

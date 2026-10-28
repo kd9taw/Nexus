@@ -53015,6 +53015,62 @@ mod tests {
         assert_eq!(engine_lock(&engine).settings().mygrid, home);
     }
 
+    /// ⛔ The keying-time call check on an SSTV picture's preset text, through the `sstv_send`
+    /// command itself (the webview's call, the picture encoded and handed to the engine). No
+    /// profiles, Phone on 20 m, TX on. A picture whose preset text names KD9TAW goes out while the
+    /// call is KD9TAW. After the call is saved as KD9TAW/P, the same picture is refused with the
+    /// reason before anything is encoded, and nothing waits to key; one naming KD9TAW/P goes out.
+    #[test]
+    fn sstv_send_refuses_a_picture_whose_preset_names_the_old_call() {
+        use tauri::Manager;
+        let spec = tempo_sstv::for_mode(tempo_sstv::SstvMode::Robot36);
+        let (w, h) = (spec.line_pixels, spec.image_lines);
+        let rgb = b64_encode(&vec![128u8; w as usize * h as usize * 3]);
+        // A fresh station on `call`, the picture sent with `preset` in its text: the command's
+        // answer, and whether a picture now waits for the radio loop to key it.
+        let send = |call: &str, preset: &str| {
+            let engine = fresh_engine();
+            {
+                let mut e = engine_lock(&engine);
+                e.set_frequency(14.230, "20m", "USB");
+                e.set_operating_mode("phone", false);
+                if call != "KD9TAW" {
+                    let mut s = e.settings().clone();
+                    s.mycall = call.into();
+                    e.apply_settings(s);
+                }
+                assert!(e.settings().station_profiles.is_empty(), "premise");
+                assert_eq!(e.settings().mycall, call, "premise");
+            }
+            let app = tauri::test::mock_builder()
+                .manage(engine.clone())
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .expect("a mock app");
+            let answer = crate::sstv_send(
+                app.state::<SharedEngine>(),
+                "robot36".into(),
+                w,
+                h,
+                rgb.clone(),
+                None,
+                Some(vec![preset.to_string()]),
+                None,
+            )
+            .map(|_| ());
+            let waits = engine_lock(&engine).poll_sstv_tx().is_some();
+            (answer, waits)
+        };
+        assert_eq!(send("KD9TAW", "KD9TAW"), (Ok(()), true), "CONTROL");
+        assert_eq!(
+            send("KD9TAW/P", "KD9TAW"),
+            (
+                Err(tempo_app::settings::STATION_CALL_CHANGED_TX_REFUSED.to_string()),
+                false
+            )
+        );
+        assert_eq!(send("KD9TAW/P", "KD9TAW/P"), (Ok(()), true));
+    }
+
     /// A station with Home (KD9TAW) and a park profile (KD9TAW/P at US-0001).
     fn station_with_a_park_profile() -> (SharedEngine, String) {
         let engine = fresh_engine();
