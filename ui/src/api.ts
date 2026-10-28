@@ -2059,6 +2059,23 @@ export async function markQslCardById(target: RowRef, received: boolean): Promis
   return invoke<RowAnswer>('mark_qsl_card_by_id', { target, received })
 }
 
+/** Put the contact `target` in the cards-to-send queue (ADIF `QSL_SENT=Q`), or take it out. Marking
+ *  the card sent (`markQslSentById`) takes it out as well. */
+export async function queueQslCardById(target: RowRef, queued: boolean): Promise<RowAnswer> {
+  return invoke<RowAnswer>('queue_qsl_card_by_id', { target, queued })
+}
+
+/** The contacts whose paper QSL card is still to go out (ADIF `QSL_SENT` `Q` or `R`, not marked
+ *  sent), in log order, each with the key a change to it must send. */
+export async function qslCardQueue(): Promise<KeyedRow[]> {
+  return invoke<KeyedRow[]>('qsl_card_queue')
+}
+
+/** Open a sheet of QSL labels (a whole HTML page) in this computer's browser, to print. */
+export async function openQslLabels(html: string): Promise<void> {
+  await invoke('open_qsl_labels', { html })
+}
+
 /** Set — or REMOVE — the satellite tag on `target` (ADIF `PROP_MODE=SAT` + `SAT_NAME`).
  *
  *  ⭐ Its own command, and NOT two boxes on the edit form. That form reads a blank field as

@@ -281,6 +281,9 @@ const MIGRATED = [
   // Check confirmations (2026-10-07) — born migrated: LoTW, calls, bands, modes and credit codes
   // are tokens, held as data or a named constant.
   'components/ConfirmationReview.tsx',
+  // Cards to send (2026-10-27) — born migrated: calls, bands, modes and the label stocks' product
+  // names are tokens.
+  'components/QslCardsToSend.tsx',
   'components/SpotLegend.tsx',
   'components/BandMap.tsx',
   'components/ContestSpotMe.tsx',

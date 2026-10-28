@@ -8908,6 +8908,28 @@ select optgroup {
   color: var(--state-good);
   border: 1px solid color-mix(in srgb, var(--state-good) 40%, transparent);
 }
+/* "Cards to send" (QslCardsToSend) renders on the park-states box, rows and notes above; its label
+   stock, start label and combine choice sit in one wrapping row above the list. */
+.qsl-cards-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-3);
+  font-size: calc(13px * var(--text-scale));
+}
+.qsl-cards-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.qsl-cards-options .park-review-note {
+  flex-basis: 100%;
+  margin: 0;
+}
+.qsl-cards-start {
+  width: 6ch;
+}
 /* "Check confirmations" (ConfirmationReview) renders on the park-states box, rows and notes above.
    Each row adds a second line, under the call: why it is listed, and what the change keeps or
    costs. The group heading names the service; the counts under the list are what it leaves alone. */

@@ -28,6 +28,8 @@ import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
 import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
+import { QslCardsToSend } from './QslCardsToSend'
+import { cardQueued } from '../features/qslLabels'
 import { ImportPreview } from './ImportPreview'
 import { importTooLarge } from '../features/logImport'
 import { ParkStateReview } from './ParkStateReview'
@@ -79,6 +81,7 @@ import {
   logQso,
   markLotwUploaded,
   markQslSentById,
+  queueQslCardById,
   markQslCardById,
   setSatTagById,
   setDxccById,
@@ -458,6 +461,7 @@ export function Logbook({
   // arm the danger button — a deliberate, typed gate for a wipe of the whole log.
   const [showPurge, setShowPurge] = useState(false)
   const [showDeleted, setShowDeleted] = useState(false)
+  const [showCards, setShowCards] = useState(false)
   // The clean-up tools (LogTools.tsx): which one the dialog shows, while it is open.
   const [tools, setTools] = useState<LogTool | null>(null)
   const [purgeText, setPurgeText] = useState('')
@@ -970,6 +974,21 @@ export function Logbook({
         via
           ? t('logbook.qsl.marked', { call: q.call, via: qslViaLabel(via) ?? via })
           : t('logbook.qsl.sentCleared', { call: q.call }),
+        'success',
+      )
+      load()
+    }
+  }
+
+  // Queue — or unqueue — a paper card for the contact (ADIF `QSL_SENT=Q`): the Cards to send list
+  // prints its label and marks it sent once the operator says the labels printed.
+  const onQueueCard = async (q: LoggedQso, ref: RowRef | null, queued: boolean) => {
+    if (!ref) return
+    const answer = await withErrorToast(() => queueQslCardById(ref, queued), t('logbook.qsl.markFailed'))
+    if (answer && changeMade(answer, q.call)) {
+      // Two literal keys, not one interpolated one — same reason as onMarkQslCard below.
+      pushToast(
+        queued ? t('logbook.qsl.queued', { call: q.call }) : t('logbook.qsl.unqueued', { call: q.call }),
         'success',
       )
       load()
@@ -2380,6 +2399,14 @@ export function Logbook({
           >
             {showForm ? t('logbook.form.close') : t('logbook.form.open')}
           </button>
+          <button
+            type="button"
+            className="export-btn"
+            onClick={() => setShowCards(true)}
+            title={t('logbook.qslCards.buttonTitle')}
+          >
+            {t('logbook.qslCards.button')}
+          </button>
           <button type="button" className="export-btn" onClick={() => setShowDeleted(true)}>
             {t('logbook.deleted.button')}
           </button>
@@ -3240,7 +3267,7 @@ export function Logbook({
                               style={{ fontSize: '0.85em' }}
                               value=""
                               onChange={(e) => {
-                                const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | 's' | ''
+                                const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | 's' | 'Q' | 'q' | ''
                                 // R/r/s are NOT ADIF letters — they are this menu's own entries for
                                 // the RECEIVED card (#152), which has no QSL_SENT_VIA code because it
                                 // is not a send at all, and for CLEARING the send (#180). Kept in the
@@ -3249,6 +3276,9 @@ export function Logbook({
                                 if (v === 'R') void onMarkQslCard(q, ref, true)
                                 else if (v === 'r') void onMarkQslCard(q, ref, false)
                                 else if (v === 's') void onMarkQslSent(q, ref, null)
+                                // Q/q: the cards-to-send queue (ADIF QSL_SENT=Q), in and out.
+                                else if (v === 'Q') void onQueueCard(q, ref, true)
+                                else if (v === 'q') void onQueueCard(q, ref, false)
                                 else if (v) void onMarkQslSent(q, ref, v as 'B' | 'D' | 'E')
                               }}
                               title={t('logbook.row.qslSent.title', { call: q.call })}
@@ -3262,6 +3292,11 @@ export function Logbook({
                                   <option value="B">{t('logbook.row.qslSent.bureau')}</option>
                                   <option value="D">{t('logbook.row.qslSent.direct')}</option>
                                   <option value="E">{t('logbook.row.qslSent.electronic')}</option>
+                                  {cardQueued(q) ? (
+                                    <option value="q">{t('logbook.row.qslQueue.remove')}</option>
+                                  ) : (
+                                    <option value="Q">{t('logbook.row.qslQueue.add')}</option>
+                                  )}
                                 </>
                               )}
                               {/* ...and the way back out of it (#180). It has to be shown on exactly
@@ -3596,6 +3631,7 @@ export function Logbook({
         onReload={reloadCard}
         logTick={logTick}
       />
+      <QslCardsToSend open={showCards} onClose={() => setShowCards(false)} onChanged={load} />
       <RecentlyDeleted open={showDeleted} onClose={() => setShowDeleted(false)} onRestored={load} />
       <LogTools
         open={tools !== null}

@@ -37387,6 +37387,30 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// The most a QSL label sheet may be: a few thousand labels' markup, with room to spare.
+const QSL_LABELS_MAX_BYTES: usize = 8 << 20;
+
+/// Open a sheet of QSL labels (an HTML page the Logbook's Cards to send built) in this computer's
+/// browser, which prints it at the label sheet's own size. Written to ONE file in the app's own
+/// cache folder — this user's, never a shared temporary folder another account could plant a
+/// link in — and replaced on every print. The page is the window's own markup; it reads and
+/// changes no contact. The webview has no print dialog of its own on every platform, and the
+/// browser's honours the sheet's page size and zero margins.
+#[tauri::command]
+fn open_qsl_labels(app: tauri::AppHandle, html: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    if html.len() > QSL_LABELS_MAX_BYTES {
+        return Err("the label sheet is too large to print in one go".to_string());
+    }
+    let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("qsl-labels.html");
+    std::fs::write(&path, html).map_err(|e| e.to_string())?;
+    app.opener()
+        .open_path(path.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// The quit cleanup ran — however many exit events arrive, it runs ONCE.
 ///
 /// Why a guard instead of relying on idempotence: on Windows/Linux a window-close quit
@@ -40378,6 +40402,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_title_bar_theme,
         open_dxped_page,
         open_external_url,
+        open_qsl_labels,
         os_notify,
         app_version,
         radio_launch_info,
@@ -40720,6 +40745,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_by_id::edit_qso_by_id,
         log_by_id::mark_qsl_sent_by_id,
         log_by_id::mark_qsl_card_by_id,
+        log_by_id::queue_qsl_card_by_id,
+        log_by_id::qsl_card_queue,
         log_by_id::set_sat_tag_by_id,
         log_by_id::set_dxcc_by_id,
         log_by_id::delete_qso_by_id,
