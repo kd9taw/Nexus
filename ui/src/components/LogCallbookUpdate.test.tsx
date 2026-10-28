@@ -281,7 +281,7 @@ describe('update from callbook', () => {
     screen.getByText(/A call with a stroke is asked again for its base call: up to 7 lookups in all\./)
   })
 
-  // A user report (ruling 954): QRZ counted 16,191 lookups on the account — another program's —
+  // A user report: QRZ counted 16,191 lookups on the account — another program's —
   // against a cap of 6,000, and every run stopped before its first. QRZ's count is information:
   // said beside today's tally, never as the reason a run stops.
   it('QRZ’s own count is said as information and never warns of the cap', async () => {

@@ -19,7 +19,7 @@
 //!   added to what this station spent ([`Callbook::spent`], kept on disk), and a lookup that would
 //!   pass the cap is not made: the run stops, [`Stop::Limit`]. QRZ publishes no daily number, so
 //!   the cap is the operator's setting, 250 by default. ⚠️ **QRZ's own count of the account's
-//!   lookups never holds the cap** (operator ruling 954): it counts every program on the account,
+//!   lookups never holds the cap**: it counts every program on the account,
 //!   so another program's day of lookups stopped every run before its first (a user report: QRZ
 //!   said 16,191 against a cap of 6,000, above the setting's maximum). It is shown to the operator
 //!   as information only; a QRZ that does refuse is caught by the refusal streak below.
@@ -437,7 +437,7 @@ mod tests {
         assert_eq!((run.stop, cb.lookups.len()), (Stop::Limit, 0));
     }
 
-    /// ★ QRZ's own count never holds the cap (operator ruling 954): it counts every program on
+    /// ★ QRZ's own count never holds the cap: it counts every program on
     /// the account, so another program's lookups stopped every run at none (a user report: QRZ
     /// said 16,191 against a cap of 6,000). Only this station's own lookups count; a QRZ that
     /// refuses is still caught by the refusal streak.

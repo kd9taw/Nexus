@@ -21,7 +21,7 @@
 //! whichever service answered. The station's own tally of the day's network lookups lives in the
 //! cache file ([`tempo_core::callbook_cache::CallbookCache::note_lookups`]). QRZ's own count of the
 //! account's lookups ([`note_qrz_session`]) is kept in the same file with its time and shown in the
-//! preview, but it **never holds the cap** (operator ruling 954): every program on the account
+//! preview, but it **never holds the cap**: every program on the account
 //! adds to it, so another program's day of lookups stopped every run before its first. A sign-in
 //! to QRZ or HamQTH is a request too ([`note_login`]), and counts.
 //!
@@ -298,7 +298,7 @@ pub(crate) fn kept(
 }
 
 /// The day's network lookups as the cap reads them: the cache file's tally, or the session's.
-/// Never QRZ's own count of the account (operator ruling 954): every program on the account adds
+/// Never QRZ's own count of the account: every program on the account adds
 /// to that, so it is shown beside this, not counted in it.
 fn spent(app: &AppHandle) -> usize {
     let now = crate::now_unix();
@@ -499,7 +499,7 @@ pub struct UpdatePreviewDto {
     pub spent: usize,
     pub cap: usize,
     /// QRZ's own count of the account's lookups, from its last answer in the last day. Shown for
-    /// information; it is not in `spent` and never holds the cap (ruling 954).
+    /// information; it is not in `spent` and never holds the cap.
     pub qrz_count: Option<usize>,
     pub could_change: usize,
     /// `[ADIF field, contacts]`, most first: exact for kept answers, at most for the rest.
