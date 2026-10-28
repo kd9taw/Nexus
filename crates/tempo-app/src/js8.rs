@@ -1615,6 +1615,7 @@ impl Engine {
             },
             beacon,
             stamp: self.tx_gate_stamp(),
+            counted: None,
         })
     }
 }

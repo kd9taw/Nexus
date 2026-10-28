@@ -71,6 +71,11 @@ pub const STATION_PROFILE_RESTORE_REFUSED: &str = "Settings are not restored or 
 /// changed it would go out under the old one, so it is dropped instead.
 pub const STATION_CALL_CHANGED_TX_REFUSED: &str = "Not sent: this message was made under another callsign than the one your station uses now. Send it again, or end the run and start it again, to go out under your current call.";
 
+/// ⛔ Why a late reply was not sent: the one over a CQ run still owed a station it had finished
+/// with (#170's late reply) was made under another callsign than the one the station transmits
+/// under now, so it is dropped rather than held, and the run goes on under the current call.
+pub const STATION_CALL_CHANGED_LATE_REPLY_DROPPED: &str = "Not sent: a late reply to a station you had already worked was made under your previous callsign, so it was dropped.";
+
 /// One named station setup. Every field but the id and name is optional: blank means "not
 /// stated", and a blank field stamps nothing on a contact.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

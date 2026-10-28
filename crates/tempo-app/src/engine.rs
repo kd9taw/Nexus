@@ -3808,6 +3808,10 @@ pub struct Engine {
     /// station or when our CQ first gets a reply; `None` between QSOs. The log records
     /// this as the contact start, with the completion time as TIME_OFF.
     qso_start_unix: Option<u64>,
+    /// A late reply owed under another call than the station's was dropped
+    /// ([`STATION_CALL_CHANGED_LATE_REPLY_DROPPED`]): said in the cockpit until the next over
+    /// keys or TX is stopped. Display only.
+    ft_late_reply_dropped: bool,
     /// Whether the operator is RUNNING (called CQ) vs answering a specific station.
     /// When running, a completed QSO returns to calling CQ (WSJT-X's run workflow).
     cq_running: bool,
@@ -6284,6 +6288,84 @@ pub struct TxPlan {
     /// Everything the TX gate evaluated when this plan was made — see
     /// [`TxGateStamp`].
     stamp: TxGateStamp,
+    /// What `plan_tx` changed when it counted this FT over as sent, so [`Engine::commit_tx`] can
+    /// take it back when the over is refused at the key for its call. `None` for every other plan.
+    counted: Option<FtOverCount>,
+}
+
+/// What [`Engine::plan_tx`] changed when it counted an FT or contest over as sent: the
+/// sequencer's step and the flags the over arms. A call saved while the radio loop builds the wave
+/// with the engine unlocked makes [`Engine::commit_tx`] refuse the over on its stamp; it was never
+/// sent, so it is not counted either (the operator's decision, 2026-10-28): no step counted, no
+/// "Disable Tx after sending 73", no CW ID. Only that refusal takes the count back. An over that
+/// keys, or one refused at the key for another reason, keeps it exactly as before.
+#[derive(Debug, Clone)]
+struct FtOverCount {
+    /// The sequencer's step before and after the count.
+    step: CountedStep,
+    /// The engine's own bookkeeping before the count.
+    pending_tx_disable: bool,
+    pending_cw_id: bool,
+    qso_start_unix: Option<u64>,
+    cq_pause_until: Option<u64>,
+}
+
+/// The part of a sequencer an over's count changes, with enough of the rest to tell that nothing
+/// else moved it between the plan and the key. Put back only when the sequencer is exactly as the
+/// count left it: a station the operator replaced or moved meanwhile is theirs, and left alone.
+#[derive(Debug, Clone, PartialEq)]
+enum CountedStep {
+    Qso {
+        before: QsoStep,
+        after: QsoStep,
+    },
+    FieldDay {
+        before: FdStep,
+        after: FdStep,
+    },
+    /// The late reply owed to a partner the run had left (#170): taken by the plan, and dropped
+    /// whether it keys or not, since it is one over, once.
+    Owed(Msg),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct QsoStep {
+    state: QsoState,
+    dxcall: Option<String>,
+    pending: Option<Msg>,
+    tx_count: u32,
+    rv_count: u8,
+    keyed_on_air: bool,
+}
+
+impl QsoStep {
+    fn of(s: &QsoStation) -> Self {
+        Self {
+            state: s.state,
+            dxcall: s.dxcall.clone(),
+            pending: s.pending.clone(),
+            tx_count: s.tx_count,
+            rv_count: s.rv_count,
+            keyed_on_air: s.keyed_on_air,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FdStep {
+    state: tempo_core::fieldday::FdState,
+    dxcall: Option<String>,
+    pending: Option<Msg>,
+}
+
+impl FdStep {
+    fn of(s: &FieldDayStation) -> Self {
+        Self {
+            state: s.state,
+            dxcall: s.dxcall.clone(),
+            pending: s.pending.clone(),
+        }
+    }
 }
 
 /// The transmit side of WSJT-X's UDP Status (type 1, `Network/NetworkMessage.hpp`), as
@@ -6934,6 +7016,7 @@ impl Engine {
             qso_logged: false,
             station_profile_return_kept: None,
             qso_start_unix: None,
+            ft_late_reply_dropped: false,
             cq_running: false,
             // Seeded from the callsign so two stations do not share a draw
             // sequence; the percentage is applied from settings on each decision.
@@ -20606,6 +20689,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;
+        // …and a dropped late reply's notice: the operator has stopped.
+        self.ft_late_reply_dropped = false;
         // So does a deferred after-73 disable: TX is already off.
         self.pending_tx_disable = false;
         self.pending_cw_id = false; // halt = silence; no parting CW ID either
@@ -29407,6 +29492,10 @@ contact yourself."
         s.radio.tx_refusal = self
             .connection_tx_refusal()
             .or_else(|| self.ft_held_call_refusal())
+            .or_else(|| {
+                self.ft_late_reply_dropped
+                    .then_some(crate::settings::STATION_CALL_CHANGED_LATE_REPLY_DROPPED)
+            })
             .map(str::to_string);
         s.radio.tx_emission_mhz = Some(self.tx_emission_mhz());
         s.radio.phone_usb_only = crate::privileges::usb_only_phone(
@@ -30273,6 +30362,7 @@ contact yourself."
             },
             beacon: true,
             stamp: self.tx_gate_stamp(),
+            counted: None,
         })
     }
 
@@ -30416,6 +30506,22 @@ contact yourself."
         // tell a capped station apart from ordinary silence — see the watchdog block there.
         let mut withheld_by_call_cap = false;
         let qso_period_s = self.active_slot_secs();
+        // What this over's count changes, for `commit_tx` to take back if the over is refused at
+        // the key for its call (`FtOverCount`). Set by the arms that count an over.
+        let mut counted: Option<FtOverCount> = None;
+        let flags = (
+            self.pending_tx_disable,
+            self.pending_cw_id,
+            self.qso_start_unix,
+            self.cq_pause_until,
+        );
+        let count = |step| FtOverCount {
+            step,
+            pending_tx_disable: flags.0,
+            pending_cw_id: flags.1,
+            qso_start_unix: flags.2,
+            cq_pause_until: flags.3,
+        };
         let text: Option<String> = match &mut self.mode {
             Mode::Chat => {
                 // Open broadcasts have priority and send unconditionally — no
@@ -30581,11 +30687,18 @@ contact yourself."
                     .and_then(|p| p.owed.as_ref())
                     .and_then(|m| call_refusal(m, &station.mycall, Some(m)))
                 {
-                    tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                    // ⛔ …and DROPPED, with the record (the operator's decision, 2026-10-28): held,
+                    // it would block every over after it, a Call CQ under the new call included,
+                    // until it expired. One over, once: this slot was its slot, and the cockpit
+                    // says it did not go. The station's own over is back on the next slot.
+                    tempo_core::applog::info("tx", &format!("late reply dropped: {why}"));
+                    self.recent_partner = None;
+                    self.ft_late_reply_dropped = true;
                     self.app.set_transmitting(false);
                     return None;
                 }
                 if let Some(m) = self.recent_partner.as_mut().and_then(|p| p.owed.take()) {
+                    counted = Some(count(CountedStep::Owed(m.clone())));
                     self.recent_partner = None;
                     self.cq_pause_until = None;
                     // `tx_rv` is already 0 and stays there: a one-shot has no step for
@@ -30603,6 +30716,7 @@ contact yourself."
                 }
                 match next {
                     Some((m, rv)) => {
+                        let before = QsoStep::of(station);
                         // Something is going out, so no pause is in force — either the run just
                         // resumed, or (the case that matters) somebody ANSWERED and this is the
                         // reply. Clearing it here rather than only on resume means a stale
@@ -30656,6 +30770,10 @@ contact yourself."
                                 self.pending_cw_id = true;
                             }
                         }
+                        counted = Some(count(CountedStep::Qso {
+                            before,
+                            after: QsoStep::of(station),
+                        }));
                         // IR-HARQ off: always transmit RV0 (no redundancy escalation).
                         tx_rv = if self.settings.harq_enabled {
                             rv as i32
@@ -30725,6 +30843,7 @@ contact yourself."
                         self.app.set_transmitting(false);
                         return None;
                     }
+                    let before = FdStep::of(station);
                     station.after_tx();
                     // Stock "Disable Tx after sending 73" after a contact the operator picked (a
                     // double-click on its CQ, a logger's Reply to it): the over leaving NOW closes
@@ -30734,6 +30853,10 @@ contact yourself."
                     if station.done() && station.picked() && self.settings.disable_tx_after_73 {
                         self.pending_tx_disable = true;
                     }
+                    counted = Some(count(CountedStep::FieldDay {
+                        before,
+                        after: FdStep::of(station),
+                    }));
                 }
                 m.map(|x| x.to_text())
             }
@@ -30758,6 +30881,7 @@ contact yourself."
                     return None;
                 }
                 self.app.set_transmitting(true);
+                self.ft_late_reply_dropped = false;
                 // Wall-clock watchdog (WSJT-X): start the timer on the first over after
                 // an operator action, then trip (auto-halt TX) once REAL elapsed time
                 // exceeds the limit — counting the RX slots between overs too, so it
@@ -30904,6 +31028,7 @@ contact yourself."
                     waveform,
                     beacon: false,
                     stamp: self.tx_gate_stamp(),
+                    counted,
                 })
             }
             None => {
@@ -31103,6 +31228,7 @@ contact yourself."
             || plan.slot != current_slot
             || plan.stamp != self.tx_gate_stamp()
         {
+            self.uncount_over_refused_for_its_call(plan);
             self.app.set_transmitting(false);
             return Vec::new();
         }
@@ -31148,6 +31274,74 @@ contact yourself."
         self.note_ft_on_air(plan, wave.len());
         self.tx_message = wsjtx_msgsent(plan.tier, &plan.waveform);
         vec![wave]
+    }
+
+    /// ⛔ An FT over `commit_tx` refused because the station's call changed while its wave was
+    /// built is not counted as sent (the operator's decision, 2026-10-28): what `plan_tx` counted
+    /// for it ([`FtOverCount`]) is taken back, as if `plan_tx` had refused it, and a late reply
+    /// is dropped and said. Judged as `plan_tx` judges an over before it counts it; an over
+    /// refused for anything else keeps its count, as before.
+    fn uncount_over_refused_for_its_call(&mut self, plan: &TxPlan) {
+        let Some(count) = &plan.counted else {
+            return;
+        };
+        let text = match &plan.waveform {
+            TxWaveform::Deep { text, .. }
+            | TxWaveform::Fast { text, .. }
+            | TxWaveform::Native { text, .. } => text,
+            TxWaveform::Js8 { .. } => return,
+        };
+        let refused = match &count.step {
+            CountedStep::Owed(m) => ft_over_call_refusal(
+                text,
+                &self.settings.mycall,
+                "",
+                &self.settings.station_profiles,
+                Some(m),
+            ),
+            _ => self.ft_sent_call_refusal(text),
+        };
+        if refused.is_none() {
+            return;
+        }
+        tempo_core::applog::info("tx", "over refused at the key for its call: not counted");
+        // Only what the count armed is disarmed: a flag that was already up stays up.
+        if !count.pending_tx_disable {
+            self.pending_tx_disable = false;
+        }
+        if !count.pending_cw_id {
+            self.pending_cw_id = false;
+        }
+        let unchanged = match (&count.step, &mut self.mode) {
+            (CountedStep::Qso { before, after }, Mode::Qso { station, .. })
+                if QsoStep::of(station) == *after =>
+            {
+                station.pending = before.pending.clone();
+                station.tx_count = before.tx_count;
+                station.rv_count = before.rv_count;
+                station.keyed_on_air = before.keyed_on_air;
+                true
+            }
+            (CountedStep::FieldDay { before, after }, Mode::FieldDay { station, .. })
+                if FdStep::of(station) == *after =>
+            {
+                station.pending = before.pending.clone();
+                true
+            }
+            (CountedStep::Owed(_), _) => {
+                self.ft_late_reply_dropped = true;
+                true
+            }
+            _ => false,
+        };
+        if unchanged {
+            if self.qso_start_unix.is_some() && count.qso_start_unix.is_none() {
+                self.qso_start_unix = None;
+            }
+            if self.cq_pause_until.is_none() {
+                self.cq_pause_until = count.cq_pause_until;
+            }
+        }
     }
 
     /// Decode a captured frame and fold it into the app *and* the active mode's

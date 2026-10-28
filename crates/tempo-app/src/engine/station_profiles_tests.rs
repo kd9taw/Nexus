@@ -1020,6 +1020,7 @@ fn a_restore_with_a_dangling_active_id_lands_on_home() {
 // not go out under the old call. Each has a control where the calls match and it keys.
 
 const CALL_CHANGED: &str = crate::settings::STATION_CALL_CHANGED_TX_REFUSED;
+const LATE_REPLY_DROPPED: &str = crate::settings::STATION_CALL_CHANGED_LATE_REPLY_DROPPED;
 
 /// The station's call becomes the profile `id`'s, with nothing refusing it: the switch's own
 /// effect, without its lock.
@@ -2307,5 +2308,184 @@ fn a_tx_row_naming_another_profiles_call_is_refused() {
         typed("W1AW 5NN 73"),
         (vec!["W1AW 5NN 73".to_string()], None),
         "typed, none of the station's calls"
+    );
+}
+
+// --- An over refused at the key is not counted; an owed late reply is dropped (ruling 959) -----
+
+/// The radio loop's key of `slot`'s over with the call saved as `call` while it builds the wave
+/// with the engine unlocked (the window a Q65, FST4 or MSK144 build waits out a decode in): plan,
+/// build, save, commit. Whether it keyed.
+fn key_over_with_a_call_edit_in_the_build(e: &mut Engine, slot: u64, call: &str) -> bool {
+    let plan = e.plan_tx(slot).expect("premise: the over is planned");
+    let wave = plan.waveform.build();
+    settings_call_edit(e, call);
+    !e.commit_tx(&plan, wave, slot).is_empty()
+}
+
+/// ⛔ M1. An S&P contact's final 73, planned under KD9TAW and refused at the key because the
+/// call was saved as KD9TAW/P while its wave was built, is not counted as sent: the step count
+/// is unchanged, "Disable Tx after sending 73" is not armed, no CW ID follows it, and the
+/// sequencer still holds the 73, so the cockpit says why. CONTROL: the same key with no edit
+/// keys, counts the over, arms the disable and (Q65, FST4, MSK144) the CW ID, exactly as before.
+#[test]
+fn without_profiles_a_final_73_refused_at_the_key_arms_neither_disable_tx_nor_a_cw_id() {
+    let tiers = [Tier::Ft8, Tier::Ft4, Tier::Q65, Tier::Fst4, Tier::Msk144];
+    let mut got = Vec::new();
+    let mut want = Vec::new();
+    for tier in tiers {
+        for edit in [false, true] {
+            let mut e = station();
+            e.settings.cw_id_after_73 = true;
+            e.settings.disable_tx_after_73 = true;
+            e.set_tier(tier);
+            e.call_station("W1AW");
+            e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -7)], 1);
+            e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW RR73", -7)], 3);
+            assert_eq!(tx_now(&e), "W1AW KD9TAW 73", "{tier:?}: premise");
+            let keyed = if edit {
+                key_over_with_a_call_edit_in_the_build(&mut e, 4, "KD9TAW/P")
+            } else {
+                key_over(&mut e, 4).is_some()
+            };
+            got.push((
+                tier,
+                edit,
+                keyed,
+                tx_count(&e),
+                e.take_pending_tx_disable(),
+                e.take_pending_cw_id(),
+                ft_notice(&e),
+            ));
+            let keeps_id = matches!(tier, Tier::Q65 | Tier::Fst4 | Tier::Msk144);
+            want.push(if edit {
+                (
+                    tier,
+                    edit,
+                    false,
+                    0,
+                    false,
+                    false,
+                    Some(CALL_CHANGED.into()),
+                )
+            } else {
+                (tier, edit, true, 1, true, keeps_id, None)
+            });
+        }
+    }
+    assert_eq!(got, want);
+}
+
+/// ⛔ M1 in a CQ run: our RR73, planned under KD9TAW and refused at the key because the call was
+/// saved while it was built, is not counted, so the contact is not logged or queued for upload
+/// (it never closed on the air). CONTROL: `without_profiles_a_refused_rr73_is_not_counted_logged_or_uploaded`.
+#[test]
+fn without_profiles_an_rr73_refused_at_the_key_is_not_counted_logged_or_uploaded() {
+    let mut e = run_at_their_roger(false);
+    let keyed = key_over_with_a_call_edit_in_the_build(&mut e, 104, "KD9TAW/P");
+    let count = tx_count(&e);
+    e.hear_for_test("CQ K1ABC FN42", -5, 106);
+    let logged: Vec<(String, Option<String>)> = e
+        .stored_log()
+        .iter()
+        .map(|r| (r.call.clone(), r.station_callsign.clone()))
+        .collect();
+    assert_eq!(
+        (keyed, count, logged, e.take_pending_uploads().len()),
+        (false, 0, vec![], 0)
+    );
+}
+
+/// ⛔ M1 in a contest: the closing RR73 of a contact the operator picked, refused at the key
+/// because the call was saved while it was built, is not counted: "Disable Tx after sending 73"
+/// is not armed and the sequencer still holds the RR73. CONTROL:
+/// `without_profiles_a_refused_contest_rr73_is_not_counted_as_sent`.
+#[test]
+fn without_profiles_a_contest_rr73_refused_at_the_key_is_not_counted_as_sent() {
+    let mut e = vhf_pick_at_our_rr73(false);
+    let keyed = key_over_with_a_call_edit_in_the_build(&mut e, 2, "KD9TAW/P");
+    let held = match &e.mode {
+        Mode::FieldDay { station, .. } => station.outgoing().map(|m| m.to_text()),
+        _ => None,
+    };
+    assert_eq!(
+        (keyed, e.take_pending_tx_disable(), held),
+        (false, false, Some("W1AW KD9TAW RR73".into()))
+    );
+}
+
+/// No profiles, a CQ run as KD9TAW: W1AW is worked to our RR73, the run goes back to CQ, and
+/// W1AW repeats its roger, so the run owes it one more RR73 under KD9TAW (#170's late reply).
+fn run_owing_a_late_rr73() -> Engine {
+    let mut e = plain_ft8_run();
+    let _ = e.take_immediate_tx();
+    e.poll_tx(0);
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW FN31", -8)], 1);
+    e.poll_tx(2);
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW R-09", -8)], 3);
+    e.poll_tx(4);
+    e.ingest_decodes_for_test(&[], 5);
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW R-09", -8)], 7);
+    assert_eq!(
+        tx_now(&e),
+        "W1AW KD9TAW RR73",
+        "premise: the late reply is owed"
+    );
+    e
+}
+
+/// ⛔ L1. The late RR73 owed under KD9TAW, after the call is saved as KD9TAW/P and Call CQ is
+/// pressed again: the owed over is dropped at its slot, the cockpit says so, and the new CQ
+/// under KD9TAW/P keys in the next slot instead of being held behind it until it expires.
+/// CONTROL: unchanged, the owed RR73 keys once and the run's CQ follows.
+#[test]
+fn without_profiles_a_late_reply_owed_under_the_old_call_is_dropped_and_the_new_cq_keys() {
+    let mut control = run_owing_a_late_rr73();
+    assert_eq!(
+        (key_over(&mut control, 8), key_over(&mut control, 10)),
+        (
+            Some("W1AW KD9TAW RR73".into()),
+            Some("CQ KD9TAW EN52".into())
+        ),
+        "CONTROL"
+    );
+
+    let mut e = run_owing_a_late_rr73();
+    settings_call_edit(&mut e, "KD9TAW/P");
+    e.start_cq(None).unwrap();
+    let _ = e.take_immediate_tx();
+    let first = key_over(&mut e, 8);
+    let notice = ft_notice(&e);
+    assert_eq!(
+        (first, notice.as_deref()),
+        (None, Some(LATE_REPLY_DROPPED)),
+        "the owed over is dropped and said"
+    );
+    assert_eq!(
+        (key_over(&mut e, 10), ft_notice(&e)),
+        (Some("CQ KD9TAW/P EN52".into()), None),
+        "the new CQ keys in the next slot"
+    );
+}
+
+/// ⛔ M1 and L1 together: the owed late RR73, planned under KD9TAW and refused at the key because
+/// the call was saved while it was built, is dropped, not owed again, and said. The run's own CQ,
+/// made under KD9TAW too, is held and says so first; once Call CQ is pressed again the drop is
+/// said until the new CQ keys.
+#[test]
+fn without_profiles_a_late_reply_refused_at_the_key_is_dropped_and_said() {
+    let mut e = run_owing_a_late_rr73();
+    let keyed = key_over_with_a_call_edit_in_the_build(&mut e, 8, "KD9TAW/P");
+    assert_eq!(
+        (keyed, tx_now(&e), ft_notice(&e).as_deref()),
+        (false, "CQ KD9TAW EN52".to_string(), Some(CALL_CHANGED)),
+        "dropped, and the run's own CQ is held"
+    );
+    e.start_cq(None).unwrap();
+    let _ = e.take_immediate_tx();
+    assert_eq!(ft_notice(&e).as_deref(), Some(LATE_REPLY_DROPPED));
+    assert_eq!(
+        (key_over(&mut e, 10), ft_notice(&e)),
+        (Some("CQ KD9TAW/P EN52".into()), None)
     );
 }
