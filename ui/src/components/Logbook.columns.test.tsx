@@ -252,7 +252,8 @@ describe('move', () => {
       fireEvent.pointerMove(notes, { clientX: 120, clientY: 10, pointerId: 1 })
       expect(saved).not.toHaveBeenCalled()
       fireEvent.pointerUp(notes, { clientX: 120, clientY: 10, pointerId: 1 })
-      fireEvent.click(notes)
+      // A pointer's click carries its click count (detail 1); a keyboard's Enter/Space click carries 0.
+      fireEvent.click(notes, { detail: 1 })
       expect(headers()).toEqual(['Call', 'Notes', 'Country', 'Band', 'Freq', 'Mode', 'Sent', 'Rcvd', 'Date (UTC)', 'Time (UTC)', 'Park', 'QSL', 'Edit / delete'])
       expect(saved).toHaveBeenCalledTimes(1)
       const order = saved.mock.calls[0][0].order as string[]
@@ -274,12 +275,52 @@ describe('move', () => {
       fireEvent.pointerDown(country, { button: 0, clientX: 150, clientY: 10, pointerId: 1 })
       fireEvent.pointerMove(country, { clientX: 152, clientY: 11, pointerId: 1 })
       fireEvent.pointerUp(country, { clientX: 152, clientY: 11, pointerId: 1 })
-      fireEvent.click(country)
+      fireEvent.click(country, { detail: 1 })
       expect(saved).not.toHaveBeenCalled()
       expect(headers()).toEqual(DEFAULT_HEADERS)
       expect(screen.getByRole('columnheader', { name: /^Country/ }).getAttribute('aria-sort')).toBe('ascending')
     } finally {
       rects.mockRestore()
+    }
+  })
+
+  it('a drag that ends with no click on the header does not swallow the next Enter or Space sort', async () => {
+    const rects = layHeaders()
+    try {
+      await renderLog({ onColumnsChange: vi.fn() })
+      const notes = screen.getByRole('columnheader', { name: 'Notes' })
+      fireEvent.pointerDown(notes, { button: 0, clientX: 1150, clientY: 10, pointerId: 1 })
+      fireEvent.pointerMove(notes, { clientX: 120, clientY: 10, pointerId: 1 })
+      // Released outside the header (or the window): the browser sends no click to it.
+      fireEvent.pointerUp(notes, { clientX: 120, clientY: 10, pointerId: 1 })
+      expect(headers().slice(0, 2)).toEqual(['Call', 'Notes'])
+      // Enter or Space on a focused header is a click with detail 0 and no pointerdown before it.
+      const country = screen.getByRole('columnheader', { name: 'Country' })
+      fireEvent.click(country, { detail: 0 })
+      expect(screen.getByRole('columnheader', { name: /^Country/ }).getAttribute('aria-sort'), 'the keyboard sort must not be swallowed').toBe('ascending')
+    } finally {
+      rects.mockRestore()
+    }
+  })
+
+  it('a keyboard move scrolls the moved header into view inside the table', async () => {
+    const scrolled: { el: Element; arg: unknown }[] = []
+    const proto = HTMLElement.prototype as unknown as { scrollIntoView?: (arg?: unknown) => void }
+    const had = proto.scrollIntoView
+    proto.scrollIntoView = function (this: Element, arg?: unknown) {
+      scrolled.push({ el: this, arg })
+    }
+    try {
+      await renderLog({ onColumnsChange: vi.fn() })
+      screen.getByRole('columnheader', { name: 'Country' }).focus()
+      scrolled.length = 0
+      fireEvent.keyDown(screen.getByRole('columnheader', { name: 'Country' }), { key: 'ArrowRight', altKey: true, shiftKey: true })
+      const country = screen.getByRole('columnheader', { name: 'Country' })
+      expect(document.activeElement).toBe(country)
+      expect(scrolled.filter((s) => s.el === country).map((s) => s.arg)).toEqual([{ block: 'nearest', inline: 'nearest' }])
+    } finally {
+      if (had) proto.scrollIntoView = had
+      else delete proto.scrollIntoView
     }
   })
 

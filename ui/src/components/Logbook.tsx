@@ -1989,7 +1989,11 @@ export function Logbook({
     if (!r) return
     refocusHeader.current = null
     const el = r.row.querySelector<HTMLElement>(`:scope > [data-col="${r.id}"]`)
-    if (el && document.activeElement !== el) el.focus({ preventScroll: true })
+    if (!el) return
+    if (document.activeElement !== el) el.focus({ preventScroll: true })
+    // A move can carry the header past the edge of a table wider than its panel: bring it back
+    // into view inside the table, moving nothing when it is already there. (jsdom has none.)
+    el.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }, [cols])
   const moveByKey = (c: LogColumn, dir: -1 | 1, row: Element | null) => {
     const next = withColumnStep(colChoice, cols, c.id, dir)
@@ -2111,7 +2115,9 @@ export function Logbook({
         title={t('logbook.sort.shiftHint')}
         {...moveHandlers(c)}
         onClick={(e) => {
-          if (swallowClick.current) {
+          // Only a pointer's click (detail ≥ 1) ends a drag. Enter or Space on the header clicks with
+          // detail 0, and sorts even when a drag ended outside the header and left the flag set.
+          if (swallowClick.current && e.detail !== 0) {
             swallowClick.current = false
             return
           }
