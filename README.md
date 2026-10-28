@@ -533,6 +533,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   (see **[NOTICE](NOTICE)**).
 - **[Hamlib](https://hamlib.github.io/)** — `rigctld` for CAT control, bundled on every platform
   (tools GPL-2.0-or-later, library LGPL-2.1-or-later; launched as a separate process, not linked).
+- **[libusb](https://libusb.info/)** (LGPL-2.1-or-later) — ships beside Hamlib in the macOS app as an
+  unmodified dynamic library, for radios on USB.
 - **[OpenSSL](https://www.openssl.org/)** (Apache-2.0) — the secure connection for HRDLog.net
   uploads on Linux, through the [`native-tls`](https://github.com/sfackler/rust-native-tls) crate
   (SChannel on Windows, Security.framework on macOS); bundled in the AppImage (see

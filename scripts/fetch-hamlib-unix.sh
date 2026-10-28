@@ -300,6 +300,11 @@ esac
 for f in "${LIC[@]}"; do
   [ -f "$src/$f" ] && [ ! -f "$DEST/${f}.txt" ] && cp "$src/$f" "$DEST/${f}.txt" || true
 done
+# libusb ships beside libhamlib on macOS, and its LGPL needs its own text in the bundle too.
+if [ "$HOST" = macos ]; then
+  cp "$tmp/libusb-${LIBUSB_VER}/COPYING" "$DEST/libusb-COPYING.txt" \
+    || { echo "libusb licence text missing from its source tarball" >&2; exit 1; }
+fi
 
 # THE CAT-DEAD GUARD — see gaps() above. Everything between here and the download can fail
 # without failing the script; fail loudly instead of shipping a licence-only hamlib directory.
