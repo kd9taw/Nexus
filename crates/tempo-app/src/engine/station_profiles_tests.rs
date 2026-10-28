@@ -2722,3 +2722,120 @@ fn without_profiles_a_contact_set_aside_logs_the_call_its_overs_carried() {
         );
     }
 }
+
+/// ⛔ No profiles: the call saved as W9XYZ, then a click on a Tx row a screen drew before the save
+/// ("W1AW KD9TAW -05") starts a new contact with W1AW. The row names a call this station no
+/// longer uses, so it is not keyed, and the cockpit says why, as it does when the click is on the
+/// contact under way. CONTROLS: unchanged, the row keys; after the save, the row under W9XYZ keys.
+#[test]
+fn without_profiles_a_stale_tx_row_naming_the_old_call_is_refused_on_a_new_contact() {
+    let click = |edit: Option<&str>, row: &str| {
+        let mut e = plain_ft8();
+        if let Some(call) = edit {
+            settings_call_edit(&mut e, call);
+        }
+        e.override_next_tx("W1AW", Some("FN31"), row);
+        (keyed(&mut e, 0..2), ft_notice(&e))
+    };
+    let row = "W1AW KD9TAW -05";
+    assert_eq!(click(None, row), (vec![row.to_string()], None), "CONTROL");
+    assert_eq!(
+        click(Some("W9XYZ"), "W1AW W9XYZ -05"),
+        (vec!["W1AW W9XYZ -05".to_string()], None),
+        "CONTROL: the row under the call in use"
+    );
+    assert_eq!(
+        click(Some("W9XYZ"), row),
+        (Vec::<String>::new(), Some(CALL_CHANGED.into()))
+    );
+    // The calls before the last one are the station's too.
+    let mut e = plain_ft8();
+    settings_call_edit(&mut e, "W9XYZ");
+    settings_call_edit(&mut e, "K1ABC");
+    e.override_next_tx("W1AW", Some("FN31"), row);
+    assert_eq!(
+        (keyed(&mut e, 0..2), ft_notice(&e)),
+        (Vec::<String>::new(), Some(CALL_CHANGED.into())),
+        "two saves on"
+    );
+}
+
+/// ⛔ No profiles, Q65 (where free text longer than FT8's goes): free text the operator queues
+/// for W1AW, which Nexus prefixes with the station's call, goes out under the call the station
+/// has when it keys. Saved as W9XYZ between the queue and the key, it is "W1AW W9XYZ TNX 73", not
+/// the old call. CONTROL: unchanged, "W1AW KD9TAW TNX 73".
+#[test]
+fn without_profiles_free_text_goes_out_with_the_call_in_use_at_the_key() {
+    for (edit, want) in [
+        (None, "W1AW KD9TAW TNX 73"),
+        (Some("W9XYZ"), "W1AW W9XYZ TNX 73"),
+    ] {
+        let mut e = station();
+        e.set_tier(Tier::Q65);
+        e.call_station("W1AW");
+        e.qso_freetext_checked("TNX 73").unwrap();
+        assert_eq!(tx_now(&e), "W1AW KD9TAW TNX 73", "premise: queued");
+        if let Some(call) = edit {
+            settings_call_edit(&mut e, call);
+        }
+        let planned = (0..2)
+            .find_map(|slot| e.plan_tx(slot))
+            .map(|plan| match plan.waveform {
+                TxWaveform::Native { text, .. } => text,
+                _ => panic!("a Q65 plan is a native waveform"),
+            });
+        assert_eq!(
+            (tx_now(&e), planned, ft_notice(&e)),
+            (want.to_string(), Some(want.to_string()), None),
+            "{edit:?}"
+        );
+    }
+}
+
+/// ⛔ JS8, no profiles: a message queued under KD9TAW, the call saved as W9XYZ, and a second
+/// message queued under W9XYZ. The first is dropped at its key and the cockpit says why; the
+/// second stays queued and keys. CONTROL: a single message under the old call is dropped as
+/// before.
+#[test]
+fn without_profiles_js8_drops_only_the_messages_queued_under_the_old_call() {
+    let queued = || {
+        let mut e = station();
+        e.js8_enter();
+        e.set_frequency(14.078, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        e.set_tx_enabled(true);
+        e.js8_send(None, "HELLO FROM HOME".into()).unwrap();
+        settings_call_edit(&mut e, "W9XYZ");
+        let period_ms = u64::from(e.js8_tx_speed().period_s()) * 1000;
+        let slot = tempo_core::timing::now_unix_ms() as u64 / period_ms + 1;
+        (e, slot)
+    };
+    let (mut control, slot) = queued();
+    assert!(control.plan_tx(slot).is_none(), "CONTROL: not keyed");
+    let js8 = control.js8_state();
+    assert_eq!(
+        (js8.queue.len(), js8.last_error.as_deref()),
+        (0, Some(CALL_CHANGED)),
+        "CONTROL"
+    );
+
+    let (mut e, slot) = queued();
+    e.js8_send(None, "HELLO AGAIN".into()).unwrap();
+    let messages = |e: &Engine| {
+        let mut shown: Vec<String> = e.js8_state().queue.into_iter().map(|q| q.display).collect();
+        shown.dedup();
+        shown
+    };
+    assert_eq!(
+        messages(&e),
+        vec!["KD9TAW: HELLO FROM HOME", "W9XYZ: HELLO AGAIN"],
+        "premise: both queued"
+    );
+    assert!(e.plan_tx(slot).is_none(), "the old call's is not keyed");
+    assert_eq!(
+        (messages(&e), e.js8_state().last_error.as_deref()),
+        (vec!["W9XYZ: HELLO AGAIN".to_string()], Some(CALL_CHANGED)),
+        "only the old call's is dropped"
+    );
+    assert!(e.plan_tx(slot + 1).is_some(), "the new call's keys");
+}

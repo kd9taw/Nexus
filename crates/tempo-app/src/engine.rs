@@ -3815,6 +3815,15 @@ pub struct Engine {
     /// ([`STATION_CALL_CHANGED_LATE_REPLY_DROPPED`]): said in the cockpit until the next over
     /// keys or TX is stopped. Display only.
     ft_late_reply_dropped: bool,
+    /// The calls this station transmitted under before the one it has now, oldest first, each
+    /// once ([`Self::note_call_saved`]). The keying-time call check counts them as the station's
+    /// own ([`ft_over_call_refusal`]), so an over naming one of them is held back on a station with
+    /// no profiles as on one with them: a Tx row a screen drew before the save, say.
+    former_calls: Vec<String>,
+    /// The operator's free text Nexus addressed (`<DX> <ME> <text>`) and the over it made, while
+    /// it may wait in the sequencer ([`Self::qso_freetext_checked`]). A call saved before it keys
+    /// writes it again under the new call ([`Self::note_call_saved`]).
+    qso_freetext: Option<(String, Msg)>,
     /// Whether the operator is RUNNING (called CQ) vs answering a specific station.
     /// When running, a completed QSO returns to calling CQ (WSJT-X's run workflow).
     cq_running: bool,
@@ -6395,6 +6404,21 @@ pub struct WsjtxTxStatus {
     pub tx_message: String,
 }
 
+/// The over [`Engine::qso_freetext`] makes of the operator's free `text` to `dx` under `mycall`:
+/// `<DX> <ME> <text>`, or, where exactly one of the two calls is nonstandard and the text reads
+/// as a standard message, that message as WSJT-X writes it for the pair
+/// ([`QsoStation::on_air_form`]). Free text to the sequence either way.
+fn addressed_free_text(mycall: &str, dx: &str, text: &str) -> Msg {
+    let std = |c: &str| tempo_core::message::is_std_call(tempo_core::message::unhash_call(c));
+    let typed = format!("{dx} {mycall} {text}");
+    let parsed = Msg::parse(&typed);
+    if std(mycall) != std(dx) && !matches!(parsed, Msg::Other(_)) {
+        Msg::Other(QsoStation::on_air_form(mycall, dx, parsed).to_text())
+    } else {
+        Msg::Other(typed)
+    }
+}
+
 /// [`Engine::sent_call_refusal`]'s comparison: `built`, the call a message was made under, against
 /// `now`, the call the station transmits under. Unhashed, without surrounding spaces and in any
 /// capitals; a message made with no call is never refused for it.
@@ -6409,8 +6433,9 @@ fn call_changed_refusal(built: &str, now: &str) -> Option<&'static str> {
 /// Only an over Nexus made from the station's call is judged (the operator's decision,
 /// 2026-10-28): one whose sender (`Msg::sender`) is one of the station's own calls, that is the
 /// call it transmits under `now`, the call its sequencer was made with (`built`), a stored
-/// station profile's call, or the sender of the one over owed to a partner the run has left
-/// (`owed`, made by the sequencer). Each is compared by its base call (`same_call`), so a
+/// station profile's call, a call the station transmitted under before (`former`,
+/// [`Engine::former_calls`]: a Tx row a screen drew before a call was saved names one), or the
+/// sender of the one over owed to a partner the run has left (`owed`, made by the sequencer). Each is compared by its base call (`same_call`), so a
 /// portable or other compound form of one of them is one of them. Such an over is refused when
 /// its sender is not the call of `now` ([`call_changed_refusal`]). Text the operator typed (Tx 5,
 /// the free text, a logger's free text) whose sender is another station's call, or that reads as
@@ -6420,6 +6445,7 @@ fn ft_over_call_refusal(
     now: &str,
     built: &str,
     profiles: &[crate::settings::StationProfile],
+    former: &[String],
     owed: Option<&Msg>,
 ) -> Option<&'static str> {
     let msg = Msg::parse(text);
@@ -6428,6 +6454,7 @@ fn ft_over_call_refusal(
     let ours = own(now)
         || own(built)
         || profiles.iter().any(|p| own(&p.call))
+        || former.iter().any(|c| own(c))
         || owed.and_then(Msg::sender).is_some_and(own);
     ours.then(|| call_changed_refusal(de, now)).flatten()
 }
@@ -7023,6 +7050,8 @@ impl Engine {
             station_profile_return_kept: None,
             qso_start_unix: None,
             ft_late_reply_dropped: false,
+            former_calls: Vec::new(),
+            qso_freetext: None,
             cq_running: false,
             // Seeded from the callsign so two stations do not share a draw
             // sequence; the percentage is applied from settings on each decision.
@@ -7536,6 +7565,8 @@ impl Engine {
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         self.remote_readings.invalidate();
+        // The station's call before the save ([`Self::note_call_saved`], at the end).
+        let call_was = self.settings.mycall.clone();
         // The address the club link line is about, before the save: a save that moves it
         // starts the line afresh at the end of this function.
         let club_target_was = self.fd_sync_targets().1;
@@ -8085,6 +8116,46 @@ impl Engine {
             // …and the contacts the mode left were that host's to have ([`Self::fd_left_log`]).
             self.fd_left_log = None;
         }
+        self.note_call_saved(&call_was);
+    }
+
+    /// After a save that changed the station's call from `was`: `was` becomes one of the calls the
+    /// station transmitted under before ([`Self::former_calls`]), and the operator's free text
+    /// waiting to go is addressed again under the call now ([`Self::qso_freetext`]): the call in it
+    /// is the one Nexus put there, so it is the station's call at the key, never the one before.
+    fn note_call_saved(&mut self, was: &str) {
+        let now = self.settings.mycall.clone();
+        if call_changed_refusal(was, &now).is_none() {
+            return;
+        }
+        let was = tempo_core::message::unhash_call(was)
+            .trim()
+            .to_ascii_uppercase();
+        self.former_calls
+            .retain(|c| !c.eq_ignore_ascii_case(&was) && !c.eq_ignore_ascii_case(now.trim()));
+        self.former_calls.push(was);
+        let Some((typed, made)) = self.qso_freetext.take() else {
+            return;
+        };
+        let Mode::Qso { station, .. } = &mut self.mode else {
+            return;
+        };
+        let Some(dx) = station.dxcall.clone() else {
+            return;
+        };
+        if station.pending.as_ref() != Some(&made) {
+            return;
+        }
+        let msg = addressed_free_text(&now, &dx, &typed);
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "free text addressed again under the call now: {}",
+                msg.to_text()
+            ),
+        );
+        station.pending = Some(msg.clone());
+        self.qso_freetext = Some((typed, msg));
     }
 
     /// Re-enter Field Day if the persisted master switch (`fd_active`) left it
@@ -19832,17 +19903,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let Mode::Qso { station, .. } = &self.mode else {
             return Ok(());
         };
-        let std = |c: &str| tempo_core::message::is_std_call(tempo_core::message::unhash_call(c));
+        let addressed = station.dxcall.is_some();
         let msg = match &station.dxcall {
-            Some(dx) => {
-                let typed = format!("{dx} {mycall} {text}");
-                let parsed = Msg::parse(&typed);
-                if std(&mycall) != std(dx) && !matches!(parsed, Msg::Other(_)) {
-                    Msg::Other(QsoStation::on_air_form(&mycall, dx, parsed).to_text())
-                } else {
-                    Msg::Other(typed)
-                }
-            }
+            Some(dx) => addressed_free_text(&mycall, dx, text),
             None => tempo_core::message::Msg::Other(text.to_string()),
         };
         // Free text goes on the air as it is (`QsoStation::hashed_form` passes `Msg::Other`).
@@ -19850,6 +19913,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err(why);
         }
         if let Mode::Qso { station, .. } = &mut self.mode {
+            self.qso_freetext = addressed.then(|| (text.to_string(), msg.clone()));
             station.override_next(msg);
             self.reset_tx_watchdog();
             // No record_own_tx here: QSO free text goes out as a SINGLE non-chunk frame,
@@ -27893,11 +27957,17 @@ contact yourself."
                 now,
                 &station.mycall,
                 &self.settings.station_profiles,
+                &self.former_calls,
                 owed,
             ),
-            Mode::Chat => {
-                ft_over_call_refusal(text, now, "", &self.settings.station_profiles, owed)
-            }
+            Mode::Chat => ft_over_call_refusal(
+                text,
+                now,
+                "",
+                &self.settings.station_profiles,
+                &self.former_calls,
+                owed,
+            ),
         }
     }
 
@@ -30713,6 +30783,7 @@ contact yourself."
                         &self.settings.mycall,
                         built,
                         &self.settings.station_profiles,
+                        &self.former_calls,
                         owed,
                     )
                 };
@@ -31331,13 +31402,14 @@ contact yourself."
         // make the over's own call look like another station's.
         let now = &self.settings.mycall;
         let profiles = &self.settings.station_profiles;
+        let former = &self.former_calls;
         let refused = match &count.step {
             CountedStep::Owed(m) => {
-                ft_over_call_refusal(text, now, &count.mycall, profiles, Some(m))
+                ft_over_call_refusal(text, now, &count.mycall, profiles, former, Some(m))
             }
             CountedStep::Qso { .. } => self
                 .ft_sent_call_refusal(text)
-                .or_else(|| ft_over_call_refusal(text, now, &count.mycall, profiles, None)),
+                .or_else(|| ft_over_call_refusal(text, now, &count.mycall, profiles, former, None)),
             CountedStep::FieldDay { .. } => self
                 .ft_sent_call_refusal(text)
                 .or_else(|| contest_over_call_refusal(&count.mycall, now)),

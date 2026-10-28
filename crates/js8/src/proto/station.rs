@@ -2733,6 +2733,27 @@ impl Station {
         (held, operator)
     }
 
+    /// The outbox's messages made with a call `stale` says the station no longer uses: dropped, the
+    /// rest of one already going out included, and the compose box's typeahead with its message.
+    /// Messages made with the call now stay queued, in order. Returns how many it dropped and
+    /// whether one of them was the operator's own.
+    pub fn drop_outbox_made_with(&mut self, stale: impl Fn(&str) -> bool) -> (usize, bool) {
+        let (mut held, mut operator, mut boxed) = (0, false, false);
+        self.outbox.retain(|o| {
+            let drop = stale(&o.mycall);
+            if drop {
+                held += 1;
+                operator |= o.origin == Origin::Operator;
+                boxed |= o.typeahead;
+            }
+            !drop
+        });
+        if boxed {
+            self.typeahead = None;
+        }
+        (held, operator)
+    }
+
     /// Whether more frames of the message on the air follow the one handed out last: the outbox
     /// head is part way through a message (JS8Call's `m_txFrameCount > 0` once a frame has gone,
     /// mainwindow.cpp:2919-2932). Never across two messages: a message's last frame pops it, so a
