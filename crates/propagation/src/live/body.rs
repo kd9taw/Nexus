@@ -15,9 +15,13 @@ pub(crate) fn read_capped(body: impl Read, limit: u64, who: &str) -> Result<Stri
         .read_to_end(&mut bytes)
         .map_err(|_| format!("{who}: could not read the response body"))?;
     if bytes.len() as u64 > limit {
+        let size = if limit >= 1024 * 1024 {
+            format!("{} MB", limit / (1024 * 1024))
+        } else {
+            format!("{} KB", limit / 1024)
+        };
         return Err(format!(
-            "{who}: the server's answer was larger than {} KB, so it was not read",
-            limit / 1024
+            "{who}: the server's answer was larger than {size}, so it was not read"
         ));
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
@@ -68,6 +72,16 @@ mod tests {
         assert_eq!(
             err,
             "Test: the server's answer was larger than 2 KB, so it was not read"
+        );
+        let err = read_capped(
+            Cursor::new(vec![b'a'; 2 * 1024 * 1024 + 1]),
+            2 * 1024 * 1024,
+            "Test",
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "Test: the server's answer was larger than 2 MB, so it was not read"
         );
     }
 
