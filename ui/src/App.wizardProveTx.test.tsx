@@ -139,7 +139,8 @@ vi.setConfig({ testTimeout: 15_000 })
 
 beforeEach(() => {
   localStorage.clear()
-  saved = { ...(defaultSettings as Record<string, unknown>) }
+  // A new install: there was no settings file, so the backend says the wizard was never done.
+  saved = { ...(defaultSettings as Record<string, unknown>), setupWizardSeen: false }
   keyedWith = []
   order = []
   globalThis.ResizeObserver = class {
@@ -165,6 +166,8 @@ describe('Prove TX in the setup wizard, through App', () => {
     window.location.hash = '#operate'
     render(<App />)
     const wizard = await screen.findByRole('dialog', { name: 'Set up Nexus' })
+    // A first run asks "How much have you done?" first; passing it unanswered is allowed.
+    fireEvent.click(within(wizard).getByRole('button', { name: /Next/ }))
     fireEvent.click(within(wizard).getByRole('button', { name: /Next/ }))
     fireEvent.click(await within(wizard).findByRole('button', { name: /COM4/ }))
     const model = (await within(wizard).findByLabelText(/Which radio is this/)) as HTMLSelectElement

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
-import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
+import type { AppSnapshot, BandChannel, ExperienceLevel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { isOnAir } from './types'
 import { rigModeTransition, RIG_MODE_BY_VIEW, type RigMode } from './rigModeForView'
 import {
@@ -158,6 +158,8 @@ import {
   pskSetMode,
   setHuntTarget,
   setLicenseClass,
+  setExperienceLevel as apiSetExperienceLevel,
+  markSetupWizardSeen,
   stopQsoRecording,
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
@@ -233,6 +235,7 @@ import { useStationAlerts } from './useStationAlerts'
 import { RevealNudge } from './components/RevealNudge'
 import { SetupWizard, type WizardDraft } from './components/SetupWizard'
 import { GettingStartedGuide } from './components/GettingStartedGuide'
+import { FirstContactWalk } from './components/FirstContactWalk'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
 import { CallCardHost } from './components/CallCard'
@@ -365,6 +368,9 @@ function App() {
   // First-run setup wizard (goal-driven). Only on a genuinely fresh install, and never by itself on a
   // computer driving another station: it sets up a station, and there every setting it edits is the
   // station's, while "fresh" is read from this computer's own storage. Settings still offers it.
+  // "Fresh" is decided by the settings file as well (`setupWizardSeen`, below): this computer's
+  // storage only says the wizard MAY be due; it opens only where there was no settings file and it
+  // was never done, so a WebView data reset or a reinstall never shows it to an existing station.
   const [showWizard, setShowWizard] = useState<boolean>(
     () => !drivesAnotherStation() && features.firstRun && storageWritable() && !wizardSeen(),
   )
@@ -372,6 +378,12 @@ function App() {
   // walkthrough offer. Pure documentation: it writes nothing and is never
   // shown unasked, so there is no "seen" flag to persist.
   const [showGuide, setShowGuide] = useState(false)
+  // The first-run question ("How much have you done?") is asked only when the wizard opens by
+  // itself on a fresh install; re-opened from Settings it does not ask again.
+  const [wizardAsks, setWizardAsks] = useState(showWizard)
+  // The first-contact walk-through (Help ▸ Your first FT8 contact, and the wizard's offer). Like
+  // the guide it writes nothing; asked for together with the guide, it opens once the guide closes.
+  const [showWalk, setShowWalk] = useState(false)
   // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
   const { leftW, rightW, leftMax, rightMax, commitLeft, commitRight, resetLeft, resetRight, resetWidths } =
     usePaneWidths(scale)
@@ -2807,8 +2819,31 @@ function App() {
     [applyWizardDraft],
   )
 
+  // The durable half of "the wizard was done": its one writer, in the settings file. Failure is
+  // not toasted: the wizard is closed either way, and the browser copy above still holds for
+  // this computer.
+  const recordWizardSeen = useCallback(() => {
+    void markSetupWizardSeen()
+      .then(() => setSettings((prev) => (prev ? { ...prev, setupWizardSeen: true } : prev)))
+      .catch(() => {})
+  }, [])
+  // A wizard that would open by itself waits for the settings file's word: an existing station
+  // (no `setupWizardSeen: false`) is never shown it, nor asked the question.
+  useEffect(() => {
+    if (!settings || !wizardAsks || settings.setupWizardSeen === false) return
+    setShowWizard(false)
+    setWizardAsks(false)
+  }, [settings, wizardAsks])
+
   const handleWizardApply = useCallback(
-    (ids: ProfileId[], landing: View, modes: FeatureId[], license: string, draft: WizardDraft) => {
+    (
+      ids: ProfileId[],
+      landing: View,
+      modes: FeatureId[],
+      license: string,
+      draft: WizardDraft,
+      experience: ExperienceLevel | null,
+    ) => {
       // SEQUENCED, not concurrent: set_settings writes the WHOLE struct
       // (licenseClass included), so a concurrent set_license_class would be
       // reverted by the stale class riding in the merge (review catch — the
@@ -2817,6 +2852,14 @@ function App() {
       void applyWizardDraft(draft)
         .then(() => setLicenseClass(license))
         .then((s) => s && setSnap(s))
+        // The experience answer has its own writer; a later form save keeps it. Only an answer
+        // given in this run is written: none leaves the station's (absent = never asked).
+        .then(() => (experience ? apiSetExperienceLevel(experience) : null))
+        .then((s) => {
+          if (!s || !experience) return
+          setSnap(s)
+          setSettings((prev) => (prev ? { ...prev, experienceLevel: experience } : prev))
+        })
         .catch((e) =>
           pushToast(
             t('shell.wizard.saveFailed', { error: `${e instanceof Error ? e.message : e}` }),
@@ -2824,21 +2867,25 @@ function App() {
             0,
           ),
         )
-      // Goal profiles + the chosen operating modes (CW/Phone) force-enabled on top.
-      features.applyProfiles(ids, modes)
+      // Goal profiles + the chosen operating modes (CW/Phone) force-enabled on top, on the
+      // first run only. Re-run from Settings, the wizard edits station, rig and log and keeps the
+      // screens the operator has on now: it never changes the feature set.
+      if (wizardAsks) features.applyProfiles(ids, modes)
       setView(landing)
       markWizardSeen()
+      recordWizardSeen()
       setShowWizard(false)
       setWizardGen((g) => g + 1)
     },
-    [features.applyProfiles, applyWizardDraft],
+    [features.applyProfiles, applyWizardDraft, wizardAsks, recordWizardSeen],
   )
 
   const handleWizardSkip = useCallback(() => {
     markWizardSeen()
+    recordWizardSeen()
     setShowWizard(false)
     setWizardGen((g) => g + 1)
-  }, [])
+  }, [recordWizardSeen])
 
   // NOTE: everything from here down to the `!snap` early return is snap-INDEPENDENT
   // and — critically for the hooks below — must run on EVERY render (rules of hooks:
@@ -3635,7 +3682,10 @@ function App() {
             onLocalClockChange={setLocalClock}
             onResetLayout={resetWidths}
             features={features}
-            onRerunWizard={() => setShowWizard(true)}
+            onRerunWizard={() => {
+              setWizardAsks(false)
+              setShowWizard(true)
+            }}
             theme={themeChoice}
             onThemeChange={setTheme}
             skin={skin}
@@ -3994,6 +4044,7 @@ function App() {
         tier={tier}
         onTierChange={handleTier}
         onOpenGuide={() => setShowGuide(true)}
+        onOpenWalk={() => setShowWalk(true)}
         field={fieldMode}
         onFieldChange={setFieldMode}
         // Who is at the key (#25). Absent/empty renders nothing — the single-op case —
@@ -4357,7 +4408,7 @@ function App() {
         />
       )}
 
-      {showWizard && settings && (
+      {showWizard && settings && (!wizardAsks || settings.setupWizardSeen === false) && (
         // Gated on settings: the prefills are one-shot useState initializers,
         // and mounting against null would turn the whole real config into
         // "fields the operator cleared" at draft time (review catch).
@@ -4369,6 +4420,9 @@ function App() {
           onProveTx={handleProveTx}
           onSkip={handleWizardSkip}
           onOpenGuide={() => setShowGuide(true)}
+          onOpenWalk={() => setShowWalk(true)}
+          askExperience={wizardAsks}
+          rerun={!wizardAsks}
         />
       )}
 
@@ -4376,6 +4430,13 @@ function App() {
         <GettingStartedGuide
           onClose={() => setShowGuide(false)}
           onOpenSettings={openSettingsAt}
+        />
+      )}
+
+      {showWalk && !showGuide && (
+        <FirstContactWalk
+          onClose={() => setShowWalk(false)}
+          doubleClickSetsTx={settings?.doubleClickSetsTx !== false}
         />
       )}
 

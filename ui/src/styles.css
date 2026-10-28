@@ -14877,6 +14877,24 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--accent);
   padding: 0 6px;
 }
+/* A section folded to its heading by the experience answer (SettingsPanel `fold`): the legend
+   stays as the label, everything else is out of the way until Show all, a search pick or a deep
+   link opens it. Only for the two "new" answers; no answer folds nothing. */
+.settings-section[data-folded] {
+  padding-bottom: 0;
+}
+.settings-section[data-folded] > :not(legend) {
+  display: none;
+}
+/* The line above a folded tab's sections, with its Show all. */
+.settings-fold-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--text-dim);
+  font-size: calc(12px * var(--text-scale));
+}
 /* A disabling group INSIDE a `.settings-section`, with no box of its own. It exists because
    `disabled` is the only way to switch off a set of controls at once, and HTML gives that to
    `<fieldset>` alone — but a control inside a disabled fieldset is disabled whatever its own
@@ -18457,6 +18475,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(13px * var(--text-scale));
   color: var(--text-dim);
   margin: 0 0 18px;
+}
+/* The first-contact walk-through's four lines (FirstContactWalk.tsx). */
+.first-contact-steps {
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-2);
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.5;
 }
 .wizard-goals {
   display: grid;

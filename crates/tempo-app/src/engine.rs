@@ -169,6 +169,9 @@ pub mod tx_extras;
 #[cfg(test)]
 mod tx_extras_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
+/// The experience answer's one writer (the first-run wizard and Settings ▸ Station).
+#[cfg(test)]
+mod experience_level_tests;
 /// The radio switch notice's record and the switch policy's one writer.
 #[cfg(test)]
 mod radio_switch_notice_tests;
@@ -7367,6 +7370,12 @@ impl Engine {
         let live_log_prop_mode = self.settings.log_prop_mode.clone();
         // …and the radio switch policy, for the same reason (`set_radio_switch_policy`).
         let live_radio_switch_policy = self.settings.radio_switch_policy;
+        // …and the experience answer (`set_experience_level`): a form loaded before the wizard
+        // answered must not clear it.
+        let live_experience_level = self.settings.experience_level;
+        // The setup wizard's "seen" record (`mark_setup_wizard_seen`) only ever goes from not seen
+        // to seen: no form, restore or reset brings the first-run wizard back to a station.
+        let live_setup_wizard_seen = self.settings.setup_wizard_seen;
         // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
         // the operator presses: the presence beacon (`set_beacon`) and JS8's automatic replies,
         // relay and heartbeat acks (`js8_arm`). From a computer driving the station those run only
@@ -7501,6 +7510,7 @@ impl Engine {
         }
         self.settings.operating_mode = live_op_mode;
         self.settings.keyboard_modem = live_keyboard_modem;
+        self.settings.setup_wizard_seen |= live_setup_wizard_seen;
         if keep_live_roster {
             self.settings.blocked_calls = live_blocked;
         }
@@ -7512,6 +7522,7 @@ impl Engine {
             self.settings.beta_updates = live_beta_updates;
             self.settings.log_prop_mode = live_log_prop_mode;
             self.settings.radio_switch_policy = live_radio_switch_policy;
+            self.settings.experience_level = live_experience_level;
             (
                 self.settings.beacon,
                 self.settings.js8_autoreply,
@@ -8052,6 +8063,22 @@ impl Engine {
         policy: crate::settings::RadioSwitchPolicy,
     ) -> &Settings {
         self.settings.radio_switch_policy = policy;
+        &self.settings
+    }
+
+    /// ⛔ **THE ONE WRITER of the experience answer** (the first-run wizard's question, and
+    /// Settings ▸ Station ▸ Your experience). Narrow for `set_radio_switch_policy`'s reason: a
+    /// surface holding an old settings snapshot must not post an old answer over the live one,
+    /// and `apply_settings` keeps the live value. Nothing in the engine reads it.
+    pub fn set_experience_level(&mut self, level: crate::settings::ExperienceLevel) -> &Settings {
+        self.settings.experience_level = Some(level);
+        &self.settings
+    }
+
+    /// **THE ONE WRITER of the setup wizard's "seen" record**: the first-run wizard was finished
+    /// or skipped, so it never opens by itself again. Nothing clears it (see `apply_settings_inner`).
+    pub fn mark_setup_wizard_seen(&mut self) -> &Settings {
+        self.settings.setup_wizard_seen = true;
         &self.settings
     }
 

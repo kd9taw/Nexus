@@ -85,7 +85,8 @@ vi.mock('./api', async (importOriginal) => {
     setArea: vi.fn(async () => snapshot),
     appVersion: vi.fn(async () => '0.0.0-test'),
     openPanelWindow: vi.fn(async () => {}),
-    getSettings: vi.fn(async () => ({ ...(defaultSettings as Record<string, unknown>) })),
+    // A new install: there was no settings file, so the backend says the wizard was never done.
+    getSettings: vi.fn(async () => ({ ...(defaultSettings as Record<string, unknown>), setupWizardSeen: false })),
   }
 })
 vi.mock('./toast', async (importOriginal) => ({

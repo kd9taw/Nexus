@@ -69,6 +69,7 @@ import type {
   QrzPushResult,
   RouteMode,
   RadioSwitchPolicy,
+  ExperienceLevel,
   RoutingRule,
   Settings,
   SourceKind,
@@ -3383,6 +3384,18 @@ export async function setDefaultRadio(id: number | null): Promise<AppSnapshot> {
  * `radioSwitchPolicy` (a settings save keeps the live value, as for `setBetaUpdates`). */
 export async function setRadioSwitchPolicy(policy: RadioSwitchPolicy): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_radio_switch_policy', { policy })
+}
+
+/** The first-run wizard's experience answer (also Settings ▸ Station) — the ONE writer of
+ * `experienceLevel` (a settings save keeps the live value, as for `setRadioSwitchPolicy`). */
+export async function setExperienceLevel(level: ExperienceLevel): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_experience_level', { level })
+}
+
+/** The first-run setup wizard was finished or skipped (`Settings.setupWizardSeen`'s one writer):
+ *  recorded beside the station's settings, so it never opens by itself again. */
+export async function markSetupWizardSeen(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('mark_setup_wizard_seen')
 }
 
 /** Where a (band, mode class) WOULD route right now — the rule editor's "test" affordance.

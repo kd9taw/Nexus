@@ -62,6 +62,16 @@ Your operator identity, license privileges, and default frequency.
   dropdown. Open = no limits (outside the US)." This is a software transmit guard
   in every Nexus TX path, checked against the Part 97 sub-band table — Nexus
   refuses to key the rig outside your segment.
+- **Your experience** — New to the hobby, New to digital or Experienced: the answer to
+  the first-run wizard's first question. It picks which screens start on (New to the
+  hobby: FT8, the log and the maps; New to digital: the same plus Phone and CW;
+  Experienced: everything) and, for the two "new" answers, opens each Settings tab on
+  the sections you need first, with the rest folded to their headings until
+  **Show all**, a search or a link opens them (Accessibility and Features never
+  fold). Changing it replaces the set in [Features](#features), asking first, and
+  naming them, whenever the change would turn screens off. It saves
+  when you pick it. A station set up before this question existed shows **Not set**,
+  and nothing changes until you pick an answer. It changes nothing about transmitting.
 - **Units** — Automatic (from your system), Metric (km, °C) or Imperial (mi, °F).
   Covers distances, temperature and wind speed across the whole app. Automatic
   follows your operating system's region, and a change applies everywhere the

@@ -111,13 +111,50 @@ try {
   console.log('PASS 1: app launched, #root rendered')
 
   // Flow 2 — a fresh profile gets the first-run wizard (release-critical:
-  // this is the first thing every new operator sees).
+  // this is the first thing every new operator sees). Walk it the way a new
+  // operator does: answer the experience question, then Next through Station
+  // and Rig to the Log step, asserting each step's title on the way.
   const wizardTitle = await waitFor(
     'the setup wizard',
     `return document.querySelector('.wizard-title')?.textContent ?? ''`,
   )
-  if (!/who/i.test(wizardTitle)) throw new Error(`wizard title unexpected: ${JSON.stringify(wizardTitle)}`)
-  console.log(`PASS 2: setup wizard shown (${JSON.stringify(wizardTitle.trim())})`)
+  if (!/how much have you done/i.test(wizardTitle)) {
+    throw new Error(`wizard title unexpected: ${JSON.stringify(wizardTitle)}`)
+  }
+  console.log(`PASS 2a: setup wizard shown (${JSON.stringify(wizardTitle.trim())})`)
+
+  const picked = await exec(
+    `const b = [...document.querySelectorAll('.wizard-modes .wizard-mode')]
+       .find((el) => /experienced/i.test(el.textContent ?? ''))
+     if (!b) return ''
+     b.click()
+     return b.textContent`,
+  )
+  if (!picked) throw new Error('experience answer "Experienced" not found on the first wizard step')
+  await waitFor(
+    'the experience answer to show as picked',
+    `return [...document.querySelectorAll('.wizard-modes .wizard-mode')]
+       .some((el) => el.getAttribute('aria-pressed') === 'true' && /experienced/i.test(el.textContent ?? ''))`,
+    5_000,
+  )
+  console.log('PASS 2b: experience answer picked')
+
+  // Next, then wait for the NEXT step's own title (the old title is still in
+  // the DOM until React re-renders, so a bare title read would race).
+  for (const [label, re] of [
+    ['Station', /who.s on the air/i],
+    ['Rig', /how does the radio connect/i],
+    ['Log', /existing log/i],
+  ]) {
+    await exec(`document.querySelector('.wizard-go').click()`)
+    const t = await waitFor(
+      `the wizard ${label} step`,
+      `const t = document.querySelector('.wizard-title')?.textContent ?? ''
+       return ${re}.test(t) ? t : ''`,
+      10_000,
+    )
+    console.log(`PASS 2c: wizard ${label} step shown (${JSON.stringify(t.trim())})`)
+  }
 
   // Flow 3 — the main UI mounts once the wizard is marked seen, and the
   // Settings panel OPENS. Settings-open is the exact class of the public

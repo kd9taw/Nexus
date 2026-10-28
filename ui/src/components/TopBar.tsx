@@ -112,6 +112,8 @@ interface Props {
   onTierChange: (t: Tier) => void
   /** Open the Getting started guide (Help ▸ Getting started). */
   onOpenGuide: () => void
+  /** Open the first-contact walk-through (Help ▸ Your first FT8 contact). Absent = not offered. */
+  onOpenWalk?: () => void
   /** Field mode (outdoor/POTA) — see useFieldMode. Optional: absent hides the chip. */
   field?: boolean
   onFieldChange?: (on: boolean) => void
@@ -375,6 +377,7 @@ export function TopBar({
   tier,
   onTierChange,
   onOpenGuide,
+  onOpenWalk,
   field,
   onFieldChange,
   operator,
@@ -485,7 +488,10 @@ export function TopBar({
               {t('topbar.help.label')}
             </button>
           }
-          items={[{ label: t('gettingStarted.title'), onSelect: onOpenGuide }]}
+          items={[
+            { label: t('gettingStarted.title'), onSelect: onOpenGuide },
+            ...(onOpenWalk ? [{ label: t('firstContact.title'), onSelect: onOpenWalk }] : []),
+          ]}
         />
         {/* Light/Dark moved to Settings ▸ Appearance (operator, 2026-08-10) — the bar
             keeps only the outdoor quick toggle: Field must stay one tap away, because

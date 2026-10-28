@@ -104,6 +104,11 @@ const NEVER_IMPORT: readonly string[] = [
   // there carries them, and loaded at the station they would mark its own form "Set at the station".
   'secretsSavedAtStation',
   'stationOnlySettings',
+  // The first-run answers, the operator's own like `licenseClass`: how much they have done (it
+  // picks the screens and how much of Settings opens) and whether this station's setup wizard was
+  // done. Each has one writer of its own; a profile from another station must move neither.
+  'experienceLevel',
+  'setupWizardSeen',
 ]
 
 /** Merge a stored profile onto the CURRENT settings — the load contract.
