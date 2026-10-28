@@ -55,7 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plays the tone and Nexus says so once. **Play the sounds on** picks the output, the system default unless you pick one.
   Nexus never plays a sound on a device your radio transmits from, where it could key a rig on VOX: it checks at every
   sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. All sounds
-  stay off by default.
+  stay off by default. The sound files and **Play the sounds on** are set at the station: from a computer driving it over
+  Remote they show the station's choice and say "Set at the station".
 - **JS8: the new-message notice from any screen.** A message filed in your Inbox puts JS8Call's "New Message Received"
   notice up wherever you are while JS8 is the mode; **Show** opens the JS8 screen on that station's messages.
 - **JS8's waterfall darkens the audio outside the decode filter**, as JS8Call's does: half-dark on each side, with a

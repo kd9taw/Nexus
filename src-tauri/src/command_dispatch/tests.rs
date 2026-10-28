@@ -3296,6 +3296,66 @@ fn a_settings_save_from_afar_keeps_the_program_the_shack_runs() {
     );
 }
 
+/// ⛔ A settings save from afar cannot change the files the station plays for JS8's sounds, nor the
+/// output it plays them on (one wrong output could key a rig on VOX): each comes back as the shack
+/// has it, set or empty, each changed alone. CONTROL: the same save from the shack's own screen
+/// takes it, and the sound switches beside them are taken from afar.
+#[test]
+fn a_settings_save_from_afar_keeps_the_js8_sound_files_and_output() {
+    let shack = tempo_app::settings::Settings {
+        js8_sound_files: [("cq".to_string(), "/home/op/sounds/cq.wav".to_string())].into(),
+        js8_sound_device: "Speakers".to_string(),
+        ..Default::default()
+    };
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
+    let files = |s: &mut tempo_app::settings::Settings| {
+        s.js8_sound_files
+            .insert("inbox".into(), r"\\elsewhere\share\mail.wav".into());
+    };
+    let device = |s: &mut tempo_app::settings::Settings| {
+        s.js8_sound_device = "USB Audio CODEC".into();
+    };
+    for (name, change) in [
+        (
+            "js8SoundFiles",
+            &files as &dyn Fn(&mut tempo_app::settings::Settings),
+        ),
+        ("js8SoundDevice", &device),
+    ] {
+        for station in [shack.clone(), tempo_app::settings::Settings::default()] {
+            let mut asked = station.clone();
+            change(&mut asked);
+            asked.js8_sounds = vec!["inbox".into()];
+            let names =
+                |a, b| -> std::collections::BTreeSet<String> { moved(a, b).into_iter().collect() };
+            assert_eq!(
+                names(&asked, &station),
+                [name.to_string(), "js8Sounds".to_string()].into(),
+                "premise: {name} moved"
+            );
+
+            let mut save = asked.clone();
+            keep_the_shacks_settings(&station, &mut save, Some(&afar));
+            assert_eq!(
+                names(&save, &station),
+                ["js8Sounds".to_string()].into(),
+                "from afar, {name} changed (CONTROL: the switches are the save's)"
+            );
+
+            let mut save = asked.clone();
+            keep_the_shacks_settings(&station, &mut save, None);
+            assert_eq!(
+                moved(&save, &asked),
+                Vec::<String>::new(),
+                "CONTROL: the shack's own form, {name}"
+            );
+        }
+    }
+}
+
 /// ⛔ A save from afar can neither change, blank nor plant a stored key: each of
 /// `SECRET_SETTINGS` comes back as the shack has it, saved or not. CONTROL: the shack's own save, of
 /// a form read with its keys, is taken as it came. The read's "saved at the station" is not saved
@@ -3964,7 +4024,13 @@ fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<Str
                     .chain(others)
                     .collect()
             }
-            Value::Array(_) | Value::Object(_) => Vec::new(),
+            // A map of names gains one; a list, or a table of fixed fields, goes untried.
+            Value::Object(o) => {
+                let mut more = o.clone();
+                more.insert("probe".into(), json!("probe"));
+                vec![Value::Object(more)]
+            }
+            Value::Array(_) => Vec::new(),
         };
         let took = tries.into_iter().find_map(|changed| {
             let mut asked = file.clone();

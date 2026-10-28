@@ -10,13 +10,15 @@
 //
 // ⚠️ Migrated from birth (i18n/hardcoded-strings.test.ts): the marks' defaults are glyphs; every word
 // is in the catalog.
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { t } from '../i18n'
 import type { Settings } from '../types'
 import { JS8_SOUND_EVENTS, js8SoundFileName, playJs8Sound, type Js8SoundEvent } from '../features/js8Sounds'
 
 type ListKey = 'js8RxBlocklist' | 'js8HighlightPrimary' | 'js8HighlightSecondary'
 type MarkKey = 'js8Eot' | 'js8Mfi'
+/** The sounds' settings set at the station only: a save from a computer driving it keeps them. */
+type StationKey = 'js8SoundFiles' | 'js8SoundDevice'
 
 /** JS8Call's defaults, for a form from before these settings. */
 export const JS8_EOT_DEFAULT = '♢'
@@ -79,6 +81,8 @@ export function Js8ListsSettings({
   outputs = [],
   outputLabel = (d: string) => d,
   setSoundDevice,
+  locked,
+  setAtStation,
 }: {
   form: Settings
   setList: (key: ListKey, list: string[]) => void
@@ -96,6 +100,11 @@ export function Js8ListsSettings({
   outputLabel?: (device: string) => string
   /** The sounds' output as it should be ('' = the system default). Absent: no picker. */
   setSoundDevice?: (device: string) => void
+  /** From a computer driving the station, whether a sound setting is set at the station only: its
+   *  output shows read-only and its files' Choose… and Reset are not drawn; `setAtStation` says so.
+   *  Absent at the station. */
+  locked?: (key: StationKey) => boolean
+  setAtStation?: (key: StationKey) => ReactNode
 }) {
   const lists: [ListKey, string, string][] = [
     ['js8RxBlocklist', t('settings.js8.rxBlocklist.label'), t('settings.js8.rxBlocklist.hint')],
@@ -110,6 +119,7 @@ export function Js8ListsSettings({
   const reset = form.js8ResetActivity === true
   const files = form.js8SoundFiles ?? {}
   const device = form.js8SoundDevice ?? ''
+  const filesHere = !locked?.('js8SoundFiles')
   // The radio's TX audio devices, offered but not choosable: a sound there could key a rig on VOX.
   // A convenience only: what holds the line is the check at every play (tempo_audio::notify_sound).
   const txDevices = new Set(
@@ -163,12 +173,15 @@ export function Js8ListsSettings({
       <div className="settings-featgroup">
         <span className="settings-featgroup-title">{t('settings.js8.sounds.title')}</span>
         <span className="settings-hint">{t('settings.js8.sounds.hint')}</span>
+        {setAtStation?.('js8SoundFiles')}
         {setSoundDevice && (
           <label className="settings-field">
             <span className="settings-label">{t('settings.js8.sound.device.label')}</span>
             <select
               className="settings-input js8-sound-device"
               aria-label={t('settings.js8.sound.device.label')}
+              disabled={locked?.('js8SoundDevice')}
+              data-setting="js8SoundDevice"
               value={device}
               onChange={(e) => setSoundDevice(e.target.value)}
             >
@@ -179,6 +192,7 @@ export function Js8ListsSettings({
                 </option>
               ))}
             </select>
+            {setAtStation?.('js8SoundDevice')}
             <span className="settings-hint">{t('settings.js8.sound.device.hint')}</span>
           </label>
         )}
@@ -214,23 +228,27 @@ export function Js8ListsSettings({
                   <span className="js8-sound-file-name" title={file ?? undefined}>
                     {file ? js8SoundFileName(file) : t('settings.js8.sound.file.builtIn')}
                   </span>
-                  <button
-                    type="button"
-                    className="settings-refresh"
-                    onClick={() =>
-                      void pickSoundFile().then((path) => {
-                        if (path) setSoundFile(ev, path)
-                      })
-                    }
-                    aria-label={t('settings.js8.sound.file.choose.aria', { event: label })}
-                    title={t('settings.js8.sound.file.choose.title')}
-                  >
-                    {t('settings.js8.sound.file.choose.label')}
-                  </button>
-                  {file && (
+                  {filesHere && (
                     <button
                       type="button"
                       className="settings-refresh"
+                      data-setting="js8SoundFiles"
+                      onClick={() =>
+                        void pickSoundFile().then((path) => {
+                          if (path) setSoundFile(ev, path)
+                        })
+                      }
+                      aria-label={t('settings.js8.sound.file.choose.aria', { event: label })}
+                      title={t('settings.js8.sound.file.choose.title')}
+                    >
+                      {t('settings.js8.sound.file.choose.label')}
+                    </button>
+                  )}
+                  {filesHere && file && (
+                    <button
+                      type="button"
+                      className="settings-refresh"
+                      data-setting="js8SoundFiles"
                       onClick={() => setSoundFile(ev, null)}
                       aria-label={t('settings.js8.sound.file.reset.aria', { event: label })}
                     >

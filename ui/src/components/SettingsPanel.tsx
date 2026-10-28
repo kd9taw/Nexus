@@ -10284,6 +10284,8 @@ export function SettingsPanel({
               outputs={audio.output}
               outputLabel={(d) => audioLabel(d, 'output')}
               setSoundDevice={(d) => update('js8SoundDevice', d)}
+              locked={locked}
+              setAtStation={setAtStation}
             />
             <Js8PaneStyleSettings
               form={form}
