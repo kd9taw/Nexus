@@ -169,6 +169,10 @@ mod remote_transmit_hold_tests;
 mod restore_session_tests;
 #[cfg(test)]
 mod rtty_sideband_tests;
+/// "My station" profiles: switching, the log stamp, the activation's pick, the licence refusal.
+mod station_profiles;
+#[cfg(test)]
+mod station_profiles_tests;
 pub mod tx_extras;
 #[cfg(test)]
 mod tx_extras_tests;
@@ -3988,6 +3992,10 @@ pub struct Engine {
     /// The radio name the active radio's TCI server reported (`device:`), for `MY_RIG`: a TCI
     /// radio's model name is the protocol's, "TCI". `None` when no TCI session has said.
     tci_device: Option<String>,
+    /// The station profile the station was on before an activation picked its park's
+    /// ([`Self::pick_station_profile_for_activation`]): what Stop goes back to. Not kept across a
+    /// restart.
+    station_profile_before_activation: Option<(String, String)>,
     /// QSOs awaiting the HRD Logbook datagram (F4MQS: HRD closed at log time lost the
     /// contact silently). The shell worker drains this each tick — connect-and-send so a
     /// closed HRD is DETECTABLE on localhost (ICMP unreachable → ConnectionRefused), sets
@@ -6887,6 +6895,7 @@ impl Engine {
             pending_udp_qsos: std::collections::VecDeque::new(),
             space_weather: None,
             tci_device: None,
+            station_profile_before_activation: None,
             hrd_pending: std::collections::VecDeque::new(),
             hrd_link_up: None,
             cq_dir: None,
@@ -7456,6 +7465,11 @@ impl Engine {
         // The setup wizard's "seen" record (`mark_setup_wizard_seen`) only ever goes from not seen
         // to seen: no form, restore or reset brings the first-run wizard back to a station.
         let live_setup_wizard_seen = self.settings.setup_wizard_seen;
+        // The station profiles and which one is on: ONE writer each, the profile verbs
+        // (`engine/station_profiles.rs`). The form's own active id says which profile its flat
+        // call, grid, state and power describe (`Settings::keep_station_form`).
+        let live_station_profiles = std::mem::take(&mut self.settings.station_profiles);
+        let live_active_station = std::mem::take(&mut self.settings.active_station_profile);
         // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
         // the operator presses: the presence beacon (`set_beacon`) and JS8's automatic replies,
         // relay and heartbeat acks (`js8_arm`). From a computer driving the station those run only
@@ -7625,6 +7639,7 @@ impl Engine {
             // A form never writes or wipes the note; the save itself may take it or end it.
             self.settings.contest_before = live_contest_before;
             self.note_contest_before(contest_was, contest_was_active);
+            self.keep_live_station_profiles(live_station_profiles, live_active_station);
         }
         if let Some(club) = self.fd_club.as_mut() {
             club.note_host_settings(
@@ -17170,6 +17185,7 @@ impl Engine {
             rec.station_callsign = self.station_callsign_now();
         }
         self.stamp_activation(rec);
+        self.stamp_station_profile(rec);
         self.stamp_station_now(rec);
         // ⛔ The satellite FIRST, as the bird held now: the popup then opens on SAT with its name,
         // and the propagation mode it remembers below never takes a satellite contact's place.
@@ -17424,6 +17440,7 @@ impl Engine {
         if !from_hold {
             self.stamp_activation(&mut rec);
         }
+        self.stamp_station_profile(&mut rec);
         self.stamp_station_now(&mut rec);
         // Resolve the DXCC entity (country) if the record doesn't already carry one
         // — so manually-logged contacts get a country too, not just auto-QSOs. One that arrives
@@ -27460,6 +27477,9 @@ contact yourself."
     ) -> Option<&'static str> {
         crate::settings::rig_conn_is_icom_lan(&self.settings.rig_conn)
             .then_some(crate::settings::ICOM_LAN_TX_REFUSED)
+            // ⛔ …and a station profile on another licensee's call while a licence class is set
+            // (`Settings::station_profile_tx_refusal`): every transmit path refuses with it.
+            .or_else(|| self.settings.station_profile_tx_refusal())
     }
 
     /// Is the licence lock the phone MODE alone? The Phone section is refused, upper sideband is
@@ -29320,6 +29340,7 @@ contact yourself."
         // model), so `catOk`/`smeterDb` are None for them.
         s.active_radio_id = self.settings.active_radio;
         s.radio_pegged = self.settings.radio_pegged;
+        (s.station_profiles, s.active_station_profile) = self.station_profile_choices();
         s.auto_radio_switch = self.auto_radio_switch.clone();
         // No AI copy or status from an unassisted entry, however it was declared (`cw_decode`).
         let decoding = self.settings.cw_decoder_active();
@@ -33453,6 +33474,9 @@ contact yourself."
     ) -> Result<(String, String), String> {
         let started = self.station.set_activation(program, reference, places);
         self.sync_fd_activation();
+        if started.is_ok() {
+            self.pick_station_profile_for_activation();
+        }
         started
     }
 
@@ -33477,6 +33501,7 @@ contact yourself."
     pub fn clear_activation(&mut self) {
         self.station.clear_activation();
         self.sync_fd_activation();
+        self.return_from_activation_station_profile();
     }
 
     /// See [`StationCore::resume_activation`].

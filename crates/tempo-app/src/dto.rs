@@ -5066,6 +5066,17 @@ pub struct AutoRadioSwitch {
     pub mode: crate::settings::RouteMode,
 }
 
+/// One "My station" profile as the top bar offers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StationProfileChoice {
+    pub id: String,
+    /// The operator's name for it; blank for Home, which the screen names in its language.
+    pub name: String,
+    /// The call it transmits under.
+    pub call: String,
+}
+
 /// The full application snapshot the UI renders from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -5084,6 +5095,13 @@ pub struct AppSnapshot {
     /// Peg-lock state (band selection won't auto-switch when true).
     #[serde(default)]
     pub radio_pegged: bool,
+    /// The "My station" profiles the top bar picks from, in their order; empty (and absent on the
+    /// wire) for a station that has made none, which sees no picker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub station_profiles: Vec<StationProfileChoice>,
+    /// The id of the profile the station is on (one of `station_profiles`); empty with none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub active_station_profile: String,
     /// The last time Nexus switched the active radio BY ITSELF, for the switch notice. Absent
     /// until a band or mode the routing hands to another radio has switched one this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]

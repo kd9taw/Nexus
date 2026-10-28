@@ -20191,6 +20191,85 @@ fn set_radio_switch_policy(
     Ok(eng.snapshot())
 }
 
+/// Put the station on one of its "My station" profiles (the top bar's picker): its call, grid,
+/// state and power become the station's, applied and saved exactly as a Settings save of them is,
+/// so the feeds bound to the call follow it. The ONE write path for which profile is on
+/// (`Engine::apply_settings` keeps the live one). Set at the station only: it changes the call the
+/// station transmits under. Returns the snapshot.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(async)]
+fn switch_station_profile(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+    id: String,
+) -> Result<AppSnapshot, String> {
+    let settings = {
+        let mut eng = engine_lock(&state);
+        eng.switch_station_profile(&id)?;
+        eng.settings().clone()
+    };
+    apply_and_persist(
+        state,
+        spots,
+        live_paths,
+        region_paths,
+        health,
+        cache,
+        settings,
+        false,
+    )
+}
+
+/// Save one "My station" profile (Settings ▸ Station); an empty id adds one. Saving the profile
+/// the station is on applies its call, grid, state and power as a switch does. Set at the station
+/// only, for the switch's reason. Returns the snapshot.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(async)]
+fn save_station_profile(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+    profile: tempo_app::settings::StationProfile,
+) -> Result<AppSnapshot, String> {
+    let settings = {
+        let mut eng = engine_lock(&state);
+        eng.save_station_profile(profile)?;
+        eng.settings().clone()
+    };
+    apply_and_persist(
+        state,
+        spots,
+        live_paths,
+        region_paths,
+        health,
+        cache,
+        settings,
+        false,
+    )
+}
+
+/// Remove one "My station" profile. Home and the profile the station is on stay. Returns the
+/// snapshot.
+#[tauri::command(async)]
+fn remove_station_profile(
+    state: State<'_, SharedEngine>,
+    id: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.remove_station_profile(&id)?;
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: remove_station_profile save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
 /// The first-run wizard's experience answer (also Settings ▸ Station ▸ Your experience), and the
 /// ONE write path for it: narrow for `set_radio_switch_policy`'s stale-snapshot reason, and
 /// `Engine::apply_settings` keeps the live value. Returns the snapshot.
@@ -40822,6 +40901,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_routing_rules,
         set_default_radio,
         set_radio_switch_policy,
+        switch_station_profile,
+        save_station_profile,
+        remove_station_profile,
         set_experience_level,
         mark_setup_wizard_seen,
         route_preview,

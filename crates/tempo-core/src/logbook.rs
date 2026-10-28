@@ -421,7 +421,8 @@ pub fn fill_extra(r: &mut QsoRecord, name: &str, value: String) -> bool {
 }
 
 /// ⭐ **Which of the record's own-station fields Nexus filled in itself from Settings** at log
-/// time — `MY_GRIDSQUARE`, `MY_STATE` — as a comma-separated list of their ADIF names.
+/// time — `MY_GRIDSQUARE`, `MY_STATE`, and a station profile's county, zones and IOTA — as a
+/// comma-separated list of their ADIF names.
 ///
 /// It exists for the LoTW upload alone ([`without_self_filled`]). An operator who signs with a
 /// named TQSL Station Location has TQSL (`-a compliant`) check every `MY_*` field a record
@@ -439,7 +440,16 @@ pub const SELF_FILLED_FIELD: &str = "APP_NEXUS_SELF_FILLED";
 /// The fields Nexus fills in itself and marks ([`mark_self_filled`]): the only names in a
 /// [`SELF_FILLED_FIELD`] list the LoTW upload honours. The list rides files the operator imports,
 /// so a name outside these strips nothing.
-const SELF_FILLED_TAGS: [&str; 2] = ["MY_GRIDSQUARE", "MY_STATE"];
+/// The four after the state are a "My station" profile's location: TQSL checks them against a
+/// Station Location as it does the grid.
+const SELF_FILLED_TAGS: [&str; 6] = [
+    "MY_GRIDSQUARE",
+    "MY_STATE",
+    "MY_CNTY",
+    "MY_CQ_ZONE",
+    "MY_ITU_ZONE",
+    "MY_IOTA",
+];
 
 /// The fields [`SELF_FILLED_FIELD`] names on this record.
 pub fn self_filled(r: &QsoRecord) -> Vec<&str> {
@@ -3157,9 +3167,12 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
     if grid_of(&rec.my_grid) != grid_of(&old.my_grid) {
         unmark_self_filled(&mut rec, "MY_GRIDSQUARE");
     }
-    let state_of = |r: &QsoRecord| extra_value(r, "MY_STATE").map(str::to_ascii_uppercase);
-    if state_of(&rec) != state_of(old) {
-        unmark_self_filled(&mut rec, "MY_STATE");
+    // …and the same for the state and a station profile's location, kept as written.
+    for tag in SELF_FILLED_TAGS.iter().filter(|t| **t != "MY_GRIDSQUARE") {
+        let of = |r: &QsoRecord| extra_value(r, tag).map(str::to_ascii_uppercase);
+        if of(&rec) != of(old) {
+            unmark_self_filled(&mut rec, tag);
+        }
     }
     // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]),
     // and for an IOTA reference a spot's comment filled ([`offer::SPOT_FILLED_FIELD`]).
@@ -7725,11 +7738,17 @@ mod tests {
         set_extra(&mut want, "MY_STATE", None);
         set_extra(&mut want, SELF_FILLED_FIELD, None);
         assert_eq!(without_self_filled(&reborn), want);
+        // A station profile's county, filled and marked by Nexus, is left out the same way; one
+        // carried unmarked (above) goes as it always did.
+        mark_self_filled(&mut filled, "MY_CNTY");
+        let reborn = parse_adif(&adif_record_own_log(&filled)).remove(0);
+        set_extra(&mut want, "MY_CNTY", None);
+        assert_eq!(without_self_filled(&reborn), want);
 
         let imported = parse_adif(
             "<CALL:4>W1AW<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8\
-             <MY_GRIDSQUARE:4>EN52<MY_STATE:2>WI<MY_CNTY:7>WI,DANE<MY_SIG_INFO:6>K-1234\
-             <APP_NEXUS_SELF_FILLED:50>CALL,QSO_DATE,BAND,MODE,MY_CNTY,MY_SIG_INFO,MY_RIG<EOR>",
+             <MY_GRIDSQUARE:4>EN52<MY_STATE:2>WI<MY_ANTENNA:4>EFHW<MY_SIG_INFO:6>K-1234\
+             <APP_NEXUS_SELF_FILLED:53>CALL,QSO_DATE,BAND,MODE,MY_ANTENNA,MY_SIG_INFO,MY_RIG<EOR>",
         )
         .remove(0);
         let mut want = imported.clone();
