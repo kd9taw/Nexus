@@ -1484,6 +1484,31 @@ pub struct Settings {
     /// "directed", "inbox", "callNew" and "callOld". Empty, the default, plays none.
     #[serde(default)]
     pub js8_sounds: Vec<String>,
+    // --- JS8 screen options: JS8Call 3.0.3's own, at its defaults ---
+    /// JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (`ResetActivity`,
+    /// OFF by default, Configuration.ui:429-433, Configuration.cpp:2303): on, the cockpit starts each
+    /// run with its RX pane, Band activity and call list empty, as JS8Call reads none of them back
+    /// (mainwindow.cpp:505-508, :607-609) and clears them at its first band (:1281-1285). Display
+    /// only, as the lists' Clear All is: the station's own record of who it heard is kept.
+    #[serde(default)]
+    pub js8_reset_activity: bool,
+    /// JS8Call's colours and fonts for its RX pane, its two lists and its compose box (Configuration
+    /// ▸ UI, Configuration.ui:3250-4060). Empty by default: every pane then follows the theme.
+    #[serde(default)]
+    pub js8_pane_style: Js8PaneStyle,
+    /// The WAV file each of those sounds plays, by the same event names: JS8Call's
+    /// `Notifications/<event>/path`, picked with its "Select" button (Configuration.cpp:2054-2066,
+    /// :2462-2478). An event with none, the default, plays Nexus's own tone for it, and so does one
+    /// whose file cannot be played. Paths on this computer: they travel in a profile, and the
+    /// Remote settings document does not carry them.
+    #[serde(default)]
+    pub js8_sound_files: std::collections::BTreeMap<String, String>,
+    /// The output the JS8 sounds play on, by device name, as JS8Call lets its notifications pick one.
+    /// Empty, the default, is the system default output. Never a device the station transmits from:
+    /// every play is refused while this (or the default it stands for) is a TX audio device
+    /// (`tempo_audio::notify_sound`), so a VOX-keyed rig is never keyed by a notification.
+    #[serde(default)]
+    pub js8_sound_device: String,
     // --- JS8Call's API for other programs on this computer (`engine/js8_api.rs`) ---
     /// Serve JS8Call's TCP API (`TCPEnabled`): OFF by default, as JS8Call ships it. Read-only, and
     /// on 127.0.0.1 only whatever else changes (`src-tauri/src/js8_api.rs`).
@@ -5813,6 +5838,38 @@ fn default_js8_mfi() -> String {
     "\u{2026}\u{2026}".to_string()
 }
 
+/// The JS8 panes' colours and fonts ([`Settings::js8_pane_style`]), as JS8Call's UI settings hold
+/// them: the RX pane's background and its received and transmitted text, the two lists' background,
+/// text, selected row and row tints, and the compose box's background and text. A colour is kept for
+/// the theme it was picked under (`light`, `dark`), so a choice made readable on one theme never
+/// paints the other; a font is one for both, as in JS8Call. An element or pane with no entry takes
+/// the theme's own. Display only, read by the UI, which checks every entry it reads.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8PaneStyle {
+    /// Colours picked under the Light theme, by element (`rxBg`, `tableFg`, `cq`, …), each `#rrggbb`.
+    #[serde(default)]
+    pub light: std::collections::BTreeMap<String, String>,
+    /// The same under the Dark theme.
+    #[serde(default)]
+    pub dark: std::collections::BTreeMap<String, String>,
+    /// Fonts by pane: `rx` and `tx` (the RX pane's received and transmitted text), `table`, `compose`.
+    #[serde(default)]
+    pub fonts: std::collections::BTreeMap<String, Js8PaneFont>,
+}
+
+/// One pane's font, as JS8Call's font buttons name it ("Font (family size)").
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8PaneFont {
+    /// One family name; empty takes the theme's.
+    #[serde(default)]
+    pub family: String,
+    /// Points, as JS8Call's; 0 takes the theme's size.
+    #[serde(default)]
+    pub size_pt: u16,
+}
+
 /// JS8Call's `ActivityAging` default (minutes). See [`Settings::js8_activity_aging_min`].
 fn default_js8_activity_aging_min() -> u16 {
     2
@@ -5951,6 +6008,10 @@ impl Default for Settings {
             js8_eot: default_js8_eot(),
             js8_mfi: default_js8_mfi(),
             js8_sounds: Vec::new(),
+            js8_reset_activity: false,
+            js8_pane_style: Js8PaneStyle::default(),
+            js8_sound_files: std::collections::BTreeMap::new(),
+            js8_sound_device: String::new(),
             js8_api_tcp: false,
             js8_api_tcp_port: default_js8_api_tcp_port(),
             js8_api_udp: false,
@@ -13320,6 +13381,156 @@ mod tests {
         assert!(
             !typed("js8RxBlockList"),
             "control: a near miss is not found"
+        );
+    }
+
+    /// JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup": off by
+    /// default (`ResetActivity`, Configuration.cpp:2303), its camelCase wire key, an upgrader's
+    /// file, a round trip of the choice, and the TS mirror.
+    #[test]
+    fn js8_reset_activity_defaults_off_as_js8call_and_round_trips() {
+        assert!(
+            !Settings::default().js8_reset_activity,
+            "ResetActivity: off"
+        );
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"js8ResetActivity\":false"), "the wire key");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.js8_reset_activity, "an upgrader's lists are kept");
+        let on: Settings = serde_json::from_str(r#"{"js8ResetActivity":true}"#).unwrap();
+        assert!(on.js8_reset_activity);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back, on);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        assert!(
+            typed("js8ResetActivity"),
+            "ui/src/types.ts Settings is missing `js8ResetActivity`"
+        );
+        assert!(
+            !typed("js8ResetActivities"),
+            "control: a near miss is not found"
+        );
+    }
+
+    /// JS8Call's colours and fonts for the JS8 panes: empty by default (every pane follows the
+    /// theme), the camelCase wire shape, an upgrader's file, a partial record, a round trip of
+    /// colours picked under each theme and a font, and the TS mirror.
+    #[test]
+    fn js8_pane_style_defaults_empty_and_round_trips_per_theme() {
+        let s = Settings::default();
+        assert_eq!(s.js8_pane_style, Js8PaneStyle::default());
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains(r#""js8PaneStyle":{"light":{},"dark":{},"fonts":{}}"#),
+            "the wire shape"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            old.js8_pane_style,
+            Js8PaneStyle::default(),
+            "an upgrader's panes follow the theme"
+        );
+        let partial: Settings =
+            serde_json::from_str(r##"{"js8PaneStyle":{"dark":{"rxBg":"#000000"}}}"##).unwrap();
+        assert!(partial.js8_pane_style.light.is_empty() && partial.js8_pane_style.fonts.is_empty());
+        let chosen: Settings = serde_json::from_str(
+            r##"{"js8PaneStyle":{"light":{"rxBg":"#ffeaa7"},"dark":{"cq":"#1f6f3f"},"fonts":{"rx":{"family":"DejaVu Sans Mono","sizePt":11}}}}"##,
+        )
+        .unwrap();
+        let p = &chosen.js8_pane_style;
+        assert_eq!(p.light.get("rxBg").map(String::as_str), Some("#ffeaa7"));
+        assert_eq!(p.dark.get("cq").map(String::as_str), Some("#1f6f3f"));
+        assert_eq!(
+            p.fonts.get("rx"),
+            Some(&Js8PaneFont {
+                family: "DejaVu Sans Mono".into(),
+                size_pt: 11
+            })
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        assert!(
+            typed("js8PaneStyle"),
+            "ui/src/types.ts Settings is missing `js8PaneStyle`"
+        );
+        assert!(!typed("js8PaneStyles"), "control: a near miss is not found");
+    }
+
+    /// The JS8 sounds' output: the system default (empty) by default, its camelCase wire key, an
+    /// upgrader's file, a round trip, and the TS mirror.
+    #[test]
+    fn js8_sound_device_is_the_system_default_by_default_and_round_trips() {
+        assert_eq!(Settings::default().js8_sound_device, "");
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"js8SoundDevice\":\"\""), "the wire key");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_sound_device, "", "an upgrader plays on the default");
+        let on: Settings =
+            serde_json::from_str(r#"{"js8SoundDevice":"Speakers (Realtek)"}"#).unwrap();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back.js8_sound_device, "Speakers (Realtek)");
+        let ts = include_str!("../../../ui/src/types.ts");
+        assert!(
+            ts.contains("  js8SoundDevice?: string"),
+            "ui/src/types.ts Settings mirrors it"
+        );
+    }
+
+    /// The JS8 sounds' WAV files: none by default (JS8Call's empty paths, so every sound plays its
+    /// built-in tone), the camelCase wire key, an upgrader's file, a round trip of chosen paths
+    /// with their slashes and backslashes as written, and the TS mirror.
+    #[test]
+    fn js8_sound_files_are_none_by_default_and_round_trip() {
+        let wire = |s: &Settings| serde_json::to_value(s).unwrap()["js8SoundFiles"].clone();
+        assert_eq!(
+            wire(&Settings::default()),
+            serde_json::json!({}),
+            "no file: every sound its tone"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(wire(&old), serde_json::json!({}), "an upgrader's file");
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8Sounds":["cq","inbox"],"js8SoundFiles":{"cq":"/home/op/sounds/cq.wav","inbox":"C:\\Sounds\\mail.wav"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            wire(&chosen),
+            serde_json::json!({"cq": "/home/op/sounds/cq.wav", "inbox": "C:\\Sounds\\mail.wav"})
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        assert!(
+            body.lines()
+                .map(str::trim_start)
+                .any(|l| { l.starts_with("js8SoundFiles:") || l.starts_with("js8SoundFiles?:") }),
+            "ui/src/types.ts Settings is missing `js8SoundFiles`"
         );
     }
 

@@ -230,8 +230,9 @@ export function js8ShownOffsetRows(
 
 /** JS8Call's "Time Delta" face: whole milliseconds of DT (mainwindow.cpp:9936). Units are a
  *  technical token, and the sign matters — an early station reads negative. */
-export function dtLabel(dtS: number): string {
-  return `${Math.round(dtS * 1000)} ms`
+export function dtLabel(dtS: number, unit = true): string {
+  const ms = Math.round(dtS * 1000)
+  return unit ? `${ms} ms` : `${ms}`
 }
 
 /** JS8Call's `Radio::base_callsign` (Radio.cpp:117-133): the longer side of the first '/', the

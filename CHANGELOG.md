@@ -69,6 +69,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Award status: Submitted and Granted, and what is ready to submit.** Each contact now carries an award status you can set: on the contact card under Award status (DXCC, WAS, WAZ, IOTA and USA-CA, each Not submitted, Submitted or Granted), and for many contacts at once in Bulk edit. It is written to the ADIF fields made for it, CREDIT_SUBMITTED and CREDIT_GRANTED, under the award's own credit code; setting one clears the other, and nothing else on the contact changes and nothing is sent. The Awards view has an Award status panel: pick an award to see how many entities are worked, confirmed, submitted and granted, and the contacts ready to submit, one per entity confirmed by that award's own rule and not yet submitted or granted (its oldest confirmed contact, or its newest). Export the list as CSV, save it as a page to print, or mark the whole list Submitted: Nexus says how many contacts it will change and changes them only when you confirm, and Undo takes it back. Granted credit LoTW sends for DXCC counts as before.
 - **US Counties award (USA-CA).** The Awards view counts CQ's United States of America Counties Award: the 3,077 counties, from each contact's county (CNTY), with the 500 to 3,077 levels. The county is read as ADIF writes it (IN,Marion) and as other logs write it (Marion, IN; IN, Marion County; a county alone beside the contact's state; Saint or St.); Alaska counts by Judicial District, and a Virginia independent city, which counts for a bordering county you choose, is left uncounted, as is any county Nexus cannot place (the card says how many). A county is confirmed by a QSL card or an eQSL from an Authenticity-Guaranteed member, as CQ's rules say; CQ names no LoTW credit for this award. The county list comes from the US Census Bureau.
 - **Logbook ▸ Clean up ▸ Blank grids.** Lists the contacts logged with no grid for which Nexus knows the station's grid: the grid it sent on the air, heard by Nexus in ALL.TXT or this session within 24 hours of the contact (the one in effect at the contact's time; a grid heard further from it is not offered as heard, since the station may have been elsewhere), or else its home QTH from a callbook lookup you already made, labelled "home QTH (callbook)" (a call with no stroke and no park, on a contact from the last 12 months). Nothing changes until you tick contacts and confirm; the fill is one change that Undo takes back, and a contact given a grid in the meantime is left as it is. A heard grid counts like any logged grid. A callbook grid is kept for the distance and the map only, as on an FT8/FT4 contact logged with no grid: it counts toward no grid award, fills no GRID need and is sent to no logging service. The fill also writes the distance to the station where the contact has your own grid, as logging a contact does. A contact already uploaded keeps its upload marks, as with every Clean up change: nothing is sent again, and each service keeps what it was sent; the list marks those contacts. Tick all ticks the contacts shown (up to 200), never ones you have not seen, and the confirm says how many of the ticked grids are heard (counted) and how many are from the callbook (for the map only).
+- **JS8 sounds from any screen, a WAV file for each, on the output you pick.** The seven JS8 sounds (a CQ, a heartbeat, an
+  ACK for you, a message to you, a message in your Inbox, a new callsign, one you have worked) now play whichever screen is
+  showing while JS8 is the mode, as JS8Call's do, so a CQ sounds while the Logbook is open. Each plays its own tone or a
+  WAV file you choose in Settings ▸ Digital ▸ JS8 ▸ Sounds (Choose…, Reset to built-in, Test); a file that cannot be played
+  plays the tone and Nexus says so once. A file on a network share (`\\server\share`, or a link to one) is never opened,
+  since opening it can send your Windows sign-in to that computer: the tone plays and Nexus asks you to copy the file to
+  this computer. A drive letter mapped to a share (or a `subst` drive) is not recognised: a file there is read like
+  one on this computer, so keep sound files on a local drive. **Play the sounds on** picks the output, the system
+  default unless you pick one.
+  Nexus never plays a sound on a device your radio transmits from, where it could key a rig on VOX: it checks at every
+  sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. The
+  device the radio actually opened for TX audio is refused too, while the radio holds it: with TX audio set to the
+  system default, a sound is not played on that device after the system default moves to another one. Two
+  identically named sound cards count as one device, whatever number Windows or Linux gives each ("Speakers (2- USB
+  Audio CODEC)", CODEC_1), since the numbers move when one is unplugged. On Linux, the sound server's default output (default, PulseAudio,
+  PipeWire) may be the radio's card, so the sounds play only on a sound card picked by name, and only while the radio's
+  TX audio is set to its own, different card by name. A device whose route is set in a sound configuration file (one of
+  your own from ~/.asoundrc, or plug:, oss, a bare dmix) may reach any card, so a sound is refused against it either way
+  round. With a radio's TX audio set to the system default (or a radio profile with none), pick a
+  specific output for the sounds. A sound plays at most ten seconds, one at a time, and Test plays on the output chosen
+  in the form before Save. All sounds stay off by default. The sound files and **Play the sounds on** are set at the station: from a computer driving it over
+  Remote they show the station's choice and say "Set at the station".
+- **JS8: the new-message notice from any screen.** A message filed in your Inbox puts JS8Call's "New Message Received"
+  notice up wherever you are while JS8 is the mode; **Show** opens the JS8 screen on that station's messages.
+- **JS8's waterfall darkens the audio outside the decode filter**, as JS8Call's does: half-dark on each side, with a
+  yellow line at each edge, while the filter is on. Every other mode's waterfall is unchanged.
+- **JS8 screen options, as JS8Call has them.** **Minimal column labels** in Band activity's and the call list's ⋯ ▸ Show
+  columns (short headings, no units in the cells). **Reset Band activity, the call list and the RX pane at startup** in
+  Settings ▸ Digital ▸ JS8 ▸ Lists and marks (off by default; display only, so HEARING? and the other answers still know
+  stations heard before). **Colours and fonts** for the RX pane, the two lists and the compose box, each colour kept for
+  the theme you picked it in, with a warning when text would be hard to read and a Reset per pane. The RX pane's **Clear**
+  and **Clear all lists** now empty the compose box too, as JS8Call's do, except while its message is going out.
 - **Nexus in Russian.** Русский язык. Pick Русский in Settings ▸ Appearance ▸ Language, or Nexus picks it
   up from a Russian system language. Translated by loloka; completed and reviewed for this release, so every screen is in
   Russian, with Russian plural forms (1 контакт, 2 контакта, 5 контактов). Frequencies, callsigns, reports, band and mode

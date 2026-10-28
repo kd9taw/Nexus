@@ -4598,6 +4598,30 @@ export async function js8SetGroups(groups: string[]): Promise<string[]> {
   return invoke<string[]>('js8_set_groups', { groups })
 }
 
+/** Settings ▸ JS8 ▸ Sounds, "Choose…": the OS file picker for a sound's WAV file.
+ *  Null when cancelled. It only reads a path back; Save writes it with the rest of the form. */
+export async function pickJs8SoundFile(): Promise<string | null> {
+  return invoke<string | null>('pick_js8_sound_file')
+}
+
+/** Play one JS8 sound on this computer, in Rust (`src-tauri/src/js8_sounds.rs`): `file` (the WAV the
+ *  form holds for it) or its built-in tone, on Settings `js8SoundDevice`, or on `route`'s output from
+ *  Settings' Test. Resolves with why a file fell
+ *  back to the tone, if it did; rejects with why nothing played: 'txDevice' (the output is a device the
+ *  station transmits from, refused for VOX safety), 'txDefault' (a TX audio device is the system
+ *  default, and so is the output), 'txUnsure' (the output cannot be told apart from a TX audio
+ *  device), 'noDevice' or 'failed'. */
+export async function playJs8SoundHere(event: string, file: string | null, route?: Js8SoundRoute): Promise<{ fileRefused: string | null }> {
+  return invoke<{ fileRefused: string | null }>('play_js8_sound', { event, file, device: route?.device ?? null, txDevices: route?.txDevices ?? null })
+}
+
+/** Where Settings' Test plays a JS8 sound before Save: the form's output ('' = the system default),
+ *  refused against the form's TX audio devices as well as the saved ones. */
+export interface Js8SoundRoute {
+  device: string
+  txDevices: string[]
+}
+
 /** The JS8 call list's Remove on @ALLCALL and Add of @ALLCALL (Settings `js8AvoidAllcall`, JS8Call's
  *  "Do not participate in the @ALLCALL group"), that one field, never the settings form. Resolves
  *  with the setting as saved. */

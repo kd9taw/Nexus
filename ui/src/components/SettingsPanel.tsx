@@ -253,6 +253,8 @@ import { contestSummaryText } from './ContestView'
 import { blockerText, startBlocker } from '../features/contestStart'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
 import { Js8ListsSettings } from './Js8ListsSettings'
+import { Js8PaneStyleSettings } from './Js8PaneStyleSettings'
+import { pickJs8SoundFile } from '../api'
 import { resolveTarget, sectionsForTab, type SettingsTabId } from '../settings/registry'
 import { EXPERIENCE_LEVELS, featurePreset, foldsSettings, screensTurnedOff, startsFolded, targetOpens } from '../settings/experience'
 import { describeRadioRouting, ROUTE_MODES, ROUTE_MODE_LABEL, type RouteLine } from '../settings/describeRouting'
@@ -2217,6 +2219,17 @@ export function SettingsPanel({
   const setJs8Sounds = (events: string[]) => {
     markDirty()
     setForm((prev) => (prev ? { ...prev, js8Sounds: events } : prev))
+  }
+  // A JS8 sound's WAV file (Js8ListsSettings): null goes back to the built-in tone.
+  const setJs8SoundFile = (event: string, path: string | null) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const files = { ...(prev.js8SoundFiles ?? {}) }
+      if (path) files[event] = path
+      else delete files[event]
+      return { ...prev, js8SoundFiles: files }
+    })
   }
   const parseJs8Groups = (raw: string): string[] =>
     raw
@@ -10322,7 +10335,28 @@ export function SettingsPanel({
                 <span className="settings-hint">{t('settings.js8.spotNever.hint')}</span>
               </label>
             </div>
-            <Js8ListsSettings form={form} setList={setJs8Words} setMark={setJs8Mark} setSounds={setJs8Sounds} />
+            <Js8ListsSettings
+              form={form}
+              setList={setJs8Words}
+              setMark={setJs8Mark}
+              setSounds={setJs8Sounds}
+              setReset={(on) => updateBool('js8ResetActivity', on)}
+              pickSoundFile={pickJs8SoundFile}
+              setSoundFile={setJs8SoundFile}
+              outputs={audio.output}
+              outputLabel={(d) => audioLabel(d, 'output')}
+              setSoundDevice={(d) => update('js8SoundDevice', d)}
+              locked={locked}
+              setAtStation={setAtStation}
+            />
+            <Js8PaneStyleSettings
+              form={form}
+              theme={paintedTheme === 'light' ? 'light' : 'dark'}
+              onChange={(js8PaneStyle) => {
+                markDirty()
+                setForm((prev) => (prev ? { ...prev, js8PaneStyle } : prev))
+              }}
+            />
 
             {/* JS8Call's API for programs on this computer: read-only, 127.0.0.1 only, both
                 sides off by default (its own file says what keeps each promise). Never on the

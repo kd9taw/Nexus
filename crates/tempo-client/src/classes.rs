@@ -369,6 +369,8 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("parks_count",                    RunsAtShack, "The shack's park list."),
     ("pick_band",                      RunsAtShack, "Changes the shack's band; keys nothing."),
     ("pick_data_folder",               RefusedHere, "Opens a folder dialog on the shack's own screen."),
+    ("pick_js8_sound_file",            RunsHere,    "A file picker for a JS8 notification sound on this computer."),
+    ("play_js8_sound",                 RunsHere,    "Plays a JS8 notification sound on this computer, never on a TX audio device."),
     ("play_voice_message",             StartsTx,    "Plays a voice-keyer message on the air."),
     ("point_rotator",                  RunsAtShack, "Turns the shack's rotator."),
     ("point_rotator_at_call",          RunsAtShack, "Turns the shack's rotator."),
