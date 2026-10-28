@@ -228,6 +228,12 @@ impl Engine {
     /// sound card ACTUALLY opened for receive (the system default when none is set) is checked by
     /// the radio loop before it opens the microphone ([`Self::pc_mic_is_receive`]).
     fn pc_mic_feedback(&self, device: &str) -> Option<PcMicCause> {
+        // A Linux sound server's route (or ALSA's own default) is whatever input the server
+        // defaults to, which may be the radio's receive codec: not provably the operator's
+        // microphone, so refused. The operator picks the microphone by its own card name instead.
+        if is_sound_server_route(device) {
+            return Some(PcMicCause::SameAsReceive);
+        }
         if same_audio_device(device, &self.settings.audio_in) {
             return Some(PcMicCause::SameAsReceive);
         }
@@ -444,7 +450,15 @@ const LOOPBACK: [&str; 13] = [
 /// trimmed and case-blind, without the ` #N` ordinal Nexus adds to identically named devices (two
 /// codecs of one name are not told apart), and ALSA names of one card compare equal under any
 /// access path (`hw:` / `plughw:` / `dsnoop:` / `default:` / `sysdefault:` …, by `CARD=` or by card
-/// number). An empty name is no device.
+/// number). One card given by number and the other by id (`hw:1,0` against `hw:CARD=CODEC`) cannot
+/// be proven different from the names alone, so they compare as the same. An empty name is no
+/// device.
+///
+/// ⛔ INTERIM. This and `is_sound_server_route` are a stand-in for the one
+/// shared fail-safe device guard the notification sounds use (`tempo_audio::notify_sound`'s
+/// route/collision rules: sound-server routes, card ids resolved from card numbers, config-file
+/// PCMs). When that guard is on main, this check must be replaced by it, so the two features never
+/// answer "is this the same device?" differently.
 pub fn same_audio_device(a: &str, b: &str) -> bool {
     let (a, b) = (device_base(a), device_base(b));
     if a.is_empty() || b.is_empty() {
@@ -453,7 +467,23 @@ pub fn same_audio_device(a: &str, b: &str) -> bool {
     if a == b {
         return true;
     }
-    matches!((alsa_card(&a), alsa_card(&b)), (Some(x), Some(y)) if x == y)
+    match (alsa_card(&a), alsa_card(&b)) {
+        (Some(x), Some(y)) => x == y || is_card_number(&x) != is_card_number(&y),
+        _ => false,
+    }
+}
+
+/// An ALSA card token that is the card's number (`1` of `hw:1,0`), not its id.
+fn is_card_number(card: &str) -> bool {
+    !card.is_empty() && card.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Whether a device name is a Linux sound server's route or ALSA's bare default (`default`,
+/// `sysdefault`, `pulse`, `pipewire`, `jack`): it captures whatever input the server defaults to,
+/// so what it carries cannot be told from its name.
+fn is_sound_server_route(name: &str) -> bool {
+    const ROUTES: [&str; 5] = ["default", "sysdefault", "pulse", "pipewire", "jack"];
+    ROUTES.contains(&device_base(name).as_str())
 }
 
 /// A saved name trimmed, lower case, without a trailing ` #N` ordinal.

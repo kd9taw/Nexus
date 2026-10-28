@@ -439,7 +439,7 @@ fn the_voice_keyer_and_the_computer_microphone_exclude_each_other() {
 /// CONTROL: an ordinary microphone arms, and the exact-name case still refuses.
 #[test]
 fn a_microphone_that_may_carry_receive_or_transmit_audio_is_refused() {
-    let cases: [(&str, &str, PcMicCause); 9] = [
+    let cases: [(&str, &str, PcMicCause); 16] = [
         ("Radio Codec", "Radio Codec", PcMicCause::SameAsReceive),
         ("radio codec #2", "Radio Codec", PcMicCause::SameAsReceive),
         (
@@ -448,6 +448,19 @@ fn a_microphone_that_may_carry_receive_or_transmit_audio_is_refused() {
             PcMicCause::SameAsReceive,
         ),
         ("dsnoop:1,0", "hw:1,0", PcMicCause::SameAsReceive),
+        // One card by number, the other by id: not provably different.
+        ("hw:1,0", "hw:CARD=Codec,DEV=0", PcMicCause::SameAsReceive),
+        ("plughw:CARD=Codec", "dsnoop:2,0", PcMicCause::SameAsReceive),
+        // A sound server's route captures whatever the server defaults to: maybe the codec.
+        ("default", "hw:CARD=Codec,DEV=0", PcMicCause::SameAsReceive),
+        ("pulse", "hw:CARD=Codec,DEV=0", PcMicCause::SameAsReceive),
+        (
+            " PipeWire ",
+            "hw:CARD=Codec,DEV=0",
+            PcMicCause::SameAsReceive,
+        ),
+        ("jack", "Radio Codec", PcMicCause::SameAsReceive),
+        ("sysdefault", "Radio Codec", PcMicCause::SameAsReceive),
         ("Second Codec", "Radio Codec", PcMicCause::RadioReceive),
         (
             "DAX Audio RX 1 (FlexRadio Systems DAX Audio)",
@@ -484,6 +497,20 @@ fn a_microphone_that_may_carry_receive_or_transmit_audio_is_refused() {
     e.settings.radios[1].audio_in = "Second Codec".into();
     e.set_ptt(true);
     assert!(e.pc_mic_armed(), "CONTROL: an ordinary microphone");
+    // CONTROL: cards proven different (both by id, both by number; a card's own default) arm.
+    for (mic, rx) in [
+        ("hw:CARD=Headset,DEV=0", "hw:CARD=Codec,DEV=0"),
+        ("plughw:2,0", "hw:1,0"),
+        ("sysdefault:CARD=Headset", "hw:CARD=Codec,DEV=0"),
+    ] {
+        let mut e = station();
+        e.settings.audio_in = rx.into();
+        e.settings.radios[0].audio_in = rx.into();
+        e.settings.radios[1].audio_in = "Second Codec".into();
+        e.settings.pc_mic_device = mic.into();
+        e.set_ptt(true);
+        assert!(e.pc_mic_armed(), "CONTROL: {mic:?} beside {rx:?}");
+    }
 }
 
 #[test]
@@ -495,6 +522,9 @@ fn device_names_compare_as_the_same_input_when_in_doubt() {
     assert!(same("plughw:2,0", "hw:2"));
     assert!(!same("hw:CARD=Device,DEV=0", "hw:CARD=Other,DEV=0"));
     assert!(!same("hw:1,0", "hw:2,0"));
+    // One card by number, the other by id: not provably different, so the same.
+    assert!(same("hw:1,0", "hw:CARD=CODEC,DEV=0"));
+    assert!(same("plughw:CARD=Device", "dsnoop:0"));
     assert!(!same("Desk Microphone", "USB Audio CODEC"));
     assert!(!same("", ""), "no device is no device");
     assert!(
