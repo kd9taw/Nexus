@@ -29,6 +29,7 @@ import {
   setSettings,
   getSettings,
   type AprsHealth,
+  type AprsIssDoppler,
   type AprsHeard,
   type AprsIsStatus,
   type AprsSource,
@@ -625,6 +626,39 @@ export function aprsDecodeStatus(
       min: dbfs(HEALTHY_BURST_MIN),
       max: dbfs(HEALTHY_BURST_MAX),
     }),
+  }
+}
+
+/** The ISS channel's Doppler correction in plain words: where the radio listens and sends while it
+ *  steers, or why the radio stays on the channel. Empty when there is nothing to say (no state). */
+export function issDopplerLine(d: AprsIssDoppler | null | undefined): string {
+  if (!d) return ''
+  if (d.on && d.rxHz != null && d.txHz != null) {
+    return t('aprs.iss.doppler.on', {
+      rx: (d.rxHz / 1e6).toFixed(4),
+      tx: (d.txHz / 1e6).toFixed(4),
+    })
+  }
+  const freq = ISS.toFixed(3)
+  switch (d.whyOff) {
+    case 'switchedOff':
+      return t('aprs.iss.doppler.off.switchedOff', { freq })
+    case 'belowHorizon':
+      return t('aprs.iss.doppler.off.belowHorizon', { freq })
+    case 'noElements':
+      return t('aprs.iss.doppler.off.noElements', { freq })
+    case 'staleElements':
+      return t('aprs.iss.doppler.off.staleElements', { freq })
+    case 'noGrid':
+      return t('aprs.iss.doppler.off.noGrid', { freq })
+    case 'noCat':
+      return t('aprs.iss.doppler.off.noCat', { freq })
+    case 'satTracker':
+      return t('aprs.iss.doppler.off.satTracker')
+    case 'starting':
+      return t('aprs.iss.doppler.off.starting')
+    default:
+      return ''
   }
 }
 
@@ -1511,6 +1545,26 @@ export function AprsCockpit({
               {t('aprs.iss.useAriss', { path: ISS_PATH })}
             </button>
           </p>
+        )}
+        {/* The ISS channel's Doppler correction: its switch (on by default) and what it is doing.
+            The engine owns the behaviour; this only saves the switch and says the state. */}
+        {freq === ISS && (
+          <>
+            <label title={t('aprs.iss.doppler.title', { freq: ISS.toFixed(3) })}>
+              <input
+                type="checkbox"
+                checked={settings?.aprsIssDoppler ?? true}
+                disabled={!settings}
+                onChange={(e) => writeSettings({ aprsIssDoppler: e.target.checked })}
+              />
+              {t('aprs.iss.doppler.label')}
+            </label>
+            {issDopplerLine(health?.issDoppler) && (
+              <p className="aprs-beacon-note aprs-iss-doppler">
+                {issDopplerLine(health?.issDoppler)}
+              </p>
+            )}
+          </>
         )}
         <button type="button" className="np-chip aprs-beacon-send" onClick={sendBeacon}>
           {t('aprs.beacon.send')}

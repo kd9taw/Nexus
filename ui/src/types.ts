@@ -4648,6 +4648,9 @@ export interface Settings {
   aprsComment?: string
   /** The digipeater path, e.g. ['WIDE1-1','WIDE2-1']. Empty is a real value: direct, no hops. */
   aprsPath?: string[]
+  /** Doppler correction on the APRS cockpit's ISS channel (default on; no other channel is
+   * corrected). */
+  aprsIssDoppler?: boolean
   /** The SSID every APRS frame we originate carries (-9 mobile, -10 iGate, -7 HT …), or
    * null/undefined to FOLLOW MY CALLSIGN — whatever `mycall` already spells out. Applied in
    * Rust only; the UI never sends a source address. */

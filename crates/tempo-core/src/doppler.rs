@@ -163,6 +163,27 @@ pub fn tuning(t: &Transponder, state: DopplerState, range_rate_km_s: f64) -> Tun
     }
 }
 
+/// Both legs of a SIMPLEX channel, each fully corrected, for a radio that RETUNES between
+/// receiving and transmitting rather than holding one dial for both.
+///
+/// [`tuning`] parks a simplex channel at its published frequency because one dial cannot carry
+/// two corrections at once. An APRS packet to the ISS is a short over the station keys itself,
+/// so the dial can sit on the receive correction between overs and move to the transmit
+/// correction for the length of each over (the APRS cockpit's ISS channel does exactly that).
+/// `downlink_hz` is where to listen, `uplink_hz` where to transmit; `range_rate_km_s` is
+/// positive while the satellite recedes, as in [`tuning`].
+pub fn simplex_legs(channel_hz: u64, range_rate_km_s: f64) -> Tuning {
+    let beta = (range_rate_km_s * 1000.0) / C_M_S;
+    let down = shift(channel_hz, -beta);
+    let up = shift(channel_hz, beta);
+    Tuning {
+        downlink_hz: down,
+        uplink_hz: up,
+        downlink_shift_hz: down as i64 - channel_hz as i64,
+        uplink_shift_hz: up as i64 - channel_hz as i64,
+    }
+}
+
 /// Adopt an operator's manual DOWNLINK tuning: convert the dial they just set
 /// into the passband offset the engine carries, given the Doppler in force at
 /// that instant. This is the operator-follow entry point — the uplink then
@@ -997,6 +1018,24 @@ mod tests {
         // Neither is a linear pair or a beacon (uplink centre 0 = no TX leg).
         assert!(!rs44().is_simplex());
         assert!(!Transponder::channel(0, 435_300_000).is_simplex());
+    }
+
+    #[test]
+    fn simplex_legs_correct_each_leg_fully_for_a_radio_that_retunes_per_over() {
+        // Approaching (rate < 0): hear it HIGH, transmit LOW. Receding: the reverse.
+        // 7.5 km/s at 145.825 MHz is ~3.65 kHz on each leg.
+        let a = simplex_legs(145_825_000, -7.5);
+        assert!(a.downlink_hz > 145_825_000 && a.uplink_hz < 145_825_000);
+        assert!((3_600..=3_700).contains(&a.downlink_shift_hz), "{a:?}");
+        assert_eq!(
+            a.uplink_shift_hz, -a.downlink_shift_hz,
+            "equal and opposite"
+        );
+        let r = simplex_legs(145_825_000, 7.5);
+        assert!(r.downlink_hz < 145_825_000 && r.uplink_hz > 145_825_000);
+        // At TCA (rate 0) both legs are the published channel.
+        let z = simplex_legs(145_825_000, 0.0);
+        assert_eq!((z.downlink_hz, z.uplink_hz), (145_825_000, 145_825_000));
     }
 
     #[test]

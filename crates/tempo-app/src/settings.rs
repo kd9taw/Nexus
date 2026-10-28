@@ -2861,6 +2861,13 @@ pub struct Settings {
     /// today's behaviour exactly.
     #[serde(default)]
     pub aprs_ssid: Option<u8>,
+    /// Doppler correction on the APRS cockpit's ISS channel (145.825 MHz). On (the default),
+    /// while that channel is selected and the ISS is above the horizon, Nexus keeps the radio on
+    /// the receive-corrected frequency between overs and moves it to the transmit-corrected one
+    /// for each APRS over, never while keyed. Off leaves the radio on 145.825. No other channel
+    /// is ever corrected.
+    #[serde(default = "default_true")]
+    pub aprs_iss_doppler: bool,
 
     // --- audio I/O ---
     /// Input (capture) device name. Empty = system default input.
@@ -6335,6 +6342,7 @@ impl Default for Settings {
             aprs_comment: default_aprs_comment(),
             aprs_path: default_aprs_path(),
             aprs_ssid: None,
+            aprs_iss_doppler: true,
             audio_in: String::new(),
             audio_out: String::new(),
             voice_mic_device: String::new(),
