@@ -11,16 +11,19 @@
 //! - the same ALSA card as one of those, reached by another name (`hw:` against `plughw:`, or by
 //!   its number, `hw:1,0`, resolved to the card's id);
 //! - the system default output, when a TX device is configured as "system default" (empty);
-//! - one that cannot be told apart from a TX device by name (Linux): the sound server's default
-//!   sink (`default`, `pulse`, `pipewire`… are ONE target) against a card named outright, either
-//!   way round, since that sink may be the rig's card. When the guard cannot prove two devices
-//!   different, it refuses.
+//! - one that cannot be PROVEN different from a TX device by name. On Linux only two different
+//!   ALSA cards are (`plughw:CARD=CODEC` against `hw:CARD=PCH`). Everything else is refused: the
+//!   sound server's default sink (`default`, `pulse`, `pipewire`… are ONE target, and it may be
+//!   the rig's card), and any PCM whose routing lives in a config file rather than its name (an
+//!   `~/.asoundrc` PCM such as `rigtx`, `plug:…`, `oss`, a bare `dmix`), against anything but its
+//!   own name. Elsewhere (Windows, macOS) two different device names are two devices.
 //!
 //! The check is made at EVERY play, against the settings as they are then and the device that
 //! actually opened, so a TX device changed after the sound device was picked is caught at the next
-//! sound. Two devices are compared by name, case-blind, the way the headphone monitor's guard
-//! compares them, and without the " #N" a device list adds to a second identically named codec:
-//! two identically named codecs are therefore one device here, which refuses more rather than less.
+//! sound. Off Linux two devices are compared by name, case-blind, the way the headphone monitor's
+//! guard compares them, and without the " #N" a device list adds to a second identically named
+//! codec: two identically named codecs are therefore one device here, which refuses more rather
+//! than less.
 //! The refusal says which of these it was ([`PlayRefusal`]), so the operator is told what to change.
 //!
 //! The pure pieces (the guard, the built-in tones) build without the `device` feature so they are
@@ -40,9 +43,10 @@ pub enum PlayRefusal {
     /// profile's that has none, as a radio whose audio is not on this computer has), and the sound
     /// would open that default, or a default nobody can name.
     TxDefault,
-    /// The two cannot be told apart by name, so the sound is refused: on Linux, the sound server's
-    /// default sink (`default`, `pulse`, `pipewire`…) against a sound card named outright, either
-    /// way round, or a card by a number this computer cannot resolve.
+    /// The two cannot be proven different by name, so the sound is refused (Linux): the sound
+    /// server's default sink (`default`, `pulse`, `pipewire`…) or a PCM routed by a config file
+    /// (`~/.asoundrc`'s own names, `plug:…`, `oss`…) against anything but itself, or a card by a
+    /// number this computer cannot resolve.
     TxUnsure,
     /// No such output device here (a named one not found, or no default output at all). Never
     /// replaced by the default: that could be the TX device under another name.
@@ -81,15 +85,54 @@ enum Card {
     Number(u32),
 }
 
+/// The ALSA plugins whose argument names one card and that play to that card: the hardware and
+/// its standard per-card aliases (alsa-lib's `cards/*.conf`). A card argument on any other plugin
+/// proves nothing: an `~/.asoundrc` PCM may take a `CARD=` and send its sound anywhere.
+const CARD_PLUGINS: [&str; 13] = [
+    "hw",
+    "plughw",
+    "dmix",
+    "dsnoop",
+    "front",
+    "rear",
+    "center_lfe",
+    "side",
+    "iec958",
+    "spdif",
+    "hdmi",
+    "usbstream",
+    "sysdefault",
+];
+
+/// How this computer's audio host names an output device, and so how two names are compared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Naming {
+    /// Linux: ALSA PCM names, whose routing may live in a config file.
+    Alsa,
+    /// Windows / macOS: one name per endpoint.
+    Endpoint,
+}
+
+/// This computer's naming (cpal's ALSA host on Linux, WASAPI / CoreAudio elsewhere).
+const HOST_NAMING: Naming = if cfg!(target_os = "linux") {
+    Naming::Alsa
+} else {
+    Naming::Endpoint
+};
+
 /// Where a device name sends its sound, as far as its name can tell.
 #[derive(Debug, PartialEq, Eq)]
 enum Route {
-    /// The sound server's default sink.
+    /// ALSA: the sound server's default sink.
     Server,
-    /// One ALSA card, by any access path (`hw:`, `plughw:`, `dmix:`, `front:`…).
+    /// ALSA: one card, by a plugin that plays to it (`hw:`, `plughw:`, `dmix:`, `front:`…).
     Card(Card),
-    /// Any other name (Windows / macOS): its base name, lower-cased, without the " #N" ordinal
-    /// that tells two identically named codecs apart in a list — they are one device here.
+    /// ALSA: any other PCM (an `~/.asoundrc` name, `plug:…`, `oss`, a bare `dmix`), lower-cased.
+    /// Its routing lives in a config file, so it is the same as its own name and proven different
+    /// from nothing.
+    Pcm(String),
+    /// Windows / macOS: its base name, lower-cased, without the " #N" ordinal that tells two
+    /// identically named codecs apart in a list — they are one device here.
     Named(String),
 }
 
@@ -100,34 +143,36 @@ enum Collision {
     Unsure,
 }
 
-/// The route of `name`, a card number resolved to its id through `card_id`.
-fn route(name: &str, card_id: &dyn Fn(u32) -> Option<String>) -> Route {
+/// The route of `name` under `naming`, a card number resolved to its id through `card_id`.
+fn route(name: &str, naming: Naming, card_id: &dyn Fn(u32) -> Option<String>) -> Route {
     let name = name.trim();
-    if let Some(at) = name.find("CARD=") {
-        let rest = &name[at + 5..];
-        let id = &rest[..rest.find(',').unwrap_or(rest.len())];
-        return Route::Card(card_ref(id, card_id));
-    }
-    // An ALSA PCM name has no spaces; a Windows or macOS friendly name nearly always has.
-    if !name.contains(char::is_whitespace) {
-        let (plugin, args) = name.split_once(':').unwrap_or((name, ""));
-        let plugin = plugin.to_ascii_lowercase();
-        let first = args.split(',').next().unwrap_or("").trim();
-        if !first.is_empty() && !first.contains('=') {
-            // `hw:1,0`, `plughw:CODEC`, `front:1`: the first argument is the card.
-            return Route::Card(card_ref(first, card_id));
-        }
-        if args.is_empty() && SOUND_SERVER_ROUTES.contains(&plugin.as_str()) {
-            return Route::Server;
-        }
-    }
     let lower = name.to_ascii_lowercase();
-    Route::Named(
-        crate::audiodev::split_device_ordinal(&lower)
-            .0
-            .trim()
-            .to_string(),
-    )
+    if naming == Naming::Endpoint {
+        return Route::Named(
+            crate::audiodev::split_device_ordinal(&lower)
+                .0
+                .trim()
+                .to_string(),
+        );
+    }
+    let (plugin, args) = lower.split_once(':').unwrap_or((&lower, ""));
+    if CARD_PLUGINS.contains(&plugin) || plugin.starts_with("surround") {
+        // `plughw:CARD=CODEC,DEV=0`, `hw:1,0`, `front:CODEC`: the card argument, by name or first.
+        let card = match args
+            .split(',')
+            .find_map(|kv| kv.trim().strip_prefix("card="))
+        {
+            Some(card) => Some(card),
+            None => args.split(',').next().filter(|a| !a.contains('=')),
+        };
+        if let Some(card) = card.map(str::trim).filter(|c| !c.is_empty()) {
+            return Route::Card(card_ref(card, card_id));
+        }
+    }
+    if args.is_empty() && SOUND_SERVER_ROUTES.contains(&plugin) {
+        return Route::Server;
+    }
+    Route::Pcm(lower)
 }
 
 fn card_ref(token: &str, card_id: &dyn Fn(u32) -> Option<String>) -> Card {
@@ -139,22 +184,25 @@ fn card_ref(token: &str, card_id: &dyn Fn(u32) -> Option<String>) -> Card {
     }
 }
 
+/// Whether two routes may be one device. `None` ONLY where they are proven different: two
+/// different cards (by id, or by number), or two different endpoint names. Every other pair —
+/// the sound server against anything else, a config-file PCM against anything but its own name,
+/// a card by id against one by a number nobody resolved — is unsure, and refuses.
 fn collide(a: &Route, b: &Route) -> Option<Collision> {
     match (a, b) {
         (Route::Server, Route::Server) => Some(Collision::Same),
-        (Route::Server, Route::Card(_)) | (Route::Card(_), Route::Server) => {
-            Some(Collision::Unsure)
-        }
         (Route::Card(x), Route::Card(y)) => match (x, y) {
             (Card::Id(x), Card::Id(y)) if x == y => Some(Collision::Same),
             (Card::Number(x), Card::Number(y)) if x == y => Some(Collision::Same),
+            (Card::Id(_), Card::Id(_)) | (Card::Number(_), Card::Number(_)) => None,
             (Card::Id(_), Card::Number(_)) | (Card::Number(_), Card::Id(_)) => {
                 Some(Collision::Unsure)
             }
-            _ => None,
         },
+        (Route::Pcm(x), Route::Pcm(y)) if x == y => Some(Collision::Same),
         (Route::Named(x), Route::Named(y)) if x == y => Some(Collision::Same),
-        _ => None,
+        (Route::Named(_), Route::Named(_)) => None,
+        _ => Some(Collision::Unsure),
     }
 }
 
@@ -177,6 +225,7 @@ fn device_verdict(
     device: &str,
     tx_devices: &[String],
     default_output: Option<&str>,
+    naming: Naming,
     card_id: &dyn Fn(u32) -> Option<String>,
 ) -> Option<PlayRefusal> {
     let device = device.trim();
@@ -187,7 +236,7 @@ fn device_verdict(
     if crate::monitor::is_flex_dax_tx_device(device) {
         return Some(PlayRefusal::TxDevice);
     }
-    let dev = route(device, card_id);
+    let dev = route(device, naming, card_id);
     let default_output = default_output.map(str::trim).filter(|d| !d.is_empty());
     let mut why: Option<PlayRefusal> = None;
     let rank = |r: &PlayRefusal| match r {
@@ -202,13 +251,13 @@ fn device_verdict(
                 // A TX device that is "the default" on a host that cannot name its default: no
                 // output can be shown to differ from it.
                 None => Some(PlayRefusal::TxDefault),
-                Some(d) => collide(&dev, &route(d, card_id)).map(|c| match c {
+                Some(d) => collide(&dev, &route(d, naming, card_id)).map(|c| match c {
                     Collision::Same => PlayRefusal::TxDefault,
                     Collision::Unsure => PlayRefusal::TxUnsure,
                 }),
             }
         } else {
-            collide(&dev, &route(tx, card_id)).map(|c| match c {
+            collide(&dev, &route(tx, naming, card_id)).map(|c| match c {
                 Collision::Same => PlayRefusal::TxDevice,
                 Collision::Unsure => PlayRefusal::TxUnsure,
             })
@@ -222,17 +271,19 @@ fn device_verdict(
     why
 }
 
-/// [`refuse_tx`] with the card-number lookup handed in (tests name their own cards).
+/// [`refuse_tx`] with the naming and the card-number lookup handed in (tests name their own
+/// platform and cards).
 fn verdict_with(
     opened: &str,
     configured: &str,
     tx_devices: &[String],
     default_output: Option<&str>,
+    naming: Naming,
     card_id: &dyn Fn(u32) -> Option<String>,
 ) -> Option<PlayRefusal> {
-    let a = device_verdict(opened, tx_devices, default_output, card_id);
+    let a = device_verdict(opened, tx_devices, default_output, naming, card_id);
     let b = (!configured.trim().is_empty())
-        .then(|| device_verdict(configured, tx_devices, default_output, card_id))
+        .then(|| device_verdict(configured, tx_devices, default_output, naming, card_id))
         .flatten();
     match (a, b) {
         (Some(PlayRefusal::TxDevice), _) | (_, Some(PlayRefusal::TxDevice)) => {
@@ -250,7 +301,14 @@ fn verdict_with(
 /// apart from, which refuses as well. An empty TX name is the system default output,
 /// `default_output` (`None` when the host cannot name one).
 pub fn would_transmit(device: &str, tx_devices: &[String], default_output: Option<&str>) -> bool {
-    device_verdict(device, tx_devices, default_output, &system_card_id).is_some()
+    device_verdict(
+        device,
+        tx_devices,
+        default_output,
+        HOST_NAMING,
+        &system_card_id,
+    )
+    .is_some()
 }
 
 /// The check made before a sound's stream is built: the device that OPENED (`opened`) and the name
@@ -268,6 +326,7 @@ pub fn refuse_tx(
         configured,
         tx_devices,
         default_output,
+        HOST_NAMING,
         &system_card_id,
     ) {
         Some(why) => Err(why),
@@ -507,13 +566,58 @@ mod tests {
         v.iter().map(|x| x.to_string()).collect()
     }
 
+    fn no_cards(_: u32) -> Option<String> {
+        None
+    }
+
+    fn refuse(
+        naming: Naming,
+        opened: &str,
+        configured: &str,
+        tx: &[String],
+        default_output: Option<&str>,
+    ) -> Result<(), PlayRefusal> {
+        match verdict_with(opened, configured, tx, default_output, naming, &no_cards) {
+            Some(why) => Err(why),
+            None => Ok(()),
+        }
+    }
+
+    /// Windows / macOS naming: whether a sound on `device` is refused.
+    fn ep(device: &str, tx: &[String], default_output: Option<&str>) -> bool {
+        refuse(Naming::Endpoint, device, "", tx, default_output).is_err()
+    }
+
+    fn ep_refuse(
+        opened: &str,
+        configured: &str,
+        tx: &[String],
+        default_output: Option<&str>,
+    ) -> Result<(), PlayRefusal> {
+        refuse(Naming::Endpoint, opened, configured, tx, default_output)
+    }
+
+    /// Linux (ALSA) naming: whether a sound on `device` is refused.
+    fn alsa(device: &str, tx: &[String], default_output: Option<&str>) -> bool {
+        refuse(Naming::Alsa, device, "", tx, default_output).is_err()
+    }
+
+    fn alsa_refuse(
+        opened: &str,
+        configured: &str,
+        tx: &[String],
+        default_output: Option<&str>,
+    ) -> Result<(), PlayRefusal> {
+        refuse(Naming::Alsa, opened, configured, tx, default_output)
+    }
+
     #[test]
     fn the_tx_device_is_refused_by_any_spelling_of_its_name() {
         let tx = s(&["USB Audio CODEC"]);
-        assert!(would_transmit("USB Audio CODEC", &tx, Some("Speakers")));
-        assert!(would_transmit("usb audio codec ", &tx, Some("Speakers")));
+        assert!(ep("USB Audio CODEC", &tx, Some("Speakers")));
+        assert!(ep("usb audio codec ", &tx, Some("Speakers")));
         assert!(
-            !would_transmit("Speakers", &tx, Some("Speakers")),
+            !ep("Speakers", &tx, Some("Speakers")),
             "control: another device plays"
         );
     }
@@ -529,24 +633,18 @@ mod tests {
             ..Default::default()
         };
         let tx = tx_audio_devices(&settings);
-        assert!(would_transmit("Rig A CODEC", &tx, None));
-        assert!(
-            would_transmit("Rig B CODEC", &tx, None),
-            "the radio not shown"
-        );
-        assert!(!would_transmit("Headphones", &tx, None), "control");
+        assert!(ep("Rig A CODEC", &tx, None));
+        assert!(ep("Rig B CODEC", &tx, None), "the radio not shown");
+        assert!(!ep("Headphones", &tx, None), "control");
     }
 
     #[test]
     fn a_tx_device_set_to_the_system_default_refuses_the_default() {
         let tx = s(&[""]);
-        assert!(would_transmit("Speakers", &tx, Some("Speakers")));
+        assert!(ep("Speakers", &tx, Some("Speakers")));
+        assert!(!ep("Headphones", &tx, Some("Speakers")), "control");
         assert!(
-            !would_transmit("Headphones", &tx, Some("Speakers")),
-            "control"
-        );
-        assert!(
-            would_transmit("Headphones", &tx, None),
+            ep("Headphones", &tx, None),
             "a default nobody can name might be any device"
         );
     }
@@ -554,10 +652,10 @@ mod tests {
     #[test]
     fn the_same_alsa_card_by_another_name_is_the_same_device() {
         let tx = s(&["plughw:CARD=CODEC,DEV=0"]);
-        assert!(would_transmit("hw:CARD=CODEC,DEV=0", &tx, None));
-        assert!(would_transmit("dmix:CARD=CODEC,DEV=0", &tx, None));
+        assert!(alsa("hw:CARD=CODEC,DEV=0", &tx, None));
+        assert!(alsa("dmix:CARD=CODEC,DEV=0", &tx, None));
         assert!(
-            !would_transmit("hw:CARD=PCH,DEV=0", &tx, None),
+            !alsa("hw:CARD=PCH,DEV=0", &tx, None),
             "control: another card"
         );
     }
@@ -570,24 +668,24 @@ mod tests {
     fn the_ordinal_suffix_does_not_hide_the_tx_codec() {
         let tx = s(&["USB Audio CODEC #2"]);
         assert!(
-            would_transmit("USB Audio CODEC", &tx, Some("Speakers")),
+            ep("USB Audio CODEC", &tx, Some("Speakers")),
             "TX is the second codec, the opened one is named bare"
         );
         assert!(
-            would_transmit("usb audio codec #3", &s(&["USB Audio CODEC"]), None),
+            ep("usb audio codec #3", &s(&["USB Audio CODEC"]), None),
             "and the other way round"
         );
         assert_eq!(
-            refuse_tx("USB Audio CODEC", "", &tx, Some("USB Audio CODEC")),
+            ep_refuse("USB Audio CODEC", "", &tx, Some("USB Audio CODEC")),
             Err(PlayRefusal::TxDevice),
             "the default output is that codec, nothing configured"
         );
         assert!(
-            !would_transmit("Speakers", &tx, Some("Speakers")),
+            !ep("Speakers", &tx, Some("Speakers")),
             "control: another device plays"
         );
         assert!(
-            !would_transmit("Speakers #2", &tx, Some("Speakers")),
+            !ep("Speakers #2", &tx, Some("Speakers")),
             "control: a second pair of speakers is not the codec"
         );
     }
@@ -599,14 +697,14 @@ mod tests {
         for tx in ["pipewire", "pulse", "default", "jack", "sysdefault"] {
             for dev in ["default", "pulse", "pipewire", "Default"] {
                 assert!(
-                    would_transmit(dev, &s(&[tx]), Some("default")),
+                    alsa(dev, &s(&[tx]), Some("default")),
                     "TX {tx}, sound on {dev}"
                 );
             }
         }
         assert!(
-            !would_transmit("Speakers", &s(&["pipewire"]), Some("Speakers")),
-            "control: a name of another system is not a route"
+            !ep("pipewire", &s(&["Speakers"]), Some("Speakers")),
+            "control: off Linux these are two device names like any other"
         );
     }
 
@@ -615,18 +713,18 @@ mod tests {
     #[test]
     fn the_sound_servers_default_against_a_tx_card_is_refused_as_unprovable() {
         let tx = s(&["plughw:CARD=CODEC,DEV=0"]);
-        assert!(would_transmit("default", &tx, Some("default")));
+        assert!(alsa("default", &tx, Some("default")));
         assert_eq!(
-            refuse_tx("default", "", &tx, Some("default")),
+            alsa_refuse("default", "", &tx, Some("default")),
             Err(PlayRefusal::TxUnsure)
         );
         assert_eq!(
-            refuse_tx("pipewire", "pipewire", &tx, Some("default")),
+            alsa_refuse("pipewire", "pipewire", &tx, Some("default")),
             Err(PlayRefusal::TxUnsure)
         );
         // The TX is the sound server's default; the sound names a card that may be its sink.
         assert_eq!(
-            refuse_tx(
+            alsa_refuse(
                 "hw:CARD=PCH,DEV=0",
                 "hw:CARD=PCH,DEV=0",
                 &s(&["pulse"]),
@@ -635,7 +733,7 @@ mod tests {
             Err(PlayRefusal::TxUnsure)
         );
         assert_eq!(
-            refuse_tx(
+            alsa_refuse(
                 "hw:CARD=PCH,DEV=0",
                 "hw:CARD=PCH,DEV=0",
                 &tx,
@@ -646,6 +744,105 @@ mod tests {
         );
     }
 
+    /// Linux: a PCM whose routing lives in a config file (`~/.asoundrc`'s `rigtx`, `plug:rigtx`,
+    /// `oss`, a bare `dmix`) cannot be proven different from any card or from the sound server's
+    /// default, so a sound against one is refused, either way round. Only two different cards play.
+    #[test]
+    fn an_alsa_pcm_routed_by_a_config_file_is_never_proven_different() {
+        let none = |_: u32| None;
+        let unsure = Some(PlayRefusal::TxUnsure);
+        // (a) TX on an asoundrc PCM, the sound on the system default.
+        assert_eq!(
+            verdict_with(
+                "default",
+                "",
+                &s(&["rigtx"]),
+                Some("default"),
+                Naming::Alsa,
+                &none
+            ),
+            unsure
+        );
+        // (b) TX on the codec by card, the sound on an asoundrc alias of that codec.
+        for alias in [
+            "js8out",
+            "plug:rigtx",
+            "oss",
+            "dmix",
+            "plughw",
+            "plug:dmix:CODEC",
+        ] {
+            assert_eq!(
+                verdict_with(
+                    alias,
+                    alias,
+                    &s(&["plughw:CARD=CODEC,DEV=0"]),
+                    Some("default"),
+                    Naming::Alsa,
+                    &none
+                ),
+                unsure,
+                "sound on {alias}"
+            );
+        }
+        // (c) TX on the system default, the sound on an asoundrc PCM.
+        assert_eq!(
+            verdict_with(
+                "js8out",
+                "js8out",
+                &s(&[""]),
+                Some("default"),
+                Naming::Alsa,
+                &none
+            ),
+            unsure
+        );
+        // Two different config-file PCMs may reach one card.
+        assert_eq!(
+            verdict_with(
+                "js8out",
+                "js8out",
+                &s(&["rigtx"]),
+                Some("default"),
+                Naming::Alsa,
+                &none
+            ),
+            unsure
+        );
+        assert_eq!(
+            verdict_with(
+                "hw:CARD=PCH,DEV=0",
+                "hw:CARD=PCH,DEV=0",
+                &s(&["plughw:CARD=CODEC,DEV=0"]),
+                Some("default"),
+                Naming::Alsa,
+                &none
+            ),
+            None,
+            "control: two different cards play"
+        );
+    }
+
+    /// Off Linux a device name is only a name: one with a `:` is not read as an ALSA card, so its
+    /// " #N" twin in a list is still the same device, and `pulse` is not a sound server. On Linux
+    /// the ALSA reading applies.
+    #[test]
+    fn alsa_names_are_read_only_on_linux() {
+        assert!(
+            ep("Line:Out", &s(&["Line:Out #2"]), Some("Speakers")),
+            "a name with a colon and its twin are one device"
+        );
+        assert!(!ep("pulse", &s(&["Rig CODEC"]), Some("pulse")), "control");
+        assert_eq!(
+            HOST_NAMING,
+            if cfg!(target_os = "linux") {
+                Naming::Alsa
+            } else {
+                Naming::Endpoint
+            }
+        );
+    }
+
     /// Linux: `hw:1,0` names card 1 by number; the card's id (`/proc/asound/card1/id`) makes it
     /// the same card as `plughw:CARD=CODEC`. A number nobody can resolve may be any card.
     #[test]
@@ -653,28 +850,42 @@ mod tests {
         let ids = |n: u32| (n == 1).then(|| "CODEC".to_string());
         let tx = s(&["plughw:CARD=CODEC,DEV=0"]);
         assert_eq!(
-            verdict_with("hw:1,0", "", &tx, Some("default"), &ids),
+            verdict_with("hw:1,0", "", &tx, Some("default"), Naming::Alsa, &ids),
             Some(PlayRefusal::TxDevice)
         );
         assert_eq!(
-            verdict_with("plughw:CARD=CODEC,DEV=0", "", &s(&["hw:1"]), None, &ids),
+            verdict_with(
+                "plughw:CARD=CODEC,DEV=0",
+                "",
+                &s(&["hw:1"]),
+                None,
+                Naming::Alsa,
+                &ids
+            ),
             Some(PlayRefusal::TxDevice),
             "and the other way round"
         );
         assert_eq!(
-            verdict_with("hw:0,0", "", &tx, Some("default"), &|n| {
+            verdict_with("hw:0,0", "", &tx, Some("default"), Naming::Alsa, &|n| {
                 (n == 0).then(|| "PCH".to_string())
             }),
             None,
             "control: card 0 is another card"
         );
         assert_eq!(
-            verdict_with("hw:5,0", "", &tx, Some("default"), &|_| None),
+            verdict_with("hw:5,0", "", &tx, Some("default"), Naming::Alsa, &|_| None),
             Some(PlayRefusal::TxUnsure),
             "a number that names no card here cannot be told apart"
         );
         assert_eq!(
-            verdict_with("hw:2,0", "", &s(&["plughw:2,0"]), None, &|_| None),
+            verdict_with(
+                "hw:2,0",
+                "",
+                &s(&["plughw:2,0"]),
+                None,
+                Naming::Alsa,
+                &|_| None
+            ),
             Some(PlayRefusal::TxDevice),
             "the same number is the same card, resolved or not"
         );
@@ -686,21 +897,21 @@ mod tests {
     #[test]
     fn a_default_tx_device_is_named_as_the_reason() {
         assert_eq!(
-            refuse_tx("Speakers", "", &s(&["Rig CODEC", ""]), Some("Speakers")),
+            ep_refuse("Speakers", "", &s(&["Rig CODEC", ""]), Some("Speakers")),
             Err(PlayRefusal::TxDefault)
         );
         assert_eq!(
-            refuse_tx("Headphones", "Headphones", &s(&[""]), None),
+            ep_refuse("Headphones", "Headphones", &s(&[""]), None),
             Err(PlayRefusal::TxDefault),
             "a default nobody can name"
         );
         assert_eq!(
-            refuse_tx("default", "", &s(&[""]), Some("default")),
+            alsa_refuse("default", "", &s(&[""]), Some("default")),
             Err(PlayRefusal::TxDefault),
             "Linux: both the sound server's default"
         );
         assert_eq!(
-            refuse_tx(
+            ep_refuse(
                 "Rig CODEC",
                 "Rig CODEC",
                 &s(&["", "Rig CODEC"]),
@@ -710,7 +921,7 @@ mod tests {
             "a named TX device is the stronger reason"
         );
         assert_eq!(
-            refuse_tx("Headphones", "Headphones", &s(&[""]), Some("Speakers")),
+            ep_refuse("Headphones", "Headphones", &s(&[""]), Some("Speakers")),
             Ok(()),
             "control"
         );
@@ -719,20 +930,16 @@ mod tests {
     #[test]
     fn smartsdrs_dax_tx_is_refused_whatever_is_configured() {
         let tx = s(&["Speakers"]);
-        assert!(would_transmit(
-            "DAX Audio TX (FlexRadio Systems DAX TX)",
-            &tx,
-            None
-        ));
+        assert!(ep("DAX Audio TX (FlexRadio Systems DAX TX)", &tx, None));
         assert!(
-            !would_transmit("DAX Audio RX 1 (FlexRadio Systems DAX Audio)", &tx, None),
+            !ep("DAX Audio RX 1 (FlexRadio Systems DAX Audio)", &tx, None),
             "control: DAX RX"
         );
     }
 
     #[test]
     fn a_device_with_no_name_is_refused() {
-        assert!(would_transmit("  ", &s(&["Rig"]), Some("Speakers")));
+        assert!(ep("  ", &s(&["Rig"]), Some("Speakers")));
     }
 
     /// The setting moves AFTER the sound's device was picked: the next play is refused, because
@@ -745,18 +952,18 @@ mod tests {
         };
         let picked = "Speakers";
         assert!(
-            !would_transmit(picked, &tx_audio_devices(&settings), None),
+            !ep(picked, &tx_audio_devices(&settings), None),
             "premise: it plays"
         );
         settings.audio_out = "Speakers".into();
-        assert!(would_transmit(picked, &tx_audio_devices(&settings), None));
+        assert!(ep(picked, &tx_audio_devices(&settings), None));
         settings.audio_out = "Rig CODEC".into();
         settings.radios.push(tempo_app::settings::RadioProfile {
             audio_out: "SPEAKERS".into(),
             ..Default::default()
         });
         assert!(
-            would_transmit(picked, &tx_audio_devices(&settings), None),
+            ep(picked, &tx_audio_devices(&settings), None),
             "a radio added later"
         );
     }
@@ -767,24 +974,24 @@ mod tests {
     fn the_device_that_opens_and_the_name_asked_are_both_checked() {
         let tx = s(&["USB Audio CODEC"]);
         assert_eq!(
-            refuse_tx("USB Audio CODEC", "", &tx, Some("USB Audio CODEC")),
+            ep_refuse("USB Audio CODEC", "", &tx, Some("USB Audio CODEC")),
             Err(PlayRefusal::TxDevice)
         );
         assert_eq!(
-            refuse_tx("USB Audio CODEC", "Codec (renamed)", &tx, None),
+            ep_refuse("USB Audio CODEC", "Codec (renamed)", &tx, None),
             Err(PlayRefusal::TxDevice)
         );
         assert_eq!(
-            refuse_tx("Speakers", "usb audio codec", &tx, None),
+            ep_refuse("Speakers", "usb audio codec", &tx, None),
             Err(PlayRefusal::TxDevice)
         );
         assert_eq!(
-            refuse_tx("Speakers", "Speakers", &tx, None),
+            ep_refuse("Speakers", "Speakers", &tx, None),
             Ok(()),
             "control"
         );
         assert_eq!(
-            refuse_tx("Speakers", "", &tx, Some("Speakers")),
+            ep_refuse("Speakers", "", &tx, Some("Speakers")),
             Ok(()),
             "control: the default"
         );

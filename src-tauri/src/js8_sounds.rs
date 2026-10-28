@@ -91,8 +91,9 @@ pub enum SoundRefusal {
     /// The output is the system default, and a TX audio device (the station's or a radio
     /// profile's) is set to the system default too (VOX safety).
     TxDefault,
-    /// The output cannot be told apart from a TX audio device by name (Linux: the sound server's
-    /// default against a sound card), so it is refused (VOX safety).
+    /// The output cannot be proven different from a TX audio device by name (Linux: anything but
+    /// two different sound cards, such as the sound server's default or an `~/.asoundrc` device),
+    /// so it is refused (VOX safety).
     TxUnsure,
     /// No such output here.
     NoDevice,
@@ -441,13 +442,15 @@ mod tests {
     /// VOX SAFETY, end to end on this side: the route a play takes from Settings hands the guard
     /// every TX audio device, so the operator's output set to one of them (by any spelling, the
     /// station's or a radio profile's, chosen before or after the TX device) refuses the sound.
+    /// The device names are ALSA cards, which are two different devices by the rule of every
+    /// platform (on Linux two cards, elsewhere two names), so the test reads the same on each.
     #[cfg(feature = "radio")]
     #[test]
     fn a_sound_routed_to_a_tx_audio_device_is_refused() {
         use tempo_audio::notify_sound::{refuse_tx, PlayRefusal};
         let mut settings = Settings {
-            audio_out: "USB Audio CODEC".into(),
-            js8_sound_device: "Speakers".into(),
+            audio_out: "plughw:CARD=CODEC,DEV=0".into(),
+            js8_sound_device: "hw:CARD=PCH,DEV=0".into(),
             ..Default::default()
         };
         let verdict = |s: &Settings| {
@@ -455,15 +458,15 @@ mod tests {
             refuse_tx(&device, &device, &tx, None)
         };
         assert_eq!(verdict(&settings), Ok(()), "control: another output plays");
-        settings.js8_sound_device = "usb audio codec".into();
+        settings.js8_sound_device = "PLUGHW:CARD=codec,DEV=0".into();
         assert_eq!(
             verdict(&settings),
             Err(PlayRefusal::TxDevice),
             "the station's TX device"
         );
-        settings.js8_sound_device = "Rig 2 CODEC".into();
+        settings.js8_sound_device = "plughw:CARD=CODEC_1,DEV=0".into();
         settings.radios.push(tempo_app::settings::RadioProfile {
-            audio_out: "Rig 2 CODEC".into(),
+            audio_out: "plughw:CARD=CODEC_1,DEV=0".into(),
             ..Default::default()
         });
         assert_eq!(
@@ -473,7 +476,7 @@ mod tests {
         );
         settings.radios.clear();
         assert_eq!(verdict(&settings), Ok(()), "control: that radio removed");
-        settings.audio_out = "Rig 2 CODEC".into();
+        settings.audio_out = "plughw:CARD=CODEC_1,DEV=0".into();
         assert_eq!(
             verdict(&settings),
             Err(PlayRefusal::TxDevice),
@@ -484,13 +487,14 @@ mod tests {
     /// Settings' Test plays on the output the FORM holds (unsaved), and refuses it against the TX
     /// audio devices as saved AND as the form holds them: an edit to either side is checked
     /// before Save, and neither can let a sound through that the other refuses.
+    /// ALSA card names, for the reason the test above gives.
     #[cfg(feature = "radio")]
     #[test]
     fn test_plays_on_the_forms_output_against_both_tx_lists() {
         use tempo_audio::notify_sound::{refuse_tx, PlayRefusal};
         let saved = Settings {
-            audio_out: "USB Audio CODEC".into(),
-            js8_sound_device: "Speakers".into(),
+            audio_out: "plughw:CARD=CODEC,DEV=0".into(),
+            js8_sound_device: "hw:CARD=PCH,DEV=0".into(),
             ..Default::default()
         };
         let verdict = |device: Option<&str>, form_tx: Option<Vec<String>>| {
@@ -498,22 +502,33 @@ mod tests {
             (device.clone(), refuse_tx(&device, &device, &tx, None))
         };
         assert_eq!(
-            verdict(Some("Headphones"), Some(vec!["Rig CODEC".into()])),
-            ("Headphones".to_string(), Ok(())),
+            verdict(
+                Some("hw:CARD=Headset,DEV=0"),
+                Some(vec!["plughw:CARD=CODEC_2,DEV=0".into()])
+            ),
+            ("hw:CARD=Headset,DEV=0".to_string(), Ok(())),
             "the form's output, not the saved one"
         );
         assert_eq!(
             verdict(None, None),
-            ("Speakers".to_string(), Ok(())),
+            ("hw:CARD=PCH,DEV=0".to_string(), Ok(())),
             "no form: the saved output"
         );
         assert_eq!(
-            verdict(Some("usb audio codec"), Some(vec!["Rig CODEC".into()])).1,
+            verdict(
+                Some("PLUGHW:CARD=codec,DEV=0"),
+                Some(vec!["plughw:CARD=CODEC_2,DEV=0".into()])
+            )
+            .1,
             Err(PlayRefusal::TxDevice),
             "the saved TX device, though the form moved TX elsewhere"
         );
         assert_eq!(
-            verdict(Some("Headphones"), Some(vec!["Headphones".into()])).1,
+            verdict(
+                Some("hw:CARD=Headset,DEV=0"),
+                Some(vec!["hw:CARD=Headset,DEV=0".into()])
+            )
+            .1,
             Err(PlayRefusal::TxDevice),
             "the form's TX device, before Save"
         );

@@ -57,7 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sound, so a sound is refused even if a radio's TX audio device is changed to that output later, and says so. Two
   identically named sound cards count as one device. On Linux, the sound server's default output (default, PulseAudio,
   PipeWire) may be the radio's card, so the sounds play only on a sound card picked by name, and only while the radio's
-  TX audio is set to its own card by name. With a radio's TX audio set to the system default (or a radio profile with none), pick a
+  TX audio is set to its own, different card by name. A device whose route is set in a sound configuration file (one of
+  your own from ~/.asoundrc, or plug:, oss, a bare dmix) may reach any card, so a sound is refused against it either way
+  round. With a radio's TX audio set to the system default (or a radio profile with none), pick a
   specific output for the sounds. A sound plays at most ten seconds, one at a time, and Test plays on the output chosen
   in the form before Save. All sounds stay off by default. The sound files and **Play the sounds on** are set at the station: from a computer driving it over
   Remote they show the station's choice and say "Set at the station".
