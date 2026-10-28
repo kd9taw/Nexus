@@ -127,6 +127,13 @@ export function Js8ListsSettings({
   )
   const isTx = (d: string) => txDevices.has(d.trim().toLowerCase())
   const deviceOptions = device && !outputs.includes(device) ? [device, ...outputs] : [...outputs]
+  // Test plays on the output the form holds, before Save, refused in Rust against the form's TX audio
+  // devices as well as the saved ones. Not from a computer driving the station: there the output is
+  // the station's, and Test plays on the saved one.
+  const testRoute =
+    setSoundDevice && !locked?.('js8SoundDevice')
+      ? { device, txDevices: [form.audioOut ?? '', ...(form.radios ?? []).map((r) => r.audioOut ?? '')] }
+      : undefined
   return (
     <>
       <div className="settings-featgroup">
@@ -217,7 +224,7 @@ export function Js8ListsSettings({
               <button
                 type="button"
                 className="settings-refresh js8-sound-test"
-                onClick={() => void playJs8Sound(ev, file, true)}
+                onClick={() => void playJs8Sound(ev, file, true, testRoute)}
                 aria-label={t('settings.js8.sound.test.aria', { event: label })}
                 title={t('settings.js8.sound.test.title')}
               >

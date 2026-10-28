@@ -209,13 +209,17 @@ pub async fn pick_js8_sound_file(app: AppHandle) -> Option<String> {
 }
 
 /// Play `event`'s sound here: `file` (the form's, so Test plays an unsaved pick) or its tone, on
-/// Settings' `js8SoundDevice`, unless that is a TX device. `Ok` says whether a file fell back to
-/// the tone; `Err` is that nothing played.
+/// Settings' `js8SoundDevice`, unless that is a TX device. Settings' Test hands the form's output
+/// (`device`) and the form's TX audio devices (`tx_devices`), so it plays where the form says before
+/// Save; that output is refused against the saved TX devices AND the form's. `Ok` says whether a
+/// file fell back to the tone; `Err` is that nothing played.
 #[tauri::command]
 pub async fn play_js8_sound(
     state: State<'_, SharedEngine>,
     event: Js8SoundEvent,
     file: Option<String>,
+    device: Option<String>,
+    tx_devices: Option<Vec<String>>,
 ) -> Result<SoundPlayed, SoundRefusal> {
     let settings = crate::with_engine(&state, |eng| eng.settings().clone())
         .await
@@ -223,7 +227,7 @@ pub async fn play_js8_sound(
     tauri::async_runtime::spawn_blocking(move || {
         let picked = PICKED.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let (clip, file_refused) = clip_for(&settings, event, file.as_deref(), &picked);
-        play_on(&settings, clip)?;
+        play_on(&settings, device, tx_devices, clip)?;
         Ok(SoundPlayed { file_refused })
     })
     .await
@@ -231,21 +235,33 @@ pub async fn play_js8_sound(
 }
 
 /// Where a sound goes and what it must never reach, from the settings as they are at this play: the
-/// operator's output (`js8SoundDevice`), and every TX audio device the station has configured.
+/// operator's output (`js8SoundDevice`, or the form's from Settings' Test), and every TX audio
+/// device the station has configured, with the form's added from Test: never fewer than saved.
 #[cfg(feature = "radio")]
-fn sound_route(settings: &Settings) -> (&str, Vec<String>) {
+fn sound_route(
+    settings: &Settings,
+    form_device: Option<String>,
+    form_tx: Option<Vec<String>>,
+) -> (String, Vec<String>) {
+    let mut tx = tempo_audio::notify_sound::tx_audio_devices(settings);
+    tx.extend(form_tx.unwrap_or_default());
     (
-        &settings.js8_sound_device,
-        tempo_audio::notify_sound::tx_audio_devices(settings),
+        form_device.unwrap_or_else(|| settings.js8_sound_device.clone()),
+        tx,
     )
 }
 
 /// Play `clip` on the operator's output, refused on a TX device (`tempo_audio::notify_sound`).
 #[cfg(feature = "radio")]
-fn play_on(settings: &Settings, clip: SoundClip) -> Result<(), SoundRefusal> {
+fn play_on(
+    settings: &Settings,
+    form_device: Option<String>,
+    form_tx: Option<Vec<String>>,
+    clip: SoundClip,
+) -> Result<(), SoundRefusal> {
     use tempo_audio::notify_sound::{play, PlayRefusal};
-    let (device, tx_devices) = sound_route(settings);
-    play(device, tx_devices, clip.rate, clip.samples).map_err(|e| match e {
+    let (device, tx_devices) = sound_route(settings, form_device, form_tx);
+    play(&device, tx_devices, clip.rate, clip.samples).map_err(|e| match e {
         PlayRefusal::TxDevice => SoundRefusal::TxDevice,
         PlayRefusal::TxDefault => SoundRefusal::TxDefault,
         PlayRefusal::TxUnsure => SoundRefusal::TxUnsure,
@@ -259,7 +275,12 @@ fn play_on(settings: &Settings, clip: SoundClip) -> Result<(), SoundRefusal> {
 
 /// A build without the radio has no sound devices.
 #[cfg(not(feature = "radio"))]
-fn play_on(_settings: &Settings, _clip: SoundClip) -> Result<(), SoundRefusal> {
+fn play_on(
+    _settings: &Settings,
+    _form_device: Option<String>,
+    _form_tx: Option<Vec<String>>,
+    _clip: SoundClip,
+) -> Result<(), SoundRefusal> {
     Err(SoundRefusal::NoDevice)
 }
 
@@ -411,8 +432,8 @@ mod tests {
             ..Default::default()
         };
         let verdict = |s: &Settings| {
-            let (device, tx) = sound_route(s);
-            refuse_tx(device, device, &tx, None)
+            let (device, tx) = sound_route(s, None, None);
+            refuse_tx(&device, &device, &tx, None)
         };
         assert_eq!(verdict(&settings), Ok(()), "control: another output plays");
         settings.js8_sound_device = "usb audio codec".into();
@@ -438,6 +459,44 @@ mod tests {
             verdict(&settings),
             Err(PlayRefusal::TxDevice),
             "the TX device changed to it after the output was picked"
+        );
+    }
+
+    /// Settings' Test plays on the output the FORM holds (unsaved), and refuses it against the TX
+    /// audio devices as saved AND as the form holds them: an edit to either side is checked
+    /// before Save, and neither can let a sound through that the other refuses.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn test_plays_on_the_forms_output_against_both_tx_lists() {
+        use tempo_audio::notify_sound::{refuse_tx, PlayRefusal};
+        let saved = Settings {
+            audio_out: "USB Audio CODEC".into(),
+            js8_sound_device: "Speakers".into(),
+            ..Default::default()
+        };
+        let verdict = |device: Option<&str>, form_tx: Option<Vec<String>>| {
+            let (device, tx) = sound_route(&saved, device.map(String::from), form_tx);
+            (device.clone(), refuse_tx(&device, &device, &tx, None))
+        };
+        assert_eq!(
+            verdict(Some("Headphones"), Some(vec!["Rig CODEC".into()])),
+            ("Headphones".to_string(), Ok(())),
+            "the form's output, not the saved one"
+        );
+        assert_eq!(
+            verdict(None, None),
+            ("Speakers".to_string(), Ok(())),
+            "no form: the saved output"
+        );
+        assert_eq!(
+            verdict(Some("usb audio codec"), Some(vec!["Rig CODEC".into()])).1,
+            Err(PlayRefusal::TxDevice),
+            "the saved TX device, though the form moved TX elsewhere"
+        );
+        assert_eq!(
+            verdict(Some("Headphones"), Some(vec!["Headphones".into()])).1,
+            Err(PlayRefusal::TxDevice),
+            "the form's TX device, before Save"
         );
     }
 

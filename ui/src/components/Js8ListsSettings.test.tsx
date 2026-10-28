@@ -120,6 +120,30 @@ describe('the JS8 lists, marks and sounds in Settings', () => {
     expect(api.playJs8SoundHere).toHaveBeenCalledWith('ack', 'C:\\Sounds\\ack.wav')
   })
 
+  it('Test plays on the output the form holds, before Save, checked against the form’s TX audio devices as well', async () => {
+    const props = {
+      form: { audioOut: 'USB Audio CODEC', radios: [{ audioOut: '' }], js8SoundDevice: 'Headphones' } as unknown as Settings,
+      setList: vi.fn(),
+      setMark: vi.fn(),
+      setSounds: vi.fn(),
+      setReset: vi.fn(),
+      outputs: ['Speakers', 'Headphones'],
+      setSoundDevice: vi.fn(),
+    }
+    const { unmount } = render(<Js8ListsSettings {...props} />)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Test the sound for A heartbeat' }))
+    })
+    expect(api.playJs8SoundHere).toHaveBeenLastCalledWith('hb', null, { device: 'Headphones', txDevices: ['USB Audio CODEC', ''] })
+    unmount()
+    // From a computer driving the station the output is the station's: Test plays on the saved one.
+    render(<Js8ListsSettings {...props} locked={(k) => k === 'js8SoundDevice'} />)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Test the sound for A heartbeat' }))
+    })
+    expect(api.playJs8SoundHere).toHaveBeenLastCalledWith('hb', null)
+  })
+
   it('picks the sounds’ output: the system default first, the radio’s TX audio devices shown but not choosable', () => {
     const setSoundDevice = vi.fn()
     render(

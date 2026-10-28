@@ -18,7 +18,7 @@
 import type { Js8ActivityRow, Js8Heard, Js8InboxEntry } from '../types'
 import { addresseeOf } from './js8Lists'
 import { js8BaseCall } from '../js8Vocab'
-import { playJs8SoundHere } from '../api'
+import { playJs8SoundHere, type Js8SoundRoute } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 
@@ -154,12 +154,13 @@ function nothingPlayed(reason: unknown): string {
  * Play one event's sound: its WAV file when one is set (Settings `js8SoundFiles`), else its built-in
  * tone, on the operator's sound output. A file that cannot be played plays the tone instead and is
  * named once per event and file; a sound that cannot play at all (its output is a TX audio device, or
- * gone) is named once per reason. `always` names either every time, for Settings' Test.
+ * gone) is named once per reason. `always` names either every time, for Settings' Test, and `route`
+ * is the output and TX audio devices the Settings form holds, so Test plays where the form says.
  */
-export async function playJs8Sound(ev: Js8SoundEvent, file?: string | null, always = false): Promise<void> {
+export async function playJs8Sound(ev: Js8SoundEvent, file?: string | null, always = false, route?: Js8SoundRoute): Promise<void> {
   const path = file?.trim() || null
   try {
-    const played = await playJs8SoundHere(ev, path)
+    const played = route ? await playJs8SoundHere(ev, path, route) : await playJs8SoundHere(ev, path)
     if (path && played?.fileRefused) {
       const key = `${ev}\n${path}`
       if (always || !told.has(key)) {
