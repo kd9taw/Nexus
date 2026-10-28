@@ -3,7 +3,8 @@
 // BLANK GRIDS — the Logbook's offer to fill a grid Nexus knows into contacts logged with none.
 // It changes nothing until the operator ticks contacts and confirms; it then sends exactly the
 // ticked ones, each with its grid and where the grid came from, so a callbook grid is filled as the
-// callbook's (for the distance and the map only). Each row says where its grid came from — heard
+// callbook's (for the distance and the map only). Tick all ticks only the rows shown, and the
+// confirm says how many of the ticked grids count and how many are for the map only. Each row says where its grid came from — heard
 // on the air, or the home QTH from the callbook — and whether the contact was already uploaded.
 // Driving another station, nothing that changes the log can be pressed.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
@@ -17,7 +18,7 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('../api', () => api)
 
-import { LogGridFill } from './LogGridFill'
+import { LogGridFill, ROWS_SHOWN } from './LogGridFill'
 
 beforeEach(() => {
   for (const f of Object.values(api)) f.mockReset()
@@ -58,6 +59,37 @@ describe('blank grids', () => {
       { id: 'b', grid: 'FN42ab', source: 'callbook' },
     ]))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
+  })
+
+  it('ticks all of the rows shown and no other: nothing is filled that was not seen', async () => {
+    const many: LogGridOffer[] = Array.from({ length: ROWS_SHOWN + 1 }, (_, i) => ({
+      id: `r${i}`, call: `K${i}AA`, whenUnix: 1_767_268_800, band: '20m', mode: 'FT8', grid: 'FN31', source: 'heard', uploaded: false,
+    }))
+    api.findLogGridOffers.mockResolvedValue({ blank: many.length, offers: many })
+    api.fillLogGrids.mockResolvedValue(made)
+    render(<LogGridFill onChanged={() => {}} afar={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Find blank grids' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: `Tick all: ${ROWS_SHOWN}` }))
+    fireEvent.click(screen.getByRole('button', { name: `Fill the ticked: ${ROWS_SHOWN}` }))
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, fill them' }))
+    await waitFor(() => expect(api.fillLogGrids).toHaveBeenCalled())
+    const picks = api.fillLogGrids.mock.calls[0][0] as { id: string }[]
+    expect(picks).toHaveLength(ROWS_SHOWN)
+    expect(picks.some((p) => p.id === `r${ROWS_SHOWN}`)).toBe(false)
+  })
+
+  it('the confirm says how many ticked grids count and how many are for the map only', async () => {
+    api.findLogGridOffers.mockResolvedValue({ blank: 2, offers })
+    render(<LogGridFill onChanged={() => {}} afar={false} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Find blank grids' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Tick all: 2' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Fill the ticked: 2' }))
+    expect(
+      screen.getByText(
+        'Fill the grids of the ticked contacts (2)? Heard on the air, counted like any logged grid: 1. ' +
+          'Home QTH (callbook), for the distance and the map only: 1. It is one change you can undo.',
+      ),
+    ).toBeTruthy()
   })
 
   it('driving another station, nothing can be filled', async () => {

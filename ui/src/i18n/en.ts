@@ -2335,7 +2335,7 @@ export const EN = {
     other: '{{count}} more not shown; ticking all of the kind includes them',
   },
   // Blank grids (LogGridFill.tsx): calls, grids and bands are tokens; ALL.TXT and GRID are names.
-  'logbook.tools.grids.intro': 'Contacts logged with no grid, where Nexus knows the station’s grid: the one it sent on the air, heard by Nexus (ALL.TXT, or this session), else its home QTH from a callbook lookup already made (a call with no stroke and no park, from the last 12 months). Only the contacts you tick are filled. A heard grid counts like any logged grid. A callbook grid is kept for the distance and the map only: it counts toward no grid award, fills no GRID need and is sent to no logging service. A contact already uploaded keeps its upload marks, as with every change here: nothing is sent again, and each service keeps what it was sent.',
+  'logbook.tools.grids.intro': 'Contacts logged with no grid, where Nexus knows the station’s grid: the one it sent on the air, heard by Nexus within 24 hours of the contact (ALL.TXT, or this session), else its home QTH from a callbook lookup already made (a call with no stroke and no park, from the last 12 months). Only the contacts you tick are filled. A heard grid counts like any logged grid. A callbook grid is kept for the distance and the map only: it counts toward no grid award, fills no GRID need and is sent to no logging service. A contact already uploaded keeps its upload marks, as with every change here: nothing is sent again, and each service keeps what it was sent.',
   'logbook.tools.grids.run': 'Find blank grids',
   'logbook.tools.grids.failed': 'The blank grids could not be found',
   'logbook.tools.grids.found': 'With a grid known: {{count}} (of {{blank}} contacts with no grid)',
@@ -2344,11 +2344,11 @@ export const EN = {
   'logbook.tools.grids.uploaded': 'already uploaded: nothing is sent again',
   'logbook.tools.grids.tickAll': 'Tick all: {{count}}',
   'logbook.tools.grids.apply': 'Fill the ticked: {{count}}',
-  'logbook.tools.grids.ask': 'Fill the grids of the ticked contacts ({{count}})? It is one change you can undo.',
+  'logbook.tools.grids.ask': 'Fill the grids of the ticked contacts ({{count}})? Heard on the air, counted like any logged grid: {{heard}}. Home QTH (callbook), for the distance and the map only: {{callbook}}. It is one change you can undo.',
   'logbook.tools.grids.confirm': 'Yes, fill them',
   'logbook.tools.grids.applyFailed': 'The grids could not be filled',
   'logbook.tools.grids.done': 'Grids filled: {{count}}',
-  'logbook.tools.grids.more': 'Not shown: {{count}} more. Ticking all includes them.',
+  'logbook.tools.grids.more': 'Not shown: {{count}} more. Tick all ticks only the contacts shown: fill those, then find blank grids again for the rest.',
   // A contact's history, in the QSO detail view: each change, who made it, and its undo.
   'qso.history.title': 'History',
   'qso.history.empty': 'No changes recorded.',

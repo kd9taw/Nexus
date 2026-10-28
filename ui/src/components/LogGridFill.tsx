@@ -1,5 +1,6 @@
 // BLANK GRIDS — contacts logged with no grid where Nexus knows the station's grid: the one it SENT
-// ON THE AIR (heard by Nexus: ALL.TXT, or this session), else its home QTH from a callbook lookup
+// ON THE AIR (heard by Nexus, in ALL.TXT or this session, within 24 hours of the contact), else its
+// home QTH from a callbook lookup
 // already made (a call with no stroke and no park only, from the last 12 months). Nothing is
 // changed until the operator ticks a contact and confirms: only the ticked ones are filled, as one
 // change the toast's Undo takes back. A heard grid counts as any logged grid; a callbook's is
@@ -16,7 +17,8 @@ import { withErrorToast } from '../toast'
 import { utcDate } from '../features/utcLog'
 import { changesRefusedHere, sayRun } from '../features/logCleanup'
 
-/** How many rows the list shows; "Tick all" still ticks every one. */
+/** How many rows the list shows. "Tick all" ticks these and no other: nothing is filled that the
+ *  operator has not seen. */
 export const ROWS_SHOWN = 200
 
 export function LogGridFill({ onChanged, afar }: { onChanged: () => void; afar: boolean }) {
@@ -67,7 +69,11 @@ export function LogGridFill({ onChanged, afar }: { onChanged: () => void; afar: 
     void run()
   }
 
-  const all = offers !== null && offers.length > 0 && offers.every((o) => ticked.has(o.id))
+  const shown = offers?.slice(0, ROWS_SHOWN) ?? []
+  const all = shown.length > 0 && shown.every((o) => ticked.has(o.id))
+  // The confirm says how many of the ticked grids count (heard) and how many are for the map only
+  // (callbook).
+  const tickedHeard = offers?.filter((o) => ticked.has(o.id) && o.source === 'heard').length ?? 0
   return (
     <div className="log-tools-pane">
       <p className="qso-detail-bare">{t('logbook.tools.grids.intro')}</p>
@@ -88,9 +94,9 @@ export function LogGridFill({ onChanged, afar }: { onChanged: () => void; afar: 
               <input
                 type="checkbox"
                 checked={all}
-                onChange={(e) => toggle(offers.map((o) => o.id), e.target.checked)}
+                onChange={(e) => toggle(shown.map((o) => o.id), e.target.checked)}
               />{' '}
-              {t('logbook.tools.grids.tickAll', { count: offers.length })}
+              {t('logbook.tools.grids.tickAll', { count: shown.length })}
             </label>
             <button
               type="button"
@@ -102,7 +108,13 @@ export function LogGridFill({ onChanged, afar }: { onChanged: () => void; afar: 
             </button>
             {asking && (
               <span className="log-tools-confirm">
-                <span>{t('logbook.tools.grids.ask', { count: ticked.size })}</span>
+                <span>
+                  {t('logbook.tools.grids.ask', {
+                    count: ticked.size,
+                    heard: tickedHeard,
+                    callbook: ticked.size - tickedHeard,
+                  })}
+                </span>
                 <button type="button" className="export-btn danger" disabled={busy} onClick={() => void apply()}>
                   {t('logbook.tools.grids.confirm')}
                 </button>
@@ -113,7 +125,7 @@ export function LogGridFill({ onChanged, afar }: { onChanged: () => void; afar: 
             )}
           </div>
           <ul className="log-tools-list">
-            {offers.slice(0, ROWS_SHOWN).map((o) => (
+            {shown.map((o) => (
               <li key={o.id} className="log-tools-copy">
                 <label>
                   <input
