@@ -11146,12 +11146,15 @@ impl Engine {
     /// SELECT = REAR). Which one works depends on how THAT radio's menus are set, so it is the
     /// operator's per-radio choice ([`crate::settings::RadioProfile::aprs_data_fm`]), off by
     /// default: plain FM stays what an APRS setup that already works gets. Hamlib's `PKTFM` is
-    /// `MD0A;` (DATA-FM) on that radio. Obeyed only on a model
+    /// `MD0A;` (DATA-FM) on that radio. The Icoms with a 2 m FM-D (IC-7100, IC-9700, IC-705,
+    /// IC-905) take the same switch: `PKTFM` is FM with Data mode ON there, over Hamlib and over
+    /// the native CI-V daemon alike. Obeyed only on a model
     /// [`crate::settings::aprs_data_fm_available`] names, so a switch left on in a profile whose
     /// model changed commands nothing new. The mic-jack opt-out
     /// ([`crate::settings::Settings::plain_ssb_if_configured`]) still turns it back into `FM`.
     ///
-    /// ⚠️ NEEDS-BENCH: an FT-991A beaconing and decoding APRS in DATA-FM with its USB codec.
+    /// ⚠️ NEEDS-BENCH: an FT-991A beaconing and decoding APRS in DATA-FM with its USB codec, and
+    /// each of those Icoms in FM-D (the radio's DATA MOD input set to USB).
     fn aprs_mode_word(&self) -> String {
         if self.settings.aprs_data_fm
             && crate::settings::aprs_data_fm_available(self.settings.rig_model)
@@ -63944,14 +63947,26 @@ mod tests {
 
         // CONTROL, one radio at a time so routing cannot pick: with the switch ON, only a radio
         // that has the mode takes it; a switch left on in a profile whose model changed commands
-        // nothing new. The same scene on a 991A is the positive.
+        // nothing new. The FT-991A and the four Icoms with a 2 m FM-D are the positives, each
+        // with its switch-off control beside it. The IC-9100 (Hamlib does not list FM-D for it),
+        // the ID-5100 (Hamlib refuses the word) and the ID-4100 (Hamlib sends plain FM for it)
+        // stay in plain FM with the switch on.
         for (model, on, want) in [
-            (3081u32, true, "FM"),
-            (3085, true, "FM"),
-            (1051, true, "FM"),
+            (1051u32, true, "FM"),
             (1036, true, "FM"),
+            (3068, true, "FM"),
+            (3071, true, "FM"),
+            (3082, true, "FM"),
             (1035, false, "FM"),
             (1035, true, "PKTFM"),
+            (3070, false, "FM"),
+            (3070, true, "PKTFM"),
+            (3081, false, "FM"),
+            (3081, true, "PKTFM"),
+            (3085, false, "FM"),
+            (3085, true, "PKTFM"),
+            (3090, false, "FM"),
+            (3090, true, "PKTFM"),
         ] {
             let mut one = Engine::new("KD9TAW", "EN52", 0);
             one.settings.ensure_radio_profiles();

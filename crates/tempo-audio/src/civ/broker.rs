@@ -1225,6 +1225,7 @@ impl RigBackend for CivBackend {
                 .and_then(|f| commands::parse_mode(&f))
         };
         let st = self.h.state();
+        let read_ok = reply.is_some(); // Main selected and the `04` answered
         let (mode, _filter) = match reply {
             Some(m) => m,
             // By name, a failed read serves Main's last by-name reading — never the cache,
@@ -1241,11 +1242,26 @@ impl RigBackend for CivBackend {
         // this read-back against the mode it commanded, and a rig answering a bare "FM" to a
         // commanded PKTFM reads as a mode mismatch.
         //
-        // ⚠️ All three arms need `data_mode`, which the state cache only ever learns from a
-        // RECEIVED `1A 06` frame (a transceive push): nothing here solicits one, so in
-        // practice this reports the plain mode today. Adding FM keeps the three consistent
-        // rather than leaving one to answer differently the day something does read it.
-        let name = match (mode, st.data_mode.unwrap_or(false)) {
+        // ⚠️ The USB/LSB arms need `data_mode`, which the state cache only ever learns from a
+        // RECEIVED `1A 06` frame (a transceive push): nothing solicits one for them, so they
+        // report the plain mode (`parse_band_mode` says why that stays). FM asks: on a radio
+        // whose `26 00` reads the VFO `04` just read, the DATA byte of that reply decides FM-D,
+        // so APRS and SSTV in FM-D read back as the `PKTFM` they commanded. Only after a `04` that
+        // answered (Main selected — never on a stranded selection), only FM pays the extra frame,
+        // and `26` replies are not folded into the cache. A failed read keeps the cache's answer.
+        let fm_data = (read_ok
+            && mode == Mode::Fm
+            && !by_name
+            && self.model.is_some_and(commands::selected_mode_by_26))
+        .then(|| {
+            let band = commands::BAND_MAIN; // `00`: the selected VFO on these radios
+            self.read(commands::read_band_mode(self.addr, band), 0x26, Some(band))
+                .ok()
+                .and_then(|f| commands::parse_band_data_mode(&f, band))
+        })
+        .flatten()
+        .map(|d| d != 0);
+        let name = match (mode, fm_data.or(st.data_mode).unwrap_or(false)) {
             (Mode::Usb, true) => "PKTUSB".to_string(),
             (Mode::Lsb, true) => "PKTLSB".to_string(),
             (Mode::Fm, true) => "PKTFM".to_string(),
@@ -2834,15 +2850,12 @@ mod tests {
                 "…with the DATA flag ON, which is what routes the USB codec to the modulator"
             );
         }
-        // The `m` read-back still says "FM" here, and that is NOT this change failing: the
-        // state cache only learns the DATA flag from a RECEIVED `1A 06` frame (a transceive
-        // push), and nothing in the tree solicits one — so the same is true of PKTUSB today.
-        // The reporting arm is added for symmetry with the USB/LSB ones, and is asserted only
-        // as far as this fake can honestly prove it.
+        // The `m` read-back names FM-D: in FM the daemon asks the radio's own `26 00` for the
+        // DATA byte (see `CivBackend::mode`).
         assert_eq!(
             backend.mode().0,
-            "FM",
-            "emission reported from the mode byte"
+            "PKTFM",
+            "FM with the radio's DATA flag on reads back as FM-D"
         );
 
         assert!(backend.set_mode("FM", 0), "plain FM still works");
@@ -2856,6 +2869,75 @@ mod tests {
             );
         }
         assert_eq!(backend.mode().0, "FM");
+    }
+
+    /// "APRS uses DATA-FM" on the native Icoms with a 2 m FM-D (IC-9700, IC-705, IC-905): the
+    /// engine commands `PKTFM`, and the daemon must leave the radio in FM with DATA on and say so.
+    ///
+    /// Each radio's own CI-V reference: operating mode `05` = FM, and `1A 06` "Data mode with
+    /// filter width settings", first byte `01` = Data mode ON, second `01` = FIL1 (IC-9700
+    /// A7508-3EX-4 PDF p. 19; IC-705 A7560-8EX-6 p. 23; IC-905 A7711-9EX-2 p. 24). The read-back
+    /// is `26 00` "Selected or unselected VFO's operating mode and filter settings", `26 00
+    /// <mode> <data> <filter>` (IC-9700 p. 24): `05 01` is FM-D, `05 00` plain FM. The DATA
+    /// byte is asked only when the mode is FM, so every other mode's `m` poll keeps its one
+    /// `04` frame.
+    ///
+    /// ⚠️ NEEDS-BENCH: an IC-9700, IC-705 and IC-905 beaconing and decoding APRS in FM-D.
+    #[test]
+    fn aprs_fm_d_is_written_and_read_back_on_each_native_2m_icom() {
+        for (addr, model) in [
+            (0xA2u8, IcomModel::Ic9700),
+            (0xA4, IcomModel::Ic705),
+            (0xAC, IcomModel::Ic905),
+        ] {
+            let (_e, b, regs) = backend_on(addr, Some(model));
+            {
+                let mut r = regs.lock().unwrap();
+                (r.main_mode, r.data_mode) = (0x05, false); // in plain FM
+            }
+            let n = regs.lock().unwrap().log.len();
+            assert!(b.set_mode("PKTFM", 0), "{model:?}: M PKTFM refused");
+            let writes: Vec<String> = regs.lock().unwrap().log[n..]
+                .iter()
+                .filter(|(c, d)| {
+                    *c == 0x06
+                        || (*c == 0x26 && d.len() > 1)
+                        || (*c == 0x1A && d.first() == Some(&0x06) && d.len() > 1)
+                })
+                .map(|(c, d)| {
+                    std::iter::once(c)
+                        .chain(d.iter())
+                        .map(|b| format!("{b:02X}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect();
+            assert_eq!(
+                writes,
+                ["06 05", "1A 06 01 01"],
+                "{model:?}: the FM-D bytes"
+            );
+            assert_eq!(b.mode().0, "PKTFM", "{model:?}: read back as FM-D");
+
+            // The radio's own state, set at its front panel: FM-D reads as PKTFM, plain FM as FM.
+            regs.lock().unwrap().data_mode = false;
+            assert_eq!(b.mode().0, "FM", "{model:?}: plain FM reads back as FM");
+            regs.lock().unwrap().data_mode = true;
+            assert_eq!(b.mode().0, "PKTFM", "{model:?}: FM-D from the panel");
+
+            // Outside FM the poll is the one `04` frame it always was.
+            {
+                let mut r = regs.lock().unwrap();
+                (r.main_mode, r.data_mode) = (0x01, true);
+            }
+            let n = regs.lock().unwrap().log.len();
+            assert_eq!(b.mode().0, "USB", "{model:?}: USB-D still reads as before");
+            let reads: Vec<u8> = regs.lock().unwrap().log[n..]
+                .iter()
+                .map(|(c, _)| *c)
+                .collect();
+            assert_eq!(reads, [0x04], "{model:?}: no extra frame outside FM");
+        }
     }
 
     #[test]
