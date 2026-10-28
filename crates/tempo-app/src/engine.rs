@@ -5486,6 +5486,11 @@ const APRS_DUPE_MERGE_SECS: i64 = 30;
 /// retention work — the cap is a memory ceiling, not a policy.
 pub const APRS_STATION_CAP: usize = 2000;
 
+/// Cap on one station's TRACK ([`AprsStation::track`]), in points. A mobile beaconing every minute
+/// fills the default hour's window with about sixty; the cap is a memory ceiling for the faster
+/// ones (a balloon or a car on a 20-second SmartBeaconing rate), and the oldest point goes first.
+pub const APRS_TRACK_CAP: usize = 120;
+
 /// Cap on RF-heard lines waiting to be gated to APRS-IS. Bounded so a feed that is down (or an
 /// uplink left on with no network) cannot grow the queue without limit; the oldest is dropped,
 /// because a stale position is the least valuable thing to contribute.
@@ -5524,6 +5529,22 @@ impl From<tempo_core::aprs::AprsWx> for AprsWxDto {
             pressure_tenth_hpa: w.pressure_tenth_hpa,
         }
     }
+}
+
+/// One place a station reported, and when — a point on its [`AprsStation::track`].
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AprsTrackPoint {
+    pub lat: f64,
+    pub lon: f64,
+    /// Unix seconds of the latest packet that put the station HERE (a parked station's re-beacons
+    /// of one spot keep one point and move its time on).
+    pub at_unix: i64,
+}
+
+/// A track of fewer than two points says nothing the position does not, so it is not sent.
+fn track_has_not_moved(track: &[AprsTrackPoint]) -> bool {
+    track.len() < 2
 }
 
 /// One STATION, accumulated from every packet it has sent — the unit the map and the station list
@@ -5573,6 +5594,11 @@ pub struct AprsStation {
     /// Latest weather readings, when this station sends them. Sticky like the position: a status
     /// packet from a weather station must not blank its last reading.
     pub wx: Option<AprsWxDto>,
+    /// Where this station has been, oldest first, ending at its current position: one point per
+    /// distinct position, in time order, at most [`APRS_TRACK_CAP`]. The map draws it as the
+    /// station's trail. Sent only once the station has moved (two points or more).
+    #[serde(skip_serializing_if = "track_has_not_moved")]
+    pub track: Vec<AprsTrackPoint>,
 }
 
 impl AprsStation {
@@ -5597,9 +5623,33 @@ impl AprsStation {
             packets: 0,
             first_heard_unix: h.at_unix,
             wx: None,
+            track: Vec::new(),
         };
         st.merge(h);
         st
+    }
+
+    /// Add a reported position to the track.
+    ///
+    /// The same spot again moves that point's time on rather than adding one, so a parked station
+    /// keeps a one-point track however often it beacons. A position OLDER than the newest point (a
+    /// late digipeated or internet copy) is not appended: the track stays in time order instead of
+    /// bending back to where the station no longer is.
+    fn extend_track(&mut self, lat: f64, lon: f64, at_unix: i64) {
+        if let Some(last) = self.track.last_mut() {
+            if at_unix < last.at_unix {
+                return;
+            }
+            if last.lat == lat && last.lon == lon {
+                last.at_unix = at_unix;
+                return;
+            }
+        }
+        self.track.push(AprsTrackPoint { lat, lon, at_unix });
+        if self.track.len() > APRS_TRACK_CAP {
+            let drop = self.track.len() - APRS_TRACK_CAP;
+            self.track.drain(0..drop);
+        }
     }
 
     /// Fold another packet from this station into its state.
@@ -5634,6 +5684,9 @@ impl AprsStation {
             // Course and speed belong to the position that carried them.
             self.speed_knots = h.speed_knots;
             self.course_deg = h.course_deg;
+        }
+        if let (Some(lat), Some(lon)) = (h.lat, h.lon) {
+            self.extend_track(lat, lon, h.at_unix);
         }
         if h.symbol_table != ' ' || h.symbol_code != ' ' {
             self.symbol_table = h.symbol_table;
@@ -23902,7 +23955,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .aprs_stations
             .values()
             .filter(|st| st.last_heard_unix >= cutoff)
-            .cloned()
+            .map(|st| {
+                let mut st = st.clone();
+                // The track is held to the same window as the station: its older legs go.
+                st.track.retain(|p| p.at_unix >= cutoff);
+                st
+            })
             .collect();
         // Same-second ties are the NORMAL case (1 s timestamps — see the
         // eviction above): without a final tiebreak the stable sort preserved
@@ -66001,6 +66059,111 @@ mod tests {
         let v = e.aprs_stations(0);
         assert_eq!(v.ttl_min, 15);
         assert!(v.fade_after_min < v.ttl_min);
+    }
+
+    /// A position packet from `call` at `lat`/`lon` — `aprs_pkt` with its fixed position replaced.
+    fn aprs_at(call: &str, lat: f64, lon: f64, at: i64) -> AprsHeard {
+        let mut h = aprs_pkt(call, "moving", at, AprsSource::Rf);
+        h.lat = Some(lat);
+        h.lon = Some(lon);
+        h
+    }
+
+    /// ⭐ THE TRACK. The store kept only the LAST position, so the map could show where a mobile is
+    /// but never where it has been. Each new position is appended in time order; a station that
+    /// re-beacons the spot it is parked on adds nothing, and a packet with no position adds nothing.
+    #[test]
+    fn a_moving_station_keeps_a_track_of_where_it_has_been() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.00, -97.00, 1000));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.01, -97.02, 1060));
+        // Parked: the same spot again, a minute later. One point, now stamped with the later time.
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.01, -97.02, 1120));
+        // A status packet carries no position and must not touch the track.
+        let mut status = aprs_pkt("W9MOB-9", "status", 1150, AprsSource::Rf);
+        status.lat = None;
+        status.lon = None;
+        e.push_aprs_heard(status);
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.03, -97.05, 1180));
+        let st = &e.aprs_stations(1200).stations[0];
+        let pts: Vec<(f64, f64, i64)> =
+            st.track.iter().map(|p| (p.lat, p.lon, p.at_unix)).collect();
+        assert_eq!(
+            pts,
+            vec![
+                (39.00, -97.00, 1000),
+                (39.01, -97.02, 1120),
+                (39.03, -97.05, 1180)
+            ]
+        );
+        // The last point is the station's current position, so the line ends under its symbol.
+        assert_eq!((st.lat, st.lon), (Some(39.03), Some(-97.05)));
+    }
+
+    /// A late copy of an OLDER position (a slow digipeater path, an internet delay) must not be
+    /// appended after a newer one: the track would zig-zag back to where the station no longer is.
+    #[test]
+    fn a_late_older_position_never_bends_the_track_backwards() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.00, -97.00, 1000));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.02, -97.04, 1120));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.01, -97.02, 1060));
+        let st = &e.aprs_stations(1200).stations[0];
+        let pts: Vec<i64> = st.track.iter().map(|p| p.at_unix).collect();
+        assert_eq!(pts, vec![1000, 1120]);
+    }
+
+    /// Bounded per station, oldest dropped first: memory stays fixed however long a mobile drives.
+    #[test]
+    fn a_track_is_capped_and_keeps_the_newest_points() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let n = APRS_TRACK_CAP as i64 + 25;
+        for i in 0..n {
+            e.push_aprs_heard(aprs_at("W9MOB-9", 39.0 + i as f64 * 0.001, -97.0, 1000 + i));
+        }
+        let st = &e.aprs_stations(1000 + n).stations[0];
+        assert_eq!(st.track.len(), APRS_TRACK_CAP);
+        assert_eq!(st.track.first().map(|p| p.at_unix), Some(1025));
+        assert_eq!(st.track.last().map(|p| p.at_unix), Some(1000 + n - 1));
+    }
+
+    /// The roster shows a station while it is inside the age window; its track is held to the same
+    /// window, so an hour-old leg of a long drive does not hang on the map behind a fresh station.
+    #[test]
+    fn the_roster_trims_track_points_older_than_the_window() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let ttl = i64::from(e.settings().aprs_station_ttl_min) * 60;
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.00, -97.00, 1000));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.01, -97.00, 1000 + ttl));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.02, -97.00, 1000 + ttl + 60));
+        let st = &e.aprs_stations(1000 + ttl + 61).stations[0];
+        let pts: Vec<i64> = st.track.iter().map(|p| p.at_unix).collect();
+        assert_eq!(pts, vec![1000 + ttl, 1000 + ttl + 60]);
+    }
+
+    /// Only a station that has MOVED carries a track on the wire. A fixed station's one point is
+    /// its position, which the record already holds, so it sends no `track` key at all.
+    #[test]
+    fn only_a_station_that_has_moved_sends_a_track() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.push_aprs_heard(aprs_at("W9FIX", 39.00, -97.00, 1000));
+        e.push_aprs_heard(aprs_at("W9FIX", 39.00, -97.00, 1600));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.00, -97.00, 1000));
+        e.push_aprs_heard(aprs_at("W9MOB-9", 39.01, -97.00, 1060));
+        let v = e.aprs_stations(1700);
+        let json = |call: &str| {
+            serde_json::to_value(v.stations.iter().find(|s| s.call == call).expect("station"))
+                .expect("serialises")
+        };
+        assert!(json("W9FIX").get("track").is_none());
+        let mob = json("W9MOB-9");
+        let track = mob
+            .get("track")
+            .and_then(|t| t.as_array())
+            .expect("a track");
+        assert_eq!(track.len(), 2);
+        assert_eq!(track[1]["atUnix"], 1060);
+        assert_eq!(track[1]["lat"], 39.01);
     }
 
     #[test]
