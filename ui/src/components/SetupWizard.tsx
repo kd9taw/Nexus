@@ -31,6 +31,7 @@ import {
 } from '../api'
 import { baudForRig, FREQ_BANDS, radioPatch } from './SettingsPanel'
 import { RadioSetupWizard } from './RadioSetupWizard'
+import { KIT_FIELDS, type FinishPlan, type RadioKit } from '../settings/radioSetup'
 import { NO_CAT_PTT_MODELS, NO_CAT_PTT_TRANSCEIVERS } from '../rigFormChecks'
 import { ProveTxButton, SetupHealth } from './SetupHealth'
 import { isValidGrid } from '../grid'
@@ -505,6 +506,33 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     setAudioIn(b.audioIn)
     setAudioOut(b.audioOut)
     setSwapOffer(false)
+  }
+
+  // "Set up radios" from here: radio 1, the radio this page sets up, is the radio in use, and this
+  // page's Finish writes its own choices for it whole, AFTER anything the radio setup wrote. So the
+  // setup opens showing this page's unsaved sound cards and keying for radio 1 (not what was stored
+  // before them), and a change it makes to them comes back into this page, as the audio swap's does,
+  // or this page's Finish would put its older choice back over it.
+  const kitSetters: Record<keyof RadioKit, (value: string) => void> = {
+    audioIn: setAudioIn,
+    audioOut: setAudioOut,
+    pttMethod: pickKeying,
+  }
+  const radio1 = (s: Settings) => s.activeRadio ?? s.radios?.[0]?.id ?? 0
+  const openRadioSetup = () => {
+    const d = draft()
+    const unsaved = Object.fromEntries(KIT_FIELDS.filter((f) => d[f] !== undefined).map((f) => [f, d[f]]))
+    void getSettings()
+      .then((s) => setRadioSetup({ ...s, radios: (s.radios ?? []).map((r) => (r.id === radio1(s) ? { ...r, ...unsaved } : r)) }))
+      .catch(() => {})
+  }
+  const adoptRadioSetup = (plan: FinishPlan) => {
+    if (!radioSetup) return
+    const changes = plan.radios.find((r) => r.id === radio1(radioSetup))?.changes ?? {}
+    for (const f of KIT_FIELDS) {
+      const value = changes[f]
+      if (value !== undefined) kitSetters[f](value)
+    }
   }
 
   const scannedOnEntry = useRef(false)
@@ -1399,13 +1427,18 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                   type="button"
                   className="wizard-btn setup-radio-setup-open"
                   title={t('setup.rig.second.radioSetup.title')}
-                  onClick={() => void getSettings().then(setRadioSetup).catch(() => {})}
+                  onClick={openRadioSetup}
                 >
                   {t('setup.rig.second.radioSetup')}
                 </button>
               )}
               {radioSetup && (
-                <RadioSetupWizard settings={radioSetup} bands={FREQ_BANDS} onClose={() => setRadioSetup(null)} />
+                <RadioSetupWizard
+                  settings={radioSetup}
+                  bands={FREQ_BANDS}
+                  onFinished={adoptRadioSetup}
+                  onClose={() => setRadioSetup(null)}
+                />
               )}
             </div>
           )}
