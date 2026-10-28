@@ -37016,8 +37016,9 @@ struct UpdateInfo {
 /// stamped into the binary (`tauri::utils::platform::bundle_type`).
 ///
 /// ⚠️ THE PACKAGE DECIDES, NOT WHETHER A CHECK SUCCEEDS. The manifest (`latest.json`, built in
-/// release.yml) carries three installers: the NSIS setup under `windows-x86_64`, the AppImage
-/// under `linux-x86_64` and the macOS app under `darwin-aarch64`. The plugin looks up
+/// release.yml) carries four installers: the NSIS setup under `windows-x86_64`, the AppImage
+/// under `linux-x86_64`, and the macOS app under `darwin-aarch64` (Apple Silicon) and
+/// `darwin-x86_64` (Intel), each Mac asking for its own architecture's. The plugin looks up
 /// `linux-x86_64-deb` and then the bare `linux-x86_64`, so on a PC's .deb the check found the
 /// AppImage, downloaded it, and Install failed every time: the plugin installs over a .deb only
 /// from a .deb (`InvalidUpdaterFormat`). The .deb packages (the PC one and both Pi ones) are

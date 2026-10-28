@@ -697,6 +697,13 @@ jobs:
       - name: release.yml keeps its secrets out of the third-party builds, and the release and CI pin their downloads
         run: node --test scripts/release-secrets.test.mjs
 
+      # The check every macOS build runs on what it ships (scripts/check-macho-bundle.mjs) only ever
+      # runs for real on a Mac, and only says anything when a build goes wrong. Its own tests run
+      # here, on Linux, against Mach-O files they write byte by byte: the paths and the minimum it
+      # must refuse, and the clean bundle it must pass.
+      - name: The macOS bundle check refuses build-machine paths and a too-new minimum macOS
+        run: node --test scripts/check-macho-bundle.test.mjs
+
       # Exactly the same argument, one file over. `.githooks/pre-push` is the one gate in this
       # project that is mechanism rather than prose — wrong-remote, release-tag, identity, the
       # per-commit content scrub and the licence/NOTICE guard — and `.githooks/pre-push.test.sh`
@@ -1139,13 +1146,20 @@ jobs:
   # src-tauri/tauri.conf.json + Entitlements.plist (added 2026-08-17; this comment warned
   # about the gap from the day the job was added, and the 1.5.x/1.6.0 DMGs shipped with it).
   #
-  # NATIVE arch only (aarch64), not a universal binary and not x86_64. libtempo is a Fortran +
-  # FFTW + Boost CMake project, so a universal build means building that native tree twice and
-  # lipo-ing it; one architecture is enough to catch a darwin regression, which is all this is for.
-  # It must be the RUNNER's arch: macos-14 is Apple Silicon, and targeting x86_64 there means
-  # cross-compiling and then reaching for an Intel libgfortran that Homebrew's native gcc does not
-  # ship — which is exactly how the first run failed (`ld: library 'gfortran' not found`, after the
-  # Fortran itself had built fine). Apple Silicon is also what most Mac operators are on.
+  # NATIVE arch only, not a universal binary. libtempo is a Fortran + FFTW + Boost CMake project,
+  # so a universal build means building that native tree twice and lipo-ing it. It must be the
+  # RUNNER's arch: macos-14 is Apple Silicon, and targeting x86_64 there means cross-compiling and
+  # then reaching for an Intel libgfortran that Homebrew's native gcc does not ship — which is
+  # exactly how the first run failed (`ld: library 'gfortran' not found`, after the Fortran itself
+  # had built fine). Since release.yml ships an Intel DMG too (2026-10-27), `macos-intel-check`
+  # below is the same check on GitHub's Intel runner.
+  #
+  # AND IT HOLDS THE MINIMUM macOS. Both jobs build FFTW, libusb and Hamlib from source at
+  # bundle.macOS.minimumSystemVersion (tauri.conf.json) and run scripts/check-macho-bundle.mjs on
+  # the app binary and the staged Hamlib, exactly as release.yml does before it signs: a Mach-O
+  # built for a newer macOS than the app promises, or one that loads from /opt/homebrew,
+  # /usr/local or /opt/local, goes red here on the push rather than at the tag. 1.21.0 shipped
+  # Hamlib tools built for macOS 14 under an app that said 10.13.
   #
   # (The "unproven until it first runs" caveat that stood here is retired: it has run many times,
   # and the CMake/Homebrew failure it predicted was fixed rather than theoretical.)
@@ -1156,11 +1170,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # gfortran (via gcc), cmake/ninja for the libtempo CMake project, fftw and boost
-      # for the modem — the darwin equivalents of the apt list the Linux job installs.
+      # gfortran (via gcc), cmake/ninja for the libtempo CMake project, and boost for the modem —
+      # the darwin equivalents of the apt list the Linux job installs. Not fftw: Homebrew builds it
+      # for the runner's macOS, so it is built from source below, at the app's minimum.
       - name: Install build dependencies
         run: |
-          brew install cmake ninja gcc fftw boost
+          brew install cmake ninja gcc boost
 
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
@@ -1170,6 +1185,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+
+      - name: Build FFTW from source for the app's minimum macOS
+        run: bash scripts/fetch-fftw-macos.sh
 
       # src-tauri embeds the built web assets, so the UI has to exist before it links.
       - name: Build the web UI
@@ -1194,10 +1212,25 @@ jobs:
           # this job passed whether or not the probe worked -- green either way is not a test. Without
           # it, the job IS the positive control for the probe: if the derivation breaks, the link
           # fails here rather than on a contributor's Mac.
+          #
+          # The deployment target and the FFTW prefix are set here, in the step, so the step is the
+          # same wherever it runs (scripts/gates runs a step with no GITHUB_ENV).
+          export MACOSX_DEPLOYMENT_TARGET="$(jq -r '.bundle.macOS.minimumSystemVersion' src-tauri/tauri.conf.json)"
+          export PKG_CONFIG_PATH="$PWD/target/fftw-macos/lib/pkgconfig"
           cargo build --release \
             --manifest-path src-tauri/Cargo.toml \
             --target aarch64-apple-darwin \
             --features radio,custom-protocol
+
+      # The release's pre-signing check, on what this job built: Hamlib staged as release.yml stages
+      # it (the script checks its own output), then the app binary.
+      - name: Check the app and the bundled Hamlib against the minimum macOS
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-hamlib-unix.sh
+          node scripts/check-macho-bundle.mjs \
+            --floor "$(jq -r '.bundle.macOS.minimumSystemVersion' src-tauri/tauri.conf.json)" \
+            --arch arm64 src-tauri/target/aarch64-apple-darwin/release/Nexus
 
       # The client core on an iPhone or iPad: it builds for iOS with no engine, no Tauri and nothing
       # Windows-only, so a phone app can be built on it. Last, so a red here never hides the link
@@ -1205,6 +1238,56 @@ jobs:
       # brew step) are compiled for iOS, by Xcode's clang and SDK, which the cc crate finds through xcrun.
       - name: cargo check tempo-client for iOS (aarch64)
         run: cargo check -p tempo-client --target aarch64-apple-ios
+
+  # The same compile check on Intel, for release.yml's Intel DMG (operator decision 2026-10-27).
+  # GitHub's one free hosted Intel macOS label; it is retired with the macOS 15 image (announced
+  # for about August 2027), and this job with it. Same steps as macos-check, without the iOS check.
+  macos-intel-check:
+    name: macOS Intel compile check (the shipping build is in release.yml)
+    runs-on: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install build dependencies
+        run: |
+          brew install cmake ninja gcc boost
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
+        with:
+          toolchain: 1.93.1
+          targets: x86_64-apple-darwin
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Build FFTW from source for the app's minimum macOS
+        run: bash scripts/fetch-fftw-macos.sh
+
+      - name: Build the web UI
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+
+      - name: Compile src-tauri for macOS (Intel)
+        env:
+          NEXUS_ALLOW_MISSING_AICW: 1
+        run: |
+          export MACOSX_DEPLOYMENT_TARGET="$(jq -r '.bundle.macOS.minimumSystemVersion' src-tauri/tauri.conf.json)"
+          export PKG_CONFIG_PATH="$PWD/target/fftw-macos/lib/pkgconfig"
+          cargo build --release \
+            --manifest-path src-tauri/Cargo.toml \
+            --target x86_64-apple-darwin \
+            --features radio,custom-protocol
+
+      - name: Check the app and the bundled Hamlib against the minimum macOS
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-hamlib-unix.sh
+          node scripts/check-macho-bundle.mjs \
+            --floor "$(jq -r '.bundle.macOS.minimumSystemVersion' src-tauri/tauri.conf.json)" \
+            --arch x86_64 src-tauri/target/x86_64-apple-darwin/release/Nexus
 
   # Job 6 — Raspberry Pi .deb, one per live Pi OS base. Runs on GitHub's hosted
   # arm64 runner (free for public repos), so the aarch64 build is NATIVE: the same
