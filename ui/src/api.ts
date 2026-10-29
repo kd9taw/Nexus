@@ -9,6 +9,7 @@ import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
 import { isStreamInput } from './remote-native/stream-input'
 import { clientWords } from './features/clientWords'
+import { restoreRefusal } from './features/restoreWords'
 import { noteCallbookAnswer } from './features/callbookAnswers'
 import type { ActivationSpotReport } from './selfSpot'
 import type { ImportDone, ImportPreview } from './features/logImport'
@@ -5809,5 +5810,7 @@ export async function resetSettings(): Promise<AppSnapshot> {
 /** Restore a bundle written by `exportSettingsBundle`. Refuses anything that is not one, by
  *  name and schema — a partial restore is worse than a refusal. */
 export async function importSettingsBundle(text: string): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('import_settings_bundle', { text })
+  return invoke<AppSnapshot>('import_settings_bundle', { text }).catch((e: unknown) => {
+    throw restoreRefusal(e)
+  })
 }

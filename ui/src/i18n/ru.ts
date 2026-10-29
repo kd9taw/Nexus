@@ -2931,6 +2931,7 @@ export const RU: PartialCatalog = {
   "settings.backup.restore.confirm.action": "Восстановить",
   "settings.backup.restore.done": "Настройки восстановлены — проверьте трансивер и нажмите «Тест CAT»",
   "settings.backup.restore.failed": "Восстановление не удалось",
+  "settings.backup.restore.onAir": "Сначала завершите или остановите передачу, затем выполните восстановление.",
   "settings.backup.reset.confirm.title": "Сбросить все настройки до заводских?",
   "settings.backup.reset.confirm.body": "Ваши трансиверы, звуковые устройства, позывной и настройки будут удалены. Журнал связей не затрагивается, а сохранённые пароли остаются в системной связке ключей. Это нельзя отменить — сначала сделайте резервную копию, если ещё не сделали.",
   "settings.backup.reset.confirm.action": "Сбросить",

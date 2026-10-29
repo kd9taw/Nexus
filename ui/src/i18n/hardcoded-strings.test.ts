@@ -119,6 +119,8 @@ const MIGRATED = [
   // and the words for a call it refused or could not make.
   'components/ClientBanner.tsx',
   'features/clientWords.ts',
+  // The words for a restore refused while the radio is keyed (2026-10-29), born migrated.
+  'features/restoreWords.ts',
   // The saved keys held back until the operator confirms them (2026-10-28), born migrated.
   'components/KeyConfirmBanner.tsx',
   // This computer ▸ Audio (2026-10-08), born migrated: a driving computer's headset.

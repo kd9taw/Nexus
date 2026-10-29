@@ -34402,7 +34402,7 @@ pub fn act_opening_session<T>(
 /// the session's rows first and builds its dupe sweep from them in the same hold as the restore.
 /// `then` runs in that hold too, after the restore — the shell persists there. When the logbook
 /// is too busy to read the rows, the restore is refused whole with [`SESSION_BUSY`], the Save's
-/// own words: neither it nor `then` runs.
+/// own words, and while the radio is keyed with [`RESTORE_ON_AIR`]: neither it nor `then` runs.
 pub fn restore_with_session_rows<T>(
     engine: &std::sync::Mutex<Engine>,
     restored: Settings,
@@ -34413,14 +34413,23 @@ pub fn restore_with_session_rows<T>(
         engine,
         |eng| eng.save_opens_session(&asked),
         |eng, rows| {
+            // Never while the radio is keyed: the restore's hold can wait on the system keychain,
+            // and the radio loop needs this lock to end the over. Nothing has changed yet.
+            if eng.on_air() || eng.loop_tx_hold_until.is_some_and(|t| Instant::now() < t) {
+                return Err(RESTORE_ON_AIR.to_string());
+            }
             eng.apply_restored_settings(restored);
             if let Some(rows) = rows {
                 eng.open_session_from(rows);
             }
-            then(eng)
+            Ok(then(eng))
         },
-    )
+    )?
 }
+
+/// What a settings restore answers while the radio is keyed ([`restore_with_session_rows`]):
+/// nothing was restored.
+pub const RESTORE_ON_AIR: &str = "Finish or stop the transmission first, then restore.";
 
 /// [`with_session_rows`]' loop: `tries` reads at most, each waiting up to `wait` for the store.
 /// `Err` when none could be used, and then `then` has not run.

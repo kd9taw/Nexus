@@ -6642,6 +6642,7 @@ export const FR: PartialCatalog = {
   "settings.backup.restore.confirm.title": "Remplacer votre configuration actuelle par {{file}} ?",
   "settings.backup.restore.done": "Réglages restaurés — vérifiez votre radio et faites Tester CAT",
   "settings.backup.restore.failed": "Échec de la restauration",
+  "settings.backup.restore.onAir": "Terminez ou arrêtez d'abord l'émission, puis restaurez.",
   "settings.beacons.hint": "Les balises émettent votre indicatif, votre locator et votre puissance — il n'y a pas de séquence de QSO, donc Appel CQ et S&P sont inactifs sur ces tiers. L'émission doit toujours être armée comme d'habitude ; la planification ne manipule jamais une radio dont vous n'avez pas activé l'émission.",
   "settings.beacons.legend": "Balises — WSPR & FST4W",
   "settings.beacons.power.hint": "<b>Obligatoire, et la valeur doit être réelle.</b> Les reports WSPR sont publiés dans une base de propagation publique dont d'autres opérateurs tirent des conclusions : un chiffre faux corrompt leurs données autant que les vôtres. La balise reste muette tant que ce n'est pas renseigné. 23 = 200 mW, 30 = 1 W, 37 = 5 W, 43 = 20 W.",

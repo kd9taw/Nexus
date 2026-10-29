@@ -1008,6 +1008,7 @@ export const DE: PartialCatalog = {
   "settings.backup.restore.confirm.action": "Wiederherstellen",
   "settings.backup.restore.done": "Einstellungen wiederhergestellt — Funkgerät prüfen und CAT testen",
   "settings.backup.restore.failed": "Wiederherstellung fehlgeschlagen",
+  "settings.backup.restore.onAir": "Beenden oder stoppen Sie zuerst die Aussendung und stellen Sie dann wieder her.",
   "settings.audio.rxGain.failed": "RX-Verstärkung konnte nicht übernommen werden",
   "settings.audio.txPower.failed": "TX-Leistung konnte nicht gesetzt werden",
   "settings.audio.device.notInList": "{{device}} — gespeichert, nicht in der Liste",

@@ -16094,6 +16094,166 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ★ A RESTORE WHILE THE RADIO IS KEYED IS REFUSED, AND CHANGES NOTHING: the restore's hold
+    /// can wait on the system keychain, and the radio loop needs the engine lock to end the over.
+    /// An FT over on the air and the rig keyed at its own mic each refuse it, with the reason; no
+    /// key is removed or stored, the settings and the UI state stay as they were. CONTROL: the
+    /// same restore with nothing keyed goes through and removes the moved key.
+    #[test]
+    fn a_restore_while_the_radio_is_keyed_is_refused_and_changes_nothing() {
+        const STATION_LOG: &str = "https://log.station.example/cloudlog";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-keyed", 0);
+        let station = station_with(&engine, restore_test_roster(), STATION_LOG);
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = || {
+            let mut keychain = FakeKeychain::holding(&all);
+            let mut saved_ui = false;
+            let out = restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| {
+                    saved_ui = true;
+                    true
+                },
+                |change| keychain.change(change),
+            )
+            .map(|_| ());
+            let url = engine_lock(&engine).settings().cloudlog_url.clone();
+            (out, keychain.forgot, keychain.stored, saved_ui, url)
+        };
+        let refused = || {
+            (
+                Err(tempo_app::engine::RESTORE_ON_AIR.to_string()),
+                Vec::<String>::new(),
+                Vec::<String>::new(),
+                false,
+                STATION_LOG.to_string(),
+            )
+        };
+
+        engine_lock(&engine).app.set_transmitting(true);
+        assert_eq!(
+            restore(),
+            refused(),
+            "an FT over on the air: refused, nothing changed"
+        );
+        engine_lock(&engine).app.set_transmitting(false);
+        engine_lock(&engine).observe_rig_ptt(true);
+        assert_eq!(
+            restore(),
+            refused(),
+            "the rig keyed at its mic: refused, nothing changed"
+        );
+        engine_lock(&engine).observe_rig_ptt(false);
+        let (out, forgot, _, saved_ui, url) = restore();
+        assert_eq!(
+            (out, forgot, saved_ui, url.as_str()),
+            (
+                Ok(()),
+                vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+                true,
+                "https://log.other.example/cloudlog"
+            ),
+            "CONTROL: nothing keyed: restored, the moved key removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE ASKS THE KEYCHAIN WHAT IT HOLDS WITHOUT HOLDING THE ENGINE LOCK: a read that
+    /// waits (an unlock prompt) never keeps the radio loop from ending an over. Each read here
+    /// waits for another thread to take the engine lock, and gets it. The removals stay in the
+    /// hold that lands the restore, before the restored settings go live. CONTROL: what waits for
+    /// the operator is what the reads said.
+    #[test]
+    fn a_restores_keychain_reads_never_hold_the_engine_lock() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-reads", 0);
+        let backup = {
+            let station = station_with(
+                &engine,
+                restore_test_roster(),
+                "https://log.station.example/cloudlog",
+            );
+            engine_lock(&engine).apply_restored_settings(station);
+            settings_bundle(&engine, Default::default(), None).unwrap()
+        };
+        // Fresh settings, with a network radio (id 7) the backup does not have, so the restore
+        // both reads (the addresses this station has none for) and removes (the dropped radio).
+        let mut fresh = station_with(
+            &engine,
+            vec![
+                tempo_app::settings::RadioProfile {
+                    id: 0,
+                    name: "Radio 1".into(),
+                    ..Default::default()
+                },
+                tempo_app::settings::RadioProfile {
+                    id: 7,
+                    name: "Restore Test Dropped".into(),
+                    icom_lan_host: "192.168.1.77".into(),
+                    ..Default::default()
+                },
+            ],
+            "",
+        );
+        fresh.active_radio = 0;
+        fresh.sync_flat_from_active();
+        {
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(fresh);
+            eng.set_keys_to_confirm(KeysToConfirm::default());
+        }
+        let mut accounts = restore_test_accounts();
+        accounts.push(icom_lan_account(7));
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let mut keychain = FakeKeychain::holding(&all);
+        let (mut reads_free, mut removals_held) = (Vec::new(), Vec::new());
+        restore_settings_bundle(
+            &engine,
+            backup,
+            Default::default,
+            |_| true,
+            |change| {
+                match change {
+                    KeychainChange::Holds(_) => {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        let other = engine.clone();
+                        std::thread::spawn(move || {
+                            drop(engine_lock(&other));
+                            let _ = tx.send(());
+                        });
+                        reads_free.push(rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok());
+                    }
+                    KeychainChange::Forget(_) => removals_held.push(engine.try_lock().is_err()),
+                    KeychainChange::Store { .. } => {}
+                }
+                keychain.change(change)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (reads_free, removals_held),
+            (vec![true; 3], vec![true]),
+            "every read made with the engine lock free; the removal in the hold"
+        );
+        assert_eq!(
+            engine_lock(&engine).keys_to_confirm(),
+            &KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![0, 1],
+            },
+            "CONTROL: each key the reads found waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ A RESTORE ONTO SETTINGS WITH NO ADDRESS FOR A SERVICE KEEPS ITS KEY, AND HOLDS IT BACK:
     /// after a reinstall or a reset the station has no Cloudlog URL and its one radio has no
     /// network host, while the keychain still holds keys it cannot say were typed for the
@@ -17243,7 +17403,9 @@ fn keep_the_stations_profile_keys(
 /// state, for a bundle exported from afar ([`keep_the_stations_paths`]). `keychain` makes one
 /// change to the keychain ([`change_keychain`]): a restore that points Cloudlog or an
 /// Icom network radio at another address than the station's, or drops an Icom network radio,
-/// removes the key kept for it, in the hold that lands the restore ([`forget_moved_keys`]).
+/// removes the key kept for it, in the hold that lands the restore ([`forget_moved_keys`]);
+/// whether it holds a key is asked before that hold. A restore while the radio is keyed is
+/// refused ([`tempo_app::engine::RESTORE_ON_AIR`]), and nothing changes.
 fn restore_settings_bundle(
     engine: &SharedEngine,
     text: String,
@@ -17301,6 +17463,23 @@ fn restore_settings_bundle(
     // The station's own key still waiting to move to the keychain: in the unknown case it was
     // typed for an address nobody can name, as the keychain's is, so it waits too.
     let station_key_pending = !own.cloudlog_key.trim().is_empty();
+    // Whether the keychain holds a saved key for each address this station had none for, asked
+    // before the hold: a keychain can wait on an unlock prompt, and the radio loop needs the
+    // engine lock to end an over. A keychain that cannot say is taken to hold it: it waits, and
+    // is not sent. The answers only add waits, so a station that changes meanwhile loses none.
+    let mut keychain = keychain;
+    let mut holds = |account: &str| !matches!(keychain(KeychainChange::Holds(account)), Ok(false));
+    let cloudlog_unknown_waits =
+        cloudlog_unknown && (station_key_pending || holds(CLOUDLOG_KEYCHAIN_USER));
+    // The radios the restore brings a network address where this station had none, with a
+    // password saved for them.
+    let unknown_held: Vec<u32> = settings
+        .radios
+        .iter()
+        .filter(|r| icom_address_unknown(r, own.radios.iter().find(|p| p.id == r.id)))
+        .map(|r| r.id)
+        .filter(|&id| holds(&icom_lan_account(id)))
+        .collect();
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
     // which is right for a form and wrong for a restore. A bundle that opens a contest session
@@ -17328,13 +17507,6 @@ fn restore_settings_bundle(
             .filter(|p| landed.iter().all(|r| r.id != p.id))
             .map(|p| (p.id, p.name.clone()))
             .collect();
-        // The radios the restore brings a network address where this station had none.
-        let unknown: Vec<u32> = landed
-            .iter()
-            .filter(|r| icom_address_unknown(r, own.radios.iter().find(|p| p.id == r.id)))
-            .map(|r| r.id)
-            .collect();
-        let mut keychain = keychain;
         let cloudlog_key = backup_cloudlog_key.as_deref();
         let (stored, failed) = forget_moved_keys(
             cloudlog_moved,
@@ -17348,19 +17520,14 @@ fn restore_settings_bundle(
             eng.forget_pending_cloudlog_key();
         }
         // What waits for the operator now: what waited before, less every key removed or
-        // replaced here, and each saved key for an address this station had none for. A keychain
-        // that cannot say whether it holds one is taken to hold it: it waits, and is not sent.
+        // replaced here, and each saved key for an address this station had none for (asked
+        // before the hold, above).
         // ⛔ A removal that failed left its key in the keychain: that key waits too (fail closed),
         // never let go because its removal was asked for.
-        let mut holds =
-            |account: &str| !matches!(keychain(KeychainChange::Holds(account)), Ok(false));
         let mut keys = eng.keys_to_confirm().clone();
         let still_held = |account: &str| failed.iter().any(|f| f == account);
         keys.cloudlog = still_held(CLOUDLOG_KEYCHAIN_USER)
-            || (!(cloudlog_moved || stored)
-                && (keys.cloudlog
-                    || (cloudlog_unknown
-                        && (station_key_pending || holds(CLOUDLOG_KEYCHAIN_USER)))));
+            || (!(cloudlog_moved || stored) && (keys.cloudlog || cloudlog_unknown_waits));
         keys.icom_lan.retain(|&id| {
             still_held(&icom_lan_account(id))
                 || !moved.iter().chain(&dropped).any(|(gone, _)| *gone == id)
@@ -17370,8 +17537,8 @@ fn restore_settings_bundle(
                 keys.icom_lan.push(*id);
             }
         }
-        for id in unknown {
-            if !keys.icom_lan_waits(id) && holds(&icom_lan_account(id)) {
+        for id in unknown_held {
+            if !keys.icom_lan_waits(id) {
                 keys.icom_lan.push(id);
             }
         }
