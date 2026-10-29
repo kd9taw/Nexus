@@ -2906,6 +2906,19 @@ export async function sstvDeleteImage(path: string): Promise<void> {
   await invoke('sstv_delete_image', { path })
 }
 
+/** One picture a batch delete could not remove, and the station's reason. */
+export interface SstvDeleteFailure {
+  path: string
+  reason: string
+}
+
+/** Delete several received SSTV images at once ("Delete selected"): each goes through the same
+ * gallery-folder check as `sstvDeleteImage`, the gallery index is rewritten once, and the ones
+ * that could not be removed come back with their reasons. Irreversible: the caller confirms first. */
+export async function sstvDeleteImages(paths: string[]): Promise<SstvDeleteFailure[]> {
+  return invoke<SstvDeleteFailure[]>('sstv_delete_images', { paths })
+}
+
 /** Toggle Skip Tx1 — the station's session-only flag, resets each launch.
  *  Returns the snapshot, whose `radio.skipTx1` the box draws. */
 export async function setSkipTx1(enabled: boolean): Promise<AppSnapshot> {
