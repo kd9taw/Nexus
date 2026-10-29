@@ -50,7 +50,8 @@ import { MiniSpectrum } from '../MiniSpectrum'
 import { ContestCalendarPane } from '../ContestCalendarPane'
 import { getContests } from '../../api'
 import { GetoutCompass } from '../prop/GetoutCompass'
-import { getoutSummary } from '../../features/getout'
+import { fmtSinceUtc, getoutSummary } from '../../features/getout'
+import { setGetoutSince, startGetoutFresh } from '../../features/getoutSince'
 import { fmtDistanceKm } from '../../units'
 import { GreylineWindow } from '../prop/GreylineWindow'
 import { ScalesAnnunciator } from '../prop/ScalesAnnunciator'
@@ -350,11 +351,42 @@ function renderOutlook(c: PaneContext): ReactNode {
 
 function renderGetout(c: PaneContext): ReactNode {
   const g = c.getout
+  const since = c.getoutSince ?? null
   return (
     <section className="connect-getout panel">
-      <h3>{t('connect.getout.heading')}</h3>
+      {/* START FRESH (features/getoutSince): count only what is heard from now on, for trying an
+          antenna. The station leaves the earlier reports out of everything below, and the map's
+          "hearing you" dots follow; Show all brings them back. Nothing is deleted. On the heading's
+          line, so the box's body keeps its height. */}
+      <div className="getout-head">
+        <h3>{t('connect.getout.heading')}</h3>
+        {since == null ? (
+          <button
+            type="button"
+            className="getout-fresh"
+            onClick={() => startGetoutFresh()}
+            title={t('connect.getout.fresh.title')}
+          >
+            {t('connect.getout.fresh')}
+          </button>
+        ) : (
+          <>
+            <span className="getout-since">{t('connect.getout.since', { time: fmtSinceUtc(since) })}</span>
+            <button
+              type="button"
+              className="getout-fresh"
+              onClick={() => setGetoutSince(null)}
+              title={t('connect.getout.showAll.title')}
+            >
+              {t('connect.getout.showAll')}
+            </button>
+          </>
+        )}
+      </div>
       {!g || g.count === 0 ? (
-        <p className="cp-none">{t('connect.getout.none')}</p>
+        <p className="cp-none">
+          {since == null ? t('connect.getout.none') : t('connect.getout.none.since', { time: fmtSinceUtc(since) })}
+        </p>
       ) : (
         <>
           <p className="getout-summary">

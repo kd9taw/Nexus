@@ -28,7 +28,7 @@ import { fmtDistanceKm } from '../../units'
 import { dualStateLabel, kpImpact, sortInsights } from '../../propViz'
 import { buildChaseTargets, chaseSummaryLine } from '../../features/chase'
 import { buildChaseFeed, chaseFeedLine as feedSummary } from '../../features/chaseFeed'
-import { getoutSummary } from '../../features/getout'
+import { fmtSinceUtc, getoutSummary } from '../../features/getout'
 import type { PropagationSnapshot } from '../../types'
 import type { PaneContext } from './paneContext'
 
@@ -214,7 +214,10 @@ export function spaceWxLine(c: PaneContext): string {
 
 export function getoutLine(c: PaneContext): string {
   const g = c.getout
-  if (!g || g.count === 0) return t('connect.getout.none')
+  if (!g || g.count === 0)
+    return c.getoutSince != null
+      ? t('connect.getout.none.since', { time: fmtSinceUtc(c.getoutSince) })
+      : t('connect.getout.none')
   const dir = getoutSummary(g.reports, c.units)
   return dir
     ? t('connect.basic.getout.dir', { count: g.count, dir })

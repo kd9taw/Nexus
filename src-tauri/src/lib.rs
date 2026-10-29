@@ -8330,8 +8330,12 @@ async fn get_dxped_windows(
 /// "Am I getting out?" — who is hearing the operator right now, from the live PSK
 /// Reporter / RBN firehose (spots where the operator is the TX side). Pure
 /// observed data — the most reassuring live answer a station can get.
+/// `since` (Unix secs) is the screen's "Start fresh" time: reports before it are left out.
+/// Each screen keeps its own and sends it, so a remote one never changes what the shack's
+/// own screen shows.
 #[tauri::command]
 async fn get_getting_out(
+    since: Option<i64>,
     state: State<'_, SharedEngine>,
     live_paths: State<'_, SharedLivePaths>,
 ) -> Result<propagation::GettingOut, String> {
@@ -8345,7 +8349,9 @@ async fn get_getting_out(
         .lock()
         .map(|b| b.recent(now, 1800))
         .unwrap_or_default();
-    Ok(propagation::getting_out(&mycall, &mygrid, &spots, now))
+    Ok(propagation::getting_out(
+        &mycall, &mygrid, &spots, now, since,
+    ))
 }
 
 /// The current OVATION aurora oval (downsampled prob ≥ 8 %), for the map overlay.
@@ -33732,7 +33738,10 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
                     .to_string();
                 ok(get_path_outlook(grid, app.state(), app.state()).await)
             }
-            "get_getting_out" => ok(get_getting_out(app.state(), app.state()).await),
+            "get_getting_out" => {
+                let since = v.get("since").and_then(|x| x.as_i64());
+                ok(get_getting_out(since, app.state(), app.state()).await)
+            }
             "get_dxped_windows" => {
                 let days = v.get("days").and_then(|x| x.as_u64()).map(|d| d as u32);
                 ok(get_dxped_windows(app.state(), app.state(), days).await)
