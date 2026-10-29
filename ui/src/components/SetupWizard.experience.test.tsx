@@ -23,6 +23,8 @@ vi.mock('../api', () => ({
   addRadio: vi.fn(() => Promise.resolve(null)),
   getSettings: vi.fn(() => Promise.resolve({ radios: [] })),
   updateRadioProfile: vi.fn(() => Promise.resolve(null)),
+  // The log step's services, shown to an operator switching programs (Experienced).
+  getCredentialsStatus: vi.fn(() => Promise.resolve([])),
 }))
 
 function renderWizard(opts: { ask?: boolean; rerun?: boolean; settings?: Record<string, unknown> } = {}) {
