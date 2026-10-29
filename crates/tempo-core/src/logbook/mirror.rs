@@ -69,6 +69,7 @@ use super::QsoRecord;
 use std::io::{Seek, SeekFrom, Write};
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -366,6 +367,9 @@ impl Default for MirrorOptions {
 pub struct MirrorWriter {
     tx: Option<mpsc::Sender<Msg>>,
     status: Arc<Mutex<Status>>,
+    /// How many changes have been handed to the lane ([`Self::dirty`]). Moved only under the
+    /// status lock, where the lane reads it before it says nothing is owed.
+    handed: Arc<AtomicU64>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -404,13 +408,16 @@ impl MirrorWriter {
         let (tx, rx) = mpsc::channel::<Msg>();
         let status = Arc::new(Mutex::new(Status::default()));
         let shared = Arc::clone(&status);
+        let handed = Arc::new(AtomicU64::new(0));
+        let counted = Arc::clone(&handed);
         let handle = std::thread::Builder::new()
             .name("nexus-log-mirror".into())
-            .spawn(move || run(path, source, rx, shared, options))
+            .spawn(move || run(path, source, rx, shared, counted, options))
             .ok();
         MirrorWriter {
             tx: Some(tx),
             status,
+            handed,
             handle,
         }
     }
@@ -418,8 +425,16 @@ impl MirrorWriter {
     /// Tell the lane the log has changed, up to revision `rev`: its next picture holds every
     /// change up to there. Never touches the disk; returns immediately — no copy of the log is
     /// made or handed over.
+    ///
+    /// The change is owed from here, not from when the lane's thread gets to it: a quit that
+    /// reads [`Self::status`] in between must not find nothing owed and close with `log.adi`
+    /// behind the store.
     pub fn dirty(&self, rev: u64) {
         if let Some(tx) = &self.tx {
+            set(&self.status, |s| {
+                self.handed.fetch_add(1, Ordering::SeqCst);
+                s.pending = true;
+            });
             let _ = tx.send(Msg::Dirty(rev));
         }
     }
@@ -500,6 +515,7 @@ fn run(
     source: Arc<dyn MirrorSource>,
     rx: mpsc::Receiver<Msg>,
     status: Arc<Mutex<Status>>,
+    handed: Arc<AtomicU64>,
     opts: MirrorOptions,
 ) {
     super::io_fence::enter_log_lane();
@@ -508,6 +524,8 @@ fn run(
     let mut pending: Option<u64> = None;
     let mut first_queued: Option<Instant> = None;
     let mut last_queued = Instant::now();
+    // How many of the changes handed over this lane has taken off the channel.
+    let mut taken: u64 = 0;
     let mut written = Written {
         ours: None,
         accepted: opts.accepted,
@@ -523,6 +541,7 @@ fn run(
         let Some(t0) = first_queued else {
             match rx.recv() {
                 Ok(Msg::Dirty(rev)) => {
+                    taken += 1;
                     owe(&mut pending, rev);
                     first_queued = Some(Instant::now());
                     last_queued = Instant::now();
@@ -545,6 +564,7 @@ fn run(
         let wait = due.saturating_duration_since(now);
         match rx.recv_timeout(wait) {
             Ok(Msg::Dirty(rev)) => {
+                taken += 1;
                 owe(&mut pending, rev); // newest wins: a mirror is a picture, not a journal
                 last_queued = Instant::now();
             }
@@ -555,7 +575,14 @@ fn run(
                         pending = None;
                     }
                 }
-                settle(&status, &mut pending, &mut first_queued, &mut last_queued);
+                settle(
+                    &status,
+                    &mut pending,
+                    &mut first_queued,
+                    &mut last_queued,
+                    &handed,
+                    taken,
+                );
                 let _ = reply.send(snapshot(&status));
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -564,7 +591,14 @@ fn run(
                         pending = None;
                     }
                 }
-                settle(&status, &mut pending, &mut first_queued, &mut last_queued);
+                settle(
+                    &status,
+                    &mut pending,
+                    &mut first_queued,
+                    &mut last_queued,
+                    &handed,
+                    taken,
+                );
             }
             Err(RecvTimeoutError::Disconnected) => {
                 // The handle was dropped: write what is pending rather than losing it — the
@@ -582,11 +616,16 @@ fn run(
 /// After a turn at writing: nothing owed → idle; still owed (the store was behind) → wait out a
 /// whole debounce again before the next try, as if the change had just arrived — never a try
 /// straight after the last, whatever the source answered and however fast.
+///
+/// Nothing is owed only once the lane has taken every change `handed` counts, `taken`: one
+/// handed over during the write is still on the channel, and still owed.
 fn settle(
     status: &Arc<Mutex<Status>>,
     pending: &mut Option<u64>,
     first: &mut Option<Instant>,
     last: &mut Instant,
+    handed: &AtomicU64,
+    taken: u64,
 ) {
     if pending.is_some() {
         let now = Instant::now();
@@ -594,7 +633,11 @@ fn settle(
         *last = now;
     } else {
         *first = None;
-        set(status, |s| s.pending = false);
+        set(status, |s| {
+            if handed.load(Ordering::SeqCst) == taken {
+                s.pending = false;
+            }
+        });
     }
 }
 
@@ -1476,5 +1519,97 @@ mod tests {
             .filter(|n| n.contains(".tmp"))
             .collect();
         assert!(left.is_empty(), "no temporary file: {left:?}");
+    }
+
+    /// A source that, once armed, holds the lane inside `ready` until the test lets it go, and
+    /// says when the lane has arrived there — so a test can hand the lane a change while it is
+    /// busy writing.
+    struct Gate {
+        rows: Vec<Arc<QsoRecord>>,
+        arrived: Mutex<Option<mpsc::Sender<()>>>,
+        go: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl MirrorSource for Gate {
+        fn ready(&self, _: u64, _: Duration) -> Readiness {
+            let armed = self.arrived.lock().unwrap().take();
+            if let Some(tx) = armed {
+                let _ = tx.send(());
+                // Bounded, so a test that fails before it lets go still ends.
+                let _ = self
+                    .go
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(60));
+            }
+            Readiness::Ready
+        }
+        fn each(&self, each: &mut dyn FnMut(&QsoRecord) -> ControlFlow<()>) -> Result<(), String> {
+            for r in &self.rows {
+                if each(r).is_break() {
+                    break;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// ★ A change handed to the lane is owed from the moment `dirty` returns, whatever the
+    /// lane's thread is doing. A quit reads the status to decide whether `log.adi` still has to
+    /// be written: a change the lane had not yet taken off its channel must not read as nothing
+    /// owed — neither before the lane wakes, nor in the answer to a write that was already
+    /// under way when the change arrived.
+    #[test]
+    fn a_change_is_owed_from_the_moment_it_is_handed_over() {
+        let d = Dir::new("owed-at-once");
+        let (arrived, at_gate) = mpsc::channel();
+        let (let_go, go) = mpsc::channel();
+        let source = Arc::new(Gate {
+            rows: rows(3),
+            arrived: Mutex::new(None),
+            go: Mutex::new(go),
+        });
+        let w = Arc::new(MirrorWriter::with_timing(
+            d.log(),
+            source.clone(),
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+        ));
+        assert!(
+            !w.status().pending,
+            "control: nothing owed before any change"
+        );
+
+        w.dirty(1);
+        assert!(
+            w.status().pending,
+            "owed at once, before the lane has woken"
+        );
+
+        // The quit's flush starts the write of revision 1, which stops at the source.
+        *source.arrived.lock().unwrap() = Some(arrived);
+        let flusher = {
+            let w = Arc::clone(&w);
+            std::thread::spawn(move || w.flush(Duration::from_secs(30)))
+        };
+        at_gate
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the lane reaches the source");
+        // A second change, handed over while the lane is busy writing the first.
+        w.dirty(2);
+        let_go.send(()).unwrap();
+        let answer = flusher.join().unwrap();
+        assert_eq!(answer.writes, 1, "the first change is written: {answer:?}");
+        assert!(
+            answer.pending,
+            "but the second is still owed, and the flush's answer says so: {answer:?}"
+        );
+
+        let s = w.flush(Duration::from_secs(30));
+        assert_eq!(
+            (s.writes, s.pending),
+            (2, false),
+            "the next flush writes it, and then nothing is owed"
+        );
     }
 }
