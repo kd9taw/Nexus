@@ -41448,6 +41448,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             }
             // The TV page's asset + RPC closures read this at call time (see TV_APP).
             let _ = TV_APP.set(app.handle().clone());
+            // The IOTA list tells the windows when a background download changes it.
+            iota_list::set_app(app.handle().clone());
             // Probe the display's physical density HERE, on the main thread, where GDK is safe
             // to call. The frontend reads the cached answer through `display_metrics` and uses
             // it to seed the UI scale cap on a first launch only. No-op off Linux.

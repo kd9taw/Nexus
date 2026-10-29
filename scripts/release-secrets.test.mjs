@@ -948,3 +948,34 @@ test('the Pi container build hands the ClubLog key to the RUN that compiles it i
   assert.equal(compile.length, 1, 'expected one RUN in Dockerfile.pi to run build-linux.sh');
   assert.match(compile[0].args, /^(?:--\S+\s+)*--mount=type=secret,id=clublog_api_key,env=CLUBLOG_API_KEY\s/, 'the RUN that compiles Nexus does not mount the ClubLog key');
 });
+
+// The IOTA island list is staged by a Node script, best-effort: a failure is a warning and the
+// installer ships without the list. So a staging step that runs before the job has Node fails on
+// every release with nothing but a yellow annotation (the linux-x86 container has no Node until
+// actions/setup-node). Every job that stages the list has to set up Node before it.
+const IOTA_STAGE = /^Stage the IOTA island list\b/;
+function iotaStagedWithoutNode(wf) {
+  const bad = [];
+  for (const j of wf.jobs.values()) {
+    const stage = j.steps.findIndex((s) => IOTA_STAGE.test(s?.name ?? ''));
+    if (stage < 0) continue;
+    const node = j.steps.findIndex((s) => /^actions\/setup-node@/.test(s?.uses ?? ''));
+    if (node < 0 || node > stage) bad.push(j.id);
+  }
+  return bad;
+}
+
+test('every job that stages the IOTA list sets up Node first', () => {
+  const staging = [...WF.jobs.values()].filter((j) => j.steps.some((s) => IOTA_STAGE.test(s?.name ?? ''))).map((j) => j.id);
+  assert.deepEqual(staging, ['linux-x86', 'windows', 'macos', 'pi'], 'the IOTA list is staged in a different set of jobs than expected');
+  assert.deepEqual(iotaStagedWithoutNode(WF), []);
+  // Positive control: the Pi job's setup-node removed is reported.
+  const planted = plant(
+    TEXT,
+    "      # The runner image's own Node is whatever version the image carries; pin it as the other\n" +
+      '      # build jobs do, for the IOTA staging step below.\n' +
+      '      - uses: actions/setup-node@v7\n        with:\n          node-version: 24\n',
+    '',
+  );
+  assert.deepEqual(iotaStagedWithoutNode(readWorkflow(planted)), ['pi']);
+});

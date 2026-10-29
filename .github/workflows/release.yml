@@ -226,13 +226,6 @@ jobs:
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release.
-      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
-        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
-
       # The container has no Rust, and rust-toolchain would fetch rustup from sh.rustup.rs, a script
       # that installs whichever rustup is current. So rustup-init is pinned as scripts/Dockerfile.pi
       # pins it (the x86_64 build of the same rustup 1.29.1; the sha256 static.rust-lang.org
@@ -250,6 +243,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
 
       # AppImage's bundler (appimagetool) normally needs FUSE, which hosted runners lack.
       # APPIMAGE_EXTRACT_AND_RUN makes it self-extract instead — the standard CI workaround.
@@ -487,13 +487,6 @@ jobs:
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release.
-      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
-        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
-
       - name: Install MinGW-w64 cross toolchain + NSIS
         run: |
           sudo apt-get update
@@ -510,6 +503,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
 
       # FFTW, and any other native library build-windows-cross.sh compiles from a downloaded
       # tarball, is built HERE, with no secret in the environment: third-party builds run
@@ -815,13 +815,6 @@ jobs:
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | shasum -a 256 -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | shasum -a 256 -c -
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release.
-      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
-        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
-
       # No fftw and no libusb here: Homebrew builds them for the runner's macOS, so both are built
       # from source below, at the app's minimum.
       - name: Install build dependencies
@@ -843,6 +836,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
 
       - name: Build the web UI
         run: |
@@ -1268,6 +1268,12 @@ jobs:
             --pattern 'model.onnx*' --dir src-tauri/resources/deepcw --clobber
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
+
+      # The runner image's own Node is whatever version the image carries; pin it as the other
+      # build jobs do, for the IOTA staging step below.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
 
       # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
       # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the

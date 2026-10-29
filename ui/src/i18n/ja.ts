@@ -6311,6 +6311,7 @@ export const JA: PartialCatalog = {
   "settings.iotaList.status": "{{count}} 島グループ・更新日 {{date}}",
   "settings.iotaList.statusShipped": "{{count}} 島グループ・Nexus同梱版（{{date}}）",
   "settings.iotaList.empty": "オフ：番号は形式（EU-131）だけで確認します。",
+  "settings.iotaList.none": "オン（一覧はまだありません）：最初のダウンロードまで、番号は形式（EU-131）だけで確認します。",
   "settings.iotaList.failed": "前回のダウンロードに失敗しました：{{detail}}",
   "settings.countryFile.legend": "カントリーファイル（DXCC）",
   "settings.countryFile.update.action": "カントリーファイルを更新",

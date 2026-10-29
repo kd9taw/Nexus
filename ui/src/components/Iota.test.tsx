@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { IotaOffer, IotaReferenceNote, IotaListSettings } from './Iota'
-import { iotaKnown, resetIotaGroupsForTest, IOTA_SITE } from '../features/iotaGroups'
+import { iotaKnown, resetIotaGroupsForTest, IOTA_SITE, IOTA_LIST_EVENT } from '../features/iotaGroups'
 import { iotaNeeded } from './SpotsPanel'
 import { t } from '../i18n'
 import type { NeedAlert } from '../types'
@@ -99,6 +99,40 @@ describe('Settings', () => {
     await waitFor(() => expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false'))
     expect(screen.getByText(t('settings.iotaList.empty'), { exact: false })).toBeTruthy()
     expect(iotaKnown('EU-999')).toBe(true) // the shape is the check again
+  })
+
+  it('on with no list in use yet says so, not "Off"', () => {
+    resetIotaGroupsForTest(null, status(true, 0))
+    render(<IotaListSettings />)
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByText(t('settings.iotaList.none'), { exact: false })).toBeTruthy()
+    expect(screen.queryByText(t('settings.iotaList.empty'), { exact: false })).toBeNull()
+  })
+
+  it("the station's first download reaches the open window without a restart", async () => {
+    let heard: (() => void) | null = null
+    const listen = vi.fn(async (name: string, cb: () => void) => {
+      if (name === IOTA_LIST_EVENT) heard = cb
+      return () => {}
+    })
+    vi.stubGlobal('__TAURI__', { event: { listen } })
+    try {
+      resetIotaGroupsForTest()
+      api.getIotaListStatus.mockResolvedValue(status(true, 0))
+      api.getIotaGroups.mockResolvedValue([])
+      render(<IotaListSettings />)
+      await screen.findByText(t('settings.iotaList.none'), { exact: false })
+      expect(heard).not.toBeNull()
+      // CONTROL: nothing is read again until the station says so.
+      expect(api.getIotaGroups).toHaveBeenCalledTimes(1)
+      api.getIotaListStatus.mockResolvedValue(status(true, 1, false))
+      api.getIotaGroups.mockResolvedValue(GROUPS)
+      heard!()
+      await screen.findByText(t('settings.iotaList.status', { count: '1', date: '2026-10-29' }), { exact: false })
+      expect(iotaKnown('EU-999')).toBe(false) // the list is the check now
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('a copy the monthly check downloaded is shown as updated, not shipped', () => {

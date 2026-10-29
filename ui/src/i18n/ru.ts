@@ -3278,6 +3278,7 @@ export const RU: PartialCatalog = {
   "settings.iotaList.status": "Групп островов: {{count}} · обновлён {{date}}",
   "settings.iotaList.statusShipped": "Групп островов: {{count}} · копия из комплекта Nexus ({{date}})",
   "settings.iotaList.empty": "Выключено: номера проверяются только по форме (EU-131).",
+  "settings.iotaList.none": "Включено, списка пока нет: до первой загрузки номера проверяются только по форме (EU-131).",
   "settings.iotaList.failed": "Последняя загрузка не удалась: {{detail}}",
   "settings.countryFile.legend": "Файл стран (DXCC)",
   "settings.countryFile.update.action": "Обновить файл страны",

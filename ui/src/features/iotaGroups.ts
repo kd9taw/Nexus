@@ -18,8 +18,30 @@ let loading: Promise<void> | null = null
 const listeners = new Set<() => void>()
 const notify = () => listeners.forEach((l) => l())
 
-/** Read the station's list and status once (again after `reloadIotaGroups`). */
+/**
+ * The station's word that the list in use changed (a download it made on its own, or the switch
+ * turned in another window): `iota_list.rs` emits it, and this window reads the list again.
+ */
+export const IOTA_LIST_EVENT = 'iota-list-changed'
+let listening = false
+function listenForChanges(): void {
+  // The global bridge api.ts uses for invoke (`withGlobalTauri`), as `useStationAlerts` does. A
+  // window without it (a Remote browser) hears nothing and keeps what it read.
+  const listen = window.__TAURI__?.event?.listen
+  if (listening || !listen) return
+  listening = true
+  void (async () => {
+    try {
+      await listen(IOTA_LIST_EVENT, () => void reloadIotaGroups())
+    } catch {
+      listening = false
+    }
+  })()
+}
+
+/** Read the station's list and status once (again after `reloadIotaGroups`, or the station's word). */
 export function loadIotaGroups(): Promise<void> {
+  listenForChanges()
   loading ??= (async () => {
     try {
       const [st, groups] = await Promise.all([getIotaListStatus(), getIotaGroups()])
@@ -97,5 +119,6 @@ export function resetIotaGroupsForTest(groups: { reference: string; name: string
   names = groups && groups.length > 0 ? new Map(groups.map((g) => [g.reference, g.name])) : null
   status = st
   loading = groups || st ? Promise.resolve() : null
+  listening = false
   notify()
 }

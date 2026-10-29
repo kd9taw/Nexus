@@ -223,11 +223,13 @@ export function IotaListSettings() {
       </label>
       <span className="settings-hint">{t('settings.iotaList.hint')}</span>
       <span className="settings-hint">
-        {!st || st.count === 0
+        {!st || !on
           ? t('settings.iotaList.empty')
-          : st.bundled
-            ? t('settings.iotaList.statusShipped', { count: st.count.toLocaleString(), date: isoDay(st.fetchedAt) })
-            : t('settings.iotaList.status', { count: st.count.toLocaleString(), date: isoDay(st.fetchedAt) })}{' '}
+          : st.count === 0
+            ? t('settings.iotaList.none')
+            : st.bundled
+              ? t('settings.iotaList.statusShipped', { count: st.count.toLocaleString(), date: isoDay(st.fetchedAt) })
+              : t('settings.iotaList.status', { count: st.count.toLocaleString(), date: isoDay(st.fetchedAt) })}{' '}
         <IotaCredit />
       </span>
       {st?.lastError && on && <span className="settings-hint">{t('settings.iotaList.failed', { detail: st.lastError })}</span>}

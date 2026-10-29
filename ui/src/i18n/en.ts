@@ -10026,6 +10026,7 @@ export const EN = {
   'settings.iotaList.status': '{{count}} island groups · updated {{date}}',
   'settings.iotaList.statusShipped': '{{count}} island groups · the copy shipped with Nexus ({{date}})',
   'settings.iotaList.empty': 'Off: references are checked by their shape (EU-131) only.',
+  'settings.iotaList.none': 'On, no list yet: references are checked by their shape (EU-131) until the first download.',
   'settings.iotaList.failed': 'Last download failed: {{detail}}',
   'settings.countryFile.legend': 'Country file (DXCC)',
   'settings.countryFile.update.action': 'Update country file',

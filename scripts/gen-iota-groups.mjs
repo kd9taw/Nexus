@@ -11,7 +11,7 @@
 // nothing over 2 MB read.
 //
 // The checks — any miss exits 1 and writes nothing, so a short or changed file never replaces
-// the committed copy:
+// a copy already staged:
 //   - the body is a JSON array of objects carrying `refno` and `name`;
 //   - at least 900 entries have a valid reference (XX-NNN, one of the seven continent codes)
 //     and a name — the app's own floor (propagation::iota::MIN_PLAUSIBLE_GROUPS);

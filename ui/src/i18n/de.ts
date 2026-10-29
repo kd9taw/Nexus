@@ -1236,6 +1236,7 @@ export const DE: PartialCatalog = {
   "settings.iotaList.status": "{{count}} Inselgruppen · aktualisiert am {{date}}",
   "settings.iotaList.statusShipped": "{{count}} Inselgruppen · mit Nexus ausgeliefert ({{date}})",
   "settings.iotaList.empty": "Aus: Referenzen werden nur nach ihrer Form (EU-131) geprüft.",
+  "settings.iotaList.none": "An, noch keine Liste: Referenzen werden bis zum ersten Download nur nach ihrer Form (EU-131) geprüft.",
   "settings.iotaList.failed": "Letzter Download fehlgeschlagen: {{detail}}",
   "settings.countryFile.legend": "Länderdatei (DXCC)",
   "settings.countryFile.update.action": "Länderdatei aktualisieren",

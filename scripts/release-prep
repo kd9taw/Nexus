@@ -169,7 +169,7 @@ fi
 # script needs iota-world.org and refuses a short or changed file, and a build without the list
 # still works (shape check until the app's first monthly download).
 if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
-  echo "warn: IOTA list NOT regenerated — shipping the committed copy." >&2
+  echo "warn: IOTA list NOT staged — a local build ships without it unless a copy is already in src-tauri/resources/iota." >&2
 fi
 
 # 5. Verify alignment or die.

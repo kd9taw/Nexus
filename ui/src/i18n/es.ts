@@ -6674,6 +6674,7 @@ export const ES: PartialCatalog = {
   "settings.iotaList.status": "{{count}} grupos de islas · actualizada el {{date}}",
   "settings.iotaList.statusShipped": "{{count}} grupos de islas · la copia incluida con Nexus ({{date}})",
   "settings.iotaList.empty": "Desactivada: las referencias solo se comprueban por su forma (EU-131).",
+  "settings.iotaList.none": "Activada, aún sin lista: las referencias se comprueban solo por su forma (EU-131) hasta la primera descarga.",
   "settings.iotaList.failed": "La última descarga falló: {{detail}}",
   "settings.countryFile.legend": "Archivo de países (DXCC)",
   "settings.countryFile.update.action": "Actualizar archivo de países",

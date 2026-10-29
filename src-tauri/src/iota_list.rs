@@ -28,7 +28,7 @@
 //! retried no sooner than a day later.
 
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, RwLock};
+use std::sync::{LazyLock, Mutex, OnceLock, RwLock};
 
 use propagation::iota::{IotaGroup, IotaGroups};
 
@@ -48,6 +48,34 @@ struct Held {
 
 /// The list in memory; `None` while the switch is off, or with no copy at all.
 static GROUPS: LazyLock<RwLock<Option<Held>>> = LazyLock::new(|| RwLock::new(None));
+
+/// Held while the meta, the downloaded file and the copy in use change together: a download that
+/// comes back and the switch turned off take it in turn, so an off made while a check was in flight
+/// is never undone by it. Never held across the network fetch itself.
+static KEEP: Mutex<()> = Mutex::new(());
+
+fn keep() -> std::sync::MutexGuard<'static, ()> {
+    KEEP.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The event every window hears when the copy in use changes, so names a background download
+/// brought show without a restart (`ui/src/features/iotaGroups.ts` reads the list again on it).
+const CHANGED_EVENT: &str = "iota-list-changed";
+
+/// The app, to tell its windows; set once in `setup`. Unset (tests), nothing is told.
+static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+pub(crate) fn set_app(app: tauri::AppHandle) {
+    let _ = APP.set(app);
+}
+
+fn tell_windows() {
+    use tauri::Emitter;
+    if let Some(app) = APP.get() {
+        let _ = app.emit(CHANGED_EVENT, ());
+    }
+}
 
 fn data_path(dir: &Path) -> PathBuf {
     dir.join("iota_groups.json")
@@ -159,15 +187,26 @@ fn pick(dir: &Path, m: &IotaListMeta, bundled: Option<Held>) -> Option<Held> {
 }
 
 /// Fetch with `fetch`, check, and keep the list in `dir`. On success the new copy is returned;
-/// on failure nothing on disk but the meta changes, so the copy in use stays.
+/// on failure nothing on disk but the meta changes, so the copy in use stays. The meta is read
+/// after the fetch, not before: if the switch was turned off while it ran, the result is dropped,
+/// nothing is written and the off stands.
 fn fetch_and_keep(
     dir: &Path,
     now: i64,
     fetch: impl FnOnce() -> Result<String, String>,
 ) -> Result<Held, String> {
+    let fetched = fetch();
+    let _keep = keep();
     let mut m = read_meta(dir);
+    if !m.enabled() {
+        // The off path deleted the file already; this one is for a copy it could not.
+        let _ = std::fs::remove_file(data_path(dir));
+        return Err(
+            "the IOTA list was switched off during the check, so the download was dropped".into(),
+        );
+    }
     m.attempted_at = now;
-    let result = fetch().and_then(|json| {
+    let result = fetched.and_then(|json| {
         let groups = IotaGroups::parse(&json)?;
         if !groups.plausible() {
             return Err(format!(
@@ -239,12 +278,17 @@ fn held_at() -> i64 {
 
 /// Download from iota-world.org and use the result. Blocking: run it off any command's thread.
 fn download(now: i64) -> Result<(), String> {
-    let held = fetch_and_keep(
-        &crate::config_dir(),
-        now,
-        propagation::live::iota::fetch_groups,
-    )?;
-    set_held(Some(held));
+    let dir = crate::config_dir();
+    let held = fetch_and_keep(&dir, now, propagation::live::iota::fetch_groups)?;
+    {
+        // An off between the keep above and here wins: it is the operator's latest word.
+        let _keep = keep();
+        if !read_meta(&dir).enabled() {
+            return Ok(());
+        }
+        set_held(Some(held));
+    }
+    tell_windows();
     Ok(())
 }
 
@@ -291,6 +335,7 @@ pub(crate) fn get_iota_list_status() -> IotaListStatus {
 #[tauri::command]
 pub(crate) async fn set_iota_list_enabled(enabled: bool) -> Result<IotaListStatus, String> {
     let dir = crate::config_dir();
+    let keeping = keep();
     let mut m = read_meta(&dir);
     m.on = Some(enabled);
     if !enabled {
@@ -299,12 +344,16 @@ pub(crate) async fn set_iota_list_enabled(enabled: bool) -> Result<IotaListStatu
         m.last_error = None;
         write_meta(&dir, &m);
         set_held(None);
+        drop(keeping);
+        tell_windows();
         return Ok(status());
     }
     // Turning it on is the operator asking now: the day's retry wait does not hold it back.
     m.attempted_at = 0;
     write_meta(&dir, &m);
     let m = load();
+    drop(keeping);
+    tell_windows();
     if due(&m, held_at(), crate::now_unix()) {
         tauri::async_runtime::spawn_blocking(|| download(crate::now_unix()))
             .await
@@ -507,6 +556,29 @@ mod tests {
             pick(&d, &on, Some(shipped())).unwrap().bundled,
             "CONTROL: on again"
         );
+    }
+
+    /// Off while a check is in flight: the download that comes back is dropped, neither kept on
+    /// disk nor put in use, and the operator's off is not overwritten by the meta read before it.
+    #[test]
+    fn a_check_in_flight_when_the_list_is_turned_off_is_dropped() {
+        let d = dir();
+        let got = fetch_and_keep(&d, NOW, || {
+            // `block_on` polls on this thread, so the command's folder is this test's own.
+            tauri::async_runtime::block_on(set_iota_list_enabled(false)).unwrap();
+            Ok(newer_list())
+        });
+        assert!(got.is_err(), "the download is not handed back to be used");
+        assert!(!data_path(&d).exists(), "nor kept on disk");
+        let m = read_meta(&d);
+        assert_eq!(m.on, Some(false), "the operator's off stands");
+        assert_eq!(m.fetched_at, 0);
+        // CONTROL: with the switch still on when the download returns, it is kept.
+        write_meta(&d, &meta(Some(true), 0, 0));
+        let kept = fetch_and_keep(&d, NOW, || Ok(newer_list())).expect("kept");
+        assert_eq!(kept.groups.name("EU-005"), Some("Great Britain (newer)"));
+        assert!(data_path(&d).exists());
+        assert_eq!(read_meta(&d).on, Some(true));
     }
 
     /// The old consent's answer carries over: a no stays off, a yes and never-asked are on.
