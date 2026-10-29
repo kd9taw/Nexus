@@ -8684,7 +8684,7 @@ export const ES: PartialCatalog = {
   "shell.lane.pcMic.ceiling": "el cambio llegó a su límite de 10 minutos, así que Nexus dejó de transmitir.",
   "shell.lane.pcMic.watchdog": "saltó el watchdog de TX, así que Nexus dejó de transmitir y apagó TX.",
   "shell.lane.pcMic.busy": "otra cosa estaba transmitiendo (entre otras, un mensaje del manipulador de voz), así que no se envió nada. Vuelve a pulsar PTT cuando termine.",
-  "shell.lane.pcMic.flexMic": "la radio estaba en su propio micrófono (el cliente Flex de Nexus la pone ahí en Phone), al que no llega el audio de este ordenador, así que no se envió nada. Usa el micrófono de la radio o apaga el micrófono de este ordenador para esta radio.",
+  "shell.lane.pcMic.flexMic": "la radio siguió en su propio micrófono: el cliente Flex de Nexus le pidió tomar el audio de este ordenador por DAX y no había cambiado en 2 segundos, así que no se envió nada. Pulsa PTT de nuevo.",
   "shell.lane.pcMic.radioReceive": "el micrófono elegido lleva el audio de recepción de una radio (la entrada de recepción de otra radio o un canal de recepción DAX de Flex), así que no se envió nada: eso emitiría la banda. Elige tu micrófono en Ajustes ▸ Equipo ▸ Audio.",
   "shell.lane.pcMic.loopback": "el micrófono elegido es un loopback o un cable virtual, que lleva lo que reproduce este ordenador, incluido el audio de transmisión de Nexus, así que no se envió nada. Elige tu micrófono en Ajustes ▸ Equipo ▸ Audio.",
   "shell.lane.pcMic.gateDown": "la transmisión dejó de estar permitida durante el cambio (TX apagado, fuera de tu licencia, una sintonía, salir de Phone u otra radio, micrófono o ruta de audio), así que Nexus dejó de transmitir.",

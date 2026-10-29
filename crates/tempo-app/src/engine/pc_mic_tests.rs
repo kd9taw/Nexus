@@ -550,21 +550,237 @@ fn a_refusal_at_the_loop_ends_the_over_before_the_microphone_opens() {
     assert_eq!(lane(&e), Some(PcMicCause::Unsure));
 }
 
-/// ⛔ Nexus's own Flex client giving the radio its own mic: the press arms nothing and says why
-/// (the PC audio would leave over DAX while the radio transmits its own mic), and an over already
-/// keyed when the radio takes its mic ends on the next tick.
-#[test]
-fn a_flex_with_its_own_mic_refuses_the_computer_microphone() {
+/// The radio loop's view of Nexus's Flex client in Phone at the shack: the radio has its own mic.
+fn flex_station() -> Engine {
     let mut e = station();
     e.observe_flex_radio_has_mic(true);
+    e
+}
+
+/// Press PTT on a Flex whose radio has its own mic and run to a keyed over on the DAX hold at `t0`:
+/// the radio reports DAX (the route put in place for it moved from 1 to 2 meanwhile), then audio.
+fn keyed_on_hold(e: &mut Engine, t0: Instant) {
     e.set_ptt(true);
-    assert!(!e.pc_mic_armed(), "armed while the radio has its own mic");
+    assert!(e.pc_mic_dax_hold().is_some(), "premise: armed on the hold");
+    e.push_pc_mic(&audio(40, 0.25), t0);
+    assert_eq!(e.poll_pc_mic(t0, TICK, 1), MicTick::Armed);
+    e.observe_pc_mic_dax(true);
+    e.push_pc_mic(&audio(40, 0.25), t0 + ms(20));
+    assert_eq!(
+        e.poll_pc_mic(t0 + ms(20), TICK, 2),
+        MicTick::Key,
+        "premise: audio keys once the radio takes DAX"
+    );
+    let mut t = 40;
+    while t <= 200 {
+        e.push_pc_mic(&audio(20, 0.25), t0 + ms(t));
+        let _ = e.poll_pc_mic(t0 + ms(t), TICK, 2);
+        t += 20;
+    }
+    assert!(e.pc_mic_keyed(), "premise: still keyed");
+    assert!(!e.take_pc_mic_abort(), "premise: no abort yet");
+}
+
+/// ⛔ ON A FLEX WHOSE RADIO HAS ITS OWN MIC, THE PRESS ARMS ON THE DAX HOLD AND KEYS ONLY ON DAX.
+/// Nexus's own Flex client gives the radio its mic in Phone, and the computer's audio reaches the
+/// radio only as DAX: the press arms (never the radio's own mic, never a key), the microphone's
+/// audio goes nowhere and keys nothing while the radio still takes its mic, the client's transmit
+/// route coming up for the switch does not end the press, and the first audio after the radio
+/// reports DAX keys. CONTROL: on any other radio there is no hold, and audio keys at once.
+#[test]
+fn on_a_flex_with_its_own_mic_the_press_waits_for_dax_and_keys_only_on_it() {
+    let mut e = flex_station();
+    let pressed = Instant::now();
+    e.set_ptt(true);
+    assert!(e.pc_mic_armed(), "the press arms the computer microphone");
+    assert!(!e.manual_ptt(), "the press keyed the radio's own mic");
+    let since = e.pc_mic_dax_hold().expect("the over rides the DAX hold");
+    assert!(since >= pressed, "the hold is timed from the press");
+    assert_eq!(lane(&e), None, "nothing to say yet");
+    // A second of speech while the radio still takes its mic, the route moving under it.
+    let t0 = Instant::now();
+    for k in 0..50u64 {
+        let t = t0 + ms(k * 20);
+        e.push_pc_mic(&audio(20, 0.5), t);
+        assert_eq!(
+            e.poll_pc_mic(t, TICK, 1 + k / 25),
+            MicTick::Armed,
+            "tick {k}: keyed on the radio's own mic"
+        );
+    }
+    assert!(e.pc_mic_armed(), "the route coming up ended the press");
+    assert!(!e.take_pc_mic_abort(), "nothing keyed, nothing to unkey");
+    // The radio reports DAX: the next audio keys, and only audio captured since.
+    e.observe_pc_mic_dax(true);
+    let t = t0 + ms(1_000);
+    assert_eq!(
+        e.poll_pc_mic(t, TICK, 2),
+        MicTick::Armed,
+        "keyed on nothing"
+    );
+    e.push_pc_mic(&audio(20, 0.25), t + ms(20));
+    assert_eq!(e.poll_pc_mic(t + ms(20), TICK, 2), MicTick::Key);
+    let mut played = Vec::new();
+    for k in 2..20u64 {
+        let t = t + ms(k * 20);
+        e.push_pc_mic(&audio(20, 0.25), t);
+        if let MicTick::Samples(b) = e.poll_pc_mic(t, TICK, 2) {
+            played.extend(b);
+        }
+    }
+    assert!(played.contains(&0.25), "the over played no speech");
     assert!(
-        !e.manual_ptt(),
-        "the press fell back to keying the radio's mic"
+        !played.contains(&0.5),
+        "audio from before the radio took DAX reached the air"
+    );
+
+    // CONTROL: the radio not on its own mic (any other radio): no hold, and audio keys at once.
+    let mut e = station();
+    e.set_ptt(true);
+    assert_eq!(e.pc_mic_dax_hold(), None, "a hold where none is needed");
+    let t0 = Instant::now();
+    e.push_pc_mic(&audio(40, 0.25), t0);
+    assert_eq!(e.poll_pc_mic(t0, TICK, 1), MicTick::Key);
+}
+
+/// ⭐ THE HOLD HAS NO LENGTH OF ITS OWN: an over on the DAX hold stays on the air past the 20
+/// seconds a voice-keyer message may carry on the same client, for as long as PTT is held and the
+/// radio keeps taking DAX.
+#[test]
+fn an_over_on_the_dax_hold_outlasts_the_voice_keyers_longest_message() {
+    let mut e = flex_station();
+    let t0 = Instant::now();
+    keyed_on_hold(&mut e, t0);
+    let mut fed = 0usize;
+    let mut t = 220;
+    while t <= 45_000 {
+        e.push_pc_mic(&audio(20, 0.25), t0 + ms(t));
+        match e.poll_pc_mic(t0 + ms(t), TICK, 2) {
+            MicTick::Samples(b) => fed += b.len(),
+            MicTick::Ahead => {}
+            other => panic!("at {t} ms the over ended: {other:?} {:?}", lane(&e)),
+        }
+        t += 20;
+    }
+    assert!(e.pc_mic_keyed());
+    assert!(
+        fed > crate::engine::FLEX_VOICE_MAX_SAMPLES * PC_MIC.rate_hz as usize / 12_000 * 2,
+        "{fed} samples: not past twice the keyer's longest message"
+    );
+}
+
+/// The radio never switches to DAX: the radio loop gives up after the client's confirm window, the
+/// press ends with nothing keyed and the lane says why. CONTROL: the same call on a keyed over
+/// (the radio had switched) leaves it alone.
+#[test]
+fn a_press_the_radio_never_switches_to_dax_for_ends_with_nothing_keyed() {
+    let mut e = flex_station();
+    e.set_ptt(true);
+    e.pc_mic_no_dax();
+    assert!(!e.pc_mic_armed());
+    assert_eq!(e.pc_mic_dax_hold(), None, "the hold outlived the press");
+    assert!(
+        !e.take_pc_mic_abort(),
+        "nothing was keyed, nothing to unkey"
     );
     assert_eq!(lane(&e), Some(PcMicCause::FlexMic));
-    e.set_ptt(false);
+    let mut e = flex_station();
+    keyed_on_hold(&mut e, Instant::now());
+    e.pc_mic_no_dax();
+    assert!(e.pc_mic_keyed(), "CONTROL: a keyed over is not the press");
+}
+
+/// ⛔ The radio leaving DAX under a keyed over on the hold (SmartSDR's own switch, the stream gone)
+/// ends it on that tick, its audio not played: the radio's mic would carry the over. CONTROL: while
+/// the radio keeps DAX the over carries on.
+#[test]
+fn a_keyed_over_on_the_dax_hold_ends_when_the_radio_leaves_dax() {
+    let mut e = flex_station();
+    let t0 = Instant::now();
+    keyed_on_hold(&mut e, t0);
+    let t = t0 + ms(220);
+    e.push_pc_mic(&audio(20, 0.5), t);
+    assert!(
+        matches!(
+            e.poll_pc_mic(t, TICK, 2),
+            MicTick::Samples(_) | MicTick::Ahead
+        ),
+        "CONTROL: the over ended on DAX"
+    );
+    e.observe_pc_mic_dax(false);
+    let t = t0 + ms(240);
+    e.push_pc_mic(&audio(20, 0.5), t);
+    assert_eq!(e.poll_pc_mic(t, TICK, 2), MicTick::Idle);
+    assert!(!e.pc_mic_armed());
+    assert!(e.take_pc_mic_abort(), "no flush + unkey");
+    assert_eq!(lane(&e), Some(PcMicCause::GateDown));
+}
+
+/// ⛔ EVERY TX GUARD STILL CUTS AN OVER ON THE DAX HOLD, and the hold ends with it (the radio loop
+/// then gives the radio its mic back): Stop TX, TX Off and a lost Flex connection or handoff at
+/// once; the watchdog on its tick, with TX left off; the release once its tail is spent; the
+/// transmit route (the client's DAX) going on its tick.
+#[test]
+fn every_stop_ends_an_over_on_the_dax_hold_and_the_hold_with_it() {
+    type Stop = fn(&mut Engine, Instant);
+    let stops: [(&str, Stop); 6] = [
+        ("Stop TX", |e, _| e.halt_tx()),
+        ("TX Off (the latch)", |e, _| e.set_tx_enabled(false)),
+        ("a handoff or a lost connection", |e, _| {
+            e.pc_mic_interrupted()
+        }),
+        ("the watchdog", |e, _| {
+            e.settings.tx_watchdog_min = 1;
+            e.tx_watchdog_start = Some(now_unix_secs() - 61);
+        }),
+        ("the release, its tail spent", |e, t| {
+            e.release_pc_mic_at(t - ms(RELEASE_TAIL_MS));
+            e.set_ptt(false);
+        }),
+        ("the client's DAX route gone", |_, _| {}),
+    ];
+    for (name, stop) in stops {
+        let mut e = flex_station();
+        let t0 = Instant::now();
+        keyed_on_hold(&mut e, t0);
+        let t = t0 + ms(220);
+        stop(&mut e, t);
+        e.push_pc_mic(&audio(20, 0.5), t);
+        // The route the over keyed on is 2: a new one is the client's DAX tee replaced or gone.
+        let route = if name.contains("route") { 3 } else { 2 };
+        let tick = e.poll_pc_mic(t, TICK, route);
+        assert_eq!(tick, MicTick::Idle, "{name}: the over carried on");
+        assert!(!e.pc_mic_armed(), "{name}: still armed");
+        assert_eq!(
+            e.pc_mic_dax_hold(),
+            None,
+            "{name}: the hold outlived the over"
+        );
+        assert!(e.take_pc_mic_abort(), "{name}: no flush + unkey");
+        if name == "the watchdog" {
+            assert!(!e.tx_enabled(), "the watchdog left TX on");
+            assert_eq!(lane(&e), Some(PcMicCause::Watchdog));
+        }
+    }
+}
+
+/// While an over on the hold is armed or keyed, the voice keyer's own switch is refused (one owner),
+/// so the two never share the client's DAX.
+#[test]
+fn the_voice_keyer_is_refused_while_an_over_rides_the_dax_hold() {
+    let mut e = flex_station();
+    e.set_ptt(true);
+    assert!(e.send_voice(audio(1_000, 0.1)).is_err(), "armed");
+    let mut e = flex_station();
+    keyed_on_hold(&mut e, Instant::now());
+    assert!(e.send_voice(audio(1_000, 0.1)).is_err(), "keyed");
+}
+
+/// An over keyed WITHOUT the hold (the radio was not on its own mic at the press) still ends on the
+/// next tick when the radio takes its mic: its audio would go to a DAX the radio is not listening
+/// to.
+#[test]
+fn an_over_keyed_off_the_hold_ends_when_the_radio_takes_its_mic() {
     let mut e = station();
     let t0 = Instant::now();
     keyed(&mut e, t0);

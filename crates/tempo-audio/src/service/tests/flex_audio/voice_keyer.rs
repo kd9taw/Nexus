@@ -15,14 +15,14 @@ use super::*;
 
 /// Phone at the shack on `session`, settled: the transmit slice in USB with native audio on, so the
 /// radio takes its transmit audio from its own mic, and nothing of ours keyed.
-fn shack(session: SimSession) -> FlexScene {
+pub(super) fn shack(session: SimSession) -> FlexScene {
     let mut s = FlexScene::with_session(true, session);
     shack_on(&mut s);
     s
 }
 
 /// Put `s` in Phone at the shack and wait until it has settled there.
-fn shack_on(s: &mut FlexScene) {
+pub(super) fn shack_on(s: &mut FlexScene) {
     {
         let mut e = s.engine.lock().unwrap();
         e.set_operating_mode("phone", false); // arms TX
@@ -33,12 +33,12 @@ fn shack_on(s: &mut FlexScene) {
 }
 
 /// Phone at the shack on the bundled radio, which reports the slice's mode back.
-fn phone() -> FlexScene {
+pub(super) fn phone() -> FlexScene {
     shack(reports(&["USB"]))
 }
 
 /// `session` with `command` answered with success and then `items`, in place of its own rule.
-fn with_rule(mut session: SimSession, command: &str, items: Vec<Item>) -> SimSession {
+pub(super) fn with_rule(mut session: SimSession, command: &str, items: Vec<Item>) -> SimSession {
     let rule = (
         Pattern::Exact(command.to_string()),
         vec![Rule {
@@ -52,12 +52,12 @@ fn with_rule(mut session: SimSession, command: &str, items: Vec<Item>) -> SimSes
     session
 }
 
-fn send(line: &str) -> Item {
+pub(super) fn send(line: &str) -> Item {
     Item::Send(line.to_string())
 }
 
 /// The interlock line for `state`, keyed by `source` under `handle` (`{h}`: our own).
-fn interlock(handle: &str, state: &str, source: &str) -> String {
+pub(super) fn interlock(handle: &str, state: &str, source: &str) -> String {
     format!(
         "S0|interlock tx_client_handle=0x{handle} state={state} reason= source={source} \
          tx_allowed=1 amplifier="
@@ -65,11 +65,11 @@ fn interlock(handle: &str, state: &str, source: &str) -> String {
 }
 
 /// The radio letting go of the transmitter: READY naming no client.
-const IDLE: &str =
+pub(super) const IDLE: &str =
     "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=";
 
 /// The bundled radio reporting its DAX source `ms` after Nexus writes it, instead of at once.
-fn slow_dax(ms: u64) -> SimSession {
+pub(super) fn slow_dax(ms: u64) -> SimSession {
     with_rule(
         reports(&["USB"]),
         "transmit set dax=1",
@@ -85,7 +85,7 @@ fn dax_word(line: &str) -> Option<&str> {
 /// What the radio saw from `since` on, over TCP and so in one order: Nexus's DAX transmit stream,
 /// the DAX source written and the radio's report of it, the keying commands, and the interlock's
 /// `idle` (READY naming no client).
-fn voice_trace(s: &FlexScene, since: Instant) -> Vec<String> {
+pub(super) fn voice_trace(s: &FlexScene, since: Instant) -> Vec<String> {
     s.log()
         .into_iter()
         .filter(|(at, _)| *at >= since)
@@ -108,7 +108,7 @@ fn voice_trace(s: &FlexScene, since: Instant) -> Vec<String> {
 
 /// When the radio first saw `want` (a command, or `radio dax=…` / `idle` as [`voice_trace`] names
 /// them) at or after `since`.
-fn seen_at(s: &FlexScene, since: Instant, want: &str) -> Option<Instant> {
+pub(super) fn seen_at(s: &FlexScene, since: Instant, want: &str) -> Option<Instant> {
     s.log()
         .into_iter()
         .filter(|(at, _)| *at >= since)
@@ -128,7 +128,7 @@ fn seen_at(s: &FlexScene, since: Instant, want: &str) -> Option<Instant> {
 /// the simulator listens on an ephemeral port, and a datagram another process on the machine still
 /// aims at that port lands in its log as well (seen once under load, with no VITA class, which
 /// every packet Nexus sends carries).
-fn dax_in(s: &FlexScene, since: Instant) -> Vec<(Instant, usize)> {
+pub(super) fn dax_in(s: &FlexScene, since: Instant) -> Vec<(Instant, usize)> {
     let log = s.log();
     let nexus: Vec<u16> = log
         .iter()
@@ -170,7 +170,7 @@ fn ptt_refused(s: &FlexScene) -> serde_json::Value {
 
 /// Run the loop until the radio has seen `want` after `since`, watching what the engine is told
 /// each tick: whether the radio has the mic, and whether the Phone screen shows the mic off.
-fn run_until_seen(
+pub(super) fn run_until_seen(
     s: &mut FlexScene,
     since: Instant,
     want: &str,
@@ -997,7 +997,7 @@ fn beside_smartsdrs_dax_a_message_writes_no_dax_source() {
 }
 
 /// The bundled radio as [`holder_kept`] has it, reporting the slice's USB back.
-fn holder_kept_in_usb() -> SimSession {
+pub(super) fn holder_kept_in_usb() -> SimSession {
     with_rule(
         holder_kept(),
         "slice set 0 mode=USB",

@@ -544,6 +544,15 @@ impl MicLatch {
         }
     }
 
+    /// An armed over waiting for its transmit route to come up (the computer microphone on Nexus's
+    /// Flex client while the radio switches to DAX for it): the route is taken afresh on its next
+    /// tick, so the route being put in place for it does not end it. A keyed over keeps its route.
+    pub fn unpin_route(&mut self) {
+        if let Phase::Armed { route } = &mut self.phase {
+            *route = None;
+        }
+    }
+
     /// The owner let go of a keyed over that must be off the air by `until` (the computer
     /// microphone's PTT release): [`Self::release`], and in addition no sample that would play at or
     /// after `until` is ever fed, and the gap is no fault in it (the owner stopped sending on

@@ -53,6 +53,14 @@
 //! refused at the wire until the radio has proved the unkey. Through the keyer's own DAX the radio
 //! still counts as having the mic ([`FlexDaemon::radio_has_mic`], [`FlexDaemon::dax_for_keyer`]).
 //!
+//! **The computer's microphone in Phone at the shack** rides the same switch with no length of its
+//! own (a DAX hold, `tempo_app::engine::pc_mic`): from the operator's PTT press for as long as it is
+//! held. The radio loop gives the routing the over's presence, keys it only once the radio reports
+//! DAX on Nexus's own stream with nothing keyed, marks that key as the keyer's is, and while keyed
+//! ends the over the moment the radio no longer takes that DAX ([`FlexDaemon::on_nexus_dax`]). Every
+//! stop of the over (the release, Stop TX, TX Off, the watchdog, a handoff, a lost session) ends the
+//! hold with it, and the mic comes back as after a message.
+//!
 //! ## Not yet
 //! No panadapter stream from this session (the older native pan still opens its own), no
 //! persisted client id (every connect registers as a new GUI client), and no tune carrier, ATU or
@@ -756,6 +764,17 @@ impl FlexDaemon {
             })
     }
 
+    /// Whether the radio takes its transmit audio from Nexus's own DAX now: it reports DAX, Nexus's
+    /// DAX transmit stream exists, and the route is up. What a keyed over of the computer's
+    /// microphone on the radio loop's DAX hold needs on every tick: without it the over's audio
+    /// does not reach the air and the radio's mic would. Cheap: the session's state read in place.
+    pub fn on_nexus_dax(&self) -> bool {
+        self.tx_route_ready()
+            && self
+                .conn()
+                .read(|s| s.model.transmit.dax == Some(true) && s.dax_tx_stream.is_some())
+    }
+
     /// Whether the radio reports a transmission nothing of ours has open: keyed (PTT_REQUESTED or
     /// TRANSMITTING) while this session has no start unconfirmed. The operator's mic PTT on the
     /// radio, another program, an earlier session of ours: a voice-keyer message waiting for DAX
@@ -799,7 +818,8 @@ impl FlexDaemon {
     /// 2026-10-03; [`routing`]). **Call it only at a quiet point**: the radio loop calls it at the
     /// end of a tick in which nothing of ours is keyed or about to be, which is what keeps the
     /// flag out of the keying path. `browser_voice`: the stream's browser voice is live;
-    /// `voice_keyer`: a voice-keyer message waits to go out over DAX. Returns what it did, for the
+    /// `voice_keyer`: a voice-keyer message waits to go out over DAX, or the computer
+    /// microphone's over rides its DAX hold (the same switch). Returns what it did, for the
     /// log.
     pub fn sync_tx_routing(&self, browser_voice: bool, voice_keyer: bool) -> Option<String> {
         let conn = self.conn();

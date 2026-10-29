@@ -13517,7 +13517,7 @@ export const EN = {
   'shell.lane.pcMic.busy':
     'something else was transmitting (a voice-keyer message, among others), so nothing was sent. Press PTT again when it ends.',
   'shell.lane.pcMic.flexMic':
-    'the radio was on its own mic (Nexus\'s Flex client puts it there in Phone), which audio from this computer does not reach, so nothing was sent. Use the radio\'s microphone, or turn this computer\'s microphone off for this radio.',
+    'the radio stayed on its own mic: Nexus\'s Flex client asked it to take this computer\'s audio over DAX, and it had not switched within 2 seconds, so nothing was sent. Press PTT again.',
   'shell.lane.pcMic.radioReceive':
     'the chosen microphone carries a radio\'s receive audio (another radio\'s receive input, or a Flex DAX receive channel), so nothing was sent: that would put the band on the air. Choose your microphone in Settings ▸ Radio ▸ Audio.',
   'shell.lane.pcMic.loopback':

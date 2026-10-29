@@ -6039,7 +6039,9 @@ impl RadioLoop {
     ///
     /// - nothing keyed or held: no over, tune, manual PTT, microphone over, TCI program's over or
     ///   rig PTT, and no immediate over, armed microphone over or armed program's over waiting for
-    ///   its key;
+    ///   its key. The one armed over that is no bar is the computer microphone's on the Flex
+    ///   client's DAX hold, not yet keyed ([`Engine::pc_mic_dax_hold`]): it is what the write is
+    ///   for, and it keys only once the radio reports the DAX the write asked for;
     /// - with slot transmission armed (the Digital section, TX enabled): the current slot's TX
     ///   decision has been made (`boundary_keyed` names this slot, so neither the boundary nor the
     ///   deferred decode path can still key in it), and the nearest boundary, either side, is
@@ -6056,7 +6058,7 @@ impl RadioLoop {
             || eng.peek_immediate_tx()
             || eng.mic_armed()
             || eng.tci_over_armed()
-            || eng.pc_mic_armed()
+            || (eng.pc_mic_armed() && (eng.pc_mic_keyed() || eng.pc_mic_dax_hold().is_none()))
         {
             return false;
         }
@@ -6092,7 +6094,9 @@ impl RadioLoop {
             }
             (
                 eng.remote_presence_live(self.mono_now(now_end)),
-                eng.voice_waits_for_dax().is_some(),
+                // The voice keyer's switch to DAX around a message, and the computer microphone's
+                // hold for as long as PTT is held: the same switch, the mic back after either.
+                eng.voice_waits_for_dax().is_some() || eng.pc_mic_dax_hold().is_some(),
             )
         };
         let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) else {
@@ -9181,6 +9185,13 @@ impl RadioLoop {
                 // one answers `Held` to a keyed rig's uplink now, on every
                 // transponder shape (`Engine::sat_note_keyed_leg`).
                 && !self.rig_keyed
+                // ⚠️ AND NOT WHILE THE COMPUTER MICROPHONE IS OPEN: the operator is holding PTT
+                // for it, as for `manual_ptt_applied` above, and its over may key on this very
+                // tick. A slow read here (past its budget on a link that answers slowly) delayed
+                // that key behind the read: the microphone's audio then reached the over as one
+                // late burst, measured from the tick's start, and the over ended on the gap at
+                // once. Keyed, `tx_until_ms` already stands this poll down.
+                && self.pc_mic_open.is_none()
                 // A TRIPPED breaker skips the poll — but only until its re-probe is due. It exists
                 // to stop the loop blocking on a dead read every cycle, which is rate-limiting;
                 // implemented as a permanent latch it left a recovered link dead for the session.
@@ -12755,6 +12766,30 @@ impl RadioLoop {
                 // `rig` is not the operator's radio this tick: a keyed transmitter cannot wait.
                 engine_lock(engine).pc_mic_interrupted();
             }
+            // ⛔ THE FLEX CLIENT'S DAX HOLD (`engine/pc_mic.rs`): an over pressed while the radio had
+            // its own mic keys only once the radio reports DAX on Nexus's own stream with the DAX
+            // tee in and nothing keyed, and while keyed is on the air only while the radio still
+            // takes that DAX. The press ends with nothing keyed when the radio is keyed by anything
+            // else first, or has not switched in the routing's own confirm window.
+            let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+            let hold = engine_lock(engine).pc_mic_dax_hold();
+            let on_dax = hold.is_some_and(|since| {
+                let tee = self.dax_tee_id.is_some();
+                if self.pc_mic_keyed {
+                    return tee && flex.is_some_and(crate::flex::FlexDaemon::on_nexus_dax);
+                }
+                if flex.is_some_and(crate::flex::FlexDaemon::keyed_by_another) {
+                    engine_lock(engine).pc_mic_interrupted();
+                    return false;
+                }
+                let ready = tee && flex.is_some_and(crate::flex::FlexDaemon::takes_voice_dax);
+                if !ready
+                    && since.elapsed() >= Duration::from_millis(crate::flex::routing::CONFIRM_MS)
+                {
+                    engine_lock(engine).pc_mic_no_dax();
+                }
+                ready
+            });
             let want = engine_lock(engine).pc_mic_source();
             // Read only the capture opened for THIS over: a new over (a quick re-press) gets a
             // fresh one at the end of the tick, so nothing captured before its press reaches it.
@@ -12764,6 +12799,7 @@ impl RadioLoop {
             let captured = current.then(|| backend.pc_mic_capture());
             let (abort, tick) = {
                 let mut eng = engine_lock(engine);
+                eng.observe_pc_mic_dax(on_dax);
                 match &captured {
                     Some(Ok(samples)) => eng.push_pc_mic(samples, mono),
                     // The microphone went away: the over ends on THIS tick, not at the gap.
@@ -12802,7 +12838,18 @@ impl RadioLoop {
                     MicTick::Key => {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying — the fail-safe must know
+                                                      // On the DAX hold the one key is marked as carrying Nexus's audio, which
+                                                      // the client keys only while the radio takes Nexus's DAX: the operator
+                                                      // flipping the radio back to its mic between the look above and the key
+                                                      // must not put the room on the air.
+                        let marked = hold.and(self.rigctld_proc.as_ref().and_then(CatDaemon::flex));
+                        if let Some(d) = marked {
+                            d.set_voice_key(true);
+                        }
                         let key = self.key_over(rig, false);
+                        if let Some(d) = marked {
+                            d.set_voice_key(false);
+                        }
                         self.report_ptt(engine, key.warns());
                         if let KeyUp::Refused(why) = &key {
                             // The rig did not key, so none of the microphone may be played.

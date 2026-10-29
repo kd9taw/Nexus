@@ -36,6 +36,18 @@
 //! - **One owner.** From the arm it owns the transmitter as the operator's held PTT
 //!   ([`super::TxOwner::ManualPtt`]), so nothing else keys under it, and it arms only when nothing
 //!   else holds the transmitter.
+//!
+//! ## On a Flex served by Nexus's own client (native audio on, Phone at the shack)
+//! The client gives the radio its own mic in Phone, and audio Nexus plays reaches the radio only as
+//! DAX. So an over pressed then rides a DAX HOLD for as long as the operator holds PTT: the press
+//! arms it on the hold ([`Engine::pc_mic_dax_hold`]), the radio loop asks the client to switch the
+//! radio to DAX, and nothing of the microphone reaches the over until the radio reports DAX on
+//! Nexus's own stream ([`Engine::observe_pc_mic_dax`]): until then it would key the room on the
+//! radio's mic. No DAX within the client's confirm window ends the press with nothing keyed
+//! ([`Engine::pc_mic_no_dax`]), and the radio leaving DAX under a keyed over ends it at once. The
+//! hold has no length of its own: it ends with the over, by every stop above, and the client puts
+//! the mic back only after the radio has proved the unkey. The voice keyer's switch is the same
+//! switch, bounded by its message instead.
 use super::{now_unix_millis, now_unix_secs, Engine};
 use crate::dto::{PcMicCause, PcMicEnded};
 use crate::mic::{MicDrop, MicFeed, MicFrame, MicGates, MicLatch, MicTick, PC_MIC};
@@ -85,6 +97,11 @@ pub(crate) struct PcMicState {
     pub(crate) tail: Option<Instant>,
     /// What the feed held at the release (captured before it), for the next tick.
     held: Vec<MicFrame>,
+    /// The over armed on the Flex client's DAX hold, at the press ([`Engine::pc_mic_dax_hold`]).
+    dax_hold: Option<Instant>,
+    /// The radio loop's word, each tick, that the radio takes this over's audio from Nexus's DAX
+    /// ([`Engine::observe_pc_mic_dax`]). Read only while `dax_hold` stands.
+    on_dax: bool,
 }
 
 impl Default for PcMicState {
@@ -103,6 +120,8 @@ impl Default for PcMicState {
             ended: None,
             tail: None,
             held: Vec::new(),
+            dax_hold: None,
+            on_dax: false,
         }
     }
 }
@@ -178,15 +197,6 @@ impl Engine {
             self.note_pc_mic(PcMicCause::Busy);
             return false;
         }
-        // Nexus's own Flex client gives the radio its own mic in Phone at the shack, and audio
-        // Nexus plays leaves over DAX, which the radio is then not listening to: the operator
-        // would be on the radio's mic believing they were on this one. The voice keyer's switch
-        // to DAX around a message is not reused: it carries at most the client's DAX queue
-        // (`FLEX_VOICE_MAX_SAMPLES`), and a held over has no length. Refused, as APRS and SSTV are.
-        if self.flex_radio_has_mic {
-            self.note_pc_mic(PcMicCause::FlexMic);
-            return false;
-        }
         let device = self.settings.pc_mic_device.trim().to_string();
         if device.is_empty() {
             self.note_pc_mic(PcMicCause::NoDevice);
@@ -205,6 +215,11 @@ impl Engine {
         self.pc_mic.seq = 0;
         self.pc_mic.partial.clear();
         self.pc_mic.silent_since = None;
+        // ⛔ Nexus's own Flex client has given the radio its own mic (Phone at the shack), and audio
+        // Nexus plays reaches the radio only as DAX: the over rides the client's switch to DAX for
+        // as long as PTT is held, and keys nothing until the radio reports it (module header).
+        self.pc_mic.dax_hold = self.flex_radio_has_mic.then(Instant::now);
+        self.pc_mic.on_dax = false;
         // A press is an operator action: the unattended-transmit clock restarts here.
         self.reset_tx_watchdog();
         true
@@ -358,6 +373,32 @@ impl Engine {
         self.drop_pc_mic_for(PcMicCause::KeyRefused);
     }
 
+    /// When the operator pressed PTT for the armed or keyed over that rides Nexus's Flex client's
+    /// switch to DAX ([`Self::arm_pc_mic`], the radio having had its own mic); `None` for any other
+    /// over, or none. The radio loop's cue to ask the client for DAX at its quiet point, to watch
+    /// the radio take it before the over may key and keep it while keyed
+    /// ([`Self::observe_pc_mic_dax`]), and to give up on it after the client's confirm window
+    /// ([`Self::pc_mic_no_dax`]).
+    pub fn pc_mic_dax_hold(&self) -> Option<Instant> {
+        self.pc_mic.dax_hold.filter(|_| self.pc_mic.over.active())
+    }
+
+    /// The radio loop's word, before each [`Self::poll_pc_mic`], on whether the radio takes the
+    /// over on the DAX hold's audio from Nexus's DAX: before the key, it reports DAX on Nexus's own
+    /// transmit stream, the route is in, and nothing is keyed; while keyed, it still reports DAX on
+    /// that stream. Until it does, no audio reaches the over; once keyed, its going ends the over.
+    pub fn observe_pc_mic_dax(&mut self, on_dax: bool) {
+        self.pc_mic.on_dax = on_dax;
+    }
+
+    /// The radio did not switch to DAX for the over on the hold within the client's confirm window:
+    /// the press ends, nothing was keyed, and the lane says why.
+    pub fn pc_mic_no_dax(&mut self) {
+        if !self.pc_mic.over.keyed() {
+            self.drop_pc_mic_for(PcMicCause::FlexMic);
+        }
+    }
+
     /// Take + reset the one-shot abort (the loop flushes the output and unkeys).
     pub fn take_pc_mic_abort(&mut self) -> bool {
         std::mem::take(&mut self.pc_mic.abort)
@@ -448,15 +489,18 @@ impl Engine {
             return MicTick::Idle;
         }
         // The section gate carries this feature's own conditions too: Phone, this radio's switch
-        // still on, the radio the over armed on, and the microphone it armed with.
-        // The radio taking its own mic (Nexus's Flex client) ends it too ([`Self::arm_pc_mic`]).
+        // still on, the radio the over armed on, and the microphone it armed with. The radio taking
+        // its own mic (Nexus's Flex client) ends an over that did not arm on the DAX hold; one that
+        // did is watched for DAX itself, below.
+        let hold = self.pc_mic.dax_hold.is_some();
+        let was_keyed = self.pc_mic.over.keyed();
         let same_source = self.pc_mic.radio == Some(self.settings.active_radio)
             && self.settings.pc_mic_device.trim() == self.pc_mic.device;
         let gates = MicGates {
             tx_enabled: self.tx_enabled,
             tx_allowed: self.tx_allowed(),
             tuning: self.tuning,
-            in_section: self.pc_mic_wanted() && same_source && !self.flex_radio_has_mic,
+            in_section: self.pc_mic_wanted() && same_source && (hold || !self.flex_radio_has_mic),
             // The operator's own hold: the release ends the over directly, so while it is armed
             // the hold is held.
             presence: true,
@@ -469,11 +513,31 @@ impl Engine {
         };
         let mut arrived = std::mem::take(&mut self.pc_mic.held);
         arrived.extend(self.pc_mic.feed.take());
+        // ⛔ THE DAX HOLD, BEFORE THE KEY: until the radio takes Nexus's DAX, the microphone's audio
+        // goes nowhere (keying on it would put the room on the air through the radio's own mic).
+        // Every gate is still judged on this tick.
+        let waiting = hold && !was_keyed && !self.pc_mic.on_dax;
+        if waiting {
+            arrived.clear();
+            self.pc_mic.partial.clear();
+        }
         let budget_ms = budget_ms.clamp(0.0, PC_MIC.max_push_ms as f64);
         let budget = (budget_ms * f64::from(PC_MIC.rate_hz) / 1000.0) as usize;
         let mut res = self.pc_mic.over.tick(gates, arrived, budget);
+        if waiting {
+            // The client's transmit route coming up for the switch is no change of route: the over
+            // takes its route on the tick the radio is on DAX, the route then in place.
+            self.pc_mic.over.unpin_route();
+        }
         if let Some(start) = res.watchdog_start {
             self.tx_watchdog_start = Some(start);
+        }
+        // ⛔ THE DAX HOLD, WHILE KEYED: the radio no longer takes Nexus's DAX (SmartSDR's own
+        // switch, the stream gone), so the over's audio would not reach the air and the radio's
+        // mic would: off the air now, release tail or not, with this tick's audio not played.
+        if res.drop.is_none() && hold && was_keyed && !self.pc_mic.on_dax {
+            res.drop = Some(MicDrop::DeviceChanged);
+            res.tick = MicTick::Idle;
         }
         // The release's tail ([`Self::release_pc_mic_at`]). The latch has already judged every
         // gate, the ceiling and the watchdog on this tick; a drop it raised stands.

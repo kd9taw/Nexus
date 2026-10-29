@@ -1641,7 +1641,8 @@ pub enum PcMicCause {
     /// Something else held the transmitter at the press (a voice-keyer message, among others).
     Busy,
     /// Nexus's own Flex client had given the radio its own mic, which audio Nexus plays does not
-    /// reach.
+    /// reach, and the radio did not switch to DAX for the over within the client's confirm window:
+    /// nothing was keyed.
     FlexMic,
     /// The chosen microphone carries another radio's receive audio (its receive input, or a Flex
     /// DAX receive channel).

@@ -18,7 +18,9 @@
 //! **The voice keyer** (operator ruling, 2026-10-12, "Change it now", for the length of a message
 //! only): in Phone at the shack, DAX also while a voice-keyer message waits to go out, and the mic
 //! again once it has gone, the radio loop keying the message only after the radio reports DAX and
-//! this write of the mic going out only after the radio has proved the unkey.
+//! this write of the mic going out only after the radio has proved the unkey. The computer's
+//! microphone takes the same switch for as long as its PTT is held (its DAX hold): the radio loop
+//! passes either as `voice_keyer`, and nothing here tells them apart.
 //!
 //! ## How each part holds
 //! - **Follow the mode.** [`wanted_source`] maps the TX slice's mode to the source: the digital

@@ -8684,7 +8684,7 @@ export const FR: PartialCatalog = {
   "shell.lane.pcMic.ceiling": "l'émission a atteint sa limite de 10 minutes, donc Nexus a repassé la radio en réception.",
   "shell.lane.pcMic.watchdog": "le watchdog TX s'est déclenché, donc Nexus a repassé la radio en réception et coupé TX.",
   "shell.lane.pcMic.busy": "autre chose émettait (entre autres un message du manipulateur vocal), donc rien n'a été émis. Appuyez de nouveau sur PTT quand c'est fini.",
-  "shell.lane.pcMic.flexMic": "la radio était sur son propre micro (le client Flex de Nexus l'y met en Phone), que l'audio de cet ordinateur n'atteint pas, donc rien n'a été émis. Utilisez le micro de la radio, ou désactivez le micro de cet ordinateur pour cette radio.",
+  "shell.lane.pcMic.flexMic": "la radio est restée sur son propre micro : le client Flex de Nexus lui a demandé de prendre l'audio de cet ordinateur par DAX, et elle n'avait pas basculé en 2 secondes, donc rien n'a été émis. Appuyez de nouveau sur PTT.",
   "shell.lane.pcMic.radioReceive": "le micro choisi porte l'audio de réception d'une radio (l'entrée de réception d'une autre radio, ou un canal de réception DAX Flex), donc rien n'a été émis : cela mettrait la bande à l'antenne. Choisissez votre micro dans Paramètres ▸ Radio ▸ Audio.",
   "shell.lane.pcMic.loopback": "le micro choisi est un loopback ou un câble virtuel, qui porte ce que joue cet ordinateur, l'audio d'émission de Nexus compris, donc rien n'a été émis. Choisissez votre micro dans Paramètres ▸ Radio ▸ Audio.",
   "shell.lane.pcMic.gateDown": "l'émission a cessé d'être permise pendant l'émission (TX coupé, hors de votre licence, un accord, sortie de Phone, ou une autre radio, un autre micro ou une autre route audio), donc Nexus a repassé la radio en réception.",
