@@ -58,10 +58,6 @@ export const PER_SURFACE = [
   // per window like the view's `nexus.ota.*` below: a chip in the box never moves the view's.
   'nexus.connect.ota.bandFilter',
   'nexus.connect.ota.hideWorked',
-  // The CW and Phone audio scopes' span chips: a statement about THIS window's scope, like the
-  // waterfall's span (a torn-off copy may run wide beside a narrow docked one).
-  'nexus.cw.scope.span',
-  'nexus.phone.scope.span',
   'nexus.connect.ota.modeFilter',
   'nexus.connect.ota.program',
   'nexus.connect.ota.sortAsc',
@@ -83,6 +79,9 @@ export const PER_SURFACE = [
   // main window's Contest screen: how large THIS window's entry and last contacts read, for the person
   // at its monitor. Each window writes its own; a logger window never sized starts from the main's.
   'nexus.contestLogger.textScale',
+  // The CW audio scope's span chips (Filter / Std / Full): a statement about THIS window's scope,
+  // like the waterfall's span (a torn-off copy may run wide beside a narrow docked one).
+  'nexus.cw.scope.span',
   // The dashboard rail beside the cockpits (features/dashRail): which box is in each slot, whether it
   // shows beside each section, and its width — statements about THIS window, like Connect's.
   'nexus.dashrail.config',
@@ -123,6 +122,8 @@ export const PER_SURFACE = [
   'nexus.ota.program',
   'nexus.ota.sortAsc',
   'nexus.ota.sortKey',
+  // The Phone audio scope's span chips, for the same reason as CW's.
+  'nexus.phone.scope.span',
   'nexus.phonescope.dss',
   'nexus.phonescope.flow',
   // The rig scope's slow-scope look (smooth scroll or a row per sweep): like 3D and flow, a look of

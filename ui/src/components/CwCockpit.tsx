@@ -1043,7 +1043,44 @@ export function CwCockpit({
   // whatever pitch the operator runs (it used to be a fixed 300–1100, centered on 600 only).
   // That is the Filter chip, and the default; Std and Full show the band as the waterfalls do.
   const [audioSpan, setAudioSpan] = useState<CwAudioSpan>(() => coerceCwAudioSpan(surfaceGet(CW_SCOPE_SPAN_KEY)))
-  const cwView = cwAudioView(audioSpan, pitch, filterHz)
+  // A radio with its own scope (`yaesuScope`) hides the chips; when its rows fall back to sound-card
+  // audio that view is Filter, never a span picked elsewhere that the operator can neither see nor change.
+  const shownSpan: CwAudioSpan = yaesuScope ? 'filter' : audioSpan
+  const cwView = cwAudioView(shownSpan, pitch, filterHz)
+  // The audio view's span: Filter (round the pitch, the default), or the waterfalls' Std and Full
+  // views. Display only: the click maps through whichever window is shown. They stand at the start of
+  // the scope's own toolbar strip: a row of their own took its height out of the picture, which sits at
+  // the panel's floor at 1024x768. Hidden on a native RF row and on a radio with its own scope.
+  const audioSpanChips =
+    !nativeRf && !yaesuScope ? (
+      <div className="ph-span" role="group" aria-label={t('cw.scope.span.aria')}>
+        {CW_AUDIO_SPANS.map((id) => (
+          <button
+            key={id}
+            type="button"
+            className={`theme-chip${audioSpan === id ? ' active' : ''}`}
+            aria-pressed={audioSpan === id}
+            title={
+              id === 'filter'
+                ? t('cw.scope.span.filter.title')
+                : id === 'std'
+                  ? t('cw.scope.span.std.title', { lo: WF_F_MIN, hi: WF_STD_HI })
+                  : t('cw.scope.span.full.title', { lo: WF_F_MIN, hi: WF_F_MAX })
+            }
+            onClick={() => {
+              setAudioSpan(id)
+              surfaceSet(CW_SCOPE_SPAN_KEY, id)
+            }}
+          >
+            {id === 'filter'
+              ? t('cw.scope.span.filter.label')
+              : id === 'std'
+                ? t('cw.scope.span.std.label')
+                : t('cw.scope.span.full.label')}
+          </button>
+        ))}
+      </div>
+    ) : null
   const changePitch = (v: number) => {
     const p = Math.max(300, Math.min(1200, Math.round(v)))
     setPitch(p)
@@ -2404,10 +2441,10 @@ export function CwCockpit({
             title={
               nativeRf
                 ? t('cw.scope.nativeRf.title')
-                : audioSpan === 'filter'
+                : shownSpan === 'filter'
                   ? t('cw.scope.audio.title', { lo: cwView.loHz, hi: cwView.hiHz })
                   // Std and Full are not centred on the pitch, so the title says what they are.
-                  : audioSpan === 'std'
+                  : shownSpan === 'std'
                     ? t('cw.scope.span.std.title', { lo: cwView.loHz, hi: cwView.hiHz })
                     : t('cw.scope.span.full.title', { lo: cwView.loHz, hi: cwView.hiHz })
             }
@@ -2492,38 +2529,6 @@ export function CwCockpit({
             ))}
           </div>
         )}
-        {!nativeRf && !yaesuScope && (
-          // The audio view's span: Filter (round the pitch, the default), or the waterfalls' Std and
-          // Full views. Display only: the click maps through whichever window is shown. Its own row,
-          // as Phone's span chips and CW's panadapter zoom: the head row is title, zero beat, Colors, ✕.
-          <div className="ph-span" role="group" aria-label={t('cw.scope.span.aria')}>
-            {CW_AUDIO_SPANS.map((id) => (
-              <button
-                key={id}
-                type="button"
-                className={`theme-chip${audioSpan === id ? ' active' : ''}`}
-                aria-pressed={audioSpan === id}
-                title={
-                  id === 'filter'
-                    ? t('cw.scope.span.filter.title')
-                    : id === 'std'
-                      ? t('cw.scope.span.std.title', { lo: WF_F_MIN, hi: WF_STD_HI })
-                      : t('cw.scope.span.full.title', { lo: WF_F_MIN, hi: WF_F_MAX })
-                }
-                onClick={() => {
-                  setAudioSpan(id)
-                  surfaceSet(CW_SCOPE_SPAN_KEY, id)
-                }}
-              >
-                {id === 'filter'
-                  ? t('cw.scope.span.filter.label')
-                  : id === 'std'
-                    ? t('cw.scope.span.std.label')
-                    : t('cw.scope.span.full.label')}
-              </button>
-            ))}
-          </div>
-        )}
         {/* CW-narrow view — 800 Hz CENTERED ON THE PITCH (cwScopeWindow) — unless a native RF
             scope is streaming, in which case we show the real RF spectrum around the dial. The
             dashed hairline is YOUR pitch, and it now sits mid-screen where a rig puts it. */}
@@ -2533,6 +2538,7 @@ export function CwCockpit({
           transmitting={snap.radio.transmitting}
           theme={theme}
           smeterDb={smeterDb}
+          toolbarStart={audioSpanChips}
           viewLoHz={yaesuRf ? -1e9 : nativeRf ? rfSpan.lo : cwView.loHz}
           viewHiHz={yaesuRf ? 1e9 : nativeRf ? rfSpan.hi : cwView.hiHz}
           markerHz={nativeRf ? undefined : pitch}

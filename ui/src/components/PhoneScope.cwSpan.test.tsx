@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { PhoneScope } from './PhoneScope'
 import { cwAudioView } from '../waterfall'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 /** The received tones (audio Hz). The row honours the window it is asked for, as the engine does. */
 let tones = [750]
@@ -97,5 +99,88 @@ describe('CW click-to-tune at every span', () => {
     const atStd = await clickTone('std', hz)
     expect(atFilter).toBe(DIAL + (hz - PITCH))
     expect(atStd).toBe(DIAL + (hz - PITCH))
+  })
+})
+
+// ── The toolbar's start slot ────────────────────────────────────────────────────────────────
+// The CW span chips ride the scope's existing toolbar strip (`.ph-scope-smeter`) rather than a row
+// of their own, which cost the picture its height at 1024x768. jsdom lays nothing out, so this pins
+// the structure and the cascade that keeps them on the strip's line: the strip a wrapping ROW of
+// flex items, and the chip group a content-width item, never a full-width line of its own. Values
+// come from the real sheets through a cascade resolved here (jsdom's CSSOM gives matching only).
+const RULES: { rule: CSSStyleRule; order: number }[] = []
+function loadSheets() {
+  if (RULES.length) return
+  for (const sheet of ['styles.css', 'cockpit-panes.css']) {
+    const style = document.createElement('style')
+    style.textContent = readFileSync(resolve(process.cwd(), 'src', sheet), 'utf8')
+    document.head.appendChild(style)
+    const walk = (rules: CSSRuleList) => {
+      for (let i = 0; i < rules.length; i++) {
+        const r = rules[i]
+        if ((r as CSSStyleRule).selectorText) RULES.push({ rule: r as CSSStyleRule, order: RULES.length })
+        else if ((r as CSSGroupingRule).cssRules) walk((r as CSSGroupingRule).cssRules)
+      }
+    }
+    walk(style.sheet!.cssRules)
+  }
+}
+/** Specificity as one comparable number: (ids, classes+attrs+pseudo-classes, elements). */
+function spec(sel: string): number {
+  const s = sel.replace(/:where\([^)]*\)/g, '')
+  const ids = (s.match(/#[\w-]+/g) ?? []).length
+  const cls = (s.match(/\.[\w-]+|\[[^\]]+\]|:[a-z-]+(?:\([^)]*\))?/g) ?? []).filter((x) => !x.startsWith('::')).length
+  const el = (s.match(/(?:^|[\s>+~(])([a-z][\w-]*)/g) ?? []).length
+  return ids * 10000 + cls * 100 + el
+}
+/** The winning declaration of `prop` on a rendered element, by importance, specificity, then order.
+ *  Selector lists are split so each selector is weighed on its own. */
+function winner(el: Element, prop: string): string | null {
+  let win: { value: string; important: boolean; spec: number; order: number } | null = null
+  for (const { rule, order } of RULES) {
+    const value = rule.style.getPropertyValue(prop)
+    if (!value) continue
+    for (const sel of rule.selectorText.split(',')) {
+      let hit = false
+      try { hit = el.matches(sel) } catch { continue }
+      if (!hit) continue
+      const important = rule.style.getPropertyPriority(prop) === 'important'
+      const s = spec(sel)
+      if (win === null || (important && !win.important) ||
+        (important === win.important && (s > win.spec || (s === win.spec && order >= win.order)))) {
+        win = { value: value.trim(), important, spec: s, order }
+      }
+    }
+  }
+  return win?.value ?? null
+}
+
+describe("the scope toolbar's start slot", () => {
+  it('renders first in the toolbar strip, on its line, and a scope without it is unchanged', async () => {
+    loadSheets()
+    const ui = render(
+      <PhoneScope cockpit="cw" transmitting={false} theme="dark" active
+        toolbarStart={<div className="ph-span" role="group" aria-label="chips"><button type="button" className="theme-chip">Std</button></div>} />,
+    )
+    await draw()
+    const strip = ui.container.querySelector('.ph-scope-smeter')!
+    const chips = ui.getByRole('group', { name: 'chips' })
+    expect(chips.parentElement).toBe(strip)
+    expect(strip.firstElementChild).toBe(chips)
+    // The S-meter is still there, after it.
+    expect(chips.nextElementSibling?.className).toBe('ph-scope-smeter-label')
+    // The strip is a wrapping ROW of flex items…
+    expect(winner(strip, 'display')).toBe('flex')
+    expect(winner(strip, 'flex-direction') ?? 'row').toBe('row')
+    // …and the chip group is a content-width item in it, not a line of its own.
+    expect(winner(chips, 'display')).toBe('flex')
+    for (const p of ['width', 'flex-basis', 'flex', 'flex-grow']) {
+      expect(winner(chips, p), `${p} on the chip group`).toBeNull()
+    }
+    cleanup()
+    // Negative control: without the slot the strip opens on the S-meter, as before.
+    const bare = render(<PhoneScope cockpit="cw" transmitting={false} theme="dark" active />)
+    await draw()
+    expect(bare.container.querySelector('.ph-scope-smeter')!.firstElementChild?.className).toBe('ph-scope-smeter-label')
   })
 })

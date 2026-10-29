@@ -8,6 +8,7 @@ import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
 import { cwScopeWindow } from '../waterfall'
 import type { AppSnapshot } from '../types'
+import type { ReactNode } from 'react'
 
 const decodeState = {
   text: '',
@@ -80,7 +81,12 @@ const { scopeProps } = vi.hoisted(() => ({ scopeProps: [] as Record<string, unkn
 vi.mock('./PhoneScope', () => ({
   PhoneScope: (p: Record<string, unknown>) => {
     scopeProps.push(p)
-    return <div data-testid="scope-stub" />
+    // The scope's own toolbar strip, holding whatever the cockpit puts at its start.
+    return (
+      <div data-testid="scope-stub">
+        <div data-testid="scope-toolbar">{p.toolbarStart as ReactNode}</div>
+      </div>
+    )
   },
 }))
 vi.mock('./BandStrip', () => ({ BandStrip: () => <div data-testid="bandstrip-stub" /> }))
@@ -177,5 +183,25 @@ describe('the CW audio scope span', () => {
     await renderCw()
     expect(chip('Filter').getAttribute('aria-pressed')).toBe('true')
     expect(view()).toEqual({ lo: 288, hi: 913 })
+  })
+
+  it('the chips stand at the start of the scope\'s own toolbar, not on a row of their own', async () => {
+    const { container } = await renderCw()
+    // A row of their own took its height out of the picture (a 112 px panel at 1024x768).
+    expect(group().closest('[data-testid="scope-toolbar"]')).not.toBeNull()
+    expect(container.querySelector('.ph-scope-panel > .ph-span')).toBeNull()
+  })
+
+  it('a radio with its own scope hides the chips, and a stored span is not applied behind them', async () => {
+    // Its rows fall back to sound-card audio (no RF feed), so the audio view is drawn — at Filter,
+    // the one view the operator can see the reason for, whatever was picked elsewhere.
+    localStorage.setItem('nexus.cw.scope.span', 'std')
+    await renderCw({ scopeModeCode: 0x34 })
+    expect(screen.queryByRole('group', { name: 'Audio scope span' })).toBeNull()
+    expect(view()).toEqual({ lo: 288, hi: 913 })
+    // Positive control: the same stored pick on a radio without its own scope is applied.
+    cleanup()
+    await renderCw()
+    expect(view()).toEqual({ lo: 200, hi: 3000 })
   })
 })
