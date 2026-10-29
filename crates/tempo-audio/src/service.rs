@@ -988,6 +988,8 @@ const TX_HOLD_RETELL_MS: f64 = 100.0;
 /// How often to run the FULL rig read-back over CAT — RF power, S-meter, mode mirror, DSP funcs.
 /// Each is a blocking TCP round-trip, so the heavy set is throttled well below the loop rate.
 const RIG_POLL_MS: f64 = 750.0;
+/// How long an owed split release the radio did not take waits before it is sent again (ms).
+const RIG_SPLIT_RELEASE_RETRY_MS: f64 = 2_000.0;
 
 /// How long after a tune-up the radio took to read its tuner state again (#344). Not at once: while
 /// it tunes a Yaesu answers `AC002` and Hamlib reads that as "off" (`u TUNER` → `0`, captured from
@@ -4238,6 +4240,9 @@ struct RadioLoop {
     audio_rig_split: bool,
     /// The RX dial (Hz) when Rig split was turned on: a band change lets go of it.
     rig_split_dial: u64,
+    /// When an owed split release ([`Rig::split_release_pending`]) may be sent again (loop ms);
+    /// `None` until the first quiet tick after it was refused.
+    rig_split_release_at: Option<f64>,
     /// The rig's OWN split state, observed while Nexus was not holding split, as
     /// `(split_on, tx_vfo, tx_freq_hz)` — what the teardown RESTORES.
     ///
@@ -4772,6 +4777,7 @@ impl RadioLoop {
             fake_it_restore_tries: 0,
             audio_rig_split: false,
             rig_split_dial: 0,
+            rig_split_release_at: None,
             rig_split_restore: None,
             split_detect: None,
             rfpower_floor: None,
@@ -6760,6 +6766,13 @@ impl RadioLoop {
     /// Let go of the Rig split Nexus holds: put back the radio's own split if one was read before
     /// Nexus turned it on, else turn split off. The cluster SPLIT-on-Work owns VFO B when active
     /// (`cluster_active`): then nothing is written.
+    ///
+    /// ⛔ A RELEASE THE RADIO DOES NOT TAKE IS STILL OWED ([`Rig::split_release_pending`]). The
+    /// answer used to be ignored, so a refused or unanswered `S 0` left the radio in Nexus's split,
+    /// and the receive-time split read then took that for the operator's own split and put it
+    /// back at the next teardown. Now the radio loop sends the release again at quiet points
+    /// ([`Self::retry_rig_split_release`]), no slot over keys meanwhile, and the split read is not
+    /// taken while it is owed.
     fn let_go_of_rig_split(&mut self, rig: &mut Rig, cluster_active: bool) {
         if !self.audio_rig_split {
             return;
@@ -6769,28 +6782,66 @@ impl RadioLoop {
         if cluster_active {
             return;
         }
-        // ⚠️ RESTORE WHAT WAS THERE, don't write an absolute OFF (2026-08-17 Flex
-        // audit, wave-2 #22). This wrote `S 0 VFOA` unconditionally, so an over
-        // ended by cancelling a split Nexus never engaged — the operator's own
-        // front-panel split, or on a multi-client Flex the split a second client
-        // set. And `apply_tx_dial_shift` had already overwritten the TX VFO's
-        // FREQUENCY with no snapshot, so the flag was only half of it. Restoring
-        // both mirrors the slice-DAX-binding restore the native lane got in the
-        // same audit: leave the radio as we found it.
-        //
-        // No snapshot (the rig never answered `s`) → the absolute OFF, which is
-        // the conservative answer when there is nothing to put back: our own split
-        // must not be left latched for a later transmission to go out on.
+        if let Err(e) = self.send_rig_split_release(rig) {
+            rig.split_release_pending = true;
+            self.rig_split_release_at = None; // the retry's wait starts at the next quiet tick
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "Split Operation: the radio did not take the split release ({e}); retrying"
+                ),
+            );
+        }
+    }
+
+    /// The release itself.
+    ///
+    /// ⚠️ RESTORE WHAT WAS THERE, don't write an absolute OFF (2026-08-17 Flex audit, wave-2 #22).
+    /// This wrote `S 0 VFOA` unconditionally, so an over ended by cancelling a split Nexus never
+    /// engaged — the operator's own front-panel split, or on a multi-client Flex the split a second
+    /// client set. And `apply_tx_dial_shift` had already overwritten the TX VFO's FREQUENCY with no
+    /// snapshot, so the flag was only half of it. Restoring both mirrors the slice-DAX-binding
+    /// restore the native lane got in the same audit: leave the radio as we found it.
+    ///
+    /// No snapshot (the rig never answered `s`) → the absolute OFF, which is the conservative
+    /// answer when there is nothing to put back: our own split must not be left latched for a
+    /// later transmission to go out on.
+    fn send_rig_split_release(&self, rig: &mut Rig) -> std::io::Result<()> {
         match self.rig_split_restore.clone() {
             Some((true, vfo, tx_hz)) => {
-                let _ = rig.set_split(true, &vfo);
+                rig.set_split(true, &vfo)?;
                 if let Some(hz) = tx_hz {
-                    let _ = rig.set_split_freq(hz);
+                    rig.set_split_freq(hz)?;
                 }
+                Ok(())
             }
-            Some((false, _, _)) | None => {
-                let _ = rig.set_split(false, "VFOA");
+            Some((false, _, _)) | None => rig.set_split(false, "VFOA"),
+        }
+    }
+
+    /// Send an owed split release again ([`Self::let_go_of_rig_split`]), at a quiet point only:
+    /// the caller runs it with no over, tune or PTT of the loop's on the air, and never while the
+    /// radio may be keyed. Each try waits [`RIG_SPLIT_RELEASE_RETRY_MS`] after the one before, so
+    /// a radio that has stopped answering does not hold up every tick for a CAT deadline.
+    fn retry_rig_split_release(&mut self, rig: &mut Rig, now: f64) {
+        if !rig.split_release_pending || rig.keyed {
+            return;
+        }
+        match self.rig_split_release_at {
+            None => {
+                self.rig_split_release_at = Some(now + RIG_SPLIT_RELEASE_RETRY_MS);
+                return;
             }
+            Some(at) if now < at => return,
+            Some(_) => {}
+        }
+        match self.send_rig_split_release(rig) {
+            Ok(()) => {
+                rig.split_release_pending = false;
+                self.rig_split_release_at = None;
+                tempo_core::applog::info("tx", "Split Operation: the radio took the split release");
+            }
+            Err(_) => self.rig_split_release_at = Some(now + RIG_SPLIT_RELEASE_RETRY_MS),
         }
     }
 
@@ -9992,9 +10043,15 @@ impl RadioLoop {
                         }
                         if (wants_rig_split || can_ask)
                             && !self.audio_rig_split
+                            // An owed release: the split the radio reports is Nexus's own.
+                            && !rig.split_release_pending
                             && self.read_turns.take_owed(HeavyRead::Split, have_budget())
                         {
-                            if let Some((on, vfo)) = rig.read_split() {
+                            // `TX` is the transmit VFO Nexus's own Flex client names for the split
+                            // it is still taking down: never the operator's.
+                            if let Some((on, vfo)) =
+                                rig.read_split().filter(|(on, vfo)| !(*on && vfo == "TX"))
+                            {
                                 // The TX frequency only matters when split is actually on — and
                                 // only when the rig can be asked for it without being disturbed.
                                 // ⚠️ THE TWO CONSUMERS HAVE DIFFERENT NEEDS AND DIFFERENT RISK
@@ -13605,6 +13662,7 @@ impl RadioLoop {
                 let cluster_active = eng.cluster_split_active();
                 self.let_go_of_rig_split(rig, cluster_active);
             }
+            self.retry_rig_split_release(rig, now);
         } else if self.fake_it_restore.is_some() {
             // A carrier is up: a held write-back's wait starts again when it ends, so it always
             // goes FAKE_IT_WRITE_BACK_MS after the last unkey.

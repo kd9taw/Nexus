@@ -392,6 +392,18 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
         refused: None,
     };
     let shift = eng.take_tx_dial_shift();
+    // ⛔ THE RADIO MAY STILL BE IN NEXUS'S SPLIT: its release was refused or not answered, so any
+    // over could go out of VFO B on the last TX dial, another band's included. Nothing keys until
+    // the radio loop's retry gets it taken (`RadioLoop::let_go_of_rig_split`).
+    if rig.split_release_pending {
+        return SplitApply {
+            refused: Some(
+                "the radio has not taken Split Operation's split off yet (the release is retried)"
+                    .to_string(),
+            ),
+            ..none
+        };
+    }
     let held = rig.tx_split_held
         && eng.settings().split_mode == SplitMode::Rig
         && !eng.cluster_split_active();
@@ -2237,6 +2249,7 @@ mod tests {
         let (addr, log) = slow_split_rigctld(split_ms, key_ms);
         let mut rig = Rig::rigctld(&addr);
         rig.set_slow_transport(true);
+        rig.test_reply_deadline_ms = Some(SLOW_SPLIT_DEADLINE_MS);
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
         // Steered last, so a scene decided near WSJT-X's latest key is decided there to within the
@@ -2470,18 +2483,25 @@ mod tests {
     }
 
     /// The split's three commands and the key answered late enough that the carrier comes 2 s, 6 s
-    /// and 7.8 s after the decision: each command after `split_ms`, the key after `key_ms`. Every
-    /// one inside its CAT deadline (2.5 s, 0.7 s): a split write left unanswered keys nothing at all
-    /// (`a_split_write_the_radio_does_not_answer_sends_nothing_and_halts_tx`).
-    const SLOW_SPLITS: [(u64, u64); 3] = [(600, 200), (1_900, 300), (2_400, 600)];
+    /// and 9.5 s after the decision: each command after `split_ms`, the key after `key_ms`. Every
+    /// one is answered inside its deadline, the split's by a long way: these scenes run the link on
+    /// [`SLOW_SPLIT_DEADLINE_MS`], so a loaded machine cannot push a 3 s answer past it. A split
+    /// write left unanswered past its deadline keys nothing at all
+    /// (`a_split_write_the_radio_does_not_answer_sends_nothing_and_halts_tx`,
+    /// `a_split_write_answered_past_its_deadline_keys_nothing`).
+    const SLOW_SPLITS: [(u64, u64); 3] = [(600, 200), (1_900, 300), (3_000, 500)];
+
+    /// The reply deadline of the slow-split scenes' link (ms): far past their slowest split write
+    /// (3 s), so the scene measures a late carrier and never a split write timing out.
+    const SLOW_SPLIT_DEADLINE_MS: u64 = 10_000;
 
     #[test]
     fn an_ft8_key_a_slow_split_takes_past_its_period_sends_nothing_and_is_unkeyed_at_once() {
         // ⭐ A boundary decided 10.0 s into this station's FT8 slot (under 11.25 s), its split and
-        // key taking 2 s, 6 s and 7.8 s. 2 s: the carrier at 12.0 s, the rest of the over from
-        // there on the slot clock, ended at 13.64 / 13.84 s. 6 s and 7.8 s: the carrier at 16.0 s and
-        // 17.8 s, in the other station's period, where the over used to go out from their slot's 1.0
-        // s and 2.8 s, its tones on their clock and PTT held to their 13.84 s; now nothing is played
+        // key taking 2 s, 6 s and 9.5 s. 2 s: the carrier at 12.0 s, the rest of the over from
+        // there on the slot clock, ended at 13.64 / 13.84 s. 6 s and 9.5 s: the carrier at 16.0 s and
+        // 19.5 s, in the other station's period, where the over used to go out from their slot's 1.0
+        // s and 4.5 s, its tones on their clock and PTT held to their 13.84 s; now nothing is played
         // and the radio is unkeyed at once. Only that over is dropped: TX stays on, and its own
         // lane says so.
         let mut scenes = std::thread::scope(|s| {
@@ -2495,15 +2515,15 @@ mod tests {
         });
         scenes[0].played_in_its_own_period(200, Some(13_640.0), "FT8, 2 s");
         scenes[1].dropped_at_once(300, 1, "FT8, 6 s");
-        scenes[2].dropped_at_once(600, 1, "FT8, 7.8 s");
+        scenes[2].dropped_at_once(500, 1, "FT8, 9.5 s");
     }
 
     #[test]
     fn an_ft4_key_a_slow_split_takes_past_its_period_sends_nothing_and_is_unkeyed_at_once() {
         // ⭐ A boundary decided 0.5 s into this station's FT4 slot, its split and key taking 2 s, 6
-        // s and 7.8 s. 2 s: the carrier at 2.5 s, the rest of the over on the slot clock, ended at
+        // s and 9.5 s. 2 s: the carrier at 2.5 s, the rest of the over on the slot clock, ended at
         // 6.04 / 6.24 s. 6 s: the carrier at 6.5 s, past its window but in its own period: nothing
-        // left to send, and PTT drops at once, as before. 7.8 s: the carrier at 8.3 s, in the other
+        // left to send, and PTT drops at once, as before. 9.5 s: the carrier at 10.0 s, in the other
         // station's period, and more than a period after the tick, where the post-key clock read is
         // laid on the tick's clock (`slot_clock_at`): the whole over used to go out from the tick's
         // 0.5 s, in the other station's period. Now nothing is played, the radio is unkeyed at
@@ -2519,7 +2539,7 @@ mod tests {
         });
         scenes[0].played_in_its_own_period(200, Some(6_040.0), "FT4, 2 s");
         scenes[1].played_in_its_own_period(300, None, "FT4, 6 s");
-        scenes[2].dropped_at_once(600, 1, "FT4, 7.8 s");
+        scenes[2].dropped_at_once(500, 1, "FT4, 9.5 s");
     }
 
     #[test]
@@ -2545,8 +2565,8 @@ mod tests {
     #[test]
     fn a_dropped_over_leaves_tx_on_and_the_next_own_slot_sends_a_full_over() {
         // ⭐ A Call CQ run in Split Operation Rig. Its FT8 boundary decided 10.0 s in, the split and
-        // the key taking 6 s (the carrier at 16.0 s), and its FT4 one decided 0.5 s in, taking 7.8 s
-        // (8.3 s): nothing is sent and the radio is unkeyed at once, as before, and TX stays on. At
+        // the key taking 6 s (the carrier at 16.0 s), and its FT4 one decided 0.5 s in, taking 9.5 s
+        // (10.0 s): nothing is sent and the radio is unkeyed at once, as before, and TX stays on. At
         // the next own boundary, the link answering at once again, the CQ goes out whole and on
         // time, ended on WSJT-X's window, and the lane goes. TX used to turn off at the first.
         fn scene(tier: tempo_app::dto::Tier, decided_ms: f64, link: (u64, u64), window_ms: f64) {
@@ -2581,7 +2601,7 @@ mod tests {
         }
         std::thread::scope(|s| {
             s.spawn(|| scene(tempo_app::dto::Tier::Ft8, 10_000.0, (1_900, 300), 13_640.0));
-            s.spawn(|| scene(tempo_app::dto::Tier::Ft4, 500.0, (2_400, 600), 6_040.0));
+            s.spawn(|| scene(tempo_app::dto::Tier::Ft4, 500.0, (3_000, 500), 6_040.0));
         });
     }
 
@@ -3081,6 +3101,25 @@ mod tests {
         split: tempo_app::settings::SplitMode,
         answer: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) -> (SlotAction, MockBackend, Engine, Vec<String>) {
+        split_over_on_a_link(split, answer, None)
+    }
+
+    /// [`split_over_on`] on a link whose reply deadline is `deadline_ms` (`None`: the transport's).
+    fn split_over_on_a_link(
+        split: tempo_app::settings::SplitMode,
+        answer: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+        deadline_ms: Option<u64>,
+    ) -> (SlotAction, MockBackend, Engine, Vec<String>) {
+        let (addr, log) = scripted_rigctld(answer);
+        // The rig kept until the wire is read: dropping it keyed sends its teardown unkey.
+        let (act, backend, eng, _rig) = split_over_at(split_cq_engine(split), &addr, deadline_ms);
+        let sent = log.lock().unwrap().clone();
+        (act, backend, eng, sent)
+    }
+
+    /// An FT8 CQ in Split Operation `split` whose 750 Hz TX offset needs a -1000 Hz dial shift, its
+    /// clock on a slot start.
+    fn split_cq_engine(split: tempo_app::settings::SplitMode) -> Engine {
         let mut eng = Engine::new("W9XYZ", "EN37", 0);
         eng.set_tier(tempo_app::dto::Tier::Ft8);
         let _ = eng.take_slot_tx_abort();
@@ -3091,8 +3130,18 @@ mod tests {
         eng.set_tx_offset(750.0);
         eng.broadcast("CQ TEST W9XYZ EN37");
         align_to_slot_start(&mut eng, 0);
-        let (addr, log) = scripted_rigctld(answer);
-        let mut rig = Rig::rigctld(&addr);
+        eng
+    }
+
+    /// The TX phase of `eng`'s over on the rigctld at `addr` (reply deadline `deadline_ms`), and the
+    /// rig it keyed through.
+    fn split_over_at(
+        mut eng: Engine,
+        addr: &str,
+        deadline_ms: Option<u64>,
+    ) -> (SlotAction, MockBackend, Engine, Rig) {
+        let mut rig = Rig::rigctld(addr);
+        rig.test_reply_deadline_ms = deadline_ms;
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
         let now = steered_now_ms(&eng);
@@ -3108,8 +3157,7 @@ mod tests {
             None,
             false,
         );
-        let sent = log.lock().unwrap().clone();
-        (act, backend, eng, sent)
+        (act, backend, eng, rig)
     }
 
     /// The split writes of one over, `verb` (`S`, `I`, `X` or `F`) answered `reply`, everything else
@@ -3228,6 +3276,127 @@ mod tests {
                 split_over_on(split, one_split_write_answered(verb, reply));
             assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, wire);
         }
+    }
+
+    /// A rig served by Nexus's own rigctld server (`rigctld_server::serve`, its trait defaults
+    /// answering an unimplemented split verb `RPRT -11`) with the split surface of Nexus's own TCI
+    /// client (split on/off and the split frequency, no split mode: `tci/shim.rs`) or of its
+    /// OmniRig client (split on/off only: `omnirig/mod.rs`). Records the TX dial it was given.
+    struct SplitSurface {
+        split_freq: bool,
+        tx_dial: std::sync::Mutex<Option<u64>>,
+        keyed: std::sync::Mutex<bool>,
+    }
+
+    impl crate::rigctld_server::RigBackend for SplitSurface {
+        fn freq_hz(&self) -> u64 {
+            14_074_000
+        }
+        fn mode(&self) -> (String, u32) {
+            ("PKTUSB".into(), 3000)
+        }
+        fn ptt(&self) -> bool {
+            *self.keyed.lock().unwrap()
+        }
+        fn set_freq(&self, _: u64) -> bool {
+            true
+        }
+        fn set_mode(&self, _: &str, _: u32) -> bool {
+            true
+        }
+        fn set_ptt(&self, on: bool) -> bool {
+            *self.keyed.lock().unwrap() = on;
+            true
+        }
+        fn set_split(&self, _on: bool, _tx_vfo: &str) -> Option<bool> {
+            Some(true)
+        }
+        fn set_split_freq(&self, hz: u64) -> Option<bool> {
+            self.split_freq.then(|| {
+                *self.tx_dial.lock().unwrap() = Some(hz);
+                true
+            })
+        }
+    }
+
+    #[test]
+    fn rig_split_keys_on_the_tci_clients_surface_and_refuses_on_omnirigs() {
+        // TCI: `S` and `I` taken, `X` not available (`RPRT -11` from the server's default): the TX
+        // dial lands and the over keys, as it did before. OmniRig: `I` not available, so the TX dial
+        // never lands: the over keys nothing, TX halts, and the split reason is on screen.
+        for (what, split_freq) in [("TCI", true), ("OmniRig", false)] {
+            let surface = std::sync::Arc::new(SplitSurface {
+                split_freq,
+                tx_dial: std::sync::Mutex::new(None),
+                keyed: std::sync::Mutex::new(false),
+            });
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            let served: std::sync::Arc<dyn crate::rigctld_server::RigBackend> = surface.clone();
+            std::thread::spawn(move || crate::rigctld_server::serve(listener, served));
+            let eng = split_cq_engine(tempo_app::settings::SplitMode::Rig);
+            let (act, backend, mut eng, _rig) = split_over_at(eng, &addr, None);
+            if split_freq {
+                assert_eq!(*surface.tx_dial.lock().unwrap(), Some(14_073_000), "{what}");
+                assert!(
+                    act.tx_this_slot
+                        && !backend.played.is_empty()
+                        && *surface.keyed.lock().unwrap(),
+                    "{what}: not keyed"
+                );
+                assert!(eng.tx_enabled(), "{what}: TX went off");
+                assert_eq!(eng.snapshot().radio.slot_key_refused, None, "{what}");
+            } else {
+                assert!(!*surface.keyed.lock().unwrap(), "{what}: keyed");
+                assert!(
+                    backend.played.is_empty() && !act.tx_this_slot,
+                    "{what}: sent"
+                );
+                assert!(!eng.tx_enabled(), "{what}: TX still on");
+                let refused = eng.snapshot().radio.slot_key_refused.expect("no reason");
+                assert!(refused.split_failed, "{what}: {refused:?}");
+                assert!(
+                    eng.take_slot_tx_abort(),
+                    "{what}: the loop not told to stop"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_split_write_answered_past_its_deadline_keys_nothing() {
+        use tempo_app::settings::SplitMode;
+        // The pair the slow-split scenes rest on, on one link with a 1 s reply deadline: `I`
+        // answered `RPRT 0` after 300 ms (inside it) keys; after 2 s (past it) keys nothing.
+        let late_i = |ms: u64| {
+            move |line: &str| {
+                if line.starts_with("I ") {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
+                Some("RPRT 0\n".to_string())
+            }
+        };
+        let (act, backend, eng, sent) =
+            split_over_on_a_link(SplitMode::Rig, late_i(300), Some(1_000));
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "T 1"],
+            "inside"
+        );
+        assert!(
+            act.tx_this_slot && !backend.played.is_empty() && eng.tx_enabled(),
+            "inside"
+        );
+        let (act, backend, mut eng, sent) =
+            split_over_on_a_link(SplitMode::Rig, late_i(2_000), Some(1_000));
+        assert_split_sent_nothing(
+            "past",
+            &act,
+            &backend,
+            &mut eng,
+            &sent,
+            &["S 1 VFOB", "I 14073000"],
+        );
     }
 
     #[test]

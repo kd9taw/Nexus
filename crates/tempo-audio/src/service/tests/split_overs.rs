@@ -563,6 +563,8 @@ struct Vfos {
     stale: Option<u64>,
     /// Dial reads answered with anything but the 20 m FT8 dial.
     reads_off_the_channel: u32,
+    /// While set, split off (`S 0`) is answered `RPRT -9` and not taken.
+    refuse_split_off: bool,
 }
 
 struct Hamlib {
@@ -629,6 +631,7 @@ fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<H
                 }
                 Some(format!("{hz}\n"))
             }
+            _ if line.starts_with("S 0") && v.refuse_split_off => Some("RPRT -9\n".to_string()),
             _ if line.starts_with("S ") => {
                 v.split = line.split_whitespace().nth(1) == Some("1");
                 ok()
@@ -1268,4 +1271,57 @@ fn through_hamlib_a_held_rig_split_is_let_go_when_the_radio_changes() {
     );
     assert!(!b.radio.vfos.lock().unwrap().split, "left in split");
     assert!(!b.rig.tx_split_held, "the new link believes split is on");
+}
+
+/// A split release the radio does not take is still owed. TX turned off after a held Rig split,
+/// the radio refusing `S 0` (`RPRT -9`): nothing keys while it is owed, even with TX turned on
+/// again at the next own boundary (the over is refused with the split reason and TX halts); the
+/// receive-time split read, which now finds the radio in split, never takes that for the
+/// operator's own split; and once the radio takes `S 0` again, a retry at a quiet point lets go.
+#[test]
+fn through_hamlib_a_refused_split_release_is_retried_at_quiet_points_and_nothing_keys_meanwhile() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    assert!(b.radio.vfos.lock().unwrap().split, "premise: held");
+    b.radio.vfos.lock().unwrap().refuse_split_off = true;
+    b.engine.lock().unwrap().set_tx_enabled(false);
+    let first = b.ticks(3);
+    assert_eq!(first, ["S 0 VFOA"], "premise: the release, refused");
+    assert!(
+        b.rig.split_release_pending,
+        "the refused release is not owed"
+    );
+    // TX on again just before the next own boundary: the over is refused, never keyed.
+    b.engine.lock().unwrap().set_tx_enabled(true);
+    let across = b.ticks(20);
+    assert!(
+        !across.iter().any(|l| l == "T 1"),
+        "keyed while the release is owed: {across:?}"
+    );
+    {
+        let e = b.engine.lock().unwrap();
+        assert!(!e.tx_enabled(), "TX still on after the refused over");
+        let refused = e
+            .snapshot()
+            .radio
+            .slot_key_refused
+            .expect("nothing says why the over was not sent");
+        assert!(refused.split_failed, "not told as the split: {refused:?}");
+    }
+    // Several seconds of receiving: heavy polls and their split reads run, the release is sent
+    // again (refused) at most every 2 s, and the radio's split is never taken for the operator's.
+    let quiet = b.ticks(300);
+    let retries = quiet.iter().filter(|l| *l == "S 0 VFOA").count();
+    assert!((1..=4).contains(&retries), "retries in 6 s: {quiet:?}");
+    assert!(!quiet.iter().any(|l| l == "T 1"), "keyed: {quiet:?}");
+    assert!(
+        !matches!(b.state.rig_split_restore, Some((true, _, _))),
+        "Nexus's own split taken for the operator's: {:?}",
+        b.state.rig_split_restore
+    );
+    // The radio takes it now: the next retry at a quiet point lets go.
+    b.radio.vfos.lock().unwrap().refuse_split_off = false;
+    let _ = b.ticks(150);
+    assert!(!b.radio.vfos.lock().unwrap().split, "still in split");
+    assert!(!b.rig.split_release_pending, "still owed");
 }

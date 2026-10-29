@@ -562,6 +562,12 @@ pub struct Rig {
     /// since: the next over writes only its TX dial and mode, as WSJT-X holds split between overs.
     /// Set by `slot::apply_tx_dial_shift`, cleared by the radio loop when it lets go of the split.
     pub(crate) tx_split_held: bool,
+    /// Nexus let go of its Rig split through this connection and the radio did not take it (the
+    /// `S 0`, or the write putting the radio's own split back, refused or unanswered): the radio
+    /// may still transmit from VFO B on Nexus's last TX dial. While set no slot over keys
+    /// (`slot::apply_tx_dial_shift`), the radio loop sends the release again at quiet points, and
+    /// the radio's split is never read as the operator's own.
+    pub(crate) split_release_pending: bool,
     /// True when the CAT link is a NETWORK transport (rigctld → SmartSDR / remote radio), where a
     /// reply can legitimately take seconds. Serial rigs answer in milliseconds, so a serial link
     /// uses a much shorter per-command deadline — a stalled serial read then can't hold the radio
@@ -573,6 +579,10 @@ pub struct Rig {
     never_send: &'static [(HamlibVerb, &'static str)],
     #[cfg(test)]
     before_remote_write: Option<Box<dyn FnOnce() + Send>>,
+    /// A test's own reply deadline (ms) in place of the transport's 700 ms / 2.5 s, for a scene
+    /// whose commands must take seconds and still be answered inside it. PTT keeps its own.
+    #[cfg(test)]
+    pub(crate) test_reply_deadline_ms: Option<u64>,
 }
 
 /// What a rigctld line asks: read or write a LEVEL, read or write a FUNC. The short and long
@@ -695,10 +705,13 @@ impl Rig {
             serial: None,
             keyed: false,
             tx_split_held: false,
+            split_release_pending: false,
             slow_transport: false,
             never_send: &[],
             #[cfg(test)]
             before_remote_write: None,
+            #[cfg(test)]
+            test_reply_deadline_ms: None,
         }
     }
 
@@ -903,6 +916,8 @@ impl Rig {
         }
         // Read the transport class before the mutable stream borrow below (they'd otherwise alias).
         let slow = self.slow_transport;
+        #[cfg(test)]
+        let deadline_override = deadline_override.or(self.test_reply_deadline_ms);
         #[cfg(test)]
         let before_write = if permission.is_some() {
             self.before_remote_write.take()
