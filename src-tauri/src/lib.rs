@@ -60392,11 +60392,33 @@ mod upload_backlog_tests {
 
     /// ⛔ H2. The base window after leaving multi-radio mode reads its own settings file, which no
     /// radio window wrote the answer into, and still sends nothing old.
+    ///
+    /// The radio window runs on a thread of its own. Every window in a test process saves under the
+    /// one profile the process started with, so a radio window on this thread would save its
+    /// settings (on the writer's thread, a moment later) into the very file the base window reads.
+    /// A test build keeps each thread's files in a folder of its own (`test_dirs`), which gives the
+    /// radio window a settings file of its own, as its `tempo-r<id>` folder does in the app; a
+    /// data-folder pointer there names this thread's data folder, so both share the one log.
     #[test]
     fn the_base_window_after_multi_radio_honours_the_answer() {
-        let radio = station(OLD_LOG);
-        let keychain = Keychain(std::cell::Cell::new(false));
-        assert_eq!(save(&radio, &keychain, Some(false)), vec![]);
+        let log_folder = super::shared_data_dir();
+        let keychain = std::thread::spawn(move || {
+            super::write_data_dir_pointer_in(&super::config_dir_for(None), &log_folder)
+                .expect("premise: the radio window shares the log");
+            let radio = station(OLD_LOG);
+            let keychain = Keychain(std::cell::Cell::new(false));
+            assert_eq!(save(&radio, &keychain, Some(false)), vec![]);
+            // Its settings on the disk before its folder goes with the thread.
+            let radio_file = super::config_dir_for(None).join("settings.json");
+            assert!(matches!(
+                super::SettingsWriter::of(&radio_file).flush(std::time::Duration::from_secs(10)),
+                tempo_app::settings::writer::Flushed::Saved
+            ));
+            keychain
+        })
+        .join()
+        .expect("the radio window saved");
+        assert!(kept().qrz.is_some(), "premise: answered beside the log");
         let base_file = super::config_dir_for(None).join("settings.json");
         assert!(
             !base_file.exists(),
