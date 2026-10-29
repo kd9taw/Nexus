@@ -16876,9 +16876,11 @@ mod contest_session_tests {
     #[test]
     fn the_notice_lists_each_key_that_waits_with_its_address() {
         use tempo_app::settings::KeysToConfirm;
-        let mut s = tempo_app::settings::Settings::default();
-        s.cloudlog_url = " https://log.example/ ".into();
-        s.radios = restore_test_roster();
+        let mut s = tempo_app::settings::Settings {
+            cloudlog_url: " https://log.example/ ".into(),
+            radios: restore_test_roster(),
+            ..Default::default()
+        };
         s.radios[1].icom_lan_port = 50011;
         s.keys_to_confirm = KeysToConfirm {
             cloudlog: true,
@@ -17125,7 +17127,6 @@ mod contest_session_tests {
             Err("the keychain is locked".to_string())
         );
         remove(Some(1), false).unwrap();
-        drop(remove);
         assert_eq!(
             seen,
             vec![Some((true, vec![1])), Some((true, vec![1]))],
