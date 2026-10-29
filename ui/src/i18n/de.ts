@@ -8705,6 +8705,8 @@ export const DE: PartialCatalog = {
   "shell.work.failed": "{{call}} konnte nicht gearbeitet werden",
   "shell.work.started": "▶ Arbeite {{call}} — Ihr Rufzeichen wird gesendet",
   "shell.work.failed.cat": "{{call}} konnte nicht gearbeitet werden — CAT prüfen",
+  "shell.work.unresolvedCq": "Das Rufzeichen dieses CQ erscheint als <...>: Nexus hat es noch nicht vollständig dekodiert. Klicken Sie auf den nächsten CQ der Station, sobald ihr Rufzeichen erscheint.",
+  "shell.work.unresolvedCall": "Dieses Rufzeichen erscheint als <...>: Nexus hat es noch nicht vollständig dekodiert. Klicken Sie auf die nächste Meldung der Station, sobald ihr Rufzeichen erscheint.",
   "shell.work.ready": "▶ {{call}} — {{mode}} {{band}}, bereit zum Loggen",
   "shell.work.here": "▶ {{call}} — {{band}} {{freq}} MHz",
   "shell.pounce.qsy.failed": "QSY zu {{call}} fehlgeschlagen",

@@ -8632,6 +8632,8 @@ export const JA: PartialCatalog = {
   "shell.work.failed": "{{call}}との交信を開始できませんでした",
   "shell.work.started": "▶ {{call}}と交信開始 — 自局コールを送信中",
   "shell.work.failed.cat": "{{call}}との交信を開始できませんでした — CATを確認してください",
+  "shell.work.unresolvedCq": "このCQのコールサインは<...>と表示されています。Nexusはまだ完全にデコードしていません。コールサインが表示されたら、その局の次のCQをクリックしてください。",
+  "shell.work.unresolvedCall": "このコールサインは<...>と表示されています。Nexusはまだ完全にデコードしていません。コールサインが表示されたら、その局の次のメッセージをクリックしてください。",
   "shell.work.ready": "▶ {{call}} — {{mode}} {{band}}、ログ記録の準備完了",
   "shell.work.here": "▶ {{call}} — {{band}} {{freq}} MHz",
   "shell.pounce.qsy.failed": "{{call}}へQSYできませんでした",

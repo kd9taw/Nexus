@@ -8780,6 +8780,8 @@ export const ES: PartialCatalog = {
   "shell.wizard.saveFailed": "La configuración no se guardó del todo: {{error}} — revisa Ajustes",
   "shell.work.failed": "No se pudo trabajar a {{call}}",
   "shell.work.failed.cat": "No se pudo trabajar a {{call}} — revisa el CAT",
+  "shell.work.unresolvedCq": "El indicativo de este CQ aparece como <...>: Nexus aún no lo ha decodificado completo. Haz clic en el siguiente CQ de la estación cuando aparezca su indicativo.",
+  "shell.work.unresolvedCall": "Este indicativo aparece como <...>: Nexus aún no lo ha decodificado completo. Haz clic en el siguiente mensaje de la estación cuando aparezca su indicativo.",
   "shell.work.here": "▶ {{call}} — {{band}} {{freq}} MHz",
   "shell.work.ready": "▶ {{call}} — {{mode}} {{band}}, listo para anotar",
   "shell.work.started": "▶ Trabajando a {{call}} — transmitiendo tu indicativo",

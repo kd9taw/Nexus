@@ -784,7 +784,24 @@ export async function callStation(
     snr: snr ?? null,
     // The decoded station's audio offset (Hz) — moves our RX/TX onto it (WSJT-X).
     freq: freq ?? null,
+  }).catch((err: unknown) => {
+    throw unresolvedRefusal(err) ?? err
   })
+}
+
+/** The engine's refusals of a click on a call shown as `<...>`, `Engine::UNRESOLVED_CQ` and
+ *  `Engine::UNRESOLVED_CALL`, word for word. The engine words them in English;
+ *  `unresolved-call-words.test.ts` holds these to its text. */
+export const ENGINE_UNRESOLVED_CQ =
+  "This CQ's call shows as <...>: Nexus has not decoded it in full yet. Click the station's next CQ once its call shows."
+export const ENGINE_UNRESOLVED_CALL =
+  "This call shows as <...>: Nexus has not decoded it in full yet. Click the station's next message once its call shows."
+
+/** One of those refusals in the operator's language; `undefined` for anything else. */
+function unresolvedRefusal(err: unknown): string | undefined {
+  if (err === ENGINE_UNRESOLVED_CQ) return t('shell.work.unresolvedCq')
+  if (err === ENGINE_UNRESOLVED_CALL) return t('shell.work.unresolvedCall')
+  return undefined
 }
 
 /** WSJT-X Tx-slot click: force `text` as the next transmission to `call`
