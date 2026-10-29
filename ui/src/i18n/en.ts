@@ -7773,6 +7773,17 @@ export const EN = {
   'settings.connections.qrz.key.saved': 'QRZ Logbook key saved — auto-upload to QRZ is ON',
   'settings.connections.qrz.key.clearFailed': 'Could not clear the QRZ Logbook key',
   'settings.connections.qrz.key.cleared': 'QRZ Logbook key cleared — auto-upload to QRZ is off',
+  // The first login saved for QRZ Logbook, ClubLog or eQSL asks before it sends the contacts never
+  // sent there (an imported log included). {{service}} is the service's own name. The cancel
+  // button, "fromNow", is the default: it has the focus, and Escape answers it.
+  'settings.connections.backlog.title': {
+    one: 'Send {{count}} contact not yet sent to {{service}}?',
+    other: 'Send {{count}} contacts not yet sent to {{service}}?',
+  },
+  'settings.connections.backlog.body':
+    'Saving this login turns uploads to {{service}} on. Contacts you make from now on are sent as you log them either way. Older contacts can still be sent from the Logbook whenever you choose.',
+  'settings.connections.backlog.send': 'Send them',
+  'settings.connections.backlog.fromNow': 'Only contacts made from now on',
   'settings.connections.qrz.sync.failed': 'QRZ sync failed',
   // ⚠️ QSO is the hobby's own word for a contact — it does not inflect into another language.
   'settings.connections.qrz.sync.done': {

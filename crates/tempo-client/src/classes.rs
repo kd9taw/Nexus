@@ -627,6 +627,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("update_install_block",           RunsAtShack, "Whether the shack's radio is busy, which an update here waits on."),
     ("update_radio_profile",           RunsAtShack, "One radio's setup at the shack, saved whole."),
     ("update_route",                   RunsHere,    "How this computer's Nexus takes an update."),
+    ("upload_backlog",                 RefusedHere, "Asked only before a login is saved, and credentials are set at the shack only."),
     ("upload_lotw_report",             RunsAtShack, "Signs and uploads at the shack, with its own TQSL."),
     ("use_single_radio",               RefusedHere, "The shack's launch picker, a choice made as the station starts."),
     ("winlink_connect",                RunsAtShack, "A CMS session from the shack with its stored password; a typed one is refused."),

@@ -198,15 +198,19 @@ impl DiagnosticsInputs {
 /// and `room` ([`StationCore::catch_up_room`]) under it, and queue what this picks with
 /// [`StationCore::requeue_catch_up`]. A contact another change removes between the two reads
 /// is simply not picked; the next sweep looks again.
+///
+/// A contact made before a service's start point ([`UploadStart`]) is not owed to it: the
+/// operator answered "Only contacts made from now on" when the login was first saved.
 pub fn catch_up_records(
     rows: &crate::logstore::LogRows,
     legs: u8,
     room: usize,
+    start: UploadStart,
 ) -> Result<Vec<(QsoRecord, u8)>, String> {
     use std::ops::ControlFlow;
     use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
     const STAMPS: Narrow = Narrow {
-        columns: &[],
+        columns: &["when_unix"],
         uploads: true,
     };
     if room == 0 {
@@ -214,7 +218,7 @@ pub fn catch_up_records(
     }
     let mut owed: Vec<(tempo_core::logbook::RecordId, u8)> = Vec::new();
     rows.each(STAMPS, Scope::All, Order::Log, &mut |r| {
-        match (unsent_legs(r, legs), r.id) {
+        match (unsent_legs(r, start.open_legs(legs, r.when_unix)), r.id) {
             (0, _) | (_, None) => {}
             (legs, Some(id)) => owed.push((id, legs)),
         }
@@ -235,6 +239,125 @@ pub fn catch_up_records(
             Some((r, legs))
         })
         .collect())
+}
+
+/// How many logged contacts have not been sent on `legs` ([`unsent_legs`]), whatever the start
+/// points say: the number the first login saved for a service asks about ("Send N contacts not
+/// yet sent to QRZ Logbook?"), whose answer sets or clears that service's start point. Read from
+/// the store, so never under the Engine lock (as [`catch_up_records`]).
+pub fn backlog_count(rows: &crate::logstore::LogRows, legs: u8) -> Result<usize, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
+    const STAMPS: Narrow = Narrow {
+        columns: &[],
+        uploads: true,
+    };
+    let mut n = 0usize;
+    rows.each(STAMPS, Scope::All, Order::Log, &mut |r| {
+        if unsent_legs(r, legs) != 0 {
+            n += 1;
+        }
+        ControlFlow::Continue(())
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
+/// Where each service's automatic uploads start, in Unix seconds: a contact made before a
+/// service's start point is never sent to it automatically. Kept beside the shared log
+/// ([`crate::upload_start`]), so every window sharing the log honours the same ones. `None` is no
+/// start point, every contact not yet sent is owed: what every station had before, and still has
+/// unless it answered "Only contacts made from now on" when it first saved a login.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UploadStart {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qrz: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clublog: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqsl: Option<u64>,
+}
+
+impl UploadStart {
+    /// The start points an earlier build of this change left in one window's settings file
+    /// ([`Settings::qrz_logbook_upload_from`](crate::settings::Settings::qrz_logbook_upload_from)),
+    /// to be moved beside the log.
+    pub fn left_in(s: &crate::settings::Settings) -> Self {
+        Self {
+            qrz: s.qrz_logbook_upload_from,
+            clublog: s.clublog_upload_from,
+            eqsl: s.eqsl_upload_from,
+        }
+    }
+
+    /// The start point of the one service on `leg`.
+    pub fn of_leg(&self, leg: u8) -> Option<u64> {
+        use crate::engine::upload_legs as l;
+        match leg {
+            l::QRZ => self.qrz,
+            l::CLUBLOG => self.clublog,
+            l::EQSL => self.eqsl,
+            _ => None,
+        }
+    }
+
+    /// The operator's answer to the first login's question for the service on `leg`: "Send them"
+    /// (`send_old`) clears its start point; "Only contacts made from now on" puts it at `now_unix`,
+    /// or keeps an earlier one already there (operator ruling "Keep the earlier point"), so a
+    /// contact made between two answers that never reached the service is still owed.
+    pub fn answer(&mut self, leg: u8, send_old: bool, now_unix: u64) {
+        use crate::engine::upload_legs as l;
+        let slot = match leg {
+            l::QRZ => &mut self.qrz,
+            l::CLUBLOG => &mut self.clublog,
+            l::EQSL => &mut self.eqsl,
+            _ => return,
+        };
+        *slot = if send_old {
+            None
+        } else {
+            Some(slot.map_or(now_unix, |held| held.min(now_unix)))
+        };
+    }
+
+    /// Each service's earlier start point of the two, or the one there is.
+    pub fn keep_earliest(self, other: Self) -> Self {
+        let early = |a: Option<u64>, b: Option<u64>| match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        Self {
+            qrz: early(self.qrz, other.qrz),
+            clublog: early(self.clublog, other.clublog),
+            eqsl: early(self.eqsl, other.eqsl),
+        }
+    }
+
+    /// `other`'s start point only for a service that has none here.
+    pub fn fill_from(self, other: Self) -> Self {
+        Self {
+            qrz: self.qrz.or(other.qrz),
+            clublog: self.clublog.or(other.clublog),
+            eqsl: self.eqsl.or(other.eqsl),
+        }
+    }
+
+    /// Which of `legs` a contact made at `when_unix` may still be sent on automatically: all of
+    /// them, less each service whose start point is after it.
+    pub fn open_legs(&self, legs: u8, when_unix: u64) -> u8 {
+        use crate::engine::upload_legs as l;
+        let mut open = legs;
+        for (leg, from) in [
+            (l::QRZ, self.qrz),
+            (l::CLUBLOG, self.clublog),
+            (l::EQSL, self.eqsl),
+        ] {
+            if from.is_some_and(|from| when_unix < from) {
+                open &= !leg;
+            }
+        }
+        open
+    }
 }
 
 /// Fill a contact's country and state from the station's resolvers where it carries none —
@@ -3810,6 +3933,19 @@ impl StationCore {
             retry_after_unix: due,
             corrected: false,
         });
+    }
+
+    /// Take `legs` off every queued upload of a contact made before `from_unix`, and drop the ones
+    /// left owing nothing: what was waiting to go when a service's start point was set
+    /// ([`UploadStart`]) — a contact logged while every upload was off is held here, and turning
+    /// one on would otherwise send it.
+    pub(crate) fn unqueue_before(&mut self, legs: u8, from_unix: u64) {
+        for p in self.pending_uploads.iter_mut() {
+            if p.rec.when_unix < from_unix {
+                p.legs &= !legs;
+            }
+        }
+        self.pending_uploads.retain(|p| p.legs != 0);
     }
 
     /// How many records the catch-up sweep may queue now: the connector queue's FREE room

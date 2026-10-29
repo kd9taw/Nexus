@@ -3689,6 +3689,18 @@ pub struct Settings {
     /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
     /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
     pub eqsl_upload: bool,
+    /// Where QRZ Logbook's automatic uploads start, as an earlier build of this change kept it
+    /// in one window's settings. Read only to be moved beside the shared log, where every window
+    /// reads it ([`crate::upload_start`]), and cleared once moved; nothing else reads or writes it.
+    /// `None`, the only value a released build's file has, writes no key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qrz_logbook_upload_from: Option<u64>,
+    /// ClubLog's, as [`Self::qrz_logbook_upload_from`]: read only to be moved beside the log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clublog_upload_from: Option<u64>,
+    /// eQSL's, as [`Self::qrz_logbook_upload_from`]: read only to be moved beside the log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqsl_upload_from: Option<u64>,
     /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has
     /// several QTH profiles ("if not logged in, if multiple accounts with same
     /// callsign" — their spec); such an account cannot authenticate at all without
@@ -6473,6 +6485,9 @@ impl Default for Settings {
             clublog_api_key: String::new(),
             clublog_upload: false,
             eqsl_upload: false,
+            qrz_logbook_upload_from: None,
+            clublog_upload_from: None,
+            eqsl_upload_from: None,
             eqsl_qth_nickname: String::new(),
             hrdlog_upload: false,
             wrl_upload: false, // the credential is the opt-in

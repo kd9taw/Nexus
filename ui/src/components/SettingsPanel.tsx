@@ -85,6 +85,7 @@ import {
   setLotwPassword,
   setQrzLogbookKey,
   setQrzPassword,
+  uploadBacklog,
   setRepeaterbookToken,
   setRxGain,
   setSettings,
@@ -3514,10 +3515,40 @@ export function SettingsPanel({
     }
   }
 
+  // The FIRST login saved for QRZ Logbook, ClubLog or eQSL turns its upload on, and its catch-up
+  // would send every contact never sent there — an imported log included, since an import marks
+  // nothing as sent. So it asks first, and the default (the button that has the focus, and what
+  // Escape, a click outside or a dialog that cannot open all answer) is "Only contacts made from
+  // now on". `true` sends them, as a save did before. A login saved over a stored one, or one whose
+  // upload switch is already on, asks nothing (`undefined`: the backend changes nothing either).
+  // With nothing waiting there is nothing to ask, and the answer is "from now on", so a log
+  // imported later is not sent by the next save. A count that cannot be read is no answer, and no
+  // question asked: the backend then saves as it always did, with no start point.
+  const askSendOld = async (
+    service: 'qrz' | 'clublog' | 'eqsl',
+    name: string,
+  ): Promise<boolean | undefined> => {
+    let owed: number | null
+    try {
+      owed = await uploadBacklog(service)
+    } catch {
+      return undefined
+    }
+    if (owed == null) return undefined
+    if (owed === 0) return false
+    return confirmDialog({
+      title: t('settings.connections.backlog.title', { count: owed, service: name }),
+      body: t('settings.connections.backlog.body', { service: name }),
+      confirmLabel: t('settings.connections.backlog.send'),
+      cancelLabel: t('settings.connections.backlog.fromNow'),
+    })
+  }
+
   const onSaveEqslPassword = async () => {
     if (!eqslPw) return
+    const sendOld = await askSendOld('eqsl', 'eQSL')
     const ok = await withErrorToast(async () => {
-      await setEqslPassword(eqslPw)
+      await setEqslPassword(eqslPw, sendOld)
       return true
     }, t('settings.connections.eqsl.password.saveFailed'))
     if (ok) {
@@ -3647,8 +3678,9 @@ export function SettingsPanel({
 
   const onSaveQrzLogbookKey = async () => {
     if (!qrzKey) return
+    const sendOld = await askSendOld('qrz', 'QRZ Logbook')
     const ok = await withErrorToast(async () => {
-      await setQrzLogbookKey(qrzKey)
+      await setQrzLogbookKey(qrzKey, sendOld)
       return true
     }, t('settings.connections.qrz.key.saveFailed'))
     if (ok) {
@@ -3697,8 +3729,9 @@ export function SettingsPanel({
 
   const onSaveClublogPassword = async () => {
     if (!clublogPw) return
+    const sendOld = await askSendOld('clublog', 'ClubLog')
     const ok = await withErrorToast(async () => {
-      await setClublogPassword(clublogPw)
+      await setClublogPassword(clublogPw, sendOld)
       return true
     }, t('settings.connections.clublog.password.saveFailed'))
     if (ok) {

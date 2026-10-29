@@ -179,6 +179,10 @@ mod rtty_sideband_tests;
 pub mod tx_extras;
 #[cfg(test)]
 mod tx_extras_tests;
+/// The first login saved for QRZ Logbook, ClubLog or eQSL never sends the old log unasked: where
+/// each service's automatic uploads start.
+#[cfg(test)]
+mod upload_start_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 /// The experience answer's one writer (the first-run wizard and Settings ▸ Station).
 #[cfg(test)]
@@ -8055,6 +8059,43 @@ impl Engine {
     pub fn set_wrl_upload(&mut self, on: bool) -> Settings {
         self.settings.wrl_upload = on;
         self.settings.clone()
+    }
+
+    /// A start point was set for the services on `legs` (QRZ Logbook, ClubLog or eQSL; see
+    /// [`crate::station::UploadStart`], kept beside the shared log): take them off every contact
+    /// made before `from_unix` that is waiting to go now — the upload queue and the contest's held
+    /// contacts. A contact logged while every upload was off waits there, and turning the upload
+    /// on would otherwise send it.
+    pub fn drop_waiting_before(&mut self, legs: u8, from_unix: u64) {
+        let legs = legs & (upload_legs::QRZ | upload_legs::CLUBLOG | upload_legs::EQSL);
+        if legs == 0 {
+            return;
+        }
+        self.station.unqueue_before(legs, from_unix);
+        let held = self.contest_held_uploads.len();
+        for h in self.contest_held_uploads.iter_mut() {
+            if h.rec.when_unix < from_unix {
+                h.owed &= !legs;
+            }
+        }
+        self.contest_held_uploads.retain(|h| h.owed != 0);
+        if self.contest_held_uploads.len() != held {
+            self.persist_contest_held_uploads();
+        }
+    }
+
+    /// Whether saving the first login for the service on `leg` (QRZ Logbook, ClubLog or eQSL) asks
+    /// what becomes of the contacts never sent there: only while that service's upload switch is
+    /// off. With the switch already on, the operator opted in before the login existed, and the
+    /// contacts that failed for want of it are sent as before, unasked.
+    pub fn login_question_applies(&self, leg: u8) -> bool {
+        let s = &self.settings;
+        !match leg {
+            upload_legs::QRZ => s.qrz_logbook_upload,
+            upload_legs::CLUBLOG => s.clublog_upload,
+            upload_legs::EQSL => s.eqsl_upload,
+            _ => true,
+        }
     }
 
     /// Store the resolved WRL logbook id — the `set_lotw_cursor` pattern: a
@@ -33549,8 +33590,19 @@ contact yourself."
     /// command runs the three with the Engine lock released for the read.
     #[cfg(test)]
     pub fn requeue_failed_uploads(&mut self, legs: u8) -> usize {
+        self.requeue_failed_uploads_from(legs, Default::default())
+    }
+
+    /// [`Self::requeue_failed_uploads`] with the start points `start` (no contact made before a
+    /// service's is picked for it), as the shipped sweep reads them from beside the log.
+    #[cfg(test)]
+    pub fn requeue_failed_uploads_from(
+        &mut self,
+        legs: u8,
+        start: crate::station::UploadStart,
+    ) -> usize {
         let (rows, room) = (self.log_rows(), self.catch_up_room());
-        let stale = crate::station::catch_up_records(&rows, legs, room)
+        let stale = crate::station::catch_up_records(&rows, legs, room, start)
             .expect("the test's log can be read");
         self.station.requeue_catch_up(stale)
     }
