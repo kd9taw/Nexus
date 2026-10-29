@@ -37,20 +37,33 @@ fn cannot_tell(service: &str, words: Option<String>) -> String {
     }
 }
 
+/// The shortest run of a secret's letters and digits that, shown anywhere in a service's words,
+/// withholds them. Five or fewer in a row can be a coincidence.
+const FRAGMENT: usize = 6;
+
 /// A service's whole answer `words` as a Test shows them: the secrets masked first
 /// ([`service_words_without_secrets`]), and only then cut to length — a cut made first can leave
 /// the start of a secret that masking, looking for the whole secret, no longer finds. Words whose
 /// cut still ends in the first four or more letters of a secret (an echo the service itself cut
-/// short) are replaced whole by `withheld`.
+/// short) are replaced whole by `withheld`, and so are words that show any run of
+/// [`FRAGMENT`] or more letters and digits of a secret anywhere, in any case or percent-encoded
+/// (a start, middle or end the service echoed on its own). A secret shorter than [`FRAGMENT`]
+/// has no such run; it relies on the whole-secret mask and the guard at the cut.
 fn shown_words(words: &str, echoed: &[Echoed<'_>], withheld: &str) -> String {
     let shown = capped(&service_words_without_secrets(words, echoed, withheld));
-    let tail = alnum_folded(shown.trim_end_matches('…'));
+    let folded = alnum_folded(shown.trim_end_matches('…'));
     let ends_in_a_secret = echoed.iter().any(|e| {
         folded_secret_forms(e.secret)
             .iter()
-            .any(|k| (4..=k.len()).any(|n| tail.ends_with(&k[..n])))
+            .any(|k| (4..=k.len()).any(|n| folded.ends_with(&k[..n])))
     });
-    if ends_in_a_secret {
+    let shows_a_fragment = echoed.iter().any(|e| {
+        folded_secret_forms(e.secret).iter().any(|k| {
+            k.len() >= FRAGMENT
+                && (0..=k.len() - FRAGMENT).any(|i| folded.contains(&k[i..i + FRAGMENT]))
+        })
+    });
+    if ends_in_a_secret || shows_a_fragment {
         withheld.to_string()
     } else {
         shown
@@ -543,6 +556,46 @@ mod tests {
         );
     }
 
+    /// A fragment of the password of six or more characters, anywhere in eQSL's words and in any
+    /// case or encoding, withholds them: the start or end of the password echoed mid-sentence (a
+    /// reply eQSL itself cut short). Controls: a refusal with no fragment is shown as eQSL wrote
+    /// it, and a five-character overlap is a coincidence, not an echo.
+    #[test]
+    fn an_eqsl_test_withholds_words_that_show_a_fragment_of_the_password() {
+        let withheld = Err(format!("eQSL said: {EQSL_WORDS_WITHHELD}"));
+        for echo in [
+            format!("Error: pwd {} truncated, try again", &PASSWORD[..6]),
+            format!("Error: pwd ...{} try again", &PASSWORD[4..]),
+            format!("Error: pwd {} truncated", PASSWORD[2..9].to_lowercase()),
+        ] {
+            let answer = eqsl_test("W9TST", PASSWORD, "", &|_| Ok(format!("<H3>{echo}</H3>")));
+            assert_eq!(answer, withheld, "{echo}");
+        }
+        // Percent-encoded: `-` and `&` reach the words as `%2D` and `%26`.
+        let symbols = "Pq-7&Rs9tU";
+        let answer = eqsl_test("W9TST", symbols, "", &|_| {
+            Ok("<H3>Error: pwd Pq%2D7%26R truncated</H3>".into())
+        });
+        assert_eq!(answer, withheld);
+        // Controls.
+        assert_eq!(
+            eqsl_test("W9TST", PASSWORD, "", &|_| Ok(
+                "<H3>Error: Bad password, try again</H3>".into()
+            )),
+            Err("eQSL said: Error: Bad password, try again".into())
+        );
+        assert_eq!(
+            eqsl_test("W9TST", PASSWORD, "", &|_| Ok(format!(
+                "<H3>Error: code {} is not valid</H3>",
+                &PASSWORD[..5]
+            ))),
+            Err(format!(
+                "eQSL said: Error: code {} is not valid",
+                &PASSWORD[..5]
+            ))
+        );
+    }
+
     // ----- ClubLog ------------------------------------------------------------
 
     fn clublog() -> ClubLogTest<'static> {
@@ -652,6 +705,49 @@ mod tests {
         assert!(
             long.starts_with("ClubLog said: Invalid login ..") && long.ends_with('…'),
             "{long}"
+        );
+    }
+
+    /// A fragment of six or more characters of the password or either key, anywhere in ClubLog's
+    /// words, withholds them, in a refusal and in an answer Nexus cannot read. Controls: a refusal
+    /// with no fragment is shown as ClubLog wrote it, and a five-character overlap is not an echo.
+    #[test]
+    fn a_clublog_test_withholds_words_that_show_a_fragment_of_a_secret() {
+        for secret in [PASSWORD, API_KEY, BUILT_IN] {
+            for echo in [
+                format!("Invalid login {} truncated, try again", &secret[..6]),
+                format!("Invalid login ...{} try again", &secret[4..]),
+            ] {
+                for status in [403, 200] {
+                    let words = clublog_test(&clublog(), &|_| Ok((status, echo.clone())))
+                        .expect_err("neither is a good login")
+                        .into_words();
+                    assert!(
+                        words.contains(CLUBLOG_TEST_WORDS_WITHHELD) && !words.contains("Invalid"),
+                        "{status}: {echo} -> {words}"
+                    );
+                }
+            }
+        }
+        // Controls.
+        assert_eq!(
+            clublog_test(&clublog(), &|_| Ok((
+                403,
+                "Invalid login, try again".into()
+            ))),
+            Err(ClubLogTestFailure::Refused(
+                "ClubLog said: Invalid login, try again".into()
+            ))
+        );
+        assert_eq!(
+            clublog_test(&clublog(), &|_| Ok((
+                403,
+                format!("Invalid login {} refused", &API_KEY[..5])
+            ))),
+            Err(ClubLogTestFailure::Refused(format!(
+                "ClubLog said: Invalid login {} refused",
+                &API_KEY[..5]
+            )))
         );
     }
 }
