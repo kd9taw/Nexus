@@ -4109,6 +4109,9 @@ export interface AprsIssDoppler {
     | 'noElements'
     | 'staleElements'
     | 'belowHorizon'
+    | 'tunedAway'
+    | 'radioRounds'
+    | 'stopped'
     | null
   rxHz: number | null
   txHz: number | null

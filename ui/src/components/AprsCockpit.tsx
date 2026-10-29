@@ -657,6 +657,12 @@ export function issDopplerLine(d: AprsIssDoppler | null | undefined): string {
       return t('aprs.iss.doppler.off.satTracker')
     case 'starting':
       return t('aprs.iss.doppler.off.starting')
+    case 'tunedAway':
+      return t('aprs.iss.doppler.off.tunedAway')
+    case 'radioRounds':
+      return t('aprs.iss.doppler.off.radioRounds', { freq })
+    case 'stopped':
+      return t('aprs.iss.doppler.off.stopped', { freq })
     default:
       return ''
   }

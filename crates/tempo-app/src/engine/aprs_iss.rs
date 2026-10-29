@@ -340,6 +340,10 @@ impl Engine {
         }
         self.aprs_iss.rounds = true;
         self.aprs_iss.own_hz = hz;
+        // …and a remote APRS hold follows it, as it follows every dial this module sets.
+        if self.remote_aprs_hold == Some(acked) {
+            self.remote_aprs_hold = Some(hz);
+        }
     }
 
     /// The driver thread stopped (it panicked): the correction is off for the rest of the run, and
