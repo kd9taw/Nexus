@@ -983,7 +983,7 @@ impl UploadDetail {
         match self {
             UploadDetail::Credentials => {
                 "The service turned the stored credentials down — fix them in Settings ▸ \
-                 Connectors, then upload again."
+                 Services ▸ Confirmations, then upload again."
             }
             UploadDetail::CallsignCertificate => {
                 "TQSL has no usable Callsign Certificate for this callsign — request or renew \
@@ -991,7 +991,8 @@ impl UploadDetail {
             }
             UploadDetail::StationLocation => {
                 "TQSL could not use the Station Location this upload asked for — create it in \
-                 TQSL, or set the name of one you already have in Settings ▸ Connectors."
+                 TQSL, or set the name of one you already have in Settings ▸ \
+                 Services ▸ Confirmations ▸ LoTW."
             }
             UploadDetail::RecordRefused => {
                 "The service took the request and refused this record — fix the QSO, then \
