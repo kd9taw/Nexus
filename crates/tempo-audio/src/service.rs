@@ -2272,11 +2272,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         // the process exits. Without this, quitting while keyed (a TX slot or a
         // tune carrier) leaves the radio transmitting until its own timeout.
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
-            backend.flush_output();
-            let _ = rig.ptt(false);
-            // Nexus stopping lets go of a Rig split it holds between overs, after the unkey.
-            let cluster_active = engine_lock(&engine).cluster_split_active();
-            state.let_go_of_rig_split(&mut rig, cluster_active);
+            state.stop_for_shutdown(&engine, &mut backend, &mut rig);
             // Drop any in-flight SSTV image feed too (the flush_output above already
             // dumped its queued audio and ptt(false) unkeyed the carrier — this is
             // symmetry with the CW/RTTY cuts below).
@@ -6852,6 +6848,20 @@ impl RadioLoop {
             }
             Err(_) => self.rig_split_release_at = Some(now + RIG_SPLIT_RELEASE_RETRY_MS),
         }
+    }
+
+    /// Nexus stopping: flush the queued audio, unkey through the still-alive rig, then let go of a
+    /// Rig split held between overs, after the unkey (WSJT-X's `TransceiverBase::shutdown` order).
+    fn stop_for_shutdown<B: AudioBackend>(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        backend: &mut B,
+        rig: &mut Rig,
+    ) {
+        backend.flush_output();
+        let _ = rig.ptt(false);
+        let cluster_active = engine_lock(engine).cluster_split_active();
+        self.let_go_of_rig_split(rig, cluster_active);
     }
 
     /// Unkey before the loop lets go of `rig`: flush the queued audio, key up through the

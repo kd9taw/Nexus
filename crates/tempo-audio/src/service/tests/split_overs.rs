@@ -1522,3 +1522,37 @@ fn through_hamlib_an_owed_release_survives_a_rebuild_to_the_same_radio() {
         );
     }
 }
+
+/// Leaving the digital screens lets go of a held Rig split (a phone or CW transmission must never go
+/// out of VFO B on the last FT TX dial), with TX turned on again so the screen alone decides; and
+/// Nexus stopping lets go of it after the unkey.
+#[test]
+fn through_hamlib_a_held_rig_split_is_let_go_off_the_digital_screens_and_when_nexus_stops() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    {
+        let mut e = b.engine.lock().unwrap();
+        e.set_operating_mode("phone", false);
+        e.set_tx_enabled(true);
+    }
+    let sent: Vec<String> = b
+        .ticks(3)
+        .into_iter()
+        .filter(|l| l.starts_with('S'))
+        .collect();
+    assert_eq!(sent, ["S 0 VFOA"], "off the digital screens");
+    assert!(!b.radio.vfos.lock().unwrap().split, "still in split");
+
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    let before = b.radio.sent().len();
+    b.state
+        .stop_for_shutdown(&b.engine, &mut b.backend, &mut b.rig);
+    let writes: Vec<String> = b.radio.sent()[before..]
+        .iter()
+        .filter(|l| !l.ends_with('?'))
+        .cloned()
+        .collect();
+    assert_eq!(writes, ["T 0", "S 0 VFOA"], "Nexus stopping");
+    assert!(!b.radio.vfos.lock().unwrap().split, "left in split");
+}
