@@ -16890,6 +16890,86 @@ mod contest_session_tests {
         assert_eq!(keys_to_confirm_in(&s), Vec::new(), "CONTROL: none waits");
     }
 
+    /// ★ A RESTORE WHILE TX IS ARMED BETWEEN OVERS, OR WHILE THE RADIO LOOP STILL PLAYS A
+    /// VOICE-KEYER MESSAGE OR APRS FRAME ON ITS OWN, IS REFUSED, AND CHANGES NOTHING: the radio
+    /// loop needs the engine lock to key the next over on time, and to end the loop's own
+    /// transmission, and nothing reports either as keyed. CONTROL: disarmed with no loop
+    /// transmission, the same restore goes through.
+    #[test]
+    fn a_restore_while_tx_is_armed_or_the_loop_transmits_is_refused() {
+        const STATION_LOG: &str = "https://log.station.example/cloudlog";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-armed", 0);
+        let station = station_with(&engine, restore_test_roster(), STATION_LOG);
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = || {
+            let mut keychain = FakeKeychain::holding(&all);
+            let out = restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .map(|_| ());
+            let url = engine_lock(&engine).settings().cloudlog_url.clone();
+            (out, keychain.forgot, url)
+        };
+        let refused = || {
+            (
+                Err(tempo_app::engine::RESTORE_ON_AIR.to_string()),
+                Vec::<String>::new(),
+                STATION_LOG.to_string(),
+            )
+        };
+
+        engine_lock(&engine).observe_loop_tx_hold(Some(5000.0));
+        assert!(
+            !engine_lock(&engine).on_air(),
+            "premise: nothing reads as keyed"
+        );
+        assert_eq!(
+            restore(),
+            refused(),
+            "the loop's own transmission: refused, nothing changed"
+        );
+        engine_lock(&engine).observe_loop_tx_hold(None);
+        {
+            let mut eng = engine_lock(&engine);
+            assert_eq!(
+                eng.settings().operating_mode,
+                tempo_app::settings::OperatingMode::Digital,
+                "premise: Digital"
+            );
+            eng.set_tx_enabled(true);
+            assert!(
+                eng.tx_enabled() && !eng.on_air(),
+                "premise: armed, not keyed"
+            );
+        }
+        assert_eq!(
+            restore(),
+            refused(),
+            "TX armed between overs: refused, nothing changed"
+        );
+        engine_lock(&engine).set_tx_enabled(false);
+        assert_eq!(
+            restore(),
+            (
+                Ok(()),
+                vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+                "https://log.other.example/cloudlog".to_string()
+            ),
+            "CONTROL: disarmed, nothing on the air: restored, the moved key removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ A SETTINGS SAVE THAT WOULD PUT A DAEMON ON A NET RIGCTL RADIO'S NETWORK ADDRESS IS
     /// REFUSED, BY NAME, AND CHANGES NOTHING. The station operates an FTDX10 (its rigctld on 4535)
     /// beside an IC-9700 on wfview's rigctld at `127.0.0.1:4533`, and the form types the FTDX10's
