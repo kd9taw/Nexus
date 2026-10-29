@@ -3801,9 +3801,9 @@ pub struct Engine {
     beacon_decided_slot: Option<u64>,
     /// The decision itself, held for the length of the interval.
     beacon_tx_this_slot: bool,
-    /// How many beacon intervals this session has decided to transmit in: WSJT-X's `m_tx`, which
-    /// flips once per beacon over, is this count's parity. It picks which of a compound call's
-    /// two messages an over sends ([`Self::beacon_message`]).
+    /// How many beacon overs this session has keyed ([`Self::note_slot_over_keyed`]): WSJT-X's
+    /// `m_tx`, which flips at each beacon over's PTT rise, is this count's parity. It picks which
+    /// of a compound call's two messages the next over sends ([`Self::beacon_message`]).
     beacon_overs: u64,
     /// Chat-native CQ run (Tempo): while on, an idle own-parity TX slot re-sends the
     /// structured CQ — the WSJT-X-style "keep calling until someone answers" loop the
@@ -21161,6 +21161,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.slot_over_dropped = None;
     }
 
+    /// The radio keyed the slot over [`Self::commit_tx`] handed it: PTT is up. A WSPR or FST4W
+    /// over counts toward a compound call's alternation ([`Self::beacon_overs`]) here, as WSJT-X
+    /// flips `m_tx` only on the tick that raises PTT (`widgets/mainwindow.cpp:7880`, `:15464`): an
+    /// interval decided but never keyed leaves the next over on the message that was due.
+    pub fn note_slot_over_keyed(&mut self) {
+        if self.tier_is_beacon(self.app.tier()) {
+            self.beacon_overs += 1;
+        }
+    }
+
     /// Halt TX because the sound card's transmit audio output would not open for slot TX (FT8,
     /// FT4, JS8 and the other timed-slot modes): nothing is keyed, since a radio keyed with no
     /// audio puts a dead carrier on the air for the whole over, and every over after it while the
@@ -29993,13 +30003,15 @@ contact yourself."
             );
         }
         // WSJT-X sends a compound call's type 2 on its first over and its type 3 on the next
-        // (`m_tx=1-m_tx`, then `if(m_tx==0) msg2=msg0`).
+        // (`m_tx=1-m_tx`, then `if(m_tx==0) msg2=msg0`). It flips as PTT rises, before it builds
+        // the over; this over is built before its key, so it is the flip the key will make: the
+        // over after an odd number keyed is the type 3.
         Ok(tempo_core::beacon::beacon_message(
             call,
             grid,
             self.settings.beacon_power_dbm,
             self.app.tier() == Tier::Fst4w,
-            self.beacon_overs.is_multiple_of(2),
+            !self.beacon_overs.is_multiple_of(2),
         ))
     }
 
@@ -30049,9 +30061,6 @@ contact yourself."
             } else {
                 self.beacon_sched.next_is_tx()
             };
-            if self.beacon_tx_this_slot {
-                self.beacon_overs += 1;
-            }
         }
         if !self.beacon_tx_this_slot {
             self.app.set_transmitting(false);
@@ -74985,6 +74994,8 @@ mod tests {
                     };
                     let first = text(&mut e);
                     assert_eq!(text(&mut e), first, "{call}: one text per interval");
+                    // Each over keys: the alternation flips at the key (see the next test).
+                    e.note_slot_over_keyed();
                     first
                 })
                 .collect()
@@ -75011,6 +75022,82 @@ mod tests {
                 "CONTROL {tier:?}"
             );
         }
+    }
+
+    /// ⭐ A COMPOUND CALL'S BEACON ALTERNATES ON THE OVERS THAT KEY, NOT ON THE INTERVALS DECIDED.
+    /// WSJT-X flips `m_tx` inside `WSPR_message` (`widgets/mainwindow.cpp:15464`), which it calls
+    /// only on the tick that raises PTT (`if((g_iptt==1 && m_iptt0==0) || m_restart)`, `:7880`, for
+    /// WSPR, and `:8006` for FST4W in the same block). An interval that keys nothing (no power set,
+    /// a plan the radio loop drops, a key it never makes) leaves the next over on the message that
+    /// was due. Nexus flipped when it decided to transmit, so the over after such an interval was
+    /// the type 3 where WSJT-X sends the type 2.
+    #[test]
+    fn a_compound_call_beacon_alternates_on_overs_keyed_not_intervals_decided() {
+        let text = |e: &mut Engine, slot: u64| match e.plan_tx(slot).map(|p| p.waveform) {
+            Some(TxWaveform::Native { text, .. }) => Some(text),
+            None => None,
+            Some(_) => panic!("slot {slot}: not a beacon over"),
+        };
+        for (tier, three) in [
+            (Tier::Wspr, "<PJ4/K1ABC> FK52UD 37"),
+            (Tier::Fst4w, "<PJ4/K1ABC> FK52UD"),
+        ] {
+            let two = "PJ4/K1ABC 37";
+            let mut e = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+            e.set_tier(tier);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 0;
+            e.apply_settings(s.clone());
+            e.set_tx_enabled(true);
+            // Decided to transmit, but no power set: nothing goes out.
+            assert_eq!(
+                text(&mut e, 10),
+                None,
+                "{tier:?}: premise: no power, no over"
+            );
+            s.beacon_power_dbm = 37;
+            e.apply_settings(s);
+            // Planned, but never keyed (the radio loop dropped it, or the radio refused the key).
+            assert_eq!(
+                text(&mut e, 11).as_deref(),
+                Some(two),
+                "{tier:?}: after no over"
+            );
+            assert_eq!(
+                text(&mut e, 12).as_deref(),
+                Some(two),
+                "{tier:?}: after no key"
+            );
+            e.note_slot_over_keyed();
+            assert_eq!(
+                text(&mut e, 13).as_deref(),
+                Some(three),
+                "{tier:?}: after a key"
+            );
+            e.note_slot_over_keyed();
+            assert_eq!(
+                text(&mut e, 14).as_deref(),
+                Some(two),
+                "{tier:?}: after two keys"
+            );
+        }
+
+        // CONTROL: an over keyed in another mode is not a beacon over, as WSJT-X flips `m_tx`
+        // only where it builds a WSPR or FST4W message.
+        let mut e = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+        e.note_slot_over_keyed();
+        e.set_tier(Tier::Wspr);
+        let mut s = e.settings().clone();
+        s.beacon_tx_percent = 100;
+        s.beacon_power_dbm = 37;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        assert_eq!(
+            text(&mut e, 10).as_deref(),
+            Some("PJ4/K1ABC 37"),
+            "CONTROL: an FT8 key flipped the beacon"
+        );
     }
 
     #[test]
