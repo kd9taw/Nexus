@@ -180,6 +180,16 @@ pub fn is_lotw_adif(body: &str) -> bool {
         .starts_with("arrl logbook of the world")
 }
 
+/// The words LoTW's sign-in page shows when the username or password is wrong. LoTW sends that
+/// page with HTTP 200 in place of the report, so only its words tell it apart.
+const SIGN_IN_REFUSED: &str = "username/password incorrect";
+
+/// True iff `body` is LoTW's sign-in page turning the username or password down, rather than the
+/// report or some other page.
+pub fn is_login_refused(body: &str) -> bool {
+    !is_lotw_adif(body) && body.to_ascii_lowercase().contains(SIGN_IN_REFUSED)
+}
+
 /// Extract the `APP_LoTW_LASTQSL` header high-water mark (the timestamp to persist
 /// and pass back as `qso_qslsince`). Returns `None` when the field is absent —
 /// notably an **empty incremental response** (no new QSLs) is header-only with no
@@ -429,5 +439,20 @@ mod tests {
         let crafted =
             "<!DOCTYPE html><title>ARRL Logbook of the World</title><eoh><body>err</body>";
         assert!(!is_lotw_adif(crafted));
+    }
+
+    #[test]
+    fn lotws_sign_in_page_is_a_refused_login() {
+        let page = "<html><title>ARRL's Logbook of The World</title><body>\
+            <p>Log on to Logbook of The World -- LoTW</p>\
+            <p class=\"error\">Username/password incorrect</p></body></html>";
+        assert!(is_login_refused(page));
+        // Controls: an error page without those words, and the report itself, are not.
+        assert!(!is_login_refused(
+            "<html><body>Down for maintenance</body></html>"
+        ));
+        assert!(!is_login_refused(
+            "ARRL Logbook of the World Status Report\n<eoh>\n"
+        ));
     }
 }
