@@ -470,7 +470,8 @@ fn tick(
         }
     }
     *lock(&shared.rx_streams) = c.broker.streams().collect();
-    let served = super::shim::served_slice(model, ours)
+    let split = *lock(&shared.state.split);
+    let served = super::shim::served_slice_split(model, ours, split)
         .and_then(|s| c.held.get(&s).copied())
         .unwrap_or(0);
     shared.served_channel.store(served, Ordering::Release);

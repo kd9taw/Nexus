@@ -104,7 +104,8 @@ use std::time::{Duration, Instant};
 
 use super::admission::{self, Admitted, Facts, Refusal};
 use super::encode::{
-    self, ClientId, Command, Kind, Rendered, StartKind, Station, Target, TxAudio, TxStart, TxStop,
+    self, ClientId, Command, Kind, Rendered, StartKind, Station, Target, TxAudio, TxSlice, TxStart,
+    TxStop,
 };
 use super::handshake::{self, ConnectConfig, Registration, NOT_SUPPORTED};
 use super::keepalive::{Keepalive, Tick};
@@ -416,6 +417,8 @@ pub enum SendError {
         target: Target,
         owner: Owner,
     },
+    /// Its admission refused it ([`Session::move_tx`]).
+    NotAdmitted(Refusal),
 }
 
 /// What ending everything of ours did ([`Session::end_ours`]).
@@ -788,7 +791,7 @@ impl Session {
         match kind {
             // Admission refuses an audio-source change while anything is keyed, so it cannot
             // reach here; if it did, it is not a keying write.
-            Kind::Ordinary | Kind::TxAudio(_) => {}
+            Kind::Ordinary | Kind::TxAudio(_) | Kind::TxSlice(_) => {}
             // The readback checks the sequence number: a second start that is not its own fails.
             Kind::Start(k) if k == keyed.kind => {
                 let stamp = self.stamp();
@@ -1064,6 +1067,17 @@ impl Session {
         let seq = self.take_seq();
         self.pending.insert(seq, Pending::TxAudio(audio));
         self.write(out, seq, &encode::render_tx_audio(admitted), now);
+        Ok(seq)
+    }
+
+    /// Move the transmit flag to a slice of ours, if its admission allows it (never while anything
+    /// is keyed or the interlock is not idle). Answered once written; the radio's reply follows as
+    /// an [`Event::Reply`].
+    pub fn move_tx(&mut self, out: &mut dyn Write, tx: TxSlice, now: u64) -> Result<u32, Refusal> {
+        let admitted = admission::admit_tx_slice(&self.model, &self.facts(), tx)?;
+        let seq = self.take_seq();
+        self.pending.insert(seq, Pending::Caller);
+        self.write(out, seq, &encode::render_tx_slice(admitted), now);
         Ok(seq)
     }
 
@@ -1722,6 +1736,7 @@ enum Request {
     Stop(TxStop, Sender<StopOutcome>),
     EndOurs(Sender<EndOutcome>),
     Route(TxAudio, Sender<Result<u32, Refusal>>),
+    MoveTx(TxSlice, Sender<Result<Reply, ConnError>>),
     Close,
 }
 
@@ -1877,6 +1892,20 @@ impl Connection {
         rx.recv().map_err(|_| None)?.map_err(Some)
     }
 
+    /// Move the transmit flag (its admission decides) and wait for the radio's reply. A refusal by
+    /// admission is [`ConnError::Refused`] with [`SendError::NotAdmitted`]: nothing was sent.
+    pub fn move_tx(&self, tx: TxSlice, timeout: Duration) -> Result<Reply, ConnError> {
+        let (reply, rx) = mpsc::channel();
+        self.requests
+            .send(Request::MoveTx(tx, reply))
+            .map_err(|_| ConnError::Closed)?;
+        match rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(ConnError::Timeout),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(ConnError::Closed),
+        }
+    }
+
     /// Whether an over of ours (`xmit 1`) is unconfirmed, on a session that has not closed, and
     /// not handed to the operator's mic: what the last published state says, without copying it.
     /// The DAX transmit pacer sends only then: a CWX word, a tune or an ATU cycle is keyed
@@ -2022,6 +2051,17 @@ fn drive<S: Read + Write>(
                     let routed = session.route(&mut io, audio, now());
                     answer(&session, shared, reply, routed);
                 }
+                Ok(Request::MoveTx(tx, reply)) => match session.move_tx(&mut io, tx, now()) {
+                    Ok(seq) => {
+                        waiters.insert(seq, reply);
+                    }
+                    Err(refusal) => answer(
+                        &session,
+                        shared,
+                        reply,
+                        Err(ConnError::Refused(SendError::NotAdmitted(refusal))),
+                    ),
+                },
                 Ok(Request::Close) | Err(TryRecvError::Disconnected) => {
                     session.close(&mut io, now());
                     break;

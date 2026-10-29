@@ -181,6 +181,10 @@ pub(crate) struct ClientState {
     /// shim keys it only while the radio takes its transmit audio from Nexus's DAX
     /// ([`FlexDaemon::set_voice_key`]). Set by the radio loop around that one key.
     pub(crate) voice_key: AtomicBool,
+    /// The Rig split the shim holds (`S 1`): the receive slice it keeps serving as the dial, and
+    /// the slice of ours it made and moved the transmit flag to. Held between overs, until `S 0`
+    /// puts the flag back and removes that slice ([`shim::SplitPair`]).
+    pub(crate) split: Mutex<Option<shim::SplitPair>>,
 }
 
 /// The mode an over on `slice` goes out in: the one the shim commanded while the radio has not
