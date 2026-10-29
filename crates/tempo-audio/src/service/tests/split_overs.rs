@@ -396,17 +396,18 @@ fn civ_bench(addr: u8, model: IcomModel, hamlib: u32, split: SplitMode, tx_hz: f
     Bench::new(engine, state, rig, Icom { log, keyed, regs })
 }
 
-/// An IC-7610 on Nexus's CI-V daemon, Split Operation = Rig: before every key `0F 01` (split on),
-/// `25 01` (the SUB band's dial, by name, on this radio) at the TX dial and `26 01 01 01` (that
-/// band's mode: USB, DATA mode D1, the bench's Data mode); after every unkey `0F 00` (split off).
-/// The same TX dial every over, MAIN never written, nothing written while it receives, the
-/// engine's dial unmoved. At 1441 Hz the step is -500 Hz; at 941 Hz, -1000 Hz.
+/// An IC-7610 on Nexus's CI-V daemon, Split Operation = Rig: before the first key `0F 01` (split
+/// on), and before every key `25 01` (the SUB band's dial, by name, on this radio) at the TX dial
+/// and `26 01 01 01` (that band's mode: USB, DATA mode D1, the bench's Data mode). Split is held
+/// between overs, as WSJT-X holds it: nothing but the unkey at an unkey. The same TX dial every
+/// over, MAIN never written, nothing written while it receives, the engine's dial unmoved. At 1441
+/// Hz the step is -500 Hz; at 941 Hz, -1000 Hz.
 ///
 /// The `26 01` is the loop's `X PKTUSB -1`, which the daemon used to refuse: its mode names
 /// (`commands::Mode::from_name`) have no DATA submode, so nothing went on the wire, and the TX VFO
 /// transmitted FT8 in whatever mode it was left in.
 #[test]
-fn an_ic7610_in_rig_split_gets_the_same_tx_dial_every_over_and_split_off_after_each() {
+fn an_ic7610_in_rig_split_gets_the_same_tx_dial_every_over_and_split_held_between() {
     for (tx_hz, tx_dial) in [(1441.0, 14_073_500u64), (941.0, 14_073_000)] {
         let mut b = civ_bench(0x98, IcomModel::Ic7610, 3078, SplitMode::Rig, tx_hz);
         let overs = b.overs(3);
@@ -414,19 +415,20 @@ fn an_ic7610_in_rig_split_gets_the_same_tx_dial_every_over_and_split_off_after_e
             eprintln!("IC-7610 Rig {tx_hz} Hz over {}: {o:?}", i + 1);
         }
         let key = vec![
-            "0F 01".to_string(),
             format!("25 01 {tx_dial}"),
             "26 01 01 01".to_string(),
             "1C 00 01".to_string(),
         ];
-        let unkey = vec!["1C 00 00".to_string(), "0F 00".to_string()];
+        let first_key = [vec!["0F 01".to_string()], key.clone()].concat();
+        let unkey = vec!["1C 00 00".to_string()];
         for (i, o) in overs.iter().enumerate() {
             let what = format!("{tx_hz} Hz, over {}", i + 1);
             assert_eq!(
                 o.dial, FT8_DIAL,
                 "{what}: the dial the shift was taken from"
             );
-            assert_eq!(o.key, key, "{what}: what goes out before the key");
+            let want = if i == 0 { &first_key } else { &key };
+            assert_eq!(&o.key, want, "{what}: what goes out before the key");
             assert_eq!(o.unkey, unkey, "{what}: what goes out at the unkey");
             assert_eq!(
                 o.rx,
@@ -437,8 +439,8 @@ fn an_ic7610_in_rig_split_gets_the_same_tx_dial_every_over_and_split_off_after_e
         let r = b.radio.regs.lock().unwrap();
         assert_eq!(
             (r.main_hz, r.sub_hz, r.split),
-            (FT8_DIAL, tx_dial, false),
-            "{tx_hz} Hz"
+            (FT8_DIAL, tx_dial, true),
+            "{tx_hz} Hz: held in split"
         );
         drop(r);
         assert_eq!(b.dial(), FT8_DIAL, "{tx_hz} Hz: the engine's dial");
@@ -664,50 +666,63 @@ fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<H
     Bench::new(engine, loop_state(), rig, Hamlib { peer, keyed, vfos })
 }
 
-/// Through Hamlib, Split Operation = Rig: before every key `S 1 VFOB`, `I` at the TX dial and
-/// `X PKTUSB -1`; after every unkey `S 0 VFOA`. VFO A is never written; VFO B holds the TX dial.
+/// Through Hamlib, Split Operation = Rig: `S 1 VFOB` before the first key only, and before every
+/// key `I` at the TX dial and `X PKTUSB -1`; nothing but `T 0` at an unkey, split held between
+/// overs as WSJT-X holds it. VFO A is never written; VFO B holds the TX dial.
 #[test]
-fn through_hamlib_rig_split_is_engaged_at_every_key_and_released_at_every_unkey() {
+fn through_hamlib_rig_split_is_engaged_before_the_first_key_and_held_between_overs() {
     let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
     let overs = b.overs(3);
     for (i, o) in overs.iter().enumerate() {
         eprintln!("Hamlib Rig over {}: {o:?}", i + 1);
         assert_eq!(o.dial, FT8_DIAL, "over {}", i + 1);
-        assert_eq!(
-            o.key,
-            ["S 1 VFOB", "I 14073500", "X PKTUSB -1", "T 1"],
-            "over {}",
-            i + 1
-        );
-        assert_eq!(o.unkey, ["T 0", "S 0 VFOA"], "over {}", i + 1);
+        let key: &[&str] = if i == 0 {
+            &["S 1 VFOB", "I 14073500", "X PKTUSB -1", "T 1"]
+        } else {
+            &["I 14073500", "X PKTUSB -1", "T 1"]
+        };
+        assert_eq!(o.key, key, "over {}", i + 1);
+        assert_eq!(o.unkey, ["T 0"], "over {}", i + 1);
         assert_eq!(o.rx, Vec::<String>::new(), "over {}", i + 1);
     }
     let v = b.radio.vfos.lock().unwrap();
-    assert_eq!((v.split, v.b), (false, 14_073_500));
+    assert_eq!((v.split, v.b), (true, 14_073_500));
     drop(v);
     assert_eq!(b.dial(), FT8_DIAL);
 }
 
 /// Through Hamlib, Split Operation = Rig, on a radio that was ALREADY in split before Nexus
 /// transmitted, VFO B on the dial (a quick split): the receive-time split read takes that as the
-/// operator's own split, and after every over the teardown puts it back. So VFO B goes to the TX
-/// dial for each over and back to the dial after it, every cycle, where WSJT-X leaves it on the TX
-/// dial.
+/// operator's own split. Nexus holds its split between overs, as WSJT-X does, so VFO B stays on the
+/// TX dial across them; the operator's own split, VFO B and all, is put back when Nexus lets go
+/// (here, TX turned off).
 #[test]
-fn through_hamlib_a_radio_already_in_split_gets_its_own_vfo_b_back_after_every_over() {
+fn through_hamlib_a_radio_already_in_split_gets_its_own_vfo_b_back_when_nexus_lets_go() {
     let mut b = hamlib_bench(SplitMode::Rig, 1441.0, Some(FT8_DIAL));
     let overs = b.overs(3);
     for (i, o) in overs.iter().enumerate() {
         eprintln!("Hamlib Rig, radio's own split on, over {}: {o:?}", i + 1);
-        assert_eq!(
-            o.key,
-            ["S 1 VFOB", "I 14073500", "X PKTUSB -1", "T 1"],
-            "over {}",
-            i + 1
-        );
-        assert_eq!(o.unkey, ["T 0", "S 1 VFOB", "I 14074000"], "over {}", i + 1);
+        let key: &[&str] = if i == 0 {
+            &["S 1 VFOB", "I 14073500", "X PKTUSB -1", "T 1"]
+        } else {
+            &["I 14073500", "X PKTUSB -1", "T 1"]
+        };
+        assert_eq!(o.key, key, "over {}", i + 1);
+        assert_eq!(o.unkey, ["T 0"], "over {}", i + 1);
         assert_eq!(o.rx, Vec::<String>::new(), "over {}", i + 1);
     }
+    assert_eq!(
+        b.radio.vfos.lock().unwrap().b,
+        14_073_500,
+        "held on the TX dial"
+    );
+    b.engine.lock().unwrap().set_tx_enabled(false);
+    let writes = b.ticks(3);
+    assert_eq!(
+        writes,
+        ["S 1 VFOB", "I 14074000"],
+        "the operator's own split put back"
+    );
     let v = b.radio.vfos.lock().unwrap();
     assert_eq!((v.split, v.b), (true, FT8_DIAL));
 }
@@ -1070,4 +1085,187 @@ fn through_hamlib_a_write_back_waiting_at_their_period_keeps_its_100_ms() {
         "the write-back, 100 ms after the wait began"
     );
     assert_eq!(b.dial(), FT8_DIAL);
+}
+
+// ── Rig split held between overs, as WSJT-X holds it ─────────────────────────────────────────
+// WSJT-X turns split on once (`Transceiver/HamlibTransceiver.cpp:965-987`, the first
+// `rig_set_split_vfo`) and writes only the TX frequency at every key after it
+// (`TransceiverBase.cpp:160-171`, "or about to tx split"); `setXIT` keeps a TX frequency set while
+// Split Operation is on (`widgets/mainwindow.cpp:12378-12387`), so nothing turns split off between
+// overs. Nexus holds it the same way and lets go only when Split Operation is changed, the band or
+// the radio changes, TX is turned off, or Nexus stops.
+
+impl<R: Radio> Bench<R> {
+    /// Step `n` ticks with no over recorded, returning every write the radio got.
+    fn ticks(&mut self, n: usize) -> Vec<String> {
+        let sinks = Sinks {
+            wsjtx: None,
+            psk: None,
+        };
+        let mut ra = mock_reopen_audio();
+        let mut rr =
+            move |_t: &Transport, _coexist: bool| (Rig::vox(), None, CatProbe::status(None, ""));
+        let mut station = StationSinks::new();
+        let before = self.radio.sent().len();
+        for _ in 0..n {
+            self.state
+                .step(
+                    &self.engine,
+                    &mut self.backend,
+                    &mut self.rig,
+                    &sinks,
+                    self.t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            self.t += 20.0;
+        }
+        self.radio.sent()[before..]
+            .iter()
+            .filter(|l| !l.ends_with('?'))
+            .cloned()
+            .collect()
+    }
+}
+
+/// Through Hamlib, Split Operation = Rig, three overs of a CQ run: `S 1 VFOB` once, before the
+/// first, and never again; every over writes the TX dial and its mode before its key; nothing is
+/// written at an unkey or while receiving, and the radio is still in split, VFO B on the TX dial.
+#[test]
+fn through_hamlib_rig_split_is_turned_on_once_and_held_across_overs() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let overs = b.overs(3);
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!("Hamlib Rig held, over {}: {o:?}", i + 1);
+    }
+    let enables: usize = overs
+        .iter()
+        .map(|o| o.key.iter().chain(&o.unkey).chain(&o.rx))
+        .map(|w| w.filter(|l| l.starts_with("S ")).count())
+        .sum();
+    assert_eq!(enables, 1, "exactly one split write in three overs");
+    assert_eq!(
+        overs[0].key,
+        ["S 1 VFOB", "I 14073500", "X PKTUSB -1", "T 1"]
+    );
+    for (i, o) in overs.iter().enumerate() {
+        if i > 0 {
+            assert_eq!(
+                o.key,
+                ["I 14073500", "X PKTUSB -1", "T 1"],
+                "over {}",
+                i + 1
+            );
+        }
+        assert_eq!(o.unkey, ["T 0"], "over {}", i + 1);
+        assert_eq!(o.rx, Vec::<String>::new(), "over {}", i + 1);
+    }
+    let v = b.radio.vfos.lock().unwrap();
+    assert_eq!((v.split, v.b), (true, 14_073_500), "held in split");
+}
+
+/// What lets go of a held Rig split, each on its own: the band changing, TX turned off, Split
+/// Operation changed. Each sends `S 0 VFOA` (no split of the radio's own to put back) while the
+/// station receives, before anything keys. The control: none of them, and nothing is written.
+#[test]
+fn through_hamlib_a_held_rig_split_is_let_go_when_the_band_tx_or_split_mode_changes() {
+    type Change = fn(&mut Engine);
+    let cases: [(&str, Option<Change>); 4] = [
+        (
+            // TX turned on again after the band change's own halt: the band alone lets go.
+            "the band changes",
+            Some(|e| {
+                e.set_frequency(7.074, "40m", "USB");
+                e.set_tx_enabled(true);
+            }),
+        ),
+        ("TX is turned off", Some(|e| e.set_tx_enabled(false))),
+        (
+            "Split Operation is set to None",
+            Some(|e| {
+                let mut s = e.settings().clone();
+                s.split_mode = SplitMode::None;
+                e.apply_settings(s);
+            }),
+        ),
+        ("control: nothing changes", None),
+    ];
+    for (what, change) in cases {
+        let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+        let _ = b.overs(1);
+        assert!(b.radio.vfos.lock().unwrap().split, "{what}: premise, held");
+        // The last ticks of the receive period after the over, before the next own boundary.
+        if let Some(change) = change {
+            change(&mut b.engine.lock().unwrap());
+        }
+        let writes = b.ticks(3);
+        let sent: Vec<&str> = writes
+            .iter()
+            .map(String::as_str)
+            .filter(|l| l.starts_with(['S', 'T']))
+            .collect();
+        match change {
+            Some(_) => {
+                assert_eq!(sent, ["S 0 VFOA"], "{what}: wire {writes:?}");
+                assert!(
+                    !b.radio.vfos.lock().unwrap().split,
+                    "{what}: still in split"
+                );
+            }
+            None => {
+                assert_eq!(sent, Vec::<&str>::new(), "{what}: wire {writes:?}");
+                assert!(b.radio.vfos.lock().unwrap().split, "{what}: let go");
+            }
+        }
+    }
+}
+
+/// A held Rig split and an over whose TX offset needs no shift (1500-1999 Hz): the TX dial is the
+/// RX dial, written before the key as WSJT-X writes `XIT` 0's TX frequency, never left on the last
+/// shifted dial VFO B still holds.
+#[test]
+fn through_hamlib_a_held_split_writes_the_rx_dial_for_an_over_with_no_shift() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let engine = b.engine.clone();
+    // Moved while the second over is on the air, for the third.
+    let overs = b.overs_with(3, |i| {
+        if i == 1 {
+            engine.lock().unwrap().set_tx_offset(1700.0);
+        }
+    });
+    assert_eq!(
+        overs[1].key,
+        ["I 14073500", "X PKTUSB -1", "T 1"],
+        "premise: held"
+    );
+    assert_eq!(
+        overs[2].key,
+        ["I 14074000", "X PKTUSB -1", "T 1"],
+        "the TX dial back on the RX dial before the key"
+    );
+}
+
+/// The radio changing lets go of a held Rig split through the outgoing link before it goes: a
+/// saved CAT change rebuilds the link, and the old radio gets the unkey and then `S 0 VFOA`.
+#[test]
+fn through_hamlib_a_held_rig_split_is_let_go_when_the_radio_changes() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    assert!(b.radio.vfos.lock().unwrap().split, "premise: held");
+    {
+        let mut e = b.engine.lock().unwrap();
+        let mut s = e.settings().clone();
+        s.rig_model = 1035;
+        e.apply_settings(s);
+    }
+    let writes = b.ticks(1);
+    assert_eq!(
+        writes,
+        ["T 0", "S 0 VFOA"],
+        "the old radio, before the link goes"
+    );
+    assert!(!b.radio.vfos.lock().unwrap().split, "left in split");
+    assert!(!b.rig.tx_split_held, "the new link believes split is on");
 }

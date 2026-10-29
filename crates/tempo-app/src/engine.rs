@@ -21046,6 +21046,45 @@ Pick the one you operate from on the Contesting tab in Settings.",
             why: why.to_string(),
             flex_audio: None,
             tx_audio_failed: false,
+            split_failed: false,
+        });
+    }
+
+    /// Halt TX because the radio did not take Split Operation's TX dial for a slot over (Rig
+    /// split's `S`, `I` or `X`, or Fake It's dial write: refused, or not answered by the CAT
+    /// deadline): nothing was keyed, since the over's audio was already moved for a dial that never
+    /// moved and would have gone out 500 Hz or more from where the operator put it. The reason
+    /// (`why`, the rig link's own answer) stays on the refused key's line until the operator turns
+    /// TX on again ([`Self::set_tx_enabled`]).
+    ///
+    /// WSJT-X 3.0.2 writes the TX frequency before PTT (`Transceiver/TransceiverBase.cpp:160-180`)
+    /// through `error_check`, which throws on anything but `RIG_OK`
+    /// (`Transceiver/HamlibTransceiver.cpp:277-284`; the split writes at `:1022`, `:1027`,
+    /// `:1034`), so PTT is never asserted, and the rig-failure handler presses Halt Tx
+    /// (`widgets/mainwindow.cpp:12556-12564`). [`Self::halt_tx`] is that Halt Tx here, as for a
+    /// refused key ([`Self::halt_tx_for_refused_key`]): one event, one line in the log, no stop for
+    /// a voice memory.
+    pub fn halt_tx_for_refused_split(&mut self, why: &str) {
+        let voice_mem_halt = self.voice_mem_halt;
+        self.quiet_tx_log = true;
+        self.halt_tx();
+        self.quiet_tx_log = false;
+        self.voice_mem_halt = voice_mem_halt;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} not keyed: the radio did not take the split TX frequency ({why}, Split \
+                 Operation {:?}); transmit halted",
+                self.tier().label(),
+                self.settings.split_mode,
+            ),
+        );
+        self.slot_key_refused = Some(crate::dto::SlotKeyRefused {
+            at: now_unix_secs(),
+            why: why.to_string(),
+            flex_audio: None,
+            tx_audio_failed: false,
+            split_failed: true,
         });
     }
 
@@ -21131,6 +21170,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             why: why.to_string(),
             flex_audio: None,
             tx_audio_failed: true,
+            split_failed: false,
         });
     }
 
@@ -28741,6 +28781,10 @@ contact yourself."
     /// Inactive (raw offset, shift 0) when split is off, the tier isn't
     /// FT8/FT4, the offset is already in-window, or a cluster SPLIT-on-Work
     /// already owns the TX dial.
+    ///
+    /// In-window is 1500..=1999 Hz, WSJT-X's own arithmetic (3.0.2 `MainWindow::setXIT`,
+    /// widgets/mainwindow.cpp:12375, `m_XIT=(n/500)*500 - 1500`): 2000 Hz is a +500 Hz shift with
+    /// the audio at 1500 Hz, as there.
     fn split_reduce(&self, tx_hz: f32) -> (f32, i64) {
         use crate::settings::SplitMode;
         let t = tx_hz.round() as i64;
@@ -28753,7 +28797,7 @@ contact yourself."
         if self.settings.split_mode == SplitMode::None
             || self.split_tx_mhz.is_some()
             || !applies
-            || (1500..=2000).contains(&t)
+            || (1500..2000).contains(&t)
         {
             return (tx_hz, 0);
         }
@@ -47919,16 +47963,46 @@ mod tests {
         e.broadcast("CQ W9XYZ EN37");
         assert!(!e.poll_tx(8).is_empty());
         assert_eq!(e.take_tx_dial_shift(), 1000, "2900 -> f0 1900, dial +1000");
-        e.set_tx_offset(2000.0); // window edge is INCLUSIVE — no spurious hop
+        e.set_tx_offset(2000.0); // WSJT-X: (2000/500)*500-1500 = +500, audio 1500
         e.broadcast("CQ W9XYZ EN37");
         assert!(!e.poll_tx(10).is_empty());
-        assert_eq!(e.take_tx_dial_shift(), 0, "2000 Hz is in-window");
+        assert_eq!(
+            e.take_tx_dial_shift(),
+            500,
+            "2000 Hz shifts +500, as WSJT-X"
+        );
         // Split off (stock default): raw offset, no shift.
         e.settings.split_mode = crate::settings::SplitMode::None;
         e.set_tx_offset(750.0);
         e.broadcast("CQ W9XYZ EN37");
         assert!(!e.poll_tx(12).is_empty());
         assert_eq!(e.take_tx_dial_shift(), 0, "None = stock raw-offset TX");
+    }
+
+    #[test]
+    fn split_operation_shifts_an_offset_of_exactly_2000_hz_as_wsjtx_does() {
+        // WSJT-X 3.0.2 `MainWindow::setXIT` (widgets/mainwindow.cpp:12375):
+        // `m_XIT=(n/500)*500 - 1500`, integer division, and the audio goes out at `n - m_XIT`.
+        // Only 1500..=1999 Hz has an XIT of 0; 2000 Hz is (4*500)-1500 = +500, audio 1500 Hz.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.split_mode = crate::settings::SplitMode::Rig;
+        e.set_tx_enabled(true);
+        for (slot, tx, shift) in [
+            (0, 2000.0, 500),
+            (2, 1999.0, 0),
+            (4, 1500.0, 0),
+            (6, 1499.0, -500),
+            (8, 2001.0, 500),
+            (10, 2500.0, 1000),
+        ] {
+            e.set_tx_offset(tx);
+            e.broadcast("CQ W9XYZ EN37");
+            assert!(!e.poll_tx(slot).is_empty(), "{tx} Hz: premise, an over");
+            let n = tx as i64;
+            assert_eq!(shift, (n / 500) * 500 - 1500, "{tx} Hz: WSJT-X's own XIT");
+            assert_eq!(e.take_tx_dial_shift(), shift, "{tx} Hz");
+        }
     }
 
     #[test]

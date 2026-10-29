@@ -1534,6 +1534,11 @@ pub struct SlotKeyRefused {
     /// nothing, so the UI says so in its own words. Absent for every other refusal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub tx_audio_failed: bool,
+    /// Set when Nexus kept the key off the air itself because the radio did not take Split
+    /// Operation's TX frequency (`why` is then the rig link's answer to that write): the PTT was
+    /// never asked for, so the UI says so in its own words. Absent for every other refusal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub split_failed: bool,
 }
 
 /// What a FlexRadio reports about its own tune carrier, while Nexus's Flex client tunes with it

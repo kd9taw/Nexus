@@ -558,6 +558,10 @@ pub struct Rig {
     serial: Option<Box<dyn serialport::SerialPort>>,
     /// Last PTT state we commanded (also lets callers/tests observe keying).
     pub keyed: bool,
+    /// Split Operation (Rig) turned split on through this connection and nobody has turned it off
+    /// since: the next over writes only its TX dial and mode, as WSJT-X holds split between overs.
+    /// Set by `slot::apply_tx_dial_shift`, cleared by the radio loop when it lets go of the split.
+    pub(crate) tx_split_held: bool,
     /// True when the CAT link is a NETWORK transport (rigctld → SmartSDR / remote radio), where a
     /// reply can legitimately take seconds. Serial rigs answer in milliseconds, so a serial link
     /// uses a much shorter per-command deadline — a stalled serial read then can't hold the radio
@@ -690,6 +694,7 @@ impl Rig {
             #[cfg(feature = "serial")]
             serial: None,
             keyed: false,
+            tx_split_held: false,
             slow_transport: false,
             never_send: &[],
             #[cfg(test)]
@@ -1704,6 +1709,24 @@ impl Rig {
         }
         self.cat(&split_mode_line(mode, passband_hz))
     }
+    /// [`Self::set_split_mode`], with `Ok(false)` where the link says it cannot set the TX VFO's
+    /// mode at all (`RPRT -11`, Hamlib's `RIG_ENAVAIL`: Nexus's own TCI client answers `X` so) rather
+    /// than an error. Any other answer that is not `RPRT 0`, or none by the deadline, is an `Err`.
+    pub fn set_split_mode_where_available(
+        &mut self,
+        mode: &str,
+        passband_hz: i32,
+    ) -> std::io::Result<bool> {
+        if mode.trim().is_empty() || self.control.is_none() {
+            return self.set_split_mode(mode, passband_hz).map(|()| true);
+        }
+        let line = split_mode_line(mode, passband_hz);
+        let reply = self.command(&line)?;
+        if rprt_code(&reply) == Some(-11) {
+            return Ok(false);
+        }
+        cat_judged(&line, &reply).map(|()| true)
+    }
     /// Select the active VFO (e.g. "VFOA"/"VFOB").
     pub fn set_vfo(&mut self, vfo: &str) -> std::io::Result<()> {
         self.cat(&vfo_line(vfo))
@@ -1920,16 +1943,22 @@ impl Rig {
             return Ok(());
         }
         let reply = self.command(line)?;
-        if reply_ok(&reply) || reply.is_empty() {
-            Ok(())
-        } else if rprt_code(&reply).is_some_and(rprt_is_link_fault) {
-            // The rig did not answer: the link, as for a dial or a mode, never a refusal.
-            Err(rprt_error(line.trim(), &reply))
-        } else {
-            Err(std::io::Error::other(format!(
-                "rigctld error for {line:?}: {reply:?}"
-            )))
-        }
+        cat_judged(line, &reply)
+    }
+}
+
+/// How [`Rig::cat`] judges a control verb's reply: `RPRT 0` (or an empty reply) is success, Hamlib's
+/// "the rig did not answer" codes are the link, anything else a refusal.
+fn cat_judged(line: &str, reply: &str) -> std::io::Result<()> {
+    if reply_ok(reply) || reply.is_empty() {
+        Ok(())
+    } else if rprt_code(reply).is_some_and(rprt_is_link_fault) {
+        // The rig did not answer: the link, as for a dial or a mode, never a refusal.
+        Err(rprt_error(line.trim(), reply))
+    } else {
+        Err(std::io::Error::other(format!(
+            "rigctld error for {line:?}: {reply:?}"
+        )))
     }
 }
 

@@ -2272,6 +2272,9 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
             backend.flush_output();
             let _ = rig.ptt(false);
+            // Nexus stopping lets go of a Rig split it holds between overs, after the unkey.
+            let cluster_active = engine_lock(&engine).cluster_split_active();
+            state.let_go_of_rig_split(&mut rig, cluster_active);
             // Drop any in-flight SSTV image feed too (the flush_output above already
             // dumped its queued audio and ptt(false) unkeyed the carrier — this is
             // symmetry with the CW/RTTY cuts below).
@@ -3138,6 +3141,9 @@ fn handoff_if_switched(
             // too, so neither can show the outgoing radio's strength.
             e.clear_rig_smeter();
         }
+        // The outgoing radio lets go of a Rig split Nexus held on it (it is not keyed: above).
+        let cluster_active = engine_lock(engine).cluster_split_active();
+        state.let_go_of_rig_split(rig, cluster_active);
         p.push(state.install_handoff_connection(rig, conn, &want_active, *last_active));
         // The incoming radio's port is the loop's now and the outgoing radio's connection is the
         // pool's: the claims follow them, under the same pool lock.
@@ -4227,9 +4233,11 @@ struct RadioLoop {
     fake_it_restore_at: Option<f64>,
     /// Write-backs the radio has not taken, against [`DIAL_SET_MAX_TRIES`].
     fake_it_restore_tries: u32,
-    /// An audio Rig-mode split engaged VFO B for an over — tear the rig split
-    /// down once no over is pending (unless the cluster split owns VFO B).
+    /// Split Operation (Rig) engaged VFO B for an over and Nexus holds it between overs, as WSJT-X
+    /// does, until `rig_split_hold_ends` (then `let_go_of_rig_split`).
     audio_rig_split: bool,
+    /// The RX dial (Hz) when Rig split was turned on: a band change lets go of it.
+    rig_split_dial: u64,
     /// The rig's OWN split state, observed while Nexus was not holding split, as
     /// `(split_on, tx_vfo, tx_freq_hz)` — what the teardown RESTORES.
     ///
@@ -4763,6 +4771,7 @@ impl RadioLoop {
             fake_it_restore_at: None,
             fake_it_restore_tries: 0,
             audio_rig_split: false,
+            rig_split_dial: 0,
             rig_split_restore: None,
             split_detect: None,
             rfpower_floor: None,
@@ -6723,6 +6732,68 @@ impl RadioLoop {
         }
     }
 
+    /// Whether a Rig split held between overs must be let go now: Split Operation is no longer
+    /// Rig, a cluster SPLIT-on-Work owns VFO B, TX is off, the band has changed since split was
+    /// turned on, or the station left the digital screens (a phone or CW transmission must never
+    /// go out of VFO B on the last FT TX dial). WSJT-X holds split between overs
+    /// (`Transceiver/TransceiverBase.cpp:160-171`, `widgets/mainwindow.cpp:12378-12387`); these are
+    /// the points where Nexus lets go of it. The radio changing and Nexus stopping let go where
+    /// they happen.
+    fn rig_split_hold_ends(&self, eng: &Engine) -> bool {
+        use tempo_app::settings::{OperatingMode, SplitMode};
+        let s = eng.settings();
+        s.split_mode != SplitMode::Rig
+            || eng.cluster_split_active()
+            || !eng.tx_enabled()
+            || s.operating_mode != OperatingMode::Digital
+            || !same_named_band(self.rig_split_dial, s.dial_hz())
+    }
+
+    /// Note that an over engaged Rig split, on `dial`: the band it was turned on for.
+    fn hold_rig_split(&mut self, dial: u64) {
+        if !self.audio_rig_split {
+            self.rig_split_dial = dial;
+        }
+        self.audio_rig_split = true;
+    }
+
+    /// Let go of the Rig split Nexus holds: put back the radio's own split if one was read before
+    /// Nexus turned it on, else turn split off. The cluster SPLIT-on-Work owns VFO B when active
+    /// (`cluster_active`): then nothing is written.
+    fn let_go_of_rig_split(&mut self, rig: &mut Rig, cluster_active: bool) {
+        if !self.audio_rig_split {
+            return;
+        }
+        self.audio_rig_split = false;
+        rig.tx_split_held = false;
+        if cluster_active {
+            return;
+        }
+        // ⚠️ RESTORE WHAT WAS THERE, don't write an absolute OFF (2026-08-17 Flex
+        // audit, wave-2 #22). This wrote `S 0 VFOA` unconditionally, so an over
+        // ended by cancelling a split Nexus never engaged — the operator's own
+        // front-panel split, or on a multi-client Flex the split a second client
+        // set. And `apply_tx_dial_shift` had already overwritten the TX VFO's
+        // FREQUENCY with no snapshot, so the flag was only half of it. Restoring
+        // both mirrors the slice-DAX-binding restore the native lane got in the
+        // same audit: leave the radio as we found it.
+        //
+        // No snapshot (the rig never answered `s`) → the absolute OFF, which is
+        // the conservative answer when there is nothing to put back: our own split
+        // must not be left latched for a later transmission to go out on.
+        match self.rig_split_restore.clone() {
+            Some((true, vfo, tx_hz)) => {
+                let _ = rig.set_split(true, &vfo);
+                if let Some(hz) = tx_hz {
+                    let _ = rig.set_split_freq(hz);
+                }
+            }
+            Some((false, _, _)) | None => {
+                let _ = rig.set_split(false, "VFOA");
+            }
+        }
+    }
+
     /// Unkey before the loop lets go of `rig`: flush the queued audio, key up through the
     /// STILL-ALIVE old rig and daemon, clear this loop's TX state, then halt TX for a CONTEXT
     /// change. Order matters: dropping the daemon or swapping the rig first would send the
@@ -7969,6 +8040,9 @@ impl RadioLoop {
                         "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
                         "CAT daemon rebuild",
                     );
+                    // …and let go of a Rig split held on it, through the still-alive old link.
+                    let cluster_active = engine_lock(engine).cluster_split_active();
+                    self.let_go_of_rig_split(rig, cluster_active);
                 }
                 // Whether `reopen_rig` may auto-coexist onto a rigctld ALREADY listening on the new
                 // port (see `allow_coexist_on_swap`). We must NOT coexist onto our OWN daemon that
@@ -13525,34 +13599,11 @@ impl RadioLoop {
                     }
                 }
             }
-            if self.audio_rig_split {
-                self.audio_rig_split = false;
-                // The cluster SPLIT-on-Work owns VFO B when active — leave it.
-                if !eng.cluster_split_active() {
-                    // ⚠️ RESTORE WHAT WAS THERE, don't write an absolute OFF (2026-08-17 Flex
-                    // audit, wave-2 #22). This wrote `S 0 VFOA` unconditionally, so an over
-                    // ended by cancelling a split Nexus never engaged — the operator's own
-                    // front-panel split, or on a multi-client Flex the split a second client
-                    // set. And `apply_tx_dial_shift` had already overwritten the TX VFO's
-                    // FREQUENCY with no snapshot, so the flag was only half of it. Restoring
-                    // both mirrors the slice-DAX-binding restore the native lane got in the
-                    // same audit: leave the radio as we found it.
-                    //
-                    // No snapshot (the rig never answered `s`) → today's absolute OFF, which is
-                    // the conservative answer when there is nothing to put back: our own split
-                    // must not be left latched for a later in-window over to transmit on.
-                    match self.rig_split_restore.clone() {
-                        Some((true, vfo, tx_hz)) => {
-                            let _ = rig.set_split(true, &vfo);
-                            if let Some(hz) = tx_hz {
-                                let _ = rig.set_split_freq(hz);
-                            }
-                        }
-                        Some((false, _, _)) | None => {
-                            let _ = rig.set_split(false, "VFOA");
-                        }
-                    }
-                }
+            // ⭐ RIG SPLIT IS HELD BETWEEN OVERS, AS WSJT-X HOLDS IT, and let go only when what it
+            // was turned on for has gone (`Self::rig_split_hold_ends`).
+            if self.audio_rig_split && self.rig_split_hold_ends(&eng) {
+                let cluster_active = eng.cluster_split_active();
+                self.let_go_of_rig_split(rig, cluster_active);
             }
         } else if self.fake_it_restore.is_some() {
             // A carrier is up: a held write-back's wait starts again when it ends, so it always
@@ -14232,16 +14283,22 @@ impl RadioLoop {
                         let split = crate::slot::apply_tx_dial_shift(&mut eng, rig);
                         self.hold_fake_it_restore(split.fake_it_restore, split.fake_it_tx_dial);
                         if split.rig_split_engaged {
-                            self.audio_rig_split = true;
+                            self.hold_rig_split(dial_hz);
                         }
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying
                         let held = self.holds_tx();
                         let asked = Instant::now();
+                        // A TX dial the radio did not take keys nothing and halts TX, as at the
+                        // boundary (`slot::apply_tx_dial_shift`).
+                        if let Some(why) = &split.refused {
+                            eng.halt_tx_for_refused_split(why);
+                        }
                         // A key the radio refuses plays nothing here and halts TX, as at the
                         // boundary (`slot::slot_key_failure`). Nexus's own audio, as there.
                         self.mark_tci_nexus_key(true);
-                        let keyed = crate::slot::key_slot_transmitter(&mut eng, rig, backend, held);
+                        let keyed = split.refused.is_none()
+                            && crate::slot::key_slot_transmitter(&mut eng, rig, backend, held);
                         self.mark_tci_nexus_key(false);
                         // ⭐ AN FT8/FT4 KEY THE RADIO ANSWERED PAST THE END OF ITS SLOT IS NOT
                         // PLAYED, as at the boundary (`slot::unkey_a_key_past_its_period`): Fake It's
@@ -15232,7 +15289,7 @@ impl RadioLoop {
         }
         self.hold_fake_it_restore(action.fake_it_restore, action.fake_it_tx_dial);
         if action.rig_split_engaged {
-            self.audio_rig_split = true;
+            self.hold_rig_split(eng.settings().dial_hz());
         }
         // Remember whether THIS slot was a transmit slot so the next boundary
         // knows not to decode our own carrier (and to decode it otherwise).
