@@ -83,9 +83,9 @@ const RX_RING_SECONDS: usize = 4;
 /// backend is rebuilt on every settings change, and a counter that reset under the operator mid-run
 /// would be useless for the very comparison it exists to serve.
 pub struct AudioHealth {
-    /// Output callbacks that had audio at entry and ran DRY before filling the block — a real gap
-    /// in a transmission. Not counted while idle: an empty ring between overs is silence by
-    /// design, not an underrun.
+    /// Gaps in a transmission: the output ran DRY and more audio arrived soon after (see
+    /// [`TxGap`]). Not counted while idle — an empty ring between overs is silence by design —
+    /// and not counted at the END of an over, whose last block always runs dry part-way.
     tx_underruns: AtomicU32,
     /// TX samples the producer could not queue because the ring was full.
     tx_dropped: AtomicU64,
@@ -140,8 +140,8 @@ pub fn audio_health() -> AudioHealthSnapshot {
 /// One output callback's pass over the TX ring.
 ///
 /// Exists so the two things the callback must get right are testable without a sound card: the
-/// level is read PER SAMPLE, and a block that runs dry MID-OVER is counted as an underrun while an
-/// idle block is not.
+/// level is read PER SAMPLE, and a block that had audio and ran dry is reported (to [`TxGap`],
+/// which decides whether that was a gap or simply the end of the over) while an idle block is not.
 ///
 /// ⚠️ THE LEVEL ATOMIC IS READ PER SAMPLE, DELIBERATELY. Issue #14 was that the level was baked
 /// into each sample in [`AudioBackend::play`] and then queued, so the ring held committed
@@ -185,16 +185,75 @@ impl<'a> TxBlock<'a> {
         }
     }
 
-    /// Close the block, counting one underrun if it started with audio and ran out. Returns
-    /// whether it did, so a test can assert on THIS block rather than on a process-global counter
-    /// that every other test is also moving.
+    /// Whether the block opened with audio queued.
+    #[inline]
+    pub(crate) fn had_audio(&self) -> bool {
+        self.had_audio
+    }
+
+    /// Close the block. Returns whether it started with audio and ran out — the signature of a
+    /// gap AND of the end of every over, which this block alone cannot tell apart; [`TxGap`]
+    /// decides which it was and does the counting.
     #[inline]
     pub(crate) fn finish(self) -> bool {
-        let underran = self.had_audio && self.ran_dry;
-        if underran {
+        self.had_audio && self.ran_dry
+    }
+}
+
+/// How soon audio must come back after the output ran dry for the silence to count as a gap in a
+/// transmission rather than the end of one. Shorter than the shortest silence between two FT8 or
+/// FT4 overs (FT8's tones end 13.14 s into a 15 s slot, so 1.86 s; FT4's 1.96 s), longer than a
+/// radio-loop stall that starves a streamed transmission (Tune, PSK, RTTY, SSTV) and recovers.
+const TX_GAP_MAX_MS: u32 = 1_000;
+
+/// The output callback's memory between blocks, for the underrun count.
+///
+/// ⭐ WHY THE COUNT WAITS FOR AUDIO TO COME BACK. A block that has audio and runs dry looks the
+/// same whether the producer fell behind or the over simply ended: an over is almost never a whole
+/// number of callback blocks, so its last block always runs out part-way. Counting that block
+/// counted one underrun at the end of EVERY over, on every station, with nothing wrong (an FT8
+/// station logged `tx_underruns` rising by exactly one per over, at the unkey). What separates a gap
+/// from an ending is what follows: after a gap the transmission resumes, after an ending the card
+/// stays idle until the next over seconds later. So a dry block only marks the spot, and the gap is
+/// counted when audio returns within [`TX_GAP_MAX_MS`]. WSJT-X does not count the end either: its
+/// Modulator pads the last block with silence and goes Idle (`Modulator/Modulator.cpp`).
+///
+/// Only the count moves; what plays is unchanged — the same samples, the same silence, at the same
+/// instants.
+pub(crate) struct TxGap {
+    /// Idle frames since a block ran dry; `None` when no dry block is outstanding.
+    dry_for: Option<u64>,
+    /// [`TX_GAP_MAX_MS`] in frames at the card's rate.
+    limit: u64,
+}
+
+impl TxGap {
+    pub(crate) fn new(rate_hz: u32) -> Self {
+        Self {
+            dry_for: None,
+            limit: u64::from(rate_hz) * u64::from(TX_GAP_MAX_MS) / 1000,
+        }
+    }
+
+    /// Fold in one finished block of `frames` frames: whether it opened with audio
+    /// ([`TxBlock::had_audio`]) and whether it ran out ([`TxBlock::finish`]). Counts one underrun
+    /// when audio returns soon after a dry block, and returns whether it did.
+    #[inline]
+    pub(crate) fn block(&mut self, had_audio: bool, ran_dry: bool, frames: usize) -> bool {
+        let gap = had_audio && self.dry_for.is_some_and(|idle| idle <= self.limit);
+        if gap {
             AUDIO_HEALTH.tx_underruns.fetch_add(1, Ordering::Relaxed);
         }
-        underran
+        self.dry_for = if ran_dry {
+            Some(0)
+        } else if had_audio {
+            None
+        } else {
+            self.dry_for
+                .map(|idle| idle.saturating_add(frames as u64))
+                .filter(|&idle| idle <= self.limit)
+        };
+        gap
     }
 }
 
@@ -2148,17 +2207,20 @@ fn build_tx_stream_fmt<T: DeviceSample + Send + 'static>(
 ) -> Result<Stream, String> {
     let ring_cb = ring.clone();
     let level_cb = level.clone();
+    let mut gap = TxGap::new(cfg.sample_rate());
     dev.build_output_stream(
         cfg.config(),
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             let mut blk = TxBlock::begin(&ring_cb, &level_cb);
+            let had_audio = blk.had_audio();
             for frame in data.chunks_mut(out_ch) {
                 let v = T::from_unit(blk.next());
                 for x in frame.iter_mut() {
                     *x = v;
                 }
             }
-            blk.finish();
+            let ran_dry = blk.finish();
+            gap.block(had_audio, ran_dry, data.len() / out_ch);
         },
         err,
         None,
@@ -2424,7 +2486,7 @@ impl AudioBackend for CpalBackend {
 
 #[cfg(test)]
 mod tx_level_tests {
-    use super::{audio_health, SpscRing, TxBlock};
+    use super::{audio_health, CaptureResampler, SpscRing, TxBlock, TxGap, MODEM_RATE};
     use std::sync::atomic::{AtomicU32, Ordering};
 
     fn ring(v: &[f32]) -> SpscRing {
@@ -2504,9 +2566,9 @@ mod tx_level_tests {
 
     /// ⭐ #172, THE MEASURABLE HALF. KR8MER asked for underrun counters with the dropout fix, and
     /// he is right: "the inversion is gone" is an assertion, a count is evidence. A block that had
-    /// audio and ran dry is a real gap in a transmission and is counted; an idle block — the
-    /// station between overs, which is most of them — is silence by design and must NOT be, or the
-    /// counter would read in the millions on a receive-only evening and mean nothing.
+    /// audio and ran dry is reported to `TxGap`, which counts it if the over then resumes; an idle
+    /// block — the station between overs, which is most of them — is silence by design and must
+    /// NOT be, or the counter would read in the millions on a receive-only evening and mean nothing.
     #[test]
     fn a_block_that_runs_dry_mid_over_is_an_underrun_and_an_idle_block_is_not() {
         let level = AtomicU32::new(1.0f32.to_bits());
@@ -2528,7 +2590,7 @@ mod tx_level_tests {
         }
         assert!(
             blk.finish(),
-            "a block that had audio and ran out is an underrun"
+            "a block that had audio and ran out is reported as dry"
         );
 
         // FULLY SERVED: the ordinary case, and the second half of the control — a block that
@@ -2547,16 +2609,157 @@ mod tx_level_tests {
     fn a_counted_underrun_reaches_the_health_reading() {
         let level = AtomicU32::new(1.0f32.to_bits());
         let short = ring(&[0.5]);
+        let mut gap = TxGap::new(48_000);
         let before = audio_health().tx_underruns;
-        let mut blk = TxBlock::begin(&short, &level);
-        for _ in 0..4 {
-            blk.next();
-        }
-        assert!(blk.finish());
+        assert_eq!(
+            play_out(&short, &level, &mut gap, 4, 1),
+            0,
+            "ran dry: marked"
+        );
+        short.push_slice(&[0.5; 4]);
+        assert_eq!(
+            play_out(&short, &level, &mut gap, 4, 1),
+            1,
+            "resumed: a gap"
+        );
         assert!(
             audio_health().tx_underruns > before,
             "the reading must move when a block underruns"
         );
+    }
+
+    /// The output callback, `blocks` blocks of `frames` frames, exactly as
+    /// `build_tx_stream_fmt` runs it. Returns how many underruns it counted.
+    fn play_out(
+        r: &SpscRing,
+        level: &AtomicU32,
+        gap: &mut TxGap,
+        frames: usize,
+        blocks: usize,
+    ) -> u32 {
+        let mut counted = 0;
+        for _ in 0..blocks {
+            let mut blk = TxBlock::begin(r, level);
+            let had_audio = blk.had_audio();
+            for _ in 0..frames {
+                blk.next();
+            }
+            let ran_dry = blk.finish();
+            counted += u32::from(gap.block(had_audio, ran_dry, frames));
+        }
+        counted
+    }
+
+    /// One FT8 over as the card gets it: the 0.5 s lead-in and 79 symbols of 1920 samples at the
+    /// modem rate, through the same 12 kHz → 48 kHz resampler `play` uses.
+    fn ft8_over_at_48k() -> Vec<f32> {
+        let mut rs = CaptureResampler::new(MODEM_RATE, 48_000);
+        rs.process(&vec![0.25f32; 6_000 + 79 * 1_920])
+    }
+
+    /// ⭐ THE END OF AN OVER IS NOT AN UNDERRUN. An over is almost never a whole number of
+    /// callback blocks, so its last block always runs out part-way; that used to be counted, one
+    /// underrun per over on every station with nothing wrong. Played to its end and on into the
+    /// idle that follows, back to back like a QSO, a clean over counts nothing — at every block
+    /// size a sound card commonly asks for.
+    #[test]
+    fn a_clean_over_played_to_its_end_counts_no_underrun() {
+        let level = AtomicU32::new(1.0f32.to_bits());
+        let over = ft8_over_at_48k();
+        for frames in [441, 448, 480, 512, 1_024, 1_056] {
+            let r = SpscRing::new(48_000 * super::TX_RING_SECONDS);
+            let mut gap = TxGap::new(48_000);
+            // 15 s per slot: the over, then the idle rest of the slot, three times over.
+            let per_slot = 48_000 * 15 / frames;
+            let mut ended_part_way = 0;
+            let mut counted = 0;
+            for _ in 0..3 {
+                assert_eq!(r.push_slice(&over), over.len());
+                for _ in 0..per_slot {
+                    let mut blk = TxBlock::begin(&r, &level);
+                    let had_audio = blk.had_audio();
+                    for _ in 0..frames {
+                        blk.next();
+                    }
+                    let ran_dry = blk.finish();
+                    ended_part_way += u32::from(ran_dry);
+                    counted += u32::from(gap.block(had_audio, ran_dry, frames));
+                }
+            }
+            // The positive control: the last block of each over really did run out part-way, so
+            // the zero below is about the decision, not about a block size that happened to fit.
+            if !over.len().is_multiple_of(frames) {
+                assert_eq!(
+                    ended_part_way, 3,
+                    "{frames}-frame blocks: each over ends part-way"
+                );
+            }
+            assert_eq!(
+                counted, 0,
+                "{frames}-frame blocks: a clean over is not an underrun"
+            );
+        }
+    }
+
+    /// The other half: a real gap is still counted. The producer falls behind mid-over — the
+    /// first half plays out, the card goes silent for a few blocks, the rest arrives — and that
+    /// is exactly one underrun, the silence the operator would hear. Two gaps are two.
+    #[test]
+    fn a_gap_inside_an_over_is_counted_once() {
+        let level = AtomicU32::new(1.0f32.to_bits());
+        let over = ft8_over_at_48k();
+        let (first, rest) = over.split_at(over.len() / 2);
+        let r = SpscRing::new(48_000 * super::TX_RING_SECONDS);
+        let mut gap = TxGap::new(48_000);
+
+        r.push_slice(first);
+        let blocks = first.len() / 480 + 1;
+        assert_eq!(
+            play_out(&r, &level, &mut gap, 480, blocks),
+            0,
+            "ran dry: not yet"
+        );
+        assert_eq!(
+            play_out(&r, &level, &mut gap, 480, 10),
+            0,
+            "100 ms of silence"
+        );
+        let (second, third) = rest.split_at(rest.len() / 2);
+        r.push_slice(second);
+        assert_eq!(
+            play_out(&r, &level, &mut gap, 480, 1),
+            1,
+            "audio came back: the silence was a gap in the over"
+        );
+        let blocks = second.len() / 480 + 1;
+        play_out(&r, &level, &mut gap, 480, blocks);
+        r.push_slice(third);
+        let blocks = third.len() / 480 + 400;
+        assert_eq!(
+            play_out(&r, &level, &mut gap, 480, blocks),
+            1,
+            "a second gap is a second underrun; the over's own end is not one"
+        );
+    }
+
+    /// Where the line is drawn: audio that comes back after [`super::TX_GAP_MAX_MS`] of silence
+    /// is the NEXT transmission, not the same one resuming. Just inside it is a gap.
+    #[test]
+    fn silence_longer_than_the_gap_limit_is_the_next_over() {
+        let level = AtomicU32::new(1.0f32.to_bits());
+        let limit_blocks = 48 * super::TX_GAP_MAX_MS as usize / 480;
+        for (idle, want) in [(limit_blocks - 1, 1), (limit_blocks + 1, 0)] {
+            let r = ring(&[0.5; 100]);
+            let mut gap = TxGap::new(48_000);
+            play_out(&r, &level, &mut gap, 480, 1);
+            play_out(&r, &level, &mut gap, 480, idle);
+            r.push_slice(&[0.5; 100]);
+            assert_eq!(
+                play_out(&r, &level, &mut gap, 480, 1),
+                want,
+                "{idle} idle blocks"
+            );
+        }
     }
 
     /// A hard Stop TX asked for by the producer is performed HERE, at the top of the next block —
