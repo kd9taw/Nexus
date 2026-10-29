@@ -5,6 +5,8 @@
 //! the client keys it only on Nexus's DAX; a press it refuses keys nothing and ends with the reason
 //! the page shows ("the station's audio changed"), and a keyed over ends the moment the radio no
 //! longer takes Nexus's DAX. With native audio off, the over goes to the sound card as before.
+//! A voice-keyer message sent during a Remote session rides the same DAX and is held to the same
+//! rule: keyed only on Nexus's DAX, and ended the moment the radio leaves it.
 //!
 //! The radio is the SmartSDR simulator and the loop the real `RadioLoop::step`, as in the parent
 //! module. What the radio saw is read by value, in its order ([`voice_trace`]).
@@ -161,7 +163,7 @@ fn a_remote_press_on_nexuss_dax_keys_and_carries_the_voice() {
 
 /// The bundled radio, reporting its DAX source back to the mic `ms` after each `xmit 1`: the
 /// operator pressing SmartSDR's own DAX button mid-over.
-fn leaves_dax_mid_over(ms: u64) -> SimSession {
+pub(super) fn leaves_dax_mid_over(ms: u64) -> SimSession {
     let mut session = reports(&["USB"]);
     let (_, rules) = session
         .rules
@@ -221,5 +223,147 @@ fn with_native_audio_off_a_remote_press_keys_as_before() {
     assert!(
         !trace.iter().any(|t| t.starts_with("transmit set dax")),
         "{trace:?}"
+    );
+}
+
+/// CONTROL: beside SmartSDR's DAX the route is not Nexus's to judge, so the watch leaves a keyed
+/// Remote over alone.
+#[test]
+fn beside_smartsdrs_dax_a_remote_over_is_not_cut() {
+    let mut s = FlexScene::with_faults(
+        true,
+        reports(&["USB"]),
+        vec![tempo_flexsim::Fault::ForeignDaxTx(
+            tempo_flexsim::ForeignDax::default(),
+        )],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    run_until(&mut s, "the client never saw the other program", |s| {
+        s.state
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .is_some_and(FlexDaemon::other_dax_feeder)
+    });
+    s.run(500);
+    let since = Instant::now();
+    let mut r = join(&s);
+    s.run(300);
+    talk(&mut s, &mut r, 2_000);
+    let trace = voice_trace(&s, since);
+    assert_eq!(
+        format!(
+            "keys={} ended={:?} keyed={}",
+            keys(&s),
+            ended(&r),
+            s.engine.lock().unwrap().mic_keyed()
+        ),
+        "keys=1 ended=None keyed=true",
+        "{trace:?}"
+    );
+}
+
+/// A 3 s voice-keyer message, as the keyer's WAV reader hands it over.
+fn three_seconds() -> Vec<f32> {
+    vec![0.05; 36_000]
+}
+
+/// ⛔ A VOICE-KEYER MESSAGE DURING A REMOTE SESSION, THE RADIO LEAVING NEXUS'S DAX UNDER IT. With a
+/// Remote operator on, the radio is already on Nexus's DAX for their voice, so the message needs no
+/// switch around it; the operator then presses SmartSDR's own DAX button 500 ms into it. The
+/// radio's mic would carry the rest and put the shack's room on the air: the message ends within a
+/// few ticks of the radio's report, and nothing keys again.
+#[test]
+fn a_voice_message_in_a_remote_session_ends_when_the_radio_leaves_dax() {
+    let mut s = shack(leaves_dax_mid_over(500));
+    let since = Instant::now();
+    let _r = join(&s);
+    run_until_seen(&mut s, since, "radio dax=1");
+    s.run(300);
+    let sent = s.engine.lock().unwrap().send_voice(three_seconds());
+    assert_eq!(sent, Ok(()));
+    run_until_seen(&mut s, since, "radio dax=0");
+    s.run(1_000);
+    let trace = voice_trace(&s, since);
+    let left = seen_at(&s, since, "radio dax=0").expect("the radio left DAX");
+    let unkey = seen_at(&s, since, "xmit 0").expect("the message was never unkeyed");
+    assert!(
+        unkey.duration_since(left) < Duration::from_millis(500),
+        "keyed {:?} after the radio left DAX: {trace:?}",
+        unkey.saturating_duration_since(left)
+    );
+    assert_eq!(keys(&s), 1, "re-keyed: {trace:?}");
+    assert!(!s.engine.lock().unwrap().snapshot().radio.voice_playing);
+}
+
+/// CONTROL: the same message in the same session, with the radio staying on Nexus's DAX, plays to
+/// its end.
+#[test]
+fn a_voice_message_in_a_remote_session_on_nexuss_dax_plays_to_its_end() {
+    let mut s = shack(reports(&["USB"]));
+    let since = Instant::now();
+    let _r = join(&s);
+    run_until_seen(&mut s, since, "radio dax=1");
+    s.run(300);
+    let sent = s.engine.lock().unwrap().send_voice(three_seconds());
+    assert_eq!(sent, Ok(()));
+    let keyed_since = Instant::now();
+    run_until_seen(&mut s, keyed_since, "xmit 0");
+    let trace = voice_trace(&s, since);
+    let key = seen_at(&s, since, "xmit 1").expect("the message keyed");
+    let unkey = seen_at(&s, since, "xmit 0").unwrap();
+    assert!(
+        unkey.duration_since(key) >= Duration::from_millis(2_900),
+        "cut after {:?}: {trace:?}",
+        unkey.duration_since(key)
+    );
+    assert_eq!(keys(&s), 1, "{trace:?}");
+}
+
+/// ⛔ A MESSAGE KEYED ONLY ON NEXUS'S DAX. A Remote operator on, the radio already on DAX by the
+/// operator's own setting, and the radio refusing Nexus's DAX transmit stream: the radio does not
+/// have the mic, so the message waits for no switch, but nothing of Nexus's reaches the radio's DAX
+/// either. Its key is marked all the same, so the client keys nothing and the keyer says the
+/// message was dropped for DAX.
+#[test]
+fn a_voice_message_off_nexuss_dax_in_a_remote_session_keys_nothing() {
+    let mut s = FlexScene::with_faults(
+        true,
+        radio_on_dax(),
+        vec![tempo_flexsim::Fault::DaxTxRefused],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    let since = Instant::now();
+    let _r = join(&s);
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    run_until(&mut s, "the client never settled", client_ready);
+    s.run(1_000);
+    assert!(
+        !has_mic(&s),
+        "premise: the radio does not have the mic: {:?}",
+        voice_trace(&s, since)
+    );
+    let sent = s.engine.lock().unwrap().send_voice(three_seconds());
+    assert_eq!(sent, Ok(()));
+    s.run(1_500);
+    let snap = serde_json::to_value(s.engine.lock().unwrap().snapshot()).unwrap();
+    assert_eq!(
+        format!(
+            "keys={} dropped={}",
+            keys(&s),
+            snap["radio"]["voiceDropped"]["cause"]
+        ),
+        "keys=0 dropped=\"noDax\"",
+        "{:?}",
+        voice_trace(&s, since)
     );
 }

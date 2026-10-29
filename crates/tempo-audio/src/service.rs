@@ -12260,12 +12260,39 @@ impl RadioLoop {
                 .as_ref()
                 .and_then(CatDaemon::flex)
                 .is_some_and(crate::flex::FlexDaemon::take_operator_mic);
+            // ⛔ THE RADIO LEFT NEXUS'S DAX UNDER A KEYED MESSAGE (native audio on; SmartSDR's own
+            // switch): the message is played to the client's DAX and nowhere else, so the radio's
+            // mic would carry the rest of the over and put the shack's room on the air. It ends
+            // here, this tick, as the keyer's own Stop ends it, as a Remote over does (below).
+            // Only a message whose audio went to the client's DAX tee at its key (the rule follows
+            // the route the message took: one on the sound card is the radio's to take as it is),
+            // tail included. Beside another program's DAX the route is not Nexus's to judge, as at
+            // the client's `T 1`; native audio going off is the tee sync's to end.
+            let voice_left_dax = self
+                .voice_tee_until_ms
+                .is_some_and(|t| self.tx_until_ms == Some(t) && now < t)
+                && self.flex_client_audio
+                && self
+                    .rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::flex)
+                    .is_some_and(|d| {
+                        let on_dax = self.dax_tee_id.is_some() && d.on_nexus_dax();
+                        !(on_dax || d.other_dax_feeder())
+                    });
+            if voice_left_dax {
+                tempo_core::applog::info(
+                    "tx",
+                    "voice-keyer message ended: the radio no longer takes its transmit audio from \
+                     Nexus's DAX",
+                );
+            }
             let (abort, samples, qso_rec, qso_path) = {
                 let mut eng = engine_lock(engine);
                 if eng.is_recording() {
                     eng.push_record_samples(rec_samples);
                 }
-                if mic_took_over {
+                if mic_took_over || voice_left_dax {
                     eng.stop_voice();
                 }
                 // The keyer's Stop, taken before the report, so the message reads as ended in the
@@ -12304,14 +12331,18 @@ impl RadioLoop {
                                                   // A NAK here used to play the message into a receiving rig: it is not played
                                                   // (`key_over`), and the line says why instead of silent dead air.
 
-                    // A message on the Flex client's switch to DAX: its one key is marked as
-                    // carrying Nexus's audio, which the client keys only while the radio takes
-                    // DAX. Refused that way (the radio left DAX between the look and the key),
+                    // With the Flex client's native audio on the message is played to its DAX, so
+                    // its one key is marked as carrying Nexus's audio, which the client keys only
+                    // while the radio takes Nexus's DAX: on the switch to DAX around it, and as
+                    // much when the radio was already on DAX (a digital slice, a Remote operator's
+                    // voice). Refused that way (the radio left DAX between the look and the key),
                     // it is the keyer's drop, and its lane says so in place of the PTT advice.
                     let (key, not_on_dax) = {
-                        let flex = dax
-                            .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
-                            .flatten();
+                        let flex = self
+                            .rigctld_proc
+                            .as_ref()
+                            .and_then(CatDaemon::flex)
+                            .filter(|_| self.flex_client_audio);
                         let asked = Instant::now();
                         if let Some(d) = flex {
                             d.set_voice_key(true);
