@@ -13463,6 +13463,12 @@ export const EN = {
   // frequency. `{{why}}` is the rig link's own answer to that write, as data.
   'shell.lane.slotKeyRefused.split':
     'Nexus did not key the radio at {{time}} UTC: the radio did not take the split frequency ({{why}}), so nothing was sent and TX was turned off. Try Fake It, or None, for Split operation in Settings, then turn TX on again.',
+  // Nexus kept the key off the air itself because it let go of its own split and could not confirm
+  // the radio's SPLIT is off (the radio did not take the release, and its split read did not say
+  // off): any over could go out of the split's TX frequency, so every over is refused, whatever
+  // Split operation is set to, until the radio says SPLIT is off or the operator disconnects it.
+  'shell.lane.slotKeyRefused.splitOff':
+    'Nexus did not key the radio at {{time}} UTC: Nexus could not confirm the radio\'s SPLIT is off, so nothing was sent and TX was turned off. Turn SPLIT off on the radio, then disconnect and reconnect the radio in Nexus (Settings ▸ Radio ▸ Rig & CAT: set Rig Model to None and Save, then choose your radio again and Save), then turn TX on again.',
   // The radio did not accept the unkey that ended a slot over: the station halted TX the same way,
   // keeps sending the unkey until the radio takes it, and the lane keeps this until TX is turned on
   // again. `{{why}}` is the radio's own answer, as data.

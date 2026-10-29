@@ -6826,8 +6826,11 @@ impl RadioLoop {
     /// quiet point only (the caller asks with no over, tune or PTT of the loop's on the air), never
     /// while the radio may be keyed, and [`RIG_SPLIT_RELEASE_RETRY_MS`] after the try before, so a
     /// radio that has stopped answering does not hold up every tick for a CAT deadline.
+    ///
+    /// Never on a rig with no control channel (Test CAT's hold puts one in while it has the port):
+    /// a release "taken" there reached no radio, and the release stays owed for the link after it.
     fn rig_split_release_due(&mut self, rig: &Rig, now: f64) -> bool {
-        if !rig.split_release_pending || rig.keyed {
+        if !rig.split_release_pending || rig.keyed || !rig.has_control() {
             return false;
         }
         match self.rig_split_release_at {
@@ -6839,16 +6842,46 @@ impl RadioLoop {
         }
     }
 
-    /// Send a due owed split release again ([`Self::rig_split_release_due`]).
+    /// Send a due owed split release again ([`Self::rig_split_release_due`]). One the radio does
+    /// not take is done all the same when a read of the radio's split says it is off
+    /// ([`Self::radio_reads_split_off`]): that is the radio's own word on what the release was for,
+    /// and it frees a radio that ignores the split write but answers the read.
     fn retry_rig_split_release(&mut self, rig: &mut Rig, now: f64) {
-        match self.send_rig_split_release(rig) {
-            Ok(()) => {
+        let done = match self.send_rig_split_release(rig) {
+            Ok(()) => Some("the radio took the split release"),
+            Err(_) if self.radio_reads_split_off(rig) => {
+                Some("the radio did not take the split release, but reads its split as off")
+            }
+            Err(_) => None,
+        };
+        match done {
+            Some(how) => {
                 rig.split_release_pending = false;
                 self.rig_split_release_at = None;
-                tempo_core::applog::info("tx", "Split Operation: the radio took the split release");
+                tempo_core::applog::info("tx", &format!("Split Operation: {how}"));
             }
-            Err(_) => self.rig_split_release_at = Some(now + RIG_SPLIT_RELEASE_RETRY_MS),
+            None => self.rig_split_release_at = Some(now + RIG_SPLIT_RELEASE_RETRY_MS),
         }
+    }
+
+    /// Whether the radio itself says its split is off: a definite "off" from a rig whose split can
+    /// be read natively ([`crate::baud_ladder::SplitDetect::Native`]), never a missing or
+    /// unreadable answer.
+    ///
+    /// ⛔ ONLY A NATIVE READ. A backend that emulates the read moves the radio to answer it, and a
+    /// cache-stub one answers from Hamlib's own memory of split writes, which says "off" for a
+    /// radio that never confirmed the `S 1` it may have taken. A capability Nexus could not ask
+    /// is not cached, so a link that comes back is asked again.
+    fn radio_reads_split_off(&mut self, rig: &mut Rig) -> bool {
+        use crate::baud_ladder::SplitDetect;
+        let detect = match self.split_detect {
+            Some(detect) => detect,
+            None => match rig.read_split_capability() {
+                Some(detect) => *self.split_detect.insert(detect),
+                None => SplitDetect::Absent,
+            },
+        };
+        detect == SplitDetect::Native && matches!(rig.read_split(), Some((false, _)))
     }
 
     /// Nexus stopping: flush the queued audio, unkey through the still-alive rig, then let go of a
@@ -8054,11 +8087,18 @@ impl RadioLoop {
                         eng.halt_tx_for_context_change("CAT probe hold");
                         eng.remote_close_radio();
                     }
+                    // …and let go of a Rig split held on it, through the still-alive link, as a
+                    // rebuild does. A release the radio does not take stays owed across the hold:
+                    // the Vox rig cannot send it, and the link rebuilt after the probe owes it.
+                    let cluster_active = engine_lock(engine).cluster_split_active();
+                    self.let_go_of_rig_split(rig, cluster_active);
+                    let release_owed = rig.split_release_pending;
                     let radio = self.remote_radio_id.unwrap_or(remote_want_radio);
                     raise_client_alarm(self.rigctld_proc.as_ref(), radio, engine);
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
                     self.let_go_of_flex_monitor();
                     *rig = Rig::vox();
+                    rig.split_release_pending = release_owed;
                     self.rig_asserted = false;
                     self.cat_hold_active = true;
                     let mut eng = engine_lock(engine);
@@ -8119,6 +8159,8 @@ impl RadioLoop {
                 // radio model (a port, baud or daemon change, a dead daemon) is the same radio, which
                 // may still be in Nexus's split: the new link owes the release and keys nothing until
                 // the radio takes it. Another model is another radio, with nothing of Nexus's on it.
+                // Rig Model None is another model too: the operator disconnecting the radio, an act
+                // that confirms its SPLIT is off, so the radio chosen again after it owes nothing.
                 let release_owed =
                     rig.split_release_pending && want.rig_model == self.applied.rig_model;
                 // Whether `reopen_rig` may auto-coexist onto a rigctld ALREADY listening on the new
@@ -14385,7 +14427,7 @@ impl RadioLoop {
                         // A TX dial the radio did not take keys nothing and halts TX, as at the
                         // boundary (`slot::apply_tx_dial_shift`).
                         if let Some(why) = &split.refused {
-                            eng.halt_tx_for_refused_split(why);
+                            eng.halt_tx_for_refused_split(why, split.split_off_unconfirmed);
                         }
                         // A key the radio refuses plays nothing here and halts TX, as at the
                         // boundary (`slot::slot_key_failure`). Nexus's own audio, as there.

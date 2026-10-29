@@ -16,7 +16,10 @@ import { t } from '../i18n'
  *  air for the audio route has a sentence of its own, by cause: the radio refused nothing, and the
  *  PTT and CAT advice would be wrong. So does a key Nexus kept off the air because the sound card's
  *  transmit audio would not open; `why` is then the sound card's error. And one it kept off the air
- *  because the radio did not take Split Operation's TX frequency; `why` is the rig link's answer. */
+ *  because the radio did not take Split Operation's TX frequency; `why` is the rig link's answer.
+ *  And one it kept off the air because it could not confirm the radio's SPLIT is off after letting
+ *  go of its own split: Split Operation's other choices are refused too until that is cleared, so
+ *  the lane says how to clear it instead. */
 export function slotKeyRefusedLane(
   r: SlotKeyRefused | null | undefined,
 ): Omit<StatusItem, 'id'> | null {
@@ -28,6 +31,8 @@ export function slotKeyRefusedLane(
     message: t('shell.lane.slotKeyRefused.message'),
     detail: r.txAudioFailed
       ? t('shell.lane.slotKeyRefused.txAudio', { time, why: r.why })
+      : r.splitFailed && r.splitOffUnconfirmed
+        ? t('shell.lane.slotKeyRefused.splitOff', { time })
       : r.splitFailed
         ? t('shell.lane.slotKeyRefused.split', { time, why: r.why })
         : !r.flexAudio

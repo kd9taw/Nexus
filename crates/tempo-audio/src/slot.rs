@@ -358,6 +358,10 @@ pub(crate) struct SplitApply {
     /// rig link's words: the over must not key ([`Engine::halt_tx_for_refused_split`]). The
     /// fields above still say what to put back, as after any over.
     pub refused: Option<String>,
+    /// The refusal is an owed split release ([`Rig::split_release_pending`]): Nexus could not
+    /// confirm the radio's SPLIT is off, so the operator is told how to clear it, not to change
+    /// Split Operation, which keys nothing either until it is cleared.
+    pub split_off_unconfirmed: bool,
 }
 
 /// Apply the WSJT-X Split-Operation dial shift for the over about to key (must
@@ -402,17 +406,17 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
         fake_it_tx_dial: None,
         rig_split_engaged: false,
         refused: None,
+        split_off_unconfirmed: false,
     };
     let shift = eng.take_tx_dial_shift();
     // ⛔ THE RADIO MAY STILL BE IN NEXUS'S SPLIT: its release was refused or not answered, so any
     // over could go out of VFO B on the last TX dial, another band's included. Nothing keys until
-    // the radio loop's retry gets it taken (`RadioLoop::let_go_of_rig_split`).
+    // the radio loop's retry gets it taken, or a read of the radio's split says it is off
+    // (`RadioLoop::retry_rig_split_release`), or the operator disconnects the radio.
     if rig.split_release_pending {
         return SplitApply {
-            refused: Some(
-                "the radio has not taken Split Operation's split off yet (the release is retried)"
-                    .to_string(),
-            ),
+            refused: Some("Nexus could not confirm the radio's SPLIT is off".to_string()),
+            split_off_unconfirmed: true,
             ..none
         };
     }
@@ -475,8 +479,17 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             let started = std::time::Instant::now();
             let mut vfo_b_written = false;
             let sent = (|| -> std::io::Result<()> {
+                // A refusal the radio gave this first `S 1` (not a missing answer, which may have
+                // been taken) does not stop the over by itself: the TX dial and mode go out and
+                // the last `S 1` decides. A K3 refuses split while VFO B is in a mode it will not
+                // pair with VFO A's, which WSJT-X 3.0.2 notes for this first call
+                // (`HamlibTransceiver.cpp:963-970`), and the `X` below is what fixes VFO B.
                 if !rig.tx_split_held {
-                    rig.hold_split_on("VFOB")?;
+                    if let Err(e) = rig.hold_split_on("VFOB") {
+                        if rig.tx_split_held {
+                            return Err(e);
+                        }
+                    }
                     within_split_budget(started, budget)?;
                 }
                 if confirmed.tx_hz != Some(tx_dial) {
@@ -887,7 +900,7 @@ pub fn slot_tx_phase(
         if let Some(why) = &split.refused {
             // The radio did not take the TX dial: no key, TX halted, and the split put back as
             // after any over (the native loop does it on its next idle tick).
-            eng.halt_tx_for_refused_split(why);
+            eng.halt_tx_for_refused_split(why, split.split_off_unconfirmed);
         }
         if split.refused.is_some() || !key_slot_transmitter(eng, rig, backend, held) {
             // Preserve split cleanup even when permission disappears during
@@ -3327,9 +3340,15 @@ mod tests {
         // Each of Rig split's three writes refused in turn (`S` and `I` with `RPRT -11`, Hamlib's
         // "not available", what Nexus's own Flex client answers them with; `X` with `RPRT -1`), and
         // Fake It's dial write refused (`RPRT -9`, an Icom's NG): the writes stop at the refusal,
-        // as WSJT-X's throw does. Split on goes first on a connection that does not hold it.
+        // as WSJT-X's throw does. Split on goes first on a connection that does not hold it; a
+        // refusal of that first one alone does not stop the writes, and the last decides.
         for (split, verb, reply, wire) in [
-            (SplitMode::Rig, "S ", "RPRT -11\n", &["S 1 VFOB"][..]),
+            (
+                SplitMode::Rig,
+                "S ",
+                "RPRT -11\n",
+                &["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB"][..],
+            ),
             (
                 SplitMode::Rig,
                 "I ",
@@ -3349,14 +3368,9 @@ mod tests {
                 split_over_on(split, one_split_write_answered(verb, Some(reply)));
             assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, wire);
             // The radio is put back as after any over: Rig split let go by the loop's teardown once
-            // the radio took split on (a refused split on leaves nothing to put back), Fake It's
-            // dial written back.
+            // the radio took split on or VFO B was written, Fake It's dial written back.
             match split {
-                SplitMode::Rig => assert_eq!(
-                    act.rig_split_engaged,
-                    verb != "S ",
-                    "{what}: the split released"
-                ),
+                SplitMode::Rig => assert!(act.rig_split_engaged, "{what}: the split released"),
                 _ => assert_eq!(
                     act.fake_it_restore,
                     Some(eng.settings().dial_hz()),
@@ -3401,8 +3415,11 @@ mod tests {
         use tempo_app::settings::SplitMode;
         // Split on answered with nothing by the CAT deadline, an empty line, or Hamlib's "the rig
         // did not answer" (`RPRT -5`): the radio may have taken it late, so the split is held and
-        // engaged, and its release is owed as for a split taken. Nothing keys either way. The
-        // control: a refusal the radio gave (`RPRT -9`, `RPRT -1`) is not taken; nothing engaged.
+        // engaged, and its release is owed as for a split taken; the writes stop there. Nothing
+        // keys either way. The control: a refusal the radio gave (`RPRT -9`, `RPRT -1`) is not
+        // taken, so nothing is owed; the TX dial and mode go out and the last `S 1`, refused too,
+        // decides. VFO B was written, so the loop puts it back.
+        let refused = ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB"];
         for (reply, taken) in [
             (None, true),
             (Some("\n"), true),
@@ -3415,9 +3432,10 @@ mod tests {
             let (act, backend, mut eng, rig) =
                 split_over_at(split_cq_engine(SplitMode::Rig), &addr, None);
             let sent = log.lock().unwrap().clone();
-            assert_eq!(rig.tx_split_held, taken, "{what}: held");
-            assert_eq!(act.rig_split_engaged, taken, "{what}: the release owed");
-            assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, &["S 1 VFOB"]);
+            assert_eq!(rig.tx_split_held, taken, "{what}: held, the release owed");
+            assert!(act.rig_split_engaged, "{what}: engaged");
+            let wire: &[&str] = if taken { &["S 1 VFOB"] } else { &refused };
+            assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, wire);
         }
     }
 

@@ -8578,6 +8578,7 @@ export const JA: PartialCatalog = {
   "shell.lane.slotKeyRefused.flex.daxUnfed": "{{time}} UTC、Nexus はこの {{mode}} の送信をキーイングしませんでした。FlexネイティブDAXオーディオはオフですが、無線機は Nexus が設定したとおり、まだ送信オーディオを DAX から受けていて、いまは DAX に何も送られていません。何も送信されず、TX はオフになりました。Nexus はまもなく無線機をマイク入力に戻します。そのあと TX をもう一度オンにしてください。",
   "shell.lane.slotKeyRefused.txAudio": "{{time}} UTC、送信オーディオの出力を開けなかったため（{{why}}）、Nexus は無線機をキーイングしませんでした。何も送信されず、TX はオフになりました。設定の「出力デバイス (TX)」を確認してください（ほかのプログラムが使用中か、接続が外れている可能性があります）。そのあと TX をもう一度オンにしてください。",
   "shell.lane.slotKeyRefused.split": "{{time}} UTC、無線機がスプリット周波数を受け付けなかったため（{{why}}）、Nexus は無線機をキーイングしませんでした。何も送信されず、TX はオフになりました。設定の「スプリット運用」で Fake It か「なし」を試し、そのあと TX をもう一度オンにしてください。",
+  "shell.lane.slotKeyRefused.splitOff": "{{time}} UTC、無線機の SPLIT がオフであることを Nexus が確認できなかったため、Nexus は無線機をキーイングしませんでした。何も送信されず、TX はオフになりました。無線機の SPLIT をオフにし、Nexus で無線機をいったん切断して接続し直してください（設定 ▸ 無線機 ▸ 無線機とCAT で無線機モデルを「なし」にして保存し、そのあと無線機を選び直して保存）。そのあと TX をもう一度オンにしてください。",
   "shell.lane.slotUnkeyFailed.message": "PTT オフ失敗 — 送信停止",
   "shell.lane.slotUnkeyFailed.detail": "{{time}} UTC に無線機が PTT オフを受け付けませんでした（{{why}}）。そのため TX はオフになりました。まだ送信している可能性があります。今すぐ無線機を確認してください。Nexus は無線機が受け付けるまで PTT オフを送り続けます。無線機が受信に戻ったら、TX をもう一度オンにしてください。",
   "shell.lane.slotAudioLost.message": "送信打ち切り — 送信停止",

@@ -6169,6 +6169,9 @@ export interface SlotKeyRefused {
    *  Operation's TX frequency (`why` is then the rig link's answer to that write): the lane says
    *  that in its own words. Absent otherwise. */
   splitFailed?: boolean
+  /** With splitFailed: Nexus could not confirm the radio's SPLIT is off after letting go of its
+   *  own split, so the lane says how to clear it. Absent otherwise. */
+  splitOffUnconfirmed?: boolean
 }
 
 /** Why Nexus's own Flex client kept a slot over's key off the air (mirror of the Rust

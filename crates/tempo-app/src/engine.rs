@@ -21047,6 +21047,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             flex_audio: None,
             tx_audio_failed: false,
             split_failed: false,
+            split_off_unconfirmed: false,
         });
     }
 
@@ -21064,7 +21065,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// (`widgets/mainwindow.cpp:12556-12564`). [`Self::halt_tx`] is that Halt Tx here, as for a
     /// refused key ([`Self::halt_tx_for_refused_key`]): one event, one line in the log, no stop for
     /// a voice memory.
-    pub fn halt_tx_for_refused_split(&mut self, why: &str) {
+    ///
+    /// `split_off_unconfirmed`: the over was refused because Nexus could not confirm the radio's
+    /// SPLIT is off after letting go of its own split, and the operator is told how to clear it.
+    pub fn halt_tx_for_refused_split(&mut self, why: &str, split_off_unconfirmed: bool) {
         let voice_mem_halt = self.voice_mem_halt;
         self.quiet_tx_log = true;
         self.halt_tx();
@@ -21085,6 +21089,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             flex_audio: None,
             tx_audio_failed: false,
             split_failed: true,
+            split_off_unconfirmed,
         });
     }
 
@@ -21171,6 +21176,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             flex_audio: None,
             tx_audio_failed: true,
             split_failed: false,
+            split_off_unconfirmed: false,
         });
     }
 

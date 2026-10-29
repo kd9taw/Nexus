@@ -63,6 +63,16 @@ describe('the status lane after a refused slot key', () => {
     expect(lane!.detail).not.toContain('CAT/port')
   })
 
+  it('says Nexus could not confirm the radio’s SPLIT is off and how to clear it, not to change Split operation', () => {
+    const why = "Nexus could not confirm the radio's SPLIT is off"
+    const lane = slotKeyRefusedLane({ at: AT, why, splitFailed: true, splitOffUnconfirmed: true })
+    expect(lane!.tier).toBe('critical')
+    expect(lane!.message).toBe(EN['shell.lane.slotKeyRefused.message'])
+    expect(lane!.detail).toBe(EN['shell.lane.slotKeyRefused.splitOff'].replace('{{time}}', '14:32:05'))
+    expect(lane!.detail).toContain('disconnect and reconnect the radio')
+    expect(lane!.detail).not.toContain('Fake It')
+  })
+
   it('says the radio was still on the DAX Nexus set once native audio was off, in its own sentence', () => {
     const lane = slotKeyRefusedLane({
       at: AT,

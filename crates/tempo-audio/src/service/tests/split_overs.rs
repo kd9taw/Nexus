@@ -580,6 +580,19 @@ struct Vfos {
     /// `S 1` makes): the TX dial and mode (`I`, `X`) are answered `RPRT -1` and not taken while
     /// split is off.
     tx_vfo_only_in_split: bool,
+    /// A radio that never answers a split write: every `S` is answered `RPRT -5` (Hamlib's "the
+    /// rig did not answer") and not taken.
+    split_no_answer: bool,
+    /// The split read (`s`) answered `RPRT -5`, as a radio that never answers it.
+    split_read_no_answer: bool,
+    /// `\dump_caps` says the split can be read natively (`SplitDetect::Native`); otherwise it is
+    /// answered `RPRT -1` and the split read is not trusted.
+    split_read_native: bool,
+    /// Split on (`S 1`) answered `RPRT -9` and not taken.
+    refuse_split_on: bool,
+    /// A K3 whose VFO B is in a mode it will not pair with VFO A's: split on (`S 1`) answered
+    /// `RPRT -9` and not taken until a TX mode (`X`) is taken.
+    split_on_needs_x: bool,
 }
 
 struct Hamlib {
@@ -643,7 +656,16 @@ fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<H
                 v.since_unkey = Some(0);
                 ok()
             }
+            "s" if v.split_read_no_answer => Some("RPRT -5\n".to_string()),
             "s" => Some(format!("{}\nVFOB\n", u8::from(v.split))),
+            "\\dump_caps" if v.split_read_native => Some(
+                "Can get Split VFO: Y\nCan get Split Freq: Y\nTargetable features: FREQ MODE\n"
+                    .to_string(),
+            ),
+            _ if line.starts_with("S ") && v.split_no_answer => Some("RPRT -5\n".to_string()),
+            _ if line.starts_with("S 1") && (v.refuse_split_on || v.split_on_needs_x) => {
+                Some("RPRT -9\n".to_string())
+            }
             "i" => Some(format!("{}\n", v.b)),
             "f" => {
                 let hz = v.stale.take().unwrap_or(radio.dial);
@@ -671,7 +693,10 @@ fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<H
                 v.b = line[2..].trim().parse().unwrap();
                 ok()
             }
-            _ if line.starts_with("X ") => ok(),
+            _ if line.starts_with("X ") => {
+                v.split_on_needs_x = false;
+                ok()
+            }
             _ if line.starts_with("F ") && v.refuse_f > 0 => {
                 v.refuse_f -= 1;
                 Some("RPRT -9\n".to_string())
@@ -1629,4 +1654,229 @@ fn through_hamlib_a_held_rig_split_is_let_go_off_the_digital_screens_and_when_ne
         .collect();
     assert_eq!(writes, ["T 0", "S 0 VFOA"], "Nexus stopping");
     assert!(!b.radio.vfos.lock().unwrap().split, "left in split");
+}
+
+// ── An owed split release the radio never confirms ───────────────────────────────────────────
+// WSJT-X keeps no owed release: a split write that fails throws, and the rig is closed and opened
+// again. Nexus keeps one so that no over goes out of VFO B while the radio may still be in its
+// split, and it must not keep it for ever: a definite "off" from the radio's own split read ends
+// it, and so does the operator disconnecting the radio.
+
+impl Bench<Hamlib> {
+    /// The first Rig-split over, refused because the radio did not answer split on, which may
+    /// have been taken late: TX halted and the release owed. Returns the writes.
+    fn refused_unanswered_split_over(&mut self) -> Vec<String> {
+        self.radio.vfos.lock().unwrap().split_no_answer = true;
+        let across = self.ticks(800);
+        assert!(!across.iter().any(|l| l == "T 1"), "keyed: {across:?}");
+        assert!(
+            across.iter().any(|l| l == "S 1 VFOB") && across.iter().any(|l| l == "S 0 VFOA"),
+            "premise, split on and its release: {across:?}"
+        );
+        assert!(!self.engine.lock().unwrap().tx_enabled(), "TX still on");
+        assert!(self.rig.split_release_pending, "premise: the release owed");
+        across
+    }
+
+    /// Split Operation set to Fake It and TX turned on again with a CQ.
+    fn fake_it_cq(&mut self) {
+        let mut e = self.engine.lock().unwrap();
+        let mut s = e.settings().clone();
+        s.split_mode = SplitMode::FakeIt;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.start_cq(None).expect("Call CQ");
+        let _ = e.take_immediate_tx();
+    }
+
+    /// The refusal on screen, which must be the owed release's and say so.
+    fn assert_refused_split_off_unconfirmed(&self, what: &str) {
+        let refused = self
+            .engine
+            .lock()
+            .unwrap()
+            .snapshot()
+            .radio
+            .slot_key_refused
+            .unwrap_or_else(|| panic!("{what}: nothing says why"));
+        assert!(
+            refused.split_failed && refused.split_off_unconfirmed,
+            "{what}: not told the radio's SPLIT could not be confirmed off: {refused:?}"
+        );
+    }
+}
+
+/// A radio that never answers a split write (`RPRT -5` to every `S`) and reads its split natively.
+/// The first Rig-split over is refused and its release owed; the retries are not taken, and a read
+/// of the radio's split that says definitely off ends it, so Fake It then keys. The controls: the
+/// read says split is ON (the radio took the `S 1` late), or the radio's split cannot be read
+/// natively (a read Hamlib emulates or answers from its own cache): still owed, and the next over,
+/// Fake It's included, is refused with the reason that says how to clear it.
+#[test]
+fn through_hamlib_a_split_never_answered_is_released_by_a_native_read_of_split_off() {
+    for (what, native, in_split, freed) in [
+        ("read says off", true, false, true),
+        ("read says on", true, true, false),
+        ("no native read", false, false, false),
+    ] {
+        let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+        b.radio.vfos.lock().unwrap().split_read_native = native;
+        let _ = b.refused_unanswered_split_over();
+        b.radio.vfos.lock().unwrap().split = in_split;
+        let quiet = b.ticks(300);
+        let retries = quiet.iter().filter(|l| *l == "S 0 VFOA").count();
+        assert!(retries >= 1, "{what}: premise, retried: {quiet:?}");
+        assert_eq!(b.rig.split_release_pending, !freed, "{what}: owed");
+        b.fake_it_cq();
+        if freed {
+            let overs = b.overs(1);
+            assert_eq!(overs[0].key, ["F 14073500", "T 1"], "{what}: Fake It");
+        } else {
+            let across = b.ticks(1300);
+            assert!(!across.iter().any(|l| l == "T 1"), "{what}: keyed");
+            b.assert_refused_split_off_unconfirmed(what);
+        }
+    }
+}
+
+/// The same radio, its split read never answered either: nothing can confirm the release, so it
+/// stays owed through retries and through a rebuild to the same radio (a saved baud change). The
+/// operator disconnecting the radio (Rig Model None, saved)
+/// ends it, and with the radio chosen again Fake It keys.
+#[test]
+fn through_hamlib_an_unconfirmable_release_ends_when_the_operator_disconnects_the_radio() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let address = b.radio.peer.address.clone();
+    let save = |b: &mut Bench<Hamlib>, edit: &dyn Fn(&mut Settings)| {
+        let mut e = b.engine.lock().unwrap();
+        let mut s = e.settings().clone();
+        edit(&mut s);
+        e.apply_settings(s);
+    };
+    // The radio chosen in Settings (an IC-7300), so None is a change.
+    const MODEL: u32 = 3073;
+    save(&mut b, &|s| s.rig_model = MODEL);
+    let _ = b.ticks_reopening(1, &address);
+    assert!(b.rig.has_control(), "premise: connected");
+    {
+        // The rebuild halted TX for the context change: the CQ again.
+        let mut e = b.engine.lock().unwrap();
+        e.set_tx_enabled(true);
+        e.start_cq(None).expect("Call CQ");
+        let _ = e.take_immediate_tx();
+    }
+    b.radio.vfos.lock().unwrap().split_read_no_answer = true;
+    let _ = b.refused_unanswered_split_over();
+    let _ = b.ticks(300);
+    assert!(b.rig.split_release_pending, "a retry ended it");
+    // The control: a rebuild to the same radio carries it.
+    save(&mut b, &|s| s.baud = 19_200);
+    let _ = b.ticks_reopening(1, &address);
+    assert!(b.rig.has_control(), "premise: a new link");
+    assert!(b.rig.split_release_pending, "a same-radio rebuild ended it");
+    // The operator disconnects the radio, then chooses it again.
+    save(&mut b, &|s| s.rig_model = 0);
+    let _ = b.ticks(1);
+    assert!(!b.rig.has_control(), "premise: disconnected");
+    assert!(
+        !b.rig.split_release_pending,
+        "still owed after a disconnect"
+    );
+    save(&mut b, &|s| s.rig_model = MODEL);
+    let _ = b.ticks_reopening(1, &address);
+    assert!(b.rig.has_control(), "premise: connected again");
+    assert!(
+        !b.rig.split_release_pending,
+        "owed on the radio chosen again"
+    );
+    b.fake_it_cq();
+    let overs = b.overs(1);
+    assert_eq!(overs[0].key, ["F 14073500", "T 1"], "Fake It");
+}
+
+/// A K3 refusing split while VFO B is in a mode it will not pair with VFO A's (WSJT-X 3.0.2 notes it
+/// for its first split call, `Transceiver/HamlibTransceiver.cpp:963-970`): the first `S 1` refused
+/// does not stop the over; the TX dial and mode go out, the mode fixes VFO B, the last `S 1` is
+/// taken and the over keys. The control: a radio that refuses every `S 1` keys nothing, and since
+/// split was never taken nothing is owed.
+#[test]
+fn through_hamlib_a_refused_first_split_on_leaves_the_last_to_decide() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    b.radio.vfos.lock().unwrap().split_on_needs_x = true;
+    let overs = b.overs(2);
+    assert_eq!(
+        overs[0].key,
+        ["S 1 VFOB", "I 14073500", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+        "the K3's first over"
+    );
+    assert_eq!(overs[1].key, ["S 1 VFOB", "T 1"], "held after it");
+
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    b.radio.vfos.lock().unwrap().refuse_split_on = true;
+    let across = b.ticks(800);
+    assert!(!across.iter().any(|l| l == "T 1"), "keyed: {across:?}");
+    assert_eq!(
+        across
+            .iter()
+            .filter(|l| ["S ", "I ", "X "].iter().any(|v| l.starts_with(v)))
+            .cloned()
+            .collect::<Vec<_>>(),
+        [
+            "S 1 VFOB",
+            "I 14073500",
+            "X PKTUSB -1",
+            "S 1 VFOB",
+            "S 0 VFOA"
+        ],
+        "the writes, and the release putting VFO B's split back"
+    );
+    assert!(!b.engine.lock().unwrap().tx_enabled(), "TX still on");
+    assert!(!b.rig.split_release_pending, "owed for a split never taken");
+}
+
+/// Test CAT takes the CAT port while a Rig split is held. The split is let go of through the link
+/// before it goes, as a rebuild lets go of it; a release the radio does not take stays owed through
+/// the hold (the Vox rig in the port's place sends nothing and settles nothing) and on the link
+/// rebuilt after it, an automatic rebuild to the same radio, until the radio takes it. The control:
+/// a release taken at the hold owes nothing and leaves the radio out of split.
+#[test]
+fn through_hamlib_test_cat_keeps_an_owed_split_release() {
+    for (what, refused) in [("refused", true), ("taken", false)] {
+        let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+        let _ = b.overs(1);
+        assert!(b.radio.vfos.lock().unwrap().split, "{what}: premise: held");
+        b.radio.vfos.lock().unwrap().refuse_split_off = refused;
+        b.engine.lock().unwrap().hold_cat_port();
+        let at_hold = b.ticks(1);
+        assert!(
+            at_hold.iter().any(|l| l == "S 0 VFOA"),
+            "{what}: not let go before the port went: {at_hold:?}"
+        );
+        assert!(
+            !b.rig.has_control(),
+            "{what}: premise: the port handed over"
+        );
+        assert_eq!(
+            b.rig.split_release_pending, refused,
+            "{what}: owed at the hold"
+        );
+        let held = b.ticks(300);
+        assert!(held.is_empty(), "{what}: written during the hold: {held:?}");
+        assert_eq!(
+            b.rig.split_release_pending, refused,
+            "{what}: owed in the hold"
+        );
+        b.engine.lock().unwrap().release_cat_port();
+        let address = b.radio.peer.address.clone();
+        let _ = b.ticks_reopening(1, &address);
+        assert!(b.rig.has_control(), "{what}: premise: the link back");
+        assert_eq!(
+            b.rig.split_release_pending, refused,
+            "{what}: owed after it"
+        );
+        b.radio.vfos.lock().unwrap().refuse_split_off = false;
+        let _ = b.ticks(150);
+        assert!(!b.rig.split_release_pending, "{what}: still owed");
+        assert!(!b.radio.vfos.lock().unwrap().split, "{what}: left in split");
+    }
 }
