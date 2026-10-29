@@ -8701,14 +8701,11 @@ impl Engine {
     }
 
     /// Remove a radio from the roster (no-op on the active or last radio). Pure roster edit.
+    /// A wait on its password ([`Self::keys_to_confirm`]) stays: the shell lets it go only once
+    /// the keychain has removed the password.
     pub fn remove_radio(&mut self, id: u32) -> bool {
         self.remote_actuation.revoke();
-        let removed = self.settings.remove_radio_profile(id);
-        if removed {
-            // Its password goes with it (the shell removes it), and so does the wait on it.
-            self.settings.keys_to_confirm.icom_lan.retain(|&r| r != id);
-        }
-        removed
+        self.settings.remove_radio_profile(id)
     }
 
     /// Rename a radio profile (operator-facing name / switcher label). Pure roster edit.

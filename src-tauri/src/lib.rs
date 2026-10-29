@@ -22575,14 +22575,53 @@ fn write_peg_lock(state: &SharedEngine, on: bool) -> tempo_app::settings::writer
 /// snapshot — the switcher then shows the new radio.
 #[tauri::command(async)]
 fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    eng.add_radio();
+    add_radio_without_a_password(&state, &OsKeychain)
+}
+
+/// [`add_radio`] with the radio's Icom network passwords in `vault`. A new radio never has a
+/// password, so one `vault` still holds under its id (a removal that failed before such a
+/// password was held back) is removed. Until it is, it waits for the operator as a held-back key
+/// does ([`tempo_app::settings::Settings::keys_to_confirm`]), and a removal that fails leaves it
+/// waiting: the new radio never signs in with it. The keychain is asked with the engine lock
+/// released, since it can wait on an unlock prompt.
+fn add_radio_without_a_password(
+    engine: &SharedEngine,
+    vault: &dyn IcomLanVault,
+) -> Result<AppSnapshot, String> {
+    let id = {
+        let mut eng = engine_lock(engine);
+        let id = eng.add_radio();
+        let mut keys = eng.keys_to_confirm().clone();
+        keys.icom_lan.push(id);
+        eng.set_keys_to_confirm(keys);
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: add_radio save failed: {e}")
+        });
+        // Mirror the new radio into the base config, or a THIRD radio added from a per-radio
+        // window is invisible to the launch picker forever — see `persist_roster_to_base`.
+        persist_roster_to_base(&eng.settings().radios);
+        id
+    };
+    let cleared = vault.clear(id);
+    let mut eng = engine_lock(engine);
+    match cleared {
+        Ok(()) => {
+            let mut keys = eng.keys_to_confirm().clone();
+            keys.icom_lan.retain(|&r| r != id);
+            eng.set_keys_to_confirm(keys);
+        }
+        Err(e) => conn_log(
+            "Icom network",
+            "error",
+            format!(
+                "couldn't check that the new radio {id} has no saved network password ({e}). \
+                 None is used: choose Use or Remove in the notice at the top of the window."
+            ),
+        ),
+    }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: add_radio save failed: {e}")
     });
-    // Mirror the new radio into the base config, or a THIRD radio added from a per-radio window is
-    // invisible to the launch picker forever — see `persist_roster_to_base`.
-    persist_roster_to_base(&eng.settings().radios);
     Ok(eng.snapshot())
 }
 
@@ -22595,22 +22634,62 @@ fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// card, but auto band-routing can change the active radio behind an open panel.
 #[tauri::command(async)]
 fn remove_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    if !eng.remove_radio(id) {
-        return Err(
-            "Can't remove this radio: it's your operating radio (make another one active \
-             first) or the only radio on the roster."
-                .into(),
-        );
+    remove_radio_and_its_password(&state, id, &OsKeychain)
+}
+
+/// [`remove_radio`] with the radios' Icom network passwords in `vault`: the radio's password goes
+/// with it. Until `vault` has removed it, it waits for the operator as a held-back key does
+/// ([`tempo_app::settings::Settings::keys_to_confirm`]), so a radio added meanwhile never takes
+/// its id; a removal that fails leaves it waiting, so it is never let go. The keychain is asked
+/// with the engine lock released, since it can wait on an unlock prompt. A failure is reported,
+/// never the password.
+fn remove_radio_and_its_password(
+    engine: &SharedEngine,
+    id: u32,
+    vault: &dyn IcomLanVault,
+) -> Result<AppSnapshot, String> {
+    {
+        let mut eng = engine_lock(engine);
+        if !eng.remove_radio(id) {
+            return Err(
+                "Can't remove this radio: it's your operating radio (make another one active \
+                 first) or the only radio on the roster."
+                    .into(),
+            );
+        }
+        let mut keys = eng.keys_to_confirm().clone();
+        if !keys.icom_lan_waits(id) {
+            keys.icom_lan.push(id);
+            eng.set_keys_to_confirm(keys);
+        }
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: remove_radio save failed: {e}")
+        });
+        // …and out of the base config too, else the picker keeps offering a radio that no longer
+        // exists.
+        persist_roster_to_base(&eng.settings().radios);
+        persist_routing_to_base(eng.settings());
+    }
+    let removed = vault.clear(id);
+    let mut eng = engine_lock(engine);
+    match removed {
+        Ok(()) => {
+            let mut keys = eng.keys_to_confirm().clone();
+            keys.icom_lan.retain(|&r| r != id);
+            eng.set_keys_to_confirm(keys);
+        }
+        Err(e) => conn_log(
+            "Icom network",
+            "error",
+            format!(
+                "couldn't remove radio {id}'s network password ({e}). It is not used: choose \
+                 Remove in the notice at the top of the window."
+            ),
+        ),
     }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: remove_radio save failed: {e}")
     });
-    // …and out of the base config too, else the picker keeps offering a radio that no longer exists.
-    persist_roster_to_base(&eng.settings().radios);
-    persist_routing_to_base(eng.settings());
-    // …and its Icom network password out of the keychain.
-    icom_lan_forget_removed(&OsKeychain, id);
     Ok(eng.snapshot())
 }
 
@@ -30499,18 +30578,6 @@ fn icom_lan_set_password(
     vault.set(radio_id, &password)
 }
 
-/// After a radio profile is removed, its Icom network password goes with it. A failure is
-/// reported, never the password.
-fn icom_lan_forget_removed(vault: &dyn IcomLanVault, radio_id: u32) {
-    if let Err(e) = vault.clear(radio_id) {
-        conn_log(
-            "Icom network",
-            "err",
-            format!("couldn't remove radio {radio_id}'s network password: {e}"),
-        );
-    }
-}
-
 /// Store (or, with an empty string, clear) a radio profile's Icom network password in the OS
 /// keychain. Write-only: it is never read back to the UI.
 #[tauri::command]
@@ -30653,32 +30720,129 @@ mod icom_lan_password_tests {
         assert_eq!(vault.get(1).unwrap(), None, "an empty password clears it");
     }
 
-    /// ⭐ DELETING THE PROFILE CLEARS ITS ENTRY, and only its own. The command does it on every
-    /// successful removal.
+    /// A vault that cannot remove anything (a locked keychain): it reads and stores as
+    /// [`MapVault`] does.
+    #[derive(Default)]
+    struct LockedVault(MapVault);
+
+    impl IcomLanVault for LockedVault {
+        fn get(&self, radio_id: u32) -> Result<Option<String>, String> {
+            self.0.get(radio_id)
+        }
+        fn set(&self, radio_id: u32, password: &str) -> Result<(), String> {
+            self.0.set(radio_id, password)
+        }
+        fn clear(&self, _radio_id: u32) -> Result<(), String> {
+            Err("the keychain is locked".into())
+        }
+    }
+
+    /// An engine whose roster is radios 0, 1 and 2, operating radio 0, with nothing waiting.
+    fn roster_engine(tag: &str) -> (std::path::PathBuf, SharedEngine) {
+        let (dir, engine) = super::durable_command_tests::engine_on_store(tag, 0);
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.radios = (0..3)
+                .map(|id| tempo_app::settings::RadioProfile {
+                    id,
+                    name: format!("Roster Test {id}"),
+                    ..Default::default()
+                })
+                .collect();
+            s.active_radio = 0;
+            s.sync_flat_from_active();
+            eng.apply_restored_settings(s);
+            eng.set_keys_to_confirm(Default::default());
+        }
+        (dir, engine)
+    }
+
+    /// ⭐ REMOVING A RADIO REMOVES ITS PASSWORD, and only its own, and only a removal that
+    /// happened does. ★ A KEYCHAIN THAT CANNOT REMOVE IT LEAVES IT HELD BACK: the password waits
+    /// in the notice and is never used, and a radio added later never takes its id. CONTROL: a
+    /// keychain that removes it leaves nothing waiting.
     #[test]
-    fn removing_a_radio_profile_forgets_its_password() {
+    fn removing_a_radio_forgets_its_password_or_holds_it_back() {
+        let (dir, engine) = roster_engine("remove-radio-vault");
+        let waiting = || engine_lock(&engine).keys_to_confirm().icom_lan.clone();
         let vault = MapVault::default();
         vault.set(1, PASSWORD).unwrap();
         vault.set(2, "another-fake").unwrap();
-        icom_lan_forget_removed(&vault, 1);
-        assert_eq!(vault.get(1).unwrap(), None);
-        assert_eq!(
-            vault.get(2).unwrap().as_deref(),
-            Some("another-fake"),
-            "the other radio's stays"
-        );
-        // The command: a removal that went ahead forgets the password, after it persisted.
-        let src = include_str!("lib.rs");
-        let body = &src[src.find("fn remove_radio(").expect("the command")..];
-        let body = &body[..body.find("\n}\n").expect("its end")];
-        let refused = body.find("return Err(").expect("the refusal");
-        let forget = body
-            .find("icom_lan_forget_removed(&OsKeychain, id)")
-            .expect("the forget");
         assert!(
-            refused < forget,
-            "only a removal that happened forgets the password"
+            remove_radio_and_its_password(&engine, 0, &vault).is_err(),
+            "premise: the operating radio is refused"
         );
+        assert_eq!(
+            waiting(),
+            Vec::<u32>::new(),
+            "a refused removal holds nothing"
+        );
+
+        remove_radio_and_its_password(&engine, 1, &vault).unwrap();
+        assert_eq!(
+            (
+                vault.get(1).unwrap(),
+                vault.get(2).unwrap().as_deref(),
+                waiting()
+            ),
+            (None, Some("another-fake"), vec![]),
+            "CONTROL: its password removed, the other radio's kept, nothing waits"
+        );
+
+        let locked = LockedVault::default();
+        locked.set(2, "another-fake").unwrap();
+        remove_radio_and_its_password(&engine, 2, &locked).unwrap();
+        assert_eq!(
+            waiting(),
+            vec![2],
+            "the keychain refused: the password stays held back"
+        );
+        assert_eq!(
+            icom_lan_password_for_login(&engine, &locked, 2),
+            Err(ICOM_PASSWORD_WAITS.to_string()),
+            "and is never used"
+        );
+        add_radio_without_a_password(&engine, &vault).unwrap();
+        let ids: Vec<u32> = engine_lock(&engine)
+            .settings()
+            .radios
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(
+            (ids, waiting()),
+            (vec![0, 3], vec![2]),
+            "a radio added then takes a fresh id, and inherits no wait"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A NEW RADIO NEVER HAS A PASSWORD: one the keychain still holds under its id (an old
+    /// removal that failed) is removed when the radio is added, and while the keychain cannot
+    /// remove it, it waits and is never used. CONTROL: removed, nothing waits.
+    #[test]
+    fn a_new_radio_never_inherits_a_password() {
+        let (dir, engine) = roster_engine("add-radio-vault");
+        let waiting = || engine_lock(&engine).keys_to_confirm().icom_lan.clone();
+        let vault = MapVault::default();
+        vault.set(3, "PLANTED-ORPHAN").unwrap();
+        add_radio_without_a_password(&engine, &vault).unwrap();
+        assert_eq!(
+            (vault.get(3).unwrap(), waiting()),
+            (None, vec![]),
+            "CONTROL: the new radio 3's leftover password removed, nothing waits"
+        );
+
+        let locked = LockedVault::default();
+        locked.set(4, "PLANTED-ORPHAN").unwrap();
+        add_radio_without_a_password(&engine, &locked).unwrap();
+        assert_eq!(
+            (waiting(), icom_lan_password_for_login(&engine, &locked, 4)),
+            (vec![4], Err(ICOM_PASSWORD_WAITS.to_string())),
+            "the keychain refused: radio 4's leftover password waits and is never used"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

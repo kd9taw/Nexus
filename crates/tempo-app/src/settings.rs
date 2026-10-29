@@ -7038,7 +7038,16 @@ impl Settings {
     /// flat rig form always edits the active radio). Does NOT change the active radio.
     pub fn add_radio_profile(&mut self) -> u32 {
         self.ensure_radio_profiles();
-        let next_id = self.radios.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        // Never the id of a password that waits for the operator (`keys_to_confirm`): that one
+        // belongs to a radio no longer on the roster, and a new radio inherits none.
+        let next_id = self
+            .radios
+            .iter()
+            .map(|p| p.id)
+            .chain(self.keys_to_confirm.icom_lan.iter().copied())
+            .max()
+            .unwrap_or(0)
+            + 1;
         let mut used: Vec<u16> = self
             .radios
             .iter()
@@ -14802,8 +14811,9 @@ mod tests {
 
     /// ★ THE SAVED KEYS HELD BACK FOR CONFIRMING ARE THE ENGINE'S: a form save, a profile load and
     /// a restore that carry none (as every form does) keep them, so no stale form lets a key go
-    /// out; they survive a save to disk and back; removing the radio drops its wait. CONTROL: the
-    /// engine's own setter changes them.
+    /// out; they survive a save to disk and back; removing the radio keeps its wait (the shell
+    /// lets it go once the password is removed), and a radio added then never takes its id.
+    /// CONTROL: the engine's own setter changes them.
     #[test]
     fn the_keys_held_back_for_confirming_survive_every_apply() {
         use crate::engine::Engine;
@@ -14859,11 +14869,20 @@ mod tests {
         assert!(eng.remove_radio(1), "premise: radio 1 removed");
         assert_eq!(
             eng.keys_to_confirm(),
-            &KeysToConfirm {
-                cloudlog: true,
-                icom_lan: vec![]
-            },
-            "the removed radio's wait goes with it"
+            &held,
+            "the removed radio's wait stays until its password is removed"
+        );
+        assert_eq!(
+            eng.add_radio(),
+            2,
+            "a radio added then never takes the id whose password waits"
+        );
+        eng.set_keys_to_confirm(KeysToConfirm::default());
+        assert!(eng.remove_radio(2), "premise: radio 2 removed");
+        assert_eq!(
+            eng.add_radio(),
+            1,
+            "CONTROL: with nothing waiting, the next id after the roster's"
         );
     }
 
