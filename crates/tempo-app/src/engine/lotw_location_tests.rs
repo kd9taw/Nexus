@@ -485,3 +485,40 @@ fn the_call_decides_with_the_grid_and_case_never_does() {
         )
     );
 }
+
+/// The whole grid breaks a tie only when it is written to 6 characters or more on both sides: a
+/// contact at EN43AB, with Home at EN43AB and a Club profile of the same call at EN43 naming a
+/// different location, is Home's, not counted. The exact 6-character match is the specific
+/// answer; a 4-character profile names only the square, and letting it tie would make every
+/// Home contact a tie whenever another profile shares its square. (A contact logged under Club
+/// while Club's grid was EN43AB, before it was edited to EN43, signs with Home's location too:
+/// nothing on the contact tells the two apart.) CONTROL: a contact at EN43 tells them apart by
+/// nothing, and is a tie, counted.
+#[test]
+fn the_whole_grid_breaks_a_tie_only_written_to_six_characters_on_both_sides() {
+    let mut e = station();
+    e.settings.mygrid = "EN43AB".into();
+    e.save_station_profile(profile("Club", ME, "EN43", "Club"))
+        .unwrap();
+    let (r, f) = runs(&e, vec![made(&e, "K1OLD", ME, "EN43AB")]);
+    assert_eq!(
+        (shape(&r), f),
+        (
+            vec![(some("Home"), vec!["K1OLD".to_string()])],
+            LotwFallback::default()
+        ),
+        "EN43AB is Home's whole grid; Club's EN43 names only the square"
+    );
+    let (r, f) = runs(&e, vec![made(&e, "K1SQR", ME, "EN43")]);
+    assert_eq!(
+        (shape(&r), f),
+        (
+            vec![(some("Home"), vec!["K1SQR".to_string()])],
+            LotwFallback {
+                tie: 1,
+                unmatched: 0
+            }
+        ),
+        "control: EN43 tells Home and Club apart by nothing"
+    );
+}
