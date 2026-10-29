@@ -6825,22 +6825,25 @@ impl RadioLoop {
         }
     }
 
-    /// Send an owed split release again ([`Self::let_go_of_rig_split`]), at a quiet point only:
-    /// the caller runs it with no over, tune or PTT of the loop's on the air, and never while the
-    /// radio may be keyed. Each try waits [`RIG_SPLIT_RELEASE_RETRY_MS`] after the one before, so
-    /// a radio that has stopped answering does not hold up every tick for a CAT deadline.
-    fn retry_rig_split_release(&mut self, rig: &mut Rig, now: f64) {
+    /// Whether an owed split release ([`Self::let_go_of_rig_split`]) is due to be sent again: at a
+    /// quiet point only (the caller asks with no over, tune or PTT of the loop's on the air), never
+    /// while the radio may be keyed, and [`RIG_SPLIT_RELEASE_RETRY_MS`] after the try before, so a
+    /// radio that has stopped answering does not hold up every tick for a CAT deadline.
+    fn rig_split_release_due(&mut self, rig: &Rig, now: f64) -> bool {
         if !rig.split_release_pending || rig.keyed {
-            return;
+            return false;
         }
         match self.rig_split_release_at {
             None => {
                 self.rig_split_release_at = Some(now + RIG_SPLIT_RELEASE_RETRY_MS);
-                return;
+                false
             }
-            Some(at) if now < at => return,
-            Some(_) => {}
+            Some(at) => now >= at,
         }
+    }
+
+    /// Send a due owed split release again ([`Self::rig_split_release_due`]).
+    fn retry_rig_split_release(&mut self, rig: &mut Rig, now: f64) {
         match self.send_rig_split_release(rig) {
             Ok(()) => {
                 rig.split_release_pending = false;
@@ -13668,7 +13671,15 @@ impl RadioLoop {
                 let cluster_active = eng.cluster_split_active();
                 self.let_go_of_rig_split(rig, cluster_active);
             }
-            self.retry_rig_split_release(rig, now);
+            if self.rig_split_release_due(rig, now) {
+                // ⚠️ OUTSIDE THE ENGINE LOCK: on a link that is up but no longer answering, each try
+                // costs a CAT deadline (700 ms, 2.5 s on a network link), and it comes back every
+                // few seconds while the release is owed. Nothing here reads the engine; the code
+                // after this takes it again and reads it as it is then.
+                drop(eng);
+                self.retry_rig_split_release(rig, now);
+                eng = engine_lock(engine);
+            }
         } else if self.fake_it_restore.is_some() {
             // A carrier is up: a held write-back's wait starts again when it ends, so it always
             // goes FAKE_IT_WRITE_BACK_MS after the last unkey.

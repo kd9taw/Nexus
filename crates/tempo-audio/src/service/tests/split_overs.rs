@@ -571,6 +571,9 @@ struct Vfos {
     no_split: bool,
     /// While set, split off (`S 0`) is answered `RPRT -11` (not available) and not taken.
     split_off_unavailable: bool,
+    /// While set, every `S 0` records whether this engine's lock was free when it came.
+    split_off_lock_probe: Option<Arc<Mutex<Engine>>>,
+    split_off_lock_free: Vec<bool>,
 }
 
 struct Hamlib {
@@ -616,6 +619,12 @@ fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<H
     let peer = retuning_peer(FT8_DIAL, "PKTUSB", move |line, radio| {
         let mut v = v.lock().unwrap();
         let ok = || Some("RPRT 0\n".to_string());
+        if line.starts_with("S 0") {
+            if let Some(engine) = v.split_off_lock_probe.clone() {
+                let free = engine.try_lock().is_ok();
+                v.split_off_lock_free.push(free);
+            }
+        }
         match line {
             "T 1" | "T 3" => {
                 radio.keyed = true;
@@ -1415,4 +1424,31 @@ fn through_hamlib_a_split_the_radio_left_between_overs_is_put_back_before_the_ne
     );
     let v = b.radio.vfos.lock().unwrap();
     assert_eq!((v.split, v.b), (true, 14_073_500));
+}
+
+/// An owed release is sent again outside the engine's lock: a radio that stops answering must not
+/// hold the engine for a CAT deadline every few seconds.
+#[test]
+fn through_hamlib_an_owed_release_is_retried_without_the_engine_lock() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    {
+        let mut v = b.radio.vfos.lock().unwrap();
+        v.refuse_split_off = true;
+        v.split_off_lock_probe = Some(b.engine.clone());
+    }
+    b.engine.lock().unwrap().set_tx_enabled(false);
+    let _ = b.ticks(300);
+    let v = b.radio.vfos.lock().unwrap();
+    let retries = &v.split_off_lock_free[1..];
+    assert!(
+        !retries.is_empty(),
+        "premise: retried: {:?}",
+        v.split_off_lock_free
+    );
+    assert!(
+        retries.iter().all(|free| *free),
+        "a retry held the engine's lock: {:?}",
+        v.split_off_lock_free
+    );
 }
