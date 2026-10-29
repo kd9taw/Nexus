@@ -239,6 +239,10 @@ const SHARED = [
   'nexus.decodes.countryExclude',
   'nexus.decodes.countryExclude.paused',
   'nexus.cw.tuneStep',
+  // The RF panadapter's chosen span (Band, Full, ±kHz) in the CW and Phone cockpits
+  // (spectrum/rfSpan.ts). SHARED like the tuning step beside it: how this operator likes the band
+  // drawn, the same in every window.
+  'nexus.cw.rfSpan',
   'nexus.cwAssist',
   'nexus.dev.xray',
   // The Field Day contacts-per-hour goal. SHARED: a target rate is a statement about how this
@@ -285,6 +289,7 @@ const SHARED = [
   'nexus.remote.workspace',
   'nexus.operate.tuneStep',
   'nexus.panels.wfDetached.v1',
+  'nexus.phone.rfSpan',
   'nexus.phone.tuneStep',
   'nexus.profiles',
   'nexus.program.chirpHowtoSeen.v1',

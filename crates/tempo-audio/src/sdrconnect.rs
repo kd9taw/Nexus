@@ -22,7 +22,9 @@
 //!   sent) and turns the IQ into rows. The IQ goes through TCI's panadapter intake and rows
 //!   ([`crate::tci::iq`]): the same placement, the same gap, stall and settle rules, the same
 //!   dB axis and the same bound on work ([`crate::tci::iq::MAX_WINDOWS`] FFTs a row whatever the
-//!   rate), published to the feed's RF slot as [`SOURCE`].
+//!   rate), published to the feed's RF slot as [`SOURCE`]. While a scope draws a window narrower
+//!   than the receiver's span (the band, or ± a few kHz round the dial), the rows are zoomed to it
+//!   (`tci::iq`'s "A row zoomed to the scope's window"); the receiver's own rate is never changed.
 //! - **The feed's RF slot is this source's** while it exists ([`SpectrumFeed::claim_rf`]): the
 //!   radio's own panadapter may keep streaming, and is not shown.
 //!
@@ -76,6 +78,12 @@ pub type Follow = SdrconnectFollow;
 
 /// How often the scope's thread looks at the dial, the IQ held and the clock.
 pub const LOOK_MS: u64 = 20;
+
+/// The most pairs held between two looks of the scope's thread: two of the longest zoomed windows
+/// ([`crate::tci::iq::ZOOM_MAX_N`]), 65 ms at 2 MHz. TCI's own bound is eight unzoomed windows, 43 ms at
+/// 384 kHz, and a receiver at 2 MHz brings more than that in every look: no zoomed window would ever
+/// arrive whole. 1 MB of samples, allocated once.
+pub const HELD: usize = 2 * crate::tci::iq::ZOOM_MAX_N;
 
 /// At most one retune in this long: ten a second while the knob turns, the latest always sent.
 pub const RETUNE_MS: u64 = 100;
@@ -470,7 +478,7 @@ fn run(shared: &Shared, host: &str, port: u16, feed: &SpectrumFeed) {
 /// One connection, until it ends or teardown: whether it drew, and why it ended.
 fn session(shared: &Shared, mut link: Link, feed: &SpectrumFeed) -> (bool, String) {
     let times = shared.times;
-    let mut intake = Intake::new(times.stall_ms);
+    let mut intake = Intake::holding(times.stall_ms, HELD);
     intake.accept(true);
     let mut rows = Rows::labelled(SOURCE);
     let mut meter = RateMeter::default();
@@ -597,6 +605,7 @@ fn session(shared: &Shared, mut link: Link, feed: &SpectrumFeed) -> (bool, Strin
         };
         let taken = intake.take(&mut samples);
         if state == State::Drawing {
+            rows.view(feed.rf_view());
             rows.feed(&taken, &samples);
             if let Some(row) = rows.row(now) {
                 if !shared.quitting() {

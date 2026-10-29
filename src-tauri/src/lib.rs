@@ -14134,15 +14134,26 @@ fn get_scope_row(
 /// radio sweeps commits each sweep once instead of scrolling copies of the last one. The span
 /// request, the precedence and the fallbacks are `get_scope_row`'s; see
 /// `SpectrumFeed::scope_frame_after` for the two answers that come back on every poll.
+///
+/// `rf_lo_hz`/`rf_hi_hz`, when both are given, are the absolute RF window the scope is drawing on a
+/// native panadapter row: the standing request an IQ panadapter zooms its rows to
+/// (`SpectrumFeed::request_rf_view`). Absent from an older UI or a Remote page, and then nothing
+/// is asked.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 fn get_scope_frame(
     lo_hz: f32,
     hi_hz: f32,
     window: Option<String>,
     last_seq: u64,
+    rf_lo_hz: Option<f64>,
+    rf_hi_hz: Option<f64>,
     feed: State<'_, tempo_app::engine::SpectrumFeed>,
     state: State<'_, SharedEngine>,
 ) -> Result<Option<tempo_app::dto::SpectrumFrame>, String> {
+    if let (Some(lo), Some(hi)) = (rf_lo_hz, rf_hi_hz) {
+        feed.request_rf_view(lo, hi);
+    }
     // The same default as `get_scope_row`, for the reason given there.
     let win = window
         .as_deref()

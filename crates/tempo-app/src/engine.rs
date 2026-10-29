@@ -334,6 +334,9 @@ struct FeedRows {
     /// The one source the operator picked for the RF slot, when they picked one over the radio's
     /// own: see [`SpectrumFeed::claim_rf`].
     rf_owner: Option<&'static str>,
+    /// The RF windows the scopes on screen are drawing (absolute Hz), each with when it was last
+    /// asked for: see [`SpectrumFeed::request_rf_view`].
+    rf_views: Vec<(f64, f64, Instant)>,
 }
 
 impl FeedRows {
@@ -996,6 +999,65 @@ impl SpectrumFeed {
                 slice: None,
                 bins: Vec::new(),
             }),
+        }
+    }
+
+    /// How long one scope's RF window counts towards [`Self::rf_view`] after the poll that asked
+    /// for it: far longer than any scope's poll period (33 ms, 120 ms under reduced motion), and
+    /// short enough that a window left behind by tuning stops widening the union within a second.
+    const RF_VIEW_TTL: Duration = Duration::from_secs(1);
+    /// The most distinct windows held at once; the oldest goes first.
+    const RF_VIEWS_MAX: usize = 8;
+    /// The narrowest window worth asking for.
+    const RF_VIEW_MIN_SPAN_HZ: f64 = 100.0;
+
+    /// A scope is drawing `lo_hz..hi_hz` of absolute RF: the window an IQ panadapter (TCI, SDRconnect)
+    /// may compute its rows over, at a finer resolution than its whole span allows.
+    ///
+    /// THE REQUEST RIDES THE POLL, as the scope span's does ([`Self::scope_row`]): it lapses
+    /// [`Self::RF_VIEW_TTL`] after the scope stops asking, so a hidden scope leaves no zoom behind.
+    /// A window that is not finite, is reversed or is narrower than [`Self::RF_VIEW_MIN_SPAN_HZ`] is
+    /// ignored. Only the IQ panadapters read it: a radio's own scope sweeps what the radio is set to.
+    pub fn request_rf_view(&self, lo_hz: f64, hi_hz: f64) {
+        if !(lo_hz.is_finite() && hi_hz.is_finite() && hi_hz - lo_hz >= Self::RF_VIEW_MIN_SPAN_HZ) {
+            return;
+        }
+        if let Ok(mut g) = self.rows.lock() {
+            let now = Instant::now();
+            g.rf_views.retain(|&(lo, hi, at)| {
+                now.duration_since(at) < Self::RF_VIEW_TTL && (lo, hi) != (lo_hz, hi_hz)
+            });
+            g.rf_views.push((lo_hz, hi_hz, now));
+            if g.rf_views.len() > Self::RF_VIEWS_MAX {
+                g.rf_views.remove(0);
+            }
+        }
+    }
+
+    /// The RF window an IQ panadapter should cover: the UNION of the windows asked for within
+    /// [`Self::RF_VIEW_TTL`], or `None` when no scope is asking.
+    ///
+    /// A union, not the latest: two scopes drawing different windows at once (the shack's and a
+    /// Remote viewer's) would otherwise take turns, and each turn would start the panadapter's rows
+    /// over. The union covers both, so each draws its own window from the one row.
+    pub fn rf_view(&self) -> Option<(f64, f64)> {
+        let g = self.rows.lock().ok()?;
+        let now = Instant::now();
+        g.rf_views
+            .iter()
+            .filter(|(_, _, at)| now.duration_since(*at) < Self::RF_VIEW_TTL)
+            .fold(None, |acc: Option<(f64, f64)>, &(lo, hi, _)| {
+                Some(acc.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))))
+            })
+    }
+
+    /// Test-only: age every RF window request to simulate scopes that stopped polling.
+    #[cfg(test)]
+    pub fn backdate_rf_views_for_test(&self, by: Duration) {
+        if let Ok(mut g) = self.rows.lock() {
+            for v in g.rf_views.iter_mut() {
+                v.2 = Instant::now() - by;
+            }
         }
     }
 
@@ -63489,6 +63551,42 @@ mod tests {
         );
         let _ = feed.rf_frame_after(0);
         assert!(feed.rf_wanted(), "and the next read renews it");
+    }
+
+    /// THE RF WINDOW A SCOPE DRAWS IS A STANDING REQUEST: the union of the windows asked for in the
+    /// last second, none once every scope stops asking, and nothing taken from a window that is not one.
+    #[test]
+    fn the_rf_view_is_the_union_of_the_windows_asked_for_and_lapses() {
+        let feed = SpectrumFeed::default();
+        assert_eq!(feed.rf_view(), None, "nobody asked");
+        // 30 m with its margin, then a +-25 kHz window round a dial at 10.120 MHz.
+        feed.request_rf_view(10_095_000.0, 10_155_000.0);
+        assert_eq!(feed.rf_view(), Some((10_095_000.0, 10_155_000.0)));
+        feed.request_rf_view(10_095_000.0, 10_145_000.0);
+        assert_eq!(
+            feed.rf_view(),
+            Some((10_095_000.0, 10_155_000.0)),
+            "a second scope's window inside the first leaves the union as it was"
+        );
+        feed.request_rf_view(10_050_000.0, 10_100_000.0);
+        assert_eq!(feed.rf_view(), Some((10_050_000.0, 10_155_000.0)));
+        // Not windows: reversed, too narrow, not finite. None of them moves the union.
+        feed.request_rf_view(10_200_000.0, 10_100_000.0);
+        feed.request_rf_view(10_100_000.0, 10_100_050.0);
+        feed.request_rf_view(f64::NEG_INFINITY, 10_100_000.0);
+        feed.request_rf_view(f64::NAN, 10_100_000.0);
+        assert_eq!(feed.rf_view(), Some((10_050_000.0, 10_155_000.0)));
+        feed.backdate_rf_views_for_test(Duration::from_millis(900));
+        assert!(feed.rf_view().is_some(), "still standing inside the TTL");
+        feed.backdate_rf_views_for_test(Duration::from_millis(1100));
+        assert_eq!(
+            feed.rf_view(),
+            None,
+            "scopes that stopped asking leave no zoom behind"
+        );
+        // Only the newest window counts once the others lapse.
+        feed.request_rf_view(14_000_000.0, 14_350_000.0);
+        assert_eq!(feed.rf_view(), Some((14_000_000.0, 14_350_000.0)));
     }
 
     /// A radio that stopped sweeping reads as no scope — but an over does not: the CI-V stream is

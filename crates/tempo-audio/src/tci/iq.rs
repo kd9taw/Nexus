@@ -44,6 +44,17 @@
 //! empties the feed's RF slot, so the scope says its source stopped instead of holding an old row
 //! as live.
 //!
+//! ## A row zoomed to the scope's window
+//! A row over the whole IQ rate has [`N`] bins: 23 Hz each at 48 kHz, but 977 Hz each at an SDR's
+//! 2 MHz, so a scope showing a 50 kHz band drew some fifty bins stretched across the screen. When a
+//! scope asks for a window ([`tempo_app::engine::SpectrumFeed::request_rf_view`]), the rows are
+//! computed over a longer FFT ([`Geometry::zoom`]) and cut to that window: at least [`ZOOM_BINS`]
+//! bins across it, as long as the window stays within [`ZOOM_MAX_MS`] of samples, the time the
+//! [`N`]-pair window lasts at 48 kHz. The work stays bounded: the windows a row takes are counted in
+//! samples, the [`MAX_WINDOWS`] × [`N`] pairs an unzoomed row takes. Nothing is asked of the server
+//! or of the receiver: its span and rate stay the operator's, and the finer rows are the same IQ
+//! read more closely.
+//!
 //! ## Starting and stopping
 //! `iq_start` goes out once the switch is on and the session is ready. A server that sends no IQ
 //! within [`START_WINDOW_MS`] does not offer it (piHPSDR's TCI has no `iq_start`): the pan sends
@@ -103,6 +114,21 @@ pub const HELD: usize = 8 * N;
 /// The most windows averaged into one row. At 384 kHz about twelve arrive between two rows; the
 /// rest are skipped, which bounds the FFTs to this many a row whatever the server streams.
 pub const MAX_WINDOWS: u32 = 8;
+
+/// The longest window a zoomed row is computed over, in pairs (33 ms at 2 MHz).
+pub const ZOOM_MAX_N: usize = 1 << 16;
+
+/// The longest a zoomed window may last, ms: [`N`] pairs at 48 kHz, which is what the rows of a
+/// 48 kHz stream are already computed over. A longer window would be finer still, and would smear a
+/// keyed signal across its gaps (a 25 wpm gap is 48 ms).
+pub const ZOOM_MAX_MS: f64 = N as f64 * 1_000.0 / 48_000.0;
+
+/// The fewest bins a zoomed row aims to put across the window it was asked for; it gets fewer than
+/// twice as many, or fewer than this where [`ZOOM_MAX_MS`] bounds the window.
+pub const ZOOM_BINS: usize = 1_024;
+
+/// The narrowest window a row is zoomed to.
+const ZOOM_MIN_SPAN_HZ: f64 = 100.0;
 
 /// A row about every 66 ms: the Flex panadapter's 15 a second.
 pub const ROW_MS: u64 = 66;
@@ -193,6 +219,40 @@ impl Geometry {
         let lo = self.centre as f64 - rate / 2.0 - rate / N as f64 / 2.0;
         (lo, lo + rate)
     }
+
+    /// The zoom for rows over `view` (absolute Hz): a window of [`Zoom::n`] pairs, the shortest that
+    /// puts [`ZOOM_BINS`] bins across the part of `view` this stream covers, and no longer than
+    /// [`ZOOM_MAX_MS`] or [`ZOOM_MAX_N`]. `None` when the whole-rate row is as fine as that allows
+    /// (a 48 kHz stream, or a window as wide as the stream), or when the window misses the stream.
+    pub fn zoom(self, view: (f64, f64)) -> Option<Zoom> {
+        let rate = f64::from(self.rate);
+        let lo = view.0.max(self.centre as f64 - rate / 2.0);
+        let hi = view.1.min(self.centre as f64 + rate / 2.0);
+        if (hi - lo).is_nan() || hi - lo < ZOOM_MIN_SPAN_HZ {
+            return None;
+        }
+        let want = ((ZOOM_BINS as f64 * rate / (hi - lo)).ceil() as usize).next_power_of_two();
+        // In whole pairs, so 384 kHz gives exactly 16384 rather than a float a hair under it.
+        let most = (u64::from(self.rate) * N as u64 / 48_000) as usize;
+        let cap = if most == 0 {
+            0
+        } else {
+            (1usize << (usize::BITS - 1 - most.leading_zeros())).min(ZOOM_MAX_N)
+        };
+        let n = want.min(cap);
+        (n > N).then_some(Zoom { n, lo, hi })
+    }
+}
+
+/// Rows over a window narrower than the stream: [`Geometry::zoom`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Zoom {
+    /// Pairs in a window, and bins in its FFT: a power of two above [`N`].
+    pub n: usize,
+    /// Hz: the part of the window asked for that the stream covers. The row is the bins whose
+    /// middles fall inside it.
+    pub lo: f64,
+    pub hi: f64,
 }
 
 /// What the pan did with the IQ blocks the session handed it. Each block counts once, in exactly
@@ -280,13 +340,23 @@ pub(crate) struct Intake {
     restart: bool,
     counts: Counts,
     stall_ms: u64,
+    /// The most pairs held between two looks: [`HELD`], or the source's own ([`Self::holding`]).
+    held: usize,
 }
 
 impl Intake {
     pub(crate) fn new(stall_ms: u64) -> Intake {
+        Intake::holding(stall_ms, HELD)
+    }
+
+    /// An intake that holds up to `held` pairs between two looks: a source streaming faster than
+    /// TCI's rates needs more than [`HELD`] for a zoomed window ([`ZOOM_MAX_N`] pairs) to arrive
+    /// whole between two looks of its thread.
+    pub(crate) fn holding(stall_ms: u64, held: usize) -> Intake {
         Intake {
+            held,
             accepting: false,
-            samples: Vec::with_capacity(2 * HELD),
+            samples: Vec::with_capacity(2 * held),
             geometry: None,
             clock: None,
             settle_until: None,
@@ -415,8 +485,8 @@ impl Intake {
             });
         }
         // Kept, the newest first when it cannot all be: the pan's thread has fallen behind.
-        let keep = pairs.min(HELD);
-        if self.samples.len() / 2 + keep > HELD {
+        let keep = pairs.min(self.held);
+        if self.samples.len() / 2 + keep > self.held {
             self.counts.overflow += (self.samples.len() / 2) as u64;
             self.samples.clear();
             self.broken = true;
@@ -474,6 +544,17 @@ pub(crate) struct Rows {
     /// The feed label the rows carry: [`SOURCE`] for TCI's.
     source: &'static str,
     geometry: Option<Geometry>,
+    /// The window the scopes are drawing ([`Self::view`]), and the zoom it gives on this stream.
+    view: Option<(f64, f64)>,
+    zoom: Option<Zoom>,
+    /// Pairs in a window: [`N`], or the zoom's.
+    n: usize,
+    /// A zoomed window's FFT, its Hann window and its buffers; empty while unzoomed.
+    planner: rustfft::FftPlanner<f32>,
+    fft: Option<std::sync::Arc<dyn rustfft::Fft<f32>>>,
+    hann: Vec<f32>,
+    buf: Vec<rustfft::num_complex::Complex32>,
+    scratch: Vec<rustfft::num_complex::Complex32>,
     /// The pairs of a window not yet whole, I then Q.
     rest: Vec<f32>,
     power: Vec<f32>,
@@ -492,6 +573,14 @@ impl Default for Rows {
         Rows {
             source: SOURCE,
             geometry: None,
+            view: None,
+            zoom: None,
+            n: N,
+            planner: rustfft::FftPlanner::new(),
+            fft: None,
+            hann: Vec::new(),
+            buf: Vec::new(),
+            scratch: Vec::new(),
             rest: Vec::with_capacity(2 * N),
             power: vec![0.0; N],
             sum: vec![0.0; N],
@@ -519,6 +608,46 @@ impl Rows {
         self.next_row = None;
     }
 
+    /// The window the scopes on screen are drawing (absolute Hz), or `None` for the whole stream:
+    /// the feed's [`SpectrumFeed::rf_view`], given before each [`Self::feed`].
+    pub(crate) fn view(&mut self, view: Option<(f64, f64)>) {
+        self.view = view;
+    }
+
+    /// The zoom the view gives on the stream now, and the window length it takes. A new length
+    /// starts the row over: power summed over one length is not the bins of another.
+    fn rezoom(&mut self) {
+        let zoom = self.geometry.zip(self.view).and_then(|(g, v)| g.zoom(v));
+        let n = zoom.map_or(N, |z| z.n);
+        if n != self.n {
+            self.restart();
+            self.n = n;
+            self.power = vec![0.0; n];
+            self.sum = vec![0.0; n];
+            self.rest = Vec::with_capacity(2 * n);
+            if n == N {
+                self.fft = None;
+                self.hann = Vec::new();
+                self.buf = Vec::new();
+                self.scratch = Vec::new();
+            } else {
+                let fft = self.planner.plan_fft_forward(n);
+                let zero = rustfft::num_complex::Complex32::new(0.0, 0.0);
+                self.buf = vec![zero; n];
+                self.scratch = vec![zero; fft.get_inplace_scratch_len()];
+                // The same Hann tempo-core's windows use, so a zoomed row and a whole one read a
+                // carrier at the same level.
+                self.hann = (0..n)
+                    .map(|k| {
+                        0.5 - 0.5 * (std::f32::consts::TAU * k as f32 / (n as f32 - 1.0)).cos()
+                    })
+                    .collect();
+                self.fft = Some(fft);
+            }
+        }
+        self.zoom = zoom;
+    }
+
     /// Cut `samples` (what `taken` describes) into windows and sum each window's power.
     pub(crate) fn feed(&mut self, taken: &Taken, samples: &[f32]) {
         if taken.restart || taken.geometry != self.geometry {
@@ -527,19 +656,21 @@ impl Rows {
         } else if taken.broken {
             self.rest.clear();
         }
+        self.rezoom();
+        let n = self.n;
         let mut samples = samples;
         if !self.rest.is_empty() {
-            let need = (2 * N - self.rest.len()).min(samples.len());
+            let need = (2 * n - self.rest.len()).min(samples.len());
             self.rest.extend_from_slice(&samples[..need]);
             samples = &samples[need..];
-            if self.rest.len() == 2 * N {
+            if self.rest.len() == 2 * n {
                 let window = std::mem::take(&mut self.rest);
                 self.window(&window);
                 self.rest = window;
                 self.rest.clear();
             }
         }
-        let mut windows = samples.chunks_exact(2 * N);
+        let mut windows = samples.chunks_exact(2 * n);
         for window in windows.by_ref() {
             self.window(window);
         }
@@ -547,11 +678,30 @@ impl Rows {
     }
 
     fn window(&mut self, iq: &[f32]) {
-        if self.windows >= MAX_WINDOWS {
+        // The bound is in samples, not windows: a zoomed window is many unzoomed ones long.
+        let most = (MAX_WINDOWS as usize * N / self.n).max(1) as u32;
+        if self.windows >= most {
             self.skipped += 1;
             return;
         }
-        if iq_power(iq, WIN, &mut self.power) {
+        let summed = match &self.fft {
+            None => iq_power(iq, WIN, &mut self.power),
+            Some(fft) => {
+                let n = self.n;
+                for ((c, pair), w) in self.buf.iter_mut().zip(iq.chunks_exact(2)).zip(&self.hann) {
+                    *c = rustfft::num_complex::Complex32::new(pair[0] * w, pair[1] * w);
+                }
+                fft.process_with_scratch(&mut self.buf, &mut self.scratch);
+                // tempo-core's full scale for an n-point window ((n/2)², a full-scale tone through
+                // Hann), and its order: the negative frequencies first, from −rate/2.
+                let full = ((n / 2) * (n / 2)) as f32;
+                for (j, p) in self.power.iter_mut().enumerate() {
+                    *p = self.buf[(j + n / 2) % n].norm_sqr() / full;
+                }
+                true
+            }
+        };
+        if summed {
             for (s, p) in self.sum.iter_mut().zip(&self.power) {
                 *s += p;
             }
@@ -567,12 +717,37 @@ impl Rows {
         if self.windows == 0 || now < due {
             return None;
         }
-        let n = self.windows as f32;
-        let row = self.sum.iter().map(|p| row_value(p / n)).collect();
+        let k = self.windows as f32;
+        // Zoomed: the bins whose middles fall inside the window, bin `j`'s middle being the centre
+        // plus `(j − n/2)·rate/n` as for a whole row ([`Geometry::edges`]).
+        let n = self.n;
+        let bin = f64::from(geometry.rate) / n as f64;
+        let at = |hz: f64| (hz - geometry.centre as f64) / bin + (n / 2) as f64;
+        let (from, to) = match self.zoom {
+            Some(z) if n > N => {
+                let from = at(z.lo).ceil().max(0.0) as usize;
+                let to = (at(z.hi).floor().max(0.0) as usize).min(n - 1);
+                if from <= to {
+                    (from, to)
+                } else {
+                    (0, n - 1)
+                }
+            }
+            _ => (0, n - 1),
+        };
+        let row = self.sum[from..=to]
+            .iter()
+            .map(|p| row_value(p / k))
+            .collect();
         self.sum.fill(0.0);
         self.windows = 0;
         self.next_row = Some(due.saturating_add(ROW_MS).max(now));
-        let (lo_hz, hi_hz) = geometry.edges();
+        let (lo_hz, hi_hz) = if n == N {
+            geometry.edges()
+        } else {
+            let lo = geometry.centre as f64 + (from as f64 - (n / 2) as f64 - 0.5) * bin;
+            (lo, lo + (to - from + 1) as f64 * bin)
+        };
         Some(Spectrum {
             row,
             lo_hz,
@@ -1037,6 +1212,7 @@ fn draw(
             break;
         }
         if control.drawing {
+            rows.view(feed.rf_view());
             rows.feed(&taken, &samples);
             if let Some(row) = rows.row(now) {
                 feed.publish_rf_frame(row, SCALE, slice);
@@ -1444,6 +1620,186 @@ mod tests {
             let j = peak_near(row, 14_140_000.0, 4);
             assert!((bin_hz(row, j) - 14_140_000.0).abs() < 0.01);
         }
+    }
+
+    // ── A row zoomed to the scope's window ──────────────────────────────────────────────────
+
+    /// THE ZOOM'S WINDOW LENGTH, rate by rate: the shortest that puts [`ZOOM_BINS`] bins across the
+    /// window the stream covers, no longer than [`ZOOM_MAX_MS`], and none where the whole-rate row is
+    /// already that fine or the window misses the stream.
+    #[test]
+    fn the_zoom_window_is_the_shortest_that_resolves_the_view() {
+        let at = |rate: u32, centre: i64| Geometry { rate, centre };
+        let band30 = (10_095_000.0, 10_155_000.0);
+        // 48 kHz: the whole-rate row is already the finest a 42.7 ms window gives.
+        assert_eq!(at(48_000, 10_120_000).zoom(band30), None);
+        // 384 kHz on 30 m: 8192 pairs puts ~1300 bins (47 Hz) across the band.
+        let z = at(384_000, 10_120_000).zoom(band30).expect("zoomed");
+        assert_eq!(z.n, 8_192);
+        assert_eq!((z.lo, z.hi), band30, "the band is inside the stream");
+        // 384 kHz, +-5 kHz: as long as 42.7 ms allows, 16384 pairs (23 Hz).
+        let z = at(384_000, 10_120_000)
+            .zoom((10_115_000.0, 10_125_000.0))
+            .expect("zoomed");
+        assert_eq!(
+            z.n, 16_384,
+            "bounded by the window's time, not by the bins wanted"
+        );
+        // 2 MHz on 30 m (the reported case): 65536 pairs, 30.5 Hz bins, 33 ms.
+        let z = at(2_000_000, 10_120_000).zoom(band30).expect("zoomed");
+        assert_eq!(z.n, ZOOM_MAX_N);
+        // 10 MHz: still the longest window there is, now 6.6 ms of samples; on 20 m's 350 kHz,
+        // half as long already puts the bins wanted across it.
+        assert_eq!(
+            at(10_000_000, 10_120_000).zoom(band30).map(|z| z.n),
+            Some(ZOOM_MAX_N)
+        );
+        assert_eq!(
+            at(10_000_000, 14_200_000)
+                .zoom((14_000_000.0, 14_350_000.0))
+                .map(|z| z.n),
+            Some(32_768)
+        );
+        // A window as wide as the stream, or wider: the whole-rate row.
+        assert_eq!(
+            at(2_000_000, 10_120_000).zoom((9_000_000.0, 11_200_000.0)),
+            None
+        );
+        assert_eq!(at(384_000, 10_120_000).zoom((-1e9, 1e9)), None);
+        // 20 m's 400 kHz with its margin, on a 384 kHz stream: clipped to the stream, no finer to be had.
+        assert_eq!(
+            at(384_000, 14_074_000).zoom((13_975_000.0, 14_375_000.0)),
+            None
+        );
+        // Part of a window inside the stream: zoomed to that part.
+        let z = at(384_000, 10_120_000)
+            .zoom((10_300_000.0, 10_320_000.0))
+            .expect("zoomed");
+        assert_eq!((z.lo, z.hi), (10_300_000.0, 10_312_000.0));
+        // A window that misses the stream, or too narrow to be one.
+        assert_eq!(
+            at(384_000, 10_120_000).zoom((20_000_000.0, 20_050_000.0)),
+            None
+        );
+        assert_eq!(
+            at(384_000, 10_120_000).zoom((10_120_000.0, 10_120_050.0)),
+            None
+        );
+    }
+
+    /// ⭐ A ZOOMED ROW PUTS A THOUSAND BINS ACROSS THE BAND AND EACH CARRIER ON ITS FREQUENCY, at the
+    /// level the whole-rate row reads it at. Positive control: the same stream with no window asked
+    /// for is the whole 384 kHz in 2048 bins of 187.5 Hz.
+    #[test]
+    fn a_zoomed_row_resolves_the_band_and_keeps_each_carrier_where_and_as_loud_as_it_is() {
+        let centre = 10_120_000;
+        // Both on a bin's middle in either row (187.5 Hz is eight 23.4 Hz bins), so neither reads
+        // a carrier off its peak: 10.1256 and 10.1144 MHz.
+        let offsets = [30.0 * 187.5, -30.0 * 187.5];
+        let mut whole = Line::new();
+        whole.stream(500, 384_000, centre, &offsets);
+        let wide = whole.rows().pop().expect("a whole-rate row");
+        assert_eq!(wide.row.len(), N);
+        assert!((wide.hi_hz - wide.lo_hz - 384_000.0).abs() < 1e-6);
+        let mut line = Line::new();
+        line.rows.view(Some((10_095_000.0, 10_155_000.0)));
+        line.stream(500, 384_000, centre, &offsets);
+        let rows = line.rows();
+        assert!(
+            rows.len() >= 4,
+            "{} zoomed rows in half a second",
+            rows.len()
+        );
+        let row = rows.last().expect("a zoomed row");
+        let bin = (row.hi_hz - row.lo_hz) / row.row.len() as f64;
+        assert!(
+            (bin - 384_000.0 / 8_192.0).abs() < 1e-9,
+            "47 Hz bins: {bin}"
+        );
+        assert!(
+            row.row.len() >= ZOOM_BINS,
+            "{} bins across the band",
+            row.row.len()
+        );
+        assert!(
+            row.lo_hz >= 10_095_000.0 - bin && row.hi_hz <= 10_155_000.0 + bin,
+            "{}..{}",
+            row.lo_hz,
+            row.hi_hz
+        );
+        assert!(
+            row.lo_hz < 10_095_000.0 + bin && row.hi_hz > 10_155_000.0 - bin,
+            "the whole band: {}..{}",
+            row.lo_hz,
+            row.hi_hz
+        );
+        for f in offsets {
+            let hz = centre as f64 + f;
+            let j = peak_near(row, hz, 4);
+            assert!(
+                (bin_hz(row, j) - hz).abs() < 0.01,
+                "at {} Hz, wanted {hz}",
+                bin_hz(row, j)
+            );
+            let (zoomed, whole) = (db(row.row[j]), db(wide.row[peak_near(&wide, hz, 2)]));
+            assert!(
+                (zoomed - whole).abs() < 0.5,
+                "{zoomed} dB zoomed, {whole} dB whole"
+            );
+        }
+        assert!(!heard(row, 10_100_000.0), "an empty bin is the floor");
+        // The view gone: the next rows are whole-rate again.
+        line.rows.view(None);
+        line.stream(300, 384_000, centre, &offsets);
+        let back = line.rows().pop().expect("a row");
+        assert_eq!(back.row.len(), N, "whole-rate rows once no scope asks");
+    }
+
+    /// The zoom's cost stays the unzoomed row's: a window [`ZOOM_MAX_N`] long counts as the
+    /// [`MAX_WINDOWS`] windows of [`N`] it replaces, so a row takes one at most, and the rest are
+    /// skipped, not computed. At 2 MHz (an SDR's rate, the reported case), through an intake that
+    /// holds enough for a whole window between two looks.
+    #[test]
+    fn a_zoomed_row_at_two_megahertz_costs_what_a_whole_one_does() {
+        let rate = 2_000_000u32;
+        let centre = 10_120_000i64;
+        let mut intake = Intake::holding(STALL_MS, 2 * ZOOM_MAX_N);
+        intake.accept(true);
+        let mut rows = Rows::default();
+        rows.view(Some((10_095_000.0, 10_155_000.0)));
+        let mut buf = Vec::new();
+        let (mut now, mut sent, mut drawn) = (10_000u64, 0u64, Vec::new());
+        // A carrier 10.5 kHz above the centre: 10.1305 MHz, inside 30 m.
+        let offsets = [10_500.0];
+        for _ in 0..25 {
+            now += 20;
+            let pairs = (rate / 50) as usize;
+            let iq = tones(&offsets, rate, sent, pairs);
+            intake.push_pairs(Some(rate), Some(centre), pairs, iq.into_iter(), now);
+            sent += pairs as u64;
+            let taken = intake.take(&mut buf);
+            rows.feed(&taken, &buf);
+            drawn.extend(rows.row(now));
+        }
+        assert!(drawn.len() >= 5, "{} rows in half a second", drawn.len());
+        assert!(rows.skipped > 0, "windows past the bound were skipped");
+        let row = drawn.last().expect("a row");
+        let bin = (row.hi_hz - row.lo_hz) / row.row.len() as f64;
+        assert!(
+            (bin - f64::from(rate) / ZOOM_MAX_N as f64).abs() < 1e-9,
+            "30.5 Hz bins: {bin}"
+        );
+        assert!(
+            row.row.len() > 1_900,
+            "{} bins across 60 kHz, where the whole row had 61",
+            row.row.len()
+        );
+        let j = peak_near(row, 10_130_500.0, 4);
+        assert!(
+            (bin_hz(row, j) - 10_130_500.0).abs() <= bin,
+            "at {}",
+            bin_hz(row, j)
+        );
     }
 
     // ── Bounds ───────────────────────────────────────────────────────────────────────────────
