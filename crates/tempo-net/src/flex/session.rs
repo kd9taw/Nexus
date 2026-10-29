@@ -417,7 +417,7 @@ pub enum SendError {
         target: Target,
         owner: Owner,
     },
-    /// Its admission refused it ([`Session::move_tx`]).
+    /// Its admission refused it ([`Session::move_tx`], [`Session::send_quiet`]).
     NotAdmitted(Refusal),
 }
 
@@ -855,6 +855,23 @@ impl Session {
         self.pending.insert(seq, Pending::Caller);
         self.write(out, seq, &rendered, now);
         Ok(seq)
+    }
+
+    /// [`Self::send`], only while nothing of ours is keyed and the interlock is idle: checked here,
+    /// on the session's own thread, where a start of ours is admitted, so no key of ours can come
+    /// between the check and the write. For a write aimed at the slice that transmits (a split
+    /// slice's tune or mode), which must never change under an over.
+    pub fn send_quiet(
+        &mut self,
+        out: &mut dyn Write,
+        command: &Command,
+        now: u64,
+    ) -> Result<u32, SendError> {
+        if self.keyed.is_some() {
+            return Err(SendError::NotAdmitted(Refusal::AlreadyKeyed));
+        }
+        admission::transmitter_idle(&self.model).map_err(SendError::NotAdmitted)?;
+        self.send(out, command, now)
     }
 
     // ── Transmit ─────────────────────────────────────────────────────────────────────────────
@@ -1732,6 +1749,7 @@ pub enum ConnError {
 
 enum Request {
     Send(Command, Sender<Result<Reply, ConnError>>),
+    SendQuiet(Command, Sender<Result<Reply, ConnError>>),
     Start(TxStart, Option<u64>, Sender<Result<u32, Refusal>>),
     Stop(TxStop, Sender<StopOutcome>),
     EndOurs(Sender<EndOutcome>),
@@ -1856,6 +1874,20 @@ impl Connection {
         let (tx, rx) = mpsc::channel();
         self.requests
             .send(Request::Send(command, tx))
+            .map_err(|_| ConnError::Closed)?;
+        match rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(ConnError::Timeout),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(ConnError::Closed),
+        }
+    }
+
+    /// [`Self::request`] through [`Session::send_quiet`]: refused, with nothing sent, while
+    /// anything of ours is keyed or the interlock is not idle.
+    pub fn request_quiet(&self, command: Command, timeout: Duration) -> Result<Reply, ConnError> {
+        let (tx, rx) = mpsc::channel();
+        self.requests
+            .send(Request::SendQuiet(command, tx))
             .map_err(|_| ConnError::Closed)?;
         match rx.recv_timeout(timeout) {
             Ok(result) => result,
@@ -2035,6 +2067,14 @@ fn drive<S: Read + Write>(
                     }
                     Err(e) => answer(&session, shared, reply, Err(ConnError::Refused(e))),
                 },
+                Ok(Request::SendQuiet(command, reply)) => {
+                    match session.send_quiet(&mut io, &command, now()) {
+                        Ok(seq) => {
+                            waiters.insert(seq, reply);
+                        }
+                        Err(e) => answer(&session, shared, reply, Err(ConnError::Refused(e))),
+                    }
+                }
                 Ok(Request::Start(start, lasting_ms, reply)) => {
                     let started = session.start_lasting(&mut io, start, lasting_ms, now());
                     answer(&session, shared, reply, started);

@@ -183,8 +183,12 @@ pub(crate) struct ClientState {
     pub(crate) voice_key: AtomicBool,
     /// The Rig split the shim holds (`S 1`): the receive slice it keeps serving as the dial, and
     /// the slice of ours it made and moved the transmit flag to. Held between overs, until `S 0`
-    /// puts the flag back and removes that slice ([`shim::SplitPair`]).
-    pub(crate) split: Mutex<Option<shim::SplitPair>>,
+    /// puts the flag back and removes that slice; bound to the session that made it, and cleared
+    /// when that session ends ([`shim::SplitHold`]).
+    pub(crate) split: Mutex<Option<shim::SplitHold>>,
+    /// A split slice asked for whose answer never named it, until it appears and is removed
+    /// ([`shim::PendingCreate`]).
+    pub(crate) split_create: Mutex<Option<shim::PendingCreate>>,
 }
 
 /// The mode an over on `slice` goes out in: the one the shim commanded while the radio has not
@@ -804,13 +808,16 @@ impl FlexDaemon {
     /// end of a tick in which nothing of ours is keyed or about to be, which is what keeps the
     /// flag out of the keying path. `browser_voice`: the stream's browser voice is live;
     /// `voice_keyer`: a voice-keyer message waits to go out over DAX. Returns what it did, for the
-    /// log.
+    /// log. The Rig split's owed take-down and a lost split create are finished here first
+    /// ([`shim::settle_split`]).
     pub fn sync_tx_routing(&self, browser_voice: bool, voice_keyer: bool) -> Option<String> {
         let conn = self.conn();
-        let snap = conn.snapshot();
-        if snap.phase != Phase::Ready {
+        if conn.snapshot().phase != Phase::Ready {
             return None;
         }
+        // The Rig split's owed work belongs at the same quiet point ([`shim::settle_split`]).
+        shim::settle_split(conn, &self.state);
+        let snap = conn.snapshot();
         let view = routing_view(&snap, &self.state);
         let native = self.state.native_audio.load(Ordering::Relaxed);
         let now = monotonic_ms();
@@ -1285,6 +1292,9 @@ fn watch(
                 ),
             ),
             Event::Closed { end, was_keyed, .. } => {
+                // A split's slices were this session's: nothing of them is used again.
+                *lock(&state.split) = None;
+                *lock(&state.split_create) = None;
                 tempo_core::applog::warn(
                     "cat",
                     &format!("Flex client ({radio}): session ended ({end:?}, keyed: {was_keyed})"),

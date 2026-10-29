@@ -565,6 +565,20 @@ pub fn admit_tx_slice(
         return Err(Refusal::AlreadyKeyed);
     }
     transmitter_idle(model)?;
+    // The flag is taken from nobody: wherever it is now must be ours, or nowhere. On a multiFLEX
+    // radio another station's slice may hold it, and moving it would take their transmitter.
+    for holder in model.tx_slices() {
+        let owner = owner_of(
+            model.slices.get(&holder).and_then(|s| s.client_handle),
+            Some(ours),
+        );
+        if owner != Owner::Ours {
+            return Err(Refusal::TxSliceNotOurs {
+                slice: holder,
+                owner,
+            });
+        }
+    }
     let reported = model.slices.get(&tx.slice).and_then(|s| s.client_handle);
     let owner = owner_of(reported, Some(ours));
     if owner != Owner::Ours {
@@ -1431,6 +1445,45 @@ mod tests {
         ] {
             assert_eq!(slice_refused(&m, &f, 0), want);
         }
+    }
+
+    /// ⭐ THE FLAG IS NEVER TAKEN FROM ANOTHER CLIENT. On a multiFLEX radio another station's slice
+    /// may hold the transmit flag; moving it to a slice of ours would take their transmitter. Only
+    /// a flag that is ours, or on no slice at all, moves.
+    #[test]
+    fn the_transmit_flag_is_never_taken_off_another_clients_slice() {
+        let foreign_tx = "S7A3C0001|slice 2 in_use=1 tx=1 client_handle=0x7A3C0001";
+        let m = model(&[OUR_RX_SLICE, foreign_tx, IDLE]);
+        assert_eq!(
+            slice_refused(&m, &facts(), 1),
+            Refusal::TxSliceNotOurs {
+                slice: 2,
+                owner: Owner::Foreign(0x7A3C_0001)
+            }
+        );
+        // A holder whose owner the radio has not said is not known to be ours either.
+        let m = model(&[OUR_RX_SLICE, "S0|slice 3 in_use=1 tx=1", IDLE]);
+        assert_eq!(
+            slice_refused(&m, &facts(), 1),
+            Refusal::TxSliceNotOurs {
+                slice: 3,
+                owner: Owner::Unknown
+            }
+        );
+        // Ours and a foreign holder at once: the foreign one is named.
+        let m = model(&[OUR_TX_SLICE, OUR_RX_SLICE, foreign_tx, IDLE]);
+        assert_eq!(
+            slice_refused(&m, &facts(), 1),
+            Refusal::TxSliceNotOurs {
+                slice: 2,
+                owner: Owner::Foreign(0x7A3C_0001)
+            }
+        );
+        // Controls: our own flag moves, and so does a flag on no slice at all.
+        let m = model(&[OUR_TX_SLICE, OUR_RX_SLICE, IDLE]);
+        assert!(admit_tx_slice(&m, &facts(), TxSlice { slice: 1 }).is_ok());
+        let m = model(&[OUR_RX_SLICE, IDLE]);
+        assert!(admit_tx_slice(&m, &facts(), TxSlice { slice: 1 }).is_ok());
     }
 
     // ── The transmitter's audio source ──
