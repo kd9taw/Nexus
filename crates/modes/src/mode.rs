@@ -1855,6 +1855,12 @@ impl Mode for Fst4Mode {
         // with a 77-bit payload vs (240,74) with the 50-bit beacon payload. Both
         // yield 160 symbols, so passing the wrong one transmits a well-formed frame
         // the far end cannot read.
+        //
+        // ⛔ Never a text `pack77` writes no frame for: `genfst4` would stop the whole process
+        // on it, or send the previous message's frame (`crate::wsjt77::fst4_refusal`).
+        if crate::wsjt77::fst4_refusal(msg).is_some() {
+            return Vec::new();
+        }
         fst4::encode(msg, self.wspr).unwrap_or_default()
     }
 
@@ -1969,6 +1975,12 @@ impl Mode for Q65Mode {
         // Empty on a message that will not pack — the trait's documented safe
         // failure, and `gen_wave` below turns it into an empty waveform, so the
         // radio loop keys nothing rather than transmitting garbage.
+        //
+        // ⛔ Never a text `pack77` writes no frame for: `genq65` would stop the whole process
+        // on it, or send the previous message's frame (`crate::wsjt77::q65_refusal`).
+        if crate::wsjt77::q65_refusal(msg).is_some() {
+            return Vec::new();
+        }
         q65::encode(msg).unwrap_or_default()
     }
 
@@ -2085,6 +2097,12 @@ impl Mode for Msk144Mode {
 
     fn encode(&self, msg: &str) -> Vec<i32> {
         // May return 40 (MSK40 shorthand) rather than 144 — gen_wave accepts both.
+        //
+        // ⛔ Never a text `pack77` writes no frame for: `genmsk_128_90` would stop the whole
+        // process on it, or send the previous message's frame (`crate::wsjt77::msk144_refusal`).
+        if crate::wsjt77::msk144_refusal(msg).is_some() {
+            return Vec::new();
+        }
         msk144::encode(msg).unwrap_or_default()
     }
 

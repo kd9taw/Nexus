@@ -105,6 +105,9 @@ pub fn message(callsign: &str, grid: &str, power_dbm: i32) -> String {
 /// Encode `"CALL GRID DBM"` into the 162 channel symbols (0..3), or `None` if it
 /// will not encode.
 pub fn encode(msg: &str) -> Option<Vec<u8>> {
+    if !upstream_reads_safely(msg.as_bytes()) {
+        return None;
+    }
     let c = std::ffi::CString::new(msg).ok()?;
     let mut sym = vec![0u8; NSYM];
     let n = {
@@ -112,6 +115,74 @@ pub fn encode(msg: &str) -> Option<Vec<u8>> {
         unsafe { tempo_fast_sys::wspr_encode_msg(c.as_ptr(), sym.as_mut_ptr()) }
     };
     (n as usize == NSYM).then_some(sym)
+}
+
+/// Whether upstream's `get_wspr_channel_symbols` (`wsprd/wsprsim_utils.c`, "No sanity checks!
+/// Beware!") can read `msg` without touching memory it does not own. It sorts the 22 characters
+/// it is given by their first blank, `/`, `<` and `>` and then `strtok`s the fields it expects,
+/// with no check that they are there: `hello` or `TNX 73` hands `NULL` to `strlen` / `atoi` and the
+/// process dies. Each test below is one of those reads; anything else is left to upstream, which
+/// sends it or refuses it as before.
+fn upstream_reads_safely(msg: &[u8]) -> bool {
+    // `wspr_encode_msg` copies at most 22 bytes, up to a NUL.
+    let n = msg.iter().take(22).take_while(|&&b| b != 0).count();
+    let m = &msg[..n];
+    let find = |c: u8| m.iter().position(|&b| b == c).unwrap_or(n);
+    let (i1, i2, i3, i4) = (find(b' '), find(b'/'), find(b'<'), find(b'>'));
+    if (3..7).contains(&i1) && i2 == n && i3 == n {
+        // Type 1, `CALL GRID PWR`: the grid is read as 4 characters.
+        let Some((_, p)) = strtok(m, 0, b" ") else {
+            return false;
+        };
+        let Some((grid, p)) = strtok(m, p, b" ") else {
+            return false;
+        };
+        grid.len() >= 4 && strtok(m, p, b" ").is_some()
+    } else if i3 == 0 && i4 < n {
+        // Type 3, `<CALL> GRID6 PWR`: the grid, less its first character, is copied into 7 bytes
+        // that must keep their final NUL.
+        let Some((_, p)) = strtok(m, 0, b"<> ") else {
+            return false;
+        };
+        let Some((grid, p)) = strtok(m, p, b" ") else {
+            return false;
+        };
+        grid.len() <= 7 && strtok(m, p, b" ").is_some()
+    } else if i2 < n {
+        // Type 2, `PFX/CALL PWR` or `CALL/SFX PWR`.
+        let Some((call, p)) = strtok(m, 0, b" ") else {
+            return false;
+        };
+        if i2 == 0 || i2 > call.len() {
+            return true; // upstream's own guard refuses it
+        }
+        if strtok(m, p, b" ").is_none() {
+            return false;
+        }
+        // `pack_prefix`: a suffix of one or two copies the call into 7 bytes that must keep their
+        // final NUL; none reads past the field; a longer one `strtok`s a prefix and then the call
+        // after it, which must be there.
+        let slash = call.iter().position(|&b| b == b'/').unwrap_or(call.len());
+        match call.len().saturating_sub(slash + 1) {
+            0 => false,
+            1 | 2 => slash <= 6,
+            _ => strtok(call, 0, b"/").is_some_and(|(_, q)| strtok(call, q, b" ").is_some()),
+        }
+    } else {
+        true // upstream returns 0 without reading a field
+    }
+}
+
+/// C's `strtok` on `s` from `from`: the next run of bytes outside `delims`, and where the next
+/// call resumes (past the delimiter that ended it, which `strtok` overwrites with a NUL).
+fn strtok<'a>(s: &'a [u8], from: usize, delims: &[u8]) -> Option<(&'a [u8], usize)> {
+    let rest = s.get(from..)?;
+    let start = from + rest.iter().position(|b| !delims.contains(b))?;
+    let end = s[start..]
+        .iter()
+        .position(|b| delims.contains(b))
+        .map_or(s.len(), |e| start + e);
+    Some((&s[start..end], (end + 1).min(s.len())))
 }
 
 /// Synthesise the WSPR audio for `symbols` CENTRED on `f0`, WITHOUT the lead-in.

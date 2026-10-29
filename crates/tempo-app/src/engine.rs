@@ -19670,21 +19670,33 @@ Pick the one you operate from on the Contesting tab in Settings.",
         Ok(())
     }
 
-    /// Why this station cannot send `text` as an FT8 or FT4 over, in the operator's words, or
-    /// `None` where it can, or the tier is neither. The verdict `Ft8Mode::encode` and
-    /// `Ft4Mode::encode` key nothing on (`modes::wsjt77::Refusal`): asked where an operator's
+    /// Why this station cannot send `text` as an FT8, FT4, Q65, MSK144 or FST4 over, in the
+    /// operator's words, or `None` where it can, or the tier is none of those. The verdict the
+    /// mode's `encode` keys nothing on (`modes::wsjt77::Refusal`): asked where an operator's
     /// text is queued, so the refusal is said before anything changes, and by [`Self::plan_tx`]
-    /// for any over that reaches it anyway.
+    /// for any over that reaches it anyway. For Q65, MSK144 and FST4 that is a text the vendored
+    /// encoder would stop the whole process on (`modes::wsjt77::q65_refusal`).
     fn ft_refusal(&self, text: &str) -> Option<String> {
-        let mode = match self.app.tier() {
-            Tier::Ft8 => modes::wsjt77::ft8_refusal(text).map(|_| "FT8")?,
-            Tier::Ft4 => modes::wsjt77::ft4_refusal(text).map(|_| "FT4")?,
+        use modes::wsjt77::{self as w, Refusal};
+        let (mode, why) = match self.app.tier() {
+            Tier::Ft8 => ("FT8", w::ft8_refusal(text)?),
+            Tier::Ft4 => ("FT4", w::ft4_refusal(text)?),
+            Tier::Q65 => ("Q65", w::q65_refusal(text)?),
+            Tier::Msk144 => ("MSK144", w::msk144_refusal(text)?),
+            Tier::Fst4 => ("FST4", w::fst4_refusal(text)?),
             _ => return None,
         };
-        Some(format!(
-            "{mode} cannot encode \"{text}\", so nothing goes out. After two calls only a report \
-             (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 characters."
-        ))
+        Some(match why {
+            Refusal::Alphabet => format!(
+                "{mode} cannot encode \"{text}\", so nothing goes out. It holds a character \
+                 other than plain letters, digits and punctuation."
+            ),
+            Refusal::BadMessage | Refusal::NoFrame => format!(
+                "{mode} cannot encode \"{text}\", so nothing goes out. After two calls only a \
+                 report (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 \
+                 characters."
+            ),
+        })
     }
 
     /// Why the Tx-slot click on `text` to `dxcall` ([`Self::override_next_tx`]) would queue an

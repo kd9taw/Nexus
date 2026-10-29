@@ -336,3 +336,73 @@ fn the_refusal_says_why_in_plain_words() {
         );
     }
 }
+
+// ---- Q65, MSK144 and FST4 -----------------------------------------------------------------------
+
+/// ⛔ Q65, MSK144 and FST4 never queue or key a text `pack77` writes no frame for
+/// (`modes::wsjt77::q65_refusal`). Their vendored encoders (`genq65`, `genmsk_128_90`, `genfst4`)
+/// read that unwritten frame with no `err=`: the first time, gfortran stops the whole process
+/// (`Bad value during integer read`), which no Rust guard can catch; after an earlier over they
+/// send that over's frame. Typed `TNX 73` beside W9XYZ makes `W9XYZ K1ABC TNX 73`, one of them.
+/// The refused over is never built here: on the old code building it stopped the test process.
+/// Controls: text the packer carries is queued and keyed (`TNX` beside a plain call is the free
+/// text `W9XYZ K1ABC T`, as WSJT-X sends it).
+#[test]
+fn q65_msk144_and_fst4_never_queue_or_key_a_text_with_no_frame() {
+    let words = |mode: &str, text: &str| {
+        format!(
+            "{mode} cannot encode \"{text}\", so nothing goes out. After two calls only a report \
+             (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 characters."
+        )
+    };
+    for (tier, mode) in [
+        (Tier::Q65, "Q65"),
+        (Tier::Msk144, "MSK144"),
+        (Tier::Fst4, "FST4"),
+    ] {
+        let mut e = answering(tier, "CQ W9XYZ EN37");
+        let queued = tx_now(&e).expect("premise: the reply is queued");
+        assert_eq!(
+            (e.qso_freetext_checked("TNX 73"), tx_now(&e)),
+            (Err(words(mode, "W9XYZ K1ABC TNX 73")), Some(queued)),
+            "{mode}: the typed box"
+        );
+        assert_eq!(
+            e.override_next_tx_refusal("W9XYZ", "W9XYZ K1ABC 73 GL"),
+            Some(words(mode, "W9XYZ K1ABC 73 GL")),
+            "{mode}: the Tx row"
+        );
+        assert_eq!(
+            e.qso_freetext_checked("TNXÉ 73"),
+            Err(format!(
+                "{mode} cannot encode \"W9XYZ K1ABC TNXÉ 73\", so nothing goes out. It holds a \
+                 character other than plain letters, digits and punctuation."
+            )),
+            "{mode}: a character the packer is not judged on"
+        );
+
+        // The keying point, for an over that reaches it anyway: nothing planned, nothing recorded.
+        e.settings.write_all_txt = true;
+        let _ = e.take_all_txt_pending();
+        let Mode::Qso { station, .. } = &mut e.mode else {
+            panic!("premise: a QSO");
+        };
+        station.override_next(Msg::Other("W9XYZ K1ABC TNX 73".into()));
+        assert_eq!(
+            (
+                (4..8).find_map(|s| e.plan_tx(s)).is_none(),
+                e.take_all_txt_pending().len()
+            ),
+            (true, 0),
+            "{mode}: the keying point"
+        );
+
+        let mut e = answering(tier, "CQ W9XYZ EN37");
+        assert_eq!(e.qso_freetext_checked("TNX"), Ok(()), "CONTROL {mode}");
+        assert_eq!(
+            next_over(&mut e, 4),
+            Some(("W9XYZ K1ABC TNX".to_string(), true)),
+            "CONTROL {mode}: keyed"
+        );
+    }
+}
