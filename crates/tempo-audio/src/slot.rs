@@ -772,6 +772,9 @@ pub fn slot_tx_phase(
         if decided.is_some() {
             eng.note_over_keyed_in_its_period();
         }
+        // PTT is up on an over that goes out: a WSPR or FST4W beacon's alternation flips here, as
+        // WSJT-X flips it on the tick that raises PTT, never on an interval that keyed nothing.
+        eng.note_slot_over_keyed();
         // ⏱ THE PTT-HOLD DEADLINE IS MEASURED FROM HERE — after the carrier is up —
         // not from the caller's `now_ms`. That was bound at the TOP of the radio-loop
         // tick, and the same tick then runs BLOCKING CAT before reaching this key: the
@@ -3336,6 +3339,87 @@ mod tests {
         assert!(eng.tx_enabled(), "control: TX went off");
         assert!(!eng.take_slot_tx_abort(), "control: a cut was asked for");
         assert_eq!(eng.snapshot().radio.slot_key_refused, None, "control");
+    }
+
+    /// ⭐ A COMPOUND CALL'S BEACON FLIPS TYPE WHEN ITS OVER KEYS, AS WSJT-X DOES (`m_tx=1-m_tx` in
+    /// `WSPR_message`, `widgets/mainwindow.cpp:15464`, called on the tick that raises PTT, `:7880`).
+    /// An over the radio refuses keys nothing, so the next over is still the type 2; an over that
+    /// keys moves the next one to the type 3. Through the real plan, commit and key.
+    #[test]
+    fn a_beacon_over_the_radio_refuses_does_not_flip_the_compound_call_alternation() {
+        let beacon = |eng: &mut Engine, slot: u64| -> (String, Vec<Vec<f32>>) {
+            let plan = eng.plan_tx(slot).expect("a beacon over");
+            let tempo_app::engine::TxWaveform::Native { text, .. } = &plan.waveform else {
+                panic!("not a beacon over");
+            };
+            let text = text.clone();
+            (text, eng.commit_tx(&plan, vec![0.25; 1_200], slot))
+        };
+        let key = |eng: &mut Engine, answer: &str, slot: u64, waves: Vec<Vec<f32>>| {
+            let (addr, log, _) = keying_rigctld(answer, 0);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let now = steered_now_ms(eng);
+            let act = slot_tx_phase(
+                eng,
+                &mut rig,
+                &mut backend,
+                &mut RxRing::new(),
+                slot,
+                now,
+                false,
+                None,
+                Some(waves),
+                false,
+            );
+            assert!(
+                log.lock().unwrap().iter().any(|l| l == "T 1"),
+                "{answer}: premise: the over tried the key"
+            );
+            act.tx_this_slot
+        };
+        for tier in [tempo_app::dto::Tier::Wspr, tempo_app::dto::Tier::Fst4w] {
+            let mut eng = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+            eng.set_tier(tier);
+            let _ = eng.take_slot_tx_abort();
+            let mut s = eng.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            eng.apply_settings(s);
+            eng.set_tx_enabled(true);
+
+            let (text, waves) = beacon(&mut eng, 10);
+            assert_eq!(
+                text, "PJ4/K1ABC 37",
+                "{tier:?}: premise: the first over is the type 2"
+            );
+            assert!(
+                !key(&mut eng, "RPRT -1", 10, waves),
+                "{tier:?}: premise: refused"
+            );
+            assert!(
+                !eng.tx_enabled(),
+                "{tier:?}: premise: a refused key halts TX"
+            );
+            let _ = eng.take_slot_tx_abort();
+            eng.set_tx_enabled(true);
+
+            let (text, waves) = beacon(&mut eng, 11);
+            assert_eq!(
+                text, "PJ4/K1ABC 37",
+                "{tier:?}: a refused key flipped the alternation"
+            );
+            assert!(
+                key(&mut eng, "RPRT 0", 11, waves),
+                "{tier:?}: premise: keyed"
+            );
+
+            let (text, _) = beacon(&mut eng, 12);
+            assert!(
+                text.starts_with("<PJ4/K1ABC> FK52UD"),
+                "{tier:?}: CONTROL: a keyed over did not flip the alternation: {text}"
+            );
+        }
     }
 
     #[test]
