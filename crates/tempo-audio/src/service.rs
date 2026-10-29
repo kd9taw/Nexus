@@ -18234,6 +18234,8 @@ fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
     // it must never send: a READ of the power that sets it (#381), the FTX-1's monitor switch
     // that is MOX and its tuner button that is a menu write (#385).
     rig.set_never_send(t.hamlib_never_send());
+    // …and which Hamlib model it drives, for the width a Remote mode write carries.
+    rig.set_hamlib_model(t.rig_model);
     match rig.read_freq() {
         Ok(hz) => CatProbe {
             ok: Some(true),
@@ -24319,6 +24321,39 @@ mod tests {
     ///
     /// Every CAT connection is opened through [`probe_cat`] before its first read, so that is
     /// where it must learn that it may never ask this.
+    /// Every CAT connection is opened through [`probe_cat`], so that is where it learns its
+    /// radio's Hamlib model; a Remote FM-D then reaches a Hamlib Icom as `M PKTFM 0`, as the
+    /// shack's own mode writes do, and the FT-991A keeps `-1`.
+    #[test]
+    fn a_remote_fm_d_reaches_the_radio_the_connection_was_opened_for_with_its_width() {
+        use crate::rig::remote::{Position, Retune};
+        use crate::rig::remote_tests::{permission, retuning_peer};
+        use tempo_app::remote_control::Revocation;
+        for (model, want) in [(3081, "M PKTFM 0"), (1035, "M PKTFM -1")] {
+            let peer = retuning_peer(144_390_000, "FM", |_, _| None);
+            let mut s = test_settings();
+            s.rig_model = model;
+            let t = Transport::from_settings(&s);
+            let mut rig = Rig::with_control(Some(peer.address.clone()), PttMode::Vox);
+            let _ = probe_cat(&mut rig, &t);
+            let (permission, _) = permission(&Revocation::default(), &Revocation::default());
+            let retune = Retune::new(
+                Position::new(144_390_000, "FM").unwrap(),
+                Position::new(144_390_000, "PKTFM").unwrap(),
+            );
+            rig.remote_retune(retune, &permission).unwrap();
+            let modes: Vec<String> = peer
+                .lines
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.starts_with("M "))
+                .cloned()
+                .collect();
+            assert_eq!(modes, [want], "{model}");
+        }
+    }
+
     #[test]
     fn a_ts590s_connection_never_asks_hamlib_for_its_rf_power() {
         let (addr, log) = mock_slow_rigctld(0);
