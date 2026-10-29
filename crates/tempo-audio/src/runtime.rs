@@ -161,6 +161,19 @@ mod tests {
     }
 
     #[test]
+    fn a_slot_over_marks_its_end() {
+        // One complete over: the card running out where it ends is the end, not an underrun
+        // (`AudioBackend::mark_unit_end`).
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tx_enabled(true);
+        eng.set_beacon(true);
+        let mut trx = Transceiver::new(eng, MockBackend::new(), Rig::vox());
+        assert!(trx.try_transmit(0).is_some(), "premise: slot 0 transmits");
+        assert!(!trx.backend.played.is_empty(), "premise: the over played");
+        assert_eq!(trx.backend.unit_ends, vec![trx.backend.played.len()]);
+    }
+
+    #[test]
     fn a_key_the_radio_refuses_plays_nothing_and_halts_tx() {
         // The library's slot loop refuses as the radio loop's does
         // (`crate::slot::slot_key_failure`): nothing is played into a radio that did not key, and

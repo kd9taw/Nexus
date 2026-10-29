@@ -48,7 +48,7 @@ const MODEM_RATE: u32 = 12_000;
 /// 48 kHz. What does not fit is COUNTED ([`AudioHealth::tx_dropped`]) rather than silently
 /// truncating the air.
 ///
-/// ⚠️ IT IS NOT BIG ENOUGH FOR EVERY OVER, AND CANNOT BE — see [`CpalBackend::tx_pending`].
+/// ⚠️ IT IS NOT BIG ENOUGH FOR EVERY OVER, AND CANNOT BE — see [`TxProducer::tx_pending`].
 /// This comment used to say overflow was "impossible in normal use", and that was measured
 /// against the FT tiers only. A WSPR over is 111.6 s, FST4/FST4W run to 1793 s, Q65 to 300 and
 /// JT65 to 47: the ring holds 21.8 s of any of them and the producer used to throw the rest
@@ -57,7 +57,7 @@ const MODEM_RATE: u32 = 12_000;
 /// would mean 344 MB at 48 kHz, on every station, so the long overs are PACED in instead.
 const TX_RING_SECONDS: usize = 20;
 
-/// A hard ceiling on the un-queued TX audio [`CpalBackend::tx_pending`] will hold, in seconds of
+/// A hard ceiling on the un-queued TX audio [`TxProducer::tx_pending`] will hold, in seconds of
 /// modem-rate (12 kHz) audio — 86 MB at the limit.
 ///
 /// 1800 s is the longest T/R period Nexus offers (FST4/FST4W-1800, a 1793 s over), so no
@@ -290,6 +290,147 @@ impl TxUnitEnd {
     /// Whether the audio queued so far ends a unit.
     pub(crate) fn owed(&self) -> bool {
         self.owed
+    }
+}
+
+/// The producer half of the sound card's transmit route, on the radio loop: the resampler, the
+/// audio parked for a ring too small for the over, and the unit-end mark. [`CpalBackend`] owns one
+/// and hands it the route each call (the ring, any DAX tee, whether a stream drains the ring).
+///
+/// ⭐ ONE STRUCT SO THE TESTS RUN THESE LINES, NOT A COPY OF THEM. The mark depends on the order of
+/// a few lines here — cleared before every push, settled after every top-up, re-marked after a
+/// retune — and a `CpalBackend` cannot be built without a sound card. The tests drive this same
+/// struct against their own ring.
+pub(crate) struct TxProducer {
+    /// Anti-aliased 12 kHz → device-rate UPsampler for the TX/playback path, the
+    /// mirror of `capture_rs`. The old stateless `resample_linear` drew straight
+    /// chords between the modem's 12 kHz samples (~8 per cycle at 1.5 kHz); at a
+    /// non-integer device ratio the chord's amplitude droop cycles, printing a
+    /// periodic envelope RIPPLE onto what should be a flat constant-envelope FT8/FT4
+    /// signal (the beaded-waveform bug — Nexus vs WSJT-X, 2026-07-21). The polyphase
+    /// windowed-sinc reconstructs the sinusoid faithfully, so the envelope stays flat
+    /// like WSJT-X's. Stateful: carries filter history across `play` calls, so the
+    /// continuous phone/monitor streams get no per-chunk seam either.
+    tx_rs: CaptureResampler,
+    /// Modem-rate (12 kHz) TX audio `play` has accepted but the sound-card ring had no room for
+    /// yet. Topped into the ring by [`CpalBackend::pump_card`], from `play` and from every
+    /// [`AudioBackend::capture`] tick, as the output callback makes room.
+    ///
+    /// ⭐ WHY IT EXISTS: `play` takes a WHOLE over in one call, and an over can be far longer
+    /// than the ring ([`TX_RING_SECONDS`]). It used to push what fitted and count the rest as
+    /// dropped — correct accounting of an outright transmit defect: a WSPR beacon put 21.8 s of
+    /// its 111.6 s over on the air and the radio stayed KEYED, on the PTT deadline the slot path
+    /// built from the length of the wave it handed in, for the remaining ~90 s (FTdx10/Ubuntu,
+    /// 2026-09-11, `tx_dropped=4307106`). Every beacon and weak-signal tier is longer than the
+    /// ring — WSPR 111.6 s, FST4/FST4W to 1793 s, Q65 to 300 s, JT65 47 s — and FST4-1800 alone
+    /// would need a 344 MB ring, so the fix cannot be a bigger one.
+    ///
+    /// ⚠️ HELD AT THE MODEM RATE, NOT THE DEVICE RATE, so the resampler runs on the way OUT of
+    /// here and `tx_rs` keeps its phase and filter history across chunks exactly as it does
+    /// across `play` calls (`CaptureResampler::process` is seam-free by contract — the
+    /// continuous phone path has always depended on that). Device rate would also be up to 16×
+    /// the memory for the same audio.
+    ///
+    /// ⚠️ A HARD STOP MUST EMPTY IT. Audio parked here has not reached the ring, so
+    /// `SpscRing::request_flush` cannot see it; [`CpalBackend::flush_tx`] clears it in the same breath
+    /// as the ring and the tee. Without that, Stop TX would cut the over and then play the rest
+    /// of it at the next key-down.
+    tx_pending: VecDeque<f32>,
+    /// Where the queued TX audio ends a complete unit, for the underrun count ([`TxUnitEnd`]).
+    tx_unit: TxUnitEnd,
+}
+
+impl TxProducer {
+    pub(crate) fn new(out_rate: u32) -> Self {
+        Self {
+            tx_rs: CaptureResampler::new(MODEM_RATE, out_rate),
+            tx_pending: VecDeque::new(),
+            tx_unit: TxUnitEnd::new(),
+        }
+    }
+
+    /// Queue `samples` on the route ([`CpalBackend::route_tx`]).
+    pub(crate) fn play(
+        &mut self,
+        tee: Option<&crate::backend::TxTeeHandle>,
+        ring: &SpscRing,
+        draining: bool,
+        samples: &[f32],
+    ) {
+        // More audio follows whatever was queued, so its end is no longer the end ([`TxUnitEnd`]).
+        self.tx_unit.clear();
+        CpalBackend::route_tx(
+            tee,
+            &mut self.tx_rs,
+            ring,
+            &mut self.tx_pending,
+            draining,
+            samples,
+        );
+    }
+
+    /// The audio queued so far ends a complete unit ([`TxUnitEnd`]). The DAX route keeps no ring
+    /// here and counts nothing, so there is nothing to mark on it.
+    pub(crate) fn mark_unit_end(&mut self, tee: Option<&crate::backend::TxTeeHandle>) {
+        if tee.is_none() {
+            self.tx_unit.mark(!self.tx_pending.is_empty());
+        }
+    }
+
+    /// The radio loop's tick: top the ring up from `tx_pending`, then hand the mark on if the
+    /// unit's last sample has reached the ring.
+    pub(crate) fn tick(&mut self, ring: &SpscRing) {
+        CpalBackend::pump_card(&mut self.tx_rs, ring, &mut self.tx_pending);
+        self.tx_unit.settle(!self.tx_pending.is_empty());
+    }
+
+    /// Hard Stop TX ([`CpalBackend::flush_tx`]).
+    pub(crate) fn flush(
+        &mut self,
+        tee: Option<&crate::backend::TxTeeHandle>,
+        ring: &SpscRing,
+        draining: bool,
+    ) -> usize {
+        self.tx_unit.clear();
+        CpalBackend::flush_tx(tee, ring, &mut self.tx_pending, draining)
+    }
+
+    /// The rest of the over played anew ([`CpalBackend::retune_route`]). The rebuild ends where
+    /// the over did, so an over whose end was marked is marked again once it is queued.
+    pub(crate) fn retune(
+        &mut self,
+        tee: Option<&crate::backend::TxTeeHandle>,
+        ring: &SpscRing,
+        draining: bool,
+        tail: &mut dyn FnMut(usize, usize) -> Vec<f32>,
+    ) -> bool {
+        let ends_unit = self.tx_unit.owed();
+        self.tx_unit.clear();
+        let done = CpalBackend::retune_route(
+            tee,
+            &mut self.tx_rs,
+            ring,
+            &mut self.tx_pending,
+            draining,
+            tail,
+        );
+        if ends_unit {
+            self.tx_unit.mark(!self.tx_pending.is_empty());
+        }
+        done
+    }
+
+    /// The route is gone ([`AudioBackend::release_device`]).
+    pub(crate) fn release(&mut self) {
+        // The route this was parked for no longer exists (see `tx_pending`). Keeping it would
+        // put the tail of an abandoned over on the air whenever the card next opens.
+        self.tx_pending.clear();
+        self.tx_unit.clear();
+    }
+
+    /// The flag the output callback reads ([`TxBlock`]).
+    pub(crate) fn unit_flag(&self) -> &Arc<AtomicBool> {
+        self.tx_unit.flag()
     }
 }
 
@@ -1201,16 +1342,6 @@ pub struct CpalBackend {
     /// 6–24 kHz energy into the decoder passband). Owned here so its state is
     /// per-capture-stream and never reset mid-stream.
     capture_rs: CaptureResampler,
-    /// Anti-aliased 12 kHz → device-rate UPsampler for the TX/playback path, the
-    /// mirror of `capture_rs`. The old stateless `resample_linear` drew straight
-    /// chords between the modem's 12 kHz samples (~8 per cycle at 1.5 kHz); at a
-    /// non-integer device ratio the chord's amplitude droop cycles, printing a
-    /// periodic envelope RIPPLE onto what should be a flat constant-envelope FT8/FT4
-    /// signal (the beaded-waveform bug — Nexus vs WSJT-X, 2026-07-21). The polyphase
-    /// windowed-sinc reconstructs the sinusoid faithfully, so the envelope stays flat
-    /// like WSJT-X's. Stateful: carries filter history across `play` calls, so the
-    /// continuous phone/monitor streams get no per-chunk seam either.
-    tx_rs: CaptureResampler,
     /// Smoothed RX input RMS (0.0–1.0, as `f32` bits), updated on the audio thread. Rendered as
     /// a WSJT-X-style dB level in the UI.
     ///
@@ -1257,32 +1388,8 @@ pub struct CpalBackend {
     /// counter only when it MOVES. Reporting lives on the loop because a realtime callback may not
     /// log — it counts, and this reads.
     health_seen: AudioHealthSnapshot,
-    /// Modem-rate (12 kHz) TX audio `play` has accepted but the sound-card ring had no room for
-    /// yet. Topped into the ring by [`Self::pump_card`], from `play` and from every
-    /// [`AudioBackend::capture`] tick, as the output callback makes room.
-    ///
-    /// ⭐ WHY IT EXISTS: `play` takes a WHOLE over in one call, and an over can be far longer
-    /// than the ring ([`TX_RING_SECONDS`]). It used to push what fitted and count the rest as
-    /// dropped — correct accounting of an outright transmit defect: a WSPR beacon put 21.8 s of
-    /// its 111.6 s over on the air and the radio stayed KEYED, on the PTT deadline the slot path
-    /// built from the length of the wave it handed in, for the remaining ~90 s (FTdx10/Ubuntu,
-    /// 2026-09-11, `tx_dropped=4307106`). Every beacon and weak-signal tier is longer than the
-    /// ring — WSPR 111.6 s, FST4/FST4W to 1793 s, Q65 to 300 s, JT65 47 s — and FST4-1800 alone
-    /// would need a 344 MB ring, so the fix cannot be a bigger one.
-    ///
-    /// ⚠️ HELD AT THE MODEM RATE, NOT THE DEVICE RATE, so the resampler runs on the way OUT of
-    /// here and `tx_rs` keeps its phase and filter history across chunks exactly as it does
-    /// across `play` calls (`CaptureResampler::process` is seam-free by contract — the
-    /// continuous phone path has always depended on that). Device rate would also be up to 16×
-    /// the memory for the same audio.
-    ///
-    /// ⚠️ A HARD STOP MUST EMPTY IT. Audio parked here has not reached the ring, so
-    /// `SpscRing::request_flush` cannot see it; [`Self::flush_tx`] clears it in the same breath
-    /// as the ring and the tee. Without that, Stop TX would cut the over and then play the rest
-    /// of it at the next key-down.
-    tx_pending: VecDeque<f32>,
-    /// Where the queued TX audio ends a complete unit, for the underrun count ([`TxUnitEnd`]).
-    tx_unit: TxUnitEnd,
+    /// The producer half of the transmit route: resampler, parked audio, unit-end mark.
+    tx: TxProducer,
 }
 
 /// The sound card's transmit route: the ring the output callback drains, and — until the first
@@ -1880,7 +1987,7 @@ impl CpalBackend {
             // The device output rate lives inside tx_rs now — play() resamples
             // through it, so the raw rate no longer needs a field of its own.
             capture_rs: CaptureResampler::new(in_rate, MODEM_RATE),
-            tx_rs: CaptureResampler::new(MODEM_RATE, out_rate),
+            tx: TxProducer::new(out_rate),
             rx_level,
             rx_gain,
             tx_level,
@@ -1891,8 +1998,6 @@ impl CpalBackend {
             voice_mic: None,
             tx_tee: None,
             health_seen: audio_health(),
-            tx_pending: VecDeque::new(),
-            tx_unit: TxUnitEnd::new(),
             _tx_output_held: tx_output_held,
         })
     }
@@ -1938,7 +2043,7 @@ impl CpalBackend {
             d,
             &self.tx_out.ring,
             &self.tx_level,
-            self.tx_unit.flag(),
+            self.tx.unit_flag(),
             err_recorder(&self.stream_err, "playback"),
         ) {
             Ok(stream) => {
@@ -1998,7 +2103,7 @@ impl CpalBackend {
     /// Split out of `play` (a one-line delegation now) so the rule is testable at all: a
     /// `CpalBackend` cannot be built without a sound card, which is why the parallel feed shipped
     /// with no test able to see it. Same doctrine as `service::dax_starved`.
-    /// ⚠️ AN OVER LONGER THAN THE RING IS PACED, NOT TRUNCATED (see [`Self::tx_pending`]). The
+    /// ⚠️ AN OVER LONGER THAN THE RING IS PACED, NOT TRUNCATED (see [`TxProducer::tx_pending`]). The
     /// card route parks the whole over at the modem rate and tops the ring up from it here and on
     /// every `capture` tick; `draining` is whether an output stream exists to make that room, and
     /// with none the audio goes straight at the ring and overflow is counted exactly as before —
@@ -2045,7 +2150,7 @@ impl CpalBackend {
     }
 
     /// Move as much parked TX audio into the sound-card ring as it currently has room for —
-    /// the producer half of the pacing in [`Self::tx_pending`]. Cheap and a no-op with nothing
+    /// the producer half of the pacing in [`TxProducer::tx_pending`]. Cheap and a no-op with nothing
     /// parked, which is every FT over and every idle tick.
     ///
     /// ⚠️ IT MUST NOT OVERFILL. The chunk is sized from the ring's FREE SLOTS converted back to
@@ -2089,7 +2194,7 @@ impl CpalBackend {
     /// before the first transmit would leave the audio queued, to play at the next one.
     ///
     /// ⚠️ AND THE PARKED AUDIO TOO. Since an over longer than the ring is paced through
-    /// [`Self::tx_pending`], most of a WSPR or FST4 over is sitting in THAT queue when the
+    /// [`TxProducer::tx_pending`], most of a WSPR or FST4 over is sitting in THAT queue when the
     /// operator hits Stop — where `request_flush` cannot reach it. Leaving it would cut the over
     /// and then play its remainder at the next key-down, on a frequency and in a mode nobody
     /// chose. It is counted in the return like every other route's.
@@ -2345,10 +2450,7 @@ impl AudioBackend for CpalBackend {
         // still a resource this backend must not keep past a release on every other host.)
         self.tx_out.stream = None;
         self.tx_out.deferred = None;
-        // The route this was parked for no longer exists (see `tx_pending`). Keeping it would
-        // put the tail of an abandoned over on the air whenever the card next opens.
-        self.tx_pending.clear();
-        self.tx_unit.clear();
+        self.tx.release();
     }
     fn spectrum_tap(&self) -> Option<(Arc<SpscRing>, u32)> {
         Some((self.spectrum_tap.clone(), self.in_rate))
@@ -2374,8 +2476,7 @@ impl AudioBackend for CpalBackend {
         // `tx_pending`. The loop calls this EVERY tick whether or not it is transmitting (see
         // `service.rs` — it must always drain the capture ring), so a 111.6 s WSPR over is fed
         // in ~20 s of lead at a time with ~1000 ticks of margin. Cheap with nothing parked.
-        Self::pump_card(&mut self.tx_rs, &self.tx_out.ring, &mut self.tx_pending);
-        self.tx_unit.settle(!self.tx_pending.is_empty());
+        self.tx.tick(&self.tx_out.ring);
         let mut dev: Vec<f32> = Vec::with_capacity(self.in_ring.len());
         while let Some(s) = self.in_ring.pop() {
             dev.push(s);
@@ -2404,24 +2505,17 @@ impl AudioBackend for CpalBackend {
         // open at key-down: a route that reaches audio without a keying edge still gets a stream.
         // Order matters — open BEFORE queueing, so the stream never starts mid-push.
         self.ensure_tx_stream();
-        // More audio follows whatever was queued, so its end is no longer the end ([`TxUnitEnd`]).
-        self.tx_unit.clear();
-        Self::route_tx(
+        self.tx.play(
             self.tx_tee.as_ref(),
-            &mut self.tx_rs,
             &self.tx_out.ring,
-            &mut self.tx_pending,
             self.tx_out.stream.is_some(),
             samples,
         );
     }
 
-    /// The audio queued so far ends a complete unit ([`TxUnitEnd`]). The DAX route keeps no ring
-    /// here and counts nothing, so there is nothing to mark on it.
+    /// The audio queued so far ends a complete unit ([`TxProducer::mark_unit_end`]).
     fn mark_unit_end(&mut self) {
-        if self.tx_tee.is_none() {
-            self.tx_unit.mark(!self.tx_pending.is_empty());
-        }
+        self.tx.mark_unit_end(self.tx_tee.as_ref());
     }
 
     /// Install / clear the alternate TX route (Flex native DAX), handing it the CURRENT TX level
@@ -2468,34 +2562,21 @@ impl AudioBackend for CpalBackend {
     /// Discard queued-but-unplayed TX audio (hard Stop TX): clear the route the over is actually
     /// travelling on, so the transmission is cut immediately, not at the slot's end.
     fn flush_output(&mut self) -> usize {
-        self.tx_unit.clear();
-        Self::flush_tx(
+        self.tx.flush(
             self.tx_tee.as_ref(),
             &self.tx_out.ring,
-            &mut self.tx_pending,
             self.tx_out.stream.is_some(),
         )
     }
 
-    /// The rest of the over on the air, played anew ([`Self::retune_route`]).
-    ///
-    /// The rebuild ends where the over did, so an over whose end was marked is marked again once
-    /// it is queued ([`TxUnitEnd`]).
+    /// The rest of the over on the air, played anew ([`TxProducer::retune`]).
     fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
-        let ends_unit = self.tx_unit.owed();
-        self.tx_unit.clear();
-        let done = Self::retune_route(
+        self.tx.retune(
             self.tx_tee.as_ref(),
-            &mut self.tx_rs,
             &self.tx_out.ring,
-            &mut self.tx_pending,
             self.tx_out.stream.is_some(),
             tail,
-        );
-        if ends_unit {
-            self.tx_unit.mark(!self.tx_pending.is_empty());
-        }
-        done
+        )
     }
 
     /// Reconfigure the dark headphone monitor in place (start/stop/retune its output
@@ -2724,25 +2805,21 @@ mod tx_level_tests {
 #[cfg(test)]
 mod tx_unit_end_tests {
     use super::{
-        audio_health, fill_tx_block, CaptureResampler, CpalBackend, DeviceSample, SpscRing,
-        TxUnitEnd, MODEM_RATE,
+        audio_health, fill_tx_block, CaptureResampler, DeviceSample, SpscRing, TxBlock, TxProducer,
+        MODEM_RATE,
     };
-    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     const CARD_RATE: u32 = 48_000;
     /// Two output channels, so every block also exercises the frame fan-out.
     const CH: usize = 2;
 
-    /// The sound card's transmit half as `CpalBackend` drives it: `play` clears the mark and
-    /// routes, `mark_unit_end` marks, `capture`'s tick tops up from `tx_pending` and settles, and
-    /// the output callback is the real one.
+    /// The sound card's transmit half: the producer `CpalBackend` owns ([`TxProducer`]), driven
+    /// as it drives it, and the real output callback.
     struct Card {
         ring: SpscRing,
         level: AtomicU32,
-        unit: TxUnitEnd,
-        tx_rs: CaptureResampler,
-        pending: VecDeque<f32>,
+        tx: TxProducer,
         /// Every mono sample the callback wrote, in order.
         out: Vec<f32>,
         counted: u32,
@@ -2753,30 +2830,19 @@ mod tx_unit_end_tests {
             Self {
                 ring: SpscRing::new(ring_samples),
                 level: AtomicU32::new(1.0f32.to_bits()),
-                unit: TxUnitEnd::new(),
-                tx_rs: CaptureResampler::new(MODEM_RATE, CARD_RATE),
-                pending: VecDeque::new(),
+                tx: TxProducer::new(CARD_RATE),
                 out: Vec::new(),
                 counted: 0,
             }
         }
         fn play(&mut self, samples: &[f32]) {
-            self.unit.clear();
-            CpalBackend::route_tx(
-                None,
-                &mut self.tx_rs,
-                &self.ring,
-                &mut self.pending,
-                true,
-                samples,
-            );
+            self.tx.play(None, &self.ring, true, samples);
         }
         fn mark_unit_end(&mut self) {
-            self.unit.mark(!self.pending.is_empty());
+            self.tx.mark_unit_end(None);
         }
         fn tick(&mut self) {
-            CpalBackend::pump_card(&mut self.tx_rs, &self.ring, &mut self.pending);
-            self.unit.settle(!self.pending.is_empty());
+            self.tx.tick(&self.ring);
         }
         /// `n` callback blocks of `frames` frames.
         fn blocks(&mut self, n: usize, frames: usize) {
@@ -2787,7 +2853,8 @@ mod tx_unit_end_tests {
         /// One block in format `T`, returned as written, with whether it counted.
         fn block<T: DeviceSample + Default + Copy>(&mut self, frames: usize) -> (Vec<T>, bool) {
             let mut data = vec![T::default(); frames * CH];
-            let counted = fill_tx_block(&mut data, CH, &self.ring, &self.level, self.unit.flag());
+            let counted =
+                fill_tx_block(&mut data, CH, &self.ring, &self.level, self.tx.unit_flag());
             for f in data.chunks(CH) {
                 assert!(f.iter().all(|x| x.to_unit() == f[0].to_unit()), "fan-out");
                 self.out.push(f[0].to_unit());
@@ -2797,7 +2864,7 @@ mod tx_unit_end_tests {
         /// Blocks until the card has played everything queued, and then `idle_ms` more.
         fn play_out(&mut self, frames: usize, idle_ms: usize) {
             let mut guard = 0;
-            while !self.ring.is_empty() || !self.pending.is_empty() {
+            while !self.ring.is_empty() || !self.tx.tx_pending.is_empty() {
                 self.blocks(1, frames);
                 self.tick();
                 guard += 1;
@@ -2934,14 +3001,14 @@ mod tx_unit_end_tests {
         let mut card = Card::new(CARD_RATE as usize);
         card.play(&over);
         card.mark_unit_end();
-        assert!(!card.pending.is_empty(), "premise: the over is paced");
+        assert!(!card.tx.tx_pending.is_empty(), "premise: the over is paced");
         card.play_out(480, 1_500);
         assert_eq!(card.counted, 0, "a clean paced over");
 
         card.play(&over);
         card.mark_unit_end();
         card.blocks(150, 480); // 1.5 s with no tick: the ring empties, the rest still parked
-        assert!(!card.pending.is_empty(), "premise: still parked");
+        assert!(!card.tx.tx_pending.is_empty(), "premise: still parked");
         card.play_out(480, 1_500);
         assert_eq!(card.counted, 1, "the stall, and not the end");
     }
@@ -2959,6 +3026,73 @@ mod tx_unit_end_tests {
         card.play(&[0.5; 100]);
         assert!(card.block::<f32>(480).1, "unmarked: an underrun");
         assert!(audio_health().tx_underruns > before);
+    }
+
+    /// ⭐ A MARK DOES NOT OUTLIVE ITS UNIT. Every push clears it, so after a marked FT over the
+    /// Tune carrier that follows is unmarked again and its stall counts. Kept, the mark would be
+    /// re-asserted on every tick and hide every later gap in anything fed as it plays.
+    #[test]
+    fn a_marked_over_does_not_hide_a_later_stall() {
+        let mut card = Card::new(CARD_RATE as usize * super::TX_RING_SECONDS);
+        card.play(&ft8_over());
+        card.mark_unit_end();
+        card.play_out(480, 1_000);
+        assert_eq!(card.counted, 0, "premise: the over's end is not counted");
+        // A lead that is not a whole number of blocks, so the stall runs dry inside one.
+        card.play(&vec![0.3f32; MODEM_RATE as usize / 4 + 10]);
+        tune_ticks(&mut card, 50);
+        assert_eq!(card.counted, 0, "a clean tune is clean");
+        assert!(
+            card.ring.len() % 480 != 0,
+            "premise: the stall runs dry part-way through a block"
+        );
+        card.blocks(150, 480); // the loop stalls 1.5 s
+        tune_ticks(&mut card, 50);
+        assert_eq!(card.counted, 1, "the stall is one underrun");
+    }
+
+    /// A retuned over ends where it did, so a marked one is marked again and its end counts
+    /// nothing; the control, unmarked, counts its end.
+    #[test]
+    fn a_retuned_over_keeps_its_mark() {
+        for (marked, want) in [(true, 0), (false, 1)] {
+            let mut card = Card::new(CARD_RATE as usize * super::TX_RING_SECONDS);
+            card.play(&ft8_over());
+            if marked {
+                card.mark_unit_end();
+            }
+            card.blocks(200, 480);
+            card.tick();
+            let moved = card.tx.retune(None, &card.ring, true, &mut |left, prime| {
+                vec![0.5; left + prime]
+            });
+            assert!(moved, "premise: the rest of the over was played anew");
+            card.play_out(480, 1_000);
+            assert_eq!(card.counted, want, "marked {marked}");
+        }
+    }
+
+    /// ⭐ THE MARK IS READ WHEN THE AUDIO RUNS OUT, NOT WHEN THE BLOCK CLOSES. One unit starves
+    /// part-way through a block, and before the block closes the producer queues and marks the
+    /// next: the gap was in the first, and counts.
+    #[test]
+    fn a_gap_counts_though_the_next_unit_is_marked_before_the_block_closes() {
+        let ring = SpscRing::new(4_096);
+        let level = AtomicU32::new(1.0f32.to_bits());
+        let mut tx = TxProducer::new(MODEM_RATE);
+        let flag = tx.unit_flag().clone();
+        tx.play(None, &ring, true, &[0.5; 100]); // unmarked: more should have followed
+        let mut blk = TxBlock::begin(&ring, &level, &flag);
+        for _ in 0..150 {
+            blk.next(); // 100 samples, then dry
+        }
+        tx.play(None, &ring, true, &[0.5; 100]);
+        tx.mark_unit_end(None);
+        assert!(
+            flag.load(Ordering::Acquire),
+            "premise: the next unit is marked"
+        );
+        assert!(blk.finish(), "the first unit's gap was not counted");
     }
 
     /// The output callback as it shipped before the mark: each frame the next sample at the level,
