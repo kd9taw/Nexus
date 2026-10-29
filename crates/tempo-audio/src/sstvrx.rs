@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use tempo_app::dto::SstvGalleryEntry;
 use tempo_app::engine::{engine_lock, Engine, SstvProgress};
+use tempo_app::sstv_gallery;
 use tempo_sstv::{SstvDecoder, SstvEvent};
 
 use crate::service::SHUTDOWN;
@@ -360,59 +361,45 @@ fn finish_image(
         return None;
     }
     let path_str = path.to_string_lossy().into_owned();
-    // Record on the session gallery (freq stamped under the same lock), then
-    // persist the whole capped list beside the images.
-    let mut e = engine_lock(engine);
-    let entry = SstvGalleryEntry {
-        path: path_str.clone(),
-        mode: img.mode_name.to_string(),
-        finished_utc: sstv_store::utc_iso(unix),
-        freq_mhz: e.settings().dial_mhz,
-        lines: image.height,
-        // Filled in later if the trailing FSK-ID burst decodes.
-        fsk_id: None,
+    // Record on the session gallery (freq stamped under the same lock), then persist the whole
+    // capped list beside the images, after letting go of the lock.
+    let (gen, snapshot) = {
+        let mut e = engine_lock(engine);
+        let entry = SstvGalleryEntry {
+            path: path_str.clone(),
+            mode: img.mode_name.to_string(),
+            finished_utc: sstv_store::utc_iso(unix),
+            freq_mhz: e.settings().dial_mhz,
+            lines: image.height,
+            // Filled in later if the trailing FSK-ID burst decodes.
+            fsk_id: None,
+        };
+        e.push_sstv_gallery(entry);
+        e.set_sstv_progress(None);
+        e.sstv_gallery_snapshot()
     };
-    e.push_sstv_gallery(entry);
-    e.set_sstv_progress(None);
-    persist_gallery(&e, gallery_dir);
+    sstv_gallery::write_gallery_json(gallery_dir, gen, &snapshot);
     Some(path_str)
 }
 
 /// Stamp a decoded FSK callsign onto the picture it trailed and re-persist gallery.json.
+///
+/// ⛔ Both writes in this file take the gallery under the Engine lock and write after letting
+/// go: the radio loop and Stop TX wait on that lock, and the gallery folder can be slow (see
+/// `tempo_app::sstv_gallery`). The snapshot's generation stops an older copy landing after a
+/// newer one, such as a gallery delete's that wrote while this thread was between the two.
 fn record_fsk_id(
     engine: &Arc<Mutex<Engine>>,
     gallery_dir: &std::path::Path,
     path: &str,
     text: String,
 ) {
-    let mut e = engine_lock(engine);
-    e.set_sstv_gallery_fsk_id(path, text);
-    persist_gallery(&e, gallery_dir);
-}
-
-/// Write gallery.json from the gallery as it is now, with the Engine lock HELD (`e` is the
-/// guard's contents).
-///
-/// ⛔ The Engine lock is what serialises every gallery.json write in the app: the shell's gallery
-/// delete rewrites the index under it too. Writing from a copy taken under the lock and released
-/// before the write let a delete land in between; the older copy then landed last and put the
-/// deleted picture back in the file. Holding it here costs the decoder nothing (this thread does
-/// the write either way); what waits is whoever wants the Engine next, for one small JSON write
-/// per finished picture and per FSK ID. The picture itself is written before the lock is taken.
-fn persist_gallery(e: &Engine, gallery_dir: &std::path::Path) {
-    #[cfg(test)]
-    if let Some(hook) = BEFORE_GALLERY_WRITE.with(|h| h.borrow_mut().take()) {
-        hook();
-    }
-    sstv_store::save_gallery(gallery_dir, e.sstv_gallery());
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Runs once, on the decode thread, just before its next gallery.json write: the seam the
-    /// race test uses to land a delete at exactly that moment.
-    static BEFORE_GALLERY_WRITE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
-        const { std::cell::RefCell::new(None) };
+    let (gen, snapshot) = {
+        let mut e = engine_lock(engine);
+        e.set_sstv_gallery_fsk_id(path, text);
+        e.sstv_gallery_snapshot()
+    };
+    sstv_gallery::write_gallery_json(gallery_dir, gen, &snapshot);
 }
 
 #[cfg(test)]
@@ -711,14 +698,14 @@ mod tests {
     }
 
     /// gallery.json is written by two parties: this decode thread (a finished picture, its FSK
-    /// ID) and the shell's gallery delete. The delete rewrites the index under the Engine lock.
-    /// The decode thread used to take its copy of the gallery under the lock, let go, and write
-    /// the file afterwards — so a delete landing in that gap wrote its index first and the
-    /// decoder's older copy then overwrote it, putting the deleted picture back into gallery.json.
-    /// The decoder now writes while it still holds the lock, so the delete waits and lands last.
+    /// ID) and the shell's gallery delete. Each takes its copy of the gallery under the Engine
+    /// lock and writes after letting go, so a delete can land between the decoder's copy and its
+    /// write. Without the generation check the decoder's older copy then overwrote the delete's
+    /// index and put the deleted picture back into gallery.json; with it, that older copy is
+    /// dropped.
     ///
     /// The stand-in delete below does what the shell's does: under the Engine lock, unlink the
-    /// file, drop the entry, rewrite the index from the gallery in memory.
+    /// file, drop the entry and take the gallery; then, with the lock released, write the index.
     #[test]
     fn a_delete_landing_while_the_decoder_saves_the_gallery_is_not_undone_by_that_save() {
         let dir =
@@ -744,28 +731,28 @@ mod tests {
         }
         let eng = engine();
         engine_lock(&eng).load_sstv_gallery(entries);
-        sstv_store::save_gallery(&dir, engine_lock(&eng).sstv_gallery());
+        let (gen, snapshot) = engine_lock(&eng).sstv_gallery_snapshot();
+        sstv_gallery::write_gallery_json(&dir, gen, &snapshot);
 
         let deleter = Arc::new(Mutex::new(None));
         {
             let (eng, dir, deleter) = (eng.clone(), dir.clone(), deleter.clone());
             let gone = deleted.to_string_lossy().into_owned();
-            BEFORE_GALLERY_WRITE.with(|h| {
-                *h.borrow_mut() = Some(Box::new(move || {
-                    let (done_tx, done_rx) = std::sync::mpsc::channel();
-                    let t = std::thread::spawn(move || {
+            sstv_gallery::before_next_write(move || {
+                let (done_tx, done_rx) = std::sync::mpsc::channel();
+                let t = std::thread::spawn(move || {
+                    let (gen, snapshot) = {
                         let mut e = engine_lock(&eng);
                         std::fs::remove_file(&gone).expect("unlink");
                         e.remove_sstv_gallery(&gone);
-                        sstv_store::save_gallery(&dir, e.sstv_gallery());
-                        drop(e);
-                        let _ = done_tx.send(());
-                    });
-                    // Give the delete every chance to finish first. It can only if the
-                    // decoder is not holding the gallery while it writes.
-                    let _ = done_rx.recv_timeout(Duration::from_millis(500));
-                    *deleter.lock().expect("deleter") = Some(t);
-                }));
+                        e.sstv_gallery_snapshot()
+                    };
+                    sstv_gallery::write_gallery_json(&dir, gen, &snapshot);
+                    let _ = done_tx.send(());
+                });
+                // The delete finishes first: the decoder holds neither lock here.
+                let _ = done_rx.recv_timeout(Duration::from_millis(500));
+                *deleter.lock().expect("deleter") = Some(t);
             });
         }
 
@@ -790,6 +777,88 @@ mod tests {
             on_disk.as_slice(),
             "the file agrees with the gallery in memory"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Run `write` (one of the decoder's gallery saves) and report whether another thread could
+    /// take the Engine lock while the save was writing gallery.json. The seam holds the write
+    /// back and, in the meantime, asks a second thread to take the lock, as the radio loop or a
+    /// Stop TX would.
+    fn engine_was_free_during_the_gallery_write(
+        eng: &Arc<Mutex<Engine>>,
+        write: impl FnOnce(),
+    ) -> bool {
+        let free = Arc::new(Mutex::new(None));
+        let taker = Arc::new(Mutex::new(None));
+        {
+            let (eng, free, taker) = (eng.clone(), free.clone(), taker.clone());
+            sstv_gallery::before_next_write(move || {
+                let (got_tx, got_rx) = std::sync::mpsc::channel();
+                let t = std::thread::spawn(move || {
+                    let _e = engine_lock(&eng);
+                    let _ = got_tx.send(());
+                });
+                let got = got_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+                *free.lock().expect("free") = Some(got);
+                *taker.lock().expect("taker") = Some(t);
+            });
+        }
+        write();
+        let t = taker.lock().expect("taker").take();
+        t.expect("the gallery write ran")
+            .join()
+            .expect("lock taker");
+        let got = free.lock().expect("free").take();
+        got.expect("the seam ran")
+    }
+
+    /// ⛔ The radio loop takes the Engine lock every tick and Stop TX takes it too. The gallery
+    /// folder sits under Pictures, which can be OneDrive-backed or redirected to a network share,
+    /// where one write can take seconds; holding the lock across it would hold an FT over's
+    /// unkey and Stop TX that long. Both of the decoder's gallery.json writes, a finished picture
+    /// and its FSK ID, must let go of the lock first, and each is checked on its own.
+    #[test]
+    fn the_engine_lock_is_free_while_the_decoder_writes_gallery_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-sstvrx-write-off-lock-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let eng = engine();
+        let spec = for_mode(SstvMode::Robot36);
+        let (w, h) = (spec.line_pixels, spec.image_lines);
+        let img = InFlight {
+            mode_name: "Robot 36",
+            width: w,
+            height: h,
+            pixels: vec![[0, 0, 0]; (w * h) as usize],
+            lines_done: h,
+            hedr_shift_hz: 0.0,
+        };
+        let image = tempo_sstv::SstvImage::new(SstvMode::Robot36, w, h);
+
+        let mut saved = None;
+        assert!(
+            engine_was_free_during_the_gallery_write(&eng, || {
+                saved = finish_image(&eng, &dir, &img, &image);
+            }),
+            "a finished picture's gallery.json write must not hold the Engine lock"
+        );
+        let saved = saved.expect("the picture was saved");
+        assert!(
+            engine_was_free_during_the_gallery_write(&eng, || {
+                record_fsk_id(&eng, &dir, &saved, "K1ABC".into());
+            }),
+            "an FSK ID's gallery.json write must not hold the Engine lock"
+        );
+
+        // And both writes landed.
+        let on_disk = sstv_store::load_gallery(&dir);
+        assert_eq!(on_disk.len(), 1);
+        assert_eq!(on_disk[0].path, saved);
+        assert_eq!(on_disk[0].fsk_id.as_deref(), Some("K1ABC"));
+        assert_eq!(engine_lock(&eng).sstv_gallery(), on_disk.as_slice());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

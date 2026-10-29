@@ -34218,6 +34218,11 @@ contact yourself."
         self.station.sstv_gallery()
     }
 
+    /// See [`StationCore::sstv_gallery_snapshot`].
+    pub fn sstv_gallery_snapshot(&self) -> (u64, Vec<crate::dto::SstvGalleryEntry>) {
+        self.station.sstv_gallery_snapshot()
+    }
+
     /// See [`StationCore::set_clock_offset_ms`].
     pub fn set_clock_offset_ms(&mut self, ms: Option<i64>) {
         self.station.set_clock_offset_ms(ms)

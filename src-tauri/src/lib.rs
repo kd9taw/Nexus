@@ -6539,25 +6539,29 @@ fn legacy_sstv_gallery_dir() -> PathBuf {
 /// stall the whole window on a slow disk. Caught by `no_engine_locking_command_runs_on_the_ui_thread`.
 #[tauri::command(async)]
 fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(), String> {
-    delete_sstv_gallery_image(&mut engine_lock(&state), &sstv_gallery_dir(), &path)
+    delete_sstv_gallery_image(&state, &sstv_gallery_dir(), &path)
 }
 
 /// Delete one received picture and reconcile the gallery index, for the desktop command above. The
-/// caller holds the Engine lock; the file removal is inside it, which the directory read below
-/// already was.
+/// file removal and the directory read are under the Engine lock; the gallery.json write is not
+/// (see [`rewrite_sstv_gallery_index`]).
 ///
 /// ⛔ The containment and membership checks are load-bearing whichever caller arrives: only a
 /// picture the gallery lists, inside the station's own gallery folder, can be removed, and a path
 /// that does not resolve there is refused rather than followed.
 pub(crate) fn delete_sstv_gallery_image(
-    eng: &mut tempo_app::engine::Engine,
+    engine: &std::sync::Mutex<tempo_app::engine::Engine>,
     dir: &std::path::Path,
     path: &str,
 ) -> Result<(), String> {
-    let pictures = canonical_gallery_paths(eng.sstv_gallery());
-    unlink_sstv_gallery_file(dir, &pictures, path)?;
-    eng.remove_sstv_gallery(path);
-    rewrite_sstv_gallery_index(eng, dir);
+    let (gen, entries) = {
+        let mut eng = engine_lock(engine);
+        let pictures = canonical_gallery_paths(eng.sstv_gallery());
+        unlink_sstv_gallery_file(dir, &pictures, path)?;
+        eng.remove_sstv_gallery(path);
+        rewrite_sstv_gallery_index(&mut eng, dir)
+    };
+    tempo_app::sstv_gallery::write_gallery_json(dir, gen, &entries);
     Ok(())
 }
 
@@ -6592,8 +6596,8 @@ fn sstv_delete_images(
 
 /// [`sstv_delete_images`] against an explicit gallery folder, so the tests can use a scratch one.
 ///
-/// The Engine lock is taken twice and never across the unlinks: once to read the gallery, once to
-/// drop what went and rewrite the index. A Select all over a full gallery on a slow disk would
+/// The Engine lock is taken twice and never across the unlinks or the gallery.json write: once to
+/// read the gallery, once to drop what went and reconcile the index. A Select all over a full gallery on a slow disk would
 /// otherwise hold the radio loop off for every file. The rewrite reconciles against the folder as
 /// it stands then, so the index matches the disk whichever unlinks failed, and a picture received
 /// in between is kept.
@@ -6623,11 +6627,14 @@ fn delete_sstv_gallery_images(
         hook(engine);
     }
     if !removed.is_empty() {
-        let mut eng = engine_lock(engine);
-        for path in removed {
-            eng.remove_sstv_gallery(path);
-        }
-        rewrite_sstv_gallery_index(&mut eng, dir);
+        let (gen, entries) = {
+            let mut eng = engine_lock(engine);
+            for path in removed {
+                eng.remove_sstv_gallery(path);
+            }
+            rewrite_sstv_gallery_index(&mut eng, dir)
+        };
+        tempo_app::sstv_gallery::write_gallery_json(dir, gen, &entries);
     }
     failed
 }
@@ -6706,23 +6713,23 @@ thread_local! {
     static SSTV_INDEX_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Rewrite `gallery.json` from what the directory now holds, rather than from the entries just
-/// dropped: it costs one directory read and it also sweeps up any other drift.
-fn rewrite_sstv_gallery_index(eng: &mut tempo_app::engine::Engine, dir: &std::path::Path) {
+/// Reconcile the gallery with what the directory now holds, rather than with the entries just
+/// dropped: it costs one directory read and it also sweeps up any other drift. Returns the
+/// gallery and its generation for the caller to write to `gallery.json`.
+///
+/// ⛔ The caller writes with `tempo_app::sstv_gallery::write_gallery_json` AFTER releasing the
+/// Engine lock. The radio loop and Stop TX wait on that lock, and the gallery folder can be a slow
+/// OneDrive or network folder. The decode thread writes the same way; the generation stops an
+/// older copy landing after a newer one.
+fn rewrite_sstv_gallery_index(
+    eng: &mut tempo_app::engine::Engine,
+    dir: &std::path::Path,
+) -> (u64, Vec<tempo_app::dto::SstvGalleryEntry>) {
     #[cfg(test)]
     SSTV_INDEX_WRITES.with(|n| n.set(n.get() + 1));
     let entries = reconcile_gallery(dir, eng.sstv_gallery().to_vec());
-    // The decode thread writes gallery.json too (`tempo_audio::sstv_store::save_gallery`), with
-    // the Engine lock held as it is here, so the two never write at once. Per-process scratch name
-    // for two builds sharing one gallery, as that function explains.
-    if let Ok(text) = serde_json::to_string(&entries) {
-        let p = dir.join("gallery.json");
-        let tmp = p.with_extension(format!("json.{}.tmp", std::process::id()));
-        if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &p).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
-    }
     eng.load_sstv_gallery(entries);
+    eng.sstv_gallery_snapshot()
 }
 
 /// Reconcile a gallery index against the files that are actually on disk.
@@ -47689,6 +47696,88 @@ mod tests {
         failed
     }
 
+    /// The single delete takes the Engine lock itself too; the same hand-over as [`delete_batch`].
+    fn delete_one(
+        eng: &mut tempo_app::engine::Engine,
+        dir: &std::path::Path,
+        path: &str,
+    ) -> Result<(), String> {
+        let engine = std::sync::Mutex::new(std::mem::replace(
+            eng,
+            tempo_app::engine::Engine::new("N0CALL", "EN52", 0),
+        ));
+        let got = super::delete_sstv_gallery_image(&engine, dir, path);
+        *eng = engine.into_inner().unwrap();
+        got
+    }
+
+    /// Whether another thread could take the Engine lock while `delete` was writing gallery.json.
+    /// The seam holds the write back and, in the meantime, asks a second thread for the lock, as
+    /// the radio loop or a Stop TX would.
+    fn engine_was_free_during_the_gallery_write(
+        engine: &std::sync::Arc<std::sync::Mutex<tempo_app::engine::Engine>>,
+        delete: impl FnOnce(),
+    ) -> bool {
+        let free = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let taker = std::sync::Arc::new(std::sync::Mutex::new(None));
+        {
+            let (engine, free, taker) = (engine.clone(), free.clone(), taker.clone());
+            tempo_app::sstv_gallery::before_next_write(move || {
+                let (got_tx, got_rx) = std::sync::mpsc::channel();
+                let t = std::thread::spawn(move || {
+                    let _e = engine_lock(&engine);
+                    let _ = got_tx.send(());
+                });
+                let got = got_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .is_ok();
+                *free.lock().unwrap() = Some(got);
+                *taker.lock().unwrap() = Some(t);
+            });
+        }
+        delete();
+        let t = taker.lock().unwrap().take();
+        t.expect("the gallery write ran").join().unwrap();
+        let got = free.lock().unwrap().take();
+        got.expect("the seam ran")
+    }
+
+    /// ⛔ The radio loop takes the Engine lock every tick and Stop TX takes it too, and the gallery
+    /// folder can be a slow OneDrive or network folder. Neither delete may hold the lock while it
+    /// writes gallery.json.
+    #[test]
+    fn the_engine_lock_is_free_while_a_gallery_delete_writes_gallery_json() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-write-off-lock", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let one = dir.join(names[0]).to_string_lossy().into_owned();
+        let two = dir.join(names[1]).to_string_lossy().into_owned();
+        assert!(
+            engine_was_free_during_the_gallery_write(&engine, || {
+                assert_eq!(
+                    super::delete_sstv_gallery_image(&engine, &dir, &one),
+                    Ok(())
+                );
+            }),
+            "the single delete's gallery.json write must not hold the Engine lock"
+        );
+        assert_eq!(index_paths(&dir), vec![two.clone()], "and it landed");
+        assert!(
+            engine_was_free_during_the_gallery_write(&engine, || {
+                assert_eq!(
+                    super::delete_sstv_gallery_images(&engine, &dir, std::slice::from_ref(&two)),
+                    vec![]
+                );
+            }),
+            "the batch delete's gallery.json write must not hold the Engine lock"
+        );
+        assert_eq!(index_paths(&dir), Vec::<String>::new(), "and it landed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn index_paths(dir: &std::path::Path) -> Vec<String> {
         let text = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
         serde_json::from_str::<Vec<tempo_app::dto::SstvGalleryEntry>>(&text)
@@ -47869,7 +47958,7 @@ mod tests {
         let index = dir.join("gallery.json");
 
         for refused in [&notes, &index] {
-            let got = super::delete_sstv_gallery_image(&mut eng, &dir, &refused.to_string_lossy());
+            let got = delete_one(&mut eng, &dir, &refused.to_string_lossy());
             assert_eq!(
                 got,
                 Err("That file is not a picture in the SSTV gallery".to_string())
@@ -47878,7 +47967,7 @@ mod tests {
         }
         let picture = dir.join(names[0]);
         assert_eq!(
-            super::delete_sstv_gallery_image(&mut eng, &dir, &picture.to_string_lossy()),
+            delete_one(&mut eng, &dir, &picture.to_string_lossy()),
             Ok(())
         );
         assert!(!picture.exists(), "the gallery picture is deleted");
@@ -47969,10 +48058,7 @@ mod tests {
         let theirs = dir.join("gallery.json.tmp");
         std::fs::write(&theirs, "[{\"path\":").unwrap();
         let picture = dir.join(names[0]).to_string_lossy().into_owned();
-        assert_eq!(
-            super::delete_sstv_gallery_image(&mut eng, &dir, &picture),
-            Ok(())
-        );
+        assert_eq!(delete_one(&mut eng, &dir, &picture), Ok(()));
         assert_eq!(
             std::fs::read_to_string(&theirs).ok().as_deref(),
             Some("[{\"path\":"),
@@ -48026,7 +48112,7 @@ mod tests {
         eng.load_sstv_gallery(listed);
         let not_a_picture = Err("That file is not a picture in the SSTV gallery".to_string());
         assert_eq!(
-            super::delete_sstv_gallery_image(&mut eng, &dir, &to_picture.to_string_lossy()),
+            delete_one(&mut eng, &dir, &to_picture.to_string_lossy()),
             not_a_picture
         );
         assert!(
@@ -48039,13 +48125,13 @@ mod tests {
         );
         // A listed link does not make the file it points at a picture.
         assert_eq!(
-            super::delete_sstv_gallery_image(&mut eng, &dir, &notes.to_string_lossy()),
+            delete_one(&mut eng, &dir, &notes.to_string_lossy()),
             not_a_picture
         );
         assert!(notes.is_file(), "the operator's notes must stay");
         // Positive control: the real picture still deletes.
         assert_eq!(
-            super::delete_sstv_gallery_image(&mut eng, &dir, &picture.to_string_lossy()),
+            delete_one(&mut eng, &dir, &picture.to_string_lossy()),
             Ok(())
         );
         assert!(!picture.exists());

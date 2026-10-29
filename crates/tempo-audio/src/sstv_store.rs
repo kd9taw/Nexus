@@ -2,9 +2,9 @@
 //!
 //! The `sstvrx` decode thread calls these to persist each completed image to
 //! the operator-browsable local data dir (`<local-appdata>/Nexus/sstv-gallery/`,
-//! the ALL.TXT location pattern) and to keep `gallery.json` — the small metadata
-//! sidecar living BESIDE the images (atomic tmp+rename, the `openings_log.json`
-//! pattern) — in step with the engine's session gallery list.
+//! the ALL.TXT location pattern) and to read `gallery.json` — the small metadata
+//! sidecar living BESIDE the images. Its one writer is
+//! `tempo_app::sstv_gallery::write_gallery_json`, which the shell's gallery delete shares.
 //!
 //! Images are written as PNG (operator decision, 2026-08-15). It is LOSSLESS, so a received
 //! picture — the only copy of what somebody sent you — is stored exactly as decoded; every
@@ -23,8 +23,7 @@ use std::path::Path;
 
 use tempo_app::dto::SstvGalleryEntry;
 
-/// The gallery metadata sidecar's filename, inside the gallery directory.
-pub const GALLERY_JSON: &str = "gallery.json";
+pub use tempo_app::sstv_gallery::GALLERY_JSON;
 
 /// Encode `width × height` RGB pixels (row-major, top-down) as a 24-bit
 /// uncompressed BMP (BITMAPINFOHEADER, bottom-up rows, BGR byte order, rows
@@ -144,26 +143,6 @@ pub fn load_gallery(dir: &Path) -> Vec<SstvGalleryEntry> {
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
-}
-
-/// Persist the gallery metadata to `dir`/`gallery.json` (atomic tmp+rename,
-/// best-effort — a failed write never disturbs the decode thread).
-///
-/// ⛔ Call with the Engine lock held and `entries` read under it: that lock is what serialises
-/// every gallery.json write in this process (see `sstvrx::persist_gallery`). The scratch file is
-/// per PROCESS, never a fixed `gallery.json.tmp`, for two builds running against one gallery: on a
-/// shared scratch name their writes land in the same file and the rename can publish a mix of
-/// both, which loads as an empty gallery. With one each, the rename is the only thing shared, and
-/// it is atomic. The `Settings::tmp_path` shape.
-pub fn save_gallery(dir: &Path, entries: &[SstvGalleryEntry]) {
-    let _ = std::fs::create_dir_all(dir);
-    if let Ok(text) = serde_json::to_string(entries) {
-        let path = dir.join(GALLERY_JSON);
-        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-        if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &path).is_err() {
-            let _ = std::fs::remove_file(&tmp);
-        }
-    }
 }
 
 /// Filename-safe UTC stamp, e.g. `20260717T153000Z`.
@@ -310,45 +289,9 @@ mod tests {
             lines: 2,
             fsk_id: None,
         };
-        save_gallery(&dir, std::slice::from_ref(&entry));
+        tempo_app::sstv_gallery::write_gallery_json(&dir, 1, std::slice::from_ref(&entry));
         let loaded = load_gallery(&dir);
         assert_eq!(loaded, vec![entry]);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Two Nexus builds can run against one gallery (a tester build beside the release). Each
-    /// writes gallery.json through a scratch file and renames it into place; on one shared
-    /// scratch name the two writes land in the same file and the rename can publish a mix of
-    /// both, which is invalid JSON and loads as an empty gallery, losing every picture's
-    /// frequency, line count and FSK ID. A save must leave a scratch file it did not create alone.
-    #[test]
-    fn a_gallery_save_leaves_another_writers_scratch_file_alone() {
-        let dir = scratch("other-writer");
-        // The fixed scratch name every earlier build writes through, mid-write.
-        let theirs = dir.join("gallery.json.tmp");
-        std::fs::write(&theirs, "[{\"path\":").unwrap();
-        save_gallery(&dir, &[]);
-        assert_eq!(
-            std::fs::read_to_string(&theirs).ok().as_deref(),
-            Some("[{\"path\":"),
-            "another writer's half-written scratch file must not be overwritten or moved"
-        );
-        assert_eq!(load_gallery(&dir), vec![], "and this save still landed");
-        assert_eq!(
-            std::fs::read_to_string(dir.join(GALLERY_JSON)).unwrap(),
-            "[]"
-        );
-        let leftovers: Vec<_> = std::fs::read_dir(&dir)
-            .unwrap()
-            .flatten()
-            .map(|f| f.file_name().to_string_lossy().into_owned())
-            .filter(|n| n != GALLERY_JSON && n != "gallery.json.tmp")
-            .collect();
-        assert_eq!(
-            leftovers,
-            Vec::<String>::new(),
-            "no scratch file left behind"
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

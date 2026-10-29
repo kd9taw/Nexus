@@ -2454,6 +2454,9 @@ pub struct StationCore {
     /// persisted `gallery.json` at startup; the decode thread appends on each
     /// completed image. Capped at [`SSTV_GALLERY_CAP`].
     pub(crate) sstv_gallery: Vec<crate::dto::SstvGalleryEntry>,
+    /// Bumped by every change to [`Self::sstv_gallery`], so a gallery.json writer can tell an
+    /// older snapshot from a newer one ([`crate::sstv_gallery::write_gallery_json`]).
+    pub(crate) sstv_gallery_gen: u64,
 }
 
 /// A Parks/Summits On The Air activation as it runs ([`StationCore::activation`]), and as
@@ -2604,6 +2607,7 @@ impl StationCore {
             activation_path: None,
             pota_exports: Default::default(),
             sstv_gallery: Vec::new(),
+            sstv_gallery_gen: 0,
         }
     }
 
@@ -5470,6 +5474,7 @@ impl StationCore {
     /// Append a completed SSTV image to the session gallery (newest last),
     /// capped at [`SSTV_GALLERY_CAP`]. Decode-thread only.
     pub fn push_sstv_gallery(&mut self, entry: crate::dto::SstvGalleryEntry) {
+        self.sstv_gallery_gen += 1;
         self.sstv_gallery.push(entry);
         if self.sstv_gallery.len() > SSTV_GALLERY_CAP {
             let excess = self.sstv_gallery.len() - SSTV_GALLERY_CAP;
@@ -5489,12 +5494,17 @@ impl StationCore {
     pub fn remove_sstv_gallery(&mut self, path: &str) -> bool {
         let before = self.sstv_gallery.len();
         self.sstv_gallery.retain(|e| e.path != path);
-        self.sstv_gallery.len() != before
+        let removed = self.sstv_gallery.len() != before;
+        if removed {
+            self.sstv_gallery_gen += 1;
+        }
+        removed
     }
 
     pub fn set_sstv_gallery_fsk_id(&mut self, path: &str, fsk_id: String) {
         if let Some(entry) = self.sstv_gallery.iter_mut().rev().find(|e| e.path == path) {
             entry.fsk_id = Some(fsk_id);
+            self.sstv_gallery_gen += 1;
         }
     }
 
@@ -5505,11 +5515,18 @@ impl StationCore {
             entries.drain(0..excess);
         }
         self.sstv_gallery = entries;
+        self.sstv_gallery_gen += 1;
     }
 
     /// The session SSTV gallery, oldest first.
     pub fn sstv_gallery(&self) -> &[crate::dto::SstvGalleryEntry] {
         &self.sstv_gallery
+    }
+
+    /// The gallery and its generation, for a gallery.json write made after the Engine lock is
+    /// released ([`crate::sstv_gallery::write_gallery_json`]).
+    pub fn sstv_gallery_snapshot(&self) -> (u64, Vec<crate::dto::SstvGalleryEntry>) {
+        (self.sstv_gallery_gen, self.sstv_gallery.clone())
     }
 
     /// Adopt a corroborated NTP measurement (`tempo_net::sntp::measure`), sizing
