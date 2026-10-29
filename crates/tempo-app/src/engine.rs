@@ -3801,6 +3801,10 @@ pub struct Engine {
     beacon_decided_slot: Option<u64>,
     /// The decision itself, held for the length of the interval.
     beacon_tx_this_slot: bool,
+    /// How many beacon intervals this session has decided to transmit in: WSJT-X's `m_tx`, which
+    /// flips once per beacon over, is this count's parity. It picks which of a compound call's
+    /// two messages an over sends ([`Self::beacon_message`]).
+    beacon_overs: u64,
     /// Chat-native CQ run (Tempo): while on, an idle own-parity TX slot re-sends the
     /// structured CQ — the WSJT-X-style "keep calling until someone answers" loop the
     /// one-shot Call CQ button couldn't do. Runtime-only (resets each launch, like
@@ -6853,6 +6857,7 @@ impl Engine {
             beacon_sched: tempo_core::beacon::BeaconScheduler::new(0, 0x5EED),
             beacon_txline_slot: None,
             beacon_decided_slot: None,
+            beacon_overs: 0,
             beacon_tx_this_slot: false,
             chat_cq: false,
             chat_cq_paused: false,
@@ -19711,21 +19716,35 @@ Pick the one you operate from on the Contesting tab in Settings.",
         Ok(())
     }
 
-    /// Why this station cannot send `text` as an FT8 or FT4 over, in the operator's words, or
-    /// `None` where it can, or the tier is neither. The verdict `Ft8Mode::encode` and
-    /// `Ft4Mode::encode` key nothing on (`modes::wsjt77::Refusal`): asked where an operator's
+    /// Why this station cannot send `text` as an FT8, FT4, Q65, MSK144 or FST4 over, in the
+    /// operator's words, or `None` where it can, or the tier is none of those. The verdict the
+    /// mode's `encode` keys nothing on (`modes::wsjt77::Refusal`): asked where an operator's
     /// text is queued, so the refusal is said before anything changes, and by [`Self::plan_tx`]
-    /// for any over that reaches it anyway.
+    /// for any over that reaches it anyway. For Q65, MSK144 and FST4 that is a text the vendored
+    /// encoder would stop the whole process on (`modes::wsjt77::q65_refusal`).
     fn ft_refusal(&self, text: &str) -> Option<String> {
-        let mode = match self.app.tier() {
-            Tier::Ft8 => modes::wsjt77::ft8_refusal(text).map(|_| "FT8")?,
-            Tier::Ft4 => modes::wsjt77::ft4_refusal(text).map(|_| "FT4")?,
+        use modes::wsjt77::{self as w, Refusal};
+        let (mode, why) = match self.app.tier() {
+            Tier::Ft8 => ("FT8", w::ft8_refusal(text)?),
+            Tier::Ft4 => ("FT4", w::ft4_refusal(text)?),
+            // `genft2` is `genft4` line for line, so FT4's verdict is FT2's.
+            Tier::Ft2 => ("FT2", w::ft4_refusal(text)?),
+            Tier::Q65 => ("Q65", w::q65_refusal(text)?),
+            Tier::Msk144 => ("MSK144", w::msk144_refusal(text)?),
+            Tier::Fst4 => ("FST4", w::fst4_refusal(text)?),
             _ => return None,
         };
-        Some(format!(
-            "{mode} cannot encode \"{text}\", so nothing goes out. After two calls only a report \
-             (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 characters."
-        ))
+        Some(match why {
+            Refusal::Alphabet => format!(
+                "{mode} cannot encode \"{text}\", so nothing goes out. It holds a character \
+                 other than plain letters, digits and punctuation."
+            ),
+            Refusal::BadMessage | Refusal::NoFrame => format!(
+                "{mode} cannot encode \"{text}\", so nothing goes out. After two calls only a \
+                 report (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 \
+                 characters."
+            ),
+        })
     }
 
     /// Why the Tx-slot click on `text` to `dxcall` ([`Self::override_next_tx`]) would queue an
@@ -29973,10 +29992,14 @@ contact yourself."
                     .to_string(),
             );
         }
-        Ok(tempo_core::beacon::message(
+        // WSJT-X sends a compound call's type 2 on its first over and its type 3 on the next
+        // (`m_tx=1-m_tx`, then `if(m_tx==0) msg2=msg0`).
+        Ok(tempo_core::beacon::beacon_message(
             call,
             grid,
             self.settings.beacon_power_dbm,
+            self.app.tier() == Tier::Fst4w,
+            self.beacon_overs.is_multiple_of(2),
         ))
     }
 
@@ -30026,6 +30049,9 @@ contact yourself."
             } else {
                 self.beacon_sched.next_is_tx()
             };
+            if self.beacon_tx_this_slot {
+                self.beacon_overs += 1;
+            }
         }
         if !self.beacon_tx_this_slot {
             self.app.set_transmitting(false);
@@ -74934,6 +74960,57 @@ mod tests {
         e.apply_settings(s);
         e.set_tx_enabled(true);
         assert_eq!(e.beacon_message().unwrap(), "KD9TAW EN52 30");
+    }
+
+    /// ⭐ A COMPOUND CALL BEACONS AS WSJT-X SENDS IT, over by over. `PJ4/K1ABC` went out as
+    /// `PJ4/K1ABC FK52 37` on every over, which WSPR decodes as power 0 and FST4W not at all.
+    /// WSJT-X 3.0.2 (`MainWindow::WSPR_message`, `widgets/mainwindow.cpp:15458-15480`) alternates
+    /// the type 2 (call and power) with the type 3 (the call's hash and the whole grid), starting
+    /// with the type 2, one message per over. Controls: a plain call sends its type 1 every over.
+    #[test]
+    fn a_compound_call_beacons_as_wsjtx_sends_it_over_by_over() {
+        let overs = |call: &str, grid: &str, tier: Tier| -> Vec<String> {
+            let mut e = Engine::new(call, grid, 0);
+            e.set_tier(tier);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            (10..14)
+                .map(|slot| {
+                    let text = |e: &mut Engine| match e.plan_tx(slot).map(|p| p.waveform) {
+                        Some(TxWaveform::Native { text, .. }) => text,
+                        _ => panic!("{call} slot {slot}: a beacon over"),
+                    };
+                    let first = text(&mut e);
+                    assert_eq!(text(&mut e), first, "{call}: one text per interval");
+                    first
+                })
+                .collect()
+        };
+        let (two, three) = ("PJ4/K1ABC 37", "<PJ4/K1ABC> FK52UD 37");
+        assert_eq!(
+            overs("PJ4/K1ABC", "FK52UD", Tier::Wspr),
+            [two, three, two, three]
+        );
+        let (two, three) = ("PJ4/K1ABC 37", "<PJ4/K1ABC> FN42");
+        assert_eq!(
+            overs("PJ4/K1ABC", "FN42", Tier::Fst4w),
+            [two, three, two, three]
+        );
+        assert_eq!(
+            overs("K1ABC/P", "FN42", Tier::Wspr),
+            ["K1ABC/P 37"; 4],
+            "WSPR's type 3 has no decodable 4-character grid"
+        );
+        for tier in [Tier::Wspr, Tier::Fst4w] {
+            assert_eq!(
+                overs("K1ABC", "FK52UD", tier),
+                ["K1ABC FK52 37"; 4],
+                "CONTROL {tier:?}"
+            );
+        }
     }
 
     #[test]
