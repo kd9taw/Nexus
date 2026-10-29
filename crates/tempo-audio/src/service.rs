@@ -20280,20 +20280,24 @@ mod tests {
         ];
         // "Host is down", which std leaves uncategorised (macOS's answer for a LAN host that
         // does not answer ARP).
-        #[cfg(target_os = "linux")]
-        {
-            let down = Error::from_raw_os_error(112);
+        if let Some(code) = crate::rig::EHOSTDOWN {
+            let down = Error::from_raw_os_error(code);
+            #[cfg(target_os = "linux")]
             assert!(down.to_string().contains("Host is down"), "{down}");
             unreachable.push(down);
         }
-        // A real connect to a network Nexus has no route to (`ENETUNREACH` at once in a network
-        // namespace; in CI the address may black-hole instead, which the connect timeout ends).
-        #[cfg(target_os = "linux")]
-        unreachable.push(
-            crate::rig::Rig::rigctld("10.255.255.1:4532")
-                .read_freq()
-                .expect_err("nothing is there"),
-        );
+        // What the CAT connect returns when nobody answered within its timeout, and when the OS
+        // said "No route to host": built by the connector's own failure mapping, with no network
+        // dial, so the outcome cannot depend on this machine's routes. (The rig tests show a
+        // real unanswered connect ends in this same error.)
+        unreachable.push(crate::rig::connect_cat_failure(
+            "192.0.2.1:4532",
+            Some(Error::from(ErrorKind::TimedOut)),
+        ));
+        unreachable.push(crate::rig::connect_cat_failure(
+            "192.0.2.1:4532",
+            Some(Error::from(ErrorKind::HostUnreachable)),
+        ));
         for e in &unreachable {
             assert!(is_link_fault(e), "{e:?} is the link");
             assert_eq!(dial_failure_brief(e), "CAT link unreachable", "{e:?}");

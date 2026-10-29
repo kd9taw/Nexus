@@ -89,7 +89,13 @@ fn connect_cat(addr: &str) -> std::io::Result<TcpStream> {
             Err(e) => last = Some(e),
         }
     }
-    Err(match last {
+    Err(connect_cat_failure(addr, last))
+}
+
+/// The error [`connect_cat`] returns after every address failed with `last` (`None`: the address
+/// resolved to none). A connect nobody answered carries the [`NotReachable`] marker.
+pub(crate) fn connect_cat_failure(addr: &str, last: Option<std::io::Error>) -> std::io::Error {
+    match last {
         Some(e) if e.kind() == std::io::ErrorKind::TimedOut => std::io::Error::new(
             std::io::ErrorKind::TimedOut,
             NotReachable(format!(
@@ -102,7 +108,7 @@ fn connect_cat(addr: &str) -> std::io::Result<TcpStream> {
             std::io::ErrorKind::InvalidInput,
             format!("rigctld address {addr} resolved to no address"),
         ),
-    })
+    }
 }
 
 /// What [`connect_cat`]'s `TimedOut` carries, in its own words: the connection was never made.
@@ -119,7 +125,7 @@ impl std::error::Error for NotReachable {}
 
 /// `EHOSTDOWN` ("Host is down"), which std leaves uncategorised: macOS's answer for a LAN host
 /// that does not answer ARP, where Linux answers `EHOSTUNREACH`.
-const EHOSTDOWN: Option<i32> = if cfg!(any(target_os = "linux", target_os = "android")) {
+pub(crate) const EHOSTDOWN: Option<i32> = if cfg!(any(target_os = "linux", target_os = "android")) {
     Some(112)
 } else if cfg!(target_vendor = "apple") {
     Some(64)
