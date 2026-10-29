@@ -1969,13 +1969,10 @@ export const EN = {
   'logbook.row.qsl.none': 'Not confirmed',
   'logbook.row.spot.title':
     "Spot {{call}} to the DX cluster (pre-fills this QSO's call + frequency)",
-  'logbook.row.spot.aria': 'Spot {{call}} to the DX cluster',
   'logbook.row.pushQrz.title':
     'Push {{call}} to your QRZ logbook (re-push is safe — duplicates are detected)',
-  'logbook.row.pushQrz.aria': 'Push {{call}} to QRZ',
   'logbook.row.qrzCorrect.title':
     'Correct {{call}} in your QRZ logbook — overwrites the copy QRZ already holds. One contact at a time; you confirm what changes first.',
-  'logbook.row.qrzCorrect.aria': 'Correct {{call}} at QRZ',
   'logbook.qrzCorrect.aria': 'Correct a contact at QRZ',
   'logbook.qrzCorrect.heading': 'Correct {{call}} at QRZ',
   'logbook.qrzCorrect.reading': 'Reading QRZ’s copy of {{call}}…',
@@ -1987,13 +1984,10 @@ export const EN = {
   'logbook.qrzCorrect.recovering': 'Deleting…',
   'logbook.row.pushClublog.title':
     'Push {{call}} to ClubLog (re-push is safe — duplicates are detected)',
-  'logbook.row.pushClublog.aria': 'Push {{call}} to ClubLog',
   // World Radio League per-row push (the manual verification / bounce-recovery path).
   'logbook.row.pushWrl.title': 'Send this QSO with {{call}} to World Radio League',
-  'logbook.row.pushWrl.aria': 'Push the QSO with {{call}} to World Radio League',
   // LoTW per-row upload: the bulk upload's TQSL path, one contact at a time.
   'logbook.row.pushLotw.title': 'Sign the QSO with {{call}} with TQSL and upload it to LoTW (uses your Station Location in Settings)',
-  'logbook.row.pushLotw.aria': 'Upload the QSO with {{call}} to LoTW',
   'logbook.push.wrl.ok': '{{call}} sent to World Radio League',
   'logbook.push.wrl.duplicate': 'World Radio League already has {{call}}',
   'logbook.push.wrl.unavailable': 'World Radio League is busy — {{call}} will go on the next try',
@@ -2001,13 +1995,11 @@ export const EN = {
   'logbook.push.wrl.failed': 'World Radio League push failed: {{detail}}',
   'logbook.row.pushHrdlog.title':
     'Push {{call}} to HRDLog.net (live-logging/awards site — not an ARRL confirmation source; re-push is safe)',
-  'logbook.row.pushHrdlog.aria': 'Push {{call}} to HRDLog.net',
   // The <select>'s VALUES are the ADIF QSL_SENT_VIA letters B/D/E and stay in the code; only
   // these labels are prose. They are capitalised menu items, which is why they are not the
   // same entries as the lower-case words that appear inside the sentences below.
   'logbook.row.qslSent.title':
     "Mark a QSL request sent to {{call}} (bureau/direct/electronic). A request is not a confirmation — the row stays here until it's confirmed.",
-  'logbook.row.qslSent.aria': 'Mark QSL sent to {{call}}',
   'logbook.qsl.cardMarked': 'QSL card recorded for {{call}}',
   'logbook.qsl.cardCleared': 'QSL card cleared for {{call}}',
   'logbook.row.qslRcvd.card': 'Card received',
@@ -2018,6 +2010,17 @@ export const EN = {
   'logbook.row.qslSent.electronic': 'Electronic',
   'logbook.row.edit': 'Edit {{call}}',
   'logbook.row.delete': 'Delete {{call}}',
+  'logbook.row.more': 'More actions for {{call}}',
+  'logbook.row.menu.spot': 'Spot to the DX cluster',
+  'logbook.row.menu.qrz': 'Upload to QRZ Logbook',
+  'logbook.row.menu.qrzCorrect': 'Correct on QRZ Logbook',
+  'logbook.row.menu.clublog': 'Upload to Club Log',
+  'logbook.row.menu.hrdlog': 'Upload to HRDLog',
+  'logbook.row.menu.wrl': 'Upload to World Radio League',
+  'logbook.row.menu.lotw': 'Upload to LoTW',
+  'logbook.row.menu.lotwBusy': 'Not now: a LoTW upload is already running',
+  'logbook.row.menu.sat': 'Satellite',
+  'logbook.row.menu.delete': 'Delete',
 
   // The satellite tag. The <select>'s VALUES are LoTW's own satellite names and stay in the
   // code — only these labels are prose. "Clear" is a separate entry and not a blank box on
@@ -2025,7 +2028,6 @@ export const EN = {
   // something the operator chooses rather than something a form submits by omission.
   'logbook.row.sat.title':
     'Record which satellite {{call}} was worked through, or clear a tag added by mistake. Only satellites LoTW accepts are offered.',
-  'logbook.row.sat.aria': 'Set satellite for {{call}}',
   'logbook.row.sat.clear': 'Not via satellite',
   'logbook.sat.tagged': '{{call}} tagged as worked via {{sat}}',
   'logbook.sat.cleared': 'Satellite tag cleared for {{call}}',

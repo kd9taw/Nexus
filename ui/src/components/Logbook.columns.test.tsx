@@ -78,6 +78,8 @@ const headers = () => screen.getAllByRole('columnheader').map((h) => h.getAttrib
 const row = (c: HTMLElement) => c.querySelector('.logbook-row:not(.head):not(.placeholder)') as HTMLElement
 const table = (c: HTMLElement) => c.querySelector('.logbook-table') as HTMLElement
 const template = (c: HTMLElement) => table(c).style.getPropertyValue('--log-cols')
+/** A template's tracks: split on the spaces outside `minmax(…)`. */
+const tracksOf = (tpl: string) => tpl.split(/ (?![^(]*\))/)
 
 async function openChooser() {
   fireEvent.keyDown(screen.getByRole('button', { name: 'Columns' }), { key: 'Enter' })
@@ -97,7 +99,7 @@ describe('the default table is the one the Logbook had', () => {
   it('the same columns, and one track per cell rendered', async () => {
     const { container } = await renderLog()
     expect(headers()).toEqual(['Call', 'Country', 'Band', 'Freq', 'Mode', 'Sent', 'Rcvd', 'Date (UTC)', 'Time (UTC)', 'Park', 'QSL', 'Notes', 'Edit / delete'])
-    const tracks = template(container).replace(/minmax\([^)]*\)/, 'M').split(/\s+/)
+    const tracks = tracksOf(template(container))
     expect(tracks).toHaveLength(row(container).querySelectorAll(':scope > .log-cell').length)
     expect(tracks).toHaveLength(container.querySelectorAll('.logbook-row.head > .log-cell').length)
     expect(table(container).classList.contains('wide')).toBe(false)
@@ -107,7 +109,7 @@ describe('the default table is the one the Logbook had', () => {
     document.documentElement.setAttribute('data-viewport', 'sm')
     const { container } = await renderLog()
     expect(headers()).toEqual(['Call', 'Country', 'Band', 'QSL', 'Notes', 'Edit / delete'])
-    expect(template(container)).toBe('1fr 1.3fr 0.7fr 0.7fr 1fr minmax(512px, 0.8fr)')
+    expect(template(container)).toBe('minmax(96px, 1fr) 1.3fr 0.7fr 0.7fr 1fr minmax(80px, 80px)')
     expect(row(container).querySelectorAll(':scope > .log-cell')).toHaveLength(6)
   })
 })
@@ -145,7 +147,8 @@ describe('the added columns show what the store holds', () => {
     expect(at('Exchange received').textContent).toBe('599 14')
     // A table showing added columns scrolls sideways, as "More columns" did.
     expect(table(container).classList.contains('wide')).toBe(true)
-    expect(table(container).style.getPropertyValue('--log-min-w')).toMatch(/rem$/)
+    // The columns' shares in rem, plus the action cluster's fixed 80 px.
+    expect(table(container).style.getPropertyValue('--log-min-w')).toMatch(/^calc\([\d.]+rem \+ 80px\)$/)
   })
 
   it('every column but the actions sorts: its header is a button, and a click asks the engine for that order', async () => {
@@ -202,7 +205,7 @@ describe('resize', () => {
     fireEvent.keyDown(screen.getByRole('columnheader', { name: 'Country' }), { key: 'ArrowRight', altKey: true })
     // From the column's laid-out width (120 px here) by one step.
     expect(saved).toHaveBeenLastCalledWith({ shown: [], hidden: [], widths: { country: 136 } })
-    expect(template(container).split(' ')[1]).toBe('136px')
+    expect(tracksOf(template(container))[1]).toBe('136px')
     // An arrow without Alt is the grid's own keys, not a resize.
     saved.mockClear()
     fireEvent.keyDown(screen.getByRole('columnheader', { name: 'Country' }), { key: 'ArrowRight' })
@@ -217,7 +220,7 @@ describe('resize', () => {
     expect(handle).not.toBeNull()
     fireEvent.pointerDown(handle, { button: 0, clientX: 300, pointerId: 1 })
     fireEvent.pointerMove(handle, { clientX: 360, pointerId: 1 })
-    expect(template(container).split(' ')[1]).toBe('180px')
+    expect(tracksOf(template(container))[1]).toBe('180px')
     expect(saved).not.toHaveBeenCalled()
     fireEvent.pointerUp(handle, { clientX: 360, pointerId: 1 })
     fireEvent.click(handle)

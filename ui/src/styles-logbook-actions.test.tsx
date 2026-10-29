@@ -140,11 +140,14 @@ const spacing = (v: string | null) =>
 // RE-TAKEN 2026-10-30, same harness, when the row's buttons became 32 px mouse targets with 8 px
 // between them (the operator found them thin and hard to click): requiredInkW 498.7px, spread 9.8
 // (488.9 .. 498.7), floor 436 -> 512.
-const MEASURED_REQUIREMENT = 498.7
-const MEASURED_FACE_SPREAD = 9.8
-/** The controls the row renders, in order, with station control held (the desktop default,
- *  and the widest case). If this changes, the measurement above is stale. */
-const EXPECTED_LABELS = ['📢', 'QRZ', 'QRZ✎', 'CL', 'HL', 'WRL', 'LoTW', 'QSL▸', 'SAT▸', '✎', '✕']
+//
+// RE-TAKEN 2026-10-30, same harness, when the row became two always-visible buttons — ✎ Edit and
+// ⋯, which holds every other action as a menu portaled out of the row: requiredInkW 72.0px on every
+// face (the glyphs sit inside the buttons' 32 px floor, so no spread), floor 512 -> a fixed 80.
+const MEASURED_REQUIREMENT = 72
+const MEASURED_FACE_SPREAD = 0
+/** The controls the row renders, in order. If this changes, the measurement above is stale. */
+const EXPECTED_LABELS = ['✎', '⋯']
 const EXPECTED_FONT_SIZE = '0.8rem'
 /** The rules that reach a button in a Logbook row: the class's base, and the row's own. (The
  *  contact card reuses the class for a small remove button; only the base reaches that one.) */
@@ -171,14 +174,8 @@ function clusterLowerBound(): number {
   const border = pxOf(winner(ROW_BUTTON, 'border'))
   const padX = spacing((winner(ROW_BUTTON, 'padding') ?? '').split(/\s+/).pop() ?? null)
   const gap = spacing(winner(['.log-rowactions'], 'gap'))
-  // A <select> is as wide as its widest OPTION, so whatever the sheet pins it to is its
-  // contribution; unpinned, it is at least a button box.
-  const selW = Math.max(box, pxOf(winner(['select.log-rowbtn'], 'width')))
   return (
-    EXPECTED_LABELS.reduce((sum, label) => {
-      if (label === 'QSL\u25B8' || label === 'SAT\u25B8') return sum + selW
-      return sum + Math.max(box, 2 * padX + 2 * border + [...label].length * MIN_ADVANCE_PX)
-    }, 0) +
+    EXPECTED_LABELS.reduce((sum, label) => sum + Math.max(box, 2 * padX + 2 * border + [...label].length * MIN_ADVANCE_PX), 0) +
     gap * (EXPECTED_LABELS.length - 1)
   )
 }
@@ -207,9 +204,8 @@ vi.mock('./api', () => {
     deleteQsoById: noop(), editQsoById: noop(), exportGeneralLog: noop(), importAdif: noop(),
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
-    // ⚠️ NON-EMPTY, unlike the sibling Logbook suites: the satellite menu renders only
-    // when the backend hands it names, and a cluster measured without it is a cluster
-    // no operator sees. The names are LoTW's own (Engine::LOTW_SAT_NAMES).
+    // NON-EMPTY: the satellite entries are part of the ⋯ menu, which is portaled out of the row,
+    // so the row's two buttons must not change with them. The names are LoTW's own.
     lotwSatNames: vi.fn(async () => ['AO-91', 'ARISS', 'SO-50']),
     setSatTagById: vi.fn(async () => ({})),
     saveTextToDownloads: noop(),
@@ -243,15 +239,10 @@ async function renderRow(moreColumns = false): Promise<HTMLElement> {
     <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
   )
   await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
-  // The whole cluster, the satellite menu in it. That menu is the one control a SEPARATE answer
-  // draws — the backend's list of names (`lotwSatNames`) — which lands on its own schedule, so
-  // the row can be on screen a moment before it. Counted then, the cluster is nine controls, not
-  // the ten an operator sees.
-  const satMenu = t('logbook.row.sat.aria', { call: 'K0ABC' })
   await waitFor(() =>
     expect(
-      container.querySelector(`.logbook-row:not(.head) select[aria-label="${satMenu}"]`),
-      'the satellite names never reached the row',
+      container.querySelector(`.logbook-row:not(.head) [aria-label="${t('logbook.row.more', { call: 'K0ABC' })}"]`),
+      'the row never drew its ⋯',
     ).not.toBeNull(),
   )
   return container.querySelector('.logbook-row:not(.head)') as HTMLElement
@@ -262,10 +253,7 @@ describe('the Logbook row-action cluster fits its grid track', () => {
     const row = await renderRow()
     const cluster = row.querySelector('.log-rowactions')
     expect(cluster, 'the row must render an action cluster, or every check here is vacuous').not.toBeNull()
-    const labels = [...cluster!.querySelectorAll('.log-rowbtn')].map((el) =>
-      // A <select>'s closed label is its first option, not its whole text content.
-      el.tagName === 'SELECT' ? (el as HTMLSelectElement).options[0].text : (el.textContent ?? ''),
-    )
+    const labels = [...cluster!.querySelectorAll('.log-rowbtn')].map((el) => el.textContent ?? '')
     expect(
       labels,
       'the action cluster changed. Its width is a FONT metric jsdom cannot compute — re-run ' +
@@ -326,7 +314,7 @@ describe('the Logbook row-action cluster fits its grid track', () => {
     ).toBeGreaterThanOrEqual(22)
 
     const lower = clusterLowerBound()
-    expect(lower, 'the bound must be non-trivial, or every floor check below is vacuous').toBeGreaterThan(200)
+    expect(lower, 'the bound must be non-trivial, or every floor check below is vacuous').toBeGreaterThan(64)
 
     cleanup()
     const surfaces: [string, () => Promise<HTMLElement>][] = [
@@ -359,16 +347,6 @@ describe('the Logbook row-action cluster fits its grid track', () => {
           'spread between faces, so a wider face on Windows still fits.',
       ).toBeGreaterThanOrEqual(MEASURED_REQUIREMENT + MEASURED_FACE_SPREAD)
     }
-
-    // …and the QSL menu must be PINNED, or the option catalog sizes the cluster and every
-    // floor above becomes a property of the operator's language: a <select> is as wide as its
-    // widest OPTION and these options are translated prose (98px in English, 110px in German
-    // — harness). `min-width` does not pin it; only an explicit width does.
-    expect(
-      pxOf(winner(['select.log-rowbtn'], 'width')),
-      'select.log-rowbtn must pin an explicit width — otherwise the widest translated option ' +
-        'sizes the control, and the cluster with it',
-    ).toBeGreaterThan(0)
   })
 
   it('makes every row button a 32 px target with room between them', () => {
@@ -395,8 +373,9 @@ describe('the Logbook row-action cluster fits its grid track', () => {
     // The control that must trip, run through the SAME two functions the checks above use —
     // `floorOf` on the track as it shipped, against `clusterLowerBound()`. Without this, a
     // green run says nothing about whether the arithmetic is capable of failing at all.
-    const shipped = floorOf('minmax(160px, 0.8fr)')
-    expect(shipped, 'the shipped track must parse, or this control is checking nothing').toBe(160)
+    // A floor written for ONE 32 px button: the two need more, and the arithmetic must say so.
+    const shipped = floorOf('minmax(60px, 60px)')
+    expect(shipped, 'the shipped track must parse, or this control is checking nothing').toBe(60)
     expect(shipped as number).toBeLessThan(clusterLowerBound())
     // …and a bare `fr` track — no floor at all, which is what the narrow viewport had — is
     // reported as having none rather than as passing.

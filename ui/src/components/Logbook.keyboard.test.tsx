@@ -19,6 +19,7 @@ import { waitOutTheListsScrollTimer } from './Logbook.testkit'
 import { ConfirmHost } from '../confirm'
 import { deleteQsoById, type RowRef } from '../api'
 import { t } from '../i18n'
+import { chooseRowAction, rowMore } from './Logbook.rowMenu.testkit'
 import { setLogSource } from '../features/logSource'
 import { createAskingLogSource } from '../features/askingLogSource'
 import { answerFrom, type LogQuestion } from '../features/logAnswers'
@@ -206,21 +207,19 @@ describe('the Logbook is a keyboard grid', () => {
     expect(focusedIndex(), 'the same place in the list').toBe(3)
   })
 
-  it('the row’s ✕ answered yes: the keyboard goes to the ✕ of the contact that takes its place', async () => {
+  it('the row menu’s Delete answered yes: the keyboard goes to the ⋯ of the contact that takes its place', async () => {
     vi.mocked(deleteQsoById).mockImplementation(async (target: RowRef) => {
       engine.log = (engine.log as LoggedQso[]).filter((r) => r.id !== target.id)
       engine.revision += 1
       return { kind: 'deleted' }
     })
     await openAt(3)
-    const del = screen.getByRole('button', { name: t('logbook.row.delete', { call: callAt(3) }) })
-    act(() => del.focus())
-    fireEvent.click(del)
+    const more = rowMore(callAt(3))
+    act(() => more.focus())
+    await chooseRowAction(callAt(3), t('logbook.row.menu.delete'))
     fireEvent.click(await screen.findByRole('button', { name: t('logbook.delete.confirm') }))
-    await waitFor(() => expect(del.isConnected).toBe(false))
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('button', { name: t('logbook.row.delete', { call: callAt(4) }) })),
-    )
+    await waitFor(() => expect(more.isConnected).toBe(false))
+    await waitFor(() => expect(document.activeElement).toBe(rowMore(callAt(4))))
   })
 
   it('a row opened in the detail view (double-click) has the keyboard again when the view closes', async () => {

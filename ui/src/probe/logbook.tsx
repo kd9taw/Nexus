@@ -11,9 +11,11 @@
 // `?control=cap` is the CONTROL: the old centred measure put back on the Logbook's panel, which the
 // probe must see leave the panel narrower than the window's content box.
 // `?zoom=1.5` pins the UI zoom instead of the window's fit (the row-button sweep runs at 100% and
-// 150%), `?sat=1` gives the station satellite names so the row carries its widest cluster (the
-// satellite menu too), `?n=10000` sets the log's size, and `?control=thin` is the row sweep's
-// CONTROL: the old 22 px row buttons put back, which the probe must see fail the target size.
+// 150%), `?sat=1` gives the station satellite names so the row's ⋯ menu carries its satellite
+// entries, `?theme=light` draws the light theme, `?n=10000` sets the log's size, `?control=thin` is
+// the row sweep's CONTROL: the old 22 px row buttons put back, which the probe must see fail the
+// target size, and `?control=blind` is the blind-tap check's: a row button hidden the way the old
+// rows hid theirs (opacity 0, still clickable), which the probe must see reported.
 import '../styles.css'
 import '../cockpit-panes.css'
 import { createRoot } from 'react-dom/client'
@@ -27,7 +29,7 @@ import { useViewport } from '../useViewport'
 import type { LoggedQso } from '../types'
 
 const params = new URLSearchParams(location.search)
-document.documentElement.setAttribute('data-theme', 'dark')
+document.documentElement.setAttribute('data-theme', params.get('theme') === 'light' ? 'light' : 'dark')
 localStorage.clear()
 if (params.get('control') === 'cap') {
   const s = document.createElement('style')
@@ -39,12 +41,18 @@ if (params.get('control') === 'thin') {
   s.textContent = '.logbook-row .log-rowbtn { height: 22px !important; min-width: 22px !important; }'
   document.head.appendChild(s)
 }
+if (params.get('control') === 'blind') {
+  const s = document.createElement('style')
+  s.textContent = '.logbook-row .log-rowedit { opacity: 0 !important; }'
+  document.head.appendChild(s)
+}
 const zoom = Number(params.get('zoom')) || fitScale(innerWidth, innerHeight) / 100
 document.documentElement.style.setProperty('--ui-zoom', String(zoom))
 
 const base = 1_790_000_000
 const LOG: LoggedQso[] = Array.from({ length: Number(params.get('n')) || 60 }, (_, n) => ({
-  id: `id-${n}`, call: `K${n}ABC`, grid: 'EN52', band: n % 2 ? '40m' : '20m', freqMhz: n % 2 ? 7.074 : 14.074, mode: n % 3 ? 'FT8' : 'CW',
+  // Portable and prefixed calls among them, the widest a callsign column has to hold.
+  id: `id-${n}`, call: ['', 'VP2V/W9XYZ', '', 'KH6/VE3ABC/M', 'DL/PA3ABC/P'][n % 5] || `K${n}ABC`, grid: 'EN52', band: n % 2 ? '40m' : '20m', freqMhz: n % 2 ? 7.074 : 14.074, mode: n % 3 ? 'FT8' : 'CW',
   rstSent: '-10', rstRcvd: '-12', name: 'Pat', qth: 'Springfield',
   comment: n % 3 ? null : 'Big signal on the long path, running 100 W into a dipole', notes: n % 5 ? null : 'Dipole at 10 m',
   country: n % 7 ? 'United States' : 'Democratic Republic of the Congo', whenUnix: base - n * 600, confirmed: n % 4 === 0, awardConfirmed: n % 4 === 0,
@@ -58,15 +66,19 @@ const answers: Record<string, (args: Record<string, unknown>) => unknown> = {
   log_activations: () => [],
 }
 const refused = new Set<string>()
+/** Every command the page sent the station, in order — what a click or a tap set off. */
+const calls: string[] = []
 window.__TAURI_INTERNALS__ = {
   invoke: <T,>(cmd: string, args: Record<string, unknown> = {}): Promise<T> => {
+    calls.push(cmd)
     if (cmd in answers) return Promise.resolve(answers[cmd](args) as T)
     refused.add(cmd)
     return Promise.reject(new Error(`${cmd} is not answered in the Logbook probe`))
   },
 }
-const probe = window as unknown as { __refused: () => string[]; __saved: (LogColumnsSaved | null)[] }
+const probe = window as unknown as { __refused: () => string[]; __calls: () => string[]; __saved: (LogColumnsSaved | null)[] }
 probe.__refused = () => [...refused]
+probe.__calls = () => [...calls]
 probe.__saved = []
 
 const WIDE: LogColumnsSaved = { shown: LOG_COLUMNS.filter((c) => !c.base).map((c) => c.id), hidden: [], widths: {} }

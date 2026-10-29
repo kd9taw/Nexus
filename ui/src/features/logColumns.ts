@@ -58,23 +58,33 @@ export interface LogColumn {
   labelVars?: Record<string, string>
 }
 
-/** The row's action cluster. Its floor is MEASURED (ui/layout-harness/measure-logbook-actions.sh,
- *  guarded by styles-logbook-actions.test.tsx): eleven controls, each a target of at least 32 px with
- *  8 px between them, need 498.7 px on the widest face installed, plus a 9.8 px spread between faces
- *  (rounded up to 512). Never resizable and never hidden. */
-export const ACTIONS_TRACK = 'minmax(512px, 0.8fr)'
+/** The row's action cluster: ✎ Edit and the ⋯ menu that holds everything else the row can do. Its
+ *  width is MEASURED (ui/layout-harness/measure-logbook-actions.sh, guarded by
+ *  styles-logbook-actions.test.tsx): two 32 px targets 8 px apart need 72 px on every face installed
+ *  (the glyphs sit inside the buttons' 32 px floor, so there is no spread between faces); 80 leaves
+ *  room to spare. Fixed, not a share: the width the cluster does not need goes to the columns that
+ *  show the contact. Never resizable and never hidden. */
+export const ACTIONS_TRACK = 'minmax(80px, 80px)'
+
+/** The px a column's text needs to be read whole at the default size — a callsign with a portable
+ *  prefix or suffix, a full `2026-10-28`, a full `14:06:22` — so a narrow window takes width from
+ *  Country and Notes, which cut to a tooltip, and never from what a contact is scanned by. Read in
+ *  real Chrome at 1024×768 (the supported floor) by `scripts/browser-probe --desktop logbook`. */
+const CALL_TRACK = 'minmax(96px, 1fr)'
+const DATE_TRACK = 'minmax(84px, 1fr)'
+const TIME_TRACK = 'minmax(64px, 0.6fr)'
 
 /** Every column, in the order the table shows them. */
 export const LOG_COLUMNS: readonly LogColumn[] = [
-  { id: 'call', labelKey: 'logbook.column.call', track: '1fr', minPx: 64, group: 'contact', base: true, narrow: true, fixed: true, sort: 'call' },
+  { id: 'call', labelKey: 'logbook.column.call', track: CALL_TRACK, minPx: 64, group: 'contact', base: true, narrow: true, fixed: true, sort: 'call' },
   { id: 'country', labelKey: 'logbook.column.country', track: '1.3fr', minPx: 48, group: 'location', base: true, narrow: true, sort: 'country' },
   { id: 'band', labelKey: 'logbook.column.band', track: '0.7fr', minPx: 40, group: 'contact', base: true, narrow: true, sort: 'band' },
   { id: 'freq', labelKey: 'logbook.column.freq', track: '1fr', minPx: 48, group: 'contact', base: true, sort: 'freq' },
   { id: 'mode', labelKey: 'logbook.column.mode', track: '0.7fr', minPx: 40, group: 'contact', base: true, sort: 'mode' },
   { id: 'sent', labelKey: 'logbook.column.sent', track: '0.6fr', minPx: 32, group: 'contact', base: true, sort: 'sent' },
   { id: 'rcvd', labelKey: 'logbook.column.rcvd', track: '0.6fr', minPx: 32, group: 'contact', base: true, sort: 'rcvd' },
-  { id: 'date', labelKey: 'logbook.column.date', track: '1fr', minPx: 56, group: 'contact', base: true, sort: 'time' },
-  { id: 'time', labelKey: 'logbook.column.time', track: '0.6fr', minPx: 40, group: 'contact', base: true, sort: 'time' },
+  { id: 'date', labelKey: 'logbook.column.date', track: DATE_TRACK, minPx: 56, group: 'contact', base: true, sort: 'time' },
+  { id: 'time', labelKey: 'logbook.column.time', track: TIME_TRACK, minPx: 40, group: 'contact', base: true, sort: 'time' },
   { id: 'park', labelKey: 'logbook.column.park', track: '0.9fr', minPx: 40, group: 'location', base: true, sort: 'park' },
   { id: 'qsl', labelKey: 'logbook.column.qsl', track: '0.7fr', minPx: 32, group: 'qsl', base: true, narrow: true, sort: 'qsl' },
   // The old "More columns" block, in its order.
@@ -107,7 +117,7 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { id: 'exchRcvd', labelKey: 'logbook.column.exchRcvd', track: '1fr', minPx: 40, group: 'contest', sort: 'exchRcvd' },
   // The tail: the notes, then the controls.
   { id: 'notes', labelKey: 'logbook.column.notes', track: '1.4fr', narrowTrack: '1fr', minPx: 48, group: 'contact', base: true, narrow: true, sort: 'notes' },
-  { id: 'actions', labelKey: 'logbook.column.actions', track: ACTIONS_TRACK, minPx: 512, group: 'contact', base: true, narrow: true, fixed: true },
+  { id: 'actions', labelKey: 'logbook.column.actions', track: ACTIONS_TRACK, minPx: 80, group: 'contact', base: true, narrow: true, fixed: true },
 ]
 
 const BY_ID: ReadonlyMap<string, LogColumn> = new Map(LOG_COLUMNS.map((c) => [c.id, c]))
@@ -325,7 +335,8 @@ export function logTableMinWidth(cols: readonly LogColumn[], saved: LogColumnsSa
   let fr = 0
   let px = 0
   for (const c of cols) {
-    const w = c.id === 'actions' ? undefined : saved.widths[c.id]
+    // The action cluster's track is a fixed width, not a share.
+    const w = c.id === 'actions' ? c.minPx : saved.widths[c.id]
     if (w !== undefined) px += w
     else fr += parseFloat(/([\d.]+)fr\)?$/.exec(c.track)?.[1] ?? '0')
   }
