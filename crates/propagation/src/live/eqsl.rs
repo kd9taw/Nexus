@@ -38,8 +38,9 @@ pub fn fetch_inbox(inbox_url: &str) -> Result<String, String> {
     // Step 1 — the built-page HTML.
     let html = get_text(&client, inbox_url)?;
     if !eqsl::is_built_page(&html) {
-        // Bad creds / no data. The HTML body carries no secret, but stay generic.
-        return Err("eQSL: login failed or no data — check your username/password".to_string());
+        // A refused login, an empty range, or a page that is neither: Nexus's own words for
+        // each, never the page's.
+        return Err(eqsl::not_built_message(&html).to_string());
     }
     let href = eqsl::extract_adi_href(&html)
         .ok_or_else(|| "eQSL: no download link found in the response".to_string())?;

@@ -106,6 +106,27 @@ pub fn is_built_page(html: &str) -> bool {
     html.to_ascii_lowercase().contains(BUILT_MARKER)
 }
 
+/// What the operator is told when step 1 did not build the file, read off eQSL's page. eQSL
+/// answers all of these with HTTP 200: a login it refuses with "Error: No such Username/Password
+/// found", and a username it does not know with "Error: No such Callsign found"; a good login
+/// with nothing in the range asked for with "You have no log entries". Any other page says
+/// nothing about the login either way, so its message does not either.
+pub fn not_built_message(html: &str) -> &'static str {
+    let s = html.to_ascii_lowercase();
+    if s.contains("error: no such username/password found")
+        || s.contains("error: no such callsign found")
+    {
+        "eQSL did not accept your username or password. Check the eQSL username and password in \
+         Settings (your eQSL website login)."
+    } else if s.contains("you have no log entries") {
+        "eQSL has no cards for you in the range asked for, so there was nothing to download."
+    } else {
+        "eQSL answered with a page that isn't the download. eQSL may be showing an error page, or \
+         may be down for maintenance. Try again shortly, and if it keeps happening please report \
+         it."
+    }
+}
+
 /// Extract the `.adi` download href from the built-page HTML. eQSL serves two
 /// links (`.adi` + identical `.txt`); we pick the `.adi`. Returns the raw href
 /// (original case) for [`resolve_download_url`]. Robust to single/double quotes;
@@ -440,6 +461,52 @@ mod tests {
         let dbg = format!("{:?}", q());
         assert!(dbg.contains("<redacted>"));
         assert!(!dbg.contains("p@ss"));
+    }
+
+    /// eQSL's refusal of the login is called one, in either of its wordings.
+    #[test]
+    fn a_refused_eqsl_login_is_called_one() {
+        let refused = "eQSL did not accept your username or password. Check the eQSL username \
+                       and password in Settings (your eQSL website login).";
+        assert_eq!(
+            not_built_message("<html><H3>Error: No such Username/Password found</H3></html>"),
+            refused
+        );
+        // An unknown username, as eQSL answers it.
+        assert_eq!(
+            not_built_message("<html><body><H3>Error: No such Callsign found</H3></body></html>"),
+            refused
+        );
+    }
+
+    /// A good login with nothing to download is not called a bad one.
+    #[test]
+    fn an_empty_eqsl_inbox_is_not_called_a_bad_login() {
+        let msg = not_built_message("<html><body>You have no log entries</body></html>");
+        assert_eq!(
+            msg,
+            "eQSL has no cards for you in the range asked for, so there was nothing to download."
+        );
+        assert!(!msg.contains("password"), "{msg}");
+    }
+
+    /// Control: a page that is neither (maintenance, an unknown error) blames neither way.
+    #[test]
+    fn an_unrecognised_eqsl_page_blames_neither_way() {
+        for page in [
+            "<html><body>eQSL is down for maintenance. Please try later.</body></html>",
+            "<html><body><H3>Error: Something else went wrong</H3></body></html>",
+            "",
+        ] {
+            let msg = not_built_message(page);
+            assert!(
+                msg.starts_with("eQSL answered with a page that isn't the download"),
+                "{msg}"
+            );
+            assert!(!msg.contains("did not accept"), "{msg}");
+            assert!(!msg.contains("username/password"), "{msg}");
+            assert!(!msg.contains("are fine"), "{msg}");
+        }
     }
 
     #[test]
