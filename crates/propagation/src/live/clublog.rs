@@ -46,6 +46,26 @@ pub fn push_realtime(url: &str, body: String) -> Result<(u16, String), String> {
     Ok((status, text))
 }
 
+/// GET a fully built URL and return `(http_status, body_text)` for any response — the Settings
+/// Test of the ClubLog credentials (`url` from [`tempo_core::clublog::build_login_test_url`],
+/// which carries the password and the key). Same discipline as [`push_realtime`]: HTTPS only, no
+/// redirects, and `Err` only for a transport failure, always redacted.
+pub fn get_status(url: &str) -> Result<(u16, String), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent(UA)
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "ClubLog: HTTP client initialization failed".to_string())?;
+    let resp = client.get(url).send().map_err(redact)?;
+    let status = resp.status().as_u16();
+    let text = resp
+        .text()
+        .map_err(|_| "ClubLog: could not read the response body".to_string())?;
+    Ok((status, text))
+}
+
 /// Map a transport error to a safe, category-only message — never `Display`/
 /// `to_string`/`source` (which can echo the URL/credentials).
 fn redact(e: reqwest::Error) -> String {
@@ -63,6 +83,18 @@ mod tests {
         let err = push_realtime(
             "http://clublog.example/realtime.php",
             "email=a@b.com&password=SECRETPW&api=DEVKEY&adif=%3Ceor%3E".to_string(),
+        )
+        .unwrap_err();
+        assert!(!err.contains("SECRETPW"), "password leaked: {err}");
+        assert!(!err.contains("DEVKEY"), "api key leaked: {err}");
+        assert!(!err.contains("clublog.example"), "host/URL leaked: {err}");
+        assert!(err.starts_with("ClubLog: "), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn the_login_test_rejects_http_without_leaking_the_credentials() {
+        let err = get_status(
+            "http://clublog.example/getmatches.php?api=DEVKEY&email=a%40b.com&password=SECRETPW",
         )
         .unwrap_err();
         assert!(!err.contains("SECRETPW"), "password leaked: {err}");

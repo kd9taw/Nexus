@@ -47,6 +47,7 @@ pub mod station;
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_util;
 pub mod update;
+pub mod upload_start;
 pub mod watchlist;
 pub mod window_geometry;
 pub mod winlink;

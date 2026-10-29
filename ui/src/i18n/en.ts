@@ -1992,6 +1992,9 @@ export const EN = {
   // World Radio League per-row push (the manual verification / bounce-recovery path).
   'logbook.row.pushWrl.title': 'Send this QSO with {{call}} to World Radio League',
   'logbook.row.pushWrl.aria': 'Push the QSO with {{call}} to World Radio League',
+  // LoTW per-row upload: the bulk upload's TQSL path, one contact at a time.
+  'logbook.row.pushLotw.title': 'Sign the QSO with {{call}} with TQSL and upload it to LoTW (uses your Station Location in Settings)',
+  'logbook.row.pushLotw.aria': 'Upload the QSO with {{call}} to LoTW',
   'logbook.push.wrl.ok': '{{call}} sent to World Radio League',
   'logbook.push.wrl.duplicate': 'World Radio League already has {{call}}',
   'logbook.push.wrl.unavailable': 'World Radio League is busy — {{call}} will go on the next try',
@@ -2081,6 +2084,13 @@ export const EN = {
     'HRDLog.net unavailable — {{call}} not confirmed uploaded; try again later',
   'logbook.push.hrdlog.rejected': '✗ HRDLog.net rejected {{call}}: {{reason}}',
   'logbook.push.hrdlog.failed': '✗ HRDLog.net push failed: {{detail}}',
+  // LoTW per-row upload results. Failures reuse the bulk upload's logbook.lotw.upload.* words.
+  'logbook.push.lotw.ok': '✓ {{call}} signed and uploaded to LoTW — it confirms when the other station uploads',
+  'logbook.push.lotw.duplicate': '✓ {{call}} was already on LoTW',
+  'logbook.push.lotw.already': '{{call}} is already uploaded to LoTW',
+  'logbook.push.lotw.confirmed': '{{call}} is already confirmed, so it is not uploaded to LoTW',
+  'logbook.push.lotw.timeless': '{{call}} has no time of day, so LoTW can never match it — not sent',
+  'logbook.push.lotw.none': '{{call}} was not sent to LoTW',
 
   // Deleting one contact. `{{band}}` is a band name — never translated.
   'logbook.delete.heading': 'Delete the QSO with {{call}} on {{band}}?',
@@ -2206,6 +2216,7 @@ export const EN = {
   'logbook.tools.callbook.applyUpTo': { one: 'Update up to {{count}} contact', other: 'Update up to {{count}} contacts' },
   'logbook.tools.callbook.stroked': { one: 'A call with a stroke is asked again for its base call: up to {{count}} lookup in all.', other: 'A call with a stroke is asked again for its base call: up to {{count}} lookups in all.' },
   'logbook.tools.callbook.qrzCount': { one: 'QRZ counted {{count}} lookup on your account in the last day.', other: 'QRZ counted {{count}} lookups on your account in the last day.' },
+  'logbook.tools.callbook.qrzCountNote': 'That counts every program that uses your QRZ login; only Nexus’s own lookups count toward the limit above.',
   'logbook.tools.callbook.waitingForTx': 'Waiting for the transmission to end before the contacts are changed…',
   'logbook.tools.callbook.end.refused': 'Stopped: QRZ answered 3 calls in a row with no record, which is how it refuses lookups (a daily limit, a lapsed subscription or a suspended account). What was found is filled in. Check your QRZ account before running it again.',
   'logbook.tools.callbook.resume': { one: '{{count}} call not looked up yet: run the update again to continue.', other: '{{count}} calls not looked up yet: run the update again to continue.' },
@@ -7774,6 +7785,17 @@ export const EN = {
   'settings.connections.qrz.key.saved': 'QRZ Logbook key saved — auto-upload to QRZ is ON',
   'settings.connections.qrz.key.clearFailed': 'Could not clear the QRZ Logbook key',
   'settings.connections.qrz.key.cleared': 'QRZ Logbook key cleared — auto-upload to QRZ is off',
+  // The first login saved for QRZ Logbook, ClubLog or eQSL asks before it sends the contacts never
+  // sent there (an imported log included). {{service}} is the service's own name. The cancel
+  // button, "fromNow", is the default: it has the focus, and Escape answers it.
+  'settings.connections.backlog.title': {
+    one: 'Send {{count}} contact not yet sent to {{service}}?',
+    other: 'Send {{count}} contacts not yet sent to {{service}}?',
+  },
+  'settings.connections.backlog.body':
+    'Saving this login turns uploads to {{service}} on. Contacts you make from now on are sent as you log them either way. Older contacts can still be sent from the Logbook whenever you choose.',
+  'settings.connections.backlog.send': 'Send them',
+  'settings.connections.backlog.fromNow': 'Only contacts made from now on',
   'settings.connections.qrz.sync.failed': 'QRZ sync failed',
   // ⚠️ QSO is the hobby's own word for a contact — it does not inflect into another language.
   'settings.connections.qrz.sync.done': {
@@ -9781,6 +9803,13 @@ export const EN = {
   'settings.connections.qrz.test.ok': '✓ QRZ Logbook reachable: {{detail}}',
   'settings.connections.qrz.test.fail':
     '✗ QRZ test failed: {{detail}} (Uploads need the per-logbook <b>API key</b> from logbook.qrz.com ▸ Settings ▸ API — not your QRZ password.)',
+  // LoTW / eQSL / ClubLog Tests. `{{service}}` is the connector's name (data, never translated);
+  // `{{detail}}` is the Test's own answer — the service's words or Nexus's — inserted verbatim.
+  'settings.connections.service.test.action': 'Test',
+  'settings.connections.service.test.title':
+    'Signs in to {{service}} with the saved login and reads — uploads nothing and changes nothing there',
+  'settings.connections.service.test.ok': '✓ {{service}}: {{detail}}',
+  'settings.connections.service.test.fail': '✗ {{service}} test failed: {{detail}}',
   'settings.connections.log.title': 'Connection log',
   'settings.connections.log.hint': 'every save, sync, push, and failure lands here',
   'settings.connections.log.empty':

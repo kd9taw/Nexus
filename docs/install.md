@@ -10,9 +10,10 @@ come here for the complete picture.
 
 ## What you need
 
-- **Windows 10 or 11, 64-bit (x64)**, or **Linux**, or a **Mac with Apple Silicon** (M-series, macOS 12 or later), or a **64-bit Raspberry Pi**
-  (Pi 3/4/5). All four platforms build from the same tree and ship together every release.
-  Intel Macs are source-build only. On a slower Pi, **Settings ▸ Digital ▸ Decode depth ▸
+- **Windows 10 or 11, 64-bit (x64)**, or **Linux**, or a **Mac running macOS 12 or later**, Apple
+  Silicon (M-series) or Intel, or a **64-bit Raspberry Pi** (Pi 3/4/5). All four platforms build
+  from the same tree and ship together every release. A Mac takes the `.dmg` for its chip:
+  `_aarch64.dmg` for Apple Silicon, `_x64.dmg` for Intel (Apple menu ▸ About This Mac shows the chip). On a slower Pi, **Settings ▸ Digital ▸ Decode depth ▸
   Fast** keeps FT8 and FT4 decoding in real time.
 - **On a PC, Linux means Ubuntu 22.04 or newer** — Mint 21 and later, Debian 12 (bookworm)
   and 13 (trixie), Fedora 36+, and anything else built on a C library of at least that
@@ -50,7 +51,8 @@ files you download by hand):
 | File | Platform |
 |---|---|
 | `Nexus_<version>_x64-setup.exe` | Windows 10/11 x64 — NSIS, per-user, bundles WebView2 and Hamlib |
-| `Nexus_<version>_aarch64.dmg` | macOS on Apple Silicon — signed + notarized; bundles Hamlib |
+| `Nexus_<version>_aarch64.dmg` | macOS 12+ on Apple Silicon — signed + notarized; bundles Hamlib |
+| `Nexus_<version>_x64.dmg` | macOS 12+ on an Intel Mac — signed + notarized; bundles Hamlib |
 | `Nexus_<version>_amd64.AppImage` | Linux on a PC, portable — one file, updates itself in place (Ubuntu 22.04 or newer) |
 | `Nexus_<version>_pc_amd64.deb` | Debian / Ubuntu on a PC (Ubuntu 22.04 / Debian 12 or newer) |
 | `Nexus_<version>_pi_arm64_bookworm.deb` | Raspberry Pi OS bookworm, 64-bit |
@@ -125,7 +127,7 @@ only.
 The DMG is **signed and notarized**, so there is no Gatekeeper warning to click
 through:
 
-1. Open `Nexus_<version>_aarch64.dmg`.
+1. Open `Nexus_<version>_aarch64.dmg` (Apple Silicon) or `Nexus_<version>_x64.dmg` (Intel).
 2. Drag **Nexus** into **Applications**, then eject the disk image.
 3. Launch Nexus from Applications (or Spotlight). Running it from inside the mounted
    disk image works once, but self-update needs the app in Applications, so move it

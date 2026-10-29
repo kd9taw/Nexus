@@ -111,7 +111,17 @@ const COMPILED_IN = new Set(['CLUBLOG_API_KEY']);
 // and signs the macOS updater tarball in the same run, so the macOS job cannot hand its keys to a
 // job of its own. It keeps them at step scope instead: every compile first, the certificate
 // imported after the last build, the keychain deleted once the bundle is signed (rule 3).
+//
+// The job is a matrix of two legs, Apple Silicon and Intel (operator decision and credential
+// approval, 2026-10-27: the Intel build uses the same secrets in the same steps as the Apple
+// Silicon one). Each leg runs every step of the job, so every `macos` row in SEEN, and every rule
+// here, holds for both legs at once; MACOS_LEGS below holds the matrix to exactly those two, so a
+// third runner holding these keys is a change to this file, not only to the workflow.
 const SIGNS_IN_BUNDLER = new Set(['macos']);
+const MACOS_LEGS = [
+  { runner: 'macos-14', target: 'aarch64-apple-darwin' },
+  { runner: 'macos-15-intel', target: 'x86_64-apple-darwin' },
+];
 
 // Every secret but these is signing-grade for rule 5: the compiled-in keys, and the job token
 // (read-only in the build jobs).
@@ -131,6 +141,7 @@ const RUNS = String.raw`(?:^|[;&|(]|\s)(?:bash\s+|sh\s+)?(?:\.\/)?`;
 const THIRD_PARTY = [
   [new RegExp(`${RUNS}scripts/build-(?:linux|windows-cross)\\.sh\\b`, 'm'), 'a platform build script (native libraries, npm, crates.io, the bundler)'],
   [new RegExp(`${RUNS}scripts/fetch-hamlib-unix\\.sh\\b`, 'm'), 'the Hamlib build (configure and make from its release tarball)'],
+  [new RegExp(`${RUNS}scripts/fetch-fftw-macos\\.sh\\b`, 'm'), 'the FFTW build (configure and make from its release tarball)'],
   [/\bcargo\s+(?:build|check|clippy|install|run|rustc|test)\b/, 'cargo compiling crates.io code'],
   [/\bcargo\s+tauri\s+(?:build|dev)\b/, '`cargo tauri build` (every crate, and the UI build)'],
   [/\bnpm\s+(?:--prefix\s+\S+\s+)?(?:ci|exec|i|install|run|test)\b|\bnpx\s/, 'npm'],
@@ -460,6 +471,7 @@ test('the build steps are recognised as third-party, and the signing steps are n
     ['windows', 'Cross-build the NSIS installer'],
     ['windows', 'Verify installer'],
     ['macos', 'Install build dependencies'],
+    ['macos', 'Build FFTW from source for the app\'s minimum macOS'],
     ['macos', 'Build the web UI'],
     ['macos', 'Install tauri-cli'],
     ['macos', 'Stage Hamlib (bundled rigctld — no brew install for the user)'],
@@ -476,6 +488,34 @@ test('the build steps are recognised as third-party, and the signing steps are n
     const why = thirdParty(findStep(WF, j, name));
     assert.equal(why, null, `job ${j}, step "${name}" holds a signing secret and runs ${why}`);
   }
+});
+
+// The macOS job's legs, read out of the workflow: `strategy.matrix.include` items, field by field.
+function matrixLegs(wf, jobId) {
+  const legs = [];
+  for (const e of wf.entries) {
+    const [a, b, c, d, f, g, h] = e.path;
+    if (a !== 'jobs' || b !== jobId || c !== 'strategy' || d !== 'matrix' || f !== 'include' || g === undefined || h === undefined) continue;
+    (legs[Number(g)] ??= {})[h] = e.value.replace(/\s+#.*$/, '');
+  }
+  return legs;
+}
+
+test('the macOS job that holds the Apple keys runs on exactly the two approved legs', () => {
+  const legs = matrixLegs(WF, 'macos').map(({ runner, target }) => ({ runner, target }));
+  assert.deepEqual(legs, MACOS_LEGS);
+  // Every leg-dependent value the job uses comes from the matrix, so neither leg can pick a
+  // runner or a target the table above does not name.
+  const job = WF.entries.filter((e) => e.path[0] === 'jobs' && e.path[1] === 'macos' && e.path[2] === 'runs-on');
+  assert.deepEqual(job.map((e) => e.value), ['${{ matrix.runner }}']);
+  // Positive control: a third leg planted in the workflow is seen.
+  const planted = plant(
+    TEXT,
+    '            suffix: x64        # Nexus_<ver>_x64.dmg, matching the Windows _x64-setup.exe\n',
+    '            suffix: x64        # Nexus_<ver>_x64.dmg, matching the Windows _x64-setup.exe\n' +
+      '          - label: Other\n            runner: self-hosted\n            target: x86_64-apple-darwin\n',
+  );
+  assert.equal(matrixLegs(readWorkflow(planted), 'macos').length, 3);
 });
 
 test('release.yml: no step or job that builds or runs third-party code can see a secret', () => {
@@ -498,8 +538,8 @@ test('a signing key planted in a build step is reported', () => {
 test('a secret moved back to job scope is reported', () => {
   const planted = plant(
     TEXT,
-    '    name: macOS (Apple Silicon .dmg)\n    runs-on: macos-14\n',
-    '    name: macOS (Apple Silicon .dmg)\n    runs-on: macos-14\n' +
+    '    name: macOS (${{ matrix.label }} .dmg)\n    runs-on: ${{ matrix.runner }}\n',
+    '    name: macOS (${{ matrix.label }} .dmg)\n    runs-on: ${{ matrix.runner }}\n' +
       '    env:\n      CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}\n',
   );
   reported(planted, "CLUBLOG_API_KEY in job macos's env reaches every step");
@@ -884,7 +924,7 @@ test('the Dockerfile reader refuses what it cannot place', () => {
 });
 
 test('the reader refuses what it cannot place', () => {
-  const macos = '    name: macOS (Apple Silicon .dmg)\n    runs-on: macos-14\n';
+  const macos = '    name: macOS (${{ matrix.label }} .dmg)\n    runs-on: ${{ matrix.runner }}\n';
   const tab = plant(TEXT, macos, `${macos}\tenv: {}\n`);
   assert.throws(() => readWorkflow(tab), /a tab in the indentation/);
   const alias = plant(

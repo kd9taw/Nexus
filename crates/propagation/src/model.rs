@@ -335,8 +335,8 @@ const DIGITAL_HOLES: &[(f64, &str)] = &[
     (28.180, "FT4"),
     (50.260, "MSK144"), // 6m
     (50.313, "FT8"),
-    (50.318, "FT8"),
-    (50.323, "FT4"),
+    (50.318, "FT4"), // the 6 m FT4 dial `ft4_band_plan` tunes
+    (50.323, "FT8"),
     (144.150, "MSK144"), // 2m
     (144.170, "FT4"),
     (144.174, "FT8"),
@@ -347,10 +347,24 @@ const DIGITAL_HOLES: &[(f64, &str)] = &[
 /// The band plan is the only thing a comment-only cluster spot lets us believe, and on these
 /// frequencies it says more than "digital" — 14.074 is FT8, 14.080 is FT4. Everywhere else the
 /// class is genuinely all that is knowable, and the caller keeps using it.
+///
+/// Neighbouring windows overlap (FT4 3.575 sits inside FT8 3.573's), so of the holes whose window
+/// holds the frequency the one named is the HIGHEST DIAL AT OR BELOW it — a signal is reported at
+/// its dial plus its audio offset, never under its dial — and, when every one is above it, the
+/// nearest (the 1 kHz allowance for a spotter's rounding). Taking the first match in table order
+/// labelled 3.575, 18.104 and 24.919 FT8. On a Work click the UI opens the FT screen on the tier
+/// this names, so it is more than a label.
 pub fn digital_hole_mode(freq_mhz: f64) -> Option<&'static str> {
+    // A dial typed as the spot's own frequency counts as at or below it despite rounding.
+    let at_or_below = |h: f64| h <= freq_mhz + 1e-9;
     DIGITAL_HOLES
         .iter()
-        .find(|&&(h, _)| freq_mhz >= h - 0.001 && freq_mhz <= h + 0.004)
+        .filter(|&&(h, _)| freq_mhz >= h - 0.001 && freq_mhz <= h + 0.004)
+        .min_by(|&&(a, _), &&(b, _)| {
+            at_or_below(b)
+                .cmp(&at_or_below(a))
+                .then((freq_mhz - a).abs().total_cmp(&(freq_mhz - b).abs()))
+        })
         .map(|&(_, mode)| mode)
 }
 
@@ -850,6 +864,116 @@ mod tests {
             None,
             "60m channel 1 is not one either"
         );
+    }
+
+    /// Every dial names its own mode, even where a neighbour's window reaches it. The lookup used
+    /// to return the FIRST hole whose window held the frequency, and an FT4 dial 2–4 kHz above
+    /// an FT8 one sits inside the FT8 window: a cluster spot on 3.575, 18.104 or 24.919 came back
+    /// "FT8", and a Work click on it opened the FT screen on FT8 at an FT4 dial. 10.140 and
+    /// 144.174 were right only because `dial + 0.004` happened to round just below them.
+    ///
+    /// The list is the app's own FT8/FT4 plans (`tempo-app` `bandplan.rs`), typed out here, not
+    /// read back from `DIGITAL_HOLES`, so a wrong row in the table cannot agree with itself.
+    #[test]
+    fn every_dial_names_its_own_mode_even_beside_a_neighbour() {
+        let dials: &[(f64, &str)] = &[
+            (1.840, "FT8"),
+            (3.573, "FT8"),
+            (3.575, "FT4"),
+            (5.357, "FT8"),
+            (5.3715, "FT8"),
+            (7.074, "FT8"),
+            (7.0475, "FT4"),
+            (10.136, "FT8"),
+            (10.140, "FT4"),
+            (14.074, "FT8"),
+            (14.080, "FT4"),
+            (18.100, "FT8"),
+            (18.104, "FT4"),
+            (21.074, "FT8"),
+            (21.140, "FT4"),
+            (24.915, "FT8"),
+            (24.919, "FT4"),
+            (28.074, "FT8"),
+            (28.180, "FT4"),
+            (50.260, "MSK144"),
+            (50.313, "FT8"),
+            (50.318, "FT4"), // 6 m FT4, as `ft4_band_plan` tunes it
+            (50.323, "FT8"),
+            (144.150, "MSK144"),
+            (144.170, "FT4"),
+            (144.174, "FT8"),
+        ];
+        for &(dial, mode) in dials {
+            // The dial itself, a hair either side of it (the float-luck cases flip on a few Hz),
+            // and a signal 1.5 kHz up the passband — unless that reaches the next dial up.
+            for off in [0.0, -0.000_001, 0.000_001, 0.0015] {
+                let f = dial + off;
+                let passes_another = dials.iter().any(|&(d, _)| d > dial && d <= f + 1e-9);
+                if off > 0.0 && passes_another {
+                    continue;
+                }
+                // A hair under a dial with another dial within 4 kHz below it belongs to that
+                // lower dial (the rule is "the highest dial at or below"), so it is not this
+                // dial's case to assert.
+                if off < 0.0 && dials.iter().any(|&(d, _)| d < dial && d >= f - 0.004) {
+                    continue;
+                }
+                assert_eq!(digital_hole_mode(f), Some(mode), "{dial} + {off} MHz");
+            }
+        }
+        // Between two dials: the dial below wins, as the signal is reported above its own dial.
+        assert_eq!(
+            digital_hole_mode(3.574),
+            Some("FT8"),
+            "1 kHz up from FT8 3.573"
+        );
+        assert_eq!(
+            digital_hole_mode(3.576),
+            Some("FT4"),
+            "1 kHz up from FT4 3.575"
+        );
+        assert_eq!(
+            digital_hole_mode(18.1035),
+            Some("FT8"),
+            "3.5 kHz up from FT8 18.100"
+        );
+        assert_eq!(
+            digital_hole_mode(144.1735),
+            Some("FT4"),
+            "3.5 kHz up from FT4 144.170"
+        );
+        // Below every dial in reach: the nearest dial above (the 1 kHz rounding allowance).
+        assert_eq!(
+            digital_hole_mode(3.5725),
+            Some("FT8"),
+            "0.5 kHz under FT8 3.573"
+        );
+        assert_eq!(
+            digital_hole_mode(50.3175),
+            Some("FT4"),
+            "0.5 kHz under FT4 50.318, past the top of FT8 50.313's window"
+        );
+    }
+
+    /// The fix changes which hole NAMES a frequency, never whether it is one: the set of
+    /// frequencies inside some hole's window is what `classify_spot_mode` routes on, and it must
+    /// be exactly what it was. Swept in 10 Hz steps across every window and its surroundings.
+    #[test]
+    fn which_frequencies_are_holes_is_unchanged() {
+        let in_a_window = |f: f64| {
+            DIGITAL_HOLES
+                .iter()
+                .any(|&(h, _)| f >= h - 0.001 && f <= h + 0.004)
+        };
+        for &(dial, _) in DIGITAL_HOLES {
+            let mut step = -300;
+            while step <= 800 {
+                let f = dial + f64::from(step) * 0.000_01;
+                assert_eq!(digital_hole_mode(f).is_some(), in_a_window(f), "{f} MHz");
+                step += 1;
+            }
+        }
     }
 
     /// The classifier itself is untouched — it still answers with the class, so every existing

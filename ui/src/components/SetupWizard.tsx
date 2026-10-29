@@ -87,13 +87,14 @@ interface Props {
     txPower?: number | null
   }
   /** Apply goal profile(s) + modes + license + the station/rig draft, then navigate.
-   * `experience` is the About-you answer given in THIS run, or null when none was given (the step
+   * `license` is the class picked here, or null when it is the class the station already holds:
+   * like the draft, an untouched wizard writes no class. `experience` is the About-you answer given in THIS run, or null when none was given (the step
    * was not asked, or was passed without a pick): App writes it only when it is set. */
   onApply: (
     ids: ProfileId[],
     landing: View,
     modes: FeatureId[],
-    license: string,
+    license: string | null,
     draft: WizardDraft,
     experience: ExperienceLevel | null,
   ) => void
@@ -566,7 +567,12 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   }, [step])
 
   // --- Step 3: license (goals/modes questions removed — everything starts on) ---
-  const [license, setLicense] = useState('open')
+  // Opens on the class the station holds, read once as the wizard opens. It used to open on
+  // "Outside the US" whatever was saved, so a re-run finished untouched wrote Open over a
+  // Technician's class and took the transmit lockout off. Finish writes the class only when the
+  // operator picked a different one.
+  const [heldLicense] = useState(() => settings?.licenseClass || 'open')
+  const [license, setLicense] = useState(heldLicense)
 
   // --- Step 3: optional starter-channel packs. First run ONLY: snapshot whether the
   // bank was empty when the wizard opened, and show the offer only then — so a returning
@@ -643,7 +649,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
    * never drift apart. */
   const finish = (profileIds: ProfileId[], view: View, modeIds: FeatureId[]) => {
     seedPacks()
-    onApply(profileIds, view, modeIds, license, draft(), experience)
+    onApply(profileIds, view, modeIds, license === heldLicense ? null : license, draft(), experience)
     if (wantGuide) onOpenGuide?.()
     if (wantWalk) onOpenWalk?.()
   }

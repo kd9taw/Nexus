@@ -1181,7 +1181,20 @@ impl Mode for Ft2Mode {
         // Empty on a message that will not pack — the trait's documented safe
         // failure; `gen_wave` below turns it into an empty waveform, so the radio
         // loop keys nothing rather than transmitting garbage.
-        ft2::encode(msg).unwrap_or_default()
+        //
+        // ⛔ Never a message the encoder refuses, as FT4: `genft2` is `genft4` line for line
+        // (the same leading-blank strip, `pack77`, and bad message), so FT4's verdict is FT2's.
+        if crate::wsjt77::ft4_refusal(msg).is_some() {
+            return Vec::new();
+        }
+        let tones = ft2::encode(msg).unwrap_or_default();
+        // The bad message only the vendored encoder can tell: it leaves its tones unwritten, the
+        // entry point's zeros, and every over carries its Costas arrays, so 103 zeros are never a
+        // frame.
+        if tones.iter().all(|&t| t == 0) {
+            return Vec::new();
+        }
+        tones
     }
 
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
@@ -1855,6 +1868,12 @@ impl Mode for Fst4Mode {
         // with a 77-bit payload vs (240,74) with the 50-bit beacon payload. Both
         // yield 160 symbols, so passing the wrong one transmits a well-formed frame
         // the far end cannot read.
+        //
+        // ⛔ Never a text `pack77` writes no frame for: `genfst4` would stop the whole process
+        // on it, or send the previous message's frame (`crate::wsjt77::fst4_refusal`).
+        if crate::wsjt77::fst4_refusal(msg).is_some() {
+            return Vec::new();
+        }
         fst4::encode(msg, self.wspr).unwrap_or_default()
     }
 
@@ -1969,6 +1988,12 @@ impl Mode for Q65Mode {
         // Empty on a message that will not pack — the trait's documented safe
         // failure, and `gen_wave` below turns it into an empty waveform, so the
         // radio loop keys nothing rather than transmitting garbage.
+        //
+        // ⛔ Never a text `pack77` writes no frame for: `genq65` would stop the whole process
+        // on it, or send the previous message's frame (`crate::wsjt77::q65_refusal`).
+        if crate::wsjt77::q65_refusal(msg).is_some() {
+            return Vec::new();
+        }
         q65::encode(msg).unwrap_or_default()
     }
 
@@ -2085,6 +2110,12 @@ impl Mode for Msk144Mode {
 
     fn encode(&self, msg: &str) -> Vec<i32> {
         // May return 40 (MSK40 shorthand) rather than 144 — gen_wave accepts both.
+        //
+        // ⛔ Never a text `pack77` writes no frame for: `genmsk_128_90` would stop the whole
+        // process on it, or send the previous message's frame (`crate::wsjt77::msk144_refusal`).
+        if crate::wsjt77::msk144_refusal(msg).is_some() {
+            return Vec::new();
+        }
         msk144::encode(msg).unwrap_or_default()
     }
 

@@ -2421,9 +2421,20 @@ export async function markLotwUploaded(): Promise<number> {
   return invoke<number>('mark_lotw_uploaded')
 }
 
-/** Store the eQSL password in the OS keychain (write-only; empty clears it). */
-export async function setEqslPassword(password: string): Promise<void> {
-  await invoke<void>('set_eqsl_password', { password })
+/** What saving the first login for an upload service would ask first: `null` when a login for it
+ *  is already stored (a save then asks nothing and changes nothing), else how many logged contacts
+ *  have not been sent there. Says only whether a login is stored, never anything of it. */
+export async function uploadBacklog(service: 'qrz' | 'clublog' | 'eqsl'): Promise<number | null> {
+  return invoke<number | null>('upload_backlog', { service })
+}
+
+/** Store the eQSL password in the OS keychain (write-only; empty clears it). `sendOld` answers
+ *  the first password's question (see `uploadBacklog`): `true` sends the contacts not yet sent
+ *  there, `false` starts eQSL's automatic uploads from now, and `undefined` (nothing was asked:
+ *  the count could not be read) saves as before. Required on purpose: a caller that skips the
+ *  question must say so, not silently send the whole log. */
+export async function setEqslPassword(password: string, sendOld: boolean | undefined): Promise<void> {
+  await invoke<void>('set_eqsl_password', { password, sendOld })
 }
 
 /** Remove the stored eQSL password from the OS keychain (idempotent). */
@@ -2490,9 +2501,10 @@ export async function callbookCacheClear(): Promise<void> {
   await invoke<void>('callbook_cache_clear')
 }
 
-/** Store the QRZ Logbook API key in the OS keychain (write-only; empty clears). */
-export async function setQrzLogbookKey(key: string): Promise<void> {
-  await invoke<void>('set_qrz_logbook_key', { key })
+/** Store the QRZ Logbook API key in the OS keychain (write-only; empty clears). `sendOld` as
+ *  `setEqslPassword`'s. */
+export async function setQrzLogbookKey(key: string, sendOld: boolean | undefined): Promise<void> {
+  await invoke<void>('set_qrz_logbook_key', { key, sendOld })
 }
 
 /** Remove the stored QRZ Logbook API key from the OS keychain (idempotent). */
@@ -2505,6 +2517,22 @@ export async function clearQrzLogbookKey(): Promise<void> {
  * with the failure reason. */
 export async function qrzTestConnection(): Promise<string> {
   return invoke<string>('qrz_test_connection', {})
+}
+
+/** Sign in to LoTW with the stored website login and read a report of no records (never an
+ * upload). Resolves to a summary or rejects with LoTW's own words / the network failure. */
+export async function lotwTestConnection(): Promise<string> {
+  return invoke<string>('lotw_test_connection', {})
+}
+
+/** Sign in to eQSL with the stored login and read an empty InBox query (never an upload). */
+export async function eqslTestConnection(): Promise<string> {
+  return invoke<string>('eqsl_test_connection', {})
+}
+
+/** Sign in to ClubLog with the upload's credentials and read its log matches (never an upload). */
+export async function clublogTestConnection(): Promise<string> {
+  return invoke<string>('clublog_test_connection', {})
 }
 
 /** Push one logged QSO to the operator's QRZ logbook. */
@@ -2546,9 +2574,9 @@ export async function qrzCorrectUndoMiss(): Promise<string> {
 }
 
 /** Store the ClubLog Application Password in the OS keychain (write-only; empty
- *  clears). */
-export async function setClublogPassword(password: string): Promise<void> {
-  await invoke<void>('set_clublog_password', { password })
+ *  clears). `sendOld` as `setEqslPassword`'s. */
+export async function setClublogPassword(password: string, sendOld: boolean | undefined): Promise<void> {
+  await invoke<void>('set_clublog_password', { password, sendOld })
 }
 
 /** Remove the stored ClubLog app-password from the OS keychain (idempotent). */

@@ -441,28 +441,29 @@ pub fn ft2_band_plan() -> Vec<BandChannel> {
     ]
 }
 
-/// **JTTY** (WSJT-X's keyboard mode): WSJT-X's own frequency list, taken as it is (operator ruling,
-/// 2026-10-08) — the eleven `Modes::JTTY` rows of `models/FrequencyList.cpp` at WSJT-X
-/// 3.3.0-beta4, one worldwide table with no region split. Interoperating with WSJT-X's stations is
-/// the point of the mode, so no dial here moves for any other reason. Dials are USB (the Keyboard
+/// **JTTY** (WSJT-X's keyboard mode): JTTY's published dial table, taken as it is — eleven USB
+/// dials, one worldwide table with no region split, 20 m (14.090) the main meeting place. The
+/// table is marked preliminary; until it changes, interoperating with the stations using it is the
+/// point of the mode, so no dial here moves for any other reason. Dials are USB (the Keyboard
 /// section's PKTUSB); the signal sits at the audio offset above the dial, about 125 Hz wide.
 ///
-/// Where the table meets Nexus's other plans: 40 m is JS8's dial, 30 m FT4's, 17 m FT4's and
-/// JS8's, 12 m the RTTY/PSK31 spot, and on 20 m and 15 m the passband covers Tempo's own channels
-/// (see [`band_plan`]).
+/// Where the table meets Nexus's other plans — dials it SHARES with another mode, so an operator
+/// on one of them may hear both: 160 m is the PSK31, RTTY and JT65 dial, 80 m FT4's, 30 m FT4's,
+/// 17 m FT8's, 12 m the RTTY/PSK31 spot; 40 m sits inside the US RTTY activity 7.080–7.100; and on
+/// 20 m and 15 m the passband covers Tempo's own channels (see [`band_plan`]).
 pub fn jtty_band_plan() -> Vec<BandChannel> {
     vec![
-        ch("160m", "HF", 1.839, "USB", "160 m · JTTY", "WSJT-X's JTTY dial, shared with JT9's (now quiet) and FST4's"),
-        ch("80m", "HF", 3.572, "USB", "80 m · JTTY", "WSJT-X's JTTY dial, on JT9's; 1 kHz below FT8 3.573"),
-        ch("40m", "HF", 7.078, "USB", "40 m · JTTY", "WSJT-X's JTTY dial, on JT9's; the same dial as JS8 7.078"),
-        ch("30m", "HF", 10.140, "USB", "30 m · JTTY", "WSJT-X's JTTY dial, the RTTY spot (the 10.150 band edge leaves no room above); the same dial as FT4"),
-        ch("20m", "HF", 14.090, "USB", "20 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above the RTTY spot; Tempo's 20 m channel (14.0905) shares this passband"),
-        ch("17m", "HF", 18.104, "USB", "17 m · JTTY", "WSJT-X's JTTY dial, on JT9's: off FT8 18.100 and clear of the 18.110 beacon; the same dial as FT4 and JS8"),
-        ch("15m", "HF", 21.090, "USB", "15 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above the RTTY spot; Tempo's 15 m channel (21.0905) shares this passband"),
-        ch("12m", "HF", 24.920, "USB", "12 m · JTTY", "WSJT-X's JTTY dial, the RTTY spot (the US narrow data segment 24.920–24.925 leaves no room above)"),
-        ch("10m", "HF", 28.090, "USB", "10 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above the RTTY spot — Technician-accessible"),
-        ch("6m", "VHF", 50.160, "USB", "6 m · JTTY", "WSJT-X's JTTY dial — Tech-OK"),
-        ch("2m", "VHF", 144.160, "USB", "2 m · JTTY", "WSJT-X's JTTY dial, 10 kHz above MSK144 144.150"),
+        ch("160m", "HF", 1.838, "USB", "160 m · JTTY", "JTTY's published dial; the same dial as PSK31, RTTY and JT65 1.838"),
+        ch("80m", "HF", 3.575, "USB", "80 m · JTTY", "JTTY's published dial; the same dial as FT4 3.575, 2 kHz above FT8 3.573"),
+        ch("40m", "HF", 7.090, "USB", "40 m · JTTY", "JTTY's published dial, inside the US RTTY activity 7.080–7.100"),
+        ch("30m", "HF", 10.140, "USB", "30 m · JTTY", "JTTY's published dial, the RTTY spot (the 10.150 band edge leaves no room above); the same dial as FT4 10.140"),
+        ch("20m", "HF", 14.090, "USB", "20 m · JTTY", "JTTY's published dial and its main meeting place, 10 kHz above the RTTY spot; Tempo's 20 m channel (14.0905) shares this passband"),
+        ch("17m", "HF", 18.100, "USB", "17 m · JTTY", "JTTY's published dial; the same dial as FT8 18.100, so FT8 signals share this passband"),
+        ch("15m", "HF", 21.090, "USB", "15 m · JTTY", "JTTY's published dial, 10 kHz above the RTTY spot; Tempo's 15 m channel (21.0905) shares this passband"),
+        ch("12m", "HF", 24.920, "USB", "12 m · JTTY", "JTTY's published dial, the RTTY spot (the US narrow data segment 24.920–24.925 leaves no room above)"),
+        ch("10m", "HF", 28.090, "USB", "10 m · JTTY", "JTTY's published dial, 10 kHz above the RTTY spot — Technician-accessible"),
+        ch("6m", "VHF", 50.160, "USB", "6 m · JTTY", "JTTY's published dial — Tech-OK"),
+        ch("2m", "VHF", 144.160, "USB", "2 m · JTTY", "JTTY's published dial, 10 kHz above MSK144 144.150"),
     ]
 }
 
@@ -1147,10 +1148,10 @@ mod tests {
         );
     }
 
-    /// The JTTY plan IS WSJT-X's frequency list (`models/FrequencyList.cpp`, the `Modes::JTTY`
-    /// rows at 3.3.0-beta4), dial for dial, all USB, every band once, every dial inside its band.
+    /// The JTTY plan IS JTTY's published dial table, dial for dial, all USB, every band once,
+    /// every dial inside its band.
     #[test]
-    fn the_jtty_plan_is_wsjtxs_frequency_list() {
+    fn the_jtty_plan_is_the_published_jtty_dial_table() {
         let plan = jtty_band_plan();
         let rows: Vec<(&str, f64, &str)> = plan
             .iter()
@@ -1159,12 +1160,12 @@ mod tests {
         assert_eq!(
             rows,
             [
-                ("160m", 1.839, "USB"),
-                ("80m", 3.572, "USB"),
-                ("40m", 7.078, "USB"),
+                ("160m", 1.838, "USB"),
+                ("80m", 3.575, "USB"),
+                ("40m", 7.090, "USB"),
                 ("30m", 10.140, "USB"),
                 ("20m", 14.090, "USB"),
-                ("17m", 18.104, "USB"),
+                ("17m", 18.100, "USB"),
                 ("15m", 21.090, "USB"),
                 ("12m", 24.920, "USB"),
                 ("10m", 28.090, "USB"),

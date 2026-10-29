@@ -25,6 +25,7 @@ import { emptyAnswer, type LogLocate, type LogPage, type LogQuestion } from '../
 import { DEFAULT_LOG_QUERY, defaultAsc, fmtUtc, logQueryKey, type LogQuery, type LogSortKey } from '../features/logQuery'
 import { failureToShow, logSource, useLogAnswer, useLogAnswers, useLogPages, useLogStatus } from '../features/logSource'
 import { LOTW_SKIP_TOAST_MS, lotwSkipNote } from '../features/lotwSkips'
+import { lotwOneRefusal } from '../features/lotwBacklog'
 import { sayExportLacks } from '../features/exportLacks'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS, parseUtcDate, parseUtcTime, utcDate, utcDateTimeToUnix, utcTime } from '../features/utcLog'
 import { SpotDialog } from './SpotDialog'
@@ -94,6 +95,7 @@ import {
   saveTextToDownloads,
   syncLotwReport,
   uploadLotwReport,
+  uploadLotwReportByIds,
   downloadEqslReport,
   getSettings,
 } from '../api'
@@ -209,6 +211,7 @@ const CLUBLOG_LABEL = 'CL'
 const HRDLOG_LABEL = 'HL'
 // Technical product token, not prose — same ruling as the labels above.
 const WRL_LABEL = 'WRL'
+const LOTW_LABEL = 'LoTW'
 const QSL_MENU_LABEL = 'QSL▸'
 /** The satellite tag menu. `SAT` is the ADIF `PROP_MODE` value itself, not a word. */
 const SAT_MENU_LABEL = 'SAT▸'
@@ -926,6 +929,42 @@ export function Logbook({
     } catch (e) {
       pushToast(t('logbook.push.hrdlog.failed', { detail: String(e) }), 'error', 6000)
     }
+  }
+
+  // Upload ONE contact to LoTW: the bulk upload's own command, TQSL and marks, given this
+  // contact's id. What the bulk leaves out (already sent, already confirmed, no time of day) is
+  // said here instead of starting TQSL. One TQSL run at a time, so it shares the bulk's busy state.
+  const onPushLotw = async (q: LoggedQso, ref: RowRef | null) => {
+    const refused = lotwOneRefusal(q)
+    if (refused === 'sent') return pushToast(t('logbook.push.lotw.already', { call: q.call }), 'info', 5000)
+    if (refused === 'confirmed') return pushToast(t('logbook.push.lotw.confirmed', { call: q.call }), 'info', 5000)
+    if (refused === 'timeless') return pushToast(t('logbook.push.lotw.timeless', { call: q.call }), 'info', 6000)
+    if (!ref) return
+    setUploading(true)
+    const r = await withErrorToast(() => uploadLotwReportByIds([ref.id]), t('logbook.lotw.upload.failed'))
+    setUploading(false)
+    if (!r) return
+    if (r.outcome === 'pending') pushToast(t('logbook.push.lotw.ok', { call: q.call }), 'success', 5000)
+    else if (r.outcome === 'duplicate') pushToast(t('logbook.push.lotw.duplicate', { call: q.call }), 'success', 5000)
+    else if (r.outcome === 'none') pushToast(t('logbook.push.lotw.none', { call: q.call }), 'info', 6000)
+    else if (r.outcome === 'retry') pushToast(r.detail || t('logbook.lotw.upload.retry'), 'error')
+    else if (r.outcome === 'authfail')
+      pushToast(
+        r.detail
+          ? t('logbook.lotw.upload.authFailedDetail', { detail: r.detail })
+          : t('logbook.lotw.upload.authFailed'),
+        'error',
+      )
+    else
+      pushToast(
+        r.detail
+          ? t('logbook.lotw.upload.failedDetail', { detail: r.detail })
+          : t('logbook.lotw.upload.failed'),
+        'error',
+      )
+    const skipped = lotwSkipNote(r)
+    if (skipped) pushToast(skipped, 'info', LOTW_SKIP_TOAST_MS)
+    load()
   }
 
   // Manual (re-)push of one logged QSO to World Radio League — same role as the
@@ -3377,6 +3416,16 @@ export function Logbook({
                               aria-label={t('logbook.row.pushWrl.aria', { call: q.call })}
                             >
                               {WRL_LABEL}
+                            </button>
+                            <button
+                              type="button"
+                              className="log-rowbtn"
+                              onClick={() => void onPushLotw(q, ref)}
+                              disabled={uploading}
+                              title={t('logbook.row.pushLotw.title', { call: q.call })}
+                              aria-label={t('logbook.row.pushLotw.aria', { call: q.call })}
+                            >
+                              {LOTW_LABEL}
                             </button>
                             {/* QSL handling for the row: mark a request SENT (once), and record the
                                 paper card that came BACK. Operator-declared, not a confirmation.

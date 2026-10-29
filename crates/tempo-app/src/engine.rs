@@ -183,6 +183,10 @@ mod station_profiles_tests;
 pub mod tx_extras;
 #[cfg(test)]
 mod tx_extras_tests;
+/// The first login saved for QRZ Logbook, ClubLog or eQSL never sends the old log unasked: where
+/// each service's automatic uploads start.
+#[cfg(test)]
+mod upload_start_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
 /// The experience answer's one writer (the first-run wizard and Settings ▸ Station).
 #[cfg(test)]
@@ -3842,6 +3846,10 @@ pub struct Engine {
     beacon_decided_slot: Option<u64>,
     /// The decision itself, held for the length of the interval.
     beacon_tx_this_slot: bool,
+    /// How many beacon intervals this session has decided to transmit in: WSJT-X's `m_tx`, which
+    /// flips once per beacon over, is this count's parity. It picks which of a compound call's
+    /// two messages an over sends ([`Self::beacon_message`]).
+    beacon_overs: u64,
     /// Chat-native CQ run (Tempo): while on, an idle own-parity TX slot re-sends the
     /// structured CQ — the WSJT-X-style "keep calling until someone answers" loop the
     /// one-shot Call CQ button couldn't do. Runtime-only (resets each launch, like
@@ -7058,6 +7066,7 @@ impl Engine {
             beacon_sched: tempo_core::beacon::BeaconScheduler::new(0, 0x5EED),
             beacon_txline_slot: None,
             beacon_decided_slot: None,
+            beacon_overs: 0,
             beacon_tx_this_slot: false,
             chat_cq: false,
             chat_cq_paused: false,
@@ -8333,6 +8342,43 @@ impl Engine {
     pub fn set_wrl_upload(&mut self, on: bool) -> Settings {
         self.settings.wrl_upload = on;
         self.settings.clone()
+    }
+
+    /// A start point was set for the services on `legs` (QRZ Logbook, ClubLog or eQSL; see
+    /// [`crate::station::UploadStart`], kept beside the shared log): take them off every contact
+    /// made before `from_unix` that is waiting to go now — the upload queue and the contest's held
+    /// contacts. A contact logged while every upload was off waits there, and turning the upload
+    /// on would otherwise send it.
+    pub fn drop_waiting_before(&mut self, legs: u8, from_unix: u64) {
+        let legs = legs & (upload_legs::QRZ | upload_legs::CLUBLOG | upload_legs::EQSL);
+        if legs == 0 {
+            return;
+        }
+        self.station.unqueue_before(legs, from_unix);
+        let held = self.contest_held_uploads.len();
+        for h in self.contest_held_uploads.iter_mut() {
+            if h.rec.when_unix < from_unix {
+                h.owed &= !legs;
+            }
+        }
+        self.contest_held_uploads.retain(|h| h.owed != 0);
+        if self.contest_held_uploads.len() != held {
+            self.persist_contest_held_uploads();
+        }
+    }
+
+    /// Whether saving the first login for the service on `leg` (QRZ Logbook, ClubLog or eQSL) asks
+    /// what becomes of the contacts never sent there: only while that service's upload switch is
+    /// off. With the switch already on, the operator opted in before the login existed, and the
+    /// contacts that failed for want of it are sent as before, unasked.
+    pub fn login_question_applies(&self, leg: u8) -> bool {
+        let s = &self.settings;
+        !match leg {
+            upload_legs::QRZ => s.qrz_logbook_upload,
+            upload_legs::CLUBLOG => s.clublog_upload,
+            upload_legs::EQSL => s.eqsl_upload,
+            _ => true,
+        }
     }
 
     /// Store the resolved WRL logbook id — the `set_lotw_cursor` pattern: a
@@ -10347,7 +10393,7 @@ impl Engine {
             && self.settings.keyboard_modem == crate::settings::KeyboardModem::Jtty
     }
 
-    /// JTTY's dial and sideband for `band`: WSJT-X's JTTY frequency there
+    /// JTTY's dial and sideband for `band`: JTTY's published dial there
     /// ([`crate::bandplan::jtty_band_plan`]), where the operator's class may run data. It is where
     /// a JTTY section entry and a JTTY band pick by name land, every time: WSJT-X goes to its
     /// frequency list on a band or mode change, so JTTY keeps no dial memory of its own. `None` =
@@ -15905,7 +15951,29 @@ impl Engine {
         text: &str,
         posid: &str,
     ) -> Result<crate::dto::FdClubImportDto, String> {
-        let now = now_unix_secs();
+        let plan = self.fd_club_import_plan(text, posid)?;
+        let mut read = plan.read(text);
+        while !self.fd_club_import_merge(&mut read)? {}
+        Ok(read.dto)
+    }
+
+    /// The first half of [`Self::fd_club_import`], taken under the Engine lock and let go: the
+    /// file's size, the club's call and session, and the position its contacts are from, checked
+    /// and kept for [`FdClubImportPlan::read`], which reads the file with the lock released.
+    pub fn fd_club_import_plan(&self, text: &str, posid: &str) -> Result<FdClubImportPlan, String> {
+        if text.len() > FD_CLUB_IMPORT_MAX_BYTES {
+            return Err(format!(
+                "This file is {:.1} MB, and a laptop's contest file is read up to {} MB: pick that laptop's fieldday_backup file",
+                text.len() as f64 / 1e6,
+                FD_CLUB_IMPORT_MAX_BYTES / 1_000_000
+            ));
+        }
+        self.fd_club_import_checks(posid)
+    }
+
+    /// The club hosted, the position one Nexus makes and not removed, and the club's session:
+    /// checked before a laptop's file is read and again before it is merged.
+    fn fd_club_import_checks(&self, posid: &str) -> Result<FdClubImportPlan, String> {
         let club = self
             .fd_club
             .as_ref()
@@ -15919,32 +15987,78 @@ impl Engine {
         if club.is_removed(&posid) {
             return Err("you removed that position from the club event: Allow back first".into());
         }
-        let session = self.fd_club_session(club)?;
-        let club_call = self.fd_club_call();
-        let mut log = tempo_core::fieldday::FieldDayLog::new(&club_call, session, "");
-        let read = log.restore_journal(text, 0, now);
-        let (other_contest, other_running) = log.held();
-        let mut dto = crate::dto::FdClubImportDto {
-            other_contest,
-            other_running,
-            unreadable: read.unreadable,
-            taken_back: log.removed().iter().map(|r| r.rows.len()).sum(),
-            ..Default::default()
+        Ok(FdClubImportPlan {
+            session: self.fd_club_session(club)?,
+            club_call: self.fd_club_call(),
+            hold: club.hold(&posid),
+            posid,
+            now: now_unix_secs(),
+        })
+    }
+
+    /// The last half of [`Self::fd_club_import`], under the Engine lock again: the next
+    /// [`FD_CLUB_IMPORT_CHUNK`] contacts [`FdClubImportPlan::read`] read, merged into the club's
+    /// log, and `Ok(true)` once the last is. Called once per hold of the lock, so a large file
+    /// never keeps the radio loop waiting. Checked again first, every time, as the lock was let go:
+    /// a club no longer hosted, a position removed meanwhile, or a club whose call or session
+    /// changed is refused, and nothing more is merged. Stopping there is safe: the contacts already
+    /// merged are the club's, by `(position, seq)`, so importing the file again adds the rest.
+    ///
+    /// Only what the file was read with counts as a session change
+    /// ([`FdClubImportPlan::reads_the_same`]): the host working a station meanwhile changes its
+    /// live session, and stops nothing. A Give of the position meanwhile stops the import with
+    /// its own sentence: the Give took that position's contacts out of the club's log, so the
+    /// rest of the old laptop's file must not go into the given position.
+    pub fn fd_club_import_merge(&mut self, read: &mut FdClubImportRead) -> Result<bool, String> {
+        let plan = &read.plan;
+        let total = read.log.qsos().len();
+        let again = self.fd_club_import_checks(&plan.posid);
+        if again.as_ref().is_ok_and(|again| again.hold != plan.hold) {
+            return Err(if read.next == 0 {
+                "you gave that position to another laptop while the file was read: nothing was added"
+                    .to_string()
+            } else {
+                format!(
+                    "the import stopped after {} of the file's {total} contacts: you gave that position to another laptop, and a Give takes the position's contacts out of the club's log, the {} this import added included",
+                    read.next, read.dto.added
+                )
+            });
+        }
+        let why = match again {
+            Ok(again) if again.club_call == plan.club_call && again.reads_the_same(plan) => None,
+            Ok(_) if read.next == 0 => {
+                Some("the club event changed while the file was read: import it again".to_string())
+            }
+            Ok(_) => Some("the club event changed".to_string()),
+            Err(e) => Some(e),
         };
+        if let Some(why) = why {
+            return Err(if read.next == 0 {
+                why
+            } else {
+                format!(
+                    "the import stopped after {} of the file's {total} contacts ({} added): {why}; import the file again for the rest",
+                    read.next, read.dto.added
+                )
+            });
+        }
+        let end = total.min(read.next + FD_CLUB_IMPORT_CHUNK);
+        let dto = &mut read.dto;
         let mut rows = Vec::new();
         {
             let other = self.fd_on_another_call_than("");
-            for q in log.qsos() {
+            for q in &read.log.qsos()[read.next..end] {
                 if other(q) {
                     dto.other_call += 1;
                 } else {
-                    rows.push(fd_wire_row(&posid, &club_call, q));
+                    rows.push(fd_wire_row(&plan.posid, &plan.club_call, q));
                 }
             }
         }
         let Some(club) = self.fd_club.as_mut() else {
             return Err("this station is not hosting a club event".into());
         };
+        let now = plan.now;
         for row in &rows {
             match club.import(row, now) {
                 crate::fdevent::Imported::Added => dto.added += 1,
@@ -15958,7 +16072,8 @@ impl Engine {
                 }
             }
         }
-        Ok(dto)
+        read.next = end;
+        Ok(end == total)
     }
 
     /// ⭐ **A position takes back its own row `seq`** — `pos` is the position the connection
@@ -19927,21 +20042,35 @@ Pick the one you operate from on the Contesting tab in Settings.",
         Ok(())
     }
 
-    /// Why this station cannot send `text` as an FT8 or FT4 over, in the operator's words, or
-    /// `None` where it can, or the tier is neither. The verdict `Ft8Mode::encode` and
-    /// `Ft4Mode::encode` key nothing on (`modes::wsjt77::Refusal`): asked where an operator's
+    /// Why this station cannot send `text` as an FT8, FT4, Q65, MSK144 or FST4 over, in the
+    /// operator's words, or `None` where it can, or the tier is none of those. The verdict the
+    /// mode's `encode` keys nothing on (`modes::wsjt77::Refusal`): asked where an operator's
     /// text is queued, so the refusal is said before anything changes, and by [`Self::plan_tx`]
-    /// for any over that reaches it anyway.
+    /// for any over that reaches it anyway. For Q65, MSK144 and FST4 that is a text the vendored
+    /// encoder would stop the whole process on (`modes::wsjt77::q65_refusal`).
     fn ft_refusal(&self, text: &str) -> Option<String> {
-        let mode = match self.app.tier() {
-            Tier::Ft8 => modes::wsjt77::ft8_refusal(text).map(|_| "FT8")?,
-            Tier::Ft4 => modes::wsjt77::ft4_refusal(text).map(|_| "FT4")?,
+        use modes::wsjt77::{self as w, Refusal};
+        let (mode, why) = match self.app.tier() {
+            Tier::Ft8 => ("FT8", w::ft8_refusal(text)?),
+            Tier::Ft4 => ("FT4", w::ft4_refusal(text)?),
+            // `genft2` is `genft4` line for line, so FT4's verdict is FT2's.
+            Tier::Ft2 => ("FT2", w::ft4_refusal(text)?),
+            Tier::Q65 => ("Q65", w::q65_refusal(text)?),
+            Tier::Msk144 => ("MSK144", w::msk144_refusal(text)?),
+            Tier::Fst4 => ("FST4", w::fst4_refusal(text)?),
             _ => return None,
         };
-        Some(format!(
-            "{mode} cannot encode \"{text}\", so nothing goes out. After two calls only a report \
-             (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 characters."
-        ))
+        Some(match why {
+            Refusal::Alphabet => format!(
+                "{mode} cannot encode \"{text}\", so nothing goes out. It holds a character \
+                 other than plain letters, digits and punctuation."
+            ),
+            Refusal::BadMessage | Refusal::NoFrame => format!(
+                "{mode} cannot encode \"{text}\", so nothing goes out. After two calls only a \
+                 report (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 \
+                 characters."
+            ),
+        })
     }
 
     /// Why the Tx-slot click on `text` to `dxcall` ([`Self::override_next_tx`]) would queue an
@@ -30372,10 +30501,14 @@ contact yourself."
                     .to_string(),
             );
         }
-        Ok(tempo_core::beacon::message(
+        // WSJT-X sends a compound call's type 2 on its first over and its type 3 on the next
+        // (`m_tx=1-m_tx`, then `if(m_tx==0) msg2=msg0`).
+        Ok(tempo_core::beacon::beacon_message(
             call,
             grid,
             self.settings.beacon_power_dbm,
+            self.app.tier() == Tier::Fst4w,
+            self.beacon_overs.is_multiple_of(2),
         ))
     }
 
@@ -30425,6 +30558,9 @@ contact yourself."
             } else {
                 self.beacon_sched.next_is_tx()
             };
+            if self.beacon_tx_this_slot {
+                self.beacon_overs += 1;
+            }
         }
         if !self.beacon_tx_this_slot {
             self.app.set_transmitting(false);
@@ -34155,8 +34291,19 @@ contact yourself."
     /// command runs the three with the Engine lock released for the read.
     #[cfg(test)]
     pub fn requeue_failed_uploads(&mut self, legs: u8) -> usize {
+        self.requeue_failed_uploads_from(legs, Default::default())
+    }
+
+    /// [`Self::requeue_failed_uploads`] with the start points `start` (no contact made before a
+    /// service's is picked for it), as the shipped sweep reads them from beside the log.
+    #[cfg(test)]
+    pub fn requeue_failed_uploads_from(
+        &mut self,
+        legs: u8,
+        start: crate::station::UploadStart,
+    ) -> usize {
         let (rows, room) = (self.log_rows(), self.catch_up_room());
-        let stale = crate::station::catch_up_records(&rows, legs, room)
+        let stale = crate::station::catch_up_records(&rows, legs, room, start)
             .expect("the test's log can be read");
         self.station.requeue_catch_up(stale)
     }
@@ -35326,6 +35473,114 @@ fn follow_tx_selection_into(start: &mut Option<u64>, logged: bool, ntx: Option<u
 pub(crate) fn wsjtx_qso_on(now: u64, ntx: u64, period_s: f64) -> u64 {
     let back = ntx.saturating_sub(2) * period_s as u64 + ((now % 60) as f64 % period_s) as u64;
     now.saturating_sub(back)
+}
+
+/// The largest laptop's contest file the host's "Import a laptop's file…" reads. A laptop's
+/// journal is a few hundred bytes a contact, so a whole Field Day is well under a megabyte; a file
+/// past this is not one, and is refused before it is read.
+pub const FD_CLUB_IMPORT_MAX_BYTES: usize = 16_000_000;
+
+/// How many of a laptop's contacts the host's "Import a laptop's file…" merges per hold of the
+/// Engine lock ([`Engine::fd_club_import_merge`]): each is journalled as it is merged, so a whole
+/// large file in one hold would keep the radio loop waiting.
+pub const FD_CLUB_IMPORT_CHUNK: usize = 256;
+
+/// What the host's "Import a laptop's file…" reads a file with, taken under the Engine lock
+/// ([`Engine::fd_club_import_plan`]) and read with it let go ([`Self::read`]).
+#[derive(Debug, Clone)]
+pub struct FdClubImportPlan {
+    posid: String,
+    club_call: String,
+    /// The position's hold ([`crate::fdevent::ClubLog::hold`]): how often the host gave it to
+    /// another laptop, so a Give during the import is seen.
+    hold: u64,
+    session: ContestSession,
+    now: u64,
+}
+
+impl FdClubImportPlan {
+    /// Is the file read under `other`'s session as it is under this one? Only what the read
+    /// ([`Self::read`], `restore_journal`) uses counts: the contest and the running it picks
+    /// (`event_id`, `contest_id`, `rules_year`), the exchange, where the station is (which picks
+    /// the role), and the exchange it sends (for a row written without one). The contact in
+    /// progress and the serials given out change as the host works stations, and the merge
+    /// reads none of them.
+    fn reads_the_same(&self, other: &Self) -> bool {
+        let (a, b) = (&self.session, &other.session);
+        a.event_id == b.event_id
+            && a.contest_id == b.contest_id
+            && a.rules_year == b.rules_year
+            && a.exchange == b.exchange
+            && a.my_location == b.my_location
+            && a.my_exchange == b.my_exchange
+    }
+
+    /// The file read as that laptop's own restart reads its journal, under the club's session
+    /// ([`tempo_core::fieldday::FieldDayLog::restore_journal`]). Needs no Engine, so the radio
+    /// loop is never kept waiting on a large file.
+    pub fn read(self, text: &str) -> FdClubImportRead {
+        let mut log =
+            tempo_core::fieldday::FieldDayLog::new(&self.club_call, self.session.clone(), "");
+        let unreadable = log.restore_journal(text, 0, self.now).unreadable;
+        let (other_contest, other_running) = log.held();
+        let dto = crate::dto::FdClubImportDto {
+            other_contest,
+            other_running,
+            unreadable,
+            taken_back: log.removed().iter().map(|r| r.rows.len()).sum(),
+            ..Default::default()
+        };
+        FdClubImportRead {
+            plan: self,
+            log,
+            next: 0,
+            dto,
+        }
+    }
+}
+
+/// A laptop's file read, for [`Engine::fd_club_import_merge`] to merge, and how far it has.
+pub struct FdClubImportRead {
+    plan: FdClubImportPlan,
+    log: tempo_core::fieldday::FieldDayLog,
+    /// The first of `log`'s contacts not yet merged.
+    next: usize,
+    dto: crate::dto::FdClubImportDto,
+}
+
+/// ⭐ **The host's "Import a laptop's file…", with the Engine lock held only to check and to
+/// merge a few hundred contacts at a time** ([`Engine::fd_club_import`]): the file is read with
+/// the lock let go, and merged [`FD_CLUB_IMPORT_CHUNK`] contacts per hold, so a large file never
+/// keeps the radio loop, which unkeys under that lock, waiting.
+pub fn fd_club_import_in(
+    engine: &std::sync::Mutex<Engine>,
+    text: &str,
+    posid: &str,
+) -> Result<crate::dto::FdClubImportDto, String> {
+    fd_club_import_with(engine, text, posid, FdClubImportPlan::read, || {})
+}
+
+/// [`fd_club_import_in`], with the read and what runs between two holds of the merge (the lock
+/// let go) given, so a test can watch both.
+fn fd_club_import_with(
+    engine: &std::sync::Mutex<Engine>,
+    text: &str,
+    posid: &str,
+    read: impl FnOnce(FdClubImportPlan, &str) -> FdClubImportRead,
+    mut between: impl FnMut(),
+) -> Result<crate::dto::FdClubImportDto, String> {
+    let plan = engine_lock(engine).fd_club_import_plan(text, posid)?;
+    let mut read = read(plan, text);
+    loop {
+        let done = engine_lock(engine).fd_club_import_merge(&mut read)?;
+        if done {
+            return Ok(read.dto);
+        }
+        between();
+        // A lock let go and taken straight back is usually taken back before a thread it woke
+        // runs, so give a waiting thread (the radio loop) its turn.
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
 
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
@@ -55347,6 +55602,233 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **A laptop's file is read with the Engine lock let go**: the radio loop unkeys under that
+    /// lock, so a large file must never keep it waiting. The read is watched from inside: the lock
+    /// is free while it runs, and the contacts it read are still merged.
+    #[test]
+    fn a_laptops_file_is_read_with_the_engine_lock_let_go() {
+        let dir = import_dir("unlocked");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let mut free = None;
+        let got = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                free = Some(super::engine_try_lock(&host).is_ok());
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap();
+        assert_eq!(
+            free,
+            Some(true),
+            "the Engine lock was held while the file was read"
+        );
+        assert_eq!((got.added, got.dupes, got.already_in), (2, 0, 0), "{got:?}");
+        assert_eq!(
+            super::engine_lock(&host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw()),
+            Some(2),
+            "CONTROL: the contacts read are merged"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A file far larger than any laptop's contest file is refused, with a sentence**, before
+    /// it is read; one at the limit is read.
+    #[test]
+    fn a_very_large_club_file_is_refused_before_it_is_read() {
+        let dir = import_dir("cap");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA"]);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let pad = |len: usize| format!("{file}{}", " ".repeat(len - file.len()));
+        let big = pad(super::FD_CLUB_IMPORT_MAX_BYTES + 1);
+        let err = super::fd_club_import_in(&host, &big, "bbbb0002").unwrap_err();
+        assert!(err.contains("MB"), "{err}");
+        assert_eq!(
+            super::engine_lock(&host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw()),
+            Some(0)
+        );
+        let at = pad(super::FD_CLUB_IMPORT_MAX_BYTES);
+        let got = super::fd_club_import_in(&host, &at, "bbbb0002").unwrap();
+        assert_eq!(
+            got.added, 1,
+            "CONTROL: a file at the limit is read: {got:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `n` distinct calls a laptop can log, `K9AAA` on.
+    fn many_calls(n: usize) -> Vec<String> {
+        let letter = |i: usize, k: u32| char::from(b'A' + (i / 26usize.pow(k) % 26) as u8);
+        (0..n)
+            .map(|i| format!("K9{}{}{}", letter(i, 2), letter(i, 1), letter(i, 0)))
+            .collect()
+    }
+
+    /// The host's Settings call set to `call`, as the operator saves it.
+    fn set_call(e: &mut Engine, call: &str) {
+        let mut s = e.settings().clone();
+        s.mycall = call.into();
+        e.apply_settings(s);
+    }
+
+    /// ⭐ **A large file is merged a few hundred contacts per hold of the Engine lock**, and between
+    /// two holds another thread (the radio loop, which unkeys under that lock) takes it: the
+    /// import is held there while a second thread locks the Engine, which must get in within a
+    /// bound far longer than any CI pause. That thread also counts the club's log, so each hold
+    /// is seen to merge no more than [`super::FD_CLUB_IMPORT_CHUNK`].
+    ///
+    /// This proves the lock is let go between merges, not that a waiting thread gets its turn:
+    /// the importer is held here by hand. The 1 ms pause after each merge is what gives the radio
+    /// loop that turn in a real import, and whether a woken thread runs before the importer locks
+    /// again is the scheduler's choice, so no test can turn red on the pause going without
+    /// turning red, now and then, on a loaded machine with it in place.
+    #[test]
+    fn a_large_import_lets_the_engine_lock_go_between_merges() {
+        let dir = import_dir("chunks");
+        let calls = many_calls(2 * super::FD_CLUB_IMPORT_CHUNK + 88);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &calls);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let mut seen = Vec::new();
+        let got = std::thread::scope(|scope| {
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let host = &host;
+                scope.spawn(move || {
+                    let held = super::engine_lock(host)
+                        .fd_club_log()
+                        .map(|c| c.qsos_raw() as usize);
+                    let _ = tx.send(held);
+                });
+                seen.push(
+                    rx.recv_timeout(std::time::Duration::from_secs(10))
+                        .expect("another thread takes the Engine lock between two merges"),
+                );
+            })
+        })
+        .unwrap();
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+        assert_eq!(seen, vec![Some(chunk), Some(2 * chunk)]);
+        assert_eq!((got.added, got.already_in), (calls.len(), 0), "{got:?}");
+        assert_eq!(
+            super::engine_lock(&host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw() as usize),
+            Some(calls.len()),
+            "CONTROL: every contact is merged"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **An import stopped partway is safe to repeat**: the club's call changing between two
+    /// merges stops it with how far it got, the contacts merged stay, and the same file imported
+    /// again adds only the rest.
+    #[test]
+    fn an_import_stopped_partway_adds_the_rest_when_imported_again() {
+        let dir = import_dir("partway");
+        let calls = many_calls(super::FD_CLUB_IMPORT_CHUNK + 44);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &calls);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+        let err =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                let mut e = super::engine_try_lock(&host).expect("the lock is free between merges");
+                set_call(&mut e, "K9NEW")
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts ({chunk} added): the club event changed; import the file again for the rest",
+                calls.len()
+            )
+        );
+        let held = |host: &std::sync::Mutex<Engine>| {
+            super::engine_lock(host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw() as usize)
+        };
+        assert_eq!(held(&host), Some(chunk), "the contacts merged stay");
+        set_call(&mut super::engine_lock(&host), "W9XYZ");
+        let again = super::fd_club_import_in(&host, &file, "bbbb0002").unwrap();
+        assert_eq!(
+            (again.added, again.already_in, again.dupes),
+            (calls.len() - chunk, chunk, 0),
+            "{again:?}"
+        );
+        assert_eq!(held(&host), Some(calls.len()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A club call changed or the club stopped while the file was read refuses the merge**,
+    /// and nothing is merged: the rows would be built under the call the read started with.
+    #[test]
+    fn a_club_changed_while_the_file_was_read_merges_nothing() {
+        let dir = import_dir("changed");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let held = |host: &std::sync::Mutex<Engine>| {
+            super::engine_lock(host)
+                .fd_club_log()
+                .map(|c| c.qsos_raw() as usize)
+        };
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                set_call(&mut super::engine_lock(&host), "K9NEW");
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "the club event changed while the file was read: import it again"
+        );
+        assert_eq!(held(&host), Some(0), "a call change merges nothing");
+        set_call(&mut super::engine_lock(&host), "W9XYZ");
+
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                super::engine_lock(&host).fd_host_stop();
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(err, "this station is not hosting a club event");
+        assert_eq!(held(&host), None, "a club stopped merges nothing");
+        super::engine_lock(&host)
+            .fd_host_start(dir.join("ilqp.ndjson"))
+            .unwrap();
+        assert_eq!(held(&host), Some(0), "and its file holds nothing");
+
+        let got = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| plan.read(text),
+            || {},
+        )
+        .unwrap();
+        assert_eq!(got.added, 2, "CONTROL: unchanged, it merges: {got:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **A duplicate and the contacts the club keeps out are counted, not added**: a station
     /// another position already worked, a contact logged on another call than the club's, one taken
     /// back on its laptop, one whose call is not a call sign, and a Field Day contact in the same
@@ -55428,6 +55910,218 @@ mod tests {
         for kept in ["K9CCC", "KKDDD", "K9EEE", "K1ABC"] {
             assert!(!cab.contains(kept), "{kept} kept out:\n{cab}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// How many of position `posid`'s contacts the host's club log holds.
+    fn club_rows_of(host: &std::sync::Mutex<Engine>, posid: &str) -> usize {
+        super::engine_lock(host)
+            .fd_club_log()
+            .map_or(0, |c| c.rows().iter().filter(|r| r.posid == posid).count())
+    }
+
+    /// The host's Give of position `posid` to a second laptop, turned away because a first one
+    /// holds it: the host's own Give button on its turned-away list.
+    fn give_to_another_laptop(e: &mut Engine, posid: &str) {
+        let v = tempo_net::fdsync::PROTO_VERSION;
+        let mut join = |key: &str| e.fd_club_join(v, posid, "tent", "W9XYZ", "ilqp", "", key);
+        join(&club_key_hash("the first laptop")).expect("the first laptop holds the position");
+        join(&club_key_hash("the second laptop")).expect_err("the second is turned away");
+        let handle = e
+            .snapshot()
+            .field_day
+            .and_then(|f| f.club)
+            .and_then(|c| c.refused.iter().find_map(|r| r.handle))
+            .expect("the turned-away laptop can be given the position");
+        e.fd_club_give_position(handle).unwrap();
+    }
+
+    /// The host's live contest session, changed as `change` changes it.
+    fn change_session(e: &mut Engine, change: impl FnOnce(&mut ContestSession)) {
+        match &mut e.mode {
+            Mode::FieldDay { station, .. } => change(&mut station.log.session),
+            _ => panic!("the host runs the party"),
+        }
+    }
+
+    /// ⭐ **A Give of the position a file is imported under stops the import**: the Give takes
+    /// that position's contacts out of the club's log and starts it afresh for the laptop given
+    /// it, so the rest of the old laptop's file must not merge into the new one's position, where
+    /// its `(position, seq)` slots would turn the new laptop's own contacts away. Given while the
+    /// file is read, nothing is merged; given between two merges, nothing more is.
+    #[test]
+    fn a_give_of_the_position_during_an_import_stops_it() {
+        let dir = import_dir("give");
+        let calls = many_calls(super::FD_CLUB_IMPORT_CHUNK + 44);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &calls);
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let err =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                give_to_another_laptop(&mut super::engine_lock(&host), "bbbb0002")
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts: you gave that position to another laptop, and a Give takes the position's contacts out of the club's log, the {chunk} this import added included",
+                calls.len()
+            )
+        );
+        assert_eq!(
+            club_rows_of(&host, "bbbb0002"),
+            0,
+            "nothing of the old laptop's file is in the given position"
+        );
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("read")));
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                give_to_another_laptop(&mut super::engine_lock(&host), "bbbb0002");
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "you gave that position to another laptop while the file was read: nothing was added"
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), 0);
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("control")));
+        let got = super::fd_club_import_in(&host, &file, "bbbb0002").unwrap();
+        assert_eq!(got.added, calls.len(), "CONTROL: no Give, all of it merges");
+        assert_eq!(club_rows_of(&host, "bbbb0002"), calls.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The host working stations during an import does not stop it**: a contact in progress
+    /// and one logged between two merges change the host's live session, but nothing the file
+    /// is read with. A change to what it is read with (where the host is, which picks the
+    /// exchange's role) still stops it.
+    #[test]
+    fn the_host_working_stations_during_an_import_does_not_stop_it() {
+        let dir = import_dir("working");
+        let calls = many_calls(2 * super::FD_CLUB_IMPORT_CHUNK + 88);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &calls);
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let mut turn = 0;
+        let got =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                let mut e = super::engine_lock(&host);
+                turn += 1;
+                if turn == 1 {
+                    e.contest_working("N9ZZZ").unwrap();
+                } else {
+                    party_contact(&mut e, "N9ZZZ");
+                }
+            })
+            .unwrap();
+        assert_eq!(
+            turn, 2,
+            "CONTROL: the host worked a station between both merges"
+        );
+        assert_eq!((got.added, got.already_in), (calls.len(), 0), "{got:?}");
+        assert_eq!(club_rows_of(&host, "bbbb0002"), calls.len());
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("moved")));
+        let err =
+            super::fd_club_import_with(&host, &file, "bbbb0002", FdClubImportPlan::read, || {
+                change_session(&mut super::engine_lock(&host), |s| {
+                    s.my_location.state = "WI".into()
+                })
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts ({chunk} added): the club event changed; import the file again for the rest",
+                calls.len()
+            )
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), chunk);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **What the re-check before each merge catches, each by its own sentence**: the club's
+    /// session changed or the position removed while the file was read merges nothing, and the
+    /// club stopped between two merges says how far the import got (a sentence only the re-check
+    /// writes).
+    #[test]
+    fn the_recheck_before_each_merge_names_what_changed() {
+        let dir = import_dir("recheck");
+        let (_laptop, file) = party_laptop(&dir, "bbbb0002", &["K9AAA", "K9BBB"]);
+
+        let host = std::sync::Mutex::new(party_host(&dir));
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                change_session(&mut super::engine_lock(&host), |s| {
+                    s.my_location.state = "WI".into()
+                });
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "the club event changed while the file was read: import it again"
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), 0, "a session change");
+
+        let host = std::sync::Mutex::new(party_host(&dir.join("removed")));
+        let err = super::fd_club_import_with(
+            &host,
+            &file,
+            "bbbb0002",
+            |plan, text| {
+                let mut e = super::engine_lock(&host);
+                let v = tempo_net::fdsync::PROTO_VERSION;
+                let key = club_key_hash("bbbb0002");
+                e.fd_club_join(v, "bbbb0002", "tent", "W9XYZ", "ilqp", "", &key)
+                    .expect("the club knows the position");
+                e.fd_club_remove_position("bbbb0002").unwrap();
+                drop(e);
+                plan.read(text)
+            },
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "you removed that position from the club event: Allow back first"
+        );
+        assert_eq!(club_rows_of(&host, "bbbb0002"), 0, "a position removed");
+
+        let calls = many_calls(super::FD_CLUB_IMPORT_CHUNK + 44);
+        let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+        let (_laptop, big) = party_laptop(&dir.join("big"), "bbbb0002", &calls);
+        let chunk = super::FD_CLUB_IMPORT_CHUNK;
+        let host = std::sync::Mutex::new(party_host(&dir.join("stopped")));
+        let err =
+            super::fd_club_import_with(&host, &big, "bbbb0002", FdClubImportPlan::read, || {
+                super::engine_lock(&host).fd_host_stop()
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "the import stopped after {chunk} of the file's {} contacts ({chunk} added): this station is not hosting a club event; import the file again for the rest",
+                calls.len()
+            )
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -74984,6 +75678,57 @@ mod tests {
         e.apply_settings(s);
         e.set_tx_enabled(true);
         assert_eq!(e.beacon_message().unwrap(), "KD9TAW EN52 30");
+    }
+
+    /// ⭐ A COMPOUND CALL BEACONS AS WSJT-X SENDS IT, over by over. `PJ4/K1ABC` went out as
+    /// `PJ4/K1ABC FK52 37` on every over, which WSPR decodes as power 0 and FST4W not at all.
+    /// WSJT-X 3.0.2 (`MainWindow::WSPR_message`, `widgets/mainwindow.cpp:15458-15480`) alternates
+    /// the type 2 (call and power) with the type 3 (the call's hash and the whole grid), starting
+    /// with the type 2, one message per over. Controls: a plain call sends its type 1 every over.
+    #[test]
+    fn a_compound_call_beacons_as_wsjtx_sends_it_over_by_over() {
+        let overs = |call: &str, grid: &str, tier: Tier| -> Vec<String> {
+            let mut e = Engine::new(call, grid, 0);
+            e.set_tier(tier);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            (10..14)
+                .map(|slot| {
+                    let text = |e: &mut Engine| match e.plan_tx(slot).map(|p| p.waveform) {
+                        Some(TxWaveform::Native { text, .. }) => text,
+                        _ => panic!("{call} slot {slot}: a beacon over"),
+                    };
+                    let first = text(&mut e);
+                    assert_eq!(text(&mut e), first, "{call}: one text per interval");
+                    first
+                })
+                .collect()
+        };
+        let (two, three) = ("PJ4/K1ABC 37", "<PJ4/K1ABC> FK52UD 37");
+        assert_eq!(
+            overs("PJ4/K1ABC", "FK52UD", Tier::Wspr),
+            [two, three, two, three]
+        );
+        let (two, three) = ("PJ4/K1ABC 37", "<PJ4/K1ABC> FN42");
+        assert_eq!(
+            overs("PJ4/K1ABC", "FN42", Tier::Fst4w),
+            [two, three, two, three]
+        );
+        assert_eq!(
+            overs("K1ABC/P", "FN42", Tier::Wspr),
+            ["K1ABC/P 37"; 4],
+            "WSPR's type 3 has no decodable 4-character grid"
+        );
+        for tier in [Tier::Wspr, Tier::Fst4w] {
+            assert_eq!(
+                overs("K1ABC", "FK52UD", tier),
+                ["K1ABC FK52 37"; 4],
+                "CONTROL {tier:?}"
+            );
+        }
     }
 
     #[test]
