@@ -17,9 +17,9 @@
 //! - **Never against the operator.** A dial this module did not put there (the knob, another band)
 //!   ends the correction for that pick of the channel; the dial is never pulled back.
 //! - **Off** below the horizon, without current orbital elements, without a grid, without CAT, while
-//!   the Satellites tracker steers the radio, for a pass on a radio that rounds what it is sent, or
-//!   when the operator turns it off: the radio goes back to (or stays on) 145.825 and the cockpit
-//!   says why.
+//!   the Satellites tracker steers the radio, for a pass on a radio that rounds what it is sent,
+//!   when the tracker has stopped answering, or when the operator turns it off: the radio goes back
+//!   to (or stays on) 145.825 and the cockpit says why.
 //!
 //! The geometry comes from the app's existing satellite tracker and element store (src-tauri's
 //! APRS ISS driver feeds [`Engine::aprs_iss_tick`] once a second); this module holds no orbit
@@ -48,6 +48,10 @@ const OWN_DIAL_TOLERANCE_HZ: u64 = 50;
 /// A read-back this close to a dial the radio has just acknowledged is the radio rounding the
 /// write to its tuning step (half the widest FM step, 25 kHz). Further off, it is a tune.
 const ROUNDING_SPAN_HZ: u64 = 12_500;
+/// The driver ticks once a second. A sky reading older than this means it has hung (a panic is
+/// reported separately): the correction is off as if it had stopped, so no frame keys on the
+/// geometry of a moment that has passed.
+const SKY_FRESH: Duration = Duration::from_secs(5);
 
 /// What the tracker says about the ISS from this station, right now.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -87,6 +91,8 @@ pub struct AprsIss {
     selected: bool,
     /// The tracker's latest word, `None` until the first tick.
     sky: Option<IssSky>,
+    /// When `sky` was last given (the real monotonic clock, as the frame deadlines are).
+    sky_at: Option<Instant>,
     /// This module has moved the dial since the channel was picked.
     moved: bool,
     /// The dial this module (or the APRS tune that picked the channel) last put on the engine.
@@ -159,7 +165,12 @@ impl Engine {
         if !self.settings.aprs_iss_doppler {
             return Some("switchedOff");
         }
-        if self.aprs_iss.driver_stopped {
+        if self.aprs_iss.driver_stopped
+            || self
+                .aprs_iss
+                .sky_at
+                .is_some_and(|t| t.elapsed() > SKY_FRESH)
+        {
             return Some("stopped");
         }
         if self.sat_dial_owner.is_some() {
@@ -274,6 +285,8 @@ impl Engine {
     /// Move the dial for the ISS correction — not a QSY, so none of a QSY's bookkeeping (which
     /// would also end the APRS context). Same shape as [`Self::steer_sat_dial`]. A committed
     /// remote APRS tune's hold moves with the dial, so the browser that set it is not stranded.
+    /// Any confirmation the radio gave is for the dial before this move: only an ack and a
+    /// read-back that come after it count.
     fn aprs_iss_set_dial(&mut self, hz: u64) {
         let was = self.settings.dial_hz();
         if self.remote_aprs_hold == Some(was) {
@@ -286,6 +299,8 @@ impl Engine {
         self.app.set_radio(mhz, &band, &sb);
         self.aprs_iss.moved = true;
         self.aprs_iss.own_hz = hz;
+        self.aprs_iss.acked_hz = None;
+        self.aprs_iss.read_back_hz = None;
     }
 
     /// The radio acknowledged a dial on the wire (from [`Self::rig_dial_applied`]). Only its
@@ -379,6 +394,7 @@ impl Engine {
             return false;
         }
         self.aprs_iss.sky = Some(sky);
+        self.aprs_iss.sky_at = Some(Instant::now());
         if !matches!(sky, IssSky::Up { .. }) {
             // The pass is over: the next one tries the radio again.
             self.aprs_iss.rounds = false;
@@ -689,6 +705,71 @@ mod tests {
     /// dropped and the cockpit says why, the correction is off for the pass, the radio goes back
     /// to 145.825 ONCE (no CAT write a second), and the next packet keys there, the gate judging
     /// 145.825.
+    /// A confirmation counts only for the dial it confirmed. After an over the receive
+    /// correction's write is never acknowledged (a link fault), and the next frame's uplink is
+    /// the same 100 Hz as the last: the frame must not key on the previous over's ack and
+    /// read-back. Control: a fresh ack and read-back of the uplink keys it.
+    #[test]
+    fn a_frame_never_keys_on_a_confirmation_from_before_the_dial_last_moved() {
+        let mut e = on_the_iss();
+        e.aprs_iss_tick(APPROACHING, at(10_000), false);
+        radio_takes_the_dial(&mut e);
+        let rx = e.settings().dial_hz();
+        beacon(&mut e);
+        assert!(e.poll_aprs_tx().is_none());
+        let tx = e.settings().dial_hz();
+        radio_takes_the_dial(&mut e);
+        let audio = e.poll_aprs_tx().expect("keys on the confirmed uplink");
+        let len_ms = audio.len() as u64 / 12;
+        assert!(!e.aprs_iss_tick(APPROACHING, at(12_000), true));
+        let margin = OVER_MARGIN.as_millis() as u64;
+        assert!(e.aprs_iss_tick(APPROACHING, at(12_000 + len_ms + margin), false));
+        assert_eq!(e.settings().dial_hz(), rx, "precondition: back on receive");
+        // The radio never acknowledges the receive write. The next frame moves the dial back.
+        beacon(&mut e);
+        assert!(e.poll_aprs_tx().is_none());
+        assert_eq!(e.settings().dial_hz(), tx, "precondition: the same uplink");
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "keyed on the previous over's confirmation"
+        );
+        radio_takes_the_dial(&mut e);
+        assert!(
+            e.poll_aprs_tx().is_some(),
+            "a fresh confirmation did not key"
+        );
+        assert_eq!(e.settings().dial_hz(), tx);
+    }
+
+    /// A driver that hangs (no panic, no more ticks) must not leave frames keying on a frozen
+    /// correction: once its reading is older than [`SKY_FRESH`] the correction is off and says it
+    /// stopped, and the next frame goes out on 145.825. Control: a fresh reading turns it back on.
+    #[test]
+    fn a_sky_reading_the_driver_stopped_refreshing_turns_the_correction_off() {
+        let mut e = on_the_iss();
+        e.aprs_iss_tick(APPROACHING, at(10_000), false);
+        radio_takes_the_dial(&mut e);
+        assert!(e.aprs_iss_doppler().unwrap().on, "precondition: on");
+        e.aprs_iss.sky_at = Some(Instant::now() - SKY_FRESH - Duration::from_millis(1));
+        let d = e.aprs_iss_doppler().unwrap();
+        assert_eq!((d.on, d.why_off), (false, Some("stopped")));
+        beacon(&mut e);
+        assert!(e.poll_aprs_tx().is_none());
+        assert_eq!(
+            e.settings().dial_hz(),
+            ISS_APRS_HZ,
+            "a frame went to a correction the driver no longer updates"
+        );
+        radio_takes_the_dial(&mut e);
+        assert!(e.poll_aprs_tx().is_some());
+        assert_eq!(e.settings().dial_hz(), ISS_APRS_HZ);
+        e.aprs_iss_tick(APPROACHING, at(20_000), false);
+        assert!(
+            e.aprs_iss_doppler().unwrap().on,
+            "a fresh reading stayed off"
+        );
+    }
+
     #[test]
     fn a_radio_that_rounds_the_uplink_drops_the_frame_and_the_correction_stops() {
         let mut e = on_the_iss();
