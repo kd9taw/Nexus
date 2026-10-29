@@ -70,6 +70,7 @@ import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
 import { CallStatsFrame } from './CallStatsPane'
+import { RecentQsosFrame } from './RecentQsosPane'
 import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
@@ -324,6 +325,7 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
   txmeters: t('operate.panel.txmeters'),
   recall: t('operate.panel.recall'),
   stats: t('callStats.pane.title'),
+  recent: t('recentQsos.pane.title'),
 })
 
 /** What each layout can render — the menu lists only these, so a panel the current layout has no
@@ -331,8 +333,8 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
  *  pick, 2026-10-07), each also lists the panes only the other draws in stock (OPERATE_ARRANGE `extra`):
  *  the Call Roster in Classic, the Tx messages and Stations in Roster, unticked until added. */
 const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'stats', 'txmeters'],
-  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'stats', 'txmeters'],
+  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'stats', 'recent', 'txmeters'],
+  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'stats', 'recent', 'txmeters'],
 }
 
 /** Where the rail side is stored (per surface): 'left', or anything else for the stock right. */
@@ -768,13 +770,17 @@ export function OperateCockpit({
   // columns"): they stand at the foot of the column FT's own boxes stand in until placed, the side rail.
   const folded = boxes?.rail?.folded?.boxes ?? []
   const foldCol = stockColumn(arrangeSpec, BOX_IDS[0]) ?? 'log'
-  // The other layout's panes, and the rail's boxes, stand only in the arranged columns, so either arranges
-  // FT too.
+  // The other layout's panes, the rail's boxes and the Recent contacts pane stand only in the arranged
+  // columns, so any of them arranges FT too. The Recent contacts pane for the arranged column's reason: it is
+  // its own height, and in the stock rail, whose feeds have no floor, it took that height out of them (Band
+  // Activity and Rx Frequency 12 px each in Roster's rail at 1024x768, measured in Chrome), where an arranged
+  // column floors them and scrolls.
   const arranged =
     (boxes
       ? place != null || BOX_IDS.some((b) => stateOf(b) !== 'removed')
       : place != null && Object.keys(place).some((id) => !isBoxId(id))) ||
     extra.some(shown) ||
+    shown('recent') ||
     folded.length > 0
   const cardOn = shownRecallCall != null && shown('recall')
   // What stands on screen in an arranged column: a pane the ⊞ menu shows (the card only while it is about
@@ -1313,6 +1319,11 @@ export function OperateCockpit({
         empty={t('callStats.emptyPicked')}
       />
     ) : null
+  // THE RECENT CONTACTS PANE at the foot of the rail (arranged columns only, see `arranged`): the last few
+  // contacts in the log, each a click into the Logbook's editor, as under every other cockpit's log entry form.
+  const recentFrame = shown('recent') ? (
+    <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
+  ) : null
 
   // #204: S&P clears the callsign card, as F4 does — the operator is leaving the station the card
   // was about to go and find the next one. UI only: the mode request goes on exactly as the strip
@@ -1463,6 +1474,8 @@ export function OperateCockpit({
         return recallCard
       case 'stats':
         return statsFrame
+      case 'recent':
+        return recentFrame
       default: {
         const entry = isBoxId(id) ? entries[id] : undefined
         return entry != null && boxes && isBoxId(id) ? (
