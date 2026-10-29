@@ -63,6 +63,8 @@ fn ft2_encodes_nothing_for_a_text_the_encoder_refuses() {
         "W9XYZ/M K1ABC/P",
         "CQ <K1ABC> FN42",
         "CQ <...> FN42",
+        "K1ABC W9XYZ 579 9999",
+        "W9XYZ K1ABC/P 7Z WMA",
     ] {
         assert_eq!(mode.encode(text), Vec::<i32>::new(), "FT2 {text:?}");
     }
@@ -173,6 +175,12 @@ fn q65_msk144_and_fst4_refuse_a_text_with_no_frame_without_stopping() {
             "W9XYZ K1ABC TNXÉ 73",
             "W9XYZ/M K1ABC TNX",
             "W9XYZ/M K1ABC/P",
+            // A frame `pack77` writes with gfortran's `*` in it: a serial past 13 bits, a Field
+            // Day class past F.
+            "K1ABC W9XYZ 579 9999",
+            "TU; K1ABC W9XYZ 559 8250",
+            "K1ABC W9XYZ 30Z NB",
+            "W9XYZ K1ABC/P 7Z WMA",
         ] {
             assert_eq!(encode_alone(mode, text), Ok(0), "{mode} {text:?}");
         }

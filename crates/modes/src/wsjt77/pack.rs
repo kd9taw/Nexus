@@ -1357,9 +1357,12 @@ pub fn reads_unassigned(msg37: &[u8; 37]) -> bool {
 /// wrap). Where `pack77` returns without writing, `genq65`, `genfst4` and `genmsk_128_90` read the
 /// frame with no `err=` and gfortran stops the whole process (`Bad value during integer read`), or,
 /// after an earlier message, send that message's frame. A hashed call it only looks up is not one
-/// of these: the frame is written, and only `unpack77` reads the table.
+/// of these: the frame is written, and only `unpack77` reads the table. Nor is a frame gfortran
+/// writes with `*` where a field overflows its width (an RTTY serial past 8191, a Field Day class
+/// past F): those encoders read it as bits and stop the same way.
 pub fn writes_frame(msg37: &[u8; 37]) -> bool {
-    pack77(msg37, &mut Ledger::default()).is_ok()
+    pack77(msg37, &mut Ledger::default())
+        .is_ok_and(|c77| c77.iter().all(|&c| c == b'0' || c == b'1'))
 }
 
 /// `pack77` for `genft8` / `genft4`: the 77 message bits, or `None` where those routines call the
