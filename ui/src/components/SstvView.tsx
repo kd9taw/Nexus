@@ -491,18 +491,6 @@ export function sstvDecodeStatus(
   return { state: 'listening', text: t('sstv.rx.listening', { where }) }
 }
 
-/** A received picture that came in short of its mode's full height — what "Select incomplete"
- *  ticks. The full height is the mode table's (`SSTV_RX_MODES`, which `sstv-modes.test.ts` holds
- *  to the crate's own `image_lines`), found by the display name the decoder records or by the
- *  filename slug a picture adopted from the folder carries. A mode the table does not know, or a
- *  line count of 0 (an adopted file, whose count cannot be recovered), is never incomplete: the
- *  button only ticks a picture it can show is short. */
-export function isIncompletePicture(g: SstvGalleryEntry): boolean {
-  const key = g.mode.trim().toLowerCase()
-  const mode = SSTV_RX_MODES.find((m) => m.name.toLowerCase() === key || m.slug === key)
-  return !!mode && g.lines > 0 && g.lines < mode.height
-}
-
 /** "2026-07-17 15:30Z" from the gallery's ISO stamp (raw string if unexpected). */
 export function fmtUtc(iso: string): string {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso)
@@ -914,16 +902,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       if (!next.delete(path)) next.add(path)
       return next
     })
-  // Ticks only — nothing is deleted until the operator has seen what is ticked and pressed Delete.
-  const selectIncomplete = () => {
-    const short = gallery.filter(isIncompletePicture)
-    if (short.length === 0) {
-      pushToast(t('sstv.gallery.select.incomplete.none'), 'info')
-      return
-    }
-    setPicked((cur) => new Set([...cur, ...short.map((g) => g.path)]))
-    announce(t('sstv.gallery.select.incomplete.done', { count: short.length }))
-  }
   // One question for the whole batch, naming how many. The pictures that could not be removed stay
   // ticked, and the toast says how many and why.
   const deleteSelected = async () => {
@@ -2373,14 +2351,6 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             <div className="sstv-gallery-tools" role="toolbar" aria-label={t('sstv.gallery.select.toolbar')}>
               <button type="button" className="cockpit-popout" onClick={() => setPicked(new Set(gallery.map((g) => g.path)))}>
                 {t('sstv.gallery.select.all')}
-              </button>
-              <button
-                type="button"
-                className="cockpit-popout"
-                title={t('sstv.gallery.select.incomplete.title')}
-                onClick={selectIncomplete}
-              >
-                {t('sstv.gallery.select.incomplete.label')}
               </button>
               {pickedNow.length > 0 && (
                 <>

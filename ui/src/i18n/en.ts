@@ -12727,13 +12727,6 @@ export const EN = {
   'sstv.gallery.select.toolbar': 'Select pictures',
   'sstv.gallery.select.all': 'Select all',
   'sstv.gallery.select.clear': 'Clear selection',
-  'sstv.gallery.select.incomplete.label': 'Select incomplete',
-  'sstv.gallery.select.incomplete.title': 'Tick every picture that came in with fewer lines than its mode sends. Nothing is deleted until you press Delete selected.',
-  'sstv.gallery.select.incomplete.none': 'No incomplete pictures in the gallery',
-  'sstv.gallery.select.incomplete.done': {
-    one: "Ticked {{count}} incomplete picture",
-    other: "Ticked {{count}} incomplete pictures",
-  },
   'sstv.gallery.select.one.aria': 'Select the {{mode}} image received {{when}}',
   'sstv.gallery.deleteSelected.label': 'Delete selected ({{count}})',
   'sstv.gallery.deleteSelected.confirm.title': {

@@ -1,17 +1,14 @@
 // @vitest-environment jsdom
 //
 // CLEARING OUT THE GALLERY: tick several pictures and delete them together, after ONE question that
-// says how many. "Select incomplete" ticks every picture that came in short of its mode's height and
-// deletes nothing: the operator sees what is ticked and presses Delete. A picture whose mode is not
-// in the table, or whose line count was never recorded, is never ticked by it.
+// says how many. Pictures that could not be removed stay ticked, and a message says how many and why.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { isIncompletePicture, SstvView } from './SstvView'
+import { SstvView } from './SstvView'
 import { ConfirmHost } from '../confirm'
 import { getSstvState, sstvDeleteImages } from '../api'
 import { pushToast } from '../toast'
-import { SSTV_RX_MODES } from '../sstvModes'
 import type { AppSnapshot, SstvGalleryEntry, SstvState } from '../types'
 
 // The house budget for a SstvView render suite on a loaded box (SstvView.deleteFocus.test.tsx).
@@ -42,11 +39,8 @@ vi.mock('../toast', () => ({
 
 const snap = { mycall: 'N0CALL', radio: { dialMhz: 14.23, band: '20m', catOk: true, sideband: 'USB', transmitting: false, txEnabled: true, tuning: false, txAllowed: true } } as unknown as AppSnapshot
 
-// Full heights from the mode table the tests do not restate (sstv-modes.test.ts holds that table to
-// the crate's own `image_lines`).
-const height = (name: string) => SSTV_RX_MODES.find((m) => m.name === name)!.height
-const picture = (hh: string, mode: string, lines: number): SstvGalleryEntry => ({
-  path: `/pictures/Nexus SSTV/20261030T${hh}0000Z.png`, mode, finishedUtc: `2026-10-30T${hh}:00:00Z`, freqMhz: 14.23, lines,
+const picture = (hh: string, mode: string): SstvGalleryEntry => ({
+  path: `/pictures/Nexus SSTV/20261030T${hh}0000Z.png`, mode, finishedUtc: `2026-10-30T${hh}:00:00Z`, freqMhz: 14.23, lines: 256,
 })
 let gallery: SstvGalleryEntry[] = []
 const idle = () => ({ armed: false, mode: null, linesDone: 0, linesTotal: 0, previewRgbBase64: null, previewWidth: 0, previewHeight: 0, hedrShiftHz: 0,
@@ -67,30 +61,9 @@ afterEach(() => cleanup())
 const tickFor = (mode: string) => screen.getByRole('checkbox', { name: new RegExp(mode) }) as HTMLInputElement
 const ticked = () => screen.queryAllByRole('checkbox').filter((c) => (c as HTMLInputElement).checked).map((c) => c.closest('.sstv-thumb')!.querySelector('.sstv-thumb-mode')!.textContent)
 
-describe('isIncompletePicture', () => {
-  it('a picture short of its mode’s height is incomplete; a full one is not', () => {
-    expect(isIncompletePicture(picture('10', 'Scottie 1', height('Scottie 1') - 40))).toBe(true)
-    expect(isIncompletePicture(picture('10', 'Scottie 1', height('Scottie 1')))).toBe(false)
-    expect(isIncompletePicture(picture('10', 'PD-120', height('PD-120') - 1))).toBe(true)
-  })
-  it('finds the mode by its filename slug too, as a picture adopted from the folder carries it', () => {
-    expect(isIncompletePicture(picture('10', 'robot36', 100))).toBe(true)
-  })
-  it('never an unknown mode, and never a picture whose line count was not recorded', () => {
-    expect(isIncompletePicture(picture('10', 'Mystery 9', 10))).toBe(false)
-    expect(isIncompletePicture(picture('10', '', 10))).toBe(false)
-    expect(isIncompletePicture(picture('10', 'Scottie 1', 0))).toBe(false)
-  })
-})
-
 describe('the gallery’s tick boxes', () => {
   beforeEach(() => {
-    gallery = [
-      picture('10', 'Robot 36', height('Robot 36')),
-      picture('11', 'Scottie 1', 120),
-      picture('12', 'Mystery 9', 5),
-      picture('13', 'Martin 1', height('Martin 1')),
-    ]
+    gallery = [picture('10', 'Robot 36'), picture('11', 'Scottie 1'), picture('12', 'PD-120'), picture('13', 'Martin 1')]
   })
 
   it('ticks one picture from the keyboard, and Select all / Clear selection do what they say', async () => {
@@ -112,22 +85,10 @@ describe('the gallery’s tick boxes', () => {
     expect(ticked()).toEqual([])
   })
 
-  it('Select incomplete ticks the short picture only: not the full ones, not the unknown mode, and deletes nothing', async () => {
+  it('there is no Select incomplete', async () => {
     render(<><SstvView snap={snap} /><ConfirmHost /></>)
     await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(4))
-    fireEvent.click(screen.getByRole('button', { name: 'Select incomplete' }))
-    expect(ticked()).toEqual(['Scottie 1'])
-    expect(sstvDeleteImages).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog')).toBeNull()
-  })
-
-  it('Select incomplete with none to find says so and ticks nothing', async () => {
-    gallery = [picture('10', 'Robot 36', height('Robot 36')), picture('12', 'Mystery 9', 5)]
-    render(<><SstvView snap={snap} /><ConfirmHost /></>)
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(2))
-    fireEvent.click(screen.getByRole('button', { name: 'Select incomplete' }))
-    expect(ticked()).toEqual([])
-    expect(pushToast).toHaveBeenCalledWith('No incomplete pictures in the gallery', 'info')
+    expect(screen.queryByRole('button', { name: /incomplete/i })).toBeNull()
   })
 
   it('Delete selected asks once, naming the count, and deletes exactly the ticked pictures', async () => {
