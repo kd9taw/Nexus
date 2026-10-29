@@ -219,6 +219,9 @@ fn signing_from_the_adif_sends_the_grid_stored_on_the_contact() {
     let portable = e
         .save_station_profile(profile("Portable", "KD9TAW/P", "EN43", ""))
         .unwrap();
+    // The home contact carries no place but its grid: a state Nexus filled now goes as stored
+    // (the place test below), and this control is about the grid.
+    e.settings.op_state = String::new();
     let home = log(&mut e, "K1HOM");
     e.switch_station_profile(&portable).unwrap();
     let away = log(&mut e, "K1POR");
@@ -257,4 +260,143 @@ fn signing_from_the_adif_sends_the_grid_stored_on_the_contact() {
     // A named Station Location still leaves out a grid Nexus filled.
     let named = lotw_batch_adif(&[home, away], false, ME, "EN61");
     assert!(grids(&named).is_empty(), "{named}");
+}
+
+/// The value of the ADIF field `tag` in each record of `adif`, in order.
+fn values(adif: &str, tag: &str) -> Vec<String> {
+    adif.split(&format!("<{tag}:"))
+        .skip(1)
+        .map(|f| {
+            let (len, rest) = f.split_once('>').expect("a field");
+            rest[..len.parse::<usize>().expect("a length")].to_string()
+        })
+        .collect()
+}
+
+/// The own-station place fields beside the grid that Nexus fills on a contact itself.
+const PLACE: [&str; 5] = [
+    "MY_STATE",
+    "MY_CNTY",
+    "MY_CQ_ZONE",
+    "MY_ITU_ZONE",
+    "MY_IOTA",
+];
+
+/// ★ Signing from the ADIF, a contact goes with the rest of the place Nexus filled on it too — its
+/// state, county, CQ and ITU zones and IOTA, as stored — never the station's at upload: a /P
+/// contact keeps its portable place after the profile is edited and the station is home with
+/// another state. Each goes exactly as it would had the operator typed it. CONTROL: a contact
+/// with none of them stored (only the grid Nexus filled) is sent byte for byte as before, with no
+/// place field; with a named Station Location every filled one is still left out.
+#[test]
+fn signing_from_the_adif_sends_the_place_stored_on_the_contact() {
+    let mut e = station();
+    e.settings.lotw_use_adif_location = true;
+    e.settings.op_state = String::new();
+    let home = log(&mut e, "K1HOM");
+    assert_eq!(
+        tempo_core::logbook::self_filled(&home),
+        ["MY_GRIDSQUARE"],
+        "premise: the home contact carries no place but the grid"
+    );
+    let at = StationProfile {
+        state: "MN".into(),
+        county: "Itasca".into(),
+        cq_zone: Some(4),
+        itu_zone: Some(7),
+        iota: "NA-001".into(),
+        ..profile("Portable", "KD9TAW/P", "EN37", "")
+    };
+    let portable = e.save_station_profile(at.clone()).unwrap();
+    e.switch_station_profile(&portable).unwrap();
+    let away = log(&mut e, "K1POR");
+    let filled = tempo_core::logbook::self_filled(&away);
+    for tag in PLACE {
+        assert!(
+            filled.contains(&tag),
+            "premise: Nexus filled {tag}: {filled:?}"
+        );
+    }
+    // The live place then changes: the profile is edited, and the station is home in another state.
+    e.save_station_profile(StationProfile {
+        id: portable.clone(),
+        state: "ND".into(),
+        county: "Cass".into(),
+        cq_zone: Some(5),
+        itu_zone: Some(8),
+        iota: String::new(),
+        ..at
+    })
+    .unwrap();
+    e.switch_station_profile(HOME_STATION_PROFILE).unwrap();
+    e.settings.op_state = "IL".into();
+    let (call, grid) = (e.settings.mycall.clone(), e.settings.mygrid.clone());
+
+    let sent = lotw_batch_adif(&[home.clone(), away.clone()], true, &call, &grid);
+    let want = [
+        ("MY_STATE", "MN"),
+        ("MY_CNTY", "MN,Itasca"),
+        ("MY_CQ_ZONE", "4"),
+        ("MY_ITU_ZONE", "7"),
+        ("MY_IOTA", "NA-001"),
+    ];
+    for (tag, value) in want {
+        assert_eq!(
+            values(&sent, tag),
+            [value],
+            "{tag}, the portable contact's only: {sent}"
+        );
+    }
+    for (tag, live) in [
+        ("MY_STATE", "ND"),
+        ("MY_STATE", "IL"),
+        ("MY_CNTY", "ND,Cass"),
+        ("MY_CQ_ZONE", "5"),
+        ("MY_ITU_ZONE", "8"),
+    ] {
+        assert!(
+            !values(&sent, tag).contains(&live.to_string()),
+            "never the live {tag} {live}: {sent}"
+        );
+    }
+    assert_eq!(grids(&sent), ["EN52", "EN37"], "{sent}");
+
+    // Exactly as the operator's own typed place goes: the builder of before, given the contact
+    // with only its grid left marked as Nexus's.
+    let mut typed = away.clone();
+    for (k, v) in &mut typed.extra {
+        if k == tempo_core::logbook::SELF_FILLED_FIELD {
+            *v = "MY_GRIDSQUARE".into();
+        }
+    }
+    let typed_before = tempo_core::logbook::adif_record_with_station(
+        &tempo_core::logbook::without_self_filled(&typed),
+        &call,
+        "EN37",
+    );
+    assert_eq!(
+        lotw_batch_adif(std::slice::from_ref(&away), true, &call, &grid),
+        format!("{}{typed_before}", tempo_core::logbook::adif_header())
+    );
+
+    // CONTROL: the contact with no place stored, byte for byte as before and with no place field.
+    let control = lotw_batch_adif(std::slice::from_ref(&home), true, &call, &grid);
+    let before = tempo_core::logbook::adif_record_with_station(
+        &tempo_core::logbook::without_self_filled(&home),
+        &call,
+        &grid,
+    );
+    assert_eq!(
+        control,
+        format!("{}{before}", tempo_core::logbook::adif_header())
+    );
+    for tag in PLACE {
+        assert!(values(&control, tag).is_empty(), "{tag}: {control}");
+    }
+
+    // A named Station Location still leaves out every place field Nexus filled.
+    let named = lotw_batch_adif(&[home, away], false, &call, &grid);
+    for tag in PLACE {
+        assert!(values(&named, tag).is_empty(), "{tag}: {named}");
+    }
 }

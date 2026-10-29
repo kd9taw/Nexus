@@ -520,12 +520,25 @@ pub fn settle_popup_my_grid(held: &mut QsoRecord, filled: &QsoRecord) {
 }
 
 /// The record as the LoTW upload sends it: without the own-station fields Nexus filled in itself
-/// ([`SELF_FILLED_FIELD`]), so TQSL signs it from the Station Location (or, in ADIF-location mode,
-/// from the live setting) exactly as it did before Nexus filled them.
+/// ([`SELF_FILLED_FIELD`]), so TQSL signs it from the named Station Location exactly as it did
+/// before Nexus filled them. Signing from the ADIF, see [`without_self_filled_grid`].
 pub fn without_self_filled(r: &QsoRecord) -> QsoRecord {
+    without_self_filled_of(r, &SELF_FILLED_TAGS)
+}
+
+/// The record as the LoTW upload sends it when TQSL signs from the location in the ADIF: only a
+/// grid Nexus filled is taken out (the upload stamps the contact's own grid where it stamps the
+/// live one), and every other own-station field Nexus filled (state, county, zones, IOTA) goes as
+/// stored on the contact, as one the operator typed would.
+pub fn without_self_filled_grid(r: &QsoRecord) -> QsoRecord {
+    without_self_filled_of(r, &["MY_GRIDSQUARE"])
+}
+
+/// `r` without those of `tags` Nexus filled itself, and without the [`SELF_FILLED_FIELD`] list.
+fn without_self_filled_of(r: &QsoRecord, tags: &[&str]) -> QsoRecord {
     let mut out = r.clone();
     for tag in self_filled(r) {
-        if !SELF_FILLED_TAGS.contains(&tag) {
+        if !tags.contains(&tag) {
             continue;
         }
         if tag == "MY_GRIDSQUARE" {

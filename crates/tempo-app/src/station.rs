@@ -443,20 +443,26 @@ pub fn lotw_owed(rows: &crate::logstore::LogRows) -> Result<bool, String> {
 /// from the live setting, exactly as they always did.
 ///
 /// ⭐ The own-station fields Nexus filled in itself from Settings (`MY_GRIDSQUARE`, `MY_STATE`;
-/// [`tempo_core::logbook::SELF_FILLED_FIELD`]) are left out, in both modes, so TQSL signs every
-/// such contact exactly as it did before Nexus filled them: from the named Station Location, or
-/// from the live setting stamped above. A named location's `-a compliant` check would otherwise
-/// skip, without a word, every contact whose filled grid is not the certificate's location. A
-/// field the operator typed or another program logged is not Nexus's and goes as it always has.
+/// [`tempo_core::logbook::SELF_FILLED_FIELD`]) are left out with a named Station Location, so TQSL
+/// signs every such contact from it exactly as it did before Nexus filled them. Its `-a compliant`
+/// check would otherwise skip, without a word, every contact whose filled grid is not the
+/// certificate's location. A field the operator typed or another program logged is not Nexus's and
+/// goes as it always has.
 ///
-/// ⭐ ADIF-location mode is the one exception for the grid: TQSL signs from the grid in the file,
-/// so the grid stamped is the one stored on the contact, filled or not, and `grid` (the live one)
-/// only for a contact with none. A portable contact keeps the grid it was made from, whatever grid
+/// ⭐ ADIF-location mode is the exception: TQSL signs from the place in the file, so each contact
+/// goes with the place stored on it, filled or not. The grid stamped is the contact's own, and
+/// `grid` (the live one) only for a contact with none; the state, county, zones and IOTA Nexus
+/// filled go as stored ([`tempo_core::logbook::without_self_filled_grid`]), and a contact with
+/// none goes without, as before. A portable contact keeps the place it was made from, whatever
 /// the station has when it is uploaded.
 pub fn lotw_batch_adif(batch: &[QsoRecord], adif_location: bool, call: &str, grid: &str) -> String {
     let mut out = tempo_core::logbook::adif_header();
     for stored in batch {
-        let r = &tempo_core::logbook::without_self_filled(stored);
+        let r = &if adif_location {
+            tempo_core::logbook::without_self_filled_grid(stored)
+        } else {
+            tempo_core::logbook::without_self_filled(stored)
+        };
         if adif_location {
             let grid = stored.my_grid.as_deref().unwrap_or(grid);
             out.push_str(&tempo_core::logbook::adif_record_with_station(
