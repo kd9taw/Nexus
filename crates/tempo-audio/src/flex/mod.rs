@@ -754,14 +754,24 @@ impl FlexDaemon {
     }
 
     /// Whether a voice-keyer message waiting for DAX may key now: the radio reports taking its
-    /// transmit audio from DAX, Nexus's own DAX transmit stream is there to carry the message (the
+    /// transmit audio from DAX, no write of Nexus's own to that flag is still in flight
+    /// ([`Routing::write_in_flight`]: right after an over the radio still reports DAX while its mic
+    /// is on the way back), Nexus's own DAX transmit stream is there to carry the message (the
     /// route is up), and nothing of ours is keyed, with the radio seen idle. The radio loop's hold
-    /// before it takes such a message. Cheap: the session's state read in place.
+    /// before it takes such a message, or a computer-microphone over on the DAX hold. Cheap: the
+    /// session's state read in place.
     pub fn takes_voice_dax(&self) -> bool {
         self.tx_route_ready()
             && self.conn().read(|s| {
                 s.model.transmit.dax == Some(true) && s.dax_tx_stream.is_some() && s.transmit_ready
             })
+            && !self.routing_write_in_flight()
+    }
+
+    /// [`Routing::write_in_flight`], on the session's state now.
+    fn routing_write_in_flight(&self) -> bool {
+        let view = self.conn().read(|s| routing_view(s, &self.state));
+        lock(&self.state.routing).write_in_flight(&view)
     }
 
     /// Whether the radio takes its transmit audio from Nexus's own DAX now: it reports DAX, Nexus's

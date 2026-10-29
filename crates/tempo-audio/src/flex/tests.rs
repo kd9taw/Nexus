@@ -2596,6 +2596,74 @@ fn a_key_carrying_the_keyers_message_needs_the_radios_dax() {
     wait_session(&d, "the unkey confirmed", |s| !s.keyed);
 }
 
+/// ⛔ Nexus's own write of the mic still in flight: right after a message the routing writes the
+/// mic back, and until the radio reports it the radio still says DAX. A key marked as the
+/// message's (or a computer-microphone over's) is refused in the shim's words then, and the radio
+/// loop's own look says not ready: `xmit 1` after `transmit set dax=0` would put the radio's mic on
+/// the air on a radio that applies them in order. CONTROL: the same marked key on the radio's
+/// confirmed DAX keys, with the loop's look ready.
+#[test]
+fn a_marked_key_waits_while_nexuss_mic_write_is_in_flight() {
+    let slow_mic = (
+        Pattern::Exact("transmit set dax=0".to_string()),
+        vec![Rule {
+            code: "0".to_string(),
+            message: String::new(),
+            items: vec![
+                Item::Wait(1_500),
+                Item::Send("S0|transmit dax=0".to_string()),
+            ],
+        }],
+    );
+    let sim = simulator(with(with_mode_echo(), vec![slow_mic]), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+    eventually("the radio on DAX", || {
+        (d.session().snapshot().model.transmit.dax == Some(true)).then_some(())
+    });
+
+    // CONTROL: on the radio's confirmed DAX the marked key goes out.
+    assert!(d.takes_voice_dax(), "CONTROL: the loop's look on DAX");
+    d.set_voice_key(true);
+    assert_eq!(
+        c.ask("T 1", 1),
+        "RPRT 0\n",
+        "CONTROL: the marked key on DAX"
+    );
+    assert_eq!(wait_count(&sim, "xmit 1", 1), 1);
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    d.set_voice_key(false);
+    assert_eq!(wait_count(&sim, "xmit 0", 1), 1);
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed && s.transmit_ready);
+
+    // Phone at the shack wants the mic back: written, not yet reported.
+    route_until(&d, &sim, false, "transmit set dax=0", 1);
+    assert_eq!(
+        d.session().snapshot().model.transmit.dax,
+        Some(true),
+        "premise: the radio still reports DAX"
+    );
+    assert!(!d.takes_voice_dax(), "the loop's look keys on a stale DAX");
+    d.set_voice_key(true);
+    let asked = Instant::now();
+    let answer = c.ask("T 1", 1);
+    d.set_voice_key(false);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        format!(
+            "answer={answer:?} xmit1={} refused={:?}",
+            count(&sim, "xmit 1"),
+            d.key_refused_since(asked)
+        ),
+        "answer=\"RPRT -1\\n\" xmit1=1 refused=Some((\"not keying the voice keyer's USB message: \
+         Nexus's switch of the radio's transmit audio is not confirmed yet\", \
+         Some(FlexAudioRefusal { mode: \"USB\", cause: NotYetDax })))"
+    );
+}
+
 /// The mode this shim just commanded counts before the radio reports it: right after `M PKTUSB`,
 /// with the radio still reporting USB and the mic as the source, `T 1` is refused.
 #[test]

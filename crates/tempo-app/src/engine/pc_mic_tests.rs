@@ -716,6 +716,35 @@ fn a_keyed_over_on_the_dax_hold_ends_when_the_radio_leaves_dax() {
     assert_eq!(lane(&e), Some(PcMicCause::GateDown));
 }
 
+/// ⛔ …and in the release's tail too: the radio leaving DAX inside the 200 ms after the release
+/// ends the over on that tick, its audio not played, though the tail still had audio to send.
+/// CONTROL: while the radio keeps DAX the same tail stays keyed.
+#[test]
+fn the_radio_leaving_dax_in_the_release_tail_ends_the_over_at_once() {
+    let mut e = flex_station();
+    let t0 = Instant::now();
+    keyed_on_hold(&mut e, t0);
+    // 400 ms of speech queued, more than the tail sends.
+    e.push_pc_mic(&audio(400, 0.25), t0 + ms(220));
+    let _ = e.poll_pc_mic(t0 + ms(220), 40.0, 2);
+    let r = t0 + ms(240);
+    e.release_pc_mic_at(r);
+    e.push_pc_mic(&audio(20, 0.5), r + ms(20));
+    assert!(
+        matches!(
+            e.poll_pc_mic(r + ms(20), 40.0, 2),
+            MicTick::Samples(_) | MicTick::Ahead
+        ),
+        "CONTROL: the tail ended on DAX"
+    );
+    assert!(e.pc_mic_keyed(), "CONTROL: premise: the tail is playing");
+    e.observe_pc_mic_dax(false);
+    e.push_pc_mic(&audio(20, 0.5), r + ms(40));
+    assert_eq!(e.poll_pc_mic(r + ms(40), 40.0, 2), MicTick::Idle);
+    assert!(!e.pc_mic_armed(), "the tail outlived the radio leaving DAX");
+    assert!(e.take_pc_mic_abort(), "no flush + unkey");
+}
+
 /// ⛔ EVERY TX GUARD STILL CUTS AN OVER ON THE DAX HOLD, and the hold ends with it (the radio loop
 /// then gives the radio its mic back): Stop TX, TX Off and a lost Flex connection or handoff at
 /// once; the watchdog on its tick, with TX left off; the release once its tail is spent; the

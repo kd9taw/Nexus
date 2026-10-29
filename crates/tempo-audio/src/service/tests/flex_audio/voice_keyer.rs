@@ -77,6 +77,16 @@ pub(super) fn slow_dax(ms: u64) -> SimSession {
     )
 }
 
+/// The bundled radio reporting its DAX source back to the mic `ms` after Nexus writes it, instead
+/// of at once: the window after an over in which Nexus's own write of the mic is still in flight.
+pub(super) fn slow_mic_back(ms: u64) -> SimSession {
+    with_rule(
+        reports(&["USB"]),
+        "transmit set dax=0",
+        vec![Item::Wait(ms), send("S0|transmit dax=0")],
+    )
+}
+
 /// The radio's own word for its DAX source in a transmit status line: `dax=1` or `dax=0`.
 fn dax_word(line: &str) -> Option<&str> {
     line.split_whitespace().find(|t| t.starts_with("dax="))
@@ -189,6 +199,21 @@ pub(super) fn run_until_seen(
         std::thread::sleep(Duration::from_millis(20));
     }
     told
+}
+
+/// Run the loop until the radio has seen `want` (as [`voice_trace`] names it) `n` times after
+/// `since`.
+pub(super) fn run_until_count(s: &mut FlexScene, since: Instant, want: &str, n: usize) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while voice_trace(s, since).iter().filter(|t| *t == want).count() < n {
+        assert!(
+            Instant::now() < deadline,
+            "never saw {want} {n} times: {:?}",
+            voice_trace(s, since)
+        );
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// A message of `secs` at the keyer's 12 kHz.
@@ -924,6 +949,47 @@ fn a_ptt_held_through_a_message_never_holds_the_keyers_dax() {
         "keys=1 refused=\"USB\" wire=[\"stream create type=dax_tx\", \"transmit set dax=1\", \
          \"radio dax=1\", \"xmit 1\", \"xmit 0\", \"idle\"]"
     );
+}
+
+/// ⛔ A MESSAGE STARTED WHILE THE MIC IS COMING BACK. After a message, Nexus writes the radio's
+/// mic back; until the radio reports it, the radio still says DAX. A message sent in that window
+/// must not key on that stale DAX: the radio would get `xmit 1` after `transmit set dax=0` and, if
+/// it applies them in order, transmit its own mic (the room). It keys only once the radio has
+/// reported the mic and then DAX again. CONTROL: a message sent once the mic is reported back keys
+/// the same way.
+#[test]
+fn a_message_while_the_mic_is_coming_back_keys_only_on_dax_again() {
+    for quick in [true, false] {
+        let mut s = shack(slow_mic_back(400));
+        let since = Instant::now();
+        s.engine.lock().unwrap().send_voice(message()).unwrap();
+        if quick {
+            run_until_seen(&mut s, since, "transmit set dax=0");
+            assert!(
+                seen_at(&s, since, "radio dax=0").is_none(),
+                "premise: the mic's write is in flight"
+            );
+        } else {
+            run_until_seen(&mut s, since, "radio dax=0");
+            s.run(200);
+        }
+        s.engine.lock().unwrap().send_voice(message()).unwrap();
+        run_until_count(&mut s, since, "radio dax=0", 2);
+        s.run(200);
+        assert_eq!(
+            format!(
+                "dropped={} keys={} wire={:?}",
+                dropped(&s),
+                keys(&s),
+                voice_trace(&s, since)
+            ),
+            "dropped=null keys=2 wire=[\"stream create type=dax_tx\", \"transmit set dax=1\", \
+             \"radio dax=1\", \"xmit 1\", \"xmit 0\", \"idle\", \"transmit set dax=0\", \
+             \"radio dax=0\", \"transmit set dax=1\", \"radio dax=1\", \"xmit 1\", \"xmit 0\", \
+             \"idle\", \"transmit set dax=0\", \"radio dax=0\"]",
+            "quick={quick}"
+        );
+    }
 }
 
 /// ⭐ SSTV AND APRS STAY REFUSED WHILE A MESSAGE PLAYS (operator ruling, 2026-10-12, "Stay

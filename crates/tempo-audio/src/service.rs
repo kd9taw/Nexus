@@ -12838,10 +12838,11 @@ impl RadioLoop {
                     MicTick::Key => {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying — the fail-safe must know
-                                                      // On the DAX hold the one key is marked as carrying Nexus's audio, which
-                                                      // the client keys only while the radio takes Nexus's DAX: the operator
-                                                      // flipping the radio back to its mic between the look above and the key
-                                                      // must not put the room on the air.
+
+                        // On the DAX hold the one key is marked as carrying Nexus's audio, which
+                        // the client keys only while the radio takes Nexus's DAX: the operator
+                        // flipping the radio back to its mic between the look above and the key
+                        // must not put the room on the air.
                         let marked = hold.and(self.rigctld_proc.as_ref().and_then(CatDaemon::flex));
                         if let Some(d) = marked {
                             d.set_voice_key(true);

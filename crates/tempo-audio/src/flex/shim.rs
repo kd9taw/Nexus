@@ -71,7 +71,10 @@
 //! with its cause, in whatever mode the slice reports, unless the radio reports `transmit dax=1`
 //! and Nexus's own transmit stream exists: the operator flipping SmartSDR's DAX button back
 //! between the loop's look and the key must not put the room on the air in the message's place.
-//! Its stop, `T 0`, is never marked.
+//! Nor while Nexus's own write of that flag is still in flight
+//! ([`super::routing::Routing::write_in_flight`]): right after an over the radio still reports DAX
+//! while the mic is on the way back, and the key would follow that write. Its stop, `T 0`, is
+//! never marked.
 //!
 //! ## A CW word is timed at the radio's speed
 //! The radio's own keyer sends each word (`cwx send`) and keys and unkeys itself with its
@@ -289,19 +292,35 @@ impl FlexShim {
             // the slice reports. Native audio is not asked: the message is played to the DAX
             // route or not at all.
             let from_dax = snap.model.transmit.dax == Some(true);
-            if from_dax && snap.dax_tx_stream.is_some() {
+            // Nexus's own write of the flag still in flight: the flag reported is about to change
+            // (right after an over, DAX while the mic is on the way back), and this key would
+            // follow that write onto the radio's mic.
+            let in_flight = {
+                let view = routing_view(&snap, &self.state);
+                self.state
+                    .routing
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .write_in_flight(&view)
+            };
+            if from_dax && snap.dax_tx_stream.is_some() && !in_flight {
                 return None;
             }
             let mode = mode.unwrap_or_default();
             let why = format!(
-                "not keying the voice keyer's {}message: the radio takes its transmit audio \
-                 from {}{}",
+                "not keying the voice keyer's {}message: {}{}",
                 if mode.is_empty() {
                     String::new()
                 } else {
                     format!("{mode} ")
                 },
-                if from_dax { "DAX" } else { "its mic input" },
+                if in_flight {
+                    "Nexus's switch of the radio's transmit audio is not confirmed yet"
+                } else if from_dax {
+                    "the radio takes its transmit audio from DAX"
+                } else {
+                    "the radio takes its transmit audio from its mic input"
+                },
                 if snap.dax_tx_stream.is_some() {
                     ""
                 } else {

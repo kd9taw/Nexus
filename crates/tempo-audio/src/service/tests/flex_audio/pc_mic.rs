@@ -10,8 +10,8 @@
 //! What the radio saw is read by value, in its order ([`voice_trace`]).
 
 use super::voice_keyer::{
-    dax_in, holder_kept_in_usb, phone, run_until_seen, seen_at, send, shack, shack_on, slow_dax,
-    voice_trace, with_rule, IDLE,
+    dax_in, holder_kept_in_usb, phone, run_until_count, run_until_seen, seen_at, send, shack,
+    shack_on, slow_dax, slow_mic_back, voice_trace, with_rule, IDLE,
 };
 use super::*;
 
@@ -126,6 +126,59 @@ fn a_held_over_waits_for_dax_carries_the_microphone_and_gives_the_mic_back() {
         frames >= 24_000 * 3 / 2,
         "the held over carried the microphone: {frames} frames at 24 kHz"
     );
+}
+
+/// ⛔ A QUICK RE-PRESS WHILE THE MIC IS COMING BACK. After an over, Nexus writes the radio's mic
+/// back; until the radio reports it (400 ms here), the radio still says DAX. A press in that window
+/// (a quick "go ahead" release, a double-tap) must not key on that stale DAX: the radio would get
+/// `xmit 1` after `transmit set dax=0` and, if it applies them in order, put its own mic (the room)
+/// on the air. It keys only once the radio has reported the mic and then DAX again, and carries the
+/// computer's microphone as any over does. CONTROL: a press once the mic is reported back keys the
+/// same way.
+#[test]
+fn a_quick_re_press_keys_only_once_the_radio_is_back_on_dax() {
+    for quick in [true, false] {
+        let mut s = shack_with_mic(slow_mic_back(400));
+        let since = Instant::now();
+        ptt(&s, true);
+        run_until_seen(&mut s, since, "xmit 1");
+        s.run(500);
+        ptt(&s, false);
+        if quick {
+            run_until_seen(&mut s, since, "transmit set dax=0");
+            assert!(
+                seen_at(&s, since, "radio dax=0").is_none(),
+                "quick={quick}: premise: the mic's write is in flight"
+            );
+        } else {
+            run_until_seen(&mut s, since, "radio dax=0");
+            s.run(200);
+        }
+        ptt(&s, true);
+        run_until_count(&mut s, since, "xmit 1", 2);
+        s.run(500);
+        let keyed = s.engine.lock().unwrap().pc_mic_keyed();
+        let held = format!("keyed={keyed} ended={} keys={}", ended(&s), keys(&s));
+        ptt(&s, false);
+        run_until_count(&mut s, since, "radio dax=0", 2);
+        s.run(200);
+        assert_eq!(
+            format!("{held} wire={:?}", voice_trace(&s, since)),
+            "keyed=true ended=null keys=2 wire=[\"stream create type=dax_tx\", \
+             \"transmit set dax=1\", \"radio dax=1\", \"xmit 1\", \"xmit 0\", \"idle\", \
+             \"transmit set dax=0\", \"radio dax=0\", \"transmit set dax=1\", \"radio dax=1\", \
+             \"xmit 1\", \"xmit 0\", \"idle\", \"transmit set dax=0\", \"radio dax=0\"]",
+            "quick={quick}"
+        );
+        let second = dax_in(&s, since)
+            .into_iter()
+            .filter(|(t, _)| *t > seen_at(&s, since, "radio dax=0").unwrap())
+            .count();
+        assert!(
+            second > 0,
+            "quick={quick}: the re-press carried no microphone"
+        );
+    }
 }
 
 /// What ends the over in [`every_transmit_guard_cuts_an_over_on_the_dax_hold`].

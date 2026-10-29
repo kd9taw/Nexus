@@ -389,6 +389,15 @@ impl Routing {
         self.leaves_dax(view) && !(native_audio && browser_voice)
     }
 
+    /// Whether Nexus's own write of the flag is still in flight: written, and not yet reported back
+    /// by the radio. Until it is, the flag the radio reports is about to change, so nothing keys on
+    /// it: right after an over, the radio still reports DAX after Nexus wrote its mic back, and a
+    /// key sent then would follow that write and put the radio's mic on the air.
+    pub fn write_in_flight(&self, view: &View) -> bool {
+        self.unconfirmed
+            .is_some_and(|(dax, _)| view.radio != Some(dax))
+    }
+
     /// Whether the radio takes its transmit audio from DAX only for a voice-keyer message: Nexus
     /// wrote it for the message alone, in place of the mic Phone at the shack has, and the radio
     /// still reports it. Its mic counts as the operator's through that (APRS and SSTV stay
