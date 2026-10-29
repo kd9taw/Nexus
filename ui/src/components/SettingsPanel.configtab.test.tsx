@@ -176,7 +176,7 @@ beforeEach(() => {
 afterEach(cleanup)
 
 
-describe('Config tab: a findable home for backup and restore', () => {
+describe('App tab (the old Config tab): a findable home for backup and restore', () => {
   const openTab = async () => fireEvent.click(await screen.findByRole('tab', { name: 'App' }))
 
   // The RESET cases that used to live here are now SettingsPanel.reset.test.tsx, which drives

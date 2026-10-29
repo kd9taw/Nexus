@@ -131,7 +131,7 @@ describe('Settings ▸ Logbook', () => {
     for (const id of MOVED) expect(document.getElementById(`settings-${id}`), id).not.toBeNull()
   })
 
-  it('Logging & Connectors keeps the sign-ins and uploads, and none of the moved sections', async () => {
+  it('Services (once Logging & Connectors) keeps the sign-ins and uploads, and none of the moved sections', async () => {
     await openTab('Services')
     for (const id of MOVED) expect(document.getElementById(`settings-${id}`), id).toBeNull()
     const conf = section('confirmations')
@@ -145,7 +145,7 @@ describe('Settings ▸ Logbook', () => {
     expect(document.getElementById('settings-integrations-feeds')).not.toBeNull()
   })
 
-  it('the controls it left behind are gone from Appearance and Config', async () => {
+  it('the controls it left behind are gone from Appearance and App (once Config)', async () => {
     await openTab('Appearance')
     expect(screen.queryByRole('checkbox', { name: 'Open the station card when the pointer rests on a call' })).toBeNull()
     expect(section('map-globe').queryByRole('button', { name: 'Reset' })).toBeNull()
