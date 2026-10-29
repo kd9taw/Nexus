@@ -106,24 +106,36 @@ pub fn is_built_page(html: &str) -> bool {
     html.to_ascii_lowercase().contains(BUILT_MARKER)
 }
 
-/// What the operator is told when step 1 did not build the file, read off eQSL's page. eQSL
+/// eQSL's InBox file with no cards in it: its opening line and header, and no records after them.
+/// eQSL answers a good login with nothing in the range asked for with a page saying so instead of
+/// a file ([`not_built_answer`]), and that answer is this file: it reads as eQSL's, complete,
+/// holding nothing.
+pub const EMPTY_INBOX: &str =
+    "ADIF 3 Export from eQSL.cc\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<EOH>\n";
+
+/// What step 1's page `html` comes to when it is not the built page, read off the page. eQSL
 /// answers all of these with HTTP 200: a login it refuses with "Error: No such Username/Password
-/// found", and a username it does not know with "Error: No such Callsign found"; a good login
-/// with nothing in the range asked for with "You have no log entries". Any other page says
-/// nothing about the login either way, so its message does not either.
-pub fn not_built_message(html: &str) -> &'static str {
+/// found", and a username it does not know with "Error: No such Callsign found", both the
+/// operator's message; a good login with nothing in the range asked for with "You have no log
+/// entries", which is the InBox, empty ([`EMPTY_INBOX`]). Any other page says nothing about the
+/// login either way, so its message does not either.
+pub fn not_built_answer(html: &str) -> Result<&'static str, &'static str> {
     let s = html.to_ascii_lowercase();
     if s.contains("error: no such username/password found")
         || s.contains("error: no such callsign found")
     {
-        "eQSL did not accept your username or password. Check the eQSL username and password in \
-         Settings (your eQSL website login)."
+        Err(
+            "eQSL did not accept your username or password. Check the eQSL username and password \
+             in Settings (your eQSL website login).",
+        )
     } else if s.contains("you have no log entries") {
-        "eQSL has no cards for you in the range asked for, so there was nothing to download."
+        Ok(EMPTY_INBOX)
     } else {
-        "eQSL answered with a page that isn't the download. eQSL may be showing an error page, or \
-         may be down for maintenance. Try again shortly, and if it keeps happening please report \
-         it."
+        Err(
+            "eQSL answered with a page that isn't the download. eQSL may be showing an error \
+             page, or may be down for maintenance. Try again shortly, and if it keeps happening \
+             please report it.",
+        )
     }
 }
 
@@ -466,31 +478,39 @@ mod tests {
     /// eQSL's refusal of the login is called one, in either of its wordings.
     #[test]
     fn a_refused_eqsl_login_is_called_one() {
-        let refused = "eQSL did not accept your username or password. Check the eQSL username \
-                       and password in Settings (your eQSL website login).";
+        let refused = Err(
+            "eQSL did not accept your username or password. Check the eQSL \
+                           username and password in Settings (your eQSL website login).",
+        );
         assert_eq!(
-            not_built_message("<html><H3>Error: No such Username/Password found</H3></html>"),
+            not_built_answer("<html><H3>Error: No such Username/Password found</H3></html>"),
             refused
         );
         // An unknown username, as eQSL answers it.
         assert_eq!(
-            not_built_message("<html><body><H3>Error: No such Callsign found</H3></body></html>"),
+            not_built_answer("<html><body><H3>Error: No such Callsign found</H3></body></html>"),
             refused
         );
     }
 
-    /// A good login with nothing to download is not called a bad one.
+    /// A good login with nothing in the range is the InBox with no cards, not a failure: the
+    /// file every reader of the download takes as eQSL's, whole, and empty.
     #[test]
-    fn an_empty_eqsl_inbox_is_not_called_a_bad_login() {
-        let msg = not_built_message("<html><body>You have no log entries</body></html>");
+    fn eqsl_saying_no_log_entries_is_an_empty_inbox() {
         assert_eq!(
-            msg,
-            "eQSL has no cards for you in the range asked for, so there was nothing to download."
+            not_built_answer("<html><body>You have no log entries</body></html>"),
+            Ok(EMPTY_INBOX)
         );
-        assert!(!msg.contains("password"), "{msg}");
+        assert!(is_eqsl_adif(EMPTY_INBOX), "read as eQSL's file");
+        assert!(is_complete_eqsl_body(EMPTY_INBOX), "read as whole");
+        assert!(
+            !EMPTY_INBOX.to_ascii_lowercase().contains("<eor>"),
+            "no cards"
+        );
     }
 
-    /// Control: a page that is neither (maintenance, an unknown error) blames neither way.
+    /// Control: a page that is neither (maintenance, an unknown error) is still a failure, and
+    /// blames neither way.
     #[test]
     fn an_unrecognised_eqsl_page_blames_neither_way() {
         for page in [
@@ -498,7 +518,7 @@ mod tests {
             "<html><body><H3>Error: Something else went wrong</H3></body></html>",
             "",
         ] {
-            let msg = not_built_message(page);
+            let msg = not_built_answer(page).expect_err(page);
             assert!(
                 msg.starts_with("eQSL answered with a page that isn't the download"),
                 "{msg}"

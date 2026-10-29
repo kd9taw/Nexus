@@ -38,9 +38,11 @@ pub fn fetch_inbox(inbox_url: &str) -> Result<String, String> {
     // Step 1 — the built-page HTML.
     let html = get_text(&client, inbox_url)?;
     if !eqsl::is_built_page(&html) {
-        // A refused login, an empty range, or a page that is neither: Nexus's own words for
-        // each, never the page's.
-        return Err(eqsl::not_built_message(&html).to_string());
+        // An empty range is the InBox with no cards; a refused login or a page that is neither
+        // is Nexus's own words for each, never the page's.
+        return eqsl::not_built_answer(&html)
+            .map(str::to_string)
+            .map_err(str::to_string);
     }
     let href = eqsl::extract_adi_href(&html)
         .ok_or_else(|| "eQSL: no download link found in the response".to_string())?;

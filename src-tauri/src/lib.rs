@@ -29410,13 +29410,43 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     let password = eqsl_keychain()?
         .get_password()
         .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
+    download_eqsl_report_on(
+        state,
+        username,
+        qth_nickname,
+        since,
+        password,
+        now_unix(),
+        &|url| propagation::live::eqsl::fetch_inbox(url),
+        &|updated| {
+            persist_settings(updated, |e| {
+                eprintln!("tempo: failed to persist eQSL cursor: {e}")
+            });
+        },
+    )
+}
+
+/// [`download_eqsl_report_impl`] with the account and cursor as Settings held them, the password,
+/// the clock (`now`), eQSL (`fetch`, both steps) and the settings file (`persist`, handed the
+/// cursor's change to save, under the Engine lock) supplied.
+#[allow(clippy::too_many_arguments)]
+fn download_eqsl_report_on(
+    state: &SharedEngine,
+    username: String,
+    qth_nickname: String,
+    since: String,
+    password: String,
+    now: i64,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+    persist: &dyn Fn(Settings),
+) -> Result<LotwSyncResult, String> {
     let used_username = username.clone();
     let used_nickname = qth_nickname.clone();
     // Candidate next cursor: this sync's start, floored to the minute and rolled
     // back by the margin (eQSL's RcvdSince timezone is unstated — over-fetch so we
     // never skip records). Captured BEFORE the fetch so nothing arriving during it
     // is missed next time.
-    let next_cursor = tempo_core::eqsl::format_rcvd_since(now_unix() - EQSL_RCVD_MARGIN_SECS);
+    let next_cursor = tempo_core::eqsl::format_rcvd_since(now - EQSL_RCVD_MARGIN_SECS);
 
     // Build the URL, fetch (two GETs), and drop the secret-bearing values after.
     let body = {
@@ -29429,7 +29459,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
             qth_nickname: Some(qth_nickname).filter(|n| !n.is_empty()),
         };
         let url = tempo_core::eqsl::build_inbox_url(&query);
-        propagation::live::eqsl::fetch_inbox(&url)?
+        fetch(&url)?
     }; // `query` + `url` (both hold the password) dropped here
 
     if !tempo_core::eqsl::is_eqsl_adif(&body) {
@@ -29463,10 +29493,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     {
         let mut eng = engine_lock(state);
         if eqsl_cursor_may_advance(eng.settings(), &body, &used_username, &used_nickname) {
-            let updated = eng.set_eqsl_cursor(next_cursor);
-            persist_settings(updated, |e| {
-                eprintln!("tempo: failed to persist eQSL cursor: {e}")
-            });
+            persist(eng.set_eqsl_cursor(next_cursor));
         }
     }
     // On disk before the sync says so — off the lock, on the blocking pool.
@@ -54015,6 +54042,128 @@ mod tests {
         );
         let (downloads, _) = checks.take(session, &[]).expect("the check is still open");
         assert!(downloads.is_empty(), "nothing was held");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What eQSL's transport hands back for a step-1 `page` that is not the built page, as
+    /// [`propagation::live::eqsl::fetch_inbox`] maps it.
+    fn eqsl_step1_answer(page: &str) -> Result<String, String> {
+        tempo_core::eqsl::not_built_answer(page)
+            .map(str::to_string)
+            .map_err(str::to_string)
+    }
+
+    const EQSL_NO_ENTRIES: &str = "<html><body>You have no log entries</body></html>";
+    const EQSL_REFUSED: &str = "<html><H3>Error: No such Username/Password found</H3></html>";
+    const EQSL_UNKNOWN_PAGE: &str = "<html><body>eQSL is down for maintenance.</body></html>";
+
+    /// eQSL answers a whole-InBox check of an account with no cards with "You have no log
+    /// entries". That is the InBox, empty: the check reads it, holding nothing, as it reads LoTW's
+    /// empty history. Controls: a refused login and an unknown page still fail the check.
+    #[test]
+    fn an_eqsl_inbox_with_no_log_entries_checks_empty() {
+        let (dir, engine, _) = check_scene("check-eqsl-no-entries");
+        let checks = crate::ConfirmationChecks::default();
+        let session = checks.start("main");
+        let fetched = |page: &'static str| {
+            crate::checked_and_held(
+                &checks,
+                session,
+                tempo_core::reconcile::check::Channel::Eqsl,
+                || crate::eqsl_check_on(&engine, &test_eqsl(), &|_| eqsl_step1_answer(page)),
+            )
+        };
+        let empty = fetched(EQSL_NO_ENTRIES).expect("an empty InBox checks");
+        assert_eq!((empty.records, empty.lines.len()), (0, 0));
+        for page in [EQSL_REFUSED, EQSL_UNKNOWN_PAGE] {
+            assert_eq!(
+                fetched(page).map(|dto| dto.records),
+                Err(eqsl_step1_answer(page).unwrap_err()),
+                "{page}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One eQSL download of `page`'s answer for the account K2DEF syncs as, from the cursor
+    /// `202610010000`, with every settings change it saves kept in `saved`.
+    fn eqsl_synced(
+        engine: &SharedEngine,
+        answer: Result<String, String>,
+        saved: &std::cell::RefCell<Vec<crate::Settings>>,
+    ) -> Result<crate::LotwSyncResult, String> {
+        {
+            let mut eng = engine.lock().unwrap();
+            let s = crate::Settings {
+                eqsl_username: "k2def-test".into(),
+                eqsl_qth_nickname: "Home".into(),
+                ..eng.settings().clone()
+            };
+            eng.apply_settings(s);
+            eng.set_eqsl_cursor("202610010000".into());
+        }
+        crate::download_eqsl_report_on(
+            engine,
+            "k2def-test".into(),
+            "Home".into(),
+            "202610010000".into(),
+            "not-a-password".into(),
+            CHECKED_AT as i64,
+            &|url| {
+                assert!(url.ends_with("&RcvdSince=202610010000"), "from the cursor");
+                answer.clone()
+            },
+            &|s| saved.borrow_mut().push(s),
+        )
+    }
+
+    /// ★ A download with nothing new since the cursor is a sync that found nothing, not an error.
+    /// eQSL answers it with "You have no log entries" where it would otherwise build the file, and
+    /// it ends the way a download of an InBox file holding no cards ends: no new confirmations,
+    /// and the cursor moved to this sync's start less the margin, once and saved. Controls: a
+    /// refused login and an unknown page fail with their own words and leave the cursor alone.
+    #[test]
+    fn an_eqsl_download_with_nothing_new_succeeds_and_moves_the_cursor_once() {
+        let (dir, engine) = store_holding(
+            "eqsl-nothing-new",
+            &tempo_core::logbook::parse_adif(&check_row("W1AW", "20m", "FT8", "180000", "")),
+        );
+        let moved_to =
+            tempo_core::eqsl::format_rcvd_since(CHECKED_AT as i64 - crate::EQSL_RCVD_MARGIN_SECS);
+        let ended = |answer: Result<String, String>| {
+            let saved = std::cell::RefCell::new(Vec::new());
+            let synced = eqsl_synced(&engine, answer, &saved)
+                .map(|r| (r.newly_confirmed, r.newly_confirmed_any, r.orphans.len()));
+            let saved: Vec<String> = saved
+                .into_inner()
+                .into_iter()
+                .map(|s| s.eqsl_last_sync)
+                .collect();
+            let held = engine.lock().unwrap().settings().eqsl_last_sync.clone();
+            (synced, saved, held)
+        };
+        let nothing_new = ended(eqsl_step1_answer(EQSL_NO_ENTRIES));
+        assert_eq!(
+            nothing_new,
+            (Ok((0, 0, 0)), vec![moved_to.clone()], moved_to.clone()),
+            "eQSL's \"no log entries\""
+        );
+        assert_eq!(
+            ended(Ok(eqsl_answer(&[]))),
+            nothing_new,
+            "control: the same as an InBox file holding no cards"
+        );
+        for page in [EQSL_REFUSED, EQSL_UNKNOWN_PAGE] {
+            assert_eq!(
+                ended(eqsl_step1_answer(page)),
+                (
+                    Err(eqsl_step1_answer(page).unwrap_err()),
+                    vec![],
+                    "202610010000".to_string()
+                ),
+                "control: {page}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
