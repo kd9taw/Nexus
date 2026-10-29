@@ -16814,7 +16814,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ========================================================================
-serde_with 3.20.0 — MIT OR Apache-2.0 (MIT elected)
+serde_with 3.21.0 — MIT OR Apache-2.0 (MIT elected)
 https://github.com/jonasbb/serde_with/
 
 LICENSE-MIT
@@ -16846,7 +16846,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ========================================================================
-serde_with_macros 3.20.0 — MIT OR Apache-2.0 (MIT elected)
+serde_with_macros 3.21.0 — MIT OR Apache-2.0 (MIT elected)
 https://github.com/jonasbb/serde_with/
 
 LICENSE-MIT
