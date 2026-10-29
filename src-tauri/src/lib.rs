@@ -16029,6 +16029,71 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ★ THE STATION'S OWN PENDING CLOUDLOG KEY IS NEVER TAKEN FOR THE BACKUP'S: a station with no
+    /// Cloudlog URL that still holds a key waiting to move to the keychain, restored from a backup
+    /// that brings a URL and no key, keeps that key held back for the operator. It was typed for
+    /// an address nobody can name, so it is not stored as the backup's key and let go to the
+    /// backup's URL. CONTROL: a backup that does carry its own key puts that key in use at once.
+    #[test]
+    fn a_stations_own_pending_key_is_not_taken_for_the_backups() {
+        use tempo_app::settings::KeysToConfirm;
+        const PENDING: &str = "PLANTED-STATION-PENDING";
+        const BACKUP_KEY: &str = "PLANTED-BACKUP-OWN-KEY";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-pending", 0);
+        let mut station = station_with(&engine, restore_test_roster(), "");
+        station.cloudlog_key = PENDING.into();
+        let restore = |backup_key: &str| {
+            let mut v: serde_json::Value = {
+                let mut eng = engine_lock(&engine);
+                eng.apply_restored_settings(station.clone());
+                eng.set_keys_to_confirm(KeysToConfirm::default());
+                assert_eq!(
+                    (
+                        eng.settings().cloudlog_key.as_str(),
+                        eng.settings().cloudlog_url.as_str()
+                    ),
+                    (PENDING, ""),
+                    "premise: the station holds the pending key and has no URL"
+                );
+                drop(eng);
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap()
+            };
+            assert_eq!(
+                v["settings"].get("cloudlogKey").and_then(|k| k.as_str()),
+                None,
+                "premise: the backup carries no key of its own"
+            );
+            v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.backup.example/cloudlog");
+            if !backup_key.is_empty() {
+                v["settings"]["cloudlogKey"] = serde_json::json!(backup_key);
+            }
+            let mut keychain = FakeKeychain::holding(&[]);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let held = engine_lock(&engine).keys_to_confirm().cloudlog;
+            (keychain.stored, held)
+        };
+
+        assert_eq!(
+            restore(""),
+            (Vec::<String>::new(), true),
+            "the station's pending key is not stored as the backup's, and it waits"
+        );
+        assert_eq!(
+            restore(BACKUP_KEY),
+            (vec![CLOUDLOG_KEYCHAIN_USER.to_string()], false),
+            "CONTROL: the backup's own key goes in at once, and nothing waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ A RESTORE ONTO SETTINGS WITH NO ADDRESS FOR A SERVICE KEEPS ITS KEY, AND HOLDS IT BACK:
     /// after a reinstall or a reset the station has no Cloudlog URL and its one radio has no
     /// network host, while the keychain still holds keys it cannot say were typed for the
@@ -17208,6 +17273,9 @@ fn restore_settings_bundle(
     keep_the_stations_paths(&mut v, &station, || station_ui.clone());
     keep_the_stations_profile_keys(&mut v, &station_ui);
     let mut settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
+    // The backup's own Cloudlog key (an old backup's), read before the station's is kept in
+    // below: the station's own key, kept, is never taken for the backup's.
+    let backup_key = settings.cloudlog_key.trim().to_string();
     // A backup carries no stored key (`redact_for_backup`): one it has blank or leaves out stays
     // as this station has it, except a Cloudlog key when the backup points Cloudlog at another
     // address: the station's key never goes to a server the backup names.
@@ -17228,8 +17296,11 @@ fn restore_settings_bundle(
     // An old backup's own key, for the address it moves Cloudlog to (or brings it to): it goes
     // into the keychain in the hold, in place of the station's, rather than waiting for the next
     // launch. It was the key for that address, so it waits for nothing.
-    let backup_cloudlog_key = Some(settings.cloudlog_key.trim().to_string())
-        .filter(|key| (cloudlog_moved || cloudlog_unknown) && !key.is_empty());
+    let backup_cloudlog_key =
+        Some(backup_key).filter(|key| (cloudlog_moved || cloudlog_unknown) && !key.is_empty());
+    // The station's own key still waiting to move to the keychain: in the unknown case it was
+    // typed for an address nobody can name, as the keychain's is, so it waits too.
+    let station_key_pending = !own.cloudlog_key.trim().is_empty();
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
     // which is right for a form and wrong for a restore. A bundle that opens a contest session
@@ -17287,7 +17358,9 @@ fn restore_settings_bundle(
         let still_held = |account: &str| failed.iter().any(|f| f == account);
         keys.cloudlog = still_held(CLOUDLOG_KEYCHAIN_USER)
             || (!(cloudlog_moved || stored)
-                && (keys.cloudlog || (cloudlog_unknown && holds(CLOUDLOG_KEYCHAIN_USER))));
+                && (keys.cloudlog
+                    || (cloudlog_unknown
+                        && (station_key_pending || holds(CLOUDLOG_KEYCHAIN_USER)))));
         keys.icom_lan.retain(|&id| {
             still_held(&icom_lan_account(id))
                 || !moved.iter().chain(&dropped).any(|(gone, _)| *gone == id)
