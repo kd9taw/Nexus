@@ -20358,6 +20358,41 @@ mod tests {
         assert_eq!(retry_passband("CW", MODE_SET_MAX_TRIES), -1);
     }
 
+    /// `PKTFM` to a Hamlib Icom goes out with width `0` from every path that chooses a width (the
+    /// first assert, a force retune including an in-band dial move, the retry ladder), because
+    /// Hamlib 4.6/4.7 drop the DATA byte on `-1`. Plain FM, the SSB data modes and AM keep their
+    /// widths on an Icom, and `PKTFM` keeps `-1` on the FT-991A and every other make.
+    #[test]
+    fn pktfm_to_a_hamlib_icom_carries_width_0_and_nothing_else_moves() {
+        const A: u64 = 144_390_000;
+        const B: u64 = 144_400_000; // 2 m, a dial move away
+        for model in [3070u32, 3073, 3078, 3081, 3085, 3090] {
+            for md in ["PKTFM", "pktfm"] {
+                assert_eq!(hamlib_mode_width(md, model, passband_for(md)), 0, "{model}");
+                for (changed, from, to) in [(false, A, B), (true, A, B), (false, 0, A)] {
+                    let pb = retune_passband(md, changed, from, to);
+                    assert_eq!(hamlib_mode_width(md, model, pb), 0, "{model}");
+                }
+                for tries in [0, MODE_SET_PASSBAND0_AFTER, MODE_SET_MAX_TRIES - 1] {
+                    let pb = retry_passband(md, tries);
+                    assert_eq!(hamlib_mode_width(md, model, pb), 0, "{model}");
+                }
+            }
+            for md in ["FM", "PKTUSB", "PKTLSB", "USB", "CW"] {
+                assert_eq!(
+                    hamlib_mode_width(md, model, passband_for(md)),
+                    -1,
+                    "{model} {md}"
+                );
+            }
+            assert_eq!(hamlib_mode_width("AM", model, passband_for("AM")), 6000);
+        }
+        // Not an Icom: the FT-991A, two Kenwood-backend models, no model.
+        for model in [1035u32, 2014, 2036, 0] {
+            assert_eq!(hamlib_mode_width("PKTFM", model, passband_for("PKTFM")), -1);
+        }
+    }
+
     /// #67 at the decision itself, on the one mode that still carries a width (AM's 6 kHz), and
     /// the DATA modes that no longer do (#82 / #107).
     #[test]
@@ -35327,7 +35362,10 @@ mod tests {
             let (addr, log) = mock_rigctld_on(144_390_000, false);
             let mut rig = Rig::rigctld(&addr);
             let (mut backend, mut state) = (MockBackend::new(), loop_state_for(&engine));
-            assert_eq!(state.applied.rig_model, model, "precondition: the loop's model");
+            assert_eq!(
+                state.applied.rig_model, model,
+                "precondition: the loop's model"
+            );
             let mut t = 1000.0;
             step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1060.0);
             let lines = log.lock().unwrap().clone();
