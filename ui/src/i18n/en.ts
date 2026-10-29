@@ -12733,7 +12733,7 @@ export const EN = {
     one: "Delete {{count}} picture?",
     other: "Delete {{count}} pictures?",
   },
-  'sstv.gallery.deleteSelected.confirm.body': 'The image files are removed and cannot be recovered.',
+  'sstv.gallery.deleteSelected.confirm.body': 'The picture files are removed and cannot be recovered.',
   'sstv.gallery.deleteSelected.confirm.label': {
     one: "Delete {{count}} picture",
     other: "Delete {{count}} pictures",
