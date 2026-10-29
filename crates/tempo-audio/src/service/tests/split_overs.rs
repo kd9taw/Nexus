@@ -1983,3 +1983,18 @@ fn through_hamlib_a_split_capability_nexus_could_not_ask_is_asked_again() {
     let (_, split) = reads(&b, from);
     assert!(split > 0, "the split never read once the radio answered");
 }
+
+/// A dual-radio handoff makes another radio the active one, so the last radio's answer to "is the
+/// split read native?" goes with it, as its `v` answer does.
+#[test]
+fn a_radio_handoff_asks_the_new_radio_whether_its_split_read_is_native() {
+    let mut state = loop_state();
+    state.split_detect = Some(crate::baud_ladder::SplitDetect::Native);
+    state.vfo_read_native = Some(true);
+    state.reset_for_handoff();
+    assert_eq!(
+        state.vfo_read_native, None,
+        "premise: the handoff reset ran"
+    );
+    assert_eq!(state.split_detect, None, "the last radio's answer kept");
+}
