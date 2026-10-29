@@ -19,8 +19,9 @@
 //! **Off is off.** Turning the switch off stops the check, deletes the downloaded copy and shows no
 //! names at all, the shipped copy included: every IOTA feature falls back to the shape-only check
 //! (`XX-NNN`), as before there was a list. The switch is kept here, beside the copy it governs, not
-//! in `settings.json`, under the key the old download consent used: an operator who said no to that
-//! download, or turned it off, stays off; one never asked is on.
+//! in `settings.json`, under the key the old download consent used. Since the list ships, that old
+//! "no" to downloading it is cleared once, at the first start after updating ([`reset_once`]), so
+//! every station starts with the names on; an off chosen after that is kept like any setting.
 //!
 //! **Degrades, never breaks.** A failed download keeps the copy in use (shipped or downloaded); a
 //! download whose shape changed is refused ([`propagation::iota::IotaGroups::plausible`]), so a
@@ -102,6 +103,9 @@ pub(crate) struct IotaListMeta {
     /// Why the last attempt was not kept, in plain words; `None` when it was.
     #[serde(default)]
     pub last_error: Option<String>,
+    /// Set once the switch has been through [`reset_once`]; from then on `on` is the operator's.
+    #[serde(default)]
+    pub reset_after_builtin: bool,
 }
 
 impl IotaListMeta {
@@ -121,6 +125,22 @@ fn write_meta(dir: &Path, m: &IotaListMeta) {
     if let Ok(json) = serde_json::to_string(m) {
         let _ = std::fs::write(meta_path(dir), json);
     }
+}
+
+/// The switch, put on once now that the list ships with Nexus. An off kept from before was most
+/// likely the answer to the old download question, which no longer applies, so it is cleared once;
+/// the marker set with it means an off chosen after this is kept like any other setting. Writes the
+/// meta only when it is not marked yet.
+fn reset_once(dir: &Path) -> IotaListMeta {
+    let mut m = read_meta(dir);
+    if !m.reset_after_builtin {
+        if m.on == Some(false) {
+            m.on = None;
+        }
+        m.reset_after_builtin = true;
+        write_meta(dir, &m);
+    }
+    m
 }
 
 /// Whether a download is due: only with the switch on, when the copy in use (dated `list_at`, 0
@@ -292,10 +312,10 @@ fn download(now: i64) -> Result<(), String> {
     Ok(())
 }
 
-/// Load the copy to use (switch on), or none (switch off).
+/// Load the copy to use (switch on), or none (switch off), after the switch's one reset.
 fn load() -> IotaListMeta {
     let dir = crate::config_dir();
-    let m = read_meta(&dir);
+    let m = reset_once(&dir);
     set_held(pick(&dir, &m, bundled_dir().and_then(|d| read_bundled(&d))));
     m
 }
@@ -338,6 +358,8 @@ pub(crate) async fn set_iota_list_enabled(enabled: bool) -> Result<IotaListStatu
     let keeping = keep();
     let mut m = read_meta(&dir);
     m.on = Some(enabled);
+    // The operator's own choice: the one reset never undoes it.
+    m.reset_after_builtin = true;
     if !enabled {
         let _ = std::fs::remove_file(data_path(&dir));
         m.fetched_at = 0;
@@ -400,7 +422,7 @@ mod tests {
             on,
             fetched_at,
             attempted_at,
-            last_error: None,
+            ..Default::default()
         }
     }
 
@@ -597,6 +619,94 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&meta(Some(false), 0, 0)).unwrap())
                 .unwrap();
         assert!(!round.enabled(), "written back under the same key");
+    }
+
+    /// The meta as an older version left it, written raw so the test does not lean on this
+    /// version's serializer.
+    fn old_meta(d: &Path, json: &str) {
+        std::fs::write(meta_path(d), json).unwrap();
+    }
+
+    /// The list ships now, so the old download question's "No" no longer applies: the first start
+    /// after updating turns the list on, once, and says so in the meta.
+    #[test]
+    fn an_old_no_to_the_download_is_put_on_once_after_updating() {
+        let d = dir();
+        old_meta(&d, r#"{"consent":false,"attemptedAt":5}"#);
+        assert!(!read_meta(&d).enabled(), "CONTROL: off before the update");
+        load();
+        let m = read_meta(&d);
+        assert!(m.enabled(), "on after the first start");
+        assert_eq!(m.on, None);
+        assert!(
+            m.reset_after_builtin,
+            "and marked, so it never happens again"
+        );
+        assert_eq!(m.attempted_at, 5, "the rest of the meta is kept");
+    }
+
+    /// After the one reset, an off the operator chooses is kept across restarts.
+    #[test]
+    fn an_off_chosen_after_the_reset_survives_restarts() {
+        let d = dir();
+        old_meta(&d, r#"{"consent":false}"#);
+        load();
+        assert!(read_meta(&d).enabled());
+        tauri::async_runtime::block_on(set_iota_list_enabled(false)).unwrap();
+        for _ in 0..3 {
+            load();
+            let m = read_meta(&d);
+            assert_eq!(m.on, Some(false), "the operator's off stands");
+            assert!(m.reset_after_builtin);
+        }
+    }
+
+    /// An off chosen before the first start ever ran the reset (no meta, or a meta with no
+    /// marker) is the operator's own word too, so the setter marks it.
+    #[test]
+    fn an_off_set_before_any_start_is_not_reset() {
+        let d = dir();
+        tauri::async_runtime::block_on(set_iota_list_enabled(false)).unwrap();
+        load();
+        assert_eq!(read_meta(&d).on, Some(false));
+    }
+
+    /// A fresh install: on, marked, and written once — a later start does not rewrite the meta.
+    #[test]
+    fn a_fresh_install_is_on_and_marked_with_no_further_writes() {
+        let d = dir();
+        assert!(!meta_path(&d).exists());
+        load();
+        let m = read_meta(&d);
+        assert!(m.enabled());
+        assert_eq!(m.on, None);
+        assert!(m.reset_after_builtin);
+        // Rewrite the same meta in a shape the serializer never produces: a write would show.
+        let spaced = serde_json::to_string_pretty(&m).unwrap();
+        std::fs::write(meta_path(&d), &spaced).unwrap();
+        load();
+        assert_eq!(
+            std::fs::read_to_string(meta_path(&d)).unwrap(),
+            spaced,
+            "a marked meta is not written again"
+        );
+    }
+
+    /// An old yes, or never asked, stays on and is marked.
+    #[test]
+    fn an_old_yes_stays_on() {
+        for json in [r#"{"consent":true,"fetchedAt":5}"#, "{}"] {
+            let d = dir();
+            old_meta(&d, json);
+            load();
+            let m = read_meta(&d);
+            assert!(m.enabled(), "{json}");
+            assert!(m.reset_after_builtin, "{json}");
+            if json != "{}" {
+                assert_eq!(m.on, Some(true));
+                assert_eq!(m.fetched_at, 5);
+            }
+        }
     }
 
     #[test]
