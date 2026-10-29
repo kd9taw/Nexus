@@ -281,6 +281,7 @@ pub(crate) fn play_keyed_over(
             secs += w.len() as f32 / tempo_fast::SAMPLE_RATE;
             backend.play(w);
         }
+        backend.mark_unit_end();
         return KeyedOver {
             tx_until_ms: tx_deadline_ms(keyed_ms, secs as f64 * 1000.0, period_ms),
             audio_until_ms: None,
@@ -319,6 +320,7 @@ pub(crate) fn play_keyed_over(
             backend.play(rest);
         }
     }
+    backend.mark_unit_end();
     on_the_window
 }
 
@@ -1793,6 +1795,33 @@ mod tests {
                 span.map_or(0, |(a, b)| b - a + 1),
                 "{tier:?}: not one run"
             );
+        }
+    }
+
+    /// A slot over is one unit, marked where its audio ends, so the sound card running out at its
+    /// end is not counted as an underrun: FT8 and FT4 on the slot clock, keyed on time and late,
+    /// and a tier played whole from the key.
+    #[test]
+    fn a_keyed_slot_over_marks_its_end() {
+        for tier in [
+            tempo_app::dto::Tier::Ft8,
+            tempo_app::dto::Tier::Ft4,
+            tempo_app::dto::Tier::Q65,
+        ] {
+            let eng = armed_engine_on(tier);
+            let waves = vec![armed_engine_on(tier).poll_tx(0).remove(0)];
+            let slot_start = 1_000.0 * eng.active_slot_secs() * 1000.0;
+            for late_ms in [20.0, 1_000.0] {
+                let keyed = slot_start + late_ms;
+                let mut backend = MockBackend::new();
+                play_keyed_over(&eng, &mut backend, &waves, keyed, keyed);
+                assert!(!backend.played.is_empty(), "{tier:?}: premise: played");
+                assert_eq!(
+                    backend.unit_ends,
+                    vec![backend.played.len()],
+                    "{tier:?} keyed {late_ms} ms in"
+                );
+            }
         }
     }
 

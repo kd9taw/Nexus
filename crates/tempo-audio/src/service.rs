@@ -11135,6 +11135,8 @@ impl RadioLoop {
                             let key = self.key_over(rig, false);
                             if key.sends() {
                                 backend.play(&buf);
+                                // One whole word: the silence after it is the word space.
+                                backend.mark_unit_end();
                                 let until = self.cw_busy_until + crate::slot::TX_TAIL_MS;
                                 self.tx_until_ms =
                                     Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
@@ -11444,6 +11446,8 @@ impl RadioLoop {
                             let buf = st.afsk.char_chunk(&bits, true);
                             if !buf.is_empty() {
                                 backend.play(&buf);
+                                // The stream's last audio: it ends here.
+                                backend.mark_unit_end();
                             }
                         }
                         // FSK needs no closing ramp — its keyer thread parks the line
@@ -11788,6 +11792,7 @@ impl RadioLoop {
                             // An over the rig would not key is not played (`key_over`).
                             if key.sends() {
                                 backend.play(&buf);
+                                backend.mark_unit_end();
                                 let until = self.rtty_busy_until + crate::slot::TX_TAIL_MS;
                                 self.tx_until_ms =
                                     Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
@@ -11906,6 +11911,8 @@ impl RadioLoop {
                         let chunk_ms = buf.len() as f64 / 12.0;
                         if !buf.is_empty() {
                             backend.play(&buf);
+                            // The stream's last audio: it ends here.
+                            backend.mark_unit_end();
                         }
                         self.psk_busy_until = self.psk_busy_until.max(now) + chunk_ms;
                         let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
@@ -12023,6 +12030,7 @@ impl RadioLoop {
                     // An over the rig would not key is not played (`key_over`).
                     if key.sends() {
                         backend.play(&buf);
+                        backend.mark_unit_end();
                         let until = self.psk_busy_until + crate::slot::TX_TAIL_MS;
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                     } else {
@@ -12124,6 +12132,7 @@ impl RadioLoop {
                 let key = self.key_over(rig, false);
                 if key.sends() {
                     backend.play(&buf);
+                    backend.mark_unit_end();
                     let dur_ms = buf.len() as f64 / 12.0; // 12 kHz mono → milliseconds
                     self.tx_until_ms = Some(now + dur_ms + crate::slot::TX_TAIL_MS);
                 }
@@ -12290,6 +12299,7 @@ impl RadioLoop {
                     };
                     if key.sends() {
                         backend.play(&buf);
+                        backend.mark_unit_end();
                         let until = now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS;
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                         self.voice_until_ms = Some(until);
@@ -12502,6 +12512,10 @@ impl RadioLoop {
                     let end = (feed.cursor + SSTV_CHUNK_SAMPLES).min(feed.samples.len());
                     backend.play(&feed.samples[feed.cursor..end]);
                     feed.cursor = end;
+                    if end == feed.samples.len() {
+                        // The picture's last chunk; the feed ahead of it is not an end.
+                        backend.mark_unit_end();
+                    }
                 }
                 let played_ms = elapsed.clamp(0.0, feed.total_ms);
                 let total_ms = feed.total_ms;
@@ -14291,6 +14305,7 @@ impl RadioLoop {
                                     secs += w2.len() as f32 / tempo_fast::SAMPLE_RATE;
                                     backend.play(w2);
                                 }
+                                backend.mark_unit_end();
                                 self.tx_until_ms =
                                     Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
                             }
@@ -18405,6 +18420,7 @@ mod tests {
     mod tci_soundcard_cw;
     mod tci_spots;
     mod tx_extras;
+    mod tx_unit_ends;
     mod udp_decode_time;
     mod udp_requests;
     mod wfview;

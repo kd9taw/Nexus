@@ -51,6 +51,14 @@ pub trait AudioBackend {
     fn capture(&mut self) -> Vec<f32>;
     /// Queue 12 kHz mono samples for transmission.
     fn play(&mut self, samples: &[f32]);
+    /// The audio queued so far ends one complete unit — a slot over, a CW word, a message, a
+    /// voice-keyer recording, a frame, a picture — so the sound card running out right there is
+    /// the end of the transmission and not an underrun. Call it right after the unit's last
+    /// [`Self::play`]. Never after audio that is fed as it is made (Tune's carrier, streamed text, a
+    /// microphone): a gap there is the feed falling behind, and must count. Only the counter
+    /// reads it; what plays is unchanged. Default no-op: a backend with no output ring counts
+    /// nothing.
+    fn mark_unit_end(&mut self) {}
     /// Open the transmit audio route now, ahead of the over that will use it, and say whether an
     /// over handed to [`Self::play`] would reach the radio: `Ok`, or `Err` with the reason it would
     /// not, in the sound card's own words. The radio loop calls it when slot TX is armed and again
@@ -224,6 +232,8 @@ pub struct MockBackend {
     pub tx_unplayed: usize,
     /// How many times `retune_tx` replaced the rest of an over.
     pub retunes: usize,
+    /// `played.len()` at each [`AudioBackend::mark_unit_end`]: where each complete unit ended.
+    pub unit_ends: Vec<usize>,
 }
 
 impl MockBackend {
@@ -269,6 +279,9 @@ impl AudioBackend for MockBackend {
     }
     fn play(&mut self, samples: &[f32]) {
         self.played.extend_from_slice(samples);
+    }
+    fn mark_unit_end(&mut self) {
+        self.unit_ends.push(self.played.len());
     }
     fn prepare_tx(&mut self) -> Result<(), String> {
         self.prepare_tx_calls += 1;

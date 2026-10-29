@@ -87,6 +87,7 @@ impl<B: AudioBackend> Transceiver<B> {
             samples += w.len();
             self.backend.play(w);
         }
+        self.backend.mark_unit_end();
         // We are transmitting; don't decode our own audio this slot.
         self.rx.clear();
         Some(samples as f32 / tempo_fast::SAMPLE_RATE)
