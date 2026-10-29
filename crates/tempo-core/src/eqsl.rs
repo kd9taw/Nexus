@@ -106,6 +106,39 @@ pub fn is_built_page(html: &str) -> bool {
     html.to_ascii_lowercase().contains(BUILT_MARKER)
 }
 
+/// eQSL's InBox file with no cards in it: its opening line and header, and no records after them.
+/// eQSL answers a good login with nothing in the range asked for with a page saying so instead of
+/// a file ([`not_built_answer`]), and that answer is this file: it reads as eQSL's, complete,
+/// holding nothing.
+pub const EMPTY_INBOX: &str =
+    "ADIF 3 Export from eQSL.cc\n<PROGRAMID:21>eQSL.cc DownloadInBox\n<EOH>\n";
+
+/// What step 1's page `html` comes to when it is not the built page, read off the page. eQSL
+/// answers all of these with HTTP 200: a login it refuses with "Error: No such Username/Password
+/// found", and a username it does not know with "Error: No such Callsign found", both the
+/// operator's message; a good login with nothing in the range asked for with "You have no log
+/// entries", which is the InBox, empty ([`EMPTY_INBOX`]). Any other page says nothing about the
+/// login either way, so its message does not either.
+pub fn not_built_answer(html: &str) -> Result<&'static str, &'static str> {
+    let s = html.to_ascii_lowercase();
+    if s.contains("error: no such username/password found")
+        || s.contains("error: no such callsign found")
+    {
+        Err(
+            "eQSL did not accept your username or password. Check the eQSL username and password \
+             in Settings (your eQSL website login).",
+        )
+    } else if s.contains("you have no log entries") {
+        Ok(EMPTY_INBOX)
+    } else {
+        Err(
+            "eQSL answered with a page that isn't the download. eQSL may be showing an error \
+             page, or may be down for maintenance. Try again shortly, and if it keeps happening \
+             please report it.",
+        )
+    }
+}
+
 /// Extract the `.adi` download href from the built-page HTML. eQSL serves two
 /// links (`.adi` + identical `.txt`); we pick the `.adi`. Returns the raw href
 /// (original case) for [`resolve_download_url`]. Robust to single/double quotes;
@@ -541,6 +574,60 @@ mod tests {
         let dbg = format!("{:?}", q());
         assert!(dbg.contains("<redacted>"));
         assert!(!dbg.contains("p@ss"));
+    }
+
+    /// eQSL's refusal of the login is called one, in either of its wordings.
+    #[test]
+    fn a_refused_eqsl_login_is_called_one() {
+        let refused = Err(
+            "eQSL did not accept your username or password. Check the eQSL \
+                           username and password in Settings (your eQSL website login).",
+        );
+        assert_eq!(
+            not_built_answer("<html><H3>Error: No such Username/Password found</H3></html>"),
+            refused
+        );
+        // An unknown username, as eQSL answers it.
+        assert_eq!(
+            not_built_answer("<html><body><H3>Error: No such Callsign found</H3></body></html>"),
+            refused
+        );
+    }
+
+    /// A good login with nothing in the range is the InBox with no cards, not a failure: the
+    /// file every reader of the download takes as eQSL's, whole, and empty.
+    #[test]
+    fn eqsl_saying_no_log_entries_is_an_empty_inbox() {
+        assert_eq!(
+            not_built_answer("<html><body>You have no log entries</body></html>"),
+            Ok(EMPTY_INBOX)
+        );
+        assert!(is_eqsl_adif(EMPTY_INBOX), "read as eQSL's file");
+        assert!(is_complete_eqsl_body(EMPTY_INBOX), "read as whole");
+        assert!(
+            !EMPTY_INBOX.to_ascii_lowercase().contains("<eor>"),
+            "no cards"
+        );
+    }
+
+    /// Control: a page that is neither (maintenance, an unknown error) is still a failure, and
+    /// blames neither way.
+    #[test]
+    fn an_unrecognised_eqsl_page_blames_neither_way() {
+        for page in [
+            "<html><body>eQSL is down for maintenance. Please try later.</body></html>",
+            "<html><body><H3>Error: Something else went wrong</H3></body></html>",
+            "",
+        ] {
+            let msg = not_built_answer(page).expect_err(page);
+            assert!(
+                msg.starts_with("eQSL answered with a page that isn't the download"),
+                "{msg}"
+            );
+            assert!(!msg.contains("did not accept"), "{msg}");
+            assert!(!msg.contains("username/password"), "{msg}");
+            assert!(!msg.contains("are fine"), "{msg}");
+        }
     }
 
     #[test]
