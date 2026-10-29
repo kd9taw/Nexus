@@ -446,7 +446,7 @@ pub(crate) fn key_slot_transmitter(
     }
     // PTT is asserted here: a WSPR or FST4W beacon's alternation flips on the attempt, whatever
     // the radio answers, as WSJT-X flips it on the tick that raises PTT
-    // (`widgets/mainwindow.cpp:7808`, `:7855`, `:7880`, `:15464`). Every return above keys nothing.
+    // (`widgets/mainwindow.cpp:7808`, `:7855`, `:7880`, `:15462`). Every return above keys nothing.
     eng.note_slot_ptt_asserted();
     let key = rig.ptt(true);
     if eng.poll_remote_transmit(std::time::Instant::now()) {
@@ -3343,7 +3343,7 @@ mod tests {
     }
 
     /// ⭐ A COMPOUND CALL'S BEACON FLIPS TYPE WHEN ITS PTT IS ASSERTED, AS WSJT-X DOES (`m_tx=1-m_tx`
-    /// in `WSPR_message`, `widgets/mainwindow.cpp:15464`, called on the tick that sets `g_iptt=1`
+    /// in `WSPR_message`, `widgets/mainwindow.cpp:15462`, called on the tick that sets `g_iptt=1`
     /// and asserts PTT, `:7808`, `:7855`, `:7880`), before the rig answers. A key the radio refuses
     /// still flips it; an over whose key is never attempted (Remote revoked first) does not; an FT8
     /// over never counts. Through the real plan, commit and key.

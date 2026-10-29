@@ -21164,7 +21164,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// The radio loop asserted PTT for the slot over [`Self::commit_tx`] handed it, whatever the
     /// radio then answers. A WSPR or FST4W over counts toward a compound call's alternation
     /// ([`Self::beacon_overs`]) here, as WSJT-X flips `m_tx` on the tick that raises PTT
-    /// (`widgets/mainwindow.cpp:7808`, `:7855`, `:7880`, `:15464`), before the rig answers, so a
+    /// (`widgets/mainwindow.cpp:7808`, `:7855`, `:7880`, `:15462`), before the rig answers, so a
     /// key the radio refuses still flips it. An interval that never reaches a key (no power set, a
     /// plan dropped, TX off, Remote revoked first) leaves the next over on the message that was due.
     pub fn note_slot_ptt_asserted(&mut self) {
@@ -75027,7 +75027,7 @@ mod tests {
     }
 
     /// ⭐ A COMPOUND CALL'S BEACON ALTERNATES ON EACH PTT ASSERT, NOT ON THE INTERVALS DECIDED.
-    /// WSJT-X flips `m_tx` inside `WSPR_message` (`widgets/mainwindow.cpp:15464`), which it calls
+    /// WSJT-X flips `m_tx` inside `WSPR_message` (`widgets/mainwindow.cpp:15462`), which it calls
     /// only on the tick that raises PTT (`if((g_iptt==1 && m_iptt0==0) || m_restart)`, `:7880`, for
     /// WSPR, and `:8006` for FST4W in the same block). An interval that never reaches a key (no
     /// power set, a plan the radio loop drops) leaves the next over on the message that was due.
