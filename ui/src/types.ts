@@ -266,6 +266,43 @@ export interface BandOutlook {
   /** Per-mode workability right now (P.533 engine only — real SNR statistics vs
    * each mode's required SNR). Empty/absent on the heuristic → the UI hides it. */
   modeNow?: { mode: string; score: number }[]
+  /** Per-UTC-hour path detail (24 entries; null = no mode carries this band that hour):
+   * the P.533 model's layer, hops and take-off angle. P.533 engine only — a monthly
+   * median, not today's measurement. Absent on the heuristic. */
+  detail?: (PathHour | null)[]
+}
+/** How one hour's signal travels on a path, per the P.533 model. */
+export interface PathHour {
+  layer: 'E' | 'F2'
+  hops: number
+  takeoffDeg: number
+}
+/** One UTC hour of model-free path geometry (propagation::pathgeo). */
+export interface PathGeoHour {
+  /** Start of the hour described: the NEXT occurrence of that UTC hour (unix s). */
+  unix: number
+  kp: number
+  /** `forecast` = SWPC's prediction; `measured` = observed; `current` = no outlook sample
+   * covers the hour, so the current Kp is assumed. Word a forecast as a forecast. */
+  kpSource: 'measured' | 'forecast' | 'current'
+  capLatDeg: number
+  /** Shares of the path (0..1): poleward of the cap, on the grey line, sunlit. */
+  polarFrac: number
+  greylineFrac: number
+  sunlitFrac: number
+  greyMe: boolean
+  greyDx: boolean
+}
+/** Short-path geometry over the next 24 h (polar cap, auroral oval, grey line, Kp). */
+export interface PathGeometry {
+  distKm: number
+  bearingDeg: number
+  maxGmlatDeg: number
+  nowHour: number
+  /** Crosses the live auroral oval now; absent when no oval is held (unknown, not "no"). */
+  ovalNow?: boolean
+  /** 24 entries, UTC hour 0..23. */
+  hours: PathGeoHour[]
 }
 /** Per-path HF prediction (the PathPredictor seam): operator↔DX, best-first. */
 export interface PathPrediction {
@@ -276,6 +313,8 @@ export interface PathPrediction {
   mufNow: number
   /** Per-UTC-hour MUF (24 values) — the ceiling line above the heatmap. */
   mufHourly: number[]
+  /** Path geometry, on a per-path outlook only (never the DX ring). */
+  geometry?: PathGeometry
 }
 /** One receiver who decoded the operator ("getting out"). */
 export interface HeardMe {

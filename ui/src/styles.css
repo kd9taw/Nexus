@@ -3244,6 +3244,30 @@ body.resizing-row {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
+/* The path "why" line: the sentence is the disclosure's summary, the numbers sit behind it. */
+.connect-path .cp-why {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+.connect-path .cp-why > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.connect-path .cp-why > summary::-webkit-details-marker {
+  display: none;
+}
+.connect-path .cp-why-more {
+  font-size: var(--fs-micro);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.connect-path .cp-why-detail {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.2em;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
 .cp-grayline {
   color: var(--accent);
 }
@@ -8295,6 +8319,25 @@ select optgroup {
 .station-dist,
 .station-heard {
   color: var(--text-faint);
+}
+/* The selected card's path "why" sentence: a full-width row under the card's own row (the card
+   wraps only for it — `flex-basis: 100%`), three lines at most so a narrow rail's card does not
+   grow a column of prose; the whole sentence and its numbers are in the hover. */
+.station-card:has(> .station-why) {
+  flex-wrap: wrap;
+}
+.station-why {
+  flex: 1 0 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-left: var(--space-5); /* under the call, roughly past the presence dot and its gap */
+  margin-bottom: 2px;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-dim);
 }
 
 .unread-badge {

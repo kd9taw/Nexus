@@ -45,6 +45,7 @@ pub mod model;
 pub mod needalert;
 pub mod opening;
 pub mod p533;
+pub mod pathgeo;
 pub mod pca;
 pub mod pota;
 pub mod pounce;
@@ -104,7 +105,8 @@ pub use journey::{
 pub use kc2g::MufStation;
 pub use kpforecast::{parse_kp_forecast, KpForecast, KpKind, KpPoint};
 pub use likelihood::{
-    mode_now_at, BandOutlook, ModeHourly, ModeNow, PathModel, PropParams, Workability,
+    mode_now_at, BandOutlook, ModeHourly, ModeNow, PathHour, PathLayer, PathModel, PropParams,
+    Workability,
 };
 pub use mapspots::{build_map_spots, MapSpot};
 pub use model::{
@@ -121,6 +123,7 @@ pub use opening::{
     classify as classify_opening, detect as detect_openings_v2, reciprocity, BandFeatures,
     BandSignal, OpeningConfig, OpeningEpisode, OpeningEvent, OpeningTracker,
 };
+pub use pathgeo::{path_geometry, KpSource, PathGeoHour, PathGeometry};
 pub use pota::{parse_pota_spots, parse_sota_spots, OtaSpot};
 pub use predict::{
     band_outlook_ring, make_predictor, modeled_now, representative_muf, HeuristicEngine,

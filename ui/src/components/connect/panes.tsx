@@ -27,6 +27,7 @@ import { type PaneId, PANE_IDS } from '../../features/connectConfig'
 import type { PaneContext } from './paneContext'
 import type { BandOutlook } from '../../types'
 import { bandTiming } from '../../propViz'
+import { PathWhy } from '../prop/PathWhy'
 import { azimuthLabel, azimuthTitle } from '../../grid'
 import { SpaceWxGauges } from '../prop/SpaceWxGauges'
 import { BandAdvisor } from '../prop/BandAdvisor'
@@ -272,6 +273,7 @@ function renderPath(c: PaneContext): ReactNode {
           />
         </p>
       )}
+      <PathWhy pred={p} />
       {c.pathOpen.length === 0 ? (
         <p className="cp-none">{t('connect.path.none')}</p>
       ) : (

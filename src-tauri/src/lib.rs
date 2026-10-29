@@ -7899,11 +7899,17 @@ async fn get_propagation(
 /// the current space weather. Answers "is THIS path workable, which band, when"
 /// for a station you may have no live spots on. Empty bands if either grid is
 /// unknown (operator hasn't set a grid, or the station has none).
+///
+/// Also attaches the path's geometry (polar cap, auroral oval, grey line, Kp per hour)
+/// from the Kp outlook and aurora oval already held — read from their caches, never
+/// fetched here, so a cold cache simply means "current Kp only" / "oval unknown".
 #[tauri::command]
 async fn get_path_outlook(
     grid: String,
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
+    kp_cache: State<'_, KpForecastCache>,
+    aurora: State<'_, AuroraCache>,
 ) -> Result<propagation::PathPrediction, String> {
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = engine_lock(&state);
@@ -7922,6 +7928,7 @@ async fn get_path_outlook(
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
+            geometry: None,
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
@@ -7943,9 +7950,33 @@ async fn get_path_outlook(
     // the heuristic fallback. p533 is compute-heavy → keep it off the async core.
     let eng = propagation::make_predictor(&prop_engine, me, station_power_w, ant_gain_dbi);
     let t = now_unix();
-    tauri::async_runtime::spawn_blocking(move || eng.predict(dx, t, &wx))
-        .await
-        .map_err(|e| e.to_string())
+    let forecast = kp_cache
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+    // The oval is a ~30-minute nowcast: an older one says nothing about now.
+    const OVAL_FRESH_SECS: u64 = 1800;
+    let oval: Option<Vec<(f32, f32)>> = aurora.lock().ok().and_then(|g| {
+        g.as_ref()
+            .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
+            .map(|(_, pts)| pts.iter().map(|p| (p.lat, p.lon)).collect())
+    });
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut pred = eng.predict(dx, t, &wx);
+        if let Some(me) = me {
+            pred.geometry = Some(propagation::path_geometry(
+                me,
+                dx,
+                t,
+                wx.kp,
+                forecast.as_ref(),
+                oval.as_deref(),
+            ));
+        }
+        pred
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Ring-outlook cache (p533 only): (computed-at, params-key, value). The 8-azimuth
@@ -7982,6 +8013,7 @@ async fn get_band_outlook(
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
+            geometry: None,
         });
     };
     let p533 = prop_engine == "p533";
@@ -33730,7 +33762,10 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                ok(get_path_outlook(grid, app.state(), app.state()).await)
+                ok(
+                    get_path_outlook(grid, app.state(), app.state(), app.state(), app.state())
+                        .await,
+                )
             }
             "get_getting_out" => ok(get_getting_out(app.state(), app.state()).await),
             "get_dxped_windows" => {

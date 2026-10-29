@@ -17,14 +17,17 @@
 //! [`P533Config`] — every constant tunable, none buried in the math.
 
 use crate::geo;
-use crate::likelihood::{hhmm, hhmm_z, mode_now_at, BandOutlook, ModeHourly, Workability};
+use crate::likelihood::{
+    hhmm, hhmm_z, mode_now_at, BandOutlook, ModeHourly, PathHour, PathLayer, Workability,
+};
 use crate::model::{band_digital_mhz, Band, SpaceWx};
 use crate::predict::{PathPrediction, PathPredictor};
 
 use super::geometry::Location;
 use super::noise::ManMadeCategory;
+use super::power::Dominant;
 use super::reliability::bcr_for_required_snr;
-use super::{run_p533, P533Params};
+use super::{run_p533, P533Params, P533Run};
 
 /// Required SNR (dB in 1 Hz) per operating mode, for the per-mode "workable
 /// now" rows. VOACAP-conventional figures: FT8 13 dB·Hz (−21 dB in 2.5 kHz),
@@ -103,6 +106,29 @@ impl P533Engine {
     }
 }
 
+/// How this run's signal travels: the dominant mode's layer, hops and take-off angle
+/// (≤ 7000 km, the short model's §6 dominant mode), or the long model's fM hop geometry
+/// beyond 7000 km, where the method assumes F2 hops and names no single mode. `None`
+/// when no mode carries the frequency. Reads values the chain already computed.
+fn path_hour(run: &P533Run) -> Option<PathHour> {
+    let (layer, hops, ele) = if run.path.distance > 7000.0 {
+        if run.long_hops == 0 {
+            return None;
+        }
+        (PathLayer::F2, run.long_hops as usize, run.long_ele)
+    } else {
+        match run.power.dominant? {
+            Dominant::E(i) => (PathLayer::E, i + 1, run.path.md_e[i].ele),
+            Dominant::F2(i) => (PathLayer::F2, i + 1, run.path.md_f2[i].ele),
+        }
+    };
+    Some(PathHour {
+        layer,
+        hops: hops.min(u8::MAX as usize) as u8,
+        takeoff_deg: ele.to_degrees() as f32,
+    })
+}
+
 /// The heuristic's window formatting over a 24×1-hour score array: the
 /// contiguous ≥Fair run containing the peak, with the low-band greyline label
 /// (byte-identical format strings so the two engines read the same in the UI).
@@ -155,6 +181,7 @@ impl PathPredictor for P533Engine {
                 bands: Vec::new(),
                 muf_now: 0.0,
                 muf_hourly: vec![0.0; 24],
+                geometry: None,
             };
         };
 
@@ -186,6 +213,7 @@ impl PathPredictor for P533Engine {
         for &band in Band::ALL.iter().filter(|b| !b.is_vhf()) {
             let freq = band_digital_mhz(band);
             let mut hourly = [0.0f32; 24];
+            let mut detail: Vec<Option<PathHour>> = vec![None; 24];
             let mut mode_hourly: Vec<ModeHourly> = MODE_SNR_DBHZ
                 .iter()
                 .map(|&(mode, _)| ModeHourly {
@@ -198,6 +226,7 @@ impl PathPredictor for P533Engine {
                 let slot = ((h + 23) % 24) as i32;
                 let run = run_p533(tx, rx, month0, slot, ssn, freq, &sys);
                 *slot_score = (run.rel.bcr / 100.0).clamp(0.0, 1.0) as f32;
+                detail[h] = path_hour(&run);
                 // The MUF ceiling is per-path (band-independent); fill once.
                 if band == Band::B20 {
                     muf_hourly[h] = run.path.opmuf as f32;
@@ -230,6 +259,7 @@ impl PathPredictor for P533Engine {
                 reliability: (usable as f32 / 24.0) * 100.0,
                 mode_now,
                 mode_hourly,
+                detail: Some(detail),
             });
         }
         bands.sort_by(|a, b| {
@@ -243,6 +273,7 @@ impl PathPredictor for P533Engine {
             bands,
             muf_now: muf_hourly[now_hour],
             muf_hourly,
+            geometry: None,
         }
     }
 }
@@ -302,5 +333,158 @@ mod tests {
         // No anchor → empty.
         let none = P533Engine::new(None).predict((48.35, 11.79), t, &wx);
         assert!(none.bands.is_empty());
+    }
+
+    /// Re-run the chain exactly as `predict` does for one band and UT hour.
+    fn run_like_predict(
+        me: (f64, f64),
+        dx: (f64, f64),
+        t: i64,
+        sfi: f64,
+        band: Band,
+        h: usize,
+    ) -> P533Run {
+        let cfg = P533Config::default();
+        let (_, month1, _) = geo::civil_from_days((t - t.rem_euclid(86_400)).div_euclid(86_400));
+        let sys = P533Params {
+            txpower: cfg.txpower_dbkw + cfg.ant_gain_dbi,
+            bw_hz: 1.0,
+            snrr: cfg.required_snr_dbhz,
+            snrxxp: 90,
+            man_made: cfg.man_made,
+        };
+        run_p533(
+            Location::new(me.0.to_radians(), me.1.to_radians()),
+            Location::new(dx.0.to_radians(), dx.1.to_radians()),
+            (month1 - 1) as usize,
+            ((h + 23) % 24) as i32,
+            ssn_from_sfi(sfi),
+            band_digital_mhz(band),
+            &sys,
+        )
+    }
+
+    fn band_of(label: &str) -> Band {
+        *Band::ALL.iter().find(|b| b.label() == label).unwrap()
+    }
+
+    #[test]
+    fn detail_is_the_runs_own_dominant_mode_on_a_short_path() {
+        // Boston → London, ~5300 km: the short model, where §6 names a dominant mode.
+        let (me, dx) = ((42.36, -71.06), (51.5, -0.12));
+        let t = 1_778_846_400; // 2026-05-15 12:00 UTC
+        let wx = SpaceWx {
+            sfi: 150.0,
+            ..Default::default()
+        };
+        let pred = P533Engine::new(Some(me)).predict(dx, t, &wx);
+        let mut checked = 0;
+        let mut multi_hop_f2 = 0;
+        for b in &pred.bands {
+            let detail = b.detail.as_ref().expect("p533 fills detail");
+            assert_eq!(detail.len(), 24);
+            for (h, d) in detail.iter().enumerate() {
+                let run = run_like_predict(me, dx, t, 150.0, band_of(&b.band), h);
+                assert!(run.path.distance < 7000.0);
+                // Independently from the run's internals, not via path_hour().
+                let want = run.power.dominant.map(|dm| match dm {
+                    Dominant::E(i) => (PathLayer::E, i as u8 + 1, run.path.md_e[i].ele),
+                    Dominant::F2(i) => (PathLayer::F2, i as u8 + 1, run.path.md_f2[i].ele),
+                });
+                match (d, want) {
+                    (Some(d), Some((layer, hops, ele))) => {
+                        assert_eq!((d.layer, d.hops), (layer, hops), "{} {h}Z", b.band);
+                        assert_eq!(d.takeoff_deg, ele.to_degrees() as f32);
+                        // The §6 path elevation IS the dominant mode's.
+                        assert_eq!(run.power.ele, ele);
+                        assert!(
+                            d.takeoff_deg > 0.0 && d.takeoff_deg < 45.0,
+                            "{}",
+                            d.takeoff_deg
+                        );
+                        if layer == PathLayer::F2 && hops >= 2 {
+                            multi_hop_f2 += 1;
+                        }
+                        checked += 1;
+                    }
+                    (None, None) => {}
+                    other => panic!("{} {h}Z: detail/run disagree: {other:?}", b.band),
+                }
+            }
+        }
+        assert!(checked > 100, "most band-hours carry a mode ({checked})");
+        // 5300 km is beyond one F2 hop's ~4000 km reach: 2+ F2 hops must appear.
+        assert!(multi_hop_f2 > 0);
+    }
+
+    #[test]
+    fn detail_is_the_long_models_hop_geometry_beyond_7000_km() {
+        // Boston → Tokyo, ~10 800 km: the long model, F2 hops of ≤ 4000 km.
+        let (me, dx) = ((42.36, -71.06), (35.68, 139.69));
+        let t = 1_796_277_600; // 2026-12-03 06:00 UTC
+        let wx = SpaceWx {
+            sfi: 150.0,
+            ..Default::default()
+        };
+        let pred = P533Engine::new(Some(me)).predict(dx, t, &wx);
+        let b20 = pred.bands.iter().find(|b| b.band == "20m").unwrap();
+        let run = run_like_predict(me, dx, t, 150.0, Band::B20, 6);
+        assert!(run.path.distance > 9000.0);
+        // Below 7000 km the short model's §6 picks the mode; out here it names none.
+        assert_eq!(run.power.dominant, None);
+        let d = b20.detail.as_ref().unwrap()[6].expect("long model always has geometry");
+        assert_eq!(d.layer, PathLayer::F2);
+        assert_eq!(d.hops as u32, run.long_hops);
+        assert!(d.hops >= 3, "10 800 km in ≤ 4000 km hops: {}", d.hops);
+        assert_eq!(d.takeoff_deg, run.long_ele.to_degrees() as f32);
+        // Positive control on the source: the >9000 km composite elevation is the same angle.
+        assert!((run.long_ele - path_ele_beyond_9000(&run)).abs() < 1e-12);
+    }
+
+    /// The elevation P.533 §5.3 stores beyond 9000 km (`ele`), re-derived from the run's
+    /// own fM geometry so the long-path detail is shown to be the chain's angle.
+    fn path_ele_beyond_9000(run: &P533Run) -> f64 {
+        let d_m = run.path.distance / run.long_hops as f64;
+        super::super::muf::elevation_angle(d_m, 300.0)
+    }
+
+    #[test]
+    fn carrying_detail_costs_no_extra_chain_runs() {
+        let me = (42.36, -71.06);
+        let wx = SpaceWx {
+            sfi: 150.0,
+            ..Default::default()
+        };
+        super::super::RUNS.with(|c| c.set(0));
+        let pred = P533Engine::new(Some(me)).predict((51.5, -0.12), 1_778_846_400, &wx);
+        let runs = super::super::RUNS.with(|c| c.get());
+        // One run per HF band per UT hour, exactly as before the detail existed.
+        assert_eq!(runs, pred.bands.len() * 24);
+        assert_eq!(pred.bands.len(), 10);
+    }
+
+    #[test]
+    fn heuristic_and_ring_carry_no_detail() {
+        let me = (42.36, -71.06);
+        let wx = SpaceWx {
+            sfi: 150.0,
+            ..Default::default()
+        };
+        let h = crate::HeuristicEngine::new(Some(me)).predict((51.5, -0.12), 1_778_846_400, &wx);
+        assert!(h.bands.iter().all(|b| b.detail.is_none()));
+        let json = serde_json::to_string(&h).unwrap();
+        assert!(!json.contains("\"detail\""), "heuristic JSON unchanged");
+        // Positive control: the p533 JSON does carry it.
+        let p = P533Engine::new(Some(me)).predict((51.5, -0.12), 1_778_846_400, &wx);
+        assert!(serde_json::to_string(&p).unwrap().contains("\"detail\":["));
+        let ring = crate::band_outlook_ring(
+            &P533Engine::new(Some(me)),
+            me,
+            9000.0,
+            2,
+            1_778_846_400,
+            &wx,
+        );
+        assert!(ring.bands.iter().all(|b| b.detail.is_none()));
     }
 }
