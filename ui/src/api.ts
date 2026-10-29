@@ -425,13 +425,15 @@ export async function fetchLotwUsers(): Promise<LotwUsersStatus> {
   return invoke<LotwUsersStatus>('fetch_lotw_users')
 }
 
-/** The IOTA island-group list on the station: the operator's answer (`null`: never asked), how many
- *  groups are held, when it was downloaded (Unix seconds, 0: never), and why the last download was
- *  not kept, if it was not. The list is IOTA Ltd's; Nexus downloads it only after a yes. */
+/** The IOTA island-group list on the station: whether it is on, how many groups are in use, the
+ *  date of that copy (Unix seconds, 0: none), whether it is the copy that shipped with Nexus, and why
+ *  the last monthly check was not kept, if it was not. The list is IOTA Ltd's, shipped by its
+ *  permission. */
 export interface IotaListStatus {
-  consent: boolean | null
+  enabled: boolean
   count: number
   fetchedAt: number
+  bundled: boolean
   lastError: string | null
 }
 
@@ -439,10 +441,10 @@ export async function getIotaListStatus(): Promise<IotaListStatus> {
   return invoke<IotaListStatus>('get_iota_list_status')
 }
 
-/** The operator's answer to "download the IOTA island-group list?". Yes downloads it now (when one
- *  is due); no deletes the copy held. */
-export async function setIotaListConsent(consent: boolean): Promise<IotaListStatus> {
-  return invoke<IotaListStatus>('set_iota_list_consent', { consent })
+/** Settings ▸ Logbook ▸ IOTA island list. On uses the list and checks for a newer one when a
+ *  month old; off shows no names, stops the check and deletes any downloaded copy. */
+export async function setIotaListEnabled(enabled: boolean): Promise<IotaListStatus> {
+  return invoke<IotaListStatus>('set_iota_list_enabled', { enabled })
 }
 
 /** One island group of the list: its reference and IOTA Ltd's name for it. */

@@ -16,10 +16,10 @@
 //! not a four-digit park number), and a comment naming two different groups names none. The bare
 //! `EU131` spelling counts only right after the word IOTA.
 //!
-//! **The island-group list ([`IotaGroups`]) is never shipped.** It is © Radio Society of Great
-//! Britain and © Islands On The Air (IOTA) Ltd, published at iota-world.org for personal,
-//! non-commercial home use. Nexus downloads it onto the operator's own machine only when they say
-//! yes, and only parses it here; without it, a reference is checked by its shape alone.
+//! **The island-group list ([`IotaGroups`]).** It is © Radio Society of Great Britain and
+//! © Islands On The Air (IOTA) Ltd, published at iota-world.org. A copy ships with Nexus by IOTA
+//! Ltd's permission and the shell refreshes it at most monthly (see NOTICE); this module only
+//! parses it. Without a list (the operator turned it off), a reference is checked by its shape alone.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -112,8 +112,7 @@ pub struct IotaGroup {
     pub name: String,
 }
 
-/// The island-group list, by reference. Built only from a copy the operator chose to download
-/// (see the module header).
+/// The island-group list, by reference (see the module header).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IotaGroups {
     by_ref: BTreeMap<String, String>,

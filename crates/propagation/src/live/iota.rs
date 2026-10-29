@@ -3,12 +3,12 @@
 //! Source: <https://www.iota-world.org/islands-on-the-air/downloads/download-file.html?path=groups.json>,
 //! the address IOTA Ltd publishes for software on its Developers page
 //! (<https://www.iota-world.org/iota-directory/developers.html>: "an API key is no longer
-//! required"). The list is © Radio Society of Great Britain and © Islands On The Air (IOTA) Ltd;
-//! its copyright notice lets anyone download it "for your own personal non-commercial home use"
-//! (<https://www.iota-world.org/copyright-notice.html>). So Nexus never ships a copy: the shell
-//! calls this only after the operator has said yes, onto their own machine, at most monthly, and
-//! the server sends no validators to make a refresh conditional. Parsing is
-//! [`crate::iota::IotaGroups::parse`].
+//! required"). The list is © Radio Society of Great Britain and © Islands On The Air (IOTA) Ltd
+//! (<https://www.iota-world.org/copyright-notice.html>); a copy ships with Nexus by IOTA Ltd's
+//! permission (see NOTICE), and the shell calls this to replace it with a newer one at most
+//! monthly, only while the operator has the list on. The server sends no validators to make a
+//! refresh conditional. Parsing is [`crate::iota::IotaGroups::parse`];
+//! `scripts/gen-iota-groups.mjs` fetches the shipped copy from the same address with the same limits.
 
 use std::time::Duration;
 

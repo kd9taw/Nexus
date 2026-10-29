@@ -512,7 +512,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("set_hrdlog_code",                RefusedHere, "Credentials are set at the shack only."),
     ("set_hunt_target",                RunsAtShack, "The shack's hunt target."),
     ("set_icom_lan_password",          RefusedHere, "Credentials are set at the shack only."),
-    ("set_iota_list_consent",          RefusedHere, "Whether the shack downloads the IOTA list is its operator's own yes, given at the shack."),
+    ("set_iota_list_enabled",          RefusedHere, "Whether the shack shows and downloads the IOTA list is its operator's own switch, turned at the shack."),
     ("set_launch_at_login",            RunsHere,    "Starts Nexus when someone signs in to this computer."),
     ("set_license_class",              RefusedHere, "The shack's licence class decides where it may transmit; set at the shack only."),
     ("set_log_form_grid",              RunsAtShack, "The shack's log form."),

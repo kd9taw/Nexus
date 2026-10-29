@@ -660,6 +660,10 @@ entity its record or LoTW names. It ships in the same release zip as `cty.dat`, 
 same **MIT License** and the same notice. The DXCC entity numbers are those the ARRL
 assigns for its DXCC program.
 
+### IOTA island-group list — © RSGB and IOTA Ltd
+© RSGB and IOTA Ltd (as shown on <https://www.iota-world.org/>); included with IOTA Ltd's permission.
+The list ships in the installer as an app resource and is not in this repository.
+
 ### Deleted DXCC entities — ARRL, from TrustedQSL
 `crates/propagation/data/dxcc_deleted.csv` lists the 62 deleted DXCC entities: each one's
 entity number and name. It is transcribed from the DXCC entity table in the configuration

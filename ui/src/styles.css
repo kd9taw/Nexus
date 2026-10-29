@@ -34037,7 +34037,6 @@ td.aw-cc {
   color: var(--text-faint);
   font-size: calc(10px * var(--text-scale));
 }
-.iota-consent,
 .iota-offer,
 .iota-card-held {
   display: flex;
@@ -34046,10 +34045,6 @@ td.aw-cc {
   gap: var(--space-1) var(--space-2);
   font-size: calc(11px * var(--text-scale));
   color: var(--text-dim);
-}
-.iota-consent-line {
-  flex: 1 1 16em;
-  min-width: 0;
 }
 .iota-offer-from {
   color: var(--text-faint);
