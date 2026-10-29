@@ -347,6 +347,10 @@ const MIGRATED = [
   // The radio setup (2026-10-27): born migrated — every string is a catalog key; radio names,
   // band tokens, model names, ports and the routing mode names are data or invariant tokens.
   'components/RadioSetupWizard.tsx',
+  // The first-run journeys (2026-10-28): born migrated — every string is a catalog key; the
+  // logbook services' names and accounts are data from the backend.
+  'components/WizardServices.tsx',
+  'settings/journeys.ts',
   // What keeps a contest from starting, moved out of ContestView beside it: catalog keys only.
   'features/contestStart.ts',
   'components/ContestScoreChip.tsx',

@@ -2885,7 +2885,9 @@ function App() {
       if (wizardAsks) features.applyProfiles(ids, modes)
       setView(landing)
       markWizardSeen()
-      recordWizardSeen()
+      // The first run is recorded as done in the settings file; a re-run from Settings already is,
+      // and writes nothing it did not change.
+      if (wizardAsks) recordWizardSeen()
       setShowWizard(false)
       setWizardGen((g) => g + 1)
     },
@@ -2894,10 +2896,10 @@ function App() {
 
   const handleWizardSkip = useCallback(() => {
     markWizardSeen()
-    recordWizardSeen()
+    if (wizardAsks) recordWizardSeen()
     setShowWizard(false)
     setWizardGen((g) => g + 1)
-  }, [recordWizardSeen])
+  }, [recordWizardSeen, wizardAsks])
 
   // NOTE: everything from here down to the `!snap` early return is snap-INDEPENDENT
   // and — critically for the hooks below — must run on EVERY render (rules of hooks:
@@ -4452,6 +4454,7 @@ function App() {
           onSkip={handleWizardSkip}
           onOpenGuide={() => setShowGuide(true)}
           onOpenWalk={() => setShowWalk(true)}
+          onOpenServices={() => openSettingsAt('confirmations')}
           askExperience={wizardAsks}
           rerun={!wizardAsks}
         />

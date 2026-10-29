@@ -8627,6 +8627,20 @@ export const EN = {
   'setup.about.newToDigital.blurb': 'You work phone or CW and are new to FT8 and the other digital modes. The Phone and CW screens stay on.',
   'setup.about.experienced': 'Experienced',
   'setup.about.experienced.blurb': 'Every screen on and all of Settings open, as you would expect.',
+  // The first step's second question: how many radios. Never stored; "Two or more" opens the radio
+  // setup once the rig step has saved the second radio.
+  'setup.about.radios.title': 'How many radios will Nexus run?',
+  'setup.about.radios.one': 'One radio',
+  'setup.about.radios.one.blurb': 'Set it up on the “Your rig” step.',
+  'setup.about.radios.several': 'Two or more',
+  'setup.about.radios.several.blurb': 'Set up the first on the “Your rig” step and add the next there. Nexus then asks which radio does which bands and modes.',
+  'setup.rig.several.hint': 'Set up your first radio here. Then “{{button}}” below adds the next, and the radio setup opens to say which radio does which bands and modes. A radio on the network is added in Settings ▸ Radio ▸ Radios.',
+  // The log step's logbook services, for an operator switching from another program. Nothing is
+  // typed or sent here; logins stay in Settings ▸ Confirmations.
+  'setup.services.title': 'Where your contacts go',
+  'setup.services.sub': 'Nothing is sent from this setup. Logins go in Settings ▸ Confirmations, beside each service. Saving a QRZ, ClubLog or eQSL login there turns its upload on, and Nexus then sends that service the contacts in your log it has no record of sending there, imported ones included.',
+  'setup.services.openAfter.label': 'Open Settings ▸ Confirmations when I finish',
+  'setup.services.openAfter.blurb': 'Where you enter your logins and choose what uploads.',
   'setup.finish.walk.label': 'Walk me through my first FT8 contact',
   'setup.finish.walk.blurb': 'Four short lines after Finish. It changes nothing and sends nothing.',
   'firstContact.title': 'Your first FT8 contact',
