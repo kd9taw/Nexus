@@ -53,8 +53,8 @@ describe('#154 — storing a secret is news; reading one is not', () => {
   it('covers every connector, not a hand-kept list', async () => {
     // Each of these is a different command shape; all must be recognised. A list would have to
     // be extended per connector, and the one somebody forgets is the one whose badge lies.
-    await api.setEqslPassword('x')
-    await api.setQrzLogbookKey('x')
+    await api.setEqslPassword('x', false)
+    await api.setQrzLogbookKey('x', false)
     await api.setHrdlogCode('x')
     await api.setRepeaterbookToken('x')
     expect(fired).toBe(4)

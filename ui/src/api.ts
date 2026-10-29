@@ -2429,9 +2429,10 @@ export async function uploadBacklog(service: 'qrz' | 'clublog' | 'eqsl'): Promis
 
 /** Store the eQSL password in the OS keychain (write-only; empty clears it). `sendOld` answers
  *  the first password's question (see `uploadBacklog`): `true` sends the contacts not yet sent
- *  there, `false` starts eQSL's automatic uploads from now, and no answer (nothing was asked)
- *  saves as before. */
-export async function setEqslPassword(password: string, sendOld?: boolean): Promise<void> {
+ *  there, `false` starts eQSL's automatic uploads from now, and `undefined` (nothing was asked:
+ *  the count could not be read) saves as before. Required on purpose: a caller that skips the
+ *  question must say so, not silently send the whole log. */
+export async function setEqslPassword(password: string, sendOld: boolean | undefined): Promise<void> {
   await invoke<void>('set_eqsl_password', { password, sendOld })
 }
 
@@ -2501,7 +2502,7 @@ export async function callbookCacheClear(): Promise<void> {
 
 /** Store the QRZ Logbook API key in the OS keychain (write-only; empty clears). `sendOld` as
  *  `setEqslPassword`'s. */
-export async function setQrzLogbookKey(key: string, sendOld?: boolean): Promise<void> {
+export async function setQrzLogbookKey(key: string, sendOld: boolean | undefined): Promise<void> {
   await invoke<void>('set_qrz_logbook_key', { key, sendOld })
 }
 
@@ -2557,7 +2558,7 @@ export async function qrzCorrectUndoMiss(): Promise<string> {
 
 /** Store the ClubLog Application Password in the OS keychain (write-only; empty
  *  clears). `sendOld` as `setEqslPassword`'s. */
-export async function setClublogPassword(password: string, sendOld?: boolean): Promise<void> {
+export async function setClublogPassword(password: string, sendOld: boolean | undefined): Promise<void> {
   await invoke<void>('set_clublog_password', { password, sendOld })
 }
 
