@@ -820,6 +820,44 @@ fn the_split_slice_is_never_moved_tuned_or_re_moded_while_keyed() {
     assert_eq!(c.ask("s", 2), "0\nVFOA\n");
 }
 
+/// ⭐ AN UNCHANGED WRITE WHILE KEYED IS STILL REFUSED. With the split slice already on the
+/// frequency and mode the last `I` and `X` took, the same `I` and `X` sent while an over is on the
+/// air are refused, never answered OK by the shortcut, and nothing reaches the wire. The control is
+/// the same pair unkeyed, answered at once with nothing sent.
+#[test]
+fn an_unchanged_split_write_while_keyed_is_refused() {
+    let sim = simulator(split_session(creates_slice_1(), moves_to_1()), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT 0\n");
+    ask_until_answer(&mut c, "i", "14075000\n");
+    // The control: unkeyed, the same pair is answered with nothing sent.
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT 0\n");
+    assert_eq!(split_wire(&sim, before), Vec::<String>::new());
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    wait_session(&d, "transmitting", |s| {
+        s.model
+            .interlock
+            .sample
+            .as_ref()
+            .is_some_and(|i| i.state == "TRANSMITTING")
+    });
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14075000", 1), "RPRT -1\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT -1\n");
+    assert!(
+        split_wire(&sim, before).is_empty(),
+        "{:?}",
+        split_wire(&sim, before)
+    );
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
 /// A rule for `command` that answers success and sends `lines`: a way to have the radio report
 /// something at a chosen moment, as another client acting between two verbs would.
 fn reports_on(command: &str, lines: &[&str]) -> (Pattern, Vec<Rule>) {
