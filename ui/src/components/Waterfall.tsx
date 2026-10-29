@@ -37,7 +37,7 @@ import { useWaterfallPalette } from '../waterfallPalette'
 import { ageLabel } from '../waterfallHistory'
 import { createSpectrumRenderer, type SpectrumRenderer, type SpectrumScene } from '../spectrum'
 import { autoRange } from '../spectrum/scaleRange'
-import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import { PalettePicker } from './PalettePicker'
 import { MOD_LABEL } from '../platform'
 import { t } from '../i18n'
@@ -59,8 +59,16 @@ const DBR = 'dBr'
 const GAIN_KEY = 'nexus.waterfall.gain'
 const ZERO_KEY = 'nexus.waterfall.zero'
 /** PER-SURFACE: a wide overview docked plus a zoomed-in torn-off waterfall is the reason
- *  to pop the waterfall out at all. */
+ *  to pop the waterfall out at all.
+ *
+ *  ⚠️ READ ONLY NOW. Every mode's waterfall kept its span here, so a 1 kHz pick in RTTY made FT8,
+ *  PSK and JS8 open on a 1 kHz window too. Each mode now keeps its span under its own key (the
+ *  `zoomKey` prop) and opens at Std until the operator picks one there. This key is still read
+ *  after the mode's own, so a span chosen before each mode had its own keeps opening as it did;
+ *  nothing writes it, so it can never again carry a pick from one mode into another. */
 const ZOOM_KEY = 'nexus.waterfall.zoom'
+/** PER-SURFACE: FT's span (the Operate cockpit and its torn-off copy), the `zoomKey` default. */
+const FT_ZOOM_KEY = 'nexus.waterfall.ft.zoom'
 /** PER-SURFACE: 2D scroll vs 3D stacked-spectrum (3DSS) view. A torn-off 3D display next to a
  *  docked 2D one is a legitimate multi-monitor setup, so this is per-surface like the zoom. */
 const THREED_KEY = 'nexus.waterfall.dss'
@@ -90,12 +98,17 @@ function loadKnob(key: string): number {
     return 0
   }
 }
-/** Load the persisted waterfall view; missing/blocked/out-of-range → 0 (the default
- * 0–3 kHz "Std" view). Only the picker's own option values are legitimate — "any finite
+/** Load the mode's persisted waterfall view; missing/blocked/out-of-range → 0 (the default
+ * 200–3000 Hz "Std" view). Only the picker's own option values are legitimate — "any finite
  * value is kept" (the old rule) let a stale/foreign span render a view the zoom select
- * cannot represent. */
-function loadZoom(): number {
-  const v = parseFloat(surfaceGet(ZOOM_KEY) ?? '')
+ * cannot represent.
+ *
+ * The mode's own key first, then the old shared one (see `ZOOM_KEY`). A value THIS window
+ * stored under either beats the main window's, so a torn-off waterfall keeps the span it was
+ * given before each mode had a key of its own. */
+function loadZoom(zoomKey: string): number {
+  const oldOnly = !surfaceHasOwn(zoomKey) && surfaceHasOwn(ZOOM_KEY)
+  const v = parseFloat((oldOnly ? surfaceGet(ZOOM_KEY) : (surfaceGet(zoomKey) ?? surfaceGet(ZOOM_KEY))) ?? '')
   return Number.isFinite(v) ? coerceZoomSpan(v) : 0
 }
 
@@ -257,6 +270,10 @@ interface Props {
    *  one of `WATERFALL_ZOOMS`: the buttons set and persist the same span the select does. Omitted ⇒
    *  the select. */
   spanChoices?: { value: number; label: string; widthHz: number }[]
+  /** Where this mode keeps its span (`nexus.waterfall.<mode>.zoom`): every mode opens at Std
+   *  until the operator picks a span in it, and a pick in one mode never moves another's.
+   *  Omitted ⇒ FT's. */
+  zoomKey?: string
   /** A contrast curve every value is drawn through, 0..1 → 0..1 (RTTY's `traceContrast`). It is
    *  baked into the palette, so the picture, the history it is redrawn from and the legend all
    *  carry it. Omitted ⇒ the linear map every other surface draws. Pass a stable function. */
@@ -362,6 +379,7 @@ export function Waterfall({
   onViewChange,
   headerExtra,
   spanChoices,
+  zoomKey = FT_ZOOM_KEY,
   contrastCurve,
   tags,
   onTag,
@@ -399,7 +417,7 @@ export function Waterfall({
   // when the operator moves it (a waterfall click, a decode double-click, `rtty_net`/`psk_net`
   // — RTTY/PSK AFC is reported separately and does NOT drag the netted center), so following
   // it costs one cold re-render per retune, not one per poll.
-  const [zoomSpan, setZoomSpan] = useState<number>(loadZoom)
+  const [zoomSpan, setZoomSpan] = useState<number>(() => loadZoom(zoomKey))
   // ⚠️ THE WINDOW HAS MEMORY, so this is not a pure re-derivation (#164). Re-centring on the
   // marker every render made the display PAN: a left-click moves the RX marker, so each click
   // slid the view by up to half a span. `zoomWindow` holds the slice still while the marker is
@@ -1222,7 +1240,7 @@ export function Waterfall({
                 onClick={() => {
                   // The same two writes as the select below: the span is state, the window follows.
                   setZoomSpan(c.value)
-                  surfaceSet(ZOOM_KEY, String(c.value))
+                  surfaceSet(zoomKey, String(c.value))
                 }}
               >
                 {c.label}
@@ -1242,7 +1260,7 @@ export function Waterfall({
               // job — this handler deliberately touches neither the view refs nor the canvas.
               const span = Number(e.target.value)
               setZoomSpan(span)
-              surfaceSet(ZOOM_KEY, String(span))
+              surfaceSet(zoomKey, String(span))
             }}
           >
             {WATERFALL_ZOOMS.map((z) => (
