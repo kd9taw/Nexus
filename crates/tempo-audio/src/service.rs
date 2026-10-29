@@ -8056,6 +8056,10 @@ impl RadioLoop {
                 self.dial_giveup = None; // same for the dial: the refusal may have been the link
                 self.dial_fail_count = 0;
                 self.width_unanswered = None;
+                // A new link asks again whether the radio answers `v` natively: a probe that
+                // confirms CAT at once skips the confirmation reset, and the last radio's answer
+                // would dress this one's cached VFO up as a reading.
+                self.vfo_read_native = None;
                 self.cat_dead_probes = 0;
                 self.cat_rebuild_at = now + CAT_REBUILD_BACKOFF_MS;
                 self.cat_port_present = None;
@@ -23893,6 +23897,94 @@ mod tests {
             "B",
             "the indicator flicked back to the pre-press reading the moment the write landed"
         );
+    }
+
+    /// WHETHER `v` IS NATIVE IS A QUESTION FOR EACH RADIO, AND A REBUILD IS A NEW RADIO. Radio A
+    /// reads its VFO natively; the operator then picks another model, B, and B answers its open at
+    /// once, so no later CAT confirmation asks anything afresh. B's `v` is Hamlib's cache of our
+    /// own last write and must not be read as the radio's selection on A's answer. CONTROL: a B
+    /// that reads natively is read.
+    #[test]
+    fn a_native_vfo_read_on_one_radio_is_not_believed_for_the_next_after_a_cat_rebuild() {
+        for (what, b_cap, shown) in [("B not native", 'N', "A"), ("control: B native", 'Y', "B")] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.request_vfo(false); // Nexus commanded VFO A…
+                e.take_vfo_apply(); // …and the loop wrote it.
+            }
+            let mut backend = MockBackend::new();
+            let (addr_a, _) = mock_vfo_rigctld("VFOA", 'Y');
+            let (addr_b, log_b) = mock_vfo_rigctld("VFOB", b_cap);
+            let mut rig = Rig::rigctld(&addr_a);
+            let mut state = loop_state_for(&engine);
+            state.cat_ok = Some(true);
+            // A answered its own probe.
+            state.vfo_read_native = Some(true);
+            // The operator chooses radio B, another model.
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.rig_model += 1;
+                e.apply_settings(s);
+            }
+            let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+            let mut reopen = move |_t: &Transport, _coexist: bool| -> RigOpen {
+                (
+                    Rig::rigctld(&addr_b),
+                    None,
+                    CatProbe::status(Some(true), String::new()),
+                )
+            };
+            let mut station = StationSinks::new();
+            let mut now = 100_000.0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut reopen,
+                    &mut station,
+                )
+                .unwrap();
+            assert!(rig.has_control(), "{what}: premise: B connected");
+            assert_eq!(state.cat_ok, Some(true), "{what}: premise: probe-confirmed");
+            // Two read-back ticks: B's capability probe, then the read it allows.
+            for _ in 0..2 {
+                now += RIG_POLL_MS;
+                vfo_read_tick(&engine, &mut state);
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        now,
+                        &mut ra,
+                        &mut reopen,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+            let wire = log_b.lock().unwrap().clone();
+            assert!(
+                wire.iter().any(|l| l == "\\dump_caps"),
+                "{what}: B was asked its own capability: {wire:?}"
+            );
+            assert_eq!(
+                wire.iter().any(|l| l == "v"),
+                b_cap == 'Y',
+                "{what}: `v` read on B: {wire:?}"
+            );
+            assert_eq!(
+                engine.lock().unwrap().snapshot().radio.active_vfo,
+                shown,
+                "{what}: the indicator"
+            );
+        }
     }
 
     /// A REFUSED LEVEL WRITE MUST STOP BEING RE-SENT (2026-08-17 Flex audit, wave-2 #60).
