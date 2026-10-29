@@ -3801,8 +3801,8 @@ pub struct Engine {
     beacon_decided_slot: Option<u64>,
     /// The decision itself, held for the length of the interval.
     beacon_tx_this_slot: bool,
-    /// How many beacon overs this session has keyed ([`Self::note_slot_over_keyed`]): WSJT-X's
-    /// `m_tx`, which flips at each beacon over's PTT rise, is this count's parity. It picks which
+    /// How many beacon overs this session has asserted PTT for ([`Self::note_slot_ptt_asserted`]):
+    /// WSJT-X's `m_tx`, which flips at each beacon over's PTT assert, is this count's parity. It picks which
     /// of a compound call's two messages the next over sends ([`Self::beacon_message`]).
     beacon_overs: u64,
     /// Chat-native CQ run (Tempo): while on, an idle own-parity TX slot re-sends the
@@ -21161,11 +21161,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.slot_over_dropped = None;
     }
 
-    /// The radio keyed the slot over [`Self::commit_tx`] handed it: PTT is up. A WSPR or FST4W
-    /// over counts toward a compound call's alternation ([`Self::beacon_overs`]) here, as WSJT-X
-    /// flips `m_tx` only on the tick that raises PTT (`widgets/mainwindow.cpp:7880`, `:15464`): an
-    /// interval decided but never keyed leaves the next over on the message that was due.
-    pub fn note_slot_over_keyed(&mut self) {
+    /// The radio loop asserted PTT for the slot over [`Self::commit_tx`] handed it, whatever the
+    /// radio then answers. A WSPR or FST4W over counts toward a compound call's alternation
+    /// ([`Self::beacon_overs`]) here, as WSJT-X flips `m_tx` on the tick that raises PTT
+    /// (`widgets/mainwindow.cpp:7808`, `:7855`, `:7880`, `:15464`), before the rig answers, so a
+    /// key the radio refuses still flips it. An interval that never reaches a key (no power set, a
+    /// plan dropped, TX off, Remote revoked first) leaves the next over on the message that was due.
+    pub fn note_slot_ptt_asserted(&mut self) {
         if self.tier_is_beacon(self.app.tier()) {
             self.beacon_overs += 1;
         }
@@ -30005,7 +30007,7 @@ contact yourself."
         // WSJT-X sends a compound call's type 2 on its first over and its type 3 on the next
         // (`m_tx=1-m_tx`, then `if(m_tx==0) msg2=msg0`). It flips as PTT rises, before it builds
         // the over; this over is built before its key, so it is the flip the key will make: the
-        // over after an odd number keyed is the type 3.
+        // over after an odd number of PTT asserts is the type 3.
         Ok(tempo_core::beacon::beacon_message(
             call,
             grid,
@@ -74994,8 +74996,8 @@ mod tests {
                     };
                     let first = text(&mut e);
                     assert_eq!(text(&mut e), first, "{call}: one text per interval");
-                    // Each over keys: the alternation flips at the key (see the next test).
-                    e.note_slot_over_keyed();
+                    // Each over keys: the alternation flips at its PTT assert (see the next test).
+                    e.note_slot_ptt_asserted();
                     first
                 })
                 .collect()
@@ -75024,15 +75026,16 @@ mod tests {
         }
     }
 
-    /// ⭐ A COMPOUND CALL'S BEACON ALTERNATES ON THE OVERS THAT KEY, NOT ON THE INTERVALS DECIDED.
+    /// ⭐ A COMPOUND CALL'S BEACON ALTERNATES ON EACH PTT ASSERT, NOT ON THE INTERVALS DECIDED.
     /// WSJT-X flips `m_tx` inside `WSPR_message` (`widgets/mainwindow.cpp:15464`), which it calls
     /// only on the tick that raises PTT (`if((g_iptt==1 && m_iptt0==0) || m_restart)`, `:7880`, for
-    /// WSPR, and `:8006` for FST4W in the same block). An interval that keys nothing (no power set,
-    /// a plan the radio loop drops, a key it never makes) leaves the next over on the message that
-    /// was due. Nexus flipped when it decided to transmit, so the over after such an interval was
-    /// the type 3 where WSJT-X sends the type 2.
+    /// WSPR, and `:8006` for FST4W in the same block). An interval that never reaches a key (no
+    /// power set, a plan the radio loop drops) leaves the next over on the message that was due.
+    /// Nexus flipped when it decided to transmit, so the over after such an interval was the type 3
+    /// where WSJT-X sends the type 2. A key the radio refuses does flip: see the radio loop's
+    /// `a_beacon_over_flips_the_compound_call_alternation_at_its_ptt_assert`.
     #[test]
-    fn a_compound_call_beacon_alternates_on_overs_keyed_not_intervals_decided() {
+    fn a_compound_call_beacon_alternates_on_each_ptt_assert_not_intervals_decided() {
         let text = |e: &mut Engine, slot: u64| match e.plan_tx(slot).map(|p| p.waveform) {
             Some(TxWaveform::Native { text, .. }) => Some(text),
             None => None,
@@ -75058,7 +75061,7 @@ mod tests {
             );
             s.beacon_power_dbm = 37;
             e.apply_settings(s);
-            // Planned, but never keyed (the radio loop dropped it, or the radio refused the key).
+            // Planned, but PTT never asserted (the radio loop dropped it).
             assert_eq!(
                 text(&mut e, 11).as_deref(),
                 Some(two),
@@ -75069,13 +75072,13 @@ mod tests {
                 Some(two),
                 "{tier:?}: after no key"
             );
-            e.note_slot_over_keyed();
+            e.note_slot_ptt_asserted();
             assert_eq!(
                 text(&mut e, 13).as_deref(),
                 Some(three),
                 "{tier:?}: after a key"
             );
-            e.note_slot_over_keyed();
+            e.note_slot_ptt_asserted();
             assert_eq!(
                 text(&mut e, 14).as_deref(),
                 Some(two),
@@ -75086,7 +75089,7 @@ mod tests {
         // CONTROL: an over keyed in another mode is not a beacon over, as WSJT-X flips `m_tx`
         // only where it builds a WSPR or FST4W message.
         let mut e = Engine::new("PJ4/K1ABC", "FK52UD", 0);
-        e.note_slot_over_keyed();
+        e.note_slot_ptt_asserted();
         e.set_tier(Tier::Wspr);
         let mut s = e.settings().clone();
         s.beacon_tx_percent = 100;
