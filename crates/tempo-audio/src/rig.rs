@@ -568,6 +568,11 @@ pub struct Rig {
     /// (`slot::apply_tx_dial_shift`), the radio loop sends the release again at quiet points, and
     /// the radio's split is never read as the operator's own.
     pub(crate) split_release_pending: bool,
+    /// The TX dial and TX mode the radio last confirmed (`RPRT 0`) for Nexus's held Rig split on this
+    /// connection, so an over whose split writes change nothing sends none of them. Forgotten by
+    /// anything that may have moved VFO B or the dial: a new connection, any dial, mode or control
+    /// write, a raw write, a dial read that differs, and every refused or late split write.
+    pub(crate) split_confirmed: Option<SplitConfirmed>,
     /// True when the CAT link is a NETWORK transport (rigctld → SmartSDR / remote radio), where a
     /// reply can legitimately take seconds. Serial rigs answer in milliseconds, so a serial link
     /// uses a much shorter per-command deadline — a stalled serial read then can't hold the radio
@@ -583,6 +588,19 @@ pub struct Rig {
     /// whose commands must take seconds and still be answered inside it. PTT keeps its own.
     #[cfg(test)]
     pub(crate) test_reply_deadline_ms: Option<u64>,
+    /// A test's own total budget (ms) for the split writes before a key, in place of
+    /// `slot::SPLIT_WRITES_BUDGET_MS`, for a scene that delays the key through them on purpose.
+    #[cfg(test)]
+    pub(crate) test_split_budget_ms: Option<u64>,
+}
+
+/// What [`Rig::split_confirmed`] holds: the RX dial the radio was on when it confirmed, and the
+/// TX dial (`I`) and TX mode (`X`) it confirmed there; `None` for one not confirmed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SplitConfirmed {
+    pub rx_dial: u64,
+    pub tx_hz: Option<u64>,
+    pub tx_mode: Option<String>,
 }
 
 /// What a rigctld line asks: read or write a LEVEL, read or write a FUNC. The short and long
@@ -706,12 +724,15 @@ impl Rig {
             keyed: false,
             tx_split_held: false,
             split_release_pending: false,
+            split_confirmed: None,
             slow_transport: false,
             never_send: &[],
             #[cfg(test)]
             before_remote_write: None,
             #[cfg(test)]
             test_reply_deadline_ms: None,
+            #[cfg(test)]
+            test_split_budget_ms: None,
         }
     }
 
@@ -792,11 +813,19 @@ impl Rig {
                 s.set_read_timeout(Some(Duration::from_millis(500)))?;
                 s.set_write_timeout(Some(Duration::from_millis(500)))?;
                 self.stream = Some(s);
+                // A new connection may be to a radio (or a daemon) that holds nothing we confirmed.
+                self.split_confirmed = None;
             }
         }
         self.stream
             .as_mut()
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "no rig stream"))
+    }
+    /// Drop the connection, as a failed command does: the next command opens a new one.
+    #[cfg(test)]
+    pub(crate) fn reconnect_for_test(&mut self) {
+        self.stream = None;
+        self.split_confirmed = None;
     }
 
     /// Send one command line and read its COMPLETE (newline-terminated) reply.
@@ -896,6 +925,7 @@ impl Rig {
                     ));
                 }
                 self.stream = None; // force a clean reconnect on the next call
+                self.split_confirmed = None;
                 Err(e)
             }
         }
@@ -1056,6 +1086,7 @@ impl Rig {
         // on a reply that was already anomalous. See
         // `a_straggler_past_the_tail_window_never_answers_the_next_command`.
         self.stream = None;
+        self.split_confirmed = None;
         Ok(partial)
     }
 
@@ -1071,6 +1102,7 @@ impl Rig {
             Ok(reply) => Ok(reply),
             Err(e) => {
                 self.stream = None; // force a clean reconnect on the next call
+                self.split_confirmed = None;
                 Err(e)
             }
         }
@@ -1121,6 +1153,7 @@ impl Rig {
         // TX-safety invariant. Keep what we parsed, drop the connection.
         if still_talking {
             self.stream = None;
+            self.split_confirmed = None;
         }
         Ok(String::from_utf8_lossy(&out).to_string())
     }
@@ -1295,6 +1328,7 @@ impl Rig {
                 Ok(())
             };
         }
+        self.split_confirmed = None;
         let reply = self.command_permitted(&freq_line(hz), None, permission)?;
         if reply_ok(&reply) || (permission.is_none() && reply.is_empty()) {
             Ok(())
@@ -1385,6 +1419,7 @@ impl Rig {
                 Ok(())
             };
         }
+        self.split_confirmed = None;
         let reply = self.command_permitted(&mode_line(mode, passband_hz), None, permission)?;
         if reply_ok(&reply) || (permission.is_none() && reply.is_empty()) {
             Ok(())
@@ -1565,20 +1600,26 @@ impl Rig {
             return Err(std::io::Error::other("not a CAT rig"));
         }
         let reply = self.command("f\n")?;
-        reply
-            .lines()
-            .find_map(hz_in_line)
-            .filter(|hz| *hz > 0)
-            .ok_or_else(|| match rprt_code(&reply) {
-                Some(code) if rprt_is_link_fault(code) => std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    format!("the rig did not answer the frequency read (Hamlib RPRT {code})"),
-                ),
-                _ => std::io::Error::other(format!(
-                    "rig did not return a frequency (reply {reply:?}) — check the serial port, \
+        let hz = reply.lines().find_map(hz_in_line).filter(|hz| *hz > 0);
+        // A dial somewhere else than where the split writes were confirmed (the operator's knob, a
+        // band change at the radio): what VFO B holds is no longer known.
+        if hz.is_none_or(|hz| {
+            self.split_confirmed
+                .as_ref()
+                .is_some_and(|c| c.rx_dial != hz)
+        }) {
+            self.split_confirmed = None;
+        }
+        hz.ok_or_else(|| match rprt_code(&reply) {
+            Some(code) if rprt_is_link_fault(code) => std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("the rig did not answer the frequency read (Hamlib RPRT {code})"),
+            ),
+            _ => std::io::Error::other(format!(
+                "rig did not return a frequency (reply {reply:?}) — check the serial port, \
                      baud rate, and that CAT/CI-V is enabled on the rig"
-                )),
-            })
+            )),
+        })
     }
 
     /// Read the rig's current mode (e.g. "USB"/"CW"). `None` if not a CAT rig or the
@@ -1641,6 +1682,7 @@ impl Rig {
         if self.control.is_none() {
             return false;
         }
+        self.split_confirmed = None;
         self.command_with_deadline(&format!("W {raw} 0\n"), Some(PTT_DEADLINE_MS))
             .is_ok_and(|reply| !reply.trim_start().starts_with("RPRT -"))
     }
@@ -1736,6 +1778,7 @@ impl Rig {
             return self.set_split_mode(mode, passband_hz).map(|()| true);
         }
         let line = split_mode_line(mode, passband_hz);
+        self.split_confirmed = None;
         let reply = self.command(&line)?;
         if rprt_code(&reply) == Some(-11) {
             return Ok(false);
@@ -1957,6 +2000,7 @@ impl Rig {
         if self.control.is_none() {
             return Ok(());
         }
+        self.split_confirmed = None;
         let reply = self.command(line)?;
         cat_judged(line, &reply)
     }

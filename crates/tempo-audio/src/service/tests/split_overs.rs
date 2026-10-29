@@ -397,11 +397,12 @@ fn civ_bench(addr: u8, model: IcomModel, hamlib: u32, split: SplitMode, tx_hz: f
 }
 
 /// An IC-7610 on Nexus's CI-V daemon, Split Operation = Rig: before the first key `0F 01` (split
-/// on), and before every key `25 01` (the SUB band's dial, by name, on this radio) at the TX dial
-/// and `26 01 01 01` (that band's mode: USB, DATA mode D1, the bench's Data mode). Split is held
-/// between overs, as WSJT-X holds it: nothing but the unkey at an unkey. The same TX dial every
-/// over, MAIN never written, nothing written while it receives, the engine's dial unmoved. At 1441
-/// Hz the step is -500 Hz; at 941 Hz, -1000 Hz.
+/// on), `25 01` (the SUB band's dial, by name, on this radio) at the TX dial and `26 01 01 01`
+/// (that band's mode: USB, DATA mode D1, the bench's Data mode). Split is held between overs, as
+/// WSJT-X holds it: nothing but the unkey at an unkey, and the later overs, their TX dial and mode
+/// unchanged and already confirmed, write nothing before the key. MAIN never written, nothing
+/// written while it receives, the engine's dial unmoved. At 1441 Hz the step is -500 Hz; at 941
+/// Hz, -1000 Hz.
 ///
 /// The `26 01` is the loop's `X PKTUSB -1`, which the daemon used to refuse: its mode names
 /// (`commands::Mode::from_name`) have no DATA submode, so nothing went on the wire, and the TX VFO
@@ -414,12 +415,13 @@ fn an_ic7610_in_rig_split_gets_the_same_tx_dial_every_over_and_split_held_betwee
         for (i, o) in overs.iter().enumerate() {
             eprintln!("IC-7610 Rig {tx_hz} Hz over {}: {o:?}", i + 1);
         }
-        let key = vec![
+        let key = vec!["1C 00 01".to_string()];
+        let first_key = vec![
+            "0F 01".to_string(),
             format!("25 01 {tx_dial}"),
             "26 01 01 01".to_string(),
             "1C 00 01".to_string(),
         ];
-        let first_key = [vec!["0F 01".to_string()], key.clone()].concat();
         let unkey = vec!["1C 00 00".to_string()];
         for (i, o) in overs.iter().enumerate() {
             let what = format!("{tx_hz} Hz, over {}", i + 1);
@@ -669,9 +671,10 @@ fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<H
     Bench::new(engine, loop_state(), rig, Hamlib { peer, keyed, vfos })
 }
 
-/// Through Hamlib, Split Operation = Rig: `S 1 VFOB` before the first key only, and before every
-/// key `I` at the TX dial and `X PKTUSB -1`; nothing but `T 0` at an unkey, split held between
-/// overs as WSJT-X holds it. VFO A is never written; VFO B holds the TX dial.
+/// Through Hamlib, Split Operation = Rig: `S 1 VFOB`, `I` at the TX dial and `X PKTUSB -1` before
+/// the first key only (the later overs' TX dial and mode are unchanged and already confirmed);
+/// nothing but `T 0` at an unkey, split held between overs as WSJT-X holds it. VFO A is never
+/// written; VFO B holds the TX dial.
 #[test]
 fn through_hamlib_rig_split_is_engaged_before_the_first_key_and_held_between_overs() {
     let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
@@ -682,7 +685,7 @@ fn through_hamlib_rig_split_is_engaged_before_the_first_key_and_held_between_ove
         let key: &[&str] = if i == 0 {
             &["S 1 VFOB", "I 14073500", "X PKTUSB -1", "T 1"]
         } else {
-            &["I 14073500", "X PKTUSB -1", "T 1"]
+            &["T 1"]
         };
         assert_eq!(o.key, key, "over {}", i + 1);
         assert_eq!(o.unkey, ["T 0"], "over {}", i + 1);
@@ -708,7 +711,7 @@ fn through_hamlib_a_radio_already_in_split_gets_its_own_vfo_b_back_when_nexus_le
         let key: &[&str] = if i == 0 {
             &["S 1 VFOB", "I 14073500", "X PKTUSB -1", "T 1"]
         } else {
-            &["I 14073500", "X PKTUSB -1", "T 1"]
+            &["T 1"]
         };
         assert_eq!(o.key, key, "over {}", i + 1);
         assert_eq!(o.unkey, ["T 0"], "over {}", i + 1);
@@ -1134,8 +1137,9 @@ impl<R: Radio> Bench<R> {
 }
 
 /// Through Hamlib, Split Operation = Rig, three overs of a CQ run: `S 1 VFOB` once, before the
-/// first, and never again; every over writes the TX dial and its mode before its key; nothing is
-/// written at an unkey or while receiving, and the radio is still in split, VFO B on the TX dial.
+/// first, and never again; the first over writes the TX dial and its mode before its key, and the
+/// later ones, nothing changed, write neither; nothing is written at an unkey or while receiving,
+/// and the radio is still in split, VFO B on the TX dial.
 #[test]
 fn through_hamlib_rig_split_is_turned_on_once_and_held_across_overs() {
     let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
@@ -1155,12 +1159,7 @@ fn through_hamlib_rig_split_is_turned_on_once_and_held_across_overs() {
     );
     for (i, o) in overs.iter().enumerate() {
         if i > 0 {
-            assert_eq!(
-                o.key,
-                ["I 14073500", "X PKTUSB -1", "T 1"],
-                "over {}",
-                i + 1
-            );
+            assert_eq!(o.key, ["T 1"], "over {}", i + 1);
         }
         assert_eq!(o.unkey, ["T 0"], "over {}", i + 1);
         assert_eq!(o.rx, Vec::<String>::new(), "over {}", i + 1);
@@ -1227,7 +1226,7 @@ fn through_hamlib_a_held_rig_split_is_let_go_when_the_band_tx_or_split_mode_chan
 
 /// A held Rig split and an over whose TX offset needs no shift (1500-1999 Hz): the TX dial is the
 /// RX dial, written before the key as WSJT-X writes `XIT` 0's TX frequency, never left on the last
-/// shifted dial VFO B still holds.
+/// shifted dial VFO B still holds. The mode, unchanged and already confirmed, is not written.
 #[test]
 fn through_hamlib_a_held_split_writes_the_rx_dial_for_an_over_with_no_shift() {
     let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
@@ -1238,14 +1237,10 @@ fn through_hamlib_a_held_split_writes_the_rx_dial_for_an_over_with_no_shift() {
             engine.lock().unwrap().set_tx_offset(1700.0);
         }
     });
-    assert_eq!(
-        overs[1].key,
-        ["I 14073500", "X PKTUSB -1", "T 1"],
-        "premise: held"
-    );
+    assert_eq!(overs[1].key, ["T 1"], "premise: held");
     assert_eq!(
         overs[2].key,
-        ["I 14074000", "X PKTUSB -1", "T 1"],
+        ["I 14074000", "T 1"],
         "the TX dial back on the RX dial before the key"
     );
 }
