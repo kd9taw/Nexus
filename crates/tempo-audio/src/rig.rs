@@ -66,6 +66,45 @@ pub enum PttMode {
 /// the slow-transport 2.5 s read window so an un-key can never hang the single-threaded radio loop.
 const PTT_DEADLINE_MS: u64 = 700;
 
+/// How long opening the CAT connection may take, per address the control address resolves to.
+///
+/// ⚠️ RADIO-LOOP LIVENESS. The radio loop opens (and, after any failed command, re-opens) this
+/// connection itself, so an unbounded connect to a network rigctld that is firewalled or switched
+/// off held the loop for the OS SYN-retry time (~127 s on Linux, ~21 s on Windows): no slot
+/// boundary, no PTT deadline, no tune ceiling meanwhile. A rigctld that is there answers in
+/// milliseconds (a local one at once), so this bounds only the connect nobody answers, which then
+/// fails as "not reachable" and the radio reads as down. Three seconds, as for a Flex's own API.
+const CAT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Open the CAT connection to `addr`, trying each address it resolves to (as
+/// `TcpStream::connect` does) but each within [`CAT_CONNECT_TIMEOUT`]. A connect nobody answers
+/// is `TimedOut` with words saying so; every other failure (a refused port, an unresolvable name)
+/// is returned as the OS gave it, so a local rigctld that is not running reads as it always has.
+fn connect_cat(addr: &str) -> std::io::Result<TcpStream> {
+    use std::net::ToSocketAddrs;
+    let mut last = None;
+    for at in addr.to_socket_addrs()? {
+        match TcpStream::connect_timeout(&at, CAT_CONNECT_TIMEOUT) {
+            Ok(s) => return Ok(s),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(match last {
+        Some(e) if e.kind() == std::io::ErrorKind::TimedOut => std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "rigctld at {addr} is not reachable: nothing answered within {} s",
+                CAT_CONNECT_TIMEOUT.as_secs()
+            ),
+        ),
+        Some(e) => e,
+        None => std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("rigctld address {addr} resolved to no address"),
+        ),
+    })
+}
+
 /// rigctld command line for PTT.
 pub fn ptt_line(on: bool) -> String {
     format!("T {}\n", on as u8)
@@ -770,7 +809,7 @@ impl Rig {
     fn ensure_connected(&mut self) -> std::io::Result<&mut TcpStream> {
         if self.stream.is_none() {
             if let Some(addr) = &self.control {
-                let s = TcpStream::connect(addr)?;
+                let s = connect_cat(addr)?;
                 s.set_read_timeout(Some(Duration::from_millis(500)))?;
                 s.set_write_timeout(Some(Duration::from_millis(500)))?;
                 self.stream = Some(s);
@@ -1954,9 +1993,9 @@ impl Rig {
 ///
 /// IT CAN BLOCK, and that is the accepted trade. A CAT unkey over a live stream is bounded by the
 /// 700 ms `PTT_DEADLINE_MS`; if a prior failure dropped the stream, `ensure_connected` reconnects
-/// first and `TcpStream::connect` is bounded only by the OS (immediate against a refused localhost
-/// rigctld — the usual case — but longer for a network rig that has gone away). A teardown that
-/// waits is better than a radio that keeps transmitting.
+/// first, bounded by `CAT_CONNECT_TIMEOUT` (immediate against a refused localhost rigctld — the
+/// usual case — up to that bound for a network rig that has gone away). A teardown that waits is
+/// better than a radio that keeps transmitting.
 impl Drop for Rig {
     fn drop(&mut self) {
         if !self.keyed {
@@ -3590,6 +3629,97 @@ mod tests {
         let mut vox = Rig::vox();
         vox.ptt(true).unwrap();
         drop(vox);
+    }
+
+    /// A listening port that never completes another connection: its accept queue is shrunk to
+    /// nothing and filled, so the kernel drops every further SYN and a connect to it waits out the
+    /// OS SYN retries (~127 s), exactly as one to a firewalled or switched-off network rigctld
+    /// does. Unlike a non-routable address it black-holes the same way in CI and in a private
+    /// network namespace with no route out. Linux only: `listen(fd, 0)` on a socket that is
+    /// already listening only changes its backlog there.
+    #[cfg(target_os = "linux")]
+    fn black_hole() -> (TcpListener, Vec<TcpStream>, String) {
+        use std::os::fd::AsRawFd;
+        unsafe extern "C" {
+            fn listen(fd: i32, backlog: i32) -> i32;
+        }
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        // SAFETY: a valid listening socket for the call's whole duration.
+        assert_eq!(
+            unsafe { listen(listener.as_raw_fd(), 0) },
+            0,
+            "listen(fd, 0)"
+        );
+        let at = listener.local_addr().unwrap();
+        let mut held = Vec::new();
+        for _ in 0..8 {
+            match TcpStream::connect_timeout(&at, Duration::from_millis(300)) {
+                Ok(s) => held.push(s),
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    return (listener, held, at.to_string());
+                }
+                Err(e) => panic!("filling the accept queue: {e}"),
+            }
+        }
+        panic!("the accept queue never filled");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cat_link_nobody_answers_gives_up_in_seconds_as_not_reachable() {
+        // A network rigctld that is firewalled or switched off answers no SYN at all. An
+        // unbounded connect held the radio loop for the OS retry time on every reconnect.
+        let (_listener, _held, addr) = black_hole();
+        let mut rig = Rig::rigctld(&addr);
+        let t0 = std::time::Instant::now();
+        let e = rig
+            .read_freq()
+            .expect_err("nothing answered the connection");
+        let took = t0.elapsed();
+        assert!(
+            took < CAT_CONNECT_TIMEOUT + Duration::from_secs(2),
+            "the connect held the caller {took:?}"
+        );
+        // A slow connect is never success, and giving up early is not the fix either.
+        assert!(took >= CAT_CONNECT_TIMEOUT, "gave up after only {took:?}");
+        assert_eq!(e.kind(), std::io::ErrorKind::TimedOut, "{e}");
+        assert!(e.to_string().contains("not reachable"), "{e}");
+        assert!(e.to_string().contains(&addr), "names the address: {e}");
+        // Nothing reached the wire, so this is not "the radio may be acting on it".
+        assert!(!no_answer_in_time(&e), "{e}");
+
+        // Control: a rigctld that is there connects and answers as before, at once.
+        let (live, _log) = mock_rigctld(ok_reply(14_074_000));
+        let mut rig = Rig::rigctld(&live);
+        let t0 = std::time::Instant::now();
+        assert_eq!(rig.read_freq().unwrap(), 14_074_000);
+        assert!(t0.elapsed() < Duration::from_secs(1), "{:?}", t0.elapsed());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_key_over_a_cat_link_nobody_answers_fails_and_halts_the_slot_over() {
+        // Keying over CAT to a radio that cannot be reached must fail, never read as keyed-ok,
+        // and must not be the "deadline passed, the radio may be keying" case a slot over plays
+        // through: the over halts.
+        let (_listener, _held, addr) = black_hole();
+        let mut rig = Rig::rigctld(&addr);
+        let t0 = std::time::Instant::now();
+        let key = rig.ptt(true);
+        assert!(key.is_err(), "keyed with no CAT link");
+        assert!(t0.elapsed() < CAT_CONNECT_TIMEOUT + Duration::from_secs(2));
+        assert!(
+            crate::slot::slot_key_failure(&key, false).is_some(),
+            "a key that never reached the radio must halt the over: {key:?}"
+        );
+        // The teardown unkey (the rig still counts itself keyed) is bounded too.
+        let t0 = std::time::Instant::now();
+        drop(rig);
+        assert!(
+            t0.elapsed() < CAT_CONNECT_TIMEOUT + Duration::from_secs(2),
+            "teardown held {:?}",
+            t0.elapsed()
+        );
     }
 
     #[test]
