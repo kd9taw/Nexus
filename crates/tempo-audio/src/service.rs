@@ -10658,13 +10658,13 @@ impl RadioLoop {
                                             eng.split_rejected(tx_mhz);
                                         }
                                         // A silence is said as one, never as a refusal.
-                                        if set.as_ref().is_err_and(is_link_fault) {
-                                            "no reply from the rig — split not set; work the \
-                                             pile-up manually"
-                                                .to_string()
-                                        } else {
-                                            "rig rejected split — work the pile-up manually"
-                                                .to_string()
+                                        match &set {
+                                            Err(e) if is_link_fault(e) => format!(
+                                                "{} — split not set; work the pile-up manually",
+                                                dial_failure_brief(e)
+                                            ),
+                                            _ => "rig rejected split — work the pile-up manually"
+                                                .to_string(),
                                         }
                                     });
                                     // The TX VFO's MODE, while a satellite pass holds it. On
@@ -10716,7 +10716,8 @@ impl RadioLoop {
                                                             "split ON — TX {tx_mhz:.4} MHz {md} ({vfo_name})"
                                                         ),
                                                         Err(e) if is_link_fault(e) => format!(
-                                                            "no reply from the rig — the TX mode was not set; put {vfo_name} in {md} by hand"
+                                                            "{} — the TX mode was not set; put {vfo_name} in {md} by hand",
+                                                            dial_failure_brief(e)
                                                         ),
                                                         Err(_) => format!(
                                                             "rig would not set the TX mode — put {vfo_name} in {md} by hand"
@@ -12834,7 +12835,7 @@ impl RadioLoop {
                         Err(e) => {
                             self.rf_power_giveup = Some(p);
                             let why = if is_link_fault(&e) {
-                                "no reply from the rig"
+                                dial_failure_brief(&e)
                             } else {
                                 "the rig didn't take it"
                             };
@@ -17557,11 +17558,16 @@ fn mode_set_note(rig: &mut Rig, md: &str, model: u32) -> String {
 ///   case.
 /// - **Unreachable** — the CAT endpoint refused the connection or isn't listening
 ///   (`ConnectionRefused` etc.): rigctld or SmartSDR not running, or the wrong
-///   address/port. This is the Windows `os error 10061` case.
+///   address/port. This is the Windows `os error 10061` case. So is a network rigctld's
+///   host that is switched off or out of reach ([`crate::rig::cat_unreachable`]), though
+///   it times out rather than being refused.
 ///
 /// The raw `{e}` is kept in every message because its OS detail helps support.
 fn mode_command_failed(md: &str, e: &std::io::Error) -> String {
     use std::io::ErrorKind::*;
+    if crate::rig::cat_unreachable(e) {
+        return format!("can't reach the radio's CAT link — couldn't set {md}: {e}");
+    }
     match e.kind() {
         Other => format!("rig rejected {md}: {e}"),
         TimedOut | UnexpectedEof | ConnectionReset | ConnectionAborted | BrokenPipe => {
@@ -17625,13 +17631,15 @@ fn comp_write_allowed(
 /// actively refusing (`ErrorKind::Other` — a `RPRT <negative>` reply) from the link not answering,
 /// because the two have completely different fixes: a different radio vs a cable/daemon.
 /// A CAT error that means "the rig did not answer" (as opposed to "the rig said no").
-/// `TimedOut` now includes Hamlib's own `RPRT -5/-6/-13/-14` (see `rig::rprt_is_link_fault`).
+/// `TimedOut` now includes Hamlib's own `RPRT -5/-6/-13/-14` (see `rig::rprt_is_link_fault`),
+/// and a CAT host that cannot be reached at all (`rig::cat_unreachable`): a network rigctld whose
+/// machine is switched off answers "No route to host", which is the radio not answering too.
 fn is_link_fault(e: &std::io::Error) -> bool {
     use std::io::ErrorKind::*;
     matches!(
         e.kind(),
         TimedOut | UnexpectedEof | ConnectionReset | ConnectionAborted | BrokenPipe | NotConnected
-    )
+    ) || crate::rig::cat_unreachable(e)
 }
 
 /// The port to follow a rig to when `configured` is absent: exactly one present USB port
@@ -17659,6 +17667,9 @@ fn alias_for(
 
 fn dial_failure_brief(e: &std::io::Error) -> &'static str {
     use std::io::ErrorKind::*;
+    if crate::rig::cat_unreachable(e) {
+        return "CAT link unreachable";
+    }
     match e.kind() {
         Other => "refused by the rig",
         TimedOut | UnexpectedEof | ConnectionReset | ConnectionAborted | BrokenPipe => {
@@ -20253,6 +20264,59 @@ mod tests {
             note.contains("rig rejected PKTUSB"),
             "rejection note: {note}"
         );
+    }
+
+    /// A network rigctld whose host is switched off, or whose network is gone, is the link not
+    /// answering, never the rig saying no: the breaker withholds the dial and the mode until the
+    /// radio is found again, and the operator is told the CAT link cannot be reached — not that the
+    /// rig refused, and not "no reply from the rig" wrapped around "not reachable".
+    #[test]
+    fn a_cat_host_that_cannot_be_reached_is_the_link_not_a_refusal() {
+        use std::io::{Error, ErrorKind};
+        let mut unreachable = vec![
+            Error::from(ErrorKind::HostUnreachable),
+            Error::from(ErrorKind::NetworkUnreachable),
+            Error::from(ErrorKind::NetworkDown),
+        ];
+        // "Host is down", which std leaves uncategorised (macOS's answer for a LAN host that
+        // does not answer ARP).
+        #[cfg(target_os = "linux")]
+        {
+            let down = Error::from_raw_os_error(112);
+            assert!(down.to_string().contains("Host is down"), "{down}");
+            unreachable.push(down);
+        }
+        // A real connect to a network Nexus has no route to (`ENETUNREACH` at once in a network
+        // namespace; in CI the address may black-hole instead, which the connect timeout ends).
+        #[cfg(target_os = "linux")]
+        unreachable.push(
+            crate::rig::Rig::rigctld("10.255.255.1:4532")
+                .read_freq()
+                .expect_err("nothing is there"),
+        );
+        for e in &unreachable {
+            assert!(is_link_fault(e), "{e:?} is the link");
+            assert_eq!(dial_failure_brief(e), "CAT link unreachable", "{e:?}");
+            let note = mode_command_failed("PKTUSB", e);
+            assert!(
+                note.starts_with("can't reach the radio's CAT link"),
+                "{note}"
+            );
+            assert!(!note.contains("no reply"), "{note}");
+        }
+
+        // Control: the rig answering no (`RPRT -1`, a rigctld refusal) is still a refusal, and a
+        // rig that did not reply is still said as one.
+        let (addr, _log) = mock_rigctld_on(14_074_000, true);
+        let refused = crate::rig::Rig::rigctld(&addr)
+            .set_mode("PKTUSB", -1)
+            .expect_err("the rig refuses PKTUSB");
+        assert!(!is_link_fault(&refused), "{refused:?}");
+        assert_eq!(dial_failure_brief(&refused), "refused by the rig");
+        assert!(mode_command_failed("PKTUSB", &refused).starts_with("rig rejected PKTUSB"));
+        let silent = Error::new(ErrorKind::TimedOut, "rig reply incomplete");
+        assert!(is_link_fault(&silent));
+        assert_eq!(dial_failure_brief(&silent), "no reply from the rig");
     }
 
     /// THE 1.7.6-test1 RADIO CRASH, pinned so it cannot come back.

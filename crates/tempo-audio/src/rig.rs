@@ -92,10 +92,10 @@ fn connect_cat(addr: &str) -> std::io::Result<TcpStream> {
     Err(match last {
         Some(e) if e.kind() == std::io::ErrorKind::TimedOut => std::io::Error::new(
             std::io::ErrorKind::TimedOut,
-            format!(
+            NotReachable(format!(
                 "rigctld at {addr} is not reachable: nothing answered within {} s",
                 CAT_CONNECT_TIMEOUT.as_secs()
-            ),
+            )),
         ),
         Some(e) => e,
         None => std::io::Error::new(
@@ -103,6 +103,41 @@ fn connect_cat(addr: &str) -> std::io::Result<TcpStream> {
             format!("rigctld address {addr} resolved to no address"),
         ),
     })
+}
+
+/// What [`connect_cat`]'s `TimedOut` carries, in its own words: the connection was never made.
+#[derive(Debug)]
+struct NotReachable(String);
+
+impl std::fmt::Display for NotReachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NotReachable {}
+
+/// `EHOSTDOWN` ("Host is down"), which std leaves uncategorised: macOS's answer for a LAN host
+/// that does not answer ARP, where Linux answers `EHOSTUNREACH`.
+const EHOSTDOWN: Option<i32> = if cfg!(any(target_os = "linux", target_os = "android")) {
+    Some(112)
+} else if cfg!(target_vendor = "apple") {
+    Some(64)
+} else if cfg!(windows) {
+    Some(10064) // WSAEHOSTDOWN
+} else {
+    None
+};
+
+/// Whether `e` says the CAT host, or the network to it, cannot be reached — a network rigctld
+/// whose machine is switched off or unplugged — rather than a radio behind a reached rigctld
+/// that did not answer, or one that said no. The radio loop counts it as the link not answering
+/// (never a refusal), and says "can't reach" rather than "no reply from the rig".
+pub fn cat_unreachable(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(e.kind(), HostUnreachable | NetworkUnreachable | NetworkDown)
+        || (e.raw_os_error().is_some() && e.raw_os_error() == EHOSTDOWN)
+        || e.get_ref().is_some_and(|inner| inner.is::<NotReachable>())
 }
 
 /// rigctld command line for PTT.
@@ -3720,6 +3755,34 @@ mod tests {
             "teardown held {:?}",
             t0.elapsed()
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cat_host_nobody_answers_is_unreachable_not_a_silent_rig() {
+        // The connection was never made, so this is the CAT host out of reach, not a radio behind
+        // a reached rigctld that did not reply: the two are worded differently to the operator.
+        let (_listener, _held, addr) = black_hole();
+        let e = Rig::rigctld(&addr)
+            .read_freq()
+            .expect_err("nothing answered the connection");
+        assert!(cat_unreachable(&e), "{e:?}");
+
+        // Controls: a rig that did not answer (`RPRT -5`), a refusal (`RPRT -1`), and a local
+        // rigctld that is not running are not "the host cannot be reached".
+        let (addr, _log) = mock_rigctld(|_l| "RPRT -5\n".to_string());
+        let e = Rig::rigctld(&addr).set_mode("USB", -1).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::TimedOut, "{e}");
+        assert!(!cat_unreachable(&e), "{e:?}");
+        let (addr, _log) = mock_rigctld(|_l| "RPRT -1\n".to_string());
+        let e = Rig::rigctld(&addr).set_mode("USB", -1).unwrap_err();
+        assert!(!cat_unreachable(&e), "{e:?}");
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap().to_string();
+        drop(l);
+        let e = Rig::rigctld(&addr).read_freq().unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::ConnectionRefused, "{e}");
+        assert!(!cat_unreachable(&e), "{e:?}");
     }
 
     #[test]
