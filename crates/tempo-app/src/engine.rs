@@ -10069,7 +10069,7 @@ impl Engine {
             && self.settings.keyboard_modem == crate::settings::KeyboardModem::Jtty
     }
 
-    /// JTTY's dial and sideband for `band`: WSJT-X's JTTY frequency there
+    /// JTTY's dial and sideband for `band`: JTTY's published dial there
     /// ([`crate::bandplan::jtty_band_plan`]), where the operator's class may run data. It is where
     /// a JTTY section entry and a JTTY band pick by name land, every time: WSJT-X goes to its
     /// frequency list on a band or mode change, so JTTY keeps no dial memory of its own. `None` =
