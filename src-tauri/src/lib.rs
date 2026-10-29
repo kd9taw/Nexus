@@ -15420,6 +15420,7 @@ mod contest_session_tests {
         forgot: Vec<String>,
         stored: Vec<String>,
         refuse_store: bool,
+        refuse_forget: bool,
     }
 
     impl FakeKeychain {
@@ -15432,12 +15433,16 @@ mod contest_session_tests {
                 forgot: Vec::new(),
                 stored: Vec::new(),
                 refuse_store: false,
+                refuse_forget: false,
             }
         }
         fn change(&mut self, change: KeychainChange) -> Result<bool, String> {
             match change {
                 KeychainChange::Forget(account) => {
                     self.forgot.push(account.to_string());
+                    if self.refuse_forget {
+                        return Err("the keychain is locked".into());
+                    }
                     Ok(self.held.remove(account).is_some())
                 }
                 KeychainChange::Store { account, key } => {
@@ -16124,6 +16129,115 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ★ A KEY WHOSE REMOVAL FAILS IS HELD BACK, NOT LET GO: a restore that moves Cloudlog and a
+    /// radio's address and drops another radio, on a keychain that refuses every removal, leaves
+    /// each of those keys in the keychain, so each waits for the operator in the same notice, and
+    /// none reaches the network or a sign-in. CONTROL: the same restore on a keychain that
+    /// removes them leaves nothing waiting.
+    #[test]
+    fn a_key_whose_removal_fails_stays_held_and_never_reaches_the_network() {
+        use std::sync::atomic::Ordering;
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("forget-fails", 0);
+        let (url, connections, stop) = counting_listener();
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = |refuse_forget: bool| {
+            {
+                let mut eng = engine_lock(&engine);
+                eng.apply_restored_settings(station.clone());
+                eng.set_keys_to_confirm(KeysToConfirm::default());
+            }
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            v["settings"]["cloudlogUrl"] = serde_json::json!(url);
+            v["settings"]["cloudlogStationId"] = serde_json::json!("1");
+            let mut radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            radios[0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+            radios.retain(|r| r["id"] != 1);
+            v["settings"]["radios"] = serde_json::json!(radios);
+            let mut keychain = FakeKeychain::holding(&all);
+            keychain.refuse_forget = refuse_forget;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let waiting = engine_lock(&engine).keys_to_confirm().clone();
+            (keychain.forgot, waiting)
+        };
+        let tried = vec![
+            CLOUDLOG_KEYCHAIN_USER.to_string(),
+            icom_lan_account(0),
+            icom_lan_account(1),
+        ];
+
+        assert_eq!(
+            restore(false),
+            (tried.clone(), KeysToConfirm::default()),
+            "CONTROL: removed, so nothing waits"
+        );
+        assert_eq!(
+            restore(true),
+            (
+                tried,
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![0, 1],
+                }
+            ),
+            "each removal refused: each key held back"
+        );
+        assert_eq!(
+            keys_to_confirm_in(engine_lock(&engine).settings())
+                .iter()
+                .map(|k| k.radio_id)
+                .collect::<Vec<_>>(),
+            vec![None, Some(0), Some(1)],
+            "the notice asks about each"
+        );
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        let upload = cloudlog_push_qso_impl(&dto, &engine, || {
+            panic!("the Cloudlog key was read while it waits")
+        });
+        let vault = super::icom_lan_password_tests::MapVault::default();
+        vault.set(0, "PLANTED-PASSWORD").unwrap();
+        stop.store(true, Ordering::SeqCst);
+        assert_eq!(
+            (
+                upload.map_err(|e| e.message),
+                icom_lan_password_for_login(&engine, &vault, 0),
+                connections.load(Ordering::SeqCst)
+            ),
+            (
+                Err(CLOUDLOG_KEY_WAITS.to_string()),
+                Err(ICOM_PASSWORD_WAITS.to_string()),
+                0
+            ),
+            "no upload, no sign-in, nothing reached the network"
+        );
+        assert_eq!(
+            answer_key_to_confirm(&engine, Some(1), true, no_key_change),
+            Err(ICOM_PASSWORD_OF_NO_RADIO.to_string()),
+            "the dropped radio's password cannot be let go to a later radio of its id"
+        );
+        assert!(
+            engine_lock(&engine).keys_to_confirm().icom_lan_waits(1),
+            "so it still waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A contact for the upload tests: an FT8 QSO with K9NEW at `time` (HHMMSS).
     fn upload_test_record(time: &str) -> tempo_core::logbook::QsoRecord {
         let mut log = tempo_core::logbook::Logbook::new();
@@ -16174,7 +16288,7 @@ mod contest_session_tests {
         let (dir, engine) = super::durable_command_tests::engine_on_store("key-waits", 0);
         let (url, connections, stop) = counting_listener();
         {
-            let mut s = engine_lock(&engine).settings().clone();
+            let mut s = station_with(&engine, restore_test_roster(), "");
             s.cloudlog_url = url;
             s.cloudlog_station_id = "1".into();
             let mut eng = engine_lock(&engine);
@@ -17151,7 +17265,7 @@ fn restore_settings_bundle(
             .collect();
         let mut keychain = keychain;
         let cloudlog_key = backup_cloudlog_key.as_deref();
-        let stored = forget_moved_keys(
+        let (stored, failed) = forget_moved_keys(
             cloudlog_moved,
             cloudlog_key,
             &moved,
@@ -17165,13 +17279,24 @@ fn restore_settings_bundle(
         // What waits for the operator now: what waited before, less every key removed or
         // replaced here, and each saved key for an address this station had none for. A keychain
         // that cannot say whether it holds one is taken to hold it: it waits, and is not sent.
+        // ⛔ A removal that failed left its key in the keychain: that key waits too (fail closed),
+        // never let go because its removal was asked for.
         let mut holds =
             |account: &str| !matches!(keychain(KeychainChange::Holds(account)), Ok(false));
         let mut keys = eng.keys_to_confirm().clone();
-        keys.cloudlog = !(cloudlog_moved || stored)
-            && (keys.cloudlog || (cloudlog_unknown && holds(CLOUDLOG_KEYCHAIN_USER)));
-        keys.icom_lan
-            .retain(|id| !moved.iter().chain(&dropped).any(|(gone, _)| gone == id));
+        let still_held = |account: &str| failed.iter().any(|f| f == account);
+        keys.cloudlog = still_held(CLOUDLOG_KEYCHAIN_USER)
+            || (!(cloudlog_moved || stored)
+                && (keys.cloudlog || (cloudlog_unknown && holds(CLOUDLOG_KEYCHAIN_USER))));
+        keys.icom_lan.retain(|&id| {
+            still_held(&icom_lan_account(id))
+                || !moved.iter().chain(&dropped).any(|(gone, _)| *gone == id)
+        });
+        for (id, _) in moved.iter().chain(&dropped) {
+            if still_held(&icom_lan_account(*id)) && !keys.icom_lan_waits(*id) {
+                keys.icom_lan.push(*id);
+            }
+        }
         for id in unknown {
             if !keys.icom_lan_waits(id) && holds(&icom_lan_account(id)) {
                 keys.icom_lan.push(id);
@@ -17277,14 +17402,16 @@ fn icom_address_moved(
 /// the restore dropped (`dropped`), through `keychain`, and say once in the Connections log what
 /// to enter again, for a key that was saved. A removal that fails says so instead. A backup's own
 /// Cloudlog key (`cloudlog_key`, an old backup's) takes the station's place in the keychain
-/// instead of being removed: whether it went in.
+/// instead of being removed. What came of it: whether that key went in, and each account whose
+/// removal failed (its key is still in the keychain, so the caller holds it back).
 fn forget_moved_keys(
     cloudlog_moved: bool,
     cloudlog_key: Option<&str>,
     radios: &[(u32, String)],
     dropped: &[(u32, String)],
     mut keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
-) -> bool {
+) -> (bool, Vec<String>) {
+    let mut failed = Vec::new();
     let account = CLOUDLOG_KEYCHAIN_USER;
     let stored =
         cloudlog_key.is_some_and(
@@ -17311,45 +17438,59 @@ fn forget_moved_keys(
         match keychain(KeychainChange::Forget(account)) {
             Ok(true) => conn_log("Cloudlog", "info", CLOUDLOG_KEY_FORGOTTEN),
             Ok(false) => {}
-            Err(e) => conn_log(
-                "Cloudlog",
-                "error",
-                format!(
-                    "The restored backup points Cloudlog/Wavelog at a different address, but \
-                     the API key saved here could not be removed ({e}). Clear it in Settings."
-                ),
-            ),
+            Err(e) => {
+                failed.push(account.to_string());
+                conn_log(
+                    "Cloudlog",
+                    "error",
+                    format!(
+                        "The restored backup points Cloudlog/Wavelog at a different address, but \
+                         the API key saved here could not be removed ({e}). It is not sent: \
+                         choose Use or Remove in the notice at the top of the window."
+                    ),
+                );
+            }
         }
     }
     for (id, name) in radios {
-        match keychain(KeychainChange::Forget(&icom_lan_account(*id))) {
+        let account = icom_lan_account(*id);
+        match keychain(KeychainChange::Forget(&account)) {
             Ok(true) => conn_log("Icom network", "info", icom_password_forgotten(name)),
             Ok(false) => {}
-            Err(e) => conn_log(
-                "Icom network",
-                "error",
-                format!(
-                    "The restored backup points {name} at a different network address, but its \
-                     saved network password could not be removed ({e}). Clear it in Settings."
-                ),
-            ),
+            Err(e) => {
+                failed.push(account);
+                conn_log(
+                    "Icom network",
+                    "error",
+                    format!(
+                        "The restored backup points {name} at a different network address, but \
+                         its saved network password could not be removed ({e}). It is not \
+                         used: choose Use or Remove in the notice at the top of the window."
+                    ),
+                );
+            }
         }
     }
     for (id, name) in dropped {
-        match keychain(KeychainChange::Forget(&icom_lan_account(*id))) {
+        let account = icom_lan_account(*id);
+        match keychain(KeychainChange::Forget(&account)) {
             Ok(true) => conn_log("Icom network", "info", icom_password_dropped(name)),
             Ok(false) => {}
-            Err(e) => conn_log(
-                "Icom network",
-                "error",
-                format!(
-                    "The restored backup has no radio {name}, but its saved network password \
-                     could not be removed ({e}). Clear it in Settings before you add a radio."
-                ),
-            ),
+            Err(e) => {
+                failed.push(account);
+                conn_log(
+                    "Icom network",
+                    "error",
+                    format!(
+                        "The restored backup has no radio {name}, but its saved network \
+                         password could not be removed ({e}). It is not used: choose Remove in \
+                         the notice at the top of the window."
+                    ),
+                );
+            }
         }
     }
-    stored
+    (stored, failed)
 }
 
 /// What the Connections log says after a restore removed the Cloudlog key ([`forget_moved_keys`]).
@@ -17430,6 +17571,10 @@ fn change_keychain(change: KeychainChange) -> Result<bool, String> {
 const CLOUDLOG_KEY_WAITS: &str = "Cloudlog/Wavelog uploads wait: a settings restore set this \
      address, and the API key saved here may be for another. Choose Use or Remove in the notice \
      at the top of the window.";
+
+/// Why Use is refused for the saved password of a radio no longer on the roster.
+const ICOM_PASSWORD_OF_NO_RADIO: &str = "That radio is no longer on the roster, so its saved \
+     network password can only be removed: choose Remove.";
 
 /// What an Icom network radio says when it does not sign in because its password waits for the
 /// operator ([`tempo_app::settings::Settings::keys_to_confirm`]).
@@ -17528,6 +17673,13 @@ fn answer_key_to_confirm(
     let waits = radio_id.map_or(keys.cloudlog, |id| keys.icom_lan_waits(id));
     if !waits {
         return Ok(());
+    }
+    // A radio no longer on the roster has no address to confirm a password for, and a radio added
+    // later takes the next free id, which can be its: its password can only be removed.
+    if let (true, Some(id)) = (use_it, radio_id) {
+        if eng.settings().radios.iter().all(|r| r.id != id) {
+            return Err(ICOM_PASSWORD_OF_NO_RADIO.to_string());
+        }
     }
     if !use_it {
         let account = radio_id.map_or_else(|| CLOUDLOG_KEYCHAIN_USER.to_string(), icom_lan_account);
