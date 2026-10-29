@@ -1341,6 +1341,43 @@ fn through_hamlib_a_refused_split_release_is_retried_at_quiet_points_and_nothing
     assert!(!b.rig.split_release_pending, "still owed");
 }
 
+impl<R: Radio> Bench<R> {
+    /// [`Self::ticks`], a rebuilt link reopening through `addr` (the same radio, a new connection).
+    fn ticks_reopening(&mut self, n: usize, addr: &str) -> Vec<String> {
+        let sinks = Sinks {
+            wsjtx: None,
+            psk: None,
+        };
+        let mut ra = mock_reopen_audio();
+        let addr = addr.to_string();
+        let mut rr = move |_t: &Transport, _coexist: bool| {
+            (Rig::rigctld(&addr), None, CatProbe::status(None, ""))
+        };
+        let mut station = StationSinks::new();
+        let before = self.radio.sent().len();
+        for _ in 0..n {
+            self.state
+                .step(
+                    &self.engine,
+                    &mut self.backend,
+                    &mut self.rig,
+                    &sinks,
+                    self.t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            self.t += 20.0;
+        }
+        self.radio.sent()[before..]
+            .iter()
+            .filter(|l| !l.ends_with('?'))
+            .cloned()
+            .collect()
+    }
+}
+
 /// A radio with no split control at all (every `S` answered `RPRT -11`, as a rig without split, an
 /// OmniRig shim or Nexus's own Flex client answers it): the first Rig-split over is refused with the
 /// split reason, and since split was never taken no release is owed, so Split Operation set to Fake
@@ -1451,4 +1488,37 @@ fn through_hamlib_an_owed_release_is_retried_without_the_engine_lock() {
         "a retry held the engine's lock: {:?}",
         v.split_off_lock_free
     );
+}
+
+/// A release owed on a link that is rebuilt to the same radio (a saved baud change) is still owed
+/// on the new link: the radio may still be in Nexus's split. The control: a different radio model
+/// starts with nothing owed.
+#[test]
+fn through_hamlib_an_owed_release_survives_a_rebuild_to_the_same_radio() {
+    for (what, same) in [("the same radio", true), ("another radio", false)] {
+        let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+        let _ = b.overs(1);
+        b.radio.vfos.lock().unwrap().refuse_split_off = true;
+        {
+            let mut e = b.engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            if same {
+                s.baud = 19_200;
+            } else {
+                s.rig_model = 1035;
+            }
+            e.apply_settings(s);
+        }
+        let address = b.radio.peer.address.clone();
+        let writes = b.ticks_reopening(1, &address);
+        assert!(
+            writes.iter().any(|l| l == "S 0 VFOA"),
+            "{what}: premise, the release refused: {writes:?}"
+        );
+        assert!(b.rig.has_control(), "{what}: premise, a new link");
+        assert_eq!(
+            b.rig.split_release_pending, same,
+            "{what}: owed on the new link"
+        );
+    }
 }

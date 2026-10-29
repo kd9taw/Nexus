@@ -8104,6 +8104,12 @@ impl RadioLoop {
                     let cluster_active = engine_lock(engine).cluster_split_active();
                     self.let_go_of_rig_split(rig, cluster_active);
                 }
+                // ⛔ A RELEASE STILL OWED GOES WITH THE RADIO, NOT THE LINK. A rebuild to the same
+                // radio model (a port, baud or daemon change, a dead daemon) is the same radio, which
+                // may still be in Nexus's split: the new link owes the release and keys nothing until
+                // the radio takes it. Another model is another radio, with nothing of Nexus's on it.
+                let release_owed =
+                    rig.split_release_pending && want.rig_model == self.applied.rig_model;
                 // Whether `reopen_rig` may auto-coexist onto a rigctld ALREADY listening on the new
                 // port (see `allow_coexist_on_swap`). We must NOT coexist onto our OWN daemon that
                 // we're about to kill — its corpse would keep commanding the OLD radio (the dual-radio
@@ -8170,6 +8176,7 @@ impl RadioLoop {
                 // it when it succeeds; when it fails, the self-heal keeps retrying — restoring the
                 // 1.10.1 self-recovery a 1.10.2 rebuild destroyed. #stuck-tx-1.10.2.
                 rig.keyed = was_keyed;
+                rig.split_release_pending = release_owed;
                 self.rigctld_proc = proc;
                 // Do NOT claim last_dial/last_mode here: open_cat's set_freq/set_mode are best-effort
                 // (`let _ =`), so a failed open-time tune must be retried. Leaving these at the OLD
