@@ -90,3 +90,52 @@ describe('the LoTW toast for contacts signed with the Station Location in Settin
     }
   })
 })
+
+describe('the LoTW toast when signing from the ADIF, and when a later TQSL run never ran', () => {
+  it('says the contacts were signed from the call and grid they carry, not a Station Location', () => {
+    expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationTie: 1, locationFromAdif: true })).toBe(
+      "1 contact fits two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: it was signed from the call and grid it carries.",
+    )
+    expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationUnmatched: 2, locationFromAdif: true })).toBe(
+      "2 contacts fit none of your station profiles by their call and grid, so no profile's Station Location was used: they were signed from the call and grid they carry.",
+    )
+    // Control: with a named Station Location, the Settings sentence as before.
+    expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationTie: 1, locationFromAdif: false })).toMatch(
+      /signed with the Station Location in Settings/,
+    )
+  })
+
+  it('counts the contacts a failed later run left unsent, with why, beside what went', () => {
+    expect(
+      lotwSkipNote({ dispatched: 2, outcome: 'pending', unsentAfterError: 3, unsentError: 'TQSL did not answer in time' }),
+    ).toBe(
+      '3 contacts were not sent (TQSL did not answer in time). The contacts signed before that went to LoTW. They stay marked as not uploaded to LoTW and go with the next upload.',
+    )
+    // Control: nothing left unsent says nothing.
+    expect(lotwSkipNote({ dispatched: 2, outcome: 'pending', unsentAfterError: 0 })).toBeNull()
+  })
+
+  it.each([
+    ['de', DE],
+    ['es', ES],
+    ['fr', FR],
+    ['ja', JA],
+    ['ru', RU],
+  ] as const)('%s: translated, with the count, the names and the error it keeps', (lang, catalog) => {
+    installCatalog(lang, catalog)
+    setLocale(lang)
+    for (const n of [1, 2, 5]) {
+      const tie = lotwSkipNote({ dispatched: n, outcome: 'pending', locationTie: n, locationFromAdif: true })
+      const none = lotwSkipNote({ dispatched: n, outcome: 'pending', locationUnmatched: n, locationFromAdif: true })
+      const left = lotwSkipNote({ dispatched: n, outcome: 'pending', unsentAfterError: n, unsentError: 'TQSL ERR' })
+      for (const said of [tie, none, left]) {
+        expect(said, `${lang}: not the English fallback`).not.toMatch(/station profiles|were not sent|was not sent/)
+        expect(said).toContain(String(n))
+      }
+      for (const said of [tie, none]) expect(said).toContain('Station Location')
+      expect(tie).toContain('TQSL')
+      expect(left).toContain('TQSL ERR')
+      expect(left).toContain('LoTW')
+    }
+  })
+})

@@ -4014,6 +4014,106 @@ mod lotw_location_tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
     }
+
+    /// A later TQSL run that cannot run at all (TQSL gone or timed out) after an earlier run sent
+    /// its contacts: the report keeps the earlier run's outcome, and counts the contacts left
+    /// unsent with why; the runs after it do not start, and nothing of theirs is stamped. CONTROL:
+    /// the first run failing is the error, as it always was.
+    #[test]
+    fn a_later_run_that_fails_keeps_what_the_earlier_runs_sent() {
+        let (dir, engine) = station("lotw-profile-later-error", "Home");
+        let mut ran = 0;
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+            ran += 1;
+            if ran == 2 {
+                Err("TQSL did not answer in time".into())
+            } else {
+                Ok((0, String::new()))
+            }
+        })
+        .expect("the earlier run's report");
+        assert_eq!(ran, 2, "the run after the failure does not start");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (2, "pending"),
+            "the Portable run went"
+        );
+        assert_eq!(
+            (report.unsent_after_error, report.unsent_error.as_deref()),
+            (3, Some("TQSL did not answer in time")),
+            "Home's two and Club's one were not sent"
+        );
+        let sent = Some(UploadOutcome::Pending);
+        assert_eq!(
+            stamped(&engine, &["K1POR", "K2POR", "K1HOM", "K2HOM", "K1CLB"]),
+            vec![sent, sent, None, None, None]
+        );
+        assert!(
+            get_connection_log().iter().any(|e| e.connector == "LoTW"
+                && e.message.contains("3 contact(s) not sent")
+                && e.message.contains("TQSL did not answer in time")),
+            "the connection log says what was left"
+        );
+
+        let (dir2, first) = station("lotw-profile-first-error", "Home");
+        let failed = lotw_upload_batch_with(&first, LotwPick::Unsent, true, |_, _| {
+            Err("TQSL is not installed".into())
+        });
+        assert_eq!(failed.unwrap_err(), "TQSL is not installed");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// Signing from the ADIF, a contact no profile tells apart is signed from the call and grid in
+    /// its own record, and the report says so, for the screen's words; with a named Station
+    /// Location it does not. CONTROL: the one-profile contact is signed with its profile's.
+    #[test]
+    fn the_report_says_how_a_contact_no_profile_told_apart_was_signed() {
+        let (dir, engine) = station("lotw-profile-adif-fallback", "Home");
+        engine_lock(&engine)
+            .save_station_profile(StationProfile {
+                name: "Portable B".into(),
+                call: "K2DEF/P".into(),
+                grid: "FN42AB".into(),
+                lotw_location: "Portable B".into(),
+                ..StationProfile::default()
+            })
+            .expect("the profile is saved");
+        let upload = |engine: &SharedEngine, calls_: &[&str]| {
+            let ids = calls_.iter().map(|c| id_of(engine, c)).collect();
+            let mut runs: Runs = Vec::new();
+            let r = lotw_upload_batch_with(engine, LotwPick::Ids(ids), true, |_, args| {
+                runs.push(run_of(args));
+                Ok((0, String::new()))
+            })
+            .expect("the upload ran");
+            (runs, r.location_tie, r.location_from_adif)
+        };
+        assert_eq!(
+            upload(&engine, &["K1POR"]),
+            (vec![(Some("Home".into()), calls(&["K1POR"]))], 1, false),
+            "a named Station Location signs it"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.lotw_use_adif_location = true;
+            eng.apply_settings(s);
+        }
+        assert_eq!(
+            upload(&engine, &["K2POR", "K1CLB"]),
+            (
+                vec![
+                    (None, calls(&["K2POR"])),
+                    (Some("Club".into()), calls(&["K1CLB"]))
+                ],
+                1,
+                true
+            ),
+            "signed from the ADIF, and said so"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]
@@ -29631,19 +29731,30 @@ fn lotw_upload_batch_with(
             held_mode,
             location_tie: 0,
             location_unmatched: 0,
+            location_from_adif: false,
+            unsent_after_error: 0,
+            unsent_error: None,
         });
     }
     let (runs, fallback) = tempo_app::station::lotw_runs(batch, location.as_deref(), &profiles);
     if runs.iter().any(|r| r.location.as_deref() == Some("")) {
         return Err(LOTW_NO_LOCATION.into());
     }
+    // Signing from the ADIF, a contact no profile tells apart goes with the call and grid it
+    // carries; otherwise with the Station Location in Settings.
+    let from_adif = location.is_none();
+    let how = if from_adif {
+        "from the call and grid they carry"
+    } else {
+        "with the Station Location in Settings"
+    };
     if fallback.tie > 0 {
         conn_log(
             "LoTW",
             "info",
             format!(
                 "{} contact(s) fit two station profiles that name different TQSL Station \
-                 Locations, so they are signed as Settings says.",
+                 Locations, so they are signed {how}.",
                 fallback.tie
             ),
         );
@@ -29654,14 +29765,15 @@ fn lotw_upload_batch_with(
             "info",
             format!(
                 "{} contact(s) fit none of the station profiles by call and grid, so they are \
-                 signed as Settings says.",
+                 signed {how}.",
                 fallback.unmatched
             ),
         );
     }
     let mut report: Option<UploadReportDto> = None;
-    for run in runs {
-        let done = lotw_sign_run(
+    let mut runs = runs.into_iter();
+    while let Some(run) = runs.next() {
+        let done = match lotw_sign_run(
             state,
             &run.batch,
             run.location.as_deref(),
@@ -29670,7 +29782,32 @@ fn lotw_upload_batch_with(
             wait,
             held_mode,
             &mut tqsl,
-        )?;
+        ) {
+            Ok(done) => done,
+            // A run that cannot run at all after earlier runs sent theirs: what they sent stays
+            // on the report, and this run's contacts and the rest are left unsent, and counted.
+            // The first run failing is the error, as it was before runs.
+            Err(e) => {
+                let Some(sent) = report else {
+                    return Err(e);
+                };
+                let unsent = run.batch.len() + runs.map(|r| r.batch.len()).sum::<usize>();
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!(
+                        "{unsent} contact(s) not sent ({e}). The earlier TQSL runs' contacts \
+                         were sent; these are offered again with the next upload."
+                    ),
+                );
+                report = Some(UploadReportDto {
+                    unsent_after_error: unsent,
+                    unsent_error: Some(e),
+                    ..sent
+                });
+                break;
+            }
+        };
         report = Some(match report {
             None => done,
             Some(before) => lotw_reports_together(before, done),
@@ -29681,6 +29818,7 @@ fn lotw_upload_batch_with(
     Ok(UploadReportDto {
         location_tie: fallback.tie,
         location_unmatched: fallback.unmatched,
+        location_from_adif: from_adif,
         ..report.expect("a batch that is not empty makes a run")
     })
 }
@@ -29715,6 +29853,9 @@ fn lotw_reports_together(a: UploadReportDto, b: UploadReportDto) -> UploadReport
         held_mode: first.held_mode,
         location_tie: 0,
         location_unmatched: 0,
+        location_from_adif: false,
+        unsent_after_error: 0,
+        unsent_error: None,
     }
 }
 
@@ -29790,6 +29931,9 @@ fn lotw_sign_run(
             held_mode,
             location_tie: 0,
             location_unmatched: 0,
+            location_from_adif: false,
+            unsent_after_error: 0,
+            unsent_error: None,
         }),
         Some(outcome) => {
             // By id, planned with the Engine lock released (SPEC-2 v3 C19): each contact read off
@@ -29883,6 +30027,9 @@ fn lotw_sign_run(
                 held_mode,
                 location_tie: 0,
                 location_unmatched: 0,
+                location_from_adif: false,
+                unsent_after_error: 0,
+                unsent_error: None,
             })
         }
     }
@@ -32630,6 +32777,9 @@ fn eqsl_answered(
                 held_mode: 0,
                 location_tie: 0,
                 location_unmatched: 0,
+                location_from_adif: false,
+                unsent_after_error: 0,
+                unsent_error: None,
             },
             None,
         )),
@@ -32672,6 +32822,9 @@ fn eqsl_answered(
                     held_mode: 0,
                     location_tie: 0,
                     location_unmatched: 0,
+                    location_from_adif: false,
+                    unsent_after_error: 0,
+                    unsent_error: None,
                 },
                 detail,
             ))

@@ -494,8 +494,9 @@ pub struct LotwRun {
 /// A contact records no profile id. The profile it was logged under is the one whose call and grid
 /// it carries: the log stamps the station's call (`STATION_CALLSIGN`) and grid (`MY_GRIDSQUARE`) on
 /// every contact, and those are the active profile's. That is also what a TQSL Station Location
-/// is: a call and a place. A contact with no call or grid of its own, or one no profile fits,
-/// takes the station's own. `profiles` must carry the live call and grid for the active profile
+/// is: a call and a place. A profile fits on the call and the 4-character grid square; the whole
+/// grid decides only between profiles of one square naming different locations. A contact with no
+/// call or grid of its own, or one no profile fits, takes the station's own. `profiles` must carry the live call and grid for the active profile
 /// ([`crate::settings::Settings::sync_active_station_from_flat`]).
 pub fn lotw_runs(
     batch: Vec<QsoRecord>,
@@ -536,7 +537,8 @@ pub fn lotw_runs(
 /// location it was not made at is one LoTW never matches.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LotwFallback {
-    /// Fit two or more profiles (the same call and grid) that name different locations.
+    /// Fit two or more profiles (the same call and grid square) that name different locations,
+    /// and the whole grid tells none of them apart.
     pub tie: usize,
     /// Fit no profile, while a profile names a location: no call or grid of its own, or a call
     /// and grid no profile has (an imported contact, one made before the profile was).
@@ -571,25 +573,41 @@ fn lotw_profile_location(
     if call.is_empty() || grid.is_empty() {
         return Fit::None;
     }
-    // Two grids name the same place when one is the other written to more characters.
-    let same_grid = |p: &str| {
-        let (a, b) = (p.to_ascii_uppercase(), grid.to_ascii_uppercase());
-        !a.is_empty() && (a.starts_with(&b) || b.starts_with(&a))
-    };
-    let mut fits = profiles
+    // A profile fits on the 4-character grid square, in any case: a contact made in another
+    // subsquare of the profile's square (a GPS fix that moved) is still the profile's.
+    let square = |g: &str| g.chars().take(4).collect::<String>().to_ascii_uppercase();
+    let fits: Vec<(&str, Option<String>)> = profiles
         .iter()
-        .filter(|p| p.call.trim().eq_ignore_ascii_case(call) && same_grid(p.grid.trim()))
-        .map(|p| match p.lotw_location.trim() {
-            "" => station(),
-            named => Some(named.to_string()),
-        });
-    let Some(first) = fits.next() else {
-        return Fit::None;
+        .filter(|p| p.call.trim().eq_ignore_ascii_case(call))
+        .filter(|p| !p.grid.trim().is_empty() && square(p.grid.trim()) == square(grid))
+        .map(|p| {
+            let location = match p.lotw_location.trim() {
+                "" => station(),
+                named => Some(named.to_string()),
+            };
+            (p.grid.trim(), location)
+        })
+        .collect();
+    let agreed = |fits: &[(&str, Option<String>)]| match fits.split_first() {
+        Some(((_, first), rest)) if rest.iter().all(|(_, l)| l == first) => Some(first.clone()),
+        _ => None,
     };
-    if fits.all(|l| l == first) {
-        Fit::Profile(first)
-    } else {
-        Fit::Tie
+    if fits.is_empty() {
+        return Fit::None;
+    }
+    if let Some(location) = agreed(&fits) {
+        return Fit::Profile(location);
+    }
+    // Profiles of the call share the square and name different locations: the whole grid (6
+    // characters or more on both, one the other written to more characters) tells them apart.
+    let whole = |p: &str| {
+        let (a, b) = (p.to_ascii_uppercase(), grid.to_ascii_uppercase());
+        a.len() >= 6 && b.len() >= 6 && (a.starts_with(&b) || b.starts_with(&a))
+    };
+    let narrowed: Vec<_> = fits.into_iter().filter(|(g, _)| whole(g)).collect();
+    match agreed(&narrowed) {
+        Some(location) => Fit::Profile(location),
+        None => Fit::Tie,
     }
 }
 

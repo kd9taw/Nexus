@@ -1663,6 +1663,25 @@ export const EN = {
     other:
       '{{count}} contacts fit none of your station profiles by their call and grid, so they were signed with the Station Location in Settings ▸ Logging & Connectors.',
   },
+  // The same two, when TQSL signs from the location in the ADIF (Settings ▸ Logging & Connectors):
+  // no Station Location signs the contact; TQSL takes the call and grid it carries.
+  'logbook.lotw.location.tieAdif': {
+    one: "{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: it was signed from the call and grid it carries.",
+    other:
+      "{{count}} contacts fit two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: they were signed from the call and grid they carry.",
+  },
+  'logbook.lotw.location.unmatchedAdif': {
+    one: "{{count}} contact fits none of your station profiles by its call and grid, so no profile's Station Location was used: it was signed from the call and grid it carries.",
+    other:
+      "{{count}} contacts fit none of your station profiles by their call and grid, so no profile's Station Location was used: they were signed from the call and grid they carry.",
+  },
+  // A LoTW upload signed in several TQSL runs (one per Station Location) where a later run could
+  // not run at all; the earlier runs' contacts went. `{{detail}}` is the error, in English.
+  'logbook.lotw.unsentAfterError': {
+    one: '{{count}} contact was not sent ({{detail}}). The contacts signed before that went to LoTW. It stays marked as not uploaded to LoTW and goes with the next upload.',
+    other:
+      '{{count}} contacts were not sent ({{detail}}). The contacts signed before that went to LoTW. They stay marked as not uploaded to LoTW and go with the next upload.',
+  },
 
   // ⚠️ `{{formatted}}` is a QSO COUNT the call site has already grouped for display
   // ("1,234"). It is a count of contacts, not a technical quantity — no dial, no report, no

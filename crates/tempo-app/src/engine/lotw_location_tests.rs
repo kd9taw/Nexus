@@ -400,3 +400,88 @@ fn signing_from_the_adif_sends_the_place_stored_on_the_contact() {
         assert!(values(&named, tag).is_empty(), "{tag}: {named}");
     }
 }
+
+/// A contact with the station call and grid it carries, as an import or the log wrote them.
+fn made(e: &Engine, call: &str, station: &str, grid: &str) -> QsoRecord {
+    let mut r = e.qso_record(call.into(), None, None);
+    r.station_callsign = some(station);
+    r.my_grid = some(grid);
+    r
+}
+
+/// ★ A profile fits a contact on its 4-character grid square: a /P contact made in another
+/// subsquare of the profile's square (a GPS fix that moved) is still the profile's. Only when
+/// profiles of one call share a square and name different locations does the whole grid (6
+/// characters or more, in any case) tell them apart; a contact whose grid tells none of them
+/// apart (4 characters, or another subsquare) is not guessed: the station's own signs it, counted.
+#[test]
+fn a_profile_fits_on_its_grid_square_and_the_whole_grid_breaks_a_tie() {
+    let mut e = station();
+    e.save_station_profile(profile("Portable", "KD9TAW/P", "EN43AB", "Portable"))
+        .unwrap();
+    let (r, f) = runs(&e, vec![made(&e, "K1POR", "KD9TAW/P", "EN43CD")]);
+    assert_eq!(
+        (shape(&r), f),
+        (
+            vec![(some("Portable"), vec!["K1POR".to_string()])],
+            LotwFallback::default()
+        ),
+        "another subsquare of the profile's square"
+    );
+
+    // Home at EN43AB, and a Club profile on the same call at EN43CD.
+    e.settings.mygrid = "EN43AB".into();
+    e.save_station_profile(profile("Club", ME, "EN43CD", "Club"))
+        .unwrap();
+    let batch = vec![
+        made(&e, "K1CLB", ME, "EN43CD"),
+        made(&e, "K1HOM", ME, "en43ab"),
+        made(&e, "K1SQR", ME, "EN43"),
+        made(&e, "K1ELS", ME, "EN43EF"),
+    ];
+    let (r, f) = runs(&e, batch);
+    assert_eq!(
+        shape(&r),
+        vec![
+            (some("Club"), vec!["K1CLB".to_string()]),
+            (
+                some("Home"),
+                vec!["K1HOM".to_string(), "K1SQR".into(), "K1ELS".into()]
+            ),
+        ]
+    );
+    assert_eq!(
+        f,
+        LotwFallback {
+            tie: 2,
+            unmatched: 0
+        },
+        "EN43 and EN43EF tell Home and Club apart by nothing: counted; EN43ab is Home's"
+    );
+}
+
+/// ★ The call decides as much as the grid: Home and a Club profile at the same grid with different
+/// calls each sign their own contacts, with no tie. And an imported contact written in lower case
+/// fits as its upper-case self does.
+#[test]
+fn the_call_decides_with_the_grid_and_case_never_does() {
+    let mut e = station();
+    e.save_station_profile(profile("Club", "W9ABC", "EN52", "Club"))
+        .unwrap();
+    let batch = vec![
+        made(&e, "K1HOM", ME, "EN52"),
+        made(&e, "K1CLB", "W9ABC", "EN52"),
+        made(&e, "K1IMP", "w9abc", "en52xx"),
+    ];
+    let (r, f) = runs(&e, batch);
+    assert_eq!(
+        (shape(&r), f),
+        (
+            vec![
+                (some("Home"), vec!["K1HOM".to_string()]),
+                (some("Club"), vec!["K1CLB".to_string(), "K1IMP".into()]),
+            ],
+            LotwFallback::default()
+        )
+    );
+}

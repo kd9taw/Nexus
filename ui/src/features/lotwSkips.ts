@@ -12,7 +12,12 @@
 //
 // …and the contacts signed with the Station Location in Settings because no station profile told
 // which location signs them (`locationTie`, `locationUnmatched`): a contact signed with a place it
-// was not made at is one LoTW never matches, so the operator is told how many, and why.
+// was not made at is one LoTW never matches, so the operator is told how many, and why. Signing
+// from the ADIF (`locationFromAdif`), no Station Location signed them: the words say so.
+//
+// …and the contacts a later TQSL run never sent (`unsentAfterError`): the batch is signed in one
+// run per Station Location, and when one cannot run at all the earlier runs' contacts have gone,
+// so the toast says both.
 
 import { t } from '../i18n'
 import type { UploadReport } from '../types'
@@ -32,11 +37,24 @@ export function lotwSkipNote(r: UploadReport): string | null {
   const heldBack = held > 0 ? t('logbook.lotw.held', { count: held }) : null
   const tie = r.locationTie ?? 0
   const unmatched = r.locationUnmatched ?? 0
+  const adif = r.locationFromAdif === true
+  const unsent = r.unsentAfterError ?? 0
   const notes = [
     skipped,
     heldBack,
-    tie > 0 ? t('logbook.lotw.location.tie', { count: tie }) : null,
-    unmatched > 0 ? t('logbook.lotw.location.unmatched', { count: unmatched }) : null,
+    tie > 0
+      ? adif
+        ? t('logbook.lotw.location.tieAdif', { count: tie })
+        : t('logbook.lotw.location.tie', { count: tie })
+      : null,
+    unmatched > 0
+      ? adif
+        ? t('logbook.lotw.location.unmatchedAdif', { count: unmatched })
+        : t('logbook.lotw.location.unmatched', { count: unmatched })
+      : null,
+    unsent > 0
+      ? t('logbook.lotw.unsentAfterError', { count: unsent, detail: r.unsentError ?? '' })
+      : null,
   ].filter((n): n is string => n != null)
   return notes.length === 0 ? null : notes.join(' ')
 }

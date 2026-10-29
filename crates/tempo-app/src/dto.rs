@@ -4419,6 +4419,18 @@ pub struct UploadReportDto {
     /// profiles, while one names a location. LoTW only; 0 elsewhere.
     #[serde(default)]
     pub location_unmatched: usize,
+    /// The tie and no-match contacts above were signed from the call and grid in their own
+    /// records (signing from the ADIF), not with the Station Location in Settings. LoTW only.
+    #[serde(default)]
+    pub location_from_adif: bool,
+    /// Contacts not sent because a later TQSL run could not run (TQSL gone or timed out, the
+    /// upload file not written) after earlier runs had sent theirs: left unsent and unstamped,
+    /// and offered again with the next upload. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub unsent_after_error: usize,
+    /// What stopped them, when `unsent_after_error` is not 0.
+    #[serde(default)]
+    pub unsent_error: Option<String>,
 }
 
 /// Result of importing an external ADIF logbook (deduped merge).
