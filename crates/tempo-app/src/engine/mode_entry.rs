@@ -317,7 +317,7 @@ mod tests {
         e.set_operating_mode("jtty", true);
         assert_eq!(e.settings().dial_mhz, 14.090);
         e.pick_band("40m", Some("jtty"));
-        assert_eq!(e.settings().dial_mhz, 7.078, "a JTTY pick by name");
+        assert_eq!(e.settings().dial_mhz, 7.090, "a JTTY pick by name");
         e.pick_band("15m", None);
         assert_eq!(
             e.settings().dial_mhz,
