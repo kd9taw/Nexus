@@ -113,6 +113,7 @@ import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { setFrequency, openPanelWindow, getSettings } from '../api'
 import { bandLabelForMhz, sidebandForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
@@ -324,6 +325,9 @@ const PHONE_SPOT_MODES: readonly string[] = ['Phone']
 /** The Needed pane's filter record — per surface, like the board's own `neededFilters`, and
  *  never that one: a chip here and a chip on the Needed view must not move each other. */
 const PHONE_NEEDED_FILTERS = 'nexus.phone.neededFilters'
+/** PER-SURFACE: the audio scope's span chip, by its `id`. Absent or unknown ⇒ Auto (the rig's
+ *  filter width), the default; a torn-off copy may run a different chip from the docked one. */
+const PHONE_SCOPE_SPAN_KEY = 'nexus.phone.scope.span'
 /** …and what it opens on while that record is empty: the Phone needs (operator, 2026-09-27:
  *  "Phone needs only — matches the Spots pane (phone spots, this band). Its chips still widen
  *  it."). `Phone` is the board's own mode class for a voice need. */
@@ -815,7 +819,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // Bandscope span (audio-window zoom within the captured passband — this is
   // soundcard audio, not RF IQ, so "span" means which slice of the passband
   // fills the scope).
-  const [span, setSpan] = useState<(typeof SPANS)[number]>(SPANS[0])
+  const [span, setSpan] = useState<(typeof SPANS)[number]>(
+    () => SPANS.find((sp) => sp.id === surfaceGet(PHONE_SCOPE_SPAN_KEY)) ?? SPANS[0],
+  )
   const [rfSpan, setRfSpan] = useState<(typeof RF_SPANS)[number]>(RF_SPANS[0])
   // Live scope feed (reported by PhoneScope) — keeps the "RX audio" label honest when a
   // native RF panadapter is driving the scope (show the real RF span instead).
@@ -2996,7 +3002,10 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
                   className={`theme-chip${span.id === sp.id ? ' active' : ''}`}
                   aria-pressed={span.id === sp.id}
                   title={sp.title()}
-                  onClick={() => setSpan(sp)}
+                  onClick={() => {
+                    setSpan(sp)
+                    surfaceSet(PHONE_SCOPE_SPAN_KEY, sp.id)
+                  }}
                 >
                   {sp.label()}
                 </button>

@@ -12846,6 +12846,13 @@ export const EN = {
   'cw.scope.audio.title':
     'Receiver AUDIO centered on your CW pitch ({{lo}}–{{hi}} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.',
   'cw.scope.audio.sub': 'zero-beat',
+  'cw.scope.span.aria': 'Audio scope span',
+  'cw.scope.span.filter.label': 'Filter',
+  'cw.scope.span.filter.title': "Your radio's filter, centered on your CW pitch — the view for zero-beating",
+  'cw.scope.span.std.label': 'Std',
+  'cw.scope.span.std.title': 'The usual waterfall view: {{lo}}–{{hi}} Hz of receive audio',
+  'cw.scope.span.full.label': 'Full',
+  'cw.scope.span.full.title': 'All the receive audio: {{lo}}–{{hi}} Hz',
   'cw.scope.colors.label': 'Colors',
   'cw.scope.splitter.label': 'scope height',
   'cw.seam.columns.label': 'Decode column / Rig controls column',

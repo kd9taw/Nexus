@@ -58,6 +58,10 @@ export const PER_SURFACE = [
   // per window like the view's `nexus.ota.*` below: a chip in the box never moves the view's.
   'nexus.connect.ota.bandFilter',
   'nexus.connect.ota.hideWorked',
+  // The CW and Phone audio scopes' span chips: a statement about THIS window's scope, like the
+  // waterfall's span (a torn-off copy may run wide beside a narrow docked one).
+  'nexus.cw.scope.span',
+  'nexus.phone.scope.span',
   'nexus.connect.ota.modeFilter',
   'nexus.connect.ota.program',
   'nexus.connect.ota.sortAsc',
