@@ -102,6 +102,41 @@ pub fn message(callsign: &str, grid: &str, power_dbm: i32) -> String {
     format!("{} {} {}", callsign.trim().to_uppercase(), g, power_dbm)
 }
 
+/// The text of one WSPR or FST4W beacon over, as WSJT-X 3.0.2's `MainWindow::WSPR_message`
+/// builds it (`widgets/mainwindow.cpp:15458-15480`).
+///
+/// A plain call sends [`message`] on every over: WSJT-X's "Prefer Type 1 messages", checked out
+/// of the box (`mainwindow.cpp:1969`). A compound call (`PJ4/K1ABC`, `K1ABC/P`) has no room
+/// beside a grid in 50 bits, so WSJT-X alternates two messages: `PJ4/K1ABC 37` (type 2: the call
+/// and the power) and, when `hashed`, `<PJ4/K1ABC> FK52UD 37` (type 3: the call's hash, the
+/// whole grid and the power; FST4W's carries no power). WSJT-X flips between them on every over
+/// it builds (`m_tx=1-m_tx`), starting with the type 2. ⚠️ `PJ4/K1ABC FK52 37` is no message at
+/// all: WSJT-X's encoder stops on it, and the C encoder sends it as a type 2 of power 0.
+///
+/// One difference, WSPR with a 4-character grid: WSJT-X's own encoder (`lib/wqencode.f90`) writes
+/// `<PJ4/K1ABC> FN42 37` as a frame `wsprd` cannot decode (the grid lands a character short of
+/// where the decoder reads it), and the C encoder writes another such frame, so that over sends
+/// the type 2 again. FST4W carries a 4-character grid in its type 3 and alternates as WSJT-X does.
+pub fn beacon_message(
+    callsign: &str,
+    grid: &str,
+    power_dbm: i32,
+    fst4w: bool,
+    hashed: bool,
+) -> String {
+    let call = callsign.trim().to_uppercase();
+    // `my_callsign().indexOf("/") > 0`
+    if call.find('/').is_none_or(|i| i == 0) {
+        return message(&call, grid, power_dbm);
+    }
+    let grid = grid.trim().to_uppercase();
+    match (hashed, fst4w) {
+        (true, true) => format!("<{call}> {grid}"),
+        (true, false) if grid.len() == 6 => format!("<{call}> {grid} {power_dbm}"),
+        _ => format!("{call} {power_dbm}"),
+    }
+}
+
 /// Encode `"CALL GRID DBM"` into the 162 channel symbols (0..3), or `None` if it
 /// will not encode.
 pub fn encode(msg: &str) -> Option<Vec<u8>> {
@@ -408,6 +443,94 @@ mod tests {
         assert_eq!(message(" W1AW ", "FN31", 37), "W1AW FN31 37");
         // 4-character grid only — the 50-bit payload has room for no more.
         assert_eq!(message("K1ABC", "EN50AB", 23), "K1ABC EN50 23");
+    }
+
+    /// ⭐ A COMPOUND CALL BEACONS AS WSJT-X SENDS IT. `PJ4/K1ABC FK52 37` went out, which the
+    /// encoder reads as a type 2 of power 0 (it decodes as `PJ4/K1ABC  0`). The goldens are WSJT-X
+    /// 3.0.2's own WSPR encoder (`lib/genwspr.f90`, `wqencode.f90`, built from its source), tone
+    /// for tone, and every one of them decodes as sent here.
+    #[test]
+    fn a_compound_call_beacons_as_wsjtx_sends_it() {
+        let seq = |call: &str, grid: &str, fst4w: bool| {
+            [false, true, false].map(|hashed| beacon_message(call, grid, 37, fst4w, hashed))
+        };
+        assert_eq!(
+            seq("pj4/k1abc", "fk52ud", false),
+            ["PJ4/K1ABC 37", "<PJ4/K1ABC> FK52UD 37", "PJ4/K1ABC 37"]
+        );
+        assert_eq!(
+            seq("PJ4/K1ABC", "FN42", true),
+            ["PJ4/K1ABC 37", "<PJ4/K1ABC> FN42", "PJ4/K1ABC 37"],
+            "FST4W's type 3 carries no power, and takes a 4-character grid"
+        );
+        assert_eq!(
+            seq("K1ABC/P", "FN42", false),
+            ["K1ABC/P 37"; 3],
+            "WSPR's type 3 has no decodable 4-character grid"
+        );
+        // Controls: a plain call sends the type 1 on every over, in both modes, byte for byte as
+        // `message` builds it.
+        for fst4w in [false, true] {
+            assert_eq!(seq("K1ABC", "FK52UD", fst4w), ["K1ABC FK52 37"; 3]);
+            assert_eq!(seq("/K1ABC", "FK52UD", fst4w), ["/K1ABC FK52 37"; 3]);
+        }
+
+        for (msg, wsjtx, heard) in [
+            (
+                "PJ4/K1ABC 37",
+                "310220001022131020100123131220220230030322022010130031010003323222013010301210032\
+                 032112203323030223022021023001310310031230021332000010120112222222132323102011022",
+                "PJ4/K1ABC 37",
+            ),
+            (
+                "K1ABC/P 37",
+                "310220001022111020100121113222020030012122022230130033010001323222013032301210032\
+                 232130201123230223020001023021312330011230021332000030120132002202330123122033020",
+                "K1ABC/P 37",
+            ),
+            (
+                "<PJ4/K1ABC> FK52UD 37",
+                "332022223002133202300303131220222012032300200010310013210203103000211010103230210\
+                 010130021123032201202221203021310130211012201112222032122310020000310101100011202",
+                "<...> FK52UD 37",
+            ),
+            (
+                "<K1ABC/P> FN42AB 37",
+                "312222203002313222322301113200022232232320000230130011012021103000011030323232210\
+                 210110023323032201220203023023330330231032201312002210320132020222312301102211202",
+                "<...> FN42AB 37",
+            ),
+            (
+                "K1ABC FK52 37",
+                "330222001222133220120103113022000032030122002212110033010023321220013212321210012\
+                 232130001303232223220201023021110330031232021132202032322132022222332123320011220",
+                "K1ABC FK52 37",
+            ),
+        ] {
+            let sym = encode(msg).expect("encodes");
+            let tones: String = sym.iter().map(|&s| char::from(b'0' + s)).collect();
+            assert_eq!(tones, wsjtx, "{msg:?}: WSJT-X's tones");
+            assert_eq!(on_the_air(&sym), [heard], "{msg:?}: what wsprd reads");
+        }
+        // The text it replaces: a power of 0 on the air.
+        let sym = encode("PJ4/K1ABC FK52 37").expect("encodes");
+        assert_eq!(on_the_air(&sym), ["PJ4/K1ABC  0"]);
+    }
+
+    /// What `wsprd` reads of `sym` sent alone at 1500 Hz.
+    fn on_the_air(sym: &[u8]) -> Vec<String> {
+        let wave = gen_wave(sym, SAMPLE_RATE, 1500.0).expect("valid");
+        let lead = (LEAD_IN_SECS * SAMPLE_RATE) as usize;
+        let mut iwave = vec![0i16; NMAX];
+        for (i, &v) in wave.iter().enumerate() {
+            if lead + i < iwave.len() {
+                iwave[lead + i] = (v * 8000.0) as i16;
+            }
+        }
+        decode_frame(&iwave, 10.1387, false, 3, false, false, false)
+            .into_iter()
+            .map(|d| d.message)
+            .collect()
     }
 
     #[test]

@@ -3797,6 +3797,10 @@ pub struct Engine {
     beacon_decided_slot: Option<u64>,
     /// The decision itself, held for the length of the interval.
     beacon_tx_this_slot: bool,
+    /// How many beacon intervals this session has decided to transmit in: WSJT-X's `m_tx`, which
+    /// flips once per beacon over, is this count's parity. It picks which of a compound call's
+    /// two messages an over sends ([`Self::beacon_message`]).
+    beacon_overs: u64,
     /// Chat-native CQ run (Tempo): while on, an idle own-parity TX slot re-sends the
     /// structured CQ — the WSJT-X-style "keep calling until someone answers" loop the
     /// one-shot Call CQ button couldn't do. Runtime-only (resets each launch, like
@@ -6849,6 +6853,7 @@ impl Engine {
             beacon_sched: tempo_core::beacon::BeaconScheduler::new(0, 0x5EED),
             beacon_txline_slot: None,
             beacon_decided_slot: None,
+            beacon_overs: 0,
             beacon_tx_this_slot: false,
             chat_cq: false,
             chat_cq_paused: false,
@@ -29944,10 +29949,14 @@ contact yourself."
                     .to_string(),
             );
         }
-        Ok(tempo_core::beacon::message(
+        // WSJT-X sends a compound call's type 2 on its first over and its type 3 on the next
+        // (`m_tx=1-m_tx`, then `if(m_tx==0) msg2=msg0`).
+        Ok(tempo_core::beacon::beacon_message(
             call,
             grid,
             self.settings.beacon_power_dbm,
+            self.app.tier() == Tier::Fst4w,
+            self.beacon_overs.is_multiple_of(2),
         ))
     }
 
@@ -29997,6 +30006,9 @@ contact yourself."
             } else {
                 self.beacon_sched.next_is_tx()
             };
+            if self.beacon_tx_this_slot {
+                self.beacon_overs += 1;
+            }
         }
         if !self.beacon_tx_this_slot {
             self.app.set_transmitting(false);
@@ -74894,6 +74906,57 @@ mod tests {
         e.apply_settings(s);
         e.set_tx_enabled(true);
         assert_eq!(e.beacon_message().unwrap(), "KD9TAW EN52 30");
+    }
+
+    /// ⭐ A COMPOUND CALL BEACONS AS WSJT-X SENDS IT, over by over. `PJ4/K1ABC` went out as
+    /// `PJ4/K1ABC FK52 37` on every over, which WSPR decodes as power 0 and FST4W not at all.
+    /// WSJT-X 3.0.2 (`MainWindow::WSPR_message`, `widgets/mainwindow.cpp:15458-15480`) alternates
+    /// the type 2 (call and power) with the type 3 (the call's hash and the whole grid), starting
+    /// with the type 2, one message per over. Controls: a plain call sends its type 1 every over.
+    #[test]
+    fn a_compound_call_beacons_as_wsjtx_sends_it_over_by_over() {
+        let overs = |call: &str, grid: &str, tier: Tier| -> Vec<String> {
+            let mut e = Engine::new(call, grid, 0);
+            e.set_tier(tier);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            (10..14)
+                .map(|slot| {
+                    let text = |e: &mut Engine| match e.plan_tx(slot).map(|p| p.waveform) {
+                        Some(TxWaveform::Native { text, .. }) => text,
+                        _ => panic!("{call} slot {slot}: a beacon over"),
+                    };
+                    let first = text(&mut e);
+                    assert_eq!(text(&mut e), first, "{call}: one text per interval");
+                    first
+                })
+                .collect()
+        };
+        let (two, three) = ("PJ4/K1ABC 37", "<PJ4/K1ABC> FK52UD 37");
+        assert_eq!(
+            overs("PJ4/K1ABC", "FK52UD", Tier::Wspr),
+            [two, three, two, three]
+        );
+        let (two, three) = ("PJ4/K1ABC 37", "<PJ4/K1ABC> FN42");
+        assert_eq!(
+            overs("PJ4/K1ABC", "FN42", Tier::Fst4w),
+            [two, three, two, three]
+        );
+        assert_eq!(
+            overs("K1ABC/P", "FN42", Tier::Wspr),
+            ["K1ABC/P 37"; 4],
+            "WSPR's type 3 has no decodable 4-character grid"
+        );
+        for tier in [Tier::Wspr, Tier::Fst4w] {
+            assert_eq!(
+                overs("K1ABC", "FK52UD", tier),
+                ["K1ABC FK52 37"; 4],
+                "CONTROL {tier:?}"
+            );
+        }
     }
 
     #[test]
