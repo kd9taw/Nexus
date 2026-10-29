@@ -863,6 +863,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
     source: nativeRf && scopeFeed ? scopeFeed.source : null,
     dialHz: dialHzNow,
     want: rfWant,
+    choice: rfSpan.id,
     sweep: scopeSweep,
     transmitting: snap.radio.transmitting || keyed,
     send: (a) =>

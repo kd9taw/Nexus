@@ -80,7 +80,7 @@ describe('sweepFits and onlyPart', () => {
 describe('useSpanAsk', () => {
   const want = { loHz: 10_095_000, hiHz: 10_155_000 }
   const wide = { loHz: 9_620_000, hiHz: 10_620_000 }
-  const base = { source: 'civ', dialHz: 10_120_000, want, sweep: wide, transmitting: false }
+  const base = { source: 'civ', dialHz: 10_120_000, want, choice: 'band', sweep: wide, transmitting: false }
   it('asks once for a sweep that does not fit, and not again on the next render', () => {
     const send = vi.fn()
     const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: base })
@@ -115,6 +115,75 @@ describe('useSpanAsk', () => {
     const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: base })
     rerender({ ...base, dialHz: 14_200_000, want: { loHz: 13_975_000, hiHz: 14_375_000 }, sweep: wide })
     expect(send.mock.calls).toEqual([[{ kind: 'civ', halfHz: 50_000 }], [{ kind: 'civ', halfHz: 250_000 }]])
+  })
+  it('a new chip is a new ask, even for the same rung', () => {
+    const send = vi.fn()
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: base })
+    rerender({ ...base, choice: '±25k' })
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+  it('a new rung is a new ask; tuning back across it does not ask again', () => {
+    const send = vi.fn()
+    // The radio sweeps centred on the dial.
+    const at = (dial: number, half: number) => ({ loHz: dial - half, hiHz: dial + half })
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), {
+      initialProps: { ...base, sweep: at(10_120_000, 50_000) },
+    })
+    expect(send, 'already there: nothing asked').not.toHaveBeenCalled()
+    // 10.100: 55 kHz to the top edge, past ±50k → ±100k.
+    rerender({ ...base, dialHz: 10_100_000, sweep: at(10_100_000, 50_000) })
+    expect(send.mock.calls).toEqual([[{ kind: 'civ', halfHz: 100_000 }]])
+    rerender({ ...base, dialHz: 10_100_000, sweep: at(10_100_000, 100_000) })
+    rerender({ ...base, sweep: at(10_120_000, 100_000) })
+    rerender({ ...base, dialHz: 10_100_000, sweep: at(10_100_000, 100_000) })
+    rerender({ ...base, sweep: at(10_120_000, 100_000) })
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+  it("after the ask lands, the operator's own span stands (radio knob, Rig Scope chip, Flex pan chip)", () => {
+    const send = vi.fn()
+    const fit = { loHz: 10_070_000, hiHz: 10_170_000 }
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: base })
+    rerender({ ...base, sweep: fit }) // the ask landed
+    rerender({ ...base, sweep: { loHz: 10_110_000, hiHz: 10_130_000 } }) // the operator: ±10k
+    rerender({ ...base, sweep: fit })
+    rerender({ ...base, sweep: { loHz: 9_870_000, hiHz: 10_370_000 } }) // the operator: ±250k
+    rerender({ ...base, sweep: { loHz: 9_870_000, hiHz: 10_370_000 }, transmitting: true })
+    rerender({ ...base, sweep: { loHz: 9_870_000, hiHz: 10_370_000 } })
+    expect(send.mock.calls).toEqual([[{ kind: 'civ', halfHz: 50_000 }]])
+  })
+  it('the same for a sweep that already fitted Band when it was first seen', () => {
+    const send = vi.fn()
+    const fit = { loHz: 10_070_000, hiHz: 10_170_000 }
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: { ...base, sweep: fit } })
+    rerender({ ...base, sweep: { loHz: 10_110_000, hiHz: 10_130_000 } })
+    expect(send).not.toHaveBeenCalled()
+  })
+  it('a radio that refused is told once, however many overs follow', () => {
+    const send = vi.fn()
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: base })
+    for (let i = 0; i < 3; i++) {
+      rerender({ ...base, sweep: { ...wide }, transmitting: true })
+      rerender({ ...base, sweep: { ...wide }, transmitting: false })
+    }
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+  it('two scopes asking different spans of one radio ask once each, never in turn', () => {
+    const a = vi.fn()
+    const b = vi.fn()
+    const fitA = { loHz: 10_070_000, hiHz: 10_170_000 }
+    const fitB = { loHz: 10_110_000, hiHz: 10_130_000 }
+    const wantB = { loHz: 10_115_000, hiHz: 10_125_000 }
+    const bBase = { ...base, want: wantB, choice: '±5k' }
+    const ha = renderHook((p) => useSpanAsk({ ...p, send: a }), { initialProps: base })
+    const hb = renderHook((p) => useSpanAsk({ ...p, send: b }), { initialProps: bBase })
+    for (let i = 0; i < 5; i++) {
+      ha.rerender({ ...base, sweep: fitA })
+      hb.rerender({ ...bBase, sweep: fitA })
+      ha.rerender({ ...base, sweep: fitB })
+      hb.rerender({ ...bBase, sweep: fitB })
+    }
+    expect(a.mock.calls).toEqual([[{ kind: 'civ', halfHz: 50_000 }]])
+    expect(b.mock.calls).toEqual([[{ kind: 'civ', halfHz: 5_000 }]])
   })
 })
 

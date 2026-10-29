@@ -105,14 +105,20 @@ export function onlyPart(
   return drawn.loHz > want.loHz + slack || drawn.hiHz < want.hiHz - slack
 }
 
-/** KEEP THE RADIO'S SWEEP ON THE CHOSEN WINDOW: send `ask` when the sweep the source reports does not
- *  already fit `want`, once for each ask — a radio that refuses (an Icom in Fixed mode) is told once,
- *  not on every poll. Nothing is sent before the source has reported a sweep, while transmitting, or
- *  for a source whose sweep Nexus does not set. */
+/** PUT THE RADIO'S SWEEP ON THE CHOSEN WINDOW, ONCE: send `ask` when the sweep the source reports
+ *  does not already fit `want`, ONCE FOR EACH ASK. An ask is the source, the rung or width, the band
+ *  the dial is in and the span chip chosen (`choice`): a new band, a new chip or a new rung is a new
+ *  ask, and nothing else is. What the radio does after that is the operator's: a span set on the
+ *  radio's own knob, the Rig Scope chips or a Flex pan chip stands, a radio that refuses (an Icom in
+ *  Fixed mode) is told once, and two scopes asking different spans of one radio each ask once
+ *  rather than taking turns undoing the other. An ask the sweep already fits when it is first seen is
+ *  spent without sending. Nothing is sent before the source has reported a sweep, while
+ *  transmitting (the ask waits for unkey), or for a source whose sweep Nexus does not set. */
 export function useSpanAsk({
   source,
   dialHz,
   want,
+  choice,
   sweep,
   transmitting,
   send,
@@ -120,26 +126,23 @@ export function useSpanAsk({
   source: string | null
   dialHz: number | null
   want: { loHz: number; hiHz: number } | null
+  choice: string
   sweep: { loHz: number; hiHz: number } | null
   transmitting: boolean
   send: (ask: SpanAsk) => void
 }): void {
-  const sent = useRef('')
+  const spent = useRef('')
   const sendRef = useRef(send)
   sendRef.current = send
   const ask = source ? spanAsk(source, dialHz, want) : null
-  const key = ask ? `${source}:${ask.kind}:${askWidth(ask)}` : ''
+  const band = dialHz != null && dialHz > 0 ? bandLabelForMhz(dialHz / 1e6) : ''
+  const key = ask ? `${source}:${ask.kind}:${askWidth(ask)}:${band}:${choice}` : ''
   const fits = ask != null && want != null && sweep != null && sweepFits(sweep, want, ask)
   useEffect(() => {
     if (!ask || !sweep || transmitting) return
-    if (fits) {
-      // The radio is already there: the next time it is not, the same ask goes out again.
-      sent.current = ''
-      return
-    }
-    if (sent.current === key) return
-    sent.current = key
-    sendRef.current(ask)
+    if (spent.current === key) return
+    spent.current = key
+    if (!fits) sendRef.current(ask)
     // `ask` is a fresh object every render; `key` says everything about it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, fits, sweep != null, transmitting])

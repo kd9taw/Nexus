@@ -707,8 +707,15 @@ export function CwCockpit({
     source: nativeRf && scopeFeed ? scopeFeed.source : null,
     dialHz: dialHzNow,
     want: rfWant,
+    choice: rfSpan.id,
     sweep: scopeSweep,
-    transmitting: snap.radio.transmitting,
+    // On the air by the cockpit's own keyed state too (`keyedNow` below: a send, a tune, the rig's
+    // PTT read back), not only the snapshot's transmitting flag.
+    transmitting:
+      snap.radio.transmitting ||
+      !!snap.radio.txBusyReason ||
+      snap.radio.tuning === true ||
+      snap.radio.rigKeyed === true,
     send: (a) =>
       void (a.kind === 'civ' ? setScopeSpan(a.halfHz) : setFlexPanSpan(a.hz))
         .then((s) => onSnap?.(s))
