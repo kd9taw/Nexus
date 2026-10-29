@@ -132,7 +132,7 @@ describe('Settings ▸ Logbook', () => {
   })
 
   it('Logging & Connectors keeps the sign-ins and uploads, and none of the moved sections', async () => {
-    await openTab('Logging & Connectors')
+    await openTab('Services')
     for (const id of MOVED) expect(document.getElementById(`settings-${id}`), id).toBeNull()
     const conf = section('confirmations')
     expect(conf.getByRole('textbox', { name: /^LoTW username/ })).toBeTruthy()
@@ -151,7 +151,7 @@ describe('Settings ▸ Logbook', () => {
     expect(section('map-globe').queryByRole('button', { name: 'Reset' })).toBeNull()
     // Positive control: the globe switch stayed with the map.
     expect(section('map-globe').getByRole('checkbox', { name: 'Show the 3-D globe above the Logbook' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('tab', { name: 'Config' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'App' }))
     expect(section('data-folder').queryByRole('spinbutton', { name: /^Keep deleted contacts/ })).toBeNull()
   })
 })

@@ -232,7 +232,7 @@ next row with another frequency moves you again. The frequency does not change b
 row ends; add a row for that.
 
 **DIRECTED.TXT.** With **Write ALL.TXT decode log** on
-([Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds)), JS8 also writes
+([Settings ▸ Services](settings-reference.md#integrations--feeds)), JS8 also writes
 JS8Call's DIRECTED.TXT beside ALL.TXT: one line per directed message heard, with the date and
 time (UTC), the dial, the offset, the SNR and the message, ♢ where it ended.
 
@@ -367,7 +367,7 @@ never held.
 ## Spotting and APRS-IS
 
 With the **PSK Reporter** switch on
-([Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds))
+([Settings ▸ Services ▸ Integrations & Feeds](settings-reference.md#integrations--feeds))
 and a real callsign set, JS8 spots the way JS8Call's SPOT button does:
 
 - Every station you hear — a heartbeat, a CQ, a directed message, the first frame of a plain

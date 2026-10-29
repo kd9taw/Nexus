@@ -191,8 +191,8 @@ async function mount(hash: string): Promise<void> {
   await waitFor(() => expect(document.querySelector('.app.loading')).toBeNull())
   await new Promise((r) => setTimeout(r, 50))
 }
-/** Open the wizard again from Settings, by the Radio tab's button or the Appearance tab's link. */
-async function openRerun(from: 'radio' | 'appearance') {
+/** Open the wizard again from Settings, by the Radio tab's button or the App tab's link (beside Features). */
+async function openRerun(from: 'radio' | 'app') {
   // Finish lands on the operating screen; the gear in the mode rail goes back to Settings.
   const gear = screen.queryByRole('button', { name: EN['nav.settings.label'] })
   if (gear && gear.getAttribute('aria-current') !== 'page') fireEvent.click(gear)
@@ -215,7 +215,7 @@ const toLicenceStep = () => {
 describe('re-running setup keeps the licence class', () => {
   it.each([
     ['technician', 'radio'],
-    ['general', 'appearance'],
+    ['general', 'app'],
   ] as const)('a %s station re-run from Settings ▸ %s and finished untouched keeps its class', async (cls, from) => {
     backend.stored = station(cls)
     await mountStation()

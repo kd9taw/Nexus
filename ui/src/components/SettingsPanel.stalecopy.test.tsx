@@ -163,7 +163,7 @@ const loaded = () => screen.findAllByDisplayValue('KD9TAW')
 
 /** The operator's own edit, on a tab with no radio in it: QRZ auto-upload on. */
 async function turnOnQrzUpload() {
-  fireEvent.click(screen.getByRole('tab', { name: 'Logging & Connectors' }))
+  fireEvent.click(screen.getByRole('tab', { name: 'Services' }))
   fireEvent.click(await screen.findByRole('switch', { name: /Auto-upload QSOs to QRZ/ }))
 }
 
@@ -391,6 +391,7 @@ describe('an edit made in any section of Settings is saved', () => {
   /** Sections whose controls never save through the form, and what they save through instead. */
   const NOT_THE_FORM: Record<string, string> = {
     'remote-access': 'its own pairing and access verbs',
+    'weak-signal': 'nothing of its own: a heading over five sections that each have a row above',
     profiles: 'named configurations kept on this computer; Load merges one over a fresh read',
     'orbital-elements': 'the orbital-element download and import verbs',
     connections: 'the credential verbs; the rest is connection status',

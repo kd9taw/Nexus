@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EN } from '../i18n/en'
+import { startsFolded } from './experience'
 import {
   searchSettings,
   SETTINGS_TABS,
@@ -100,7 +101,12 @@ function panelGroups(): string[] {
 
 describe('the registry describes the panel that actually renders', () => {
   it('registers every legend the panel renders', () => {
-    const registered = new Set(SETTINGS_SECTIONS.filter((s) => !s.parent).map((s) => s.label))
+    // A legend is a top-level section, or a section nested inside a top-level section's fieldset
+    // (the weak-signal group's five modes); a collapsible `SettingsGroup` is the other nested form.
+    const groups = new Set(panelGroups())
+    const registered = new Set(
+      SETTINGS_SECTIONS.filter((s) => !s.parent || !groups.has(s.label)).map((s) => s.label),
+    )
     const missing = panelLegends().filter((l) => !registered.has(l))
     expect(
       missing,
@@ -248,17 +254,51 @@ describe('density — the guard the four prior reorgs lacked', () => {
   // and the density cost was counted anyway, because this registry is scanned regardless of the
   // feature toggle; JS8 is now ON by default (2026-09), so the section is one every operator
   // scans and the cost counted here is simply the real one.
-  const MAX_SECTIONS_PER_TAB = 13
+  //
+  // TOP-LEVEL sections are what is counted (2026-10, the Settings regroup). A nested section sits
+  // under its parent's heading, so an operator scanning the page passes one heading, not one per
+  // child: counting every section made grouping RAISE the number while lowering what is scanned.
+  // A second, higher ceiling on the whole tab stops grouping from hiding unlimited depth.
+  const MAX_TOP_LEVEL_PER_TAB = 12
+  const MAX_SECTIONS_PER_TAB = 16
+
+  function densityFindings(sections: { id: string; tab: string; parent?: string }[]): string[] {
+    const out: string[] = []
+    for (const tab of new Set(sections.map((s) => s.tab))) {
+      const all = sections.filter((s) => s.tab === tab)
+      const top = all.filter((s) => !s.parent)
+      if (top.length > MAX_TOP_LEVEL_PER_TAB)
+        out.push(`${tab} has ${top.length} top-level sections (ceiling ${MAX_TOP_LEVEL_PER_TAB})`)
+      if (all.length > MAX_SECTIONS_PER_TAB)
+        out.push(`${tab} has ${all.length} sections in all (ceiling ${MAX_SECTIONS_PER_TAB})`)
+    }
+    return out
+  }
 
   it('keeps every tab under the density ceiling', () => {
-    const over = SETTINGS_TABS.map((t) => ({ id: t.id, n: sectionsForTab(t.id).length }))
-      .filter((x) => x.n > MAX_SECTIONS_PER_TAB)
-      .map((x) => `${x.id} has ${x.n} sections (ceiling ${MAX_SECTIONS_PER_TAB})`)
     expect(
-      over,
+      densityFindings(SETTINGS_SECTIONS),
       'split the tab or move a section — do not raise the ceiling to make this pass without ' +
         'deciding that a deeper page is genuinely better for the operator',
     ).toEqual([])
+  })
+
+  it('counts top-level sections, and still bounds what grouping can hide (controls)', () => {
+    const many = (n: number, nested = 0) => [
+      ...Array.from({ length: n }, (_, i) => ({ id: `t${i}`, tab: 'x' })),
+      ...Array.from({ length: nested }, (_, i) => ({ id: `n${i}`, tab: 'x', parent: 't0' })),
+    ]
+    // At the ceiling, with nested children under it, passes: the children are not scanned.
+    expect(densityFindings(many(MAX_TOP_LEVEL_PER_TAB, MAX_SECTIONS_PER_TAB - MAX_TOP_LEVEL_PER_TAB))).toEqual([])
+    // One top-level over fires; so does grouping past the total.
+    expect(densityFindings(many(MAX_TOP_LEVEL_PER_TAB + 1))).toHaveLength(1)
+    expect(densityFindings(many(2, MAX_SECTIONS_PER_TAB))).toHaveLength(1)
+    // The real Digital tab is the case this exists for: over the top-level ceiling if its
+    // weak-signal modes were not grouped, under it as they are.
+    const digital = SETTINGS_SECTIONS.filter((s) => s.tab === 'digital')
+    expect(digital.filter((s) => s.parent === 'weak-signal').length).toBe(5)
+    expect(densityFindings(digital)).toEqual([])
+    expect(digital.length).toBeGreaterThan(MAX_TOP_LEVEL_PER_TAB)
   })
 
   it('gives every section searchable words beyond its own label', () => {
@@ -278,12 +318,12 @@ describe('density — the guard the four prior reorgs lacked', () => {
 describe('resolveTarget — a stale pointer must land, never dead-end', () => {
   it('resolves a plain tab id and a tab label', () => {
     expect(resolveTarget('radio')).toEqual({ tab: 'radio' })
-    expect(resolveTarget('Logging & Connectors')).toEqual({ tab: 'logging' })
+    expect(resolveTarget('Services')).toEqual({ tab: 'services' })
   })
 
   it('resolves a section to its tab AND the section', () => {
     expect(resolveTarget('audio')).toEqual({ tab: 'radio', section: 'audio' })
-    expect(resolveTarget('Confirmations')).toEqual({ tab: 'logging', section: 'confirmations' })
+    expect(resolveTarget('Confirmations')).toEqual({ tab: 'services', section: 'confirmations' })
   })
 
   it('resolves the path forms the app and docs actually write', () => {
@@ -307,10 +347,10 @@ describe('resolveTarget — a stale pointer must land, never dead-end', () => {
   it('lands every legacy tab name still live in the tree', () => {
     // These four are the residue the 0.17 sweep missed and are STILL cited in the app today:
     // Features ×11, Logbook & QSL ×6, Integrations ×4, Connections ×3.
-    expect(resolveTarget('Settings ▸ Features')?.tab).toBe('appearance')
-    expect(resolveTarget('Settings ▸ Logbook & QSL')?.tab).toBe('logging')
-    expect(resolveTarget('Settings ▸ Integrations')?.tab).toBe('logging')
-    expect(resolveTarget('Settings ▸ Connections')?.tab).toBe('logging')
+    expect(resolveTarget('Settings ▸ Features')?.tab).toBe('app')
+    expect(resolveTarget('Settings ▸ Logbook & QSL')?.tab).toBe('services')
+    expect(resolveTarget('Settings ▸ Integrations')?.tab).toBe('services')
+    expect(resolveTarget('Settings ▸ Connections')?.tab).toBe('services')
     // And the pre-0.17 names for what is now the Radio tab.
     expect(resolveTarget('Settings ▸ Rig / CAT')?.tab).toBe('radio')
     expect(resolveTarget('Settings ▸ Rig Control')?.tab).toBe('radio')
@@ -357,6 +397,112 @@ describe('resolveTarget — a stale pointer must land, never dead-end', () => {
   it('returns null rather than guessing at something it does not know', () => {
     expect(resolveTarget('')).toBeNull()
     expect(resolveTarget('Settings ▸ Nonexistent Thing')).toBeNull()
+  })
+})
+
+describe('the Settings regroup — every section keeps its id and lands on one tab', () => {
+  // The regroup moved sections between tabs (Satellites, Services and App are new; Logging &
+  // Connectors and Config are gone) WITHOUT renaming a section id: the ids are the deep-link
+  // targets, the manual's anchors and the search results. A move is a registry edit AND a JSX
+  // wrapper edit, and these hold the two halves together.
+
+  /** The tab wrapper each anchor renders under: the nearest `{tab === 'x'` before it. */
+  function wrapperTabOf(anchorIndex: number): string | undefined {
+    const before = panelSrc.slice(0, anchorIndex)
+    const all = [...before.matchAll(/\{tab === '([a-z]+)'/g)]
+    return all[all.length - 1]?.[1]
+  }
+
+  it('renders every section exactly once, under the wrapper of the tab the registry names', () => {
+    const wrong: string[] = []
+    for (const s of SETTINGS_SECTIONS) {
+      const anchors = [
+        ...panelSrc.matchAll(new RegExp(`id="settings-${s.id}"|<SettingsGroup\\s+id="${s.id}"`, 'g')),
+      ]
+      if (anchors.length !== 1) {
+        wrong.push(`${s.id} has ${anchors.length} anchors`)
+        continue
+      }
+      const under = wrapperTabOf(anchors[0].index!)
+      if (under !== s.tab) wrong.push(`${s.id}: registry says ${s.tab}, renders under ${under}`)
+    }
+    expect(wrong).toEqual([])
+  })
+
+  it('resolves every section id to its own tab and itself', () => {
+    const tabIds = new Set(SETTINGS_TABS.map((t) => t.id))
+    for (const s of SETTINGS_SECTIONS) {
+      expect(resolveTarget(s.id), s.id).toEqual({ tab: s.tab, section: s.id })
+      expect(tabIds.has(s.tab), s.id).toBe(true)
+    }
+  })
+
+  it('puts each section on its new tab', () => {
+    const tabOf = (id: string) => sectionById(id)?.tab
+    expect(['satellite-doppler', 'orbital-elements'].map(tabOf)).toEqual(['satellites', 'satellites'])
+    for (const id of ['confirmations', 'connections', 'integrations-feeds', 'antenna-gain', 'dxkeeper', 'n3fjp', 'n1mm'])
+      expect(tabOf(id), id).toBe('services')
+    for (const id of ['features', 'app-updates', 'start-at-sign-in', 'this-computer', 'performance', 'data-folder', 'configurations'])
+      expect(tabOf(id), id).toBe('app')
+    for (const id of ['workspace', 'theme', 'colours', 'waterfall-scopes', 'map-globe', 'connect-web', 'accessibility'])
+      expect(tabOf(id), id).toBe('appearance')
+    // Remote keeps its own tab.
+    expect(tabOf('remote-access')).toBe('remote')
+    for (const id of ['jt65', 'msk144', 'beacons-wspr-fst4w', 'fst4', 'q65']) {
+      expect(tabOf(id), id).toBe('digital')
+      expect(sectionById(id)?.parent, id).toBe('weak-signal')
+    }
+    expect(SETTINGS_TABS.map((t) => t.id)).toEqual([
+      'station', 'remote', 'radio', 'satellites', 'phone', 'cw', 'digital', 'spots', 'logbook',
+      'services', 'contesting', 'appearance', 'app',
+    ])
+  })
+
+  it('lands the removed tabs\' names on their new homes', () => {
+    // Old tab ids, as a stored deep link or a pointer may still carry them.
+    expect(resolveTarget('logging')).toEqual({ tab: 'services' })
+    // `configurations` is also a section id (Backup & reset), on App: the section wins.
+    expect(resolveTarget('configurations')).toEqual({ tab: 'app', section: 'configurations' })
+    expect(resolveTarget('config')).toEqual({ tab: 'app' })
+    // Their old labels, bare and in a path.
+    expect(resolveTarget('Logging & Connectors')).toEqual({ tab: 'services' })
+    expect(resolveTarget('Config')).toEqual({ tab: 'app' })
+    expect(resolveTarget('Settings ▸ Logging & Connectors ▸ Confirmations')).toEqual({
+      tab: 'services',
+      section: 'confirmations',
+    })
+    expect(resolveTarget('Settings ▸ Config ▸ Backup & reset')).toEqual({ tab: 'app', section: 'configurations' })
+    expect(resolveTarget('Settings ▸ Radio ▸ Satellite Doppler')).toEqual({
+      tab: 'satellites',
+      section: 'satellite-doppler',
+    })
+    expect(resolveTarget('Settings ▸ Appearance ▸ Features')).toEqual({ tab: 'app', section: 'features' })
+    // The new tabs by name.
+    expect(resolveTarget('Satellites')).toEqual({ tab: 'satellites' })
+    expect(resolveTarget('App')).toEqual({ tab: 'app' })
+    // Control: a name nobody ever used still resolves to nothing.
+    expect(resolveTarget('Settings ▸ Loggingg')).toBeNull()
+  })
+
+  it('never folds Accessibility or Features, on the tabs they now live on', () => {
+    for (const level of ['newToHobby', 'newToDigital'] as const) {
+      expect(startsFolded('accessibility', level), level).toBe(false)
+      expect(startsFolded('features', level), level).toBe(false)
+      // Control: a section beside each, on the same tab, does fold.
+      expect(startsFolded('theme', level), level).toBe(true)
+      expect(startsFolded('app-updates', level), level).toBe(true)
+    }
+    // Top-level, so no folding parent can hide them either.
+    expect(sectionById('accessibility')?.parent).toBeUndefined()
+    expect(sectionById('features')?.parent).toBeUndefined()
+  })
+
+  it('finds the new tabs by their names in search', () => {
+    const ids = (q: string) => searchSettings(q).map((h) => h.section.id)
+    expect(ids('satellite')).toContain('satellite-doppler')
+    expect(ids('services')).toContain('connections')
+    expect(ids('app')).toContain('app-updates')
+    expect(ids('weak signal')).toContain('weak-signal')
   })
 })
 

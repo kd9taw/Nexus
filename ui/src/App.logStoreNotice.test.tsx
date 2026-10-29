@@ -159,7 +159,7 @@ describe('the logbook database could not be opened (C9)', () => {
     expect(said).toMatch(/network drive/)
     expect(said).toMatch(/Nothing is lost/)
     expect(said).toMatch(/log\.adi/)
-    expect(said, 'the remedy, where it is').toMatch(/Settings ▸ Config ▸ Data & log folder/)
+    expect(said, 'the remedy, where it is').toMatch(/Settings ▸ App ▸ Data & log folder/)
   })
 
   it('says it once a session: more snapshots never repeat it, and dismissed it stays gone', async () => {

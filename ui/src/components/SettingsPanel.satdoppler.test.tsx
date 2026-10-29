@@ -88,7 +88,10 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-const openRadio = async () => fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+// Satellite Doppler and the orbital elements are on the Satellites tab; the radio cards and the
+// rotator stay on Radio.
+const openRadio = async () => fireEvent.click(await screen.findByRole('tab', { name: 'Satellites' }))
+const openRadioTab = async () => fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
 
 /** The fieldset a control sits in, by its <legend>. */
 const sectionOf = (el: HTMLElement) =>
@@ -229,9 +232,12 @@ describe('the mapping select and the per-radio edit flow', () => {
   it('is disabled, with the reason, while editing a radio you are not operating', async () => {
     api.get('getSettings').mockImplementation(twoRadios)
     renderPanel()
-    await openRadio()
+    // The radio cards are on Radio, the mapping on Satellites: the edit started on one tab still
+    // holds on the other.
+    await openRadioTab()
     // Only the NON-active radio's card offers Edit.
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    await openRadio()
     const sel = (await screen.findByLabelText('Satellite VFO mapping')) as HTMLSelectElement
     expect(sel.disabled).toBe(true)
     expect(sel.title).toMatch(/confirmed per radio/i)
@@ -314,7 +320,7 @@ describe('rotator settings', () => {
   it('post-pass defaults to Stop, and says Stop leaves the antenna where the pass ended', async () => {
     // Moving a mast nobody asked to move is the one unrecoverable surprise here.
     renderPanel()
-    await openRadio()
+    await openRadioTab()
     const sel = (await screen.findByLabelText(
       'What the rotator does after a pass',
     )) as HTMLSelectElement
@@ -326,7 +332,7 @@ describe('rotator settings', () => {
 
   it('flip is off and warns that many rotators cannot pass 90° elevation', async () => {
     renderPanel()
-    await openRadio()
+    await openRadioTab()
     const flip = (await screen.findByLabelText(
       'Allow the rotator to flip past 90 degrees elevation',
     )) as HTMLInputElement
@@ -338,7 +344,7 @@ describe('rotator settings', () => {
 
   it('carries park, ready, tolerance and calibration for both axes', async () => {
     renderPanel()
-    await openRadio()
+    await openRadioTab()
     for (const label of [
       'Park azimuth (degrees)',
       'Park elevation (degrees)',
@@ -365,7 +371,7 @@ describe('rotator settings', () => {
     // confirmSatUplink verb — see the round-3 test above — and a Save
     // payload cannot carry it.)
     renderPanel()
-    await openRadio()
+    await openRadioTab()
     fireEvent.change(await screen.findByLabelText('What the rotator does after a pass'), {
       target: { value: 'park' },
     })

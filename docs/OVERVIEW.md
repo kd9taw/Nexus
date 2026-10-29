@@ -86,7 +86,7 @@ modes (FT8 and FT4 send its Field Day and NA VHF Contest messages, in ARRL Field
 VHF contests). **Q65, FST4, FST4W, MSK144, JT65 and WSPR have since shipped and transmit**, each
 keeping its own operating rhythm rather than inheriting FT8's — MSK144 waits twelve transmit
 periods before giving up where FT8 waits three, and WSPR and FST4W never touch the QSO
-sequencer at all. Per-QSO WAV save has shipped too — Settings ▸ Logging & Connectors ▸ Save
+sequencer at all. Per-QSO WAV save has shipped too — Settings ▸ Services ▸ Save
 received audio.
 
 ## The CW cockpit

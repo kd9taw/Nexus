@@ -90,7 +90,7 @@ beforeEach(() => {
 afterEach(cleanup)
 
 const openLogging = async () =>
-  fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+  fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
 
 /** The fieldset a control sits in, by its <legend>. */
 const sectionOf = (el: HTMLElement) =>

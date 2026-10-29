@@ -83,7 +83,7 @@ that operation.
 not on the air — the model still runs, the expedition just is not there. Hover a chip for that
 day's best band and window, or "no modelled path" when there isn't one. This is your own
 station's forecast, not a generic one: it uses the propagation engine you picked in
-[Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds), and each entry
+[Settings ▸ Services](settings-reference.md#integrations--feeds), and each entry
 says which engine produced its number.
 
 To plan a chase:

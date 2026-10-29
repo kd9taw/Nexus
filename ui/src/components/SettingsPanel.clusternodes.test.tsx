@@ -116,7 +116,7 @@ function renderPanel() {
 
 async function openSpotSources() {
   renderPanel()
-  fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+  fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
   return screen.findByRole('radiogroup', { name: 'Phone/SSB cluster nodes' })
 }
 

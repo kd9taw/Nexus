@@ -160,7 +160,7 @@ describe('Spot me on the Spots board', () => {
 
   it.each([
     ['spotNoCall', 'Not spotted: set your callsign in Settings first.'],
-    ['spotNoCluster', 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Spot Sources.'],
+    ['spotNoCluster', 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Services ▸ Integrations & Feeds ▸ Spot Sources.'],
     // The contest screen's spot went a moment ago: the station's one cooldown holds this button too.
     ['spotCooldown:42', 'Not spotted again yet: one spot a minute. 42 s to go.'],
     ['spotOffBand', 'Not spotted: the dial is outside the amateur bands.'],

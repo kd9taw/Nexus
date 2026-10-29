@@ -183,7 +183,7 @@ describe('#353 — the WSJT-X note in Getting started opens the switch it names'
     // The guide closed — it is a modal, and would otherwise cover what it just opened.
     await waitFor(() => expect(document.querySelector('.gsg')).toBeNull())
     // Settings is open on the tab the section lives in…
-    const tab = await screen.findByRole('tab', { name: EN['settings.tabs.logging'] })
+    const tab = await screen.findByRole('tab', { name: EN['settings.tabs.services'] })
     expect(tab.getAttribute('aria-selected')).toBe('true')
     // …and that section is the one holding the switch the note names.
     const section = await waitFor(() => {
@@ -207,7 +207,7 @@ describe('#353 — the WSJT-X note in Getting started opens the switch it names'
     await waitFor(() => expect(document.querySelector('.app.loading')).toBeNull())
     const toSection = () => scrolledTo.filter((id) => id === 'settings-integrations-feeds').length
     await followTheNoteLink()
-    const logging = await screen.findByRole('tab', { name: EN['settings.tabs.logging'] })
+    const logging = await screen.findByRole('tab', { name: EN['settings.tabs.services'] })
     await waitFor(() => expect(logging.getAttribute('aria-selected')).toBe('true'))
     await waitFor(() => expect(toSection()).toBeGreaterThan(0))
 
@@ -223,7 +223,7 @@ describe('#353 — the WSJT-X note in Getting started opens the switch it names'
     await waitFor(() => expect(document.querySelector('.gsg')).toBeNull())
     await waitFor(() =>
       expect(
-        screen.getByRole('tab', { name: EN['settings.tabs.logging'] }).getAttribute('aria-selected'),
+        screen.getByRole('tab', { name: EN['settings.tabs.services'] }).getAttribute('aria-selected'),
         'a repeat from another tab moves the panel back',
       ).toBe('true'),
     )

@@ -212,18 +212,18 @@ of a page.
 | Change the dial frequency a mode starts on | [Settings ▸ Digital ▸ Working Frequencies](settings-reference.md#working-frequencies) |
 | Set keyer speed, sidetone or the keying backend | [Settings ▸ CW](settings-reference.md#cw) |
 | Set repeater shift, CTCSS tone or mic gain | [Settings ▸ Phone ▸ Phone (SSB / FM)](settings-reference.md#phone-ssb--fm) |
-| Add a DX cluster, RBN or PSK Reporter feed | [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds) |
-| Feed WSJT-X, GridTracker or JTAlert over UDP | [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds) |
-| Turn on LoTW, QRZ, ClubLog, eQSL or HRDLog upload | [Settings ▸ Logging & Connectors ▸ Confirmations](settings-reference.md#confirmations) |
-| See whether an upload actually went | [Settings ▸ Logging & Connectors ▸ Connections](settings-reference.md#connections) |
-| Change how "worked before" is decided | [Settings ▸ Logging & Connectors ▸ Worked-before (B4) & dupes](settings-reference.md#worked-before-b4--dupes) |
+| Add a DX cluster, RBN or PSK Reporter feed | [Settings ▸ Services ▸ Integrations & Feeds](settings-reference.md#integrations--feeds) |
+| Feed WSJT-X, GridTracker or JTAlert over UDP | [Settings ▸ Services ▸ Integrations & Feeds](settings-reference.md#integrations--feeds) |
+| Turn on LoTW, QRZ, ClubLog, eQSL or HRDLog upload | [Settings ▸ Services ▸ Confirmations](settings-reference.md#confirmations) |
+| See whether an upload actually went | [Settings ▸ Services ▸ Connections](settings-reference.md#connections) |
+| Change how "worked before" is decided | [Settings ▸ Logbook ▸ Worked-before (B4) & dupes](settings-reference.md#worked-before-b4--dupes) |
 | Get an alert when a new one appears | [Settings ▸ Spots & Alerts ▸ Pounce](settings-reference.md#pounce--new-one-alert) |
 | Set the Field Day class, section and exchange | [Settings ▸ Contesting ▸ Field Day](settings-reference.md#field-day) |
 | Change theme, contrast or Night | [Settings ▸ Appearance ▸ Theme](settings-reference.md#theme) |
 | Change UI scale, text size or density, or pick a one-tap look | [Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) |
 | Turn a whole section off | [Settings ▸ Appearance ▸ Features](settings-reference.md#features) |
 | Turn on screen-reader announcements and earcons | [Settings ▸ Appearance ▸ Accessibility & eyes-free](settings-reference.md#accessibility--eyes-free) |
-| Back up, restore or reset everything | [Settings ▸ Config ▸ Backup & reset](settings-reference.md#backup--reset) |
+| Back up, restore or reset everything | [Settings ▸ App ▸ Backup & reset](settings-reference.md#backup--reset) |
 | Stop a transmission that is already going out | [Scenarios ▸ Stop a transmission](scenarios.md#stop-a-transmission) |
 | Work out why nothing is decoding | [Scenarios ▸ Nothing is decoding](scenarios.md#nothing-is-decoding) |
 | Work out why the rig will not key | [Scenarios ▸ The rig will not key](scenarios.md#the-rig-will-not-key) |

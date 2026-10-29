@@ -156,7 +156,7 @@ CW and Phone rows appear **only when those operating modes are enabled**
 digital-only operator's board stays clean. This is also why phone/SSB needs can
 look sparse: RBN auto-spots only CW and digital, so SSB needs come from the
 human DX cluster — see which cluster nodes are working, or list your own, in
-[Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds).
+[Settings ▸ Services](settings-reference.md#integrations--feeds).
 
 ### As a box on Conditions or beside your cockpit
 

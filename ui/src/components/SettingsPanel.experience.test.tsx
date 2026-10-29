@@ -187,14 +187,22 @@ describe('Settings folding for a new operator', () => {
     fireEvent.click(screen.getByRole('tab', { name: EN['settings.tabs.appearance'] }))
     await waitFor(() => expect(section('theme')).toBeTruthy())
     expect(section('theme').getAttribute('data-folded')).toBe('true')
-    // Features and Accessibility never fold, for any answer.
-    expect(section('features').hasAttribute('data-folded')).toBe(false)
+    // Accessibility never folds, for any answer.
     expect(section('accessibility').hasAttribute('data-folded')).toBe(false)
     // The heading stays as the label.
     expect(section('theme').querySelector('legend')).toBeTruthy()
     fireEvent.click(screen.getByText(SHOW_ALL))
     expect(section('theme').hasAttribute('data-folded')).toBe(false)
     expect(screen.queryByText(SHOW_ALL)).toBeNull()
+  })
+
+  it('never folds Features on the App tab, where the rest of App folds', async () => {
+    renderPanel('station', 'newToHobby')
+    await waitFor(() => expect(select()).toBeTruthy())
+    fireEvent.click(screen.getByRole('tab', { name: EN['settings.tabs.app'] }))
+    await waitFor(() => expect(section('features')).toBeTruthy())
+    expect(section('features').hasAttribute('data-folded')).toBe(false)
+    expect(section('app-updates').getAttribute('data-folded')).toBe('true')
   })
 
   it('keeps a hour-one section open on a tab that folds others (Radio)', async () => {
@@ -209,7 +217,7 @@ describe('Settings folding for a new operator', () => {
     renderPanel('rotator', 'newToHobby')
     await waitFor(() => expect(section('rotator')).toBeTruthy())
     expect(section('rotator').hasAttribute('data-folded')).toBe(false)
-    expect(section('orbital-elements').getAttribute('data-folded')).toBe('true')
+    expect(section('amplifier').getAttribute('data-folded')).toBe('true')
   })
 
   it('a deep link to a section inside a folded section opens the section around it', async () => {

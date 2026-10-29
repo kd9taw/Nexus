@@ -101,7 +101,7 @@ describe('Cloudlog/Wavelog over plain http on the LAN (#378)', () => {
   it('says, under the Base URL, that plain http sends the API key unencrypted', async () => {
     mockSettings('http://192.168.1.20/wavelog')
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
     // Positive control: the Base URL field is on screen with the reporter's kind of address.
     const field = await screen.findByDisplayValue('http://192.168.1.20/wavelog')
     const note = screen.getByText(NOTE)
@@ -114,7 +114,7 @@ describe('Cloudlog/Wavelog over plain http on the LAN (#378)', () => {
   it('says nothing for an https address', async () => {
     mockSettings('https://log.example.org')
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
     expect(await screen.findByDisplayValue('https://log.example.org'), 'control').toBeTruthy()
     expect(screen.queryByText(NOTE)).toBeNull()
   })
@@ -122,7 +122,7 @@ describe('Cloudlog/Wavelog over plain http on the LAN (#378)', () => {
   it('says it as soon as an http address is typed', async () => {
     mockSettings('https://log.example.org')
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
     const field = await screen.findByDisplayValue('https://log.example.org')
     expect(screen.queryByText(NOTE), 'control: nothing before the edit').toBeNull()
     fireEvent.change(field, { target: { value: 'HTTP://wavelog.lan' } })
