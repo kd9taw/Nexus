@@ -21774,6 +21774,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
             self.remote_actuation.revoke();
             self.sat_dial_owner = owner;
+            self.aprs_iss_forget_confirmation();
         }
     }
 

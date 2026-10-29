@@ -303,6 +303,14 @@ impl Engine {
         self.aprs_iss.read_back_hz = None;
     }
 
+    /// A satellite pass took the dial or handed it back (from [`Self::set_sat_dial_owner`]): it
+    /// moves the dial outside this module, so a confirmation from before it, or from while it held
+    /// the dial, is not one for the dial a frame keys on next.
+    pub(super) fn aprs_iss_forget_confirmation(&mut self) {
+        self.aprs_iss.acked_hz = None;
+        self.aprs_iss.read_back_hz = None;
+    }
+
     /// The radio acknowledged a dial on the wire (from [`Self::rig_dial_applied`]). Only its
     /// read-back ([`Self::aprs_iss_rig_read`]) says it is there: a radio may round the write.
     pub(super) fn aprs_iss_rig_applied(&mut self, hz: u64) {
@@ -701,10 +709,6 @@ mod tests {
         assert_eq!(e.settings().dial_hz(), tx);
     }
 
-    /// A radio that rounds the uplink it is sent never keys off target: the waiting frame is
-    /// dropped and the cockpit says why, the correction is off for the pass, the radio goes back
-    /// to 145.825 ONCE (no CAT write a second), and the next packet keys there, the gate judging
-    /// 145.825.
     /// A confirmation counts only for the dial it confirmed. After an over the receive
     /// correction's write is never acknowledged (a link fault), and the next frame's uplink is
     /// the same 100 Hz as the last: the frame must not key on the previous over's ack and
@@ -732,6 +736,45 @@ mod tests {
         assert!(
             e.poll_aprs_tx().is_none(),
             "keyed on the previous over's confirmation"
+        );
+        radio_takes_the_dial(&mut e);
+        assert!(
+            e.poll_aprs_tx().is_some(),
+            "a fresh confirmation did not key"
+        );
+        assert_eq!(e.settings().dial_hz(), tx);
+    }
+
+    /// The Satellites tracker taking the dial voids the confirmation too. The uplink is confirmed
+    /// with a frame waiting; a pass takes the dial, steers away (never acknowledged), steers back
+    /// to the same uplink and hands the dial back: the frame must not key on the confirmation
+    /// from before. Control: a fresh ack and read-back of the uplink keys it.
+    #[test]
+    fn a_frame_never_keys_on_a_confirmation_from_before_a_satellite_pass_held_the_dial() {
+        let mut e = on_the_iss();
+        e.aprs_iss_tick(APPROACHING, at(10_000), false);
+        radio_takes_the_dial(&mut e);
+        beacon(&mut e);
+        assert!(e.poll_aprs_tx().is_none());
+        let tx = e.settings().dial_hz();
+        radio_takes_the_dial(&mut e);
+        e.set_sat_dial_owner(Some(("ISS|fm".to_string(), 0)));
+        e.steer_sat_dial(145.830);
+        assert_eq!(
+            e.settings().dial_hz(),
+            145_830_000,
+            "precondition: steered away"
+        );
+        e.steer_sat_dial(tx as f64 / 1_000_000.0);
+        e.set_sat_dial_owner(None);
+        assert_eq!(
+            e.settings().dial_hz(),
+            tx,
+            "precondition: back on the uplink"
+        );
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "keyed on a confirmation from before the pass held the dial"
         );
         radio_takes_the_dial(&mut e);
         assert!(
@@ -770,6 +813,10 @@ mod tests {
         );
     }
 
+    /// A radio that rounds the uplink it is sent never keys off target: the waiting frame is
+    /// dropped and the cockpit says why, the correction is off for the pass, the radio goes back
+    /// to 145.825 ONCE (no CAT write a second), and the next packet keys there, the gate judging
+    /// 145.825.
     #[test]
     fn a_radio_that_rounds_the_uplink_drops_the_frame_and_the_correction_stops() {
         let mut e = on_the_iss();
