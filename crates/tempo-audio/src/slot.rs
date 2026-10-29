@@ -416,6 +416,22 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             ..none
         };
     }
+    // ⛔ NEXUS'S SPLIT IS STILL ON THE RADIO AND SPLIT OPERATION IS NO LONGER RIG: changed in the
+    // moment before this key, ahead of the loop's next quiet point, which lets go of it. Fake It
+    // would move VFO A and key VFO B on the last TX dial; None would key VFO B there. Nothing keys.
+    // A cluster SPLIT-on-Work owns VFO B when active, and the loop writes nothing for it.
+    if rig.tx_split_held
+        && eng.settings().split_mode != SplitMode::Rig
+        && !eng.cluster_split_active()
+    {
+        return SplitApply {
+            refused: Some(
+                "Split Operation was changed while the radio was still in Nexus's split"
+                    .to_string(),
+            ),
+            ..none
+        };
+    }
     let held = rig.tx_split_held
         && eng.settings().split_mode == SplitMode::Rig
         && !eng.cluster_split_active();
@@ -3753,6 +3769,29 @@ mod tests {
             &sent,
             &["S 1 VFOB"],
         );
+    }
+
+    #[test]
+    fn a_held_split_with_split_operation_changed_before_the_key_keys_nothing() {
+        use tempo_app::settings::SplitMode;
+        // Nexus's split is still on the radio (the loop lets go of it at its next quiet point) and
+        // Split Operation has just been set to Fake It or None: Fake It would move VFO A and key VFO
+        // B on the last TX dial, None would key VFO B there. Nothing keys, TX halts.
+        for split in [SplitMode::FakeIt, SplitMode::None] {
+            let what = format!("{split:?}");
+            let (addr, log) = scripted_rigctld(|_: &str| Some("RPRT 0\n".to_string()));
+            let mut rig = Rig::rigctld(&addr);
+            rig.tx_split_held = true;
+            let (act, backend, mut eng, sent) =
+                over_through(split_cq_engine(split), &mut rig, &log);
+            assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, &[]);
+        }
+        // The control: Split Operation still Rig keys from the held split.
+        let (addr, log) = scripted_rigctld(|_: &str| Some("RPRT 0\n".to_string()));
+        let mut rig = Rig::rigctld(&addr);
+        rig.tx_split_held = true;
+        let (act, backend, eng, _) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        keyed_as_before("still Rig", &act, &backend, &eng);
     }
 
     #[test]
