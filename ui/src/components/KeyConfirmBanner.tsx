@@ -3,7 +3,8 @@
 // fresh install, or reset settings), the system keychain may still hold a key it cannot say was
 // typed for that address. Until the operator answers, Cloudlog uploads wait and the radio does not
 // sign in with it. One row per key: the question with its address, Use (it is the key for that
-// address) and Remove (forget it).
+// address, and only that one: the station refuses Use once the address has changed since) and
+// Remove (forget it).
 //
 // It renders nothing when no key waits, and nowhere but the desktop app itself: the hosted page
 // and the TV page have no such question, and a computer driving another station is refused the
@@ -45,7 +46,7 @@ export function KeyConfirmBanner() {
   if (keys.length === 0) return null
   const answer = (key: KeyToConfirm, useIt: boolean) => {
     setAnswering(true)
-    void answerSavedKey(key.radioId, useIt)
+    void answerSavedKey(key.radioId, useIt, key.address)
       .catch((e: unknown) => pushToast(e instanceof Error ? e.message : String(e), 'error'))
       .finally(() => {
         setAnswering(false)

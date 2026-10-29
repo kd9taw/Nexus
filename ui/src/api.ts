@@ -5709,10 +5709,11 @@ export async function keysToConfirm(): Promise<KeyToConfirm[]> {
   return invoke<KeyToConfirm[]>('keys_to_confirm')
 }
 
-/** The operator's answer about a saved key that waits: Use (`useIt`) lets it go to its address;
- *  Remove forgets it from the system keychain. */
-export async function answerSavedKey(radioId: number | null, useIt: boolean): Promise<void> {
-  return invoke<void>('answer_saved_key', { radioId, useIt })
+/** The operator's answer about a saved key that waits: Use (`useIt`) lets it go to `address`, the
+ *  one the notice showed (the station refuses it when the address has changed since); Remove
+ *  forgets it from the system keychain. */
+export async function answerSavedKey(radioId: number | null, useIt: boolean, address: string): Promise<void> {
+  return invoke<void>('answer_saved_key', { radioId, useIt, address })
 }
 
 /** Moves a test build's road switch: where it is now. Blocking one road while the other is

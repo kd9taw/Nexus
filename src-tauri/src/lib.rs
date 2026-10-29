@@ -16452,7 +16452,7 @@ mod contest_session_tests {
             "no upload, no sign-in, nothing reached the network"
         );
         assert_eq!(
-            answer_key_to_confirm(&engine, Some(1), true, no_key_change),
+            answer_key_to_confirm(&engine, Some(1), true, None, no_key_change),
             Err(ICOM_PASSWORD_OF_NO_RADIO.to_string()),
             "the dropped radio's password cannot be let go to a later radio of its id"
         );
@@ -16546,8 +16546,10 @@ mod contest_session_tests {
             "nothing reached the instance"
         );
 
-        answer_key_to_confirm(&engine, None, true, no_key_change).unwrap();
-        answer_key_to_confirm(&engine, Some(1), true, no_key_change).unwrap();
+        let shown = keys_to_confirm_in(engine_lock(&engine).settings());
+        answer_key_to_confirm(&engine, None, true, Some(&shown[0].address), no_key_change).unwrap();
+        answer_key_to_confirm(&engine, Some(1), true, Some("radio-b.local"), no_key_change)
+            .unwrap();
         assert_eq!(
             engine_lock(&engine).keys_to_confirm(),
             &KeysToConfirm::default(),
@@ -16571,6 +16573,48 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ★ A RESTORE THAT LANDS WHILE A CLOUDLOG UPLOAD READS ITS KEY STOPS THAT UPLOAD: the key read
+    /// then may be the one kept for the restored address, so it never goes to the address read
+    /// before. Nothing reaches the old address, and the refusal says why. CONTROL: with nothing
+    /// changing meanwhile, the same upload reaches it.
+    #[test]
+    fn a_restore_landing_mid_upload_never_pairs_the_old_address_with_the_new_key() {
+        use std::sync::atomic::Ordering;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-mid-send", 0);
+        let (url, connections, stop) = counting_listener();
+        let station = {
+            let mut s = station_with(&engine, restore_test_roster(), "");
+            s.cloudlog_url = url;
+            s.cloudlog_station_id = "1".into();
+            s
+        };
+        engine_lock(&engine).apply_restored_settings(station.clone());
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        let landed = cloudlog_push_qso_impl(&dto, &engine, || {
+            let mut moved = station.clone();
+            moved.cloudlog_url = "https://log.restored.example/cloudlog".into();
+            engine_lock(&engine).apply_restored_settings(moved);
+            Ok("PLANTED-RESTORED-KEY".into())
+        });
+        assert_eq!(
+            (
+                landed.map_err(|e| e.message),
+                connections.load(Ordering::SeqCst)
+            ),
+            (Err(CLOUDLOG_CHANGED_MID_SEND.to_string()), 0),
+            "a restore landed during the read: nothing sent to the old address"
+        );
+
+        engine_lock(&engine).apply_restored_settings(station.clone());
+        let _ = cloudlog_push_qso_impl(&dto, &engine, || Ok("PLANTED-KEY".into()));
+        stop.store(true, Ordering::SeqCst);
+        assert!(
+            connections.load(Ordering::SeqCst) > 0,
+            "CONTROL: nothing changed meanwhile: the upload reaches the instance"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ REMOVE FORGETS A KEY THAT WAITS, and nothing waits for it any more; each answer touches
     /// its own key alone. CONTROL: a keychain that cannot remove it leaves it waiting (never
     /// sent), and an answer about a key that does not wait changes nothing.
@@ -16586,18 +16630,18 @@ mod contest_session_tests {
         let now = || engine_lock(&engine).keys_to_confirm().clone();
 
         assert_eq!(
-            answer_key_to_confirm(&engine, Some(1), false, |_| Err("locked".into())),
+            answer_key_to_confirm(&engine, Some(1), false, None, |_| Err("locked".into())),
             Err("locked".to_string()),
             "CONTROL: the keychain refused"
         );
         assert_eq!(now(), waiting, "CONTROL: so it still waits");
-        answer_key_to_confirm(&engine, Some(5), false, no_key_change).unwrap();
+        answer_key_to_confirm(&engine, Some(5), false, None, no_key_change).unwrap();
         assert_eq!(now(), waiting, "CONTROL: radio 5's did not wait");
 
         let accounts = restore_test_accounts();
         let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
         let mut keychain = FakeKeychain::holding(&all);
-        answer_key_to_confirm(&engine, Some(1), false, |c| keychain.change(c)).unwrap();
+        answer_key_to_confirm(&engine, Some(1), false, None, |c| keychain.change(c)).unwrap();
         assert_eq!(
             (keychain.forgot.clone(), now()),
             (
@@ -16609,7 +16653,7 @@ mod contest_session_tests {
             ),
             "radio 1's removed, and it waits no more"
         );
-        answer_key_to_confirm(&engine, None, false, |c| keychain.change(c)).unwrap();
+        answer_key_to_confirm(&engine, None, false, None, |c| keychain.change(c)).unwrap();
         assert_eq!(
             (keychain.forgot.clone(), now()),
             (
@@ -16624,6 +16668,75 @@ mod contest_session_tests {
         assert!(
             keychain.held.contains_key(&icom_lan_account(2)),
             "radio 2's kept"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ USE CONFIRMS THE ADDRESS THE NOTICE SHOWED, AND NO OTHER: when a restore or a Save moves
+    /// the Cloudlog URL or a radio's network address after the notice asked, Use is refused, the
+    /// key still waits, and the notice asks again about the new address. CONTROL: Use with the
+    /// address shown lets it go.
+    #[test]
+    fn use_confirms_only_the_address_the_notice_showed() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-shown", 0);
+        {
+            let station = station_with(
+                &engine,
+                restore_test_roster(),
+                "https://log.shown.example/cloudlog",
+            );
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(station);
+            eng.set_keys_to_confirm(KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+            });
+        }
+        let shown = keys_to_confirm_in(engine_lock(&engine).settings());
+        assert_eq!(
+            shown.iter().map(|k| k.address.as_str()).collect::<Vec<_>>(),
+            vec!["https://log.shown.example/cloudlog", "radio-b.local"],
+            "premise: the notice shows each address"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.cloudlog_url = "https://log.moved.example/cloudlog".into();
+            s.radios[1].icom_lan_host = "radio-moved.local".into();
+            eng.apply_restored_settings(s);
+        }
+        let waiting = || engine_lock(&engine).keys_to_confirm().clone();
+        assert_eq!(
+            (
+                answer_key_to_confirm(&engine, None, true, Some(&shown[0].address), no_key_change),
+                answer_key_to_confirm(
+                    &engine,
+                    Some(1),
+                    true,
+                    Some(&shown[1].address),
+                    no_key_change
+                ),
+                waiting()
+            ),
+            (
+                Err(KEY_ADDRESS_CHANGED.to_string()),
+                Err(KEY_ADDRESS_CHANGED.to_string()),
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![1],
+                }
+            ),
+            "moved since the notice asked: refused, and both still wait"
+        );
+        let now = keys_to_confirm_in(engine_lock(&engine).settings());
+        answer_key_to_confirm(&engine, None, true, Some(&now[0].address), no_key_change).unwrap();
+        answer_key_to_confirm(&engine, Some(1), true, Some(&now[1].address), no_key_change)
+            .unwrap();
+        assert_eq!(
+            waiting(),
+            KeysToConfirm::default(),
+            "CONTROL: Use with the address shown lets each go"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -16676,6 +16789,74 @@ mod contest_session_tests {
             back,
             vec![("K9NEW".to_string(), legs::CLOUDLOG, 2, true)],
             "Cloudlog's leg waits on the queue, unspent, due later"
+        );
+    }
+
+    /// ★ HELD CATCH-UP CONTACTS SAY NOTHING AND KEEP THEIR PACING: a catch-up contact whose only
+    /// leg left is a Cloudlog upload held back writes no "catch-up: sending" line and still counts
+    /// as queued, and two held in the same moment are put back a catch-up spacing apart, so after
+    /// Use they go one at a time. CONTROL: with nothing waiting, it goes, says so, and counts as
+    /// sent.
+    #[test]
+    fn held_catch_up_contacts_say_nothing_and_keep_their_pacing() {
+        use tempo_app::engine::{upload_legs as legs, PendingUpload, UploadOrigin};
+        use tempo_app::settings::KeysToConfirm;
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let catch_up = |call: &str| {
+            let mut rec = upload_test_record("120000");
+            rec.call = call.into();
+            PendingUpload {
+                rec,
+                origin: UploadOrigin::CatchUp,
+                legs: legs::CLOUDLOG,
+                attempts: 0,
+                retry_after_unix: 0,
+                corrected: false,
+            }
+        };
+        let said = |call: &str| {
+            get_connection_log().iter().any(|e| {
+                e.message
+                    .starts_with(&format!("catch-up: sending an older QSO with {call} "))
+            })
+        };
+        let now = 1_000_000;
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![],
+        });
+        let mut left = 3;
+        let sent = [
+            legs_to_send_now(&engine, &catch_up("K9HLDA"), now, &mut left),
+            legs_to_send_now(&engine, &catch_up("K9HLDB"), now, &mut left),
+        ];
+        assert_eq!(
+            (sent, left, said("K9HLDA"), said("K9HLDB")),
+            ([0, 0], 3, false, false),
+            "held: nothing sent, nothing said, both still queued"
+        );
+        let mut due: Vec<i64> = engine_lock(&engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|b| b.retry_after_unix)
+            .collect();
+        due.sort_unstable();
+        assert!(
+            due.len() == 2
+                && due[0] > now
+                && due[1] - due[0] >= tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
+            "put back a catch-up spacing apart, both later: {due:?}"
+        );
+
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm::default());
+        assert_eq!(
+            (
+                legs_to_send_now(&engine, &catch_up("K9GOES"), now, &mut left),
+                left,
+                said("K9GOES")
+            ),
+            (legs::CLOUDLOG, 2, true),
+            "CONTROL: nothing waits: it goes, says so, and counts as sent"
         );
     }
 
@@ -17822,17 +18003,43 @@ const ICOM_PASSWORD_WAITS: &str = "Not signed in: a settings restore set this ra
      and the network password saved here may be for another. Choose Use or Remove in the notice \
      at the top of the window.";
 
-/// The Cloudlog key to send, read through `read`, unless it waits for the operator
-/// ([`tempo_app::settings::Settings::keys_to_confirm`]): then nothing is read, and the refusal says
-/// why. Every read of the Cloudlog key that is sent goes through here.
+/// Why a Cloudlog request was not sent when the settings it was built from changed while its key
+/// was being read (a restore that landed then).
+const CLOUDLOG_CHANGED_MID_SEND: &str = "The Cloudlog/Wavelog settings changed while this was \
+     being sent, so nothing was sent. It goes with the new settings next time.";
+
+/// Where a Cloudlog request goes and the key it carries: the URL and the station profile id
+/// (trimmed), read with the wait in one hold, then the key through `read`, unless it waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]): then nothing is read, and the
+/// refusal says why. The keychain is read with the engine lock released, so the address and the
+/// wait are read again after it, in one hold: a restore that landed in between refuses the
+/// request, and an old address is never paired with a key now kept for another. Every read of
+/// the Cloudlog key that is sent goes through here.
 fn cloudlog_key_to_send(
     engine: &SharedEngine,
     read: impl FnOnce() -> Result<String, String>,
-) -> Result<String, String> {
-    if engine_lock(engine).keys_to_confirm().cloudlog {
+) -> Result<(String, String, String), String> {
+    let target = || {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        (
+            s.cloudlog_url.trim().to_string(),
+            s.cloudlog_station_id.trim().to_string(),
+            s.keys_to_confirm.cloudlog,
+        )
+    };
+    let (url, station_id, waits) = target();
+    if waits {
         return Err(CLOUDLOG_KEY_WAITS.to_string());
     }
-    read()
+    let key = read()?;
+    match target() {
+        (_, _, true) => Err(CLOUDLOG_KEY_WAITS.to_string()),
+        (u, id, false) if u != url || id != station_id => {
+            Err(CLOUDLOG_CHANGED_MID_SEND.to_string())
+        }
+        _ => Ok((url, station_id, key)),
+    }
 }
 
 /// The Cloudlog key in the system keychain; empty when none is saved.
@@ -17898,14 +18105,22 @@ fn keys_to_confirm_in(s: &Settings) -> Vec<KeyToConfirm> {
     cloudlog.into_iter().chain(radios).collect()
 }
 
+/// Why Use is refused when the address a key waits for is no longer the one the notice showed.
+const KEY_ADDRESS_CHANGED: &str = "That address changed since the notice asked, so nothing was \
+     let go. Check the notice again, then choose.";
+
 /// The operator's answer about a saved key that waits ([`keys_to_confirm_in`]): Use
-/// (`use_it`) lets it go to the address it waits for; Remove forgets it from the keychain, through
-/// `keychain`. Either way it waits no more, and that is saved. A Remove the keychain refuses leaves
-/// it waiting, so it is still never sent. A key that does not wait is left alone.
+/// (`use_it`) lets it go to the address it waits for, which must be `shown`, the address the
+/// notice asked about (a restore or a Save may have moved it since; `None` for a key typed again,
+/// which is the key for whatever address is set); Remove forgets it from the
+/// keychain, through `keychain`. Either way it waits no more, and that is saved. A Remove the
+/// keychain refuses leaves it waiting, so it is still never sent. A key that does not wait is left
+/// alone.
 fn answer_key_to_confirm(
     engine: &SharedEngine,
     radio_id: Option<u32>,
     use_it: bool,
+    shown: Option<&str>,
     mut keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
 ) -> Result<(), String> {
     let mut eng = engine_lock(engine);
@@ -17919,6 +18134,15 @@ fn answer_key_to_confirm(
     if let (true, Some(id)) = (use_it, radio_id) {
         if eng.settings().radios.iter().all(|r| r.id != id) {
             return Err(ICOM_PASSWORD_OF_NO_RADIO.to_string());
+        }
+    }
+    // Use confirms the address the operator was shown, and no other.
+    if let (true, Some(shown)) = (use_it, shown) {
+        if !keys_to_confirm_in(eng.settings())
+            .iter()
+            .any(|k| k.radio_id == radio_id && k.address == shown)
+        {
+            return Err(KEY_ADDRESS_CHANGED.to_string());
         }
     }
     if !use_it {
@@ -17949,7 +18173,8 @@ static CLOUDLOG_WAIT_SAID: std::sync::atomic::AtomicBool =
 const CLOUDLOG_WAIT_RECHECK_SECS: i64 = 60;
 
 /// A queued contact's Cloudlog leg, held back while the Cloudlog key waits for the operator: put
-/// back on the queue as it is, no attempt spent, and not sent. The legs left to send now.
+/// back on the queue as it is, no attempt spent, and not sent. A catch-up contact keeps its place
+/// in the catch-up's pacing, so after Use they still go one at a time. The legs left to send now.
 fn hold_a_waiting_cloudlog_leg(
     engine: &SharedEngine,
     p: &tempo_app::engine::PendingUpload,
@@ -17960,7 +18185,7 @@ fn hold_a_waiting_cloudlog_leg(
     if p.legs & CLOUDLOG == 0 || !eng.keys_to_confirm().cloudlog {
         return p.legs;
     }
-    eng.requeue_upload_at(
+    eng.requeue_after_failure(
         p.rec.clone(),
         CLOUDLOG,
         p.attempts,
@@ -17971,6 +18196,43 @@ fn hold_a_waiting_cloudlog_leg(
         conn_log("Cloudlog", "info", CLOUDLOG_KEY_WAITS);
     }
     p.legs & !CLOUDLOG
+}
+
+/// A due record's legs for the upload worker to send now: a Cloudlog leg whose key waits held back
+/// first ([`hold_a_waiting_cloudlog_leg`]); then, for a catch-up record with a leg left to send,
+/// one Connections log line per leg saying it goes, `catchup_left` counting the record as sent. A
+/// record held back whole sends nothing, says nothing and is still queued.
+fn legs_to_send_now(
+    engine: &SharedEngine,
+    p: &tempo_app::engine::PendingUpload,
+    now_unix: i64,
+    catchup_left: &mut usize,
+) -> u8 {
+    let legs = hold_a_waiting_cloudlog_leg(engine, p, now_unix);
+    if legs != 0 && p.origin == tempo_app::engine::UploadOrigin::CatchUp {
+        *catchup_left = catchup_left.saturating_sub(1);
+        // #290: filed under the service the record is actually owed to. This
+        // said "ClubLog" outright, which was the only sweep there was — an eQSL
+        // catch-up would have reported its whole run under ClubLog's name.
+        // `catchup_left` counts RECORDS, so a record owing two legs says the
+        // same remaining count on both lines, which is what is left to send.
+        for (_, service) in UPLOAD_LEG_SERVICES
+            .iter()
+            .filter(|(leg, _)| legs & leg != 0)
+        {
+            conn_log(
+                service,
+                "info",
+                format!(
+                    "catch-up: sending an older QSO with {} — {catchup_left} still \
+                     queued, one every {}s so {service} isn't flooded",
+                    p.rec.call,
+                    tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
+                ),
+            );
+        }
+    }
+    legs
 }
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what
@@ -30770,7 +31032,7 @@ fn clear_icom_lan_password(state: State<'_, SharedEngine>, radio_id: u32) -> Res
 /// address it waits for ([`tempo_app::settings::Settings::keys_to_confirm`]): Cloudlog's
 /// (`None`) or radio `radio_id`'s. Nothing changes for a key that did not wait.
 fn key_typed_again(engine: &SharedEngine, radio_id: Option<u32>) {
-    let _ = answer_key_to_confirm(engine, radio_id, true, no_keychain_change);
+    let _ = answer_key_to_confirm(engine, radio_id, true, None, no_keychain_change);
 }
 
 /// An answer that touches no keychain entry ([`key_typed_again`]): asked for none.
@@ -31373,8 +31635,9 @@ fn answer_saved_key(
     state: State<'_, SharedEngine>,
     radio_id: Option<u32>,
     use_it: bool,
+    address: String,
 ) -> Result<(), String> {
-    answer_key_to_confirm(&state, radio_id, use_it, change_keychain)
+    answer_key_to_confirm(&state, radio_id, use_it, Some(&address), change_keychain)
 }
 
 /// Remove the stored Cloudlog/Wavelog API key from the OS keychain (idempotent).
@@ -35236,14 +35499,15 @@ struct CloudlogStationDto {
 async fn cloudlog_station_info(
     state: State<'_, SharedEngine>,
 ) -> Result<Vec<CloudlogStationDto>, String> {
-    let url = {
-        let eng = engine_lock(&state);
-        eng.settings().cloudlog_url.trim().to_string()
-    };
-    if url.is_empty() {
+    if engine_lock(&state)
+        .settings()
+        .cloudlog_url
+        .trim()
+        .is_empty()
+    {
         return Err("Set your Cloudlog/Wavelog URL in Settings first.".to_string());
     }
-    let key = cloudlog_key_to_send(&state, || {
+    let (url, _, key) = cloudlog_key_to_send(&state, || {
         cloudlog_keychain()?
             .get_password()
             .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())
@@ -35289,22 +35553,13 @@ fn cloudlog_push_qso_impl(
     read_key: impl FnOnce() -> Result<String, String>,
 ) -> Result<String, propagation::live::cloudlog::CloudlogError> {
     use propagation::live::cloudlog::{CloudlogError, CloudlogFailure};
-    let (url, station_id) = {
-        let eng = engine_lock(engine);
-        let s = eng.settings();
-        (
-            s.cloudlog_url.trim().to_string(),
-            s.cloudlog_station_id.trim().to_string(),
-        )
-    };
-    let key = cloudlog_key_to_send(engine, read_key)
-        .map_err(|message| CloudlogError {
+    let (url, station_id, key) =
+        cloudlog_key_to_send(engine, read_key).map_err(|message| CloudlogError {
             class: CloudlogFailure::NotConfigured,
             message,
             status: None,
-        })?
-        .trim()
-        .to_string();
+        })?;
+    let key = key.trim().to_string();
     if url.is_empty() {
         return Err(CloudlogError {
             class: CloudlogFailure::NotConfigured,
@@ -42501,32 +42756,9 @@ fn start_on_the_logbook(
                     eng.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
                     continue;
                 }
-                if p.origin == tempo_app::engine::UploadOrigin::CatchUp {
-                    catchup_left = catchup_left.saturating_sub(1);
-                    // #290: filed under the service the record is actually owed to. This
-                    // said "ClubLog" outright, which was the only sweep there was — an eQSL
-                    // catch-up would have reported its whole run under ClubLog's name.
-                    // `catchup_left` counts RECORDS, so a record owing two legs says the
-                    // same remaining count on both lines, which is what is left to send.
-                    for (_, service) in UPLOAD_LEG_SERVICES
-                        .iter()
-                        .filter(|(leg, _)| p.legs & leg != 0)
-                    {
-                        conn_log(
-                            service,
-                            "info",
-                            format!(
-                                "catch-up: sending an older QSO with {} — {catchup_left} still \
-                                 queued, one every {}s so {service} isn't flooded",
-                                p.rec.call,
-                                tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
-                            ),
-                        );
-                    }
-                }
                 // A Cloudlog key the operator has yet to confirm for this address: that leg
                 // waits on the queue, unspent, and the rest go now.
-                let legs = hold_a_waiting_cloudlog_leg(&push_engine, &p, now_unix);
+                let legs = legs_to_send_now(&push_engine, &p, now_unix, &mut catchup_left);
                 if legs == 0 {
                     // Nothing else owed: nothing goes anywhere, DXKeeper included, which saw
                     // this contact the first time it came round.

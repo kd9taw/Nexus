@@ -11,10 +11,14 @@ import { EN } from '../i18n/en'
 let desktop = true
 const mockKeys = vi.fn<() => Promise<KeyToConfirm[]>>()
 const mockAnswer = vi.fn<(radioId: number | null, useIt: boolean) => Promise<void>>()
+const mockShown = vi.fn<(address: string) => void>()
 vi.mock('../api', () => ({
   isTauri: () => desktop,
   keysToConfirm: () => mockKeys(),
-  answerSavedKey: (radioId: number | null, useIt: boolean) => mockAnswer(radioId, useIt),
+  answerSavedKey: (radioId: number | null, useIt: boolean, address: string) => {
+    mockShown(address)
+    return mockAnswer(radioId, useIt)
+  },
 }))
 import { KeyConfirmBanner, KEYS_TO_CONFIRM_EVERY_MS } from './KeyConfirmBanner'
 
@@ -33,6 +37,7 @@ beforeEach(() => {
   desktop = true
   mockKeys.mockReset()
   mockAnswer.mockReset()
+  mockShown.mockReset()
   mockAnswer.mockResolvedValue(undefined)
 })
 afterEach(() => {
@@ -84,6 +89,17 @@ describe('KeyConfirmBanner', () => {
     expect(mockAnswer).toHaveBeenLastCalledWith(1, false)
     expect(mockAnswer).toHaveBeenCalledTimes(2)
     expect(screen.queryByRole('group')).toBeNull()
+  })
+
+  it('answers with the address it showed, so the station can refuse a Use for another', async () => {
+    mockKeys.mockResolvedValue([CLOUDLOG, IC9700])
+    render(<KeyConfirmBanner />)
+    await settle()
+    const radio = screen.getByText(fill(EN['keyConfirm.icomLan'], { radio: 'IC-9700', address: '192.168.1.20' }))
+    fireEvent.click(within(radio.parentElement as HTMLElement).getByRole('button', { name: EN['keyConfirm.use'] }))
+    await settle()
+    expect(mockAnswer).toHaveBeenCalledWith(1, true)
+    expect(mockShown).toHaveBeenCalledWith('192.168.1.20')
   })
 
   it('asks again while it shows nothing, so a restore made later is seen', async () => {
