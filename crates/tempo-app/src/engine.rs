@@ -141,6 +141,8 @@ mod kept_files_tests;
 /// The cockpit's drive and RX gain survive a later Settings save, and a save of another radio.
 #[cfg(test)]
 mod live_level_tests;
+#[cfg(test)]
+mod lotw_location_tests;
 mod mode_entry;
 /// A program outside Nexus judged across the whole audio passband it could send.
 #[cfg(test)]
@@ -49516,17 +49518,19 @@ mod tests {
         assert_eq!(of("N0CALL").my_rig, None);
         assert_eq!(of("N0CALL").my_grid, None);
 
-        // THE LoTW UPLOAD, both modes: the filled grid is not sent; the arrived one is.
+        // THE LoTW UPLOAD. With a named Station Location the filled grid is not sent; the
+        // arrived one is. Signing from the ADIF, each contact goes with the grid stored on it,
+        // never the live one (EN52 here): the filled FN31 too.
         let batch = [of("W9XYZ"), of("K9AAA")];
         let named = crate::station::lotw_batch_adif(&batch, false, "K2DEF", "FN31");
         assert_eq!(named.matches("<MY_GRIDSQUARE:").count(), 1, "{named}");
         assert!(named.contains("<MY_GRIDSQUARE:4>EM10"), "{named}");
         let located = crate::station::lotw_batch_adif(&batch, true, "K2DEF", "EN52");
         assert!(
-            located.contains("<MY_GRIDSQUARE:4>EN52") && located.contains("<MY_GRIDSQUARE:4>EM10"),
-            "ADIF-location mode stamps the live grid as it always did: {located}"
+            located.contains("<MY_GRIDSQUARE:4>FN31") && located.contains("<MY_GRIDSQUARE:4>EM10"),
+            "ADIF-location mode sends each contact's own grid: {located}"
         );
-        assert!(!located.contains("FN31"), "{located}");
+        assert!(!located.contains("EN52"), "{located}");
     }
 
     /// A logged contact carries the station's power (ADIF `TX_PWR`) — the watts the

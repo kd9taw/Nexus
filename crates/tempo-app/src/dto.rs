@@ -4411,6 +4411,14 @@ pub struct UploadReportDto {
     /// connection log, rather than dropped inside TQSL. LoTW only; 0 elsewhere.
     #[serde(default)]
     pub held_mode: usize,
+    /// Contacts signed with the Station Location in Settings because they fit two station
+    /// profiles naming different locations. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub location_tie: usize,
+    /// Contacts signed with the Station Location in Settings because they fit none of the station
+    /// profiles, while one names a location. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub location_unmatched: usize,
 }
 
 /// Result of importing an external ADIF logbook (deduped merge).

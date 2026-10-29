@@ -34,10 +34,11 @@ function fromStation(form: Settings): StationProfile {
     powerW: form.stationPowerW ?? null,
     rig: '',
     antenna: '',
+    lotwLocation: '',
   }
 }
 
-type TextKey = 'name' | 'call' | 'grid' | 'state' | 'county' | 'iota' | 'park' | 'rig' | 'antenna'
+type TextKey = 'name' | 'call' | 'grid' | 'state' | 'county' | 'iota' | 'park' | 'rig' | 'antenna' | 'lotwLocation'
 type NumberKey = 'cqZone' | 'ituZone' | 'powerW'
 
 // Each label is read through a literal key, so the catalog guards can check every call site.
@@ -51,6 +52,11 @@ const TEXT_FIELDS: { key: TextKey; label: () => string; hint?: () => string }[] 
   { key: 'park', label: () => t('settings.stationProfiles.park'), hint: () => t('settings.stationProfiles.park.hint') },
   { key: 'rig', label: () => t('settings.stationProfiles.rig') },
   { key: 'antenna', label: () => t('settings.stationProfiles.antenna') },
+  {
+    key: 'lotwLocation',
+    label: () => t('settings.stationProfiles.lotwLocation'),
+    hint: () => t('settings.stationProfiles.lotwLocation.hint'),
+  },
 ]
 
 const NUMBER_FIELDS: { key: NumberKey; label: () => string }[] = [

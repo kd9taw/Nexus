@@ -7,6 +7,7 @@ import { DE } from '../i18n/de'
 import { ES } from '../i18n/es'
 import { FR } from '../i18n/fr'
 import { JA } from '../i18n/ja'
+import { RU } from '../i18n/ru'
 import { lotwSkipNote } from './lotwSkips'
 
 afterEach(() => setLocale('en'))
@@ -47,5 +48,45 @@ describe('the LoTW toast for contacts held back from TQSL', () => {
     expect(lotwSkipNote({ dispatched: 5, outcome: 'pending', heldMode: 0 })).toBeNull()
     // Control: the catalog entry the toast is built from is the one asserted above.
     expect(EN['logbook.lotw.held']).toBeTruthy()
+  })
+})
+
+describe('the LoTW toast for contacts signed with the Station Location in Settings', () => {
+  it('counts a tie between station profiles and a contact no profile fits, and why', () => {
+    expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationTie: 1 })).toBe(
+      '1 contact fits two of your station profiles, and they name different TQSL Station Locations, so it was signed with the Station Location in Settings ▸ Logging & Connectors.',
+    )
+    expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationUnmatched: 2 })).toBe(
+      '2 contacts fit none of your station profiles by their call and grid, so they were signed with the Station Location in Settings ▸ Logging & Connectors.',
+    )
+    const all = lotwSkipNote({ dispatched: 9, outcome: 'pending', heldMode: 1, locationTie: 2, locationUnmatched: 3 })
+    expect(all).toMatch(/^1 JTTY contact was not sent: .* 2 contacts fit two of your station profiles.* 3 contacts fit none of/)
+  })
+
+  it('says nothing when every contact was signed with its own profile’s location', () => {
+    // Control: a report whose counts are zero, and one from a station older than the counts.
+    expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationTie: 0, locationUnmatched: 0 })).toBeNull()
+    expect(lotwSkipNote({ dispatched: 3, outcome: 'pending' })).toBeNull()
+  })
+
+  it.each([
+    ['de', DE],
+    ['es', ES],
+    ['fr', FR],
+    ['ja', JA],
+    ['ru', RU],
+  ] as const)('%s: translated, with the count and the names it keeps', (lang, catalog) => {
+    installCatalog(lang, catalog)
+    setLocale(lang)
+    for (const n of [1, 2, 5]) {
+      const tie = lotwSkipNote({ dispatched: n, outcome: 'pending', locationTie: n })
+      const none = lotwSkipNote({ dispatched: n, outcome: 'pending', locationUnmatched: n })
+      for (const said of [tie, none]) {
+        expect(said, `${lang}: not the English fallback`).not.toMatch(/station profiles/)
+        expect(said).toContain(String(n))
+        expect(said).toContain('Station Location')
+      }
+      expect(tie).toContain('TQSL')
+    }
   })
 })

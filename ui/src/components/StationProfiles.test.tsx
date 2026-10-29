@@ -27,7 +27,7 @@ const station = {
   mycall: 'KD9TAW', mygrid: 'EN52', opState: 'WI', stationPowerW: 100,
 } as unknown as Settings
 
-const blank = { county: '', cqZone: null, ituZone: null, iota: '', park: '', rig: '', antenna: '' }
+const blank = { county: '', cqZone: null, ituZone: null, iota: '', park: '', rig: '', antenna: '', lotwLocation: '' }
 
 describe('My station profiles', () => {
   it('adds a profile that starts as the station is now, through its own writer', async () => {
@@ -60,6 +60,30 @@ describe('My station profiles', () => {
     fireEvent.click(screen.getByText('Remove'))
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
     expect(removeStationProfile).toHaveBeenCalledWith('p2')
+  })
+
+  it('names the TQSL Station Location a profile signs its LoTW contacts with', async () => {
+    const form = {
+      ...station,
+      activeStationProfile: 'home',
+      stationProfiles: [
+        { id: 'home', name: '', call: 'KD9TAW', grid: 'EN52', state: 'WI', powerW: 100, ...blank },
+        { id: 'p1', name: 'Portable', call: 'KD9TAW/P', grid: 'EN43', state: 'WI', powerW: 10, ...blank },
+      ],
+    } as unknown as Settings
+    const onChanged = vi.fn()
+    render(<StationProfiles form={form} readOnly={false} onChanged={onChanged} />)
+    fireEvent.click(screen.getAllByText('Edit')[1])
+    expect(screen.getByText(/Leave blank to use the one in Settings/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('TQSL Station Location', { exact: false }), {
+      target: { value: 'Portable EN43' },
+    })
+    fireEvent.click(screen.getByText('Save profile'))
+    await waitFor(() => expect(onChanged).toHaveBeenCalled())
+    expect(saveStationProfile).toHaveBeenCalledWith({
+      id: 'p1', name: 'Portable', call: 'KD9TAW/P', grid: 'EN43', state: 'WI', powerW: 10,
+      ...blank, lotwLocation: 'Portable EN43',
+    })
   })
 
   it('from a computer driving the station: shown, set at the station', () => {

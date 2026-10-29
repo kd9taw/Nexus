@@ -119,7 +119,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'experience', 'new to the hobby', 'new ham', 'beginner', 'new to digital', 'experienced',
       // "My station" profiles: named setups switched from the top bar.
       'station profile', 'my station', 'portable', 'home', 'club call', 'county', 'cq zone',
-      'itu zone', 'iota', 'antenna', 'rig'],
+      'itu zone', 'iota', 'antenna', 'rig', 'tqsl station location', 'lotw location'],
   },
 
   // ---- Remote ------------------------------------------------------------------

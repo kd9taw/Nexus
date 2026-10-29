@@ -9,6 +9,10 @@
 // contact, written `MODE=MFSK SUBMODE=JTTY`): sent, TQSL would drop it and the whole batch would
 // read as rejected, so the station keeps it unsent and says so (`heldMode`, the connection log's
 // sentence). Without this the screen showed an upload that left a contact behind for no reason.
+//
+// …and the contacts signed with the Station Location in Settings because no station profile told
+// which location signs them (`locationTie`, `locationUnmatched`): a contact signed with a place it
+// was not made at is one LoTW never matches, so the operator is told how many, and why.
 
 import { t } from '../i18n'
 import type { UploadReport } from '../types'
@@ -26,8 +30,15 @@ export function lotwSkipNote(r: UploadReport): string | null {
         (edited > 0 ? t('logbook.lotw.skipped.edited', { count: edited }) : '') +
         (deleted > 0 ? t('logbook.lotw.skipped.deleted', { count: deleted }) : '')
   const heldBack = held > 0 ? t('logbook.lotw.held', { count: held }) : null
-  if (skipped == null) return heldBack
-  return heldBack == null ? skipped : `${skipped} ${heldBack}`
+  const tie = r.locationTie ?? 0
+  const unmatched = r.locationUnmatched ?? 0
+  const notes = [
+    skipped,
+    heldBack,
+    tie > 0 ? t('logbook.lotw.location.tie', { count: tie }) : null,
+    unmatched > 0 ? t('logbook.lotw.location.unmatched', { count: unmatched }) : null,
+  ].filter((n): n is string => n != null)
+  return notes.length === 0 ? null : notes.join(' ')
 }
 
 /** How long the toast stays: three short sentences are more than the default four seconds. */

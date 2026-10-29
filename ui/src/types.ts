@@ -2838,6 +2838,12 @@ export interface UploadReport {
   /** Contacts held back because TQSL does not know their mode yet (a JTTY contact, written
    *  `MODE=MFSK SUBMODE=JTTY`): not sent, still marked not uploaded. Absent from an older station. */
   heldMode?: number
+  /** Contacts signed with the Station Location in Settings because they fit two station profiles
+   *  naming different TQSL Station Locations. Absent from an older station. */
+  locationTie?: number
+  /** Contacts signed with the Station Location in Settings because they fit none of the station
+   *  profiles while one names a location. Absent from an older station. */
+  locationUnmatched?: number
 }
 
 /** A confirmation in a synced report with no matching logged QSO (diagnostic). */
@@ -5954,6 +5960,9 @@ export interface StationProfile {
   powerW: number | null
   rig: string
   antenna: string
+  /** The TQSL Station Location its contacts are signed with on a LoTW upload; blank = the
+   *  station's own (Settings ▸ Logging). */
+  lotwLocation: string
 }
 
 /** One profile as the top bar offers it. */

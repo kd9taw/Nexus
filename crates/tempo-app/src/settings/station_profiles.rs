@@ -108,6 +108,9 @@ pub struct StationProfile {
     pub rig: String,
     /// `MY_ANTENNA`.
     pub antenna: String,
+    /// The TQSL Station Location its contacts are signed with on a LoTW upload; blank signs them
+    /// with the station's own (Settings ▸ Logging). A name in TQSL, never a secret.
+    pub lotw_location: String,
 }
 
 impl StationProfile {
@@ -150,6 +153,7 @@ impl StationProfile {
         self.power_w = self.power_w.filter(|w| w.is_finite() && *w > 0.0);
         self.rig = self.rig.trim().to_string();
         self.antenna = self.antenna.trim().to_string();
+        self.lotw_location = self.lotw_location.trim().to_string();
         Ok(self)
     }
 
@@ -502,6 +506,40 @@ mod tests {
         p.iota = "eu-005".into();
         let p = p.normalized().unwrap();
         assert_eq!((p.park.as_str(), p.iota.as_str()), ("US-1234", "EU-005"));
+    }
+
+    /// A profile's TQSL Station Location is kept through a save and a load, under its own key,
+    /// trimmed like the rest; a profile written before it existed loads with none (the station's).
+    #[test]
+    fn the_lotw_location_round_trips_and_an_older_profile_has_none() {
+        let path = std::env::temp_dir().join(format!(
+            "tempo_station_profiles_lotw_{}.json",
+            std::process::id()
+        ));
+        let mut s = station();
+        s.ensure_station_profiles();
+        s.station_profiles.push(
+            StationProfile {
+                lotw_location: "  Portable EN53 ".into(),
+                ..portable()
+            }
+            .normalized()
+            .unwrap(),
+        );
+        assert_eq!(s.station_profiles[1].lotw_location, "Portable EN53");
+        s.save(&path).unwrap();
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains(r#""lotwLocation": "Portable EN53""#));
+        let back = Settings::load(&path);
+        assert_eq!(back.station_profiles, s.station_profiles);
+        let _ = std::fs::remove_file(&path);
+
+        let older: StationProfile = serde_json::from_str(
+            r#"{"id":"p1","name":"Portable","call":"KD9TAW/P","grid":"EN53"}"#,
+        )
+        .unwrap();
+        assert_eq!(older.lotw_location, "");
     }
 
     #[test]

@@ -1651,6 +1651,18 @@ export const EN = {
     other:
       '{{count}} JTTY contacts were not sent: TQSL does not know the JTTY mode yet and would drop them, so they were held back. They stay marked as not uploaded to LoTW.',
   },
+  // Contacts a LoTW upload signed with the Station Location in Settings because no station profile
+  // told which TQSL Station Location signs them. TQSL and LoTW are names.
+  'logbook.lotw.location.tie': {
+    one: '{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so it was signed with the Station Location in Settings ▸ Logging & Connectors.',
+    other:
+      '{{count}} contacts fit two of your station profiles, and they name different TQSL Station Locations, so they were signed with the Station Location in Settings ▸ Logging & Connectors.',
+  },
+  'logbook.lotw.location.unmatched': {
+    one: '{{count}} contact fits none of your station profiles by its call and grid, so it was signed with the Station Location in Settings ▸ Logging & Connectors.',
+    other:
+      '{{count}} contacts fit none of your station profiles by their call and grid, so they were signed with the Station Location in Settings ▸ Logging & Connectors.',
+  },
 
   // ⚠️ `{{formatted}}` is a QSO COUNT the call site has already grouped for display
   // ("1,234"). It is a count of contacts, not a technical quantity — no dial, no report, no
@@ -8644,6 +8656,8 @@ export const EN = {
   'settings.stationProfiles.power': 'Power (W)',
   'settings.stationProfiles.rig': 'Rig',
   'settings.stationProfiles.antenna': 'Antenna',
+  'settings.stationProfiles.lotwLocation': 'TQSL Station Location',
+  'settings.stationProfiles.lotwLocation.hint': 'The Station Location in TQSL that signs this profile\'s contacts for LoTW. Leave blank to use the one in Settings ▸ Logging & Connectors.',
   'settings.station.experience.notSet': 'Not set',
   'settings.station.experience.hint': 'Picks which screens are on and how much of Settings opens at first. Changing it replaces the set in Settings ▸ Appearance ▸ Features. Every setting stays reachable by search.',
   'settings.station.experience.failed': 'Could not save your experience',

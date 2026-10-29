@@ -3764,6 +3764,259 @@ mod lotw_batch_tests {
 }
 
 #[cfg(test)]
+mod lotw_location_tests {
+    use super::durable_command_tests::engine_on_store;
+    use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
+    use tempo_app::settings::StationProfile;
+    use tempo_core::logbook::{RecordId, UploadOutcome};
+
+    /// A store-backed station (K2DEF in FN31, Station Location `station_location`) with a Portable
+    /// profile (K2DEF/P in FN42, location "Portable"), a Club profile (W2CLB in FN30, location
+    /// "Club") and Home naming none, and five contacts logged under them.
+    fn station(tag: &str, station_location: &str) -> (PathBuf, SharedEngine) {
+        let (dir, engine) = engine_on_store(tag, 0);
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.lotw_station_location = station_location.into();
+            eng.apply_settings(s);
+            for (name, call, grid, location) in [
+                ("Portable", "K2DEF/P", "FN42", "Portable"),
+                ("Club", "W2CLB", "FN30", "Club"),
+            ] {
+                eng.save_station_profile(StationProfile {
+                    name: name.into(),
+                    call: call.into(),
+                    grid: grid.into(),
+                    lotw_location: location.into(),
+                    ..StationProfile::default()
+                })
+                .expect("the profile is saved");
+            }
+        }
+        let mut adif = String::new();
+        for (i, (call, station, grid)) in [
+            ("K1POR", "K2DEF/P", "FN42"),
+            ("K1HOM", "K2DEF", "FN31"),
+            ("K1CLB", "W2CLB", "FN30"),
+            ("K2POR", "K2DEF/P", "FN42"),
+            ("K2HOM", "K2DEF", "FN31"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            adif.push_str(&format!(
+                "<CALL:5>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261020<TIME_ON:6>12000{i}\
+                 <STATION_CALLSIGN:{}>{station}<MY_GRIDSQUARE:4>{grid}<EOR>\n",
+                station.len()
+            ));
+        }
+        tempo_app::logwrite::import_adif(&engine, &adif)
+            .0
+            .expect("the contacts are imported");
+        (dir, engine)
+    }
+
+    fn id_of(engine: &SharedEngine, call: &str) -> RecordId {
+        engine
+            .stored_log()
+            .iter()
+            .find(|r| r.call == call)
+            .and_then(|r| r.id)
+            .expect("logged")
+    }
+
+    /// The LoTW outcome stamped on each contact, by call, in the order asked.
+    fn stamped(engine: &SharedEngine, calls: &[&str]) -> Vec<Option<UploadOutcome>> {
+        let log = engine.stored_log();
+        calls
+            .iter()
+            .map(|c| {
+                log.iter()
+                    .find(|r| r.call == *c)
+                    .and_then(|r| r.upload.lotw.as_ref().map(|s| s.outcome))
+            })
+            .collect()
+    }
+
+    /// Each TQSL run: the Station Location it was given (`-l`) and the calls in its file.
+    type Runs = Vec<(Option<String>, Vec<String>)>;
+
+    fn run_of(args: &[String]) -> (Option<String>, Vec<String>) {
+        let location = args
+            .iter()
+            .position(|a| a == "-l")
+            .map(|at| args[at + 1].clone());
+        let file = std::fs::read_to_string(args.last().expect("the batch file"))
+            .expect("TQSL can read it");
+        let calls = file
+            .split("<CALL:5>")
+            .skip(1)
+            .map(|f| f[..5].to_string())
+            .collect();
+        (location, calls)
+    }
+
+    fn calls(v: &[&str]) -> Vec<String> {
+        v.iter().map(|c| c.to_string()).collect()
+    }
+
+    /// ★ Each contact is signed with the Station Location of the profile it was logged under, in
+    /// one TQSL run per location; a contact of a profile naming none (Home) with the station's.
+    /// Every contact is stamped with its own run's outcome.
+    #[test]
+    fn each_contact_is_signed_with_its_profiles_location() {
+        let (dir, engine) = station("lotw-profile-locations", "Home");
+        let mut runs: Runs = Vec::new();
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, args| {
+            runs.push(run_of(args));
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!(
+            runs,
+            vec![
+                (Some("Portable".into()), calls(&["K1POR", "K2POR"])),
+                (Some("Home".into()), calls(&["K1HOM", "K2HOM"])),
+                (Some("Club".into()), calls(&["K1CLB"])),
+            ]
+        );
+        assert_eq!((report.dispatched, report.outcome.as_str()), (5, "pending"));
+        let all = ["K1POR", "K1HOM", "K1CLB", "K2POR", "K2HOM"];
+        assert_eq!(
+            stamped(&engine, &all),
+            vec![Some(UploadOutcome::Pending); 5]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A run TQSL refuses (the Club location is not in this TQSL) stamps its own contacts with the
+    /// refusal, and only them; the others are sent. The screen reads the refusal, and the
+    /// connection log names the location it came from.
+    #[test]
+    fn a_refused_location_stamps_only_its_own_contacts() {
+        let (dir, engine) = station("lotw-profile-refused", "Home");
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, args| {
+            Ok(match run_of(args).0.as_deref() {
+                Some("Club") => (5, "Error: station location 'Club' not found".into()),
+                _ => (0, String::new()),
+            })
+        })
+        .expect("the upload ran");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (5, "authfail")
+        );
+        let sent = Some(UploadOutcome::Pending);
+        assert_eq!(
+            stamped(&engine, &["K1POR", "K1HOM", "K1CLB", "K2POR", "K2HOM"]),
+            vec![sent, sent, Some(UploadOutcome::AuthFail), sent, sent]
+        );
+        assert!(
+            get_connection_log().iter().any(|e| e.connector == "LoTW"
+                && e.level == "error"
+                && e.message.contains("(Station Location Club)")),
+            "the connection log names the location"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two profiles with the same call and grid (K2DEF/P in FN42) that name different locations:
+    /// their contact is not guessed. It is signed with the Station Location in Settings, and the
+    /// report the operator reads counts it. A contact no profile fits is counted too. CONTROL:
+    /// while one profile alone fits, its location signs and nothing is counted.
+    #[test]
+    fn a_contact_two_profiles_fit_is_signed_as_settings_say_and_counted() {
+        let (dir, engine) = station("lotw-profile-tie", "Home");
+        let upload = |call: &str| {
+            let mut runs: Runs = Vec::new();
+            let report = lotw_upload_batch_with(
+                &engine,
+                LotwPick::Ids(vec![id_of(&engine, call)]),
+                true,
+                |_, args| {
+                    runs.push(run_of(args));
+                    Ok((0, String::new()))
+                },
+            )
+            .expect("the upload ran");
+            (runs, report.location_tie, report.location_unmatched)
+        };
+        assert_eq!(
+            upload("K2POR"),
+            (vec![(Some("Portable".into()), calls(&["K2POR"]))], 0, 0),
+            "one profile fits: its location, nothing to tell"
+        );
+        engine_lock(&engine)
+            .save_station_profile(StationProfile {
+                name: "Portable B".into(),
+                call: "K2DEF/P".into(),
+                grid: "FN42AB".into(),
+                lotw_location: "Portable B".into(),
+                ..StationProfile::default()
+            })
+            .expect("the profile is saved");
+        assert_eq!(
+            upload("K1POR"),
+            (vec![(Some("Home".into()), calls(&["K1POR"]))], 1, 0),
+            "a tie: the station's location, counted"
+        );
+        tempo_app::logwrite::import_adif(
+            &engine,
+            "<CALL:5>K3OLD<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261020<TIME_ON:6>130000\
+             <STATION_CALLSIGN:7>K2DEF/P<MY_GRIDSQUARE:4>EM10<EOR>\n",
+        )
+        .0
+        .expect("imported");
+        assert_eq!(
+            upload("K3OLD"),
+            (vec![(Some("Home".into()), calls(&["K3OLD"]))], 0, 1),
+            "no profile fits: the station's location, counted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With no Station Location in Settings, contacts whose profiles name one are signed; a batch
+    /// with a contact that needs the station's own is refused before TQSL runs, with today's words,
+    /// and nothing is stamped. CONTROL: no profile naming a location refuses as it always did.
+    #[test]
+    fn the_stations_own_location_is_needed_only_by_its_own_contacts() {
+        let (dir, engine) = station("lotw-profile-no-station", "");
+        let ported = vec![id_of(&engine, "K1POR"), id_of(&engine, "K1CLB")];
+        let mut runs: Runs = Vec::new();
+        lotw_upload_batch_with(&engine, LotwPick::Ids(ported), true, |_, args| {
+            runs.push(run_of(args));
+            Ok((0, String::new()))
+        })
+        .expect("only profile locations are needed");
+        assert_eq!(
+            runs,
+            vec![
+                (Some("Portable".into()), calls(&["K1POR"])),
+                (Some("Club".into()), calls(&["K1CLB"])),
+            ]
+        );
+        let mut ran = false;
+        let refused = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+            ran = true;
+            Ok((0, String::new()))
+        });
+        assert_eq!(refused.unwrap_err(), LOTW_NO_LOCATION);
+        assert!(!ran, "TQSL never ran");
+        assert_eq!(stamped(&engine, &["K1HOM", "K2POR"]), vec![None, None]);
+
+        let (dir2, plain) = engine_on_store("lotw-profile-none-named", 1);
+        let refused = lotw_upload_batch_with(&plain, LotwPick::Unsent, true, |_, _| {
+            panic!("TQSL never runs")
+        });
+        assert_eq!(refused.unwrap_err(), LOTW_NO_LOCATION);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+}
+
+#[cfg(test)]
 mod logbook_startup_tests {
     use super::durable_command_tests::{card_at, engine_on_store, id_at};
     use super::*;
@@ -20340,9 +20593,22 @@ fn save_station_profile_on(
             s.station_power_w,
         )
     };
+    let locations = |s: &Settings| {
+        s.station_profiles
+            .iter()
+            .map(|p| (p.id.clone(), p.lotw_location.clone()))
+            .collect::<Vec<_>>()
+    };
     let mut eng = engine_lock(engine);
     let before = flat(eng.settings());
+    let located = locations(eng.settings());
     eng.save_station_profile(profile)?;
+    // A changed TQSL Station Location is the operator fixing what may have suspended the
+    // automatic LoTW batch, as the same change in Settings is (`apply_and_persist`).
+    if locations(eng.settings()) != located {
+        LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+        LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
     Ok((flat(eng.settings()) != before).then(|| eng.settings().clone()))
 }
 
@@ -29263,31 +29529,42 @@ fn lotw_upload_batch(
     lotw_upload_batch_with(state, pick, wait, run_tqsl)
 }
 
-/// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over the batch file, to
+/// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over a batch file, to
 /// completion, and answers its exit code and stderr. The shipped runner is [`run_tqsl`]; a test
 /// stands in for it to change the log while "TQSL" runs — the window this function's stamp has
 /// to survive.
+///
+/// TQSL signs a file with one Station Location, so the batch is signed in one run per location
+/// ([`tempo_app::station::lotw_runs`]): each contact with the location of the station profile it
+/// was logged under, or the station's own. A station whose contacts need one location makes one
+/// run, as before profiles. Each run is stamped with its own outcome.
 fn lotw_upload_batch_with(
     state: &SharedEngine,
     pick: LotwPick,
     wait: bool,
-    tqsl: impl FnOnce(&str, &[String]) -> Result<(i32, String), String>,
+    mut tqsl: impl FnMut(&str, &[String]) -> Result<(i32, String), String>,
 ) -> Result<UploadReportDto, String> {
     // Brief lock: read config and what the batch is, then release it — before the batch is read
     // from the store, and before TQSL is spawned. Held across the spawn it would freeze the
     // whole UI for as long as ARRL takes to answer, which is tens of seconds on a big batch.
-    let (chosen, rows, location, tqsl_path, (adif_location, call, grid)) = {
+    let (chosen, rows, location, tqsl_path, (call, grid), profiles) = {
         let mut eng = engine_lock(state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
+        // The profiles, the one the station is on with its live call and grid.
+        let profiles = {
+            let mut s = eng.settings().clone();
+            s.sync_active_station_from_flat();
+            s.station_profiles
+        };
         // A named Station Location is required UNLESS the operator signs from the ADIF
-        // (travelers who never create TQSL station locations).
-        if location.is_empty() && !use_adif_location {
-            return Err(
-                "Set your LoTW Station Location in Settings before uploading (or enable \
-                        \"sign from ADIF location\" if you don't create TQSL station locations)."
-                    .into(),
-            );
+        // (travelers who never create TQSL station locations), or a profile names one: then it
+        // is required only when a contact of the batch needs the station's own (below).
+        if location.is_empty()
+            && !use_adif_location
+            && profiles.iter().all(|p| p.lotw_location.trim().is_empty())
+        {
+            return Err(LOTW_NO_LOCATION.into());
         }
         // A batch chosen by hand names its contacts by id. The contacts themselves are read from
         // the store once the lock is released, as the default batch's are.
@@ -29298,15 +29575,18 @@ fn lotw_upload_batch_with(
         let tqsl_path = eng.settings().tqsl_path.clone();
         // None in ADIF-location mode → tqsl_args omits `-l`.
         let location = (!use_adif_location).then_some(location);
-        let station = (
-            use_adif_location,
-            eng.settings().mycall.clone(),
-            eng.settings().mygrid.clone(),
-        );
+        let station = (eng.settings().mycall.clone(), eng.settings().mygrid.clone());
         // Counted from here to the last return: while it runs, an undo of a callsign correction
         // cannot tell whether LoTW has the corrected call, so it does not put LoTW's marks back.
         eng.lotw_batch_begun();
-        (chosen, eng.log_rows(), location, tqsl_path, station)
+        (
+            chosen,
+            eng.log_rows(),
+            location,
+            tqsl_path,
+            station,
+            profiles,
+        )
     };
     struct Running<'a>(&'a SharedEngine);
     impl Drop for Running<'_> {
@@ -29349,9 +29629,109 @@ fn lotw_upload_batch_with(
             skipped_edited: 0,
             skipped_deleted: 0,
             held_mode,
+            location_tie: 0,
+            location_unmatched: 0,
         });
     }
-    let adif = tempo_app::station::lotw_batch_adif(&batch, adif_location, &call, &grid);
+    let (runs, fallback) = tempo_app::station::lotw_runs(batch, location.as_deref(), &profiles);
+    if runs.iter().any(|r| r.location.as_deref() == Some("")) {
+        return Err(LOTW_NO_LOCATION.into());
+    }
+    if fallback.tie > 0 {
+        conn_log(
+            "LoTW",
+            "info",
+            format!(
+                "{} contact(s) fit two station profiles that name different TQSL Station \
+                 Locations, so they are signed as Settings says.",
+                fallback.tie
+            ),
+        );
+    }
+    if fallback.unmatched > 0 {
+        conn_log(
+            "LoTW",
+            "info",
+            format!(
+                "{} contact(s) fit none of the station profiles by call and grid, so they are \
+                 signed as Settings says.",
+                fallback.unmatched
+            ),
+        );
+    }
+    let mut report: Option<UploadReportDto> = None;
+    for run in runs {
+        let done = lotw_sign_run(
+            state,
+            &run.batch,
+            run.location.as_deref(),
+            (&call, &grid),
+            &tqsl_path,
+            wait,
+            held_mode,
+            &mut tqsl,
+        )?;
+        report = Some(match report {
+            None => done,
+            Some(before) => lotw_reports_together(before, done),
+        });
+    }
+    // Said on the screen as well: a contact signed with a location it was not made at is one
+    // LoTW never matches.
+    Ok(UploadReportDto {
+        location_tie: fallback.tie,
+        location_unmatched: fallback.unmatched,
+        ..report.expect("a batch that is not empty makes a run")
+    })
+}
+
+/// Why a LoTW upload does not start: a contact needs the station's own Station Location, and
+/// none is set.
+const LOTW_NO_LOCATION: &str = "Set your LoTW Station Location in Settings before uploading (or \
+     enable \"sign from ADIF location\" if you don't create TQSL station locations).";
+
+/// Two runs' reports as one, for the screen: the counts added, and the outcome the operator most
+/// needs to read (a sign-in or location failure, then a rejection, then a retry, then sent, then
+/// already on file), with that run's detail.
+fn lotw_reports_together(a: UploadReportDto, b: UploadReportDto) -> UploadReportDto {
+    let rank = |o: &str| match o {
+        "authfail" => 4,
+        "rejected" => 3,
+        "retry" => 2,
+        "pending" => 1,
+        _ => 0,
+    };
+    let (first, other) = if rank(&b.outcome) > rank(&a.outcome) {
+        (b, a)
+    } else {
+        (a, b)
+    };
+    UploadReportDto {
+        dispatched: first.dispatched + other.dispatched,
+        outcome: first.outcome,
+        detail: first.detail.or(other.detail),
+        skipped_edited: first.skipped_edited + other.skipped_edited,
+        skipped_deleted: first.skipped_deleted + other.skipped_deleted,
+        held_mode: first.held_mode,
+        location_tie: 0,
+        location_unmatched: 0,
+    }
+}
+
+/// One TQSL run of a LoTW upload: `batch` signed with `location` (`None`: from the location in
+/// the ADIF, `station` = the live call and grid as the fallback), and stamped with its outcome.
+#[allow(clippy::too_many_arguments)]
+fn lotw_sign_run(
+    state: &SharedEngine,
+    batch: &[tempo_core::logbook::QsoRecord],
+    location: Option<&str>,
+    (call, grid): (&str, &str),
+    tqsl_path: &str,
+    wait: bool,
+    held_mode: usize,
+    tqsl: &mut impl FnMut(&str, &[String]) -> Result<(i32, String), String>,
+) -> Result<UploadReportDto, String> {
+    let adif = tempo_app::station::lotw_batch_adif(batch, location.is_none(), call, grid);
     // The contacts by id, taken with the file: the stamp below finds them by id once TQSL is
     // done, and only where each is still the contact that was signed.
     let signed: Vec<tempo_app::station::LotwSigned> = batch
@@ -29389,8 +29769,8 @@ fn lotw_upload_batch_with(
     let path_str = path.to_string_lossy().to_string();
 
     // Run TQSL one-shot, capturing its result.
-    let args = tempo_core::lotw_upload::tqsl_args(location.as_deref(), &path_str);
-    let (code, stderr) = tqsl(&tqsl_path, &args)?;
+    let args = tempo_core::lotw_upload::tqsl_args(location, &path_str);
+    let (code, stderr) = tqsl(tqsl_path, &args)?;
     // ⛔ TWO details, and they are not interchangeable. `detail` is TQSL's own tail and goes
     // to the operator's toast — a screen. `stamped` is the CLASS and is the only one written
     // into `log.adi`, because `log.adi` is the file TQSL then signs and uploads to ARRL: a
@@ -29408,6 +29788,8 @@ fn lotw_upload_batch_with(
             skipped_edited: 0,
             skipped_deleted: 0,
             held_mode,
+            location_tie: 0,
+            location_unmatched: 0,
         }),
         Some(outcome) => {
             // By id, planned with the Engine lock released (SPEC-2 v3 C19): each contact read off
@@ -29483,7 +29865,9 @@ fn lotw_upload_batch_with(
                     "LoTW",
                     "error",
                     format!(
-                        "TQSL exit {code} — {}",
+                        "TQSL exit {code}{} — {}",
+                        // Which run, when a batch is signed in more than one.
+                        location.map_or(String::new(), |l| format!(" (Station Location {l})")),
                         detail.as_deref().unwrap_or("no output from TQSL")
                     ),
                 );
@@ -29497,6 +29881,8 @@ fn lotw_upload_batch_with(
                 skipped_edited: done.changed,
                 skipped_deleted: done.gone,
                 held_mode,
+                location_tie: 0,
+                location_unmatched: 0,
             })
         }
     }
@@ -32242,6 +32628,8 @@ fn eqsl_answered(
                 skipped_edited: 0,
                 skipped_deleted: 0,
                 held_mode: 0,
+                location_tie: 0,
+                location_unmatched: 0,
             },
             None,
         )),
@@ -32282,6 +32670,8 @@ fn eqsl_answered(
                     skipped_edited: 0,
                     skipped_deleted: 0,
                     held_mode: 0,
+                    location_tie: 0,
+                    location_unmatched: 0,
                 },
                 detail,
             ))
