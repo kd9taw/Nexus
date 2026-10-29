@@ -7443,6 +7443,7 @@ impl RadioLoop {
         self.tuner_reprobe_at = None;
         self.atu_tune_started_at = None;
         self.vfo_read_native = None; // the new rig answers `v` or not on its own account
+        self.split_detect = None; // …and its split read is native or not on its own account
         self.level_supported = [None; N_LEVELS];
         self.level_misses = [0; N_LEVELS];
         self.tx_meter_supported = [None; N_TX_METERS];
@@ -8230,6 +8231,9 @@ impl RadioLoop {
                 // 1.10.1 self-recovery a 1.10.2 rebuild destroyed. #stuck-tx-1.10.2.
                 rig.keyed = was_keyed;
                 rig.split_release_pending = release_owed;
+                // A new link asks again whether the radio's split read is native: the last radio's
+                // answer would let a cache stub's "off" free a release owed on this one.
+                self.split_detect = None;
                 self.rigctld_proc = proc;
                 // Do NOT claim last_dial/last_mode here: open_cat's set_freq/set_mode are best-effort
                 // (`let _ =`), so a failed open-time tune must be retried. Leaving these at the OLD
@@ -9303,6 +9307,7 @@ impl RadioLoop {
                     self.func_state = [None; N_FUNCS];
                     self.tuner_probed = false;
                     self.vfo_read_native = None;
+                    self.split_detect = None;
                     self.level_supported = [None; N_LEVELS];
                     self.level_misses = [0; N_LEVELS];
                     self.tx_meter_supported = [None; N_TX_METERS];
@@ -9449,6 +9454,7 @@ impl RadioLoop {
                             self.func_state = [None; N_FUNCS];
                             self.tuner_probed = false;
                             self.vfo_read_native = None;
+                            self.split_detect = None;
                             self.level_supported = [None; N_LEVELS];
                             self.level_misses = [0; N_LEVELS];
                             self.tx_meter_supported = [None; N_TX_METERS];
@@ -10100,12 +10106,13 @@ impl RadioLoop {
                         // which is how it regressed the teardown restore.
                         let want_detect = engine_lock(engine).settings().split_detect_enabled;
                         let can_ask = want_detect && {
-                            let detect = *self.split_detect.get_or_insert_with(|| {
+                            // Could not ask → not native this time, and asked again later.
+                            // Silence is not permission.
+                            let detect = self.split_detect.or_else(|| {
                                 rig.read_split_capability()
-                                    // Could not ask → Absent. Silence is not permission.
-                                    .unwrap_or(crate::baud_ladder::SplitDetect::Absent)
+                                    .inspect(|&detect| self.split_detect = Some(detect))
                             });
-                            detect == crate::baud_ladder::SplitDetect::Native
+                            detect == Some(crate::baud_ladder::SplitDetect::Native)
                         };
                         if self.rig_poll_ticks.is_multiple_of(4) {
                             self.read_turns.owe(HeavyRead::Split);

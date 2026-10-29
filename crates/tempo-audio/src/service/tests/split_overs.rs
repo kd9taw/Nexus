@@ -588,6 +588,8 @@ struct Vfos {
     /// `\dump_caps` says the split can be read natively (`SplitDetect::Native`); otherwise it is
     /// answered `RPRT -1` and the split read is not trusted.
     split_read_native: bool,
+    /// `\dump_caps` gets no answer at all, so Nexus could not ask whether the split read is native.
+    caps_no_answer: bool,
     /// Split on (`S 1`) answered `RPRT -9` and not taken.
     refuse_split_on: bool,
     /// A K3 whose VFO B is in a mode it will not pair with VFO A's: split on (`S 1`) answered
@@ -658,6 +660,7 @@ fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<H
             }
             "s" if v.split_read_no_answer => Some("RPRT -5\n".to_string()),
             "s" => Some(format!("{}\nVFOB\n", u8::from(v.split))),
+            "\\dump_caps" if v.caps_no_answer => Some(String::new()),
             "\\dump_caps" if v.split_read_native => Some(
                 "Can get Split VFO: Y\nCan get Split Freq: Y\nTargetable features: FREQ MODE\n"
                     .to_string(),
@@ -1386,6 +1389,12 @@ fn through_hamlib_a_refused_split_release_is_retried_at_quiet_points_and_nothing
 impl<R: Radio> Bench<R> {
     /// [`Self::ticks`], a rebuilt link reopening through `addr` (the same radio, a new connection).
     fn ticks_reopening(&mut self, n: usize, addr: &str) -> Vec<String> {
+        self.ticks_reopening_probed(n, addr, None)
+    }
+
+    /// [`Self::ticks_reopening`], the reopen's probe answering `ok` (`Some(true)`: the open
+    /// itself confirmed the CAT link, as a radio that answers at once does).
+    fn ticks_reopening_probed(&mut self, n: usize, addr: &str, ok: Option<bool>) -> Vec<String> {
         let sinks = Sinks {
             wsjtx: None,
             psk: None,
@@ -1393,7 +1402,7 @@ impl<R: Radio> Bench<R> {
         let mut ra = mock_reopen_audio();
         let addr = addr.to_string();
         let mut rr = move |_t: &Transport, _coexist: bool| {
-            (Rig::rigctld(&addr), None, CatProbe::status(None, ""))
+            (Rig::rigctld(&addr), None, CatProbe::status(ok, ""))
         };
         let mut station = StationSinks::new();
         let before = self.radio.sent().len();
@@ -1879,4 +1888,98 @@ fn through_hamlib_test_cat_keeps_an_owed_split_release() {
         assert!(!b.rig.split_release_pending, "{what}: still owed");
         assert!(!b.radio.vfos.lock().unwrap().split, "{what}: left in split");
     }
+}
+
+fn save_settings<R: Radio>(b: &mut Bench<R>, edit: impl FnOnce(&mut Settings)) {
+    let mut e = b.engine.lock().unwrap();
+    let mut s = e.settings().clone();
+    edit(&mut s);
+    e.apply_settings(s);
+}
+
+fn call_cq_at_our_period<R: Radio>(b: &mut Bench<R>) {
+    while b.t.rem_euclid(30_000.0) < 29_000.0 {
+        let _ = b.ticks(1);
+    }
+    let mut e = b.engine.lock().unwrap();
+    e.set_tx_enabled(true);
+    e.start_cq(None).expect("Call CQ");
+    let _ = e.take_immediate_tx();
+}
+
+/// ⛔ WHETHER THE SPLIT READ IS NATIVE IS A QUESTION FOR EACH RADIO. Radio A reads its split
+/// natively; the operator then picks radio B, another model, whose split read is not native (a
+/// cache stub: `s` answers 0 for a split it never confirmed). A release owed on B is not freed by
+/// B's `s` = 0 on A's answer. CONTROL: when B reads natively too, its definite "off" frees it.
+#[test]
+fn through_hamlib_a_native_split_read_on_one_radio_is_not_believed_for_the_next() {
+    for (what, b_native) in [("B not native", false), ("control: B native", true)] {
+        let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+        let address = b.radio.peer.address.clone();
+        save_settings(&mut b, |s| s.rig_model = 3073);
+        let _ = b.ticks_reopening(1, &address);
+        call_cq_at_our_period(&mut b);
+        {
+            let mut v = b.radio.vfos.lock().unwrap();
+            v.split_read_native = true;
+            v.split_no_answer = true;
+        }
+        let on_a = b.ticks(800);
+        assert!(
+            on_a.iter().any(|l| l == "S 0 VFOA") && !on_a.iter().any(|l| l == "T 1"),
+            "{what}: premise: a release owed on A: {on_a:?}"
+        );
+        let _ = b.ticks(300);
+        assert!(
+            !b.rig.split_release_pending,
+            "{what}: premise: A's native read freed it"
+        );
+        // The operator chooses radio B.
+        b.radio.vfos.lock().unwrap().split_read_native = b_native;
+        save_settings(&mut b, |s| s.rig_model = 1035);
+        // B answers its open at once, so no later CAT confirmation asks it anything afresh.
+        let _ = b.ticks_reopening_probed(1, &address, Some(true));
+        assert!(b.rig.has_control(), "{what}: premise: B connected");
+        call_cq_at_our_period(&mut b);
+        let on_b = b.ticks(800);
+        assert!(!on_b.iter().any(|l| l == "T 1"), "{what}: keyed: {on_b:?}");
+        assert!(
+            on_b.iter().any(|l| l == "S 1 VFOB") && on_b.iter().any(|l| l == "S 0 VFOA"),
+            "{what}: premise: a release owed on B: {on_b:?}"
+        );
+        let _ = b.ticks(300);
+        assert_eq!(b.rig.split_release_pending, !b_native, "{what}: owed on B");
+    }
+}
+
+/// A radio whose split capability could not be asked (no answer to `\dump_caps`) is asked again
+/// later, so a radio that reads its split natively is read once it answers. CONTROL: before it
+/// answers, its split is not read.
+#[test]
+fn through_hamlib_a_split_capability_nexus_could_not_ask_is_asked_again() {
+    let mut b = hamlib_bench(SplitMode::None, 1441.0, Some(14_075_000));
+    save_settings(&mut b, |s| s.split_detect_enabled = true);
+    {
+        let mut v = b.radio.vfos.lock().unwrap();
+        v.caps_no_answer = true;
+        v.split_read_native = true;
+    }
+    let reads = |b: &Bench<Hamlib>, from: usize| -> (usize, usize) {
+        let sent = b.radio.sent();
+        let caps = sent[from..]
+            .iter()
+            .filter(|l| *l == "\\dump_caps ?")
+            .count();
+        let split = sent[from..].iter().filter(|l| *l == "s ?").count();
+        (caps, split)
+    };
+    let _ = b.ticks(1000);
+    let (caps, split) = reads(&b, 0);
+    assert!(caps > 0, "premise: the capability was asked");
+    assert_eq!(split, 0, "control: read before the radio answered");
+    b.radio.vfos.lock().unwrap().caps_no_answer = false;
+    let from = b.radio.sent().len();
+    let _ = b.ticks(1000);
+    let (_, split) = reads(&b, from);
+    assert!(split > 0, "the split never read once the radio answered");
 }
