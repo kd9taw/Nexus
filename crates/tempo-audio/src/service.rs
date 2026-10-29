@@ -35416,6 +35416,107 @@ mod tests {
         }
     }
 
+    /// The FIRST ASSERT after a read-only launch carries the same width: `ensure_commanded` is
+    /// the mode write that goes out just before the key of the first beacon or SSTV image when
+    /// nothing has commanded the rig yet, so `M PKTFM -1` there would put that first over out
+    /// in plain FM, DATA OFF, on a Hamlib Icom. The retune-driven wire test above never reaches
+    /// this site (the retune asserts first and latches it), so it is called directly here, on
+    /// the loop built for each radio. CONTROL: the FT-991A keeps `-1` at the same site.
+    #[test]
+    fn the_first_assert_before_a_key_sends_a_hamlib_icom_the_fm_data_width() {
+        for (model, want) in [(3081u32, "M PKTFM 0"), (1035, "M PKTFM -1")] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.rig_model = model;
+                e.apply_settings(s);
+            }
+            let (addr, log) = mock_rigctld_on(144_390_000, false);
+            let mut rig = Rig::rigctld(&addr);
+            let mut state = loop_state_for(&engine);
+            assert_eq!(
+                state.applied.rig_model, model,
+                "precondition: the loop's model"
+            );
+            assert!(!state.rig_asserted, "precondition: nothing asserted yet");
+            state.cur_dial = 144_390_000;
+            state.cur_md = "PKTFM".to_string();
+            state.ensure_commanded(&mut rig);
+            let lines = log.lock().unwrap().clone();
+            let modes: Vec<&String> = lines.iter().filter(|l| l.starts_with("M ")).collect();
+            assert_eq!(
+                modes,
+                vec![want],
+                "model {model}: the one mode write before the key — {lines:?}"
+            );
+            assert!(state.rig_asserted, "control: the assert landed and latched");
+        }
+    }
+
+    /// The BAND-CROSS RE-ASSERT carries the same width. The operator sits on 70 cm in FM and
+    /// opens APRS: the tune's mode write lands on 70 cm, the dial write crosses to 2 m, and the
+    /// radio's band stack recalls plain FM there. Nexus reads that back and re-asserts the DATA
+    /// mode, and on a Hamlib Icom that re-assert must be `M PKTFM 0`, or the beacon leaves with
+    /// DATA OFF after all. CONTROL: the FT-991A's re-assert stays `M PKTFM -1`.
+    #[test]
+    fn a_band_cross_re_assert_sends_a_hamlib_icom_the_fm_data_width() {
+        for (model, want) in [(3081u32, "M PKTFM 0"), (1035, "M PKTFM -1")] {
+            let (addr, seen, live_mode) =
+                band_stacking_rigctld_stub(446_000_000, &[("2m", "FM"), ("70cm", "FM")]);
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.rig_model = model;
+                s.aprs_data_fm = true;
+                e.apply_settings(s);
+                e.set_frequency(446.000, "70cm", "FM");
+            }
+            let mut rig = Rig::rigctld(&addr);
+            let (mut backend, mut state) = (MockBackend::new(), loop_state_for(&engine));
+            assert_eq!(
+                state.applied.rig_model, model,
+                "precondition: the loop's model"
+            );
+            let mut t = 1000.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1000.0);
+            assert!(
+                seen.lock().unwrap().iter().any(|l| l == "F 446000000"),
+                "precondition: settled on 70 cm — {:?}",
+                seen.lock().unwrap()
+            );
+            let mark = seen.lock().unwrap().len();
+
+            engine.lock().unwrap().aprs_tune(144.390).unwrap();
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1020.0);
+            let lines = seen.lock().unwrap()[mark..].to_vec();
+            let cross = lines
+                .iter()
+                .position(|l| l == "F 144390000")
+                .unwrap_or_else(|| panic!("control: the APRS tune must cross to 2 m — {lines:?}"));
+            assert!(
+                lines[..cross].iter().any(|l| l.starts_with("M PKTFM")),
+                "control: the tune's own mode write went out on 70 cm first — {lines:?}"
+            );
+            let after: Vec<&String> = lines[cross..]
+                .iter()
+                .filter(|l| l.starts_with("M "))
+                .collect();
+            assert_eq!(
+                after,
+                vec![want],
+                "model {model}: the re-assert after the band stack recalled FM — {lines:?}"
+            );
+            assert_eq!(
+                live_mode.lock().unwrap().as_str(),
+                "PKTFM",
+                "model {model}: the radio ends in the DATA mode"
+            );
+        }
+    }
+
     /// A rigctld that REFUSES the verbs named in `refuse` (matched on the first token) with
     /// `RPRT -11` — Hamlib's "function not available", which is what a backend with no
     /// repeater or CTCSS support really answers — and accepts everything else. `f` returns
