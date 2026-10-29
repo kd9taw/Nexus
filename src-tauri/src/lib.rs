@@ -28695,20 +28695,25 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     )
 }
 
-/// What `fetch` brings back that is not LoTW's report file.
+/// What to say about a `body` from `fetch` that is not LoTW's report file.
 ///
-/// ⚠️ DO NOT BLAME THE CREDENTIALS HERE — the exact sibling of the eQSL guard, and the same
-/// reasoning. `fetch_report` has already returned a body, so the login worked; a wrong password
-/// fails earlier with its own message. eQSL demonstrated the failure mode on 2026-08-28: it
-/// changed the wording its download opens with, the structural check started rejecting good
-/// files, and operators were told to re-enter passwords that were provably correct because their
-/// UPLOADS were still landing. LoTW can change its wording the same way, and it is the one that
-/// carries award credit, so it should not be the place we find this out again.
-fn lotw_not_a_report() -> String {
-    "LoTW answered, but the download was not the report file it should have been. Your \
-     username and password are fine — this is not a login problem. LoTW may be \
-     returning an error page, or may be down for maintenance. Try again shortly, and \
-     if it keeps happening please report it."
+/// LoTW answers a wrong username or password with its sign-in page, HTTP 200, so that page is
+/// told apart by its words ([`tempo_core::lotw::is_login_refused`]) and called what it is.
+///
+/// ⚠️ ANY OTHER PAGE IS NOT BLAMED ON THE CREDENTIALS — the sibling of the eQSL guard, and the
+/// same reasoning. eQSL demonstrated the failure mode on 2026-08-28: it changed the wording its
+/// download opens with, the structural check started rejecting good files, and operators were
+/// told to re-enter passwords that were provably correct because their UPLOADS were still
+/// landing. LoTW can change its wording the same way. Nor are the credentials vouched for: an
+/// unrecognised page says nothing about them either way.
+fn lotw_not_a_report(body: &str) -> String {
+    if tempo_core::lotw::is_login_refused(body) {
+        return "LoTW did not accept your username or password. Check the LoTW username and \
+                password in Settings (your LoTW website login)."
+            .to_string();
+    }
+    "LoTW answered with a page that isn't a report. LoTW may be showing an error page, or may \
+     be down for maintenance. Try again shortly, and if it keeps happening please report it."
         .to_string()
 }
 
@@ -28823,7 +28828,7 @@ fn lotw_since_cursor(
     }; // `query` + `url` (both hold the password) dropped here
 
     if !tempo_core::lotw::is_lotw_adif(&body) {
-        return Err(lotw_not_a_report());
+        return Err(lotw_not_a_report(&body));
     }
 
     // Merge via the shared reconcile path, then advance the cursor only on a real
@@ -28935,7 +28940,7 @@ fn lotw_history_by_year(
             &query, year, newest, oldest,
         )) {
             Ok(b) if !tempo_core::lotw::is_lotw_adif(&b) => {
-                return Err(stopped(lotw_not_a_report(), &result))
+                return Err(stopped(lotw_not_a_report(&b), &result))
             }
             // A year cut off before its end marker is not in: what it holds would be merged, and
             // the place moved past what it lost.
@@ -58520,6 +58525,67 @@ mod tests {
             ("2026-10-15 08:00:00".to_string(), true, 0, String::new()),
             "the newest year's high-water, not the last year's"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// LoTW's answer to a wrong username or password: its sign-in page, sent with HTTP 200 in
+    /// place of the report.
+    const LOTW_SIGN_IN_PAGE: &str = "<html><title>ARRL's Logbook of The World</title><body>\
+        <p>Log on to Logbook of The World -- LoTW</p>\
+        <p class=\"error\">Username/password incorrect</p></body></html>";
+
+    /// A wrong LoTW password is called one. LoTW answers it with its sign-in page, HTTP 200, so
+    /// the download used to say the username and password were fine.
+    #[test]
+    fn a_wrong_lotw_password_is_called_one_on_a_first_download() {
+        let (dir, engine) = sweep_scene("lotw-sign-in-first");
+        let mut lotw = LargeLotw::scene();
+        lotw.years.insert(2026, LOTW_SIGN_IN_PAGE.to_string());
+        let saved = std::cell::RefCell::new(Vec::new());
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("the login is refused");
+        assert!(
+            e.contains("LoTW did not accept your username or password"),
+            "{e}"
+        );
+        assert!(!e.contains("are fine"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same on a download from a cursor.
+    #[test]
+    fn a_wrong_lotw_password_is_called_one_on_a_later_download() {
+        let (dir, engine) = sweep_scene("lotw-sign-in-later");
+        let mut lotw = LargeLotw::scene();
+        let saved = std::cell::RefCell::new(Vec::new());
+        fetch_lotw(&engine, &lotw, &saved).expect("the first download");
+        lotw.since_answer = LOTW_SIGN_IN_PAGE.to_string();
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("the login is refused");
+        assert!(
+            e.contains("LoTW did not accept your username or password"),
+            "{e}"
+        );
+        assert!(!e.contains("are fine"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Control: a page that is neither the report nor the sign-in page is not called a wrong
+    /// password, and the credentials are not vouched for either.
+    #[test]
+    fn a_lotw_page_that_is_not_a_report_blames_neither_way() {
+        let (dir, engine) = sweep_scene("lotw-not-a-report");
+        let mut lotw = LargeLotw::scene();
+        lotw.years.insert(
+            2026,
+            "<html><body>Down for maintenance</body></html>".to_string(),
+        );
+        let saved = std::cell::RefCell::new(Vec::new());
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("not a report");
+        assert!(
+            e.contains("LoTW answered with a page that isn't a report"),
+            "{e}"
+        );
+        assert!(!e.contains("are fine"), "{e}");
+        assert!(!e.contains("did not accept"), "{e}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
