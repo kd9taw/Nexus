@@ -342,7 +342,7 @@ describe('SstvView TX panel', () => {
     expect(setOperatingMode).toHaveBeenCalledWith('phone', false)
     // The fifth argument is #50's per-image affirmation, and its default is the load-bearing
     // half: an operator who never touched the checkbox gets the plate.
-    expect(sstvSend).toHaveBeenCalledWith(expect.any(String), 320, 256, 'scottie1', false)
+    expect(sstvSend).toHaveBeenCalledWith(expect.any(String), 320, 256, 'scottie1', false, [])
     // Phone preflight runs before the send.
     expect(setOperatingMode.mock.invocationCallOrder[0]).toBeLessThan(
       sstvSend.mock.invocationCallOrder[0],
@@ -421,7 +421,7 @@ describe('SstvView TX panel', () => {
     const send = await loadPicture()
     fireEvent.click(send)
     await waitFor(() =>
-      expect(sstvSend).toHaveBeenCalledWith(expect.any(String), 320, 256, 'martin1', false),
+      expect(sstvSend).toHaveBeenCalledWith(expect.any(String), 320, 256, 'martin1', false, []),
     )
   })
 
@@ -508,7 +508,7 @@ describe('SstvView TX panel', () => {
     fireEvent.click(send)
     // PD-120 is 640×496 — the re-crop packed the new size.
     await waitFor(() =>
-      expect(sstvSend).toHaveBeenCalledWith(expect.any(String), 640, 496, 'pd120', false),
+      expect(sstvSend).toHaveBeenCalledWith(expect.any(String), 640, 496, 'pd120', false, []),
     )
   })
 
@@ -522,7 +522,7 @@ describe('SstvView TX panel', () => {
     fireEvent.click(screen.getByLabelText(/already shows my callsign/i))
     fireEvent.click(send)
     await waitFor(() =>
-      expect(sstvSend).toHaveBeenCalledWith(expect.any(String), 320, 256, 'scottie1', true),
+      expect(sstvSend).toHaveBeenCalledWith(expect.any(String), 320, 256, 'scottie1', true, []),
     )
     // And the caption stops claiming a burn-in that is not happening.
     expect(screen.getByText(/you've said it's already in the picture/i)).toBeTruthy()
