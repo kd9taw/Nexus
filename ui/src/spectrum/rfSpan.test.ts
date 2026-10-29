@@ -214,6 +214,34 @@ describe('the stored choice, per window', () => {
     window.history.replaceState({}, '', '/')
     expect(loadRfSpan('phone', ids, 'band'), 'the main window kept Band').toBe('band')
   })
+  it('a docked cockpit on Band and a torn-off one on ±5k, one radio: each asks once, never in turn', () => {
+    const spans = ['band', 'full', '±5k'] as const
+    saveRfSpan('phone', 'band')
+    window.history.replaceState({}, '', '/?panel=phone&instance=w2')
+    saveRfSpan('phone', '±5k')
+    const torn = loadRfSpan('phone', spans, 'band')
+    window.history.replaceState({}, '', '/')
+    const docked = loadRfSpan('phone', spans, 'band')
+    expect([docked, torn], 'premise: two windows, two stored spans').toEqual(['band', '±5k'])
+    const dial = 10_120_000
+    const wantOf = (id: string) => (id === 'band' ? bandWindow(dial) : { loHz: dial - 5_000, hiHz: dial + 5_000 })
+    const props = (id: string, sweep: { loHz: number; hiHz: number }) =>
+      ({ source: 'civ', dialHz: dial, want: wantOf(id), choice: id, sweep, transmitting: false })
+    // The one radio's sweep, centred on the dial, as each window's ask lands and the other's replaces it.
+    const at = (half: number) => ({ loHz: dial - half, hiHz: dial + half })
+    const a = vi.fn()
+    const b = vi.fn()
+    const ha = renderHook((p) => useSpanAsk({ ...p, send: a }), { initialProps: props(docked, at(500_000)) })
+    const hb = renderHook((p) => useSpanAsk({ ...p, send: b }), { initialProps: props(torn, at(500_000)) })
+    for (let i = 0; i < 10; i++) {
+      for (const half of [50_000, 5_000]) {
+        ha.rerender(props(docked, at(half)))
+        hb.rerender(props(torn, at(half)))
+      }
+    }
+    expect(a.mock.calls).toEqual([[{ kind: 'civ', halfHz: 50_000 }]])
+    expect(b.mock.calls).toEqual([[{ kind: 'civ', halfHz: 5_000 }]])
+  })
   it('a stored value that is no span reads as the default', () => {
     localStorage.setItem('nexus.cw.rfSpan', '±3M')
     expect(loadRfSpan('cw', ids, 'band')).toBe('band')
