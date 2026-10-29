@@ -376,6 +376,107 @@ fn parse_added_count(lower: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+// ----- Settings ▸ Test: a read-only sign-in ----------------------------------
+
+/// The `RcvdSince` a Test asks with: the last minute of the range eQSL's `DownloadInBox` spec
+/// gives the parameter ("01/01/1900 - 12/31/2078"), so no card can be in the answer.
+const LOGIN_TEST_SINCE: &str = "207812312359";
+
+/// What eQSL's InBox page says when the login is good and nothing matches.
+const NO_ENTRIES: &str = "you have no log entries";
+
+/// Build the URL of a Test of the eQSL login: step 1 of the InBox download, signed in the same
+/// way (username, password and QTH Nickname, as the download sends them), asked for the cards
+/// received after the last date eQSL takes. Only step 1 is made; the `.adi` it may link to is
+/// never fetched. A read: it uploads nothing and changes nothing. The returned URL carries the
+/// password — never log it.
+pub fn build_login_test_url(username: &str, password: &str, qth_nickname: &str) -> String {
+    build_inbox_url(&EqslQuery {
+        username: username.trim().to_string(),
+        password: password.to_string(),
+        rcvd_since: Some(LOGIN_TEST_SINCE.to_string()),
+        qth_nickname: Some(qth_nickname.to_string()),
+    })
+}
+
+/// What eQSL's step-1 page `html` says about the login: the built page, or its "no log entries"
+/// page, is a good login; a line beginning `Error:` is eQSL's refusal, in its words (eQSL answers
+/// an unknown call "Error: No such Callsign found", HTTP 200). The line comes back whole: the
+/// caller masks the password in all of it first, and only then cuts it to length
+/// (`login_check::capped`).
+pub fn classify_login_test(html: &str) -> crate::login_check::LoginCheck {
+    use crate::login_check::{page_lines, LoginCheck};
+    let lower = html.to_ascii_lowercase();
+    if is_built_page(html) || lower.contains(NO_ENTRIES) {
+        return LoginCheck::Accepted;
+    }
+    match page_lines(html)
+        .into_iter()
+        .find(|line| line.to_ascii_lowercase().starts_with("error:"))
+    {
+        Some(words) => LoginCheck::Refused(words),
+        None => LoginCheck::Unrecognised(None),
+    }
+}
+
+#[cfg(test)]
+mod login_test_tests {
+    use super::*;
+    use crate::login_check::LoginCheck;
+
+    /// The Test is step 1 of the InBox download, signed in as the download is, with the QTH
+    /// Nickname, asked for nothing: never the upload endpoint.
+    #[test]
+    fn the_test_asks_step_one_of_the_inbox_for_nothing() {
+        let url = build_login_test_url(" W9TST ", "p@ss w&rd", "Home QTH");
+        assert_eq!(
+            url,
+            "https://www.eqsl.cc/qslcard/DownloadInBox.cfm?UserName=W9TST&Password=p%40ss%20w%26rd\
+             &QTHNickname=Home%20QTH&RcvdSince=207812312359"
+        );
+        assert!(!url.contains("ImportADIF"), "never the upload endpoint");
+        // Control: the upload endpoint is a different URL, so the check above can fail.
+        assert!(EQSL_IMPORT_URL.contains("ImportADIF"));
+        // No nickname is no parameter, as the download sends it.
+        assert!(!build_login_test_url("W9TST", "x", " ").contains("QTHNickname"));
+    }
+
+    #[test]
+    fn the_test_reads_the_built_page_and_the_empty_inbox_as_a_good_login() {
+        assert_eq!(
+            classify_login_test("<html>Your ADIF log file has been built</html>"),
+            LoginCheck::Accepted
+        );
+        assert_eq!(
+            classify_login_test("<html><body>You have no log entries</body></html>"),
+            LoginCheck::Accepted
+        );
+    }
+
+    /// eQSL's refusal comes through in its words; the page's scripts never do.
+    #[test]
+    fn the_test_reads_an_error_line_as_a_refusal_in_eqsls_words() {
+        let page = "<html><head><title>Download InBox - eQSL.cc</title>\
+            <script>if (x) alert('Error: from a script');</script></head>\
+            <body><H3>Error: No such Callsign found</H3></body></html>";
+        assert_eq!(
+            classify_login_test(page),
+            LoginCheck::Refused("Error: No such Callsign found".into())
+        );
+        // A long line comes back whole, for the caller to mask before it cuts it.
+        let long = format!("Error: {}", "x".repeat(1000));
+        assert_eq!(
+            classify_login_test(&format!("<H3>{long}</H3>")),
+            LoginCheck::Refused(long)
+        );
+        // Control: a page with no error line is not called a bad login.
+        assert_eq!(
+            classify_login_test("<html><body>Please try later</body></html>"),
+            LoginCheck::Unrecognised(None)
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

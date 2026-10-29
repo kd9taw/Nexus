@@ -9765,6 +9765,13 @@ export const EN = {
   'settings.connections.qrz.test.ok': '✓ QRZ Logbook reachable: {{detail}}',
   'settings.connections.qrz.test.fail':
     '✗ QRZ test failed: {{detail}} (Uploads need the per-logbook <b>API key</b> from logbook.qrz.com ▸ Settings ▸ API — not your QRZ password.)',
+  // LoTW / eQSL / ClubLog Tests. `{{service}}` is the connector's name (data, never translated);
+  // `{{detail}}` is the Test's own answer — the service's words or Nexus's — inserted verbatim.
+  'settings.connections.service.test.action': 'Test',
+  'settings.connections.service.test.title':
+    'Signs in to {{service}} with the saved login and reads — uploads nothing and changes nothing there',
+  'settings.connections.service.test.ok': '✓ {{service}}: {{detail}}',
+  'settings.connections.service.test.fail': '✗ {{service}} test failed: {{detail}}',
   'settings.connections.log.title': 'Connection log',
   'settings.connections.log.hint': 'every save, sync, push, and failure lands here',
   'settings.connections.log.empty':
