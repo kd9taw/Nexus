@@ -3061,6 +3061,7 @@ export const DE: PartialCatalog = {
   "logbook.tools.callbook.applyUpTo": { "one": "Bis zu {{count}} QSO ergänzen", "other": "Bis zu {{count}} QSOs ergänzen" },
   "logbook.tools.callbook.stroked": { "one": "Ein Rufzeichen mit Schrägstrich wird noch einmal ohne Zusatz abgefragt: insgesamt bis zu {{count}} Abfrage.", "other": "Ein Rufzeichen mit Schrägstrich wird noch einmal ohne Zusatz abgefragt: insgesamt bis zu {{count}} Abfragen." },
   "logbook.tools.callbook.qrzCount": { "one": "QRZ hat für dein Konto am letzten Tag {{count}} Abfrage gezählt.", "other": "QRZ hat für dein Konto am letzten Tag {{count}} Abfragen gezählt." },
+  "logbook.tools.callbook.qrzCountNote": "Das zählt jedes Programm, das deinen QRZ-Login nutzt; auf das Limit oben zählen nur die Abfragen von Nexus selbst.",
   "logbook.tools.callbook.waitingForTx": "Warte, bis die Aussendung endet, bevor die QSOs geändert werden…",
   "logbook.tools.callbook.end.refused": "Gestoppt: QRZ hat 3 Rufzeichen hintereinander ohne Eintrag beantwortet. So lehnt QRZ Abfragen ab (Tageslimit, abgelaufenes Abo oder gesperrtes Konto). Was gefunden wurde, ist eingetragen. Prüfe dein QRZ-Konto, bevor du es erneut startest.",
   "logbook.tools.callbook.resume": { "one": "{{count}} Rufzeichen noch nicht abgefragt: Starte die Ergänzung erneut, um fortzufahren.", "other": "{{count}} Rufzeichen noch nicht abgefragt: Starte die Ergänzung erneut, um fortzufahren." },

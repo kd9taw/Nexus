@@ -21,6 +21,16 @@
 # positive control. Both are or-later, so both may be used under GPL-3, which is what Nexus is
 # (GPL-3.0-only). See the Hamlib entry in NOTICE.
 #
+# ON macOS, THE BUNDLE MUST RUN ON THE OLDEST macOS THE APP PROMISES, and nothing in it may load
+# from the build machine (2026-10-27). Every Mach-O records the oldest macOS it runs on, and
+# without a deployment target that is the RUNNER's own: 1.21.0's Hamlib tools said 14.0, while the
+# app promised 12, so dyld refused them on a Mac running 12 or 13 and CAT fell back to whatever
+# Homebrew had. So on macOS this script builds for the minimum in src-tauri/tauri.conf.json
+# (bundle.macOS.minimumSystemVersion, the one place it is written down), builds libusb from its
+# own pinned source at that minimum instead of copying Homebrew's (built for the runner's macOS),
+# configures Hamlib without readline (a readline found on the build machine is a MacPorts or
+# Homebrew path on the user's), and ends with scripts/check-macho-bundle.mjs over everything staged.
+#
 #   ./scripts/fetch-hamlib-unix.sh        # idempotent; skips if already staged
 set -euo pipefail
 
@@ -28,6 +38,14 @@ VER=4.7.1
 TARBALL="hamlib-${VER}.tar.gz"
 URL="https://github.com/Hamlib/Hamlib/releases/download/${VER}/${TARBALL}"
 SHA256=d197a08a3d5d936d7571ae573f745bbba619e88998742c8267e3fcb0fb3d5974
+
+# libusb, macOS only: built here rather than copied from Homebrew, whose bottle is built for the
+# runner's macOS. The hash is the one Homebrew's own libusb formula pins for this tarball (a
+# second party, not only what the host served). Bump procedure: change both lines together, after
+# checking the new hash against an independent packager.
+LIBUSB_VER=1.0.30
+LIBUSB_URL="https://github.com/libusb/libusb/releases/download/v${LIBUSB_VER}/libusb-${LIBUSB_VER}.tar.bz2"
+LIBUSB_SHA256=fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO/src-tauri/resources/hamlib"
@@ -37,6 +55,38 @@ case "$(uname -s)" in
   Darwin) HOST=macos; LIBEXT=dylib ;;
   *) echo "fetch-hamlib-unix.sh is for Linux/macOS; Windows uses fetch-hamlib.sh" >&2; exit 1 ;;
 esac
+
+# Download $1 to $2 and refuse it unless it hashes to $3.
+fetch_pinned() {
+  (command -v curl >/dev/null && curl -fsSL -o "$2" "$1") || wget -qO "$2" "$1"
+  if command -v sha256sum >/dev/null; then
+    echo "$3  $2" | sha256sum -c - || { echo "checksum mismatch for $1 — aborting" >&2; exit 1; }
+  else
+    echo "$3  $2" | shasum -a 256 -c - || { echo "checksum mismatch for $1 — aborting" >&2; exit 1; }
+  fi
+}
+
+if [ "$HOST" = macos ]; then
+  for tool in node python3 pkg-config; do
+    command -v "$tool" >/dev/null || { echo "need $tool to build and check Hamlib on macOS" >&2; exit 1; }
+  done
+  # The minimum macOS, read from the one place it is set. A deployment target already in the
+  # environment must agree with it: two numbers that can drift apart are how the bundle and the
+  # app came to promise different things.
+  floor=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bundle"]["macOS"]["minimumSystemVersion"])' \
+            "$REPO/src-tauri/tauri.conf.json") \
+    || { echo "src-tauri/tauri.conf.json sets no bundle.macOS.minimumSystemVersion" >&2; exit 1; }
+  if [ -n "${MACOSX_DEPLOYMENT_TARGET:-}" ] && [ "$MACOSX_DEPLOYMENT_TARGET" != "$floor" ]; then
+    echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET, but tauri.conf.json's minimum is $floor" >&2; exit 1
+  fi
+  export MACOSX_DEPLOYMENT_TARGET="$floor"
+  ARCH="$(uname -m)"   # arm64 or x86_64: every build here is native
+fi
+
+# The staged Mach-Os against the minimum and the paths an operator's Mac has (macOS only).
+macho_check() {
+  node "$REPO/scripts/check-macho-bundle.mjs" --floor "$MACOSX_DEPLOYMENT_TARGET" --arch "$ARCH" "$@" "$DEST"
+}
 
 # The four programs Nexus launches. rigctld is CAT, rotctld is the rotator, and rigctl is the
 # baud ladder's one-shot prober (`rigctl -l` also backs the model list).
@@ -70,7 +120,12 @@ gaps() {
 }
 
 if [ -z "$(gaps)" ]; then
-  echo "Hamlib already staged at $DEST"; exit 0
+  # On macOS, staged is not enough: a copy built before the minimum was set (or for another
+  # architecture) is rebuilt rather than bundled.
+  if [ "$HOST" = linux ] || macho_check >/dev/null 2>&1; then
+    echo "Hamlib already staged at $DEST"; exit 0
+  fi
+  echo "Hamlib is staged at $DEST but fails the macOS check; rebuilding it"
 fi
 
 for tool in make cc; do
@@ -79,16 +134,30 @@ done
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 echo "Downloading Hamlib $VER source…"
-(command -v curl >/dev/null && curl -fsSL -o "$tmp/$TARBALL" "$URL") || wget -qO "$tmp/$TARBALL" "$URL"
-if command -v sha256sum >/dev/null; then
-  echo "$SHA256  $tmp/$TARBALL" | sha256sum -c - || { echo "checksum mismatch — aborting" >&2; exit 1; }
-else
-  echo "$SHA256  $tmp/$TARBALL" | shasum -a 256 -c - || { echo "checksum mismatch — aborting" >&2; exit 1; }
-fi
+fetch_pinned "$URL" "$tmp/$TARBALL" "$SHA256"
 
 tar xzf "$tmp/$TARBALL" -C "$tmp"
 src="$tmp/hamlib-${VER}"
 pfx="$tmp/prefix"
+
+# Hamlib's configure finds libusb through pkg-config, so on macOS build ours first, into the same
+# prefix, and put that prefix first on the pkg-config path. Hamlib then links it by its absolute
+# prefix path, and the repoint below turns that into @rpath like any other.
+hamlib_cfg=()
+if [ "$HOST" = macos ]; then
+  echo "Building libusb $LIBUSB_VER for macOS $MACOSX_DEPLOYMENT_TARGET ($ARCH)…"
+  fetch_pinned "$LIBUSB_URL" "$tmp/libusb.tar.bz2" "$LIBUSB_SHA256"
+  tar xjf "$tmp/libusb.tar.bz2" -C "$tmp"
+  ( cd "$tmp/libusb-${LIBUSB_VER}" && ./configure --prefix="$pfx" --disable-static >"$tmp/libusb.log" 2>&1 \
+      && make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >>"$tmp/libusb.log" 2>&1 \
+      && make install >>"$tmp/libusb.log" 2>&1 ) \
+    || { echo "libusb build FAILED — see $tmp/libusb.log" >&2; tail -25 "$tmp/libusb.log" >&2; exit 1; }
+  export PKG_CONFIG_PATH="$pfx/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+  # rigctl and rotctl's line editing. Nexus never types at them, and the readline configure finds
+  # is the build machine's: MacPorts' /opt/local/lib/libreadline.8.dylib in a community Intel
+  # build, the system libedit in ours only by luck of what was installed.
+  hamlib_cfg+=(--without-readline)
+fi
 
 # THE RPATH IS THE WHOLE TRICK. The staged programs sit beside their libhamlib in the bundle, so
 # they must look NEXT TO THEMSELVES for it — not at a configure-time --prefix that will not exist
@@ -119,6 +188,7 @@ echo "Configuring Hamlib $VER ($HOST)…"
     --without-tcl-binding \
     --without-lua-binding \
     --without-indi \
+    ${hamlib_cfg[@]+"${hamlib_cfg[@]}"} \
     >"$tmp/configure.log" 2>&1 ) || { echo "configure FAILED — see $tmp/configure.log" >&2; tail -25 "$tmp/configure.log" >&2; exit 1; }
 
 echo "Building…"
@@ -184,9 +254,18 @@ else
   hostlib=$({ otool -L "$DEST/rigctld"; otool -L "$DEST/$soname"; } 2>/dev/null \
             | awk '$1 !~ /^@/ && $1 ~ /libusb/ {print $1; exit}' || true)
 fi
+# On macOS it MUST be there, and it must be the libusb built above: a Hamlib that found none
+# disables its USB backends with only a configure warning, and one that found Homebrew's is the
+# runner's macOS again.
+if [ "$HOST" = macos ]; then
+  case "${hostlib:-}" in
+    "$pfx"/*|"$(cd "$pfx" && pwd -P)"/*) : ;;
+    *) echo "Hamlib links libusb at '${hostlib:-<nothing>}', not the libusb built at $pfx" >&2; exit 1 ;;
+  esac
+fi
 if [ -n "${hostlib:-}" ] && [ -f "$hostlib" ]; then
   cp -L "$hostlib" "$DEST/$dep"
-  echo "  + $dep (from host)"
+  echo "  + $dep (from $( [ "$HOST" = macos ] && echo "source, libusb $LIBUSB_VER" || echo host ))"
   # ⚠️ AND ON macOS, REPOINT IT. The copy is not enough: rigctld still records the absolute
   # HOMEBREW path it was linked against (/opt/homebrew/opt/libusb/...), which does not exist on
   # an operator's Mac. Without this rewrite the bundled libusb sits there unused and a
@@ -221,6 +300,11 @@ esac
 for f in "${LIC[@]}"; do
   [ -f "$src/$f" ] && [ ! -f "$DEST/${f}.txt" ] && cp "$src/$f" "$DEST/${f}.txt" || true
 done
+# libusb ships beside libhamlib on macOS, and its LGPL needs its own text in the bundle too.
+if [ "$HOST" = macos ]; then
+  cp "$tmp/libusb-${LIBUSB_VER}/COPYING" "$DEST/libusb-COPYING.txt" \
+    || { echo "libusb licence text missing from its source tarball" >&2; exit 1; }
+fi
 
 # THE CAT-DEAD GUARD — see gaps() above. Everything between here and the download can fail
 # without failing the script; fail loudly instead of shipping a licence-only hamlib directory.
@@ -291,6 +375,12 @@ else
       exit 1
     fi
   done
+  # And the whole check: every load command (run paths and install names too, not only what
+  # otool -L lists), the minimum macOS of every file, and the architecture. The four programs,
+  # the library and libusb must each be among the files it read.
+  req=()
+  for f in "${BINS[@]}" "$soname" "$dep"; do req+=(--require "$f"); done
+  macho_check "${req[@]}" || { echo "the staged Hamlib fails the macOS bundle check (above)" >&2; exit 1; }
 fi
 if ! "$DEST/rigctld" --version >/dev/null 2>&1; then
   {

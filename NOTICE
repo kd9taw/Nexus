@@ -597,6 +597,14 @@ Before 2026-08-24 only Windows carried the bundle. Linux relied on the .deb's
 nothing by design, with no CAT until they found out unaided that they needed a
 Hamlib package; macOS relied on `brew install hamlib` the same way.
 
+### libusb — <https://libusb.info/>
+License: **LGPL-2.1-or-later**. libusb **1.0.30** ships in the macOS app beside the bundled
+Hamlib, which loads it for USB-attached radios; Nexus itself does not call it. It is built from the
+official source tarball (SHA-256 pinned in `scripts/fetch-hamlib-unix.sh`), unmodified, as a
+separate dynamic library (`libusb-1.0.0.dylib`) that can be replaced, and its licence text travels
+in the bundle as `libusb-COPYING.txt`. Earlier macOS builds carried Homebrew's copy of the same
+library without this entry.
+
 ### DXCC country file (cty.dat) — Jim Reisert, AD1C
 `crates/propagation/data/cty.dat` is the AD1C "Country Files" (the big-CTY
 `cty.dat` database) by Jim Reisert, **AD1C** (<https://www.country-files.com/>),

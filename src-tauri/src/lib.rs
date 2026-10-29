@@ -34912,7 +34912,8 @@ fn fd_club_import(
     text: String,
     posid: String,
 ) -> Result<tempo_app::dto::FdClubImportDto, String> {
-    engine_lock(&state).fd_club_import(&text, &posid)
+    // The file is read with the Engine lock let go: the lock is taken only to check and to merge.
+    tempo_app::engine::fd_club_import_in(&state, &text, &posid)
 }
 
 /// What the host's Give button did: the position given, or why nothing changed.
@@ -37663,8 +37664,9 @@ struct UpdateInfo {
 /// stamped into the binary (`tauri::utils::platform::bundle_type`).
 ///
 /// ⚠️ THE PACKAGE DECIDES, NOT WHETHER A CHECK SUCCEEDS. The manifest (`latest.json`, built in
-/// release.yml) carries three installers: the NSIS setup under `windows-x86_64`, the AppImage
-/// under `linux-x86_64` and the macOS app under `darwin-aarch64`. The plugin looks up
+/// release.yml) carries four installers: the NSIS setup under `windows-x86_64`, the AppImage
+/// under `linux-x86_64`, and the macOS app under `darwin-aarch64` (Apple Silicon) and
+/// `darwin-x86_64` (Intel), each Mac asking for its own architecture's. The plugin looks up
 /// `linux-x86_64-deb` and then the bare `linux-x86_64`, so on a PC's .deb the check found the
 /// AppImage, downloaded it, and Install failed every time: the plugin installs over a .deb only
 /// from a .deb (`InvalidUpdaterFormat`). The .deb packages (the PC one and both Pi ones) are
@@ -44087,7 +44089,7 @@ mod tests {
     }
 
     /// ⭐ The host's "Import a laptop's file…" reaches the engine only if its command is REGISTERED
-    /// and goes through `Engine::fd_club_import`, and no Remote dispatcher names either: a club
+    /// and goes through `engine::fd_club_import_in`, and no Remote dispatcher names either: a club
     /// change is refused from afar. POSITIVE CONTROL: the dispatchers read here do name the engine
     /// calls they make.
     #[test]
@@ -44111,7 +44113,10 @@ mod tests {
             .split_once("\n}\n")
             .expect("the end of the command")
             .0;
-        assert!(body.contains(".fd_club_import(&text, &posid)"), "{body}");
+        assert!(
+            body.contains("engine::fd_club_import_in(&state, &text, &posid)"),
+            "{body}"
+        );
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),

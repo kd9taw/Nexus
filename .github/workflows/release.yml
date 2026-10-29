@@ -29,7 +29,8 @@
 # whether the commit being released ever passed. Both must hold.
 #
 # PINNED DOWNLOADS. Everything this workflow fetches to build with is pinned to a digest or a
-# commit: actions from outside GitHub's own (by commit SHA), the DeepCW model, FFTW, Hamlib, the
+# commit: actions from outside GitHub's own (by commit SHA), the DeepCW model, FFTW, Hamlib (and on
+# macOS libusb; scripts/fetch-fftw-macos.sh and scripts/fetch-hamlib-unix.sh pin both), the
 # tauri bundler's AppImage tools and the AppImage runtime (scripts/build-linux.sh), epubcheck,
 # the manual's Python packages, the x86_64 Linux job's container image and rustup-init, and the Pi
 # container's images, Node.js and rustup-init
@@ -720,13 +721,25 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------------------
-  # macOS — Apple Silicon DMG, signed and notarized. First shipped 1.5.1 (operator's
-  # Apple Developer enrollment 2026-08-16).
+  # macOS — two DMGs, signed and notarized: Apple Silicon (first shipped 1.5.1, operator's
+  # Apple Developer enrollment 2026-08-16) and Intel (operator decision 2026-10-27).
   #
-  # aarch64 ONLY, deliberately: the modem is Fortran, and Homebrew's gfortran is
-  # single-arch — a universal binary needs an x86_64 gfortran+FFTW toolchain the arm64
-  # runner does not have. Apple Silicon covers every Mac sold since 2020; Intel Macs
-  # build from source (which works out of the box as of 1.5.0 — see NOTICE/on8st PRs).
+  # ONE JOB, TWO LEGS, EACH NATIVE: the modem is Fortran, and Homebrew's gfortran is
+  # single-arch, so each architecture is built on a runner of its own kind (macos-14 is Apple
+  # Silicon, macos-15-intel is Intel) rather than cross-compiled or made universal; a universal
+  # binary would double every Apple Silicon download. The legs share every step, so the Intel
+  # build signs, notarizes and is verified exactly as the Apple Silicon one, and holds each
+  # secret in exactly the same steps (scripts/release-secrets.test.mjs reads the job once, and
+  # holds the matrix to these two legs). Both gate the release. GitHub retires its hosted Intel
+  # macOS runners with the macOS 15 image (announced for about August 2027); this leg has to
+  # move or go then.
+  #
+  # BOTH RUN ON macOS 12 AND UP. bundle.macOS.minimumSystemVersion in tauri.conf.json is the one
+  # place the minimum is written; the first step exports it as MACOSX_DEPLOYMENT_TARGET, so the
+  # app, the libtempo modem, FFTW, libusb and Hamlib are all built for it (Homebrew's bottles are
+  # built for the runner's own macOS, which is why FFTW and libusb are built from source now), and
+  # scripts/check-macho-bundle.mjs holds every shipped Mach-O to it before signing and again on
+  # the finished app. 1.21.0 shipped Hamlib tools built for macOS 14 with nothing to notice.
   #
   # Signing: APPLE_CERTIFICATE (base64 .p12) + APPLE_CERTIFICATE_PASSWORD into an
   # ephemeral keychain; the identity is READ BACK from the keychain rather than stored
@@ -741,12 +754,37 @@ jobs:
   # sat in the keychain could have signed with it, whatever that step's own env said.
   # ---------------------------------------------------------------------------------------
   macos:
-    name: macOS (Apple Silicon .dmg)
-    runs-on: macos-14
+    name: macOS (${{ matrix.label }} .dmg)
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One leg failing must not cancel the other: a dry run should say which architecture broke.
+      fail-fast: false
+      matrix:
+        include:
+          - label: Apple Silicon
+            runner: macos-14
+            target: aarch64-apple-darwin
+            arch: arm64        # the Mach-O name, for scripts/check-macho-bundle.mjs
+            suffix: aarch64    # the file name: Nexus_<ver>_aarch64.dmg, as it always was
+          - label: Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+            suffix: x64        # Nexus_<ver>_x64.dmg, matching the Windows _x64-setup.exe
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      # Every native build below reads it from the environment: rustc and the cc crate, CMake for
+      # libtempo, gfortran, and the configure scripts of FFTW, libusb and Hamlib.
+      - name: Build for the app's minimum macOS
+        run: |
+          set -euo pipefail
+          floor=$(jq -r '.bundle.macOS.minimumSystemVersion // empty' src-tauri/tauri.conf.json)
+          [ -n "$floor" ] || { echo "tauri.conf.json sets no bundle.macOS.minimumSystemVersion"; exit 1; }
+          echo "MACOSX_DEPLOYMENT_TARGET=$floor" >> "$GITHUB_ENV"
+          echo "building for macOS $floor and up (${{ matrix.target }})"
 
       # See linux-x86: every artifact-producing job stamps, first. The DMG, the .app's
       # CFBundleShortVersionString and the updater tarball all take their version from here.
@@ -763,13 +801,23 @@ jobs:
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | shasum -a 256 -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | shasum -a 256 -c -
 
+      # No fftw and no libusb here: Homebrew builds them for the runner's macOS, so both are built
+      # from source below, at the app's minimum.
       - name: Install build dependencies
-        run: brew install cmake ninja gcc fftw boost libusb
+        run: brew install cmake ninja gcc boost
 
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
           toolchain: 1.93.1
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
+
+      # The modem links it statically. Pinned like Hamlib, built like the Windows FFTW; the
+      # pkg-config path is how libtempo's CMake and tempo-fast-sys/build.rs both find it.
+      - name: Build FFTW from source for the app's minimum macOS
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-fftw-macos.sh
+          echo "PKG_CONFIG_PATH=$PWD/target/fftw-macos/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v7
         with:
@@ -800,12 +848,36 @@ jobs:
       # macro, and the UI build) ran holding the notarization key and the updater key, with the
       # Developer ID identity unlocked in the keychain. The ClubLog key is here because it is
       # compiled in (see the Windows job).
+      #
+      # The log is kept for the next step: objects linked in from a static archive (Homebrew gcc's
+      # libgfortran.a above all) keep the macOS they were built for, and the linker only warns.
       - name: Compile the app
         env:
           CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
         run: |
-          ( cd src-tauri && cargo tauri build --target aarch64-apple-darwin \
-              --features radio,custom-protocol --no-bundle )
+          set -euo pipefail
+          ( cd src-tauri && cargo tauri build --target ${{ matrix.target }} \
+              --features radio,custom-protocol --no-bundle ) 2>&1 | tee "$RUNNER_TEMP/compile.log"
+
+      # BEFORE ANYTHING IS SIGNED: the app binary and the staged Hamlib, against the minimum and
+      # the paths an operator's Mac has. Failing here costs no notarization. The linker's "built
+      # for newer macOS" warnings are reported, not failed: the static gcc runtime has no build at
+      # the minimum to swap in, and whether it matters is the oldest-macOS bench's question.
+      - name: Check every Mach-O against the minimum macOS before signing
+        run: |
+          set -euo pipefail
+          node scripts/check-macho-bundle.mjs --floor "$MACOSX_DEPLOYMENT_TARGET" --arch ${{ matrix.arch }} \
+            src-tauri/target/${{ matrix.target }}/release/Nexus
+          node scripts/check-macho-bundle.mjs --floor "$MACOSX_DEPLOYMENT_TARGET" --arch ${{ matrix.arch }} \
+            --require rigctld --require rigctl --require rotctld --require rotctl \
+            --require libhamlib.4.dylib --require libusb-1.0.0.dylib src-tauri/resources/hamlib
+          newer=$(grep -c 'built for newer' "$RUNNER_TEMP/compile.log" || true)
+          if [ "${newer:-0}" -gt 0 ]; then
+            echo "::warning::the linker reported $newer object(s) built for a macOS newer than $MACOSX_DEPLOYMENT_TARGET"
+            grep 'built for newer' "$RUNNER_TEMP/compile.log" | sort -u | head -40
+          else
+            echo "the linker reported no object built for a macOS newer than $MACOSX_DEPLOYMENT_TARGET"
+          fi
 
       # Imported only now, after the last build. From here until the bundle step deletes the
       # keychain, anything this job runs can sign with the identity.
@@ -887,12 +959,25 @@ jobs:
           # notarytool wants the .p8 on disk; Tauri picks it up via APPLE_API_KEY_PATH.
           printf '%s\n' "$APPLE_API_KEY_CONTENT" > "$RUNNER_TEMP/AuthKey.p8"
           export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
-          ( cd src-tauri && cargo tauri bundle --target aarch64-apple-darwin \
+          # The bundler staples the notarization ticket onto the .app and then builds the DMG
+          # and the updater tarball from it, but it ignores the stapler's result, and a ticket
+          # Apple has accepted can take a while to be stapleable. scripts/xcrun-staple-retry.sh
+          # stands in for xcrun so that one call is retried (bounded) and logged; every other
+          # xcrun call passes straight through.
+          shim="$RUNNER_TEMP/xcrun-shim"
+          mkdir -p "$shim"
+          ln -sf "$PWD/scripts/xcrun-staple-retry.sh" "$shim/xcrun"
+          export PATH="$shim:$PATH" NEXUS_STAPLE_LOG="$RUNNER_TEMP/staple.log"
+          : > "$NEXUS_STAPLE_LOG"
+          ( cd src-tauri && cargo tauri bundle --target ${{ matrix.target }} \
               --features radio,custom-protocol --bundles app,dmg )
           rm -f "$RUNNER_TEMP/AuthKey.p8"
           # The Developer ID identity goes too: the Verify step below runs the bundled rigctld,
           # and nothing after this line signs anything.
           security delete-keychain "$RUNNER_TEMP/nexus-signing.keychain-db"
+          cat "$NEXUS_STAPLE_LOG"
+          grep -q '^stapled ' "$NEXUS_STAPLE_LOG" \
+            || { echo "the .app was not stapled before the DMG and updater bundle were made from it"; exit 1; }
 
       - name: Verify the artifacts
         env:
@@ -903,7 +988,7 @@ jobs:
           SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
           set -euo pipefail
-          bundle=src-tauri/target/aarch64-apple-darwin/release/bundle
+          bundle=src-tauri/target/${{ matrix.target }}/release/bundle
           dmg=$(find "$bundle/dmg" -name '*.dmg' -print -quit)
           tarball=$(find "$bundle/macos" -name '*.app.tar.gz' -print -quit)
           [ -n "$dmg" ] || { echo "no DMG produced"; exit 1; }
@@ -911,7 +996,14 @@ jobs:
           # Gatekeeper's own verdict on what shipped — signing AND notarization AND
           # staple, the exact test a user's first double-click runs.
           spctl -a -t exec -vv "$app"
-          xcrun stapler validate "$app"
+          # `stapler validate` asks Apple's ticket service online, so a dropped connection
+          # (NSURLError -1005, exit 68) fails it with the ticket stapled; try a few times.
+          for i in 1 2 3 4 5; do
+            xcrun stapler validate "$app" && break
+            [ "$i" -lt 5 ] || { echo "stapler validate failed 5 times"; exit 1; }
+            echo "stapler validate attempt $i failed; trying again in 20s"
+            sleep 20
+          done
           # The model must be IN the bundle — the 2026-07-20 .deb shipped without it
           # and nothing but looking inside the artifact can catch that class.
           m="$app/Contents/Resources/resources/deepcw/model.onnx"
@@ -957,12 +1049,20 @@ jobs:
                   | grep -vE '^@rpath/|^@loader_path/|^/usr/lib/|^/System/' || true)
             [ -z "$bad" ] || { echo "$f links outside the bundle — dead on a Mac without those paths:"; echo "$bad"; exit 1; }
           done
+          # And every Mach-O in the whole signed app (not only Hamlib), every load command, the
+          # minimum macOS of each and the architecture, plus the Info.plist minimum Finder reads.
+          node scripts/check-macho-bundle.mjs --floor "$MACOSX_DEPLOYMENT_TARGET" --arch ${{ matrix.arch }} \
+            --plist "$app/Contents/Info.plist" --require Contents/MacOS/Nexus \
+            --require Contents/Resources/resources/hamlib/rigctld \
+            --require Contents/Resources/resources/hamlib/libhamlib.4.dylib \
+            --require Contents/Resources/resources/hamlib/libusb-1.0.0.dylib "$app"
           mkdir -p out
           ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
-          cp "$dmg" "out/Nexus_${ver}_aarch64.dmg"
+          sfx=${{ matrix.suffix }}
+          cp "$dmg" "out/Nexus_${ver}_${sfx}.dmg"
           if [ -n "$tarball" ] && [ -f "$tarball.sig" ]; then
-            cp "$tarball" "out/Nexus_${ver}_aarch64.app.tar.gz"
-            cp "$tarball.sig" "out/Nexus_${ver}_aarch64.app.tar.gz.sig"
+            cp "$tarball" "out/Nexus_${ver}_${sfx}.app.tar.gz"
+            cp "$tarball.sig" "out/Nexus_${ver}_${sfx}.app.tar.gz.sig"
           elif [ "$SIGNING_KEY_PRESENT" = true ]; then
             # The key was present, so a missing tarball/.sig is a bundler regression,
             # not a fork build — and it must fail HERE, with the same hard bar as the
@@ -979,14 +1079,27 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: nexus-macos
+          name: nexus-macos-${{ matrix.suffix }}
           path: out/*
           if-no-files-found: error
 
+  # Each leg's DMG on a clean runner of its own architecture.
   smoke-macos:
-    name: Smoke — mount + launch the macOS artifact
+    name: Smoke — mount + launch the macOS artifact (${{ matrix.label }})
     needs: macos
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Apple Silicon
+            runner: macos-14
+            arch: arm64
+            suffix: aarch64
+          - label: Intel
+            runner: macos-15-intel
+            arch: x86_64
+            suffix: x64
     steps:
       # Checkout BEFORE download-artifact: the updater-signature check below reads the
       # minisign pubkey out of src-tauri/tauri.conf.json, and checkout's default clean
@@ -995,17 +1108,22 @@ jobs:
         with:
           persist-credentials: false
 
+      # Both legs' artifacts; each smoke leg picks its own by file name below.
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: nexus-macos
+          pattern: nexus-macos-*
           merge-multiple: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
 
       - name: Mount the DMG and Gatekeeper-assess the app
         run: |
           set -euo pipefail
-          dmg=$(find dist -name '*.dmg' -print -quit)
-          [ -n "$dmg" ] || { echo "no dmg in the nexus-macos artifact"; exit 1; }
+          dmg=$(find dist -name '*_${{ matrix.suffix }}.dmg' -print -quit)
+          [ -n "$dmg" ] || { echo "no *_${{ matrix.suffix }}.dmg in the nexus-macos artifacts"; exit 1; }
           mnt=$(hdiutil attach "$dmg" -nobrowse | awk -F'\t' 'END{print $NF}')
           app=$(find "$mnt" -maxdepth 1 -name '*.app' -print -quit)
           [ -n "$app" ] || { echo "no .app inside the DMG"; exit 1; }
@@ -1013,6 +1131,11 @@ jobs:
           spctl -a -t exec -vv "$app"
           cp -R "$app" "$RUNNER_TEMP/Nexus.app"
           hdiutil detach "$mnt"
+          # The DMG's app is for this runner's architecture and the app's minimum macOS, as the
+          # build leg found it; read again from what a user downloads.
+          floor=$(jq -r '.bundle.macOS.minimumSystemVersion' src-tauri/tauri.conf.json)
+          node scripts/check-macho-bundle.mjs --floor "$floor" --arch ${{ matrix.arch }} \
+            --plist "$RUNNER_TEMP/Nexus.app/Contents/Info.plist" --require Contents/MacOS/Nexus "$RUNNER_TEMP/Nexus.app"
 
       - name: Gate on the SIGNED entitlements + Info.plist (the dead-mic class)
         run: |
@@ -1060,7 +1183,7 @@ jobs:
           # updater writes without quarantine, so Gatekeeper never assesses it), and the
           # plugin's swap/restart logic itself — that runs only against a real installed
           # app and lives on the Mac bench list.
-          tarball=$(find dist -name '*.app.tar.gz' -print -quit)
+          tarball=$(find dist -name '*_${{ matrix.suffix }}.app.tar.gz' -print -quit)
           if [ -z "$tarball" ]; then
             # Only reachable on a fork build without signing secrets: the macos verify
             # step now hard-fails when the key was present and no bundle appeared.
@@ -1073,6 +1196,10 @@ jobs:
           upapp=$(find "$RUNNER_TEMP/updater" -maxdepth 1 -name '*.app' -print -quit)
           [ -n "$upapp" ] || { echo "no .app inside the updater tarball"; exit 1; }
           codesign --verify --deep --strict "$upapp"
+          # The bytes the darwin-<arch> manifest entry hands this architecture's installs.
+          floor=$(jq -r '.bundle.macOS.minimumSystemVersion' src-tauri/tauri.conf.json)
+          node scripts/check-macho-bundle.mjs --floor "$floor" --arch ${{ matrix.arch }} \
+            --plist "$upapp/Contents/Info.plist" --require Contents/MacOS/Nexus "$upapp"
           dmgver=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$RUNNER_TEMP/Nexus.app/Contents/Info.plist")
           upver=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$upapp/Contents/Info.plist")
           [ "$dmgver" = "$upver" ] || { echo "version mismatch: DMG=$dmgver updater=$upver"; exit 1; }
@@ -1310,10 +1437,11 @@ jobs:
           path: dist
           pattern: nexus-windows
           merge-multiple: true
+      # Both macOS legs: nexus-macos-aarch64 and nexus-macos-x64.
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: nexus-macos
+          pattern: nexus-macos-*
           merge-multiple: true
       # The NSIS and AppImage .sig files, beside the installers they sign.
       - uses: actions/download-artifact@v4
@@ -1395,6 +1523,9 @@ jobs:
       # cannot self-update, so those platforms keep the notify-and-download path forever. Emitting
       # a manifest entry for them would promise an update route that does not exist.
       - name: Build the updater manifest (latest.json)
+        env:
+          # Whether the key exists, not the key: with it, every platform below must be signed.
+          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
           set -euo pipefail
           ver='${{ steps.ver.outputs.ver }}'
@@ -1409,9 +1540,20 @@ jobs:
               "$1" "$(cat "$2.sig")" "$base" "$(basename "$2")")"
           }
           mac=$(find dist -name '*_aarch64.app.tar.gz' -print -quit)
+          macx=$(find dist -name '*_x64.app.tar.gz' -print -quit)
           add "windows-x86_64" "$win"
           add "linux-x86_64"   "$app"
           add "darwin-aarch64" "$mac"
+          # Intel Macs. The updater asks for the key of the architecture it was built for, so an
+          # Apple Silicon install never sees this entry and an Intel one never sees the other.
+          add "darwin-x86_64"  "$macx"
+          # With the key present, a platform missing here is an install that never updates again,
+          # and nothing reports it: the client treats "no entry" as "nothing new".
+          if [ "$SIGNING_KEY_PRESENT" = true ]; then
+            for k in windows-x86_64 linux-x86_64 darwin-aarch64 darwin-x86_64; do
+              case "$platforms" in *"\"$k\""*) : ;; *) echo "signing key present but latest.json has no $k"; exit 1 ;; esac
+            done
+          fi
           if [ -z "$platforms" ]; then
             echo "No signed artifacts — skipping latest.json. Clients keep the notify-only path."
             exit 0
