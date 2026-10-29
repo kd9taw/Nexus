@@ -1158,6 +1158,14 @@ pub struct KeysToConfirm {
     pub cloudlog: bool,
     /// The Icom network password of each of these radios, by profile id.
     pub icom_lan: Vec<u32>,
+    /// Of those that wait, the ones kept only because removing them from the keychain failed:
+    /// Cloudlog's key, and each of these radios' passwords. The station knows such a key was typed
+    /// for another address (or for a radio it no longer has), so it can only be removed, never
+    /// used ([`Self::not_removed`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cloudlog_not_removed: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub icom_lan_not_removed: Vec<u32>,
 }
 
 impl KeysToConfirm {
@@ -1168,6 +1176,37 @@ impl KeysToConfirm {
     /// Whether radio `id`'s Icom network password waits.
     pub fn icom_lan_waits(&self, id: u32) -> bool {
         self.icom_lan.contains(&id)
+    }
+
+    /// Whether this key (Cloudlog's for `None`, else radio `radio_id`'s password) waits only
+    /// because removing it failed.
+    pub fn not_removed(&self, radio_id: Option<u32>) -> bool {
+        radio_id.map_or(self.cloudlog_not_removed, |id| {
+            self.icom_lan_not_removed.contains(&id)
+        })
+    }
+
+    /// Hold this key back as one whose removal failed: it waits, and can only be removed.
+    pub fn hold_not_removed(&mut self, radio_id: Option<u32>) {
+        match radio_id {
+            None => (self.cloudlog, self.cloudlog_not_removed) = (true, true),
+            Some(id) => {
+                if !self.icom_lan_waits(id) {
+                    self.icom_lan.push(id);
+                }
+                if !self.icom_lan_not_removed.contains(&id) {
+                    self.icom_lan_not_removed.push(id);
+                }
+            }
+        }
+    }
+
+    /// Forget why a key waited once it waits no more, so a later wait starts afresh.
+    pub(crate) fn only_of_keys_that_wait(mut self) -> Self {
+        self.cloudlog_not_removed &= self.cloudlog;
+        let waits = self.icom_lan.clone();
+        self.icom_lan_not_removed.retain(|id| waits.contains(id));
+        self
     }
 }
 
@@ -14834,6 +14873,7 @@ mod tests {
         let held = KeysToConfirm {
             cloudlog: true,
             icom_lan: vec![1],
+            ..Default::default()
         };
         eng.set_keys_to_confirm(held.clone());
         assert_eq!(
@@ -14883,6 +14923,73 @@ mod tests {
             eng.add_radio(),
             1,
             "CONTROL: with nothing waiting, the next id after the roster's"
+        );
+    }
+
+    /// ★ A KEY KEPT ONLY BECAUSE ITS REMOVAL FAILED SAYS SO UNTIL IT STOPS WAITING: the mark is
+    /// saved and read back, and goes with the wait, so a later wait for that key starts afresh.
+    /// CONTROL: a settings file from before the mark existed reads as no removal failed.
+    #[test]
+    fn a_failed_removals_mark_lives_and_ends_with_its_wait() {
+        use crate::engine::Engine;
+        let mut eng = Engine::with_settings(Settings::default());
+        let mut keys = KeysToConfirm::default();
+        keys.hold_not_removed(None);
+        keys.hold_not_removed(Some(3));
+        keys.hold_not_removed(Some(3));
+        eng.set_keys_to_confirm(keys.clone());
+        assert_eq!(
+            (
+                eng.keys_to_confirm().clone(),
+                keys.not_removed(None),
+                keys.not_removed(Some(3)),
+                keys.not_removed(Some(4)),
+            ),
+            (
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![3],
+                    cloudlog_not_removed: true,
+                    icom_lan_not_removed: vec![3],
+                },
+                true,
+                true,
+                false
+            ),
+            "each waits, marked once"
+        );
+        let json = serde_json::to_string(&keys).unwrap();
+        assert_eq!(
+            serde_json::from_str::<KeysToConfirm>(&json).unwrap(),
+            keys,
+            "saved and read back"
+        );
+
+        let mut let_go = eng.keys_to_confirm().clone();
+        let_go.cloudlog = false;
+        let_go.icom_lan.clear();
+        eng.set_keys_to_confirm(let_go);
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &KeysToConfirm::default(),
+            "the marks went with the waits"
+        );
+        let mut again = KeysToConfirm::default();
+        again.cloudlog = true;
+        again.icom_lan.push(3);
+        eng.set_keys_to_confirm(again);
+        assert!(
+            !eng.keys_to_confirm().not_removed(None) && !eng.keys_to_confirm().not_removed(Some(3)),
+            "a later wait starts afresh"
+        );
+        assert_eq!(
+            serde_json::from_str::<KeysToConfirm>(r#"{"cloudlog":true,"icomLan":[1]}"#).unwrap(),
+            KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+                ..Default::default()
+            },
+            "CONTROL: an older file reads as no removal failed"
         );
     }
 

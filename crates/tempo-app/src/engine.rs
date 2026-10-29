@@ -7358,9 +7358,16 @@ impl Engine {
         &self.settings.keys_to_confirm
     }
 
-    /// Replace them: a restore's, the operator's answer, or a key typed again.
+    /// Replace them: a restore's, the operator's answer, or a key typed again. A key that waits no
+    /// more loses its reason for waiting. When the Cloudlog key stops waiting, the catch-up
+    /// contacts held back for it take their slots in the catch-up's pacing once, now
+    /// ([`StationCore::repace_catch_up`]), so they go one at a time.
     pub fn set_keys_to_confirm(&mut self, keys: crate::settings::KeysToConfirm) {
-        self.settings.keys_to_confirm = keys;
+        let cloudlog_let_go = self.settings.keys_to_confirm.cloudlog && !keys.cloudlog;
+        self.settings.keys_to_confirm = keys.only_of_keys_that_wait();
+        if cloudlog_let_go {
+            self.station.repace_catch_up(upload_legs::CLOUDLOG);
+        }
     }
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {

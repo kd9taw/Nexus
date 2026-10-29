@@ -4,7 +4,8 @@
 // typed for that address. Until the operator answers, Cloudlog uploads wait and the radio does not
 // sign in with it. One row per key: the question with its address, Use (it is the key for that
 // address, and only that one: the station refuses Use once the address has changed since) and
-// Remove (forget it).
+// Remove (forget it). A key kept only because removing it failed (it was saved for another
+// address, or for a radio no longer on the roster) is said so, and offered Remove alone.
 //
 // It renders nothing when no key waits, and nowhere but the desktop app itself: the hosted page
 // and the TV page have no such question, and a computer driving another station is refused the
@@ -21,6 +22,30 @@ import { pushToast } from '../toast'
 
 /** How often the banner asks which saved keys wait. */
 export const KEYS_TO_CONFIRM_EVERY_MS = 5_000
+
+/** The station's refusals of an answer, word for word (`src-tauri/src/lib.rs`). */
+export const KEY_ADDRESS_CHANGED =
+  'That address changed since the notice asked, so nothing was let go. Check the notice again, then choose.'
+export const ICOM_PASSWORD_OF_NO_RADIO =
+  'That radio is no longer on the roster, so its saved network password can only be removed: choose Remove.'
+export const KEY_NOT_REMOVED =
+  'Removing this saved key failed, and it was saved for another address, so it can only be removed: choose Remove.'
+
+/** A refused answer in the operator's language when it is one of the station's own; any other as
+ *  it came. */
+export function answerRefusal(err: unknown): string {
+  const said = err instanceof Error ? err.message : String(err)
+  switch (said) {
+    case KEY_ADDRESS_CHANGED:
+      return t('keyConfirm.refused.addressChanged')
+    case ICOM_PASSWORD_OF_NO_RADIO:
+      return t('keyConfirm.refused.noRadio')
+    case KEY_NOT_REMOVED:
+      return t('keyConfirm.refused.notRemoved')
+    default:
+      return said
+  }
+}
 
 export function KeyConfirmBanner() {
   const [keys, setKeys] = useState<KeyToConfirm[]>([])
@@ -47,7 +72,7 @@ export function KeyConfirmBanner() {
   const answer = (key: KeyToConfirm, useIt: boolean) => {
     setAnswering(true)
     void answerSavedKey(key.radioId, useIt, key.address)
-      .catch((e: unknown) => pushToast(e instanceof Error ? e.message : String(e), 'error'))
+      .catch((e: unknown) => pushToast(answerRefusal(e), 'error'))
       .finally(() => {
         setAnswering(false)
         ask()
@@ -55,17 +80,23 @@ export function KeyConfirmBanner() {
   }
   return (
     <div className="key-confirm-banner" role="group" aria-label={t('keyConfirm.label')}>
-      <span className="key-confirm-why">{t('keyConfirm.why')}</span>
+      {keys.some((key) => !key.removalFailed) && <span className="key-confirm-why">{t('keyConfirm.why')}</span>}
       {keys.map((key) => (
         <span className="key-confirm-row" key={key.radioId ?? 'cloudlog'}>
           <span className="key-confirm-question">
-            {key.radioId === null
-              ? t('keyConfirm.cloudlog', { address: key.address })
-              : t('keyConfirm.icomLan', { radio: key.radio, address: key.address })}
+            {key.removalFailed
+              ? key.radioId === null
+                ? t('keyConfirm.notRemoved.cloudlog')
+                : t('keyConfirm.notRemoved.icomLan', { radio: key.radio })
+              : key.radioId === null
+                ? t('keyConfirm.cloudlog', { address: key.address })
+                : t('keyConfirm.icomLan', { radio: key.radio, address: key.address })}
           </span>
-          <button type="button" disabled={answering} onClick={() => answer(key, true)}>
-            {t('keyConfirm.use')}
-          </button>
+          {!key.removalFailed && (
+            <button type="button" disabled={answering} onClick={() => answer(key, true)}>
+              {t('keyConfirm.use')}
+            </button>
+          )}
           <button type="button" disabled={answering} onClick={() => answer(key, false)}>
             {t('keyConfirm.remove')}
           </button>

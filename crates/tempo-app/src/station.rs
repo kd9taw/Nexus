@@ -3875,6 +3875,24 @@ impl StationCore {
         self.requeue_upload_at(rec, legs, attempts, slot, origin);
     }
 
+    /// Give each queued catch-up record that owes `legs` alone its slot in the catch-up's pacing
+    /// again, never before it is due nor in the past: once, when a leg held back on the queue is
+    /// let go. While held, those records keep a plain time of their own and take no slot, so
+    /// the other services' catch-up is not slowed by records that send nothing; this puts them
+    /// back in line so they go one at a time, not in a burst.
+    pub fn repace_catch_up(&mut self, legs: u8) {
+        let now = now_unix_secs() as i64;
+        for p in self
+            .pending_uploads
+            .iter_mut()
+            .filter(|p| p.origin == crate::engine::UploadOrigin::CatchUp && p.legs == legs)
+        {
+            let slot = self.catchup_slot_unix.max(p.retry_after_unix).max(now);
+            self.catchup_slot_unix = slot + crate::engine::CATCHUP_UPLOAD_SPACING_SECS;
+            p.retry_after_unix = slot;
+        }
+    }
+
     /// Record a connector-upload outcome for the operator (toast text + level).
     /// Bumps `upload_tick` so the UI's snapshot poll notices the change.
     pub fn note_upload(&mut self, note: impl Into<String>, ok: bool) {

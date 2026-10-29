@@ -5702,6 +5702,9 @@ export interface KeyToConfirm {
   radio: string
   /** The Cloudlog URL, or the radio's network address. */
   address: string
+  /** Kept only because removing it failed: it was saved for another address (or a radio no
+   *  longer on the roster), so it can only be removed. */
+  removalFailed: boolean
 }
 
 /** The saved keys that wait for the operator. Refused on a computer driving another station. */

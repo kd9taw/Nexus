@@ -24,8 +24,8 @@ import { KeyConfirmBanner, KEYS_TO_CONFIRM_EVERY_MS } from './KeyConfirmBanner'
 
 const fill = (text: string, values: Record<string, string>) =>
   text.replace(/\{\{(\w+)\}\}/g, (_, name: string) => values[name] ?? '')
-const CLOUDLOG: KeyToConfirm = { radioId: null, radio: '', address: 'https://log.example/' }
-const IC9700: KeyToConfirm = { radioId: 1, radio: 'IC-9700', address: '192.168.1.20' }
+const CLOUDLOG: KeyToConfirm = { radioId: null, radio: '', address: 'https://log.example/', removalFailed: false }
+const IC9700: KeyToConfirm = { radioId: 1, radio: 'IC-9700', address: '192.168.1.20', removalFailed: false }
 const settle = async () => {
   await act(async () => {
     await Promise.resolve()
@@ -100,6 +100,42 @@ describe('KeyConfirmBanner', () => {
     await settle()
     expect(mockAnswer).toHaveBeenCalledWith(1, true)
     expect(mockShown).toHaveBeenCalledWith('192.168.1.20')
+  })
+
+  it('offers a key whose removal failed for Remove alone, and says so', async () => {
+    mockKeys.mockResolvedValue([
+      { ...CLOUDLOG, removalFailed: true },
+      { ...IC9700, removalFailed: true },
+    ])
+    render(<KeyConfirmBanner />)
+    await settle()
+    const group = screen.getByRole('group', { name: EN['keyConfirm.label'] })
+    const cloudlog = within(group).getByText(EN['keyConfirm.notRemoved.cloudlog'])
+    const radio = within(group).getByText(fill(EN['keyConfirm.notRemoved.icomLan'], { radio: 'IC-9700' }))
+    for (const q of [cloudlog, radio]) {
+      const row = q.parentElement as HTMLElement
+      expect(within(row).queryByRole('button', { name: EN['keyConfirm.use'] })).toBeNull()
+      expect(within(row).getByRole('button', { name: EN['keyConfirm.remove'] })).toBeTruthy()
+    }
+    expect(within(group).queryByText(EN['keyConfirm.why'])).toBeNull()
+    expect(within(group).queryByText(fill(EN['keyConfirm.cloudlog'], { address: 'https://log.example/' }))).toBeNull()
+
+    fireEvent.click(within(radio.parentElement as HTMLElement).getByRole('button', { name: EN['keyConfirm.remove'] }))
+    await settle()
+    expect(mockAnswer).toHaveBeenCalledWith(1, false)
+  })
+
+  it('CONTROL: beside a key held back for its address, that one still offers Use, with the reason', async () => {
+    mockKeys.mockResolvedValue([CLOUDLOG, { ...IC9700, removalFailed: true }])
+    render(<KeyConfirmBanner />)
+    await settle()
+    const group = screen.getByRole('group', { name: EN['keyConfirm.label'] })
+    expect(within(group).getByText(EN['keyConfirm.why'])).toBeTruthy()
+    const cloudlog = within(group).getByText(fill(EN['keyConfirm.cloudlog'], { address: 'https://log.example/' }))
+    expect(
+      within(cloudlog.parentElement as HTMLElement).getByRole('button', { name: EN['keyConfirm.use'] }),
+    ).toBeTruthy()
+    expect(within(group).getAllByRole('button', { name: EN['keyConfirm.use'] })).toHaveLength(1)
   })
 
   it('asks again while it shows nothing, so a restore made later is seen', async () => {
