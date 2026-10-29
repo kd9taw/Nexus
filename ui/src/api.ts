@@ -2506,6 +2506,22 @@ export async function qrzTestConnection(): Promise<string> {
   return invoke<string>('qrz_test_connection', {})
 }
 
+/** Sign in to LoTW with the stored website login and read a report of no records (never an
+ * upload). Resolves to a summary or rejects with LoTW's own words / the network failure. */
+export async function lotwTestConnection(): Promise<string> {
+  return invoke<string>('lotw_test_connection', {})
+}
+
+/** Sign in to eQSL with the stored login and read an empty InBox query (never an upload). */
+export async function eqslTestConnection(): Promise<string> {
+  return invoke<string>('eqsl_test_connection', {})
+}
+
+/** Sign in to ClubLog with the upload's credentials and read its log matches (never an upload). */
+export async function clublogTestConnection(): Promise<string> {
+  return invoke<string>('clublog_test_connection', {})
+}
+
 /** Push one logged QSO to the operator's QRZ logbook. */
 export async function qrzPushQso(record: LoggedQso): Promise<QrzPushResult> {
   return invoke<QrzPushResult>('qrz_push_qso', { record })

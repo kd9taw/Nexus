@@ -163,6 +163,99 @@ pub fn classify_response(status: u16, body: &str) -> ClubLogPush {
     }
 }
 
+// ----- Settings ▸ Test: a read-only sign-in ----------------------------------
+
+/// ClubLog's log-matches endpoint (GET). Hard-coded https constant, as the realtime one.
+pub const CLUBLOG_MATCHES_URL: &str = "https://clublog.org/getmatches.php";
+
+/// Build the URL of a Test of the ClubLog credentials: `getmatches.php`, signed in with the
+/// four values a realtime upload sends (email, Application Password, callsign, application key),
+/// asked for the matches made from 31 December 2078.
+///
+/// ClubLog's "Checking for Log Matches" page documents it as a GET of `api`, `email`,
+/// `password` (the Application Password), `callsign` ("it must be owned by the account") and an
+/// optional `startyear`/`startmonth`/`startday` (the date ClubLog made the match), answering a
+/// JSON array. So it proves what an upload needs — the login and that the callsign is the
+/// account's — and reads only: no `adif`, nothing stored. ClubLog documents no read-only "login"
+/// call. The returned URL carries the password and the key — never log it.
+pub fn build_login_test_url(email: &str, password: &str, callsign: &str, api_key: &str) -> String {
+    format!(
+        "{CLUBLOG_MATCHES_URL}?api={}&email={}&password={}&callsign={}\
+         &startyear=2078&startmonth=12&startday=31",
+        pct(api_key.trim()),
+        pct(email.trim()),
+        pct(password),
+        pct(callsign.trim()),
+    )
+}
+
+/// What ClubLog's answer (`status`, `body`) to [`build_login_test_url`] says about the login:
+/// a JSON array is a good one; a 403 is ClubLog's refusal ("Authentication failed", in the
+/// realtime page's words for the same status), in its words when it gave any. ClubLog's words
+/// may echo the request — the caller masks the secrets before showing them.
+pub fn classify_login_test(status: u16, body: &str) -> crate::login_check::LoginCheck {
+    use crate::login_check::{capped, LoginCheck};
+    let words = Some(capped(body)).filter(|w| !w.is_empty());
+    match status {
+        200 if body.trim_start().starts_with('[') => LoginCheck::Accepted,
+        403 => LoginCheck::Refused(words.unwrap_or_else(|| "HTTP 403 Forbidden".to_string())),
+        _ => LoginCheck::Unrecognised(words),
+    }
+}
+
+#[cfg(test)]
+mod login_test_tests {
+    use super::*;
+    use crate::login_check::LoginCheck;
+
+    /// The Test carries the four values the upload sends, to the read-only matches endpoint,
+    /// and no record.
+    #[test]
+    fn the_test_signs_in_to_the_matches_endpoint_with_the_uploads_credentials() {
+        let url = build_login_test_url(" a@b.com ", "app pw&1", " W9TST ", "DEVKEY");
+        assert_eq!(
+            url,
+            "https://clublog.org/getmatches.php?api=DEVKEY&email=a%40b.com&password=app%20pw%261\
+             &callsign=W9TST&startyear=2078&startmonth=12&startday=31"
+        );
+        assert!(!url.contains("realtime.php") && !url.contains("putlogs"));
+        assert!(!url.contains("adif"), "no record goes with a Test");
+        // Control: the upload's body does carry one, so the check above can fail.
+        let upload = build_realtime_body(&ClubLogQuery {
+            email: "a@b.com".into(),
+            password: "app pw&1".into(),
+            callsign: "W9TST".into(),
+            api_key: "DEVKEY".into(),
+            adif: "<call:4>W1AW<eor>".into(),
+        });
+        assert!(upload.contains("adif="));
+    }
+
+    #[test]
+    fn the_test_reads_the_status_clublog_answers() {
+        assert_eq!(classify_login_test(200, "[]"), LoginCheck::Accepted);
+        assert_eq!(
+            classify_login_test(200, " [[\"W1AW\",291,\"2026-01-02\",20,\"FT8\"]]"),
+            LoginCheck::Accepted
+        );
+        assert_eq!(
+            classify_login_test(403, "Invalid login\n"),
+            LoginCheck::Refused("Invalid login".into())
+        );
+        assert_eq!(
+            classify_login_test(403, ""),
+            LoginCheck::Refused("HTTP 403 Forbidden".into())
+        );
+        // Controls: a 200 that is not the array, and any other status, are not called a good
+        // login nor a bad one.
+        assert_eq!(
+            classify_login_test(200, "Maintenance"),
+            LoginCheck::Unrecognised(Some("Maintenance".into()))
+        );
+        assert_eq!(classify_login_test(500, ""), LoginCheck::Unrecognised(None));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

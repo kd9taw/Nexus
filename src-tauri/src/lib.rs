@@ -65,6 +65,8 @@ mod command_classes;
 /// admits: deny by default at both ends, Stop never refused, at most once, the caps, and the
 /// revision a whole save is checked against.
 mod command_dispatch;
+/// Settings ▸ Connections ▸ Test for LoTW, eQSL and ClubLog: sign in and read, never upload.
+mod connector_checks;
 /// The contest strip's Super Check Partial download and call-history file: the HTTP and the
 /// commands, off the Engine lock. The rules are `tempo_app::scp` and `tempo_app::call_history`.
 mod contest_lists;
@@ -41092,6 +41094,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         resume_chat_cq,
         notify_erase,
         qrz_test_connection,
+        connector_checks::lotw_test_connection,
+        connector_checks::eqsl_test_connection,
+        connector_checks::clublog_test_connection,
         set_hunt_target,
         clear_hunt_target,
         fd_log_manual,

@@ -224,6 +224,96 @@ fn extract_adif_field(body: &str, name: &str) -> Option<String> {
     }
 }
 
+// ----- Settings ▸ Test: a read-only sign-in ----------------------------------
+
+/// The `qso_qslsince` a Test asks with: a date no confirmation can have yet, so even a service
+/// that ignored the missing `qso_query` would have nothing to send.
+const LOGIN_TEST_SINCE: &str = "2078-12-31";
+
+/// The words LoTW's sign-in page shows when the username or password is wrong (seen on that
+/// page, which LoTW sends with HTTP 200 in place of the report).
+const LOGIN_REFUSED: &str = "username/password incorrect";
+
+/// Build the URL of a Test of the LoTW **website** login: the report the confirmation download
+/// asks for, signed in the same way, made to hold no records.
+///
+/// LoTW's developer page documents `qso_query` as "If absent, ADIF file will contain no QSO
+/// records", so it is left out; the report header still comes back, and only a good login gets
+/// one. `qso_qsl=yes` with an explicit `qso_qslsince` keeps this from being the unqualified query
+/// whose high-water LoTW keeps as the default for the next download by any program. A read: it
+/// uploads nothing and changes nothing. The returned URL carries the password — never log it.
+pub fn build_login_test_url(username: &str, password: &str) -> String {
+    format!(
+        "{LOTW_REPORT_URL}?login={}&password={}&qso_qsl=yes&qso_qslsince={LOGIN_TEST_SINCE}",
+        pct(username.trim()),
+        pct(password),
+    )
+}
+
+/// What LoTW's answer `body` to [`build_login_test_url`] says about the login.
+pub fn classify_login_test(body: &str) -> crate::login_check::LoginCheck {
+    use crate::login_check::LoginCheck;
+    if is_lotw_adif(body) {
+        return LoginCheck::Accepted;
+    }
+    // LoTW's own words, as its page writes them.
+    match body.to_ascii_lowercase().find(LOGIN_REFUSED) {
+        Some(at) => LoginCheck::Refused(body[at..at + LOGIN_REFUSED.len()].to_string()),
+        None => LoginCheck::Unrecognised(None),
+    }
+}
+
+#[cfg(test)]
+mod login_test_tests {
+    use super::*;
+    use crate::login_check::LoginCheck;
+
+    /// The Test is the confirmation download's sign-in, asked for no records: the report
+    /// endpoint over https, the same login and password parameters, no `qso_query`.
+    #[test]
+    fn the_test_asks_the_report_endpoint_for_no_records() {
+        let url = build_login_test_url(" w9tst ", "p@ss w&rd=1");
+        assert_eq!(
+            url,
+            "https://lotw.arrl.org/lotwuser/lotwreport.adi?login=w9tst&password=p%40ss%20w%26rd%3D1\
+             &qso_qsl=yes&qso_qslsince=2078-12-31"
+        );
+        assert!(!url.contains("qso_query"), "no QSO records are asked for");
+        // Control: the download it mirrors does ask for records, so the check above can fail.
+        let download = build_report_url(&LotwQuery {
+            username: "w9tst".into(),
+            password: "x".into(),
+            qsl_since: None,
+        });
+        assert!(download.contains("qso_query=1"));
+    }
+
+    #[test]
+    fn the_test_reads_the_report_header_as_a_good_login() {
+        let header = "ARRL Logbook of the World Status Report\n\
+            <PROGRAMID:4>LoTW\n<APP_LoTW_NUMREC:1>0\n<eoh>\n";
+        assert_eq!(classify_login_test(header), LoginCheck::Accepted);
+    }
+
+    /// LoTW answers a wrong login with its sign-in page, HTTP 200; its words come through.
+    #[test]
+    fn the_test_reads_lotws_sign_in_page_as_a_refusal_in_its_words() {
+        let page = "<html><title>ARRL's Logbook of The World</title><body>\
+            <p>Log on to Logbook of The World -- LoTW</p>\
+            <p class=\"error\">Username/password incorrect</p></body></html>";
+        assert_eq!(
+            classify_login_test(page),
+            LoginCheck::Refused("Username/password incorrect".into())
+        );
+        // Control: an error page that is neither the report nor the refusal is not called a
+        // bad login.
+        assert_eq!(
+            classify_login_test("<html><body>Down for maintenance</body></html>"),
+            LoginCheck::Unrecognised(None)
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
