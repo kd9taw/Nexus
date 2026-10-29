@@ -21052,8 +21052,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // uses: its overs are refused at the key, so the run's give-up, which
             // sets such a contact aside (#153), never comes. It is set aside here instead, for Log
             // QSO, under the call its overs carried ([`Self::set_aside`]). Logging only.
+            //
+            // A report crossed only when THEIR report to us arrived: it proves they heard us under
+            // the old call. Our report sent is not asked: it is recorded when the over is queued,
+            // and after the call change that over is refused at the key, so it may never have
+            // gone out.
             if call_changed_refusal(&was.mycall, &self.settings.mycall).is_some()
-                && (was.rx_report.is_some() || self.qso_report_sent.is_some())
+                && was.rx_report.is_some()
             {
                 let made_on = (self.settings.band.clone(), self.log_frequencies());
                 let st = self.set_aside(dx, was.dxgrid.clone(), was.rx_report, made_on);

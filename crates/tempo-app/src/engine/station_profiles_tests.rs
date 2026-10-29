@@ -2957,3 +2957,29 @@ fn a_mode_change_without_a_call_edit_still_sets_no_unfinished_contact_aside() {
         (false, false, vec![])
     );
 }
+
+/// ⛔ No profiles: a run as KD9TAW, the call saved as W9XYZ, then W1AW answers our CQ with only a
+/// grid. Our report is queued under KD9TAW and refused at the key, so no report crossed either
+/// way. Ending the run sets nothing aside and Log QSO logs nothing: a report queued and never
+/// sent is not a contact. The set-aside on a call edit (the test above) needs W1AW's report to us.
+#[test]
+fn without_profiles_a_run_left_after_a_call_edit_with_no_report_in_sets_nothing_aside() {
+    let mut e = plain_ft8();
+    e.start_cq(None).unwrap();
+    let _ = e.take_immediate_tx();
+    assert_eq!(key_over(&mut e, 100).as_deref(), Some("CQ KD9TAW EN52"));
+    settings_call_edit(&mut e, "W9XYZ");
+    e.hear_for_test("KD9TAW W1AW FN31", -5, 102);
+    assert_eq!(tx_now(&e), "W1AW KD9TAW -05", "premise: our report queued");
+    assert_eq!(key_over(&mut e, 102), None, "premise: refused at the key");
+    e.halt_tx();
+    e.set_mode("qso-monitor").unwrap();
+    assert_eq!(
+        (
+            e.stalled_qso.is_some(),
+            e.log_current_qso(),
+            logged_calls(&e)
+        ),
+        (false, false, vec![])
+    );
+}
