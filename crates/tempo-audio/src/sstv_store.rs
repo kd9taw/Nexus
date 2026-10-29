@@ -148,13 +148,20 @@ pub fn load_gallery(dir: &Path) -> Vec<SstvGalleryEntry> {
 
 /// Persist the gallery metadata to `dir`/`gallery.json` (atomic tmp+rename,
 /// best-effort — a failed write never disturbs the decode thread).
+///
+/// ⛔ Call with the Engine lock held and `entries` read under it: that lock is what serialises
+/// every gallery.json write in this process (see `sstvrx::persist_gallery`). The scratch file is
+/// per PROCESS, never a fixed `gallery.json.tmp`, for two builds running against one gallery: on a
+/// shared scratch name their writes land in the same file and the rename can publish a mix of
+/// both, which loads as an empty gallery. With one each, the rename is the only thing shared, and
+/// it is atomic. The `Settings::tmp_path` shape.
 pub fn save_gallery(dir: &Path, entries: &[SstvGalleryEntry]) {
     let _ = std::fs::create_dir_all(dir);
     if let Ok(text) = serde_json::to_string(entries) {
         let path = dir.join(GALLERY_JSON);
-        let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 }
@@ -306,6 +313,42 @@ mod tests {
         save_gallery(&dir, std::slice::from_ref(&entry));
         let loaded = load_gallery(&dir);
         assert_eq!(loaded, vec![entry]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two Nexus builds can run against one gallery (a tester build beside the release). Each
+    /// writes gallery.json through a scratch file and renames it into place; on one shared
+    /// scratch name the two writes land in the same file and the rename can publish a mix of
+    /// both, which is invalid JSON and loads as an empty gallery, losing every picture's
+    /// frequency, line count and FSK ID. A save must leave a scratch file it did not create alone.
+    #[test]
+    fn a_gallery_save_leaves_another_writers_scratch_file_alone() {
+        let dir = scratch("other-writer");
+        // The fixed scratch name every earlier build writes through, mid-write.
+        let theirs = dir.join("gallery.json.tmp");
+        std::fs::write(&theirs, "[{\"path\":").unwrap();
+        save_gallery(&dir, &[]);
+        assert_eq!(
+            std::fs::read_to_string(&theirs).ok().as_deref(),
+            Some("[{\"path\":"),
+            "another writer's half-written scratch file must not be overwritten or moved"
+        );
+        assert_eq!(load_gallery(&dir), vec![], "and this save still landed");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(GALLERY_JSON)).unwrap(),
+            "[]"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|f| f.file_name().to_string_lossy().into_owned())
+            .filter(|n| n != GALLERY_JSON && n != "gallery.json.tmp")
+            .collect();
+        assert_eq!(
+            leftovers,
+            Vec::<String>::new(),
+            "no scratch file left behind"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

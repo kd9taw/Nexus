@@ -6542,10 +6542,9 @@ fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(),
     delete_sstv_gallery_image(&mut engine_lock(&state), &sstv_gallery_dir(), &path)
 }
 
-/// Delete one received picture and reconcile the gallery index, for the desktop command above and
-/// for the Remote gallery delete, which resolves the path from its own gallery row and never takes
-/// one from a browser. The caller holds the Engine lock; the file removal is inside it, which the
-/// directory read below already was.
+/// Delete one received picture and reconcile the gallery index, for the desktop command above. The
+/// caller holds the Engine lock; the file removal is inside it, which the directory read below
+/// already was.
 ///
 /// ⛔ The containment and membership checks are load-bearing whichever caller arrives: only a
 /// picture the gallery lists, inside the station's own gallery folder, can be removed, and a path
@@ -6619,6 +6618,10 @@ fn delete_sstv_gallery_images(
             }),
         }
     }
+    #[cfg(test)]
+    if let Some(hook) = BEFORE_BATCH_RELOCK.with(|h| h.borrow_mut().take()) {
+        hook(engine);
+    }
     if !removed.is_empty() {
         let mut eng = engine_lock(engine);
         for path in removed {
@@ -6629,15 +6632,36 @@ fn delete_sstv_gallery_images(
     failed
 }
 
+#[cfg(test)]
+type BatchRelockHook = Box<dyn FnOnce(&std::sync::Mutex<tempo_app::engine::Engine>)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once, between the batch delete's unlinks and its relock: the seam a test uses to land
+    /// a newly received picture at exactly that moment.
+    static BEFORE_BATCH_RELOCK: std::cell::RefCell<Option<BatchRelockHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// The gallery's pictures as canonical paths, for the membership check below. A picture whose
 /// file is already gone has no canonical path and is left out; it could not be removed anyway.
+/// So is an entry that is a symbolic link rather than a picture file: following it would make
+/// whatever it points at count as a gallery picture.
 fn canonical_gallery_paths(
     entries: &[tempo_app::dto::SstvGalleryEntry],
 ) -> std::collections::HashSet<std::path::PathBuf> {
     entries
         .iter()
-        .filter_map(|e| std::path::Path::new(&e.path).canonicalize().ok())
+        .map(|e| std::path::Path::new(&e.path))
+        .filter(|p| is_regular_file(p))
+        .filter_map(|p| p.canonicalize().ok())
         .collect()
+}
+
+/// A plain file, not a symbolic link to one. The gallery holds only the pictures the decoder wrote,
+/// and those are never links.
+fn is_regular_file(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
 }
 
 /// Remove one picture file. The in-memory gallery and the index on disk are the caller's to update,
@@ -6647,13 +6671,17 @@ fn canonical_gallery_paths(
 /// are canonicalised, so `..` cannot walk out. ⛔ So is the membership check: inside the folder is
 /// not enough, the file must be one of the gallery's `pictures` (canonical, from
 /// [`canonical_gallery_paths`]), so an operator's own file kept there, or `gallery.json` itself, is
-/// refused.
+/// refused. A request that names a symbolic link is refused as not a picture: removing what it
+/// points at would delete a file the request never named.
 fn unlink_sstv_gallery_file(
     dir: &std::path::Path,
     pictures: &std::collections::HashSet<std::path::PathBuf>,
     path: &str,
 ) -> Result<(), String> {
     let target = std::path::Path::new(path);
+    if std::fs::symlink_metadata(target).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("That file is not a picture in the SSTV gallery".into());
+    }
     let canon_dir = dir
         .canonicalize()
         .map_err(|e| format!("no gallery folder: {e}"))?;
@@ -6684,11 +6712,14 @@ fn rewrite_sstv_gallery_index(eng: &mut tempo_app::engine::Engine, dir: &std::pa
     #[cfg(test)]
     SSTV_INDEX_WRITES.with(|n| n.set(n.get() + 1));
     let entries = reconcile_gallery(dir, eng.sstv_gallery().to_vec());
+    // The decode thread writes gallery.json too (`tempo_audio::sstv_store::save_gallery`), with
+    // the Engine lock held as it is here, so the two never write at once. Per-process scratch name
+    // for two builds sharing one gallery, as that function explains.
     if let Ok(text) = serde_json::to_string(&entries) {
         let p = dir.join("gallery.json");
-        let tmp = p.with_extension("json.tmp");
-        if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &p);
+        let tmp = p.with_extension(format!("json.{}.tmp", std::process::id()));
+        if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &p).is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
     }
     eng.load_sstv_gallery(entries);
@@ -6713,9 +6744,11 @@ fn reconcile_gallery(
     dir: &std::path::Path,
     entries: Vec<tempo_app::dto::SstvGalleryEntry>,
 ) -> Vec<tempo_app::dto::SstvGalleryEntry> {
+    // Plain files only, here and in the adoption below: a symbolic link named like a picture
+    // (dangling, or pointing at something else in or out of the folder) is not one the decoder wrote.
     let mut kept: Vec<tempo_app::dto::SstvGalleryEntry> = entries
         .into_iter()
-        .filter(|e| std::path::Path::new(&e.path).is_file())
+        .filter(|e| is_regular_file(std::path::Path::new(&e.path)))
         .collect();
     let known: std::collections::HashSet<String> = kept.iter().map(|e| e.path.clone()).collect();
 
@@ -6733,7 +6766,9 @@ fn reconcile_gallery(
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(str::to_ascii_lowercase);
-            if !matches!(ext.as_deref(), Some("bmp") | Some("png")) {
+            if !matches!(ext.as_deref(), Some("bmp") | Some("png"))
+                || !f.file_type().is_ok_and(|t| t.is_file())
+            {
                 continue;
             }
             let p = path.to_string_lossy().into_owned();
@@ -47866,6 +47901,159 @@ mod tests {
         assert_eq!(failed, vec![]);
         assert!(!dir.join(names[0]).exists());
         assert!(dir.join(names[1]).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The batch delete lets go of the Engine while it unlinks, so the decoder can finish a picture
+    /// in between. That picture must come through with everything the decoder knew about it (its
+    /// FSK ID here; frequency and line count likewise), and the picture the batch removed must not
+    /// come back. Writing back the gallery as it stood before the unlinks would lose the FSK ID:
+    /// the arrival would survive only because the folder scan re-adopts its file, bare.
+    #[test]
+    fn a_picture_received_during_a_gallery_batch_delete_keeps_its_fsk_id_and_the_deleted_one_stays_gone(
+    ) {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-arrival", &names);
+        let arrival = dir.join("20261030T100500Z_robot36.png");
+        let arrival_path = arrival.to_string_lossy().into_owned();
+        {
+            let arrival_path = arrival_path.clone();
+            super::BEFORE_BATCH_RELOCK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |engine| {
+                    // What the decode thread does for a finished picture and its trailing FSK ID.
+                    std::fs::write(&arrival_path, b"PNG-not-really").unwrap();
+                    let mut e = engine.lock().unwrap();
+                    let mut got =
+                        entry(std::path::Path::new(&arrival_path), "2026-10-30T10:05:00Z");
+                    got.freq_mhz = 14.233;
+                    e.push_sstv_gallery(got);
+                    e.set_sstv_gallery_fsk_id(&arrival_path, "K1ABC".into());
+                }));
+            });
+        }
+
+        let gone = dir.join(names[0]).to_string_lossy().into_owned();
+        let failed = delete_batch(&mut eng, &dir, std::slice::from_ref(&gone));
+
+        assert_eq!(failed, vec![]);
+        let text = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+        let on_disk: Vec<tempo_app::dto::SstvGalleryEntry> = serde_json::from_str(&text).unwrap();
+        for (label, gallery) in [
+            ("on disk", on_disk.as_slice()),
+            ("in memory", eng.sstv_gallery()),
+        ] {
+            let paths: Vec<&str> = gallery.iter().map(|e| e.path.as_str()).collect();
+            assert_eq!(
+                paths,
+                vec![arrival_path.as_str()],
+                "{label}: the arrival is kept and the deleted picture stays deleted"
+            );
+            assert_eq!(
+                gallery[0].fsk_id.as_deref(),
+                Some("K1ABC"),
+                "{label}: the arrival keeps its FSK ID"
+            );
+            assert_eq!(gallery[0].freq_mhz, 14.233, "{label}: and its frequency");
+        }
+        assert!(!dir.join(names[0]).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two builds can share one gallery folder. The index rewrite must not write through another
+    /// writer's scratch file (the fixed name earlier builds use): two writes in one file can be
+    /// published as a mix of both, which loads as an empty gallery.
+    #[test]
+    fn a_gallery_delete_leaves_another_writers_scratch_file_alone() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-other-writer", &names);
+        let theirs = dir.join("gallery.json.tmp");
+        std::fs::write(&theirs, "[{\"path\":").unwrap();
+        let picture = dir.join(names[0]).to_string_lossy().into_owned();
+        assert_eq!(
+            super::delete_sstv_gallery_image(&mut eng, &dir, &picture),
+            Ok(())
+        );
+        assert_eq!(
+            std::fs::read_to_string(&theirs).ok().as_deref(),
+            Some("[{\"path\":"),
+            "another writer's half-written scratch file must not be overwritten or moved"
+        );
+        assert_eq!(
+            index_paths(&dir),
+            Vec::<String>::new(),
+            "this rewrite still landed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symbolic link is never a gallery picture, whatever it is named and wherever it points:
+    /// the folder scan does not adopt one, an index entry that is one drops out, and a delete that
+    /// names one (or names the file a listed link points at) is refused with both files left.
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_in_the_gallery_folder_is_never_a_picture() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-symlink", &names);
+        let picture = dir.join(names[0]);
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"the operator's notes").unwrap();
+        // A link named like a picture pointing at a listed picture, one pointing at the notes,
+        // and a dangling one.
+        let to_picture = dir.join("20261030T100100Z_robot36.png");
+        let to_notes = dir.join("20261030T100200Z_pd120.png");
+        let dangling = dir.join("20261030T100300Z_martin1.bmp");
+        std::os::unix::fs::symlink(&picture, &to_picture).unwrap();
+        std::os::unix::fs::symlink(&notes, &to_notes).unwrap();
+        std::os::unix::fs::symlink(dir.join("gone.png"), &dangling).unwrap();
+
+        // The folder scan adopts the real picture only.
+        let adopted: Vec<String> = reconcile_gallery(&dir, Vec::new())
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(adopted, vec![picture.to_string_lossy().into_owned()]);
+
+        // An index that already lists a link drops it.
+        let mut listed = eng.sstv_gallery().to_vec();
+        listed.push(entry(&to_notes, "2026-10-30T10:02:00Z"));
+        let kept: Vec<String> = reconcile_gallery(&dir, listed.clone())
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(kept, vec![picture.to_string_lossy().into_owned()]);
+
+        // Delete: a link that points at a listed picture is refused, and neither goes.
+        eng.load_sstv_gallery(listed);
+        let not_a_picture = Err("That file is not a picture in the SSTV gallery".to_string());
+        assert_eq!(
+            super::delete_sstv_gallery_image(&mut eng, &dir, &to_picture.to_string_lossy()),
+            not_a_picture
+        );
+        assert!(
+            picture.is_file(),
+            "the picture the link points at must stay"
+        );
+        assert!(
+            std::fs::symlink_metadata(&to_picture).is_ok(),
+            "and so does the link"
+        );
+        // A listed link does not make the file it points at a picture.
+        assert_eq!(
+            super::delete_sstv_gallery_image(&mut eng, &dir, &notes.to_string_lossy()),
+            not_a_picture
+        );
+        assert!(notes.is_file(), "the operator's notes must stay");
+        // Positive control: the real picture still deletes.
+        assert_eq!(
+            super::delete_sstv_gallery_image(&mut eng, &dir, &picture.to_string_lossy()),
+            Ok(())
+        );
+        assert!(!picture.exists());
+        assert!(
+            index_paths(&dir).is_empty(),
+            "no link is listed after the rewrite: {:?}",
+            index_paths(&dir)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
