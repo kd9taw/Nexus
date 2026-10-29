@@ -736,13 +736,25 @@ impl FlexDaemon {
     /// this holds (operator rulings, 2026-10-04 and 2026-10-12), and a voice-keyer message waits
     /// for the switch to DAX around it. It still holds while the radio is on DAX only for such a
     /// message ([`Self::dax_for_keyer`]). Beside another program's DAX the flag is not Nexus's to
-    /// judge, as for the digital refusal at `T 1`. Cheap: what the audio control thread last read,
-    /// and the session's state read in place.
+    /// judge, as for the digital refusal at `T 1`. It holds from the moment Nexus writes the mic
+    /// ([`Routing::mic_write_in_flight`]), before the radio reports it: a press then (right after a
+    /// digital mode, or after a slow switch back) takes the switch to DAX around it rather than the
+    /// stale DAX the radio still reports. Cheap: what the audio control thread last read, and the
+    /// session's state read in place.
     pub fn radio_has_mic(&self) -> bool {
         self.state.native_audio.load(Ordering::Relaxed)
             && self.audio.as_ref().is_some_and(|a| {
-                !a.other_feeder() && (a.radio_dax() == Some(false) || self.dax_for_keyer())
+                !a.other_feeder()
+                    && (a.radio_dax() == Some(false)
+                        || self.dax_for_keyer()
+                        || self.mic_write_in_flight())
             })
+    }
+
+    /// [`Routing::mic_write_in_flight`], on the session's state now.
+    fn mic_write_in_flight(&self) -> bool {
+        let view = self.conn().read(|s| routing_view(s, &self.state));
+        lock(&self.state.routing).mic_write_in_flight(&view)
     }
 
     /// Whether the radio takes its transmit audio from DAX only for a voice-keyer message: Nexus
@@ -862,10 +874,15 @@ impl FlexDaemon {
                 ),
             ),
         };
+        // Held from the write until its sequence number is recorded: the radio's refusal, read on
+        // the watch thread by that number, cannot arrive first.
+        let mut routing = lock(&self.state.routing);
         match conn.route(audio) {
-            Ok(_) => {
+            Ok(seq) => {
                 if let Step::Write { dax, why } = step {
-                    let keep = lock(&self.state.routing).written(dax, why, now);
+                    let keep = routing.written(dax, why, now);
+                    routing.sent(seq);
+                    drop(routing);
                     self.memory.keep(&self.memory_key, keep);
                 }
                 *lock(&self.routing_refusal) = None;
@@ -1310,6 +1327,9 @@ fn watch(
                      transmit — receive only"
                 ),
             ),
+            // A refused command may be the routing's write of the DAX source: it is then no longer
+            // in flight ([`Routing::refused`]).
+            Event::Reply { seq, code, .. } if code != 0 => lock(&state.routing).refused(seq),
             Event::Closed { end, was_keyed, .. } => {
                 tempo_core::applog::warn(
                     "cat",

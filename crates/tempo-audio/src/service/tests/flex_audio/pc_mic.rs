@@ -181,6 +181,160 @@ fn a_quick_re_press_keys_only_once_the_radio_is_back_on_dax() {
     }
 }
 
+/// What the radio sees for one held over that waits for the mic's write and then DAX, from the mic's
+/// write to the mic back after it.
+const MIC_THEN_OVER: [&str; 9] = [
+    "transmit set dax=0",
+    "radio dax=0",
+    "transmit set dax=1",
+    "radio dax=1",
+    "xmit 1",
+    "xmit 0",
+    "idle",
+    "transmit set dax=0",
+    "radio dax=0",
+];
+
+/// ⛔ A PRESS RIGHT AFTER A DIGITAL MODE. From FT8 to Phone at the shack Nexus writes the radio's
+/// mic; until the radio reports it (600 ms here) the radio still says DAX. A press in that window
+/// must not take the stale DAX for the computer's route: it would key without the hold, and the
+/// radio would get `xmit 1` after `transmit set dax=0` and put its own mic (the room) on the air.
+/// The press counts the mic's write as the radio having its mic, arms on the hold, and keys only
+/// once the radio has reported the mic and then DAX again. CONTROL: a press once the mic is
+/// reported keys the same way.
+#[test]
+fn a_press_right_after_a_digital_mode_keys_only_once_the_radio_is_on_dax() {
+    for quick in [true, false] {
+        let boot = Instant::now();
+        let mut s = FlexScene::with_session(true, slow_mic_back(600));
+        mic_on(&s);
+        run_until(&mut s, "the radio never took DAX for FT8", |s| {
+            seen_at(s, boot, "radio dax=1").is_some()
+        });
+        s.run(300);
+        let since = Instant::now();
+        {
+            let mut e = s.engine.lock().unwrap();
+            e.set_operating_mode("phone", false); // arms TX
+            e.set_frequency(14.250, "20m", "USB");
+        }
+        run_until_seen(&mut s, since, "transmit set dax=0");
+        if quick {
+            assert!(
+                seen_at(&s, since, "radio dax=0").is_none(),
+                "quick={quick}: premise: the mic's write is in flight"
+            );
+        } else {
+            run_until_seen(&mut s, since, "radio dax=0");
+            s.run(200);
+        }
+        ptt(&s, true);
+        let hold = s.engine.lock().unwrap().pc_mic_dax_hold().is_some();
+        run_until_seen(&mut s, since, "xmit 1");
+        s.run(500);
+        let keyed = s.engine.lock().unwrap().pc_mic_keyed();
+        let held = format!(
+            "hold={hold} keyed={keyed} ended={} keys={}",
+            ended(&s),
+            keys(&s)
+        );
+        ptt(&s, false);
+        run_until_count(&mut s, since, "radio dax=0", 2);
+        s.run(200);
+        assert_eq!(
+            format!("{held} wire={:?}", voice_trace(&s, since)),
+            format!("hold=true keyed=true ended=null keys=1 wire={MIC_THEN_OVER:?}"),
+            "quick={quick}"
+        );
+        let reported = seen_at(&s, since, "radio dax=1").unwrap();
+        assert!(
+            dax_in(&s, since).iter().any(|(t, _)| *t > reported),
+            "quick={quick}: the press carried no microphone"
+        );
+    }
+}
+
+/// ⛔ A RE-PRESS WHILE A SLOW MIC WRITE OUTLIVES THE ROUTING'S CONFIRM WINDOW. The radio reports the
+/// mic 2.6 s after Nexus writes it, later than the routing's own 2 s window, after which the
+/// routing decides again. A press just before that window ends must still not key on the radio's
+/// stale DAX: for keying, the write stays in flight until the radio reports it (or refuses it), so
+/// the press waits for the mic's report, then DAX again, and only then keys.
+#[test]
+fn a_re_press_waits_for_a_mic_write_the_radio_reports_late() {
+    let mut s = shack_with_mic(slow_mic_back(2_600));
+    let since = Instant::now();
+    ptt(&s, true);
+    run_until_seen(&mut s, since, "xmit 1");
+    s.run(500);
+    ptt(&s, false);
+    run_until_seen(&mut s, since, "transmit set dax=0");
+    s.run(1_800);
+    assert!(
+        seen_at(&s, since, "radio dax=0").is_none(),
+        "premise: the mic's write is still in flight"
+    );
+    ptt(&s, true);
+    run_until_count(&mut s, since, "xmit 1", 2);
+    s.run(500);
+    let keyed = s.engine.lock().unwrap().pc_mic_keyed();
+    let held = format!("keyed={keyed} ended={} keys={}", ended(&s), keys(&s));
+    ptt(&s, false);
+    run_until_count(&mut s, since, "radio dax=0", 2);
+    s.run(200);
+    assert_eq!(
+        format!("{held} wire={:?}", voice_trace(&s, since)),
+        "keyed=true ended=null keys=2 wire=[\"stream create type=dax_tx\", \
+         \"transmit set dax=1\", \"radio dax=1\", \"xmit 1\", \"xmit 0\", \"idle\", \
+         \"transmit set dax=0\", \"radio dax=0\", \"transmit set dax=1\", \"radio dax=1\", \
+         \"xmit 1\", \"xmit 0\", \"idle\", \"transmit set dax=0\", \"transmit set dax=0\", \
+         \"radio dax=0\"]",
+        "the last write of the mic, reported late again, is the routing's to try again at 2 s"
+    );
+}
+
+/// …and a mic write the radio never answers at all (no report, no reply): the press is not locked
+/// out silently. It keys nothing and ends in the routing's confirm window with its reason, as a
+/// press the radio never switches for does.
+#[test]
+fn a_re_press_after_a_mic_write_the_radio_never_answers_keys_nothing_and_says_so() {
+    let boot = Instant::now();
+    let mut s = FlexScene::with_faults(
+        true,
+        reports(&["USB"]),
+        vec![tempo_flexsim::Fault::Unanswered {
+            starting: "transmit set dax=0".into(),
+            then_silent: false,
+        }],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    mic_on(&s);
+    run_until(&mut s, "the radio never took DAX for FT8", |s| {
+        seen_at(s, boot, "radio dax=1").is_some()
+    });
+    let since = Instant::now();
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    run_until_seen(&mut s, since, "transmit set dax=0");
+    s.run(2_500);
+    ptt(&s, true);
+    s.run(3_000);
+    let trace = voice_trace(&s, since);
+    assert_eq!(
+        format!(
+            "ended={} keys={} reported={}",
+            ended(&s),
+            keys(&s),
+            trace.iter().any(|t| t.starts_with("radio "))
+        ),
+        "ended=\"flexMic\" keys=0 reported=false",
+        "{trace:?}"
+    );
+    ptt(&s, false);
+}
+
 /// What ends the over in [`every_transmit_guard_cuts_an_over_on_the_dax_hold`].
 type Stop = fn(&mut FlexScene);
 

@@ -2664,6 +2664,63 @@ fn a_marked_key_waits_while_nexuss_mic_write_is_in_flight() {
     );
 }
 
+/// The radio REFUSING Nexus's write of its mic ends that write's flight at once: the flag it reports
+/// stands, so the radio is on DAX and does not have the mic, and a marked key may go on that DAX.
+/// CONTROL: a write the radio never answers at all (no reply, no report) stays in flight past the
+/// routing's confirm window: the radio counts as having the mic, and nothing keys on its stale DAX.
+#[test]
+fn a_refused_mic_write_is_not_in_flight_and_an_unanswered_one_stays_in_flight() {
+    for refused in [true, false] {
+        let (session, faults) = if refused {
+            (
+                with(
+                    with_mode_echo(),
+                    vec![rule("transmit set dax=0", "50000015", &[])],
+                ),
+                vec![],
+            )
+        } else {
+            (
+                with_mode_echo(),
+                vec![Fault::Unanswered {
+                    starting: "transmit set dax=0".into(),
+                    then_silent: false,
+                }],
+            )
+        };
+        let sim = simulator(session, faults);
+        let d = audio_daemon(&sim, memory());
+        dax_tx_ready(&sim, &d);
+        let mut c = Client::connect(&d);
+        wait_session(&d, "the readback idle", |s| s.transmit_ready);
+        eventually("the radio on DAX", || {
+            (d.session().snapshot().model.transmit.dax == Some(true)).then_some(())
+        });
+        assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+        route_until(&d, &sim, false, "transmit set dax=0", 1);
+        // Past the routing's confirm window, without writing again.
+        std::thread::sleep(Duration::from_millis(routing::CONFIRM_MS + 500));
+        assert_eq!(
+            d.session().snapshot().model.transmit.dax,
+            Some(true),
+            "refused={refused}: premise: the radio still reports DAX"
+        );
+        assert_eq!(
+            format!(
+                "has the mic {}, takes DAX {}",
+                d.radio_has_mic(),
+                d.takes_voice_dax()
+            ),
+            if refused {
+                "has the mic false, takes DAX true"
+            } else {
+                "has the mic true, takes DAX false"
+            },
+            "refused={refused}"
+        );
+    }
+}
+
 /// The mode this shim just commanded counts before the radio reports it: right after `M PKTUSB`,
 /// with the radio still reporting USB and the mic as the source, `T 1` is refused.
 #[test]

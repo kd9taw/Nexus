@@ -6104,6 +6104,14 @@ impl RadioLoop {
         };
         if let Some(done) = d.sync_tx_routing(browser_voice, voice_keyer) {
             crate::civ::diag::note(&format!("Flex client: {done}"));
+            // A write of the mic has the radio "having the mic" from now, before it reports it: the
+            // engine is told at once, so a press before the next tick takes the switch to DAX around
+            // it rather than going the plain way on the DAX the radio still reports.
+            let radio_has_mic = d.radio_has_mic();
+            if self.flex_radio_has_mic_pushed != Some(radio_has_mic) {
+                self.flex_radio_has_mic_pushed = Some(radio_has_mic);
+                engine_lock(engine).observe_flex_radio_has_mic(radio_has_mic);
+            }
         }
     }
 
