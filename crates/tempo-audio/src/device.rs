@@ -215,8 +215,10 @@ const TX_GAP_MAX_MS: u32 = 1_000;
 /// station logged `tx_underruns` rising by exactly one per over, at the unkey). What separates a gap
 /// from an ending is what follows: after a gap the transmission resumes, after an ending the card
 /// stays idle until the next over seconds later. So a dry block only marks the spot, and the gap is
-/// counted when audio returns within [`TX_GAP_MAX_MS`]. WSJT-X does not count the end either: its
-/// Modulator pads the last block with silence and goes Idle (`Modulator/Modulator.cpp`).
+/// counted when audio returns within [`TX_GAP_MAX_MS`]. WSJT-X has no such event at all: past the
+/// last FT8/FT4 sample its Modulator fills every block it is asked for with silence until the TX
+/// window closes and the stream is stopped (WSJT-X 3.0.2 `Modulator/Modulator.cpp:321-332`,
+/// `:365-369`; `widgets/mainwindow.cpp:8219-8220`), so its sound card never runs short at the end.
 ///
 /// Only the count moves; what plays is unchanged — the same samples, the same silence, at the same
 /// instants.
