@@ -31480,7 +31480,7 @@ fn icom_lan_set_password(
 
 /// Store (or, with an empty string, clear) a radio profile's Icom network password in the OS
 /// keychain. Write-only: it is never read back to the UI.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_icom_lan_password(
     state: State<'_, SharedEngine>,
     radio_id: u32,
@@ -31492,7 +31492,7 @@ fn set_icom_lan_password(
 }
 
 /// Remove a radio profile's Icom network password from the OS keychain (idempotent).
-#[tauri::command]
+#[tauri::command(async)]
 fn clear_icom_lan_password(state: State<'_, SharedEngine>, radio_id: u32) -> Result<(), String> {
     OsKeychain.clear(radio_id)?;
     key_typed_again(&state, Some(radio_id));
@@ -32077,7 +32077,7 @@ fn clear_qrz_logbook_key(state: State<'_, SharedEngine>) -> Result<(), String> {
 /// keychain — write-only, kept out of settings.json at rest like every other
 /// credential. Unlike QRZ, saving does NOT flip the upload toggle: Cloudlog also
 /// needs a URL + station-profile id, so the operator enables it explicitly.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_cloudlog_key(state: State<'_, SharedEngine>, key: String) -> Result<(), String> {
     let entry = cloudlog_keychain()?;
     if key.trim().is_empty() {
@@ -32095,13 +32095,13 @@ fn set_cloudlog_key(state: State<'_, SharedEngine>, key: String) -> Result<(), S
 }
 
 /// The saved keys that wait for the operator ([`keys_to_confirm_in`]), for the notice.
-#[tauri::command]
+#[tauri::command(async)]
 fn keys_to_confirm(state: State<'_, SharedEngine>) -> Vec<KeyToConfirm> {
     keys_to_confirm_in(engine_lock(&state).settings())
 }
 
 /// The operator's Use or Remove on a saved key that waits ([`answer_key_to_confirm`]).
-#[tauri::command]
+#[tauri::command(async)]
 fn answer_saved_key(
     state: State<'_, SharedEngine>,
     radio_id: Option<u32>,
@@ -32112,7 +32112,7 @@ fn answer_saved_key(
 }
 
 /// Remove the stored Cloudlog/Wavelog API key from the OS keychain (idempotent).
-#[tauri::command]
+#[tauri::command(async)]
 fn clear_cloudlog_key(state: State<'_, SharedEngine>) -> Result<(), String> {
     let r = clear_keychain_entry(&cloudlog_keychain()?);
     if r.is_ok() {
