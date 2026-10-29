@@ -9,7 +9,7 @@
 //! with the engine lock released. The engine decides what, if anything, the radio is told; this
 //! thread never writes to a radio. Off the ISS channel it only reads one flag a second.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use propagation::sat::{self, Tle};
 use tempo_app::engine::aprs_iss::IssSky;
@@ -69,20 +69,40 @@ pub fn spawn(engine: SharedEngine) {
 }
 
 fn run(engine: SharedEngine) {
+    drive(&engine, EVERY, |grid| {
+        iss_sky(&tle_snapshot(), grid, now_unix())
+    });
+}
+
+/// The loop, every `every`, with where the ISS is (`sky_from` the grid) passed in. The tick clock
+/// is monotonic: a wall-clock step must not stretch or cut the engine's waits. A panic in a tick
+/// (SGP4 on a malformed element set, say) stops the correction rather than leaving it frozen
+/// mid-pass: the engine is told, so a frame waiting on the transmit frequency is dropped, never
+/// keyed later, and the cockpit says the correction stopped.
+fn drive(engine: &SharedEngine, every: Duration, sky_from: impl Fn(&str) -> IssSky) {
     loop {
-        std::thread::sleep(EVERY);
-        let grid = {
-            let eng = engine_lock(&engine);
-            if !eng.aprs_iss_wants_sky() {
-                continue;
-            }
-            eng.settings().mygrid.clone()
-        };
-        let now = now_unix();
-        let sky = iss_sky(&tle_snapshot(), &grid, now);
-        let mut eng = engine_lock(&engine);
-        let keyed = eng.aprs_iss_keyed();
-        eng.aprs_iss_tick(sky, (now as u64).saturating_mul(1_000), keyed);
+        std::thread::sleep(every);
+        let tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let grid = {
+                let eng = engine_lock(engine);
+                if !eng.aprs_iss_wants_sky() {
+                    return;
+                }
+                eng.settings().mygrid.clone()
+            };
+            let sky = sky_from(&grid);
+            let mut eng = engine_lock(engine);
+            let keyed = eng.aprs_iss_keyed();
+            eng.aprs_iss_tick(sky, Instant::now(), keyed);
+        }));
+        if tick.is_err() {
+            tempo_core::applog::warn(
+                "aprs",
+                "the APRS ISS Doppler correction stopped: its tick panicked",
+            );
+            engine_lock(engine).aprs_iss_driver_stopped();
+            return;
+        }
     }
 }
 
@@ -133,6 +153,36 @@ mod tests {
         assert!(up.uplink_shift_hz < -2_000, "rising: send low");
         let down = tempo_core::doppler::simplex_legs(145_825_000, setting);
         assert!(down.downlink_shift_hz < -2_000 && down.uplink_shift_hz > 2_000);
+    }
+
+    /// A tick that panics stops the correction: the waiting frame is dropped, never keyed once
+    /// the radio later takes the uplink, and the cockpit says the correction stopped.
+    #[test]
+    fn a_panicking_tick_stops_the_correction_and_drops_a_waiting_frame() {
+        let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("technician");
+        e.set_operating_mode("phone", false);
+        e.aprs_tune(145.825).unwrap();
+        e.set_cat_status(Some(true), String::new());
+        let approaching = IssSky::Up {
+            range_rate_km_s: -6.0,
+        };
+        assert!(e.aprs_iss_tick(approaching, Instant::now(), false));
+        let takes = |e: &mut tempo_app::engine::Engine| {
+            let hz = e.settings().dial_hz();
+            e.rig_dial_applied(hz);
+            e.rig_freq_read(hz);
+        };
+        takes(&mut e);
+        e.aprs_beacon(41.9, -87.6, '/', '>', "test", &[]).unwrap();
+        assert!(e.poll_aprs_tx().is_none(), "precondition: the frame waits");
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(e));
+        drive(&engine, Duration::ZERO, |_| panic!("malformed elements"));
+        let mut e = engine_lock(&engine);
+        assert_eq!(e.aprs_iss_doppler().unwrap().why_off, Some("stopped"));
+        assert!(e.aprs_tx_notice().is_some(), "dropped without a word");
+        takes(&mut e);
+        assert!(e.poll_aprs_tx().is_none(), "keyed after the driver died");
     }
 
     #[test]

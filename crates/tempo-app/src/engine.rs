@@ -2011,6 +2011,22 @@ const APRS_REFUSED_KEY: &str = "APRS not sent: the radio did not accept the key,
 const APRS_ISS_UPLINK_NOT_TAKEN: &str = "APRS not sent: the radio did not move to the ISS \
      transmit frequency (Doppler-corrected), so what was queued was dropped, not held for later. \
      Nothing was keyed. Send it again, or turn the ISS Doppler correction off.";
+/// …when CAT was down, so the move could not be made or confirmed.
+const APRS_ISS_NO_CAT: &str = "APRS not sent: the radio's CAT link is down, so Nexus could not \
+     put the radio on the ISS frequency and confirm it there. What was queued was dropped, not \
+     held for later. Nothing was keyed. Send it again once CAT is back.";
+/// …when the radio read back a different frequency than it was sent: it rounds to its own step.
+const APRS_ISS_RADIO_ROUNDS: &str = "APRS not sent: the radio did not hold the Doppler-corrected \
+     ISS frequency it was sent (it rounds to its own tuning step), so what was queued was dropped \
+     rather than sent off frequency. Nothing was keyed. The correction is off for this pass; send \
+     it again and it goes out on 145.825 MHz.";
+/// …when the radio was tuned off the ISS channel while something was queued for it.
+const APRS_ISS_TUNED_AWAY: &str = "APRS not sent: the radio was tuned away from the ISS channel, \
+     so what was queued for the ISS was dropped, not sent on the new frequency. Nothing was keyed.";
+/// …when the ISS Doppler correction itself stopped while a frame waited on it.
+const APRS_ISS_STOPPED: &str = "APRS not sent: the ISS Doppler correction stopped while the \
+     packet waited for the transmit frequency, so it was dropped, not held for later. Nothing was \
+     keyed. Send it again and it goes out on 145.825 MHz.";
 
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
@@ -22472,6 +22488,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// pick has been made (or the hold was released).
     pub fn sat_binding(&self) -> Option<&SatBinding> {
         self.sat_binding.as_ref()
+    }
+
+    /// The radio loop read the radio's dial: what the radio itself says, on every successful read
+    /// (an unchanged dial included, which [`Self::observe_rig_freq`] never sees). The ISS
+    /// channel's Doppler correction confirms its writes by it ([`aprs_iss`]).
+    pub fn rig_freq_read(&mut self, hz: u64) {
+        self.aprs_iss_rig_read(hz);
     }
 
     /// The radio loop pushed a dial and the rig ACKNOWLEDGED it — confirm a

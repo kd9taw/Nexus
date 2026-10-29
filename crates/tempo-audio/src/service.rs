@@ -9236,6 +9236,7 @@ impl RadioLoop {
                             if !self.outside_coverage(hz) {
                                 eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
                             }
+                            eng.rig_freq_read(hz);
                         }
                         self.freq_misses = 0; // a good read clears the breaker's miss run
                                               // A tripped breaker's re-probe answered: the link is BACK. Reset the health
@@ -10443,6 +10444,7 @@ impl RadioLoop {
                         if !self.outside_coverage(hz) {
                             eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
                         }
+                        eng.rig_freq_read(hz);
                     }
                     if !self.fake_it_transient(hz)
                         && !self.read_outside_coverage(hz, engine)
