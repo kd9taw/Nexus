@@ -189,6 +189,9 @@ pub(crate) struct ClientState {
     /// A split slice asked for whose answer never named it, until it appears and is removed
     /// ([`shim::PendingCreate`]).
     pub(crate) split_create: Mutex<Option<shim::PendingCreate>>,
+    /// The last `I` and `X` the radio took for the split slice ([`shim::SplitWritten`]): a held
+    /// over that writes them again unchanged costs no round trip.
+    pub(crate) split_written: Mutex<Option<shim::SplitWritten>>,
 }
 
 /// The mode an over on `slice` goes out in: the one the shim commanded while the radio has not

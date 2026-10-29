@@ -200,6 +200,56 @@ pub(crate) struct PendingCreate {
     at: Instant,
 }
 
+/// The last `I` and `X` the radio answered OK for a split slice, for the session that sent them.
+/// The engine writes both before every over on a held split; one that would change nothing (this
+/// record matches AND the radio reports the slice so) is answered at once with nothing sent. Each
+/// write forgets its half before it goes out, so after a refusal, a timeout or another session
+/// the next one is always a real write.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SplitWritten {
+    handle: u32,
+    slice: u8,
+    /// `I`'s frequency.
+    freq_hz: Option<u64>,
+    /// `X`'s mode word (the Flex one) and width, as asked.
+    mode: Option<(String, i32)>,
+}
+
+/// The split slice and a copy of the record for it, while the radio reports the flag on that
+/// slice and nothing of ours is keyed: when an unchanged `I` or `X` may be answered at once.
+/// Reads only; waits for nothing.
+fn split_unchanged(conn: &Connection, state: &ClientState) -> Option<(Snapshot, u8, SplitWritten)> {
+    let (snap, tx, releasing) = split_on_air(conn, state)?;
+    if releasing || !quiet(&snap) {
+        return None;
+    }
+    let written = lock(&state.split_written).clone()?;
+    (Some(written.handle) == snap.handle && written.slice == tx).then_some((snap, tx, written))
+}
+
+/// Change the record for `slice` of this session's split by `f`, starting a fresh one when it is
+/// another's.
+fn note_written(
+    state: &ClientState,
+    snap: &Snapshot,
+    slice: u8,
+    f: impl FnOnce(&mut SplitWritten),
+) {
+    let Some(handle) = snap.handle else {
+        return;
+    };
+    let mut written = lock(&state.split_written);
+    let entry = written.get_or_insert_with(SplitWritten::default);
+    if entry.handle != handle || entry.slice != slice {
+        *entry = SplitWritten {
+            handle,
+            slice,
+            ..SplitWritten::default()
+        };
+    }
+    f(entry);
+}
+
 /// How long a slice asked for may still appear. A radio answers a create in milliseconds; past
 /// this the record is dropped rather than kept as a reason to remove a slice made later.
 const PENDING_CREATE_FOR: Duration = Duration::from_secs(10);
@@ -876,6 +926,8 @@ impl FlexShim {
             return Err(lost(SetFault::NoAnswer));
         }
         let pair = SplitPair { rx, tx };
+        // A new split slice: nothing written to it yet.
+        *lock(&self.state.split_written) = None;
         set_hold(
             &self.state,
             Some(SplitHold {
@@ -1240,10 +1292,26 @@ impl RigBackend for FlexShim {
         self.try_set_split_freq(hz).map(|r| r.is_ok())
     }
 
-    /// `I`: tune the split slice, never while anything transmits.
+    /// `I`: tune the split slice, never while anything transmits. The frequency the slice is
+    /// already on, by the radio's report and by the last `I` it took, is answered at once with
+    /// nothing sent ([`SplitWritten`]).
     fn try_set_split_freq(&self, hz: u64) -> Option<Result<(), SetFault>> {
+        if let Some(conn) = self.conn.upgrade() {
+            if let Some((snap, slice, written)) = split_unchanged(&conn, &self.state) {
+                let reported = snap
+                    .model
+                    .slices
+                    .get(&slice)
+                    .and_then(|s| s.frequency_mhz)
+                    .map(|mhz| (mhz * 1e6).round());
+                if written.freq_hz == Some(hz) && reported == Some(hz as f64) {
+                    return Some(Ok(()));
+                }
+            }
+        }
         let deadline = Instant::now() + REQUEST_TIMEOUT;
-        Some(self.split_target(deadline).and_then(|(conn, _, slice)| {
+        Some(self.split_target(deadline).and_then(|(conn, snap, slice)| {
+            note_written(&self.state, &snap, slice, |w| w.freq_hz = None);
             answered(conn.request_quiet(
                 Command::SliceTune {
                     slice,
@@ -1251,7 +1319,9 @@ impl RigBackend for FlexShim {
                     keep_pan: true,
                 },
                 left(deadline),
-            ))
+            ))?;
+            note_written(&self.state, &snap, slice, |w| w.freq_hz = Some(hz));
+            Ok(())
         }))
     }
 
@@ -1262,9 +1332,35 @@ impl RigBackend for FlexShim {
 
     /// `X`: the split slice's mode, and a width as `M` places one (zero or less keeps the
     /// filter), never while anything transmits.
+    /// The mode and width the slice already has, by the radio's report and by the last `X` it
+    /// took, are answered at once with nothing sent ([`SplitWritten`]).
     fn try_set_split_mode(&self, mode: &str, passband_hz: i32) -> Option<Result<(), SetFault>> {
+        if let Some(conn) = self.conn.upgrade() {
+            if let Some((snap, slice, written)) = split_unchanged(&conn, &self.state) {
+                let unchanged = snap.model.slices.get(&slice).is_some_and(|s| {
+                    flex_mode_for(mode, s.mode_list.as_deref()).is_some_and(|word| {
+                        let filter_kept = match u32::try_from(passband_hz) {
+                            Ok(width) if width > 0 => {
+                                let current = s.filter_low.zip(s.filter_high);
+                                current.is_some()
+                                    && filter_for(&word, width, s.mode.as_deref(), current)
+                                        == current
+                            }
+                            _ => true,
+                        };
+                        s.mode.as_deref() == Some(word.as_str())
+                            && filter_kept
+                            && written.mode == Some((word, passband_hz))
+                    })
+                });
+                if unchanged {
+                    return Some(Ok(()));
+                }
+            }
+        }
         let deadline = Instant::now() + REQUEST_TIMEOUT;
         Some(self.split_target(deadline).and_then(|(conn, snap, slice)| {
+            note_written(&self.state, &snap, slice, |w| w.mode = None);
             let Some(s) = snap.model.slices.get(&slice) else {
                 return Err(SetFault::Refused);
             };
@@ -1284,6 +1380,7 @@ impl RigBackend for FlexShim {
                 _ => None,
             };
             let mode = Mode::new(&word).ok_or(SetFault::Refused)?;
+            let asked = (word.clone(), passband_hz);
             answered(conn.request_quiet(Command::SliceMode { slice, mode }, left(deadline)))?;
             // The over goes out in this mode from now, whether or not the radio has said so yet.
             *self
@@ -1291,17 +1388,18 @@ impl RigBackend for FlexShim {
                 .commanded
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = Some((slice, word, Instant::now()));
-            match filter {
-                None => Ok(()),
-                Some((low_hz, high_hz)) => answered(conn.request_quiet(
+            if let Some((low_hz, high_hz)) = filter {
+                answered(conn.request_quiet(
                     Command::SliceFilter {
                         slice,
                         low_hz,
                         high_hz,
                     },
                     left(deadline),
-                )),
+                ))?;
             }
+            note_written(&self.state, &snap, slice, |w| w.mode = Some(asked));
+            Ok(())
         }))
     }
 

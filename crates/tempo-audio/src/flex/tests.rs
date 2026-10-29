@@ -702,6 +702,87 @@ fn three_overs_on_a_held_split_open_one_slice() {
     assert_eq!(c.ask("s", 2), "1\nVFOB\n");
 }
 
+/// ⭐ A HELD SPLIT OVER ADDS NO ROUND TRIP. The engine writes `S 1`, `I` and `X` before every
+/// over; with the flag already on the split slice and the slice already on that frequency and
+/// mode (by the radio's report and by the last write it took), each is answered at once and
+/// nothing reaches the radio. A changed `I` still tunes; after a refused `I`, and on a new split
+/// slice, the next `I` is a real write even to the frequency the slice reports.
+#[test]
+fn an_unchanged_split_write_on_a_held_over_sends_nothing() {
+    let session = with(
+        split_session(creates_slice_1(), moves_to_1()),
+        vec![
+            rule(
+                "slice tune 1 14.076000 autopan=0",
+                "0",
+                &["S{h}|slice 1 RF_frequency=14.076000"],
+            ),
+            rule(
+                "slice tune 1 14.074000 autopan=0",
+                "0",
+                &["S{h}|slice 1 RF_frequency=14.074000"],
+            ),
+            rule("slice tune 1 14.077000 autopan=0", "50000015", &[]),
+        ],
+    );
+    let sim = simulator(session, vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT 0\n");
+    ask_until_answer(&mut c, "i", "14075000\n");
+    for over in 1..=3 {
+        let before = wire(&sim).len();
+        let started = Instant::now();
+        assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n", "over {over}");
+        assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n", "over {over}");
+        assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT 0\n", "over {over}");
+        let took = started.elapsed();
+        assert_eq!(
+            split_wire(&sim, before),
+            Vec::<String>::new(),
+            "over {over}"
+        );
+        assert!(took < Duration::from_millis(250), "over {over}: {took:?}");
+        assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+        assert_eq!(wait_count(&sim, "xmit 1", over), over);
+        assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+        wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    }
+    // A changed `I` tunes.
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14076000", 1), "RPRT 0\n");
+    assert_eq!(
+        split_wire(&sim, before),
+        ["slice tune 1 14.076000 autopan=0"]
+    );
+    ask_until_answer(&mut c, "i", "14076000\n");
+    // A refused `I` forgets the last one: the next is written although the slice reports it.
+    assert_eq!(c.ask("I 14077000", 1), "RPRT -1\n");
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14076000", 1), "RPRT 0\n");
+    assert_eq!(
+        split_wire(&sim, before),
+        ["slice tune 1 14.076000 autopan=0"]
+    );
+    // A new split slice: nothing it took is known.
+    assert_eq!(c.ask("I 14074000", 1), "RPRT 0\n");
+    ask_until_answer(&mut c, "i", "14074000\n");
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT 0\n");
+    wait_session(&d, "the split slice gone", |s| {
+        !s.model.slices.contains_key(&1)
+    });
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14074000", 1), "RPRT 0\n");
+    assert_eq!(
+        split_wire(&sim, before),
+        ["slice tune 1 14.074000 autopan=0"]
+    );
+}
+
 /// ⭐ NEVER RETUNE OR REASSIGN THE TRANSMITTER WHILE KEYED. With an over of ours on the air, `I`,
 /// `X` and `S 0` are refused and nothing reaches the wire; once the unkey is proven the same
 /// verbs go through (the control).
