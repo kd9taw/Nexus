@@ -4064,6 +4064,67 @@ mod lotw_location_tests {
         let _ = std::fs::remove_dir_all(&dir2);
     }
 
+    /// A later run TQSL signed whose stamps could not be shown on disk (another program holds the
+    /// database's write lock past every retry): its contacts went to LoTW, so the report counts
+    /// them as sent and says their mark was not confirmed, and counts as unsent only the runs
+    /// after it, which do not start. The disk refused their stamp here, so they stay owed and go
+    /// again with the next upload. CONTROL: the earlier run is reported and stamped as before.
+    #[test]
+    fn a_later_run_signed_but_not_confirmed_on_disk_is_counted_as_sent() {
+        let (dir, engine) = station("lotw-profile-later-unconfirmed", "Home");
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let mut hold = None;
+        let mut ran = 0;
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+            ran += 1;
+            if ran == 2 {
+                hold = Some(
+                    tempo_core::logbook::sqlite::WriteHold::take(&db).expect("hold the write lock"),
+                );
+            }
+            Ok((0, String::new()))
+        })
+        .expect("the earlier run's report");
+        drop(hold);
+        assert_eq!(ran, 2, "the run after it does not start");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (4, "pending"),
+            "the Portable run and the Home run went"
+        );
+        assert_eq!(
+            (report.unconfirmed_after_error, report.unsent_after_error),
+            (2, 1),
+            "Home's two went, unconfirmed; only Club's was not sent"
+        );
+        assert!(
+            report.unsent_error.is_some(),
+            "why the stamp was not confirmed"
+        );
+        // The stamps as the log holds them now, without waiting for the write the disk refused:
+        // Home's were refused, so they are not stamped and stay owed.
+        let rows = engine_lock(&engine).log_rows();
+        let mut held = Vec::new();
+        rows.each_record(std::time::Duration::ZERO, &mut |r| {
+            held.push((r.call.clone(), r.upload.lotw.as_ref().map(|s| s.outcome)));
+            std::ops::ControlFlow::Continue(())
+        })
+        .expect("the store reads");
+        let sent = Some(UploadOutcome::Pending);
+        let of = |call: &str| held.iter().find(|(c, _)| c == call).map(|(_, o)| *o);
+        assert_eq!(
+            ["K1POR", "K2POR", "K1HOM", "K2HOM", "K1CLB"].map(of),
+            [sent, sent, None, None, None].map(Some)
+        );
+        assert!(
+            get_connection_log()
+                .iter()
+                .any(|e| e.connector == "LoTW" && e.message.contains("2 contact(s) went to LoTW")),
+            "the connection log says the signed run went"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Signing from the ADIF, a contact no profile tells apart is signed from the call and grid in
     /// its own record, and the report says so, for the screen's words; with a named Station
     /// Location it does not. CONTROL: the one-profile contact is signed with its profile's.
@@ -29734,6 +29795,7 @@ fn lotw_upload_batch_with(
             location_from_adif: false,
             unsent_after_error: 0,
             unsent_error: None,
+            unconfirmed_after_error: 0,
         });
     }
     let (runs, fallback) = tempo_app::station::lotw_runs(batch, location.as_deref(), &profiles);
@@ -29773,7 +29835,7 @@ fn lotw_upload_batch_with(
     let mut report: Option<UploadReportDto> = None;
     let mut runs = runs.into_iter();
     while let Some(run) = runs.next() {
-        let done = match lotw_sign_run(
+        let (done, unconfirmed) = match lotw_sign_run(
             state,
             &run.batch,
             run.location.as_deref(),
@@ -29808,6 +29870,42 @@ fn lotw_upload_batch_with(
                 break;
             }
         };
+        // A run TQSL signed and sent whose stamps could not be shown on disk. After earlier runs,
+        // its contacts went to LoTW, so they are counted with what went and said to be
+        // unconfirmed (a stamp the disk refused leaves its contact owed, sent again next time);
+        // only the runs after it, which do not start, are unsent. The first run's is the error,
+        // as it was before runs.
+        if let Some(why) = unconfirmed {
+            let Some(sent) = report else {
+                return Err(durability_failed(why));
+            };
+            let signed = done.dispatched;
+            let unsent = runs.map(|r| r.batch.len()).sum::<usize>();
+            conn_log(
+                "LoTW",
+                "error",
+                format!(
+                    "{signed} contact(s) went to LoTW, but Nexus could not confirm their upload \
+                     mark was saved to disk ({why}); any not saved are offered again with the next \
+                     upload, and LoTW ignores a contact it already has.{}",
+                    if unsent > 0 {
+                        format!(
+                            " {unsent} contact(s) not sent; they are offered again with the next \
+                             upload."
+                        )
+                    } else {
+                        String::new()
+                    }
+                ),
+            );
+            report = Some(UploadReportDto {
+                unsent_after_error: unsent,
+                unsent_error: Some(why),
+                unconfirmed_after_error: signed,
+                ..lotw_reports_together(sent, done)
+            });
+            break;
+        }
         report = Some(match report {
             None => done,
             Some(before) => lotw_reports_together(before, done),
@@ -29856,11 +29954,14 @@ fn lotw_reports_together(a: UploadReportDto, b: UploadReportDto) -> UploadReport
         location_from_adif: false,
         unsent_after_error: 0,
         unsent_error: None,
+        unconfirmed_after_error: 0,
     }
 }
 
 /// One TQSL run of a LoTW upload: `batch` signed with `location` (`None`: from the location in
 /// the ADIF, `station` = the live call and grid as the fallback), and stamped with its outcome.
+/// With the report, why its stamps could not be shown on disk when `wait` asked for that: TQSL
+/// had signed and sent the batch by then, so the caller says which happened.
 #[allow(clippy::too_many_arguments)]
 fn lotw_sign_run(
     state: &SharedEngine,
@@ -29871,7 +29972,7 @@ fn lotw_sign_run(
     wait: bool,
     held_mode: usize,
     tqsl: &mut impl FnMut(&str, &[String]) -> Result<(i32, String), String>,
-) -> Result<UploadReportDto, String> {
+) -> Result<(UploadReportDto, Option<String>), String> {
     let adif = tempo_app::station::lotw_batch_adif(batch, location.is_none(), call, grid);
     // The contacts by id, taken with the file: the stamp below finds them by id once TQSL is
     // done, and only where each is still the contact that was signed.
@@ -29922,19 +30023,23 @@ fn lotw_sign_run(
 
     match tempo_core::lotw_upload::classify_tqsl_exit(code, &stderr) {
         // Network error → leave state untouched so the next attempt retries cleanly.
-        None => Ok(UploadReportDto {
-            dispatched: batch.len(),
-            outcome: "retry".into(),
-            detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
-            skipped_edited: 0,
-            skipped_deleted: 0,
-            held_mode,
-            location_tie: 0,
-            location_unmatched: 0,
-            location_from_adif: false,
-            unsent_after_error: 0,
-            unsent_error: None,
-        }),
+        None => Ok((
+            UploadReportDto {
+                dispatched: batch.len(),
+                outcome: "retry".into(),
+                detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
+                skipped_edited: 0,
+                skipped_deleted: 0,
+                held_mode,
+                location_tie: 0,
+                location_unmatched: 0,
+                location_from_adif: false,
+                unsent_after_error: 0,
+                unsent_error: None,
+                unconfirmed_after_error: 0,
+            },
+            None,
+        )),
         Some(outcome) => {
             // By id, planned with the Engine lock released (SPEC-2 v3 C19): each contact read off
             // the store, and stamped under the lock only while it is still the one TQSL signed.
@@ -29980,11 +30085,12 @@ fn lotw_sign_run(
             }
             // The Logbook button waits for the stamps to reach the disk; the six-hourly
             // automatic batch does not (a stamp it loses is re-derived by the next echo).
-            if wait {
-                durable
-                    .wait(tempo_app::logstore::DURABLE_WAIT)
-                    .map_err(durability_failed)?;
-            }
+            // TQSL has signed and sent the batch by now, whatever the wait answers.
+            let unconfirmed = if wait {
+                durable.wait(tempo_app::logstore::DURABLE_WAIT).err()
+            } else {
+                None
+            };
             // ⛔ THE LINE THAT MAKES THE STAMP'S OWN SENTENCE TRUE.
             //
             // `UploadDetail`'s sentences tell the operator the service's own wording "was in
@@ -30016,21 +30122,25 @@ fn lotw_sign_run(
                     ),
                 );
             }
-            Ok(UploadReportDto {
-                dispatched: batch.len(),
-                outcome: outcome.code().to_string(),
-                detail,
-                // The same counts as the connection-log line above, for the screen: an upload
-                // count that does not clear otherwise reads as an upload that failed.
-                skipped_edited: done.changed,
-                skipped_deleted: done.gone,
-                held_mode,
-                location_tie: 0,
-                location_unmatched: 0,
-                location_from_adif: false,
-                unsent_after_error: 0,
-                unsent_error: None,
-            })
+            Ok((
+                UploadReportDto {
+                    dispatched: batch.len(),
+                    outcome: outcome.code().to_string(),
+                    detail,
+                    // The same counts as the connection-log line above, for the screen: an upload
+                    // count that does not clear otherwise reads as an upload that failed.
+                    skipped_edited: done.changed,
+                    skipped_deleted: done.gone,
+                    held_mode,
+                    location_tie: 0,
+                    location_unmatched: 0,
+                    location_from_adif: false,
+                    unsent_after_error: 0,
+                    unsent_error: None,
+                    unconfirmed_after_error: 0,
+                },
+                unconfirmed,
+            ))
         }
     }
 }
@@ -32780,6 +32890,7 @@ fn eqsl_answered(
                 location_from_adif: false,
                 unsent_after_error: 0,
                 unsent_error: None,
+                unconfirmed_after_error: 0,
             },
             None,
         )),
@@ -32825,6 +32936,7 @@ fn eqsl_answered(
                     location_from_adif: false,
                     unsent_after_error: 0,
                     unsent_error: None,
+                    unconfirmed_after_error: 0,
                 },
                 detail,
             ))

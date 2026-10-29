@@ -1133,6 +1133,7 @@ export const JA: PartialCatalog = {
   "logbook.lotw.location.tieAdif": "{{count}}件の交信は、異なる TQSL の Station Location を指定した2つのステーションプロファイルに当てはまるため、プロファイルの Station Location は使わず、交信に記録されたコールサインとグリッドで署名しました。",
   "logbook.lotw.location.unmatchedAdif": "{{count}}件の交信は、コールサインとグリッドがどのステーションプロファイルにも当てはまらないため、プロファイルの Station Location は使わず、交信に記録されたコールサインとグリッドで署名しました。",
   "logbook.lotw.unsentAfterError": "{{count}}件の交信は送信されませんでした（{{detail}}）。それより前に署名した交信は LoTW に送られました。送信されなかった交信は LoTW 未アップロードのまま残り、次回のアップロードで送られます。",
+  "logbook.lotw.unconfirmedAfterError": "{{count}}件の交信は LoTW に送られましたが、アップロード済みの記録がディスクに保存されたことを Nexus は確認できませんでした（{{detail}}）。保存されていない交信は次回のアップロードで再送されます。LoTW は既にある交信を無視します。",
   "logbook.markLotw.label": "LoTW済みにする",
   "logbook.markLotw.title": "これらは（別ツール経由で）すでにLoTWにアップロード済みですか？済みとしてマークすると、Nexusはアップロード対象に数えなくなります。",
   "logbook.markLotw.aria": "LoTWアップロード済みとしてマーク",

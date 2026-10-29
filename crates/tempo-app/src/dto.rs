@@ -4424,13 +4424,20 @@ pub struct UploadReportDto {
     #[serde(default)]
     pub location_from_adif: bool,
     /// Contacts not sent because a later TQSL run could not run (TQSL gone or timed out, the
-    /// upload file not written) after earlier runs had sent theirs: left unsent and unstamped,
-    /// and offered again with the next upload. LoTW only; 0 elsewhere.
+    /// upload file not written), or did not start after a run whose stamps were not confirmed on
+    /// disk (`unconfirmed_after_error`), once earlier runs had sent theirs: left unsent and
+    /// unstamped, and offered again with the next upload. LoTW only; 0 elsewhere.
     #[serde(default)]
     pub unsent_after_error: usize,
-    /// What stopped them, when `unsent_after_error` is not 0.
+    /// What stopped them, when `unsent_after_error` or `unconfirmed_after_error` is not 0.
     #[serde(default)]
     pub unsent_error: Option<String>,
+    /// Contacts of a later TQSL run that TQSL signed and sent, whose stamp could not be shown to be
+    /// on disk: they went to LoTW and are counted in `dispatched` (one whose stamp the disk refused
+    /// stays owed and is sent again), and the runs after theirs did not start. LoTW only; 0
+    /// elsewhere.
+    #[serde(default)]
+    pub unconfirmed_after_error: usize,
 }
 
 /// Result of importing an external ADIF logbook (deduped merge).

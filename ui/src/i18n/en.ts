@@ -1682,6 +1682,13 @@ export const EN = {
     other:
       '{{count}} contacts were not sent ({{detail}}). The contacts signed before that went to LoTW. They stay marked as not uploaded to LoTW and go with the next upload.',
   },
+  // A later TQSL run of such an upload that TQSL signed and sent, whose upload mark could not be
+  // shown to be saved to disk. `{{detail}}` is why, in English.
+  'logbook.lotw.unconfirmedAfterError': {
+    one: '{{count}} contact went to LoTW, but Nexus could not confirm its upload mark was saved to disk ({{detail}}). If it was not, it goes again with the next upload; LoTW ignores a contact it already has.',
+    other:
+      '{{count}} contacts went to LoTW, but Nexus could not confirm their upload mark was saved to disk ({{detail}}). Any not saved go again with the next upload; LoTW ignores a contact it already has.',
+  },
 
   // ⚠️ `{{formatted}}` is a QSO COUNT the call site has already grouped for display
   // ("1,234"). It is a count of contacts, not a technical quantity — no dial, no report, no

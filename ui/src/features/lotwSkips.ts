@@ -17,7 +17,8 @@
 //
 // …and the contacts a later TQSL run never sent (`unsentAfterError`): the batch is signed in one
 // run per Station Location, and when one cannot run at all the earlier runs' contacts have gone,
-// so the toast says both.
+// so the toast says both. A run TQSL signed whose mark could not be shown on disk
+// (`unconfirmedAfterError`) went to LoTW: the toast says that, not "not sent".
 
 import { t } from '../i18n'
 import type { UploadReport } from '../types'
@@ -39,6 +40,7 @@ export function lotwSkipNote(r: UploadReport): string | null {
   const unmatched = r.locationUnmatched ?? 0
   const adif = r.locationFromAdif === true
   const unsent = r.unsentAfterError ?? 0
+  const unconfirmed = r.unconfirmedAfterError ?? 0
   const notes = [
     skipped,
     heldBack,
@@ -51,6 +53,9 @@ export function lotwSkipNote(r: UploadReport): string | null {
       ? adif
         ? t('logbook.lotw.location.unmatchedAdif', { count: unmatched })
         : t('logbook.lotw.location.unmatched', { count: unmatched })
+      : null,
+    unconfirmed > 0
+      ? t('logbook.lotw.unconfirmedAfterError', { count: unconfirmed, detail: r.unsentError ?? '' })
       : null,
     unsent > 0
       ? t('logbook.lotw.unsentAfterError', { count: unsent, detail: r.unsentError ?? '' })

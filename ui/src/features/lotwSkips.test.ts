@@ -115,6 +115,27 @@ describe('the LoTW toast when signing from the ADIF, and when a later TQSL run n
     expect(lotwSkipNote({ dispatched: 2, outcome: 'pending', unsentAfterError: 0 })).toBeNull()
   })
 
+  it('says a later run whose mark was not confirmed on disk went to LoTW, apart from what was not sent', () => {
+    expect(
+      lotwSkipNote({
+        dispatched: 4,
+        outcome: 'pending',
+        unconfirmedAfterError: 2,
+        unsentAfterError: 1,
+        unsentError: 'database is locked',
+      }),
+    ).toBe(
+      '2 contacts went to LoTW, but Nexus could not confirm their upload mark was saved to disk (database is locked). Any not saved go again with the next upload; LoTW ignores a contact it already has. ' +
+        '1 contact was not sent (database is locked). The contacts signed before that went to LoTW. It stays marked as not uploaded to LoTW and goes with the next upload.',
+    )
+    // The last run: nothing left unsent, so no "not sent" sentence.
+    expect(
+      lotwSkipNote({ dispatched: 4, outcome: 'pending', unconfirmedAfterError: 2, unsentError: 'database is locked' }),
+    ).not.toMatch(/not sent/)
+    // Control: confirmed says nothing.
+    expect(lotwSkipNote({ dispatched: 4, outcome: 'pending', unconfirmedAfterError: 0 })).toBeNull()
+  })
+
   it.each([
     ['de', DE],
     ['es', ES],
@@ -128,6 +149,11 @@ describe('the LoTW toast when signing from the ADIF, and when a later TQSL run n
       const tie = lotwSkipNote({ dispatched: n, outcome: 'pending', locationTie: n, locationFromAdif: true })
       const none = lotwSkipNote({ dispatched: n, outcome: 'pending', locationUnmatched: n, locationFromAdif: true })
       const left = lotwSkipNote({ dispatched: n, outcome: 'pending', unsentAfterError: n, unsentError: 'TQSL ERR' })
+      const unsure = lotwSkipNote({ dispatched: n, outcome: 'pending', unconfirmedAfterError: n, unsentError: 'DISK ERR' })
+      expect(unsure, `${lang}: not the English fallback`).not.toMatch(/could not confirm/)
+      expect(unsure).toContain(String(n))
+      expect(unsure).toContain('DISK ERR')
+      expect(unsure).toContain('LoTW')
       for (const said of [tie, none, left]) {
         expect(said, `${lang}: not the English fallback`).not.toMatch(/station profiles|were not sent|was not sent/)
         expect(said).toContain(String(n))

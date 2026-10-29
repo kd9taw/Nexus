@@ -2850,8 +2850,13 @@ export interface UploadReport {
   /** Contacts not sent because a later TQSL run could not run after earlier runs had sent
    *  theirs: still marked not uploaded. Absent from an older station. */
   unsentAfterError?: number
-  /** What stopped them (English, from the station), when `unsentAfterError` is not 0. */
+  /** What stopped them (English, from the station), when `unsentAfterError` or
+   *  `unconfirmedAfterError` is not 0. */
   unsentError?: string | null
+  /** Contacts of a later TQSL run that went to LoTW, whose upload mark could not be shown to be
+   *  saved to disk (one not saved is sent again). Counted in `dispatched`. Absent from an older
+   *  station. */
+  unconfirmedAfterError?: number
 }
 
 /** A confirmation in a synced report with no matching logged QSO (diagnostic). */
