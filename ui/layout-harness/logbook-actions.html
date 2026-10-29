@@ -111,8 +111,8 @@ const CELLS = [
 // strings). The sheet takes the row's tracks from `--log-cols`, which the Logbook sets from the
 // columns it renders, so this page sets it the same way. Narrow (`sm`/`xs`) the Logbook renders
 // only Call, Country, Band, QSL and Notes before the actions — by index into CELLS here.
-const COMPACT = '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(436px, 0.8fr)';
-const NARROW = '1fr 1.3fr 0.7fr 0.7fr 1fr minmax(436px, 0.8fr)';
+const COMPACT = '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(512px, 0.8fr)';
+const NARROW = '1fr 1.3fr 0.7fr 0.7fr 1fr minmax(512px, 0.8fr)';
 const NARROW_CELLS = [0, 1, 2, 10, 11];
 
 function buildRow(row, lang, narrow = false) {

@@ -9,8 +9,8 @@
 // its buttons) stays that control's. The row that has the stop is held by id, so a contact logged
 // above it does not move the operator's place.
 //
-// jsdom lays nothing out, so the geometry the list reads is given: rows 43 px, the list 400 px into
-// a 600 px scroller below an 80 px sticky block — twelve rows to a page.
+// jsdom lays nothing out, so the geometry the list reads is given: rows 53 px, the list 400 px into
+// a 600 px scroller below an 80 px sticky block — nine rows to a page.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -45,7 +45,7 @@ vi.mock('../api', () => {
 })
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn((run: () => Promise<unknown>) => run()) }))
 
-const ROW_PX = 43
+const ROW_PX = 53
 const LIST_AT = 400
 const STICKY_PX = 80
 const N = 300
@@ -150,7 +150,7 @@ describe('the Logbook is a keyboard grid', () => {
   it('Page Down / Page Up move one visible page', async () => {
     await openAt(0)
     press('PageDown')
-    await waitFor(() => expect(focusedIndex()).toBe(12))
+    await waitFor(() => expect(focusedIndex()).toBe(9))
     press('PageUp')
     await waitFor(() => expect(focusedIndex()).toBe(0))
   })

@@ -18155,8 +18155,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .log-rowactions {
   display: inline-flex;
-  gap: var(--space-1);
+  /* 8px between the row's buttons (6px at the narrow sizes' spacing scale), so a click aimed at
+     one does not land on its neighbour. */
+  gap: var(--space-2);
   justify-content: flex-end;
+  align-items: center;
 }
 .log-rowbtn {
   cursor: pointer;
@@ -18186,6 +18189,19 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: 0.8rem;
   opacity: 0;
   transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+/* THE LOGBOOK ROW'S BUTTONS ARE MOUSE TARGETS, not glyph-sized marks (operator, 2026-10-30: each
+   entry was "very thin", its buttons "hard to click"). Every one is at least 32×32 px at the default
+   density — above the 24 px minimum target size of WCAG 2.5.8, for a mouse on a shack PC — and the
+   row grows with them (the row's own padding is unchanged). The HEIGHT follows Settings ▸ Density:
+   Comfortable is roomier still, and Compact (`dense`) brings the row back to about the old 43 px (26 px buttons)
+   for an operator who wants more contacts on screen. The width floor does not follow it, so the
+   one-glyph buttons stay wide enough to hit. Scoped to the Logbook's rows: the contact card reuses
+   the class for a small inline remove button beside a field. Measured in real Chrome by
+   `scripts/browser-probe --desktop logbook` (the row sweep). */
+.logbook-row .log-rowbtn {
+  min-width: 32px;
+  height: calc(32px * var(--density-scale));
 }
 .logbook-row:hover .log-rowbtn,
 .logbook-row:focus-within .log-rowbtn {

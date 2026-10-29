@@ -89,7 +89,7 @@ function winner(selectors: string[], prop: string): string | null {
 const ROW_RULES = ['.log-row', '.logbook-row', '.logbook-table .logbook-row', '.logbook-table.wide .logbook-row']
 const NARROW_RULES = ["[data-viewport='sm'] .log-row", "[data-viewport='sm'] .logbook-row", "[data-viewport='sm'] .logbook-table .logbook-row"]
 
-/** A template's tracks. `minmax(436px, 0.8fr)` stays one track. */
+/** A template's tracks. `minmax(512px, 0.8fr)` stays one track. */
 function tracks(template: string): string[] {
   expect(template, 'the table must carry a template').toBeTruthy()
   const out: string[] = []
@@ -118,7 +118,9 @@ const pxOf = (v: string | null) => (v == null ? 0 : Number(/(-?\d+(?:\.\d+)?)px/
 /** `--space-1` resolved at --space-scale 1 — md and up, the widest case and the one the floor
  *  has to cover. Narrow viewports tighten it, which only ever makes the cluster smaller. */
 const SPACE_1 = 4
-const spacing = (v: string | null) => (v && /var\(--space-1\)/.test(v) ? SPACE_1 : pxOf(v))
+const SPACE_2 = 8
+const spacing = (v: string | null) =>
+  v && /var\(--space-1\)/.test(v) ? SPACE_1 : v && /var\(--space-2\)/.test(v) ? SPACE_2 : pxOf(v)
 
 // ── The harness's numbers, and the inputs they were taken at ─────────────────────────────
 // ui/layout-harness/measure-logbook-actions.sh, 2026-09-16, real headless Chrome:
@@ -134,12 +136,19 @@ const spacing = (v: string | null) => (v && /var\(--space-1\)/.test(v) ? SPACE_1
 //
 // RE-TAKEN 2026-10-28, same harness, when the per-contact LoTW upload joined the cluster and made
 // it eleven controls: requiredInkW 421.8px, spread 13.1 (408.7 .. 421.8), floor 384 -> 436.
-const MEASURED_REQUIREMENT = 421.8
-const MEASURED_FACE_SPREAD = 13.1
+//
+// RE-TAKEN 2026-10-30, same harness, when the row's buttons became 32 px mouse targets with 8 px
+// between them (the operator found them thin and hard to click): requiredInkW 498.7px, spread 9.8
+// (488.9 .. 498.7), floor 436 -> 512.
+const MEASURED_REQUIREMENT = 498.7
+const MEASURED_FACE_SPREAD = 9.8
 /** The controls the row renders, in order, with station control held (the desktop default,
  *  and the widest case). If this changes, the measurement above is stale. */
 const EXPECTED_LABELS = ['📢', 'QRZ', 'QRZ✎', 'CL', 'HL', 'WRL', 'LoTW', 'QSL▸', 'SAT▸', '✎', '✕']
 const EXPECTED_FONT_SIZE = '0.8rem'
+/** The rules that reach a button in a Logbook row: the class's base, and the row's own. (The
+ *  contact card reuses the class for a small remove button; only the base reaches that one.) */
+const ROW_BUTTON = ['.log-rowbtn', '.logbook-row .log-rowbtn']
 /** A per-character advance chosen BELOW every face measured — the narrowest observed was
  *  Ubuntu's `CL` at 7.2px/char at this size. It builds a LOWER bound only, so every face that
  *  is wider than this (all of them) can only make the real requirement larger. */
@@ -156,11 +165,11 @@ const MIN_ADVANCE_PX = 6.5
  */
 function clusterLowerBound(): number {
   const box = Math.max(
-    pxOf(winner(['.log-rowbtn'], 'min-width')),
-    pxOf(winner(['.log-rowbtn'], 'width')),
+    pxOf(winner(ROW_BUTTON, 'min-width')),
+    pxOf(winner(ROW_BUTTON, 'width')),
   )
-  const border = pxOf(winner(['.log-rowbtn'], 'border'))
-  const padX = spacing((winner(['.log-rowbtn'], 'padding') ?? '').split(/\s+/).pop() ?? null)
+  const border = pxOf(winner(ROW_BUTTON, 'border'))
+  const padX = spacing((winner(ROW_BUTTON, 'padding') ?? '').split(/\s+/).pop() ?? null)
   const gap = spacing(winner(['.log-rowactions'], 'gap'))
   // A <select> is as wide as its widest OPTION, so whatever the sheet pins it to is its
   // contribution; unpinned, it is at least a button box.
@@ -310,9 +319,9 @@ describe('the Logbook row-action cluster fits its grid track', () => {
     expect(controls).toBe(EXPECTED_LABELS.length)
 
     // The font the measurement was taken at, and a square floor for the one-glyph buttons.
-    expect(winner(['.log-rowbtn'], 'font-size')).toBe(EXPECTED_FONT_SIZE)
+    expect(winner(ROW_BUTTON, 'font-size')).toBe(EXPECTED_FONT_SIZE)
     expect(
-      Math.max(pxOf(winner(['.log-rowbtn'], 'min-width')), pxOf(winner(['.log-rowbtn'], 'width'))),
+      Math.max(pxOf(winner(ROW_BUTTON, 'min-width')), pxOf(winner(ROW_BUTTON, 'width'))),
       '.log-rowbtn must keep a square floor for its one-glyph buttons',
     ).toBeGreaterThanOrEqual(22)
 
@@ -360,6 +369,26 @@ describe('the Logbook row-action cluster fits its grid track', () => {
       'select.log-rowbtn must pin an explicit width — otherwise the widest translated option ' +
         'sizes the control, and the cluster with it',
     ).toBeGreaterThan(0)
+  })
+
+  it('makes every row button a 32 px target with room between them', () => {
+    // The operator found the rows thin and the buttons hard to click (2026-10-30). The size is the
+    // CASCADE's answer for a button in a Logbook row, resolved at the default density (×1) and at
+    // the narrowest spacing scale (xs, ×0.86), where the gap is smallest. The real boxes are
+    // measured in Chrome by `scripts/browser-probe --desktop logbook`; this pins the declarations
+    // that probe measured.
+    const at = (v: string | null, density: number) => {
+      const m = /^calc\(\s*(\d+(?:\.\d+)?)px\s*\*\s*var\(--density-scale\)\s*\)$/.exec(v ?? '')
+      return m ? Number(m[1]) * density : pxOf(v)
+    }
+    expect(at(winner(ROW_BUTTON, 'height'), 1), 'a row button is at least 32 px tall at the default density').toBeGreaterThanOrEqual(32)
+    expect(pxOf(winner(ROW_BUTTON, 'min-width')), 'a row button is at least 32 px wide').toBeGreaterThanOrEqual(32)
+    // Dense is the operator's own choice of a compact list, and it still clears WCAG 2.5.8's 24 px.
+    expect(at(winner(ROW_BUTTON, 'height'), 0.82)).toBeGreaterThanOrEqual(24)
+    expect(spacing(winner(['.log-rowactions'], 'gap')) * 0.86, 'at least 6 px between neighbours at every spacing scale').toBeGreaterThanOrEqual(6)
+    // …and only the Logbook's rows grow: the class's own base still describes the contact card's
+    // small inline button.
+    expect(pxOf(winner(['.log-rowbtn'], 'height'))).toBe(22)
   })
 
   it('FIRES: the floor that shipped is reported as too small', () => {

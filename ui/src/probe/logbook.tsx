@@ -10,6 +10,10 @@
 // `?cols=wide` shows every column the chooser offers, so the table is wider than any window here.
 // `?control=cap` is the CONTROL: the old centred measure put back on the Logbook's panel, which the
 // probe must see leave the panel narrower than the window's content box.
+// `?zoom=1.5` pins the UI zoom instead of the window's fit (the row-button sweep runs at 100% and
+// 150%), `?sat=1` gives the station satellite names so the row carries its widest cluster (the
+// satellite menu too), `?n=10000` sets the log's size, and `?control=thin` is the row sweep's
+// CONTROL: the old 22 px row buttons put back, which the probe must see fail the target size.
 import '../styles.css'
 import '../cockpit-panes.css'
 import { createRoot } from 'react-dom/client'
@@ -30,20 +34,26 @@ if (params.get('control') === 'cap') {
   s.textContent = '.layout.single > .panel.log-view { max-width: 1100px !important; margin: 0 auto !important; }'
   document.head.appendChild(s)
 }
-const zoom = fitScale(innerWidth, innerHeight) / 100
+if (params.get('control') === 'thin') {
+  const s = document.createElement('style')
+  s.textContent = '.logbook-row .log-rowbtn { height: 22px !important; min-width: 22px !important; }'
+  document.head.appendChild(s)
+}
+const zoom = Number(params.get('zoom')) || fitScale(innerWidth, innerHeight) / 100
 document.documentElement.style.setProperty('--ui-zoom', String(zoom))
 
 const base = 1_790_000_000
-const LOG: LoggedQso[] = Array.from({ length: 60 }, (_, n) => ({
+const LOG: LoggedQso[] = Array.from({ length: Number(params.get('n')) || 60 }, (_, n) => ({
   id: `id-${n}`, call: `K${n}ABC`, grid: 'EN52', band: n % 2 ? '40m' : '20m', freqMhz: n % 2 ? 7.074 : 14.074, mode: n % 3 ? 'FT8' : 'CW',
-  rstSent: '-10', rstRcvd: '-12', name: 'Pat', qth: 'Springfield', comment: null, notes: n % 5 ? null : 'Dipole at 10 m',
-  country: 'United States', whenUnix: base - n * 600, confirmed: n % 4 === 0, awardConfirmed: n % 4 === 0,
+  rstSent: '-10', rstRcvd: '-12', name: 'Pat', qth: 'Springfield',
+  comment: n % 3 ? null : 'Big signal on the long path, running 100 W into a dipole', notes: n % 5 ? null : 'Dipole at 10 m',
+  country: n % 7 ? 'United States' : 'Democratic Republic of the Congo', whenUnix: base - n * 600, confirmed: n % 4 === 0, awardConfirmed: n % 4 === 0,
   qslRcvd: { card: false, lotw: n % 4 === 0, eqsl: false, qrz: false }, extra: [['CQZ', '4'], ['ITUZ', '8'], ['CONT', 'NA']],
 }))
 
 const answers: Record<string, (args: Record<string, unknown>) => unknown> = {
   ask_log: (a) => answerAs(a.q as LogQuestion, LOG),
-  lotw_sat_names: () => [],
+  lotw_sat_names: () => (params.get('sat') ? ['AO-91', 'ISS', 'SO-50'] : []),
   log_operators: () => [],
   log_activations: () => [],
 }

@@ -25,12 +25,12 @@ import {
 import type { LoggedQso } from '../types'
 
 /** `.logbook-row`'s template before the model (styles.css, 59aeae99e). */
-const OLD_COMPACT = '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(436px, 0.8fr)'
+const OLD_COMPACT = '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(512px, 0.8fr)'
 /** `[data-viewport='sm'] .logbook-row`'s. */
-const OLD_NARROW = '1fr 1.3fr 0.7fr 0.7fr 1fr minmax(436px, 0.8fr)'
+const OLD_NARROW = '1fr 1.3fr 0.7fr 0.7fr 1fr minmax(512px, 0.8fr)'
 /** `.logbook-table.wide .logbook-row`'s ("More columns"). */
 const OLD_WIDE =
-  '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr 1.4fr minmax(436px, 0.8fr)'
+  '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr 1.4fr minmax(512px, 0.8fr)'
 
 const template = (saved: LogColumnsSaved, narrow = false) =>
   logGridTemplate(renderedColumns(saved, narrow), saved, narrow)

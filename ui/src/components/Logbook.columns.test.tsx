@@ -107,7 +107,7 @@ describe('the default table is the one the Logbook had', () => {
     document.documentElement.setAttribute('data-viewport', 'sm')
     const { container } = await renderLog()
     expect(headers()).toEqual(['Call', 'Country', 'Band', 'QSL', 'Notes', 'Edit / delete'])
-    expect(template(container)).toBe('1fr 1.3fr 0.7fr 0.7fr 1fr minmax(436px, 0.8fr)')
+    expect(template(container)).toBe('1fr 1.3fr 0.7fr 0.7fr 1fr minmax(512px, 0.8fr)')
     expect(row(container).querySelectorAll(':scope > .log-cell')).toHaveLength(6)
   })
 })

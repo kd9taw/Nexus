@@ -286,8 +286,8 @@ type SortKey = LogSortKey
 
 /** Rows per Logbook page: what the list asks its source for at a time (SPEC-2 v2 §6). */
 const LOG_PAGE = 128
-/** A row's height before it is measured: its 22 px buttons plus padding. */
-const ROW_ESTIMATE = 43
+/** A row's height before it is measured: its 32 px buttons plus padding, at the default density. */
+const ROW_ESTIMATE = 53
 /** Rows the list renders beyond the viewport on each side (the virtualizer's `overscan`). */
 const OVERSCAN = 12
 /** Pages the list keeps of the orders it has read — the order on screen, and one coming. */
@@ -3051,8 +3051,8 @@ export function Logbook({
                       style={placed}
                     >
                       <span className="log-cell">{t('logbook.rows.loading')}</span>
-                      {/* The row buttons' own box, unseen: a row's height is its 22 px buttons
-                          plus padding, so a placeholder holding one is exactly as tall as the row
+                      {/* The row buttons' own box, unseen: a row's height is its buttons plus
+                          padding, so a placeholder holding one is exactly as tall as the row
                           it stands for — nothing below it moves when the row lands, and the list
                           never measures a short row it then has to correct. */}
                       <span className="log-cell log-rowactions" aria-hidden="true">
@@ -3109,7 +3109,12 @@ export function Logbook({
                     case 'freq':
                       return (
                         <>
-                          <span className="log-cell mono">{q.freqMhz.toFixed(4)}</span>
+                          {/* The numeric cells carry their own text as a tooltip: at the narrow end of a
+                              size class the table's shares can cut a frequency, date or time short,
+                              and a cut number must still be readable in full. */}
+                          <span className="log-cell mono" title={q.freqMhz.toFixed(4)}>
+                            {q.freqMhz.toFixed(4)}
+                          </span>
                         </>
                       )
                     case 'mode':
@@ -3133,7 +3138,9 @@ export function Logbook({
                     case 'date':
                       return (
                         <>
-                          <span className="log-cell mono">{utcDate(q.whenUnix)}</span>
+                          <span className="log-cell mono" title={utcDate(q.whenUnix)}>
+                            {utcDate(q.whenUnix)}
+                          </span>
                         </>
                       )
                     case 'time':
@@ -3149,7 +3156,7 @@ export function Logbook({
                               and eQSL forever. */}
                           <span
                             className="log-cell mono"
-                            title={q.timeKnown === false ? t('logbook.row.time.dateOnly') : ''}
+                            title={q.timeKnown === false ? t('logbook.row.time.dateOnly') : utcTime(q.whenUnix)}
                           >
                             {q.timeKnown === false ? '—' : utcTime(q.whenUnix)}
                           </span>
