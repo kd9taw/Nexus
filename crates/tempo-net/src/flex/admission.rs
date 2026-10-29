@@ -241,6 +241,12 @@ pub enum Refusal {
         stream: u32,
         owner: Owner,
     },
+    /// The client's own Rig split is still being taken down: the transmit flag is on the split
+    /// slice turning split off has not removed yet, so a start would go out at that slice's old
+    /// frequency. Refused by the client above this module, which holds the split; its words.
+    SplitTakeDown {
+        why: String,
+    },
 }
 
 impl fmt::Display for Refusal {
@@ -287,6 +293,7 @@ impl fmt::Display for Refusal {
                 "another program feeds the radio's DAX transmit audio (stream 0x{stream:08X}, \
                  {owner:?})"
             ),
+            Refusal::SplitTakeDown { why } => f.write_str(why),
         }
     }
 }

@@ -545,9 +545,14 @@ impl FlexDaemon {
     /// radio loop's tune timeout): the session ends it by itself at that plus its margin, whether
     /// or not the loop runs. A typed call, as the loop reaches the native CI-V daemon: rigctld has
     /// no verb for a radio's tune carrier. `Err(None)` when the session is gone.
+    /// Refused, as `T 1` is, while the transmit flag is still on a Rig split slice that turning
+    /// split off has not removed yet ([`shim::split_blocks_key`]).
     pub fn tune_on(&self, hold_ms: u64) -> Result<(), Option<Refusal>> {
-        self.conn()
-            .start_lasting(TxStart::TuneOn, Some(hold_ms))
+        let conn = self.conn();
+        if let Some(why) = shim::split_blocks_key(conn, &self.state) {
+            return Err(Some(Refusal::SplitTakeDown { why }));
+        }
+        conn.start_lasting(TxStart::TuneOn, Some(hold_ms))
             .map(|_| ())
     }
 

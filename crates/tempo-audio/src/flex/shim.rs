@@ -27,7 +27,7 @@
 //! | `f`, `m`, `t`, `v`, `s`, `l RFPOWER`, `l AF`, `l KEYSPD`, `u NB/NR/ANF` | read from the status model | — |
 //! | `u TUNER` | the radio's `atu` status: `1` once a cycle has matched (`TUNE_SUCCESSFUL`, `TUNE_OK`), else `0` | only while the client runs the radio's ATU (its switch) and the radio reports a tuner fitted; otherwise not answered, so no ATU button is offered |
 //! | `S 1 VFOB` | Rig split: `slice create` on the served slice's pan, frequency and mode, `slice set <new> audio_mute=1`, then `TxSlice` → `slice set <new> tx=1`; held, so a later `S 1` sends nothing while the flag is still there | the transmit slice's own admission (nothing of ours keyed, the interlock idle, the slice ours); a create or a move the radio refuses is `RPRT -1`, and a slice made for a split that did not happen is removed |
-//! | `S 0` | `TxSlice` → `slice set <receive> tx=1`, then `slice remove <split slice>` | the same admission; nothing to undo is `RPRT 0`; one that cannot finish now is owed, finished at the radio loop's next quiet point |
+//! | `S 0` | `TxSlice` → `slice set <receive> tx=1`, then `slice remove <split slice>` | the same admission; nothing to undo is `RPRT 0`; one that cannot finish now is owed, finished at the radio loop's next quiet point; a receive slice closed outside Nexus lets the split go, the split slice left as the dial with its audio on |
 //! | `I <hz>` | `slice tune <split slice> <MHz> autopan=0` | a split held; nothing of ours keyed and the interlock idle |
 //! | `X <mode> <width>` | `slice set <split slice> mode=`, then `filt` for a width (`M`'s rules) | as `I` |
 //! | `s`, `i`, `x` | the split flag and `VFOB` while the flag is on the pair's split slice (`TX` while an `S 0` is owed: Nexus's own leftover, never the operator's split); that slice's frequency and mode, else the served slice's | — |
@@ -331,10 +331,33 @@ pub(crate) fn release_split(
     if is_ours(&snap, pair.tx) {
         if tx_slices.contains(&pair.tx) {
             if !is_ours(&snap, pair.rx) {
-                return Err(refuse_split(
-                    "its receive slice is gone, so the transmit flag has no slice of Nexus's to \
-                     go back to",
-                ));
+                // The receive slice was closed outside Nexus: the flag has no slice of ours to go
+                // back to, so the split slice stays, as a plain slice with the flag, and is the
+                // dial from now on (as `S 1` drops a pair whose receive slice has gone). Its
+                // audio comes back, so the operator hears it.
+                if !wait_quiet(conn, deadline) {
+                    return Err(refuse_split("a transmission has not ended"));
+                }
+                let _ = conn.request(
+                    Command::SliceAudioMute {
+                        slice: pair.tx,
+                        mute: false,
+                    },
+                    left(deadline),
+                );
+                tempo_core::applog::warn(
+                    "cat",
+                    &format!(
+                        "Flex client: Rig split is off. Nexus's receive slice was closed outside \
+                         Nexus, so the transmitter stays on slice {}, which is now the dial",
+                        pair.tx
+                    ),
+                );
+                let mut current = lock(&state.split);
+                if current.is_some_and(|h| h.pair == pair && h.handle == hold.handle) {
+                    *current = None;
+                }
+                return Ok(());
             }
             if !wait_quiet(conn, deadline) {
                 return Err(refuse_split("a transmission has not ended"));
@@ -358,8 +381,8 @@ pub(crate) fn release_split(
 /// Remove a split slice the radio made after its create went unanswered or unread
 /// ([`PendingCreate`]): a slice of ours the shim did not know before the ask and that is not part
 /// of a pair held now. A slice that holds the transmit flag is left (the radio gives a new slice
-/// the flag only when it has none).
-fn reconcile_create(conn: &Connection, state: &ClientState) {
+/// the flag only when it has none). Each removal waits for its answer until `deadline` at most.
+fn reconcile_create(conn: &Connection, state: &ClientState, deadline: Instant) {
     let snap = conn.snapshot();
     let pair = split_hold(state, snap.handle).map(|h| h.pair);
     let strays: Vec<u8> = {
@@ -397,7 +420,7 @@ fn reconcile_create(conn: &Connection, state: &ClientState) {
                 "Flex client: removing slice {slice}, made for a Rig split that did not happen"
             ),
         );
-        let _ = conn.request(Command::SliceRemove { slice }, REQUEST_TIMEOUT);
+        let _ = conn.request(Command::SliceRemove { slice }, left(deadline));
     }
 }
 
@@ -405,20 +428,23 @@ fn reconcile_create(conn: &Connection, state: &ClientState) {
 /// transmit audio routing ([`super::FlexDaemon::sync_tx_routing`]): never with anything of ours
 /// keyed or about to be. Removes a split slice a lost create left behind, and finishes a
 /// take-down `S 0` could not, or one the radio's status calls for (the split slice removed in
-/// SmartSDR). Waits for nothing it cannot have at once: bounded by [`REQUEST_TIMEOUT`] per
-/// command, and only when there is something to do.
+/// SmartSDR). Waits for nothing it cannot have at once, and only when there is something to do:
+/// all of it shares one [`REQUEST_TIMEOUT`], so the radio loop is held at most that long. What
+/// the time does not cover stays owed for the next quiet point.
 pub(crate) fn settle_split(conn: &Connection, state: &ClientState) {
-    reconcile_create(conn, state);
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    reconcile_create(conn, state, deadline);
     let snap = conn.snapshot();
     let Some(hold) = split_hold(state, snap.handle) else {
         return;
     };
-    // Owed: a take-down `S 0` asked for, or a split slice the radio no longer reports as ours.
-    let owed = hold.releasing || !is_ours(&snap, hold.pair.tx);
+    // Owed: a take-down `S 0` asked for, or a slice of the pair the radio no longer reports as
+    // ours (removed in SmartSDR).
+    let owed = hold.releasing || !is_ours(&snap, hold.pair.tx) || !is_ours(&snap, hold.pair.rx);
     if !owed || !quiet(&snap) {
         return;
     }
-    if release_split(conn, state, Instant::now() + REQUEST_TIMEOUT).is_ok() {
+    if release_split(conn, state, deadline).is_ok() {
         tempo_core::applog::info(
             "cat",
             "Flex client: Rig split is off; the transmit flag is back on the receive slice",
@@ -800,7 +826,7 @@ impl FlexShim {
             return Err(refuse_split("a transmission has not ended"));
         }
         // A slice an earlier create left behind goes before another is asked for.
-        reconcile_create(&conn, &self.state);
+        reconcile_create(&conn, &self.state, Instant::now() + REQUEST_TIMEOUT);
         let snap = conn.snapshot();
         let known: Vec<u8> = snap
             .model
@@ -1000,11 +1026,15 @@ impl FlexShim {
             .atu_refused
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = None;
-        let refused = match self
+        // Refused, as `T 1` is, while the flag is still on a split slice being taken down.
+        let started = self
             .conn
             .upgrade()
-            .map(|conn| conn.start(TxStart::AtuStart))
-        {
+            .map(|conn| match split_blocks_key(&conn, &self.state) {
+                Some(why) => Err(Some(Refusal::SplitTakeDown { why })),
+                None => conn.start(TxStart::AtuStart),
+            });
+        let refused = match started {
             Some(Ok(_)) => return true,
             Some(Err(refusal)) => super::atu_refusal_words(refusal.as_ref()),
             None => super::atu_refusal_words(None),
