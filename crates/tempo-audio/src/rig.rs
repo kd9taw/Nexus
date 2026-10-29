@@ -558,9 +558,10 @@ pub struct Rig {
     serial: Option<Box<dyn serialport::SerialPort>>,
     /// Last PTT state we commanded (also lets callers/tests observe keying).
     pub keyed: bool,
-    /// Split Operation (Rig) turned split on through this connection and nobody has turned it off
-    /// since: the next over writes only its TX dial and mode, as WSJT-X holds split between overs.
-    /// Set by `slot::apply_tx_dial_shift`, cleared by the radio loop when it lets go of the split.
+    /// Split Operation (Rig) turned split on through this connection (or sent it and got no answer,
+    /// so the radio may have) and nobody has turned it off since: the next over writes only its TX
+    /// dial and mode, as WSJT-X holds split between overs. Set by [`Self::hold_split_on`], cleared
+    /// by the radio loop when it lets go of the split.
     pub(crate) tx_split_held: bool,
     /// Nexus let go of its Rig split through this connection and the radio did not take it (the
     /// `S 0`, or the write putting the radio's own split back, refused or unanswered): the radio
@@ -1718,6 +1719,34 @@ impl Rig {
     /// Set split on/off and which VFO transmits (DX pileups). `tx_vfo` e.g. "VFOB".
     pub fn set_split(&mut self, on: bool, tx_vfo: &str) -> std::io::Result<()> {
         self.cat(&split_line(on, tx_vfo))
+    }
+    /// Split on for Split Operation's over, through [`Self::set_split`], noting in
+    /// [`Self::tx_split_held`] that the radio has Nexus's split. An answer that is not `RPRT 0` is an
+    /// `Err` as there, but only a refusal the radio gave (an `RPRT` code that is not a link fault)
+    /// or a line never sent leaves the split not held. No answer by the deadline, an empty or
+    /// unreadable reply, or Hamlib's "the rig did not answer" may have been taken late, so it is
+    /// held, and its release is owed as for a split taken.
+    pub(crate) fn hold_split_on(&mut self, tx_vfo: &str) -> std::io::Result<()> {
+        if self.control.is_none() {
+            self.tx_split_held = true;
+            return Ok(());
+        }
+        let line = split_line(true, tx_vfo);
+        self.split_confirmed = None;
+        let (sent, refused) = match self.command(&line) {
+            Ok(reply) => (
+                cat_judged(&line, &reply),
+                rprt_code(&reply).is_some_and(|code| !rprt_is_link_fault(code)),
+            ),
+            Err(e) => {
+                let never_sent = e.kind() == std::io::ErrorKind::Unsupported;
+                (Err(e), never_sent)
+            }
+        };
+        if sent.is_ok() || !refused {
+            self.tx_split_held = true;
+        }
+        sent
     }
     /// [`Self::set_split`], with `Ok(false)` where the link says split cannot be controlled at all
     /// (`RPRT -11`, Hamlib's `RIG_ENAVAIL`, or `RPRT -4`, `RIG_ENIMPL`) rather than an error. Any

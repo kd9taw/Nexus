@@ -6774,8 +6774,9 @@ impl RadioLoop {
             return;
         }
         self.audio_rig_split = false;
-        // Owed only if the radio took Nexus's `S 1`: a split it never turned on is nothing to let
-        // go of, and a radio with no split control at all would otherwise owe it for ever.
+        // Owed only if the radio took Nexus's `S 1`, or may have (no answer): a split it never
+        // turned on is nothing to let go of, and a radio with no split control at all would
+        // otherwise owe it for ever.
         let took_split = std::mem::replace(&mut rig.tx_split_held, false);
         if cluster_active {
             return;

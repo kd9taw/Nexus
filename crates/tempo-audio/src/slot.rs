@@ -452,8 +452,14 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             // ⚠️ WIDTH IS NOCHANGE (-1), NOT `passband_for(md)`. WSJT-X passes NOCHANGE, and the
             // point here is the MODE — sending a width would reach across and reset the filter
             // the operator set on the TX VFO, which is the shape of the very bug #67 was about.
-            // BEFORE the split enable, in WSJT-X's order (`HamlibTransceiver.cpp:1010-1015`):
-            // Hamlib's split-mode call addresses the TX VFO whether or not split is on yet.
+            //
+            // ⛔ SPLIT ON FIRST WHEN THIS CONNECTION DOES NOT HOLD IT, then the TX dial and mode,
+            // then split on last, WSJT-X's order (3.0.2 `Transceiver/HamlibTransceiver.cpp:960-987`
+            // turns split on ahead of the TX frequency, "otherwise rig_set_split_freq() will target
+            // the wrong VFO on some rigs"; `:1029-1034` turns it on again last). WSJT-X does the
+            // first once per session; here it is every time split is not held, because a TX VFO
+            // that exists only in split refuses `I` and `X` until `S 1` (Nexus's own Flex client
+            // makes its split slice there), so after a release the next over would never key.
             let md = eng.rig_mode_effective();
             // What the radio confirmed for this dial, only while this connection holds the split.
             let mut confirmed = rig
@@ -469,6 +475,10 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             let started = std::time::Instant::now();
             let mut vfo_b_written = false;
             let sent = (|| -> std::io::Result<()> {
+                if !rig.tx_split_held {
+                    rig.hold_split_on("VFOB")?;
+                    within_split_budget(started, budget)?;
+                }
                 if confirmed.tx_hz != Some(tx_dial) {
                     rig.set_split_freq(tx_dial)?;
                     vfo_b_written = true;
@@ -486,8 +496,7 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
                 }
                 // Split on, last, before every over: never skipped as unchanged, and inside the
                 // budget like the rest.
-                rig.set_split(true, "VFOB")?;
-                rig.tx_split_held = true;
+                rig.hold_split_on("VFOB")?;
                 within_split_budget(started, budget)?;
                 Ok(())
             })();
@@ -495,10 +504,11 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
                 rig.split_confirmed = Some(confirmed);
             }
             SplitApply {
-                // Engaged once the radio took split on, or VFO B was written (the loop puts back
-                // the radio's own split and its VFO B). Only a split the radio took is owed a
-                // release (`RadioLoop::let_go_of_rig_split`): a radio with no split control at all
-                // would otherwise owe it for ever.
+                // Engaged once the radio took split on (or got it and never answered), or VFO B
+                // was written (the loop puts back the radio's own split and its VFO B). Only a
+                // split the radio took, or may have, is owed a release
+                // (`RadioLoop::let_go_of_rig_split`): a radio with no split control at all would
+                // otherwise owe it for ever.
                 rig_split_engaged: rig.tx_split_held || vfo_b_written,
                 refused: sent.err().map(|e| e.to_string()),
                 ..none
@@ -2411,7 +2421,7 @@ mod tests {
         /// after, the over ended on `window_ms` (`None`: it had nothing left, and ended at once).
         fn played_in_its_own_period(&mut self, key_ms: u64, window_ms: Option<f64>, what: &str) {
             assert_eq!(
-                self.sent()[3..],
+                self.sent()[4..],
                 ["T 1"],
                 "{what}: the split, the key, and no unkey"
             );
@@ -2483,13 +2493,13 @@ mod tests {
             );
             if held {
                 assert_eq!(
-                    self.sent()[3..],
+                    self.sent()[4..],
                     ["T 1"],
                     "{what}: the split and the key, and the operator's PTT left to them"
                 );
             } else {
                 assert_eq!(
-                    self.sent()[3..],
+                    self.sent()[4..],
                     ["T 1", "T 0"],
                     "{what}: the split, the key, then the unkey"
                 );
@@ -2555,7 +2565,7 @@ mod tests {
         /// window (`window_ms`, then PTT 200 ms later), TX on.
         fn held_silent_to_the_window(&self, window_ms: f64, what: &str) {
             assert_eq!(
-                self.sent()[3..],
+                self.sent()[4..],
                 ["T 1"],
                 "{what}: the split, the key, and no unkey"
             );
@@ -2581,17 +2591,18 @@ mod tests {
         }
     }
 
-    /// The split's three commands and the key answered late enough that the carrier comes 2 s, 6 s
-    /// and 9.5 s after the decision: each command after `split_ms`, the key after `key_ms`. Every
-    /// one is answered inside its deadline, the split's by a long way: these scenes run the link on
-    /// [`SLOW_SPLIT_DEADLINE_MS`], so a loaded machine cannot push a 3 s answer past it. A split
+    /// The split's four commands (split on, the TX dial, its mode, split on) and the key answered
+    /// late enough that the carrier comes 2 s, 6 s and 9.5 s after the decision: each command after
+    /// `split_ms`, the key after `key_ms`. Every one is answered inside its deadline, the split's by
+    /// a long way: these scenes run the link on [`SLOW_SPLIT_DEADLINE_MS`], so a loaded machine
+    /// cannot push a 2.25 s answer past it. A split
     /// write left unanswered past its deadline keys nothing at all
     /// (`a_split_write_the_radio_does_not_answer_sends_nothing_and_halts_tx`,
     /// `a_split_write_answered_past_its_deadline_keys_nothing`).
-    const SLOW_SPLITS: [(u64, u64); 3] = [(600, 200), (1_900, 300), (3_000, 500)];
+    const SLOW_SPLITS: [(u64, u64); 3] = [(450, 200), (1_425, 300), (2_250, 500)];
 
     /// The reply deadline of the slow-split scenes' link (ms): far past their slowest split write
-    /// (3 s), so the scene measures a late carrier and never a split write timing out.
+    /// (2.25 s), so the scene measures a late carrier and never a split write timing out.
     const SLOW_SPLIT_DEADLINE_MS: u64 = 10_000;
 
     #[test]
@@ -2699,8 +2710,8 @@ mod tests {
             );
         }
         std::thread::scope(|s| {
-            s.spawn(|| scene(tempo_app::dto::Tier::Ft8, 10_000.0, (1_900, 300), 13_640.0));
-            s.spawn(|| scene(tempo_app::dto::Tier::Ft4, 500.0, (3_000, 500), 6_040.0));
+            s.spawn(|| scene(tempo_app::dto::Tier::Ft8, 10_000.0, (1_425, 300), 13_640.0));
+            s.spawn(|| scene(tempo_app::dto::Tier::Ft4, 500.0, (2_250, 500), 6_040.0));
         });
     }
 
@@ -2724,9 +2735,9 @@ mod tests {
         let [mut ft8, mut ft8_slow, ft4, mut ft4_slow] = std::thread::scope(|s| {
             [
                 (Ft8, 11_200.0, (0, 0)),
-                (Ft8, 11_200.0, (1_200, 300)),
+                (Ft8, 11_200.0, (900, 300)),
                 (Ft4, 5_600.0, (0, 0)),
-                (Ft4, 5_600.0, (700, 200)),
+                (Ft4, 5_600.0, (525, 200)),
             ]
             // Boxed: four scenes by value, each holding an `Engine`, left a debug build's frame
             // this close to the test thread's 2 MiB stack.
@@ -2756,7 +2767,7 @@ mod tests {
             wave,
             0,
             10_000.0,
-            (1_900, 300),
+            (1_425, 300),
             true,
         );
         let answered = held.sent_nothing_and_unkeyed_at_once(300, true, what);
@@ -2778,7 +2789,7 @@ mod tests {
         for (in_a_row, slot) in [(1, 0), (2, 2), (3, 4), (4, 6)] {
             let what = format!("FT4, drop {in_a_row}");
             let mut dropped =
-                slow_split_boundary_of(eng, wave.clone(), slot, 5_600.0, (700, 200), false);
+                slow_split_boundary_of(eng, wave.clone(), slot, 5_600.0, (525, 200), false);
             dropped.dropped_at_once(200, in_a_row, &what);
             eng = dropped.eng;
         }
@@ -3090,11 +3101,11 @@ mod tests {
             "the TX VFO must be put in the operating mode, with the width left alone \
              (WSJT-X passes RIG_PASSBAND_NOCHANGE). wanted `X {md} -1`, wire was: {sent:?}"
         );
-        // …and before split is turned on, which goes last, in WSJT-X's order
-        // (`HamlibTransceiver.cpp:1010-1015`).
+        // …and before split is turned on again, last, in WSJT-X's order (3.0.2
+        // `Transceiver/HamlibTransceiver.cpp:1029-1034`).
         let i_split = sent
             .iter()
-            .position(|l| l.starts_with("S 1"))
+            .rposition(|l| l.starts_with("S 1"))
             .expect("split on");
         let i_mode = sent
             .iter()
@@ -3316,20 +3327,20 @@ mod tests {
         // Each of Rig split's three writes refused in turn (`S` and `I` with `RPRT -11`, Hamlib's
         // "not available", what Nexus's own Flex client answers them with; `X` with `RPRT -1`), and
         // Fake It's dial write refused (`RPRT -9`, an Icom's NG): the writes stop at the refusal,
-        // as WSJT-X's throw does.
+        // as WSJT-X's throw does. Split on goes first on a connection that does not hold it.
         for (split, verb, reply, wire) in [
+            (SplitMode::Rig, "S ", "RPRT -11\n", &["S 1 VFOB"][..]),
             (
                 SplitMode::Rig,
-                "S ",
+                "I ",
                 "RPRT -11\n",
-                &["I 14073000", "X PKTUSB -1", "S 1 VFOB"][..],
+                &["S 1 VFOB", "I 14073000"][..],
             ),
-            (SplitMode::Rig, "I ", "RPRT -11\n", &["I 14073000"][..]),
             (
                 SplitMode::Rig,
                 "X ",
                 "RPRT -1\n",
-                &["I 14073000", "X PKTUSB -1"][..],
+                &["S 1 VFOB", "I 14073000", "X PKTUSB -1"][..],
             ),
             (SplitMode::FakeIt, "F ", "RPRT -9\n", &["F 14073000"][..]),
         ] {
@@ -3338,12 +3349,12 @@ mod tests {
                 split_over_on(split, one_split_write_answered(verb, Some(reply)));
             assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, wire);
             // The radio is put back as after any over: Rig split let go by the loop's teardown once
-            // VFO B was written (a refused first write leaves nothing to put back), Fake It's dial
-            // written back.
+            // the radio took split on (a refused split on leaves nothing to put back), Fake It's
+            // dial written back.
             match split {
                 SplitMode::Rig => assert_eq!(
                     act.rig_split_engaged,
-                    verb != "I ",
+                    verb != "S ",
                     "{what}: the split released"
                 ),
                 _ => assert_eq!(
@@ -3361,27 +3372,52 @@ mod tests {
         // No answer by the CAT deadline, and an empty reply (a bare newline, no `RPRT`), on each
         // write: an answer that never says `RPRT 0` is not one the radio took.
         for (split, verb, reply, wire) in [
-            (
-                SplitMode::Rig,
-                "S ",
-                None,
-                &["I 14073000", "X PKTUSB -1", "S 1 VFOB"][..],
-            ),
-            (SplitMode::Rig, "I ", None, &["I 14073000"][..]),
+            (SplitMode::Rig, "S ", None, &["S 1 VFOB"][..]),
+            (SplitMode::Rig, "I ", None, &["S 1 VFOB", "I 14073000"][..]),
             (
                 SplitMode::Rig,
                 "X ",
                 None,
-                &["I 14073000", "X PKTUSB -1"][..],
+                &["S 1 VFOB", "I 14073000", "X PKTUSB -1"][..],
             ),
             (SplitMode::FakeIt, "F ", None, &["F 14073000"][..]),
-            (SplitMode::Rig, "I ", Some("\n"), &["I 14073000"][..]),
+            (
+                SplitMode::Rig,
+                "I ",
+                Some("\n"),
+                &["S 1 VFOB", "I 14073000"][..],
+            ),
             (SplitMode::FakeIt, "F ", Some("\n"), &["F 14073000"][..]),
         ] {
             let what = format!("{split:?}, {verb:?} answered {reply:?}");
             let (act, backend, mut eng, sent) =
                 split_over_on(split, one_split_write_answered(verb, reply));
             assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, wire);
+        }
+    }
+
+    #[test]
+    fn a_split_on_with_no_answer_may_have_been_taken_and_its_release_is_owed() {
+        use tempo_app::settings::SplitMode;
+        // Split on answered with nothing by the CAT deadline, an empty line, or Hamlib's "the rig
+        // did not answer" (`RPRT -5`): the radio may have taken it late, so the split is held and
+        // engaged, and its release is owed as for a split taken. Nothing keys either way. The
+        // control: a refusal the radio gave (`RPRT -9`, `RPRT -1`) is not taken; nothing engaged.
+        for (reply, taken) in [
+            (None, true),
+            (Some("\n"), true),
+            (Some("RPRT -5\n"), true),
+            (Some("RPRT -9\n"), false),
+            (Some("RPRT -1\n"), false),
+        ] {
+            let what = format!("S 1 answered {reply:?}");
+            let (addr, log) = scripted_rigctld(one_split_write_answered("S ", reply));
+            let (act, backend, mut eng, rig) =
+                split_over_at(split_cq_engine(SplitMode::Rig), &addr, None);
+            let sent = log.lock().unwrap().clone();
+            assert_eq!(rig.tx_split_held, taken, "{what}: held");
+            assert_eq!(act.rig_split_engaged, taken, "{what}: the release owed");
+            assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, &["S 1 VFOB"]);
         }
     }
 
@@ -3487,7 +3523,7 @@ mod tests {
             split_over_on_a_link(SplitMode::Rig, late_i(300), Some(1_000));
         assert_eq!(
             sent,
-            ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"],
             "inside"
         );
         assert!(
@@ -3496,7 +3532,14 @@ mod tests {
         );
         let (act, backend, mut eng, sent) =
             split_over_on_a_link(SplitMode::Rig, late_i(2_000), Some(1_000));
-        assert_split_sent_nothing("past", &act, &backend, &mut eng, &sent, &["I 14073000"]);
+        assert_split_sent_nothing(
+            "past",
+            &act,
+            &backend,
+            &mut eng,
+            &sent,
+            &["S 1 VFOB", "I 14073000"],
+        );
     }
 
     #[test]
@@ -3518,7 +3561,7 @@ mod tests {
         let (act, backend, eng, sent) = split_over_on(SplitMode::Rig, x_not_available);
         assert_eq!(
             sent,
-            ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"],
             "X not available: on the wire"
         );
         assert!(
@@ -3528,7 +3571,7 @@ mod tests {
         for (split, wire) in [
             (
                 SplitMode::Rig,
-                &["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"][..],
+                &["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"][..],
             ),
             (SplitMode::FakeIt, &["F 14073000", "T 1"][..]),
         ] {
@@ -3640,7 +3683,7 @@ mod tests {
             &backend,
             &mut eng,
             &sent,
-            &["I 14073000", "X PKTUSB -1"],
+            &["S 1 VFOB", "I 14073000"],
         );
         let why = eng.snapshot().radio.slot_key_refused.unwrap().why;
         assert!(
@@ -3668,7 +3711,10 @@ mod tests {
         let mut rig = Rig::rigctld(&addr);
         rig.set_slow_transport(true);
         let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
-        assert_eq!(sent, ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]);
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]
+        );
         keyed_as_before("100 ms a write", &act, &backend, &eng);
     }
 
@@ -3685,7 +3731,7 @@ mod tests {
             assert_eq!(sent, want, "{what}: on the wire");
             keyed_as_before(what, &act, &backend, &eng);
         };
-        let all = ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"];
+        let all = ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"];
         over(750.0, &mut rig, &all, "the first over");
         // Held, nothing changed: only split on, which goes out before every over.
         let split_on = ["S 1 VFOB", "T 1"];
@@ -3695,10 +3741,10 @@ mod tests {
         over(1700.0, &mut rig, &new_dial, "a new TX offset");
         let back = ["I 14073000", "S 1 VFOB", "T 1"];
         over(750.0, &mut rig, &back, "back again");
-        // A dial write away and back between overs: both written again.
+        // A dial write away and back between overs: both written again, split still held.
         rig.set_freq(7_074_000).unwrap();
         rig.set_freq(14_074_000).unwrap();
-        let both = all;
+        let both = ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"];
         over(750.0, &mut rig, &both, "after a dial write");
         // The radio's dial read somewhere else (the operator's knob): both written again.
         dial.store(14_080_000, Ordering::SeqCst);
@@ -3724,7 +3770,7 @@ mod tests {
         // A new connection (the old one dropped): both written again.
         rig.reconnect_for_test();
         over(750.0, &mut rig, &both, "after a reconnect");
-        // Split let go and taken again: both, and split on.
+        // Split let go and taken again: split on first, both, and split on.
         rig.set_split(false, "VFOA").unwrap();
         rig.tx_split_held = false;
         over(750.0, &mut rig, &all, "split taken again");
@@ -3754,7 +3800,10 @@ mod tests {
         });
         let mut rig = Rig::rigctld(&addr);
         let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
-        assert_eq!(sent, ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]);
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]
+        );
         keyed_as_before("the first over", &act, &backend, &eng);
         let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
         assert_eq!(sent, ["S 1 VFOB", "T 1"], "held, unchanged");
