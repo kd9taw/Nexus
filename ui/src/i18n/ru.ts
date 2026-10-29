@@ -573,6 +573,8 @@ export const RU: PartialCatalog = {
   "shell.work.failed": "Не удалось вызвать {{call}}",
   "shell.work.started": "▶ Вызов {{call}} — передаётся ваш позывной",
   "shell.work.failed.cat": "Не удалось вызвать {{call}} — проверьте CAT",
+  "shell.work.unresolvedCq": "Позывной этого CQ показан как <...>: Nexus ещё не декодировал его полностью. Нажмите на следующий CQ станции, когда её позывной появится.",
+  "shell.work.unresolvedCall": "Этот позывной показан как <...>: Nexus ещё не декодировал его полностью. Нажмите на следующее сообщение станции, когда её позывной появится.",
   "shell.work.ready": "▶ {{call}} — {{mode}} {{band}}, можно записать в журнал",
   "shell.work.here": "▶ {{call}} — {{band}} {{freq}} MHz",
   "shell.pounce.qsy.failed": "Не удалось перейти (QSY) к {{call}}",

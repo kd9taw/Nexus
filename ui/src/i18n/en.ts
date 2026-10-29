@@ -13593,6 +13593,8 @@ export const EN = {
   'shell.work.failed': 'Could not work {{call}}',
   'shell.work.started': '▶ Working {{call}} — transmitting your call',
   'shell.work.failed.cat': 'Could not work {{call}} — check CAT',
+  'shell.work.unresolvedCq': 'This CQ\'s call shows as <...>: Nexus has not decoded it in full yet. Click the station\'s next CQ once its call shows.',
+  'shell.work.unresolvedCall': 'This call shows as <...>: Nexus has not decoded it in full yet. Click the station\'s next message once its call shows.',
   'shell.work.ready': '▶ {{call}} — {{mode}} {{band}}, ready to log',
   'shell.work.here': '▶ {{call}} — {{band}} {{freq}} MHz',
   'shell.pounce.qsy.failed': 'Could not QSY to {{call}}',
