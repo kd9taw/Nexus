@@ -114,7 +114,7 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
 import { PASSBAND_LIMITS } from '../spectrum/markers'
 import { scopeSpots } from '../spectrum/scopeSpots'
-import { bandWindow, loadRfSpan, onlyPart, RF_SPAN_KEYS, saveRfSpan, useSpanAsk } from '../spectrum/rfSpan'
+import { bandWindow, loadRfSpan, onlyPart, saveRfSpan, useSpanAsk } from '../spectrum/rfSpan'
 import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { cwScopeSideSign, cwScopeWindow, isRfScopeSource, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON } from '../waterfall'
@@ -685,12 +685,12 @@ export function CwCockpit({
       .catch(showWhenDriving)
   }
   const [rfSpan, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
-    const id = loadRfSpan(RF_SPAN_KEYS.cw, RF_SPANS.map((sp) => sp.id), 'band')
+    const id = loadRfSpan('cw', RF_SPANS.map((sp) => sp.id), 'band')
     return RF_SPANS.find((sp) => sp.id === id) ?? RF_SPANS[0]
   })
   const setRfSpan = (sp: (typeof RF_SPANS)[number]) => {
     setRfSpanState(sp)
-    saveRfSpan(RF_SPAN_KEYS.cw, sp.id)
+    saveRfSpan('cw', sp.id)
   }
   // The row's own span as the source sweeps it (PhoneScope `onSweep`), for `useSpanAsk`.
   const [scopeSweep, setScopeSweep] = useState<{ loHz: number; hiHz: number } | null>(null)

@@ -10,7 +10,6 @@ import {
   bandWindow,
   loadRfSpan,
   onlyPart,
-  RF_SPAN_KEYS,
   saveRfSpan,
   spanAsk,
   sweepFits,
@@ -119,17 +118,35 @@ describe('useSpanAsk', () => {
   })
 })
 
-describe('the stored choice', () => {
-  afterEach(() => localStorage.clear())
+describe('the stored choice, per window', () => {
+  afterEach(() => {
+    localStorage.clear()
+    window.history.replaceState({}, '', '/')
+  })
   const ids = ['band', 'full', '±25k'] as const
   it('defaults to Band, and a stored choice wins', () => {
-    expect(loadRfSpan(RF_SPAN_KEYS.phone, ids, 'band')).toBe('band')
-    saveRfSpan(RF_SPAN_KEYS.phone, 'full')
-    expect(loadRfSpan(RF_SPAN_KEYS.phone, ids, 'band')).toBe('full')
-    expect(loadRfSpan(RF_SPAN_KEYS.cw, ids, 'band'), 'each cockpit its own').toBe('band')
+    expect(loadRfSpan('phone', ids, 'band')).toBe('band')
+    saveRfSpan('phone', 'full')
+    expect(loadRfSpan('phone', ids, 'band')).toBe('full')
+    expect(loadRfSpan('cw', ids, 'band'), 'each cockpit its own').toBe('band')
+  })
+  it('a choice kept under the old station-wide key is still read', () => {
+    localStorage.setItem('nexus.cw.rfSpan', '±25k')
+    expect(loadRfSpan('cw', ids, 'band')).toBe('±25k')
+    window.history.replaceState({}, '', '/?panel=cw&instance=w2')
+    expect(loadRfSpan('cw', ids, 'band'), 'a pop-out with none of its own reads it too').toBe('±25k')
+  })
+  it("a pop-out's choice is its own and leaves the main window's alone", () => {
+    saveRfSpan('phone', 'band')
+    window.history.replaceState({}, '', '/?panel=phone&instance=w2')
+    saveRfSpan('phone', '±25k')
+    expect(loadRfSpan('phone', ids, 'band')).toBe('±25k')
+    expect(localStorage.getItem('nexus.phone.rfSpan.phone.w2')).toBe('±25k')
+    window.history.replaceState({}, '', '/')
+    expect(loadRfSpan('phone', ids, 'band'), 'the main window kept Band').toBe('band')
   })
   it('a stored value that is no span reads as the default', () => {
-    localStorage.setItem(RF_SPAN_KEYS.cw, '±3M')
-    expect(loadRfSpan(RF_SPAN_KEYS.cw, ids, 'band')).toBe('band')
+    localStorage.setItem('nexus.cw.rfSpan', '±3M')
+    expect(loadRfSpan('cw', ids, 'band')).toBe('band')
   })
 })

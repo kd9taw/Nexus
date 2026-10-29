@@ -120,7 +120,7 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
 import { PASSBAND_LIMITS } from '../spectrum/markers'
 import { scopeSpots } from '../spectrum/scopeSpots'
-import { bandWindow, loadRfSpan, onlyPart, RF_SPAN_KEYS, saveRfSpan, useSpanAsk } from '../spectrum/rfSpan'
+import { bandWindow, loadRfSpan, onlyPart, saveRfSpan, useSpanAsk } from '../spectrum/rfSpan'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
 import { SplitControl } from './SplitControl'
@@ -829,12 +829,12 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // fills the scope).
   const [span, setSpan] = useState<(typeof SPANS)[number]>(SPANS[0])
   const [rfSpan, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
-    const id = loadRfSpan(RF_SPAN_KEYS.phone, RF_SPANS.map((sp) => sp.id), 'band')
+    const id = loadRfSpan('phone', RF_SPANS.map((sp) => sp.id), 'band')
     return RF_SPANS.find((sp) => sp.id === id) ?? RF_SPANS[0]
   })
   const setRfSpan = (sp: (typeof RF_SPANS)[number]) => {
     setRfSpanState(sp)
-    saveRfSpan(RF_SPAN_KEYS.phone, sp.id)
+    saveRfSpan('phone', sp.id)
   }
   // The row's own span as the source sweeps it (PhoneScope `onSweep`), for `useSpanAsk`.
   const [scopeSweep, setScopeSweep] = useState<{ loHz: number; hiHz: number } | null>(null)

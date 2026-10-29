@@ -21,6 +21,7 @@
 // radio it is sent to, and nothing is sent while the station is on the air.
 import { useEffect, useRef } from 'react'
 import { bandLabelForMhz, bandRangeForLabel } from '../band'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
 
 /** The margin either side of a band: a tenth of its width, at most this. 30 m's 50 kHz gets 5 kHz a
  *  side; 20 m's 350 kHz, 6 m's and 2 m's 4 MHz get 25 kHz. */
@@ -144,24 +145,24 @@ export function useSpanAsk({
   }, [key, fits, sweep != null, transmitting])
 }
 
-/** Where the chosen span is kept: one record per cockpit, for the whole station, like the cockpit's
- *  tuning step. A stored choice wins over the default. */
-export const RF_SPAN_KEYS = { phone: 'nexus.phone.rfSpan', cw: 'nexus.cw.rfSpan' } as const
+/** Where the chosen span is kept: one record per cockpit PER WINDOW, like the audio scope's span
+ *  chips, so a torn-off cockpit may run Band beside a ±5 kHz docked one. A stored choice wins over the
+ *  default. The main window's key is the bare one, which is also the spelling an earlier build stored
+ *  for the whole station, so that choice is read where it was left; a pop-out with no choice of its
+ *  own reads the main window's (`surfaceGet`). Static literals: the storage-scope test classifies
+ *  them by these declarations. */
+const PHONE_RF_SPAN_KEY = 'nexus.phone.rfSpan'
+const CW_RF_SPAN_KEY = 'nexus.cw.rfSpan'
 
-/** The stored span id if it is one of `ids`, else `fallback`. */
-export function loadRfSpan<T extends string>(key: string, ids: readonly T[], fallback: T): T {
-  try {
-    const v = localStorage.getItem(key)
-    return ids.find((id) => id === v) ?? fallback
-  } catch {
-    return fallback
-  }
+/** The stored span id for `cockpit` in this window if it is one of `ids`, else `fallback`.
+ *  Storage-safe: `surfaceGet` reads a refused store as nothing stored. */
+export function loadRfSpan<T extends string>(cockpit: 'phone' | 'cw', ids: readonly T[], fallback: T): T {
+  const v = cockpit === 'phone' ? surfaceGet(PHONE_RF_SPAN_KEY) : surfaceGet(CW_RF_SPAN_KEY)
+  return ids.find((id) => id === v) ?? fallback
 }
 
-export function saveRfSpan(key: string, id: string): void {
-  try {
-    localStorage.setItem(key, id)
-  } catch {
-    // Storage refused (private mode): the choice holds for this session only.
-  }
+/** Keep `id` as this window's span for `cockpit`. Never touches another window's record. */
+export function saveRfSpan(cockpit: 'phone' | 'cw', id: string): void {
+  if (cockpit === 'phone') surfaceSet(PHONE_RF_SPAN_KEY, id)
+  else surfaceSet(CW_RF_SPAN_KEY, id)
 }

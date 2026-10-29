@@ -26,6 +26,11 @@ import { SCALE_KEYS } from './spectrum/scaleSettings'
  *  below — the list and the code cannot drift apart. */
 export const PER_SURFACE = [
   'neededFilters',
+  // The RF panadapter's chosen span (Band, Full, ±kHz) in the CW and Phone cockpits
+  // (spectrum/rfSpan.ts): per window, like the audio scope's span chips, so a torn-off cockpit keeps
+  // its own. The main window's spelling is the bare key an earlier build kept for the whole station.
+  'nexus.cw.rfSpan',
+  'nexus.phone.rfSpan',
   'nexus-ui-scale-mode',
   // APRS's body (layout L7): the station list column's width and the side the map stands on —
   // statements about THIS window's shape, like Connect's rail widths and Operate's rail side.
@@ -239,10 +244,6 @@ const SHARED = [
   'nexus.decodes.countryExclude',
   'nexus.decodes.countryExclude.paused',
   'nexus.cw.tuneStep',
-  // The RF panadapter's chosen span (Band, Full, ±kHz) in the CW and Phone cockpits
-  // (spectrum/rfSpan.ts). SHARED like the tuning step beside it: how this operator likes the band
-  // drawn, the same in every window.
-  'nexus.cw.rfSpan',
   'nexus.cwAssist',
   'nexus.dev.xray',
   // The Field Day contacts-per-hour goal. SHARED: a target rate is a statement about how this
@@ -289,7 +290,6 @@ const SHARED = [
   'nexus.remote.workspace',
   'nexus.operate.tuneStep',
   'nexus.panels.wfDetached.v1',
-  'nexus.phone.rfSpan',
   'nexus.phone.tuneStep',
   'nexus.profiles',
   'nexus.program.chirpHowtoSeen.v1',
