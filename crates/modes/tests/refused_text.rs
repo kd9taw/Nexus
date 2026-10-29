@@ -44,6 +44,59 @@ fn ft8_and_ft4_encode_nothing_for_a_text_the_encoder_refuses() {
     }
 }
 
+/// ⛔ FT2 ENCODES NOTHING FOR A TEXT THE ENCODER REFUSES, as FT8 and FT4 do. `genft2` is `genft4`
+/// line for line (leading blanks stripped the same way, `pack77`, `read(c77,...,err=1)`), so it
+/// never stops the process, but it keyed these anyway: a text the packer builds from fields it
+/// never set went out as whatever frame was left, and a bad message as 103 zero tones, one steady
+/// carrier. Controls: every text the packer carries keys exactly the vendored encoder's tones.
+#[test]
+fn ft2_encodes_nothing_for_a_text_the_encoder_refuses() {
+    let mode = make_mode(ModeKind::Ft2);
+    for text in [
+        "W9XYZ K1ABC TNX 73",
+        "W1AW KD9TAW TNX 73",
+        " W9XYZ K1ABC TNX 73",
+        "W9XYZ/M K1ABC TNX 73",
+        "W9XYZ/M K1ABC TNX",
+        "W9XYZ K1ABC 73 GL",
+        "W9XYZ K1ABC 5NN 001",
+        "W9XYZ/M K1ABC/P",
+        "CQ <K1ABC> FN42",
+        "CQ <...> FN42",
+    ] {
+        assert_eq!(mode.encode(text), Vec::<i32>::new(), "FT2 {text:?}");
+    }
+    for text in [
+        "TNX 73",
+        "W9XYZ K1ABC TNX",
+        "HELLO WORLD THIS IS LONG TEXT",
+        "CQ K1ABC FN42",
+        "CQ W9XYZ EN37",
+        "W9XYZ K1ABC FN42",
+        "K1ABC W9XYZ -10",
+        "W9XYZ K1ABC R-10",
+        "W9XYZ K1ABC RR73",
+        "W9XYZ K1ABC 73",
+        "W9XYZ K1ABC 599 001",
+        "W9XYZ K1ABC 2B EMA",
+        "<...> W9XYZ -10",
+        "W9XYZ/M <K1ABC> 73",
+        "CQ PJ4/K1ABC",
+        "w9xyz k1abc tnx",
+    ] {
+        let tones = mode.encode(text);
+        assert_eq!(
+            Some(&tones),
+            ft2::encode(text).as_ref(),
+            "CONTROL FT2 {text:?}"
+        );
+        assert!(
+            tones.len() == 103 && tones.iter().any(|&t| t != 0),
+            "CONTROL FT2 {text:?}: {tones:?}"
+        );
+    }
+}
+
 // ---- The encoders that stop the process ---------------------------------------------------------
 
 /// The child half of [`encode_alone`]: encodes the mode and text it is handed, and says how many

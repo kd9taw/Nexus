@@ -19686,6 +19686,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let (mode, why) = match self.app.tier() {
             Tier::Ft8 => ("FT8", w::ft8_refusal(text)?),
             Tier::Ft4 => ("FT4", w::ft4_refusal(text)?),
+            // `genft2` is `genft4` line for line, so FT4's verdict is FT2's.
+            Tier::Ft2 => ("FT2", w::ft4_refusal(text)?),
             Tier::Q65 => ("Q65", w::q65_refusal(text)?),
             Tier::Msk144 => ("MSK144", w::msk144_refusal(text)?),
             Tier::Fst4 => ("FST4", w::fst4_refusal(text)?),

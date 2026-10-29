@@ -406,3 +406,77 @@ fn q65_msk144_and_fst4_never_queue_or_key_a_text_with_no_frame() {
         );
     }
 }
+
+// ---- FT2 ----------------------------------------------------------------------------------------
+
+/// ⛔ FT2 never queues or keys an over its encoder refuses, as FT8 and FT4 do, with the same words.
+/// `genft2` is `genft4` line for line, so it never stops the process; it keyed these instead: a text
+/// the packer builds from fields it never set as whatever frame was left, and a bad message as 103
+/// zero tones, one steady carrier. Controls: text the packer carries is queued and keyed.
+#[test]
+fn ft2_never_queues_or_keys_text_the_encoder_refuses() {
+    let words = |text: &str| {
+        format!(
+            "FT2 cannot encode \"{text}\", so nothing goes out. After two calls only a report \
+             (-12, R-12), RRR, RR73 or 73 fits; free text alone, as in Tx 5, holds 13 characters."
+        )
+    };
+    let mut e = answering(Tier::Ft2, "CQ W9XYZ EN37");
+    let queued = tx_now(&e).expect("premise: the reply is queued");
+    assert_eq!(
+        (e.qso_freetext_checked("TNX 73"), tx_now(&e)),
+        (Err(words("W9XYZ K1ABC TNX 73")), Some(queued.clone())),
+        "the typed box"
+    );
+    assert_eq!(
+        e.override_next_tx_refusal("W9XYZ", "W9XYZ K1ABC 73 GL"),
+        Some(words("W9XYZ K1ABC 73 GL")),
+        "the Tx row"
+    );
+    assert_eq!(
+        next_over(&mut e, 4),
+        Some((queued, true)),
+        "the reply queued before keys"
+    );
+
+    let mut e = answering(Tier::Ft2, "CQ W9XYZ/M");
+    assert_eq!(
+        e.qso_freetext_checked("TNX"),
+        Err(words("W9XYZ/M K1ABC TNX")),
+        "a frame from fields never set"
+    );
+
+    // The keying point, for an over that reaches it anyway: nothing planned, nothing recorded.
+    for text in ["W9XYZ K1ABC TNX 73", "CQ <K1ABC> FN42"] {
+        let mut e = answering(Tier::Ft2, "CQ W9XYZ EN37");
+        e.settings.write_all_txt = true;
+        let _ = e.take_all_txt_pending();
+        let Mode::Qso { station, .. } = &mut e.mode else {
+            panic!("premise: a QSO");
+        };
+        station.override_next(Msg::Other(text.into()));
+        assert_eq!(
+            (
+                (4..8).find_map(|s| e.plan_tx(s)).is_none(),
+                e.take_all_txt_pending().len()
+            ),
+            (true, 0),
+            "the keying point: {text:?}"
+        );
+    }
+
+    let mut e = answering(Tier::Ft2, "CQ W9XYZ EN37");
+    assert_eq!(e.qso_freetext_checked("TNX"), Ok(()), "CONTROL");
+    assert_eq!(
+        next_over(&mut e, 4),
+        Some(("W9XYZ K1ABC TNX".to_string(), true)),
+        "CONTROL: keyed"
+    );
+    let mut e = answering(Tier::Ft2, "CQ W9XYZ/M");
+    assert_eq!(e.qso_freetext_checked("73"), Ok(()), "CONTROL");
+    assert_eq!(
+        next_over(&mut e, 4),
+        Some(("W9XYZ/M <K1ABC> 73".to_string(), true)),
+        "CONTROL: keyed"
+    );
+}

@@ -1181,7 +1181,20 @@ impl Mode for Ft2Mode {
         // Empty on a message that will not pack — the trait's documented safe
         // failure; `gen_wave` below turns it into an empty waveform, so the radio
         // loop keys nothing rather than transmitting garbage.
-        ft2::encode(msg).unwrap_or_default()
+        //
+        // ⛔ Never a message the encoder refuses, as FT4: `genft2` is `genft4` line for line
+        // (the same leading-blank strip, `pack77`, and bad message), so FT4's verdict is FT2's.
+        if crate::wsjt77::ft4_refusal(msg).is_some() {
+            return Vec::new();
+        }
+        let tones = ft2::encode(msg).unwrap_or_default();
+        // The bad message only the vendored encoder can tell: it leaves its tones unwritten, the
+        // entry point's zeros, and every over carries its Costas arrays, so 103 zeros are never a
+        // frame.
+        if tones.iter().all(|&t| t == 0) {
+            return Vec::new();
+        }
+        tones
     }
 
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
