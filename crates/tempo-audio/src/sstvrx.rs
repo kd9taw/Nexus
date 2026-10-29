@@ -837,6 +837,11 @@ mod tests {
             hedr_shift_hz: 0.0,
         };
         let image = tempo_sstv::SstvImage::new(SstvMode::Robot36, w, h);
+        // An earlier write (a load, a delete) already reached this folder, so the picture's write
+        // lands only if pushing it moved the gallery past that write's generation.
+        engine_lock(&eng).load_sstv_gallery(vec![]);
+        let (gen, snapshot) = engine_lock(&eng).sstv_gallery_snapshot();
+        sstv_gallery::write_gallery_json(&dir, gen, &snapshot);
 
         let mut saved = None;
         assert!(
@@ -846,6 +851,15 @@ mod tests {
             "a finished picture's gallery.json write must not hold the Engine lock"
         );
         let saved = saved.expect("the picture was saved");
+        let on_disk: Vec<String> = sstv_store::load_gallery(&dir)
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(
+            on_disk,
+            vec![saved.clone()],
+            "the finished picture is in gallery.json before any FSK ID arrives"
+        );
         assert!(
             engine_was_free_during_the_gallery_write(&eng, || {
                 record_fsk_id(&eng, &dir, &saved, "K1ABC".into());

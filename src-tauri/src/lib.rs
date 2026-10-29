@@ -6543,8 +6543,9 @@ fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(),
 }
 
 /// Delete one received picture and reconcile the gallery index, for the desktop command above. The
-/// file removal and the directory read are under the Engine lock; the gallery.json write is not
-/// (see [`rewrite_sstv_gallery_index`]).
+/// Engine lock is held only to copy the gallery and, later, to apply the result: the file lookups,
+/// the removal, the folder read and the gallery.json write all run without it (see
+/// [`rewrite_sstv_gallery_index`]).
 ///
 /// ⛔ The containment and membership checks are load-bearing whichever caller arrives: only a
 /// picture the gallery lists, inside the station's own gallery folder, can be removed, and a path
@@ -6554,13 +6555,9 @@ pub(crate) fn delete_sstv_gallery_image(
     dir: &std::path::Path,
     path: &str,
 ) -> Result<(), String> {
-    let (gen, entries) = {
-        let mut eng = engine_lock(engine);
-        let pictures = canonical_gallery_paths(eng.sstv_gallery());
-        unlink_sstv_gallery_file(dir, &pictures, path)?;
-        eng.remove_sstv_gallery(path);
-        rewrite_sstv_gallery_index(&mut eng, dir)
-    };
+    let listed = engine_lock(engine).sstv_gallery().to_vec();
+    unlink_sstv_gallery_file(dir, &canonical_gallery_paths(&listed), path)?;
+    let (gen, entries) = rewrite_sstv_gallery_index(engine, dir, &[path]);
     tempo_app::sstv_gallery::write_gallery_json(dir, gen, &entries);
     Ok(())
 }
@@ -6596,17 +6593,19 @@ fn sstv_delete_images(
 
 /// [`sstv_delete_images`] against an explicit gallery folder, so the tests can use a scratch one.
 ///
-/// The Engine lock is taken twice and never across the unlinks or the gallery.json write: once to
-/// read the gallery, once to drop what went and reconcile the index. A Select all over a full gallery on a slow disk would
-/// otherwise hold the radio loop off for every file. The rewrite reconciles against the folder as
-/// it stands then, so the index matches the disk whichever unlinks failed, and a picture received
-/// in between is kept.
+/// The Engine lock is never held across file work: it is taken only to copy the gallery, and then
+/// by [`rewrite_sstv_gallery_index`] to copy it again and to apply the result. The file lookups,
+/// the unlinks, the folder read and the gallery.json write all run without it, since a Select all
+/// over a full gallery in a slow folder would otherwise hold the radio loop off for every file. The
+/// rewrite reconciles against the folder as it stands then, so the index matches the disk whichever
+/// unlinks failed, and a picture received in between is kept.
 fn delete_sstv_gallery_images(
     engine: &std::sync::Mutex<tempo_app::engine::Engine>,
     dir: &std::path::Path,
     paths: &[String],
 ) -> Vec<SstvDeleteFailure> {
-    let pictures = canonical_gallery_paths(engine_lock(engine).sstv_gallery());
+    let listed = engine_lock(engine).sstv_gallery().to_vec();
+    let pictures = canonical_gallery_paths(&listed);
     let mut asked = std::collections::HashSet::new();
     let mut failed = Vec::new();
     let mut removed = Vec::new();
@@ -6627,13 +6626,7 @@ fn delete_sstv_gallery_images(
         hook(engine);
     }
     if !removed.is_empty() {
-        let (gen, entries) = {
-            let mut eng = engine_lock(engine);
-            for path in removed {
-                eng.remove_sstv_gallery(path);
-            }
-            rewrite_sstv_gallery_index(&mut eng, dir)
-        };
+        let (gen, entries) = rewrite_sstv_gallery_index(engine, dir, &removed);
         tempo_app::sstv_gallery::write_gallery_json(dir, gen, &entries);
     }
     failed
@@ -6650,6 +6643,27 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+#[cfg(test)]
+type GalleryDiskHook = Box<dyn FnMut(&'static str)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs at each step of a delete that touches the gallery folder (resolving the gallery's
+    /// pictures, removing a file, reading the folder back): the seam a test uses to ask whether the
+    /// Engine lock is free at that moment.
+    static ON_GALLERY_DISK_WORK: std::cell::RefCell<Option<GalleryDiskHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn gallery_disk_work(step: &'static str) {
+    ON_GALLERY_DISK_WORK.with(|h| {
+        if let Some(hook) = h.borrow_mut().as_mut() {
+            hook(step);
+        }
+    });
+}
+
 /// The gallery's pictures as canonical paths, for the membership check below. A picture whose
 /// file is already gone has no canonical path and is left out; it could not be removed anyway.
 /// So is an entry that is a symbolic link rather than a picture file: following it would make
@@ -6657,6 +6671,8 @@ thread_local! {
 fn canonical_gallery_paths(
     entries: &[tempo_app::dto::SstvGalleryEntry],
 ) -> std::collections::HashSet<std::path::PathBuf> {
+    #[cfg(test)]
+    gallery_disk_work("membership");
     entries
         .iter()
         .map(|e| std::path::Path::new(&e.path))
@@ -6685,6 +6701,8 @@ fn unlink_sstv_gallery_file(
     pictures: &std::collections::HashSet<std::path::PathBuf>,
     path: &str,
 ) -> Result<(), String> {
+    #[cfg(test)]
+    gallery_disk_work("unlink");
     let target = std::path::Path::new(path);
     if std::fs::symlink_metadata(target).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err("That file is not a picture in the SSTV gallery".into());
@@ -6713,21 +6731,64 @@ thread_local! {
     static SSTV_INDEX_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Reconcile the gallery with what the directory now holds, rather than with the entries just
-/// dropped: it costs one directory read and it also sweeps up any other drift. Returns the
-/// gallery and its generation for the caller to write to `gallery.json`.
+/// Drop the `removed` pictures from the gallery and reconcile it with what the directory now
+/// holds, rather than with the entries just dropped: it costs one directory read and it also
+/// sweeps up any other drift. Returns the gallery and its generation for the caller to write to
+/// `gallery.json`.
 ///
-/// ⛔ The caller writes with `tempo_app::sstv_gallery::write_gallery_json` AFTER releasing the
-/// Engine lock. The radio loop and Stop TX wait on that lock, and the gallery folder can be a slow
-/// OneDrive or network folder. The decode thread writes the same way; the generation stops an
-/// older copy landing after a newer one.
+/// ⛔ No file work under the Engine lock. The radio loop and Stop TX wait on that lock, and the
+/// gallery folder can be a slow OneDrive or network folder, where each lookup is a round trip. So
+/// the folder is read against a copy of the gallery, and the lock is retaken only to apply what the
+/// read found to the gallery as it stands THEN: entries whose files have gone are dropped, files
+/// the gallery did not list are adopted, and anything the decoder added or changed in between (a
+/// new picture, its FSK ID) is kept as the decoder left it.
+///
+/// ⛔ The caller writes with `tempo_app::sstv_gallery::write_gallery_json` AFTER this returns, with
+/// no lock held. The decode thread writes the same way; the generation stops an older copy landing
+/// after a newer one.
 fn rewrite_sstv_gallery_index(
-    eng: &mut tempo_app::engine::Engine,
+    engine: &std::sync::Mutex<tempo_app::engine::Engine>,
     dir: &std::path::Path,
+    removed: &[&str],
 ) -> (u64, Vec<tempo_app::dto::SstvGalleryEntry>) {
     #[cfg(test)]
     SSTV_INDEX_WRITES.with(|n| n.set(n.get() + 1));
-    let entries = reconcile_gallery(dir, eng.sstv_gallery().to_vec());
+    let listed: Vec<tempo_app::dto::SstvGalleryEntry> = engine_lock(engine)
+        .sstv_gallery()
+        .iter()
+        .filter(|e| !removed.contains(&e.path.as_str()))
+        .cloned()
+        .collect();
+    let found = reconcile_gallery(dir, listed.clone());
+    let on_disk: std::collections::HashSet<&str> = found.iter().map(|e| e.path.as_str()).collect();
+    let was_listed: std::collections::HashSet<&str> =
+        listed.iter().map(|e| e.path.as_str()).collect();
+    let vanished: std::collections::HashSet<&str> = was_listed
+        .iter()
+        .copied()
+        .filter(|p| !on_disk.contains(p))
+        .collect();
+
+    let mut eng = engine_lock(engine);
+    for path in removed {
+        eng.remove_sstv_gallery(path);
+    }
+    let mut entries: Vec<tempo_app::dto::SstvGalleryEntry> = eng
+        .sstv_gallery()
+        .iter()
+        .filter(|e| !vanished.contains(e.path.as_str()))
+        .cloned()
+        .collect();
+    // Adopt only files the copy did not list: one it did list and the gallery no longer has was
+    // removed in between (another delete), and must not come back.
+    let known: std::collections::HashSet<String> = entries.iter().map(|e| e.path.clone()).collect();
+    entries.extend(
+        found
+            .iter()
+            .filter(|e| !was_listed.contains(e.path.as_str()) && !known.contains(&e.path))
+            .cloned(),
+    );
+    entries.sort_by(|a, b| a.finished_utc.cmp(&b.finished_utc));
     eng.load_sstv_gallery(entries);
     eng.sstv_gallery_snapshot()
 }
@@ -6751,6 +6812,8 @@ fn reconcile_gallery(
     dir: &std::path::Path,
     entries: Vec<tempo_app::dto::SstvGalleryEntry>,
 ) -> Vec<tempo_app::dto::SstvGalleryEntry> {
+    #[cfg(test)]
+    gallery_disk_work("reconcile");
     // Plain files only, here and in the adoption below: a symbolic link named like a picture
     // (dangling, or pointing at something else in or out of the folder) is not one the decoder wrote.
     let mut kept: Vec<tempo_app::dto::SstvGalleryEntry> = entries
@@ -47776,6 +47839,147 @@ mod tests {
         );
         assert_eq!(index_paths(&dir), Vec::<String>::new(), "and it landed");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Records each step at which a delete touches the gallery folder, and whether another thread
+    /// (the radio loop, a Stop TX) could have taken the Engine lock at that moment.
+    fn record_gallery_disk_work(
+        engine: &std::sync::Arc<std::sync::Mutex<tempo_app::engine::Engine>>,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<(&'static str, bool)>>> {
+        let steps = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (engine, seen) = (engine.clone(), steps.clone());
+        super::ON_GALLERY_DISK_WORK.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |step| {
+                let engine = engine.clone();
+                let free = std::thread::spawn(move || engine.try_lock().is_ok())
+                    .join()
+                    .unwrap();
+                seen.borrow_mut().push((step, free));
+            }));
+        });
+        steps
+    }
+
+    /// ⛔ The gallery folder can be a slow OneDrive or network folder, where every file lookup is a
+    /// round trip, and the radio loop and Stop TX wait on the Engine lock. Neither delete may hold
+    /// the lock while it resolves the gallery's pictures, removes a file or reads the folder back:
+    /// a delete clicked during an over must never hold off the unkey.
+    #[test]
+    fn the_engine_lock_is_free_while_a_gallery_delete_reads_and_removes_files() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+            "20261030T100200Z_pd120.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-disk-off-lock", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let paths: Vec<String> = names
+            .iter()
+            .map(|n| dir.join(n).to_string_lossy().into_owned())
+            .collect();
+        let steps = record_gallery_disk_work(&engine);
+
+        assert_eq!(
+            super::delete_sstv_gallery_image(&engine, &dir, &paths[0]),
+            Ok(())
+        );
+        assert_eq!(
+            steps.take(),
+            vec![("membership", true), ("unlink", true), ("reconcile", true)],
+            "the single delete's file work must not hold the Engine lock"
+        );
+        assert_eq!(
+            super::delete_sstv_gallery_images(&engine, &dir, &paths[1..]),
+            vec![]
+        );
+        assert_eq!(
+            steps.take(),
+            vec![
+                ("membership", true),
+                ("unlink", true),
+                ("unlink", true),
+                ("reconcile", true)
+            ],
+            "the batch delete's file work must not hold the Engine lock"
+        );
+        super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+
+        assert_eq!(index_paths(&dir), Vec::<String>::new());
+        assert!(engine_lock(&engine).sstv_gallery().is_empty());
+        assert!(names.iter().all(|n| !dir.join(n).exists()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The folder is read with the Engine lock released, so the decoder can finish a picture while
+    /// a delete reads it. That picture must keep everything the decoder knew (its FSK ID, its
+    /// frequency), and the deleted one must stay gone. Applying the folder read wholesale would
+    /// lose the arrival, or keep only a bare re-adopted copy of it.
+    #[test]
+    fn a_picture_received_while_a_gallery_delete_reads_the_folder_keeps_its_fsk_id() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        for batch in [false, true] {
+            let (dir, eng) = batch_gallery(&format!("sstv-read-arrival-{batch}"), &names);
+            let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+            let arrival = dir
+                .join("20261030T100500Z_pd120.png")
+                .to_string_lossy()
+                .into_owned();
+            {
+                let (engine, arrival) = (engine.clone(), arrival.clone());
+                super::ON_GALLERY_DISK_WORK.with(|h| {
+                    *h.borrow_mut() = Some(Box::new(move |step| {
+                        if step != "reconcile" {
+                            return;
+                        }
+                        // What the decode thread does for a finished picture and its FSK ID.
+                        std::fs::write(&arrival, b"PNG-not-really").unwrap();
+                        let mut e = engine_lock(&engine);
+                        let mut got = entry(std::path::Path::new(&arrival), "2026-10-30T10:05:00Z");
+                        got.freq_mhz = 14.233;
+                        e.push_sstv_gallery(got);
+                        e.set_sstv_gallery_fsk_id(&arrival, "K1ABC".into());
+                    }));
+                });
+            }
+            let gone = dir.join(names[0]).to_string_lossy().into_owned();
+            let kept = dir.join(names[1]).to_string_lossy().into_owned();
+            if batch {
+                assert_eq!(
+                    super::delete_sstv_gallery_images(&engine, &dir, std::slice::from_ref(&gone)),
+                    vec![]
+                );
+            } else {
+                assert_eq!(
+                    super::delete_sstv_gallery_image(&engine, &dir, &gone),
+                    Ok(())
+                );
+            }
+            super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+
+            let text = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+            let on_disk: Vec<tempo_app::dto::SstvGalleryEntry> =
+                serde_json::from_str(&text).unwrap();
+            let in_memory = engine_lock(&engine).sstv_gallery().to_vec();
+            for (label, gallery) in [("on disk", &on_disk), ("in memory", &in_memory)] {
+                let paths: Vec<&str> = gallery.iter().map(|e| e.path.as_str()).collect();
+                assert_eq!(
+                    paths,
+                    vec![kept.as_str(), arrival.as_str()],
+                    "batch {batch}, {label}: the arrival is kept and the deleted picture stays deleted"
+                );
+                assert_eq!(
+                    gallery[1].fsk_id.as_deref(),
+                    Some("K1ABC"),
+                    "batch {batch}, {label}: the arrival keeps its FSK ID"
+                );
+                assert_eq!(gallery[1].freq_mhz, 14.233, "batch {batch}, {label}");
+            }
+            assert!(!dir.join(names[0]).exists());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     fn index_paths(dir: &std::path::Path) -> Vec<String> {
