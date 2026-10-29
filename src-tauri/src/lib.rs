@@ -761,10 +761,11 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
         // board showed "Digital" for a spot and "FT8" for a PSK Reporter row describing the same
         // FT8 station, with nothing to explain the difference (reported on 1.0.3).
         //
-        // Display only, verified before changing it: `workTarget` picks a cockpit by matching
-        // 'CW' / 'Phone' / 'RTTY' exactly and defaulting everything else to Operate, and
-        // `modeDefaultMhz` returns null for anything that is not CW or Phone. "Digital" and "FT8"
-        // therefore take the same arm in both, so where a click lands is unchanged.
+        // Not display only: on a Work click the UI's `workTier` reads FT8 or FT4 from this name and
+        // opens the FT screen on that tier (the frequency is the spot's either way). Which cockpit
+        // opens is unchanged by it: `workTarget` matches 'CW' / 'Phone' / 'RTTY' exactly and sends
+        // everything else to Operate, and `modeDefaultMhz` returns null for anything that is not
+        // CW or Phone, so "Digital", "FT8" and "FT4" take the same arm in both.
         mode: propagation::digital_hole_mode(freq_mhz)
             .map(str::to_string)
             .unwrap_or_else(|| {
