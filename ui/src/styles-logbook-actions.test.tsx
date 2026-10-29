@@ -89,7 +89,7 @@ function winner(selectors: string[], prop: string): string | null {
 const ROW_RULES = ['.log-row', '.logbook-row', '.logbook-table .logbook-row', '.logbook-table.wide .logbook-row']
 const NARROW_RULES = ["[data-viewport='sm'] .log-row", "[data-viewport='sm'] .logbook-row", "[data-viewport='sm'] .logbook-table .logbook-row"]
 
-/** A template's tracks. `minmax(384px, 0.8fr)` stays one track. */
+/** A template's tracks. `minmax(436px, 0.8fr)` stays one track. */
 function tracks(template: string): string[] {
   expect(template, 'the table must carry a template').toBeTruthy()
   const out: string[] = []
@@ -131,11 +131,14 @@ const spacing = (v: string | null) => (v && /var\(--space-1\)/.test(v) ? SPACE_1
 // it ten controls: requiredInkW 372.6px, spread 11.3 (361.3 .. 372.6), floor 336 -> 384. The
 // delta is exactly the 44px the sheet pins a `select.log-rowbtn` to plus one 4px gap —
 // measured, not assumed, which is the step this file exists to stop anyone skipping.
-const MEASURED_REQUIREMENT = 372.6
-const MEASURED_FACE_SPREAD = 11.3
+//
+// RE-TAKEN 2026-10-28, same harness, when the per-contact LoTW upload joined the cluster and made
+// it eleven controls: requiredInkW 421.8px, spread 13.1 (408.7 .. 421.8), floor 384 -> 436.
+const MEASURED_REQUIREMENT = 421.8
+const MEASURED_FACE_SPREAD = 13.1
 /** The controls the row renders, in order, with station control held (the desktop default,
  *  and the widest case). If this changes, the measurement above is stale. */
-const EXPECTED_LABELS = ['📢', 'QRZ', 'QRZ✎', 'CL', 'HL', 'WRL', 'QSL▸', 'SAT▸', '✎', '✕']
+const EXPECTED_LABELS = ['📢', 'QRZ', 'QRZ✎', 'CL', 'HL', 'WRL', 'LoTW', 'QSL▸', 'SAT▸', '✎', '✕']
 const EXPECTED_FONT_SIZE = '0.8rem'
 /** A per-character advance chosen BELOW every face measured — the narrowest observed was
  *  Ubuntu's `CL` at 7.2px/char at this size. It builds a LOWER bound only, so every face that

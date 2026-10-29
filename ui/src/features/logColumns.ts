@@ -59,9 +59,9 @@ export interface LogColumn {
 }
 
 /** The row's action cluster. Its floor is MEASURED (ui/layout-harness/measure-logbook-actions.sh,
- *  guarded by styles-logbook-actions.test.tsx): ten controls need 372.6 px on the widest face
- *  installed, plus an 11.3 px spread between faces. Never resizable and never hidden. */
-export const ACTIONS_TRACK = 'minmax(384px, 0.8fr)'
+ *  guarded by styles-logbook-actions.test.tsx): eleven controls need 421.8 px on the widest face
+ *  installed, plus a 13.1 px spread between faces. Never resizable and never hidden. */
+export const ACTIONS_TRACK = 'minmax(436px, 0.8fr)'
 
 /** Every column, in the order the table shows them. */
 export const LOG_COLUMNS: readonly LogColumn[] = [
@@ -106,7 +106,7 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { id: 'exchRcvd', labelKey: 'logbook.column.exchRcvd', track: '1fr', minPx: 40, group: 'contest', sort: 'exchRcvd' },
   // The tail: the notes, then the controls.
   { id: 'notes', labelKey: 'logbook.column.notes', track: '1.4fr', narrowTrack: '1fr', minPx: 48, group: 'contact', base: true, narrow: true, sort: 'notes' },
-  { id: 'actions', labelKey: 'logbook.column.actions', track: ACTIONS_TRACK, minPx: 384, group: 'contact', base: true, narrow: true, fixed: true },
+  { id: 'actions', labelKey: 'logbook.column.actions', track: ACTIONS_TRACK, minPx: 436, group: 'contact', base: true, narrow: true, fixed: true },
 ]
 
 const BY_ID: ReadonlyMap<string, LogColumn> = new Map(LOG_COLUMNS.map((c) => [c.id, c]))
