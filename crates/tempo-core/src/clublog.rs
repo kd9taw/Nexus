@@ -192,10 +192,11 @@ pub fn build_login_test_url(email: &str, password: &str, callsign: &str, api_key
 /// What ClubLog's answer (`status`, `body`) to [`build_login_test_url`] says about the login:
 /// a JSON array is a good one; a 403 is ClubLog's refusal ("Authentication failed", in the
 /// realtime page's words for the same status), in its words when it gave any. ClubLog's words
-/// may echo the request — the caller masks the secrets before showing them.
+/// may echo the request, so they come back whole: the caller masks the secrets in all of them
+/// first, and only then cuts them to length (`login_check::capped`).
 pub fn classify_login_test(status: u16, body: &str) -> crate::login_check::LoginCheck {
-    use crate::login_check::{capped, LoginCheck};
-    let words = Some(capped(body)).filter(|w| !w.is_empty());
+    use crate::login_check::LoginCheck;
+    let words = Some(body.trim().to_string()).filter(|w| !w.is_empty());
     match status {
         200 if body.trim_start().starts_with('[') => LoginCheck::Accepted,
         403 => LoginCheck::Refused(words.unwrap_or_else(|| "HTTP 403 Forbidden".to_string())),
@@ -253,6 +254,21 @@ mod login_test_tests {
             LoginCheck::Unrecognised(Some("Maintenance".into()))
         );
         assert_eq!(classify_login_test(500, ""), LoginCheck::Unrecognised(None));
+    }
+
+    /// A long answer comes back whole, so the caller can mask a secret anywhere in it before
+    /// cutting it.
+    #[test]
+    fn the_test_passes_clublogs_words_on_uncut() {
+        let long = format!("Invalid login {}", "x".repeat(1000));
+        assert_eq!(
+            classify_login_test(403, &long),
+            LoginCheck::Refused(long.clone())
+        );
+        assert_eq!(
+            classify_login_test(200, &long),
+            LoginCheck::Unrecognised(Some(long))
+        );
     }
 }
 

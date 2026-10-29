@@ -401,9 +401,11 @@ pub fn build_login_test_url(username: &str, password: &str, qth_nickname: &str) 
 
 /// What eQSL's step-1 page `html` says about the login: the built page, or its "no log entries"
 /// page, is a good login; a line beginning `Error:` is eQSL's refusal, in its words (eQSL answers
-/// an unknown call "Error: No such Callsign found", HTTP 200).
+/// an unknown call "Error: No such Callsign found", HTTP 200). The line comes back whole: the
+/// caller masks the password in all of it first, and only then cuts it to length
+/// (`login_check::capped`).
 pub fn classify_login_test(html: &str) -> crate::login_check::LoginCheck {
-    use crate::login_check::{capped, page_lines, LoginCheck};
+    use crate::login_check::{page_lines, LoginCheck};
     let lower = html.to_ascii_lowercase();
     if is_built_page(html) || lower.contains(NO_ENTRIES) {
         return LoginCheck::Accepted;
@@ -412,7 +414,7 @@ pub fn classify_login_test(html: &str) -> crate::login_check::LoginCheck {
         .into_iter()
         .find(|line| line.to_ascii_lowercase().starts_with("error:"))
     {
-        Some(words) => LoginCheck::Refused(capped(&words)),
+        Some(words) => LoginCheck::Refused(words),
         None => LoginCheck::Unrecognised(None),
     }
 }
@@ -460,6 +462,12 @@ mod login_test_tests {
         assert_eq!(
             classify_login_test(page),
             LoginCheck::Refused("Error: No such Callsign found".into())
+        );
+        // A long line comes back whole, for the caller to mask before it cuts it.
+        let long = format!("Error: {}", "x".repeat(1000));
+        assert_eq!(
+            classify_login_test(&format!("<H3>{long}</H3>")),
+            LoginCheck::Refused(long)
         );
         // Control: a page with no error line is not called a bad login.
         assert_eq!(

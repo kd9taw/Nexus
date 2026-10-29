@@ -14,11 +14,12 @@
 //! not the TQSL certificate an upload is signed with; none can show a contact would be accepted.
 
 use tauri::State;
-use tempo_core::login_check::LoginCheck;
+use tempo_core::login_check::{capped, LoginCheck};
 
 use crate::{
-    clublog_keychain, conn_logged, effective_clublog_key, engine_lock, eqsl_keychain,
-    lotw_keychain, service_words_without_secrets, Echoed, SharedEngine, CLUBLOG_SUSPENDED,
+    alnum_folded, clublog_keychain, conn_logged, effective_clublog_key, engine_lock, eqsl_keychain,
+    folded_secret_forms, lotw_keychain, service_words_without_secrets, Echoed, SharedEngine,
+    CLUBLOG_SUSPENDED,
 };
 
 /// A Test's fetch: the read-only URL, and the service's answer or a redacted transport error.
@@ -33,6 +34,26 @@ fn cannot_tell(service: &str, words: Option<String>) -> String {
     match words {
         Some(words) => format!("{base} {service} said: {words}"),
         None => base,
+    }
+}
+
+/// A service's whole answer `words` as a Test shows them: the secrets masked first
+/// ([`service_words_without_secrets`]), and only then cut to length — a cut made first can leave
+/// the start of a secret that masking, looking for the whole secret, no longer finds. Words whose
+/// cut still ends in the first four or more letters of a secret (an echo the service itself cut
+/// short) are replaced whole by `withheld`.
+fn shown_words(words: &str, echoed: &[Echoed<'_>], withheld: &str) -> String {
+    let shown = capped(&service_words_without_secrets(words, echoed, withheld));
+    let tail = alnum_folded(shown.trim_end_matches('…'));
+    let ends_in_a_secret = echoed.iter().any(|e| {
+        folded_secret_forms(e.secret)
+            .iter()
+            .any(|k| (4..=k.len()).any(|n| tail.ends_with(&k[..n])))
+    });
+    if ends_in_a_secret {
+        withheld.to_string()
+    } else {
+        shown
     }
 }
 
@@ -123,7 +144,7 @@ fn eqsl_test(
         qth_nickname,
     ))?;
     let unechoed = |words: &str| {
-        service_words_without_secrets(
+        shown_words(
             words,
             &[Echoed {
                 secret: password,
@@ -250,7 +271,7 @@ fn clublog_test(
     );
     let (status, body) = fetch(&url).map_err(ClubLogTestFailure::Other)?;
     let unechoed = |words: &str| {
-        service_words_without_secrets(
+        shown_words(
             words,
             &[
                 Echoed {
@@ -458,6 +479,70 @@ mod tests {
         );
     }
 
+    /// How many characters of a service's words a Test shows, read off the cap itself.
+    fn cap() -> usize {
+        tempo_core::login_check::capped(&"a".repeat(10_000))
+            .trim_end_matches('…')
+            .chars()
+            .count()
+    }
+
+    /// `head` padded with dots so the next character written after it is the `at`-th.
+    fn padded_to(head: &str, at: usize) -> String {
+        format!("{head}{}", ".".repeat(at - head.chars().count()))
+    }
+
+    /// Whether `words` show the first four or more characters of `secret`, in any case.
+    fn shows_a_prefix_of(words: &str, secret: &str) -> bool {
+        let words = words.to_lowercase();
+        let secret = secret.to_lowercase();
+        (4..=secret.len()).any(|n| words.contains(&secret[..n]))
+    }
+
+    /// eQSL's words are masked in full before they are cut: a password that starts just before
+    /// the cut never leaves its first characters behind. Controls: a short refusal is shown as
+    /// eQSL wrote it, a password mid-sentence is masked with the words around it kept, and a long
+    /// refusal with no secret in it is cut and still shown.
+    #[test]
+    fn an_eqsl_test_masks_the_password_before_it_cuts_the_words() {
+        let head = padded_to("Error: bad login ", cap() - 4);
+        let words = eqsl_test("W9TST", PASSWORD, "", &|_| {
+            Ok(format!("<H3>{head}{PASSWORD} for this account</H3>"))
+        })
+        .expect_err("an Error: line is a refusal");
+        assert!(!shows_a_prefix_of(&words, PASSWORD), "{words}");
+        // A partial echo of the password, ending where the words are cut, is withheld.
+        let words = eqsl_test("W9TST", PASSWORD, "", &|_| {
+            Ok(format!("<H3>{head}{} and more</H3>", &PASSWORD[..6]))
+        })
+        .expect_err("an Error: line is a refusal");
+        assert!(!shows_a_prefix_of(&words, PASSWORD), "{words}");
+        // Controls.
+        assert_eq!(
+            eqsl_test("W9TST", PASSWORD, "", &|_| Ok(
+                "<H3>Error: Bad password</H3>".into()
+            )),
+            Err("eQSL said: Error: Bad password".into())
+        );
+        assert_eq!(
+            eqsl_test("W9TST", PASSWORD, "", &|_| Ok(format!(
+                "<H3>Error: password {PASSWORD} is wrong</H3>"
+            ))),
+            Err("eQSL said: Error: password «password» is wrong".into())
+        );
+        let long = eqsl_test("W9TST", PASSWORD, "", &|_| {
+            Ok(format!(
+                "<H3>{}</H3>",
+                padded_to("Error: busy ", cap() + 50)
+            ))
+        })
+        .expect_err("an Error: line is a refusal");
+        assert!(
+            long.starts_with("eQSL said: Error: busy ..") && long.ends_with('…'),
+            "{long}"
+        );
+    }
+
     // ----- ClubLog ------------------------------------------------------------
 
     fn clublog() -> ClubLogTest<'static> {
@@ -528,6 +613,45 @@ mod tests {
             Err(ClubLogTestFailure::Other(
                 "ClubLog: could not connect".into()
             ))
+        );
+    }
+
+    /// ClubLog's words are masked in full before they are cut: neither the password nor a key
+    /// that starts just before the cut leaves its first characters behind, in a refusal or in an
+    /// answer Nexus cannot read. Controls as for eQSL.
+    #[test]
+    fn a_clublog_test_masks_the_secrets_before_it_cuts_the_words() {
+        let head = padded_to("Invalid login ", cap() - 4);
+        for secret in [PASSWORD, API_KEY, BUILT_IN] {
+            for status in [403, 200] {
+                let body = format!("{head}{secret} for this account");
+                let words = clublog_test(&clublog(), &|_| Ok((status, body.clone())))
+                    .expect_err("neither is a good login")
+                    .into_words();
+                assert!(!shows_a_prefix_of(&words, secret), "{status}: {words}");
+            }
+            // A partial echo, ending where the words are cut, is withheld.
+            let body = format!("{head}{} and more", &secret[..6]);
+            let words = clublog_test(&clublog(), &|_| Ok((403, body.clone())))
+                .expect_err("a 403 is a refusal")
+                .into_words();
+            assert!(!shows_a_prefix_of(&words, secret), "{words}");
+        }
+        // Controls.
+        assert_eq!(
+            clublog_test(&clublog(), &|_| Ok((403, format!("api {API_KEY} refused")))),
+            Err(ClubLogTestFailure::Refused(
+                "ClubLog said: api «api key» refused".into()
+            ))
+        );
+        let long = clublog_test(&clublog(), &|_| {
+            Ok((403, padded_to("Invalid login ", cap() + 50)))
+        })
+        .expect_err("a 403 is a refusal")
+        .into_words();
+        assert!(
+            long.starts_with("ClubLog said: Invalid login ..") && long.ends_with('…'),
+            "{long}"
         );
     }
 }

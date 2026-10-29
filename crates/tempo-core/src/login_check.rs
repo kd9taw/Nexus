@@ -9,10 +9,11 @@
 pub enum LoginCheck {
     /// The service took the credentials and answered the read.
     Accepted,
-    /// The service refused them, in its own words.
+    /// The service refused them, in its own words — whole, never cut: a caller masks any secret
+    /// in them first and only then [`capped`]s them, so a cut cannot split a secret.
     Refused(String),
     /// The service answered with something that is neither, so the Test cannot tell. Its words,
-    /// when the answer had any that could be read.
+    /// whole as for `Refused`, when the answer had any that could be read.
     Unrecognised(Option<String>),
 }
 

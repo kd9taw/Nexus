@@ -29605,29 +29605,9 @@ fn service_words_without_secrets(words: &str, echoed: &[Echoed<'_>], withheld: &
     let scrubbed = echoed.iter().fold(words.to_string(), |text, e| {
         tempo_core::qrz_correct::scrub_secret(&text, e.secret, e.marker)
     });
-    let folded = |text: &str| -> String {
-        text.chars()
-            .filter(char::is_ascii_alphanumeric)
-            .map(|c| c.to_ascii_lowercase())
-            .collect()
-    };
-    let shown = folded(&scrubbed);
+    let shown = alnum_folded(&scrubbed);
     let still_shown = echoed.iter().any(|e| {
-        // The secret's letters and digits, and those of its percent-encoded form (a `-` as `2d`).
-        let plain = folded(e.secret);
-        let encoded: String = e
-            .secret
-            .trim()
-            .bytes()
-            .map(|b| {
-                if b.is_ascii_alphanumeric() {
-                    (b.to_ascii_lowercase() as char).to_string()
-                } else {
-                    format!("{b:02x}")
-                }
-            })
-            .collect();
-        [plain, encoded]
+        folded_secret_forms(e.secret)
             .iter()
             .any(|k| !k.is_empty() && shown.contains(k.as_str()))
     });
@@ -29636,6 +29616,32 @@ fn service_words_without_secrets(words: &str, echoed: &[Echoed<'_>], withheld: &
     } else {
         scrubbed
     }
+}
+
+/// `text`'s letters and digits, lower-cased: the form [`service_words_without_secrets`] looks
+/// for a secret in, whatever case or separators the service wrote it with.
+fn alnum_folded(text: &str) -> String {
+    text.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// A secret as [`alnum_folded`] text would show it: its letters and digits, and those of its
+/// percent-encoded form (a `-` as `2d`).
+fn folded_secret_forms(secret: &str) -> [String; 2] {
+    let encoded = secret
+        .trim()
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b.to_ascii_lowercase() as char).to_string()
+            } else {
+                format!("{b:02x}")
+            }
+        })
+        .collect();
+    [alnum_folded(secret), encoded]
 }
 
 /// What the operator is told instead of QRZ's words when they still show the Logbook API key.
