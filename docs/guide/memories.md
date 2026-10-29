@@ -8,7 +8,7 @@ here writes channels into your rig's memory slots, and the trip to a real radio
 is a CHIRP CSV, which Memories reads and writes both ways.
 
 Every goal profile turns Memories on; switch it off in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features). Entering the
+[Settings ▸ App ▸ Features](settings-reference.md#features). Entering the
 section never touches the rig — only an explicit **Tune** retunes.
 
 <!-- TODO: capture screenshot — the Memories section: sidebar showing All memories / ★ Favorites / Nets plus two installed pack groups, list view with both an HF and a VHF / UHF band section, and one repeater row's inline editor open showing Offset and Tone -->

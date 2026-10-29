@@ -11,7 +11,7 @@ Needed board has.
 Spots is on by default: the first-run Goals step keeps it on under **DX
 chasing & awards**, **Contesting** and **Everything (expert)** and leaves it off
 under the other three profiles, and
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) turns it on
+[Settings ▸ App ▸ Features](settings-reference.md#features) turns it on
 or off any time. It describes itself there as "Every cluster/RBN spot on the air
 — the raw firehose, filter by band/mode."
 

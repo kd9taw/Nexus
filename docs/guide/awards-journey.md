@@ -8,7 +8,7 @@ read straight from your [logbook](logbook-qsl.md); neither needs an account or a
 network.
 
 Awards is an opt-in section, nudged on after your first QSO. Turn it on any time
-in [Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+in [Settings ▸ App ▸ Features](settings-reference.md#features).
 
 ![The Official Awards tab: ten award cards in one row — DXCC 234/100, Honor Roll 234/340, Challenge 1119/1000, Confirmed 52%, 5-Band DXCC 87/100, WAZ 40/40, WAS 50/50, VUCC 101/100, Sat VUCC 0/100 and IOTA 40/100, with WAS and VUCC outlined as achieved. Under them a DXCC-by-band chart from 160 m to 2 m and a Grids-by-band (VUCC) chart, beside a "Confirm for a new one (50)" list where each entity is chipped with the bands it is waiting on.](../img/manual/awards-official.webp)
 

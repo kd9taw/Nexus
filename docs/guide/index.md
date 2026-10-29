@@ -56,7 +56,7 @@ logbook service's state and QRZ Logbook's Test); logins stay in
 from the wizard. Every step is skippable and everything it sets
 stays editable later: the answer in
 [Settings ▸ Station](settings-reference.md#operator--radio), any section on or off in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features). Run again from
+[Settings ▸ App ▸ Features](settings-reference.md#features). Run again from
 Settings, the wizard edits station, rig and log only and keeps the screens you have on.
 
 The supported window floor is **1024×768**. Everything is reachable there — some
@@ -221,7 +221,7 @@ of a page.
 | Set the Field Day class, section and exchange | [Settings ▸ Contesting ▸ Field Day](settings-reference.md#field-day) |
 | Change theme, contrast or Night | [Settings ▸ Appearance ▸ Theme](settings-reference.md#theme) |
 | Change UI scale, text size or density, or pick a one-tap look | [Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) |
-| Turn a whole section off | [Settings ▸ Appearance ▸ Features](settings-reference.md#features) |
+| Turn a whole section off | [Settings ▸ App ▸ Features](settings-reference.md#features) |
 | Turn on screen-reader announcements and earcons | [Settings ▸ Appearance ▸ Accessibility & eyes-free](settings-reference.md#accessibility--eyes-free) |
 | Back up, restore or reset everything | [Settings ▸ App ▸ Backup & reset](settings-reference.md#backup--reset) |
 | Stop a transmission that is already going out | [Scenarios ▸ Stop a transmission](scenarios.md#stop-a-transmission) |

@@ -14922,6 +14922,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .settings-section[data-folded] > :not(legend) {
   display: none;
 }
+/* A section that holds whole sections of its own (Digital's weak-signal group), stacked. A class,
+   never an inline style: an inline display would beat the fold rule above and keep a folded
+   group open. */
+.settings-subsections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
 /* The line above a folded tab's sections, with its Show all. */
 .settings-fold-note {
   display: flex;

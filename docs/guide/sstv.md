@@ -14,7 +14,7 @@ from this section.
 SSTV sits in the left rail's Digital group (FT · Tempo · RTTY · SSTV · APRS) and
 is on by default — the wizard turns everything on. It is a mode rather than a
 goal, so the five goal profiles in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) leave it out;
+[Settings ▸ App ▸ Features](settings-reference.md#features) leave it out;
 **Everything (expert)** keeps it on. If the rail has no SSTV button, switch it
 back on there.
 

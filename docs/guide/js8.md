@@ -10,7 +10,7 @@ canned exchange is not a conversation.
 
 **Before you start.** JS8 is on out of the box — look in the Digital group of the rail,
 after APRS. If you don't operate it, switch it off in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features). Entering the screen
+[Settings ▸ App ▸ Features](settings-reference.md#features). Entering the screen
 tunes the rig to the JS8 watering hole for the current band (7.078, 14.078, 3.578 … —
 JS8Call 3.0.3's own list, USB, or your own; see [Frequencies](#frequencies-the-decode-filter-and-the-band-schedule))
 and starts decoding every speed at once. Nothing transmits

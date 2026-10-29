@@ -9,7 +9,7 @@ on the air.
 DXpeditions ships enabled — the wizard turns everything on — and the DX/awards
 and 6m/VHF goal profiles both keep it. If you have trimmed sections, switch it
 back on in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features). It never
+[Settings ▸ App ▸ Features](settings-reference.md#features). It never
 touches the rig on its own: nothing here retunes until you press **▶ Work** on a card, and the
 QSO itself still happens in a cockpit. It tears off to a second monitor with **⧉ Pop out**.
 

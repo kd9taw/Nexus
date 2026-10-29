@@ -69,7 +69,7 @@ const NEVER_IMPORT: readonly string[] = [
   // betas simply stop arriving and nobody finds out. (The backend keeps the same value across a
   // payload that omits the key; this is the other half — a payload that carries a STALE one.)
   'betaUpdates',
-  // The LOGBOOK UPLOAD SWITCHES, every one under Settings ▸ Logging & Connectors ▸ Confirmations
+  // The LOGBOOK UPLOAD SWITCHES, every one under Settings ▸ Services ▸ Confirmations
   // (#396; the operator's ruling: profiles never touch them). Where your contacts are sent is not
   // part of a station. Left importable, loading a profile saved while QRZ upload was on turned it
   // back on after the operator had switched it off and forgotten the key, and every contact went

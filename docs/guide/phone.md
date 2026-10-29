@@ -9,7 +9,7 @@ logbook and license privileges wired in.
 
 Phone ships enabled — the wizard turns everything on; there is no mode picker to
 miss it in. No goal profile enables it, though, so if you pick one in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features), switch Phone
+[Settings ▸ App ▸ Features](settings-reference.md#features), switch Phone
 back on there — or take **Everything (expert)**, which includes it.
 
 ![The Phone cockpit on 15 m: the dial reads 21.2000 MHz, the mode chips show AUTO-FM selected next to USB, LSB and FM, and a rig: USB badge beside them flags that the radio itself is still on USB. The bandscope fills the upper half — a panadapter trace over a scrolling waterfall, with the Full / Voice / Low / High span chips above it — while Band Activity and the six-slot voice keyer, F1 CQ through F6 Again, stack in the left column and the LOG pane runs down the right. PUSH TO TALK and its Lock tick sit in the dock across the bottom; Panels, the Power slider, Tune and Stop TX ride in the header above the scope.](../img/manual/phone-cockpit.webp)

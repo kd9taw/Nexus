@@ -152,7 +152,7 @@ Filters persist across restarts. **Filter** opens one row of chips in three grou
 
 **Clear** wipes them all. Which chips are offered follows what your station can produce:
 CW and Phone rows appear **only when those operating modes are enabled**
-([Settings ▸ Appearance ▸ Features](settings-reference.md#features)), so a
+([Settings ▸ App ▸ Features](settings-reference.md#features)), so a
 digital-only operator's board stays clean. This is also why phone/SSB needs can
 look sparse: RBN auto-spots only CW and digital, so SSB needs come from the
 human DX cluster — see which cluster nodes are working, or list your own, in

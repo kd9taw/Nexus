@@ -276,7 +276,7 @@ Nexus is built so the station still works. What changes:
 | [Memories](memories.md) and [Repeaters](program.md) channel lists you already have | Repeater lookups for a new location |
 
 **Before you go:** refresh the orbital elements
-([Settings ▸ Radio ▸ Orbital elements](settings-reference.md#orbital-elements)),
+([Settings ▸ Satellites ▸ Orbital elements](settings-reference.md#orbital-elements)),
 the country file
 ([Settings ▸ Logbook ▸ Country file (DXCC)](settings-reference.md#country-file-dxcc)),
 and the LoTW users list

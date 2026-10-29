@@ -339,8 +339,8 @@ immediately.
 
 ### Reading the daemon's own error
 
-**Settings ▸ Radio ▸ Connections log**, filtered to **Rotator**, is where the
-answer is. Nexus captures `rotctld`'s stderr and prints Hamlib's own words:
+The **Connection log** in **Settings ▸ Services ▸ Connections**, in its **Rotator**
+rows, is where the answer is. Nexus captures `rotctld`'s stderr and prints Hamlib's own words:
 
 - `rotctld launched (model 901 on COM7 @ 600, :4533)` — it is up. Any failure
   after this is on the wire, not the daemon.

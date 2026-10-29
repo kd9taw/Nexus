@@ -216,7 +216,7 @@ describe('#353 — the WSJT-X note in Getting started opens the switch it names'
     await followTheNoteLink()
     await waitFor(() => expect(toSection(), 'a repeat on the same tab scrolls again').toBeGreaterThan(before))
 
-    // Another tab: the panel moves back to Logging & Connectors.
+    // Another tab: the panel moves back to Services.
     fireEvent.click(screen.getByRole('tab', { name: EN['settings.tabs.radio'] }))
     expect(logging.getAttribute('aria-selected')).toBe('false')
     await followTheNoteLink()

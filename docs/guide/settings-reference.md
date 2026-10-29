@@ -3126,7 +3126,7 @@ renamed one. Run one, or keep one machine's Nexus closed.
 - **Reset all settings…** — returns everything to factory defaults: radios, audio
   devices, callsign, preferences. **Your logbook is not touched** (it lives
   outside the settings), and **stored passwords stay in your keychain** — clear
-  those individually under *Logging & Connectors*. Confirms first, and cannot be
+  those individually under *Services*. Confirms first, and cannot be
   undone, so back up if you have not. Use this rather than deleting
   `settings.json` by hand: deleting the file while Nexus is running resets
   nothing, because the app holds your old configuration in memory and writes it

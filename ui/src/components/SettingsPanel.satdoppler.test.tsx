@@ -244,6 +244,18 @@ describe('the mapping select and the per-radio edit flow', () => {
     expect(sel.title).toMatch(/pass rail/i)
   })
 
+  it('names the radio being edited, which the Satellites tab itself does not show', async () => {
+    api.get('getSettings').mockImplementation(twoRadios)
+    renderPanel()
+    await openRadioTab()
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    await openRadio()
+    const sel = (await screen.findByLabelText('Satellite VFO mapping')) as HTMLSelectElement
+    expect(sel.title).toContain('IC-9700')
+    // The operating radio is not the one the message is about.
+    expect(sel.title).not.toContain('FTDX10')
+  })
+
   it('stays live for the radio you are operating', async () => {
     api.get('getSettings').mockImplementation(twoRadios)
     renderPanel()

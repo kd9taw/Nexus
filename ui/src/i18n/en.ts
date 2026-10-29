@@ -8395,7 +8395,7 @@ export const EN = {
   'settings.satelliteDoppler.vfoMap.label': 'VFO mapping',
   'settings.satelliteDoppler.vfoMap.aria': 'Satellite VFO mapping',
   'settings.satelliteDoppler.vfoMap.otherRadio':
-    'The uplink mapping is confirmed per radio, for the radio you are operating. Confirm it for this radio on the pass rail during a pass, or make it the active radio first.',
+    'You are editing {{name}}, not the radio you are operating. The uplink mapping is confirmed per radio, for the radio you are operating: confirm it for {{name}} on the pass rail during a pass, or make it the active radio first.',
   'settings.satelliteDoppler.vfoMap.hint':
     "Which VFO carries your uplink. Match this to how your radio is wired. <b>A wrong mapping transmits on your own downlink</b> — into the satellite's output passband, on top of everyone else working the bird. Picking one applies immediately and confirms it for the radio you are operating; a second radio gets its own confirmation on the pass rail. Every mapping except Uplink only keeps the downlink corrected.",
   'settings.satelliteDoppler.minShift.label': 'Minimum shift (Hz)',
@@ -10270,7 +10270,7 @@ export const EN = {
   'settings.confirmations.hrdlog.code.forget.title':
     'Remove the stored HRDLog.net code from the system keychain',
   'settings.confirmations.hrdlog.code.hint':
-    'The upload code from your HRDLog.net account (Options → your code). Uploads log under your station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate from the HRD Logbook UDP push under Logging.',
+    'The upload code from your HRDLog.net account (Options → your code). Uploads log under your station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate from the HRD Logbook UDP push in Settings ▸ Services ▸ Integrations & Feeds.',
   'settings.confirmations.hrdlog.upload.label': 'Auto-upload QSOs to HRDLog.net',
   'settings.confirmations.hrdlog.upload.hint':
     'Push each logged QSO to HRDLog.net (needs the upload code above). HRDLog.net is a live-logging and awards site — it is <b>not</b> an ARRL confirmation source, so an upload here never earns DXCC/WAS credit.',

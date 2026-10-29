@@ -5,13 +5,15 @@
 // answers bring (a section no first-hour operator needs shows its heading only, until Show all or a
 // deep link). No answer, the panel as it always was: an updating station sees no change.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 import type { FeaturesApi } from '../useFeatures'
 import { ConfirmHost } from '../confirm'
 import { EN } from '../i18n'
-import { SETTINGS_SECTIONS } from '../settings/registry'
+import { SETTINGS_SECTIONS, SETTINGS_TABS } from '../settings/registry'
 import { resolveEnabled } from '../features/profiles'
 
 vi.setConfig({ testTimeout: 15_000 })
@@ -258,5 +260,61 @@ describe('Settings folding for a new operator', () => {
     await waitFor(() => expect(section('theme')).toBeTruthy())
     expect(document.querySelectorAll('[data-folded]').length).toBe(0)
     expect(screen.queryByText(SHOW_ALL)).toBeNull()
+  })
+})
+
+// A fold is the `data-folded` attribute plus the styles.css rule that hides everything but the
+// legend. The attribute tests above cannot see the rule lose: an inline `display` on a section's
+// child beats any stylesheet rule, and the weak-signal group once shipped folded-but-open that way.
+// jsdom computes the cascade (specificity, order and inline style) when the real sheet is loaded,
+// so this asks it which display wins on every child of every folded section, on every tab.
+describe('a folded section shows only its heading (computed cascade)', () => {
+  const STYLES = readFileSync(resolve(__dirname, '../styles.css'), 'utf8')
+
+  it('hides every non-legend child of every folded section, and leaves open sections open', async () => {
+    let folded = 0
+    let open = 0
+    for (const tab of SETTINGS_TABS) {
+      renderPanel(tab.id, 'newToHobby')
+      const sheet = document.createElement('style')
+      sheet.textContent = STYLES
+      document.head.appendChild(sheet)
+      await waitFor(() => expect(document.querySelector('.settings-section'), tab.id).toBeTruthy())
+      for (const s of document.querySelectorAll<HTMLElement>('.settings-section')) {
+        const kids = [...s.children].filter((c) => c.tagName !== 'LEGEND')
+        if (s.hasAttribute('data-folded')) {
+          for (const c of kids) {
+            expect(getComputedStyle(c).display, `${tab.id}: #${s.id} > ${c.tagName}.${c.className}`).toBe('none')
+            folded++
+          }
+        } else if (!s.closest('[data-folded]') && kids.length > 0) {
+          // Control: the rule does not hide an open section's content.
+          expect(getComputedStyle(kids[0]).display, `${tab.id}: #${s.id}`).not.toBe('none')
+          open++
+        }
+      }
+      sheet.remove()
+      cleanup()
+    }
+    expect(folded).toBeGreaterThan(0)
+    expect(open).toBeGreaterThan(0)
+  })
+
+  it('folds the weak-signal group to its heading, and Show all opens all five modes', async () => {
+    renderPanel('digital', 'newToHobby')
+    const sheet = document.createElement('style')
+    sheet.textContent = STYLES
+    document.head.appendChild(sheet)
+    await waitFor(() => expect(section('weak-signal')).toBeTruthy())
+    expect(section('weak-signal').getAttribute('data-folded')).toBe('true')
+    const body = section('weak-signal').querySelector(':scope > :not(legend)') as HTMLElement
+    expect(getComputedStyle(body).display).toBe('none')
+    fireEvent.click(screen.getByText(SHOW_ALL))
+    expect(getComputedStyle(body).display).toBe('flex')
+    for (const id of ['jt65', 'msk144', 'beacons-wspr-fst4w', 'fst4', 'q65']) {
+      expect(section(id).parentElement, id).toBe(body)
+      expect(getComputedStyle(section(id)).display, id).not.toBe('none')
+    }
+    sheet.remove()
   })
 })

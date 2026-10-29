@@ -7548,7 +7548,11 @@ export function SettingsPanel({
                   disabled={editingRadioId != null && editingRadioId !== (activeRadioId ?? form.activeRadio)}
                   title={
                     editingRadioId != null && editingRadioId !== (activeRadioId ?? form.activeRadio)
-                      ? t('settings.satelliteDoppler.vfoMap.otherRadio')
+                      ? t('settings.satelliteDoppler.vfoMap.otherRadio', {
+                          name:
+                            form.radios?.find((r) => r.id === editingRadioId)?.name ??
+                            t('settings.radios.anotherRadio'),
+                        })
                       : undefined
                   }
                   onChange={(e) => setSatVfoMap(e.target.value as NonNullable<Settings['satVfoMap']>)}
@@ -9221,7 +9225,7 @@ export function SettingsPanel({
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-weak-signal" {...fold('weak-signal')}>
             <legend>{t('settings.weakSignal.legend')}</legend>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+            <div className="settings-subsections">
           {/* ---- JT65: submode only. One fixed 60 s period, unlike the others. ---- */}
           {tab === 'digital' && (
           <fieldset className="settings-section" id="settings-jt65" {...fold('jt65')}>
