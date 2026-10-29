@@ -371,6 +371,18 @@ measured at all. Both of those paths hand the identification back to you:
   **✎** loads it back into the composer so you can put your own text on it and
   send it back. The in-app list keeps the 200 newest; images past that stay on
   disk but drop off the screen.
+- **Clearing out several pictures at once.** Every card has a tick box (Tab to
+  it, Space to tick). Above the cards, **Select all** ticks everything and
+  **Clear selection** unticks it; **Delete selected (N)** asks once, naming how
+  many, and then deletes every ticked picture for good. If any could not be
+  deleted, a message says how many and why, and those stay ticked.
+  **Select incomplete** ticks every picture that came in with fewer lines than
+  its mode sends, and deletes nothing: you see what is ticked, then press
+  Delete selected. It never ticks a picture whose mode Nexus does not know, or
+  one found in the folder without a gallery record, because their line count
+  is unknown. The receiver saves a picture only once its mode's full line count
+  has been decoded (one that faded out partway is saved at full height, noise
+  and all), so in practice this finds short pictures in older gallery records.
 - **Images are PNG, and lossless.** A received picture is the only copy of what
   somebody sent you, so it is stored exactly as it was decoded — nothing is
   smoothed or thrown away to make the file smaller. Each one also carries its own
