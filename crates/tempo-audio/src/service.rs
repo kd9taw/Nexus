@@ -6778,19 +6778,24 @@ impl RadioLoop {
             return;
         }
         self.audio_rig_split = false;
-        rig.tx_split_held = false;
+        // Owed only if the radio took Nexus's `S 1`: a split it never turned on is nothing to let
+        // go of, and a radio with no split control at all would otherwise owe it for ever.
+        let took_split = std::mem::replace(&mut rig.tx_split_held, false);
         if cluster_active {
             return;
         }
-        if let Err(e) = self.send_rig_split_release(rig) {
-            rig.split_release_pending = true;
-            self.rig_split_release_at = None; // the retry's wait starts at the next quiet tick
-            tempo_core::applog::info(
-                "tx",
-                &format!(
-                    "Split Operation: the radio did not take the split release ({e}); retrying"
-                ),
-            );
+        match self.send_rig_split_release(rig) {
+            Err(e) if took_split => {
+                rig.split_release_pending = true;
+                self.rig_split_release_at = None; // the retry's wait starts at the next quiet tick
+                tempo_core::applog::info(
+                    "tx",
+                    &format!(
+                        "Split Operation: the radio did not take the split release ({e}); retrying"
+                    ),
+                );
+            }
+            Err(_) | Ok(()) => {}
         }
     }
 
@@ -6815,7 +6820,8 @@ impl RadioLoop {
                 }
                 Ok(())
             }
-            Some((false, _, _)) | None => rig.set_split(false, "VFOA"),
+            // A link that cannot control split at all (`RPRT -11` / `-4`) has nothing to release.
+            Some((false, _, _)) | None => rig.set_split_where_available(false, "VFOA").map(|_| ()),
         }
     }
 

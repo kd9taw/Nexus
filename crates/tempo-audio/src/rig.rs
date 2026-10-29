@@ -1719,6 +1719,23 @@ impl Rig {
     pub fn set_split(&mut self, on: bool, tx_vfo: &str) -> std::io::Result<()> {
         self.cat(&split_line(on, tx_vfo))
     }
+    /// [`Self::set_split`], with `Ok(false)` where the link says split cannot be controlled at all
+    /// (`RPRT -11`, Hamlib's `RIG_ENAVAIL`, or `RPRT -4`, `RIG_ENIMPL`) rather than an error. Any
+    /// other answer that is not `RPRT 0`, or none by the deadline, is an `Err`. WSJT-X takes those two
+    /// as done when it leaves split (`Transceiver/HamlibTransceiver.cpp:1022-1033`), so fake split
+    /// and no split keep working on a rig that has no split.
+    pub fn set_split_where_available(&mut self, on: bool, tx_vfo: &str) -> std::io::Result<bool> {
+        if self.control.is_none() {
+            return Ok(true);
+        }
+        let line = split_line(on, tx_vfo);
+        self.split_confirmed = None;
+        let reply = self.command(&line)?;
+        if matches!(rprt_code(&reply), Some(-11 | -4)) {
+            return Ok(false);
+        }
+        cat_judged(&line, &reply).map(|()| true)
+    }
     /// Set the split (TX) frequency in Hz.
     pub fn set_split_freq(&mut self, hz: u64) -> std::io::Result<()> {
         self.cat(&split_freq_line(hz))
