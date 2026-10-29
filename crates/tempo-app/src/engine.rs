@@ -8121,8 +8121,11 @@ impl Engine {
 
     /// After a save that changed the station's call from `was`: `was` becomes one of the calls the
     /// station transmitted under before ([`Self::former_calls`]), and the operator's free text
-    /// waiting to go is addressed again under the call now ([`Self::qso_freetext`]): the call in it
-    /// is the one Nexus put there, so it is the station's call at the key, never the one before.
+    /// waiting to go is addressed again under the call now ([`Self::qso_freetext`]) when it has no
+    /// sender ("W1AW KD9TAW TNX 73"): the call in it is the one Nexus put there, so it is the
+    /// station's call at the key, never the one before. Free text that reads as a standard message
+    /// ("W1AW KD9TAW 73") names the old call as its sender, so it stays as it was and is refused at
+    /// the key ([`ft_over_call_refusal`]), as the sequencer's own over would be.
     fn note_call_saved(&mut self, was: &str) {
         let now = self.settings.mycall.clone();
         if call_changed_refusal(was, &now).is_none() {
@@ -8143,7 +8146,8 @@ impl Engine {
         let Some(dx) = station.dxcall.clone() else {
             return;
         };
-        if station.pending.as_ref() != Some(&made) {
+        if station.pending.as_ref() != Some(&made) || Msg::parse(&made.to_text()).sender().is_some()
+        {
             return;
         }
         let msg = addressed_free_text(&now, &dx, &typed);
@@ -21044,6 +21048,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let roger = roger_click_73_sent(was, self.roger_click.as_deref());
         let complete = ft_contact_complete(was, self.qso_report_sent);
         if !complete && !roger {
+            // Unfinished, with a report crossed, and made under a call the station no longer
+            // uses: its overs are refused at the key, so the run's give-up, which
+            // sets such a contact aside (#153), never comes. It is set aside here instead, for Log
+            // QSO, under the call its overs carried ([`Self::set_aside`]). Logging only.
+            if call_changed_refusal(&was.mycall, &self.settings.mycall).is_some()
+                && (was.rx_report.is_some() || self.qso_report_sent.is_some())
+            {
+                let made_on = (self.settings.band.clone(), self.log_frequencies());
+                let st = self.set_aside(dx, was.dxgrid.clone(), was.rx_report, made_on);
+                self.stalled_qso = Some(st);
+            }
             return;
         }
         let (dxgrid, rx_report) = (was.dxgrid.clone(), was.rx_report);

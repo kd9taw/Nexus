@@ -2839,3 +2839,121 @@ fn without_profiles_js8_drops_only_the_messages_queued_under_the_old_call() {
     );
     assert!(e.plan_tx(slot + 1).is_some(), "the new call's keys");
 }
+
+/// No profiles, S&P: our roger to W1AW is on the air under KD9TAW, then the operator queues the
+/// free text `text` (Nexus writes "W1AW KD9TAW <text>") and, when given, saves the call as
+/// `edit`. What the sequencer holds next, what the next two slots key, and what the cockpit says.
+fn free_text_after_our_roger(
+    text: &str,
+    edit: Option<&str>,
+) -> (String, Vec<String>, Option<String>) {
+    let mut e = plain_ft8();
+    e.call_station("W1AW");
+    assert_eq!(
+        keyed(&mut e, 0..2),
+        vec!["W1AW KD9TAW EN52"],
+        "premise: our call"
+    );
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -7)], 2);
+    assert_eq!(
+        keyed(&mut e, 2..4),
+        vec!["W1AW KD9TAW R-07"],
+        "premise: our roger"
+    );
+    e.qso_freetext_checked(text).unwrap();
+    assert_eq!(tx_now(&e), format!("W1AW KD9TAW {text}"), "premise: queued");
+    if let Some(call) = edit {
+        settings_call_edit(&mut e, call);
+    }
+    let next = tx_now(&e);
+    (next, keyed(&mut e, 4..6), ft_notice(&e))
+}
+
+/// ⛔ No profiles: free text that reads as a standard message ("73", "RR73", a report) is an over
+/// Nexus wrote with the station's call as its sender, "W1AW KD9TAW 73". Saved as W9XYZ before it
+/// keys, it is refused at the key with the call-changed notice, as the sequencer's own 73 is in
+/// that state; it is not sent as "W1AW W9XYZ 73" to a station that never worked W9XYZ.
+/// CONTROLS: unchanged, it keys; free text with no sender ("GL") is addressed again under W9XYZ
+/// and keys.
+#[test]
+fn without_profiles_free_text_naming_the_old_call_as_sender_is_refused_at_the_key() {
+    assert_eq!(
+        free_text_after_our_roger("73", None),
+        (
+            "W1AW KD9TAW 73".to_string(),
+            vec!["W1AW KD9TAW 73".to_string()],
+            None
+        ),
+        "CONTROL: unchanged"
+    );
+    assert_eq!(
+        free_text_after_our_roger("GL", Some("W9XYZ")),
+        (
+            "W1AW W9XYZ GL".to_string(),
+            vec!["W1AW W9XYZ GL".to_string()],
+            None
+        ),
+        "CONTROL: no sender, addressed again"
+    );
+    for text in ["73", "RR73", "R-07"] {
+        let was = format!("W1AW KD9TAW {text}");
+        assert_eq!(
+            free_text_after_our_roger(text, Some("W9XYZ")),
+            (was, Vec::<String>::new(), Some(CALL_CHANGED.into())),
+            "{text}"
+        );
+    }
+}
+
+/// No profiles, a run: W1AW answers our CQ, our report and their roger cross, and our RR73 is
+/// queued under KD9TAW. The call is saved as `edit` when given, five more slots go by with W1AW
+/// silent, then the operator stops TX and leaves the run for monitoring and presses Log QSO.
+/// Whether a contact was set aside, what the press did, and the calls logged.
+fn run_left_after_a_call_edit(edit: Option<&str>) -> (bool, bool, Vec<(String, Option<String>)>) {
+    let mut e = run_at_their_roger(false);
+    if let Some(call) = edit {
+        settings_call_edit(&mut e, call);
+    }
+    for slot in 104u64..109 {
+        e.poll_tx(slot);
+    }
+    e.halt_tx();
+    e.set_mode("qso-monitor").unwrap();
+    let aside = e.stalled_qso.is_some();
+    let pressed = e.log_current_qso();
+    (aside, pressed, logged_calls(&e))
+}
+
+/// ⛔ No profiles: the call is saved as W9XYZ after the reports crossed in a run, so the run's
+/// overs, made under KD9TAW, are refused and its give-up never comes. Ending the run sets the
+/// contact aside, as a contact that stops part-way is, and Log QSO logs it under KD9TAW, the
+/// call its overs went out under. CONTROL: with the call unchanged, nothing new: the RR73 keys,
+/// the contact completes on the air and logs itself, KD9TAW.
+#[test]
+fn without_profiles_a_run_contact_left_after_a_call_edit_is_set_aside_for_log_qso() {
+    let w1aw = vec![("W1AW".to_string(), Some(ME.to_string()))];
+    assert_eq!(
+        run_left_after_a_call_edit(Some("W9XYZ")),
+        (true, true, w1aw.clone())
+    );
+    let (_, _, control) = run_left_after_a_call_edit(None);
+    assert_eq!(control, w1aw, "CONTROL: unchanged");
+}
+
+/// CONTROL for the set-aside on a call edit: with the call unchanged, a mode change that ends an
+/// unfinished contact (reports crossed, no RR73 yet) sets nothing aside, as before; only the run's
+/// give-up and a band change set such a contact aside.
+#[test]
+fn a_mode_change_without_a_call_edit_still_sets_no_unfinished_contact_aside() {
+    let mut e = run_at_their_roger(false);
+    e.halt_tx();
+    e.set_mode("qso-monitor").unwrap();
+    assert_eq!(
+        (
+            e.stalled_qso.is_some(),
+            e.log_current_qso(),
+            logged_calls(&e)
+        ),
+        (false, false, vec![])
+    );
+}
