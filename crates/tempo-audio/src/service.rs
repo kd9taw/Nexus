@@ -12324,7 +12324,26 @@ impl RadioLoop {
                 self.tx_until_ms = None;
             }
             if let Some((buf, dax)) = samples {
-                if !buf.is_empty() {
+                // ⛔ NO MESSAGE WITHOUT THE CLIENT'S DAX TEE (native audio on). The message's audio
+                // reaches the radio only through the tee, and the tee trails the session (the audio
+                // control thread's tick, after its blocking stream requests): a message keyed
+                // before it is in would go to the sound card, the radio would send a silent over on
+                // DAX, and the leave-DAX watch above, which follows the tee, would never apply, so
+                // SmartSDR's switch to the mic would put the room on the air. It is the keyer's
+                // drop for DAX, nothing keyed. Beside another program's DAX the route is not
+                // Nexus's to judge, and the message goes out as before.
+                let no_tee = !buf.is_empty()
+                    && self.flex_client_audio
+                    && self.dax_tee_id.is_none()
+                    && self
+                        .rigctld_proc
+                        .as_ref()
+                        .and_then(CatDaemon::flex)
+                        .is_some_and(|d| !d.other_dax_feeder());
+                if no_tee {
+                    engine_lock(engine).drop_flex_voice(tempo_app::dto::VoiceDropCause::NoDax);
+                }
+                if !buf.is_empty() && !no_tee {
                     let secs = buf.len() as f32 / tempo_fast::SAMPLE_RATE;
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know

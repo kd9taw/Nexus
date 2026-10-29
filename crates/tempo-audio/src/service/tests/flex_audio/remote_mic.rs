@@ -301,6 +301,78 @@ fn a_voice_message_in_a_remote_session_ends_when_the_radio_leaves_dax() {
     assert!(!s.engine.lock().unwrap().snapshot().radio.voice_playing);
 }
 
+/// Hold Nexus's DAX transmit route down in `s`, or let it come back.
+fn hold_route_out(s: &FlexScene, on: bool) {
+    s.state
+        .rigctld_proc
+        .as_ref()
+        .and_then(CatDaemon::flex)
+        .expect("the Flex client")
+        .hold_tx_route_out(on);
+}
+
+/// ⛔ A VOICE-KEYER MESSAGE BEFORE THE DAX TEE IS IN, DURING A REMOTE SESSION. The radio already
+/// reports Nexus's DAX for the Remote operator, but the loop's transmit route trails the session
+/// (the audio control thread's tick and its blocking stream requests: held here by a test-only
+/// seam), so no tee carries the message. Keyed, its audio would go to the sound card, the radio
+/// would send a silent over on DAX, and nothing would watch it: SmartSDR's DAX switched to the mic
+/// 500 ms in would put the room on the air. It is dropped for DAX and keys nothing. CONTROL: once
+/// the route is in, the next message keys, plays on DAX and ends when the radio leaves it.
+#[test]
+fn a_voice_message_before_the_dax_tee_is_in_keys_nothing() {
+    let mut s = shack(leaves_dax_mid_over(500));
+    let since = Instant::now();
+    let _r = join(&s);
+    run_until_seen(&mut s, since, "radio dax=1");
+    s.run(300);
+    hold_route_out(&s, true);
+    run_until(&mut s, "the tee never went", |s| {
+        s.state.dax_tee_id.is_none()
+    });
+    let sent = s.engine.lock().unwrap().send_voice(three_seconds());
+    assert_eq!(sent, Ok(()));
+    s.run(300);
+    // The route comes in as it does in life, a tick or two late (mid-message, were it keyed).
+    hold_route_out(&s, false);
+    run_until(&mut s, "the tee never came in", |s| {
+        s.state.dax_tee_id.is_some()
+    });
+    s.run(1_500);
+    let trace = voice_trace(&s, since);
+    let snap = serde_json::to_value(s.engine.lock().unwrap().snapshot()).unwrap();
+    assert_eq!(
+        format!(
+            "keys={} dropped={} left={:?}",
+            keys(&s),
+            snap["radio"]["voiceDropped"]["cause"],
+            seen_at(&s, since, "radio dax=0").map(|left| seen_at(&s, since, "xmit 0")
+                .map(|unkey| unkey.saturating_duration_since(left)))
+        ),
+        "keys=0 dropped=\"noDax\" left=None",
+        "{trace:?}"
+    );
+
+    let again = Instant::now();
+    let sent = s.engine.lock().unwrap().send_voice(three_seconds());
+    assert_eq!(sent, Ok(()));
+    run_until_seen(&mut s, again, "radio dax=0");
+    s.run(1_000);
+    let trace = voice_trace(&s, again);
+    let key = seen_at(&s, again, "xmit 1").expect("the message never keyed with the tee in");
+    let left = seen_at(&s, again, "radio dax=0").unwrap();
+    let unkey = seen_at(&s, again, "xmit 0").expect("the message was never unkeyed");
+    assert!(
+        dax_in(&s, key).iter().map(|(_, n)| n).sum::<usize>() > 0,
+        "the message never reached Nexus's DAX: {trace:?}"
+    );
+    assert!(
+        unkey.duration_since(left) < Duration::from_millis(500),
+        "keyed {:?} after the radio left DAX: {trace:?}",
+        unkey.saturating_duration_since(left)
+    );
+    assert_eq!(keys(&s), 1, "re-keyed: {trace:?}");
+}
+
 /// CONTROL: the same message in the same session, with the radio staying on Nexus's DAX, plays to
 /// its end.
 #[test]
