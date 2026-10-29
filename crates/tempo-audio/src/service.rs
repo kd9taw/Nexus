@@ -12569,10 +12569,38 @@ impl RadioLoop {
         // keyer's seams, which are proven on the air: the same PTT, the same `play()` (the Flex DAX
         // tee when one is installed, the sound card otherwise), and `tx_until_ms`, the deadline
         // that unkeys the rig if this loop dies.
+        //
+        // ⛔ THE FLEX CLIENT'S DAX (native audio on): the operator's voice is played to the client's
+        // DAX and nowhere else, so the radio must take that DAX for the whole over. A radio on its
+        // own mic would put the shack's room on the air in their place. The key is marked as the
+        // voice keyer's is (below), so the client keys it only on Nexus's DAX, and a keyed over ends
+        // the moment the radio no longer takes it (SmartSDR's own switch). Beside another program's
+        // DAX the route is not Nexus's to judge, as at the client's `T 1`.
         {
             let mono = self.mono_now(now);
+            let left_dax = self.mic_keyed
+                && self.flex_client_audio
+                && self
+                    .rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::flex)
+                    .is_some_and(|d| {
+                        let on_dax = self.dax_tee_id.is_some() && d.on_nexus_dax();
+                        !(on_dax || d.other_dax_feeder())
+                    });
+            if left_dax {
+                tempo_core::applog::info(
+                    "tx",
+                    "remote microphone over ended: the radio no longer takes its transmit audio \
+                     from Nexus's DAX",
+                );
+            }
             let (abort, tick) = {
                 let mut eng = engine_lock(engine);
+                if left_dax {
+                    // Arms the abort (the over is keyed): unkeyed and flushed below, this tick.
+                    eng.end_remote_mic_off_route();
+                }
                 let tick = if self.may_key() {
                     // M3: what the ring can take without reaching more than the look-ahead past
                     // now. The engine clamps it to the per-push cap as well.
@@ -12616,13 +12644,43 @@ impl RadioLoop {
                     MicTick::Key => {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying — the fail-safe must know
+
+                        // On the Flex client's DAX the one key is marked as carrying Nexus's
+                        // audio: the client keys it only while the radio takes Nexus's DAX, with
+                        // no write of its own to that flag in flight. Refused that way, the client
+                        // says why, and the page is told the station's audio is not ready.
+                        let marked = self
+                            .rigctld_proc
+                            .as_ref()
+                            .and_then(CatDaemon::flex)
+                            .filter(|_| self.flex_client_audio);
+                        let asked = Instant::now();
+                        if let Some(d) = marked {
+                            d.set_voice_key(true);
+                        }
                         let key = self.key_over(rig, false);
-                        self.report_ptt(engine, key.warns());
+                        if let Some(d) = marked {
+                            d.set_voice_key(false);
+                        }
+                        let not_on_dax = matches!(key, KeyUp::Refused(_))
+                            .then(|| marked.and_then(|d| d.key_refused_since(asked)))
+                            .flatten()
+                            .filter(|(_, cause)| cause.is_some())
+                            .map(|(why, _)| why);
+                        self.report_ptt(engine, key.warns() && not_on_dax.is_none());
                         if let KeyUp::Refused(why) = &key {
                             // The rig did not key, so none of the operator's voice may be played
                             // (`key_over`): the over ends here, through its one kill path.
-                            note_refused_key("Remote microphone over not keyed", why);
-                            engine_lock(engine).drop_mic_latch();
+                            note_refused_key(
+                                "Remote microphone over not keyed",
+                                not_on_dax.as_deref().unwrap_or(why),
+                            );
+                            let mut eng = engine_lock(engine);
+                            if not_on_dax.is_some() {
+                                eng.end_remote_mic_off_route();
+                            } else {
+                                eng.drop_mic_latch();
+                            }
                         } else {
                             self.mic_keyed = true;
                             self.mic_busy_until = now;
