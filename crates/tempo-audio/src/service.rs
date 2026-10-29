@@ -36,7 +36,7 @@ use tempo_core::timing::{now_unix_ms, SlotClock};
 use crate::backend::AudioBackend;
 use crate::device::CpalBackend;
 use crate::frames::RxRing;
-use crate::rig::tuning::{passband_for, retune_passband, same_named_band};
+use crate::rig::tuning::{hamlib_mode_width, passband_for, retune_passband, same_named_band};
 use crate::rig::{FuncSet, PttMode, Rig, SerialLine};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
@@ -6578,7 +6578,8 @@ impl RadioLoop {
         // transmitted. Same root cause as the two retune paths — see the long note there.
         let mode_changed = !md.trim().is_empty() && md != self.last_mode;
         if !md.trim().is_empty() {
-            match rig.set_mode(&md, passband_for(&md)) {
+            let width = hamlib_mode_width(&md, self.applied.rig_model, passband_for(&md));
+            match rig.set_mode(&md, width) {
                 Ok(()) => {
                     self.last_mode = md;
                     self.rig_asserted = true;
@@ -6820,7 +6821,8 @@ impl RadioLoop {
         crate::civ::diag::note(&format!(
             "band-stack override: rig reports {reported:?} after the band change, re-asserting {md:?}"
         ));
-        if rig.set_mode(md, passband_for(md)).is_ok() {
+        let width = hamlib_mode_width(md, self.applied.rig_model, passband_for(md));
+        if rig.set_mode(md, width).is_ok() {
             self.last_mode = md.to_string();
             // The corrective mode-set can shift a pitch-offset rig — re-push the dial so
             // the number stands in the DESTINATION mode's convention (same rule as the
@@ -8814,7 +8816,11 @@ impl RadioLoop {
                         // …and it is re-asserted WITHOUT re-commanding the width when neither the
                         // mode nor the band moved — see `retune_passband` for why that gate is not
                         // `mode_changed` alone (#67).
-                        let sent_pb = retune_passband(&md, mode_changed, self.last_dial, dial);
+                        let sent_pb = hamlib_mode_width(
+                            &md,
+                            self.applied.rig_model,
+                            retune_passband(&md, mode_changed, self.last_dial, dial),
+                        );
                         match rig.set_mode(&md, sent_pb) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
@@ -8892,7 +8898,11 @@ impl RadioLoop {
                     // Apply the section's mode. `last_mode` only ever holds a mode actually
                     // applied, so a give-up never masquerades as success.
                     if mode_changed && !link_down {
-                        let sent_pb = retry_passband(&md, self.mode_fail_count);
+                        let sent_pb = hamlib_mode_width(
+                            &md,
+                            self.applied.rig_model,
+                            retry_passband(&md, self.mode_fail_count),
+                        );
                         match rig.set_mode(&md, sent_pb) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
@@ -10709,8 +10719,12 @@ impl RadioLoop {
                                                     // exactly like nobody answering, and the
                                                     // operator can fix it from the front panel in
                                                     // seconds once they know.
-                                                    let sent =
-                                                        rig.set_split_mode(md, passband_for(md));
+                                                    let width = hamlib_mode_width(
+                                                        md,
+                                                        self.applied.rig_model,
+                                                        passband_for(md),
+                                                    );
+                                                    let sent = rig.set_split_mode(md, width);
                                                     retune_note = Some(match &sent {
                                                         Ok(()) => format!(
                                                             "split ON — TX {tx_mhz:.4} MHz {md} ({vfo_name})"
@@ -35191,6 +35205,12 @@ mod tests {
     #[test]
     fn an_sstv_image_on_an_fm_channel_commands_the_fm_data_word_before_it_keys() {
         let engine = sstv_fm_engine();
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rig_model = 3081; // IC-9700 over Hamlib, the report's Icom
+            e.apply_settings(s);
+        }
         let (addr, log) = mock_rigctld_on(144_500_000, false);
         let mut rig = Rig::rigctld(&addr);
         let mut backend = MockBackend::new();
@@ -35256,6 +35276,13 @@ mod tests {
             mode_cmd < keyed,
             "the mode has to reach the rig BEFORE the key, not after: {lines:?}"
         );
+        // BY VALUE, WIDTH INCLUDED: Hamlib 4.6/4.7 send an Icom `PKTFM` with NOCHANGE (`-1`) as
+        // the bare `26 00 05`, which is FM with DATA OFF, so the image would go out of the wrong
+        // input. Width `0` is `26 00 05 01 01`: FM, DATA on, FIL1.
+        assert_eq!(
+            lines[mode_cmd], "M PKTFM 0",
+            "an Icom over Hamlib needs the width that carries the DATA byte: {lines:?}"
+        );
         assert!(
             !lines
                 .iter()
@@ -35269,6 +35296,51 @@ mod tests {
             state.last_fm.is_some(),
             "the FM repeater settings must still be tracked as current during an image"
         );
+    }
+
+    /// ⭐ APRS IN DATA-FM, ON THE WIRE, PER RADIO. With the switch on, a Hamlib Icom must be told
+    /// `M PKTFM 0`: Hamlib 4.6.5 and 4.7.1 turn `M PKTFM -1` into the bare `26 00 05` (FM, DATA
+    /// OFF), so the beacon would leave from the plain-FM input, and `0` into `26 00 05 01 01`
+    /// (FM, DATA on, FIL1). CONTROLS: the FT-991A keeps `M PKTFM -1` (its `MD0A;` lands either
+    /// way, and `0` would add an `NA00;` filter write), and with the switch off an Icom gets
+    /// plain FM with no width, as before.
+    #[test]
+    fn aprs_data_fm_reaches_a_hamlib_icom_with_the_width_that_carries_the_data_byte() {
+        for (model, data_fm, want, never) in [
+            (3081u32, true, "M PKTFM 0", "M PKTFM -1"), // IC-9700
+            (3070, true, "M PKTFM 0", "M PKTFM -1"),    // IC-7100
+            (3085, true, "M PKTFM 0", "M PKTFM -1"),    // IC-705
+            (3090, true, "M PKTFM 0", "M PKTFM -1"),    // IC-905
+            (1035, true, "M PKTFM -1", "M PKTFM 0"),    // FT-991A
+            (3081, false, "M FM -1", "M PKTFM"),
+        ] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.rig_model = model;
+                s.aprs_data_fm = data_fm;
+                e.apply_settings(s);
+                e.aprs_tune(144.390).unwrap();
+            }
+            let (addr, log) = mock_rigctld_on(144_390_000, false);
+            let mut rig = Rig::rigctld(&addr);
+            let (mut backend, mut state) = (MockBackend::new(), loop_state_for(&engine));
+            assert_eq!(state.applied.rig_model, model, "precondition: the loop's model");
+            let mut t = 1000.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1060.0);
+            let lines = log.lock().unwrap().clone();
+            let modes: Vec<&String> = lines.iter().filter(|l| l.starts_with("M ")).collect();
+            assert!(
+                modes.iter().any(|l| *l == want),
+                "model {model}, DATA-FM {data_fm}: want {want:?}, saw {modes:?}"
+            );
+            assert!(
+                !modes.iter().any(|l| l.starts_with(never)),
+                "model {model}, DATA-FM {data_fm}: never {never:?}, saw {modes:?}"
+            );
+        }
     }
 
     /// A rigctld that REFUSES the verbs named in `refuse` (matched on the first token) with
