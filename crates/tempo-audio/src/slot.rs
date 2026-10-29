@@ -2571,7 +2571,9 @@ mod tests {
                 (Ft4, 5_600.0, (700, 200)),
             ]
             .map(|(tier, decided, (split, key))| {
-                s.spawn(move || slow_split_boundary(tier, decided, split, key))
+                // Boxed: each scene holds an Engine, and four of them moved by value through the
+                // arrays here overflow the test thread's default 2 MiB stack in a debug build.
+                s.spawn(move || Box::new(slow_split_boundary(tier, decided, split, key)))
             })
             .map(|h| h.join().unwrap())
         });

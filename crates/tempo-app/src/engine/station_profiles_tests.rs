@@ -2760,21 +2760,19 @@ fn without_profiles_a_stale_tx_row_naming_the_old_call_is_refused_on_a_new_conta
     );
 }
 
-/// ⛔ No profiles, Q65 (where free text longer than FT8's goes): free text the operator queues
-/// for W1AW, which Nexus prefixes with the station's call, goes out under the call the station
-/// has when it keys. Saved as W9XYZ between the queue and the key, it is "W1AW W9XYZ TNX 73", not
-/// the old call. CONTROL: unchanged, "W1AW KD9TAW TNX 73".
+/// ⛔ No profiles, Q65: free text the operator queues for W1AW, which Nexus prefixes with the
+/// station's call, goes out under the call the station has when it keys. Saved as W9XYZ between
+/// the queue and the key, it is "W1AW W9XYZ TU", not the old call. CONTROL: unchanged,
+/// "W1AW W9TST TU". The text fills a Q65 free-text frame (13 characters) with either call.
 #[test]
 fn without_profiles_free_text_goes_out_with_the_call_in_use_at_the_key() {
-    for (edit, want) in [
-        (None, "W1AW KD9TAW TNX 73"),
-        (Some("W9XYZ"), "W1AW W9XYZ TNX 73"),
-    ] {
+    for (edit, want) in [(None, "W1AW W9TST TU"), (Some("W9XYZ"), "W1AW W9XYZ TU")] {
         let mut e = station();
+        settings_call_edit(&mut e, "W9TST");
         e.set_tier(Tier::Q65);
         e.call_station("W1AW");
-        e.qso_freetext_checked("TNX 73").unwrap();
-        assert_eq!(tx_now(&e), "W1AW KD9TAW TNX 73", "premise: queued");
+        e.qso_freetext_checked("TU").unwrap();
+        assert_eq!(tx_now(&e), "W1AW W9TST TU", "premise: queued");
         if let Some(call) = edit {
             settings_call_edit(&mut e, call);
         }
