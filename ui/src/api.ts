@@ -5692,6 +5692,28 @@ export async function clientStatus(): Promise<ClientStatus | null> {
   return invoke<ClientStatus | null>('client_status')
 }
 
+/** One saved key the station holds back until the operator confirms it for the address it would
+ *  go to (a settings restore set that address where the station had none): Cloudlog's
+ *  (`radioId` null) or a radio's Icom network password. Never the key, nor anything about it. */
+export interface KeyToConfirm {
+  radioId: number | null
+  /** The radio's name; empty for Cloudlog. */
+  radio: string
+  /** The Cloudlog URL, or the radio's network address. */
+  address: string
+}
+
+/** The saved keys that wait for the operator. Refused on a computer driving another station. */
+export async function keysToConfirm(): Promise<KeyToConfirm[]> {
+  return invoke<KeyToConfirm[]>('keys_to_confirm')
+}
+
+/** The operator's answer about a saved key that waits: Use (`useIt`) lets it go to its address;
+ *  Remove forgets it from the system keychain. */
+export async function answerSavedKey(radioId: number | null, useIt: boolean): Promise<void> {
+  return invoke<void>('answer_saved_key', { radioId, useIt })
+}
+
 /** Moves a test build's road switch: where it is now. Blocking one road while the other is
  *  blocked is refused (`oneRoadAtATime`); a shipped build has no such command. */
 export async function benchRoadSwitch(to: BenchPosition): Promise<BenchPosition> {

@@ -7353,6 +7353,16 @@ impl Engine {
         self.settings.cloudlog_key.clear();
     }
 
+    /// The saved keys held back until the operator confirms them ([`Settings::keys_to_confirm`]).
+    pub fn keys_to_confirm(&self) -> &crate::settings::KeysToConfirm {
+        &self.settings.keys_to_confirm
+    }
+
+    /// Replace them: a restore's, the operator's answer, or a key typed again.
+    pub fn set_keys_to_confirm(&mut self, keys: crate::settings::KeysToConfirm) {
+        self.settings.keys_to_confirm = keys;
+    }
+
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         self.remote_readings.invalidate();
         // The address the club link line is about, before the save: a save that moves it
@@ -7540,6 +7550,9 @@ impl Engine {
         // three earlier partial fixes each patched only the path their author was testing).
         // A restore that moves the Cloudlog URL drops it afterwards (`forget_pending_cloudlog_key`).
         let live_cloudlog_key = std::mem::take(&mut self.settings.cloudlog_key);
+        // The saved keys held back until the operator confirms them: engine-owned, kept whatever
+        // the payload carries (`Settings::keys_to_confirm`). A restore sets its own afterwards.
+        let live_keys_to_confirm = std::mem::take(&mut self.settings.keys_to_confirm);
         // The forward-compatibility catch-all (`Settings::unknown`) — the keys a NEWER build
         // wrote into settings.json that this build has no field for. Same one-writer shape as
         // the Cloudlog key, and for the same reason: this is the only session-time wholesale
@@ -7583,6 +7596,7 @@ impl Engine {
         if self.settings.cloudlog_key.is_empty() {
             self.settings.cloudlog_key = live_cloudlog_key;
         }
+        self.settings.keys_to_confirm = live_keys_to_confirm;
         // Put back every preserved key the incoming payload did not carry (see the capture).
         for (key, value) in live_unknown {
             self.settings.unknown.entry(key).or_insert(value);
@@ -8689,7 +8703,12 @@ impl Engine {
     /// Remove a radio from the roster (no-op on the active or last radio). Pure roster edit.
     pub fn remove_radio(&mut self, id: u32) -> bool {
         self.remote_actuation.revoke();
-        self.settings.remove_radio_profile(id)
+        let removed = self.settings.remove_radio_profile(id);
+        if removed {
+            // Its password goes with it (the shell removes it), and so does the wait on it.
+            self.settings.keys_to_confirm.icom_lan.retain(|&r| r != id);
+        }
+        removed
     }
 
     /// Rename a radio profile (operator-facing name / switcher label). Pure roster edit.

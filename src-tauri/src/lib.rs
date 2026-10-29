@@ -15448,6 +15448,7 @@ mod contest_session_tests {
                     self.held.insert(account.to_string(), key.to_string());
                     Ok(true)
                 }
+                KeychainChange::Holds(account) => Ok(self.held.contains_key(account)),
             }
         }
     }
@@ -15787,8 +15788,8 @@ mod contest_session_tests {
         );
         assert_eq!(
             restore(&|id| id != 3),
-            (vec![0, 1, 2], Vec::<String>::new()),
-            "CONTROL: the dropped radio had no network host"
+            (vec![0, 1, 2], vec![icom_lan_account(3)]),
+            "a dropped radio with no network host: its password too, as removing it does"
         );
         assert_eq!(
             restore(&|id| id != 1),
@@ -15804,8 +15805,15 @@ mod contest_session_tests {
         );
         assert_eq!(
             restore(&|id| id == 2),
-            (vec![2], vec![icom_lan_account(0), icom_lan_account(1)]),
-            "both network radios dropped"
+            (
+                vec![2],
+                vec![
+                    icom_lan_account(0),
+                    icom_lan_account(1),
+                    icom_lan_account(3)
+                ]
+            ),
+            "every radio dropped, network or not"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -15825,8 +15833,13 @@ mod contest_session_tests {
         );
         let accounts = restore_test_accounts();
         let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let waiting = tempo_app::settings::KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![0, 1],
+        };
         let restore = |contest: bool| {
             engine_lock(&engine).apply_restored_settings(station.clone());
+            engine_lock(&engine).set_keys_to_confirm(waiting.clone());
             let mut v: serde_json::Value =
                 serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
                     .unwrap();
@@ -15857,7 +15870,8 @@ mod contest_session_tests {
                 },
             )
             .map(|_| ());
-            (restored, keychain.forgot, in_the_hold)
+            let now = engine_lock(&engine).keys_to_confirm().clone();
+            (restored, keychain.forgot, in_the_hold, now)
         };
 
         let hold = held_up(&engine, &dir);
@@ -15866,9 +15880,10 @@ mod contest_session_tests {
             (
                 Err(tempo_app::engine::SESSION_BUSY.to_string()),
                 Vec::new(),
-                Vec::new()
+                Vec::new(),
+                waiting.clone()
             ),
-            "CONTROL: refused for the logbook, every key kept"
+            "CONTROL: refused for the logbook, every key kept, and what waited still waits"
         );
         drop(hold);
 
@@ -15881,9 +15896,11 @@ mod contest_session_tests {
                     icom_lan_account(0),
                     icom_lan_account(1)
                 ],
-                vec![true, true, true]
+                vec![true, true, true],
+                tempo_app::settings::KeysToConfirm::default()
             ),
-            "Cloudlog moved, radio 0 moved, radio 1 dropped: each removed while the engine is held"
+            "Cloudlog moved, radio 0 moved, radio 1 dropped: each removed while the engine is \
+             held, and nothing waits for a key that is gone"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -16007,14 +16024,16 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// ★ A RESTORE ONTO SETTINGS WITH NO ADDRESS FOR A SERVICE KEEPS ITS KEY: after a
-    /// reinstall or a reset the station has no Cloudlog URL and its one radio has no network
-    /// host, while the keychain still holds the operator's keys. Restoring their backup moves
-    /// nothing away from an address this station had, so every key stays, for a radio the station
-    /// has and one it does not. CONTROL: restored again over the addresses it now has, a backup
-    /// that moves them removes the keys.
+    /// ★ A RESTORE ONTO SETTINGS WITH NO ADDRESS FOR A SERVICE KEEPS ITS KEY, AND HOLDS IT BACK:
+    /// after a reinstall or a reset the station has no Cloudlog URL and its one radio has no
+    /// network host, while the keychain still holds keys it cannot say were typed for the
+    /// addresses the backup brings. Every key stays, and each one saved is held back until the
+    /// operator confirms it, for a radio the station has and one it does not. A radio with no
+    /// network host, and a key that is not saved, wait for nothing. CONTROL: restored again over
+    /// the addresses it now has, a backup that moves them removes the keys, and nothing waits.
     #[test]
-    fn a_restore_onto_fresh_settings_keeps_every_key() {
+    fn a_restore_onto_fresh_settings_keeps_every_key_and_holds_it_back() {
+        use tempo_app::settings::KeysToConfirm;
         let (dir, engine) = super::durable_command_tests::engine_on_store("restore-fresh", 0);
         let accounts = restore_test_accounts();
         let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
@@ -16028,8 +16047,8 @@ mod contest_session_tests {
         let backup: serde_json::Value =
             serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
                 .unwrap();
-        let restore = |v: &serde_json::Value| {
-            let mut keychain = FakeKeychain::holding(&all);
+        let restore = |v: &serde_json::Value, holding: &[&str]| {
+            let mut keychain = FakeKeychain::holding(holding);
             restore_settings_bundle(
                 &engine,
                 v.to_string(),
@@ -16038,24 +16057,42 @@ mod contest_session_tests {
                 |change| keychain.change(change),
             )
             .unwrap();
-            keychain.forgot
+            let waiting = engine_lock(&engine).keys_to_confirm().clone();
+            (keychain.forgot, waiting)
+        };
+        // Fresh: no Cloudlog URL, one radio (id 0, no network host).
+        let fresh = || {
+            let fresh = station_with(
+                &engine,
+                vec![tempo_app::settings::RadioProfile {
+                    id: 0,
+                    name: "Radio 1".into(),
+                    ..Default::default()
+                }],
+                "",
+            );
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(fresh);
+            eng.set_keys_to_confirm(KeysToConfirm::default());
         };
 
-        // Fresh: no Cloudlog URL, one radio (id 0, no network host).
-        let fresh = station_with(
-            &engine,
-            vec![tempo_app::settings::RadioProfile {
-                id: 0,
-                name: "Radio 1".into(),
-                ..Default::default()
-            }],
-            "",
-        );
-        engine_lock(&engine).apply_restored_settings(fresh);
+        fresh();
         assert_eq!(
-            restore(&backup),
-            Vec::<String>::new(),
-            "onto fresh settings: every key kept"
+            restore(&backup, &[]),
+            (Vec::<String>::new(), KeysToConfirm::default()),
+            "CONTROL: nothing saved, nothing waits"
+        );
+        fresh();
+        assert_eq!(
+            restore(&backup, &all),
+            (
+                Vec::<String>::new(),
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![0, 1],
+                }
+            ),
+            "onto fresh settings: every key kept, each saved one held back"
         );
         let s = engine_lock(&engine).settings().clone();
         assert_eq!(
@@ -16073,15 +16110,264 @@ mod contest_session_tests {
         moved["settings"]["radios"][0]["icomLanHost"] = serde_json::json!("192.168.1.99");
         moved["settings"]["radios"][1]["icomLanHost"] = serde_json::json!("radio-c.local");
         assert_eq!(
-            restore(&moved),
-            vec![
-                CLOUDLOG_KEYCHAIN_USER.to_string(),
-                icom_lan_account(0),
-                icom_lan_account(1)
-            ],
-            "CONTROL: moved from the station's addresses, removed"
+            restore(&moved, &all),
+            (
+                vec![
+                    CLOUDLOG_KEYCHAIN_USER.to_string(),
+                    icom_lan_account(0),
+                    icom_lan_account(1)
+                ],
+                KeysToConfirm::default()
+            ),
+            "CONTROL: moved from the station's addresses, removed, and nothing waits"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A contact for the upload tests: an FT8 QSO with K9NEW at `time` (HHMMSS).
+    fn upload_test_record(time: &str) -> tempo_core::logbook::QsoRecord {
+        let mut log = tempo_core::logbook::Logbook::new();
+        log.import_adif(&format!(
+            "<CALL:5>K9NEW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260925<TIME_ON:6>{time}<EOR>"
+        ));
+        let mut rec = tempo_core::logbook::QsoRecord::clone(&log.records()[0]);
+        rec.id = None;
+        rec
+    }
+
+    /// A listener on this computer that counts the connections made to it, closing each at once;
+    /// `stop` ends it, and its count is read after.
+    fn counting_listener() -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let count = std::sync::Arc::new(AtomicUsize::new(0));
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let (c, st) = (count.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !st.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((conn, _)) => {
+                        c.fetch_add(1, Ordering::SeqCst);
+                        drop(conn);
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                }
+            }
+        });
+        (url, count, stop)
+    }
+
+    /// ★ A SAVED KEY THAT WAITS FOR THE OPERATOR NEVER REACHES THE NETWORK: a Cloudlog upload
+    /// reads no key and connects nowhere, saying why; the Icom network sign-in reads no password
+    /// and says why. CONTROL: after the operator's Use the same upload connects to the
+    /// instance with the key, and the sign-in gets its password.
+    #[test]
+    fn a_key_that_waits_never_reaches_the_network_until_use() {
+        use std::sync::atomic::Ordering;
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-waits", 0);
+        let (url, connections, stop) = counting_listener();
+        {
+            let mut s = engine_lock(&engine).settings().clone();
+            s.cloudlog_url = url;
+            s.cloudlog_station_id = "1".into();
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(s);
+            eng.set_keys_to_confirm(KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+            });
+        }
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        let vault = super::icom_lan_password_tests::MapVault::default();
+        vault.set(1, "PLANTED-PASSWORD").unwrap();
+
+        let waiting = cloudlog_push_qso_impl(&dto, &engine, || {
+            panic!("the Cloudlog key was read while it waits")
+        });
+        assert_eq!(
+            waiting.map_err(|e| e.message),
+            Err(CLOUDLOG_KEY_WAITS.to_string()),
+            "the upload says why"
+        );
+        assert_eq!(
+            icom_lan_password_for_login(&engine, &vault, 1),
+            Err(ICOM_PASSWORD_WAITS.to_string()),
+            "the radio does not sign in, and says why"
+        );
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            0,
+            "nothing reached the instance"
+        );
+
+        answer_key_to_confirm(&engine, None, true, no_key_change).unwrap();
+        answer_key_to_confirm(&engine, Some(1), true, no_key_change).unwrap();
+        assert_eq!(
+            engine_lock(&engine).keys_to_confirm(),
+            &KeysToConfirm::default(),
+            "Use: nothing waits"
+        );
+        let mut read = false;
+        let _ = cloudlog_push_qso_impl(&dto, &engine, || {
+            read = true;
+            Ok("PLANTED-KEY".into())
+        });
+        stop.store(true, Ordering::SeqCst);
+        assert!(
+            read && connections.load(Ordering::SeqCst) > 0,
+            "CONTROL: after Use the key is read and the upload reaches the instance"
+        );
+        assert_eq!(
+            icom_lan_password_for_login(&engine, &vault, 1),
+            Ok(Some("PLANTED-PASSWORD".to_string())),
+            "CONTROL: after Use the sign-in gets its password"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ REMOVE FORGETS A KEY THAT WAITS, and nothing waits for it any more; each answer touches
+    /// its own key alone. CONTROL: a keychain that cannot remove it leaves it waiting (never
+    /// sent), and an answer about a key that does not wait changes nothing.
+    #[test]
+    fn remove_forgets_a_key_that_waits() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-remove", 0);
+        let waiting = KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![1, 2],
+        };
+        engine_lock(&engine).set_keys_to_confirm(waiting.clone());
+        let now = || engine_lock(&engine).keys_to_confirm().clone();
+
+        assert_eq!(
+            answer_key_to_confirm(&engine, Some(1), false, |_| Err("locked".into())),
+            Err("locked".to_string()),
+            "CONTROL: the keychain refused"
+        );
+        assert_eq!(now(), waiting, "CONTROL: so it still waits");
+        answer_key_to_confirm(&engine, Some(5), false, no_key_change).unwrap();
+        assert_eq!(now(), waiting, "CONTROL: radio 5's did not wait");
+
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let mut keychain = FakeKeychain::holding(&all);
+        answer_key_to_confirm(&engine, Some(1), false, |c| keychain.change(c)).unwrap();
+        assert_eq!(
+            (keychain.forgot.clone(), now()),
+            (
+                vec![icom_lan_account(1)],
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![2],
+                }
+            ),
+            "radio 1's removed, and it waits no more"
+        );
+        answer_key_to_confirm(&engine, None, false, |c| keychain.change(c)).unwrap();
+        assert_eq!(
+            (keychain.forgot.clone(), now()),
+            (
+                vec![icom_lan_account(1), CLOUDLOG_KEYCHAIN_USER.to_string()],
+                KeysToConfirm {
+                    cloudlog: false,
+                    icom_lan: vec![2],
+                }
+            ),
+            "Cloudlog's removed too"
+        );
+        assert!(
+            keychain.held.contains_key(&icom_lan_account(2)),
+            "radio 2's kept"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A CONTACT'S CLOUDLOG UPLOAD WAITS ON THE QUEUE WHILE THE KEY DOES: the leg goes back as it
+    /// was, no attempt spent, due again later, and the contact's other services go now. CONTROL:
+    /// with nothing waiting every leg goes now and nothing is put back.
+    #[test]
+    fn a_contacts_cloudlog_upload_waits_on_the_queue_while_the_key_does() {
+        use tempo_app::engine::upload_legs as legs;
+        use tempo_app::settings::KeysToConfirm;
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let queued = |time: &str| {
+            let mut eng = engine_lock(&engine);
+            eng.log_qso(upload_test_record(time));
+            let mut p = eng.take_pending_uploads().pop().expect("queued");
+            p.attempts = 2;
+            p
+        };
+        let now = 1_000_000;
+
+        let p = queued("120000");
+        assert_eq!(
+            hold_a_waiting_cloudlog_leg(&engine, &p, now),
+            p.legs,
+            "CONTROL: nothing waits, every leg goes"
+        );
+        assert!(
+            engine_lock(&engine).take_pending_uploads().is_empty(),
+            "CONTROL: nothing put back"
+        );
+
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![],
+        });
+        let p = queued("121500");
+        assert_ne!(p.legs & legs::CLOUDLOG, 0, "premise: it owes Cloudlog");
+        assert_eq!(
+            hold_a_waiting_cloudlog_leg(&engine, &p, now),
+            p.legs & !legs::CLOUDLOG,
+            "the other services go now"
+        );
+        let back: Vec<_> = engine_lock(&engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|b| (b.rec.call, b.legs, b.attempts, b.retry_after_unix > now))
+            .collect();
+        assert_eq!(
+            back,
+            vec![("K9NEW".to_string(), legs::CLOUDLOG, 2, true)],
+            "Cloudlog's leg waits on the queue, unspent, due later"
+        );
+    }
+
+    /// The notice's list: Cloudlog's key with its URL, and each radio's password with its name and
+    /// address, the port named only when it is not the usual one.
+    #[test]
+    fn the_notice_lists_each_key_that_waits_with_its_address() {
+        use tempo_app::settings::KeysToConfirm;
+        let mut s = tempo_app::settings::Settings::default();
+        s.cloudlog_url = " https://log.example/ ".into();
+        s.radios = restore_test_roster();
+        s.radios[1].icom_lan_port = 50011;
+        s.keys_to_confirm = KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![0, 1],
+        };
+        let key = |radio_id, radio: &str, address: &str| KeyToConfirm {
+            radio_id,
+            radio: radio.into(),
+            address: address.into(),
+        };
+        assert_eq!(
+            keys_to_confirm_in(&s),
+            vec![
+                key(None, "", "https://log.example/"),
+                key(Some(0), "Restore Test IC-705", "192.168.1.20"),
+                key(Some(1), "Restore Test IC-9700", "radio-b.local:50011"),
+            ]
+        );
+        s.keys_to_confirm = KeysToConfirm::default();
+        assert_eq!(keys_to_confirm_in(&s), Vec::new(), "CONTROL: none waits");
     }
 
     /// ★ A SETTINGS SAVE THAT WOULD PUT A DAEMON ON A NET RIGCTL RADIO'S NETWORK ADDRESS IS
@@ -16821,10 +17107,15 @@ fn restore_settings_bundle(
     // ...nor does the one the engine holds waiting to move to the keychain, which every apply
     // keeps. A key the backup does carry (an old one) is the backup's own, and stays.
     let forget_pending_cloudlog_key = cloudlog_moved && settings.cloudlog_key.trim().is_empty();
-    // An old backup's own key, for the address it moves Cloudlog to: it goes into the keychain in
-    // the hold, in place of the station's, rather than waiting for the next launch.
+    // A backup that brings a Cloudlog address where this station had none: whatever key the
+    // keychain holds was typed for an address it cannot name, so it waits for the operator.
+    let cloudlog_unknown =
+        !settings.cloudlog_url.trim().is_empty() && own.cloudlog_url.trim().is_empty();
+    // An old backup's own key, for the address it moves Cloudlog to (or brings it to): it goes
+    // into the keychain in the hold, in place of the station's, rather than waiting for the next
+    // launch. It was the key for that address, so it waits for nothing.
     let backup_cloudlog_key = Some(settings.cloudlog_key.trim().to_string())
-        .filter(|key| cloudlog_moved && !key.is_empty());
+        .filter(|key| (cloudlog_moved || cloudlog_unknown) && !key.is_empty());
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
     // which is right for a form and wrong for a restore. A bundle that opens a contest session
@@ -16844,19 +17135,49 @@ fn restore_settings_bundle(
             .filter(|r| icom_address_moved(r, own.radios.iter().find(|p| p.id == r.id)))
             .map(|r| (r.id, r.name.clone()))
             .collect();
-        // A radio the restore dropped is removed as `remove_radio` removes one: a radio added
-        // later takes the next free id, which can be this one's.
+        // A radio the restore dropped is removed as `remove_radio` removes one, whatever its
+        // connection: a radio added later takes the next free id, which can be this one's.
         let dropped: Vec<(u32, String)> = own
             .radios
             .iter()
-            .filter(|p| !p.icom_lan_host.trim().is_empty() && landed.iter().all(|r| r.id != p.id))
+            .filter(|p| landed.iter().all(|r| r.id != p.id))
             .map(|p| (p.id, p.name.clone()))
             .collect();
+        // The radios the restore brings a network address where this station had none.
+        let unknown: Vec<u32> = landed
+            .iter()
+            .filter(|r| icom_address_unknown(r, own.radios.iter().find(|p| p.id == r.id)))
+            .map(|r| r.id)
+            .collect();
+        let mut keychain = keychain;
         let cloudlog_key = backup_cloudlog_key.as_deref();
-        if forget_moved_keys(cloudlog_moved, cloudlog_key, &moved, &dropped, keychain) {
+        let stored = forget_moved_keys(
+            cloudlog_moved,
+            cloudlog_key,
+            &moved,
+            &dropped,
+            &mut keychain,
+        );
+        if stored {
             // In the keychain now: nothing left waiting to move there.
             eng.forget_pending_cloudlog_key();
         }
+        // What waits for the operator now: what waited before, less every key removed or
+        // replaced here, and each saved key for an address this station had none for. A keychain
+        // that cannot say whether it holds one is taken to hold it: it waits, and is not sent.
+        let mut holds =
+            |account: &str| !matches!(keychain(KeychainChange::Holds(account)), Ok(false));
+        let mut keys = eng.keys_to_confirm().clone();
+        keys.cloudlog = !(cloudlog_moved || stored)
+            && (keys.cloudlog || (cloudlog_unknown && holds(CLOUDLOG_KEYCHAIN_USER)));
+        keys.icom_lan
+            .retain(|id| !moved.iter().chain(&dropped).any(|(gone, _)| gone == id));
+        for id in unknown {
+            if !keys.icom_lan_waits(id) && holds(&icom_lan_account(id)) {
+                keys.icom_lan.push(id);
+            }
+        }
+        eng.set_keys_to_confirm(keys);
         // UI state is best-effort: a bundle whose settings are good but whose ui-state is not
         // should still restore the radios. The half that failed is named rather than swallowed.
         if let Some(ui) = v.get("uiState").cloned() {
@@ -16914,17 +17235,30 @@ fn service_address(url: &str) -> (String, String, String) {
 /// Whether a restored backup points a service at another address than the station's
 /// ([`service_address`]), so the key kept here for the station's must not go there. A backup with
 /// no address for it moves nothing: then it is sent nowhere. Nor does a station with no address
-/// for it (a fresh install, or reset settings): the key the keychain still holds was typed for
-/// some address, and the backup is the operator's own record of which.
+/// for it (a fresh install, or reset settings): the key the keychain still holds is kept, but it
+/// cannot say which address it was typed for, so it waits for the operator
+/// ([`tempo_app::settings::Settings::keys_to_confirm`]).
 fn address_moved(restored: &str, station: &str) -> bool {
     !restored.trim().is_empty()
         && !station.trim().is_empty()
         && service_address(restored) != service_address(station)
 }
 
+/// Whether a restore brings a radio a network address where this station had none for it: no such
+/// radio, or one with no network host (a fresh install or reset settings). The password the
+/// keychain holds for its id cannot say which address it was typed for.
+fn icom_address_unknown(
+    restored: &tempo_app::settings::RadioProfile,
+    station: Option<&tempo_app::settings::RadioProfile>,
+) -> bool {
+    !restored.icom_lan_host.trim().is_empty()
+        && station.is_none_or(|s| s.icom_lan_host.trim().is_empty())
+}
+
 /// Whether a restored radio's Icom network address (host, any case, and port) is another than the
 /// station's radio of the same id has. A radio with no network host moves nothing, nor does one
-/// the station has no network host for or no such radio at all ([`address_moved`]).
+/// the station has no network host for or no such radio at all: that one's saved password waits
+/// for the operator instead ([`icom_address_unknown`]).
 fn icom_address_moved(
     restored: &tempo_app::settings::RadioProfile,
     station: Option<&tempo_app::settings::RadioProfile>,
@@ -17051,19 +17385,25 @@ enum KeychainChange<'a> {
     Forget(&'a str),
     /// Keep `key` under `account`, in place of what is there.
     Store { account: &'a str, key: &'a str },
+    /// Whether an entry is there (the answer says nothing about it).
+    Holds(&'a str),
 }
 
 /// A restore's `keychain` in a test whose backup moves no address: it is never called.
 #[cfg(test)]
 fn no_key_change(change: KeychainChange) -> Result<bool, String> {
-    let (KeychainChange::Forget(account) | KeychainChange::Store { account, .. }) = change;
+    let (KeychainChange::Forget(account)
+    | KeychainChange::Store { account, .. }
+    | KeychainChange::Holds(account)) = change;
     panic!("a restore that moves no address changed the keychain entry {account}")
 }
 
 /// Make `change` to the OS keychain (service "tempo"), as the Settings buttons do. Whether an
 /// entry was there to remove; a stored key is always `true`.
 fn change_keychain(change: KeychainChange) -> Result<bool, String> {
-    let (KeychainChange::Forget(account) | KeychainChange::Store { account, .. }) = change;
+    let (KeychainChange::Forget(account)
+    | KeychainChange::Store { account, .. }
+    | KeychainChange::Holds(account)) = change;
     let entry = keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, account)
         .map_err(|e| format!("couldn't open the system keychain: {e}"))?;
     match change {
@@ -17076,7 +17416,169 @@ fn change_keychain(change: KeychainChange) -> Result<bool, String> {
             .set_password(key)
             .map(|()| true)
             .map_err(|e| format!("couldn't save to the system keychain: {e}")),
+        // Read and dropped at once: only whether it is there leaves this arm.
+        KeychainChange::Holds(_) => match entry.get_password() {
+            Ok(_) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(format!("couldn't read the system keychain: {e}")),
+        },
     }
+}
+
+/// What the Connections log and a refused upload say while the Cloudlog key waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]).
+const CLOUDLOG_KEY_WAITS: &str = "Cloudlog/Wavelog uploads wait: a settings restore set this \
+     address, and the API key saved here may be for another. Choose Use or Remove in the notice \
+     at the top of the window.";
+
+/// What an Icom network radio says when it does not sign in because its password waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]).
+const ICOM_PASSWORD_WAITS: &str = "Not signed in: a settings restore set this radio's address, \
+     and the network password saved here may be for another. Choose Use or Remove in the notice \
+     at the top of the window.";
+
+/// The Cloudlog key to send, read through `read`, unless it waits for the operator
+/// ([`tempo_app::settings::Settings::keys_to_confirm`]): then nothing is read, and the refusal says
+/// why. Every read of the Cloudlog key that is sent goes through here.
+fn cloudlog_key_to_send(
+    engine: &SharedEngine,
+    read: impl FnOnce() -> Result<String, String>,
+) -> Result<String, String> {
+    if engine_lock(engine).keys_to_confirm().cloudlog {
+        return Err(CLOUDLOG_KEY_WAITS.to_string());
+    }
+    read()
+}
+
+/// The Cloudlog key in the system keychain; empty when none is saved.
+fn cloudlog_key_from_keychain() -> Result<String, String> {
+    Ok(cloudlog_keychain()?.get_password().unwrap_or_default())
+}
+
+/// Radio `radio_id`'s Icom network password for its sign-in, from `vault`, unless it waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]): then nothing is read, and the
+/// radio says why. The reason a sign-in gets none never carries the password.
+///
+/// It takes the engine lock: the radio loop opens a radio with that lock released, the open
+/// blocking for seconds, so asking here cannot wait on itself.
+fn icom_lan_password_for_login(
+    engine: &SharedEngine,
+    vault: &dyn IcomLanVault,
+    radio_id: u32,
+) -> Result<Option<String>, String> {
+    if engine_lock(engine)
+        .keys_to_confirm()
+        .icom_lan_waits(radio_id)
+    {
+        return Err(ICOM_PASSWORD_WAITS.to_string());
+    }
+    vault.get(radio_id).map_err(|why| {
+        format!("Nexus could not read this radio's password from the system keychain ({why})")
+    })
+}
+
+/// One saved key that waits for the operator, as the notice shows it: Cloudlog's
+/// (`radio_id: None`) or radio `radio_id`'s Icom network password, with the radio's name and the
+/// address it would go to. Never the key, and nothing about it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyToConfirm {
+    radio_id: Option<u32>,
+    radio: String,
+    address: String,
+}
+
+/// The saved keys that wait for the operator in `s`, for the notice.
+fn keys_to_confirm_in(s: &Settings) -> Vec<KeyToConfirm> {
+    let keys = &s.keys_to_confirm;
+    let cloudlog = keys.cloudlog.then(|| KeyToConfirm {
+        radio_id: None,
+        radio: String::new(),
+        address: s.cloudlog_url.trim().to_string(),
+    });
+    let radios = keys.icom_lan.iter().map(|&id| {
+        let radio = s.radios.iter().find(|r| r.id == id);
+        let port = radio.map_or(0, |r| r.icom_lan_port);
+        let host = radio.map_or("", |r| r.icom_lan_host.trim());
+        KeyToConfirm {
+            radio_id: Some(id),
+            radio: radio.map_or_else(|| format!("Radio {id}"), |r| r.name.clone()),
+            address: if port == 0 || port == tempo_app::settings::ICOM_LAN_DEFAULT_PORT {
+                host.to_string()
+            } else {
+                format!("{host}:{port}")
+            },
+        }
+    });
+    cloudlog.into_iter().chain(radios).collect()
+}
+
+/// The operator's answer about a saved key that waits ([`keys_to_confirm_in`]): Use
+/// (`use_it`) lets it go to the address it waits for; Remove forgets it from the keychain, through
+/// `keychain`. Either way it waits no more, and that is saved. A Remove the keychain refuses leaves
+/// it waiting, so it is still never sent. A key that does not wait is left alone.
+fn answer_key_to_confirm(
+    engine: &SharedEngine,
+    radio_id: Option<u32>,
+    use_it: bool,
+    mut keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
+) -> Result<(), String> {
+    let mut eng = engine_lock(engine);
+    let mut keys = eng.keys_to_confirm().clone();
+    let waits = radio_id.map_or(keys.cloudlog, |id| keys.icom_lan_waits(id));
+    if !waits {
+        return Ok(());
+    }
+    if !use_it {
+        let account = radio_id.map_or_else(|| CLOUDLOG_KEYCHAIN_USER.to_string(), icom_lan_account);
+        keychain(KeychainChange::Forget(&account))?;
+    }
+    match radio_id {
+        None => keys.cloudlog = false,
+        Some(id) => keys.icom_lan.retain(|&r| r != id),
+    }
+    eng.set_keys_to_confirm(keys);
+    if radio_id.is_none() {
+        CLOUDLOG_WAIT_SAID.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: saving the answer about a saved key failed: {e}")
+    });
+    Ok(())
+}
+
+/// Whether the Connections log has said, since the Cloudlog key last stopped waiting, that the
+/// uploads wait ([`hold_a_waiting_cloudlog_leg`]): once, not once per contact.
+static CLOUDLOG_WAIT_SAID: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// How long a contact's Cloudlog upload waits on the queue before it is looked at again, while the
+/// key waits for the operator.
+const CLOUDLOG_WAIT_RECHECK_SECS: i64 = 60;
+
+/// A queued contact's Cloudlog leg, held back while the Cloudlog key waits for the operator: put
+/// back on the queue as it is, no attempt spent, and not sent. The legs left to send now.
+fn hold_a_waiting_cloudlog_leg(
+    engine: &SharedEngine,
+    p: &tempo_app::engine::PendingUpload,
+    now_unix: i64,
+) -> u8 {
+    use tempo_app::engine::upload_legs::CLOUDLOG;
+    let mut eng = engine_lock(engine);
+    if p.legs & CLOUDLOG == 0 || !eng.keys_to_confirm().cloudlog {
+        return p.legs;
+    }
+    eng.requeue_upload_at(
+        p.rec.clone(),
+        CLOUDLOG,
+        p.attempts,
+        now_unix + CLOUDLOG_WAIT_RECHECK_SECS,
+        p.origin,
+    );
+    if !CLOUDLOG_WAIT_SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        conn_log("Cloudlog", "info", CLOUDLOG_KEY_WAITS);
+    }
+    p.legs & !CLOUDLOG
 }
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what
@@ -29787,14 +30289,34 @@ fn icom_lan_forget_removed(vault: &dyn IcomLanVault, radio_id: u32) {
 /// Store (or, with an empty string, clear) a radio profile's Icom network password in the OS
 /// keychain. Write-only: it is never read back to the UI.
 #[tauri::command]
-fn set_icom_lan_password(radio_id: u32, password: String) -> Result<(), String> {
-    icom_lan_set_password(&OsKeychain, radio_id, password)
+fn set_icom_lan_password(
+    state: State<'_, SharedEngine>,
+    radio_id: u32,
+    password: String,
+) -> Result<(), String> {
+    icom_lan_set_password(&OsKeychain, radio_id, password)?;
+    key_typed_again(&state, Some(radio_id));
+    Ok(())
 }
 
 /// Remove a radio profile's Icom network password from the OS keychain (idempotent).
 #[tauri::command]
-fn clear_icom_lan_password(radio_id: u32) -> Result<(), String> {
-    OsKeychain.clear(radio_id)
+fn clear_icom_lan_password(state: State<'_, SharedEngine>, radio_id: u32) -> Result<(), String> {
+    OsKeychain.clear(radio_id)?;
+    key_typed_again(&state, Some(radio_id));
+    Ok(())
+}
+
+/// A key the operator typed or cleared in Settings answers whether the saved one may go to the
+/// address it waits for ([`tempo_app::settings::Settings::keys_to_confirm`]): Cloudlog's
+/// (`None`) or radio `radio_id`'s. Nothing changes for a key that did not wait.
+fn key_typed_again(engine: &SharedEngine, radio_id: Option<u32>) {
+    let _ = answer_key_to_confirm(engine, radio_id, true, no_keychain_change);
+}
+
+/// An answer that touches no keychain entry ([`key_typed_again`]): asked for none.
+fn no_keychain_change(_: KeychainChange) -> Result<bool, String> {
+    Ok(false)
 }
 
 /// Whether a radio profile has an Icom network password saved. Says only yes or no.
@@ -29819,7 +30341,7 @@ mod icom_lan_password_tests {
     const PASSWORD: &str = "not-a-password";
 
     #[derive(Default)]
-    struct MapVault(Mutex<BTreeMap<u32, String>>);
+    pub(super) struct MapVault(Mutex<BTreeMap<u32, String>>);
 
     impl IcomLanVault for MapVault {
         fn get(&self, radio_id: u32) -> Result<Option<String>, String> {
@@ -30267,26 +30789,45 @@ fn clear_qrz_logbook_key(state: State<'_, SharedEngine>) -> Result<(), String> {
 /// credential. Unlike QRZ, saving does NOT flip the upload toggle: Cloudlog also
 /// needs a URL + station-profile id, so the operator enables it explicitly.
 #[tauri::command]
-fn set_cloudlog_key(key: String) -> Result<(), String> {
+fn set_cloudlog_key(state: State<'_, SharedEngine>, key: String) -> Result<(), String> {
     let entry = cloudlog_keychain()?;
     if key.trim().is_empty() {
         clear_keychain_entry(&entry)?;
         conn_log("Cloudlog", "info", "API key cleared from the OS keychain");
+        key_typed_again(&state, None);
         return Ok(());
     }
     entry
         .set_password(key.trim())
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("Cloudlog", "ok", "API key saved to the OS keychain");
+    key_typed_again(&state, None);
     Ok(())
+}
+
+/// The saved keys that wait for the operator ([`keys_to_confirm_in`]), for the notice.
+#[tauri::command]
+fn keys_to_confirm(state: State<'_, SharedEngine>) -> Vec<KeyToConfirm> {
+    keys_to_confirm_in(engine_lock(&state).settings())
+}
+
+/// The operator's Use or Remove on a saved key that waits ([`answer_key_to_confirm`]).
+#[tauri::command]
+fn answer_saved_key(
+    state: State<'_, SharedEngine>,
+    radio_id: Option<u32>,
+    use_it: bool,
+) -> Result<(), String> {
+    answer_key_to_confirm(&state, radio_id, use_it, change_keychain)
 }
 
 /// Remove the stored Cloudlog/Wavelog API key from the OS keychain (idempotent).
 #[tauri::command]
-fn clear_cloudlog_key() -> Result<(), String> {
+fn clear_cloudlog_key(state: State<'_, SharedEngine>) -> Result<(), String> {
     let r = clear_keychain_entry(&cloudlog_keychain()?);
     if r.is_ok() {
         conn_log("Cloudlog", "info", "API key cleared from the OS keychain");
+        key_typed_again(&state, None);
     }
     r
 }
@@ -34146,9 +34687,11 @@ async fn cloudlog_station_info(
     if url.is_empty() {
         return Err("Set your Cloudlog/Wavelog URL in Settings first.".to_string());
     }
-    let key = cloudlog_keychain()?
-        .get_password()
-        .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())?;
+    let key = cloudlog_key_to_send(&state, || {
+        cloudlog_keychain()?
+            .get_password()
+            .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())
+    })?;
     // Blocking HTTP off the async executor (the push impls' rule), and the destination check
     // with it: for a plain-http name it is a lookup. The key moves in and dies with the closure.
     let found = tauri::async_runtime::spawn_blocking(move || {
@@ -34187,6 +34730,7 @@ async fn cloudlog_station_info(
 fn cloudlog_push_qso_impl(
     dto: &LoggedQso,
     engine: &SharedEngine,
+    read_key: impl FnOnce() -> Result<String, String>,
 ) -> Result<String, propagation::live::cloudlog::CloudlogError> {
     use propagation::live::cloudlog::{CloudlogError, CloudlogFailure};
     let (url, station_id) = {
@@ -34197,14 +34741,12 @@ fn cloudlog_push_qso_impl(
             s.cloudlog_station_id.trim().to_string(),
         )
     };
-    let key = cloudlog_keychain()
-        .map_err(|e| CloudlogError {
+    let key = cloudlog_key_to_send(engine, read_key)
+        .map_err(|message| CloudlogError {
             class: CloudlogFailure::NotConfigured,
-            message: e,
+            message,
             status: None,
         })?
-        .get_password()
-        .unwrap_or_default()
         .trim()
         .to_string();
     if url.is_empty() {
@@ -34698,36 +35240,37 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         }
     }
     if cloudlog_on && owed & legs::CLOUDLOG != 0 {
-        let (part, ok, detail, transient) = match cloudlog_push_qso_impl(&dto, engine) {
-            Ok(_) => {
-                conn_log("Cloudlog", "ok", format!("auto-forward {call}"));
-                ("Cloudlog ✓".to_string(), true, conn_detail!(""), false)
-            }
-            Err(e) => {
-                conn_log(
-                    "Cloudlog",
-                    "error",
-                    format!("auto-forward {call} — {}", e.message),
-                );
-                // The class and the status only — `e.message` is the instance's, and stays on
-                // screen.
-                diag_upload_failure("Cloudlog", cloudlog_class_name(e.class), e.status, &dto);
-                // #226: only a failure that can clear on its own is retried. A refusal (a
-                // callsign where the location number goes, a bad key, a URL that is not the
-                // API) was retried up to the budget and failed the same way every time; it is
-                // said once, with the way back, and dropped.
-                let refusal = cloudlog_refusal_line(e.class, &call);
-                if let Some(line) = &refusal {
-                    conn_log("Cloudlog", "error", line.clone());
+        let (part, ok, detail, transient) =
+            match cloudlog_push_qso_impl(&dto, engine, cloudlog_key_from_keychain) {
+                Ok(_) => {
+                    conn_log("Cloudlog", "ok", format!("auto-forward {call}"));
+                    ("Cloudlog ✓".to_string(), true, conn_detail!(""), false)
                 }
-                (
-                    format!("Cloudlog ✗ {}", e.message),
-                    false,
-                    cloudlog_stamp(e.class),
-                    refusal.is_none(),
-                )
-            }
-        };
+                Err(e) => {
+                    conn_log(
+                        "Cloudlog",
+                        "error",
+                        format!("auto-forward {call} — {}", e.message),
+                    );
+                    // The class and the status only — `e.message` is the instance's, and stays on
+                    // screen.
+                    diag_upload_failure("Cloudlog", cloudlog_class_name(e.class), e.status, &dto);
+                    // #226: only a failure that can clear on its own is retried. A refusal (a
+                    // callsign where the location number goes, a bad key, a URL that is not the
+                    // API) was retried up to the budget and failed the same way every time; it is
+                    // said once, with the way back, and dropped.
+                    let refusal = cloudlog_refusal_line(e.class, &call);
+                    if let Some(line) = &refusal {
+                        conn_log("Cloudlog", "error", line.clone());
+                    }
+                    (
+                        format!("Cloudlog ✗ {}", e.message),
+                        false,
+                        cloudlog_stamp(e.class),
+                        refusal.is_none(),
+                    )
+                }
+            };
         // Same as HRDLog above: no per-QSO stamp, so this is the only health signal.
         //
         // ⛔ The persisted detail is Nexus's own sentence, never the instance's. Cloudlog is
@@ -41425,6 +41968,14 @@ fn start_on_the_logbook(
                         );
                     }
                 }
+                // A Cloudlog key the operator has yet to confirm for this address: that leg
+                // waits on the queue, unspent, and the rest go now.
+                let legs = hold_a_waiting_cloudlog_leg(&push_engine, &p, now_unix);
+                if legs == 0 {
+                    // Nothing else owed: nothing goes anywhere, DXKeeper included, which saw
+                    // this contact the first time it came round.
+                    continue;
+                }
                 let rec = p.rec.clone();
                 // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
                 // acknowledges, so there is no success to distinguish from failure and
@@ -41455,7 +42006,7 @@ fn start_on_the_logbook(
                         n3fjp_on,
                         cloudlog_on,
                     },
-                    p.legs,
+                    legs,
                 );
                 let capped = cap_hrdlog_retries(failed, p.attempts);
                 if capped != failed {
@@ -41473,7 +42024,7 @@ fn start_on_the_logbook(
                 // good. A contact contest mode held stays in its file until it owes nothing, so
                 // a quit part-way through the paced release sends the rest at the next launch.
                 // `failed` before the HRDLog cap: a leg that cap gives up on is retried then.
-                let done = p.legs & !failed;
+                let done = legs & !failed;
                 if done != 0 {
                     engine_lock_result(&push_engine)
                         .unwrap_or_else(|e| e.into_inner())
@@ -41562,8 +42113,9 @@ fn start_on_the_logbook(
         tempo_audio::rigctld_proc::init_orphan_ledger(config_dir_for(None).join("daemon-pids"));
         // The Icom network client reads a radio's password from the keychain at the moment it
         // logs in, through this source; nothing else hands it the password.
-        tempo_audio::icomlan::set_credential_source(std::sync::Arc::new(|radio_id| {
-            OsKeychain.get(radio_id)
+        let login_engine = engine.clone();
+        tempo_audio::icomlan::set_credential_source(std::sync::Arc::new(move |radio_id| {
+            icom_lan_password_for_login(&login_engine, &OsKeychain, radio_id)
         }));
         let radio_engine = engine.clone();
         std::thread::spawn(move || {
@@ -43005,6 +43557,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_qrz_logbook_key,
         clear_qrz_logbook_key,
         set_cloudlog_key,
+        keys_to_confirm,
+        answer_saved_key,
         clear_cloudlog_key,
         qrz_push_qso,
         qrz_correct_preview,

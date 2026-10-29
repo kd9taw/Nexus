@@ -1148,6 +1148,29 @@ fn cloudlog_key_absent(s: &str) -> bool {
     s.trim().is_empty()
 }
 
+/// The saved keys this station holds back until the operator confirms them for the address they
+/// now go to ([`Settings::keys_to_confirm`]). Names only which keys: never a key, and nothing
+/// about one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KeysToConfirm {
+    /// The Cloudlog/Wavelog API key.
+    pub cloudlog: bool,
+    /// The Icom network password of each of these radios, by profile id.
+    pub icom_lan: Vec<u32>,
+}
+
+impl KeysToConfirm {
+    pub fn is_empty(&self) -> bool {
+        !self.cloudlog && self.icom_lan.is_empty()
+    }
+
+    /// Whether radio `id`'s Icom network password waits.
+    pub fn icom_lan_waits(&self, id: u32) -> bool {
+        self.icom_lan.contains(&id)
+    }
+}
+
 /// ⭐ **The seven settings a contest weekend changes, as they were before it changed them** —
 /// the note the contest-over checklist offers back when Contest mode goes off: the station
 /// callsign a club set, the operator at the key, the position, the entry category (MULTI-OP),
@@ -3796,6 +3819,19 @@ pub struct Settings {
     /// prior build's behaviour; the mitigation is simply not to downgrade with a migration pending.
     #[serde(default, skip_serializing_if = "cloudlog_key_absent")]
     pub cloudlog_key: String,
+    /// ⛔ THE SAVED KEYS NOT TO SEND YET. A settings restore onto a station that had no address for
+    /// a service (a fresh install, or reset settings) lands the backup's address, while the system
+    /// keychain, which outlives both, may still hold a key, and cannot say which address it was
+    /// typed for. That key is kept but not used: no Cloudlog upload goes out with it and the Icom
+    /// network radio does not sign in with it, until the operator answers Use (it is the key for
+    /// that address) or Remove. Typing the key again answers too.
+    ///
+    /// ENGINE-OWNED, like the pending key above: `Engine::apply_settings_inner` keeps the
+    /// engine's value across every form save, profile load and restore, so a form that posts it
+    /// back empty can never let a key go out. Only the restore, the operator's answer, a key typed
+    /// again and removing the radio change it (`Engine::set_keys_to_confirm`).
+    #[serde(default, skip_serializing_if = "KeysToConfirm::is_empty")]
+    pub keys_to_confirm: KeysToConfirm,
     /// Auto-forward each logged QSO to the Cloudlog/Wavelog instance above. Off by default.
     #[serde(default)]
     pub cloudlog_upload: bool,
@@ -6553,6 +6589,7 @@ impl Default for Settings {
             cloudlog_url: String::new(),
             cloudlog_station_id: String::new(),
             cloudlog_key: String::new(),
+            keys_to_confirm: KeysToConfirm::default(),
             cloudlog_upload: false,
             opening_regional: true,
             macros: Macros::default(),
@@ -14761,6 +14798,73 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE SAVED KEYS HELD BACK FOR CONFIRMING ARE THE ENGINE'S: a form save, a profile load and
+    /// a restore that carry none (as every form does) keep them, so no stale form lets a key go
+    /// out; they survive a save to disk and back; removing the radio drops its wait. CONTROL: the
+    /// engine's own setter changes them.
+    #[test]
+    fn the_keys_held_back_for_confirming_survive_every_apply() {
+        use crate::engine::Engine;
+        let mut station = Settings::default();
+        station.radios = vec![
+            RadioProfile {
+                id: 0,
+                ..Default::default()
+            },
+            RadioProfile {
+                id: 1,
+                ..Default::default()
+            },
+        ];
+        station.active_radio = 0;
+        station.sync_flat_from_active();
+        let mut eng = Engine::with_settings(station);
+        let held = KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![1],
+        };
+        eng.set_keys_to_confirm(held.clone());
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &held,
+            "CONTROL: the setter sets them"
+        );
+
+        let mut form = eng.settings().clone();
+        form.keys_to_confirm = KeysToConfirm::default();
+        form.mycall = "W9FORM".into();
+        eng.apply_settings(form.clone());
+        assert_eq!(
+            (eng.settings().mycall.as_str(), eng.keys_to_confirm()),
+            ("W9FORM", &held),
+            "a form save that carries none keeps them"
+        );
+        eng.apply_restored_settings(form);
+        assert_eq!(eng.keys_to_confirm(), &held, "so does a restore's apply");
+
+        let dir = std::env::temp_dir().join(format!("tempo_keys_confirm_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        eng.settings().save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).keys_to_confirm,
+            held,
+            "saved and read back"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(eng.remove_radio(1), "premise: radio 1 removed");
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![]
+            },
+            "the removed radio's wait goes with it"
+        );
     }
 
     /// round 10 N2 — the serializer skip and the migration gate must agree on a WHITESPACE-only key.

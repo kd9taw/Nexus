@@ -128,8 +128,9 @@ pub fn net_model(model: IcomModel) -> Option<Model> {
     })
 }
 
-/// Where a radio's password comes from: `Ok(None)` when none is saved, `Err` when the store could
-/// not be read (the reason never carries the password).
+/// Where a radio's password comes from: `Ok(None)` when none is saved, `Err` with the operator's
+/// words for why none is handed over (the store could not be read, or the operator has yet to
+/// confirm it for this address). The reason never carries the password.
 pub type CredentialSource = dyn Fn(u32) -> Result<Option<String>, String> + Send + Sync;
 
 static CREDENTIALS: OnceLock<Mutex<Option<Arc<CredentialSource>>>> = OnceLock::new();
@@ -311,11 +312,7 @@ impl IcomLanDaemon {
         let password = match credentials(target.profile_id) {
             Ok(Some(p)) => p,
             Ok(None) => return Err(StartError::new("No password is saved for this radio")),
-            Err(why) => {
-                return Err(StartError::new(format!(
-                    "Nexus could not read this radio's password from the system keychain ({why})"
-                )))
-            }
+            Err(why) => return Err(StartError::new(why)),
         };
         let login = match (User::new(&target.user), Secret::new(password)) {
             (Ok(user), Ok(password)) => Login { user, password },
