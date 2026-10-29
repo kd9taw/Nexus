@@ -39130,8 +39130,8 @@ fn start_on_the_logbook(
             std::thread::sleep(std::time::Duration::from_secs(subsec_jitter(120)));
             maybe_kick_tle_refresh(false);
         });
-        // The IOTA island-group list: the copy the operator chose to download, refreshed when a
-        // month old. Nothing at all without their yes (`iota_list`).
+        // The IOTA island-group list: the copy that shipped or a newer download, checked for an
+        // update when a month old; none while the operator has it off (`iota_list`).
         iota_list::load_at_startup();
         // LoTW-user marks: restore the persisted ARRL activity list (if the
         // operator ever fetched it) and wire the recency-windowed resolver.
@@ -41320,7 +41320,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         freq_markers::freq_marker_qsy,
         get_lotw_users_status,
         iota_list::get_iota_list_status,
-        iota_list::set_iota_list_consent,
+        iota_list::set_iota_list_enabled,
         iota_list::get_iota_groups,
         get_iota_offer,
         fetch_lotw_users,

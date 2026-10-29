@@ -29,7 +29,7 @@ const QSO = {
 } as unknown as LoggedQso
 
 const GROUPS = [{ reference: 'EU-028', name: 'Example Isles group' }]
-const status = { consent: true, count: 1, fetchedAt: 0, lastError: null }
+const status = { enabled: true, count: 1, fetchedAt: 0, bundled: true, lastError: null }
 
 beforeEach(() => {
   vi.clearAllMocks()

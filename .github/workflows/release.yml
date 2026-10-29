@@ -226,6 +226,13 @@ jobs:
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
 
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
+
       # The container has no Rust, and rust-toolchain would fetch rustup from sh.rustup.rs, a script
       # that installs whichever rustup is current. So rustup-init is pinned as scripts/Dockerfile.pi
       # pins it (the x86_64 build of the same rustup 1.29.1; the sha256 static.rust-lang.org
@@ -479,6 +486,13 @@ jobs:
             --pattern 'model.onnx*' --dir src-tauri/resources/deepcw --clobber
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
+
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
 
       - name: Install MinGW-w64 cross toolchain + NSIS
         run: |
@@ -800,6 +814,13 @@ jobs:
             --pattern 'model.onnx*' --dir src-tauri/resources/deepcw --clobber
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | shasum -a 256 -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | shasum -a 256 -c -
+
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
 
       # No fftw and no libusb here: Homebrew builds them for the runner's macOS, so both are built
       # from source below, at the app's minimum.
@@ -1247,6 +1268,13 @@ jobs:
             --pattern 'model.onnx*' --dir src-tauri/resources/deepcw --clobber
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
+
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
 
       # The ClubLog key, compiled in as on every other platform (#388). It goes in as a BuildKit
       # secret, which Dockerfile.pi mounts for the one RUN that compiles Nexus; a build arg would

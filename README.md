@@ -493,6 +493,9 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
 - **[AD1C Country Files](https://www.country-files.com/)** (MIT) — **Jim Reisert AD1C**. `cty.dat`
   maps callsigns to DXCC entities and CQ/ITU zones for the awards, the map and the Needed board
   (see **[NOTICE](NOTICE)**).
+- **[IOTA](https://www.iota-world.org/)** — **RSGB and IOTA Ltd**. The island-group list ships in the
+  installer with IOTA Ltd's permission (it is not in this repository) and names the group beside an
+  IOTA reference; Nexus checks iota-world.org for a newer copy at most monthly (see **[NOTICE](NOTICE)**).
 - **Street maps** (optional download) — map data © **[OpenStreetMap](https://www.openstreetmap.org/copyright)**
   contributors (ODbL), from the **[Protomaps basemap](https://github.com/protomaps/basemaps)**;
   drawn with **[MapLibre GL JS](https://github.com/maplibre/maplibre-gl-js)** (BSD-3-Clause) and

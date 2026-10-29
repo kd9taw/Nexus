@@ -1,9 +1,9 @@
-// IOTA ON SCREEN — an island group's name beside its reference, the one-line consent to download the
-// list the names come from, and the chip that OFFERS a reference to a contact being logged.
+// IOTA ON SCREEN — an island group's name beside its reference, the Settings switch for the list the
+// names come from, and the chip that OFFERS a reference to a contact being logged.
 //
-// The names are IOTA Ltd's (© RSGB and © Islands On The Air Ltd): every name shown carries a link
-// to IOTA's site, and the list is on this machine only because the operator said yes to the
-// consent line (`features/iotaGroups`). Without it a reference shows bare, as it always did.
+// The names are IOTA Ltd's (© RSGB and © Islands On The Air Ltd), shipped with Nexus by its
+// permission: every name shown carries IOTA Ltd's credit and a link to its site, as a courtesy. With
+// the list switched off (`features/iotaGroups`) a reference shows bare, as it did before the list.
 //
 // An offer is never a write: the chip says where the reference came from (the spot's comment, or the
 // callbook) and the operator takes it or not. The log-time half that decides what to offer is the
@@ -16,13 +16,13 @@ import { getIotaOffer, type IotaOfferData } from '../api'
 import {
   IOTA_SHAPE,
   IOTA_SITE,
-  answerIotaConsent,
   iotaKnown,
   iotaGroupsVersion,
   iotaListHeld,
   iotaListStatus,
   iotaName,
   loadIotaGroups,
+  setIotaListOn,
   subscribeIotaGroups,
 } from '../features/iotaGroups'
 
@@ -59,42 +59,15 @@ export function IotaGroupName({ reference }: { reference: string | null | undefi
 }
 
 /**
- * The one line that asks whether to download the island-group list: what it is, whose it is, where
- * it comes from. Shown only while the operator has never answered; Settings ▸ Logbook ▸ IOTA island
- * list changes the answer later.
- */
-export function IotaListConsent() {
-  useIotaGroups()
-  const [busy, setBusy] = useState(false)
-  const st = iotaListStatus()
-  if (!st || st.consent !== null) return null
-  const answer = (yes: boolean) => {
-    setBusy(true)
-    void withErrorToast(() => answerIotaConsent(yes), t('iota.consent.failed')).finally(() => setBusy(false))
-  }
-  return (
-    <div className="iota-consent" role="group" aria-label={t('iota.consent.aria')}>
-      <span className="iota-consent-line">{t('iota.consent.line')}</span>
-      <button type="button" className="settings-test-btn" disabled={busy} onClick={() => answer(true)}>
-        {t('iota.consent.yes')}
-      </button>
-      <button type="button" className="settings-test-btn" disabled={busy} onClick={() => answer(false)}>
-        {t('iota.consent.no')}
-      </button>
-    </div>
-  )
-}
-
-/**
- * Beside a reference: its group's name when the list is held and has it, a warning when the list is
- * held and does not ("EU-999" is no island group), and without the list the consent line, once.
- * A reference of the wrong shape says nothing here: the box's own check refuses it.
+ * Beside a reference: its group's name when the list is in use and has it, a warning when it does
+ * not ("EU-999" is no island group), and nothing with the list off. A reference of the wrong shape
+ * says nothing here: the box's own check refuses it.
  */
 export function IotaReferenceNote({ reference }: { reference: string | null | undefined }) {
   useIotaGroups()
   const r = (reference ?? '').trim().toUpperCase()
   if (!IOTA_SHAPE.test(r)) return null
-  if (!iotaListHeld()) return <IotaListConsent />
+  if (!iotaListHeld()) return null
   if (!iotaKnown(r)) {
     return (
       <span className="iota-unknown" role="note">
@@ -223,35 +196,38 @@ export function IotaOfferChip({ state }: { state: IotaOfferState }) {
   return <IotaOffer offer={state.offer} accepted={!!state.taken} onAccept={state.toggle} onDismiss={state.dismiss} />
 }
 
+/** A Unix time as its UTC day, `2026-10-29`. */
+const isoDay = (secs: number) => new Date(secs * 1000).toISOString().slice(0, 10)
+
 /**
- * Settings ▸ Logbook ▸ IOTA island list: the same yes or no as the consent line, changeable at any
- * time, with what the station holds. Off deletes the copy held.
+ * Settings ▸ Logbook ▸ IOTA island list: on (the default) shows names from the copy that shipped with
+ * Nexus, or a newer one the monthly check fetched; off shows none, stops the check and deletes any
+ * downloaded copy.
  */
 export function IotaListSettings() {
   useIotaGroups()
   const [busy, setBusy] = useState(false)
   const st = iotaListStatus()
-  const on = st?.consent === true
+  const on = st?.enabled === true
   const flip = () => {
     setBusy(true)
-    void withErrorToast(() => answerIotaConsent(!on), t('iota.consent.failed')).finally(() => setBusy(false))
+    void withErrorToast(() => setIotaListOn(!on), t('iota.list.failed')).finally(() => setBusy(false))
   }
   return (
     <div className="settings-field">
       <label className="settings-field">
-        <span className="settings-label">{t('settings.iotaList.consent.label')}</span>
+        <span className="settings-label">{t('settings.iotaList.label')}</span>
         <button type="button" role="switch" aria-checked={on} className={`toggle${on ? ' on' : ''}`} disabled={busy || !st} onClick={flip}>
           <span className="toggle-knob" />
         </button>
       </label>
-      <span className="settings-hint">{t('settings.iotaList.consent.hint')}</span>
+      <span className="settings-hint">{t('settings.iotaList.hint')}</span>
       <span className="settings-hint">
-        {st && st.count > 0
-          ? t('settings.iotaList.status', {
-              count: st.count.toLocaleString(),
-              date: new Date(st.fetchedAt * 1000).toISOString().slice(0, 10),
-            })
-          : t('settings.iotaList.empty')}{' '}
+        {!st || st.count === 0
+          ? t('settings.iotaList.empty')
+          : st.bundled
+            ? t('settings.iotaList.statusShipped', { count: st.count.toLocaleString(), date: isoDay(st.fetchedAt) })
+            : t('settings.iotaList.status', { count: st.count.toLocaleString(), date: isoDay(st.fetchedAt) })}{' '}
         <IotaCredit />
       </span>
       {st?.lastError && on && <span className="settings-hint">{t('settings.iotaList.failed', { detail: st.lastError })}</span>}

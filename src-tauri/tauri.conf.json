@@ -68,6 +68,7 @@
       "resources/hamlib/*": "resources/hamlib/",
       "resources/deepcw/*": "resources/deepcw/",
       "resources/tles/*": "resources/tles/",
+      "resources/iota/*": "resources/iota/",
       "../licenses/remote/*": "resources/remote/",
       "../licenses/stream/*": "resources/stream/",
       "../licenses/openssl/*": "resources/openssl/",
