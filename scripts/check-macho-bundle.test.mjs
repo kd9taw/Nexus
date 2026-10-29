@@ -1,5 +1,5 @@
-// Tests for scripts/check-macho-bundle.mjs, the check release.yml and ci.yml run on every Mach-O
-// a macOS build ships.
+// Tests for scripts/check-macho-bundle.mjs, the check release.yml runs on every Mach-O a macOS
+// build ships.
 //
 // The fixtures are real Mach-O headers and load commands, written here byte by byte in the layout
 // <mach-o/loader.h> defines, so the check reads them exactly as it reads a shipped file. Every
