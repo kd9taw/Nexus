@@ -536,8 +536,8 @@ function packagePresent(pkg) {
 // Actions that provision the runner. They are not gates and have no local
 // equivalent: the toolchain they install is the local box's own.
 const INFRA_ACTIONS = [
-  'actions/checkout', 'actions/cache', 'actions/setup-node', 'actions/upload-artifact',
-  'actions/download-artifact', 'dtolnay/rust-toolchain',
+  'actions/checkout', 'actions/cache', 'actions/cache/restore', 'actions/cache/save',
+  'actions/setup-node', 'actions/upload-artifact', 'actions/download-artifact', 'dtolnay/rust-toolchain',
 ];
 
 // Actions that ARE gates, with the local command they stand for.
