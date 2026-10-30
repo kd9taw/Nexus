@@ -105,16 +105,27 @@ export function onlyPart(
   return drawn.loHz > want.loHz + slack || drawn.hiHz < want.hiHz - slack
 }
 
+/** Two sweep widths within this fraction of each other are the same width: a radio reporting the
+ *  span it was asked for a few hertz off is still on it. Icom's rungs are 2x apart and more. */
+const SAME_WIDTH = 0.01
+
 /** PUT THE RADIO'S SWEEP ON THE CHOSEN WINDOW, ONCE: send `ask` when the sweep the source reports
- *  does not already fit `want`, ONCE FOR EACH ASK. An ask is the source, the rung or width, the band
- *  the dial is in and the span chip chosen (`choice`): a new band, a new chip or a new rung is a new
- *  ask, and nothing else is. What the radio does after that is the operator's: a span set on the
- *  radio's own knob, the Rig Scope chips or a Flex pan chip stands, a radio that refuses (an Icom in
- *  Fixed mode) is told once, and two scopes asking different spans of one radio each ask once
- *  rather than taking turns undoing the other. An ask the sweep already fits when it is first seen is
- *  spent without sending. Nothing is sent before the source has reported a sweep, while
- *  transmitting (the ask waits for unkey), or for a source whose sweep Nexus does not set. */
+ *  does not already fit `want`, ONCE FOR EACH ASK. An ask is the radio (`radio`, the active radio's
+ *  id), the source, the Icom rung, the band the dial is in and the span chip chosen (`choice`): a
+ *  new radio, band, chip or rung is a new ask. The Flex pan's width is not in it: that width follows
+ *  the dial hertz by hertz, so tuning would make every few hundred hertz a new ask.
+ *
+ *  Under one ask, the sweep's WIDTH says who moved it. The width the ask set (or, for an ask the
+ *  sweep already fitted when first seen, the width it had then) is Nexus's; once a sweep of that
+ *  width has fitted, a sweep of the same width that stops fitting means the DIAL moved, and it is
+ *  asked again. Any other width is the operator's or another window's, and stands: a span set on the
+ *  radio's own knob, the Rig Scope chips or a Flex pan chip, a radio that refuses (an Icom in Fixed
+ *  mode, whose sweep never fits after the ask) told once, and two scopes asking different spans of
+ *  one radio each asking once rather than taking turns undoing the other. Nothing is sent before the
+ *  source has reported a sweep, while transmitting (the ask waits for unkey), or for a source whose
+ *  sweep Nexus does not set. */
 export function useSpanAsk({
+  radio,
   source,
   dialHz,
   want,
@@ -123,6 +134,7 @@ export function useSpanAsk({
   transmitting,
   send,
 }: {
+  radio?: number
   source: string | null
   dialHz: number | null
   want: { loHz: number; hiHz: number } | null
@@ -131,21 +143,34 @@ export function useSpanAsk({
   transmitting: boolean
   send: (ask: SpanAsk) => void
 }): void {
-  const spent = useRef('')
+  // The ask last seen, the sweep width that is Nexus's under it, and whether a sweep of that width
+  // has fitted since.
+  const spent = useRef<{ key: string; width: number; fitted: boolean } | null>(null)
   const sendRef = useRef(send)
   sendRef.current = send
   const ask = source ? spanAsk(source, dialHz, want) : null
   const band = dialHz != null && dialHz > 0 ? bandLabelForMhz(dialHz / 1e6) : ''
-  const key = ask ? `${source}:${ask.kind}:${askWidth(ask)}:${band}:${choice}` : ''
+  const rung = ask?.kind === 'civ' ? ask.halfHz : ''
+  const key = ask ? `${radio ?? ''}:${source}:${ask.kind}:${rung}:${band}:${choice}` : ''
   const fits = ask != null && want != null && sweep != null && sweepFits(sweep, want, ask)
+  const width = sweep ? sweep.hiHz - sweep.loHz : 0
   useEffect(() => {
     if (!ask || !sweep || transmitting) return
-    if (spent.current === key) return
-    spent.current = key
-    if (!fits) sendRef.current(ask)
-    // `ask` is a fresh object every render; `key` says everything about it.
+    const s = spent.current
+    if (s?.key === key) {
+      if (Math.abs(width - s.width) > s.width * SAME_WIDTH) return
+      if (fits) s.fitted = true
+      if (fits || !s.fitted) return
+    } else if (fits) {
+      spent.current = { key, width, fitted: true }
+      return
+    }
+    spent.current = { key, width: askWidth(ask), fitted: false }
+    sendRef.current(ask)
+    // `ask` is a fresh object every render; what decides a send is in the deps, and a send takes
+    // the ask of the render that ran it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, fits, sweep != null, transmitting])
+  }, [key, fits, width, sweep != null, transmitting])
 }
 
 /** Where the chosen span is kept: one record per cockpit PER WINDOW, like the audio scope's span

@@ -185,6 +185,108 @@ describe('useSpanAsk', () => {
     expect(a.mock.calls).toEqual([[{ kind: 'civ', halfHz: 50_000 }]])
     expect(b.mock.calls).toEqual([[{ kind: 'civ', halfHz: 5_000 }]])
   })
+  it('Icom: tuning the knob out of a rung that fitted Band asks for the next rung, once', () => {
+    // A radio that obeys: centre mode, sweep = dial ± its rung. 20 m Band from 14.200 (±250k fits)
+    // down to 14.074 in 100 Hz steps: the ±500k ask first appears while ±250k still fits (a bin's
+    // slack), and a few hundred Hz later ±250k no longer holds the band.
+    let half = 250_000
+    const send = vi.fn((a: SpanAsk) => {
+      if (a.kind === 'civ') half = a.halfHz
+    })
+    const props = (dial: number) => ({
+      source: 'civ',
+      dialHz: dial,
+      want: bandWindow(dial),
+      choice: 'band',
+      sweep: { loHz: dial - half, hiHz: dial + half },
+      transmitting: false,
+    })
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: props(14_200_000) })
+    for (let d = 14_200_000; d >= 14_074_000; d -= 100) rerender(props(d))
+    const end = 14_074_000
+    expect(send.mock.calls).toEqual([[{ kind: 'civ', halfHz: 500_000 }]])
+    expect(onlyPart({ loHz: end - half, hiHz: end + half }, bandWindow(end)), 'the band is all drawn').toBe(false)
+  })
+  it("Flex: the operator's own pan width stands while they tune", () => {
+    let width = 1 // the pan before the ask holds nothing
+    const send = vi.fn((a: SpanAsk) => {
+      if (a.kind === 'flex') width = a.hz
+    })
+    const props = (dial: number) => ({
+      source: 'flex',
+      dialHz: dial,
+      want: bandWindow(dial),
+      choice: 'band',
+      sweep: { loHz: dial - width / 2, hiHz: dial + width / 2 },
+      transmitting: false,
+    })
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: props(14_200_000) })
+    expect(send.mock.calls).toEqual([[{ kind: 'flex', hz: 450_000 }]])
+    width = 2_000_000 // the operator's pan chip
+    for (let d = 14_200_000; d >= 14_190_000; d -= 1000) rerender(props(d))
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(width).toBe(2_000_000)
+  })
+  it('Flex: tuning out of the pan Nexus asked for asks again (that width is not the operator’s)', () => {
+    let width = 1
+    const send = vi.fn((a: SpanAsk) => {
+      if (a.kind === 'flex') width = a.hz
+    })
+    const props = (dial: number) => ({
+      source: 'flex',
+      dialHz: dial,
+      want: bandWindow(dial),
+      choice: 'band',
+      sweep: { loHz: dial - width / 2, hiHz: dial + width / 2 },
+      transmitting: false,
+    })
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: props(14_200_000) })
+    for (let d = 14_200_000; d <= 14_210_000; d += 100) rerender(props(d))
+    expect(send.mock.calls.length, 'asked again as the dial left the pan').toBeGreaterThan(1)
+    const end = 14_210_000
+    expect(onlyPart({ loHz: end - width / 2, hiHz: end + width / 2 }, bandWindow(end))).toBe(false)
+  })
+  it('an ask the radio refused is not repeated as the dial moves, even at the width it asked', () => {
+    // An Icom in Fixed mode: its edges stay put whatever is asked, here a 100 kHz window (the ±50k
+    // ask's width) that the dial walks along, with an over at every step.
+    const send = vi.fn()
+    const fixed = { loHz: 10_000_000, hiHz: 10_100_000 }
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: { ...base, sweep: fixed } })
+    for (let d = 10_120_000; d <= 10_125_000; d += 100) {
+      rerender({ ...base, dialHz: d, sweep: { ...fixed }, transmitting: true })
+      rerender({ ...base, dialHz: d, sweep: { ...fixed } })
+    }
+    expect(send.mock.calls).toEqual([[{ kind: 'civ', halfHz: 50_000 }]])
+  })
+  it('another radio of the same source is a new ask; the same radio coming back is not', () => {
+    const narrow = { loHz: 10_110_000, hiHz: 10_130_000 }
+    const p = (source: string | null, radio: number) => ({ ...base, source, radio, sweep: source ? narrow : null })
+    const send = vi.fn()
+    const { rerender } = renderHook((q) => useSpanAsk({ ...q, send }), { initialProps: p('civ', 1) })
+    rerender(p(null, 1))
+    rerender(p('civ', 2))
+    expect(send, 'the second Icom is asked').toHaveBeenCalledTimes(2)
+    const again = vi.fn()
+    const h = renderHook((q) => useSpanAsk({ ...q, send: again }), { initialProps: p('civ', 1) })
+    h.rerender(p(null, 1))
+    h.rerender(p('civ', 1))
+    expect(again, 'a reconnect keeps its own span').toHaveBeenCalledTimes(1)
+  })
+  it('a new band on the same rung is a new ask', () => {
+    // 17 m at 18.100 and 12 m at 24.940 both need ±100k on an Icom. The operator narrows the radio
+    // to ±10k on 17 m (it stands), then changes band: the new band is asked for.
+    const send = vi.fn()
+    const at = (dial: number, half: number) => ({ loHz: dial - half, hiHz: dial + half })
+    const p = (dial: number, half: number) => ({ ...base, dialHz: dial, want: bandWindow(dial), sweep: at(dial, half) })
+    const { rerender } = renderHook((q) => useSpanAsk({ ...q, send }), { initialProps: p(18_100_000, 500_000) })
+    rerender(p(18_100_000, 100_000))
+    rerender(p(18_100_000, 10_000))
+    expect(send.mock.calls, 'premise: one ask on 17 m, and the operator’s ±10k stands').toEqual([
+      [{ kind: 'civ', halfHz: 100_000 }],
+    ])
+    rerender(p(24_940_000, 10_000))
+    expect(send.mock.calls).toEqual([[{ kind: 'civ', halfHz: 100_000 }], [{ kind: 'civ', halfHz: 100_000 }]])
+  })
 })
 
 describe('the stored choice, per window', () => {
