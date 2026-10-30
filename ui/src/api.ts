@@ -5465,14 +5465,24 @@ export async function getScopeRow(
  * copies of a source that sweeps slower than it polls. Two answers come back whatever `lastSeq`
  * says, because neither means "nothing new": a source that went quiet answers its EMPTY frame, and
  * a row nobody numbered (the Companion path) comes back unsequenced (`seq` 0) on every poll.
+ *
+ * `rfView` is the absolute RF window the scope is drawing on a native panadapter row. It rides the
+ * poll as a standing request: an SDR's IQ panadapter (TCI, SDRconnect) computes its rows over that
+ * window at a finer resolution than its whole span allows. A radio's own scope ignores it.
  */
 export async function getScopeFrame(
   loHz: number,
   hiHz: number,
   window: ScopeAnalysis | undefined,
   lastSeq: number,
+  rfView?: { loHz: number; hiHz: number },
 ): Promise<SpectrumFrameWire | null> {
-  return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq })
+  return invoke<SpectrumFrameWire | null>(
+    'get_scope_frame',
+    rfView
+      ? { loHz, hiHz, window, lastSeq, rfLoHz: rfView.loHz, rfHiHz: rfView.hiHz }
+      : { loHz, hiHz, window, lastSeq },
+  )
 }
 
 /**

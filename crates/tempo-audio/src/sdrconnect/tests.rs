@@ -130,6 +130,64 @@ fn a_carrier_is_drawn_at_its_own_rf_frequency() {
     );
 }
 
+/// ⭐ A SCOPE'S WINDOW IS DRAWN AT THE RESOLUTION THE IQ HOLDS, NOT STRETCHED FROM THE WHOLE SPAN:
+/// while a scope asks for 30 m with its margin (10.095-10.155 MHz) the rows cover that window with
+/// more than a thousand bins, and the carrier is in its own bin; the receiver's rate is never asked
+/// to change. Positive control: before the window is asked for, the row is the receiver's whole
+/// 192 kHz in 2048 bins.
+#[test]
+fn a_scopes_window_is_drawn_at_the_iqs_own_resolution() {
+    let fake = Fake::start(Config {
+        rate: 192_000,
+        centre: 10_120_000,
+        carriers: vec![10_130_500],
+        ..Config::default()
+    });
+    let feed = SpectrumFeed::default();
+    let scope = scope_on(&fake, &feed);
+    until(&scope, "the scope draws", |s| {
+        s.state == State::Drawing && s.rows > 2
+    });
+    let whole = row_around(&feed, 10_120_000);
+    assert_eq!(whole.row.len(), 2048);
+    assert!((whole.hi_hz - whole.lo_hz - 192_000.0).abs() < 1.0);
+    let band = (10_095_000.0, 10_155_000.0);
+    let deadline = Instant::now() + WAIT;
+    let row = loop {
+        // The request rides each poll, as a scope on screen makes it.
+        feed.request_rf_view(band.0, band.1);
+        if let Some(row) = rf(&feed).filter(|r| r.hi_hz - r.lo_hz < 100_000.0) {
+            break row;
+        }
+        assert!(Instant::now() < deadline, "no zoomed row");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let bin = (row.hi_hz - row.lo_hz) / row.row.len() as f64;
+    assert!(
+        row.row.len() >= 1_024,
+        "{} bins across the band",
+        row.row.len()
+    );
+    assert!(bin < 50.0, "{bin} Hz bins, where the whole row's were 94");
+    assert!(
+        row.lo_hz <= band.0 + bin && row.hi_hz >= band.1 - bin,
+        "{}..{}",
+        row.lo_hz,
+        row.hi_hz
+    );
+    assert!(
+        (peak_near(&row, 10_130_500.0) - 10_130_500.0).abs() <= bin,
+        "the carrier is in its own bin"
+    );
+    assert!(
+        !fake
+            .received()
+            .iter()
+            .any(|m| m.contains("device_sample_rate") && m.contains("set_property")),
+        "the receiver's rate is the operator's"
+    );
+}
+
 /// ⭐ THE RECEIVER FOLLOWS THE DIAL: a dial change retunes the receiver to it and the rows move
 /// with it; a knob spun fast is followed at most ten times a second and the last dial is the one
 /// the receiver lands on.

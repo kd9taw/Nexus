@@ -15,6 +15,8 @@ import { RarityChip } from './RarityChip'
 import { WatchTile } from './WatchTile'
 import { NEED_CHIP } from '../features/needVisuals'
 import type { WatchFilter } from '../watchlist'
+import { PATH_OUTLOOK, useKeyedFeed } from '../features/connectFeeds'
+import { pathWhyDetail, pathWhyFacts, pathWhyLine } from '../features/pathWhy'
 
 interface Props {
   station: Station
@@ -90,6 +92,11 @@ export function StationCard({
   const az = azimuthTo(myGrid, station.grid, station.country, centroids)
   // Top need drives the row's dominant colour; needAll drives the chips.
   const chip = need ? NEED_CHIP[need] : null
+  // The path "why" line, on the SELECTED card only: one outlook request for the station the
+  // operator is looking at (the same keyed feed the Path card reads), never one per row.
+  const pathPred = useKeyedFeed(PATH_OUTLOOK, selected && station.grid ? station.grid : null).value
+  const whyFacts = selected ? pathWhyFacts(pathPred) : null
+  const why = pathWhyLine(whyFacts)
   // ONE definition of "work this station" for both gestures the card offers — the Work button
   // and the double-click. They were two separate argument lists before, which is how they
   // could have drifted apart; a caller that gets one right and the other wrong is exactly the
@@ -186,6 +193,16 @@ export function StationCard({
       >
         {QRZ_LABEL}
       </button>
+      {why && (
+        <span
+          className="station-why"
+          // The whole sentence (the card shows three lines of it) and the numbers behind it, one
+          // hover away (the Path card has them a click away; this card is the select button).
+          title={[why, ...pathWhyDetail(whyFacts, pathPred?.geometry?.maxGmlatDeg ?? 0)].join('\n')}
+        >
+          {why}
+        </span>
+      )}
     </div>
   )
 }
