@@ -276,18 +276,23 @@ export interface PathHour {
   layer: 'E' | 'F2'
   hops: number
   takeoffDeg: number
+  /** Beyond 7000 km: the hop geometry the long-path method assumes from distance alone (the
+   * same every hour and band) — an estimate, not a modelled ray. */
+  estimated: boolean
 }
 /** One UTC hour of model-free path geometry (propagation::pathgeo). */
 export interface PathGeoHour {
   /** Start of the hour described: the NEXT occurrence of that UTC hour (unix s). */
   unix: number
-  kp: number
+  /** null exactly when `kpSource` is `unknown`, and so are `capLatDeg` and `polarFrac`. */
+  kp: number | null
   /** `forecast` = SWPC's prediction; `measured` = observed; `current` = no outlook sample
-   * covers the hour, so the current Kp is assumed. Word a forecast as a forecast. */
-  kpSource: 'measured' | 'forecast' | 'current'
-  capLatDeg: number
+   * covers the hour, so SWPC's latest reading is carried forward; `unknown` = no space-weather
+   * data held at all. Word a forecast as a forecast, and an unknown Kp as unknown. */
+  kpSource: 'measured' | 'forecast' | 'current' | 'unknown'
+  capLatDeg: number | null
   /** Shares of the path (0..1): poleward of the cap, on the grey line, sunlit. */
-  polarFrac: number
+  polarFrac: number | null
   greylineFrac: number
   sunlitFrac: number
   greyMe: boolean

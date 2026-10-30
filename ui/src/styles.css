@@ -8336,7 +8336,7 @@ select optgroup {
   box-sizing: border-box;
   padding-left: var(--space-5); /* under the call, roughly past the presence dot and its gap */
   margin-bottom: 2px;
-  font-size: calc(11px * var(--text-scale));
+  font-size: var(--fs-micro);
   color: var(--text-dim);
 }
 

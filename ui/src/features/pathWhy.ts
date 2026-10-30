@@ -5,10 +5,12 @@
 //
 // Two kinds of fact, and the sentence keeps them apart:
 // - the MODEL (band open now, hops, layer, take-off): P.533 is a monthly median — the typical
-//   day of the month, not a measurement of today;
-// - the OVERLAY (polar cap, auroral oval, Kp): space weather laid over the model, which does not
-//   include storms. A Kp the outlook predicts is said to be a forecast, and its effect "may"
-//   happen — never stated as something observed.
+//   day of the month, not a measurement of today. Beyond 7000 km the hops and take-off are the
+//   geometry the long-path method assumes, and are worded as an estimate;
+// - the OVERLAY (auroral zone, polar cap, auroral oval, Kp): space weather laid over the model,
+//   which does not include storms. A Kp the outlook predicts is said to be a forecast, and its
+//   effect "may" happen — never stated as something observed. With no space-weather data the
+//   Kp is unknown: it is said so, and nothing that depends on Kp is claimed.
 //
 // Every number in the sentence comes from a field; nothing here is prose-only.
 
@@ -19,19 +21,30 @@ import type { BandOutlook, PathGeoHour, PathHour, PathPrediction } from '../type
 const OPEN_NOW = 0.3
 /** Kp from which a forecast storm is worth a warning: NOAA G1 (minor storm) starts at Kp 5. */
 const STORM_KP = 5
+/** Geomagnetic latitude from which a crossing is the polar cap proper. The cap edge the
+ * geometry uses (66° − 1.2·Kp) sits near 64° at quiet Kp, inside the auroral zone, so a path
+ * that only gets between that edge and here crosses the auroral zone, not the cap. */
+const POLAR_CAP_DEG = 70
+/** The furthest equatorward that edge ever comes (its floor at Kp 9): a path that never
+ * reaches it is out of the auroral zone at any Kp, so an unknown Kp changes nothing for it. */
+const EDGE_FLOOR_DEG = 55
 
 export interface PathWhyFacts {
   /** Best band open now (highest current-hour score ≥ Fair), or null if none is. */
   band: string | null
   /** That band's modelled mode this hour (P.533 only). */
   hop: PathHour | null
-  /** The path crosses the polar cap at this hour's Kp. */
+  /** The path is poleward of the cap edge at this hour's Kp (false when Kp is unknown). */
   polarNow: boolean
+  /** ...and reaches the polar cap proper, not only the auroral zone. */
+  capNow: boolean
+  /** Kp is unknown this hour, and the path reaches latitudes where it would matter. */
+  kpUnknown: boolean
   /** The path crosses the live auroral oval (only when an oval is held). */
   ovalNow: boolean
   /** Grey line at the ends right now. */
   grey: 'both' | 'me' | 'dx' | null
-  /** The first hour in the next 24 h whose FORECAST Kp reaches a storm and puts the polar cap
+  /** The first hour in the next 24 h whose FORECAST Kp reaches a storm and puts the cap edge
    * over this path. */
   storm: { kp: number; unix: number } | null
   /** This hour's geometry (for the detail rows). */
@@ -55,17 +68,20 @@ export function pathWhyFacts(p: PathPrediction | null | undefined): PathWhyFacts
   const h = g.nowHour
   const now = g.hours[h]
   const band = bestBandNow(p.bands, h)
+  const polarNow = (now.polarFrac ?? 0) > 0
   let storm: PathWhyFacts['storm'] = null
   for (let k = 0; k < 24 && !storm; k++) {
     const x = g.hours[(h + k) % 24]
-    if (x.kpSource === 'forecast' && x.kp >= STORM_KP && x.polarFrac > 0) {
+    if (x.kpSource === 'forecast' && x.kp !== null && x.kp >= STORM_KP && (x.polarFrac ?? 0) > 0) {
       storm = { kp: x.kp, unix: x.unix }
     }
   }
   return {
     band: band?.band ?? null,
     hop: band?.detail?.[h] ?? null,
-    polarNow: now.polarFrac > 0,
+    polarNow,
+    capNow: polarNow && g.maxGmlatDeg >= POLAR_CAP_DEG,
+    kpUnknown: now.kpSource === 'unknown' && g.maxGmlatDeg >= EDGE_FLOOR_DEG,
     ovalNow: g.ovalNow === true,
     grey: now.greyMe && now.greyDx ? 'both' : now.greyMe ? 'me' : now.greyDx ? 'dx' : null,
     storm,
@@ -82,7 +98,8 @@ function greyWords(g: NonNullable<PathWhyFacts['grey']>): string {
 
 function kpSourceWords(s: PathGeoHour['kpSource']): string {
   if (s === 'measured') return t('pathWhy.kpSource.measured')
-  return s === 'forecast' ? t('pathWhy.kpSource.forecast') : t('pathWhy.kpSource.current')
+  if (s === 'forecast') return t('pathWhy.kpSource.forecast')
+  return s === 'current' ? t('pathWhy.kpSource.current') : t('pathWhy.kpSource.unknown')
 }
 
 /** "1800Z" — the clock format of the outlook's windows. */
@@ -100,8 +117,16 @@ function kpLabel(kp: number): string {
 export function pathWhyLine(f: PathWhyFacts | null): string | null {
   if (!f) return null
   const parts: string[] = []
-  if (f.hop) parts.push(t('pathWhy.hops', { count: f.hop.hops, layer: f.hop.layer }))
-  if (f.polarNow) parts.push(t('pathWhy.polar'))
+  if (f.hop) {
+    const { hops: count, layer } = f.hop
+    parts.push(
+      f.hop.estimated
+        ? t('pathWhy.hopsEstimate', { count, layer })
+        : t('pathWhy.hops', { count, layer }),
+    )
+  }
+  if (f.polarNow) parts.push(f.capNow ? t('pathWhy.polar') : t('pathWhy.auroralZone'))
+  if (f.kpUnknown) parts.push(t('pathWhy.kpUnknown'))
   if (f.ovalNow) parts.push(t('pathWhy.oval'))
   if (f.grey) parts.push(greyWords(f.grey))
   if (!f.band && parts.length === 0 && !f.storm) return null
@@ -110,7 +135,7 @@ export function pathWhyLine(f: PathWhyFacts | null): string | null {
   if (f.storm) {
     const kp = kpLabel(f.storm.kp)
     const time = utcHourLabel(f.storm.unix)
-    // Already inside the cap: an aurora deepens it. Outside: the forecast grows the cap over it.
+    // Already inside the edge: an aurora deepens it. Outside: the forecast pushes it over.
     text +=
       t('pathWhy.sepWarn') +
       (f.polarNow ? t('pathWhy.storm.aurora', { kp, time }) : t('pathWhy.storm.cap', { kp, time }))
@@ -124,26 +149,30 @@ export function pathWhyDetail(f: PathWhyFacts | null, maxGmlatDeg: number): stri
   const pct = (x: number) => String(Math.round(x * 100))
   const rows: string[] = []
   if (f.hop) {
+    const mode = `${f.hop.hops}${f.hop.layer}`
+    const deg = f.hop.takeoffDeg.toFixed(1)
     rows.push(
-      t('pathWhy.detail.mode', {
-        mode: `${f.hop.hops}${f.hop.layer}`,
-        deg: f.hop.takeoffDeg.toFixed(1),
-      }),
+      f.hop.estimated
+        ? t('pathWhy.detail.modeEstimate', { mode, deg })
+        : t('pathWhy.detail.mode', { mode, deg }),
     )
   }
+  const { kp, capLatDeg, polarFrac } = f.now
   rows.push(
-    t('pathWhy.detail.polar', {
-      pct: pct(f.now.polarFrac),
-      lat: f.now.capLatDeg.toFixed(0),
-      kp: kpLabel(f.now.kp),
-      source: kpSourceWords(f.now.kpSource),
-    }),
+    kp === null || capLatDeg === null || polarFrac === null
+      ? t('pathWhy.detail.polarUnknown')
+      : t('pathWhy.detail.polar', {
+          pct: pct(polarFrac),
+          lat: capLatDeg.toFixed(0),
+          kp: kpLabel(kp),
+          source: kpSourceWords(f.now.kpSource),
+        }),
   )
   rows.push(t('pathWhy.detail.maxLat', { lat: maxGmlatDeg.toFixed(0) }))
   rows.push(
     t('pathWhy.detail.grey', { pct: pct(f.now.greylineFrac), sun: pct(f.now.sunlitFrac) }),
   )
   if (f.ovalNow) rows.push(t('pathWhy.detail.oval'))
-  rows.push(t('pathWhy.detail.note'))
+  rows.push(t('pathWhy.detail.note', { source: kpSourceWords(f.now.kpSource) }))
   return rows
 }

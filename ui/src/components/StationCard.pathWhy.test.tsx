@@ -33,7 +33,7 @@ function polarPred(): PathPrediction {
         grayline: false,
         hourly,
         reliability: 40,
-        detail: Array.from({ length: 24 }, () => ({ layer: 'F2' as const, hops: 3, takeoffDeg: 4.9 })),
+        detail: Array.from({ length: 24 }, () => ({ layer: 'F2' as const, hops: 3, takeoffDeg: 4.9, estimated: false })),
       },
     ],
     mufNow: 19,
@@ -99,7 +99,7 @@ describe('the station card', () => {
     // The numbers behind it, one hover away.
     const title = container.querySelector('.station-why')!.getAttribute('title')!
     expect(title).toContain('Mode 3F2, take-off 4.9°')
-    expect(title).toContain('Polar cap: 25% of the path')
+    expect(title).toContain('Auroral zone and polar cap: 25% of the path')
   })
 
   it('an unselected card asks for nothing and shows no line', async () => {

@@ -189,6 +189,10 @@ pub struct PathHour {
     pub hops: u8,
     /// Take-off (elevation) angle of that mode, degrees.
     pub takeoff_deg: f32,
+    /// Beyond 7000 km the hops and take-off angle are the geometry the long model ASSUMES
+    /// from distance alone (F2 hops at a fixed reflection height) — the same in every hour and
+    /// on every band, so an estimate rather than a modelled ray. False for a §6 dominant mode.
+    pub estimated: bool,
 }
 
 /// One mode's "workable right now" entry — see [`BandOutlook::mode_now`].
