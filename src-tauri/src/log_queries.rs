@@ -317,6 +317,9 @@ struct OrderKey {
     /// an upload stamp and a card marked sent move only `content_rev`, and the rows a sent filter
     /// lets through, and the order of an upload or QSL-sent-date sort, move with them.
     content_rev: Option<u64>,
+    /// The path grades' revision too, for an order a path filter decides: the display-only grades
+    /// grow as the log is graded, and move neither of the log's revisions (`path_grades`).
+    grades_rev: Option<u64>,
     query: LogQuery,
 }
 
@@ -559,6 +562,7 @@ impl LogQueries {
         let key = OrderKey {
             index_rev: c.index_rev,
             content_rev: query.reads_content().then_some(c.content_rev),
+            grades_rev: query.filter.path.map(|_| crate::path_grades::rev()),
             query: query.clone(),
         };
         let slot = {
@@ -638,6 +642,14 @@ impl LogQueries {
                         columns
                             .extend(DECIDE_COLUMNS.iter().filter(|c| !ORDER_COLUMNS.contains(c)));
                         extras.extend(AWARD_EXTRAS);
+                    }
+                    if f.path.is_some() {
+                        for c in crate::path_grades::COLUMNS {
+                            if !columns.contains(c) {
+                                columns.push(c);
+                            }
+                        }
+                        extras.extend(crate::path_grades::READS);
                     }
                     extras.sort_unstable();
                     extras.dedup();
@@ -1176,6 +1188,11 @@ impl<'a> Decider<'a> {
                 shown
             });
             if !shown.is_some_and(|e| e.trim().eq_ignore_ascii_case(entity)) {
+                return false;
+            }
+        }
+        if let Some(want) = f.path {
+            if !crate::path_grades::filter_keeps(r, want) {
                 return false;
             }
         }

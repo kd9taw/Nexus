@@ -2399,6 +2399,26 @@ pub struct StationCore {
     #[allow(clippy::type_complexity)]
     pub(crate) state_resolve:
         Option<Box<dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync>>,
+    /// The log-time path grader, injected by the command layer (which holds the propagation
+    /// model, the path card it last computed and the rotator's readings): for a contact being
+    /// logged, its graded route and the beam heading it was made on
+    /// ([`tempo_core::logbook::path_stamp`]). Same pattern as [`Self::set_state_resolver`], for
+    /// the same reason — tempo-app has no `propagation` dependency. It runs under the Engine
+    /// lock, so it only ever reads what the command layer already holds: no prediction, no
+    /// rotator query, no disk. Its second input is the worked station's decode lateness
+    /// ([`crate::engine::Engine`]'s `late_dts_of`), for the grader's aggregate DT gate. `None` in
+    /// headless tests (a contact logs with no grade).
+    #[allow(clippy::type_complexity)]
+    pub(crate) path_at_log: Option<
+        Box<
+            dyn Fn(
+                    &tempo_core::logbook::QsoRecord,
+                    &[f32],
+                ) -> tempo_core::logbook::path_stamp::PathAtLog
+                + Send
+                + Sync,
+        >,
+    >,
     /// Grid → rarity tier (0–3) resolver, injected by the command layer (which
     /// owns the geography table in the propagation crate) — same pattern as
     /// [`Self::set_dxcc_resolver`]. `None` in headless tests (gems stay off).
@@ -2591,6 +2611,7 @@ impl StationCore {
             dxcc_country: None,
             country_dxcc: None,
             state_resolve: None,
+            path_at_log: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
             hunted_parks_import: HashSet::new(),
@@ -3495,6 +3516,20 @@ impl StationCore {
         resolve: impl Fn(&str, Option<&str>) -> Option<String> + Send + Sync + 'static,
     ) {
         self.state_resolve = Some(Box::new(resolve));
+    }
+
+    /// Inject the log-time path grader ([`Self::path_at_log`]).
+    pub fn set_path_grader(
+        &mut self,
+        grade: impl Fn(
+                &tempo_core::logbook::QsoRecord,
+                &[f32],
+            ) -> tempo_core::logbook::path_stamp::PathAtLog
+            + Send
+            + Sync
+            + 'static,
+    ) {
+        self.path_at_log = Some(Box::new(grade));
     }
 
     /// Inject the grid → rarity-tier (0–3) resolver (the command layer passes a

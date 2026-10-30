@@ -3429,3 +3429,43 @@ fn log_query_bench() {
         broken.join("\n  ")
     );
 }
+
+/// ★ The path filter is decided by the engine from each contact's grade: "long" keeps the contacts
+/// whose grade names the long path, "polar" those whose graded route crosses the polar cap. A
+/// contact with no grade passes neither. CONTROL: with no path filter every contact shows.
+#[test]
+fn the_path_filter_keeps_the_long_and_the_polar_paths() {
+    let rec = |call: &str, grid: &str, route: Option<&str>| {
+        let mut s = format!(
+            "<EOH><CALL:{}>{call}<QSO_DATE:8>20260507<TIME_ON:6>100000<BAND:3>20m<MODE:3>FT8\
+             <GRIDSQUARE:4>{grid}<MY_GRIDSQUARE:4>FN31",
+            call.len()
+        );
+        if let Some(r) = route {
+            let why = format!("MARGIN_{r};{grid}/20m");
+            s += &format!("<APP_NEXUS_PATH:{}>{r}", r.len());
+            s += &format!("<APP_NEXUS_PATH_WHY:{}>{why}", why.len());
+        }
+        s += "<EOR>";
+        tempo_core::logbook::parse_adif(&s).remove(0)
+    };
+    let records = vec![
+        rec("VK2LP", "QF56", Some("L")),
+        rec("VK2SP", "QF56", Some("S")),
+        rec("JA1PO", "PM95", Some("S")),
+        rec("G4EU", "IO91", Some("S")),
+        rec("K1NONE", "IO91", None),
+    ];
+    let d = Dir::new("filter-path");
+    let engine = on_store(&d, &records);
+    let q = LogQueries::default();
+    assert_eq!(
+        filtered_calls(&q, &engine, json!({"path": "long"})),
+        ["VK2LP"]
+    );
+    assert_eq!(
+        filtered_calls(&q, &engine, json!({"path": "polar"})),
+        ["JA1PO"]
+    );
+    assert_eq!(filtered_calls(&q, &engine, json!({"band": "20m"})).len(), 5);
+}

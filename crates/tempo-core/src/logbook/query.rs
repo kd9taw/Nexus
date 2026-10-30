@@ -44,7 +44,7 @@ use std::collections::{HashMap, HashSet};
 
 /// The Logbook's field filters — what SQL answers, and what it leaves to the caller.
 pub mod filter;
-pub use filter::{AwardNeed, LogFilter, QslFilter, QslState, SentState};
+pub use filter::{AwardNeed, LogFilter, PathFilter, QslFilter, QslState, SentState};
 
 // ── JavaScript's string semantics ──────────────────────────────────────────────────────────────
 

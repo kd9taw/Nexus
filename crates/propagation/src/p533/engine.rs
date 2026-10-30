@@ -204,7 +204,71 @@ impl PathPredictor for P533Engine {
 /// Below this short-path distance the long path is not offered (see `predict_route`).
 const MIN_LONG_PATH_SPAN_KM: f64 = 10.0;
 
+/// One band at one UTC hour on one route: what grading a logged contact needs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BandHour {
+    /// Basic circuit reliability, 0..1 — the day prediction's `hourly[h]`.
+    pub bcr: f32,
+    /// The hour's median SNR (dB), when a mode carries the frequency — the day prediction's
+    /// `detail[h].snr_db`.
+    pub snr_db: Option<f32>,
+}
+
 impl P533Engine {
+    /// The chain's system parameters from this engine's configuration.
+    fn sys(&self) -> P533Params {
+        P533Params {
+            // Antenna gain rides on the TX power term (see P533Config.ant_gain_dbi).
+            txpower: self.cfg.txpower_dbkw + self.cfg.ant_gain_dbi,
+            bw_hz: 1.0,
+            snrr: self.cfg.required_snr_dbhz,
+            snrxxp: 90,
+            man_made: self.cfg.man_made,
+        }
+    }
+
+    /// [`Self::predict_route`]'s figures for ONE band at the UTC hour containing `at_unix`, at the
+    /// sunspot number given: one run of the chain instead of a day's 240, and the same numbers the
+    /// day prediction carries in that band's cell (same month, slot, frequency and parameters).
+    /// `None` without an operator location, for a band the engine does not model, and for the
+    /// long route of two co-located stations — the cases the day prediction has no cell for.
+    pub fn band_hour(
+        &self,
+        dx: (f64, f64),
+        route: Route,
+        band: Band,
+        at_unix: i64,
+        ssn: f64,
+    ) -> Option<BandHour> {
+        let me = self.me?;
+        if band.is_vhf() {
+            return None;
+        }
+        if route == Route::Long && geo::haversine_km(me, dx) < MIN_LONG_PATH_SPAN_KM {
+            return None;
+        }
+        let day0 = at_unix - at_unix.rem_euclid(86_400);
+        let (_, month1, _) = geo::civil_from_days(day0.div_euclid(86_400));
+        let h = (at_unix.rem_euclid(86_400) / 3600) as usize;
+        let slot = ((h + 23) % 24) as i32;
+        let tx = Location::new(me.0.to_radians(), me.1.to_radians());
+        let rx = Location::new(dx.0.to_radians(), dx.1.to_radians());
+        let run = run_p533_route(
+            tx,
+            rx,
+            route,
+            (month1 - 1) as usize,
+            slot,
+            ssn,
+            band_digital_mhz(band),
+            &self.sys(),
+        );
+        Some(BandHour {
+            bcr: (run.rel.bcr / 100.0).clamp(0.0, 1.0) as f32,
+            snr_db: path_hour(&run).map(|p| p.snr_db),
+        })
+    }
+
     fn predict_on(
         &self,
         dx: (f64, f64),
@@ -240,14 +304,7 @@ impl P533Engine {
 
         let tx = Location::new(me.0.to_radians(), me.1.to_radians());
         let rx = Location::new(dx.0.to_radians(), dx.1.to_radians());
-        let sys = P533Params {
-            // Antenna gain rides on the TX power term (see P533Config.ant_gain_dbi).
-            txpower: self.cfg.txpower_dbkw + self.cfg.ant_gain_dbi,
-            bw_hz: 1.0,
-            snrr: self.cfg.required_snr_dbhz,
-            snrxxp: 90,
-            man_made: self.cfg.man_made,
-        };
+        let sys = self.sys();
 
         let mut bands: Vec<BandOutlook> = Vec::new();
         let mut muf_hourly = vec![0.0f32; 24];
@@ -326,6 +383,45 @@ impl P533Engine {
 mod tests {
     use super::*;
     use crate::p533::run_p533;
+
+    #[test]
+    fn one_band_hour_is_the_day_predictions_cell() {
+        // Boston–Sydney: both routes, every hour, two bands — the single run grading a logged
+        // contact uses is the same number the path card and the day strip show for that cell.
+        let eng = P533Engine::new(Some((42.36, -71.06)));
+        let dx = (-33.87, 151.21);
+        let day0 = 1_778_112_000; // 2026-05-07 00:00Z
+        let ssn = 105.0;
+        let wx = SpaceWx {
+            ssn: Some(ssn as f32),
+            ..Default::default()
+        };
+        for route in [Route::Short, Route::Long] {
+            let day = eng.predict_route(dx, route, day0, &wx).unwrap();
+            for band in [Band::B20, Band::B40] {
+                let b = day.bands.iter().find(|b| b.band == band.label()).unwrap();
+                for h in 0..24usize {
+                    let one = eng
+                        .band_hour(dx, route, band, day0 + h as i64 * 3600 + 1799, ssn)
+                        .unwrap();
+                    assert_eq!(one.bcr, b.hourly[h], "{route:?} {band:?} {h}");
+                    let snr = b.detail.as_ref().unwrap()[h].map(|p| p.snr_db);
+                    assert_eq!(one.snr_db, snr, "{route:?} {band:?} {h}");
+                }
+            }
+        }
+        // Nothing the day prediction has no cell for.
+        assert!(eng
+            .band_hour(dx, Route::Short, Band::B2, day0, ssn)
+            .is_none());
+        let here = (42.36, -71.06);
+        assert!(eng
+            .band_hour(here, Route::Long, Band::B20, day0, ssn)
+            .is_none());
+        assert!(P533Engine::new(None)
+            .band_hour(dx, Route::Short, Band::B20, day0, ssn)
+            .is_none());
+    }
 
     #[test]
     fn covington_inversion_roundtrips() {
