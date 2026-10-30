@@ -70,6 +70,7 @@ import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
 import { CallStatsFrame } from './CallStatsPane'
+import { RecentQsosFrame } from './RecentQsosPane'
 import { TxPanel } from './TxPanel'
 import { CockpitHeader } from './CockpitHeader'
 import { PanelsMenu } from './PanelsMenu'
@@ -324,6 +325,7 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
   txmeters: t('operate.panel.txmeters'),
   recall: t('operate.panel.recall'),
   stats: t('callStats.pane.title'),
+  recent: t('recentQsos.pane.title'),
 })
 
 /** What each layout can render — the menu lists only these, so a panel the current layout has no
@@ -331,8 +333,8 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
  *  pick, 2026-10-07), each also lists the panes only the other draws in stock (OPERATE_ARRANGE `extra`):
  *  the Call Roster in Classic, the Tx messages and Stations in Roster, unticked until added. */
 const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'stats', 'txmeters'],
-  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'stats', 'txmeters'],
+  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'stats', 'recent', 'txmeters'],
+  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'stats', 'recent', 'txmeters'],
 }
 
 /** Where the rail side is stored (per surface): 'left', or anything else for the stock right. */
@@ -710,8 +712,8 @@ export function OperateCockpit({
   // standing 'recall' entry would mount an EMPTY rail with Stations hidden and nothing selected.
   // THE STATS PANE (CallStatsPane) stands under the card, about the same station, in the station's own
   // window. Unlike the card it always has something to say (its own empty line), so a ticked one counts
-  // for the rail whether or not a station is selected.
-  const statsSide: readonly OperatePanelId[] = ['stats']
+  // for the rail whether or not a station is selected. So does the Recent contacts pane at the rail's foot.
+  const statsSide: readonly OperatePanelId[] = ['stats', 'recent']
   const sidePanels: readonly OperatePanelId[] = shownRecallCall
     ? [...SIDE_PANELS[layoutMode], 'recall', ...statsSide]
     : [...SIDE_PANELS[layoutMode], ...statsSide]
@@ -769,13 +771,22 @@ export function OperateCockpit({
   const folded = boxes?.rail?.folded?.boxes ?? []
   const foldCol = stockColumn(arrangeSpec, BOX_IDS[0]) ?? 'log'
   // The other layout's panes, and the rail's boxes, stand only in the arranged columns, so either arranges
-  // FT too.
+  // FT too. (The Recent contacts pane does not: it stands in the stock rail, `railFloor` below.)
   const arranged =
     (boxes
       ? place != null || BOX_IDS.some((b) => stateOf(b) !== 'removed')
       : place != null && Object.keys(place).some((id) => !isBoxId(id))) ||
     extra.some(shown) ||
     folded.length > 0
+  // THE RECENT CONTACTS PANE IN THE STOCK RAIL: ticking it keeps FT's stock layout (Classic's Rx/Tx column
+  // and its Tx messages divider as they were). It is its own height at the rail's foot, and the stock rail's
+  // feeds have no floor, so they gave it their height (Band Activity and Rx Frequency 12 px each in Roster's
+  // rail at 1024x768, measured in Chrome). While it stands there the rail floors its feeds instead
+  // (cockpit-panes.css `.op-rail-floor`, read through each feed's `min-height`) and scrolls, and the card
+  // keeps its size as it does in an arranged column, or it would be the one item left to shrink.
+  const railFloor = !arranged && shown('recent')
+  const railFeedStyle = (style?: React.CSSProperties): React.CSSProperties | undefined =>
+    railFloor ? { ...style, minHeight: 'var(--cockpit-fill-min, 0)' } : style
   const cardOn = shownRecallCall != null && shown('recall')
   // What stands on screen in an arranged column: a pane the ⊞ menu shows (the card only while it is about
   // a station), and a box only where the window lends it one.
@@ -1298,7 +1309,7 @@ export function OperateCockpit({
     : null
   // In the arranged columns the card keeps its size and the column scrolls (`.cockpit-recall-kept`).
   const recallCard = shownRecallCall && shown('recall')
-    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} kept={arranged} {...closeProps('recall')} paneTitle={labels.recall} grip="recall" />
+    ? <OperateRecall snap={snap} call={shownRecallCall} mode={tier} fdActive={fdActive} onOpenLog={onOpenLogbook} onShowCall={setCardCall} kept={arranged || railFloor} {...closeProps('recall')} paneTitle={labels.recall} grip="recall" />
     : null
   // THE STATS PANE under the card: what the log holds for the station the card is about — the one the
   // operator clicked, else the one the sequencer is working (`recallCall`), on this band in this mode.
@@ -1313,6 +1324,11 @@ export function OperateCockpit({
         empty={t('callStats.emptyPicked')}
       />
     ) : null
+  // THE RECENT CONTACTS PANE at the foot of the rail (stock or arranged, see `railFloor`): the last few
+  // contacts in the log, each a click into the Logbook's editor, as under every other cockpit's log entry form.
+  const recentFrame = shown('recent') ? (
+    <RecentQsosFrame close={closeProps('recent')} logTick={snap.logTick} active={active} onOpen={onOpenLogbook} />
+  ) : null
 
   // #204: S&P clears the callsign card, as F4 does — the operator is leaving the station the card
   // was about to go and find the next one. UI only: the mode request goes on exactly as the strip
@@ -1463,6 +1479,8 @@ export function OperateCockpit({
         return recallCard
       case 'stats':
         return statsFrame
+      case 'recent':
+        return recentFrame
       default: {
         const entry = isBoxId(id) ? entries[id] : undefined
         return entry != null && boxes && isBoxId(id) ? (
@@ -2166,11 +2184,11 @@ export function OperateCockpit({
                 </div>
               )}
               {sideShown && (
-                <aside className="cockpit-side" ref={rosterSideRef}>
+                <aside className={railFloor ? 'cockpit-side op-rail-floor' : 'cockpit-side'} ref={rosterSideRef}>
                   {recallCard}
                   {statsFrame}
                   {shown('bandActivity') && (
-                    <div className="cockpit-decodes-side panel" ref={decodesSideRef} style={shareStyle('bandActivity')}>
+                    <div className="cockpit-decodes-side panel" ref={decodesSideRef} style={railFeedStyle(shareStyle('bandActivity'))}>
                       {/* The FULL decode window (filters + sort), not the compact
                           strip — roster mode = decode window + roster on one page
                           (operator request); only Rx Frequency stays compact. */}
@@ -2212,7 +2230,7 @@ export function OperateCockpit({
                     />
                   )}
                   {shown('rxfreq') && (
-                    <div className="cockpit-rxfreq panel" ref={rxfreqRef} style={shareStyle('rxfreq')}>
+                    <div className="cockpit-rxfreq panel" ref={rxfreqRef} style={railFeedStyle(shareStyle('rxfreq'))}>
                       <OperateDecodes
                         {...closeProps('rxfreq')}
                         paneTitle={labels.rxfreq}
@@ -2246,6 +2264,7 @@ export function OperateCockpit({
                       />
                     </div>
                   )}
+                  {recentFrame}
                 </aside>
               )}
             </>
@@ -2372,10 +2391,11 @@ export function OperateCockpit({
                 </div>
               )}
               {sideShown && (
-                <aside className="cockpit-side" ref={classicSideRef}>
+                <aside className={railFloor ? 'cockpit-side op-rail-floor' : 'cockpit-side'} ref={classicSideRef}>
                   {recallCard}
                   {statsFrame}
-                  {shown('stations') && <div className="cockpit-roster panel">{roster}</div>}
+                  {shown('stations') && <div className="cockpit-roster panel" style={railFeedStyle()}>{roster}</div>}
+                  {recentFrame}
                 </aside>
               )}
             </>
