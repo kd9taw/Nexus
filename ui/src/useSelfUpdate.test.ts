@@ -748,6 +748,34 @@ describe('the hourly re-check while an update waits', () => {
     })
   }
 
+  // Two downloads overlap: the replaced one ends first. Its ending must not unmark the newer one,
+  // still running, or an unmount then closes the newer too early, and again when it ends.
+  it('overlapping downloads: the replaced one ending first leaves the newer one marked as running', async () => {
+    const ends: Array<() => void> = []
+    const slow = (version: string) => () =>
+      Promise.resolve(new CountedUpdate(version, () => new Promise<void>((resolve) => ends.push(resolve))) as unknown as Handle)
+    nextCheck = slow('9.9.9')
+    const { result, unmount } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    nextCheck = slow('10.0.0')
+    await hours(1)
+    await act(async () => {
+      ends[0]()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.phase, 'premise: the newer download is still on its way').toBe('downloading')
+    unmount()
+    await settle()
+    const newer = made()[1]
+    expect(newer.closes, 'not closed while its download runs').toBe(0)
+    await act(async () => {
+      ends[1]()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(made().map((u) => u.closes), 'each closed once, after its download ended').toEqual([1, 1])
+    expect(leaked(null)).toHaveLength(0)
+  })
+
   it('unmounting mid-download frees the download when it ends', async () => {
     let finish: () => void = () => {}
     nextCheck = () =>
@@ -814,6 +842,25 @@ describe('the hourly re-check while an update waits', () => {
       expect(result.current.version).toBe('10.0.0')
     })
   }
+
+  it('CONTROL: an Install press whose TX check cannot be asked does not stop a newer version landing', async () => {
+    const core = (window as unknown as { __TAURI__: { core: { invoke: (cmd: string) => Promise<unknown> } } }).__TAURI__.core
+    const bridge = core.invoke
+    core.invoke = (cmd: string) => (cmd === 'update_install_block' ? Promise.reject(new Error('engine gone')) : bridge(cmd))
+    nextCheck = offeringCounted('9.9.9')
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    act(() => result.current.install())
+    await settle()
+    expect(result.current.phase, 'premise: the press failed').toBe('error')
+    core.invoke = bridge
+    act(() => result.current.dismiss())
+    nextCheck = offeringCounted('10.0.0')
+    await hours(1)
+    expect(result.current.phase).toBe('ready')
+    expect(result.current.version).toBe('10.0.0')
+    expect(leaked(made()[1])).toHaveLength(0)
+  })
 
   it('a check that answers after unmount is closed', async () => {
     let answer: (h: Handle) => void = () => {}
