@@ -23,6 +23,7 @@ pub mod awards_more;
 pub mod beacons;
 pub mod callstats;
 pub mod chirp;
+pub mod contact_path;
 pub mod custom;
 pub mod dxcc;
 pub mod dxped;

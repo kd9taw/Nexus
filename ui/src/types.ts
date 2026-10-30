@@ -337,6 +337,62 @@ export interface RouteCall {
     | { kind: 'greyLine'; route: 'short' | 'long' }
   )[]
 }
+/** What a logged contact's path grade is asked from: the fields the grade reads. */
+export interface PathGradeAsk {
+  whenUnix: number
+  band: string
+  grid?: string | null
+  myGrid?: string | null
+  /** ADIF PROP_MODE: a contact not by the ionosphere (satellite, EME …) is never graded. */
+  propMode?: string | null
+  /** The passthrough fields the grade reads (SFI, K_INDEX, ANT_AZ, the stamp's). */
+  extra: [string, string][]
+}
+/** A logged contact's path grade as the Logbook shows it. `why` holds reason tokens
+ * (`MARGIN_S`, `HEADING_S`, `HEARD_L:3`, `LATEDT:60/12` …), put into words by features/pathGrade. */
+export interface PathGrade {
+  verdict: 'short' | 'long' | 'either' | 'unknown'
+  confidence?: 'likely' | 'possible'
+  why: string[]
+  /** `logged`: stamped on the contact when it was logged. `modelled`: graded later, model only. */
+  tier: 'logged' | 'modelled'
+  /** The route named (the short path when none is) crosses the polar cap. */
+  polar: boolean
+  /** Where the sunspot number came from: the flux the contact logged, or today's (recent). */
+  ssnSource?: 'logged' | 'recent'
+  /** The contact's own stamp was made for another grid or band (edited since). */
+  stampStale?: boolean
+}
+/** One contact's path over the day it was made (the contact card). */
+export interface ContactPathDay {
+  pred: PathPrediction
+  ssnSource: 'logged' | 'recent'
+  grade?: PathGrade
+}
+export interface PathCoverage {
+  graded: number
+  open: number
+  outside: number
+}
+/** The success measures over graded contacts (the expert's check on the grading). */
+export interface PathValidation {
+  all: PathCoverage
+  polar: PathCoverage
+  nonPolar: PathCoverage
+  byBand: [string, PathCoverage][]
+  headingJudged: number
+  headingAgree: number
+}
+export interface PathGradingStatus {
+  running: boolean
+  contacts: number
+  graded: number
+  ungradable: number
+  cellsDone: number
+  cellsTotal: number
+  finishedUnix?: number
+  last30Days?: PathValidation
+}
 /** Per-path HF prediction (the PathPredictor seam): operator↔DX, best-first. */
 export interface PathPrediction {
   /** Engine that produced it: "heuristic" today; "voacap"/"p533" later. */

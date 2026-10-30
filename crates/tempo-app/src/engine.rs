@@ -17798,6 +17798,16 @@ impl Engine {
                 }
             }
         }
+        // THE PATH THIS CONTACT TOOK (`APP_NEXUS_PATH*`): the command layer's grader answers from
+        // what it already holds — the path card it computed for this station — and the record
+        // gains new fields only (`path_stamp::stamp_path`), never `ANT_AZ` or `ANT_PATH`. After
+        // the grid and the band are final, which the grade is made for.
+        if let Some(grade) = &self.station.path_at_log {
+            let late = self.late_dts_of(&rec.call);
+            if let Some(found) = grade(&rec, &late) {
+                tempo_core::logbook::path_stamp::stamp_path(&mut rec, &found);
+            }
+        }
         // THE APPEND (SPEC-2 v3 C19): the station mints the row's id, the hot index takes the
         // row, and the writer is handed it — a channel send. NO SQL and no pass over the log,
         // so the radio loop never waits on the disk (the FT gate): the duplicate guard above
@@ -19362,6 +19372,41 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // Newest first, then highest resume rank within the same slot.
             .max_by_key(|(r, _, _, slot)| (*slot, *r))
             .map(|(_, m, snr, slot)| (m, snr, slot))
+    }
+
+    /// For each decode FROM `call` in the decode history, its DT minus the median DT of every
+    /// decode in the same period (periods with fewer than three decodes are skipped: no median
+    /// worth the name) — what the path grader's aggregate DT gate reads. ⚠️ Read only, and never
+    /// evidence on its own: one decode's DT says nothing about the route (clock error is larger
+    /// than the long path's extra delay); the gate needs many (`contact_path::late_dt_ms`).
+    fn late_dts_of(&self, call: &str) -> Vec<f32> {
+        let mut by_slot: std::collections::BTreeMap<u64, Vec<f32>> = Default::default();
+        for (slot, d) in &self.decode_history {
+            by_slot.entry(*slot).or_default().push(d.dt);
+        }
+        let medians: std::collections::HashMap<u64, f32> = by_slot
+            .into_iter()
+            .filter(|(_, v)| v.len() >= 3)
+            .map(|(slot, mut v)| {
+                v.sort_by(f32::total_cmp);
+                let m = v.len() / 2;
+                let med = if v.len().is_multiple_of(2) {
+                    (v[m - 1] + v[m]) / 2.0
+                } else {
+                    v[m]
+                };
+                (slot, med)
+            })
+            .collect();
+        self.decode_history
+            .iter()
+            .filter(|(_, d)| {
+                Msg::parse(&d.message)
+                    .sender()
+                    .is_some_and(|s| same_call(s, call))
+            })
+            .filter_map(|(slot, d)| medians.get(slot).map(|m| d.dt - m))
+            .collect()
     }
 
     /// The station's latest transmission, for a click naming no message: among the decodes FROM
@@ -33697,6 +33742,20 @@ contact yourself."
         resolve: impl Fn(&str, Option<&str>) -> Option<String> + Send + Sync + 'static,
     ) {
         self.station.set_state_resolver(resolve)
+    }
+
+    /// See [`StationCore::set_path_grader`].
+    pub fn set_path_grader(
+        &mut self,
+        grade: impl Fn(
+                &tempo_core::logbook::QsoRecord,
+                &[f32],
+            ) -> Option<tempo_core::logbook::path_stamp::PathStamp>
+            + Send
+            + Sync
+            + 'static,
+    ) {
+        self.station.set_path_grader(grade)
     }
 
     /// See [`StationCore::set_grid_rarity_resolver`].
@@ -49673,6 +49732,129 @@ mod tests {
         );
     }
 
+    /// A contact being logged takes the command layer's grade as NEW fields only, and never an
+    /// antenna field: the record gains the three grade fields and nothing else, and an antenna
+    /// heading or path the record already carries is kept as it was. Without a grader nothing is
+    /// added. The grader sees the record as it will be written (grid and band final).
+    #[test]
+    fn a_new_contact_takes_the_graders_path_as_new_fields_only() {
+        use tempo_core::logbook::path_stamp::{read_path, PathStamp, StampConf, StampRoute};
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let bare = e.qso_record("JA1NONE".into(), Some("PM95".into()), None);
+        e.log_qso(bare);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let saw = std::sync::Arc::clone(&seen);
+        e.set_path_grader(move |r, _| {
+            saw.lock()
+                .unwrap()
+                .push((r.call.clone(), r.grid.clone().unwrap_or_default()));
+            Some(PathStamp {
+                route: StampRoute::Short,
+                conf: Some(StampConf::Likely),
+                why: vec!["MARGIN_S".into()],
+                key: "PM95/20m".into(),
+            })
+        });
+        let graded = e.qso_record("JA1ABC".into(), Some("PM95".into()), None);
+        e.log_qso(graded);
+        let mut typed = e.qso_record("JA1TYP".into(), Some("PM95".into()), None);
+        typed.extra = vec![
+            ("ANT_AZ".into(), "45".into()),
+            ("ANT_PATH".into(), "L".into()),
+        ];
+        e.log_qso(typed);
+        let log = e.stored_log();
+        let at = |call: &str| log.iter().find(|r| r.call == call).unwrap();
+        let tag =
+            |call: &str, t: &str| tempo_core::logbook::extra_field(at(call), t).map(str::to_string);
+        assert_eq!(read_path(at("JA1NONE")), None, "no grader, no grade");
+        let g = read_path(at("JA1ABC")).unwrap();
+        assert_eq!(
+            (g.route, g.conf),
+            (StampRoute::Short, Some(StampConf::Likely))
+        );
+        // Nexus fills no antenna field, whatever the grade.
+        assert_eq!(tag("JA1ABC", "ANT_AZ"), None);
+        assert_eq!(tag("JA1ABC", "ANT_PATH"), None);
+        // Beside the ungraded contact's fields, exactly the three grade fields.
+        let keys = |call: &str| -> std::collections::BTreeSet<String> {
+            at(call).extra.iter().map(|(k, _)| k.clone()).collect()
+        };
+        let added: Vec<String> = keys("JA1ABC")
+            .difference(&keys("JA1NONE"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            added,
+            [
+                "APP_NEXUS_PATH",
+                "APP_NEXUS_PATH_CONF",
+                "APP_NEXUS_PATH_WHY"
+            ]
+        );
+        // The operator's own values stand; the grade beside them is still added.
+        assert_eq!(tag("JA1TYP", "ANT_AZ").as_deref(), Some("45"));
+        assert_eq!(tag("JA1TYP", "ANT_PATH").as_deref(), Some("L"));
+        assert!(read_path(at("JA1TYP")).is_some());
+        assert_eq!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .map(|(c, _)| c.as_str())
+                .collect::<Vec<_>>(),
+            ["JA1ABC", "JA1TYP"]
+        );
+        // What the services are sent is the contact without its grade.
+        let out = tempo_core::logbook::adif_record(at("JA1ABC"));
+        assert!(
+            !out.contains("APP_NEXUS_PATH") && !out.contains("ANT_"),
+            "{out}"
+        );
+    }
+
+    /// The path grader is handed the worked station's decode lateness: each of its decodes' DT
+    /// minus the median DT of its period, from the decode history — a period too thin for a
+    /// median (fewer than three decodes) gives nothing, and other stations give nothing.
+    #[test]
+    fn the_grader_is_handed_the_stations_decode_lateness() {
+        let d = |message: &str, dt: f32| modes::Decode {
+            message: message.into(),
+            sync: 1.0,
+            snr: -10,
+            dt,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            raw: None,
+            mode: None,
+        };
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for slot in 10..13u64 {
+            e.ingest_decodes_for_test(
+                &[
+                    d("CQ JA1ABC PM95", 0.30),
+                    d("CQ W1AW FN31", 0.10),
+                    d("CQ G4XYZ IO91", 0.20),
+                ],
+                slot,
+            );
+        }
+        // A thin period: the station alone, no median.
+        e.ingest_decodes_for_test(&[d("CQ JA1ABC PM95", 0.9)], 13);
+        let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::<f32>::new()));
+        let put = std::sync::Arc::clone(&got);
+        e.set_path_grader(move |_, late| {
+            *put.lock().unwrap() = late.to_vec();
+            None
+        });
+        let rec = e.qso_record("JA1ABC".into(), Some("PM95".into()), None);
+        e.log_qso(rec);
+        let late = got.lock().unwrap().clone();
+        assert_eq!(late.len(), 3, "{late:?}");
+        assert!(late.iter().all(|x| (x - 0.10).abs() < 1e-5), "{late:?}");
+    }
+
     /// K_INDEX, A_INDEX and SFI go on a contact only when the operator turned the setting
     /// on, and only from a reading Nexus fetched no more than three hours earlier — never the
     /// propagation model's stand-ins, never a stale number.
@@ -49681,6 +49863,7 @@ mod tests {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         let now = now_unix_secs();
         e.note_space_weather(2.67, 7.0, 148.6, now - 60);
+        e.settings.log_space_weather = false;
         let off = e.qso_record("K1OFF".into(), None, None);
         e.log_qso(off);
         e.settings.log_space_weather = true;
@@ -49699,7 +49882,7 @@ mod tests {
             ["K_INDEX", "A_INDEX", "SFI"]
                 .map(|t| tempo_core::logbook::extra_field(r, t).map(str::to_string))
         };
-        assert_eq!(wx("K1OFF"), [None, None, None], "off by default");
+        assert_eq!(wx("K1OFF"), [None, None, None], "off when turned off");
         assert_eq!(
             wx("K1ON"),
             [Some("3".into()), Some("7".into()), Some("149".into())]
@@ -79306,6 +79489,73 @@ mod logged_frequency_tests {
             "Cabrillo moved with the on-air frequency"
         );
         assert_eq!(cabrillo_qso_lines(&low).len(), 1, "one QSO line each");
+    }
+
+    /// A station with the path grader on writes exactly the Cabrillo entry (and the contest's own
+    /// ADIF) a station without it does: the grade is the general log's fields, and
+    /// the contest's files are written from the contest's own rows. CONTROL: on the graded
+    /// station the grader is live — a general-log contact takes its grade.
+    #[test]
+    fn a_graded_contact_writes_the_same_cabrillo() {
+        use tempo_core::logbook::path_stamp::{PathStamp, StampConf, StampRoute};
+        let c = Case {
+            name: "FT8 at 14.074",
+            section: "digital",
+            setup: no_setup,
+            dial: 14.074,
+            band: "20m",
+            sideband: "USB",
+            class: "DIG",
+            submode: None,
+            word: "PKTUSB",
+            on_air_hz: 0,
+        };
+        let station = |graded: bool| {
+            let mut e = fd_station(&c);
+            if graded {
+                e.set_path_grader(|_, _| {
+                    Some(PathStamp {
+                        route: StampRoute::Short,
+                        conf: Some(StampConf::Likely),
+                        why: vec!["MARGIN_S".into()],
+                        key: "FN31/20m".into(),
+                    })
+                });
+            }
+            log_one(&mut e, &c);
+            e
+        };
+        let (plain, graded) = (station(false), station(true));
+        let whole = |e: &Engine| {
+            e.export_log("cabrillo")
+                .expect("a Cabrillo entry")
+                .lines()
+                .filter(|l| !l.starts_with("CREATED-BY") && !l.starts_with("X-"))
+                .map(|l| {
+                    if l.starts_with("QSO:") {
+                        l.split_whitespace()
+                            .enumerate()
+                            .map(|(i, f)| if i == 3 || i == 4 { "-" } else { f })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(whole(&plain), whole(&graded));
+        assert_eq!(cabrillo_qso_lines(&graded).len(), 1);
+        assert_eq!(plain.export_log("adif"), graded.export_log("adif"));
+        let mut graded = graded;
+        let rec = graded.qso_record("K1ABC".into(), Some("FN31".into()), None);
+        graded.log_qso(rec);
+        let log = crate::test_util::StoredLog::stored_log(&graded);
+        assert!(
+            log.iter()
+                .any(|r| tempo_core::logbook::path_stamp::read_path(r).is_some()),
+            "control: the graded station's general-log contact carries its grade"
+        );
     }
 
     /// ⭐ AN AUTO-SEQUENCED RTTY CONTACT — the general-log record `rtty_qso_record` builds —

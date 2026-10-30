@@ -106,6 +106,9 @@ mod log_tools;
 /// Parsec presence mode's watcher thread: stop latched transmissions when the operator's Parsec
 /// session drops (off by default; started on Windows only).
 mod parsec_presence;
+/// Your contacts' paths: the log-time grade of a new contact, and the display-only grading of the
+/// existing log, kept beside settings.json.
+mod path_grades;
 /// `get_path_outlook`'s kept predictions: six hours per day, grids, engine, power and SSN.
 mod path_outlook;
 /// The region strips' sweep: ten DX regions' path over the day, kept in memory and on disk.
@@ -2188,6 +2191,11 @@ static LAST_SOLAR_WIND: Mutex<Option<propagation::SolarWind>> = Mutex::new(None)
 /// quantity for monthly-median CCIR maps; without this the engine falls back
 /// to a Covington inversion of SFI). Refreshed on the space-wx fetch cadence.
 static LAST_SSN: Mutex<Option<f32>> = Mutex::new(None);
+
+/// The smoothed sunspot number the solar-cycle feed last gave, if it has given one.
+fn current_ssn() -> Option<f64> {
+    LAST_SSN.lock().ok().and_then(|g| *g).map(f64::from)
+}
 
 /// The X-ray "fast lane" cache: (fetched-at, flux W/m², reading unix time). A
 /// flare's rise takes minutes, so `get_xray_now` refetches GOES every 60 s —
@@ -8297,10 +8305,61 @@ async fn get_path_outlook(
                 pred.long_path = Some(Box::new(lp));
             }
         }
+        // Kept for the grade of a contact logged with this station (`path_grades::at_log`).
+        path_grades::keep_outlook(&mygrid, &grid, t, &pred);
         pred
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// The path grade of each Logbook row asked about: its own stamp when it carries one made for its
+/// current grid and band, else the display-only grade of the existing log (`path_grades`), else
+/// none. Reads only what `path_grades` holds; the Engine lock for the station's grid, once.
+#[tauri::command]
+async fn log_path_grades(
+    rows: Vec<path_grades::GradeAsk>,
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<Option<path_grades::GradeView>>, String> {
+    let mygrid = with_engine(&state, |eng| eng.settings().mygrid.clone()).await?;
+    let (now, ssn) = (now_unix(), current_ssn());
+    tauri::async_runtime::spawn_blocking(move || {
+        rows.iter()
+            .map(|a| path_grades::view_for(a, &mygrid, now, ssn))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// One contact's path over the day it was made (`path_grades::contact_day`) — the contact card.
+/// Two predictions on a blocking thread with no lock held.
+#[tauri::command]
+async fn contact_path_day(
+    row: path_grades::GradeAsk,
+    state: State<'_, SharedEngine>,
+) -> Result<Option<path_grades::ContactDay>, String> {
+    let (mygrid, power, gain) = with_engine(&state, |eng| {
+        let st = eng.settings();
+        (
+            st.mygrid.clone(),
+            st.station_power_w,
+            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        )
+    })
+    .await?;
+    let (now, ssn) = (now_unix(), current_ssn());
+    tauri::async_runtime::spawn_blocking(move || {
+        path_grades::contact_day(&row, &mygrid, power, gain, now, ssn)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// How the display-only grading of the log is going, and the success measures it counted.
+#[tauri::command]
+fn path_grading_status() -> path_grades::Status {
+    path_grades::status()
 }
 
 /// The region strips: ten fixed DX regions' path over the day from the operator's grid — both
@@ -39737,6 +39796,20 @@ pub fn run() {
     if region_enabled {
         start_pskr_region_feed(&region_paths, &cluster_call, &region_grid);
     }
+    // The log-time path grader: a contact being logged takes the route the path card graded for
+    // its station, as new fields only, and never an antenna field. It reads
+    // what `path_grades` already holds (it runs under the Engine lock); the record's own
+    // MY_GRIDSQUARE, which the log funnel has stamped by then, names the operator's end.
+    {
+        let live = live_paths.clone();
+        let region = region_paths.0.clone();
+        engine_lock(&engine)
+            .set_path_grader(move |rec, late| path_grades::at_log(rec, "", &live, &region, late));
+    }
+    // The display-only grading of the existing log (a first pass two minutes after launch, then
+    // whenever the log has changed).
+    #[cfg(feature = "radio")]
+    path_grades::start_grader(engine.clone());
     // Record the LOGIN IDENTITY the feeds were started under, so a later Settings rename
     // knows to tear them down and reconnect (topics/login are call-bound). Built the same
     // way the comparison in `apply_and_persist` is: a seed in any other shape reads as a
@@ -42240,6 +42313,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_propagation,
         get_path_outlook,
         get_path_regions,
+        log_path_grades,
+        contact_path_day,
+        path_grading_status,
         get_band_outlook,
         get_getting_out,
         get_aurora,
