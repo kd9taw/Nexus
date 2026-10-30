@@ -87,6 +87,7 @@ impl<B: AudioBackend> Transceiver<B> {
             samples += w.len();
             self.backend.play(w);
         }
+        self.backend.mark_unit_end();
         // We are transmitting; don't decode our own audio this slot.
         self.rx.clear();
         Some(samples as f32 / tempo_fast::SAMPLE_RATE)
@@ -157,6 +158,19 @@ mod tests {
         // SAFETY: we know B is MockBackend here.
         trx.end_tx();
         assert!(!trx.is_keyed());
+    }
+
+    #[test]
+    fn a_slot_over_marks_its_end() {
+        // One complete over: the card running out where it ends is the end, not an underrun
+        // (`AudioBackend::mark_unit_end`).
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tx_enabled(true);
+        eng.set_beacon(true);
+        let mut trx = Transceiver::new(eng, MockBackend::new(), Rig::vox());
+        assert!(trx.try_transmit(0).is_some(), "premise: slot 0 transmits");
+        assert!(!trx.backend.played.is_empty(), "premise: the over played");
+        assert_eq!(trx.backend.unit_ends, vec![trx.backend.played.len()]);
     }
 
     #[test]

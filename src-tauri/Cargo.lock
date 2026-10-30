@@ -5547,6 +5547,7 @@ dependencies = [
  "deepcw",
  "io-kit-sys",
  "png 0.17.16",
+ "rustfft",
  "serde_json",
  "serialport",
  "tempo-app",

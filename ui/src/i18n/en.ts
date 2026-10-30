@@ -1969,13 +1969,10 @@ export const EN = {
   'logbook.row.qsl.none': 'Not confirmed',
   'logbook.row.spot.title':
     "Spot {{call}} to the DX cluster (pre-fills this QSO's call + frequency)",
-  'logbook.row.spot.aria': 'Spot {{call}} to the DX cluster',
   'logbook.row.pushQrz.title':
     'Push {{call}} to your QRZ logbook (re-push is safe — duplicates are detected)',
-  'logbook.row.pushQrz.aria': 'Push {{call}} to QRZ',
   'logbook.row.qrzCorrect.title':
     'Correct {{call}} in your QRZ logbook — overwrites the copy QRZ already holds. One contact at a time; you confirm what changes first.',
-  'logbook.row.qrzCorrect.aria': 'Correct {{call}} at QRZ',
   'logbook.qrzCorrect.aria': 'Correct a contact at QRZ',
   'logbook.qrzCorrect.heading': 'Correct {{call}} at QRZ',
   'logbook.qrzCorrect.reading': 'Reading QRZ’s copy of {{call}}…',
@@ -1987,13 +1984,10 @@ export const EN = {
   'logbook.qrzCorrect.recovering': 'Deleting…',
   'logbook.row.pushClublog.title':
     'Push {{call}} to ClubLog (re-push is safe — duplicates are detected)',
-  'logbook.row.pushClublog.aria': 'Push {{call}} to ClubLog',
   // World Radio League per-row push (the manual verification / bounce-recovery path).
   'logbook.row.pushWrl.title': 'Send this QSO with {{call}} to World Radio League',
-  'logbook.row.pushWrl.aria': 'Push the QSO with {{call}} to World Radio League',
   // LoTW per-row upload: the bulk upload's TQSL path, one contact at a time.
   'logbook.row.pushLotw.title': 'Sign the QSO with {{call}} with TQSL and upload it to LoTW (uses your Station Location in Settings)',
-  'logbook.row.pushLotw.aria': 'Upload the QSO with {{call}} to LoTW',
   'logbook.push.wrl.ok': '{{call}} sent to World Radio League',
   'logbook.push.wrl.duplicate': 'World Radio League already has {{call}}',
   'logbook.push.wrl.unavailable': 'World Radio League is busy — {{call}} will go on the next try',
@@ -2001,13 +1995,11 @@ export const EN = {
   'logbook.push.wrl.failed': 'World Radio League push failed: {{detail}}',
   'logbook.row.pushHrdlog.title':
     'Push {{call}} to HRDLog.net (live-logging/awards site — not an ARRL confirmation source; re-push is safe)',
-  'logbook.row.pushHrdlog.aria': 'Push {{call}} to HRDLog.net',
   // The <select>'s VALUES are the ADIF QSL_SENT_VIA letters B/D/E and stay in the code; only
   // these labels are prose. They are capitalised menu items, which is why they are not the
   // same entries as the lower-case words that appear inside the sentences below.
   'logbook.row.qslSent.title':
     "Mark a QSL request sent to {{call}} (bureau/direct/electronic). A request is not a confirmation — the row stays here until it's confirmed.",
-  'logbook.row.qslSent.aria': 'Mark QSL sent to {{call}}',
   'logbook.qsl.cardMarked': 'QSL card recorded for {{call}}',
   'logbook.qsl.cardCleared': 'QSL card cleared for {{call}}',
   'logbook.row.qslRcvd.card': 'Card received',
@@ -2018,6 +2010,17 @@ export const EN = {
   'logbook.row.qslSent.electronic': 'Electronic',
   'logbook.row.edit': 'Edit {{call}}',
   'logbook.row.delete': 'Delete {{call}}',
+  'logbook.row.more': 'More actions for {{call}}',
+  'logbook.row.menu.spot': 'Spot to the DX cluster',
+  'logbook.row.menu.qrz': 'Upload to QRZ Logbook',
+  'logbook.row.menu.qrzCorrect': 'Correct on QRZ Logbook',
+  'logbook.row.menu.clublog': 'Upload to Club Log',
+  'logbook.row.menu.hrdlog': 'Upload to HRDLog',
+  'logbook.row.menu.wrl': 'Upload to World Radio League',
+  'logbook.row.menu.lotw': 'Upload to LoTW',
+  'logbook.row.menu.lotwBusy': 'Not now: a LoTW upload is already running',
+  'logbook.row.menu.sat': 'Satellite',
+  'logbook.row.menu.delete': 'Delete',
 
   // The satellite tag. The <select>'s VALUES are LoTW's own satellite names and stay in the
   // code — only these labels are prose. "Clear" is a separate entry and not a blank box on
@@ -2025,7 +2028,6 @@ export const EN = {
   // something the operator chooses rather than something a form submits by omission.
   'logbook.row.sat.title':
     'Record which satellite {{call}} was worked through, or clear a tag added by mistake. Only satellites LoTW accepts are offered.',
-  'logbook.row.sat.aria': 'Set satellite for {{call}}',
   'logbook.row.sat.clear': 'Not via satellite',
   'logbook.sat.tagged': '{{call}} tagged as worked via {{sat}}',
   'logbook.sat.cleared': 'Satellite tag cleared for {{call}}',
@@ -10961,6 +10963,12 @@ export const EN = {
   'connect.getout.none': 'No reception reports yet — call CQ, then watch who hears you.',
   'connect.getout.summary': '<b>{{count}}</b> hearing you · furthest <b>{{dist}}</b>',
   'connect.getout.select.title': 'Select {{call}} on the map',
+  'connect.getout.fresh': 'Start fresh',
+  'connect.getout.fresh.title': 'Count only the reception reports that arrive from now on, for trying an antenna. Nothing is deleted.',
+  'connect.getout.since': 'since {{time}}',
+  'connect.getout.showAll': 'Show all',
+  'connect.getout.showAll.title': 'Count every reception report again',
+  'connect.getout.none.since': 'No reception reports since {{time}} yet — call CQ, then watch who hears you.',
 
   // ── The Basic projections — one whole sentence per pane, per state ──────────────────
   // Every one of these was assembled from fragments. They are whole sentences now, with
@@ -10999,6 +11007,8 @@ export const EN = {
     'SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} flare in progress; R{{scale}} radio blackout.',
   'connect.basic.getout.dir': '{{count}} hearing you — {{dir}}.',
   'connect.basic.getout.furthest': '{{count}} hearing you — furthest {{dist}}.',
+  'connect.basic.getout.dir.since': '{{count}} hearing you since {{time}} — {{dir}}.',
+  'connect.basic.getout.furthest.since': '{{count}} hearing you since {{time}} — furthest {{dist}}.',
   'connect.basic.bestband.none': 'No region reachable on any band yet.',
   'connect.basic.bestband': 'To {{region}}: try {{band}} ({{word}}).',
   'connect.basic.activity.offline': 'No live activity data right now.',
@@ -11628,6 +11638,9 @@ export const EN = {
   // The filter chips. `CQ`, `CQ+73` and `B4` are Q-code/log tokens and stay in the code;
   // these four are words. Every chip's EXPLANATION is a word.
   'operate.decodes.filters.aria': 'Filter decodes',
+  'operate.decodes.fold.label': 'Filters',
+  'operate.decodes.fold.labelLit': 'Filters · {{count}}',
+  'operate.decodes.fold.title': "Show or hide this pane's filter and sort controls. They fold away when the pane is short, so the list keeps its rows. Lit while a filter is on.",
   'operate.decodes.filter.all': 'All',
   'operate.decodes.filter.me': 'To me',
   'operate.decodes.filter.rx': 'On RX',
@@ -11669,6 +11682,20 @@ export const EN = {
   'operate.decodes.sort.label': 'sort',
   'operate.decodes.sort.time': 'Time',
   'operate.decodes.sort.freq': 'Freq',
+
+  // The Band Activity search box (in the pane's title row). It narrows the list to the lines that
+  // contain every word typed; `*` and `?` are wildcards. `{{shown}}` is how many rows are on screen,
+  // `{{total}}` how many the chips would show with the box empty.
+  'operate.decodes.search.placeholder': 'Search',
+  'operate.decodes.search.aria': 'Search Band Activity',
+  'operate.decodes.search.title':
+    'Show only the lines that contain what you type: a call, grid, report, CQ DX or POTA, or a country. Every word must match; * and ? are wildcards. Only this list changes: decoding, alerts and transmitting do not. ✕ or Esc clears it (Esc also stops transmitting, as everywhere).',
+  'operate.decodes.search.clear': 'Clear the search',
+  'operate.decodes.search.count': '{{shown}} of {{total}} match',
+  'operate.decodes.search.count.title':
+    'The search box is hiding the lines that do not match. Clear it to see the whole list.',
+  'operate.decodes.emptySearch.detail':
+    '{{count}} decodes are hidden by the search — clear it to see them.',
 
   // `{{count}}` is how many rows the pane is showing.
   'operate.decodes.heard': '{{count}} heard',
@@ -13011,6 +13038,13 @@ export const EN = {
   'cw.scope.audio.title':
     'Receiver AUDIO centered on your CW pitch ({{lo}}–{{hi}} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.',
   'cw.scope.audio.sub': 'zero-beat',
+  'cw.scope.span.aria': 'Audio scope span',
+  'cw.scope.span.filter.label': 'Filter',
+  'cw.scope.span.filter.title': "Your radio's filter, centered on your CW pitch — the view for zero-beating",
+  'cw.scope.span.std.label': 'Std',
+  'cw.scope.span.std.title': 'The usual waterfall view: {{lo}}–{{hi}} Hz of receive audio',
+  'cw.scope.span.full.label': 'Full',
+  'cw.scope.span.full.title': 'All the receive audio: {{lo}}–{{hi}} Hz',
   'cw.scope.colors.label': 'Colors',
   'cw.scope.splitter.label': 'scope height',
   'cw.seam.columns.label': 'Decode column / Rig controls column',
@@ -13020,6 +13054,9 @@ export const EN = {
   'cw.rfZoom.full.label': 'Full',
   'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
   'cw.rfZoom.span.title': '±{{khz}} kHz around your dial',
+  'cw.rfZoom.band.label': 'Band',
+  'cw.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
+  'cw.rfZoom.band.partial': 'Your scope sweeps only part of this band',
 
   // ── CW ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ──────────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an
@@ -13466,6 +13503,9 @@ export const EN = {
   'phone.rfZoom.full.label': 'Full',
   'phone.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
   'phone.rfZoom.span.title': '±{{khz}} kHz around your dial',
+  'phone.rfZoom.band.label': 'Band',
+  'phone.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
+  'phone.rfZoom.band.partial': 'Your scope sweeps only part of this band',
 
   // ── Phone ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ───────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an escape

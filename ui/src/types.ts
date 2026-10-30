@@ -990,6 +990,9 @@ export interface MapSpot {
   band: string
   heardMe: boolean
   ageSecs: number
+  /** When the report was made (Unix secs). Not `asOf - ageSecs`: a cached snapshot keeps its
+   *  `asOf` while its spots are rebuilt on every poll. */
+  time: number
   approx: boolean
   /** Exact spot frequency (MHz) when the source carried one (cluster/RBN, PSKR
    * HTTP) — what map click-to-work tunes to. Null = band-level only. */

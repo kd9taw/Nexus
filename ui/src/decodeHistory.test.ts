@@ -391,3 +391,84 @@ describe('erase and the engine own-TX ring', () => {
     expect(h.entries()).toHaveLength(1)
   })
 })
+
+// The snapshot re-offers the same decode list at 4 Hz for a whole period. A poll that changes
+// nothing must SAY so (the pane skips its re-render and its filter/sort pass on it) and must leave
+// every entry the same object (the pane's memoised rows compare by identity).
+describe('an unchanged re-poll changes nothing', () => {
+  const period = () => [
+    row({ from: 'W9XYZ', message: 'CQ W9XYZ EN52', freqHz: 1200 }),
+    row({ from: 'K2DEF', message: 'W1AW K2DEF -12', freqHz: 800 }),
+  ]
+
+  it('reports no change, keeps the version, and keeps each entry object', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    expect(h.ingest(period(), 10, 1_000)).toBe(true)
+    const v = h.version
+    const before = h.entries()
+    // A fresh array of fresh, equal rows — exactly what the next poll delivers.
+    expect(h.ingest(period(), 10, 1_300)).toBe(false)
+    expect(h.version).toBe(v)
+    const after = h.entries()
+    expect(after).toHaveLength(2)
+    after.forEach((e, i) => expect(e).toBe(before[i]))
+  })
+
+  it('a new row, or a flag moving under a row, is a change and a new entry for that row only', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest(period(), 10, 1_000)
+    const [w9, k2] = h.entries()
+    let v = h.version
+    // The station gets worked: its row's `worked` flips under it (a row losing its chips).
+    const worked = period()
+    worked[1] = { ...worked[1], worked: true }
+    expect(h.ingest(worked, 10, 1_300)).toBe(true)
+    expect(h.version).toBeGreaterThan(v)
+    expect(h.entries()[0]).toBe(w9)
+    expect(h.entries()[1]).not.toBe(k2)
+    expect(h.entries()[1].worked).toBe(true)
+    // A new decode in the next period.
+    v = h.version
+    expect(h.ingest([row({ from: 'JA1XYZ', message: 'CQ JA1XYZ PM95', freqHz: 900 })], 11, 16_000)).toBe(true)
+    expect(h.version).toBeGreaterThan(v)
+    expect(h.entries()).toHaveLength(3)
+  })
+
+  it('a re-sent late period is no change either', () => {
+    const late: LateDecodes = {
+      band: '20m',
+      dialMhz: 14.074,
+      tier: 'FT8',
+      periodStartMs: 8 * 15_000,
+      slot: 9,
+      rows: [row({ message: 'CQ W9XYZ EN52', freqHz: 1200 })],
+    }
+    const h = new DecodeHistory()
+    h.setScope('40m', 'FT8')
+    expect(h.ingestLate(late, 1_000)).toBe(true)
+    const v = h.version
+    const e = h.entries()[0]
+    expect(h.ingestLate({ ...late, rows: late.rows.map((r) => ({ ...r })) }, 1_300)).toBe(false)
+    expect(h.version).toBe(v)
+    expect(h.entries()[0]).toBe(e)
+  })
+
+  it('every wipe moves the version: band change, erase, reset', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest(period(), 10)
+    let v = h.version
+    h.setScope('20m', 'FT8') // same scope: nothing happens
+    expect(h.version).toBe(v)
+    h.setScope('40m', 'FT8')
+    expect(h.version).toBeGreaterThan(v)
+    v = h.version
+    h.erase(5)
+    expect(h.version).toBeGreaterThan(v)
+    v = h.version
+    h.reset()
+    expect(h.version).toBeGreaterThan(v)
+  })
+})

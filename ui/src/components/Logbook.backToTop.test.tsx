@@ -11,7 +11,7 @@
 // deleted — is not a new list: it keeps the rows under the operator where they are (R5), as before.
 //
 // jsdom lays nothing out, so the geometry the list reads is given: the list starts 400 px into the
-// scroller, below a 320 px globe band and an 80 px sticky block; rows are 43 px; the view 600.
+// scroller, below a 320 px globe band and an 80 px sticky block; rows are 53 px; the view 600.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -46,7 +46,7 @@ vi.mock('../api', () => {
 })
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn((run: () => Promise<unknown>) => run()) }))
 
-const ROW_PX = 43
+const ROW_PX = 53
 const LIST_AT = 400 // where the rows start in the scroller: globe band + sticky block
 const STICKY_PX = 80
 const LIST_TOP = LIST_AT - STICKY_PX // the scroll that puts row 0 just under the sticky block
