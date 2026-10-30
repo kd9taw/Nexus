@@ -171,6 +171,7 @@ describe('Getting Out: Start fresh', () => {
   })
 
   it('says when nobody has heard you since the start', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW_MS)
     vi.mocked(api.getGettingOut).mockImplementation(async (since?: number | null) =>
       since == null ? ALL : { count: 0, maxKm: 0, reports: [] },
     )
