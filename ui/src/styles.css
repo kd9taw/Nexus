@@ -708,7 +708,11 @@ button.nb-chip:hover {
 .status-chip.tier-critical {
   color: var(--alert-critical);
   border-color: var(--alert-critical);
-  animation: status-pulse 1.6s ease-in-out infinite;
+  /* Three pulses to catch the eye, then steady at full strength: the colour, rim and flag carry
+     the alarm from there. An endless pulse repainted the header every frame for as long as the
+     alarm was up — and a missing sound card keeps it up for the whole session. A new alarm is a
+     new chip (StatusLane keys it by its words), so it pulses again. */
+  animation: status-pulse 1.6s ease-in-out 3;
 }
 .status-chip.tier-warning {
   color: var(--alert-warning);
@@ -2323,16 +2327,22 @@ button.nb-chip:hover {
   display: block;
 }
 
-/* Slot wrapper — reuses the retired .connect-side glass so panes float over the globe. */
+/* Slot wrapper — the retired .connect-side glass, minus the blur. No frame sits over the map any
+   more (Connect's rails and strip have tracks of their own beside it; the cockpits never had a
+   map), so a backdrop blur behind an 82 %-opaque fill blurred only the plain page, and made every
+   pane its own blurred compositing surface, re-blurred on each frame the scope or waterfall drew.
+   The overlays that do sit over the map (.map-layers, .map-insights, .globe3d-*) keep theirs.
+   The blur also made each frame the containing block of its positioned content and a stacking
+   context; position + isolation keep both, so nothing inside a pane moves. */
 .pane-frame {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+  isolation: isolate;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--elev-2);

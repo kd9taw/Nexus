@@ -28,8 +28,11 @@ export function StatusLane() {
       <div className="status-lane" role="status" aria-live="polite">
         {items.map((it) => {
           const Icon = TIER_ICON[it.tier]
+          // Keyed by its words as well as its id: the critical pulse runs a few times and then
+          // holds, so a different alarm under the same id (the audio line names several) has to
+          // be a new chip to pulse again. A reworded tooltip is the same alarm and keeps its chip.
           return (
-            <Tooltip key={it.id} side="bottom" content={it.detail ?? it.message}>
+            <Tooltip key={`${it.id}\u0000${it.message}`} side="bottom" content={it.detail ?? it.message}>
               <span className={chipClass(it.tier)}>
                 <Icon size={13} strokeWidth={2} aria-hidden="true" />
                 <span className="status-chip-msg">{it.message}</span>
