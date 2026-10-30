@@ -60,6 +60,10 @@ pub struct P533Run {
     pub ei: f64,
     /// §5.3 long-path field strength (≥ 7000 km), else 0.
     pub el: f64,
+    /// The long model's fM hop geometry (≥ 7000 km): hop count and elevation (rad).
+    /// 0 / 0.0 below 7000 km.
+    pub long_hops: u32,
+    pub long_ele: f64,
 }
 
 /// System parameters for a run (the `Path.*` inputs of the reference driver).
@@ -76,6 +80,13 @@ pub struct P533Params {
     pub man_made: noise::ManMadeCategory,
 }
 
+// Chain runs on this thread — lets the engine tests prove that carrying more out of each
+// run costs no extra runs.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Run the P.533 chain end-to-end in the reference `P533()` order:
 /// MUF basic/variability/operational → E-layer screening → field strength
 /// (short / long / §5.4 interpolation) → median receiver power → P.372 noise
@@ -89,6 +100,8 @@ pub fn run_p533(
     frequency: f64,
     sys: &P533Params,
 ) -> P533Run {
+    #[cfg(test)]
+    RUNS.with(|c| c.set(c.get() + 1));
     let mut path = muf::muf_path(tx, rx, month0, hour_slot, ssn, frequency);
     fieldstrength::e_layer_screening_frequency(&mut path);
     fieldstrength::median_skywave_field_strength_short(&mut path, sys.txpower);
@@ -186,6 +199,8 @@ pub fn run_p533(
         rel,
         ei,
         el: lp.el,
+        long_hops: lp.hops_m,
+        long_ele: lp.ele_m,
     }
 }
 
