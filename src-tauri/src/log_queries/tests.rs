@@ -3442,7 +3442,7 @@ fn the_path_filter_keeps_the_long_and_the_polar_paths() {
             call.len()
         );
         if let Some(r) = route {
-            let why = format!("MARGIN_{r};{grid}/20m");
+            let why = format!("WITHIN;{grid}/20m");
             s += &format!("<APP_NEXUS_PATH:{}>{r}", r.len());
             s += &format!("<APP_NEXUS_PATH_WHY:{}>{why}", why.len());
         }
@@ -3455,6 +3455,9 @@ fn the_path_filter_keeps_the_long_and_the_polar_paths() {
         rec("JA1PO", "PM95", Some("S")),
         rec("G4EU", "IO91", Some("S")),
         rec("K1NONE", "IO91", None),
+        // Neither route named: never a long path.
+        rec("ZS6EI", "KG44", Some("EITHER")),
+        rec("PY2UN", "GG66", Some("UNKNOWN")),
     ];
     let d = Dir::new("filter-path");
     let engine = on_store(&d, &records);
@@ -3467,5 +3470,5 @@ fn the_path_filter_keeps_the_long_and_the_polar_paths() {
         filtered_calls(&q, &engine, json!({"path": "polar"})),
         ["JA1PO"]
     );
-    assert_eq!(filtered_calls(&q, &engine, json!({"band": "20m"})).len(), 5);
+    assert_eq!(filtered_calls(&q, &engine, json!({"band": "20m"})).len(), 7);
 }

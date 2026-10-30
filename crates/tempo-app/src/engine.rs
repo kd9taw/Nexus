@@ -17690,9 +17690,8 @@ impl Engine {
         // card it computed for this station and the rotator's recent readings — and the record
         // gains new fields only (`path_stamp::stamp_path`). After the grid and the band are
         // final, which the grade is made for.
-        if self.station.path_at_log.is_some() {
+        if let Some(grade) = &self.station.path_at_log {
             let late = self.late_dts_of(&rec.call);
-            let grade = self.station.path_at_log.as_ref().expect("checked above");
             let found = grade(&rec, &late);
             tempo_core::logbook::path_stamp::stamp_path(&mut rec, &found);
         }
@@ -19278,7 +19277,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .map(|(slot, mut v)| {
                 v.sort_by(f32::total_cmp);
                 let m = v.len() / 2;
-                let med = if v.len() % 2 == 0 {
+                let med = if v.len().is_multiple_of(2) {
                     (v[m - 1] + v[m]) / 2.0
                 } else {
                     v[m]

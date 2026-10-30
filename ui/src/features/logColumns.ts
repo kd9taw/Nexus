@@ -49,8 +49,8 @@ export interface LogColumn {
   narrow?: boolean
   /** Cannot be hidden: the callsign names the row, the actions are its controls. */
   fixed?: boolean
-  /** The engine's sort for it. Every column that shows data sorts; only the action cluster does
-   *  not. A passthrough tag (county, zones, continent, distance, the received dates) is read by
+  /** The engine's sort for it. Every column that shows data sorts but the path, whose grades
+   *  partly live outside the log; the action cluster does not either. A passthrough tag (county, zones, continent, distance, the received dates) is read by
    *  the passthrough's own key, and an upload mark or an exchange by its table's, one lookup per
    *  contact, as the search reads the SUBMODE. */
   sort?: LogSortKey
@@ -93,6 +93,10 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { id: 'ituz', labelKey: 'logbook.column.ituz', track: '0.5fr', minPx: 28, group: 'location', sort: 'ituz' },
   { id: 'cont', labelKey: 'logbook.column.cont', track: '0.5fr', minPx: 28, group: 'location', sort: 'cont' },
   { id: 'distance', labelKey: 'logbook.column.distance', track: '0.7fr', minPx: 40, group: 'location', sort: 'distance' },
+  // The path each contact took (features/pathGrade): its grade lives partly outside the log (the
+  // display-only grading of the existing log), so the engine cannot order by it — the one column
+  // beside the actions with no sort. Its filter (`LogFilter.path`) is the engine's.
+  { id: 'path', labelKey: 'logbook.column.path', track: '0.9fr', minPx: 56, group: 'location' },
   { id: 'qslSentDate', labelKey: 'logbook.column.qslSentDate', track: '0.9fr', minPx: 56, group: 'qsl', sort: 'qslSentDate' },
   { id: 'qslRcvdDate', labelKey: 'logbook.column.qslRcvdDate', track: '0.9fr', minPx: 56, group: 'qsl', sort: 'qslRcvdDate' },
   { id: 'lotwRcvdDate', labelKey: 'logbook.column.lotwRcvdDate', track: '0.9fr', minPx: 56, group: 'qsl', sort: 'lotwRcvdDate' },

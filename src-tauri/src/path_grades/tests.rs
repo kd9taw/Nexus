@@ -517,8 +517,9 @@ fn every_service_gets_the_contact_unchanged_but_for_the_antenna_fields() {
         );
     }
     // LoTW's batch, as the upload builds it for TQSL.
-    let lotw =
-        |r: &QsoRecord| tempo_app::station::lotw_batch_adif(&[r.clone()], false, "K2DEF", "FN42");
+    let lotw = |r: &QsoRecord| {
+        tempo_app::station::lotw_batch_adif(std::slice::from_ref(r), false, "K2DEF", "FN42")
+    };
     assert_eq!(lotw(&graded), with_antenna(lotw(&plain)));
     // The operator's own export reads back as the same contact, grade included.
     let own = adif_record_own_log(&graded);
@@ -571,9 +572,10 @@ fn receivers_along_one_route_are_said_and_raise_nothing() {
         freq_mhz: None,
     };
     lock(&region).push(spot("VK2AA", NOW + 120));
-    // Another station's spot, and one from an hour before: neither counts.
+    // Another station's spot, and one from an hour before or after: none counts.
     lock(&region).push(spot("VK3ZZ", NOW + 120));
     lock(&region).push(spot("VK2AA", NOW - 3600));
+    lock(&region).push(spot("VK2AA", NOW + 3600));
     let heard = at_log(&rec, "", &live, &region, &[], NOW).grade.unwrap();
     assert_eq!(heard.why.last().map(String::as_str), Some("HEARD_L:1"));
     assert_eq!((heard.route, heard.conf), (plain.route, plain.conf));

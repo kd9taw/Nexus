@@ -165,7 +165,7 @@ pub fn late_dt_ms(late_secs: &[f32]) -> Option<(u16, u16)> {
     }
     v.sort_by(f32::total_cmp);
     let mid = v.len() / 2;
-    let median = if v.len() % 2 == 0 {
+    let median = if v.len().is_multiple_of(2) {
         (v[mid - 1] + v[mid]) / 2.0
     } else {
         v[mid]

@@ -274,6 +274,23 @@ export async function getPathOutlook(grid: string): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_path_outlook', { grid })
 }
 
+/** The path grade of each Logbook row: its own stamp when it carries one made for its current
+ * grid and band, else the display-only grade of the log, else null. */
+export async function logPathGrades(rows: import('./types').PathGradeAsk[]): Promise<(import('./types').PathGrade | null)[]> {
+  return invoke<(import('./types').PathGrade | null)[]>('log_path_grades', { rows })
+}
+
+/** One contact's path over the day it was made, for the contact card. Null when it has no grid
+ * square, no solar flux for its part of the cycle, or no long path to compare. */
+export async function contactPathDay(row: import('./types').PathGradeAsk): Promise<import('./types').ContactPathDay | null> {
+  return invoke<import('./types').ContactPathDay | null>('contact_path_day', { row })
+}
+
+/** How the display-only grading of the log is going, and the 30-day success measures. */
+export async function pathGradingStatus(): Promise<import('./types').PathGradingStatus> {
+  return invoke<import('./types').PathGradingStatus>('path_grading_status')
+}
+
 /** The ten DX regions' path over the day from the operator's grid (the region strips). The model
  * part is kept six hours at the shack; each hour's Kp is current at every ask. */
 export async function getPathRegions(): Promise<import('./types').PathRegions> {

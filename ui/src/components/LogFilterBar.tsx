@@ -24,6 +24,7 @@ import {
   withoutFilter,
   withSavedFilter,
   type AwardNeed,
+  type PathFilter,
   type LogFilter,
   type QslFilter,
   type QslService,
@@ -317,6 +318,19 @@ function LogFilterPanel({ id, filter, onChange }: Props & { id: string }) {
                 {NEED_LABEL[a]}
               </option>
             ))}
+          </select>
+        </label>
+        <label className="log-filter-field">
+          <span>{t('logbook.filters.path')}</span>
+          <select
+            className="settings-input"
+            value={filter.path ?? ''}
+            onChange={(e) => onChange(withField(filter, 'path', (e.target.value || undefined) as PathFilter | undefined))}
+            title={t('logbook.filters.pathTitle')}
+          >
+            <option value="">{t('logbook.filters.any')}</option>
+            <option value="long">{t('logbook.filters.pathLong')}</option>
+            <option value="polar">{t('logbook.filters.pathPolar')}</option>
           </select>
         </label>
         {text('text', t('logbook.filters.text'))}

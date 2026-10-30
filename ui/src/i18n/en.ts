@@ -1887,6 +1887,82 @@ export const EN = {
   'logbook.column.ituz': 'ITU zone',
   'logbook.column.cont': 'Continent',
   'logbook.column.distance': 'Distance (km)',
+  // Your contacts' paths (features/pathGrade.ts, the Logbook's Path column and filter, the contact
+  // card): which way round each logged contact most likely went. A grade stamped when the contact
+  // was logged is the station's own (beam heading, receivers, decodes) over the model; one made
+  // afterwards is the model's monthly median alone, never a measurement. `{{n}}`, `{{pct}}`,
+  // `{{open}}`, `{{outside}}`, `{{polar}}`, `{{other}}`, `{{ms}}`, `{{done}}` and `{{total}}` are
+  // numbers; ▸ ◂ ▸◂ ? ⊕ are invariant marks; ANT_PATH and ADIF are field names, kept verbatim.
+  'logbook.column.path': 'Path',
+  'logbook.column.path.title':
+    'The path each contact most likely took: ▸ short, ◂ long, ▸◂ either, ? outside the model, ⊕ across the polar cap. Bright: graded when it was logged. Dim: modelled afterwards.',
+  'logbook.filters.path': 'Path',
+  'logbook.filters.pathTitle':
+    'The path each contact most likely took, as the Path column grades it',
+  'logbook.filters.pathLong': 'Long path',
+  'logbook.filters.pathPolar': 'Across the polar cap',
+  'pathGrade.verdict.short': 'Short path',
+  'pathGrade.verdict.long': 'Long path',
+  'pathGrade.verdict.either': 'Either path',
+  'pathGrade.verdict.unknown': 'Outside the model',
+  'pathGrade.conf.confirmed': 'confirmed by your beam heading',
+  'pathGrade.cell.confirmed': 'confirmed',
+  'pathGrade.cell.either': 'either',
+  'pathGrade.cell.outside': 'outside',
+  'pathGrade.none': 'No path grade yet',
+  'pathGrade.sentence': '{{verdict}}, {{conf}}.',
+  'pathGrade.sentence.polar': '{{verdict}}, {{conf}} — across the polar cap.',
+  'pathGrade.sentence.bare': '{{verdict}}.',
+  'pathGrade.sentence.barePolar': '{{verdict}} — across the polar cap.',
+  'pathGrade.sentence.either': 'Either path: the two were modelled within 6 dB of each other.',
+  'pathGrade.sentence.eitherPolar':
+    'Either path: the two were modelled within 6 dB of each other; the short path crosses the polar cap.',
+  'pathGrade.sentence.outside': 'Outside the model: both paths were modelled closed at that hour.',
+  'pathGrade.why.lead': 'Why: {{text}}.',
+  'pathGrade.why.openS': 'only the short path was modelled open',
+  'pathGrade.why.openL': 'only the long path was modelled open',
+  'pathGrade.why.marginS': 'the short path was modelled at least 6 dB better',
+  'pathGrade.why.marginL': 'the long path was modelled at least 6 dB better',
+  'pathGrade.why.within': 'the two paths were modelled within 6 dB of each other',
+  'pathGrade.why.closed': 'both paths were modelled closed',
+  'pathGrade.why.greyS': 'grey line along the short path',
+  'pathGrade.why.greyL': 'grey line along the long path',
+  'pathGrade.why.headingS': 'your beam pointed along the short path',
+  'pathGrade.why.headingL': 'your beam pointed along the long path',
+  'pathGrade.why.heardS': 'other receivers along the short path heard the same signal: {{n}}',
+  'pathGrade.why.heardL': 'other receivers along the long path heard the same signal: {{n}}',
+  'pathGrade.why.lateDt':
+    'their decodes ran {{ms}} ms late (decodes: {{n}}), which is not evidence on its own',
+  'pathGrade.tier.logged': 'Graded when it was logged, from the path card and your station.',
+  'pathGrade.tier.modelled':
+    'Modelled afterwards from the propagation model alone (a monthly median, not a measurement).',
+  'pathGrade.ssn.logged': 'Solar activity from the flux logged with the contact.',
+  'pathGrade.ssn.recent': 'Solar activity: today’s, as no flux was logged with the contact.',
+  'pathGrade.stale':
+    'The grade stamped when it was logged was made for another grid or band, so this one is the model’s.',
+  'pathGrade.measure.progress': 'Grading the log: {{done}} of {{total}}',
+  'pathGrade.measure.coverage':
+    'Last 30 days, graded contacts: {{n}}. In hours the model calls open on some path: {{open}}%. Outside the model: {{outside}}%.',
+  'pathGrade.measure.polar':
+    'Open on some path — polar paths: {{polar}}%, other paths: {{other}}%.',
+  'pathGrade.measure.heading':
+    'Your beam heading agrees with the model’s better path: {{pct}}% (contacts judged: {{n}}).',
+  'pathGrade.measure.noHeading':
+    'No contact yet with a logged beam heading and a clear model margin.',
+  'pathGrade.measure.none': 'No graded contacts in the last 30 days yet.',
+  'pathGrade.measure.ungradable':
+    'Not graded: {{n}} (no grid square, a VHF band, or no solar flux for their part of the cycle).',
+  'contactCard.path': 'Path',
+  'contactCard.path.loading': 'Working out the path…',
+  'contactCard.path.none':
+    'No path for this contact: it needs both grid squares, and solar flux logged with it if it is more than three months old.',
+  'contactCard.path.details': 'Why, and how sure',
+  'contactCard.path.day': 'The path over that day, modelled. The marked hour is the contact’s.',
+  'contactCard.path.pick': 'Your antenna path',
+  'contactCard.path.pickTitle':
+    'Adds the ADIF field ANT_PATH, written when you save the contact. Nexus writes it by itself only for a short path your beam heading confirmed.',
+  'contactCard.path.pickShort': 'Short path',
+  'contactCard.path.pickLong': 'Long path',
   'logbook.column.qslSentDate': 'Card sent',
   'logbook.column.qslRcvdDate': 'Card received',
   'logbook.column.lotwRcvdDate': 'LoTW received',
