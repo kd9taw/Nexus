@@ -351,22 +351,26 @@ function glowSprite(): THREE.CanvasTexture {
   return glowTex
 }
 
-/** Canvas-text sprite for the opening-sector labels ("6m Sporadic-E") — the 2-D map
- * labels its sectors; the globe must too (2D↔3D parity). */
-/** A theme colour from the document root, for THREE materials (which cannot read a CSS var). */
-function rootInk(name: string, fallback: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
-}
-/** The path ribbon's reliability inks — the same theme colours the 2-D map strokes. */
+/** The path ribbon's reliability inks. The globe is a dark night sphere in either UI theme, so
+ * these are the dark theme's inks whatever the theme (the light theme's darker ones lose their
+ * contrast on it); closed is a lighter grey than the 2-D map's, so a label reads over the grey
+ * state and province lines. */
 function ribbonInk(i: RibbonInk | null): string {
-  if (i === 'open') return rootInk('--band-open', '#69d98d')
-  if (i === 'marginal') return rootInk('--band-marginal', '#f1ca47')
-  if (i === 'closed') return rootInk('--band-closed', '#747b81')
-  return rootInk('--accent', '#a9d4ff')
+  if (i === 'open') return '#69d98d'
+  if (i === 'marginal') return '#f1ca47'
+  if (i === 'closed') return '#aab1b7'
+  return '#a9d4ff'
 }
+/** The polar stretch on the globe: the dark theme's aurora violet, for the same reason. */
+const GLOBE_ROUTE_POLAR = '#c77dff'
+/** A ribbon label's size (world units; the globe's radius is 100): larger than the opening
+ * labels, so a heading is found at a glance. */
+const RIBBON_LABEL_SCALE: [number, number] = [30, 5.6]
 /** The ribbon sits just above the other line overlays (greyline 0.004). */
 const PATH_ALT = 0.005
 
+/** Canvas-text sprite for the opening-sector labels ("6m Sporadic-E") — the 2-D map
+ * labels its sectors; the globe must too (2D↔3D parity). */
 function textSprite(text: string, color: string): THREE.Sprite {
   const c = document.createElement('canvas')
   c.width = 256
@@ -1774,7 +1778,7 @@ function Globe3DView({
         const parts = l.stretches.filter((st) => st.kind === kind).map((st) => asLatLng(st.points))
         const k = `${key}-${kind}`
         keys.push(k)
-        const ink = kind === 'polar' ? rootInk('--route-polar', '#c77dff') : '#ffc86e'
+        const ink = kind === 'polar' ? GLOBE_ROUTE_POLAR : '#ffc86e'
         syncLines(g, linesRef.current, k, parts, ink, 1, parts.length > 0, PATH_ALT + 0.001, dashed)
       }
     }
@@ -1782,6 +1786,7 @@ function Globe3DView({
     const labels = rib.lines.map((l) => {
       const pos = g.getCoords(l.labelAt.lat, l.labelAt.lon, 0.03)
       const sp = textSprite(l.label, ribbonInk(l.ink))
+      sp.scale.set(...RIBBON_LABEL_SCALE, 1)
       sp.position.set(pos.x, pos.y, pos.z)
       scene.add(sp)
       return sp

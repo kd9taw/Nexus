@@ -4,10 +4,11 @@
 // One grid per box: the hour axis on top (its 24 buttons scrub the map to that hour), a row per
 // band coloured by the MODELLED reliability of the route shown, each cell marked with the route the
 // model favours (▸ short, ◂ long; nothing when it favours neither), a violet underline where that
-// route crosses the polar cap at the hour's Kp, and the MUF ceiling as a line over the highest band
-// under it. Under the bands: the grey-line row (◐ when either end is on the terminator) and the Kp
-// ribbon, measured solid, forecast hollow, the current value carried forward dashed — the Kp outlook
-// box's convention, so a forecast never reads as a reading. The legend says all of it, and that the
+// route crosses the auroral zone or the polar cap at the hour's Kp, and the MUF ceiling as a line
+// over the highest band under it. Under the bands: the grey-line row (◐ when either end is on the
+// terminator) and the Kp ribbon, measured solid, forecast hollow, SWPC's latest reading carried
+// forward dashed, unknown an empty dotted slot — the Kp outlook box's convention, so a forecast
+// never reads as a reading. The legend says all of it, and that the
 // figures are a monthly median; wherever a long-path figure can show, so does the long-path label.
 //
 // Display only: a click scrubs the map's terminator and ribbon, and turns nothing.
@@ -28,6 +29,7 @@ import {
   type DayMode,
 } from '../../features/pathDay'
 import { ROUTE_LP, ROUTE_SP } from '../../features/pathRibbon'
+import { POLAR_CAP_DEG, utcHourLabel } from '../../features/pathWhy'
 
 /** The hour a strip is scrubbed to: its UTC hour and the middle of that hour (ms) for the map. */
 export interface DayScrub {
@@ -96,7 +98,20 @@ function kpText(kp: number): string {
 }
 
 /** The hover words for one cell: both routes' figures, the model's call, polar, above the MUF. */
-function cellTitle(band: string, h: number, c: PathDayCell, hour: PathDayHour | undefined, mode: DayMode, aboveMuf: boolean): string {
+/** What a crossing is, worded as the why line and the route chip word it: the polar cap proper
+ * when the route reaches 70° geomagnetic, else the auroral zone. A route outside the zone now that
+ * this hour's FORECAST Kp would bring in reads "Auroral zone if Kp N (forecast from HHZ)". */
+function crossingWords(day: PathDay, route: 'short' | 'long' | null, hour: PathDayHour | undefined): string {
+  const max = route === 'long' ? day.maxGmlatLong : day.maxGmlatShort
+  if (max != null && max >= POLAR_CAP_DEG) return t('pathWhy.polar')
+  const now = day.hours[day.nowHour]
+  const inNow = route === 'long' ? now?.polarLong === true : now?.polarShort === true
+  if (!inNow && hour && hour.kpSource === 'forecast' && hour.kp != null)
+    return t('pathRoute.chip.stormIf', { kp: kpText(hour.kp), time: utcHourLabel(hour.unix) })
+  return t('pathWhy.auroralZone')
+}
+
+function cellTitle(day: PathDay, band: string, h: number, c: PathDayCell, hour: PathDayHour | undefined, mode: DayMode, aboveMuf: boolean): string {
   const v = cellView(c, hour, mode)
   const parts = [t('pathDay.cell.short', { pct: c.shortPct })]
   if (c.longPct != null) parts.push(t('pathDay.cell.long', { pct: c.longPct }))
@@ -107,7 +122,7 @@ function cellTitle(band: string, h: number, c: PathDayCell, hour: PathDayHour | 
     )
   } else if (c.verdict === 'either') parts.push(t('pathDay.cell.either'))
   else if (c.verdict === 'unknown') parts.push(t('pathDay.cell.closed'))
-  if (v.polar) parts.push(t('pathDay.cell.polar'))
+  if (v.polar) parts.push(crossingWords(day, v.polarRoute, hour))
   if (aboveMuf) parts.push(t('pathDay.cell.aboveMuf'))
   return t('pathDay.cell.title', { band, time: fmtZ(h), text: parts.join(t('pathWhy.sep')) })
 }
@@ -185,7 +200,7 @@ function Grid({
                 key={h}
                 className={`pd-cell${col(h)}${v.polar ? ' polar' : ''}${ceil === r.index ? ' ceil' : ''}${v.pct == null ? ' none' : ''}`}
                 style={v.pct == null ? undefined : ({ background: heatColor(v.pct / 100) } as CSSProperties)}
-                title={cellTitle(r.band.band, h, c, r.day.hours[h], mode, aboveMuf)}
+                title={cellTitle(r.day, r.band.band, h, c, r.day.hours[h], mode, aboveMuf)}
                 onClick={() => pick(h)}
               >
                 {v.glyph}

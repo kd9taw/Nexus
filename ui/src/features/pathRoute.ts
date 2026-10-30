@@ -13,7 +13,7 @@
 
 import { t } from '../i18n'
 import type { PathGeometry, PathPrediction, RouteCall } from '../types'
-import { pathWhyFacts, utcHourLabel } from './pathWhy'
+import { kpSourceWords, pathWhyFacts, utcHourLabel } from './pathWhy'
 
 export type RouteName = 'short' | 'long'
 
@@ -21,6 +21,17 @@ export type RouteName = 'short' | 'long'
  * `route::OPEN_BCR` / `CLOSED_BCR`). */
 const OPEN_BCR = 0.5
 const CLOSED_BCR = 0.1
+/** Below this long-minus-short distance (km) the stations are near-antipodal and no route is
+ * called (the engine's `route::NEAR_ANTIPODE_KM`). */
+const NEAR_ANTIPODE_KM = 500
+
+/** The stations are near-antipodal: every heading is about the same distance, so neither route
+ * is a choice. */
+export function nearAntipode(p: PathPrediction | null | undefined): boolean {
+  const sp = p?.geometry
+  const lp = p?.longPath?.geometry
+  return !!sp && !!lp && lp.distKm - sp.distKm < NEAR_ANTIPODE_KM
+}
 
 export interface RouteHint {
   band: string
@@ -51,7 +62,7 @@ function pickCall(routes: RouteCall[], focusBand?: string | null): RouteCall | n
 export function routeHint(p: PathPrediction | null | undefined, focusBand?: string | null): RouteHint | null {
   const sp = p?.geometry
   const lp = p?.longPath?.geometry
-  if (!p?.routes || !sp || !lp) return null
+  if (!p?.routes || !sp || !lp || nearAntipode(p)) return null
   const c = pickCall(p.routes, focusBand)
   if (!c) return null
   const route = c.verdict === 'long' ? 'long' : c.verdict === 'short' ? 'short' : 'either'
@@ -65,8 +76,12 @@ export function routeHint(p: PathPrediction | null | undefined, focusBand?: stri
   }
 }
 
-function confWords(c: RouteCall['confidence']): string {
-  return c === 'possible' ? t('pathRoute.conf.possible') : t('pathRoute.conf.likely')
+/** The long path is never more than "possible" until it is validated — held here too, so a call
+ * that somehow came without a confidence cannot read "likely". */
+function confWords(c: RouteCall): string {
+  return c.verdict === 'long' || c.confidence === 'possible'
+    ? t('pathRoute.conf.possible')
+    : t('pathRoute.conf.likely')
 }
 
 /** The one-sentence hint ("Beam 80° for 20m: long path (likely) — …"), or null. `short` leaves
@@ -75,11 +90,18 @@ export function routeHintLine(h: RouteHint | null, short = false): string | null
   if (!h) return null
   const { band, call } = h
   if (h.route === 'either') {
-    return t('pathWhy.sentence', {
-      text: t('pathRoute.hint.either', { band, sp: h.spBrgDeg, lp: h.lpBrgDeg }),
-    })
+    // "Within 6 dB" only when the margin said so; an either the grey line made from a margin
+    // call names both reasons instead.
+    const grey = call.reasons.find((r) => r.kind === 'greyLine')
+    const [sp, lp] = [h.spBrgDeg, h.lpBrgDeg]
+    let text: string
+    if (call.reasons.some((r) => r.kind === 'withinMargin')) text = t('pathRoute.hint.either', { band, sp, lp })
+    else if (grey?.kind === 'greyLine' && grey.route === 'long') text = t('pathRoute.hint.eitherGreyLong', { band, sp, lp })
+    else if (grey?.kind === 'greyLine') text = t('pathRoute.hint.eitherGreyShort', { band, sp, lp })
+    else return null
+    return t('pathWhy.sentence', { text })
   }
-  const conf = confWords(call.confidence)
+  const conf = confWords(call)
   let text =
     h.route === 'long'
       ? t('pathRoute.hint.long', { band, brg: h.brgDeg, conf })
@@ -124,17 +146,39 @@ export function routeHintDetail(h: RouteHint | null): string[] {
   return rows
 }
 
-/** "Polar path" (· the forecast storm that would deepen it) for one route, or null when that
- * route is clear of the cap now and no forecast storm puts it there. */
-export function polarChip(p: PathPrediction | null | undefined, route: RouteName): string | null {
-  const one = route === 'long' ? p?.longPath : p
-  const f = pathWhyFacts(one)
+function chipFacts(p: PathPrediction | null | undefined, route: RouteName) {
+  const f = pathWhyFacts(route === 'long' ? p?.longPath : p)
+  // An unknown Kp has no edge: `polarNow` is false and no forecast storm is held, so no chip.
   if (!f || (!f.polarNow && !f.storm)) return null
-  if (f.storm) {
-    const kp = Number.isInteger(f.storm.kp) ? String(f.storm.kp) : f.storm.kp.toFixed(1)
-    return t('pathRoute.chip.storm', { kp, time: utcHourLabel(f.storm.unix) })
+  const storm = f.storm && {
+    kp: Number.isInteger(f.storm.kp) ? String(f.storm.kp) : f.storm.kp.toFixed(1),
+    time: utcHourLabel(f.storm.unix),
   }
-  return t('pathRoute.chip.polar')
+  return { ...f, storm }
+}
+
+/** The chip for one route, named as the why line names it: "Polar path" in the cap proper,
+ * "Auroral zone" past the edge but short of it, each with the forecast storm that would deepen
+ * it; a route clear of both now that a forecast storm would reach gets an "if". Null when the
+ * route is clear and no storm is forecast over it, or Kp is unknown. */
+export function polarChip(p: PathPrediction | null | undefined, route: RouteName): string | null {
+  const f = chipFacts(p, route)
+  if (!f) return null
+  const s = f.storm
+  if (!f.polarNow) return s && t('pathRoute.chip.stormIf', { kp: s.kp, time: s.time })
+  if (f.capNow) return s ? t('pathRoute.chip.storm', { kp: s.kp, time: s.time }) : t('pathRoute.chip.polar')
+  return s ? t('pathRoute.chip.zoneStorm', { kp: s.kp, time: s.time }) : t('pathRoute.chip.zone')
+}
+
+/** The chip's hover: what it means, and where this hour's Kp came from (or, for the "if", that
+ * it is a forecast). */
+export function polarChipTitle(p: PathPrediction | null | undefined, route: RouteName): string | null {
+  const f = chipFacts(p, route)
+  if (!f) return null
+  const s = f.storm
+  if (!f.polarNow) return s && t('pathRoute.chip.title.stormIf', { kp: s.kp, time: s.time })
+  const source = kpSourceWords(f.now.kpSource)
+  return f.capNow ? t('pathRoute.chip.title.cap', { source }) : t('pathRoute.chip.title.zone', { source })
 }
 
 export type RibbonInk = 'open' | 'marginal' | 'closed'

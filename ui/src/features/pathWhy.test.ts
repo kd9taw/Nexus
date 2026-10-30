@@ -164,18 +164,22 @@ describe('the path why line', () => {
     expect(f?.polarNow).toBe(false)
     expect(f?.storm).toBeNull()
     const line = pathWhyLine(f)
-    expect(line).toBe('20m short path, 2 F2 hops, Kp unknown, no space-weather data.')
+    expect(line).toBe('20m short path, 2 F2 hops, Kp unknown (no Kp reading).')
     expect(line).not.toMatch(/polar cap|auroral zone|latest reading|current/)
     expect(pathWhyDetail(f, 64.7)).toEqual([
       'Mode 2F2, take-off 11.2° (P.533 monthly median)',
       'Auroral zone and polar cap: unknown, because Kp is unknown',
       'Highest geomagnetic latitude on the path: 65°',
       'Grey line: 0% of the path · in daylight: 100%',
-      'The model is a monthly median and does not include storms; the auroral zone, the polar cap and the aurora are laid over it from space weather. Kp this hour: unknown, no space-weather data.',
+      'The model is a monthly median and does not include storms; the auroral zone, the polar cap and the aurora are laid over it from space weather. Kp this hour: unknown (no Kp reading).',
     ])
     // Negative control: a path that never reaches the edge at any Kp loses nothing by it.
-    const low = pathWhyLine(pathWhyFacts(pred([band('20m', 0.8)], geo, undefined, 30)))
-    expect(low).toBe('20m short path.')
+    const lowFacts = pathWhyFacts(pred([band('20m', 0.8)], geo, undefined, 30))
+    expect(pathWhyLine(lowFacts)).toBe('20m short path.')
+    // ...and its detail row says 0%, not "unknown": no Kp brings the edge that far.
+    expect(pathWhyDetail(lowFacts, 30)[0]).toBe(
+      'Auroral zone and polar cap: 0% of the path (it never reaches 55° geomagnetic, the edge at Kp 9)',
+    )
   })
 
   it('the note names the real source of this hour\'s Kp', () => {

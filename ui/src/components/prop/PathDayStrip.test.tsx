@@ -97,6 +97,29 @@ describe('the selected station strip', () => {
     expect(c20[20].title).toContain('modelled')
   })
 
+  it('names a crossing as the why line does: polar cap from 70°, else auroral zone, "if" only for a forecast storm', () => {
+    const at = (d: PathDay, h: number) => {
+      const { container, unmount } = render(<PathDayPane pred={pred(d)} scrub={null} />)
+      const t = cellsOf(rows(container)[0])[h].title
+      unmount()
+      return t
+    }
+    // Deep: the long path reaches 75° geomagnetic.
+    const deep = { ...day(), maxGmlatShort: 40, maxGmlatLong: 75 }
+    expect(at(deep, 20)).toContain('crosses the polar cap')
+    // Shallow and already in the zone now (12Z): the auroral zone, even at a forecast hour.
+    const zone = { ...day(), maxGmlatShort: 40, maxGmlatLong: 65 }
+    expect(at(zone, 18)).toContain('crosses the auroral zone')
+    expect(at(zone, 18)).not.toContain('Auroral zone if')
+    // Shallow, outside the zone now; only the 18Z forecast storm brings the long path in.
+    const stormIf = day()
+    stormIf.maxGmlatShort = 40
+    stormIf.maxGmlatLong = 65
+    stormIf.hours = stormIf.hours.map((h, i) => ({ ...h, polarLong: i === 18 }))
+    expect(at(stormIf, 18)).toContain('Auroral zone if Kp 5.3 (forecast from 1800Z)')
+    expect(at(stormIf, 20)).not.toMatch(/auroral zone|polar cap/i)
+  })
+
   it('SP shows the short path alone and drops the long-path label; LP the long path', () => {
     const { container, getByRole } = render(<PathDayPane pred={pred(day())} scrub={null} />)
     fireEvent.click(getByRole('button', { name: 'SP' }))
@@ -133,7 +156,7 @@ describe('the selected station strip', () => {
     const kp = [...container.querySelectorAll('.pd-kpcell')] as HTMLElement[]
     expect(kp[5].className).toContain('unknown')
     expect(kp[5].className).not.toMatch(/good|warn|bad/)
-    expect(kp[5].title).toBe('05Z: unknown, no space-weather data')
+    expect(kp[5].title).toBe('05Z: unknown (no Kp reading)')
   })
 
   it('an hour scrubs the map to the middle of that hour, and the same hour goes back to now', () => {

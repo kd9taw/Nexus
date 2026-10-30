@@ -106,6 +106,8 @@ mod log_tools;
 /// Parsec presence mode's watcher thread: stop latched transmissions when the operator's Parsec
 /// session drops (off by default; started on Windows only).
 mod parsec_presence;
+/// `get_path_outlook`'s kept predictions: six hours per day, grids, engine, power and SSN.
+mod path_outlook;
 /// The region strips' sweep: ten DX regions' path over the day, kept in memory and on disk.
 mod path_regions;
 mod pouncer;
@@ -8086,14 +8088,41 @@ async fn get_path_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx))
     };
+    // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
+    // serving hour's scalars and the geometry are recomputed then.
+    let keep = prop_engine == "p533";
+    let key = path_outlook::key(
+        t,
+        &mygrid,
+        &grid,
+        &prop_engine,
+        station_power_w,
+        ant_gain_dbi,
+        wx.ssn,
+    );
     tauri::async_runtime::spawn_blocking(move || {
-        // Both routes at once on their own threads: the long path costs the same chain again,
-        // so this keeps the card's wait at one prediction's. Neither holds any lock.
-        let (mut pred, long) = std::thread::scope(|s| {
-            let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
-            let sp = eng.predict(dx, t, &wx);
-            (sp, lp.join().ok().flatten())
-        });
+        let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
+            Some((mut sp, mut lp)) => {
+                path_outlook::refresh_now(&mut sp, t);
+                if let Some(lp) = lp.as_mut() {
+                    path_outlook::refresh_now(lp, t);
+                }
+                (sp, lp)
+            }
+            None => {
+                // Both routes at once on their own threads: the long path costs the same chain
+                // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
+                let (sp, lp) = std::thread::scope(|s| {
+                    let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
+                    let sp = eng.predict(dx, t, &wx);
+                    (sp, lp.join().ok().flatten())
+                });
+                if keep {
+                    path_outlook::put(key, sp.clone(), lp.clone());
+                }
+                (sp, lp)
+            }
+        };
         if let Some(me) = me {
             let geom = |route| {
                 propagation::path_geometry_route(
@@ -8236,6 +8265,27 @@ mod path_outlook_kp_tests {
     #[test]
     fn a_fetched_kp_is_passed_on() {
         assert_eq!(swpc_kp(Some(&view(3.33, true))), Some(3.33));
+    }
+
+    #[test]
+    fn an_unfetched_snapshot_draws_no_polar_stretch_on_either_route() {
+        // Boston -> Tokyo runs over a cap both ways round at any real Kp.
+        let (me, dx, t) = ((42.36, -71.06), (35.68, 139.69), 1_778_846_400);
+        let polar = |kp_now, route| {
+            propagation::path_geometry_route(me, dx, route, t, kp_now, None, None)
+                .segments_now
+                .iter()
+                .any(|s| s.kind == propagation::SegmentKind::Polar)
+        };
+        for route in [propagation::Route::Short, propagation::Route::Long] {
+            assert!(!polar(swpc_kp(None), route), "cold cache, {route:?}");
+            assert!(
+                !polar(swpc_kp(Some(&view(2.0, false))), route),
+                "stand-in, {route:?}"
+            );
+            // Positive control: the same Kp, really reported, draws the stretch.
+            assert!(polar(swpc_kp(Some(&view(2.0, true))), route), "{route:?}");
+        }
     }
 }
 

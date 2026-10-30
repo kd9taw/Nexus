@@ -112,7 +112,7 @@ describe('the heading hint on the station card', () => {
     )
     // The long route crosses the cap and a storm is forecast: the chip names it as a forecast.
     expect(container.querySelector('.station-route .route-polar-chip')?.textContent).toBe(
-      'Polar path · Kp 6 forecast at 1800Z',
+      'Polar path · Kp 6 forecast from 1800Z',
     )
     // The reason and the numbers, one hover away.
     const title = container.querySelector('.station-route')!.getAttribute('title')!
@@ -142,5 +142,17 @@ describe('the heading hint on the Path card', () => {
     const p: PathPrediction = { ...longPred(), engine: 'heuristic', longPath: undefined, routes: undefined }
     const { container } = render(<PathRoute pred={p} className="cp-route" />)
     expect(container.innerHTML).toBe('')
+  })
+
+  it('near the antipode it makes no call and says why: no heading, no label, no chip', () => {
+    const p = longPred()
+    p.geometry = geo(90, 19_950, 0.2)
+    p.longPath!.geometry = geo(270, 20_080, 0.2)
+    const { container } = render(<PathRoute pred={p} className="cp-route" />)
+    expect(container.querySelector('.route-hint')?.textContent).toBe(
+      'Near the antipode: every heading is about the same distance.',
+    )
+    expect(container.querySelector('.route-lp-badge')).toBeNull()
+    expect(container.querySelector('.route-polar-chip')).toBeNull()
   })
 })

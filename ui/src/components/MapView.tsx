@@ -673,8 +673,6 @@ const RINGS_KM = [1000, 3000, 5000, 10000]
  * catalog. */
 const PATH_SP = 'SP'
 const PATH_LP = 'LP'
-/** The grey-line stretch of the path ribbon: the terminator line's own gold. */
-const RIBBON_GREY = 'rgba(255, 200, 110, 0.95)'
 
 // Cartographic palette — a map should read as a MAP (filled land + ocean), not a
 // wireframe. The basemap's colours are THEME TOKENS (styles.css MAP BASEMAP): the standard
@@ -2886,8 +2884,8 @@ export function MapView({
           }
         }
         ctx.font = `${Math.round(10 * ms)}px system-ui`
-        ctx.textAlign = 'left'
         ctx.textBaseline = 'middle'
+        const qthAt = placePoint(kind, proj, me)
         for (const l of rib.lines) {
           const width = (pathMode === 'lp') === (l.route === 'long') ? 2.5 : 1.5
           ctx.setLineDash(l.route === 'long' ? [5, 4] : [])
@@ -2897,7 +2895,7 @@ export function MapView({
           polyline(l.points)
           ctx.stroke()
           for (const st of l.stretches) {
-            ctx.strokeStyle = st.kind === 'polar' ? cssVar('--route-polar') : RIBBON_GREY
+            ctx.strokeStyle = cssVar(st.kind === 'polar' ? '--route-polar' : '--route-grey')
             ctx.lineWidth = width + 1.5
             ctx.beginPath()
             polyline(st.points)
@@ -2906,8 +2904,12 @@ export function MapView({
           ctx.setLineDash([])
           const at = placePoint(kind, proj, l.labelAt)
           if (at) {
+            // A route leaving westward on screen runs its label leftward from the anchor, so the
+            // text never lies back over the QTH ring.
+            const west = qthAt !== null && at[0] < qthAt[0]
+            ctx.textAlign = west ? 'right' : 'left'
             ctx.fillStyle = inkOf(l.ink)
-            haloText(l.label, at[0] + 4 * ms, at[1] - 6 * ms)
+            haloText(l.label, at[0] + (west ? -4 : 4) * ms, at[1] - 6 * ms)
           }
         }
       }

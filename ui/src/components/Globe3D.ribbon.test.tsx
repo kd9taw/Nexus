@@ -146,7 +146,7 @@ function outlook(): PathPrediction {
     // EN52 (the QTH) to Sydney: ~14 900 km short path.
     geometry: geometry(14_900, 245),
     longPath: { engine: 'p533', bands: [], mufNow: 0, mufHourly: [], geometry: geometry(25_130, 65) },
-    routes: [{ band: '20m', verdict: 'long', confidence: 'likely', shortBcr: 0, longBcr: 0.9, reasons: [] }],
+    routes: [{ band: '20m', verdict: 'long', confidence: 'possible', shortBcr: 0, longBcr: 0.9, reasons: [{ kind: 'oneClosed', open: 'long' }] }],
   }
 }
 

@@ -27,8 +27,10 @@ export interface CellView {
   /** The route that figure is for; null when the model names neither (either way, both closed). */
   route: 'short' | 'long' | null
   glyph: string
-  /** The route shown crosses the polar cap at that hour's Kp. */
+  /** The route shown crosses the auroral zone or the polar cap at that hour's Kp. */
   polar: boolean
+  /** The route that `polar` is about (the better figure's when the model names neither). */
+  polarRoute: 'short' | 'long' | null
 }
 
 /** What one cell shows in `mode`. */
@@ -37,6 +39,7 @@ export function cellView(c: PathDayCell, h: PathDayHour | undefined, mode: DayMo
     pct,
     route,
     glyph: route ? ROUTE_GLYPH[route] : '',
+    polarRoute,
     polar: polarRoute === 'long' ? h?.polarLong === true : polarRoute === 'short' ? h?.polarShort === true : false,
   })
   if (mode === 'short') return view(c.shortPct, 'short', 'short')

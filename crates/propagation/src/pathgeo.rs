@@ -582,6 +582,26 @@ mod tests {
     }
 
     #[test]
+    fn with_kp_unknown_neither_route_draws_a_polar_stretch() {
+        // Boston -> Tokyo crosses a cap both ways round at any real Kp (positive control:
+        // the test above). With no Kp held there is no cap edge to draw from.
+        for route in [Route::Short, Route::Long] {
+            let g = path_geometry_route(BOSTON, TOKYO, route, MAY_12Z, None, None, None);
+            assert!(
+                g.segments_now.iter().all(|s| s.kind != SegmentKind::Polar),
+                "{route:?}: {:?}",
+                g.segments_now
+            );
+            assert!(g.hours.iter().all(|h| h.polar_frac.is_none()));
+            let known = path_geometry_route(BOSTON, TOKYO, route, MAY_12Z, Some(2.0), None, None);
+            assert!(known
+                .segments_now
+                .iter()
+                .any(|s| s.kind == SegmentKind::Polar));
+        }
+    }
+
+    #[test]
     fn an_equatorial_long_path_stays_out_of_the_cap_at_kp_9() {
         // Singapore -> Nairobi: the short path and its long path both hug the equator.
         let lp = path_geometry_route(

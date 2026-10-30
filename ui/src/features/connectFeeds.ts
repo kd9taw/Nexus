@@ -70,6 +70,8 @@ export interface Feed<T> {
 export interface KeyedFeed<T> {
   readonly name: string
   readonly load: (key: string) => Promise<T>
+  /** Poll each key this often while it is shown; absent = asked once per stretch of being shown. */
+  readonly everyMs?: number
 }
 
 /** What a feed holds (see the header). */
@@ -106,8 +108,10 @@ export const KP_FORECAST: Feed<KpForecast> = { name: 'kpForecast', load: () => g
 /** The ten DX regions' path over the day: the shack keeps the model six hours, so this poll only
  *  picks up the hours' Kp as the outlook moves (SWPC republishes every 30 minutes). */
 export const PATH_REGIONS: Feed<PathRegions> = { name: 'pathRegions', load: () => getPathRegions(), everyMs: 900_000 }
-/** The outlook along the path to the selected station's grid, asked once per selection. */
-export const PATH_OUTLOOK: KeyedFeed<PathPrediction> = { name: 'pathOutlook', load: (grid) => getPathOutlook(grid) }
+/** The outlook along the path to the selected station's grid, asked again every minute while the
+ *  station stays selected: the shack keeps the day's prediction (P.533), so each ask only moves the
+ *  current hour, the Kp per hour and the route calls on. */
+export const PATH_OUTLOOK: KeyedFeed<PathPrediction> = { name: 'pathOutlook', load: (grid) => getPathOutlook(grid), everyMs: 60_000 }
 
 /** A programme's activators on the air now, with when the answer came (the board's "Updated" line). */
 export interface OtaAnswer {
@@ -300,7 +304,7 @@ function feedFor<T>(kf: KeyedFeed<T>, key: string): Feed<T> {
   }
   let feed = byKey.get(key)
   if (!feed) {
-    feed = { name: `${kf.name}:${key}`, load: () => kf.load(key), everyMs: null }
+    feed = { name: `${kf.name}:${key}`, load: () => kf.load(key), everyMs: kf.everyMs ?? null }
     byKey.set(key, feed)
   }
   return feed as Feed<T>
