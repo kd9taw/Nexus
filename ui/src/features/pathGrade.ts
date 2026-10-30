@@ -2,14 +2,14 @@
 // line, from the shack's grade (src-tauri `path_grades`).
 //
 // A grade is either stamped on the contact when it was logged (`tier: 'logged'`: from the path card
-// computed for that station and the station's own evidence — its beam heading, receivers along the
-// route, its decodes) or modelled afterwards for display only (`tier: 'modelled'`: the propagation
-// model alone, at the solar flux the contact logged). The two are never confused on screen: a
-// modelled grade is dimmed and its hover says it is the model's monthly median, never a
-// measurement. Only the station's own beam heading makes a grade "confirmed", and never for the
-// long path, whose figures are unvalidated (the hover carries that label whenever the long path is
-// involved). The reasons arrive as tokens and are put into words here, so every language reads the
-// same evidence.
+// computed for that station, with the receivers along the route and the station's decodes as
+// reasons) or modelled afterwards for display only (`tier: 'modelled'`: the propagation model
+// alone, at the solar flux the contact logged). The two are never confused on screen: a modelled
+// grade is dimmed and its hover says it is the model's monthly median, never a measurement. The
+// long path's figures are unvalidated, and the hover carries that label whenever the long path is
+// involved. The reasons arrive as tokens and are put into words here, so every language reads the
+// same evidence. A grade never touches the contact's antenna fields (ADIF ANT_AZ, ANT_PATH): those
+// are the operator's, set on the contact card.
 //
 // The Logbook asks for the grades of the rows it draws: asks made together go as one question,
 // answers are kept by what the grade depends on (time, band, both grid squares, the fields it
@@ -43,6 +43,7 @@ export function gradeAsk(q: LoggedQso): PathGradeAsk {
     band: q.band,
     grid: q.grid ?? null,
     myGrid: q.myGrid ?? null,
+    propMode: q.propMode ?? null,
     extra: (q.extra ?? []).filter(([k]) => (PATH_GRADE_READS as readonly string[]).includes(k)),
   }
 }
@@ -50,7 +51,7 @@ export function gradeAsk(q: LoggedQso): PathGradeAsk {
 /** What a row's grade depends on: an edit of any of it asks again. */
 export function gradeKey(q: LoggedQso): string {
   const a = gradeAsk(q)
-  return JSON.stringify([q.id ?? '', a.whenUnix, a.band, a.grid, a.myGrid, a.extra])
+  return JSON.stringify([q.id ?? '', a.whenUnix, a.band, a.grid, a.myGrid, a.propMode, a.extra])
 }
 
 function verdictWord(g: PathGrade): string {
@@ -68,8 +69,6 @@ function verdictWord(g: PathGrade): string {
 
 function confWord(c: PathGrade['confidence']): string | null {
   switch (c) {
-    case 'confirmed':
-      return t('pathGrade.conf.confirmed')
     case 'likely':
       return t('pathRoute.conf.likely')
     case 'possible':
@@ -103,10 +102,6 @@ export function reasonText(token: string): string | null {
       return t('pathGrade.why.greyS')
     case 'GREY_L':
       return t('pathGrade.why.greyL')
-    case 'HEADING_S':
-      return t('pathGrade.why.headingS')
-    case 'HEADING_L':
-      return t('pathGrade.why.headingL')
     case 'HEARD_S':
     case 'HEARD_L': {
       const n = Number(arg)
@@ -167,9 +162,7 @@ export function gradeCell(g: PathGrade | null | undefined): GradeCellView {
       ? t('pathGrade.cell.either')
       : g.verdict === 'unknown'
         ? t('pathGrade.cell.outside')
-        : g.confidence === 'confirmed'
-          ? t('pathGrade.cell.confirmed')
-          : (confWord(g.confidence) ?? '')
+        : (confWord(g.confidence) ?? '')
   const text = [glyph, word, g.polar ? POLAR_GLYPH : ''].filter(Boolean).join(' ')
   return { text, title: gradeLines(g).join('\n'), dim: g.tier === 'modelled' }
 }

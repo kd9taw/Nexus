@@ -5,10 +5,12 @@
 //!
 //! 1. **A NEW contact is graded as it is logged** ([`at_log`], the engine's path grader). It reads
 //!    only what this module already holds — the path card computed for that station
-//!    ([`keep_outlook`]), the rotator's recent readings ([`note_rotor`]) and the PSK Reporter
-//!    spots — because it runs under the Engine lock: no prediction, no rotator query, no disk.
-//!    The record gains new fields only (`tempo_core::logbook::path_stamp`). A contact with no
-//!    card for its station logs with no grade; the second half grades it for display.
+//!    ([`keep_outlook`]) and the PSK Reporter spots — because it runs under the Engine lock: no
+//!    prediction, no disk. The record gains the grade fields only
+//!    (`tempo_core::logbook::path_stamp`), never `ANT_AZ` or `ANT_PATH`. A contact with no card
+//!    for its station logs with no grade; the second half grades it for display. A contact that
+//!    did not go by the ionosphere ([`ionospheric`]: satellite, EME, a repeater …) is never
+//!    graded.
 //! 2. **The existing log is graded for DISPLAY ONLY** ([`capture`] then [`run_pass`]). ⛔ It
 //!    never writes a contact: the grades live in this module's own file (`path_grades.jsonl`
 //!    beside `settings.json`), keyed by what a grade depends on — the two grid squares, the band,
@@ -34,7 +36,7 @@ use propagation::contact_path::{self as cp, ContactGrade, SsnSource, ValidationT
 use propagation::{PathPrediction, Route, RouteCall, RouteConfidence, RouteReason, RouteVerdict};
 use serde::{Deserialize, Serialize};
 use tempo_app::logstore::LogRows;
-use tempo_core::logbook::path_stamp::{self, PathAtLog, PathStamp, StampConf, StampRoute};
+use tempo_core::logbook::path_stamp::{self, PathStamp, StampConf, StampRoute};
 use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
 use tempo_core::logbook::QsoRecord;
 
@@ -68,7 +70,6 @@ pub(crate) fn reason_token(r: &RouteReason) -> String {
         RouteReason::WithinMargin => "WITHIN".into(),
         RouteReason::BothClosed => "CLOSED".into(),
         RouteReason::GreyLine { route } => format!("GREY_{}", letter(*route)),
-        RouteReason::Heading { route } => format!("HEADING_{}", letter(*route)),
         RouteReason::HeardAlong { route, receivers } => {
             format!("HEARD_{}:{receivers}", letter(*route))
         }
@@ -87,7 +88,6 @@ fn stamp_route(v: RouteVerdict) -> StampRoute {
 
 fn stamp_conf(c: RouteConfidence) -> StampConf {
     match c {
-        RouteConfidence::Confirmed => StampConf::Confirmed,
         RouteConfidence::Likely => StampConf::Likely,
         RouteConfidence::Possible => StampConf::Possible,
     }
@@ -157,84 +157,6 @@ fn outlook_for(me4: &str, dx4: &str, when: i64) -> Option<Arc<PathPrediction>> {
         .map(|k| Arc::clone(&k.pred))
 }
 
-// ── the rotator's readings ───────────────────────────────────────────────────────────────────
-
-/// The readings kept: an hour at the poller's pace.
-const ROTOR_KEPT: usize = 480;
-/// How far before a contact's start a reading still describes it (seconds) …
-const ROTOR_BEFORE_SECS: i64 = 60;
-/// … and after its end.
-const ROTOR_AFTER_SECS: i64 = 20;
-/// The beam counts as still over a contact only if every reading across it is within this.
-pub(crate) const ROTOR_STILL_DEG: f32 = 10.0;
-/// How often the poller reads a configured rotator.
-pub(crate) const ROTOR_POLL: std::time::Duration = std::time::Duration::from_secs(15);
-
-static ROTOR: Mutex<VecDeque<(i64, f32)>> = Mutex::new(VecDeque::new());
-
-/// Keep one rotator reading (any read: the Rotor pane's poll, the strip's, the poller's).
-pub(crate) fn note_rotor(at: i64, az_deg: f64) {
-    if !az_deg.is_finite() {
-        return;
-    }
-    let mut r = lock(&ROTOR);
-    r.push_back((at, az_deg.rem_euclid(360.0) as f32));
-    while r.len() > ROTOR_KEPT {
-        r.pop_front();
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn forget_rotor() {
-    lock(&ROTOR).clear();
-}
-
-/// The beam heading over a contact from `start` to `end` (unix seconds): every reading from a
-/// minute before it to just after it, if there is one and the beam did not move more than
-/// [`ROTOR_STILL_DEG`] across them. `None` otherwise — a beam that swung during the contact
-/// says nothing about the one heading it was made on.
-pub(crate) fn heading_over(start: i64, end: i64) -> Option<u16> {
-    let r = lock(&ROTOR);
-    let span: Vec<f32> = r
-        .iter()
-        .filter(|(t, _)| *t >= start - ROTOR_BEFORE_SECS && *t <= end.max(start) + ROTOR_AFTER_SECS)
-        .map(|(_, a)| *a)
-        .collect();
-    let first = *span.first()?;
-    let gap = |a: f32| {
-        let d = (a - first).rem_euclid(360.0);
-        d.min(360.0 - d)
-    };
-    if span.iter().any(|a| gap(*a) > ROTOR_STILL_DEG) {
-        return None;
-    }
-    Some((first.round() as u16) % 360)
-}
-
-/// Read the configured rotator every [`ROTOR_POLL`] so a contact's heading is known whether or
-/// not a Rotor pane is open. One short connection to rotctld per read; nothing when no rotator
-/// is configured. Stops when Nexus quits.
-#[cfg(feature = "radio")]
-pub(crate) fn start_rotor_poller(engine: crate::SharedEngine) {
-    let _ = std::thread::Builder::new()
-        .name("rotor-heading".into())
-        .spawn(move || loop {
-            std::thread::sleep(ROTOR_POLL);
-            if tempo_audio::service::SHUTDOWN.load(Ordering::Relaxed) {
-                return;
-            }
-            let addr = {
-                let eng = tempo_app::engine::engine_lock(&engine);
-                crate::effective_rotator_addr(eng.settings())
-            };
-            if let Some(addr) = addr {
-                if let Some(az) = tempo_audio::rotator::read_azimuth(&addr) {
-                    note_rotor(crate::now_unix(), az);
-                }
-            }
-        });
-}
-
 // ── the log-time grade ───────────────────────────────────────────────────────────────────────
 
 /// How far either side of a contact's start a PSK Reporter spot counts as the same moment.
@@ -270,49 +192,52 @@ fn receivers(
     out
 }
 
-/// The grade and heading for a contact being logged — the engine's path grader. `my_grid` is
-/// the station's grid from Settings, for a record that names none; `late_secs` the worked
-/// station's decode lateness against each period's median (the aggregate DT gate); `now` the
-/// clock.
+/// Whether a contact went by the ionosphere, as far as its record says: no `PROP_MODE`, or one
+/// naming the ionosphere (`F2`, `ION`). A satellite, EME, repeater, internet-linked or any other
+/// contact is not a path the model describes, and is never graded.
+pub(crate) fn ionospheric(prop_mode: Option<&str>) -> bool {
+    match prop_mode.map(str::trim).filter(|m| !m.is_empty()) {
+        None => true,
+        Some(m) => m.eq_ignore_ascii_case("F2") || m.eq_ignore_ascii_case("ION"),
+    }
+}
+
+/// The grade for a contact being logged — the engine's path grader. `my_grid` is the station's
+/// grid from Settings, for a record that names none; `late_secs` the worked station's decode
+/// lateness against each period's median (the aggregate DT gate). Never an antenna field.
 pub(crate) fn at_log(
     rec: &QsoRecord,
     my_grid: &str,
     live: &Mutex<propagation::LiveSpots>,
     region: &Mutex<propagation::LiveSpots>,
     late_secs: &[f32],
-    now: i64,
-) -> PathAtLog {
+) -> Option<PathStamp> {
+    if !ionospheric(rec.prop_mode.as_deref()) {
+        return None;
+    }
     let start = rec.when_unix as i64;
-    let end = rec.time_off_unix.map_or(now, |t| t as i64);
-    let ant_az = heading_over(start, end);
-    let grade = (|| {
-        let key = path_stamp::grade_key(rec)?;
-        let mine = rec
-            .my_grid
-            .as_deref()
-            .filter(|g| !g.trim().is_empty())
-            .unwrap_or(my_grid);
-        let me4 = grid4(mine)?;
-        let dx4 = grid4(rec.grid.as_deref()?)?;
-        let pred = outlook_for(&me4, &dx4, start)?;
-        let lp = pred.long_path.as_deref()?;
-        let hour = (start.rem_euclid(86_400) / 3600) as usize;
-        let mut call = propagation::compare_routes_at(&pred, lp, hour)
-            .into_iter()
-            .find(|c| c.band.eq_ignore_ascii_case(rec.band.trim()))?;
-        if let (Some(az), Some(g)) = (ant_az, pred.geometry.as_ref()) {
-            cp::confirm_by_heading(&mut call, f32::from(az), g.bearing_deg);
-        }
-        if let (Some(me), Some(dx)) = (latlon(mine), rec.grid.as_deref().and_then(latlon)) {
-            let along = cp::receivers_along(me, dx, &receivers(rec, live, region));
-            call.reasons.extend(cp::heard_along_reason(along));
-        }
-        if let Some((ms, decodes)) = cp::late_dt_ms(late_secs) {
-            call.reasons.push(RouteReason::LateDt { ms, decodes });
-        }
-        Some(stamp_of(&call, key))
-    })();
-    PathAtLog { grade, ant_az }
+    let key = path_stamp::grade_key(rec)?;
+    let mine = rec
+        .my_grid
+        .as_deref()
+        .filter(|g| !g.trim().is_empty())
+        .unwrap_or(my_grid);
+    let me4 = grid4(mine)?;
+    let dx4 = grid4(rec.grid.as_deref()?)?;
+    let pred = outlook_for(&me4, &dx4, start)?;
+    let lp = pred.long_path.as_deref()?;
+    let hour = (start.rem_euclid(86_400) / 3600) as usize;
+    let mut call = propagation::compare_routes_at(&pred, lp, hour)
+        .into_iter()
+        .find(|c| c.band.eq_ignore_ascii_case(rec.band.trim()))?;
+    if let (Some(me), Some(dx)) = (latlon(mine), rec.grid.as_deref().and_then(latlon)) {
+        let along = cp::receivers_along(me, dx, &receivers(rec, live, region));
+        call.reasons.extend(cp::heard_along_reason(along));
+    }
+    if let Some((ms, decodes)) = cp::late_dt_ms(late_secs) {
+        call.reasons.push(RouteReason::LateDt { ms, decodes });
+    }
+    Some(stamp_of(&call, key))
 }
 
 // ── the display-only grades of the existing log ──────────────────────────────────────────────
@@ -380,7 +305,11 @@ pub(crate) struct GradeAsk {
     pub(crate) grid: Option<String>,
     #[serde(default)]
     pub(crate) my_grid: Option<String>,
-    /// The passthrough fields the grade reads (`SFI`, `ANT_AZ`, the stamp's); others ignored.
+    /// ADIF `PROP_MODE`: anything but the ionosphere is never graded ([`ionospheric`]).
+    #[serde(default)]
+    pub(crate) prop_mode: Option<String>,
+    /// The passthrough fields the grade reads (`SFI`, `K_INDEX`, `ANT_AZ`, the stamp's); others
+    /// ignored.
     #[serde(default)]
     pub(crate) extra: Vec<(String, String)>,
 }
@@ -392,6 +321,7 @@ impl GradeAsk {
             band: r.band.clone(),
             grid: r.grid.clone(),
             my_grid: r.my_grid.clone(),
+            prop_mode: r.prop_mode.clone(),
             extra: r
                 .extra
                 .iter()
@@ -415,6 +345,7 @@ impl GradeAsk {
         r.band = self.band.clone();
         r.grid = self.grid.clone();
         r.my_grid = self.my_grid.clone();
+        r.prop_mode = self.prop_mode.clone();
         r.extra = self.extra.clone();
         r.extra.sort();
         r
@@ -431,7 +362,14 @@ pub(crate) const READS: &[&str] = &[
 ];
 
 /// The `qso` columns a grade reads.
-pub(crate) const COLUMNS: &[&str] = &["when_unix", "time_off_unix", "band", "grid", "my_grid"];
+pub(crate) const COLUMNS: &[&str] = &[
+    "when_unix",
+    "time_off_unix",
+    "band",
+    "grid",
+    "my_grid",
+    "prop_mode",
+];
 
 /// A cell's key and what grading it needs.
 struct CellAsk {
@@ -445,6 +383,9 @@ struct CellAsk {
 }
 
 fn cell_ask(a: &GradeAsk, my_grid: &str, now: i64, current_ssn: Option<f64>) -> Option<CellAsk> {
+    if !ionospheric(a.prop_mode.as_deref()) {
+        return None;
+    }
     let mine = a
         .my_grid
         .as_deref()
@@ -506,8 +447,6 @@ pub(crate) struct Status {
 #[derive(Default)]
 struct Grades {
     inputs: String,
-    /// The station's grid at the last pass, for a contact that names none.
-    my_grid: String,
     /// The file holds nothing for these inputs yet: the next write starts it over, header first.
     file_fresh: bool,
     loaded: bool,
@@ -530,6 +469,12 @@ pub(crate) fn file_path() -> PathBuf {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."))
         .join("path_grades.jsonl")
+}
+
+/// The grades file in `dir` (a test's own folder).
+#[cfg(test)]
+pub(crate) fn file_path_in(dir: &Path) -> PathBuf {
+    dir.join("path_grades.jsonl")
 }
 
 #[derive(Serialize, Deserialize)]
@@ -652,7 +597,6 @@ pub(crate) fn run_pass(job: Job, path: &Path, stop: &AtomicBool) -> Result<Statu
             g.rev += 1;
         }
     }
-    lock(&GRADES).my_grid = job.my_grid.clone();
     // The log, read off every lock but its own.
     let mut asks: Vec<GradeAsk> = Vec::new();
     job.rows
@@ -833,7 +777,6 @@ fn verdict_of(r: StampRoute) -> RouteVerdict {
 
 fn conf_of(c: StampConf) -> RouteConfidence {
     match c {
-        StampConf::Confirmed => RouteConfidence::Confirmed,
         StampConf::Likely => RouteConfidence::Likely,
         StampConf::Possible => RouteConfidence::Possible,
     }
@@ -868,6 +811,9 @@ pub(crate) fn view_for(
     now: i64,
     current_ssn: Option<f64>,
 ) -> Option<GradeView> {
+    if !ionospheric(a.prop_mode.as_deref()) {
+        return None;
+    }
     let rec = a.record();
     let stamp = path_stamp::read_path(&rec);
     let current = path_stamp::grade_key(&rec);
@@ -908,13 +854,16 @@ pub(crate) fn view_for(
 
 /// The Logbook's path filter for one contact ([`tempo_core::logbook::query::PathFilter`]): the
 /// grade it shows names the long path, or its route crosses the polar cap. A contact with no
-/// grade passes neither.
-pub(crate) fn filter_keeps(r: &QsoRecord, want: tempo_core::logbook::query::PathFilter) -> bool {
+/// grade passes neither. `my_grid` is the station's grid now, as the Path column reads it.
+pub(crate) fn filter_keeps(
+    r: &QsoRecord,
+    want: tempo_core::logbook::query::PathFilter,
+    my_grid: &str,
+) -> bool {
     use tempo_core::logbook::query::PathFilter;
-    let my_grid = lock(&GRADES).my_grid.clone();
     let Some(v) = view_for(
         &GradeAsk::of(r),
-        &my_grid,
+        my_grid,
         crate::now_unix(),
         crate::current_ssn(),
     ) else {
@@ -950,6 +899,9 @@ pub(crate) fn contact_day(
     current_ssn: Option<f64>,
 ) -> Option<ContactDay> {
     use propagation::PathPredictor;
+    if !ionospheric(a.prop_mode.as_deref()) {
+        return None;
+    }
     let mine = a
         .my_grid
         .as_deref()
@@ -993,6 +945,10 @@ pub(crate) fn contact_day(
         grade: view_for(a, my_grid, now, current_ssn),
     })
 }
+
+/// The module's state is process-wide; the tests that touch it take turns.
+#[cfg(test)]
+pub(crate) static TEST_SERIAL: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 pub(crate) fn forget_grades() {

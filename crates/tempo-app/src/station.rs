@@ -2400,12 +2400,11 @@ pub struct StationCore {
     pub(crate) state_resolve:
         Option<Box<dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync>>,
     /// The log-time path grader, injected by the command layer (which holds the propagation
-    /// model, the path card it last computed and the rotator's readings): for a contact being
-    /// logged, its graded route and the beam heading it was made on
+    /// model and the path card it last computed): for a contact being logged, its graded route
     /// ([`tempo_core::logbook::path_stamp`]). Same pattern as [`Self::set_state_resolver`], for
     /// the same reason — tempo-app has no `propagation` dependency. It runs under the Engine
     /// lock, so it only ever reads what the command layer already holds: no prediction, no
-    /// rotator query, no disk. Its second input is the worked station's decode lateness
+    /// no disk. Its second input is the worked station's decode lateness
     /// ([`crate::engine::Engine`]'s `late_dts_of`), for the grader's aggregate DT gate. `None` in
     /// headless tests (a contact logs with no grade).
     #[allow(clippy::type_complexity)]
@@ -2414,7 +2413,7 @@ pub struct StationCore {
             dyn Fn(
                     &tempo_core::logbook::QsoRecord,
                     &[f32],
-                ) -> tempo_core::logbook::path_stamp::PathAtLog
+                ) -> Option<tempo_core::logbook::path_stamp::PathStamp>
                 + Send
                 + Sync,
         >,
@@ -3528,7 +3527,7 @@ impl StationCore {
         grade: impl Fn(
                 &tempo_core::logbook::QsoRecord,
                 &[f32],
-            ) -> tempo_core::logbook::path_stamp::PathAtLog
+            ) -> Option<tempo_core::logbook::path_stamp::PathStamp>
             + Send
             + Sync
             + 'static,

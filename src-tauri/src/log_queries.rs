@@ -231,6 +231,9 @@ struct Capture {
     revision: u64,
     index_rev: u64,
     content_rev: u64,
+    /// The station's grid, for the path filter's grade of a contact that names none — the same
+    /// source the Logbook's Path column reads (`log_path_grades`).
+    my_grid: String,
 }
 
 impl Capture {
@@ -240,6 +243,7 @@ impl Capture {
             revision: eng.log_revision(),
             index_rev: eng.log_index_rev(),
             content_rev: eng.log_content_rev(),
+            my_grid: eng.settings().mygrid.clone(),
         }
     }
 
@@ -621,7 +625,7 @@ impl LogQueries {
                 if query.is_default() {
                     db.rowids_newest_first()
                 } else {
-                    let decider = Decider::new(&query.filter, resolve, inputs.need);
+                    let decider = Decider::new(&query.filter, resolve, inputs.need, &c.my_grid);
                     let keep = |r: &QsoRecord| decider.keeps(r);
                     let mut b = OrderBuilder::new(query, resolve);
                     if query.filter.decided_by_caller() {
@@ -1148,6 +1152,7 @@ struct Decider<'a> {
     f: &'a LogFilter,
     resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
     need: Option<&'a NeedSlots>,
+    my_grid: &'a str,
     cty: std::cell::RefCell<HashMap<String, Option<propagation::dxcc::DxccInfo>>>,
     shown: std::cell::RefCell<HashMap<ShownKey, Option<String>>>,
 }
@@ -1157,11 +1162,13 @@ impl<'a> Decider<'a> {
         f: &'a LogFilter,
         resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
         need: Option<&'a NeedSlots>,
+        my_grid: &'a str,
     ) -> Self {
         Self {
             f,
             resolve,
             need,
+            my_grid,
             cty: Default::default(),
             shown: Default::default(),
         }
@@ -1192,7 +1199,7 @@ impl<'a> Decider<'a> {
             }
         }
         if let Some(want) = f.path {
-            if !crate::path_grades::filter_keeps(r, want) {
+            if !crate::path_grades::filter_keeps(r, want, self.my_grid) {
                 return false;
             }
         }

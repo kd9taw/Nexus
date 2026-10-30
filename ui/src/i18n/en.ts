@@ -1905,8 +1905,6 @@ export const EN = {
   'pathGrade.verdict.long': 'Long path',
   'pathGrade.verdict.either': 'Either path',
   'pathGrade.verdict.unknown': 'Outside the model',
-  'pathGrade.conf.confirmed': 'confirmed by your beam heading',
-  'pathGrade.cell.confirmed': 'confirmed',
   'pathGrade.cell.either': 'either',
   'pathGrade.cell.outside': 'outside',
   'pathGrade.none': 'No path grade yet',
@@ -1931,13 +1929,11 @@ export const EN = {
   'pathGrade.why.closed': 'both paths were modelled closed',
   'pathGrade.why.greyS': 'grey line along the short path',
   'pathGrade.why.greyL': 'grey line along the long path',
-  'pathGrade.why.headingS': 'your beam pointed along the short path',
-  'pathGrade.why.headingL': 'your beam pointed along the long path',
   'pathGrade.why.heardS': 'other receivers along the short path heard the same signal: {{n}}',
   'pathGrade.why.heardL': 'other receivers along the long path heard the same signal: {{n}}',
   'pathGrade.why.lateDt':
     'their decodes ran {{ms}} ms late (decodes: {{n}}), which is not evidence on its own',
-  'pathGrade.tier.logged': 'Graded when it was logged, from the path card and your station.',
+  'pathGrade.tier.logged': 'Graded when it was logged, from the path card for that station.',
   'pathGrade.tier.modelled':
     'Modelled afterwards from the propagation model alone (a monthly median, not a measurement).',
   'pathGrade.ssn.logged': 'Solar activity from the flux logged with the contact.',
@@ -1950,7 +1946,7 @@ export const EN = {
   'pathGrade.measure.polar':
     'Open on some path — polar paths: {{polar}}%, other paths: {{other}}%.',
   'pathGrade.measure.heading':
-    'Your beam heading agrees with the model’s better path: {{pct}}% (contacts judged: {{n}}).',
+    'A beam heading logged with the contact (ANT_AZ) agrees with the model’s better path: {{pct}}% (contacts judged: {{n}}).',
   'pathGrade.measure.noHeading':
     'No contact yet with a logged beam heading and a clear model margin.',
   'pathGrade.measure.none': 'No graded contacts in the last 30 days yet.',
@@ -1964,7 +1960,7 @@ export const EN = {
   'contactCard.path.day': 'The path over that day, modelled. The marked hour is the contact’s.',
   'contactCard.path.pick': 'Your antenna path',
   'contactCard.path.pickTitle':
-    'Adds the ADIF field ANT_PATH, written when you save the contact. Nexus writes it by itself only for a short path your beam heading confirmed.',
+    'Adds the ADIF field ANT_PATH, written when you save the contact. Nexus never fills it by itself.',
   'contactCard.path.pickShort': 'Short path',
   'contactCard.path.pickLong': 'Long path',
   'logbook.column.qslSentDate': 'Card sent',

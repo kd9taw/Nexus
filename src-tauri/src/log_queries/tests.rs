@@ -3472,3 +3472,38 @@ fn the_path_filter_keeps_the_long_and_the_polar_paths() {
     );
     assert_eq!(filtered_calls(&q, &engine, json!({"band": "20m"})).len(), 7);
 }
+
+/// ★ A path filter's order is built again as the log is graded: the grades' revision is part of
+/// its key, so a contact graded after the first ask is in the next one. Boston to Tokyo crosses
+/// the polar cap both ways round, so its grade is polar whichever route it names.
+#[test]
+fn the_path_filter_sees_contacts_graded_after_it_was_first_asked() {
+    use crate::path_grades::{capture, file_path_in, forget_grades, run_pass, TEST_SERIAL};
+    let _s = TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    forget_grades();
+    const NOW: i64 = 1_778_150_000;
+    let rec = tempo_core::logbook::parse_adif(
+        "<EOH><CALL:6>JA1AAA<QSO_DATE:8>20260507<TIME_ON:6>090000<BAND:3>20m<MODE:3>FT8\
+         <GRIDSQUARE:4>PM95<MY_GRIDSQUARE:4>FN42<SFI:3>150<EOR>",
+    )
+    .remove(0);
+    let d = Dir::new("filter-path-rev");
+    let engine = on_store(&d, &[rec]);
+    let q = LogQueries::default();
+    assert!(
+        filtered_calls(&q, &engine, json!({"path": "polar"})).is_empty(),
+        "nothing graded yet"
+    );
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    run_pass(
+        capture(&engine, NOW, Some(80.0)),
+        &file_path_in(&d.0),
+        &stop,
+    )
+    .expect("a pass");
+    assert_eq!(
+        filtered_calls(&q, &engine, json!({"path": "polar"})),
+        ["JA1AAA"]
+    );
+    forget_grades();
+}

@@ -1,36 +1,34 @@
 //! Your contacts — which way round a LOGGED contact's signal most likely went, and how sure.
 //!
 //! [`crate::route`] answers "which route does the model favour" for a band and an hour. A logged
-//! contact adds evidence the model never has: the station's own beam heading at the time, other
-//! receivers along one route, the station's own decodes. This module grades one contact from all
-//! of it, strongest first, and says which evidence each part of the answer stands on:
+//! contact adds evidence the model never has: other receivers along one route, the station's own
+//! decodes. This module grades one contact from all of it, strongest first, and says which
+//! evidence each part of the answer stands on:
 //!
-//! 1. **The station's beam heading** ([`confirm_by_heading`]). Within ±30° of one route's bearing,
-//!    and the other route modelled at least 6 dB worse: that route is *confirmed* — the only way a
-//!    grade reaches *confirmed*, because it is the station's own evidence, not the model's.
-//!    Only from a connected rotator (which turns a beam); an omni or a station with no rotator
-//!    never gets a heading, so never *confirmed*. **The long path is never confirmed**: a
-//!    long-path verdict is held at *possible* until the long path is validated, and the heading
-//!    cannot lift it — it is said as a reason instead.
-//! 2. **The model's margin** ([`crate::route::infer_route`], the same call the path card and the
+//! 1. **The model's margin** ([`crate::route::infer_route`], the same call the path card and the
 //!    day strip make for that band and hour).
-//! 3. **Grey line** on 160/80/40 m — inside `infer_route`, one notch, never past *likely*.
-//! 4. **Receivers along the route** ([`receivers_along`]): other receivers between the two ends,
+//! 2. **Grey line** on 160/80/40 m — inside `infer_route`, one notch, never past *likely*.
+//! 3. **Receivers along the route** ([`receivers_along`]): other receivers between the two ends,
 //!    on one route only, hearing the same signal within the quarter hour. It says where the
 //!    signal was heard, not how it reached you, so it is a reason and never raises a confidence.
-//! 5. **FT8 DT** ([`late_dt_ms`]). ⚠️ **A single decode's DT is NOT evidence of the long path,
+//! 4. **FT8 DT** ([`late_dt_ms`]). ⚠️ **A single decode's DT is NOT evidence of the long path,
 //!    and must never be made into it.** The long path's extra delay is at most ~67 ms (20 000 km
 //!    at the speed of light), and both stations' clock errors are routinely larger than that, so
 //!    one DT says nothing about the route. Only an aggregate is admitted — a station whose DT sits
 //!    at least 50 ms above each period's median over at least ten decodes — and even then it is a
 //!    reason string, never a confidence. Do not "improve" this into a per-decode test.
 //!
+//! A beam heading never changes a grade. Nexus does not know which antenna a rotator turns (a
+//! station with a beam on the high bands and a wire on 80 m would read its idle beam as the 80 m
+//! heading), so the heading is used only by the expert's agreement count below, from a heading
+//! the contact itself logged (`ANT_AZ`, typed or imported).
+//!
 //! The model is a monthly median at a sunspot number. For a past contact that number is the one
 //! the contact itself logged (its `SFI`), or for a recent contact today's ([`ssn_for_contact`]);
 //! a contact older than that with no flux logged is not graded at all rather than graded against
 //! the wrong part of the solar cycle.
 //!
-//! [`ValidationTally`] counts how often the model's open hours and the station's own headings
+//! [`ValidationTally`] counts how often the model's open hours and the headings contacts logged
 //! agree with the contacts actually made — the expert's check on all of the above.
 
 use serde::{Deserialize, Serialize};
@@ -40,8 +38,8 @@ use crate::model::Band;
 use crate::p533::engine::{ssn_from_sfi, P533Engine};
 use crate::pathgeo::path_geometry_route;
 use crate::route::{
-    infer_route, Route, RouteCall, RouteConfidence, RouteEvidence, RouteReason, RouteVerdict,
-    CLOSED_BCR, MARGIN_DB, NEAR_ANTIPODE_KM, OPEN_BCR,
+    infer_route, Route, RouteCall, RouteEvidence, RouteReason, RouteVerdict, CLOSED_BCR, MARGIN_DB,
+    NEAR_ANTIPODE_KM, OPEN_BCR,
 };
 
 /// A beam heading within this many degrees of a route's bearing points along that route.
@@ -69,7 +67,7 @@ fn bearing_gap(a: f32, b: f32) -> f32 {
     d.min(360.0 - d)
 }
 
-/// The route a beam heading points along: within [`HEADING_TOLERANCE_DEG`] of that route's
+/// The route a logged beam heading points along: within [`HEADING_TOLERANCE_DEG`] of that route's
 /// bearing. The two bearings are opposite, so at most one matches.
 pub fn heading_route(heading_deg: f32, short_bearing_deg: f32) -> Option<Route> {
     let long_bearing = (short_bearing_deg + 180.0).rem_euclid(360.0);
@@ -79,23 +77,6 @@ pub fn heading_route(heading_deg: f32, short_bearing_deg: f32) -> Option<Route> 
         Some(Route::Long)
     } else {
         None
-    }
-}
-
-/// Evidence 1: the station's beam heading at the time of the contact. A heading along the short
-/// path, with the long path modelled at least [`MARGIN_DB`] worse, makes the call *confirmed*
-/// short. A heading along the long path is said (a [`RouteReason::Heading`]) and lifts nothing:
-/// the long path is held at *possible* until it is validated. A heading along neither route adds
-/// nothing — it may be a skewed path, which the model does not know.
-pub fn confirm_by_heading(call: &mut RouteCall, heading_deg: f32, short_bearing_deg: f32) {
-    let Some(route) = heading_route(heading_deg, short_bearing_deg) else {
-        return;
-    };
-    call.reasons.push(RouteReason::Heading { route });
-    let long_worse = call.margin_db.is_some_and(|m| m <= -MARGIN_DB);
-    if route == Route::Short && long_worse {
-        call.verdict = RouteVerdict::Short;
-        call.confidence = Some(RouteConfidence::Confirmed);
     }
 }
 
@@ -112,7 +93,7 @@ fn against_arc(a: (f64, f64), b: (f64, f64), p: (f64, f64)) -> (f64, bool) {
     (xt.abs() * EARTH_KM, on_short)
 }
 
-/// Evidence 4: how many of `receivers` (lat, lon) lie along each route between `me` and `dx` —
+/// Evidence 3: how many of `receivers` (lat, lon) lie along each route between `me` and `dx` —
 /// `[short, long]`. A receiver within [`ALONG_END_KM`] of either end, or further than
 /// [`ALONG_TRACK_KM`] from the great circle, counts for neither. Where a signal was heard is not
 /// how it reached the operator, so this only ever becomes a reason ([`heard_along_reason`]).
@@ -147,7 +128,7 @@ pub fn heard_along_reason(counts: [u16; 2]) -> Option<RouteReason> {
     }
 }
 
-/// Evidence 5, the only admissible form of it (see the module header): `late_secs` holds, for
+/// Evidence 4, the only admissible form of it (see the module header): `late_secs` holds, for
 /// each of a station's decodes, its DT minus the median DT of every decode in the same period.
 /// `Some((ms, decodes))` when there are at least [`LATE_DT_MIN_DECODES`] of them and their median
 /// is at least [`LATE_DT_MIN_SECS`] late. Never evidence on its own: a reason, nothing more.
@@ -359,7 +340,7 @@ impl ValidationTally {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::route::compare_routes_at;
+    use crate::route::{compare_routes_at, RouteConfidence};
     use crate::PathPredictor;
 
     fn call(
@@ -394,90 +375,6 @@ mod tests {
         // Square to both routes: neither (a skewed path, if anything).
         assert_eq!(heading_route(42.0, 312.0), None);
         assert_eq!(heading_route(312.0 + 31.0, 312.0), None);
-    }
-
-    #[test]
-    fn a_short_path_heading_with_the_long_path_6_db_worse_is_confirmed() {
-        let mut c = call(
-            Some(-7.0),
-            RouteVerdict::Short,
-            Some(RouteConfidence::Likely),
-        );
-        confirm_by_heading(&mut c, 300.0, 312.0);
-        assert_eq!(c.verdict, RouteVerdict::Short);
-        assert_eq!(c.confidence, Some(RouteConfidence::Confirmed));
-        assert_eq!(
-            c.reasons,
-            vec![RouteReason::Heading {
-                route: Route::Short
-            }]
-        );
-        // Also from "either" (inside 6 dB on BCR, but the SNR margin separates them).
-        let mut c = call(Some(-6.0), RouteVerdict::Either, None);
-        confirm_by_heading(&mut c, 312.0, 312.0);
-        assert_eq!(
-            (c.verdict, c.confidence),
-            (RouteVerdict::Short, Some(RouteConfidence::Confirmed))
-        );
-    }
-
-    #[test]
-    fn a_heading_alone_or_inside_the_margin_confirms_nothing() {
-        // The beam on the short path but the long path only 5 dB worse: said, not confirmed.
-        let mut c = call(
-            Some(-5.0),
-            RouteVerdict::Short,
-            Some(RouteConfidence::Possible),
-        );
-        confirm_by_heading(&mut c, 312.0, 312.0);
-        assert_eq!(c.confidence, Some(RouteConfidence::Possible));
-        assert_eq!(
-            c.reasons,
-            vec![RouteReason::Heading {
-                route: Route::Short
-            }]
-        );
-        // No SNR from the model: nothing to measure the margin with.
-        let mut c = call(None, RouteVerdict::Short, Some(RouteConfidence::Likely));
-        confirm_by_heading(&mut c, 312.0, 312.0);
-        assert_eq!(c.confidence, Some(RouteConfidence::Likely));
-        // The beam on the short path while the model favours the long path: the model's call
-        // stands, and the disagreement is said.
-        let mut c = call(
-            Some(9.0),
-            RouteVerdict::Long,
-            Some(RouteConfidence::Possible),
-        );
-        confirm_by_heading(&mut c, 312.0, 312.0);
-        assert_eq!(
-            (c.verdict, c.confidence),
-            (RouteVerdict::Long, Some(RouteConfidence::Possible))
-        );
-        // The beam along neither route: no reason at all.
-        let mut c = call(
-            Some(-9.0),
-            RouteVerdict::Short,
-            Some(RouteConfidence::Likely),
-        );
-        confirm_by_heading(&mut c, 42.0, 312.0);
-        assert_eq!(c.confidence, Some(RouteConfidence::Likely));
-        assert!(c.reasons.is_empty());
-    }
-
-    #[test]
-    fn a_long_path_heading_is_never_confirmed() {
-        // The strongest long-path case there is: beam on the long path, long 12 dB better.
-        let mut c = call(
-            Some(12.0),
-            RouteVerdict::Long,
-            Some(RouteConfidence::Possible),
-        );
-        confirm_by_heading(&mut c, 132.0, 312.0);
-        assert_eq!(
-            (c.verdict, c.confidence),
-            (RouteVerdict::Long, Some(RouteConfidence::Possible))
-        );
-        assert_eq!(c.reasons, vec![RouteReason::Heading { route: Route::Long }]);
     }
 
     #[test]

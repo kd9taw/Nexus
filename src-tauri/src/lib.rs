@@ -18568,13 +18568,9 @@ async fn read_rotator_state(
         let Some(host) = host else {
             return Ok(None);
         };
-        let st = tauri::async_runtime::spawn_blocking(move || rotator_state(&host))
+        tauri::async_runtime::spawn_blocking(move || Some(rotator_state(&host)))
             .await
-            .map_err(|e| e.to_string())?;
-        if let Some(a) = st.az_deg {
-            path_grades::note_rotor(now_unix(), a);
-        }
-        Ok(Some(st))
+            .map_err(|e| e.to_string())
     }
     #[cfg(not(feature = "radio"))]
     {
@@ -18592,15 +18588,9 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
         let Some(host) = host else {
             return Ok(None); // no rotator configured — the pane shows its hint
         };
-        let az =
-            tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::read_azimuth(&host))
-                .await
-                .map_err(|e| e.to_string())?;
-        // Every reading is the heading a contact logged now was made on (`path_grades`).
-        if let Some(a) = az {
-            path_grades::note_rotor(now_unix(), a);
-        }
-        Ok(az)
+        tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::read_azimuth(&host))
+            .await
+            .map_err(|e| e.to_string())
     }
     #[cfg(not(feature = "radio"))]
     {
@@ -39748,23 +39738,19 @@ pub fn run() {
         start_pskr_region_feed(&region_paths, &cluster_call, &region_grid);
     }
     // The log-time path grader: a contact being logged takes the route the path card graded for
-    // its station and the beam heading the rotator read over it, as new fields only. It reads
+    // its station, as new fields only, and never an antenna field. It reads
     // what `path_grades` already holds (it runs under the Engine lock); the record's own
     // MY_GRIDSQUARE, which the log funnel has stamped by then, names the operator's end.
     {
         let live = live_paths.clone();
         let region = region_paths.0.clone();
-        engine_lock(&engine).set_path_grader(move |rec, late| {
-            path_grades::at_log(rec, "", &live, &region, late, now_unix())
-        });
+        engine_lock(&engine)
+            .set_path_grader(move |rec, late| path_grades::at_log(rec, "", &live, &region, late));
     }
-    // The rotator's heading for those stamps, and the display-only grading of the existing log
-    // (a first pass two minutes after launch, then whenever the log has changed).
+    // The display-only grading of the existing log (a first pass two minutes after launch, then
+    // whenever the log has changed).
     #[cfg(feature = "radio")]
-    {
-        path_grades::start_rotor_poller(engine.clone());
-        path_grades::start_grader(engine.clone());
-    }
+    path_grades::start_grader(engine.clone());
     // Record the LOGIN IDENTITY the feeds were started under, so a later Settings rename
     // knows to tear them down and reconnect (topics/login are call-bound). Built the same
     // way the comparison in `apply_and_persist` is: a seed in any other shape reads as a

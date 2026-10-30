@@ -53,14 +53,10 @@ pub enum RouteVerdict {
     Unknown,
 }
 
-/// How strongly the evidence favours the route it names (`Short`/`Long` verdicts only).
+/// How strongly the model favours the route it names (`Short`/`Long` verdicts only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RouteConfidence {
-    /// The station's own beam heading at the time agrees with a route the model also favours by
-    /// the margin — evidence from the station, never from the model alone
-    /// ([`crate::contact_path::confirm_by_heading`]). This module never produces it.
-    Confirmed,
     Likely,
     Possible,
 }
@@ -82,9 +78,6 @@ pub enum RouteReason {
     BothClosed,
     /// A low band whose arc on this route lies along the grey line and the other does not.
     GreyLine { route: Route },
-    /// The station's beam pointed along this route when the contact was made
-    /// ([`crate::contact_path`]).
-    Heading { route: Route },
     /// Other receivers between the two ends, on this route only, heard the same signal within
     /// the quarter hour ([`crate::contact_path::receivers_along`]). Never raises a confidence.
     HeardAlong { route: Route, receivers: u16 },

@@ -99,10 +99,9 @@ carries:
 - **The path it took**, when the Path card had worked out the path to that station within six
   hours of the contact: whether the signal most likely went the short or the long way round,
   how sure, and why. Nexus keeps this in your own log and its exports only; no service is sent
-  it. With a rotator connected, the heading your beam held through the contact is logged as
-  ANT_AZ, and when that heading agrees with a short path the model also favours by at least
-  6 dB, ANT_PATH is logged as S. A long path is never confirmed this way; set ANT_PATH yourself
-  on the contact card when you know it.
+  it. Nexus never fills in the antenna heading or antenna path (ANT_AZ, ANT_PATH) itself; set
+  ANT_PATH yourself on the contact card when you know it. A contact that did not go by the
+  ionosphere (a satellite, EME or repeater contact) is not graded.
 
 A field the contact already carries (from WSJT-X, an import or what you typed) is kept. A
 contact whose start is more than 3 hours before you log it gets no operator, rig, power, grid

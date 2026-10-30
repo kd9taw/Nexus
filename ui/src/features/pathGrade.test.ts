@@ -49,6 +49,7 @@ describe('what a grade is asked from', () => {
       band: '20m',
       grid: 'QF56',
       myGrid: 'FN42',
+      propMode: null,
       extra: [
         ['SFI', '150'],
         ['APP_NEXUS_PATH', 'S'],
@@ -62,6 +63,8 @@ describe('what a grade is asked from', () => {
     expect(gradeKey(row())).not.toBe(gradeKey(row({ grid: 'QF57' })))
     expect(gradeKey(row())).not.toBe(gradeKey(row({ band: '40m' })))
     expect(gradeKey(row())).not.toBe(gradeKey(row({ extra: [['SFI', '151']] })))
+    expect(gradeKey(row())).not.toBe(gradeKey(row({ propMode: 'SAT' })))
+    expect(gradeAsk(row({ propMode: 'SAT' })).propMode).toBe('SAT')
   })
 })
 
@@ -69,7 +72,6 @@ describe('the Path cell', () => {
   it('shows the route and how sure, the polar cap, and nothing for no grade', () => {
     expect(gradeCell(grade()).text).toBe('▸ likely')
     expect(gradeCell(grade({ verdict: 'long', confidence: 'possible', polar: true })).text).toBe('◂ possible ⊕')
-    expect(gradeCell(grade({ verdict: 'short', confidence: 'confirmed', tier: 'logged' })).text).toBe('▸ confirmed')
     expect(gradeCell(grade({ verdict: 'either', confidence: undefined })).text).toBe('▸◂ either')
     expect(gradeCell(grade({ verdict: 'unknown', confidence: undefined })).text).toBe('? outside')
     expect(gradeCell(null).text).toBe('—')
@@ -80,15 +82,16 @@ describe('the Path cell', () => {
     expect(gradeCell(grade({ tier: 'logged' })).dim).toBe(false)
   })
 
-  it('says in the hover where the grade stands: modelled, or from the beam heading', () => {
+  it('says in the hover where the grade stands: modelled afterwards, or graded when logged', () => {
     const modelled = gradeCell(grade()).title
     expect(modelled).toMatch(/Short path, likely/)
     expect(modelled).toMatch(/modelled afterwards/i)
     expect(modelled).toMatch(/at least 6 dB better/)
-    const logged = gradeCell(grade({ tier: 'logged', confidence: 'confirmed', why: ['MARGIN_S', 'HEADING_S'] })).title
-    expect(logged).toMatch(/confirmed by your beam heading/)
-    expect(logged).toMatch(/your beam pointed along the short path/)
+    const logged = gradeCell(grade({ tier: 'logged', why: ['MARGIN_S', 'HEARD_S:2'] })).title
+    expect(logged).toMatch(/other receivers along the short path heard the same signal: 2/)
     expect(logged).toMatch(/when it was logged/i)
+    // A beam heading is never a reason: a token for it is not put into words.
+    expect(reasonText('HEADING_S')).toBeNull()
     // The long path's figures are unvalidated, and the hover says so.
     expect(gradeCell(grade({ verdict: 'long', confidence: 'possible' })).title).toMatch(/unvalidated for long path/)
     expect(gradeCell(grade()).title).not.toMatch(/unvalidated/)
@@ -112,9 +115,7 @@ describe('the reasons in words', () => {
   })
 
   it('leads the contact card with one sentence', () => {
-    expect(gradeSentence(grade({ verdict: 'short', confidence: 'confirmed', tier: 'logged', why: ['HEADING_S'] }))).toBe(
-      'Short path, confirmed by your beam heading.',
-    )
+    expect(gradeSentence(grade({ verdict: 'short', confidence: 'likely', tier: 'logged' }))).toBe('Short path, likely.')
     expect(gradeSentence(grade({ verdict: 'long', confidence: 'possible', polar: true }))).toBe(
       'Long path, possible — across the polar cap.',
     )

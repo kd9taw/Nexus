@@ -343,6 +343,8 @@ export interface PathGradeAsk {
   band: string
   grid?: string | null
   myGrid?: string | null
+  /** ADIF PROP_MODE: a contact not by the ionosphere (satellite, EME …) is never graded. */
+  propMode?: string | null
   /** The passthrough fields the grade reads (SFI, K_INDEX, ANT_AZ, the stamp's). */
   extra: [string, string][]
 }
@@ -350,7 +352,7 @@ export interface PathGradeAsk {
  * (`MARGIN_S`, `HEADING_S`, `HEARD_L:3`, `LATEDT:60/12` …), put into words by features/pathGrade. */
 export interface PathGrade {
   verdict: 'short' | 'long' | 'either' | 'unknown'
-  confidence?: 'confirmed' | 'likely' | 'possible'
+  confidence?: 'likely' | 'possible'
   why: string[]
   /** `logged`: stamped on the contact when it was logged. `modelled`: graded later, model only. */
   tier: 'logged' | 'modelled'

@@ -46,7 +46,7 @@ describe("the contact card's Path", () => {
     expect(why.textContent).toMatch(/Modelled afterwards/)
     expect(container.querySelector('.path-day')).not.toBeNull()
     expect(vi.mocked(contactPathDay).mock.calls[0][0]).toEqual({
-      whenUnix: 1_778_150_000, band: '20m', grid: 'QF56', myGrid: 'FN42', extra: [['SFI', '150']],
+      whenUnix: 1_778_150_000, band: '20m', grid: 'QF56', myGrid: 'FN42', propMode: null, extra: [['SFI', '150']],
     })
   })
 

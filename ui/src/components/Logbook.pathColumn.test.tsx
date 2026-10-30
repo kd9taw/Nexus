@@ -61,7 +61,7 @@ const LOG = [
   { ...base, id: 'c', call: 'K1NO', grid: null, whenUnix: 1_778_130_000, extra: [] },
 ]
 const GRADES: Record<string, PathGrade | null> = {
-  QF56: { verdict: 'short', confidence: 'confirmed', why: ['MARGIN_S', 'HEADING_S'], tier: 'logged', polar: false },
+  QF56: { verdict: 'short', confidence: 'likely', why: ['MARGIN_S', 'HEARD_S:2'], tier: 'logged', polar: false },
   PM95: { verdict: 'long', confidence: 'possible', why: ['OPEN_L'], tier: 'modelled', polar: true, ssnSource: 'logged' },
 }
 
@@ -98,13 +98,13 @@ describe('the Path column', () => {
   it('shows each row its grade, asked together, and the logged one brighter than the modelled', async () => {
     const { container } = await renderLog(['path'])
     await waitFor(() => expect(container.querySelectorAll('.log-path')).toHaveLength(3))
-    await waitFor(() => expect([...container.querySelectorAll('.log-path')].map((c) => c.textContent)).toEqual(['▸ confirmed', '◂ possible ⊕', '—']))
+    await waitFor(() => expect([...container.querySelectorAll('.log-path')].map((c) => c.textContent)).toEqual(['▸ likely', '◂ possible ⊕', '—']))
     expect(api.logPathGrades).toHaveBeenCalledTimes(1)
     const [vk, ja] = [...container.querySelectorAll('.log-path')]
     expect(vk.classList.contains('modelled')).toBe(false)
     expect(ja.classList.contains('modelled')).toBe(true)
     expect(ja.getAttribute('title')).toMatch(/unvalidated for long path/)
-    expect(vk.getAttribute('title')).toMatch(/confirmed by your beam heading/)
+    expect(vk.getAttribute('title')).toMatch(/when it was logged/)
   })
 
   it('its header explains the marks and carries the success measures, and does not sort', async () => {

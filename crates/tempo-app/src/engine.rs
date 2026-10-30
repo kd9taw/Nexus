@@ -17754,15 +17754,15 @@ impl Engine {
                 }
             }
         }
-        // THE PATH THIS CONTACT TOOK, AND THE BEAM IT WAS MADE ON (`APP_NEXUS_PATH*`, `ANT_AZ`,
-        // `ANT_PATH`): the command layer's grader answers from what it already holds — the path
-        // card it computed for this station and the rotator's recent readings — and the record
-        // gains new fields only (`path_stamp::stamp_path`). After the grid and the band are
-        // final, which the grade is made for.
+        // THE PATH THIS CONTACT TOOK (`APP_NEXUS_PATH*`): the command layer's grader answers from
+        // what it already holds — the path card it computed for this station — and the record
+        // gains new fields only (`path_stamp::stamp_path`), never `ANT_AZ` or `ANT_PATH`. After
+        // the grid and the band are final, which the grade is made for.
         if let Some(grade) = &self.station.path_at_log {
             let late = self.late_dts_of(&rec.call);
-            let found = grade(&rec, &late);
-            tempo_core::logbook::path_stamp::stamp_path(&mut rec, &found);
+            if let Some(found) = grade(&rec, &late) {
+                tempo_core::logbook::path_stamp::stamp_path(&mut rec, &found);
+            }
         }
         // THE APPEND (SPEC-2 v3 C19): the station mints the row's id, the hot index takes the
         // row, and the writer is handed it — a channel send. NO SQL and no pass over the log,
@@ -33663,7 +33663,7 @@ contact yourself."
         grade: impl Fn(
                 &tempo_core::logbook::QsoRecord,
                 &[f32],
-            ) -> tempo_core::logbook::path_stamp::PathAtLog
+            ) -> Option<tempo_core::logbook::path_stamp::PathStamp>
             + Send
             + Sync
             + 'static,
@@ -49625,15 +49625,13 @@ mod tests {
         );
     }
 
-    /// A contact being logged takes the command layer's grade and beam heading as NEW fields
-    /// only: the grade fields, `ANT_AZ`, and `ANT_PATH` for a confirmed short path — and a
-    /// heading or antenna path the record already carries is never replaced. Without a grader
-    /// nothing is added. The grader sees the record as it will be written (grid and band final).
+    /// A contact being logged takes the command layer's grade as NEW fields only, and never an
+    /// antenna field: the record gains the three grade fields and nothing else, and an antenna
+    /// heading or path the record already carries is kept as it was. Without a grader nothing is
+    /// added. The grader sees the record as it will be written (grid and band final).
     #[test]
     fn a_new_contact_takes_the_graders_path_as_new_fields_only() {
-        use tempo_core::logbook::path_stamp::{
-            read_path, PathAtLog, PathStamp, StampConf, StampRoute,
-        };
+        use tempo_core::logbook::path_stamp::{read_path, PathStamp, StampConf, StampRoute};
         let mut e = Engine::new("K2DEF", "FN31", 0);
         let bare = e.qso_record("JA1NONE".into(), Some("PM95".into()), None);
         e.log_qso(bare);
@@ -49643,15 +49641,12 @@ mod tests {
             saw.lock()
                 .unwrap()
                 .push((r.call.clone(), r.grid.clone().unwrap_or_default()));
-            PathAtLog {
-                grade: Some(PathStamp {
-                    route: StampRoute::Short,
-                    conf: Some(StampConf::Confirmed),
-                    why: vec!["MARGIN_S".into(), "HEADING_S".into()],
-                    key: "PM95/20m".into(),
-                }),
-                ant_az: Some(330),
-            }
+            Some(PathStamp {
+                route: StampRoute::Short,
+                conf: Some(StampConf::Likely),
+                why: vec!["MARGIN_S".into()],
+                key: "PM95/20m".into(),
+            })
         });
         let graded = e.qso_record("JA1ABC".into(), Some("PM95".into()), None);
         e.log_qso(graded);
@@ -49666,14 +49661,30 @@ mod tests {
         let tag =
             |call: &str, t: &str| tempo_core::logbook::extra_field(at(call), t).map(str::to_string);
         assert_eq!(read_path(at("JA1NONE")), None, "no grader, no grade");
-        assert_eq!(tag("JA1NONE", "ANT_AZ"), None);
         let g = read_path(at("JA1ABC")).unwrap();
         assert_eq!(
             (g.route, g.conf),
-            (StampRoute::Short, Some(StampConf::Confirmed))
+            (StampRoute::Short, Some(StampConf::Likely))
         );
-        assert_eq!(tag("JA1ABC", "ANT_AZ").as_deref(), Some("330"));
-        assert_eq!(tag("JA1ABC", "ANT_PATH").as_deref(), Some("S"));
+        // Nexus fills no antenna field, whatever the grade.
+        assert_eq!(tag("JA1ABC", "ANT_AZ"), None);
+        assert_eq!(tag("JA1ABC", "ANT_PATH"), None);
+        // Beside the ungraded contact's fields, exactly the three grade fields.
+        let keys = |call: &str| -> std::collections::BTreeSet<String> {
+            at(call).extra.iter().map(|(k, _)| k.clone()).collect()
+        };
+        let added: Vec<String> = keys("JA1ABC")
+            .difference(&keys("JA1NONE"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            added,
+            [
+                "APP_NEXUS_PATH",
+                "APP_NEXUS_PATH_CONF",
+                "APP_NEXUS_PATH_WHY"
+            ]
+        );
         // The operator's own values stand; the grade beside them is still added.
         assert_eq!(tag("JA1TYP", "ANT_AZ").as_deref(), Some("45"));
         assert_eq!(tag("JA1TYP", "ANT_PATH").as_deref(), Some("L"));
@@ -49686,13 +49697,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["JA1ABC", "JA1TYP"]
         );
-        // What the services are sent carries the antenna fields and never the grade.
+        // What the services are sent is the contact without its grade.
         let out = tempo_core::logbook::adif_record(at("JA1ABC"));
         assert!(
-            out.contains("<ANT_AZ:3>330") && out.contains("<ANT_PATH:1>S"),
+            !out.contains("APP_NEXUS_PATH") && !out.contains("ANT_"),
             "{out}"
         );
-        assert!(!out.contains("APP_NEXUS_PATH"), "{out}");
     }
 
     /// The path grader is handed the worked station's decode lateness: each of its decodes' DT
@@ -49729,7 +49739,7 @@ mod tests {
         let put = std::sync::Arc::clone(&got);
         e.set_path_grader(move |_, late| {
             *put.lock().unwrap() = late.to_vec();
-            Default::default()
+            None
         });
         let rec = e.qso_record("JA1ABC".into(), Some("PM95".into()), None);
         e.log_qso(rec);
@@ -79375,12 +79385,12 @@ mod logged_frequency_tests {
     }
 
     /// A station with the path grader on writes exactly the Cabrillo entry (and the contest's own
-    /// ADIF) a station without it does: the grade and heading are the general log's fields, and
+    /// ADIF) a station without it does: the grade is the general log's fields, and
     /// the contest's files are written from the contest's own rows. CONTROL: on the graded
-    /// station the grader is live — a general-log contact takes its heading.
+    /// station the grader is live — a general-log contact takes its grade.
     #[test]
     fn a_graded_contact_writes_the_same_cabrillo() {
-        use tempo_core::logbook::path_stamp::{PathAtLog, PathStamp, StampConf, StampRoute};
+        use tempo_core::logbook::path_stamp::{PathStamp, StampConf, StampRoute};
         let c = Case {
             name: "FT8 at 14.074",
             section: "digital",
@@ -79396,14 +79406,13 @@ mod logged_frequency_tests {
         let station = |graded: bool| {
             let mut e = fd_station(&c);
             if graded {
-                e.set_path_grader(|_, _| PathAtLog {
-                    grade: Some(PathStamp {
+                e.set_path_grader(|_, _| {
+                    Some(PathStamp {
                         route: StampRoute::Short,
-                        conf: Some(StampConf::Confirmed),
-                        why: vec!["MARGIN_S".into(), "HEADING_S".into()],
+                        conf: Some(StampConf::Likely),
+                        why: vec!["MARGIN_S".into()],
                         key: "FN31/20m".into(),
-                    }),
-                    ant_az: Some(275),
+                    })
                 });
             }
             log_one(&mut e, &c);
@@ -79437,8 +79446,8 @@ mod logged_frequency_tests {
         let log = crate::test_util::StoredLog::stored_log(&graded);
         assert!(
             log.iter()
-                .any(|r| tempo_core::logbook::extra_field(r, "ANT_AZ") == Some("275")),
-            "control: the graded contact carries its heading"
+                .any(|r| tempo_core::logbook::path_stamp::read_path(r).is_some()),
+            "control: the graded station's general-log contact carries its grade"
         );
     }
 
