@@ -44,10 +44,12 @@ export function cellView(c: PathDayCell, h: PathDayHour | undefined, mode: DayMo
   })
   if (mode === 'short') return view(c.shortPct, 'short', 'short')
   if (mode === 'long') return c.longPct == null ? view(null, null, null) : view(c.longPct, 'long', 'long')
-  if (c.longPct == null || c.verdict == null) return view(c.shortPct, 'short', 'short')
+  // No long model: the short path is the only route there is.
+  if (c.longPct == null) return view(c.shortPct, 'short', 'short')
   if (c.verdict === 'short') return view(c.shortPct, 'short', 'short')
   if (c.verdict === 'long') return view(c.longPct, 'long', 'long')
-  // Either way / both closed: the better figure, and no route claimed.
+  // Either way / both closed / no call (near the antipode the shack names no route): the better
+  // figure, and no route claimed.
   const longer = c.longPct > c.shortPct
   return view(Math.max(c.shortPct, c.longPct), null, longer ? 'long' : 'short')
 }

@@ -305,6 +305,22 @@ export function layoutPanels(layout: ConnectLayout): PanelLayout<SlotId> {
 /** The same split, allowing for the float a seam's arithmetic can leave behind. Absent is even. */
 const sameShare = (a: number | undefined, b: number | undefined) => Math.abs((a ?? 1) - (b ?? 1)) < 1e-6
 
+/** Boxes a preset's tab plan gained after it shipped. A stored layout that is the plan as it was
+ *  before them still reads as that preset (it was never customised), and the boxes stay offered in the
+ *  picker rather than being inserted into it; a fresh install gets the plan with them. */
+const LATER_PLAN_BOXES: readonly PaneId[] = ['pathDay', 'pathRegions']
+
+/** A preset's tab plan as it was before `LATER_PLAN_BOXES` joined it. */
+function withoutLaterBoxes(layout: ConnectLayout): ConnectLayout {
+  if (!layout.tabs) return layout
+  const tabs: Partial<Record<SlotId, PaneId[]>> = {}
+  for (const s of SLOT_IDS) {
+    const list = layout.tabs[s]
+    if (list) tabs[s] = list.filter((p) => !LATER_PLAN_BOXES.includes(p))
+  }
+  return { ...layout, tabs }
+}
+
 function matches(layout: ConnectLayout, now: ConnectLayoutState): boolean {
   for (const s of SLOT_IDS) {
     const want = layout.tabs?.[s]
@@ -334,7 +350,9 @@ export function connectLayoutNow(
   kept?: ConnectLayout | null,
 ): ConnectPresetId | 'standard' | 'kept' | 'custom' {
   if (matches(STANDARD_LAYOUT, now)) return 'standard'
-  const preset = CONNECT_PRESET_IDS.find((id) => matches(presets[id], now))
+  const preset = CONNECT_PRESET_IDS.find(
+    (id) => matches(presets[id], now) || matches(withoutLaterBoxes(presets[id]), now),
+  )
   if (preset) return preset
   return kept && matches(kept, now) ? 'kept' : 'custom'
 }

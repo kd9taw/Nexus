@@ -149,6 +149,28 @@ describe('Frame + bar — the default view to try', () => {
     expect(connectLayoutNow({ ...base, slots: { ...base.slots, left1: 'advisory', right2: 'greyline' } })).toBe('frameBar')
   })
 
+  it('the default as it was before the path boxes joined its tab plan still reads as the default', () => {
+    // An operator on Frame + bar since before Path over the day and Paths to the regions joined it: the
+    // stored layout is left alone (the boxes are offered, never inserted) and still reads Frame + bar.
+    const old = (l: ConnectLayout): ConnectLayoutState => {
+      const st = applied(l)
+      const tabs: Partial<Record<SlotId, PaneId[]>> = {}
+      for (const [s, list] of Object.entries(st.tabs ?? {}))
+        tabs[s as SlotId] = (list as PaneId[]).filter((p) => p !== 'pathDay' && p !== 'pathRegions')
+      return { ...st, tabs }
+    }
+    expect(connectLayoutNow(old(A()))).toBe('frameBar')
+    expect(connectLayoutNow(old(TV_FRAME_BAR), TV_PRESETS)).toBe('frameBar')
+    // A fresh install gets the new plan, which reads the same.
+    expect(connectLayoutNow(applied(A()))).toBe('frameBar')
+    // Only that exact earlier plan: one path box without the other is somebody's own arrangement.
+    const half = applied(A())
+    const t = half.tabs as Partial<Record<SlotId, PaneId[]>>
+    expect(connectLayoutNow({ ...half, tabs: { ...t, left2: t.left2!.filter((p) => p !== 'pathRegions') } })).toBe('custom')
+    // Control: the earlier plan with any other change is still Custom.
+    expect(connectLayoutNow({ ...old(A()), bar: false })).toBe('custom')
+  })
+
   it('a tab added, a tab taken out, or the tabs reordered reads Custom', () => {
     const base = applied(A())
     const tabs = base.tabs as Partial<Record<SlotId, PaneId[]>>

@@ -12,12 +12,12 @@
 // figures are a monthly median; wherever a long-path figure can show, so does the long-path label.
 //
 // Display only: a click scrubs the map's terminator and ribbon, and turns nothing.
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { NeedAlert, PathDay, PathDayCell, PathDayHour, PathPrediction, ZoneTally } from '../../types'
 import { t } from '../../i18n'
 import { fmtZ, heatColor } from '../../propViz'
 import { getLogStats } from '../../api'
-import { PATH_REGIONS, useFeed } from '../../features/connectFeeds'
+import { PATH_REGIONS, refreshFeed, useFeed } from '../../features/connectFeeds'
 import {
   bestBand,
   cellView,
@@ -91,6 +91,16 @@ function regionName(id: string): string | null {
     default:
       return null
   }
+}
+
+/** The current UTC hour, re-read every minute. */
+function useUtcHour(): number {
+  const [h, setH] = useState(() => new Date().getUTCHours())
+  useEffect(() => {
+    const id = setInterval(() => setH(new Date().getUTCHours()), 60_000)
+    return () => clearInterval(id)
+  }, [])
+  return h
 }
 
 function kpText(kp: number): string {
@@ -349,12 +359,27 @@ export function PathRegionsPane({
   needs,
   scrub,
   onScrub,
+  myGrid,
+  engine,
 }: {
   needs: readonly NeedAlert[]
   scrub: number | null
   onScrub?: (s: DayScrub | null) => void
+  /** The operator's grid and the prediction engine: a change asks the shack for the sweep again,
+   * rather than showing the old one until the next 15-minute poll. */
+  myGrid?: string
+  engine?: string
 }) {
   const data = useFeed(PATH_REGIONS).value ?? null
+  // The sweep is polled every 15 minutes; its "now" column follows the clock instead, checked
+  // every minute, so it moves on at the hour as the station strip does.
+  const nowHour = useUtcHour()
+  const settings = useRef({ myGrid, engine })
+  useEffect(() => {
+    const was = settings.current
+    settings.current = { myGrid, engine }
+    if (was.myGrid !== myGrid || was.engine !== engine) void refreshFeed(PATH_REGIONS)
+  }, [myGrid, engine])
   const [mode, setMode] = useState<DayMode>('best')
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
   // The log's contacts per CQ zone, asked once (the shack keeps the fold); none on a surface that
@@ -427,7 +452,7 @@ export function PathRegionsPane({
       <Grid
         rows={rows}
         hours={hours}
-        nowHour={regions[0].day.nowHour}
+        nowHour={nowHour}
         mode={shown}
         scrub={scrub}
         onScrub={onScrub}

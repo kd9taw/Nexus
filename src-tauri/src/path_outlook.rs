@@ -41,14 +41,14 @@ pub(crate) fn key(
     engine: &str,
     station_power_w: Option<f64>,
     ant_gain_dbi: f64,
-    ssn: Option<f32>,
+    wx: &propagation::SpaceWx,
 ) -> String {
     format!(
-        "{}|{}|{}|{engine}|{ant_gain_dbi}|{station_power_w:?}|{:?}",
+        "{}|{}|{}|{engine}|{ant_gain_dbi}|{station_power_w:?}|{}",
         t.div_euclid(86_400),
         mygrid.trim().to_ascii_uppercase(),
         dx_grid.trim().to_ascii_uppercase(),
-        ssn.map(|v| v.round() as i32),
+        crate::ssn_key(wx),
     )
 }
 
@@ -128,7 +128,20 @@ mod tests {
 
     #[test]
     fn the_key_moves_with_every_input_and_not_with_the_hour() {
-        let k = |t, g: &str, d: &str, e: &str, p, a, s| key(t, g, d, e, p, a, s);
+        let k = |t, g: &str, d: &str, e: &str, p, a, s: Option<f32>| {
+            key(
+                t,
+                g,
+                d,
+                e,
+                p,
+                a,
+                &SpaceWx {
+                    ssn: s,
+                    ..SpaceWx::default()
+                },
+            )
+        };
         let base = k(T, "FN42", "IO91", "p533", Some(100.0), 0.0, Some(105.0));
         assert_eq!(
             base,
@@ -169,6 +182,29 @@ mod tests {
         ] {
             assert_ne!(base, other);
         }
+    }
+
+    #[test]
+    fn with_no_sunspot_number_held_an_sfi_change_is_another_key() {
+        // P.533 derives the SSN from the SFI when no R12 is held, so the answer moves with the SFI.
+        let at = |sfi: f32, ssn: Option<f32>| {
+            key(
+                T,
+                "FN42",
+                "IO91",
+                "p533",
+                None,
+                0.0,
+                &SpaceWx {
+                    sfi,
+                    ssn,
+                    ..SpaceWx::default()
+                },
+            )
+        };
+        assert_ne!(at(70.0, None), at(200.0, None));
+        // Control: with an R12 held the engine ignores the SFI, and so does the key.
+        assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
     }
 
     #[test]

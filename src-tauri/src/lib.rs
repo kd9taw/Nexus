@@ -8098,7 +8098,7 @@ async fn get_path_outlook(
         &prop_engine,
         station_power_w,
         ant_gain_dbi,
-        wx.ssn,
+        &wx,
     );
     tauri::async_runtime::spawn_blocking(move || {
         let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
@@ -8207,14 +8207,7 @@ async fn get_path_regions(
     let t = now_unix();
     let ask = path_regions::Ask {
         me,
-        key: path_regions::sweep_key(
-            t,
-            &mygrid,
-            &prop_engine,
-            station_power_w,
-            ant_gain_dbi,
-            wx.ssn,
-        ),
+        key: path_regions::sweep_key(t, &mygrid, &prop_engine, station_power_w, ant_gain_dbi, &wx),
         engine: propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
         t,
         kp_now,
@@ -8233,6 +8226,31 @@ async fn get_path_regions(
 /// (the same rule that keeps stand-ins off logged contacts).
 fn swpc_kp(wx: Option<&propagation::SpaceWxView>) -> Option<f32> {
     wx.filter(|w| w.fetched).map(|w| w.kp)
+}
+
+#[cfg(test)]
+mod ring_key_tests {
+    use super::ring_key;
+    use propagation::SpaceWx;
+
+    #[test]
+    fn with_no_sunspot_number_held_an_sfi_change_is_another_ring_key() {
+        let at = |sfi: f32, ssn: Option<f32>| {
+            ring_key(
+                0,
+                "FN42",
+                0.0,
+                None,
+                &SpaceWx {
+                    sfi,
+                    ssn,
+                    ..SpaceWx::default()
+                },
+            )
+        };
+        assert_ne!(at(70.0, None), at(200.0, None));
+        assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+    }
 }
 
 #[cfg(test)]
@@ -8362,6 +8380,32 @@ async fn get_band_outlook(
     .await
 }
 
+/// The sunspot number a P.533 cache keys on, as a key fragment: the one the engine runs on (the
+/// R12 held, else the one it derives from the SFI — `effective_ssn`, the engine's own rule), so
+/// a changed SFI is another key whenever no R12 is held.
+pub(crate) fn ssn_key(wx: &propagation::SpaceWx) -> String {
+    format!(
+        "ssn{}",
+        propagation::p533::engine::effective_ssn(wx).round() as i32
+    )
+}
+
+/// The ring outlook's cache key: UTC day, grid, gain, power and the sunspot number the engine runs on.
+fn ring_key(
+    t: i64,
+    mygrid: &str,
+    ant_gain_dbi: f64,
+    station_power_w: Option<f64>,
+    wx: &propagation::SpaceWx,
+) -> String {
+    format!(
+        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{}",
+        t / 86_400,
+        station_power_w,
+        ssn_key(wx),
+    )
+}
+
 async fn ring_prediction(
     mygrid: String,
     prop_engine: String,
@@ -8378,12 +8422,7 @@ async fn ring_prediction(
         let eng = propagation::HeuristicEngine::new(Some(me));
         return Ok(propagation::band_outlook_ring(&eng, me, 9000.0, 8, t, &wx));
     }
-    let key = format!(
-        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{:?}",
-        t / 86_400,
-        station_power_w,
-        wx.ssn.map(|v| v.round() as i32),
-    );
+    let key = ring_key(t, &mygrid, ant_gain_dbi, station_power_w, &wx);
     if let Ok(g) = RING_OUTLOOK.lock() {
         if let Some((when, k, v)) = g.as_ref() {
             if *k == key && when.elapsed().as_secs() < RING_TTL_SECS {
