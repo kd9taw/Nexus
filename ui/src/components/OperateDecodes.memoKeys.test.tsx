@@ -45,9 +45,10 @@ const rows = (): DecodeRow[] => [
   decode({ from: 'DL1QQ', message: 'DL1QQ K1ABC RR73', freqHz: 1230, isCq: false, signoff: true, country: 'Fed. Rep. of Germany', confirmedBand: true }),
   decode({ from: 'VK2AAA', message: 'KD0XX VK2AAA -05', freqHz: 2000, isCq: false, directedToMe: true, country: 'Australia', worked: true }),
   decode({ from: 'F5ZZZ', message: 'CQ F5ZZZ JN18', freqHz: 1700, grid: 'JN18', country: 'France' }),
-  decode({ from: 'KD0XX', message: 'CQ KD0XX EN34', freqHz: 1210, mine: true, txAt: 1_700_000_000 }),
+  decode({ from: 'KD0XX', message: 'CQ KD0XX EN34', freqHz: 1210, mine: true, txAt: 1_470 }),
 ]
-// The own-transmit row is stamped before the period's decodes, so it sorts first.
+// The own-transmit row was sent in slot 98 (1,470 s on the pane's 15 s clock), the period before
+// the one these decodes were heard in, so it sorts first.
 const ALL = ['KD0XX', 'W1AW', 'JA1XYZ', 'K1ABC', 'DL1QQ', 'VK2AAA', 'F5ZZZ']
 
 const alert = (call: string, tags: NeedAlert['tags']): NeedAlert =>

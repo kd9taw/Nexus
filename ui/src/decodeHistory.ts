@@ -107,6 +107,27 @@ export function periodStartMs(slot: number, tier: Tier, periodSecs: number = TIE
   return slot * periodSecs * 1000
 }
 
+/** The station's slot clock as the pane knows it: the live T/R period, and the offset (ms, positive =
+ *  the computer runs fast) the station steers its slots by (`radio.clockOffsetMs`). */
+export interface SlotClock {
+  periodMs: number
+  offsetMs: number
+}
+
+/**
+ * The slot an own over was sent in, from its transmit stamp — numbered as the engine numbers slots
+ * (`floor(slot-clock ms / period)`), so an over sent in s sorts with the decodes ingested at s.
+ *
+ * `txAt` is the COMPUTER's clock truncated to the second, so the over went out somewhere in
+ * [txAt, txAt + 1 s) of it; the slot clock is that minus the steering offset. An over keys at or
+ * after its period's start, and a boundary over a few hundred ms into it, so the period is read from
+ * the LATEST moment the stamp allows: the start of the second would put a boundary over (and every
+ * FT4 boundary, which falls on the half second) in the period before.
+ */
+export function ownTxSlot(txAtSec: number, clock: SlotClock): number {
+  return Math.floor((txAtSec * 1000 + 999 - clock.offsetMs) / clock.periodMs)
+}
+
 /**
  * UTC epoch-ms a row's time column shows: the START of the period it was heard in, as WSJT-X's Band
  * Activity and ALL.TXT stamp a decode. Never the moment the row reached the list (`at`, which the
@@ -267,7 +288,7 @@ export class DecodeHistory {
    * pane already drew is the same value next poll; a row whose flags moved (worked, needs) is a
    * new one.
    */
-  ingest(decodes: DecodeRow[], slot: number, now: number = Date.now()): boolean {
+  ingest(decodes: DecodeRow[], slot: number, now: number = Date.now(), clock?: SlotClock): boolean {
     const m = this.map
     let changed = false
     for (const d of decodes) {
@@ -280,8 +301,11 @@ export class DecodeHistory {
       // transmission re-emitted across poll boundaries stays ONE row and each
       // new cycle is a new row. Received decodes key per (slot, message, ~freq):
       // re-polls dedupe, re-transmissions next period append (WSJT-X flow).
+      // The message is part of an own row's key because txAt is whole seconds: a mid-over
+      // switch (the report on the air, then the 73 the RR73 calls for) records two overs in
+      // the same second, and keyed on txAt alone the second replaced the first.
       const id = d.mine
-        ? `mine|${d.txAt ?? Math.floor(now / SLOT_MS)}`
+        ? `mine|${d.txAt ?? Math.floor(now / SLOT_MS)}|${d.message}`
         : `${slot}|${d.message}|${Math.round(d.freqHz / 5)}`
       const prev = m.get(id)
       // Keep the first-heard timestamp (chronological position is stable);
@@ -295,10 +319,15 @@ export class DecodeHistory {
       // the timeline"). Pin it to the period its own transmit time names.
       // (SLOT_MS is the FT8 period; on FT4 the estimate lands an older period —
       // never the live one, which is the failure that matters.)
+      // With the pane's slot clock the transmit time names the period exactly
+      // ({@link ownTxSlot}) — and must: the ingest `slot` is the last DECODED one, two
+      // periods back for an over keyed at a boundary before that period's decodes fold.
       const slotFor =
         prev?.slot ??
         (d.mine && d.txAt != null
-          ? slot - Math.max(0, Math.round((now - d.txAt * 1000) / SLOT_MS))
+          ? clock
+            ? ownTxSlot(d.txAt, clock)
+            : slot - Math.max(0, Math.round((now - d.txAt * 1000) / SLOT_MS))
           : slot)
       const next: DecodeEntry = { ...d, slot: slotFor, at, id }
       if (prev && sameEntry(prev, next)) continue

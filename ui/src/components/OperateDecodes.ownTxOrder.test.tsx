@@ -89,3 +89,36 @@ describe('Band Activity: an own over lists after the decode it answered', () => 
     expect(messages()).toEqual(['W9XYZ KD9TAW 73', 'KD9TAW W9XYZ RR73'])
   })
 })
+
+describe('Band Activity: an own over sits in the period it was sent in', () => {
+  // The pane's `slot` is the last DECODED period. Q65-120 (not the table's 60), slot 15 starts at
+  // 1,800,000 ms; the station steers by -400 ms, so an over keyed 100 ms into slot 15 is stamped
+  // 1799 s by the computer's clock. It arrives while the pane still says 14.
+  const q65 = (decodes: DecodeRow[], slot: number) => (
+    <OperateDecodes
+      decodes={decodes}
+      slot={slot}
+      rxOffsetHz={1200}
+      band="2m"
+      tier="Q65"
+      periodSecs={120}
+      clockOffsetMs={-400}
+      harqRescues={0}
+      onCall={() => {}}
+    />
+  )
+  const cq: DecodeRow = { ...rr73, from: 'K2DEF', message: 'CQ K2DEF FN20', isCq: true, directedToMe: false, freqHz: 800 }
+
+  it('lists below the decodes of the period before it, by the live period and the steering offset', () => {
+    vi.setSystemTime(1_780_000)
+    const view = render(q65([cq], 14))
+    vi.setSystemTime(1_800_300)
+    view.rerender(q65([{ ...my73, txAt: 1799 }], 14))
+    vi.setSystemTime(1_806_000)
+    view.rerender(q65([rr73, { ...my73, txAt: 1799 }], 15))
+    // Heard while the over was on the air, so it lists after it.
+    vi.setSystemTime(1_926_000)
+    view.rerender(q65([{ ...cq, from: 'N1NEW', message: 'CQ N1NEW FN42' }, { ...my73, txAt: 1799 }], 16))
+    expect(messages()).toEqual(['CQ K2DEF FN20', 'KD9TAW W9XYZ RR73', 'W9XYZ KD9TAW 73', 'CQ N1NEW FN42'])
+  })
+})
