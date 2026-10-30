@@ -112,16 +112,35 @@ jobs:
           components: clippy, rustfmt
 
 
-      - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v6
+      # THE CARGO CACHES: restored by every run, SAVED ONLY ON MAIN. Measured 2026-10-30 on the
+      # land/* runs, which reach this file by workflow_dispatch on their own branch:
+      #  - A run can restore only its own branch's caches or main's. Since ci-main.yml stopped
+      #    re-running this workflow on main for a commit that already passed, main held no cache at
+      #    all, and every land/* branch runs once: each run started cold and saved ~6 GB that no
+      #    other branch can ever read. That pushed the repository past GitHub's 10 GB cap, and the
+      #    eviction took main's caches first, because the branch saves were newer than main's last
+      #    read. Saving on main only keeps main's set alive; every branch reads it.
+      #  - The three Rust jobs shared ONE key, so the first to finish saved its build and the other
+      #    two failed with "Unable to reserve cache"; the winner's build was then restored into jobs
+      #    that compile different things. Each job has its own key now.
+      #  - Incremental state is left out. It is the largest part of target/ and cargo throws it away
+      #    for any crate whose source changed, which is every crate a run is testing; leaving it out
+      #    keeps main's set under the cap. The registry's unpacked sources are left out for the same
+      #    reason: cargo unpacks them again from registry/cache in seconds.
+      # A cache is speed only. A miss rebuilds from source and tests exactly the same thing.
+      - name: Restore the cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+            !target/debug/incremental
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-test-
 
 
       - name: cargo fmt --check
@@ -186,6 +205,22 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Main only, and only when every step passed: a build that stopped partway, saved under the
+      # exact key, would be restored as an exact hit and never saved again until Cargo.lock moved.
+      # The key is the restore step's; the paths must be its paths exactly, or the save lands
+      # where nothing reads.
+      - name: Save the cargo cache (main only)
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+            target
+            !target/debug/incremental
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
   # The feature-gated crates, which a plain `--workspace` run does not build:
   # tempo-audio's service.rs is `#[cfg(feature = "device")]` and propagation's
   # fetchers are behind `live`, so the default pass silently skips both. The
@@ -200,9 +235,9 @@ jobs:
         uses: actions/checkout@v7
 
       # The SAME system-dependency list as the `test` job — see there for why each
-      # package is present. The three Rust jobs must keep identical lists: they share
-      # one cargo cache key and one libtempo build, so a package added to only one of
-      # them goes red in the other two on a build unrelated to the change that added it.
+      # package is present. The three Rust jobs must keep identical lists: they build
+      # the same libtempo, so a package added to only one of them goes red in the
+      # other two on a build unrelated to the change that added it.
       # (A composite action would state this once, but `scripts/gates` reports a local
       # `uses: ./…` as UNKNOWN, which costs every local gate run its full-coverage
       # claim — a worse trade than duplication. Teaching the tool to resolve local
@@ -243,16 +278,20 @@ jobs:
           targets: aarch64-linux-android
 
 
-      - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v6
+      # Its own key, restored everywhere and saved on main only: see the `test` job's cache.
+      - name: Restore the cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+            !target/debug/incremental
+          key: ${{ runner.os }}-cargo-features-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-features-
 
 
       # The real-radio path (cpal audio + serial PTT) is feature-gated out of the
@@ -309,6 +348,18 @@ jobs:
           ANDROID_PLATFORM=android-24 CC_aarch64_linux_android="$bin/aarch64-linux-android24-clang" \
             AR_aarch64_linux_android="$bin/llvm-ar" cargo check -p tempo-client --target aarch64-linux-android
 
+      - name: Save the cargo cache (main only)
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+            target
+            !target/debug/incremental
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
   # src-tauri and the native Remote controller. src-tauri declares its OWN
   # `[workspace]`, so `cargo test --workspace` and `cargo fmt --all` never reach it.
   # That boundary is exactly why these are separate commands, and why moving them to
@@ -322,9 +373,9 @@ jobs:
         uses: actions/checkout@v7
 
       # The SAME system-dependency list as the `test` job — see there for why each
-      # package is present. The three Rust jobs must keep identical lists: they share
-      # one cargo cache key and one libtempo build, so a package added to only one of
-      # them goes red in the other two on a build unrelated to the change that added it.
+      # package is present. The three Rust jobs must keep identical lists: they build
+      # the same libtempo, so a package added to only one of them goes red in the
+      # other two on a build unrelated to the change that added it.
       # (A composite action would state this once, but `scripts/gates` reports a local
       # `uses: ./…` as UNKNOWN, which costs every local gate run its full-coverage
       # claim — a worse trade than duplication. Teaching the tool to resolve local
@@ -363,16 +414,23 @@ jobs:
           components: clippy, rustfmt
 
 
-      - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v6
+      # Its own key, restored everywhere and saved on main only: see the `test` job's cache. Every
+      # cargo command in this job, the native Remote probe's included, builds into src-tauri/target
+      # (src-tauri is its own workspace), which the shared cache this replaced never held: the
+      # job rebuilt src-tauri from nothing on every run, hit or miss.
+      - name: Restore the cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+            src-tauri/target
+            !src-tauri/target/debug/incremental
+          key: ${{ runner.os }}-cargo-tauri-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-tauri-
 
 
       # src-tauri is its OWN workspace root (empty `[workspace]` table in its
@@ -459,6 +517,18 @@ jobs:
 
       - name: Native Remote controller through the Cloudflare runtime
         run: npm --prefix remote run test:native
+
+      - name: Save the cargo cache (main only)
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+            src-tauri/target
+            !src-tauri/target/debug/incremental
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # The hosted page is the stream page. The old watch/control workspace and the observer view take no
   # new features; new Remote work goes to the stream, the LAN stream window or the native client.
@@ -911,13 +981,17 @@ jobs:
         with:
           toolchain: 1.91.0
 
-      - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v6
+      # Restored everywhere and saved on main only: see the `test` job's cache.
+      - name: Restore the cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             ~/.cargo/git
             target
+            !target/debug/incremental
           key: ${{ runner.os }}-msrv-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-msrv-
@@ -927,6 +1001,18 @@ jobs:
 
       - name: cargo check propagation --features live (MSRV)
         run: cargo check -p propagation --features live
+
+      - name: Save the cargo cache (main only)
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+            target
+            !target/debug/incremental
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # Job 4 — Supply chain: RustSec advisories, license allow-list, sources, bans.
   deny:
@@ -1072,14 +1158,20 @@ jobs:
           toolchain: 1.93.1
           targets: x86_64-pc-windows-gnu
 
-      - name: Cache cargo, FFTW, and build artifacts
-        uses: actions/cache@v6
+      # Restored everywhere and saved on main only: see the `test` job's cache. src-tauri/target
+      # is NOT cached here: main builds it with fat LTO and branch runs with cargo's ordinary
+      # release linking (see the cross-compile step), and every crate's fingerprint includes its
+      # profile, so a branch run recompiled and re-ran every build script in it regardless. It
+      # was downloaded and thrown away on every branch run, at about a gigabyte of the 10 GB cap.
+      - name: Restore the cargo, FFTW and libvpx cache
+        id: cargo-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
-            ~/.cargo/registry
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
             ~/.cargo/git
             target
-            src-tauri/target
             target/fftw-mingw
             target/vpx-mingw
           # The cross script is in the key because it holds FFTW's configure flags. Under a key
@@ -1122,6 +1214,19 @@ jobs:
           # only — the gate exists to stop a SHIPPING build (build-windows-cross.sh
           # and any local `cargo tauri build`) going out with no CAT.
           NEXUS_ALLOW_MISSING_HAMLIB: "1"
+          # THE LINK PROFILE. On main, on a release/* branch and on a tag this is src-tauri's own
+          # [profile.release], fat LTO and one codegen unit, as release.yml links the installer.
+          # Anywhere else (a land/* or topic branch, a pull request) it is cargo's ordinary
+          # release linking, `lto = false` (no cross-crate LTO) and 16 codegen units: the same
+          # code compiled and linked for Windows, in minutes. A LAND/* OR TOPIC RUN THEREFORE
+          # DOES NOT PROVE THE FAT-LTO LINK. What proves it before a tag is
+          # scripts/require-green-ci, which accepts a release only on a green run of this
+          # workflow from main, a release/* branch or the tag itself, the runs linked as above.
+          # Measured 2026-10-30: the src-tauri crate under fat LTO had grown from 15 to 37
+          # minutes of this job. scripts/release-secrets.test.mjs holds the fat values to the
+          # profile and keeps the override out of release.yml and the build scripts.
+          CARGO_PROFILE_RELEASE_LTO: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/')) && 'true' || 'false' }}
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/')) && '1' || '16' }}
         run: >
           cargo build --release
           --manifest-path src-tauri/Cargo.toml
@@ -1137,6 +1242,19 @@ jobs:
         run: |
           python3 scripts/check-no-input-injection.py --self-test
           python3 scripts/check-no-input-injection.py
+
+      - name: Save the cargo, FFTW and libvpx cache (main only)
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+            target
+            target/fftw-mingw
+            target/vpx-mingw
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # Job 5b — the client core for iOS. The only macOS job on branch and main CI.
   #
@@ -1228,12 +1346,26 @@ jobs:
       # The WSJT-X-derived modem source is vendored in-tree at libtempo/vendor/wsjtx
       # and is CMake's default WX, so the checkout is self-contained — no external
       # tree to stage, which is what previously forced a dev-box path into the image.
+      #
+      # THE LINK PROFILE, as the Windows job's: src-tauri's fat LTO and one codegen unit on main,
+      # a release/* branch and a tag, cargo's ordinary release linking anywhere else. A LAND/* OR
+      # TOPIC RUN THEREFORE DOES NOT PROVE THE FAT-LTO LINK, and its uploaded .deb is not linked
+      # as a release's is; scripts/require-green-ci accepts a release only on a run that does. The
+      # two bare `--build-arg NAME`s hand the container these values from the step env;
+      # Dockerfile.pi's own defaults are the release profile, which is what release.yml (passing
+      # neither) builds. Measured 2026-10-30: the src-tauri crate under fat LTO had grown from
+      # 18 to 36 minutes of this job.
       - name: Build .deb in a debian:${{ matrix.base }} container
+        env:
+          CARGO_PROFILE_RELEASE_LTO: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/')) && 'true' || 'false' }}
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/')) && '1' || '16' }}
         run: >
           docker buildx build
           --platform linux/arm64
           -f scripts/Dockerfile.pi
           --build-arg BASE=${{ matrix.base }}
+          --build-arg CARGO_PROFILE_RELEASE_LTO
+          --build-arg CARGO_PROFILE_RELEASE_CODEGEN_UNITS
           --progress=plain
           --target export
           --output type=local,dest=pi-out/${{ matrix.base }}
