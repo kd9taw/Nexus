@@ -14,9 +14,10 @@
 // commands. The old key-based commands must not be reached (`old`, below).
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import { t } from '../i18n'
+import { chooseRowAction, rowMore } from './Logbook.rowMenu.testkit'
 import { deleteQsoById, editQsoById, markQslCardById, markQslSentById, setSatTagById } from '../api'
 import { pushToast } from '../toast'
 import { createAskingLogSource } from '../features/askingLogSource'
@@ -110,8 +111,6 @@ async function renderLogbook() {
   await screen.findByRole('button', { name: t('logbook.row.edit', { call: 'K2ABC' }) })
   return view
 }
-const qslMenu = (call: string) => screen.getByRole('combobox', { name: t('logbook.row.qslSent.aria', { call }) })
-const satMenu = (call: string) => screen.getByRole('combobox', { name: t('logbook.row.sat.aria', { call }) })
 const K2 = { id: 'id-2', editKey: 'ek:id-2@1' }
 /** A contact as the engine now holds it, answered with its key. */
 const now = (row: LoggedQso, at: number) => {
@@ -125,10 +124,10 @@ describe('each change names its contact by id and the edit key on screen', () =>
     vi.mocked(markQslSentById).mockResolvedValue({ kind: 'applied', current: now(contact(2), 1) })
     vi.mocked(markQslCardById).mockResolvedValue({ kind: 'applied', current: now(contact(2), 1) })
     await renderLogbook()
-    fireEvent.change(qslMenu('K2ABC'), { target: { value: 'B' } })
+    await chooseRowAction('K2ABC', 'QSL', t('logbook.row.qslSent.bureau'))
     await waitFor(() => expect(markQslSentById).toHaveBeenCalledWith(K2, 'B'))
     await waitFor(() => expect(toasts()).toContain(t('logbook.qsl.marked', { call: 'K2ABC', via: t('logbook.qsl.via.bureau') })))
-    fireEvent.change(qslMenu('K2ABC'), { target: { value: 'R' } })
+    await chooseRowAction('K2ABC', 'QSL', t('logbook.row.qslRcvd.card'))
     await waitFor(() => expect(markQslCardById).toHaveBeenCalledWith(K2, true))
     expect(old.markQslSent).not.toHaveBeenCalled()
     expect(old.markQslCard).not.toHaveBeenCalled()
@@ -137,7 +136,7 @@ describe('each change names its contact by id and the edit key on screen', () =>
   it('FIX: the satellite tag', async () => {
     vi.mocked(setSatTagById).mockResolvedValue({ kind: 'applied', current: now(contact(2), 1) })
     await renderLogbook()
-    fireEvent.change(satMenu('K2ABC'), { target: { value: 'AO-91' } })
+    await chooseRowAction('K2ABC', t('logbook.row.menu.sat'), 'AO-91')
     await waitFor(() => expect(setSatTagById).toHaveBeenCalledWith(K2, 'AO-91'))
     await waitFor(() => expect(toasts()).toContain(t('logbook.sat.tagged', { call: 'K2ABC', sat: 'AO-91' })))
     expect(old.setSatTag).not.toHaveBeenCalled()
@@ -146,7 +145,7 @@ describe('each change names its contact by id and the edit key on screen', () =>
   it('FIX: a delete', async () => {
     vi.mocked(deleteQsoById).mockResolvedValue({ kind: 'deleted' })
     await renderLogbook()
-    fireEvent.click(screen.getByRole('button', { name: t('logbook.row.delete', { call: 'K1ABC' }) }))
+    await chooseRowAction('K1ABC', t('logbook.row.menu.delete'))
     await waitFor(() => expect(deleteQsoById).toHaveBeenCalledWith({ id: 'id-1', editKey: 'ek:id-1@1' }))
     await waitFor(() => expect(toasts()).toContain(t('logbook.delete.done', { call: 'K1ABC' })))
     expect(old.deleteQso).not.toHaveBeenCalled()
@@ -185,11 +184,11 @@ describe('each change names its contact by id and the edit key on screen', () =>
       engine.rev = 2
       return { kind: 'applied', current: now(engine.log[2], 2) }
     })
-    fireEvent.change(qslMenu('K2ABC'), { target: { value: 'R' } })
+    await chooseRowAction('K2ABC', 'QSL', t('logbook.row.qslRcvd.card'))
     await waitFor(() => expect(pagesAsked).toContain(2))
     vi.mocked(markQslSentById).mockResolvedValue({ kind: 'applied', current: now(engine.log[2], 2) })
-    await waitFor(() => {
-      fireEvent.change(qslMenu('K2ABC'), { target: { value: 'E' } })
+    await waitFor(async () => {
+      await chooseRowAction('K2ABC', 'QSL', t('logbook.row.qslSent.electronic'))
       expect(markQslSentById).toHaveBeenCalled()
     })
     const calls = vi.mocked(markQslSentById).mock.calls
@@ -202,7 +201,7 @@ describe('a change the engine refuses is said plainly, and the contact shown as 
     await renderLogbook()
     const asked = pagesAsked.length
     vi.mocked(markQslSentById).mockResolvedValue({ kind: 'changed', current: now(contact(2, { call: 'K2ABD' }), 2) })
-    fireEvent.change(qslMenu('K2ABC'), { target: { value: 'B' } })
+    await chooseRowAction('K2ABC', 'QSL', t('logbook.row.qslSent.bureau'))
     await waitFor(() => expect(toasts()).toContain(t('logbook.change.changed', { call: 'K2ABC' })))
     expect(toasts(), 'a change that was not made was reported as made').not.toContain(
       t('logbook.qsl.marked', { call: 'K2ABC', via: t('logbook.qsl.via.bureau') }),
@@ -213,7 +212,7 @@ describe('a change the engine refuses is said plainly, and the contact shown as 
   it('gone: a row menu change', async () => {
     await renderLogbook()
     vi.mocked(setSatTagById).mockResolvedValue({ kind: 'gone' })
-    fireEvent.change(satMenu('K1ABC'), { target: { value: 'SO-50' } })
+    await chooseRowAction('K1ABC', t('logbook.row.menu.sat'), 'SO-50')
     await waitFor(() => expect(toasts()).toContain(t('logbook.change.gone', { call: 'K1ABC' })))
     expect(toasts()).not.toContain(t('logbook.sat.tagged', { call: 'K1ABC', sat: 'SO-50' }))
   })
@@ -248,13 +247,11 @@ describe('a change the engine refuses is said plainly, and the contact shown as 
   it('a delete: changed is not a delete; gone is', async () => {
     await renderLogbook()
     vi.mocked(deleteQsoById).mockResolvedValueOnce({ kind: 'changed', current: now(contact(1), 2) })
-    fireEvent.click(screen.getByRole('button', { name: t('logbook.row.delete', { call: 'K1ABC' }) }))
+    await chooseRowAction('K1ABC', t('logbook.row.menu.delete'))
     await waitFor(() => expect(toasts()).toContain(t('logbook.delete.changed', { call: 'K1ABC' })))
     expect(toasts()).not.toContain(t('logbook.delete.done', { call: 'K1ABC' }))
     vi.mocked(deleteQsoById).mockResolvedValueOnce({ kind: 'gone' })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: t('logbook.row.delete', { call: 'K0ABC' }) }))
-    })
+    await chooseRowAction('K0ABC', t('logbook.row.menu.delete'))
     await waitFor(() => expect(toasts()).toContain(t('logbook.delete.gone', { call: 'K0ABC' })))
     expect(toasts()).not.toContain(t('logbook.delete.done', { call: 'K0ABC' }))
   })
@@ -270,9 +267,9 @@ describe('a change the logbook was too busy to make is said plainly, and nothing
     const asked = pagesAsked.length
     vi.mocked(markQslSentById).mockResolvedValue({ kind: 'busy' })
     vi.mocked(setSatTagById).mockResolvedValue({ kind: 'busy' })
-    fireEvent.change(qslMenu('K2ABC'), { target: { value: 'B' } })
+    await chooseRowAction('K2ABC', 'QSL', t('logbook.row.qslSent.bureau'))
     await waitFor(() => expect(toasts()).toContain(t('logbook.change.busy', { call: 'K2ABC' })))
-    fireEvent.change(satMenu('K1ABC'), { target: { value: 'SO-50' } })
+    await chooseRowAction('K1ABC', t('logbook.row.menu.sat'), 'SO-50')
     await waitFor(() => expect(toasts()).toContain(t('logbook.change.busy', { call: 'K1ABC' })))
     expect(toasts(), 'a change that was not made was reported as made').not.toContain(
       t('logbook.qsl.marked', { call: 'K2ABC', via: t('logbook.qsl.via.bureau') }),
@@ -304,10 +301,10 @@ describe('a change the logbook was too busy to make is said plainly, and nothing
     await renderLogbook()
     const asked = pagesAsked.length
     vi.mocked(deleteQsoById).mockResolvedValueOnce({ kind: 'busy' })
-    fireEvent.click(screen.getByRole('button', { name: t('logbook.row.delete', { call: 'K1ABC' }) }))
+    await chooseRowAction('K1ABC', t('logbook.row.menu.delete'))
     await waitFor(() => expect(toasts()).toContain(t('logbook.delete.busy', { call: 'K1ABC' })))
     expect(toasts()).not.toContain(t('logbook.delete.done', { call: 'K1ABC' }))
-    expect(screen.getByRole('button', { name: t('logbook.row.delete', { call: 'K1ABC' }) })).toBeTruthy()
+    expect(rowMore('K1ABC')).toBeTruthy()
     await new Promise((r) => setTimeout(r, 50))
     expect(pagesAsked.length).toBe(asked)
   })

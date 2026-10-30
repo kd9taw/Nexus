@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
 import { render, waitFor, fireEvent, cleanup } from '@testing-library/react'
 import { Logbook } from './Logbook'
+import { itemLabels, menuItem, openRowSubmenu } from './Logbook.rowMenu.testkit'
+import { t } from '../i18n'
 import * as api from '../api'
 import type { LogQuestion } from '../features/logAnswers'
 
@@ -65,10 +67,21 @@ async function renderWithSentQsl() {
     <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
   )
   await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
-  const select = container.querySelector('.logbook-row:not(.head) select') as HTMLSelectElement
-  expect(select).toBeTruthy()
-  return { container, select }
+  const menu = await openRowSubmenu('K0ABC', 'QSL')
+  return { container, menu }
 }
+/** The QSL menu's entries, by what each does: B/D/E send, Q/q queue, s clears the send, R/r the card. */
+const CODE: Record<string, string> = {
+  [t('logbook.row.qslSent.bureau')]: 'B',
+  [t('logbook.row.qslSent.direct')]: 'D',
+  [t('logbook.row.qslSent.electronic')]: 'E',
+  [t('logbook.row.qslQueue.add')]: 'Q',
+  [t('logbook.row.qslQueue.remove')]: 'q',
+  [t('logbook.row.qslSent.clear')]: 's',
+  [t('logbook.row.qslRcvd.card')]: 'R',
+  [t('logbook.row.qslRcvd.clear')]: 'r',
+}
+const codes = (menu: HTMLElement) => itemLabels(menu).map((l) => CODE[l] ?? l)
 
 // #180 (rgoiko): the RECEIVED side has a clear entry ("r") the moment a card is on the
 // record, so a mis-tick is reversible. The SENT side has none — once `qslSent.sent` is
@@ -76,11 +89,11 @@ async function renderWithSentQsl() {
 // chair a mis-click on Bureau/Direct/Electronic is permanent.
 describe('QSL sent — undoing a mis-click (#180)', () => {
   it('offers a clear entry while the request is marked sent', async () => {
-    const { select } = await renderWithSentQsl()
+    const { menu } = await renderWithSentQsl()
 
     // Positive control: the RECEIVED side's send-independent entry IS here, so the menu
     // really rendered and a missing SENT clear is a real absence, not a dead query.
-    const values = [...select.options].map((o) => o.value)
+    const values = codes(menu)
     expect(values).toContain('R')
     // The three SEND options are correctly hidden — you cannot send twice.
     expect(values).not.toContain('B')
@@ -93,8 +106,8 @@ describe('QSL sent — undoing a mis-click (#180)', () => {
   })
 
   it('clears the sent mark when that entry is chosen', async () => {
-    const { select } = await renderWithSentQsl()
-    fireEvent.change(select, { target: { value: 's' } })
+    const { menu } = await renderWithSentQsl()
+    fireEvent.click(menuItem(menu, t('logbook.row.qslSent.clear')))
     // The row on screen by its id, never its position (a Remote delete shifts positions).
     await waitFor(() =>
       expect(api.markQslSentById as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(expect.objectContaining({ id: 'id-K0ABC' }), null),
@@ -112,8 +125,7 @@ describe('QSL sent — undoing a mis-click (#180)', () => {
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
     await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
-    const select = container.querySelector('.logbook-row:not(.head) select') as HTMLSelectElement
-    const values = [...select.options].map((o) => o.value)
+    const values = codes(await openRowSubmenu('K0ABC', 'QSL'))
     // The three sends are back — so this really is the not-yet-sent state.
     expect(values).toEqual(expect.arrayContaining(['B', 'D', 'E']))
     expect(values).not.toContain('s')
