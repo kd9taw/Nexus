@@ -985,13 +985,18 @@ test('every job that stages the IOTA list sets up Node first', () => {
 // instead, through cargo's CARGO_PROFILE_RELEASE_LTO / _CODEGEN_UNITS overrides; its runs on main, a
 // release/* branch and a tag keep the profile, and scripts/require-green-ci accepts a release only on
 // one of those. A release must never take the branch values, and nothing may move the profile
-// behind the manifest's back. Comment lines are not read: a comment changes no build.
+// behind the manifest's back. The check is per line, and full-line `#` comments are not read: a
+// comment changes no build. It is defence in depth against an edit that moves the profile, not a
+// boundary against someone set on hiding one: a name split across a backslash-newline, a name built
+// by indirection, a `--config <file>` or RUSTFLAGS codegen flags are out of its reach. It fails
+// closed on prose, too: a step name, an echo or a trailing comment that names an override or a
+// profile table is refused; reword it.
 //  - no workflow but ci.yml, and neither release build entry point (build-linux.sh,
-//    build-windows-cross.sh), names ANY CARGO_PROFILE_RELEASE_* variable, in whatever form it is
-//    set (`env:`, `export`, a `$GITHUB_ENV` line, a prefix on a command);
+//    build-windows-cross.sh), has a line that names ANY CARGO_PROFILE_RELEASE_* variable, however
+//    it would set it (`env:`, `export`, a `$GITHUB_ENV` line, a prefix on a command);
 //  - no workflow, build script, ci.yml or Dockerfile.pi names a profile table to cargo, in any of
 //    its spellings (`--config profile.release.lto=…`, `--config "profile.release={…}"`,
-//    `[profile.release]`, `[profile]` with `release.lto`);
+//    `[profile.release]`, `[profile]` with `release.lto`, quoted key parts);
 //  - no .cargo/config* (repository root or src-tauri) carries any profile table, which cargo
 //    would apply over the manifest;
 //  - in ci.yml and Dockerfile.pi every mention of CARGO_PROFILE_RELEASE_* is one of the exact lines
@@ -1002,8 +1007,12 @@ test('every job that stages the IOTA list sets up Node first', () => {
 //    key is refused there too.
 const CARGO_TAURI = process.env.CARGO_TAURI || path.join(ROOT, 'src-tauri', 'Cargo.toml');
 const ANY_OVERRIDE = /CARGO_PROFILE_RELEASE_/;
-const PROFILE_TABLE = /profile\.release|\[\s*profile\s*[\].]/;
-const codeLines = (text) => text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#') && !l.startsWith('//'));
+// TOML allows a key part to be quoted (`["profile".release]`, `'"profile".release.lto=false'`), with
+// spaces around the dots.
+const PROFILE_TABLE = /["']?profile["']?\s*\.\s*["']?release|\[\s*["']?profile["']?\s*[\].]/;
+// Every format read here (YAML, bash, Dockerfile, TOML) comments with `#` only; `//usr/bin/env` is a
+// command in bash, so `//` is not skipped.
+const codeLines = (text) => text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
 function releaseProfile(cargoToml) {
   const section = cargoToml.split(/^\[profile\.release\]\s*$/m)[1]?.split(/^\[/m)[0] ?? '';
   const lto = section.match(/^lto\s*=\s*"?([\w]+)"?\s*$/m)?.[1];
@@ -1100,6 +1109,11 @@ test('only ci.yml land/topic runs leave the shipped link profile; release, main,
   has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, nai, `          echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"\n${nai}`) }), '>> "$GITHUB_ENV"');
   has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, '--build-arg CARGO_PROFILE_RELEASE_LTO\n', '--build-arg CARGO_PROFILE_RELEASE_LTO=false\n') }), '--build-arg CARGO_PROFILE_RELEASE_LTO=false');
   has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, 'ARG CARGO_PROFILE_RELEASE_LTO=true', 'ARG CARGO_PROFILE_RELEASE_LTO=false') }), 'defaults to false');
+  // `//` is no comment in bash: this line runs, and the export with it.
+  has(linkProfileFindings(scripts('build-windows-cross.sh', `${cross}\n//usr/bin/env true; export CARGO_PROFILE_RELEASE_LTO=false\n`)), '//usr/bin/env true; export CARGO_PROFILE_RELEASE_LTO=false');
+  // Quoted TOML key parts, in a config file and on the command line.
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '["profile".release]\nlto = false\n']] }), '["profile".release]');
+  has(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', `cargo tauri build --config '"profile".release.lto=false' --features`))), `'"profile".release.lto=false'`);
   // Dockerfile.pi is release.yml's Pi build: an ENV after the ARGs, or a prefix inside the RUN.
   const args = 'ARG CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1\n';
   has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, args, `${args}ENV CARGO_PROFILE_RELEASE_LTO=false\n`) }), 'ENV CARGO_PROFILE_RELEASE_LTO=false');

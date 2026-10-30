@@ -224,9 +224,13 @@ if [ -z "$green" ]; then
     if [ -n "$RUNS_JSON_FILE" ]; then
       is_branch="${NEXUS_CI_REF_IS_BRANCH:-no}"
     else
-      branch_out=$(gh api "repos/$repo/branches/$ref" --jq .name 2>&1); branch_rc=$?
+      # The name goes into a URL path: `#` would cut it short and `%` would be decoded, so it is
+      # encoded. Only gh's "Branch not found" 404 means no branch: a 404 for the repository
+      # itself ("Not Found (HTTP 404)", a token that cannot read it) is an unreadable answer.
+      ref_path=$(jq -rn --arg r "$ref" '$r | @uri') || die_usage "could not encode '$ref' for the API"
+      branch_out=$(gh api "repos/$repo/branches/$ref_path" --jq .name 2>&1); branch_rc=$?
       if [ $branch_rc -eq 0 ]; then is_branch=yes
-      elif printf '%s' "$branch_out" | grep -q 'HTTP 404'; then is_branch=no
+      elif printf '%s' "$branch_out" | grep -qF 'Branch not found (HTTP 404)'; then is_branch=no
       else
         printf '%s\n' "$branch_out" | sed 's/^/require-green-ci:   /' >&2
         die_usage "could not ask whether a branch named '$ref' exists — refusing rather than guessing
@@ -284,14 +288,20 @@ fi
   echo "ORDINARY outcome of pushing again quickly, and 43% of recent main runs are"
   echo "cancelled. 1.12.0 published on exactly this footing."
   echo
-  echo "What to do (the tag is not on the remote yet if this is the pre-push hook, so CI cannot"
-  echo "be run on '$ref' itself; run it on a branch that links as a release does):"
+  echo "What to do (run CI on a branch that links as a release does; at the pre-push hook the tag"
+  echo "is not on the remote yet, so CI cannot be run on '$ref' itself):"
   echo "  1. If main is at this commit, run ci.yml on main:"
   echo "       gh workflow run $WORKFLOW --repo ${repo:-<owner/repo>} --ref main"
   echo "     Otherwise put this commit on a release branch and run it there:"
   echo "       git push origin $sha:refs/heads/release/${ref#v}"
   echo "       gh workflow run $WORKFLOW --repo ${repo:-<owner/repo>} --ref release/${ref#v}"
-  echo "     Wait for the run to finish green on exactly $sha, then push the tag again."
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "     Wait for that run to finish green on exactly $sha. The tag is already public here,"
+    echo "     so pushing it again starts nothing: re-run this workflow's failed jobs instead:"
+    echo "       gh run rerun ${GITHUB_RUN_ID:-<this run id>} --failed --repo ${repo:-<owner/repo>}"
+  else
+    echo "     Wait for the run to finish green on exactly $sha, then push the tag again."
+  fi
   echo "  2. If it is red, fix it and cut the tag again. Do not publish around it."
   echo "  3. Genuine break-glass only — deliberate, visible, and keyed to THIS ref:"
   echo "       NEXUS_ALLOW_UNVERIFIED_CI=$ref"
@@ -307,7 +317,8 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "Nothing was published."
     echo
     echo "Set the \`NEXUS_ALLOW_UNVERIFIED_CI\` repository variable to \`$ref\` to override"
-    echo "deliberately, or run CI on main or a release/* branch at this commit and push the tag again."
+    echo "deliberately, or run CI on main or a release/* branch at this commit, then re-run this"
+    echo "workflow's failed jobs (\`gh run rerun ${GITHUB_RUN_ID:-<this run id>} --failed\`)."
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 

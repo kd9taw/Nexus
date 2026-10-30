@@ -213,6 +213,69 @@ else
 fi
 
 echo
+echo "15. THE LIVE BRANCH LOOKUP, through a stand-in gh on PATH (no NEXUS_CI_RUNS_JSON): only gh's"
+echo "    'Branch not found' 404 means no branch; a 404 for the repository, a network error or a"
+echo "    rate limit is an unreadable answer (exit 2); runs on main or release/* never ask."
+mkdir -p "$LAB/bin"
+cat > "$LAB/bin/gh" <<'FAKE'
+#!/usr/bin/env bash
+# Stand-in for gh: `run list` answers from $FAKE_RUNS; `api .../branches/<name>` answers by
+# $FAKE_BRANCH and records the path it was asked for in $FAKE_LOG.
+case "$1 $2" in
+  "run list") cat "$FAKE_RUNS"; exit 0 ;;
+  "api "*)
+    echo "$2" >> "$FAKE_LOG"
+    case "$FAKE_BRANCH" in
+      200)       echo "v9.9.9"; exit 0 ;;
+      nobranch)  echo "gh: Branch not found (HTTP 404)" >&2; exit 1 ;;
+      norepo)    echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+      ratelimit) echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1 ;;
+      network)   echo "error connecting to api.github.com" >&2; exit 1 ;;
+    esac ;;
+esac
+echo "fake gh: unexpected call: $*" >&2; exit 99
+FAKE
+chmod +x "$LAB/bin/gh"
+live() {  # live <expected-exit> <name> <FAKE_BRANCH> <headBranch> [ref]
+  local want="$1" name="$2" mode="$3" hb="$4" ref="${5:-$REF}" out rc
+  printf '[{"databaseId":20,"headBranch":"%s","status":"completed","conclusion":"success","headSha":"%s","event":"workflow_dispatch","createdAt":"t","url":"u"}]' "$hb" "$SHA" > "$LAB/live.json"
+  : > "$LAB/api.log"
+  out=$(env -u NEXUS_CI_RUNS_JSON PATH="$LAB/bin:$PATH" FAKE_RUNS="$LAB/live.json" FAKE_BRANCH="$mode" FAKE_LOG="$LAB/api.log" \
+        "$SCRIPT" --sha "$SHA" --ref "$ref" --repo owner/repo 2>&1)
+  rc=$?
+  if [ "$rc" = "$want" ]; then
+    pass=$((pass+1)); printf '  ok   %-58s exit %s\n' "$name" "$rc"
+  else
+    fail=$((fail+1)); printf '  FAIL %-58s exit %s (wanted %s)\n' "$name" "$rc" "$want"
+    printf '%s\n' "$out" | sed 's/^/       | /'
+  fi
+}
+live 1 "tag run, branch lookup 200 (a branch exists) => REFUSE" 200 "$REF"
+live 0 "tag run, 'Branch not found' 404            => PASS"   nobranch "$REF"
+live 2 "tag run, repository 'Not Found' 404        => ERROR"  norepo "$REF"
+live 2 "tag run, rate limited (403)                => ERROR"  ratelimit "$REF"
+live 2 "tag run, network error                     => ERROR"  network "$REF"
+live 0 "main run never asks about a branch         => PASS"   network main
+if [ -s "$LAB/api.log" ]; then
+  fail=$((fail+1)); printf '  FAIL %-58s\n' "a main run asked the branch API"
+else
+  pass=$((pass+1)); printf '  ok   %-58s\n' "a main run asked the branch API nothing"
+fi
+live 0 "tag 'v9.9.9#x' is looked up encoded       => PASS"   nobranch 'v9.9.9#x' 'v9.9.9#x'
+if grep -qxF 'repos/owner/repo/branches/v9.9.9%23x' "$LAB/api.log"; then
+  pass=$((pass+1)); printf '  ok   %-58s\n' "the lookup path encodes '#'"
+else
+  fail=$((fail+1)); printf '  FAIL %-58s\n' "the lookup path was: $(cat "$LAB/api.log")"
+fi
+printf '[{"databaseId":21,"headBranch":"land/x","status":"completed","conclusion":"success","headSha":"%s","event":"workflow_dispatch","createdAt":"t","url":"u"}]' "$SHA" > "$LAB/runs.json"
+msg=$(NEXUS_CI_RUNS_JSON="$LAB/runs.json" GITHUB_ACTIONS=true GITHUB_RUN_ID=4242 "$SCRIPT" --sha "$SHA" --ref "$REF" --repo owner/repo 2>&1)
+if printf '%s' "$msg" | grep -qF 'gh run rerun 4242 --failed'; then
+  pass=$((pass+1)); printf '  ok   %-58s\n' "in a workflow, the advice re-runs the failed jobs"
+else
+  fail=$((fail+1)); printf '  FAIL %-58s\n' "in a workflow, the advice does NOT re-run the failed jobs"
+fi
+
+echo
 echo "--------------------------------------------------------------"
 printf '%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
