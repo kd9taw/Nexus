@@ -26513,6 +26513,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let mut seq = seq;
             seq.cfg = self.settings.rtty_seq_config();
             self.rtty_seq = Some(seq);
+            // The sequencer decides from what the decoder hears, so Auto takes the decoder: it is
+            // the operator's from here (a screen leave no longer stops it), and one that a leave
+            // stopped (another window left RTTY while this one stayed) starts again. Never one
+            // the operator stopped. RX only: nothing here keys or changes what Auto sends.
+            self.rtty_auto_armed = false;
+            if !self.rtty_armed && !self.rtty_auto_arm_declined {
+                self.rtty_afc_hz = 0.0;
+                self.rtty_afc_locked = false;
+                self.rtty_armed = true;
+            }
         } else {
             if let Some(seq) = self.rtty_seq.as_mut() {
                 seq.abort();

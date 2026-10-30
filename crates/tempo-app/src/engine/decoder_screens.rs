@@ -300,6 +300,48 @@ mod tests {
         assert!(!e.rtty_armed(), "Auto off: the next leave stops it");
     }
 
+    /// ⭐ RTTY AUTO NEVER RUNS OVER A STOPPED DECODER. With a computer driving the station there
+    /// are two windows and one engine: the shack window leaving RTTY stops the decoder under the
+    /// client's RTTY screen, whose entry arm has already happened. Switching Auto on there must
+    /// start the decoder again, or the sequencer runs deaf and every over follows its reply
+    /// timer. Receive only: this arms the decoder and changes nothing the sequencer sends.
+    #[test]
+    fn switching_rtty_auto_on_starts_a_decoder_a_leave_stopped() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(e.rtty_auto_arm());
+        e.leave_decoder_screen(DecoderScreen::Rtty, false); // the other window left RTTY
+        assert!(!e.rtty_armed(), "premise: the leave stopped it");
+        e.set_rtty_auto(true).unwrap();
+        assert!(e.rtty_armed(), "Auto on starts the decoder it reads");
+
+        // …but never one the operator stopped: their Stop still holds.
+        let mut f = Engine::new("W9XYZ", "EN61", 0);
+        f.set_rtty_armed(true);
+        f.set_rtty_armed(false);
+        f.set_rtty_auto(true).unwrap();
+        assert!(!f.rtty_armed(), "the operator's stop is theirs");
+    }
+
+    /// Auto is the operator's commitment, so the decoder it runs on becomes theirs: after Auto
+    /// goes off again a leave does not stop it (they stop it with its own button).
+    #[test]
+    fn switching_rtty_auto_on_makes_the_decoder_the_operators() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(e.rtty_auto_arm());
+        e.set_rtty_auto(true).unwrap();
+        assert!(
+            !e.leave_decoder_screen(DecoderScreen::Rtty, false),
+            "Auto on: the decoder is no longer the screen's to stop"
+        );
+        assert!(e.rtty_armed(), "Auto on, screen left: still decoding");
+        e.set_rtty_auto(false).unwrap();
+        assert!(
+            !e.leave_decoder_screen(DecoderScreen::Rtty, false),
+            "nothing to ask"
+        );
+        assert!(e.rtty_armed(), "Auto made it the operator's");
+    }
+
     /// The RX iGate contributes what the RF decoder hears, from any screen: with it on, the
     /// APRS decoder keeps running.
     #[test]

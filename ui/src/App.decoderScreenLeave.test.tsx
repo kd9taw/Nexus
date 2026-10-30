@@ -50,6 +50,13 @@ async function navTo(label: string): Promise<void> {
   await act(async () => {})
 }
 
+/** Let every answer in flight land and React commit what it caused. */
+async function settle(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0))
+  })
+}
+
 const left = () => vi.mocked(api.leaveDecoderScreen).mock.calls.map(([s]) => s)
 
 beforeEach(() => {
@@ -94,6 +101,38 @@ describe('leaving a decoder screen', () => {
     expect(left(), 'a glance is not a section change').toEqual([])
     await navTo('Phone')
     expect(left()).toEqual(['rtty'])
+  })
+
+  it('a leave that lands after the operator came back starts the decoder again', async () => {
+    // RTTY → Phone → RTTY inside one round trip: the leave reaches the engine AFTER the return's
+    // auto-arm (a no-op then: still armed), and stops the decoder under the RTTY screen.
+    let land: (kept: boolean) => void = () => {}
+    vi.mocked(api.leaveDecoderScreen).mockImplementationOnce(() => new Promise<boolean>((r) => (land = r)))
+    const arms = () => vi.mocked(api.rttyAutoArm).mock.calls.length
+    await mountOn('rtty')
+    await navTo('Phone')
+    const away = arms()
+    await navTo('RTTY')
+    await waitFor(() => expect(arms(), 'premise: the cockpit armed on its return').toBeGreaterThan(away))
+    await settle()
+    const back = arms()
+    await settle()
+    expect(arms(), 'premise: nothing else arms while the leave is in flight').toBe(back)
+    await act(async () => land(false))
+    await settle()
+    expect(arms(), 'the late leave is undone').toBe(back + 1)
+  })
+
+  it('a leave that lands with the operator still away arms nothing', async () => {
+    let land: (kept: boolean) => void = () => {}
+    vi.mocked(api.leaveDecoderScreen).mockImplementationOnce(() => new Promise<boolean>((r) => (land = r)))
+    await mountOn('rtty')
+    await navTo('Phone')
+    await settle()
+    const armsBefore = vi.mocked(api.rttyAutoArm).mock.calls.length
+    await act(async () => land(false))
+    await settle()
+    expect(vi.mocked(api.rttyAutoArm).mock.calls.length, 'away: the leave stands').toBe(armsBefore)
   })
 
   it('a screen the engine keeps is asked about again at the next section', async () => {
