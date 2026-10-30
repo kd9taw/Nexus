@@ -109,10 +109,12 @@ impl P533Engine {
 
 /// How this run's signal travels: the dominant mode's layer, hops and take-off angle
 /// (≤ 7000 km, the short model's §6 dominant mode), or the long model's fM hop geometry
-/// beyond 7000 km, where the method assumes F2 hops and names no single mode. `None`
+/// beyond 7000 km, where the method assumes F2 hops and names no single mode (flagged
+/// `estimated`: that geometry follows from distance alone). `None`
 /// when no mode carries the frequency. Reads values the chain already computed.
 fn path_hour(run: &P533Run) -> Option<PathHour> {
-    let (layer, hops, ele) = if run.path.distance > 7000.0 {
+    let estimated = run.path.distance > 7000.0;
+    let (layer, hops, ele) = if estimated {
         if run.long_hops == 0 {
             return None;
         }
@@ -128,6 +130,7 @@ fn path_hour(run: &P533Run) -> Option<PathHour> {
         hops: hops.min(u8::MAX as usize) as u8,
         takeoff_deg: ele.to_degrees() as f32,
         snr_db: run.rel.snr as f32,
+        estimated,
     })
 }
 
@@ -434,6 +437,7 @@ mod tests {
                 match (d, want) {
                     (Some(d), Some((layer, hops, ele))) => {
                         assert_eq!((d.layer, d.hops), (layer, hops), "{} {h}Z", b.band);
+                        assert!(!d.estimated, "a §6 dominant mode is modelled, not assumed");
                         assert_eq!(d.takeoff_deg, ele.to_degrees() as f32);
                         // The §6 path elevation IS the dominant mode's.
                         assert_eq!(run.power.ele, ele);
@@ -477,8 +481,64 @@ mod tests {
         assert_eq!(d.hops as u32, run.long_hops);
         assert!(d.hops >= 3, "10 800 km in ≤ 4000 km hops: {}", d.hops);
         assert_eq!(d.takeoff_deg, run.long_ele.to_degrees() as f32);
+        assert!(d.estimated, "beyond 7000 km the hop geometry is assumed");
         // Positive control on the source: the >9000 km composite elevation is the same angle.
         assert!((run.long_ele - path_ele_beyond_9000(&run)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn detail_in_the_7000_to_9000_km_blend_is_the_long_models_geometry() {
+        // Chicago → Munich, ~7300 km: P.533 blends the short and long models here; the detail
+        // must be the long model's assumed geometry, not a short-model dominant mode.
+        let (me, dx) = ((41.88, -87.63), (48.35, 11.79));
+        let t = 1_778_846_400; // 2026-05-15 12:00 UTC
+        let wx = SpaceWx {
+            sfi: 150.0,
+            ..Default::default()
+        };
+        let pred = P533Engine::new(Some(me)).predict(dx, t, &wx);
+        let mut checked = 0;
+        for b in &pred.bands {
+            for (h, d) in b.detail.as_ref().unwrap().iter().enumerate() {
+                let run = run_like_predict(me, dx, t, 150.0, band_of(&b.band), h);
+                assert!((7000.0..9000.0).contains(&run.path.distance));
+                let d = d.expect("the long model always has geometry");
+                assert_eq!((d.layer, d.hops as u32), (PathLayer::F2, run.long_hops));
+                assert_eq!(d.takeoff_deg, run.long_ele.to_degrees() as f32);
+                assert!(d.estimated);
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, pred.bands.len() * 24);
+    }
+
+    #[test]
+    fn an_e_layer_dominant_mode_is_reported_as_e() {
+        // Boston → Chicago, ~1400 km, a May day: one E hop carries the low bands at midday.
+        let (me, dx) = ((42.36, -71.06), (41.88, -87.63));
+        let t = 1_778_846_400; // 2026-05-15 12:00 UTC
+        let wx = SpaceWx {
+            sfi: 150.0,
+            ..Default::default()
+        };
+        let pred = P533Engine::new(Some(me)).predict(dx, t, &wx);
+        let mut e_hours = 0;
+        for b in &pred.bands {
+            for (h, d) in b.detail.as_ref().unwrap().iter().enumerate() {
+                let run = run_like_predict(me, dx, t, 150.0, band_of(&b.band), h);
+                if let (Some(d), Some(Dominant::E(i))) = (d, run.power.dominant) {
+                    assert_eq!(
+                        (d.layer, d.hops),
+                        (PathLayer::E, i as u8 + 1),
+                        "{} {h}Z",
+                        b.band
+                    );
+                    assert_eq!(d.takeoff_deg, run.path.md_e[i].ele.to_degrees() as f32);
+                    e_hours += 1;
+                }
+            }
+        }
+        assert!(e_hours > 0, "a daytime 1400 km path has E-dominant hours");
     }
 
     /// The elevation P.533 §5.3 stores beyond 9000 km (`ele`), re-derived from the run's

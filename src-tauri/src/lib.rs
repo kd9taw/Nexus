@@ -8014,7 +8014,8 @@ async fn get_propagation(
 ///
 /// Also attaches the path's geometry (polar cap, auroral oval, grey line, Kp per hour)
 /// from the Kp outlook and aurora oval already held — read from their caches, never
-/// fetched here, so a cold cache simply means "current Kp only" / "oval unknown".
+/// fetched here, so a cold cache simply means "latest Kp only" / "oval unknown", and with
+/// no SWPC reading at all, "Kp unknown".
 #[tauri::command]
 async fn get_path_outlook(
     grid: String,
@@ -8075,6 +8076,13 @@ async fn get_path_outlook(
             .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
             .map(|(_, pts)| pts.iter().map(|p| (p.lat, p.lon)).collect())
     });
+    // The geometry's Kp is only ever one SWPC reported: `wx.kp` above may be the cold-cache
+    // default or a failed fetch's stand-in, which the engine may use but no label may call a
+    // reading.
+    let kp_now = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx))
+    };
     tauri::async_runtime::spawn_blocking(move || {
         // Both routes at once on their own threads: the long path costs the same chain again,
         // so this keeps the card's wait at one prediction's. Neither holds any lock.
@@ -8090,7 +8098,7 @@ async fn get_path_outlook(
                     dx,
                     route,
                     t,
-                    wx.kp,
+                    kp_now,
                     forecast.as_ref(),
                     oval.as_deref(),
                 )
@@ -8106,6 +8114,46 @@ async fn get_path_outlook(
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// The Kp SWPC actually reported, from the propagation cache's snapshot — `None` when the cache
+/// is cold, or when the last fetch failed and the snapshot carries the model's stand-in values
+/// (the same rule that keeps stand-ins off logged contacts).
+fn swpc_kp(wx: Option<&propagation::SpaceWxView>) -> Option<f32> {
+    wx.filter(|w| w.fetched).map(|w| w.kp)
+}
+
+#[cfg(test)]
+mod path_outlook_kp_tests {
+    use super::swpc_kp;
+
+    fn view(kp: f32, fetched: bool) -> propagation::SpaceWxView {
+        propagation::SpaceWxView {
+            sfi: 120.0,
+            kp,
+            a_index: 8.0,
+            xray_class: "B-class".into(),
+            flare: false,
+            xray_long: 1e-7,
+            solar_wind: None,
+            fetched,
+        }
+    }
+
+    #[test]
+    fn a_cold_cache_gives_no_kp() {
+        assert_eq!(swpc_kp(None), None);
+    }
+
+    #[test]
+    fn a_failed_fetchs_stand_in_kp_is_not_a_reading() {
+        assert_eq!(swpc_kp(Some(&view(2.0, false))), None);
+    }
+
+    #[test]
+    fn a_fetched_kp_is_passed_on() {
+        assert_eq!(swpc_kp(Some(&view(3.33, true))), Some(3.33));
+    }
 }
 
 /// Ring-outlook cache (p533 only): (computed-at, params-key, value). The 8-azimuth
@@ -8416,6 +8464,11 @@ async fn get_dxped_windows(
                 // different question, where 60 m is a legitimate answer and demoting it
                 // would be a lie. Only a caller that knows it is ranking chases may do it.
                 p.demote_award_ineligible();
+                // The chase board reads scores and windows, never the per-hour hop geometry:
+                // drop it so each expedition does not carry ~1 KB of it per band.
+                for b in &mut p.bands {
+                    b.detail = None;
+                }
                 // NO TRUNCATION HERE, AND THAT IS THE FIX. A `p.bands.truncate(4)` used to
                 // follow this line with no recorded reason. Once each WORK NOW card began
                 // headlining its OWN band instead of a shared cross-band line, that truncation
