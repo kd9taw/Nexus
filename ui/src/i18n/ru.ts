@@ -519,6 +519,7 @@ export const RU: PartialCatalog = {
   "shell.lane.audio.soundCard": "ОШИБКА ЗВУКОВОЙ КАРТЫ",
   "shell.lane.audio.noReceiveAudio": "НЕТ ЗВУКА ПРИЁМА",
   "shell.lane.audio.ptt": "PTT НЕ ПРИНЯТ",
+  "shell.lane.audio.pttUnconfirmed": "PTT НЕ ПОДТВЕРЖДЁН",
   "shell.lane.audio.flexAudio": "НЕТ ЗВУКА FLEX",
   "shell.lane.audio.flexAddress": "НЕТ IP ТРАНСИВЕРА FLEX",
   "shell.lane.audio.monitor": "КОНТРОЛЬ В НАУШНИКАХ ВЫКЛ.",

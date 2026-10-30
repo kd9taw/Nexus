@@ -13763,6 +13763,7 @@ export const EN = {
   'shell.lane.audio.soundCard': 'SOUND CARD FAILED',
   'shell.lane.audio.noReceiveAudio': 'NO RECEIVE AUDIO',
   'shell.lane.audio.ptt': 'PTT NOT ACCEPTED',
+  'shell.lane.audio.pttUnconfirmed': 'PTT NOT CONFIRMED',
   'shell.lane.audio.flexAudio': 'NO FLEX AUDIO',
   'shell.lane.audio.flexAddress': 'NO FLEX RADIO IP',
   'shell.lane.audio.monitor': 'HEADPHONE MONITOR OFF',

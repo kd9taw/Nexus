@@ -8871,6 +8871,7 @@ export const DE: PartialCatalog = {
   "shell.lane.audio.soundCard": "SOUNDKARTE AUSGEFALLEN",
   "shell.lane.audio.noReceiveAudio": "KEIN EMPFANGSAUDIO",
   "shell.lane.audio.ptt": "PTT NICHT ANGENOMMEN",
+  "shell.lane.audio.pttUnconfirmed": "PTT NICHT BESTÄTIGT",
   "shell.lane.audio.flexAudio": "KEIN FLEX-AUDIO",
   "shell.lane.audio.flexAddress": "KEINE FLEX-RADIO-IP",
   "shell.lane.audio.monitor": "KOPFHÖRER-MONITOR AUS",

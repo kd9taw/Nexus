@@ -23,6 +23,8 @@ const KINDS: Record<AudioErrorKind, { tier: StatusTier; headline: () => string }
   noReceiveAudio: { tier: 'critical', headline: () => t('shell.lane.audio.noReceiveAudio') },
   // The over is not sent on a key the rig refused.
   ptt: { tier: 'critical', headline: () => t('shell.lane.audio.ptt') },
+  // The key got no answer in time: not a refusal, and the radio may yet key.
+  pttUnconfirmed: { tier: 'warning', headline: () => t('shell.lane.audio.pttUnconfirmed') },
   // Already back on the sound card, by design.
   flexAudio: { tier: 'warning', headline: () => t('shell.lane.audio.flexAudio') },
   // Only the native panadapter waits for the address.

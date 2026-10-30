@@ -2642,6 +2642,7 @@ fn open_read_only(
             crate::rigctld_server::PortReply::Rigctld => {
                 let mut rig = Rig::with_control(Some(direct.to_string()), PttMode::Vox);
                 rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
+                rig.set_network_chain(t.is_network()); // a key-down waits the network window
                 let ok = probe_cat(&mut rig, t).ok;
                 return (rig, None, ok);
             }
@@ -2682,6 +2683,7 @@ fn open_read_only(
                     || t.is_tci()
                     || t.is_slow_serial_link(),
             );
+            rig.set_network_chain(network); // a key-down waits the network window
             let ok = probe_cat(&mut rig, t).ok;
             (rig, Some(proc), ok)
         }
@@ -3423,7 +3425,8 @@ enum KeyUp {
     /// or rigctld answered it with Hamlib's own "the rig did not answer"
     /// ([`crate::rig::no_answer_in_time`]). Not a refusal: a slow radio behind rigctld (a Xiegu,
     /// a vintage Kenwood, any rig at 19200 baud or less) keys and answers late, so the over goes
-    /// out, with its warning, as it always did.
+    /// out, with its warning (the key not confirmed), as it always did. Except the tune, which
+    /// plays its carrier only into a confirmed key (`RadioLoop::step`'s tune branch).
     NoAnswer,
     /// The radio refused the key, or the key failed in any way but no answer in time
     /// ([`KeyUp::NoAnswer`]), and nothing of the loop's holds the transmitter: nothing may be
@@ -3443,6 +3446,13 @@ impl KeyUp {
         *self != KeyUp::Keyed
     }
 }
+
+/// The PTT line for a key the rig did not answer in time ([`KeyUp::NoAnswer`]): not a refusal, so
+/// not the refusal's words, and the advice is the link the answer waits on.
+const PTT_UNCONFIRMED: (AudioErrorKind, &str) = (
+    AudioErrorKind::PttUnconfirmed,
+    "The rig did not answer the PTT key in time — check the CAT link to the radio.",
+);
 
 /// The log's line for an over a refused key dropped ([`KeyUp::Refused`]), in the words the voice
 /// keyer's and APRS's refusals use: `<what>: the radio did not accept the key (<why>) (dropped)`.
@@ -6228,20 +6238,38 @@ impl RadioLoop {
     /// banner: the words the voice keyer, SSTV, the Remote microphone, the tune and the
     /// operator's own PTT give a key the rig refused. A refused key used to be played into a
     /// receiving rig with no warning ("silent dead air"); now the over is not played at all
-    /// ([`Self::key_over`]), and this says why. A key with no answer in time still plays, as it
-    /// always did, and this says the key was not confirmed. Uses the err-owner arbitration so a
-    /// PTT status never clobbers a device/mic error, and clears only its OWN status when keying
-    /// succeeds again.
+    /// ([`Self::key_over`]), and this says why. A key with no answer in time is not a refusal and
+    /// is not called one ([`Self::report_key`]). Uses the err-owner arbitration so a PTT status
+    /// never clobbers a device/mic error, and clears only its OWN status when keying succeeds
+    /// again.
     fn report_ptt(&mut self, engine: &Arc<Mutex<Engine>>, failed: bool) {
-        if failed {
+        self.report_ptt_as(
+            engine,
+            failed.then_some((
+                AudioErrorKind::Ptt,
+                "The rig didn't accept PTT — check your PTT method and CAT/port.",
+            )),
+        );
+    }
+
+    /// [`Self::report_ptt`] for what came of a key: a key with no answer in time
+    /// ([`KeyUp::NoAnswer`]) says the key was not confirmed, and names the link it waits on,
+    /// rather than that the rig did not accept it; anything else as `report_ptt` reports it.
+    fn report_key(&mut self, engine: &Arc<Mutex<Engine>>, key: &KeyUp) {
+        if *key == KeyUp::NoAnswer {
+            self.report_ptt_as(engine, Some(PTT_UNCONFIRMED));
+        } else {
+            self.report_ptt(engine, key.warns());
+        }
+    }
+
+    /// The PTT line itself: set to `line`, or with `None` cleared if it is this line's.
+    fn report_ptt_as(&mut self, engine: &Arc<Mutex<Engine>>, line: Option<(AudioErrorKind, &str)>) {
+        if let Some((kind, words)) = line {
             if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
                 {
                     let mut eng = engine_lock(engine);
-                    eng.set_audio_error(Some((
-                        AudioErrorKind::Ptt,
-                        "The rig didn't accept PTT — check your PTT method and CAT/port."
-                            .to_string(),
-                    )));
+                    eng.set_audio_error(Some((kind, words.to_string())));
                 }
                 self.err_owner = ErrOwner::Ptt;
             }
@@ -6567,11 +6595,8 @@ impl RadioLoop {
         // the SDR program's microphone ([`Self::mark_tci_nexus_key`]).
         self.mark_tci_nexus_key(true);
         let asked = Instant::now();
-        let key = if plain {
-            rig.ptt_plain(true)
-        } else {
-            rig.ptt(true)
-        };
+        // On a network chain the key waits that chain's window (`Rig::key_awaiting_answer`).
+        let key = rig.key_awaiting_answer(plain);
         self.mark_tci_nexus_key(false);
         match key {
             Ok(()) => KeyUp::Keyed,
@@ -11028,10 +11053,11 @@ impl RadioLoop {
                 // Yaesu's own reference defines where Hamlib sends none
                 // (`rigmodels::cw_playback_stops`), sent in the form Hamlib does not wait on, so
                 // the unkey after them is not held for the radio's read timeout
-                // (`Rig::send_raw_set`).
+                // (`Rig::send_raw_set`). Both are stops: each goes out at once behind a late key's
+                // owed answer, as the release does, never held back by it (`Rig::command_lines`).
                 let _ = rig.stop_morse();
                 for stop in crate::rigmodels::cw_playback_stops(self.applied.rig_model) {
-                    rig.send_raw_set(stop);
+                    rig.send_raw_stop(stop);
                 }
                 self.cw_busy_until = 0.0; // a fresh macro after Stop keys immediately
                 self.cw_keying_until = 0.0;
@@ -12408,7 +12434,11 @@ impl RadioLoop {
                     if not_on_dax {
                         engine_lock(engine).drop_flex_voice(tempo_app::dto::VoiceDropCause::NoDax);
                     }
-                    self.report_ptt(engine, key.warns() && !not_on_dax);
+                    if not_on_dax {
+                        self.report_ptt(engine, false);
+                    } else {
+                        self.report_key(engine, &key);
+                    }
                 }
             }
             // QSO recording (audio bridge): stream the live RX capture straight to a WAV on
@@ -12587,7 +12617,7 @@ impl RadioLoop {
                     if let KeyUp::Refused(why) = &key {
                         note_refused_key("SSTV not keyed", why);
                     }
-                    self.report_ptt(engine, key.warns());
+                    self.report_key(engine, &key);
                 }
             }
             // Chunked look-ahead feed + progress + completion.
@@ -12683,7 +12713,7 @@ impl RadioLoop {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying — the fail-safe must know
                         let key = self.key_over(rig, false);
-                        self.report_ptt(engine, key.warns());
+                        self.report_key(engine, &key);
                         if let KeyUp::Refused(why) = &key {
                             // The rig did not key, so none of the operator's voice may be played
                             // (`key_over`): the over ends here, through its one kill path.
@@ -12783,7 +12813,7 @@ impl RadioLoop {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying — the fail-safe must know
                         let key = self.key_over(rig, false);
-                        self.report_ptt(engine, key.warns());
+                        self.report_key(engine, &key);
                         if let KeyUp::Refused(why) = &key {
                             // The rig did not key, so none of the program's audio may be played:
                             // the over ends here through its one kill path, and the abort that
@@ -12844,7 +12874,12 @@ impl RadioLoop {
                 // microphone (or a broker client's key), so a Rear/Data radio (#381) keys it as it
                 // always has, `T 1`, where every transmission whose audio Nexus plays keys DATA.
                 let asked = Instant::now();
-                let ptt_failed = rig.ptt_plain(ptt).is_err();
+                let keyed = if ptt {
+                    rig.key_awaiting_answer(true)
+                } else {
+                    rig.ptt_plain(false)
+                };
+                let ptt_failed = keyed.is_err();
                 if ptt {
                     // A press Nexus's own Flex client kept off the air because the radio still
                     // takes its transmit audio from the DAX Nexus set, not the mic (`flex::shim`):
@@ -12858,7 +12893,15 @@ impl RadioLoop {
                         .filter(|r| r.cause == tempo_app::dto::FlexAudioCause::MicNotBack)
                         .map(|r| r.mode);
                     engine_lock(engine).set_ptt_refused(mic_not_back.as_deref());
-                    self.report_ptt(engine, ptt_failed && mic_not_back.is_none());
+                    // Nothing of Nexus's plays under this key (the voice is the operator's, at
+                    // the radio's microphone), so a key with no answer in time changes only the
+                    // words: not confirmed, never "not accepted". Its release follows it on the
+                    // same connection (`Rig::command_lines`).
+                    if keyed.as_ref().is_err_and(crate::rig::no_answer_in_time) {
+                        self.report_ptt_as(engine, Some(PTT_UNCONFIRMED));
+                    } else {
+                        self.report_ptt(engine, ptt_failed && mic_not_back.is_none());
+                    }
                 } else {
                     self.report_ptt(engine, false);
                 }
@@ -13921,13 +13964,27 @@ impl RadioLoop {
                 } else {
                     let key = self.key_over(rig, false);
                     // The tune's line, in the words the voice keyer gives a refused key.
-                    self.report_ptt(engine, key.warns());
+                    self.report_key(engine, &key);
                     match key {
                         KeyUp::Refused(why) => {
                             note_refused_key("tune not keyed", &why);
                             Some(why)
                         }
-                        _ => None,
+                        // ⛔ NO CARRIER INTO A KEY THE RADIO HAS NOT CONFIRMED. Unlike every other
+                        // over here, the tune does not go out on a key with no answer in time. Its
+                        // tone is only worth anything on the air, and a key with no answer may
+                        // still be on its way: behind a rigctld held up for seconds it reached the
+                        // radio long after the tone started, and once after the operator had let
+                        // go of Tune. The tune ends here as a refused one does; a late answer
+                        // does not start it again, since an over that late is stale, and the
+                        // release goes out behind the key on the same connection
+                        // (`Rig::command_lines`).
+                        KeyUp::NoAnswer => {
+                            let why = "the radio did not confirm the key in time".to_string();
+                            note_refused_key("tune not keyed", &why);
+                            Some(why)
+                        }
+                        KeyUp::Keyed | KeyUp::Held => None,
                     }
                 };
                 self.tuning_keyed = true;
@@ -18088,6 +18145,7 @@ fn open_cat(
                 crate::rigctld_server::PortReply::Rigctld => {
                     let mut rig = Rig::with_control(Some(direct.to_string()), ptt_mode);
                     rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
+                    rig.set_network_chain(t.is_network()); // a key-down waits the network window
                     let mut probe = finish_cat_open(&mut rig, t);
                     probe.detail = format!("Sharing the rigctld at {direct} — {}", probe.detail);
                     return (rig, None, probe);
@@ -18125,6 +18183,7 @@ fn open_cat(
             rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
             // network chains + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200
             // baud) get the long command deadline
+            rig.set_network_chain(t.is_network()); // a key-down waits the network window
             let mut probe = finish_cat_open(&mut rig, t);
             probe.detail = format!(
                 "Sharing the rigctld already on :{} — {}",
@@ -18177,6 +18236,7 @@ fn open_cat(
                     || t.is_tci()
                     || t.is_slow_serial_link(),
             ); // network chains + the native daemon + the TCI client (a write waits for the SDR program's report) + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
+            rig.set_network_chain(network); // a key-down waits the network window
             let mut probe = finish_cat_open(&mut rig, t);
             // Say WHICH backend this result came from — a native-CI-V radio silently
             // falling back to rigctld otherwise reads as "native was tested and failed".

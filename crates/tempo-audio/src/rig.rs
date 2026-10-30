@@ -66,6 +66,35 @@ pub enum PttMode {
 /// the slow-transport 2.5 s read window so an un-key can never hang the single-threaded radio loop.
 const PTT_DEADLINE_MS: u64 = 700;
 
+/// Reply deadline (ms) for a KEY-DOWN on a network chain ([`Rig::set_network_chain`]): the same
+/// window every other command there gets, because a rigctld reaching its radio over the network
+/// can take that long to answer a key that works. The release keeps [`PTT_DEADLINE_MS`].
+const NETWORK_KEY_DEADLINE_MS: u64 = 2_500;
+
+/// How long a connection may go on owing late answers before it is given up and the next command
+/// opens a new one ([`Rig::command_lines`]). Counted from the first answer that went owed and is
+/// still owed without a break (not from the release), and acted on only once a RELEASE has gone
+/// out behind the last key: so the give-up comes at the first command after both, which can be
+/// sooner than this after the release.
+///
+/// Giving it up then is safe: the key and its release are both already queued on it, in order,
+/// and rigctld carries out the lines a client sent before it closed (measured: the late `T 1` and
+/// then its `T 0`, after the close). Before a release is queued it is never given up, since that is
+/// the defect the connection is kept for. The bound only ends a connection one answer behind for
+/// good (a peer that lost an answer, so every later answer is taken for the line before it): there
+/// every release reads as unconfirmed and every refusal as no answer, until the release on a new
+/// connection is confirmed. 30 s is past the longest stall measured behind a held rigctld (20 s, a
+/// Hamlib timeout waited out under its client lock), so a stall that ends is still answered on its
+/// own connection, and short enough that such a wedge is over in half a minute.
+const OWED_ANSWER_BOUND: Duration = Duration::from_secs(30);
+
+/// Whether `b` ends one answer of an ordered line ([`Rig::command_lines`]): rigctld ends a `T` or
+/// `\stop_morse` answer with a newline, and a `W <cmd> 0` raw set with one terminator, a NUL on
+/// Hamlib 4.7.1 and a newline on 4.5.5 ([`Rig::send_raw_set`]).
+fn ends_an_answer(b: u8) -> bool {
+    b == b'\n' || b == b'\0'
+}
+
 /// How long opening the CAT connection may take, per address the control address resolves to.
 ///
 /// ⚠️ RADIO-LOOP LIVENESS. The radio loop opens (and, after any failed command, re-opens) this
@@ -643,6 +672,21 @@ pub struct Rig {
     /// uses a much shorter per-command deadline — a stalled serial read then can't hold the radio
     /// loop (and the fast dial poll) for 2.5 s. Default false (serial / local).
     slow_transport: bool,
+    /// True when the CAT link reaches the radio over the network (a NET rigctl chain, a Flex): a
+    /// key-down that waits for the link ([`Self::key_awaiting_answer`]) waits
+    /// [`NETWORK_KEY_DEADLINE_MS`] for its answer instead of [`PTT_DEADLINE_MS`].
+    network_chain: bool,
+    /// Answers still owed on `stream` by ordered lines (a key, a release, a stop) whose deadline
+    /// passed with the line sent ([`Self::command_lines`]): one terminator each
+    /// ([`ends_an_answer`]). Zero whenever `stream` is `None`.
+    owed_replies: usize,
+    /// Since when `stream` has owed answers without a break, for [`OWED_ANSWER_BOUND`].
+    owed_since: Option<std::time::Instant>,
+    /// Whether the last key line written on `stream` was a key-DOWN: its release is not queued
+    /// behind it yet, so the connection must not be given up ([`OWED_ANSWER_BOUND`]).
+    owed_key_down: bool,
+    /// [`OWED_ANSWER_BOUND`]; a field so a test can shorten it.
+    owed_bound: Duration,
     /// The (verb, token) pairs never sent on this link, because the radio's Hamlib driver turns
     /// them into a different command than the radio's own manual defines — see
     /// [`crate::rigmodels::hamlib_never_send`]. Empty by default.
@@ -771,6 +815,11 @@ impl Rig {
             serial: None,
             keyed: false,
             slow_transport: false,
+            network_chain: false,
+            owed_replies: 0,
+            owed_since: None,
+            owed_key_down: false,
+            owed_bound: OWED_ANSWER_BOUND,
             never_send: &[],
             #[cfg(test)]
             before_remote_write: None,
@@ -782,6 +831,12 @@ impl Rig {
     /// slow reply isn't cut off; leave default (false) for serial rigs so a stalled read is bounded.
     pub fn set_slow_transport(&mut self, slow: bool) {
         self.slow_transport = slow;
+    }
+    /// Mark this CAT link as reaching the radio over the network, so a key-down that waits for
+    /// the link ([`Self::key_awaiting_answer`]) waits [`NETWORK_KEY_DEADLINE_MS`] for its answer.
+    /// Every release keeps [`PTT_DEADLINE_MS`].
+    pub fn set_network_chain(&mut self, network: bool) {
+        self.network_chain = network;
     }
     /// Name the (verb, token) pairs this link must never send (#381, #385). Everything else is
     /// sent as before, so a power or a switch the radio's driver maps correctly still goes out.
@@ -849,6 +904,8 @@ impl Rig {
 
     fn ensure_connected(&mut self) -> std::io::Result<&mut TcpStream> {
         if self.stream.is_none() {
+            self.owed_replies = 0; // owed on a connection that is gone
+            self.owed_since = None;
             if let Some(addr) = &self.control {
                 let s = connect_cat(addr)?;
                 s.set_read_timeout(Some(Duration::from_millis(500)))?;
@@ -904,7 +961,7 @@ impl Rig {
     /// Reading the reply the protocol's own length fixes it at the source, so nothing is left to
     /// drain. The drain stays as the backstop it was always meant to be.
     fn command_expecting(&mut self, line: &str, expected_lines: usize) -> std::io::Result<String> {
-        self.command_lines(line, None, None, expected_lines, false)
+        self.command_lines(line, None, None, expected_lines, false, false)
     }
 
     fn command_permitted(
@@ -913,7 +970,7 @@ impl Rig {
         deadline_ms: Option<u64>,
         permission: Option<&WritePermission>,
     ) -> std::io::Result<String> {
-        self.command_lines(line, deadline_ms, permission, 1, false)
+        self.command_lines(line, deadline_ms, permission, 1, false, false)
     }
 
     /// [`Self::command_with_deadline`] for a read that must END by its deadline: each socket read
@@ -922,9 +979,27 @@ impl Rig {
     /// be overrun by up to the window. The tune-time meter reads need the strict form: a read that
     /// outlasts the tune carrier's lead gaps the carrier. PTT keeps its own deadline as it was.
     fn command_ending_by(&mut self, line: &str, deadline_ms: u64) -> std::io::Result<String> {
-        self.command_lines(line, Some(deadline_ms), None, 1, true)
+        self.command_lines(line, Some(deadline_ms), None, 1, true, false)
     }
 
+    /// ⛔ A LATE KEY KEEPS ITS CONNECTION (`ordered`). Every other failure drops the connection,
+    /// as [`Self::command`] says. A key line (`T …`) whose deadline passes is still live inside
+    /// rigctld, which can hold it for seconds (a mode write ahead of it waiting out Hamlib's
+    /// timeout under rigctld's one client lock). Dropping the connection then sent the release on
+    /// a NEW connection, and rigctld's lock does not serve its connections in arrival order, so
+    /// the release could be carried out BEFORE the key and leave the radio keyed after the
+    /// operator let go. So the connection stays, and its answer is counted as owed
+    /// (`owed_replies`): the next key line is written behind it at once and reads the owed
+    /// answers before its own (rigctld serves one connection strictly in order, so the release
+    /// always follows the key), and any other command first waits for them within its own
+    /// deadline and, until they are in, sends nothing and fails as no answer in time. The
+    /// desync this module guards against stays impossible: an owed answer is counted, never
+    /// read as another command's. Only a hard error (the connection closed or broken) drops it,
+    /// or answers still owed [`OWED_ANSWER_BOUND`] after a release went out behind the key.
+    ///
+    /// Ordered, and so written behind owed answers at once, are the key lines and the stops a
+    /// Stop TX sends with the unkey (`\stop_morse`, a radio's own CW playback stop): a stop must
+    /// never wait out an owed answer and then not be sent. Each answers with one terminator.
     fn command_lines(
         &mut self,
         line: &str,
@@ -932,20 +1007,58 @@ impl Rig {
         permission: Option<&WritePermission>,
         expected_lines: usize,
         end_by_deadline: bool,
+        ordered: bool,
     ) -> std::io::Result<String> {
         // Before the stream is touched: a refused line never reached the wire, so it is neither a
         // link failure nor a reason to drop the connection below.
         if let Some(why) = self.refused_line(line) {
             return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, why));
         }
+        self.give_up_a_stale_debt();
+        if !ordered {
+            let window = deadline_ms.unwrap_or(self.transport_deadline_ms());
+            self.settle_owed(window)?;
+        }
+        // Only a key line moves `owed_key_down`: a stop keys nothing.
+        let key_down = match line.trim() {
+            "T 0" => Some(false),
+            l if l.starts_with("T ") => Some(true),
+            _ => None,
+        };
+        let mut owed = std::mem::take(&mut self.owed_replies);
+        let owed_before = owed;
         match self.command_inner(
             line,
             deadline_ms,
             permission,
             expected_lines,
             end_by_deadline,
+            &mut owed,
         ) {
-            Ok(reply) => Ok(reply),
+            Ok(reply) => {
+                self.owed_since = None;
+                Ok(reply)
+            }
+            Err(e) if ordered && deadline_passed(&e) && self.stream.is_some() => {
+                if crate::civ::diag::is_enabled() {
+                    crate::civ::diag::note(&format!(
+                        "Rig: rigctld cmd {:?} not answered in time ({e}) → connection kept, {} answer(s) owed (keyed={})",
+                        line.trim(),
+                        owed + 1,
+                        self.keyed
+                    ));
+                }
+                // Owing without a break since the earlier miss, if one was still owed when this
+                // line went out.
+                if self.owed_since.is_none() || owed_before == 0 {
+                    self.owed_since = Some(std::time::Instant::now());
+                }
+                if let Some(down) = key_down {
+                    self.owed_key_down = down;
+                }
+                self.owed_replies = owed + 1;
+                Err(e)
+            }
             Err(e) => {
                 // Diagnostic: dropping the rigctld connection is what triggers the daemon's
                 // disconnect fail-safe unkey. Log WHICH command failed and why (keyed = mid-TX,
@@ -958,9 +1071,106 @@ impl Rig {
                     ));
                 }
                 self.stream = None; // force a clean reconnect on the next call
+                self.owed_replies = 0;
+                self.owed_since = None;
                 Err(e)
             }
         }
+    }
+
+    /// Give up a connection that has owed answers for [`OWED_ANSWER_BOUND`] with a release queued
+    /// behind its last key ([`OWED_ANSWER_BOUND`] says why that is safe and when it is needed).
+    /// The next command opens a new connection; `keyed` is left as it is, so it is cleared only by
+    /// a release that connection confirms.
+    fn give_up_a_stale_debt(&mut self) {
+        let stale = self
+            .owed_since
+            .is_some_and(|since| since.elapsed() >= self.owed_bound);
+        if self.owed_replies == 0 || self.owed_key_down || !stale {
+            return;
+        }
+        if crate::civ::diag::is_enabled() {
+            crate::civ::diag::note(&format!(
+                "Rig: {} answer(s) still owed after {:?} with the release queued → connection given up (keyed={})",
+                self.owed_replies, self.owed_bound, self.keyed
+            ));
+        }
+        // Read what has arrived first, so the close is an orderly one and not a reset that could
+        // cost rigctld the lines still queued on it.
+        if let Some(stream) = self.stream.as_mut() {
+            let mut scratch = [0u8; 256];
+            if stream.set_nonblocking(true).is_ok() {
+                while matches!(stream.read(&mut scratch), Ok(n) if n > 0) {}
+            }
+        }
+        self.stream = None;
+        self.owed_replies = 0;
+        self.owed_since = None;
+    }
+
+    /// A command's reply deadline (ms) when it names none: the long window on a slow transport.
+    fn transport_deadline_ms(&self) -> u64 {
+        if self.slow_transport {
+            2_500
+        } else {
+            700
+        }
+    }
+
+    /// Read the answers still owed by late key lines ([`Self::command_lines`]), writing nothing,
+    /// for at most `deadline_ms`. Still owed by then: no answer in time, the connection kept. A
+    /// closed or broken connection is dropped, and with it what it owed.
+    fn settle_owed(&mut self, deadline_ms: u64) -> std::io::Result<()> {
+        if self.owed_replies == 0 {
+            return Ok(());
+        }
+        let deadline = std::time::Instant::now() + Duration::from_millis(deadline_ms);
+        let mut buf = [0u8; 256];
+        while self.owed_replies > 0 {
+            let Some(stream) = self.stream.as_mut() else {
+                self.owed_replies = 0;
+                self.owed_since = None;
+                return Ok(());
+            };
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    NoAnswerInTime {
+                        words: format!(
+                            "rig still owes the answer to an earlier key after {deadline_ms} ms; nothing sent"
+                        ),
+                        hamlib: false,
+                    },
+                ));
+            }
+            let read = stream
+                .set_read_timeout(Some(left.min(Duration::from_millis(500))))
+                .and_then(|()| stream.read(&mut buf));
+            let failed = match read {
+                Ok(0) => std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "rigctld closed the connection",
+                ),
+                // Nothing but owed answers is in flight on this connection, so every terminator
+                // read here ends one of them.
+                Ok(n) => {
+                    let answers = buf[..n].iter().filter(|&&b| ends_an_answer(b)).count();
+                    self.owed_replies = self.owed_replies.saturating_sub(answers);
+                    if self.owed_replies == 0 {
+                        self.owed_since = None;
+                    }
+                    continue;
+                }
+                Err(e) if read_should_retry(e.kind()) => continue,
+                Err(e) => e,
+            };
+            self.stream = None;
+            self.owed_replies = 0;
+            self.owed_since = None;
+            return Err(failed);
+        }
+        Ok(())
     }
 
     fn command_inner(
@@ -970,6 +1180,7 @@ impl Rig {
         permission: Option<&WritePermission>,
         expected_lines: usize,
         end_by_deadline: bool,
+        owed: &mut usize,
     ) -> std::io::Result<String> {
         if let Some(permission) = permission {
             permission
@@ -977,27 +1188,33 @@ impl Rig {
                 .map_err(remote_permission_error)?;
         }
         // Read the transport class before the mutable stream borrow below (they'd otherwise alias).
-        let slow = self.slow_transport;
+        let fallback_deadline_ms = self.transport_deadline_ms();
         #[cfg(test)]
         let before_write = if permission.is_some() {
             self.before_remote_write.take()
         } else {
             None
         };
+        if self.stream.is_none() {
+            *owed = 0; // a connection opened now owes nothing
+        }
         let stream = self.ensure_connected()?;
         // Discard any STALE bytes left in the socket by a prior MULTI-LINE reply — `m` (get_mode)
         // returns the mode line AND a passband line, and on a networked chain the 2nd line can
         // arrive AFTER we already returned the 1st. A lingering byte would be read as THIS
         // command's answer and desync every command after it (the exact hazard the drop-on-failure
         // guards, but a successful multi-line reply slips past that). Non-blocking → free when clean.
-        stream.set_nonblocking(true)?;
-        let mut scratch = [0u8; 256];
-        while let Ok(n) = stream.read(&mut scratch) {
-            if n == 0 {
-                break; // peer closed — the real read below surfaces it
+        // Not while late keys' answers are owed: those bytes are counted below, never discarded.
+        if *owed == 0 {
+            stream.set_nonblocking(true)?;
+            let mut scratch = [0u8; 256];
+            while let Ok(n) = stream.read(&mut scratch) {
+                if n == 0 {
+                    break; // peer closed — the real read below surfaces it
+                }
             }
+            stream.set_nonblocking(false)?;
         }
-        stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_millis(500)))?; // restore blocking-with-timeout
         #[cfg(test)]
         if let Some(before_write) = before_write {
@@ -1022,7 +1239,7 @@ impl Rig {
         // transport-aware: a serial rig answers in ms so a stall is bounded
         // tightly (it can't hold the radio loop / fast dial poll), while a
         // network chain keeps the long 2.5 s window for legitimately slow replies.
-        let deadline_ms = deadline_override.unwrap_or(if slow { 2_500 } else { 700 });
+        let deadline_ms = deadline_override.unwrap_or(fallback_deadline_ms);
         let deadline = std::time::Instant::now() + Duration::from_millis(deadline_ms);
         // For a multi-line verb: once the FIRST line is in but the rest is not, how long the
         // straggler gets. Short because it is measuring one more segment on a link that has
@@ -1069,6 +1286,15 @@ impl Rig {
                 }
                 Ok(n) => {
                     out.extend_from_slice(&buf[..n]);
+                    // The owed answers of late keys come first (rigctld answers one connection in
+                    // order): each whole answer of theirs is set aside, never taken for this one.
+                    while *owed > 0 {
+                        let Some(end) = out.iter().position(|&b| ends_an_answer(b)) else {
+                            break;
+                        };
+                        out.drain(..=end);
+                        *owed -= 1;
+                    }
                     // Short of the expected line count: give the rest a brief window, and
                     // shorten the per-read wait to match so the window can actually expire.
                     if expected_lines > 1
@@ -1127,6 +1353,8 @@ impl Rig {
     /// command's answer — the exact desync the drop-on-failure guard exists for. This drains to
     /// quiet and, like `command`, drops the stream on any failure so nothing is left behind.
     fn command_multiline(&mut self, line: &str) -> std::io::Result<String> {
+        // A late key's owed answer is read first, as for every other command (`command_lines`).
+        self.settle_owed(2_000)?;
         match self.command_multiline_inner(line) {
             Ok(reply) => Ok(reply),
             Err(e) => {
@@ -1201,7 +1429,7 @@ impl Rig {
     /// key for one whose audio it does not play.
     #[track_caller]
     pub fn ptt(&mut self, on: bool) -> std::io::Result<()> {
-        self.key(on, true)
+        self.key(on, true, false)
     }
 
     /// [`Self::ptt`] for a transmission whose audio Nexus does NOT play: the operator's own voice
@@ -1212,11 +1440,22 @@ impl Rig {
     /// where Nexus's own audio enters the radio, so it leaves these as they were. Release: `T 0`.
     #[track_caller]
     pub fn ptt_plain(&mut self, on: bool) -> std::io::Result<()> {
-        self.key(on, false)
+        self.key(on, false, false)
+    }
+
+    /// A key-down ([`Self::ptt`], or with `plain` [`Self::ptt_plain`]) that waits for the radio's
+    /// answer as long as the link can take to give it: on a network chain
+    /// ([`Self::set_network_chain`]) [`NETWORK_KEY_DEADLINE_MS`], elsewhere the PTT deadline. For
+    /// the radio loop's own overs and the operator's PTT, whose warning, and for the tune whether
+    /// anything plays at all, turn on the key being confirmed. The slot overs (FT8, FT4, JS8 and
+    /// the rest) key with `ptt`, whose deadline is part of their timing.
+    #[track_caller]
+    pub fn key_awaiting_answer(&mut self, plain: bool) -> std::io::Result<()> {
+        self.key(true, !plain, true)
     }
 
     #[track_caller]
-    fn key(&mut self, on: bool, nexus_audio: bool) -> std::io::Result<()> {
+    fn key(&mut self, on: bool, nexus_audio: bool, link_window: bool) -> std::io::Result<()> {
         // Diagnostic: name the exact caller of every PTT change. A CI-V capture that shows an
         // unexplained unkey mid-TX can then be traced to the precise line that dropped it —
         // this is how the IC-9700 flicker's true source gets pinned instead of inferred. Cheap
@@ -1265,8 +1504,17 @@ impl Rig {
                     // PTT is time-critical: a fixed 700 ms deadline (not the slow-transport
                     // 2.5 s read window) so the un-key can't hang the radio loop. Missing it is
                     // not a refusal ([`no_answer_in_time`]): a slow radio keys and answers late.
-                    // Nor is Hamlib's own "the rig did not answer" ([`ptt_reply`]).
-                    self.command_with_deadline(&line, Some(PTT_DEADLINE_MS))
+                    // Nor is Hamlib's own "the rig did not answer" ([`ptt_reply`]). A key-down
+                    // asked to wait for the link ([`Self::key_awaiting_answer`]) waits a network
+                    // chain's window; a release never does. A missed deadline keeps the
+                    // connection, so the release goes out behind the key
+                    // ([`Self::command_lines`]).
+                    let deadline = if on && link_window && self.network_chain {
+                        NETWORK_KEY_DEADLINE_MS
+                    } else {
+                        PTT_DEADLINE_MS
+                    };
+                    self.command_lines(&line, Some(deadline), None, 1, false, true)
                         .and_then(|reply| ptt_reply(&reply))
                 }
             }
@@ -1698,11 +1946,28 @@ impl Rig {
     /// Returns whether rigctld took the line — NOT whether the radio honoured it, which nothing
     /// on this path can know. The caller confirms by reading the value back.
     pub fn send_raw_set(&mut self, raw: &str) -> bool {
+        self.raw_set(raw, false)
+    }
+
+    /// [`Self::send_raw_set`] for a STOP (a radio's own CW playback stop): written behind any
+    /// answer a late key still owes, never held back by it ([`Self::command_lines`]).
+    pub fn send_raw_stop(&mut self, raw: &str) -> bool {
+        self.raw_set(raw, true)
+    }
+
+    fn raw_set(&mut self, raw: &str, ordered: bool) -> bool {
         if self.control.is_none() {
             return false;
         }
-        self.command_with_deadline(&format!("W {raw} 0\n"), Some(PTT_DEADLINE_MS))
-            .is_ok_and(|reply| !reply.trim_start().starts_with("RPRT -"))
+        self.command_lines(
+            &format!("W {raw} 0\n"),
+            Some(PTT_DEADLINE_MS),
+            None,
+            1,
+            false,
+            ordered,
+        )
+        .is_ok_and(|reply| !reply.trim_start().starts_with("RPRT -"))
     }
 
     pub fn send_raw(&mut self, raw: &str) -> Option<String> {
@@ -1979,8 +2244,15 @@ impl Rig {
     }
     /// Abort CW in progress. Newer Hamlib exposes `\stop_morse`; older builds vary by
     /// manufacturer (the WinKeyer path has a reliable Clear-Buffer abort instead).
+    /// A stop: written behind any answer a late key still owes, never held back by it
+    /// ([`Self::command_lines`]).
     pub fn stop_morse(&mut self) -> std::io::Result<()> {
-        self.cat("\\stop_morse\n")
+        if self.control.is_none() {
+            return Ok(());
+        }
+        let line = "\\stop_morse\n";
+        let reply = self.command_lines(line, None, None, 1, false, true)?;
+        Self::cat_reply(line, &reply)
     }
     /// Play the rig's voice memory `ch` — Hamlib's `\send_voice_mem`, the exact spelling
     /// its own NET client uses (on a Yaesu it becomes `PB0<ch>;`). ⚠️ The RIG transmits the
@@ -2000,11 +2272,16 @@ impl Rig {
             return Ok(());
         }
         let reply = self.command(line)?;
-        if reply_ok(&reply) || reply.is_empty() {
+        Self::cat_reply(line, &reply)
+    }
+
+    /// What rigctld's `reply` to the set `line` says ([`Self::cat`]).
+    fn cat_reply(line: &str, reply: &str) -> std::io::Result<()> {
+        if reply_ok(reply) || reply.is_empty() {
             Ok(())
-        } else if rprt_code(&reply).is_some_and(rprt_is_link_fault) {
+        } else if rprt_code(reply).is_some_and(rprt_is_link_fault) {
             // The rig did not answer: the link, as for a dial or a mode, never a refusal.
-            Err(rprt_error(line.trim(), &reply))
+            Err(rprt_error(line.trim(), reply))
         } else {
             Err(std::io::Error::other(format!(
                 "rigctld error for {line:?}: {reply:?}"
@@ -2974,6 +3251,14 @@ mod tests {
         // Command 1's reply arrives late (past the deadline) → the command must
         // error AND drop the stream; command 2 reconnects and reads its OWN
         // fresh reply, never the stale one.
+        //
+        // Every command but a KEY line still drops the connection on a timeout, which is what
+        // this pins. A key line (`T …`) no longer does: dropping it left the late key live inside
+        // rigctld while its release went out on a new connection and could be carried out first,
+        // leaving the radio keyed. A late key's answer is counted as owed and read before the
+        // next command's, so the same desync stays impossible on a connection kept open — see
+        // `a_late_key_and_its_release_arrive_on_one_connection_in_order` and
+        // `a_late_key_reply_is_consumed_never_read_as_the_next_answer`.
         use std::io::{Read as _, Write as _};
         use std::sync::atomic::{AtomicUsize, Ordering};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -3012,6 +3297,385 @@ mod tests {
             14_074_000,
             "next command must read its own reply, not the stale RPRT 0"
         );
+    }
+
+    /// What [`mock_rigctld_paced`] carried out: `(connection, line)`, in order.
+    type CarriedOut = Vec<(usize, String)>;
+
+    /// A rigctld that serves each connection on its own thread and, as rigctld does, ONE LINE AT A
+    /// TIME in the order it arrived: `answer(line)` says how long that line takes and what it
+    /// answers, or `None` for a line it never answers. The log is `(connection, line)` in the order
+    /// the lines were CARRIED OUT, which is the order the radio sees them.
+    fn mock_rigctld_paced(
+        answer: impl Fn(&str) -> Option<(Duration, String)> + Send + Sync + 'static,
+    ) -> (String, Arc<Mutex<CarriedOut>>) {
+        use std::io::BufRead;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = Arc::new(Mutex::new(Vec::<(usize, String)>::new()));
+        let log_w = log.clone();
+        let answer = Arc::new(answer);
+        std::thread::spawn(move || {
+            for (conn, stream) in listener.incoming().enumerate() {
+                let Ok(mut stream) = stream else { break };
+                let (log_w, answer) = (log_w.clone(), answer.clone());
+                std::thread::spawn(move || {
+                    let Ok(reader) = stream.try_clone() else {
+                        return;
+                    };
+                    for line in std::io::BufReader::new(reader).lines() {
+                        let Ok(line) = line else { return };
+                        let Some((delay, reply)) = answer(&line) else {
+                            log_w.lock().unwrap().push((conn, line));
+                            continue;
+                        };
+                        std::thread::sleep(delay);
+                        log_w.lock().unwrap().push((conn, line));
+                        if stream.write_all(reply.as_bytes()).is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (addr, log)
+    }
+
+    /// Wait (bounded) for the mock's log to reach `n` lines carried out.
+    fn wait_for_lines(log: &Mutex<CarriedOut>, n: usize) -> CarriedOut {
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let seen = log.lock().unwrap().clone();
+            if seen.len() >= n || std::time::Instant::now() >= until {
+                return seen;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// ⛔ A LATE KEY IS NEVER OVERTAKEN BY ITS RELEASE. rigctld can hold a `T 1` for seconds (a
+    /// mode write in front of it waiting out Hamlib's timeout, with rigctld's one client lock held).
+    /// The key used to miss its 700 ms deadline and DROP the connection with the `T 1` still live
+    /// inside rigctld; the release then went out on a NEW connection, whose thread rigctld's lock
+    /// does not serve in arrival order, so the release could run first and leave the radio keyed
+    /// after the operator let go. The release must go out behind the key on the SAME connection,
+    /// which rigctld carries out in order, whatever its lock does.
+    #[test]
+    fn a_late_key_and_its_release_arrive_on_one_connection_in_order() {
+        let (addr, log) = mock_rigctld_paced(|line| {
+            let delay = if line == "T 1" { 1_500 } else { 0 };
+            Some((Duration::from_millis(delay), "RPRT 0\n".to_string()))
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let key = rig.ptt(true);
+        assert!(
+            key.as_ref().is_err_and(deadline_passed),
+            "a key answered at 1.5 s misses the 700 ms deadline: {key:?}"
+        );
+        assert!(rig.keyed, "a key-down attempt is keyed until released");
+        // The release queues behind the key, so its answer comes once the key's has.
+        let release = rig.ptt(false);
+        assert_eq!(release.map_err(|e| e.to_string()), Ok(()));
+        assert!(!rig.keyed, "a confirmed release clears keyed");
+        assert_eq!(
+            wait_for_lines(&log, 2),
+            vec![(0, "T 1".to_string()), (0, "T 0".to_string())],
+            "the key and its release on one connection, the key carried out first"
+        );
+    }
+
+    /// A late key's answer is the key's, never the next command's: a read made while it is still
+    /// owed sends nothing and says it got no answer in time (so the radio loop still counts a
+    /// silent link), and once the key's answer is in, the next command reads its own. The late
+    /// answer here is a refusal, so a release that took it for its own would fail.
+    #[test]
+    fn a_late_key_reply_is_consumed_never_read_as_the_next_answer() {
+        let (addr, log) = mock_rigctld_paced(|line| {
+            Some(match line {
+                "T 1" => (Duration::from_millis(2_500), "RPRT -1\n".to_string()),
+                "f" => (Duration::ZERO, "14074000\n".to_string()),
+                _ => (Duration::ZERO, "RPRT 0\n".to_string()),
+            })
+        });
+        let mut rig = Rig::rigctld(&addr);
+        assert!(rig.ptt(true).is_err());
+        let early = rig.read_freq();
+        assert!(
+            early.as_ref().is_err_and(no_answer_in_time),
+            "a read while the key's answer is owed is no answer in time: {early:?}"
+        );
+        wait_for_lines(&log, 1);
+        assert_eq!(rig.read_freq().map_err(|e| e.to_string()), Ok(14_074_000));
+        assert_eq!(rig.ptt(false).map_err(|e| e.to_string()), Ok(()));
+        assert!(!rig.keyed);
+        assert_eq!(
+            wait_for_lines(&log, 3),
+            vec![
+                (0, "T 1".to_string()),
+                (0, "f".to_string()),
+                (0, "T 0".to_string())
+            ],
+            "the early read never went out; everything on the key's connection"
+        );
+    }
+
+    /// Negative control: keeping the connection after a late key does not keep a DEAD one. A
+    /// rigctld that closes the connection under the owed key fails the release, which leaves the
+    /// rig keyed (so every unkey path keeps trying), and a later release reconnects and is
+    /// confirmed.
+    #[test]
+    fn a_dead_socket_after_a_late_key_still_unkeys_until_confirmed() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let conns = Arc::new(AtomicUsize::new(0));
+        let conns_w = conns.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let idx = conns_w.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 64];
+                    if idx == 0 {
+                        // Take the key, never answer it, and go away.
+                        let _ = stream.read(&mut buf);
+                        std::thread::sleep(Duration::from_millis(900));
+                        return;
+                    }
+                    while let Ok(n) = stream.read(&mut buf) {
+                        if n == 0 || stream.write_all(b"RPRT 0\n").is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        let mut rig = Rig::rigctld(&addr);
+        assert!(rig.ptt(true).is_err());
+        std::thread::sleep(Duration::from_millis(300)); // the key's connection is gone by now
+        let mut releases = Vec::new();
+        for _ in 0..3 {
+            let r = rig.ptt(false);
+            releases.push(r.is_ok());
+            assert_eq!(rig.keyed, r.is_err(), "keyed until a release is confirmed");
+            if r.is_ok() {
+                break;
+            }
+        }
+        assert_eq!(
+            releases.last(),
+            Some(&true),
+            "a release is confirmed: {releases:?}"
+        );
+        assert!(conns.load(Ordering::SeqCst) >= 2, "it reconnected");
+    }
+
+    /// Negative control: a rigctld that never answers anything is still a silent link. Every
+    /// command fails with no answer in time, each by its own deadline, a release nobody confirmed
+    /// leaves the rig keyed, and dropping the rig still sends the release, on the key's
+    /// connection.
+    #[test]
+    fn a_rigctld_that_never_answers_is_still_a_silent_link_and_still_unkeyed_on_drop() {
+        let (addr, log) = mock_rigctld_paced(|_| None);
+        let mut rig = Rig::rigctld(&addr);
+        let started = std::time::Instant::now();
+        assert!(rig.ptt(true).is_err_and(|e| deadline_passed(&e)));
+        for _ in 0..2 {
+            let read = rig.read_freq();
+            assert!(read.is_err_and(|e| no_answer_in_time(&e)));
+        }
+        assert!(rig.ptt(false).is_err());
+        assert!(rig.keyed, "an unconfirmed release leaves the rig keyed");
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "every command ended by its deadline: {:?}",
+            started.elapsed()
+        );
+        drop(rig);
+        assert_eq!(
+            wait_for_lines(&log, 3),
+            vec![
+                (0, "T 1".to_string()),
+                (0, "T 0".to_string()),
+                (0, "T 0".to_string())
+            ],
+            "the reads never went out; the release and the drop's release follow the key"
+        );
+    }
+
+    /// ⛔ A CONNECTION ONE ANSWER BEHIND FOR GOOD IS GIVEN UP, BUT ONLY ONCE THE RELEASE IS QUEUED. A
+    /// peer that loses the answer to one key leaves Nexus one answer behind for good: each release
+    /// takes its own `RPRT 0` for the lost one and reads as unconfirmed, the rig reads as keyed while
+    /// the radio is not, and every read waits on an answer that never comes. Once a release has gone
+    /// out behind the key and the bound has passed, the connection is given up and the next release,
+    /// on a new one, is confirmed. Never before the release is queued: a read past the bound with
+    /// only the key queued still sends nothing and opens nothing.
+    #[test]
+    fn a_lost_key_answer_is_given_up_once_its_release_is_queued() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let first = Arc::new(AtomicBool::new(true));
+        let lose = first.clone();
+        let (addr, log) = mock_rigctld_paced(move |line| {
+            if line == "T 1" && lose.swap(false, Ordering::SeqCst) {
+                return None; // the radio keyed; its answer is lost
+            }
+            Some(match line {
+                "f" => (Duration::ZERO, "14074000\n".to_string()),
+                _ => (Duration::ZERO, "RPRT 0\n".to_string()),
+            })
+        });
+        let mut rig = Rig::rigctld(&addr);
+        // Longer than one release's own wait and shorter than two, so only answers owed without a
+        // break across several releases reach it.
+        rig.owed_bound = Duration::from_millis(1_500);
+        assert!(rig.ptt(true).is_err());
+        std::thread::sleep(Duration::from_millis(1_600));
+        assert!(
+            rig.read_freq().is_err_and(|e| no_answer_in_time(&e)),
+            "past the bound with no release queued, nothing is given up"
+        );
+        assert_eq!(
+            log.lock().unwrap().clone(),
+            vec![(0, "T 1".to_string())],
+            "the read went out, or a new connection opened, before the release was queued"
+        );
+        // The release goes out behind the lost answer and takes its own answer for it.
+        assert!(rig.ptt(false).is_err(), "premise: one answer behind");
+        assert!(rig.keyed);
+        let mut tries = 0;
+        while rig.keyed && tries < 5 {
+            let _ = rig.ptt(false);
+            tries += 1;
+        }
+        assert!(
+            !rig.keyed,
+            "still keyed after {tries} releases past the bound"
+        );
+        assert_eq!(rig.read_freq().map_err(|e| e.to_string()), Ok(14_074_000));
+        let log = wait_for_lines(&log, 4);
+        assert_eq!(
+            log[..2],
+            [(0, "T 1".to_string()), (0, "T 0".to_string())],
+            "the key's own connection carried the release behind it: {log:?}"
+        );
+        assert!(
+            log[2..].iter().all(|(conn, _)| *conn > 0),
+            "everything after the give-up went out on a new connection: {log:?}"
+        );
+    }
+
+    /// ⛔ GIVING A CONNECTION UP NEVER CLEARS `keyed`: only a release a connection confirms does.
+    /// Here no key line is ever answered, so the give-up comes and the release on the new
+    /// connection is not confirmed either; a give-up that cleared `keyed` would stop the idle
+    /// self-heal unkeying a radio that may still be keyed.
+    #[test]
+    fn a_given_up_connection_leaves_the_rig_keyed() {
+        let (addr, log) = mock_rigctld_paced(|line| match line {
+            "T 1" | "T 0" => None,
+            _ => Some((Duration::ZERO, "RPRT 0\n".to_string())),
+        });
+        let mut rig = Rig::rigctld(&addr);
+        rig.owed_bound = Duration::from_millis(1_500);
+        assert!(rig.ptt(true).is_err());
+        for n in 0..5 {
+            assert!(rig.ptt(false).is_err());
+            assert!(
+                rig.keyed,
+                "keyed cleared after release {n} with no release confirmed"
+            );
+        }
+        let log = wait_for_lines(&log, 6);
+        assert!(
+            log.iter().any(|(conn, _)| *conn > 0),
+            "premise: a give-up happened: {log:?}"
+        );
+    }
+
+    /// A release behind an owed key is judged on its OWN answer: the key's late `RPRT 0` is set
+    /// aside, so a release the rig refuses is a refusal and leaves the rig keyed. Taking the key's
+    /// answer for the release's is the "rejected T read as success" desync.
+    #[test]
+    fn a_release_behind_an_owed_key_is_judged_on_its_own_answer() {
+        let (addr, log) = mock_rigctld_paced(|line| {
+            Some(match line {
+                "T 1" => (Duration::from_millis(1_300), "RPRT 0\n".to_string()),
+                _ => (Duration::ZERO, "RPRT -9\n".to_string()),
+            })
+        });
+        let mut rig = Rig::rigctld(&addr);
+        assert!(rig.ptt(true).is_err());
+        let release = rig.ptt(false);
+        assert!(
+            release.as_ref().is_err_and(|e| !no_answer_in_time(e)),
+            "the key's RPRT 0 was read as the release's answer: {release:?}"
+        );
+        assert!(rig.keyed, "a refused release cleared keyed");
+        assert_eq!(
+            wait_for_lines(&log, 2),
+            vec![(0, "T 1".to_string()), (0, "T 0".to_string())]
+        );
+    }
+
+    /// ⛔ A STOP IS NEVER HELD BACK BY AN OWED KEY. Stop TX sends the CAT keyer's stop and a
+    /// radio's own CW playback stop with the unkey; with a late key's answer owed they waited it out
+    /// and were then not sent at all. They go out behind the key at once, as the release does, and
+    /// a raw stop's NUL-terminated answer is counted like a newline one, so the release after them
+    /// still reads its own answer.
+    #[test]
+    fn a_stop_goes_out_behind_an_owed_key_and_is_never_held_back() {
+        let (addr, log) = mock_rigctld_paced(|line| {
+            Some(match line {
+                "T 1" => (Duration::from_millis(4_000), "RPRT 0\n".to_string()),
+                l if l.starts_with("W ") => (Duration::ZERO, "\0".to_string()),
+                _ => (Duration::ZERO, "RPRT 0\n".to_string()),
+            })
+        });
+        let mut rig = Rig::rigctld(&addr);
+        assert!(rig.ptt(true).is_err());
+        // Both miss their deadlines behind the 4 s key, so both answers are owed too.
+        let _ = rig.stop_morse();
+        let _ = rig.send_raw_stop("KY00;");
+        assert_eq!(
+            wait_for_lines(&log, 3),
+            vec![
+                (0, "T 1".to_string()),
+                (0, "\\stop_morse".to_string()),
+                (0, "W KY00; 0".to_string())
+            ],
+            "a stop was held back or went out on another connection"
+        );
+        assert_eq!(rig.ptt(false).map_err(|e| e.to_string()), Ok(()));
+        assert!(!rig.keyed);
+    }
+
+    /// On a network chain a key-down that waits for the link waits the network window: a `T 1`
+    /// answered at 1.2 s is a key, not "no answer in time". The release keeps its short deadline,
+    /// which is why it has one. Controls: the same answer on a local link still misses the key
+    /// deadline, and so does a slot over's key (`ptt`), whose deadline is part of its timing.
+    #[test]
+    fn a_network_chain_key_waits_the_network_window() {
+        let late =
+            || mock_rigctld_paced(|_| Some((Duration::from_millis(1_200), "RPRT 0\n".to_string())));
+        let (net_addr, _) = late();
+        let mut net = Rig::rigctld(&net_addr);
+        net.set_network_chain(true);
+        assert_eq!(
+            net.key_awaiting_answer(false).map_err(|e| e.to_string()),
+            Ok(())
+        );
+        assert!(
+            net.ptt(false).is_err_and(|e| deadline_passed(&e)),
+            "the release keeps the short deadline on a network chain"
+        );
+        let (local_addr, _) = late();
+        let mut local = Rig::rigctld(&local_addr);
+        assert!(local
+            .key_awaiting_answer(false)
+            .is_err_and(|e| deadline_passed(&e)));
+        let (slot_addr, _) = late();
+        let mut slot = Rig::rigctld(&slot_addr);
+        slot.set_network_chain(true);
+        assert!(slot.ptt(true).is_err_and(|e| deadline_passed(&e)));
     }
 
     #[test]
