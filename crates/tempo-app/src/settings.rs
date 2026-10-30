@@ -2900,7 +2900,11 @@ pub struct Settings {
     pub station_power_w: Option<f64>,
     /// Log the space weather on each contact (ADIF `K_INDEX`, `A_INDEX`, `SFI`): the latest
     /// planetary K and A index and 10.7 cm solar flux Nexus fetched, and only when that reading is
-    /// no more than three hours old. Off by default — a logger's propagation fields are opt-in.
+    /// no more than three hours old. ⭐ **On for a NEW install** (`Settings::default()`, no
+    /// settings file): the path a contact took is explained from the space weather at the time.
+    /// An existing station keeps what its file says, and a file without the key (from before
+    /// the default changed) or one that cannot be read reads off — the field's own serde
+    /// default — so an update turns nothing on.
     #[serde(default)]
     pub log_space_weather: bool,
     /// Display units for distances/temperature/speed (F4MQS): `"auto"` (from the OS
@@ -6356,7 +6360,7 @@ impl Default for Settings {
             monitor_device: String::new(),
             monitor_level: 0.5,
             station_power_w: None,
-            log_space_weather: false,
+            log_space_weather: true,
             units: default_units(),
             swr_stop_enabled: false,
             swr_stop_threshold: 2.5,
@@ -7538,10 +7542,12 @@ impl Settings {
     }
 
     /// The defaults for a settings file that is present but could not be used: the station is not a
-    /// new install, so the first-run setup wizard is not shown ([`Self::setup_wizard_seen`]).
+    /// new install, so the first-run setup wizard is not shown ([`Self::setup_wizard_seen`]) and
+    /// space weather is not newly logged ([`Self::log_space_weather`]).
     fn not_a_new_install() -> Self {
         Settings {
             setup_wizard_seen: true,
+            log_space_weather: false,
             ..Settings::default()
         }
     }
@@ -8535,6 +8541,67 @@ mod tests {
         std::fs::write(&path, "{ not json").unwrap();
         assert!(
             Settings::load_at(&path, KEPT_AT).setup_wizard_seen,
+            "a file that does not read is not a new install"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **Space weather is logged with each contact from a NEW install on; an existing station
+    /// keeps the choice its file holds.** A first run (no file) starts on. A file that says either
+    /// way keeps it. A file without the key (every station from before the default changed) is
+    /// an existing station that never turned it on, so it stays off; so does a file that is
+    /// present but cannot be read. CONTROL: a new install's first save keeps it on, and turning
+    /// it off there stays off.
+    #[test]
+    fn space_weather_logging_starts_on_for_a_new_install_only() {
+        let dir = scratch_dir("log_space_weather");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let fresh = Settings::load_at(&path, KEPT_AT);
+        assert!(fresh.log_space_weather, "no file: a new install starts on");
+        fresh.save(&path).unwrap();
+        assert!(Settings::load_at(&path, KEPT_AT).log_space_weather);
+        let mut off = Settings::load_at(&path, KEPT_AT);
+        off.log_space_weather = false;
+        off.save(&path).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "turned off stays off"
+        );
+
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        assert!(
+            full.contains("\"logSpaceWeather\": false"),
+            "fixture holds the old default"
+        );
+        std::fs::write(&path, full).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "an existing file says off"
+        );
+        std::fs::write(
+            &path,
+            full.replace("\"logSpaceWeather\": false", "\"logSpaceWeather\": true"),
+        )
+        .unwrap();
+        assert!(
+            Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "an existing file says on"
+        );
+        let without: String = full
+            .lines()
+            .filter(|l| !l.contains("logSpaceWeather"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, without).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "a file from before the key is an existing station: off"
+        );
+        std::fs::write(&path, "{ not json").unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
             "a file that does not read is not a new install"
         );
         let _ = std::fs::remove_dir_all(&dir);

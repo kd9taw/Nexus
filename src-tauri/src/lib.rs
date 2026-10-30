@@ -106,6 +106,9 @@ mod log_tools;
 /// Parsec presence mode's watcher thread: stop latched transmissions when the operator's Parsec
 /// session drops (off by default; started on Windows only).
 mod parsec_presence;
+/// Your contacts' paths: the log-time grade of a new contact, and the display-only grading of the
+/// existing log, kept beside settings.json.
+mod path_grades;
 /// `get_path_outlook`'s kept predictions: six hours per day, grids, engine, power and SSN.
 mod path_outlook;
 /// The region strips' sweep: ten DX regions' path over the day, kept in memory and on disk.
@@ -2181,6 +2184,13 @@ static LAST_SOLAR_WIND: Mutex<Option<propagation::SolarWind>> = Mutex::new(None)
 /// quantity for monthly-median CCIR maps; without this the engine falls back
 /// to a Covington inversion of SFI). Refreshed on the space-wx fetch cadence.
 static LAST_SSN: Mutex<Option<f32>> = Mutex::new(None);
+
+/// The smoothed sunspot number the solar-cycle feed last gave, if it has given one. Only a value
+/// NOAA's feed answered is ever stored (`LAST_SSN` is written on a successful fetch alone), so it
+/// is never the model's stand-in; the grades take it only for a recent contact.
+fn current_ssn() -> Option<f64> {
+    LAST_SSN.lock().ok().and_then(|g| *g).map(f64::from)
+}
 
 /// The X-ray "fast lane" cache: (fetched-at, flux W/m², the GOES sample's unix time). A
 /// flare's rise takes minutes, so `get_xray_now` refetches GOES every 60 s —
@@ -8213,16 +8223,15 @@ async fn get_path_outlook(
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
-    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold.
-    let wx = {
+    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold. Whether the
+    // card may be kept for a contact's grade is decided from the same snapshot.
+    let (wx, measured) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        guard
-            .as_ref()
-            .map(|(_, s)| {
-                let ssn = LAST_SSN.lock().ok().and_then(|g| *g);
-                outlook_wx(&s.space_wx, ssn, now_unix())
-            })
-            .unwrap_or_default()
+        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+        let wx = view
+            .map(|v| outlook_wx(v, LAST_SSN.lock().ok().and_then(|g| *g), now_unix()))
+            .unwrap_or_default();
+        (wx, grade_card_measured(view, now_unix()))
     };
     // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or
     // the heuristic fallback. p533 is compute-heavy → keep it off the async core.
@@ -8305,10 +8314,64 @@ async fn get_path_outlook(
                 pred.long_path = Some(Box::new(lp));
             }
         }
+        // Kept for the grade of a contact logged with this station (`path_grades::at_log`), only
+        // when it was computed from measured space weather (`grade_card_measured`).
+        if measured {
+            path_grades::keep_outlook(&mygrid, &grid, t, &pred);
+        }
         pred
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// The path grade of each Logbook row asked about: its own stamp when it carries one made for its
+/// current grid and band, else the display-only grade of the existing log (`path_grades`), else
+/// none. Reads only what `path_grades` holds; the Engine lock for the station's grid, once.
+#[tauri::command]
+async fn log_path_grades(
+    rows: Vec<path_grades::GradeAsk>,
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<Option<path_grades::GradeView>>, String> {
+    let mygrid = with_engine(&state, |eng| eng.settings().mygrid.clone()).await?;
+    let (now, ssn) = (now_unix(), current_ssn());
+    tauri::async_runtime::spawn_blocking(move || {
+        rows.iter()
+            .map(|a| path_grades::view_for(a, &mygrid, now, ssn))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// One contact's path over the day it was made (`path_grades::contact_day`) — the contact card.
+/// Two predictions on a blocking thread with no lock held.
+#[tauri::command]
+async fn contact_path_day(
+    row: path_grades::GradeAsk,
+    state: State<'_, SharedEngine>,
+) -> Result<Option<path_grades::ContactDay>, String> {
+    let (mygrid, power, gain) = with_engine(&state, |eng| {
+        let st = eng.settings();
+        (
+            st.mygrid.clone(),
+            st.station_power_w,
+            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        )
+    })
+    .await?;
+    let (now, ssn) = (now_unix(), current_ssn());
+    tauri::async_runtime::spawn_blocking(move || {
+        path_grades::contact_day(&row, &mygrid, power, gain, now, ssn)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// How the display-only grading of the log is going, and the success measures it counted.
+#[tauri::command]
+fn path_grading_status() -> path_grades::Status {
+    path_grades::status()
 }
 
 /// The region strips: ten fixed DX regions' path over the day from the operator's grid — both
@@ -8617,6 +8680,15 @@ fn outlook_wx(v: &propagation::SpaceWxView, ssn: Option<f32>, now: i64) -> propa
     .speaking_now(&v.stamps, now)
 }
 
+/// Whether a path outlook computed now may be kept as the grade of a contact logged with the
+/// station: only when the snapshot's solar flux and Kp are readings that may speak for `now`
+/// ([`propagation::model::SpaceWxStamps::model_usable`]). A card from a cold cache, a stand-in
+/// flux or an old Kp grades nothing: the contact logs with no grade, and the display-only pass
+/// grades it from its own logged numbers (`path_grades`).
+fn grade_card_measured(wx: Option<&propagation::SpaceWxView>, now: i64) -> bool {
+    wx.is_some_and(|w| w.stamps.model_usable(now))
+}
+
 /// The Kp SWPC actually reported, from the propagation cache's snapshot, when it may speak for
 /// `now` — `None` when the cache is cold, when the Kp is the model's stand-in (its product did
 /// not answer), or when its sample is older than the gauge's limit (a cached snapshot is served
@@ -8654,7 +8726,7 @@ mod ring_key_tests {
 
 #[cfg(test)]
 mod path_outlook_kp_tests {
-    use super::{outlook_wx, swpc_kp};
+    use super::{grade_card_measured, outlook_wx, swpc_kp};
 
     const NOW: i64 = 1_761_800_000;
 
@@ -8700,6 +8772,22 @@ mod path_outlook_kp_tests {
         v.stamps.sfi_at = Some(NOW - 3600);
         v.fetched = true;
         assert_eq!(swpc_kp(Some(&v), NOW), None);
+    }
+
+    /// The outlook card kept for a contact's log-time grade rests on measured space weather only.
+    #[test]
+    fn only_a_card_from_a_measured_flux_and_kp_is_kept_for_grading() {
+        let measured = |sfi_at: Option<i64>, kp_at: Option<i64>| {
+            let mut v = view(3.0, kp_at);
+            v.stamps.sfi_at = sfi_at;
+            grade_card_measured(Some(&v), NOW)
+        };
+        assert!(!grade_card_measured(None, NOW), "cold cache");
+        assert!(!measured(None, Some(NOW - 60)), "stand-in flux");
+        assert!(!measured(Some(NOW - 3600), Some(NOW - 2 * 3600)), "old Kp");
+        assert!(!measured(Some(NOW - 3600), None), "stand-in Kp");
+        // Positive control: both measured and current.
+        assert!(measured(Some(NOW - 3600), Some(NOW - 60)));
     }
 
     /// A cached snapshot's Kp from two hours ago says nothing about the path now.
@@ -19253,7 +19341,7 @@ struct RttyScopeDto {
 /// Receive-only: it reads what the decode thread pushed and changes nothing.
 #[tauri::command]
 async fn get_rtty_scope(state: State<'_, SharedEngine>) -> Result<RttyScopeDto, String> {
-    with_engine(&state, |eng| {
+    with_engine(&state, |mut eng| {
         let s = eng.rtty_scope();
         RttyScopeDto {
             live: s.live,
@@ -20605,6 +20693,27 @@ fn sstv_auto_disarm(state: State<'_, SharedEngine>) -> Result<SstvStateDto, Stri
     let mut eng = engine_lock(&state);
     eng.sstv_auto_disarm();
     Ok(sstv_state_dto(&eng))
+}
+
+/// The operator left a receive screen (RTTY, PSK, JTTY, SSTV, APRS) for another section: stop
+/// the decoder that opening it started, unless something still needs it — and, while a computer
+/// driving the station is attached, stop nothing until it has gone. RX only — see
+/// [`tempo_app::engine::Engine::leave_decoder_screen`]. The SSTV picture viewer, open in its own
+/// window here, keeps the SSTV screen in the section; this refreshes that from the window itself
+/// before deciding. Returns whether the decoder is still running on its screen's arm, so the
+/// caller asks again at the next section change.
+#[tauri::command(async)]
+fn leave_decoder_screen(
+    app: tauri::AppHandle,
+    state: State<'_, SharedEngine>,
+    screen: tempo_app::engine::decoder_screens::DecoderScreen,
+) -> Result<bool, String> {
+    let viewer_open = app
+        .get_webview_window(&panel_label(SSTV_VIEWER_SLUG, Instance::Main))
+        .is_some();
+    let mut eng = engine_lock(&state);
+    eng.set_sstv_viewer_open(viewer_open);
+    Ok(eng.leave_decoder_screen(screen))
 }
 
 /// Start decoding an SSTV picture NOW, in the mode the operator named, without
@@ -23317,6 +23426,10 @@ fn set_psk_macros(
 /// progress with the main window's while it is open (`tempo_app::engine::contest_entry`).
 pub(crate) const CONTEST_LOGGER_SLUG: &str = "contestlog";
 
+/// The received-picture viewer's panel slug (`SstvViewer.tsx`'s `SSTV_VIEWER_PANEL`): the SSTV
+/// screen in a window of its own, which keeps that screen in the section (`leave_decoder_screen`).
+const SSTV_VIEWER_SLUG: &str = "sstvviewer";
+
 /// The contest screen window's panel slug: the main window's Contest screen below its log line
 /// (the contest switch, the controls, the club board, the scoreboard, the bonuses and the log),
 /// popped out to a monitor of its own. The main window keeps the log line and the last contacts
@@ -23556,6 +23669,13 @@ async fn open_panel_window(
     // handler). Never persisted, so a restart cannot leave it shared.
     if slug == CONTEST_LOGGER_SLUG && matches!(inst, Instance::Main) {
         share_the_contest_entry(&app);
+    }
+    // THE SSTV PICTURE VIEWER keeps the SSTV screen in its section while it is open (the station
+    // does not stop that receiver behind it), from here to its `Destroyed` event.
+    if slug == SSTV_VIEWER_SLUG && matches!(inst, Instance::Main) {
+        if let Some(engine) = app.try_state::<SharedEngine>() {
+            engine_lock(&engine).set_sstv_viewer_open(true);
+        }
     }
     if let Some(side) = docked_side {
         // Re-pin to the edge of the current work area (best-effort; ignore if unmapped) so a
@@ -40074,6 +40194,20 @@ pub fn run() {
     if region_enabled {
         start_pskr_region_feed(&region_paths, &cluster_call, &region_grid);
     }
+    // The log-time path grader: a contact being logged takes the route the path card graded for
+    // its station, as new fields only, and never an antenna field. It reads
+    // what `path_grades` already holds (it runs under the Engine lock); the record's own
+    // MY_GRIDSQUARE, which the log funnel has stamped by then, names the operator's end.
+    {
+        let live = live_paths.clone();
+        let region = region_paths.0.clone();
+        engine_lock(&engine)
+            .set_path_grader(move |rec, late| path_grades::at_log(rec, "", &live, &region, late));
+    }
+    // The display-only grading of the existing log (a first pass two minutes after launch, then
+    // whenever the log has changed).
+    #[cfg(feature = "radio")]
+    path_grades::start_grader(engine.clone());
     // Record the LOGIN IDENTITY the feeds were started under, so a later Settings rename
     // knows to tear them down and reconnect (topics/login are call-bound). Built the same
     // way the comparison in `apply_and_persist` is: a seed in any other shape reads as a
@@ -42226,6 +42360,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         sstv_manual_rx,
         sstv_auto_arm,
         sstv_auto_disarm,
+        leave_decoder_screen,
         get_sstv_state,
         sstv_send,
         sstv_stop,
@@ -42576,6 +42711,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_propagation,
         get_path_outlook,
         get_path_regions,
+        log_path_grades,
+        contact_path_day,
+        path_grading_status,
         get_band_outlook,
         get_getting_out,
         get_aurora,
@@ -42811,6 +42949,13 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                 if window.label() == panel_label(CONTEST_LOGGER_SLUG, Instance::Main) {
                     if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
                         engine_lock(&engine).contest_entry_share(false);
+                    }
+                }
+                // The SSTV picture viewer is gone: the SSTV screen no longer shows anywhere but
+                // its own screen.
+                if window.label() == panel_label(SSTV_VIEWER_SLUG, Instance::Main) {
+                    if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
+                        engine_lock(&engine).set_sstv_viewer_open(false);
                     }
                 }
             }
@@ -44801,6 +44946,55 @@ mod tests {
                 "{command} must pass the typed report to {engine}"
             );
         }
+    }
+
+    /// The SSTV picture viewer keeps the SSTV screen in its section from the moment its window is
+    /// built to its `Destroyed` event (the engine's flag the decoders' held-leave poll reads; the
+    /// leave command itself also reads the live window). The contest logger's test, below, is the
+    /// pattern.
+    #[test]
+    fn the_sstv_viewer_keeps_its_screen_from_its_open_to_its_destroy() {
+        let src = include_str!("lib.rs");
+        let body = |sig: &str| -> String {
+            let rest = src
+                .split_once(sig)
+                .unwrap_or_else(|| panic!("{sig} is defined"))
+                .1;
+            rest[..rest.find("\n}\n").expect("the end of the function")].to_string()
+        };
+        let open = body("\nasync fn open_panel_window(");
+        let built = open.find("builder.build()").expect("the window is built");
+        let kept = open
+            .find("set_sstv_viewer_open(true)")
+            .expect("opening the viewer keeps the SSTV screen");
+        assert!(built < kept, "only once the window exists");
+        assert!(
+            open[..kept].contains("slug == SSTV_VIEWER_SLUG"),
+            "only the viewer's window"
+        );
+        let build = body("\nfn build_app(");
+        let destroyed = build
+            .find("WindowEvent::Destroyed")
+            .expect("the app handles a window's Destroyed event");
+        let after = &build[destroyed..];
+        let label = after
+            .find("panel_label(SSTV_VIEWER_SLUG, Instance::Main)")
+            .expect("the viewer's own window");
+        assert!(
+            after[label..].contains("set_sstv_viewer_open(false)"),
+            "the viewer window's Destroyed event ends it"
+        );
+        let leave = body("\nfn leave_decoder_screen(");
+        let refreshed = leave
+            .find("set_sstv_viewer_open(")
+            .expect("the command refreshes the viewer from its window");
+        let decided = leave
+            .find(".leave_decoder_screen(")
+            .expect("the command asks the engine");
+        assert!(
+            refreshed < decided,
+            "the command reads the live window before deciding"
+        );
     }
 
     /// ⭐ THE CONTEST LOGGER WINDOW: its strip shares the contact in progress only if the put is
