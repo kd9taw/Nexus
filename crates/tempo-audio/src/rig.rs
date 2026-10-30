@@ -3523,9 +3523,11 @@ mod tests {
             })
         });
         let mut rig = Rig::rigctld(&addr);
-        rig.owed_bound = Duration::from_millis(300);
+        // Longer than one release's own wait and shorter than two, so only answers owed without a
+        // break across several releases reach it.
+        rig.owed_bound = Duration::from_millis(1_500);
         assert!(rig.ptt(true).is_err());
-        std::thread::sleep(Duration::from_millis(400));
+        std::thread::sleep(Duration::from_millis(1_600));
         assert!(
             rig.read_freq().is_err_and(|e| no_answer_in_time(&e)),
             "past the bound with no release queued, nothing is given up"
@@ -3538,7 +3540,6 @@ mod tests {
         // The release goes out behind the lost answer and takes its own answer for it.
         assert!(rig.ptt(false).is_err(), "premise: one answer behind");
         assert!(rig.keyed);
-        std::thread::sleep(Duration::from_millis(400));
         let mut tries = 0;
         while rig.keyed && tries < 5 {
             let _ = rig.ptt(false);
