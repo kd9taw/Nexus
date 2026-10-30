@@ -12966,6 +12966,13 @@ export const EN = {
   'cw.scope.audio.title':
     'Receiver AUDIO centered on your CW pitch ({{lo}}–{{hi}} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.',
   'cw.scope.audio.sub': 'zero-beat',
+  'cw.scope.span.aria': 'Audio scope span',
+  'cw.scope.span.filter.label': 'Filter',
+  'cw.scope.span.filter.title': "Your radio's filter, centered on your CW pitch — the view for zero-beating",
+  'cw.scope.span.std.label': 'Std',
+  'cw.scope.span.std.title': 'The usual waterfall view: {{lo}}–{{hi}} Hz of receive audio',
+  'cw.scope.span.full.label': 'Full',
+  'cw.scope.span.full.title': 'All the receive audio: {{lo}}–{{hi}} Hz',
   'cw.scope.colors.label': 'Colors',
   'cw.scope.splitter.label': 'scope height',
   'cw.seam.columns.label': 'Decode column / Rig controls column',
@@ -12975,6 +12982,9 @@ export const EN = {
   'cw.rfZoom.full.label': 'Full',
   'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
   'cw.rfZoom.span.title': '±{{khz}} kHz around your dial',
+  'cw.rfZoom.band.label': 'Band',
+  'cw.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
+  'cw.rfZoom.band.partial': 'Your scope sweeps only part of this band',
 
   // ── CW ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ──────────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an
@@ -13421,6 +13431,9 @@ export const EN = {
   'phone.rfZoom.full.label': 'Full',
   'phone.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
   'phone.rfZoom.span.title': '±{{khz}} kHz around your dial',
+  'phone.rfZoom.band.label': 'Band',
+  'phone.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
+  'phone.rfZoom.band.partial': 'Your scope sweeps only part of this band',
 
   // ── Phone ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ───────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an escape
