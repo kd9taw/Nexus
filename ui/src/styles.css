@@ -478,6 +478,12 @@ html {
   color: var(--text-faint);
   pointer-events: none;
 }
+/* A disabled item the keyboard still stops on (Menu's focusableWhenDisabled): a ring, not the
+   accent fill, so it still reads as disabled. */
+.ui-menu-item[data-disabled][data-highlighted] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
 /* An item's state line under its label ("Uploaded, 2026-10-28 14:06", or why it cannot be chosen
    now), a rule between groups, a submenu's arrow, and a destructive item. */
 .ui-menu-text {
@@ -18209,7 +18215,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    until pointed at. They were `opacity: 0` until the row was hovered, which hid them from the eye
    and not from the pointer: a click, or a touchscreen tap where there is no hover, on the blank
    right end of a row fired the button under it and uploaded the contact. Nothing in a row may be
-   clickable while it cannot be seen (Logbook.rowmenu.test.tsx resolves this cascade for a row the
+   clickable while it cannot be seen (Logbook.rowMenu.test.tsx resolves this cascade for a row the
    pointer never visited). */
 .logbook-row .log-rowbtn {
   min-width: 32px;

@@ -1,20 +1,20 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
-import { render, waitFor, cleanup, fireEvent } from '@testing-library/react'
+import { render, waitFor, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseRules, cmpSpec } from '../cssCascade'
 import { Logbook } from './Logbook'
 import type { LogQuestion } from '../features/logAnswers'
 import {
-  clublogPushQso, deleteQsoById, hrdlogPushQso, markQslCardById, markQslSentById, qrzCorrectPreview, qrzPushQso,
+  clublogPushQso, deleteQsoById, hrdlogPushQso, markQslCardById, markQslSentById, postSpot, qrzCorrectPreview, qrzPushQso,
   queueQslCardById, setSatTagById, uploadLotwReportByIds, wrlPushQso,
 } from '../api'
 import { confirmDialog } from '../confirm'
 import { fmtUtc } from '../features/logQuery'
 import { t } from '../i18n'
 import type { UploadReport } from '../types'
-import { chooseRowAction, menuItem, openRowMenu, rowMore } from './Logbook.rowMenu.testkit'
+import { chooseRowAction, itemLabels, menuItem, openRowMenu, openRowSubmenu, rowMore } from './Logbook.rowMenu.testkit'
 
 // THE LOGBOOK ROW: two buttons always on screen (✎ Edit and ⋯), every other action one deliberate
 // choice in the ⋯ menu. What this file holds down:
@@ -56,6 +56,8 @@ vi.mock('../api', () => {
     clublogPushQso: vi.fn(async () => ({ result: 'ok' })),
     hrdlogPushQso: vi.fn(async () => ({ result: 'ok' })),
     wrlPushQso: vi.fn(async () => ({ result: 'accepted' })),
+    postSpot: vi.fn(async () => {}),
+    qsoHistory: vi.fn(async () => []), undoQsoChange: noop(), openQrzPage: noop(), getSettings: noop(),
   }
 })
 vi.mock('../toast', () => ({
@@ -87,7 +89,9 @@ async function renderLog(over: Record<string, unknown> = {}): Promise<HTMLElemen
 // jsdom applies no stylesheet, so the sheet is resolved here: every rule whose selector the element
 // matches (jsdom's own `matches`, so `:hover` and `:focus-within` are false — the row nobody has
 // pointed at), important first, then specificity, then source order. Its inline style wins over all.
-const RULES = parseRules(readFileSync(resolve(process.cwd(), 'src', 'styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''))
+const sheet = (...path: string[]) => readFileSync(resolve(process.cwd(), 'src', ...path), 'utf8')
+// The contact card's own sheet comes after the app's, as its import puts it.
+const RULES = parseRules((sheet('styles.css') + '\n' + sheet('components', 'ContactCard.css')).replace(/\/\*[\s\S]*?\*\//g, ''))
 
 function resolved(el: Element, prop: string): string | null {
   const inline = (el as HTMLElement).style?.getPropertyValue(prop)
@@ -249,5 +253,143 @@ describe('the row shows two buttons, and the rest is in its ⋯ menu', () => {
     await waitFor(() => expect(markQslSentById).toHaveBeenCalledWith(expect.anything(), null))
     await chooseRowAction('K0ABC', t('logbook.row.menu.sat'), t('logbook.row.sat.clear'))
     await waitFor(() => expect(setSatTagById).toHaveBeenCalledWith(expect.anything(), null))
+  })
+})
+
+describe('the ⋯ menu’s items, each as it was on the row', () => {
+  it('Direct and Electronic mark the card sent by their own route', async () => {
+    await renderLog()
+    await chooseRowAction('K0ABC', 'QSL', t('logbook.row.qslSent.direct'))
+    await waitFor(() => expect(markQslSentById).toHaveBeenLastCalledWith(expect.anything(), 'D'))
+    await chooseRowAction('K0ABC', 'QSL', t('logbook.row.qslSent.electronic'))
+    await waitFor(() => expect(markQslSentById).toHaveBeenLastCalledWith(expect.anything(), 'E'))
+    expect(markQslSentById).toHaveBeenCalledTimes(2)
+  })
+
+  it('offers to clear a received card only when one is marked', async () => {
+    await renderLog()
+    expect(itemLabels(await openRowSubmenu('K0ABC', 'QSL'))).not.toContain(t('logbook.row.qslRcvd.clear'))
+    cleanup()
+    await renderLog({ qslRcvd: { card: true, lotw: false, eqsl: false } })
+    await chooseRowAction('K0ABC', 'QSL', t('logbook.row.qslRcvd.clear'))
+    await waitFor(() => expect(markQslCardById).toHaveBeenCalledWith(expect.anything(), false))
+  })
+
+  it('Delete is drawn as the destructive item, and only Delete', async () => {
+    await renderLog()
+    const menu = await openRowMenu('K0ABC')
+    const danger = [...menu.querySelectorAll('[role="menuitem"].danger')].map((i) => i.querySelector('.ui-menu-label')?.textContent)
+    expect(danger).toEqual([t('logbook.row.menu.delete')])
+  })
+})
+
+/** Past a menu's close, whose focus return runs a task after it (Radix's timeout). */
+const settle = () => new Promise((r) => setTimeout(r, 50))
+
+// SPOT FROM THE ⋯ MENU. The menu closes as the Spot dialog opens, and a closing menu gives the
+// keyboard back to its button: it once did so AFTER the dialog had taken it, so the keyboard sat on
+// ⋯ behind the dialog — typing went nowhere, Esc did not close it, Tab walked the rows behind it.
+describe('Spot from the ⋯ menu', () => {
+  const spotDialog = () => screen.getByRole('dialog', { name: t('spots.post.aria') })
+  const callBox = () => within(spotDialog()).getByDisplayValue('K0ABC')
+
+  async function expectKeyboardInDialog() {
+    await waitFor(() => expect(document.activeElement).toBe(callBox()))
+    await settle()
+    expect(screen.queryByRole('menu'), 'the menu closed').toBeNull()
+    expect(document.activeElement, 'still in the call box once the menu has closed').toBe(callBox())
+  }
+
+  it('by keyboard: opens seeded with the contact, keyboard in the call box; Esc closes it back to ⋯', async () => {
+    await renderLog()
+    const more = rowMore('K0ABC')
+    more.focus()
+    const menu = await openRowMenu('K0ABC')
+    const spot = menuItem(menu, t('logbook.row.menu.spot'))
+    await waitFor(() => expect(document.activeElement).toBe(spot))
+    fireEvent.keyDown(spot, { key: 'Enter' })
+    await expectKeyboardInDialog()
+    // Seeded with the contact's call, its frequency and its mode.
+    const boxes = within(spotDialog()).getAllByRole('textbox') as HTMLInputElement[]
+    expect(boxes.map((b) => b.value)).toEqual(['K0ABC', '14.074', 'FT8'])
+    fireEvent.keyDown(callBox(), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(document.activeElement, 'the keyboard is back on the row’s ⋯').toBe(more)
+    expect(postSpot).not.toHaveBeenCalled()
+  })
+
+  it('by mouse: the same', async () => {
+    await renderLog()
+    const more = rowMore('K0ABC')
+    fireEvent.pointerDown(more, { button: 0, ctrlKey: false, pointerType: 'mouse' })
+    const menu = await screen.findByRole('menu')
+    fireEvent.click(menuItem(menu, t('logbook.row.menu.spot')))
+    await expectKeyboardInDialog()
+    fireEvent.keyDown(callBox(), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(document.activeElement).toBe(more)
+  })
+
+  it('CONTROL: an item that opens nothing still gives the keyboard back to ⋯', async () => {
+    await renderLog()
+    const more = rowMore('K0ABC')
+    more.focus()
+    await chooseRowAction('K0ABC', t('logbook.row.menu.hrdlog'))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(more))
+  })
+})
+
+describe('a Ctrl- or Shift-click inside the ⋯ menu', () => {
+  // A contact with an id: only those can be picked.
+  it('chooses the item and does not also pick the row', async () => {
+    await renderLog({ id: 'id-1' })
+    const menu = await openRowMenu('K0ABC')
+    fireEvent.click(menuItem(menu, t('logbook.row.menu.hrdlog')), { ctrlKey: true })
+    await waitFor(() => expect(hrdlogPushQso).toHaveBeenCalledTimes(1))
+    expect(document.querySelector('.logbook-row[aria-selected="true"]'), 'no row picked').toBeNull()
+  })
+
+  it('CONTROL: a Ctrl-click on the row itself still picks it', async () => {
+    const row = await renderLog({ id: 'id-1' })
+    fireEvent.click(row, { ctrlKey: true })
+    await waitFor(() => expect(row.getAttribute('aria-selected')).toBe('true'))
+  })
+})
+
+describe('while TQSL runs, the keyboard still reaches why LoTW cannot be chosen', () => {
+  it('stops on the LoTW item, which says why, and choosing it sends nothing more', async () => {
+    let finish: (v: UploadReport) => void = () => {}
+    vi.mocked(uploadLotwReportByIds).mockImplementationOnce(() => new Promise<UploadReport>((r) => (finish = r)))
+    await renderLog()
+    await chooseRowAction('K0ABC', t('logbook.row.menu.lotw'))
+    await waitFor(() => expect(uploadLotwReportByIds).toHaveBeenCalledTimes(1))
+    const menu = await openRowMenu('K0ABC')
+    const lotw = menuItem(menu, t('logbook.row.menu.lotw'))
+    // Walk down from the first item: the keyboard lands on LoTW, between World Radio League and QSL.
+    const wrl = menuItem(menu, t('logbook.row.menu.wrl'))
+    wrl.focus()
+    fireEvent.keyDown(wrl, { key: 'ArrowDown' })
+    await waitFor(() => expect(document.activeElement).toBe(lotw))
+    expect(lotw.getAttribute('aria-disabled')).toBe('true')
+    expect(lotw.textContent).toContain(t('logbook.row.menu.lotwBusy'))
+    fireEvent.keyDown(lotw, { key: 'Enter' })
+    await settle()
+    expect(uploadLotwReportByIds).toHaveBeenCalledTimes(1)
+    finish({ dispatched: 1, outcome: 'pending' })
+  })
+})
+
+describe('the contact card’s per-field ✕ / ↺', () => {
+  it('can be seen, and is a 24 px target', async () => {
+    const row = await renderLog({ id: 'id-1', extra: [['CNTY', 'MA,ESSEX']] })
+    fireEvent.doubleClick(row)
+    const card = await waitFor(() => document.querySelector<HTMLElement>('.contact-card-dialog')!)
+    fireEvent.click(within(card).getByText(t('contactCard.more')))
+    const remove = within(card).getByRole('button', { name: t('contactCard.field.remove', { tag: 'CNTY' }) })
+    expect(unseen(remove, card)).toBeNull()
+    const px = (v: string | null) => Number(/^(\d+(?:\.\d+)?)px$/.exec(v ?? '')?.[1] ?? 0)
+    expect(px(resolved(remove, 'min-width')), 'WCAG 2.5.8: at least 24 px wide').toBeGreaterThanOrEqual(24)
+    expect(px(resolved(remove, 'height')), 'and 24 px tall').toBeGreaterThanOrEqual(24)
   })
 })

@@ -2134,6 +2134,7 @@ export function Logbook({
       label: t('logbook.row.menu.spot'),
       title: t('logbook.row.spot.title', { call: q.call }),
       onSelect: () => setSpotSeed({ call: q.call, freq: q.freqMhz, mode: q.mode }),
+      opensDialog: true,
     },
     {
       label: t('logbook.row.menu.qrz'),
@@ -2168,6 +2169,8 @@ export function Logbook({
       // One TQSL run at a time: while one runs, the item says so rather than going quietly dead.
       hint: uploading ? t('logbook.row.menu.lotwBusy') : sentState(q.upload?.lotw),
       disabled: uploading,
+      // …and the keyboard still stops on it, so the reason is heard, not only seen.
+      focusableWhenDisabled: true,
       title: t('logbook.row.pushLotw.title', { call: q.call }),
       onSelect: () => void onPushLotw(q, ref),
     },
@@ -3528,9 +3531,11 @@ export function Logbook({
                     // because the affordance is otherwise invisible.
                     onDoubleClick={() => setCard({ row: q, ref })}
                     // Ctrl/⌘-click picks the row for "Export selected", Shift-click a run — on the
-                    // row itself, never through one of its controls.
+                    // row itself, never through one of its controls, nor through its ⋯ menu (portaled
+                    // out of the row, but React still bubbles its clicks here).
                     onClick={(e) => {
                       if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return
+                      if (!e.currentTarget.contains(e.target as Node)) return
                       if ((e.target as HTMLElement).closest('button, a, input, select, textarea, label')) return
                       e.preventDefault()
                       pickRows(vrow.index, e.shiftKey)

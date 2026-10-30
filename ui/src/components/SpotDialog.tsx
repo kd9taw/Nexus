@@ -3,6 +3,7 @@ import { postSpot } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import { parseOperatorNumber } from '../numInput'
+import { focusedControl } from '../focusReturn'
 
 // Compose + post a DX-cluster spot. The backend `post_spot` command validates the callsign,
 // checks a cluster is connected, and sanitizes the line — this is just the reviewable popup the
@@ -39,12 +40,12 @@ export function SpotDialog({
   // THE KEYBOARD GOES BACK TO WHERE THE DIALOG WAS OPENED FROM when it closes — cancelled, escaped
   // or posted. It was left on the page itself.
   // The call box is focused here rather than by `autoFocus`, which would move the keyboard before
-  // the control that opened the dialog could be noted.
+  // the control that opened the dialog could be noted. Opened from a menu item, the opener is the
+  // menu's button: the item goes with the menu.
   const callRef = useRef<HTMLInputElement>(null)
   useLayoutEffect(() => {
     if (!open) return
-    const active = document.activeElement
-    const opener = active instanceof HTMLElement && active !== document.body ? active : null
+    const opener = focusedControl()
     callRef.current?.focus()
     return () => {
       const now = document.activeElement

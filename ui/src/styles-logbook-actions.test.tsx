@@ -367,6 +367,8 @@ describe('the Logbook row-action cluster fits its grid track', () => {
     // …and only the Logbook's rows grow: the class's own base still describes the contact card's
     // small inline button.
     expect(pxOf(winner(['.log-rowbtn'], 'height'))).toBe(22)
+    // The ⋯ menu's items are the same 32 px targets.
+    expect(pxOf(winner(['.log-rowmenu .ui-menu-item'], 'min-height')), 'a ⋯ menu item is at least 32 px tall').toBeGreaterThanOrEqual(32)
   })
 
   it('FIRES: the floor that shipped is reported as too small', () => {

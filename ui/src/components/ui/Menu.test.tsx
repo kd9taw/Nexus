@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
+import { useState } from 'react'
 import { Menu, type MenuEntry } from './Menu'
 
 // The shared ⋯ / context menu, driven the way the keyboard and a pointer drive it.
@@ -103,6 +104,8 @@ describe('Menu', () => {
     press('ArrowRight', sub)
     await waitFor(() => expect(screen.getAllByRole('menu')).toHaveLength(2))
     await waitFor(() => expect(document.activeElement?.textContent).toBe('Bureau'))
+    // The submenu is portaled too, so it puts the zoom back as the menu does.
+    expect((screen.getAllByRole('menu')[1].firstElementChild as HTMLElement).style.zoom).toBe('var(--ui-zoom, 1)')
     press('ArrowLeft')
     await waitFor(() => expect(screen.getAllByRole('menu')).toHaveLength(1))
     expect(document.activeElement).toBe(sub)
@@ -113,5 +116,45 @@ describe('Menu', () => {
     press('Enter')
     await waitFor(() => expect(card).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  })
+
+  it('an item that opens a dialog runs once the menu has closed, from the button, and the dialog keeps the keyboard', async () => {
+    // A dialog with no focus trap of its own, which takes the keyboard as it opens (SpotDialog's way).
+    function Opened() {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <Menu trigger={<button type="button">More</button>} items={[{ label: 'Spot', opensDialog: true, onSelect: () => setOpen(true) }]} />
+          {open && <input aria-label="Call" ref={(el) => el?.focus()} data-opened-from={document.activeElement?.textContent} />}
+        </>
+      )
+    }
+    render(<Opened />)
+    const trigger = screen.getByRole('button', { name: 'More' })
+    press('Enter', trigger)
+    const menu = await screen.findByRole('menu')
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('Spot'))
+    press('Enter', within(menu).getByRole('menuitem'))
+    const call = await screen.findByRole('textbox', { name: 'Call' })
+    expect(call.getAttribute('data-opened-from'), 'opened with the keyboard on the button').toBe('More')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.activeElement, 'the closed menu did not take the keyboard back').toBe(call)
+  })
+
+  it('an item that has moved the keyboard on by the time the menu has closed keeps it there', async () => {
+    // A dialog that took the keyboard as the menu closed (the confirm question's way): the closing
+    // menu does not pull it back to the button.
+    const outside = document.createElement('input')
+    document.body.append(outside)
+    const { trigger } = host([{ label: 'Delete', onSelect: () => void setTimeout(() => outside.focus(), 0) }])
+    press('Enter', trigger)
+    const menu = await screen.findByRole('menu')
+    await waitFor(() => expect(document.activeElement?.textContent).toBe('Delete'))
+    press('Enter', within(menu).getByRole('menuitem'))
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    await new Promise((r) => setTimeout(r, 50))
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
   })
 })
