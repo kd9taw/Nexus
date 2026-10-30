@@ -3,8 +3,8 @@
 // DT in seconds, the audio offset in Hz, the UTC stamp, the band, the tier and the country.
 // So do the TOKENS the pane is built out of — gathered in DECODE_TOKENS below so a translator
 // can see the whole set at once. What moved is the prose around them.
-import { Fragment, useEffect, useRef, useState } from 'react'
-import { t } from '../i18n'
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
+import { getLocale, t } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { useRovingList } from '../useRovingList'
 import { usePinnedScroll } from '../usePinnedScroll'
@@ -34,7 +34,7 @@ import { gridFromMessage, isIgnored } from '../txMessages'
 import { compileTerm, searchTerms } from '../searchQuery'
 import { StateBlock } from './StateBlock'
 import { RarityChip } from './RarityChip'
-import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
+import { azimuthLabel, azimuthTitle, azimuthTo, type LatLon } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 
@@ -228,6 +228,9 @@ const NO_NEEDS: Map<string, NeedAlert[]> = new Map()
 /** Shared empty set for a pane that does not apply the country exclusion. */
 const NO_ENTITIES: ReadonlySet<string> = new Set()
 
+/** Shared empty alert list, so a row with no needs keeps an equal prop and its memo holds. */
+const NO_ALERTS: NeedAlert[] = []
+
 /** Max need micro-icons shown per row before collapsing into a "+N" chip. */
 const MAX_NEED_ICONS = 3
 
@@ -289,6 +292,9 @@ export function OperateDecodes({
   }
   const histRef = { current: history ?? (localHistRef.current as DecodeHistory) }
   const [, setTick] = useState(0)
+  // What this render draws from: the effects below re-render only when the history has moved
+  // past it, so a poll that changed nothing (most of them) costs no second render.
+  const histVersion = histRef.current.version
   // Persisted per-surface (operateFilters.ts) so the chip survives a restart. Only the pane
   // that RENDERS chips can write one: the locked panes (Rx Frequency) show no filter bar, so
   // their filterState is dead — `filter` below takes lockedFilter — and 'rx' can never
@@ -317,7 +323,10 @@ export function OperateDecodes({
   const setSearchText = onSearch ?? setOwnSearch
   // Compiled once per render rather than per row (searchQuery's rule). Every term must match: the
   // line is many fields flattened, so a second word narrows, as in the Spots search.
-  const searchTests = searchable ? searchTerms(searchText).map(compileTerm) : []
+  const searchTests = useMemo(
+    () => (searchable ? searchTerms(searchText).map(compileTerm) : []),
+    [searchable, searchText],
+  )
   // #276 "Newest on top" — an option, OFF by default so the pane keeps the WSJT-X order. It is
   // a TIME-order statement, so another sort ignores it (reversing an SNR ranking would read as a
   // broken sort), and like the chips it applies only on the pane that renders the chip bar:
@@ -410,14 +419,147 @@ export function OperateDecodes({
   const centroids = useEntityCentroids()
   const hiddenEntities = hideExcludedCountries ? countries.hidden : NO_ENTITIES
 
+  const ignores = ignoredCalls ?? NO_IGNORES
+  // The period the separators, the time column and the search date rows by (see the `periodSecs` prop).
+  const periodS = periodSecs && periodSecs > 0 ? periodSecs : undefined
+  // Everything the chips and modifiers keep; the search box then narrows it (below). Memoised on
+  // the history's version and every input the filters read, so a re-render that changed none of
+  // them (a 4 Hz poll of an unchanged period) reuses the list instead of filtering and sorting
+  // up to MAX_HISTORY rows again.
+  const hist = histRef.current
+  const kept = useMemo(
+    () =>
+      orderEntries(
+        hist
+          .entries()
+          .filter((d) => passesFilter(d, filter, rxOffsetHz))
+          // "Hide B4" ANDs with the chip (never with the B4 chip itself). Own rows and the
+          // station mid-QSO stay — hiding your own echo or your current partner as "worked"
+          // would be the same class of self-own the country exclude guards against. "Mid-QSO"
+          // is `partnerCall` (the sequencer's live partner), NOT the selection: the selection
+          // lingers after Done, and a finished QSO's partner is just a worked station.
+          //
+          // ⭐ AND A DECODE ADDRESSED TO ME IS NEVER HIDDEN (#268). The partner exemption above
+          // expires ONE MESSAGE TOO EARLY: the RR73 that ends the QSO is the same event that
+          // clears `partnerCall` and logs the contact, and `recent_decodes` is rebuilt from
+          // scratch every snapshot (engine.rs `working_a_station_clears_the_icons_on_a_decode_
+          // already_on_screen` — the retroactive refresh is an operator ruling and stays), so
+          // `worked` flips true under a row already on screen and the next 4 Hz poll takes it
+          // away. bitslave watched his partner's RR73 vanish out of the Rx Frequency pane while
+          // he was reading it. A row losing its CHIPS when you work the station is what was
+          // asked for; a row being REMOVED is not.
+          // The rule, rather than a patch for the RR73 alone: −B4 declutters stations I could
+          // work and already have. A station that has put MY callsign on the air is traffic for
+          // me whatever the logbook says, so it stays — exactly like `!d.mine` beside it.
+          .filter(
+            (d) =>
+              !(
+                hideB4 &&
+                filter !== 'b4' &&
+                (hideB4Scope === 'band' ? d.workedBand === true : d.worked) &&
+                !d.mine &&
+                !d.directedToMe &&
+                (partnerCall == null || d.from !== partnerCall)
+              ),
+          )
+          // "Hide blocked" ANDs the same way; own rows and the station mid-QSO always stay.
+          .filter(
+            (d) =>
+              !(
+                hideBlocked &&
+                isIgnored(ignores, d.from) &&
+                !d.mine &&
+                (partnerCall == null || d.from !== partnerCall)
+              ),
+          )
+          // "Hide confirmed on this band" — own rows and the working partner always stay,
+          // and so does anything addressed to me: the same rule as −B4 above, because the two
+          // are one class (declutter what I no longer need to work) and must not disagree.
+          // `confirmedBand` is per-ENTITY, so this chip hides EVERY station from a confirmed
+          // entity — including the partner's RR73 the moment the QSO ends and the live-partner
+          // exemption stops covering it. That is −B4's #268 defect reached through the other
+          // chip; approved with it rather than left stranded.
+          .filter(
+            (d) =>
+              !(
+                hideConfirmed &&
+                d.confirmedBand &&
+                !d.mine &&
+                !d.directedToMe &&
+                (partnerCall == null || d.from !== partnerCall)
+              ),
+          )
+          // Wildcard call-hide (VP8* etc.) — display-only; own rows and the QSO partner stay.
+          .filter(
+            (d) =>
+              !(
+                isCallHidden(d.from, hideCalls.entries) &&
+                !d.mine &&
+                (partnerCall == null || d.from !== partnerCall)
+              ),
+          )
+          // The country exclusion is ANDed with the chip, and it is the last word on what the
+          // pane shows — so `list.length` (the "N heard" readout) counts what is on screen.
+          .filter(
+            (d) =>
+              !isHiddenByCountry(
+                {
+                  entity: d.country,
+                  call: d.from,
+                  // The Tx panel's DX call: never hide the station we are working, mid-exchange.
+                  qsoPartner: selectedCall,
+                  addressedToMe: d.directedToMe || Boolean(d.mine),
+                  // NEEDED OUTRANKS EXCLUDED, on the engine's own flags — a new entity or a new
+                  // band slot still surfaces from a country the operator has switched off.
+                  needed: Boolean(d.newDxcc || d.newBand),
+                },
+                hiddenEntities,
+              ),
+          ),
+        sort,
+      ),
+    // `histVersion` stands for `hist.entries()`: equal versions mean equal entries.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      hist, histVersion, filter, rxOffsetHz, hideB4, hideB4Scope, hideBlocked, ignores,
+      partnerCall, hideConfirmed, hideCalls.entries, hiddenEntities, selectedCall, sort,
+    ],
+  )
+  // The search ANDs with all of the above and is applied last, so `kept` is exactly what the box
+  // is narrowing — the "N of M" count's M. Display only: a matching row is the same entry, so
+  // every click, double-click and key on it does what it does unfiltered.
+  const list = useMemo(
+    () =>
+      searchTests.length > 0
+        ? kept.filter((d) => {
+            const line = decodeLineText(d, tier, periodS).toUpperCase()
+            return searchTests.every((test) => test(line))
+          })
+        : kept,
+    [kept, searchTests, tier, periodS],
+  )
+  // What the pane DRAWS: the newest MAX_ROWS of what the filter kept. The store behind it is
+  // ten times deeper (see decodeHistory's MAX_HISTORY) so a filtered pane can be scrolled back
+  // through hours of its own frequency, but the row count that is actually painted — the cost
+  // the 4 Hz ticker pays on a machine without GPU compositing — is exactly what it always was.
+  // Everything below counts `shown`, not `list`: the "N heard" readout means what is on screen,
+  // and the roving-keyboard index must address the rows that exist.
+  const shown = useMemo(() => renderWindow(list), [list])
+  // The order rows are DRAWN in. Everything that addresses a row by position (the roving index,
+  // the period separators) reads `drawn`; counts read `shown`, which is the same set.
+  const drawn = useMemo(() => (newestTop ? [...shown].reverse() : shown), [shown, newestTop])
+
   // Bottom-pinned auto-scroll (WSJT-X flow) — the shared discipline, extracted
-  // to usePinnedScroll (which keeps the every-render re-pin this pane's
-  // keep-alive host depends on). `pinned` drives the "▲ reviewing" hint.
+  // to usePinnedScroll. `pinned` drives the "▲ reviewing" hint.
   // Newest on top (#276) pins the TOP instead, holding the row being read while new periods
-  // arrive above it (each row carries `data-pin-key` for that).
+  // arrive above it (each row carries `data-pin-key` for that). `drawn` is the content signal:
+  // the pin (and the layout it reads) runs when the drawn rows change, not on every render; a
+  // keep-alive host shown again re-pins through the hook's resize watch.
   const { ref: scrollRef, pinned, onScroll, repin } = usePinnedScroll<HTMLDivElement>(
     newestTop ? 'top' : 'bottom',
+    drawn,
   )
+
   // A new search follows the newest matches: the list may shrink below the pane's height, where
   // no scroll event could ever arrive to end a "reviewing" the operator left behind.
   const pickSearch = (q: string) => {
@@ -445,7 +587,10 @@ export function OperateDecodes({
     // The period caught decoding at the change is older than anything live, so it goes first.
     if (late) histRef.current.ingestLate(late)
     histRef.current.ingest(decodes, slot)
-    setTick((t) => t + 1)
+    // Re-render only if the history moved past what this render drew. Not "did MY ingest change
+    // it": a history the cockpit shares may already have been moved by another pane.
+    if (histRef.current.version !== histVersion) setTick((t) => t + 1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the poll's own inputs; histVersion is read, not a trigger
   }, [decodes, slot, late, band, tier])
 
   // Inbound UDP Clear: when clearTick changes (skip mount), wipe without
@@ -459,120 +604,6 @@ export function OperateDecodes({
       setTick((t) => t + 1)
     }
   }, [clearTick, repin])
-
-  const ignores = ignoredCalls ?? NO_IGNORES
-  // The period the separators, the time column and the search date rows by (see the `periodSecs` prop).
-  const periodS = periodSecs && periodSecs > 0 ? periodSecs : undefined
-  // Everything the chips and modifiers keep; the search box then narrows it (below).
-  const kept = orderEntries(
-    histRef.current
-      .entries()
-      .filter((d) => passesFilter(d, filter, rxOffsetHz))
-      // "Hide B4" ANDs with the chip (never with the B4 chip itself). Own rows and the
-      // station mid-QSO stay — hiding your own echo or your current partner as "worked"
-      // would be the same class of self-own the country exclude guards against. "Mid-QSO"
-      // is `partnerCall` (the sequencer's live partner), NOT the selection: the selection
-      // lingers after Done, and a finished QSO's partner is just a worked station.
-      //
-      // ⭐ AND A DECODE ADDRESSED TO ME IS NEVER HIDDEN (#268). The partner exemption above
-      // expires ONE MESSAGE TOO EARLY: the RR73 that ends the QSO is the same event that
-      // clears `partnerCall` and logs the contact, and `recent_decodes` is rebuilt from
-      // scratch every snapshot (engine.rs `working_a_station_clears_the_icons_on_a_decode_
-      // already_on_screen` — the retroactive refresh is an operator ruling and stays), so
-      // `worked` flips true under a row already on screen and the next 4 Hz poll takes it
-      // away. bitslave watched his partner's RR73 vanish out of the Rx Frequency pane while
-      // he was reading it. A row losing its CHIPS when you work the station is what was
-      // asked for; a row being REMOVED is not.
-      // The rule, rather than a patch for the RR73 alone: −B4 declutters stations I could
-      // work and already have. A station that has put MY callsign on the air is traffic for
-      // me whatever the logbook says, so it stays — exactly like `!d.mine` beside it.
-      .filter(
-        (d) =>
-          !(
-            hideB4 &&
-            filter !== 'b4' &&
-            (hideB4Scope === 'band' ? d.workedBand === true : d.worked) &&
-            !d.mine &&
-            !d.directedToMe &&
-            (partnerCall == null || d.from !== partnerCall)
-          ),
-      )
-      // "Hide blocked" ANDs the same way; own rows and the station mid-QSO always stay.
-      .filter(
-        (d) =>
-          !(
-            hideBlocked &&
-            isIgnored(ignores, d.from) &&
-            !d.mine &&
-            (partnerCall == null || d.from !== partnerCall)
-          ),
-      )
-      // "Hide confirmed on this band" — own rows and the working partner always stay,
-      // and so does anything addressed to me: the same rule as −B4 above, because the two
-      // are one class (declutter what I no longer need to work) and must not disagree.
-      // `confirmedBand` is per-ENTITY, so this chip hides EVERY station from a confirmed
-      // entity — including the partner's RR73 the moment the QSO ends and the live-partner
-      // exemption stops covering it. That is −B4's #268 defect reached through the other
-      // chip; approved with it rather than left stranded.
-      .filter(
-        (d) =>
-          !(
-            hideConfirmed &&
-            d.confirmedBand &&
-            !d.mine &&
-            !d.directedToMe &&
-            (partnerCall == null || d.from !== partnerCall)
-          ),
-      )
-      // Wildcard call-hide (VP8* etc.) — display-only; own rows and the QSO partner stay.
-      .filter(
-        (d) =>
-          !(
-            isCallHidden(d.from, hideCalls.entries) &&
-            !d.mine &&
-            (partnerCall == null || d.from !== partnerCall)
-          ),
-      )
-      // The country exclusion is ANDed with the chip, and it is the last word on what the
-      // pane shows — so `list.length` (the "N heard" readout) counts what is on screen.
-      .filter(
-        (d) =>
-          !isHiddenByCountry(
-            {
-              entity: d.country,
-              call: d.from,
-              // The Tx panel's DX call: never hide the station we are working, mid-exchange.
-              qsoPartner: selectedCall,
-              addressedToMe: d.directedToMe || Boolean(d.mine),
-              // NEEDED OUTRANKS EXCLUDED, on the engine's own flags — a new entity or a new
-              // band slot still surfaces from a country the operator has switched off.
-              needed: Boolean(d.newDxcc || d.newBand),
-            },
-            hiddenEntities,
-          ),
-      ),
-    sort,
-  )
-  // The search ANDs with all of the above and is applied last, so `kept` is exactly what the box
-  // is narrowing — the "N of M" count's M. Display only: a matching row is the same entry, so
-  // every click, double-click and key on it does what it does unfiltered.
-  const list =
-    searchTests.length > 0
-      ? kept.filter((d) => {
-          const line = decodeLineText(d, tier, periodS).toUpperCase()
-          return searchTests.every((test) => test(line))
-        })
-      : kept
-  // What the pane DRAWS: the newest MAX_ROWS of what the filter kept. The store behind it is
-  // ten times deeper (see decodeHistory's MAX_HISTORY) so a filtered pane can be scrolled back
-  // through hours of its own frequency, but the row count that is actually painted — the cost
-  // the 4 Hz ticker pays on a machine without GPU compositing — is exactly what it always was.
-  // Everything below counts `shown`, not `list`: the "N heard" readout means what is on screen,
-  // and the roving-keyboard index must address the rows that exist.
-  const shown = renderWindow(list)
-  // The order rows are DRAWN in. Everything that addresses a row by position (the roving index,
-  // the period separators) reads `drawn`; counts read `shown`, which is the same set.
-  const drawn = newestTop ? [...shown].reverse() : shown
 
   // Wipe this pane (WSJT-X "Erase") and re-pin to the bottom.
   // Also calls onErase so the cockpit can mirror the gesture to loggers.
@@ -612,6 +643,26 @@ export function OperateDecodes({
     else if (mods.shift) onCall(d.from, undefined, d.message, d.snr, d.freqHz)
     else onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
   })
+
+  // The row handlers read the LATEST render's values through `live`, so `rowActions` can be one
+  // object for the pane's lifetime and leave the memoised rows' props alone.
+  const live = useRef({ roving, handleDouble, onSelectDecode })
+  live.current = { roving, handleDouble, onSelectDecode }
+  const rowActions = useMemo<RowActions>(
+    () => ({
+      click: (index, d) => {
+        live.current.roving.setActive(index)
+        if (d.from && !d.heard)
+          live.current.onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
+      },
+      double: (e, d) => live.current.handleDouble(e, d),
+      focus: (index) => live.current.roving.rowProps(index).onFocus(),
+      setEl: (index, el) => live.current.roving.rowProps(index).ref(el),
+    }),
+    [],
+  )
+  // Read, not subscribed: the rows take it as a prop so a language switch redraws them.
+  const locale = getLocale()
 
   const eraseBtn = (
     <button
@@ -825,28 +876,10 @@ export function OperateDecodes({
             />
           ))}
         {drawn.map((d, i) => {
-          const ignoredRow = isIgnored(ignores, d.from)
-          const selectedRow = !!d.from && !!selectedUp && d.from.toUpperCase() === selectedUp
-          // JTAlert highlight lookup: match the from-call case-insensitively.
-          const hlEntry = d.from ? highlights.get(d.from.toUpperCase()) : undefined
-          const hlStyle = hlEntry
-            ? {
-                backgroundColor: hlEntry.bg ?? undefined,
-                color: hlEntry.fg ?? undefined,
-              }
-            : undefined
-          // Tooltip suffix for highlighted rows so the operator knows why the color appeared.
-          // An appended CLAUSE carrying its own separator, interpolated whole.
-          const hlTip = hlEntry ? t('operate.decodes.row.highlighted') : ''
-          // Need context for this row (why is this station worth working) — icons + colour. The
-          // surface's mode is the tier, the mode every row here is decoded in: a "new mode" need
-          // is for one mode, so an FT4 need never marks a row on the FT8 feed.
-          const rowAlerts = d.from ? (needAlertsByCall.get(d.from.toUpperCase()) ?? []) : []
-          const needs = resolveDecodeNeeds(d, band, rowAlerts, tier, needScopes)
-          // Beam heading for this row: the decode's own grid when it sent one, else
-          // the centre of its entity (marked `~`), else nothing at all.
-          const az = azimuthTo(myGrid, d.grid, d.country, centroids)
-          const azText = azimuthLabel(az)
+          // The row itself is the memoised DecodeRowView: it re-renders when what it draws
+          // changes, not on every poll. Everything it draws arrives as a prop.
+          const up = d.from ? d.from.toUpperCase() : null
+          const selectedRow = !!up && !!selectedUp && up === selectedUp
           return (
             <Fragment key={d.id}>
               {/* WSJT-X period separator: a dim bar with the period's UTC start +
@@ -898,191 +931,24 @@ export function OperateDecodes({
                   </span>
                 </div>
               )}
-              <div
-                className={`decode-row ${rowClass(d, needs.rowNeed)}${selectedRow ? ' selected' : ''}${ignoredRow ? ' ignored' : ''}`}
-                role="option"
-                data-pin-key={d.id}
-                aria-selected={selectedRow}
-                aria-label={
-                  d.from
-                    ? t('operate.decodes.row.aria', {
-                        call: d.from,
-                        snr: fmtSnr(d.snr),
-                        hz: Math.round(d.freqHz),
-                        message: d.message,
-                        // Two optional clauses, each interpolated WHOLE with its own
-                        // separator — never a sentence glued from fragments.
-                        country: d.country
-                          ? t('operate.decodes.row.aria.country', { country: d.country })
-                          : '',
-                        azimuth: az
-                          ? az.approx
-                            ? t('operate.decodes.row.aria.azimuth.approx', { deg: az.deg })
-                            : t('operate.decodes.row.aria.azimuth', { deg: az.deg })
-                          : '',
-                      })
-                    : d.message
-                }
+              <DecodeRowView
+                d={d}
+                index={i}
                 tabIndex={roving.rowProps(i).tabIndex}
-                ref={roving.rowProps(i).ref as (el: HTMLDivElement | null) => void}
-                onFocus={roving.rowProps(i).onFocus}
-                style={hlStyle}
-                onClick={() => {
-                  roving.setActive(i)
-                  if (d.from && !d.heard)
-                    onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
-                }}
-                onDoubleClick={(e) => handleDouble(e, d)}
-                title={
-                  d.heard
-                    ? t('operate.decodes.row.heard.title', { band: d.heard.band, mode: d.heard.tier })
-                    : ignoredRow
-                    ? t('operate.row.ignored.title')
-                    : d.from
-                      ? t('operate.decodes.row.title', { call: d.from, highlight: hlTip })
-                      : undefined
-                }
-              >
-                <span
-                  className={`decode-tier ${d.tier.toLowerCase()}`}
-                  title={t('operate.decodes.tier.title', { tier: d.tier })}
-                >
-                  {d.tier}
-                </span>
-                {/* The period it was heard in, as WSJT-X and ALL.TXT stamp it; when it reached
-                    this list goes in the tooltip. */}
-                <span
-                  className="decode-utc"
-                  title={
-                    d.mine
-                      ? t('operate.decodes.utc.title')
-                      : t('operate.decodes.utc.period.title', { time: fmtUtc(d.at) })
-                  }
-                >
-                  {fmtUtc(rowTimeMs(d, tier, periodS))}
-                </span>
-                <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
-                {/* On MSK144 dt is the ping's TIME WITHIN THE PERIOD (WSJT-X renames this
-                    column "T"), so it is legitimately 0..period and the FT8 clock-skew
-                    colouring would paint every healthy ping red. */}
-                <span
-                  className={`decode-dt ${d.tier === 'MSK144' ? 'ok' : dtClass(d.dtSec)}`}
-                  title={
-                    d.tier === 'MSK144'
-                      ? t('operate.decodes.dt.title.msk144')
-                      : t('operate.decodes.dt.title')
-                  }
-                >
-                  {fmtDt(d.dtSec)}
-                </span>
-                <span className="decode-freq">{Math.round(d.freqHz)}</span>
-                <span className="decode-msg" title={d.country ? `${d.message} · ${d.country}` : d.message}>
-                  {d.message}
-                  {/* WSJT-X AP / low-confidence markers: dim trailing annotations.
-                      Both can appear on the same decode (AP-assisted but uncertain). */}
-                  {(d.lowConf || d.ap) && (
-                    <span className="decode-confidence-markers">
-                      {d.lowConf && (
-                        <span
-                          className="decode-marker decode-marker-lc"
-                          title={t('operate.decodes.marker.lowConf.title')}
-                        >
-                          ?
-                        </span>
-                      )}
-                      {d.ap && (
-                        <span
-                          className="decode-marker decode-marker-ap"
-                          title={t('operate.decodes.marker.ap.title')}
-                        >
-                          a
-                        </span>
-                      )}
-                    </span>
-                  )}
-                  {/* Need chips: WHY this station is worth working (new DXCC/zone/band/mode/
-                      grid, DXpedition, worked-but-unconfirmed) — the SAME labelled text chips
-                      the Needed panel uses, so the two views read as one. Capped, with +N. */}
-                  {needs.cats.length > 0 && (
-                    <span className="decode-needs" aria-label={t('operate.decodes.needs.aria')}>
-                      {needs.cats.slice(0, MAX_NEED_ICONS).map((c: NeedCat) => {
-                        const v = NEED_VISUALS[c]
-                        return (
-                          <span key={c} className={`need-chip ${v.cls}`} title={v.title}>
-                            {v.label}
-                          </span>
-                        )
-                      })}
-                      {needs.cats.length > MAX_NEED_ICONS && (
-                        <span
-                          className="decode-need-more"
-                          title={needs.cats
-                            .slice(MAX_NEED_ICONS)
-                            .map((c) => NEED_VISUALS[c].title)
-                            .join('\n')}
-                        >
-                          +{needs.cats.length - MAX_NEED_ICONS}
-                        </span>
-                      )}
-                    </span>
-                  )}
-                  {d.worked && (
-                    <span
-                      className={`b4-chip${d.workedBand ? ' b4-band' : ''}`}
-                      title={d.workedBand ? t('operate.b4.sameBand') : t('operate.b4.otherBand')}
-                    >
-                      {DECODE_TOKENS.b4}
-                    </span>
-                  )}
-                  {d.isCq && !d.directedToMe && (
-                    <span className="decode-tag cq">{DECODE_TOKENS.cq}</span>
-                  )}
-                  {d.directedToMe && (
-                    <span className="decode-tag me">{t('operate.decodes.tag.you')}</span>
-                  )}
-                  {d.rv > 0 && (
-                    <span className="harq-chip" title={t('operate.decodes.harqRv.title', { rv: d.rv })}>
-                      {DECODE_TOKENS.harq}·{DECODE_TOKENS.rv}
-                      {d.rv}
-                    </span>
-                  )}
-                  <RarityChip rarity={d.gridRarity} />
-                  {d.lotwUser && (
-                    <span
-                      className="lotw-mark"
-                      title={t('operate.decodes.lotw.title', {
-                        call: d.from ?? t('operate.decodes.lotw.thisStation'),
-                      })}
-                    >
-                      L
-                    </span>
-                  )}
-                  {d.country && <span className="decode-country">{d.country}</span>}
-                  {/* The heading, immediately after the country — where every other
-                      logger puts it, and where the tester asked for it. `.decode-country`
-                      already carries `margin-left:auto`, so the pair floats to the right
-                      of the message together and no other cell moves. */}
-                  {az && azText && (
-                    <span className="decode-az" title={azimuthTitle(az, d.country)}>
-                      {azText}
-                    </span>
-                  )}
-                </span>
-                {d.from && (
-                  // WSJT-X style: DOUBLE-CLICK the row to work the station (see onDoubleClick) — no
-                  // per-row Work button, so each decode stays a single tight line. QRZ opens the
-                  // callsign's page.
-                  // The station's card, where its QRZ button opens the page this one used to.
-                  <button
-                    type="button"
-                    className="qrz-link-call decode-qrz"
-                    {...callCardTrigger(d.from, qrzPageOf(d.from), true)}
-                    onDoubleClick={(e) => e.stopPropagation()}
-                  >
-                    {DECODE_TOKENS.qrz}
-                  </button>
-                )}
-              </div>
+                selected={selectedRow}
+                ignored={isIgnored(ignores, d.from)}
+                // JTAlert highlight lookup: match the from-call case-insensitively.
+                hl={up ? highlights.get(up) : undefined}
+                alerts={up ? (needAlertsByCall.get(up) ?? NO_ALERTS) : NO_ALERTS}
+                band={band}
+                tier={tier}
+                periodS={periodS}
+                needScopes={needScopes}
+                myGrid={myGrid}
+                centroids={centroids}
+                locale={locale}
+                actions={rowActions}
+              />
             </Fragment>
           )
         })}
@@ -1090,6 +956,260 @@ export function OperateDecodes({
     </section>
   )
 }
+
+/** The parent's row handlers, through one stable object (see `rowActions`), so a memoised row
+ *  never re-renders just because a handler closure was rebuilt. */
+interface RowActions {
+  click: (index: number, d: DecodeEntry) => void
+  double: (e: React.MouseEvent, d: DecodeEntry) => void
+  focus: (index: number) => void
+  setEl: (index: number, el: HTMLElement | null) => void
+}
+
+interface DecodeRowViewProps {
+  d: DecodeEntry
+  /** The row's position in drawing order (the roving index). */
+  index: number
+  tabIndex: number
+  selected: boolean
+  ignored: boolean
+  /** The UDP highlight for this row's call, if any. */
+  hl: HighlightEntry | undefined
+  /** This row's live NeedAlerts (a shared empty list when none). */
+  alerts: NeedAlert[]
+  band: string
+  tier: Tier
+  periodS: number | undefined
+  needScopes: NeedBandScopes | undefined
+  myGrid: string
+  centroids: ReadonlyMap<string, LatLon> | null
+  /** Not read: a locale switch must redraw rows whose data did not change. */
+  locale: string
+  actions: RowActions
+}
+
+/**
+ * One decode line. MEMOISED: the pane re-renders on every snapshot poll, and up to MAX_ROWS rows
+ * rebuilt each time was most of its cost. A row keeps its entry object across polls that change
+ * nothing about it (DecodeHistory.ingest), so a shallow prop compare is exact.
+ */
+const DecodeRowView = memo(function DecodeRowView({
+  d,
+  index,
+  tabIndex,
+  selected,
+  ignored,
+  hl: hlEntry,
+  alerts,
+  band,
+  tier,
+  periodS,
+  needScopes,
+  myGrid,
+  centroids,
+  actions,
+}: DecodeRowViewProps) {
+  const hlStyle = hlEntry
+    ? {
+        backgroundColor: hlEntry.bg ?? undefined,
+        color: hlEntry.fg ?? undefined,
+      }
+    : undefined
+  // Tooltip suffix for highlighted rows so the operator knows why the color appeared.
+  // An appended CLAUSE carrying its own separator, interpolated whole.
+  const hlTip = hlEntry ? t('operate.decodes.row.highlighted') : ''
+  // Need context for this row (why is this station worth working) — icons + colour. The
+  // surface's mode is the tier, the mode every row here is decoded in: a "new mode" need
+  // is for one mode, so an FT4 need never marks a row on the FT8 feed.
+  const needs = resolveDecodeNeeds(d, band, alerts, tier, needScopes)
+  // Beam heading for this row: the decode's own grid when it sent one, else
+  // the centre of its entity (marked `~`), else nothing at all.
+  const az = azimuthTo(myGrid, d.grid, d.country, centroids)
+  const azText = azimuthLabel(az)
+  return (
+      <div
+        className={`decode-row ${rowClass(d, needs.rowNeed)}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}`}
+        role="option"
+        data-pin-key={d.id}
+        aria-selected={selected}
+        aria-label={
+          d.from
+            ? t('operate.decodes.row.aria', {
+                call: d.from,
+                snr: fmtSnr(d.snr),
+                hz: Math.round(d.freqHz),
+                message: d.message,
+                // Two optional clauses, each interpolated WHOLE with its own
+                // separator — never a sentence glued from fragments.
+                country: d.country
+                  ? t('operate.decodes.row.aria.country', { country: d.country })
+                  : '',
+                azimuth: az
+                  ? az.approx
+                    ? t('operate.decodes.row.aria.azimuth.approx', { deg: az.deg })
+                    : t('operate.decodes.row.aria.azimuth', { deg: az.deg })
+                  : '',
+              })
+            : d.message
+        }
+        tabIndex={tabIndex}
+        ref={(el) => actions.setEl(index, el)}
+        onFocus={() => actions.focus(index)}
+        style={hlStyle}
+        onClick={() => actions.click(index, d)}
+        onDoubleClick={(e) => actions.double(e, d)}
+        title={
+          d.heard
+            ? t('operate.decodes.row.heard.title', { band: d.heard.band, mode: d.heard.tier })
+            : ignored
+            ? t('operate.row.ignored.title')
+            : d.from
+              ? t('operate.decodes.row.title', { call: d.from, highlight: hlTip })
+              : undefined
+        }
+      >
+        <span
+          className={`decode-tier ${d.tier.toLowerCase()}`}
+          title={t('operate.decodes.tier.title', { tier: d.tier })}
+        >
+          {d.tier}
+        </span>
+        {/* The period it was heard in, as WSJT-X and ALL.TXT stamp it; when it reached
+            this list goes in the tooltip. */}
+        <span
+          className="decode-utc"
+          title={
+            d.mine
+              ? t('operate.decodes.utc.title')
+              : t('operate.decodes.utc.period.title', { time: fmtUtc(d.at) })
+          }
+        >
+          {fmtUtc(rowTimeMs(d, tier, periodS))}
+        </span>
+        <span className={`decode-snr ${snrClass(d.snr)}`}>{fmtSnr(d.snr)}</span>
+        {/* On MSK144 dt is the ping's TIME WITHIN THE PERIOD (WSJT-X renames this
+            column "T"), so it is legitimately 0..period and the FT8 clock-skew
+            colouring would paint every healthy ping red. */}
+        <span
+          className={`decode-dt ${d.tier === 'MSK144' ? 'ok' : dtClass(d.dtSec)}`}
+          title={
+            d.tier === 'MSK144'
+              ? t('operate.decodes.dt.title.msk144')
+              : t('operate.decodes.dt.title')
+          }
+        >
+          {fmtDt(d.dtSec)}
+        </span>
+        <span className="decode-freq">{Math.round(d.freqHz)}</span>
+        <span className="decode-msg" title={d.country ? `${d.message} · ${d.country}` : d.message}>
+          {d.message}
+          {/* WSJT-X AP / low-confidence markers: dim trailing annotations.
+              Both can appear on the same decode (AP-assisted but uncertain). */}
+          {(d.lowConf || d.ap) && (
+            <span className="decode-confidence-markers">
+              {d.lowConf && (
+                <span
+                  className="decode-marker decode-marker-lc"
+                  title={t('operate.decodes.marker.lowConf.title')}
+                >
+                  ?
+                </span>
+              )}
+              {d.ap && (
+                <span
+                  className="decode-marker decode-marker-ap"
+                  title={t('operate.decodes.marker.ap.title')}
+                >
+                  a
+                </span>
+              )}
+            </span>
+          )}
+          {/* Need chips: WHY this station is worth working (new DXCC/zone/band/mode/
+              grid, DXpedition, worked-but-unconfirmed) — the SAME labelled text chips
+              the Needed panel uses, so the two views read as one. Capped, with +N. */}
+          {needs.cats.length > 0 && (
+            <span className="decode-needs" aria-label={t('operate.decodes.needs.aria')}>
+              {needs.cats.slice(0, MAX_NEED_ICONS).map((c: NeedCat) => {
+                const v = NEED_VISUALS[c]
+                return (
+                  <span key={c} className={`need-chip ${v.cls}`} title={v.title}>
+                    {v.label}
+                  </span>
+                )
+              })}
+              {needs.cats.length > MAX_NEED_ICONS && (
+                <span
+                  className="decode-need-more"
+                  title={needs.cats
+                    .slice(MAX_NEED_ICONS)
+                    .map((c) => NEED_VISUALS[c].title)
+                    .join('\n')}
+                >
+                  +{needs.cats.length - MAX_NEED_ICONS}
+                </span>
+              )}
+            </span>
+          )}
+          {d.worked && (
+            <span
+              className={`b4-chip${d.workedBand ? ' b4-band' : ''}`}
+              title={d.workedBand ? t('operate.b4.sameBand') : t('operate.b4.otherBand')}
+            >
+              {DECODE_TOKENS.b4}
+            </span>
+          )}
+          {d.isCq && !d.directedToMe && (
+            <span className="decode-tag cq">{DECODE_TOKENS.cq}</span>
+          )}
+          {d.directedToMe && (
+            <span className="decode-tag me">{t('operate.decodes.tag.you')}</span>
+          )}
+          {d.rv > 0 && (
+            <span className="harq-chip" title={t('operate.decodes.harqRv.title', { rv: d.rv })}>
+              {DECODE_TOKENS.harq}·{DECODE_TOKENS.rv}
+              {d.rv}
+            </span>
+          )}
+          <RarityChip rarity={d.gridRarity} />
+          {d.lotwUser && (
+            <span
+              className="lotw-mark"
+              title={t('operate.decodes.lotw.title', {
+                call: d.from ?? t('operate.decodes.lotw.thisStation'),
+              })}
+            >
+              L
+            </span>
+          )}
+          {d.country && <span className="decode-country">{d.country}</span>}
+          {/* The heading, immediately after the country — where every other
+              logger puts it, and where the tester asked for it. `.decode-country`
+              already carries `margin-left:auto`, so the pair floats to the right
+              of the message together and no other cell moves. */}
+          {az && azText && (
+            <span className="decode-az" title={azimuthTitle(az, d.country)}>
+              {azText}
+            </span>
+          )}
+        </span>
+        {d.from && (
+          // WSJT-X style: DOUBLE-CLICK the row to work the station (see onDoubleClick) — no
+          // per-row Work button, so each decode stays a single tight line. QRZ opens the
+          // callsign's page.
+          // The station's card, where its QRZ button opens the page this one used to.
+          <button
+            type="button"
+            className="qrz-link-call decode-qrz"
+            {...callCardTrigger(d.from, qrzPageOf(d.from), true)}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            {DECODE_TOKENS.qrz}
+          </button>
+        )}
+      </div>
+  )
+})
 
 // The chip vocabulary. THE WORDS RESOLVE LAZILY, through getters (the registry rule, batch 3):
 // these are module constants a render reads, so looking them up at import would freeze
