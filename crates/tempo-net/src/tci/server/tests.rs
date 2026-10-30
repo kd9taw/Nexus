@@ -2165,10 +2165,15 @@ struct TempDir(std::path::PathBuf);
 
 impl TempDir {
     fn new(tag: &str) -> TempDir {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
-        let p = std::env::temp_dir().join(format!("tci-{tag}-{}-{nanos}", std::process::id()));
+        let p = std::env::temp_dir().join(format!(
+            "tci-{tag}-{}-{nanos}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&p).expect("a temporary directory");
         TempDir(p)
     }

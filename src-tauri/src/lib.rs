@@ -3279,11 +3279,15 @@ mod durable_command_tests {
 
     /// A store-backed engine on a folder of the test's own, with `n` contacts.
     pub(super) fn engine_on_store(tag: &str, n: usize) -> (PathBuf, SharedEngine) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-durable-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-durable-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch");
         let mut adif = tempo_core::logbook::adif_header();
         for i in 0..n {
@@ -3783,11 +3787,15 @@ mod logbook_startup_tests {
     /// A folder of the test's own — created only when `contacts` is `Some`, holding a 1.13
     /// `log.adi` of that many contacts.
     fn folder(tag: &str, contacts: Option<usize>) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-startup-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-startup-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         if let Some(n) = contacts {
             std::fs::create_dir_all(&dir).expect("scratch");
             let mut adif = tempo_core::logbook::adif_header();
@@ -4795,11 +4803,15 @@ mod data_folder_tests {
     /// A unique scratch directory. No tempfile dependency in this crate; the name carries the
     /// test's own label so a leftover is attributable.
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-data-folder-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-data-folder-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -6058,11 +6070,15 @@ mod assistance_journal_tests {
     const ASIDE: &str = "assistance_journal.unreadable-20260930-142233.json";
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-assist-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-assist-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -7062,11 +7078,15 @@ mod conversations_file_tests {
     const ASIDE: &str = "conversations.unreadable-20260930-142233.json";
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-convs-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-convs-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -7293,11 +7313,15 @@ mod ui_state_file_tests {
     use super::*;
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-ui-state-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-ui-state-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -15433,11 +15457,15 @@ mod contest_session_tests {
     /// An engine on a store of its own, with the Field Day master left on — the station a launch
     /// resumes Field Day on — and not in Field Day yet.
     fn field_day_left_on(tag: &str) -> (PathBuf, SharedEngine) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-resume-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-resume-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch");
         std::fs::write(dir.join("log.adi"), tempo_core::logbook::adif_header()).expect("log");
         let opened = tempo_app::logstore::open(
@@ -37113,11 +37141,15 @@ mod radioprog_file_tests {
 
     /// A unique scratch directory; the name carries the test's own label.
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-radioprog-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-radioprog-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
