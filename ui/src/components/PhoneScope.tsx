@@ -34,6 +34,7 @@
 // snaps onto the signal in the passband; [ ] the width; ↑/↓ scroll back while paused), and none of
 // them is Esc or Space, which belong to the cockpit's stop and its PTT.
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { getRfFrame, getScopeFrame } from '../api'
 import type { SpectrumFrameWire, SpotRow } from '../types'
 import {
@@ -258,6 +259,9 @@ interface Props {
    *  analog meter and keeps the strip — one host's change must not reach the other
    *  (`TxMeters`' four-row contract leaking into Operate is what that costs). */
   hideSmeter?: boolean
+  /** Controls the host puts at the START of this toolbar strip, before the S-meter: CW's audio span
+   *  chips, which on a row of their own took their height out of the picture. Absent = nothing. */
+  toolbarStart?: ReactNode
   /** Trace peak-hold time constant (ms) — how long a column's peak stands after the signal
    * stops. See TRACE_HOLD_MS: the cockpit picks it, because the right answer depends on the
    * SIGNAL, not on the operator. CW passes `fast` (48 ms dits have to be visible as keying);
@@ -324,6 +328,7 @@ function sMeterDisplay(db: number): { frac: number; label: string; zone: 'ok' | 
 
 export function PhoneScope({
   hideSmeter = false,
+  toolbarStart,
   transmitting,
   theme,
   active = true,
@@ -1835,6 +1840,7 @@ export function PhoneScope({
             control — hiding the strip would take those with it, which is a different and much
             worse change than the one asked for. Phone hides the reading because its analog
             meter shows the same number on the same screen; CW keeps it. */}
+        {toolbarStart}
         {!hideSmeter && (
           <>
             <span className="ph-scope-smeter-label">S</span>
