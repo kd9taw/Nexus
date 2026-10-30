@@ -26,9 +26,11 @@
 //! The two ClubLog answers are written to disk with the time of their last ask
 //! ([`set_cache_dir`]), the ask time before the ask goes out, so a restart — even one in the
 //! middle of an ask — does not ask ClubLog again before its schedule says so. The file is read
-//! again whenever an ask is being decided, so every Nexus sharing the folder (one per radio
-//! window, or a shack's shared data folder) counts the others' asks. A damaged file, or a folder
-//! that cannot be written, fails closed: the first ask waits an hour ([`load_kept`]).
+//! again whenever an ask is being decided, under a lock every Nexus sharing the folder takes
+//! (one per radio window, or a shack's shared data folder), so they count each other's asks and
+//! two cannot decide at once ([`folder_lock`]). A damaged file, or a cache that cannot be written
+//! back at start (read-only folder or file, full disk, a file held open), fails closed: the first
+//! ask waits an hour ([`load_kept`]).
 //! `mostwanted.php` is public and asked as `?api=1`: no key goes with it.
 
 use std::collections::{HashMap, HashSet};
@@ -90,6 +92,8 @@ const MOST_WANTED_SCHEDULE: Schedule = Schedule {
 /// The two ClubLog answers on disk, beside each other in the folder [`set_cache_dir`] names.
 const EXPEDITIONS_FILE: &str = "clublog_expeditions.json";
 const MOST_WANTED_FILE: &str = "clublog_mostwanted.json";
+/// Locked by every Nexus sharing the folder while it decides an ask ([`folder_lock`]).
+const LOCK_FILE: &str = "clublog.lock";
 
 /// One source's last good answer and when it was last asked. What is written to disk for the
 /// ClubLog sources.
@@ -108,6 +112,15 @@ impl<T> Kept<T> {
             data: None,
             asked_unix: 0,
             failures: 0,
+        }
+    }
+
+    /// As "asked now, failed (at least) once", keeping any answer.
+    fn held(self, now: i64) -> Self {
+        Kept {
+            asked_unix: now,
+            failures: self.failures.max(1),
+            data: self.data,
         }
     }
 
@@ -140,6 +153,7 @@ fn refresh<T: Serialize + DeserializeOwned>(
         slot,
         s,
         now,
+        || file.and_then(folder_lock),
         |k| {
             if let Some(f) = file {
                 adopt_later(k, f, now);
@@ -154,18 +168,36 @@ fn refresh<T: Serialize + DeserializeOwned>(
     );
 }
 
-/// [`refresh`]'s body: `look` brings the slot up to date before the decision, `keep` is handed
-/// it after each change.
-fn refresh_with<T>(
+/// The lock every Nexus sharing the folder takes around reading a slot's file, deciding and
+/// stamping (never around the network wait), so two processes deciding in the same instant
+/// cannot both find a source due. An OS file lock (`flock` / `LockFileEx`), released when the
+/// handle drops — a process that dies holding it gives it up. `None` when the lock file cannot
+/// be opened or locked: then the in-process lock and the re-read are what there is.
+fn folder_lock(file: &Path) -> Option<std::fs::File> {
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(file.with_file_name(LOCK_FILE))
+        .ok()?;
+    f.lock().ok()?;
+    Some(f)
+}
+
+/// [`refresh`]'s body: `hold` takes the cross-process lock (held while it is in scope), `look`
+/// brings the slot up to date before the decision, `keep` is handed it after each change.
+fn refresh_with<T, G>(
     slot: &Mutex<Kept<T>>,
     s: Schedule,
     now: i64,
+    hold: impl Fn() -> Option<G>,
     look: impl FnOnce(&mut Kept<T>),
     keep: impl Fn(&Kept<T>),
     fetch: impl FnOnce() -> Result<T, String>,
 ) {
     {
         let mut k = lock(slot);
+        let _held = hold();
         look(&mut k);
         if !k.due(s, now) {
             return;
@@ -182,6 +214,7 @@ fn refresh_with<T>(
     // A failure leaves the last good answer, served stale.
     if let Ok(v) = fetch() {
         let mut k = lock(slot);
+        let _held = hold();
         k.data = Some(v);
         k.failures = 0;
         keep(&k);
@@ -223,19 +256,23 @@ fn read_kept<T: DeserializeOwned>(path: &Path) -> Result<Option<Kept<T>>, ()> {
         .map_err(|_| ())
 }
 
-/// Write one ClubLog answer and its ask time (tmp + rename; best effort — what is in memory
-/// still governs this process if the write fails).
-fn write_kept<T: Serialize>(path: &Path, kept: &Kept<T>) {
+/// Write one ClubLog answer and its ask time (tmp + rename). Whether it landed: a full disk, a
+/// folder that takes no file, or a target held open or marked read-only (Windows: a virus
+/// scanner, a sync client) all say no. The tmp file never outlives a failure. When a write fails
+/// at run time, what is in memory still governs this process.
+fn write_kept<T: Serialize>(path: &Path, kept: &Kept<T>) -> bool {
     let Ok(text) = serde_json::to_string(kept) else {
-        return;
+        return false;
     };
     let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if std::fs::write(&tmp, text).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
+    let landed = std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_ok();
+    if !landed {
+        let _ = std::fs::remove_file(&tmp);
     }
+    landed
 }
 
 /// What the feed asks the network for — a seam, so the schedule can be driven in tests by a
@@ -301,6 +338,7 @@ impl Feeds {
             &self.ng3k,
             NG3K_SCHEDULE,
             now,
+            || None::<()>,
             |_| {},
             |_| {},
             || src.ng3k(),
@@ -354,26 +392,27 @@ impl Feeds {
 
     /// Read both ClubLog answers back from `dir` and write there from now on.
     fn load_from(&self, dir: &Path, now: i64) {
-        let writable = can_write(dir);
-        load_kept(&self.active, &dir.join(EXPEDITIONS_FILE), now, writable);
-        load_kept(&self.wanted, &dir.join(MOST_WANTED_FILE), now, writable);
+        load_kept(&self.active, &dir.join(EXPEDITIONS_FILE), now);
+        load_kept(&self.wanted, &dir.join(MOST_WANTED_FILE), now);
         *lock(&self.dir) = Some(dir.to_path_buf());
     }
 }
 
-/// ⛔ Fails CLOSED. A file that is there but does not read, or a folder this run cannot write
-/// (read-only share, a lock held by a virus scanner, a full disk), starts the source as "asked
-/// now, failed once": first ask in an hour, not at once. Failing open would put a Nexus started
-/// over and over back to asking on every launch — the very pattern this module exists to stop.
-/// What remains: with the folder unwritable, a Nexus that keeps running more than an hour asks
-/// then, and its asks are not shared with other runs (each run keeps its own schedule in memory).
-fn load_kept<T: DeserializeOwned>(slot: &Mutex<Kept<T>>, path: &Path, now: i64, writable: bool) {
-    let held = Kept {
-        data: None,
-        asked_unix: now,
-        failures: 1,
-    };
-    *lock(slot) = match read_kept(path) {
+/// ⛔ Fails CLOSED. What was read is written straight back to the same file, a real write to
+/// the real target. If that does not land (a read-only share or folder, a full disk, the file
+/// held open or marked read-only), the next ask could not be recorded either, and a Nexus
+/// started over and over would ask on every launch — the very pattern this module exists to
+/// stop. So the source then starts as "asked now, failed once" (first ask an hour on), keeping
+/// any answer it read. A file that is there but does not read starts the same way.
+///
+/// What remains when nothing can be written: each launch waits an hour from its own start, so
+/// launches in a loop ask nothing; a Nexus that stays up past that hour asks once per endpoint,
+/// then keeps its schedule in memory only — N such runs ask N times a period, and each restart
+/// of one costs one ask per endpoint, an hour on.
+fn load_kept<T: Serialize + DeserializeOwned>(slot: &Mutex<Kept<T>>, path: &Path, now: i64) {
+    let mut slot = lock(slot);
+    let _held = folder_lock(path);
+    let mut k = match read_kept(path) {
         // An ask time in the future — a clock that was wrong, a file from a machine that is —
         // is clamped to `now`: left alone it would hold the next ask off until that future
         // date plus a whole period.
@@ -381,17 +420,13 @@ fn load_kept<T: DeserializeOwned>(slot: &Mutex<Kept<T>>, path: &Path, now: i64, 
             asked_unix: k.asked_unix.min(now),
             ..k
         },
-        Ok(None) if writable => return,
-        Ok(None) | Err(()) => held,
+        Ok(None) => Kept::new(),
+        Err(()) => Kept::new().held(now),
     };
-}
-
-/// Whether `dir` takes a file — created if missing; the probe file is removed again.
-fn can_write(dir: &Path) -> bool {
-    let probe = dir.join(format!(".clublog-probe.{}", std::process::id()));
-    let ok = std::fs::create_dir_all(dir).is_ok() && std::fs::write(&probe, b"").is_ok();
-    let _ = std::fs::remove_file(&probe);
-    ok
+    if !write_kept(path, &k) {
+        k = k.held(now);
+    }
+    *slot = k;
 }
 
 /// Where the ClubLog answers are kept across restarts. Called once at startup, before the
@@ -1218,7 +1253,10 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(base.join("a-file"), b"").unwrap();
         let dir = base.join("a-file").join("cache");
-        assert!(!can_write(&dir), "control: this folder must refuse a write");
+        assert!(
+            !takes_a_write(&dir),
+            "control: this folder must refuse a write"
+        );
         let fake = Fake::new(true, true, true);
         for i in 0..20 {
             let launch = Feeds::new();
@@ -1237,7 +1275,7 @@ mod tests {
         assert_eq!(fake.clublog_asks(), 2, "one ask per endpoint, an hour on");
         // Control: a writable folder with no file asks at once.
         let ok = scratch_dir("writable");
-        assert!(can_write(&ok));
+        assert!(takes_a_write(&ok));
         let first = Feeds::new();
         first.load_from(&ok, T0);
         let fresh = Fake::new(true, true, true);
@@ -1247,10 +1285,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ok);
     }
 
-    /// The case the write probe exists for: a folder that is there and readable but takes no
-    /// file (a read-only share, a full disk) reads as "no file yet", which alone would ask on
-    /// every launch. Unix permissions model it; root ignores them, so the case reports itself
-    /// as not exercised there rather than passing on nothing.
+    /// A folder that is there and readable but takes no file (a read-only share) reads as "no
+    /// file yet", which alone would ask on every launch; the write-back at start is what
+    /// catches it. Unix permissions model it; root ignores them, so the case reports itself as
+    /// not exercised there rather than passing on nothing.
     #[cfg(unix)]
     #[test]
     fn a_read_only_folder_does_not_let_relaunches_ask() {
@@ -1258,7 +1296,7 @@ mod tests {
         let dir = scratch_dir("read-only");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-        if can_write(&dir) {
+        if takes_a_write(&dir) {
             eprintln!("read-only folder case NOT exercised: this user writes past 0o555 (root)");
         } else {
             assert!(
@@ -1282,6 +1320,257 @@ mod tests {
         }
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Whether `dir` takes a cache write (a test's control).
+    fn takes_a_write(dir: &Path) -> bool {
+        let probe = dir.join("probe.json");
+        let ok = write_kept(&probe, &Kept::<u8>::new());
+        let _ = std::fs::remove_file(&probe);
+        ok
+    }
+
+    /// Leave a good answer from 40 days ago in `dir`, as a run that long ago did.
+    fn stale_answer_in(dir: &Path) {
+        let then = Feeds::new();
+        then.load_from(dir, T0 - 40 * DAY);
+        let _ = then.plans(&Fake::new(true, true, true), T0 - 40 * DAY);
+    }
+
+    /// Twenty launches two seconds apart on `dir`; how many ClubLog asks they made, and the
+    /// last launch's most-wanted rank (the kept answer, served stale).
+    fn relaunch_loop(dir: &Path) -> (usize, Option<u32>) {
+        let fake = Fake::new(true, true, true);
+        let mut rank = None;
+        for i in 0..20 {
+            let launch = Feeds::new();
+            launch.load_from(dir, T0 + 2 * i);
+            rank = launch
+                .plans(&fake, T0 + 2 * i)
+                .ok()
+                .and_then(|p| p[0].most_wanted_rank);
+        }
+        (fake.clublog_asks(), rank)
+    }
+
+    /// ⛔ The everyday shape of "cannot write": a folder that held the cache yesterday and takes
+    /// no write today (a read-only share), with a long-stale answer in it. The answer reads, so
+    /// only the write-back at start can tell the next ask could not be recorded. Launches in a
+    /// loop ask nothing and serve the stale answer. (Root ignores 0o555: reported, not passed.)
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_answer_in_a_read_only_folder_does_not_let_relaunches_ask() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch_dir("stale-read-only");
+        stale_answer_in(&dir);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if takes_a_write(&dir) {
+            eprintln!("read-only folder case NOT exercised: this user writes past 0o555 (root)");
+        } else {
+            let (asks, rank) = relaunch_loop(&dir);
+            assert_eq!(
+                asks, 0,
+                "a stale answer in a read-only folder let launches ask"
+            );
+            assert_eq!(rank, Some(42), "the stale answer was not served");
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A write of the data that fails (a full disk's ENOSPC; simulated here by a folder sitting
+    /// where the write's temporary file goes, so the data write fails while the folder itself
+    /// takes files — which is all an empty-file probe would have checked) fails closed.
+    #[test]
+    fn a_failing_data_write_does_not_let_relaunches_ask() {
+        let dir = scratch_dir("write-fails");
+        stale_answer_in(&dir);
+        for name in [EXPEDITIONS_FILE, MOST_WANTED_FILE] {
+            let tmp = dir
+                .join(name)
+                .with_extension(format!("json.{}.tmp", std::process::id()));
+            std::fs::create_dir_all(tmp).unwrap();
+        }
+        assert!(
+            takes_a_write(&dir),
+            "control: the folder itself takes files"
+        );
+        let (asks, rank) = relaunch_loop(&dir);
+        assert_eq!(asks, 0, "a failing write let launches ask");
+        assert_eq!(rank, Some(42));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A real full disk. Not run by default: it needs a filled filesystem, which a test cannot
+    /// make without privileges. Run it in a private mount namespace on a filled tmpfs, e.g.
+    /// `unshare -rm sh -c 'mount -t tmpfs -o size=64k none /mnt && head -c 1M /dev/zero >/mnt/fill;
+    /// NEXUS_TEST_FULL_DIR=/mnt cargo test … real_full_disk -- --ignored'`.
+    #[test]
+    #[ignore]
+    fn real_full_disk_does_not_let_relaunches_ask() {
+        let Some(dir) = std::env::var_os("NEXUS_TEST_FULL_DIR").map(PathBuf::from) else {
+            panic!("set NEXUS_TEST_FULL_DIR to a folder on a full filesystem");
+        };
+        assert!(!takes_a_write(&dir), "control: the filesystem must be full");
+        let (asks, _) = relaunch_loop(&dir);
+        assert_eq!(asks, 0, "a full disk let launches ask");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "tmp files left behind: {leftovers:?}");
+    }
+
+    /// Windows: a cache file marked read-only (or held by a virus scanner or sync client) cannot
+    /// be replaced, so the stamp would never land. Fails closed, and leaves no tmp file behind.
+    #[cfg(windows)]
+    #[test]
+    fn a_read_only_cache_file_does_not_let_relaunches_ask() {
+        let dir = scratch_dir("read-only-file");
+        stale_answer_in(&dir);
+        for name in [EXPEDITIONS_FILE, MOST_WANTED_FILE] {
+            let mut perm = std::fs::metadata(dir.join(name)).unwrap().permissions();
+            perm.set_readonly(true);
+            std::fs::set_permissions(dir.join(name), perm).unwrap();
+        }
+        let (asks, rank) = relaunch_loop(&dir);
+        assert_eq!(asks, 0, "a read-only cache file let launches ask");
+        assert_eq!(rank, Some(42));
+        let leftovers = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0, "tmp files left behind");
+        for name in [EXPEDITIONS_FILE, MOST_WANTED_FILE] {
+            let mut perm = std::fs::metadata(dir.join(name)).unwrap().permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perm.set_readonly(false);
+            let _ = std::fs::set_permissions(dir.join(name), perm);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Nexus that found a sibling's ask out takes that ask's ANSWER when it lands (the same
+    /// ask, further along), so it does not ask again when its back-off for an unanswered ask
+    /// runs out.
+    #[test]
+    fn a_sibling_takes_the_answer_to_the_ask_it_waited_on() {
+        let dir = scratch_dir("same-ask");
+        let (a, b) = (Feeds::new(), Feeds::new());
+        a.load_from(&dir, T0);
+        b.load_from(&dir, T0);
+        let mut slow = Fake::new(true, true, true);
+        slow.delay = Duration::from_millis(400);
+        let fb = Fake::new(true, true, true);
+        std::thread::scope(|s| {
+            s.spawn(|| a.plans(&slow, T0));
+            std::thread::sleep(Duration::from_millis(150));
+            let _ = b.plans(&fb, T0 + 1);
+            assert_eq!(
+                fb.active.load(Ordering::SeqCst),
+                0,
+                "B asked while A's ask was out"
+            );
+        });
+        // A has answered. An hour on (B's wait for an unanswered ask), B takes A's answer.
+        let _ = b.plans(&fb, T0 + H + 1);
+        assert_eq!(
+            fb.active.load(Ordering::SeqCst),
+            0,
+            "B asked again: it never took A's answer"
+        );
+        assert!(
+            lock(&b.active).data.is_some(),
+            "B does not serve A's answer"
+        );
+        assert_eq!(lock(&b.active).failures, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The child of `processes_deciding_at_once_ask_once_between_them`, in its own process;
+    /// does nothing when run on its own.
+    #[test]
+    #[ignore]
+    fn lock_race_child() {
+        let (Some(dir), Some(at)) = (
+            std::env::var_os("NEXUS_DXPED_RACE_DIR"),
+            std::env::var("NEXUS_DXPED_RACE_AT").ok(),
+        ) else {
+            return;
+        };
+        let at: u128 = at.parse().unwrap();
+        let feeds = Feeds::new();
+        feeds.load_from(Path::new(&dir), T0);
+        let mut fake = Fake::new(true, true, true);
+        fake.delay = Duration::from_millis(50);
+        let nanos = || {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        };
+        while nanos() < at {
+            std::hint::spin_loop();
+        }
+        let _ = feeds.plans(&fake, T0 + DAY);
+        println!("RACE-ASKS {}", fake.active.load(Ordering::SeqCst));
+    }
+
+    /// Separate OS processes on one folder, all deciding in the same instant on a stale answer:
+    /// one asks. Without the folder lock, two would sometimes both read the old stamp before
+    /// either's new one landed.
+    #[test]
+    fn processes_deciding_at_once_ask_once_between_them() {
+        let exe = std::env::current_exe().expect("test binary");
+        for round in 0..8 {
+            let dir = scratch_dir(&format!("race-{round}"));
+            let seed = Feeds::new();
+            seed.load_from(&dir, T0 - 2 * DAY);
+            let _ = seed.plans(&Fake::new(true, true, true), T0 - 2 * DAY);
+            let at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+                + 1_500_000_000;
+            let kids: Vec<_> = (0..4)
+                .map(|_| {
+                    std::process::Command::new(&exe)
+                        .args([
+                            "--exact",
+                            "live::dxped::tests::lock_race_child",
+                            "--ignored",
+                            "--nocapture",
+                            "--test-threads=1",
+                        ])
+                        .env("NEXUS_DXPED_RACE_DIR", &dir)
+                        .env("NEXUS_DXPED_RACE_AT", at.to_string())
+                        .stdout(std::process::Stdio::piped())
+                        .spawn()
+                        .expect("spawn the child")
+                })
+                .collect();
+            let mut asks = 0usize;
+            let mut answered = 0;
+            for kid in kids {
+                let out = kid.wait_with_output().expect("child ran");
+                let text = String::from_utf8_lossy(&out.stdout);
+                // The harness prints it on the test's own line ("test … ... RACE-ASKS 1").
+                for n in text.lines().filter_map(|l| l.split("RACE-ASKS ").nth(1)) {
+                    asks += n
+                        .split_whitespace()
+                        .next()
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap();
+                    answered += 1;
+                }
+            }
+            assert_eq!(answered, 4, "round {round}: a child did not report");
+            assert_eq!(asks, 1, "round {round}: {asks} processes asked");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     /// An ask time in the future (a clock that was wrong) is clamped to now on load, so the
