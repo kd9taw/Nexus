@@ -25,7 +25,10 @@
 //!
 //! The two ClubLog answers are written to disk with the time of their last ask
 //! ([`set_cache_dir`]), the ask time before the ask goes out, so a restart — even one in the
-//! middle of an ask — does not ask ClubLog again before its schedule says so.
+//! middle of an ask — does not ask ClubLog again before its schedule says so. The file is read
+//! again whenever an ask is being decided, so every Nexus sharing the folder (one per radio
+//! window, or a shack's shared data folder) counts the others' asks. A damaged file, or a folder
+//! that cannot be written, fails closed: the first ask waits an hour ([`load_kept`]).
 //! `mostwanted.php` is public and asked as `?api=1`: no key goes with it.
 
 use std::collections::{HashMap, HashSet};
@@ -124,15 +127,46 @@ impl<T> Kept<T> {
 }
 
 /// Ask `fetch` when `slot` is due; `keep` is handed the slot after each change (to write it).
-fn refresh<T>(
+///
+/// `file` is where a ClubLog slot is kept (`None` for NG3K, which is memory only).
+fn refresh<T: Serialize + DeserializeOwned>(
     slot: &Mutex<Kept<T>>,
     s: Schedule,
     now: i64,
+    file: Option<&Path>,
     fetch: impl FnOnce() -> Result<T, String>,
+) {
+    refresh_with(
+        slot,
+        s,
+        now,
+        |k| {
+            if let Some(f) = file {
+                adopt_later(k, f, now);
+            }
+        },
+        |k| {
+            if let Some(f) = file {
+                write_kept(f, k);
+            }
+        },
+        fetch,
+    );
+}
+
+/// [`refresh`]'s body: `look` brings the slot up to date before the decision, `keep` is handed
+/// it after each change.
+fn refresh_with<T>(
+    slot: &Mutex<Kept<T>>,
+    s: Schedule,
+    now: i64,
+    look: impl FnOnce(&mut Kept<T>),
     keep: impl Fn(&Kept<T>),
+    fetch: impl FnOnce() -> Result<T, String>,
 ) {
     {
         let mut k = lock(slot);
+        look(&mut k);
         if !k.due(s, now) {
             return;
         }
@@ -151,6 +185,56 @@ fn refresh<T>(
         k.data = Some(v);
         k.failures = 0;
         keep(&k);
+    }
+}
+
+/// Another Nexus sharing the folder (a second radio's window, a shack's shared data folder) may
+/// have asked since this one last looked: its stamp counts here too, or N processes would make
+/// N asks a period. One small read, only while an ask is being decided. A file that does not
+/// read changes nothing here (this run's own state stands; [`load_kept`] handled it at start).
+fn adopt_later<T: DeserializeOwned>(k: &mut Kept<T>, path: &Path, now: i64) {
+    if let Ok(Some(disk)) = read_kept::<T>(path) {
+        // The same ask, later along (its answer arrived), counts as later too. A stamp in the
+        // future is no other run's ask but a wrong clock's, already clamped at load; adopted,
+        // it would push the next ask off for ever.
+        let later = disk.asked_unix > k.asked_unix
+            || (disk.asked_unix == k.asked_unix && disk.failures < k.failures);
+        let later = later && disk.asked_unix <= now;
+        if later {
+            k.asked_unix = disk.asked_unix;
+            k.failures = disk.failures;
+            if disk.data.is_some() {
+                k.data = disk.data;
+            }
+        }
+    }
+}
+
+/// What a kept file holds: `Ok(None)` when there is no file, `Err` when there is one that does
+/// not read (cut short by a power loss, damaged, unreadable).
+fn read_kept<T: DeserializeOwned>(path: &Path) -> Result<Option<Kept<T>>, ()> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    serde_json::from_str::<Kept<T>>(&text)
+        .map(Some)
+        .map_err(|_| ())
+}
+
+/// Write one ClubLog answer and its ask time (tmp + rename; best effort — what is in memory
+/// still governs this process if the write fails).
+fn write_kept<T: Serialize>(path: &Path, kept: &Kept<T>) {
+    let Ok(text) = serde_json::to_string(kept) else {
+        return;
+    };
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
     }
 }
 
@@ -213,20 +297,29 @@ impl Feeds {
 
     /// Ask whichever sources are due, then merge what is kept.
     fn plans(&self, src: &dyn Source, now: i64) -> Result<Vec<DxpeditionPlan>, String> {
-        refresh(&self.ng3k, NG3K_SCHEDULE, now, || src.ng3k(), |_| {});
+        refresh_with(
+            &self.ng3k,
+            NG3K_SCHEDULE,
+            now,
+            |_| {},
+            |_| {},
+            || src.ng3k(),
+        );
+        let dir = lock(&self.dir).clone();
+        let file = |name| dir.as_ref().map(|d| d.join(name));
         refresh(
             &self.active,
             EXPEDITIONS_SCHEDULE,
             now,
+            file(EXPEDITIONS_FILE).as_deref(),
             || src.active(),
-            |k| self.save(k, EXPEDITIONS_FILE),
         );
         refresh(
             &self.wanted,
             MOST_WANTED_SCHEDULE,
             now,
+            file(MOST_WANTED_FILE).as_deref(),
             || src.most_wanted(),
-            |k| self.save(k, MOST_WANTED_FILE),
         );
 
         let Some(mut plans) = lock(&self.ng3k).data.clone() else {
@@ -259,43 +352,46 @@ impl Feeds {
         Ok(plans)
     }
 
-    /// Write one ClubLog answer and its ask time (tmp + rename; best effort — a failed write
-    /// only means the next start asks once more than it needed to).
-    fn save<T: Serialize>(&self, kept: &Kept<T>, name: &str) {
-        let Some(dir) = lock(&self.dir).clone() else {
-            return;
-        };
-        let Ok(text) = serde_json::to_string(kept) else {
-            return;
-        };
-        let path = dir.join(name);
-        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
-        }
-    }
-
     /// Read both ClubLog answers back from `dir` and write there from now on.
     fn load_from(&self, dir: &Path, now: i64) {
-        load_kept(&self.active, &dir.join(EXPEDITIONS_FILE), now);
-        load_kept(&self.wanted, &dir.join(MOST_WANTED_FILE), now);
+        let writable = can_write(dir);
+        load_kept(&self.active, &dir.join(EXPEDITIONS_FILE), now, writable);
+        load_kept(&self.wanted, &dir.join(MOST_WANTED_FILE), now, writable);
         *lock(&self.dir) = Some(dir.to_path_buf());
     }
 }
 
-/// A file that does not read is ignored (that source is simply asked when due). An ask time in
-/// the future — a clock that was wrong, a file from a machine that is — is clamped to `now`:
-/// left alone it would hold the next ask off until that future date plus a whole period.
-fn load_kept<T: DeserializeOwned>(slot: &Mutex<Kept<T>>, path: &Path, now: i64) {
-    let Some(mut k) = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Kept<T>>(&t).ok())
-    else {
-        return;
+/// ⛔ Fails CLOSED. A file that is there but does not read, or a folder this run cannot write
+/// (read-only share, a lock held by a virus scanner, a full disk), starts the source as "asked
+/// now, failed once": first ask in an hour, not at once. Failing open would put a Nexus started
+/// over and over back to asking on every launch — the very pattern this module exists to stop.
+/// What remains: with the folder unwritable, a Nexus that keeps running more than an hour asks
+/// then, and its asks are not shared with other runs (each run keeps its own schedule in memory).
+fn load_kept<T: DeserializeOwned>(slot: &Mutex<Kept<T>>, path: &Path, now: i64, writable: bool) {
+    let held = Kept {
+        data: None,
+        asked_unix: now,
+        failures: 1,
     };
-    k.asked_unix = k.asked_unix.min(now);
-    *lock(slot) = k;
+    *lock(slot) = match read_kept(path) {
+        // An ask time in the future — a clock that was wrong, a file from a machine that is —
+        // is clamped to `now`: left alone it would hold the next ask off until that future
+        // date plus a whole period.
+        Ok(Some(k)) => Kept {
+            asked_unix: k.asked_unix.min(now),
+            ..k
+        },
+        Ok(None) if writable => return,
+        Ok(None) | Err(()) => held,
+    };
+}
+
+/// Whether `dir` takes a file — created if missing; the probe file is removed again.
+fn can_write(dir: &Path) -> bool {
+    let probe = dir.join(format!(".clublog-probe.{}", std::process::id()));
+    let ok = std::fs::create_dir_all(dir).is_ok() && std::fs::write(&probe, b"").is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
 }
 
 /// Where the ClubLog answers are kept across restarts. Called once at startup, before the
@@ -1053,6 +1149,137 @@ mod tests {
                 "a relaunch mid-ask asked again"
             );
         });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two Nexus running at once on one data folder (a window per radio, or a shack's shared
+    /// folder) ask once a period between them, not once each: the file is read again before
+    /// an ask is decided.
+    #[test]
+    fn two_processes_on_one_folder_ask_once_between_them() {
+        let dir = scratch_dir("siblings");
+        let (a, b) = (Feeds::new(), Feeds::new());
+        a.load_from(&dir, T0);
+        b.load_from(&dir, T0);
+        let (fa, fb) = (Fake::new(true, true, true), Fake::new(true, true, true));
+        let _ = a.plans(&fa, T0);
+        let plans = b.plans(&fb, T0 + 1).expect("NG3K up");
+        assert_eq!(fb.clublog_asks(), 0, "the second process asked too");
+        assert_eq!(
+            plans[0].most_wanted_rank,
+            Some(42),
+            "the sibling's answer was not read"
+        );
+        // A day on, A asks first; B, a second later, counts that ask.
+        let _ = a.plans(&fa, T0 + DAY);
+        let _ = b.plans(&fb, T0 + DAY + 1);
+        assert_eq!(fa.active.load(Ordering::SeqCst), 2);
+        assert_eq!(fb.clublog_asks(), 0, "the second process asked a day later");
+        // Control: with nobody else asking, B is still asked when due.
+        let _ = b.plans(&fb, T0 + 2 * DAY + 1);
+        assert_eq!(fb.active.load(Ordering::SeqCst), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ A damaged file fails closed: read as "asked now, failed once", so the first ask is an
+    /// hour away, and a Nexus started over and over on that file asks nothing.
+    #[test]
+    fn a_damaged_cache_file_waits_an_hour_and_is_then_rewritten() {
+        let dir = scratch_dir("damaged");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Cut short, as a power loss mid-write leaves it.
+        std::fs::write(dir.join(EXPEDITIONS_FILE), r#"{"data":["C91"#).unwrap();
+        std::fs::write(dir.join(MOST_WANTED_FILE), "").unwrap();
+        let fake = Fake::new(true, true, true);
+        for i in 0..20 {
+            let launch = Feeds::new();
+            launch.load_from(&dir, T0 + 2 * i);
+            let _ = launch.plans(&fake, T0 + 2 * i);
+        }
+        assert_eq!(fake.clublog_asks(), 0, "a damaged file let launches ask");
+        let run = Feeds::new();
+        run.load_from(&dir, T0 + 40);
+        let _ = run.plans(&fake, T0 + 40 + H);
+        assert_eq!(fake.clublog_asks(), 2, "asked again an hour on");
+        // …and the file reads again.
+        let back = Feeds::new();
+        back.load_from(&dir, T0 + 41 + H);
+        assert_eq!(lock(&back.active).failures, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder that cannot be written (here: its path runs through a file, which no user, root
+    /// included, can create a folder under) fails closed too: launches over and over ask
+    /// nothing, and a run that stays up asks an hour on and keeps its schedule in memory.
+    #[test]
+    fn an_unwritable_folder_does_not_let_relaunches_ask() {
+        let base = scratch_dir("unwritable");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("a-file"), b"").unwrap();
+        let dir = base.join("a-file").join("cache");
+        assert!(!can_write(&dir), "control: this folder must refuse a write");
+        let fake = Fake::new(true, true, true);
+        for i in 0..20 {
+            let launch = Feeds::new();
+            launch.load_from(&dir, T0 + 2 * i);
+            let _ = launch.plans(&fake, T0 + 2 * i);
+        }
+        assert_eq!(
+            fake.clublog_asks(),
+            0,
+            "an unwritable folder let launches ask"
+        );
+        let run = Feeds::new();
+        run.load_from(&dir, T0);
+        let _ = run.plans(&fake, T0 + H);
+        let _ = run.plans(&fake, T0 + H + 300);
+        assert_eq!(fake.clublog_asks(), 2, "one ask per endpoint, an hour on");
+        // Control: a writable folder with no file asks at once.
+        let ok = scratch_dir("writable");
+        assert!(can_write(&ok));
+        let first = Feeds::new();
+        first.load_from(&ok, T0);
+        let fresh = Fake::new(true, true, true);
+        let _ = first.plans(&fresh, T0);
+        assert_eq!(fresh.clublog_asks(), 2);
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&ok);
+    }
+
+    /// The case the write probe exists for: a folder that is there and readable but takes no
+    /// file (a read-only share, a full disk) reads as "no file yet", which alone would ask on
+    /// every launch. Unix permissions model it; root ignores them, so the case reports itself
+    /// as not exercised there rather than passing on nothing.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_folder_does_not_let_relaunches_ask() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch_dir("read-only");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if can_write(&dir) {
+            eprintln!("read-only folder case NOT exercised: this user writes past 0o555 (root)");
+        } else {
+            assert!(
+                matches!(
+                    read_kept::<HashSet<String>>(&dir.join(EXPEDITIONS_FILE)),
+                    Ok(None)
+                ),
+                "control: the folder reads as holding no file"
+            );
+            let fake = Fake::new(true, true, true);
+            for i in 0..20 {
+                let launch = Feeds::new();
+                launch.load_from(&dir, T0 + 2 * i);
+                let _ = launch.plans(&fake, T0 + 2 * i);
+            }
+            assert_eq!(
+                fake.clublog_asks(),
+                0,
+                "a read-only folder let launches ask"
+            );
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
