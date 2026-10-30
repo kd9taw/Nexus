@@ -322,14 +322,14 @@ describe('the overlay while paused', () => {
       texts.length = 0
       fireEvent.click(container.querySelector('.wf-pause')!)
       await frames(2)
-      let onScreen = texts.filter((s) => s.startsWith('−')).at(-1)
+      let onScreen = texts.filter((s) => s.startsWith('−')).pop()
       const stale: string[] = []
       for (let step = 0; step < 40; step++) {
         now += 50
         texts.length = 0
         await frames(1)
         const drawn = texts.filter((s) => s.startsWith('−'))
-        if (drawn.length) onScreen = drawn.at(-1)
+        if (drawn.length) onScreen = drawn[drawn.length - 1]
         const truth = `−${ageLabel(now - rowTms)}`
         if (onScreen !== truth) stale.push(`+${now - 1_000_000} ms: on screen ${onScreen}, true ${truth}`)
       }
