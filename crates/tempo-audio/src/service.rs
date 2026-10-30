@@ -516,7 +516,7 @@ fn tci_dials_nexus(t: &Transport, target: &crate::tci::Target) -> Option<String>
     let itself = t.tci_dials_nexus_by_name()
         || target
             .server()
-            .is_ok_and(|a| a.ip().is_loopback() && a.port() == own);
+            .is_ok_and(|a| a.ip().to_canonical().is_loopback() && a.port() == own);
     itself.then(|| {
         format!(
             "The TCI connection points at Nexus's own TCI server ({}:{own}), not an SDR program. \
@@ -1989,7 +1989,7 @@ fn build_wsjtx_server(enabled: bool, addr: &str, app_version: &str) -> Option<Ws
         return None;
     }
     // A remote target needs a wildcard bind; all-loopback stays on loopback.
-    let bind = if targets.iter().all(|t| t.ip().is_loopback()) {
+    let bind = if targets.iter().all(|t| t.ip().to_canonical().is_loopback()) {
         "127.0.0.1:0"
     } else {
         "0.0.0.0:0"

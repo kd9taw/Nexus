@@ -100,7 +100,7 @@ pub(crate) async fn redirected(
         let Ok((mut stream, peer)) = listener.accept().await else {
             continue;
         };
-        if !peer.ip().is_loopback() {
+        if !peer.ip().to_canonical().is_loopback() {
             continue;
         }
         let target = read_target(&mut stream).await;

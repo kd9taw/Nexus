@@ -170,11 +170,12 @@ impl WsjtxServer {
                 // With several targets, a trusted source is ANY of them (or loopback, or
                 // any target being a multicast group the operator joined) — the same
                 // per-target trust model, applied across the list.
-                let allowed = from.ip().is_loopback()
-                    || self
-                        .targets
-                        .iter()
-                        .any(|t| t.ip().is_multicast() || from.ip() == t.ip());
+                let from_ip = from.ip().to_canonical();
+                let allowed = from_ip.is_loopback()
+                    || self.targets.iter().any(|t| {
+                        let target = t.ip().to_canonical();
+                        target.is_multicast() || from_ip == target
+                    });
                 if allowed {
                     Ok(wsjtx::parse_inbound(&buf[..n]))
                 } else {

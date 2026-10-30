@@ -31,10 +31,10 @@
 //!   reaches it, and a global IPv6 address would name the machine itself.
 //!
 //! [`leaks`] is still the last lock: every SDP and candidate the station is about to send is read
-//! for a host candidate or a private, link-local, carrier-NAT or unique-local address, and a leak is
-//! never sent. The one thing it lets through is the station's own address, as the address of that
-//! one host candidate. A `raddr`, any other host's address, a host candidate for any other address,
-//! and the station's own LAN address anywhere else are still leaks.
+//! for a host candidate or a private, link-local, carrier-NAT, unique-local or site-local address,
+//! and a leak is never sent. The one thing it lets through is the station's own address, as the
+//! address of that one host candidate. A `raddr`, any other host's address, a host candidate for
+//! any other address, and the station's own LAN address anywhere else are still leaks.
 //!
 //! The page and the relay hand every candidate the station names to the browser as it is. A page
 //! that refused private or host candidates (one way to stop a relay that forges the station's
@@ -80,9 +80,20 @@ pub fn private(ip: IpAddr) -> bool {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return private(IpAddr::V4(v4));
             }
+            // The deprecated IPv4-compatible form (::/96, excluding :: and ::1) carries an IPv4
+            // address, and is read as that address just as the mapped form is.
+            let segments = v6.segments();
+            if segments[..6].iter().all(|segment| *segment == 0)
+                && !v6.is_loopback()
+                && !v6.is_unspecified()
+            {
+                let o = v6.octets();
+                return private(IpAddr::V4(Ipv4Addr::new(o[12], o[13], o[14], o[15])));
+            }
             let first = v6.segments()[0];
-            // Unique local (fc00::/7) and link-local (fe80::/10).
-            (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+            // Unique local (fc00::/7), link-local (fe80::/10) and the deprecated site-local
+            // fec0::/10, which private networks still use.
+            (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80 || (first & 0xffc0) == 0xfec0
         }
     }
 }
@@ -911,6 +922,8 @@ mod tests {
             "candidate:1 1 udp 2130706431 169.254.10.1 61000 typ host",
             "candidate:1 1 udp 2130706431 100.101.102.103 61000 typ host",
             "candidate:1 1 udp 2130706431 fd00::1 61000 typ host",
+            "candidate:1 1 udp 2130706431 fec0::1 61000 typ host",
+            "candidate:1 1 udp 2130706431 ::192.168.1.20 61000 typ host",
             "candidate:1 1 udp 2130706431 203.0.113.7 61000 typ host raddr 10.0.0.5 rport 61000",
             "candidate:1 1 udp 1694498815 203.0.113.7 61000 typ srflx raddr 192.168.1.20 rport 5",
             "o=- 1 2 IN IP4 192.168.1.20",

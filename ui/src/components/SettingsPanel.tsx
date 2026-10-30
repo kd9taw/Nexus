@@ -1012,7 +1012,7 @@ function splitRadioFields(changes: Partial<Settings>): { radio: Partial<RadioPro
  */
 const CONFIRMATION_EXAMPLES = {
   rbToken: 'rbuapp_…',
-  lanRanges: '192.168.x.x, 10.x.x.x, 172.16–31.x.x, 127.x.x.x',
+  lanRanges: '192.168.x.x, 10.x.x.x, 172.16–31.x.x, 127.x.x.x, 169.254.x.x, 100.64–127.x.x',
 } as const
 
 /**

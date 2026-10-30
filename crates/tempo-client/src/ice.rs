@@ -162,7 +162,7 @@ impl Reach {
     #[cfg_attr(not(any(test, feature = "test-util")), allow(unused_variables))]
     fn of(host: SocketAddr) -> Self {
         #[cfg(any(test, feature = "test-util"))]
-        if host.ip().is_loopback() {
+        if host.ip().to_canonical().is_loopback() {
             return Reach::Loopback;
         }
         Reach::Internet
