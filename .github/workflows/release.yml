@@ -781,11 +781,17 @@ jobs:
             runner: macos-14
             target: aarch64-apple-darwin
             arch: arm64        # the Mach-O name, for scripts/check-macho-bundle.mjs
+            # The gcc bottle for this runner's macOS that scripts/macos-static-runtime-imports.txt
+            # was reviewed against, by its ghcr blob digest (see "Install build dependencies").
+            gcc_bottle: arm64_sequoia
+            gcc_bottle_sha256: 8c57a4e5c65c93b90b280e3e761833f946b5a7d186f2067d239af44b71c5a577
             suffix: aarch64    # the file name: Nexus_<ver>_aarch64.dmg, as it always was
           - label: Intel
             runner: macos-15-intel
             target: x86_64-apple-darwin
             arch: x86_64
+            gcc_bottle: sequoia
+            gcc_bottle_sha256: d9c228e06901cfdc5c91b01f0119a56ea634ae3ed6504d15a3af03a65ae687f0
             suffix: x64        # Nexus_<ver>_x64.dmg, matching the Windows _x64-setup.exe
     steps:
       - uses: actions/checkout@v7
@@ -819,8 +825,65 @@ jobs:
 
       # No fftw and no libusb here: Homebrew builds them for the runner's macOS, so both are built
       # from source below, at the app's minimum.
+      #
+      # NOTHING HERE MAY BUILD FROM SOURCE. Homebrew has stopped publishing Intel bottles of gcc,
+      # boost, cmake, ninja, gmp, xz and icu4c, so the `brew install cmake ninja gcc boost` that was
+      # here would compile all of them on the Intel runner until the job's 6-hour limit. So:
+      # - gcc: the exact bottle scripts/macos-static-runtime-imports.txt was reviewed against, by its
+      #   digest (the matrix). Changing it means re-reviewing that list. `--force-bottle` pours it
+      #   and never builds; `--ignore-dependencies` leaves alone the libraries it loads (its
+      #   formula's depends_on: gmp isl libmpc mpfr zstd), which the image's preinstalled
+      #   gcc-13/14/15 already use. Homebrew pours a bottle from a file only for a developer (it
+      #   refuses package paths otherwise), hence HOMEBREW_DEVELOPER on that one command.
+      # - Boost: the modem uses only the header-only <boost/crc.hpp>, so its headers come from
+      #   Boost's own release tarball (the hash Homebrew's boost formula pins for it), and libtempo's
+      #   find_package(Boost) finds them through BOOST_ROOT.
+      # - cmake is the image's own. ninja is not needed: on macOS build.rs drives CMake's Makefiles.
+      # Anything missing fails here in seconds, by name, and the timeout bounds the rest.
       - name: Install build dependencies
-        run: brew install cmake ninja gcc boost
+        timeout-minutes: 30
+        env:
+          GCC_BOTTLE: ${{ matrix.gcc_bottle }}
+          GCC_BOTTLE_SHA256: ${{ matrix.gcc_bottle_sha256 }}
+          BOOST: boost-1.92.0
+          BOOST_SHA256: ea7b982002cc9dfbe59b0b217b206f470dc75f3de0bb2973d844118934d82411
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_UPGRADE: "1"
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$*"; exit 1; }
+          command -v cmake >/dev/null || die "this runner image has no cmake, which the modem build needs"
+          # The pinned bottle has to be this runner's own (macOS 15 is sequoia; arm64 bottles say so).
+          os=$(sw_vers -productVersion | cut -d. -f1)
+          case "$os" in 14) tag=sonoma ;; 15) tag=sequoia ;; 26) tag=tahoe ;; *) tag="macos$os" ;; esac
+          if [ "$(uname -m)" = arm64 ]; then tag="arm64_$tag"; fi
+          [ "$tag" = "$GCC_BOTTLE" ] || die "the pinned gcc bottle is for $GCC_BOTTLE but this runner is $tag: pin its bottle and re-review scripts/macos-static-runtime-imports.txt"
+          for dep in gmp isl libmpc mpfr zstd; do
+            brew list --versions "$dep" >/dev/null || die "the gcc bottle needs $dep, which this runner image does not have; installing it may build from source"
+          done
+
+          dl="$RUNNER_TEMP/deps"
+          mkdir -p "$dl"
+          bottle="$dl/gcc--16.2.0.$GCC_BOTTLE.bottle.tar.gz"
+          token=$(curl -fsS "https://ghcr.io/token?scope=repository:homebrew/core/gcc:pull" | jq -r .token)
+          curl -fsSL --retry 3 -H "Authorization: Bearer $token" -o "$bottle" \
+            "https://ghcr.io/v2/homebrew/core/gcc/blobs/sha256:$GCC_BOTTLE_SHA256"
+          echo "$GCC_BOTTLE_SHA256  $bottle" | shasum -a 256 -c -
+          HOMEBREW_DEVELOPER=1 brew install --force-bottle --ignore-dependencies "$bottle"
+          # The gfortran the modem build will find (build.rs and the import gate default FC to it).
+          fc=$(command -v gfortran) || die "the gcc bottle installed no gfortran"
+          [ "$fc" = "$(brew --prefix)/bin/gfortran" ] || die "gfortran on PATH is $fc, not the pinned gcc's"
+          [ "$(gfortran -dumpfullversion)" = 16.2.0 ] || die "gfortran is $(gfortran -dumpfullversion), not the pinned 16.2.0"
+          printf 'print *, "gfortran ok"\nend\n' > "$dl/smoke.f90"
+          gfortran "$dl/smoke.f90" -o "$dl/smoke" || die "the pinned gfortran cannot build a program: a library it loads is missing or too old"
+          "$dl/smoke"
+
+          curl -fsSL --retry 3 -o "$dl/$BOOST.tar.xz" \
+            "https://github.com/boostorg/boost/releases/download/$BOOST/$BOOST-b2-nodocs.tar.xz"
+          echo "$BOOST_SHA256  $dl/$BOOST.tar.xz" | shasum -a 256 -c -
+          tar -xJf "$dl/$BOOST.tar.xz" -C "$dl" "$BOOST/boost"
+          [ -f "$dl/$BOOST/boost/crc.hpp" ] || die "the Boost tarball held no boost/crc.hpp"
+          echo "BOOST_ROOT=$dl/$BOOST" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
@@ -878,6 +941,20 @@ jobs:
           set -euo pipefail
           ( cd src-tauri && cargo tauri build --target ${{ matrix.target }} \
               --features radio,custom-protocol --no-bundle )
+
+      # The modem's CMake used the pinned Boost headers: a Boost CMake package anywhere else on the
+      # runner would win over BOOST_ROOT, and the build would not say so.
+      - name: Check the modem was built with the pinned Boost headers
+        run: |
+          set -euo pipefail
+          n=0
+          for cache in src-tauri/target/${{ matrix.target }}/release/build/tempo-fast-sys-*/out/CMakeCache.txt; do
+            [ -f "$cache" ] || continue
+            grep -qx "Boost_INCLUDE_DIR:PATH=$BOOST_ROOT" "$cache" \
+              || { echo "::error::$cache: libtempo did not use the pinned Boost headers at $BOOST_ROOT"; grep '^Boost_' "$cache"; exit 1; }
+            n=$((n + 1))
+          done
+          [ "$n" -gt 0 ] || { echo "::error::no libtempo CMake cache under src-tauri/target/${{ matrix.target }}"; exit 1; }
 
       # BEFORE ANYTHING IS SIGNED: the app binary and the staged Hamlib, against the minimum and
       # the paths an operator's Mac has. Failing here costs no notarization.
