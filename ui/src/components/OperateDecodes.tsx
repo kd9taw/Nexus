@@ -21,6 +21,7 @@ import {
   periodStartMs,
   renderWindow,
   rowTimeMs,
+  TIER_PERIOD_SECS,
   type DecodeEntry,
   type DecodeFilter,
   type DecodeSort,
@@ -95,6 +96,10 @@ interface Props {
    *  setting, so the tier alone cannot date a row. Absent or 0 (a station that sends none), the
    *  tier's usual period stands in. */
   periodSecs?: number
+  /** The offset (ms, positive = the computer runs fast) the station steers its slots by
+   *  (`snap.radio.clockOffsetMs`). With the period it places an own over in the period it was sent
+   *  in; absent, none is applied. */
+  clockOffsetMs?: number | null
   /** The period a band or mode change caught while it was decoding (the snapshot's
    * `lateDecodes`): shown after the wipe, as WSJT-X shows it, under the band and mode it was
    * heard on, and never worked from. */
@@ -264,6 +269,7 @@ export function OperateDecodes({
   band,
   tier,
   periodSecs,
+  clockOffsetMs,
   late = null,
   harqRescues,
   onCall,
@@ -596,7 +602,10 @@ export function OperateDecodes({
   useEffect(() => {
     // The period caught decoding at the change is older than anything live, so it goes first.
     if (late) histRef.current.ingestLate(late)
-    histRef.current.ingest(decodes, slot)
+    // The slot clock dates an own over by its own transmit time, never by `slot`, which is the last
+    // DECODED period (see DecodeHistory.ingest).
+    const clock = { periodMs: (periodS ?? TIER_PERIOD_SECS[tier]) * 1000, offsetMs: clockOffsetMs ?? 0 }
+    histRef.current.ingest(decodes, slot, Date.now(), clock)
     // Re-render only if the history moved past what this render drew. Not "did MY ingest change
     // it": a history the cockpit shares may already have been moved by another pane.
     if (histRef.current.version !== histVersion) setTick((t) => t + 1)
