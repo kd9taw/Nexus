@@ -1463,3 +1463,42 @@ fn a_close_stops_the_iq_stream_this_session_started_after_the_stops() {
         [Out::Text("trx:0,false;".into()), Out::Close]
     );
 }
+
+/// What the driver publishes to, for a session driven by hand.
+fn shared_for(s: &Session) -> Shared {
+    Shared {
+        snapshot: Mutex::new(s.snapshot()),
+        changed: Condvar::new(),
+        on_air: AtomicBool::new(false),
+        audio_over: AtomicBool::new(false),
+    }
+}
+
+/// ⭐ A QUIET LINK'S MODEL IS NOT COPIED AGAIN EVERY TURN. The driver publishes after every turn,
+/// fifty a second on a quiet link, and the model is everything the server has reported: it is
+/// copied only when it has changed, and readers see the session's own values either way. The
+/// control: a notice that changes the model is published at once.
+#[test]
+fn an_unchanged_model_is_published_without_a_copy() {
+    let mut b = Bench::ready(Config::new(trx(0)));
+    let shared = shared_for(&b.s);
+    publish(&b.s, &shared);
+    // Where the published model keeps the device's name: a new copy keeps it somewhere new.
+    let device = |shared: &Shared| match &lock(&shared.snapshot).model.device {
+        Reading::Known(name) => name.as_str().as_ptr() as usize,
+        other => panic!("no device: {other:?}"),
+    };
+    let before = device(&shared);
+    b.at(23).poll();
+    publish(&b.s, &shared);
+    assert_eq!(
+        device(&shared),
+        before,
+        "an unchanged model was copied again"
+    );
+    assert_eq!(*lock(&shared.snapshot), b.s.snapshot());
+    b.text("drive:0,40;");
+    publish(&b.s, &shared);
+    assert_ne!(device(&shared), before, "a changed model is a new copy");
+    assert_eq!(*lock(&shared.snapshot), b.s.snapshot());
+}

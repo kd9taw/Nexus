@@ -38969,8 +38969,13 @@ fn install_panic_logger() {
         // `info` renders payload + location; the applog redactor scrubs it either way.
         tempo_core::applog::error("panic", &format!("at {where_}: {info}"));
         // Error level flushes, but a panic can be followed immediately by an abort, so make
-        // the wait explicit rather than relying on the writer getting a slice first.
-        tempo_core::applog::flush();
+        // the wait explicit rather than relying on the writer getting a slice first. TX SAFETY:
+        // not on a transmit session's driver, whose stops go out the moment this hook returns
+        // (it catches its own panic, so no abort follows): the line is queued, and the writer
+        // flushes an error line as soon as it has it.
+        if !tempo_net::on_a_transmit_driver() {
+            tempo_core::applog::flush();
+        }
         // ★ THE STARTUP-SILENCE CATCH. A panic BEFORE the main window exists is the shape the
         // operator experiences as "I double-click it and nothing happens" — and in tauri
         // 2.11.2 that is exactly where a WebView2 failure lands, because windows are created
