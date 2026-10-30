@@ -497,6 +497,7 @@ fn req_for<'a>(
         frame_time_ms,
         ap: true,          // stock: AP on (engine ap_decode default)
         ap_cq_only: false, // stock: all AP hypotheses
+        activity: false,
         partial,
     }
 }

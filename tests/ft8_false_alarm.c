@@ -123,6 +123,9 @@ int main(int argc, char **argv) {
                                     nqso_progress, nfqso, /*nftx*/2400, /*nzhsym*/50,
                                     /*nutc*/0, /*la7final*/1,
                                     /*lft8apon*/1, /*lapcqonly*/0,
+                                    /* In a contest: the rover and 'TU; ' filter off, so
+                                     * nothing it would drop can hide a false decode here. */
+                                    /*lactivity*/1,
                                     out, MAXOUT);
         if (ndec < 0) {
             printf("RESULT: FAIL (decoder error on frame %d, ndec=%d)\n", f, ndec);

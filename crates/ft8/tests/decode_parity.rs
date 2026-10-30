@@ -66,7 +66,7 @@ fn frame_with(msg: &str, f0: f32, snr_db: f32, seed: u64) -> Vec<i16> {
 }
 
 fn full_range(iwave: &[i16], ndepth: i32) -> Vec<ft8::Decode> {
-    decode_frame(iwave, 200, 2900, ndepth, "", "", 0, 0, true, false)
+    decode_frame(iwave, 200, 2900, ndepth, "", "", 0, 0, true, false, false)
 }
 
 // ---- tests -----------------------------------------------------------------
@@ -147,7 +147,7 @@ fn explore_early_pass_cost() {
         for _ in 0..3 {
             let t = Instant::now();
             let d = ft8::decode_frame_a7(
-                &early, 200, 2900, 3, "", "", 0, 0, 0, 0, false, partial, true, false,
+                &early, 200, 2900, 3, "", "", 0, 0, 0, 0, false, partial, true, false, false,
             );
             best = best.min(t.elapsed().as_secs_f64() * 1e3);
             ndec = d.len();

@@ -458,6 +458,12 @@ contains
   !                   lapcqonly: one AP pass, iaptype=1). WSJT-X sets this
   !                   automatically after >300 s without transmitting; here the
   !                   caller decides. Ignored when lft8apon_in = 0.
+  !   lactivity_in  : nonzero = the operator is in a Special Operating Activity
+  !                   (Nexus: Contest mode, or a Hound) — upstream's ncontest /= 0
+  !                   as ft8b's rover and 'TU; ' filter reads it, and only there:
+  !                   0 drops type 1-3 decodes holding '/R' or starting 'TU; ',
+  !                   as WSJT-X does with no activity selected; nonzero keeps
+  !                   them. ncontest itself stays 0 (see below).
   !   out           : caller array of ft8_decode_t (capacity max_out)
   !   max_out       : capacity of out
   !
@@ -467,13 +473,13 @@ contains
   !-------------------------------------------------------------------------
   function ft8_decode_frame(iwave, nfa, nfb, ndepth, mycall, hiscall, &
        nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
-       lft8apon_in, lapcqonly_in, out, max_out) result(ndec) &
+       lft8apon_in, lapcqonly_in, lactivity_in, out, max_out) result(ndec) &
        bind(C, name="ft8_decode_frame")
     integer(c_int16_t),     intent(in)  :: iwave(F8_NMAX)
     integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in
     integer(c_int), value,  intent(in)  :: nftx_in, nzhsym_in
     integer(c_int), value,  intent(in)  :: nutc, la7final, max_out
-    integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in
+    integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in, lactivity_in
     character(kind=c_char), intent(in)  :: mycall(*)
     character(kind=c_char), intent(in)  :: hiscall(*)
     type(ft8_decode_t),     intent(out) :: out(*)
@@ -481,7 +487,7 @@ contains
 
     ndec = ft8_decode_frame_cb(iwave, nfa, nfb, ndepth, mycall, hiscall, &
          nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
-         lft8apon_in, lapcqonly_in, out, max_out, c_null_funptr, c_null_ptr)
+         lft8apon_in, lapcqonly_in, lactivity_in, out, max_out, c_null_funptr, c_null_ptr)
   end function ft8_decode_frame
 
   !-------------------------------------------------------------------------
@@ -506,13 +512,13 @@ contains
   !-------------------------------------------------------------------------
   function ft8_decode_frame_cb(iwave, nfa, nfb, ndepth, mycall, hiscall, &
        nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
-       lft8apon_in, lapcqonly_in, out, max_out, cb, cb_user) result(ndec) &
+       lft8apon_in, lapcqonly_in, lactivity_in, out, max_out, cb, cb_user) result(ndec) &
        bind(C, name="ft8_decode_frame_cb")
     integer(c_int16_t),     intent(in)  :: iwave(F8_NMAX)
     integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in
     integer(c_int), value,  intent(in)  :: nftx_in, nzhsym_in
     integer(c_int), value,  intent(in)  :: nutc, la7final, max_out
-    integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in
+    integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in, lactivity_in
     character(kind=c_char), intent(in)  :: mycall(*)
     character(kind=c_char), intent(in)  :: hiscall(*)
     type(ft8_decode_t),     intent(out) :: out(*)
@@ -522,7 +528,7 @@ contains
 
     ndec = ft8_decode_frame_dp(iwave, nfa, nfb, ndepth, mycall, hiscall, &
          nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
-         lft8apon_in, lapcqonly_in, out, max_out, cb, cb_user, &
+         lft8apon_in, lapcqonly_in, lactivity_in, out, max_out, cb, cb_user, &
          c_null_ptr, 0, c_null_ptr, c_null_ptr, c_null_ptr)
   end function ft8_decode_frame_cb
 
@@ -573,14 +579,14 @@ contains
   !-------------------------------------------------------------------------
   function ft8_decode_frame_dp(iwave, nfa, nfb, ndepth, mycall, hiscall, &
        nqso_progress, nfqso_in, nftx_in, nzhsym_in, nutc, la7final, &
-       lft8apon_in, lapcqonly_in, out, max_out, cb, cb_user, &
+       lft8apon_in, lapcqonly_in, lactivity_in, out, max_out, cb, cb_user, &
        subs, nearly, early, early_subs, resid) result(ndec) &
        bind(C, name="ft8_decode_frame_dp")
     integer(c_int16_t),     intent(in)  :: iwave(F8_NMAX)
     integer(c_int), value,  intent(in)  :: nfa, nfb, ndepth, nqso_progress, nfqso_in
     integer(c_int), value,  intent(in)  :: nftx_in, nzhsym_in
     integer(c_int), value,  intent(in)  :: nutc, la7final, max_out
-    integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in
+    integer(c_int), value,  intent(in)  :: lft8apon_in, lapcqonly_in, lactivity_in
     character(kind=c_char), intent(in)  :: mycall(*)
     character(kind=c_char), intent(in)  :: hiscall(*)
     type(ft8_decode_t),     intent(out) :: out(*)
@@ -617,7 +623,7 @@ contains
     integer :: nsnr, ndecodes, n2, napwid, nown, ncount
     integer :: i, i1, i2, iz, ndelta
     real    :: sync, f1, xdt, xbase, dmin, xsnr, syncmin, f1_e, xdt_e
-    logical :: newdat, lsubtract, ldupe, lft8apon, lapcqonly, nagain, lownnew
+    logical :: newdat, lsubtract, ldupe, lft8apon, lapcqonly, nagain, lownnew, lactivity
     logical :: is_new_slot, is_stale
 
     ndec = 0
@@ -676,11 +682,9 @@ contains
     !      vendored file (move the +-1 mapping under `first` only; it has no
     !      ncontest dependence). See also the class-1 note at the top of this
     !      module, which files this exact hazard.
-    !   2. It re-opens the rover ruling. ft8b.f90:443-470 documents dropping
-    !      upstream's '/R' filter SPECIFICALLY because ncontest is the constant 0
-    !      here, and says taking upstream's gated version would then be correct.
-    !      That was an operator decision (2026-07-27, "We need to be able to work
-    !      rovers"), so it is an operator question, not a refactor.
+    !   2. Upstream's rover and 'TU; ' filter in ft8b also reads ncontest. It
+    !      reads `lactivity` (from lactivity_in) here instead, which is already
+    !      runtime state, so that filter does not wait on this.
     ncontest  = 0
     ! Center deep AP + sync on the operator's QSO/RX freq when supplied; else the
     ! band midpoint (legacy behavior).
@@ -710,6 +714,7 @@ contains
     ! must silence BOTH a-priori paths. lapcqonly rides into ft8b only.
     lft8apon  = (lft8apon_in /= 0)
     lapcqonly = (lapcqonly_in /= 0)
+    lactivity = (lactivity_in /= 0)
     nagain    = .false.
     ! DELIBERATE DIVERGENCE, MEASURED AND KEPT. Upstream sets napwid=50 for FT8
     ! unconditionally (mainwindow.cpp:3776). Ours is 75, and that is a GAIN, not
@@ -862,7 +867,7 @@ contains
           call ft8b(dd, newdat, nqso_progress, nfqso, nftx, ndeep, nzhsym, lft8apon, &
                lapcqonly, napwid, lsubtract, nagain, ncontest, iaptype, mycall12, &
                hiscall12, f1, xdt, xbase, apsym, aph10, nharderrors, dmin, &
-               nbadcrc, iappass, msg37, xsnr, itone)
+               nbadcrc, iappass, msg37, xsnr, itone, lactivity)
           nsnr = nint(xsnr)
           xdt  = xdt - 0.5
           if (nbadcrc == 0) then
