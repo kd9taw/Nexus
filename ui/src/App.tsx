@@ -146,6 +146,12 @@ import {
   getTleStatus,
   sstvArm,
   sstvAutoDisarm,
+  leaveDecoderScreen,
+  rttyAutoArm,
+  pskAutoArm,
+  jttyAutoArm,
+  sstvAutoArm,
+  aprsAutoArm,
   setSettings as apiSetSettings,
   setContestEsm,
   setCwSpeedMatch,
@@ -190,6 +196,7 @@ import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { tickSatPassAlert } from './features/satPassAlert'
 import type { EsmSetting } from './features/esmHost'
 import { tickIssAutoArm } from './features/issAutoArm'
+import { enterView, isDecoderScreen, type DecoderScreen } from './features/decoderScreens'
 import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
 import { slotKeyRefusedLane } from './features/slotKeyRefused'
@@ -324,6 +331,14 @@ const SCREEN_BY_SECTION: Partial<Record<string, View>> = {
   rtty: 'rtty',
   keyboard: 'psk',
   jtty: 'jtty',
+}
+/** Each decoder screen's entry arm — what its cockpit calls on the rising edge of `active`. */
+const ENTRY_ARM: Record<DecoderScreen, () => Promise<unknown>> = {
+  rtty: rttyAutoArm,
+  psk: pskAutoArm,
+  jtty: jttyAutoArm,
+  sstv: sstvAutoArm,
+  aprs: aprsAutoArm,
 }
 function App() {
   const [theme, setTheme, themeChoice] = useTheme()
@@ -571,6 +586,31 @@ function App() {
         afarEntryRef.current = from
         setView(from)
       })
+  }, [view])
+  // The receive decoders a screen started stop when the operator enters ANOTHER SECTION — by any
+  // path that changes the view, so the Remote picture and a computer driving this station too
+  // (`features/decoderScreens.ts`). The engine stops only a decoder its screen started and nothing
+  // else needs; one it keeps comes back onto the list, to be asked about at the next section.
+  //
+  // A leave and the return's entry arm are separate calls: on a quick way back (or a slow link) the
+  // leave can land AFTER the entry arm, which then found the decoder still running and did nothing,
+  // and stop the decoder under the screen the operator is on. So a leave that lands with its screen
+  // in front again asks for that screen's entry arm once more (only ever an upgrade from off, and
+  // refused after the operator's own Stop, as on entry).
+  const decoderScreensRef = useRef<DecoderScreen[]>(isDecoderScreen(view) ? [view] : [])
+  useEffect(() => {
+    const { left, held } = enterView(decoderScreensRef.current, view)
+    decoderScreensRef.current = held
+    for (const screen of left) {
+      void leaveDecoderScreen(screen)
+        .then((kept) => {
+          if (kept === true && !decoderScreensRef.current.includes(screen)) {
+            decoderScreensRef.current = [...decoderScreensRef.current, screen]
+          }
+          if (kept !== true && viewRef.current === screen) return ENTRY_ARM[screen]()
+        })
+        .catch(() => {})
+    }
   }, [view])
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
   // DXpeditions ON THE AIR NOW that announced SuperFox — a format this version of Nexus has no

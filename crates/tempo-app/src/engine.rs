@@ -106,6 +106,8 @@ mod cw_unassisted_tests;
 /// A CW message the radio's own keyer would not take is refused whole, before anything keys.
 #[cfg(test)]
 mod cw_whole_message_tests;
+/// The receive decoders a screen started, stopped when the operator leaves for another section.
+pub mod decoder_screens;
 mod field_day_display;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
 /// When an FT8/FT4 contact is logged by itself, offered in the confirm popup, or left for Log QSO.
@@ -4867,6 +4869,11 @@ pub struct Engine {
     /// RTTY view must not quietly restart it behind them (the APRS/SSTV/PSK
     /// decline-memory doctrine). Session-only; a manual arm retires it.
     rtty_auto_arm_declined: bool,
+    /// The RTTY decoder is running because the operator OPENED its screen
+    /// ([`Engine::rtty_auto_arm`]), not because they pressed Arm. Only such an arm ends when they
+    /// leave for another section ([`Engine::leave_decoder_screen`]); an explicit Arm clears it, so
+    /// a decoder the operator started stays started. Session-only.
+    rtty_auto_armed: bool,
     /// Drain buffer for the RTTY decode thread: 12 kHz RX audio accumulates here
     /// while armed; the thread empties it via [`Engine::take_rtty_audio`]. Empty
     /// (zero cost) while disarmed.
@@ -4888,6 +4895,9 @@ pub struct Engine {
     rtty_afc_locked: bool,
     /// The tuning scope's newest frame, pushed by the decode thread beside the characters.
     rtty_scope: RttyScope,
+    /// When the UI last read the tuning scope ([`Engine::rtty_scope`]). The decode thread builds
+    /// frames only while someone is drawing them ([`Engine::rtty_scope_wanted`]).
+    rtty_scope_read_at: Option<Instant>,
     /// One-shot: drop + rebuild the RX demodulator (the AFC-reset command — a
     /// wrong-neighbor acquire-then-freeze recovers by re-acquiring from scratch).
     rtty_afc_reset: bool,
@@ -4967,6 +4977,9 @@ pub struct Engine {
     /// the PSK view must not quietly restart it behind them (the APRS/SSTV
     /// decline-memory doctrine). Session-only; a manual arm retires it.
     psk_auto_arm_declined: bool,
+    /// The PSK decoder is running because the operator opened its screen, not because they
+    /// pressed Arm — the `rtty_auto_armed` distinction.
+    psk_auto_armed: bool,
     /// Drain buffer for the PSK decode thread: 12 kHz RX audio accumulates here
     /// while armed; the thread empties it via [`Engine::take_psk_audio`]. Empty
     /// (zero cost) while disarmed.
@@ -5046,6 +5059,10 @@ pub struct Engine {
     /// The operator explicitly stopped the decoder this session, so entering the APRS view must
     /// not quietly start it again behind them. Session-only; a manual arm always still works.
     aprs_auto_arm_declined: bool,
+    /// The APRS decoder is running because the operator opened its screen
+    /// ([`Engine::aprs_auto_arm`]) — the `rtty_auto_armed` distinction. Not [`AprsArm::Auto`]:
+    /// that also covers a Remote receive-only start, which is an operator act.
+    aprs_auto_armed: bool,
     /// Drain buffer for the APRS decode thread (same pattern as `rtty_audio`). Empty while disarmed.
     aprs_audio: Vec<f32>,
     /// Recently-decoded APRS packets, newest last, capped at [`APRS_HEARD_CAP`]. Pushed by the
@@ -5170,6 +5187,21 @@ pub struct Engine {
     /// the view must not restart it behind them. Same decision-memory as
     /// `aprs_auto_arm_declined`.
     sstv_auto_arm_declined: bool,
+    /// The SSTV picture viewer's window is open at the station
+    /// ([`Engine::set_sstv_viewer_open`]), which keeps the SSTV screen in its section.
+    sstv_viewer_open: bool,
+    /// Decoder screens left while a computer driving the station was attached, whose leave waits
+    /// for it to go ([`Engine::leave_decoder_screen`]). Opening the screen again cancels its leave.
+    decoder_leaves_held: Vec<decoder_screens::DecoderScreen>,
+    /// Some remote device holds the station lease (the authority poll's answer, refreshed every
+    /// `poll_remote_transmit` tick). Read only by the receive decoders' leave; decides no TX.
+    remote_lease_held: bool,
+    /// When no computer was last seen attached while leaves were held: the start of
+    /// [`decoder_screens::DETACH_GRACE`].
+    decoders_detached_since: Option<Instant>,
+    /// The SSTV receiver is running because the operator opened its screen, not because they
+    /// (or the ISS pass, an opt-in of theirs) armed it — the `rtty_auto_armed` distinction.
+    sstv_auto_armed: bool,
     /// What the SSTV decode thread is actually hearing — the evidence the view
     /// states instead of one hint that meant four different things.
     sstv_health: SstvHealth,
@@ -5250,6 +5282,9 @@ fn copy_names_call(copy: &str, call: &str) -> bool {
 const QSO_WAV_WINDOW: usize = 720_000;
 /// RTTY decoded-character ring cap: ~4000 chars ≈ tens of minutes of copy at 45.45 baud.
 const RTTY_TEXT_CAP: usize = 4000;
+/// How long after its last read the RTTY tuning scope still counts as on screen: several polls at
+/// the slowest cadence (5 Hz under reduced motion), so a slow frame never blanks it.
+pub const RTTY_SCOPE_WANTED_FOR: Duration = Duration::from_secs(1);
 /// PSK31 decoded-character ring cap — the RTTY sizing (PSK31 copies even slower,
 /// ~4 chars/s, so 4000 chars is comfortably tens of minutes of transcript).
 const PSK_TEXT_CAP: usize = 4000;
@@ -7184,11 +7219,13 @@ impl Engine {
             qsy,
             rtty_armed: false,
             rtty_auto_arm_declined: false,
+            rtty_auto_armed: false,
             rtty_audio: Vec::new(),
             rtty_chars: VecDeque::new(),
             rtty_afc_hz: 0.0,
             rtty_afc_locked: false,
             rtty_scope: RttyScope::default(),
+            rtty_scope_read_at: None,
             rtty_afc_reset: false,
             rtty_center: None,
             rtty_queue: VecDeque::new(),
@@ -7203,6 +7240,7 @@ impl Engine {
             rtty_auto_over: false,
             psk_armed: false,
             psk_auto_arm_declined: false,
+            psk_auto_armed: false,
             psk_audio: Vec::new(),
             psk_chars: VecDeque::new(),
             psk_afc_hz: 0.0,
@@ -7226,6 +7264,7 @@ impl Engine {
             aprs_is_status: AprsIsStatus::default(),
             aprs_is_for_js8: (false, false),
             aprs_auto_arm_declined: false,
+            aprs_auto_armed: false,
             aprs_audio: Vec::new(),
             aprs_heard: Vec::new(),
             aprs_health: AprsHealth::default(),
@@ -7243,6 +7282,11 @@ impl Engine {
             sstv_armed: false,
             sstv_manual_rx: None,
             sstv_auto_arm_declined: false,
+            sstv_viewer_open: false,
+            decoder_leaves_held: Vec::new(),
+            remote_lease_held: false,
+            decoders_detached_since: None,
+            sstv_auto_armed: false,
             sstv_health: SstvHealth::default(),
             sstv_audio: Vec::new(),
             sstv_progress: None,
@@ -24109,6 +24153,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // the rest of the session.
             self.rtty_auto_arm_declined = true;
         }
+        // Either way it is now the operator's decision, not the screen's.
+        self.rtty_auto_armed = false;
         self.rtty_armed = on;
     }
 
@@ -24127,13 +24173,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// so it survives a remount and is testable without a webview. RX ONLY — arming the
     /// decoder cannot key anything; every RTTY TX path is separate and gated elsewhere.
     pub fn rtty_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Rtty);
         if self.rtty_armed || self.rtty_auto_arm_declined || !self.settings.rtty_rx_auto_arm {
             return false;
         }
-        self.rtty_chars.clear();
+        // The transcript is KEPT: the screen stops this decoder when the operator leaves for
+        // another section ([`Engine::leave_decoder_screen`]), and coming back must find what it
+        // had decoded, as it did while the decoder ran on behind them.
         self.rtty_afc_hz = 0.0;
         self.rtty_afc_locked = false;
         self.rtty_armed = true;
+        self.rtty_auto_armed = true;
         true
     }
 
@@ -24168,6 +24218,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             arm,
             ..Default::default()
         };
+        self.aprs_auto_armed = false;
         self.aprs_arm = arm;
     }
 
@@ -24186,6 +24237,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             };
             self.aprs_arm = AprsArm::Auto;
         }
+        // A Remote start is the operator's, so leaving the screen does not stop it.
+        self.aprs_auto_armed = false;
     }
 
     /// Arm the decoder because the operator ENTERED the APRS view — receive-only, never
@@ -24195,6 +24248,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// and it refuses outright once the operator has explicitly stopped the decoder this session.
     /// The policy lives here rather than in the UI so it survives a remount and is testable.
     pub fn aprs_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Aprs);
         if self.aprs_arm != AprsArm::Off || self.aprs_auto_arm_declined {
             return false;
         }
@@ -24203,6 +24257,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             ..Default::default()
         };
         self.aprs_arm = AprsArm::Auto;
+        self.aprs_auto_armed = true;
         true
     }
 
@@ -25075,13 +25130,24 @@ Pick the one you operate from on the Contesting tab in Settings.",
         };
     }
 
-    /// The tuning scope the UI polls (`get_rtty_scope`). Not live while disarmed.
-    pub fn rtty_scope(&self) -> RttyScope {
+    /// The tuning scope the UI polls (`get_rtty_scope`). Not live while disarmed. The read is
+    /// what tells the decode thread the scope is wanted ([`Self::rtty_scope_wanted`]).
+    pub fn rtty_scope(&mut self) -> RttyScope {
+        self.rtty_scope_read_at = Some(Instant::now());
         if self.rtty_armed {
             self.rtty_scope.clone()
         } else {
             RttyScope::default()
         }
+    }
+
+    /// Whether anything is drawing the tuning scope: it was read within
+    /// [`RTTY_SCOPE_WANTED_FOR`] of `now`. The scope polls at 5–20 Hz only while its pane is
+    /// shown, the RTTY screen is in front and the window is visible, so a silent poll means
+    /// nobody is looking, and the decode thread skips building frames nobody reads.
+    pub fn rtty_scope_wanted(&self, now: Instant) -> bool {
+        self.rtty_scope_read_at
+            .is_some_and(|at| now.saturating_duration_since(at) < RTTY_SCOPE_WANTED_FOR)
     }
 
     /// The compact RTTY state the UI polls (`get_rtty_state`).
@@ -25246,6 +25312,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // it for the rest of the session.
             self.psk_auto_arm_declined = true;
         }
+        // Either way it is now the operator's decision, not the screen's.
+        self.psk_auto_armed = false;
         self.psk_armed = on;
     }
 
@@ -25261,13 +25329,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// testable without a webview. RX ONLY — arming the decoder cannot key
     /// anything (TX starts only from an explicit send behind `psk_tx_gate`).
     pub fn psk_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Psk);
         if self.psk_armed || self.psk_auto_arm_declined || !self.settings.psk_rx_auto_arm {
             return false;
         }
-        self.psk_chars.clear();
+        // The transcript is kept across a leave and a return, as RTTY's is (`rtty_auto_arm`).
         self.psk_afc_hz = 0.0;
         self.psk_signal = false;
         self.psk_armed = true;
+        self.psk_auto_armed = true;
         true
     }
 
@@ -26462,6 +26532,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let mut seq = seq;
             seq.cfg = self.settings.rtty_seq_config();
             self.rtty_seq = Some(seq);
+            // The sequencer decides from what the decoder hears, so Auto takes the decoder: it is
+            // the operator's from here (a screen leave no longer stops it), and one that a leave
+            // stopped (another window left RTTY while this one stayed) starts again. Never one
+            // the operator stopped. RX only: nothing here keys or changes what Auto sends.
+            self.rtty_auto_armed = false;
+            if !self.rtty_armed && !self.rtty_auto_arm_declined {
+                self.rtty_afc_hz = 0.0;
+                self.rtty_afc_locked = false;
+                self.rtty_armed = true;
+            }
         } else {
             if let Some(seq) = self.rtty_seq.as_mut() {
                 seq.abort();
@@ -26966,6 +27046,8 @@ contact yourself."
             armed: on,
             ..Default::default()
         };
+        // Either way it is now the operator's decision (or their ISS opt-in's), not the screen's.
+        self.sstv_auto_armed = false;
         self.sstv_armed = on;
     }
 
@@ -26983,6 +27065,7 @@ contact yourself."
         self.sstv_progress = None;
         self.sstv_manual_rx = None;
         self.sstv_health = SstvHealth::default();
+        self.sstv_auto_armed = false;
         self.sstv_armed = false;
     }
 
@@ -27007,6 +27090,7 @@ contact yourself."
     /// entry path: the Arm button and the ISS pass arm both call
     /// [`Engine::set_sstv_armed`], an explicit operator act, and are unaffected.
     pub fn sstv_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Sstv);
         if self.sstv_armed || self.sstv_auto_arm_declined || !self.settings.sstv_rx_auto_arm {
             return false;
         }
@@ -27015,6 +27099,7 @@ contact yourself."
             ..Default::default()
         };
         self.sstv_armed = true;
+        self.sstv_auto_armed = true;
         true
     }
 
@@ -27036,6 +27121,8 @@ contact yourself."
         if !self.sstv_armed {
             self.set_sstv_armed(true);
         }
+        // A receiver the screen started becomes the operator's with their manual start.
+        self.sstv_auto_armed = false;
         self.sstv_manual_rx = Some(mode_slug);
     }
 
@@ -38373,6 +38460,26 @@ mod tests {
         assert_eq!(
             (e.rtty_state().mark_hz, e.rtty_state().space_hz),
             (1415.0, 1585.0)
+        );
+    }
+
+    #[test]
+    fn the_rtty_scope_is_wanted_only_while_something_reads_it() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let now = Instant::now();
+        assert!(
+            !e.rtty_scope_wanted(now),
+            "never read: nobody is drawing it"
+        );
+        e.rtty_scope();
+        let read = Instant::now();
+        assert!(
+            e.rtty_scope_wanted(read),
+            "just read: the scope is on screen"
+        );
+        assert!(
+            !e.rtty_scope_wanted(read + RTTY_SCOPE_WANTED_FOR),
+            "the polls stopped: the pane closed or the screen was left"
         );
     }
 

@@ -91,6 +91,7 @@ import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { LogColumnsSaved } from './features/logColumns'
 import type { SavedLogFilter } from './features/logFilter'
 import type { LogQuery } from './features/logQuery'
+import type { DecoderScreen } from './features/decoderScreens'
 import type { StreetPack } from './features/streetPack'
 import type {
   StreetArea,
@@ -4781,6 +4782,14 @@ export async function sstvAutoArm(): Promise<SstvState> {
  * start the receiver — the decoding bug again, one ISS pass later. */
 export async function sstvAutoDisarm(): Promise<SstvState> {
   return invoke<SstvState>('sstv_auto_disarm')
+}
+
+/** The operator left a receive screen for another section (`features/decoderScreens.ts`): stop
+ * the decoder that opening it started, unless something still needs it. RX only. Resolves true
+ * when the decoder is still running on the screen's arm — ask again at the next section change.
+ * A decoder the operator armed is never stopped here. */
+export async function leaveDecoderScreen(screen: DecoderScreen): Promise<boolean> {
+  return invoke<boolean>('leave_decoder_screen', { screen })
 }
 
 /** Live SSTV RX state: in-flight progress + preview + the saved-image gallery

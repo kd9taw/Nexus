@@ -18920,7 +18920,7 @@ struct RttyScopeDto {
 /// Receive-only: it reads what the decode thread pushed and changes nothing.
 #[tauri::command]
 async fn get_rtty_scope(state: State<'_, SharedEngine>) -> Result<RttyScopeDto, String> {
-    with_engine(&state, |eng| {
+    with_engine(&state, |mut eng| {
         let s = eng.rtty_scope();
         RttyScopeDto {
             live: s.live,
@@ -20272,6 +20272,27 @@ fn sstv_auto_disarm(state: State<'_, SharedEngine>) -> Result<SstvStateDto, Stri
     let mut eng = engine_lock(&state);
     eng.sstv_auto_disarm();
     Ok(sstv_state_dto(&eng))
+}
+
+/// The operator left a receive screen (RTTY, PSK, JTTY, SSTV, APRS) for another section: stop
+/// the decoder that opening it started, unless something still needs it — and, while a computer
+/// driving the station is attached, stop nothing until it has gone. RX only — see
+/// [`tempo_app::engine::Engine::leave_decoder_screen`]. The SSTV picture viewer, open in its own
+/// window here, keeps the SSTV screen in the section; this refreshes that from the window itself
+/// before deciding. Returns whether the decoder is still running on its screen's arm, so the
+/// caller asks again at the next section change.
+#[tauri::command(async)]
+fn leave_decoder_screen(
+    app: tauri::AppHandle,
+    state: State<'_, SharedEngine>,
+    screen: tempo_app::engine::decoder_screens::DecoderScreen,
+) -> Result<bool, String> {
+    let viewer_open = app
+        .get_webview_window(&panel_label(SSTV_VIEWER_SLUG, Instance::Main))
+        .is_some();
+    let mut eng = engine_lock(&state);
+    eng.set_sstv_viewer_open(viewer_open);
+    Ok(eng.leave_decoder_screen(screen))
 }
 
 /// Start decoding an SSTV picture NOW, in the mode the operator named, without
@@ -22984,6 +23005,10 @@ fn set_psk_macros(
 /// progress with the main window's while it is open (`tempo_app::engine::contest_entry`).
 pub(crate) const CONTEST_LOGGER_SLUG: &str = "contestlog";
 
+/// The received-picture viewer's panel slug (`SstvViewer.tsx`'s `SSTV_VIEWER_PANEL`): the SSTV
+/// screen in a window of its own, which keeps that screen in the section (`leave_decoder_screen`).
+const SSTV_VIEWER_SLUG: &str = "sstvviewer";
+
 /// The contest screen window's panel slug: the main window's Contest screen below its log line
 /// (the contest switch, the controls, the club board, the scoreboard, the bonuses and the log),
 /// popped out to a monitor of its own. The main window keeps the log line and the last contacts
@@ -23223,6 +23248,13 @@ async fn open_panel_window(
     // handler). Never persisted, so a restart cannot leave it shared.
     if slug == CONTEST_LOGGER_SLUG && matches!(inst, Instance::Main) {
         share_the_contest_entry(&app);
+    }
+    // THE SSTV PICTURE VIEWER keeps the SSTV screen in its section while it is open (the station
+    // does not stop that receiver behind it), from here to its `Destroyed` event.
+    if slug == SSTV_VIEWER_SLUG && matches!(inst, Instance::Main) {
+        if let Some(engine) = app.try_state::<SharedEngine>() {
+            engine_lock(&engine).set_sstv_viewer_open(true);
+        }
     }
     if let Some(side) = docked_side {
         // Re-pin to the edge of the current work area (best-effort; ignore if unmapped) so a
@@ -41857,6 +41889,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         sstv_manual_rx,
         sstv_auto_arm,
         sstv_auto_disarm,
+        leave_decoder_screen,
         get_sstv_state,
         sstv_send,
         sstv_stop,
@@ -42442,6 +42475,13 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                 if window.label() == panel_label(CONTEST_LOGGER_SLUG, Instance::Main) {
                     if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
                         engine_lock(&engine).contest_entry_share(false);
+                    }
+                }
+                // The SSTV picture viewer is gone: the SSTV screen no longer shows anywhere but
+                // its own screen.
+                if window.label() == panel_label(SSTV_VIEWER_SLUG, Instance::Main) {
+                    if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
+                        engine_lock(&engine).set_sstv_viewer_open(false);
                     }
                 }
             }
@@ -44432,6 +44472,55 @@ mod tests {
                 "{command} must pass the typed report to {engine}"
             );
         }
+    }
+
+    /// The SSTV picture viewer keeps the SSTV screen in its section from the moment its window is
+    /// built to its `Destroyed` event (the engine's flag the decoders' held-leave poll reads; the
+    /// leave command itself also reads the live window). The contest logger's test, below, is the
+    /// pattern.
+    #[test]
+    fn the_sstv_viewer_keeps_its_screen_from_its_open_to_its_destroy() {
+        let src = include_str!("lib.rs");
+        let body = |sig: &str| -> String {
+            let rest = src
+                .split_once(sig)
+                .unwrap_or_else(|| panic!("{sig} is defined"))
+                .1;
+            rest[..rest.find("\n}\n").expect("the end of the function")].to_string()
+        };
+        let open = body("\nasync fn open_panel_window(");
+        let built = open.find("builder.build()").expect("the window is built");
+        let kept = open
+            .find("set_sstv_viewer_open(true)")
+            .expect("opening the viewer keeps the SSTV screen");
+        assert!(built < kept, "only once the window exists");
+        assert!(
+            open[..kept].contains("slug == SSTV_VIEWER_SLUG"),
+            "only the viewer's window"
+        );
+        let build = body("\nfn build_app(");
+        let destroyed = build
+            .find("WindowEvent::Destroyed")
+            .expect("the app handles a window's Destroyed event");
+        let after = &build[destroyed..];
+        let label = after
+            .find("panel_label(SSTV_VIEWER_SLUG, Instance::Main)")
+            .expect("the viewer's own window");
+        assert!(
+            after[label..].contains("set_sstv_viewer_open(false)"),
+            "the viewer window's Destroyed event ends it"
+        );
+        let leave = body("\nfn leave_decoder_screen(");
+        let refreshed = leave
+            .find("set_sstv_viewer_open(")
+            .expect("the command refreshes the viewer from its window");
+        let decided = leave
+            .find(".leave_decoder_screen(")
+            .expect("the command asks the engine");
+        assert!(
+            refreshed < decided,
+            "the command reads the live window before deciding"
+        );
     }
 
     /// ⭐ THE CONTEST LOGGER WINDOW: its strip shares the contact in progress only if the put is
