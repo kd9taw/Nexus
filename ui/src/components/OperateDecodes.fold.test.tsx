@@ -179,3 +179,13 @@ describe('Band Activity folds its filter row only when the pane is short', () =>
     expect(fold()).toBeNull()
   })
 })
+
+describe('a folded row never hides a call-hide that is hiding rows', () => {
+  it('the Filters button lights while the wildcard call-hide is hiding rows', () => {
+    localStorage.setItem('nexus.decodes.hideCalls', 'JA*')
+    paneHeight = 10 * EM
+    const { container } = mount({ decodes: [decode(), decode({ from: 'JA1ABC', message: 'CQ JA1ABC PM95' })] })
+    expect(container.querySelector('.od-status')?.textContent).toMatch(/1 heard/)
+    expect(fold()!.classList.contains('active')).toBe(true)
+  })
+})

@@ -495,7 +495,8 @@ export function OperateDecodes({
     (filter !== 'all' ? 1 : 0) +
     (hideBlocked ? 1 : 0) +
     (hideConfirmed ? 1 : 0) +
-    (hideB4 && filter !== 'b4' ? 1 : 0)
+    (hideB4 && filter !== 'b4' ? 1 : 0) +
+    (hideCalls.entries.length > 0 ? 1 : 0)
   const showChips = !chipsFolded || chipsOpen
 
   const ignores = ignoredCalls ?? NO_IGNORES
