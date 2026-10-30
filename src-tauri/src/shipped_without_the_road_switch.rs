@@ -194,11 +194,15 @@ fn refusals(root: &Path, read: &mut Vec<String>) -> Vec<String> {
 
 /// A scratch copy of every file in `files` from this tree, under a root of its own.
 fn scratch_copy(label: &str, files: &[String]) -> PathBuf {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("nexus-shipped-{label}-{nanos}"));
+    let root = std::env::temp_dir().join(format!(
+        "nexus-shipped-{label}-{nanos}-{}",
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     for file in files {
         let to = root.join(file);
         std::fs::create_dir_all(to.parent().expect("a file has a folder")).unwrap();

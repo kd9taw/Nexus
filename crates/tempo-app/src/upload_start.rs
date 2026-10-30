@@ -105,10 +105,12 @@ mod tests {
     use crate::engine::upload_legs;
 
     fn folder(name: &str) -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "nexus-upload-start-{name}-{}-{:?}",
+            "nexus-upload-start-{name}-{}-{:?}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
+            std::time::SystemTime::now(),
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
