@@ -527,6 +527,9 @@ export function Waterfall({
   const rowTimeAtRef = useRef<((yCss: number) => number | null) | null>(null)
   /** Cold-path re-render hook, owned by the canvas effect (null until mounted). */
   const rebuildRef = useRef<(() => void) | null>(null)
+  /** Restarts the draw loop, which stops while the waterfall is hidden (`active` false); owned by
+   *  the canvas effect (null until mounted). A no-op while the loop runs. */
+  const wakeRef = useRef<(() => void) | null>(null)
 
   txRef.current = transmitting
   txBlanksRef.current = txBlanks
@@ -1104,28 +1107,34 @@ export function Waterfall({
     }
 
     /** Everything the overlay draws from, as one string: it is drawn again only when this moves
-     *  (or its inks were dropped, or while paused, when the time tape's ages move every frame). */
+     *  (or its inks were dropped). Paused, the chip and the time tape print ages, which move with
+     *  the clock in whole seconds — so the second is in the key, with the row the picture's newest
+     *  end shows (a scrollback step moves it; a row committed while paused does not, as the offset
+     *  moves with it and the picture holds still), whether that is the live tail, and the flow the
+     *  tape is read in. */
     const overlayKeyOf = () => {
       const c = cursorsRef.current
       const named = c ? c.map((k) => `${k.hz}/${k.color}/${k.label}`).join(',') : '-'
       const band = toneBandRef.current
       const shade = band ? `${band.loHz}/${band.hiHz}/${keyedRef.current}` : '-'
       const filter = shadeRef.current
-      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}|${shade}|${filter ? `${filter.loHz}-${filter.hiHz}` : '-'}`
+      const held = pausedRef.current
+        ? `${Math.floor(Date.now() / 1000)}/${offsetRef.current > 0}/${renderer.rowAt(offsetRef.current)?.seq}/${newestAtTopRef.current}`
+        : '-'
+      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}|${shade}|${filter ? `${filter.loHz}-${filter.hiHz}` : '-'}|${held}`
     }
 
     const loop = (now: number) => {
       if (!running) return
-      // Paused while the cockpit is navigated away (kept mounted but hidden): skip
-      // the spectrum fetch + scroll + overlay entirely so no CPU is spent and the
-      // backing store is left untouched. Keep `last` current and `acc` at 0 so the
-      // scroll resumes cleanly (no time-debt burst) the moment we return, and draw
-      // the picture once then, whatever the canvas kept while it was away.
+      // Stopped while the cockpit is navigated away (kept mounted but hidden): no spectrum
+      // fetch, scroll or overlay, and no next frame asked for — a loop that re-armed itself to
+      // do nothing kept the browser's frame pipeline awake at the display rate, once per mounted
+      // waterfall. `wake` restarts it when `active` flips back, with `last` current and `acc` at
+      // 0 so the scroll resumes cleanly (no time-debt burst), and the picture is drawn once
+      // then, whatever the canvas kept while it was away.
       if (!activeRef.current) {
-        last = now
-        acc = 0
         dirty = true
-        rafRef.current = requestAnimationFrame(loop)
+        rafRef.current = null
         return
       }
       acc += now - last
@@ -1159,17 +1168,25 @@ export function Waterfall({
       // shows moved: clearing and redrawing a full-window overlay 60 times a second was most
       // of the waterfall's cost on a large screen.
       const key = overlayKeyOf()
-      if (key !== overlayKey || pausedRef.current || !inksRef.current) {
+      if (key !== overlayKey || !inksRef.current) {
         overlayKey = key
         drawOverlay()
       }
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
+    wakeRef.current = () => {
+      if (!running || rafRef.current !== null) return
+      last = performance.now()
+      acc = 0
+      rafRef.current = requestAnimationFrame(loop)
+    }
 
     return () => {
       running = false
+      wakeRef.current = null
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
       ro.disconnect()
       rowTimeAtRef.current = null
       release()
@@ -1177,6 +1194,12 @@ export function Waterfall({
     // intentionally run once; live props read via refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Shown again: restart the loop that stopped while hidden (after the canvas effect, so on the
+  // mount it finds the loop already running and does nothing).
+  useEffect(() => {
+    if (active) wakeRef.current?.()
+  }, [active])
 
   // Wide-graph gestures. LEFT = RX (green) is stock WSJT-X and JTDX alike, so it is the one
   // gesture that must never move — an operator's muscle memory for it is universal. On top of
