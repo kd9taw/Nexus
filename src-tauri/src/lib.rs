@@ -44301,6 +44301,55 @@ mod tests {
     /// REGISTERED, the sharing starts when that window is built and ends when it is destroyed,
     /// and all three log commands log through the engine's claim (`contest_log_entry`) — the one
     /// hold of the lock that makes Enter in both windows log the contact once.
+    /// The SSTV picture viewer keeps the SSTV screen in its section from the moment its window is
+    /// built to its `Destroyed` event (the engine's flag the decoders' held-leave poll reads; the
+    /// leave command itself also reads the live window). The contest logger's test, below, is the
+    /// pattern.
+    #[test]
+    fn the_sstv_viewer_keeps_its_screen_from_its_open_to_its_destroy() {
+        let src = include_str!("lib.rs");
+        let body = |sig: &str| -> String {
+            let rest = src
+                .split_once(sig)
+                .unwrap_or_else(|| panic!("{sig} is defined"))
+                .1;
+            rest[..rest.find("\n}\n").expect("the end of the function")].to_string()
+        };
+        let open = body("\nasync fn open_panel_window(");
+        let built = open.find("builder.build()").expect("the window is built");
+        let kept = open
+            .find("set_sstv_viewer_open(true)")
+            .expect("opening the viewer keeps the SSTV screen");
+        assert!(built < kept, "only once the window exists");
+        assert!(
+            open[..kept].contains("slug == SSTV_VIEWER_SLUG"),
+            "only the viewer's window"
+        );
+        let build = body("\nfn build_app(");
+        let destroyed = build
+            .find("WindowEvent::Destroyed")
+            .expect("the app handles a window's Destroyed event");
+        let after = &build[destroyed..];
+        let label = after
+            .find("panel_label(SSTV_VIEWER_SLUG, Instance::Main)")
+            .expect("the viewer's own window");
+        assert!(
+            after[label..].contains("set_sstv_viewer_open(false)"),
+            "the viewer window's Destroyed event ends it"
+        );
+        let leave = body("\nfn leave_decoder_screen(");
+        let refreshed = leave
+            .find("set_sstv_viewer_open(")
+            .expect("the command refreshes the viewer from its window");
+        let decided = leave
+            .find(".leave_decoder_screen(")
+            .expect("the command asks the engine");
+        assert!(
+            refreshed < decided,
+            "the command reads the live window before deciding"
+        );
+    }
+
     #[test]
     fn the_contest_logger_window_shares_the_entry_from_its_open_to_its_destroy() {
         let src = include_str!("lib.rs");

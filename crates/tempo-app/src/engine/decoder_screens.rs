@@ -26,7 +26,14 @@
 //! stops).
 
 use super::{AprsArm, AprsHealth, Engine};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// How long the station waits, once no computer is attached, before carrying out the leaves held
+/// while one was: two of presence's 5 s windows. A gap that short is a blip (a stalled heartbeat,
+/// a throttled client window, a reconnect), not the computer going, and stopping its viewer's
+/// receiver on it would lose the pictures the hold exists to keep. Receive only, so waiting costs
+/// only a few seconds of decoding.
+pub const DETACH_GRACE: Duration = Duration::from_secs(10);
 
 /// A receive screen whose decoder starts when the operator opens it. "rtty", "psk", "jtty",
 /// "sstv", "aprs" on the wire.
@@ -69,7 +76,7 @@ impl Engine {
         // their own leaves against this one engine, and neither knows what the other shows. Stop
         // nothing (a decoder left on is the safe side: receive only) and carry the leave out once
         // that computer has gone ([`Self::carry_out_held_leaves`]).
-        if self.remote_presence_live(Instant::now()) {
+        if self.computer_attached(Instant::now()) {
             if !self.decoder_leaves_held.contains(&screen) {
                 self.decoder_leaves_held.push(screen);
             }
@@ -112,17 +119,37 @@ impl Engine {
         false
     }
 
+    /// A computer is attached to the station: it holds live presence (its Stop road's heartbeat, or
+    /// a streamed controller), OR it holds the station lease without presence (on the internet with
+    /// datagrams blocked, or a LAN whose Stop road is not heard). Either way its screens send leaves
+    /// and its picture viewer watches the shack's receiver. The lease is read off the radio loop's
+    /// authority poll (`poll_remote_transmit`).
+    fn computer_attached(&self, now: Instant) -> bool {
+        self.remote_presence_live(now) || self.remote_lease_held
+    }
+
     /// Opening `screen` again cancels a leave held for it: it is in front once more.
     pub(super) fn decoder_screen_entered(&mut self, screen: DecoderScreen) {
         self.decoder_leaves_held.retain(|held| *held != screen);
     }
 
-    /// Carry out the leaves held while a computer was attached, now that none is: each decoder
+    /// Carry out the leaves held while a computer was attached, once none has been for
+    /// [`DETACH_GRACE`]: each decoder
     /// still running on its screen's arm stops, unless something still needs it (that one stays
     /// held and is asked again at the next poll). Run on the radio loop's poll
     /// (`poll_remote_stream`); with nothing held it costs one check.
     pub(super) fn carry_out_held_leaves(&mut self, now: Instant) {
-        if self.decoder_leaves_held.is_empty() || self.remote_presence_live(now) {
+        if self.decoder_leaves_held.is_empty() {
+            self.decoders_detached_since = None;
+            return;
+        }
+        if self.computer_attached(now) {
+            self.decoders_detached_since = None;
+            return;
+        }
+        // Gone only once it has stayed gone for the grace (a blip is not the computer going).
+        let since = *self.decoders_detached_since.get_or_insert(now);
+        if now.saturating_duration_since(since) < DETACH_GRACE {
             return;
         }
         for screen in std::mem::take(&mut self.decoder_leaves_held) {
@@ -135,10 +162,12 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    use super::super::remote_transmit::RemoteTxHold;
     use super::*;
     use crate::remote_control::transmit::TransmitAuthority;
     use crate::settings::Settings;
-    use std::time::Duration;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     const SCREENS: [DecoderScreen; 5] = [
         DecoderScreen::Rtty,
@@ -367,7 +396,13 @@ mod tests {
             SCREENS.iter().all(|s| armed(&e, *s)),
             "still attached: all running"
         );
-        e.poll_remote_stream(t0 + Duration::from_secs(6)); // presence lapsed
+        let lapsed = t0 + Duration::from_secs(6);
+        e.poll_remote_stream(lapsed); // presence lapsed: the grace starts
+        assert!(
+            SCREENS.iter().all(|s| armed(&e, *s)),
+            "inside the grace: all running"
+        );
+        e.poll_remote_stream(lapsed + DETACH_GRACE);
         for s in SCREENS {
             assert!(!armed(&e, s), "{s:?}: stopped once the computer was gone");
             assert!(
@@ -390,15 +425,86 @@ mod tests {
         e.leave_decoder_screen(DecoderScreen::Sstv);
         assert!(!e.rtty_auto_arm(), "back on RTTY (already running)");
         e.set_sstv_viewer_open(true);
-        e.poll_remote_stream(t0 + Duration::from_secs(6));
+        let lapsed = t0 + Duration::from_secs(6);
+        e.poll_remote_stream(lapsed);
+        e.poll_remote_stream(lapsed + DETACH_GRACE);
         assert!(e.rtty_armed(), "RTTY is in front again: not stopped");
         assert!(e.sstv_armed(), "the viewer still shows SSTV");
         e.set_sstv_viewer_open(false);
-        e.poll_remote_stream(t0 + Duration::from_secs(7));
+        e.poll_remote_stream(lapsed + DETACH_GRACE + Duration::from_secs(1));
         assert!(
             !e.sstv_armed(),
             "the viewer closed: the held leave is carried out"
         );
+    }
+
+    /// A computer can hold the station's lease, and drive it, with no presence at all: on the
+    /// internet with datagrams blocked ("watch, tune and log only"), or on a LAN where its Stop road
+    /// is not heard. It is just as attached: its screens send leaves too, and its picture viewer
+    /// watches the shack's SSTV receiver. The lease counts, read off the radio loop's authority poll.
+    fn with_a_lease_and_no_presence() -> (Engine, Arc<AtomicBool>, Instant) {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let lease = Arc::new(AtomicBool::new(true));
+        let held = lease.clone();
+        e.set_remote_tx_hold_source(Arc::new(move |_| {
+            Some(RemoteTxHold {
+                lease_held: held.load(Ordering::SeqCst),
+                ..Default::default()
+            })
+        }));
+        let t0 = Instant::now();
+        e.poll_remote_transmit(t0);
+        assert!(!e.remote_presence_live(t0), "premise: no presence");
+        (e, lease, t0)
+    }
+
+    #[test]
+    fn a_lease_without_presence_is_attached_too() {
+        for s in SCREENS {
+            let (mut e, lease, t0) = with_a_lease_and_no_presence();
+            assert!(auto_arm(&mut e, s));
+            assert!(
+                e.leave_decoder_screen(s),
+                "{s:?}: kept while the lease is held"
+            );
+            assert!(e.leave_decoder_screen(s), "{s:?}: either window's leave");
+            e.poll_remote_transmit(t0 + Duration::from_secs(30));
+            assert!(
+                armed(&e, s),
+                "{s:?}: still decoding while the lease is held"
+            );
+            // The computer goes: the lease ends, and after the grace the held leave is carried out.
+            lease.store(false, Ordering::SeqCst);
+            let gone = t0 + Duration::from_secs(31);
+            e.poll_remote_transmit(gone);
+            e.poll_remote_transmit(gone + DETACH_GRACE - Duration::from_millis(1));
+            assert!(armed(&e, s), "{s:?}: inside the grace nothing is stopped");
+            e.poll_remote_transmit(gone + DETACH_GRACE);
+            assert!(!armed(&e, s), "{s:?}: the grace is over: stopped");
+        }
+    }
+
+    /// A gap of a few seconds (a network blip, a client window whose timers were throttled) is not
+    /// the computer going: it comes back inside the grace, and nothing it was watching stopped.
+    #[test]
+    fn a_short_gap_carries_out_nothing() {
+        let (mut e, lease, t0) = with_a_lease_and_no_presence();
+        assert!(e.sstv_auto_arm());
+        assert!(e.leave_decoder_screen(DecoderScreen::Sstv));
+        lease.store(false, Ordering::SeqCst);
+        e.poll_remote_transmit(t0 + Duration::from_secs(1));
+        e.poll_remote_transmit(t0 + Duration::from_secs(5));
+        lease.store(true, Ordering::SeqCst);
+        e.poll_remote_transmit(t0 + Duration::from_secs(6));
+        // Gone again later: the grace starts over from this gap, not the first.
+        lease.store(false, Ordering::SeqCst);
+        e.poll_remote_transmit(t0 + Duration::from_secs(7));
+        e.poll_remote_transmit(
+            t0 + Duration::from_secs(7) + DETACH_GRACE - Duration::from_millis(1),
+        );
+        assert!(e.sstv_armed(), "the blip carried nothing out");
+        e.poll_remote_transmit(t0 + Duration::from_secs(7) + DETACH_GRACE);
+        assert!(!e.sstv_armed());
     }
 
     /// The RTTY auto-sequencer decides its next over from what the decoder hears. While it is

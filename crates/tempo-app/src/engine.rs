@@ -5193,6 +5193,12 @@ pub struct Engine {
     /// Decoder screens left while a computer driving the station was attached, whose leave waits
     /// for it to go ([`Engine::leave_decoder_screen`]). Opening the screen again cancels its leave.
     decoder_leaves_held: Vec<decoder_screens::DecoderScreen>,
+    /// Some remote device holds the station lease (the authority poll's answer, refreshed every
+    /// `poll_remote_transmit` tick). Read only by the receive decoders' leave; decides no TX.
+    remote_lease_held: bool,
+    /// When no computer was last seen attached while leaves were held: the start of
+    /// [`decoder_screens::DETACH_GRACE`].
+    decoders_detached_since: Option<Instant>,
     /// The SSTV receiver is running because the operator opened its screen, not because they
     /// (or the ISS pass, an opt-in of theirs) armed it — the `rtty_auto_armed` distinction.
     sstv_auto_armed: bool,
@@ -7278,6 +7284,8 @@ impl Engine {
             sstv_auto_arm_declined: false,
             sstv_viewer_open: false,
             decoder_leaves_held: Vec::new(),
+            remote_lease_held: false,
+            decoders_detached_since: None,
             sstv_auto_armed: false,
             sstv_health: SstvHealth::default(),
             sstv_audio: Vec::new(),

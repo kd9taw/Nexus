@@ -563,10 +563,20 @@ impl Authority {
                 Some(l) if self.tx_held_for(&l.device, &c.tx_grants, now) => {
                     (l.device.clone(), c.tx_grants.clone())
                 }
-                _ => return Some(RemoteTxHold::default()),
+                // Not held. Whether a device holds the lease still goes back: a computer driving
+                // the station with no presence is attached all the same (the receive decoders).
+                lease => {
+                    return Some(RemoteTxHold {
+                        lease_held: lease.is_some(),
+                        ..RemoteTxHold::default()
+                    })
+                }
             }
         };
-        Some(self.hold_shown(&device, &grants, now))
+        Some(RemoteTxHold {
+            lease_held: true,
+            ..self.hold_shown(&device, &grants, now)
+        })
     }
 
     /// [`Self::hold_shown`] for each of `devices` at `now`, as the remote PC holding the lease under
@@ -627,6 +637,7 @@ impl Authority {
             held: true,
             owner_notified,
             left,
+            lease_held: false,
         }
     }
 
