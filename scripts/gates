@@ -340,6 +340,26 @@ function parseYaml(text) {
 // binary. One process, one directory.
 const RUNNER_TEMP = path.join(os.tmpdir(), `nexus-gates-runner-${process.pid}`);
 
+// And removed on EVERY way out: pass, red, crash, Ctrl-C, SIGTERM, a closed terminal. Nothing
+// removed it before; the tests alone run this script dozens of times per pass, and on 2026-10-30
+// thousands of these directories, with whatever their steps downloaded, helped fill a RAM-disk
+// /tmp until every tool on the box failed. 'exit' covers every path that ends in process.exit or
+// a thrown error. A signal would kill the process without it, so each one first lets the step it
+// interrupted wind down (a step still writing here would recreate what was just removed), then
+// exits through 'exit' with the code a shell reports for that signal. Ctrl-C and `timeout` signal
+// the whole process group, step included; the step is signalled again here for a `kill` aimed at
+// this process alone, and a step that will not stop is given ten seconds, not forever.
+let runningStep = null;
+process.on('exit', () => fs.rmSync(RUNNER_TEMP, { recursive: true, force: true }));
+for (const [signal, number] of [['SIGINT', 2], ['SIGTERM', 15], ['SIGHUP', 1]]) {
+  process.on(signal, () => {
+    if (!runningStep) process.exit(128 + number);
+    runningStep.once('close', () => process.exit(128 + number));
+    runningStep.kill(signal);
+    setTimeout(() => process.exit(128 + number), 10_000);
+  });
+}
+
 // Where a run leaves its evidence: one .log per gate and a summary.txt. Under
 // the tree's own (gitignored) target/, so the worktree that ran the gates is
 // where the record is found. Per-run, for the same reason as RUNNER_TEMP — two
@@ -1206,6 +1226,7 @@ function runStep(script, cwd, env, logPath) {
       env,
       stdio: ['inherit', 'pipe', 'pipe'],
     });
+    runningStep = child;
     const tee = (from, to) =>
       from.on('data', (chunk) => {
         to.write(chunk);
@@ -1217,6 +1238,7 @@ function runStep(script, cwd, env, logPath) {
       fs.writeSync(log, `scripts/gates: could not start bash: ${err.message}\n`);
     });
     child.on('close', (code) => {
+      runningStep = null;
       fs.closeSync(log);
       resolve(code === null ? 1 : code);
     });

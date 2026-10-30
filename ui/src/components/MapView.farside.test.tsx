@@ -34,7 +34,8 @@ vi.mock('../api', () => ({
 
 import { MapView } from './MapView'
 import { destinationPoint, flareField, inView, makeProjection, project, type MapView3 } from '../mapGeo'
-import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
+import { gridToLatLon, type LatLon } from '../grid'
+import { ribbonLines } from '../features/pathRibbon'
 
 class RO {
   observe() {}
@@ -424,12 +425,11 @@ describe('on the Globe, a far-side marker is not drawn through the planet — an
     const r = await mount({ stations: [station('W9NEAR', 'EN61')], selectedCall: 'W9NEAR' })
     await act(async () => void fireEvent.click(screen.getByRole('button', { name: 'LP' })))
     const canvas = mapCanvas(r.container)
-    // The long path's own samples, as the map takes them: 48 steps round the other way.
+    // The long path's own samples, as the map takes them (features/pathRibbon: the rest of the great
+    // circle from the exact reciprocal bearing).
     const sll = gridToLatLon('EN61')!
-    const brg = (bearingDeg(ME, sll) + 180) % 360
-    const spKm = haversineKm(ME, sll)
     const proj = makeProjection('globe', ME, W, H, HOME)
-    const samples = Array.from({ length: 49 }, (_, i) => destinationPoint(ME, brg, ((40_075 - spKm) * i) / 48))
+    const samples = ribbonLines(ME, sll).find((l) => l.route === 'long')!.points
     const facing = samples.filter((s) => inView('globe', proj, s))
     expect(samples.length - facing.length, 'CONTROL: most of a long path is behind the globe').toBeGreaterThan(10)
     // The long path's stroke — its dashes are the [5, 4] pattern — draws one point per sample it

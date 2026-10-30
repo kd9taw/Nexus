@@ -1,10 +1,13 @@
 // Imported by the compiled-browser CI entry point; also runnable alone.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
-import { readdir, readFile } from 'node:fs/promises'
+import { execFile, spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { readdir, readFile, readlink } from 'node:fs/promises'
+import { once } from 'node:events'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { chrome, CHROME_COLD_START_MS } from './browser-runtime.mjs'
 
 const run = promisify(execFile)
@@ -67,4 +70,50 @@ test('a Worker that fails to start leaves no process behind and the runner exits
     assert.deepEqual(survivors, [], 'no process started by the failed Worker may outlive its runner')
   }
   console.log(`Worker startup failure: runner exited red in ${seconds} s with no surviving process`)
+})
+
+// A runner that dies without stopping its Chrome must take that Chrome and its profile with it. Chrome
+// runs in a process group of its own, so before the orphan guard (browser-runtime.mjs) a runner killed by
+// `timeout`, Ctrl-C or SIGKILL left it running, and thirty such Chromes, each holding a profile of a few
+// hundred MB, filled a RAM-disk /tmp. Each case first sees the profile and (on Linux) a Chrome using it,
+// so "gone afterwards" cannot pass by their never having existed.
+test('a Chrome whose owner dies without stopping it is ended and its profile removed', { timeout: 300000 }, async () => {
+  const fixture = fileURLToPath(new URL('./fixtures/browser-orphan-owner.mjs', import.meta.url))
+  const chromesUsing = async profile => {
+    if (process.platform !== 'linux') return []
+    const found = []
+    for (const pid of (await readdir('/proc')).filter(name => /^\d+$/.test(name))) {
+      try { if ((await readFile(`/proc/${pid}/cmdline`, 'utf8')).includes(`--user-data-dir=${profile}`)) found.push(pid) } catch {}
+    }
+    return found
+  }
+  for (const signal of ['SIGTERM', 'SIGKILL']) {
+    const child = spawn(process.execPath, [fixture], { stdio: ['ignore', 'pipe', 'inherit'] })
+    try {
+      let out = ''
+      child.stdout.on('data', chunk => { out += chunk })
+      const exited = once(child, 'exit')
+      await Promise.race([
+        (async () => { while (!out.includes('\n')) await once(child.stdout, 'data') })(),
+        exited.then(() => { throw new Error(`${signal}: the owner exited before Chrome started`) }),
+      ])
+      const profile = out.trim()
+      assert.ok(existsSync(profile), `${signal}: the profile must exist while Chrome runs`)
+      // Chrome's own temp folders, such as its single-instance folder named by this link, must be inside
+      // the profile, or removing the profile leaves them behind. (Not under a temp directory too long for
+      // Chrome's socket there; browser-runtime.mjs keeps the shared one then. CI's is short.)
+      if (Buffer.byteLength(join(profile, 'org.chromium.Chromium.XXXXXX', 'SingletonSocket')) <= 107) {
+        const singleton = dirname(await readlink(join(profile, 'SingletonSocket')))
+        assert.ok(singleton.startsWith(`${profile}/`), `${signal}: Chrome's single-instance folder ${singleton} is not inside its profile`)
+      }
+      if (process.platform === 'linux') assert.notDeepEqual(await chromesUsing(profile), [], `${signal}: no Chrome found using the profile`)
+      child.kill(signal)
+      await exited
+      // The guard's rm -rf of a few hundred MB took about 40 s on a loaded box.
+      const deadline = performance.now() + 90_000
+      while (performance.now() < deadline && (existsSync(profile) || (await chromesUsing(profile)).length)) await new Promise(resolve => setTimeout(resolve, 100))
+      assert.deepEqual(await chromesUsing(profile), [], `${signal}: Chrome outlived its owner`)
+      assert.equal(existsSync(profile), false, `${signal}: the profile outlived its owner`)
+    } finally { child.kill('SIGKILL') }
+  }
 })

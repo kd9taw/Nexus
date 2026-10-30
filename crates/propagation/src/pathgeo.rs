@@ -18,24 +18,29 @@
 //!
 //! Every Kp value carries its source, so a surface can say "forecast" for a forecast and never
 //! present a prediction as an observation. With no space-weather data at all an hour's Kp is
-//! [`KpSource::Unknown`] and every Kp-dependent number is absent rather than a stand-in. Short path only; the long path arrives with the
-//! route parameter.
+//! [`KpSource::Unknown`] and every Kp-dependent number is absent rather than a stand-in. Either
+//! route: the long path samples the other arc of the same great circle ([`path_geometry_route`]).
 
 use serde::Serialize;
 
 use crate::geo;
 use crate::kpforecast::{KpForecast, KpKind};
 use crate::pca::cutoff_lat_deg;
+use crate::route::Route;
 
 /// Samples along the arc, both ends included. 64 segments keep the spacing ≤ ~310 km
 /// (≤ 2.8°) on the longest short path, finer than the 2° OVATION cells it is matched to.
 pub const SAMPLES: usize = 65;
+/// Samples along the long path, which is up to twice as long: the same spacing.
+pub const SAMPLES_LONG: usize = 129;
+/// Earth circumference (km) on the sphere [`geo`] uses (radius 6371 km).
+const CIRCUMFERENCE_KM: f64 = 2.0 * std::f64::consts::PI * 6371.0;
 
 /// Solar elevation band (degrees either side of the horizon) counted as grey line.
 pub const GREYLINE_DEG: f64 = 6.0;
 
 /// Where an hour's Kp came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum KpSource {
     /// SWPC measured it (the period has passed or is in progress with final data).
@@ -70,9 +75,32 @@ pub struct PathGeoHour {
     /// Grey line at the operator's end / the far end.
     pub grey_me: bool,
     pub grey_dx: bool,
+    /// The stretches of the arc inside the polar cap or on the grey line in this hour — what a
+    /// map draws over the path when the operator scrubs the day to it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<PathSegment>,
 }
 
-/// The short-path geometry between two stations over the next 24 hours.
+/// What a stretch of the arc is crossing in the request's hour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SegmentKind {
+    /// Poleward of the polar-cap boundary at the hour's Kp.
+    Polar,
+    /// On the grey line (sun within ±6° of the horizon).
+    Grey,
+}
+
+/// A stretch of the arc, as fractions of its length from the operator (0) to the far end (1).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathSegment {
+    pub from: f32,
+    pub to: f32,
+    pub kind: SegmentKind,
+}
+
+/// The geometry of one route between two stations over the next 24 hours.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PathGeometry {
@@ -88,6 +116,31 @@ pub struct PathGeometry {
     pub oval_now: Option<bool>,
     /// 24 entries, UTC hour 0..23, aligned with the engine's `hourly` arrays.
     pub hours: Vec<PathGeoHour>,
+    /// The stretches of the arc inside the polar cap or on the grey line in the request's
+    /// hour — what a map draws over the path.
+    pub segments_now: Vec<PathSegment>,
+}
+
+/// Runs of flagged samples as arc fractions; each sample stands for half a step either side.
+fn segments_of(flags: &[bool], kind: SegmentKind, out: &mut Vec<PathSegment>) {
+    let last = (flags.len() - 1) as f32;
+    let half = 0.5 / last;
+    let mut i = 0;
+    while i < flags.len() {
+        if !flags[i] {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < flags.len() && flags[i] {
+            i += 1;
+        }
+        out.push(PathSegment {
+            from: (start as f32 / last - half).max(0.0),
+            to: ((i - 1) as f32 / last + half).min(1.0),
+            kind,
+        });
+    }
 }
 
 /// Kp for the hour starting at `unix`: the outlook sample whose 3-hour period contains it,
@@ -134,9 +187,44 @@ pub fn path_geometry(
     forecast: Option<&KpForecast>,
     oval: Option<&[(f32, f32)]>,
 ) -> PathGeometry {
-    let pts: Vec<(f64, f64)> = (0..SAMPLES)
-        .map(|i| geo::interpolate(me, dx, i as f64 / (SAMPLES - 1) as f64))
-        .collect();
+    path_geometry_route(me, dx, Route::Short, from_unix, kp_now, forecast, oval)
+}
+
+/// [`path_geometry`] for either route. The long path leaves on the reciprocal bearing and
+/// runs the rest of the great circle; its distance and bearing are the long path's.
+pub fn path_geometry_route(
+    me: (f64, f64),
+    dx: (f64, f64),
+    route: Route,
+    from_unix: i64,
+    kp_now: Option<f32>,
+    forecast: Option<&KpForecast>,
+    oval: Option<&[(f32, f32)]>,
+) -> PathGeometry {
+    let sp_km = geo::haversine_km(me, dx);
+    let sp_brg = geo::bearing_deg(me, dx);
+    let (pts, dist_km, bearing_deg): (Vec<(f64, f64)>, f64, f64) = match route {
+        Route::Short => (
+            (0..SAMPLES)
+                .map(|i| geo::interpolate(me, dx, i as f64 / (SAMPLES - 1) as f64))
+                .collect(),
+            sp_km,
+            sp_brg,
+        ),
+        Route::Long => {
+            let km = CIRCUMFERENCE_KM - sp_km;
+            let brg = (sp_brg + 180.0) % 360.0;
+            let n = SAMPLES_LONG;
+            (
+                (0..n)
+                    .map(|i| geo::destination_point(me, brg, km * i as f64 / (n - 1) as f64))
+                    .collect(),
+                km,
+                brg,
+            )
+        }
+    };
+    let samples = pts.len();
     let gmlat: Vec<f64> = pts
         .iter()
         .map(|&(la, lo)| geo::geomagnetic_lat_deg(la, lo).abs())
@@ -155,7 +243,8 @@ pub fn path_geometry(
         })
     });
 
-    let n = SAMPLES as f32;
+    let n = samples as f32;
+    let mut segments_now = Vec::new();
     let hour0 = from_unix - from_unix.rem_euclid(3600);
     let now_hour = (from_unix.rem_euclid(86_400) / 3600) as usize;
     let hours = (0..24usize)
@@ -172,6 +261,15 @@ pub fn path_geometry(
                 .map(|&(la, lo)| geo::solar_elevation_deg(la, lo, mid))
                 .collect();
             let grey = |e: f64| e.abs() <= GREYLINE_DEG;
+            let mut segments = Vec::new();
+            // No polar stretch to draw when the Kp, and so the cap edge, is unknown.
+            let polars: Vec<bool> = gmlat.iter().map(|&g| cap.is_some_and(|c| g >= c)).collect();
+            let greys: Vec<bool> = elev.iter().map(|&e| grey(e)).collect();
+            segments_of(&polars, SegmentKind::Polar, &mut segments);
+            segments_of(&greys, SegmentKind::Grey, &mut segments);
+            if h == now_hour {
+                segments_now = segments.clone();
+            }
             PathGeoHour {
                 unix,
                 kp,
@@ -181,18 +279,20 @@ pub fn path_geometry(
                 greyline_frac: elev.iter().filter(|&&e| grey(e)).count() as f32 / n,
                 sunlit_frac: elev.iter().filter(|&&e| e > 0.0).count() as f32 / n,
                 grey_me: grey(elev[0]),
-                grey_dx: grey(elev[SAMPLES - 1]),
+                grey_dx: grey(elev[samples - 1]),
+                segments,
             }
         })
         .collect();
 
     PathGeometry {
-        dist_km: geo::haversine_km(me, dx) as f32,
-        bearing_deg: geo::bearing_deg(me, dx) as f32,
+        dist_km: dist_km as f32,
+        bearing_deg: bearing_deg as f32,
         max_gmlat_deg: max_gmlat as f32,
         now_hour: now_hour as u8,
         oval_now,
         hours,
+        segments_now,
     }
 }
 
@@ -432,6 +532,146 @@ mod tests {
         let two_north = [(46.0f32, -71.0f32)];
         let g = path_geometry(BOSTON, near, MAY_12Z, Some(2.0), None, Some(&two_north));
         assert_eq!(g.oval_now, Some(false), "two cells away does not");
+    }
+
+    fn long(me: (f64, f64), dx: (f64, f64), kp: f32) -> PathGeometry {
+        path_geometry_route(me, dx, Route::Long, MAY_12Z, Some(kp), None, None)
+    }
+
+    #[test]
+    fn the_long_path_is_the_rest_of_the_circle_on_the_reciprocal_bearing() {
+        let (sp, lp) = (quiet(BOSTON, TOKYO, 2.0), long(BOSTON, TOKYO, 2.0));
+        assert!(
+            (sp.dist_km + lp.dist_km - CIRCUMFERENCE_KM as f32).abs() < 1.0,
+            "{} + {}",
+            sp.dist_km,
+            lp.dist_km
+        );
+        let d = (lp.bearing_deg - sp.bearing_deg).rem_euclid(360.0);
+        assert!((d - 180.0).abs() < 1e-3, "{d}");
+        // The last long-path sample is the far station, reached the other way round.
+        let end = geo::destination_point(BOSTON, lp.bearing_deg as f64, lp.dist_km as f64);
+        assert!(geo::haversine_km(end, TOKYO) < 5.0, "{end:?}");
+    }
+
+    #[test]
+    fn a_polar_short_path_has_a_long_path_over_the_other_cap() {
+        // Boston -> Tokyo runs over the northern cap at quiet Kp. Its long path is no escape:
+        // every great circle reaches the same geomagnetic latitude in both hemispheres (the
+        // dipole frame is a rotation), and the short path holds one apex, so the long path holds
+        // the other — it crosses the southern cap instead.
+        let (sp, lp) = (quiet(BOSTON, TOKYO, 3.0), long(BOSTON, TOKYO, 3.0));
+        assert!(sp.hours.iter().all(|h| h.polar_frac.unwrap() > 0.0));
+        assert!(lp.hours.iter().all(|h| h.polar_frac.unwrap() > 0.0));
+        assert!(
+            lp.max_gmlat_deg >= sp.max_gmlat_deg - 0.5,
+            "{} vs {}",
+            lp.max_gmlat_deg,
+            sp.max_gmlat_deg
+        );
+        // Where the cap stretch is: north on the short path, south on the long one.
+        let mid_lat = |g: &PathGeometry| {
+            let s = g
+                .segments_now
+                .iter()
+                .find(|s| s.kind == SegmentKind::Polar)
+                .expect("a polar stretch");
+            let f = ((s.from + s.to) / 2.0) as f64;
+            geo::destination_point(BOSTON, g.bearing_deg as f64, g.dist_km as f64 * f).0
+        };
+        assert!(mid_lat(&sp) > 50.0, "{}", mid_lat(&sp));
+        assert!(mid_lat(&lp) < -50.0, "{}", mid_lat(&lp));
+    }
+
+    #[test]
+    fn with_kp_unknown_neither_route_draws_a_polar_stretch() {
+        // Boston -> Tokyo crosses a cap both ways round at any real Kp (positive control:
+        // the test above). With no Kp held there is no cap edge to draw from.
+        for route in [Route::Short, Route::Long] {
+            let g = path_geometry_route(BOSTON, TOKYO, route, MAY_12Z, None, None, None);
+            assert!(
+                g.segments_now.iter().all(|s| s.kind != SegmentKind::Polar),
+                "{route:?}: {:?}",
+                g.segments_now
+            );
+            assert!(g.hours.iter().all(|h| h.polar_frac.is_none()));
+            let known = path_geometry_route(BOSTON, TOKYO, route, MAY_12Z, Some(2.0), None, None);
+            assert!(known
+                .segments_now
+                .iter()
+                .any(|s| s.kind == SegmentKind::Polar));
+        }
+    }
+
+    #[test]
+    fn an_equatorial_long_path_stays_out_of_the_cap_at_kp_9() {
+        // Singapore -> Nairobi: the short path and its long path both hug the equator.
+        let lp = path_geometry_route(
+            (1.35, 103.82),
+            (-1.29, 36.82),
+            Route::Long,
+            MAY_12Z,
+            Some(9.0),
+            None,
+            None,
+        );
+        assert!(lp.hours.iter().all(|h| h.polar_frac == Some(0.0)));
+        assert!(lp.max_gmlat_deg < 35.0, "{}", lp.max_gmlat_deg);
+        assert!((32_000.0..34_000.0).contains(&lp.dist_km), "{}", lp.dist_km);
+    }
+
+    #[test]
+    fn segments_cover_exactly_the_flagged_stretch() {
+        let mut out = Vec::new();
+        // 5 samples (4 steps): samples 1..=2 flagged → 0.25±0.125 .. 0.5±0.125.
+        segments_of(
+            &[false, true, true, false, true],
+            SegmentKind::Grey,
+            &mut out,
+        );
+        assert_eq!(out.len(), 2);
+        assert_eq!((out[0].from, out[0].to), (0.125, 0.625));
+        // The end sample is clamped to the arc.
+        assert_eq!((out[1].from, out[1].to), (0.875, 1.0));
+        out.clear();
+        segments_of(&[false; 5], SegmentKind::Grey, &mut out);
+        assert!(out.is_empty());
+        // At equinox 06Z the London -> Accra arc is grey end to end: one segment, 0..1.
+        let g = path_geometry(LONDON, (5.6, -0.19), 1_773_986_400, Some(2.0), None, None);
+        let grey: Vec<_> = g
+            .segments_now
+            .iter()
+            .filter(|s| s.kind == SegmentKind::Grey)
+            .collect();
+        assert_eq!(grey.len(), 1);
+        assert!(grey[0].from == 0.0 && grey[0].to == 1.0, "{grey:?}");
+    }
+
+    #[test]
+    fn every_hour_carries_its_own_stretches() {
+        // London -> Accra at equinox, asked at 06Z: grey end to end at 06Z, none at noon.
+        let g = path_geometry(LONDON, (5.6, -0.19), 1_773_986_400, Some(2.0), None, None);
+        assert_eq!(g.hours[g.now_hour as usize].segments, g.segments_now);
+        let grey = |h: usize| {
+            g.hours[h]
+                .segments
+                .iter()
+                .any(|s| s.kind == SegmentKind::Grey)
+        };
+        assert!(grey(6) && !grey(12));
+        // Boston -> Tokyo at Kp 2: the polar stretch is drawn in each hour the arc is in the cap.
+        let bt = quiet(BOSTON, TOKYO, 2.0);
+        for h in &bt.hours {
+            let polar = h.segments.iter().any(|s| s.kind == SegmentKind::Polar);
+            assert_eq!(polar, h.polar_frac.unwrap() > 0.0);
+        }
+        assert!(bt.hours.iter().all(|h| h.polar_frac.unwrap() > 0.0));
+        // With the Kp unknown there is no cap edge, so no polar stretch is drawn at any hour.
+        let unknown = path_geometry(BOSTON, TOKYO, MAY_12Z, None, None, None);
+        assert!(unknown
+            .hours
+            .iter()
+            .all(|h| h.segments.iter().all(|s| s.kind != SegmentKind::Polar)));
     }
 
     #[test]

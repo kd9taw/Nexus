@@ -267,6 +267,11 @@ if [ "$BUILD" = 1 ]; then
 fi
 
 LOG="$(mktemp -t browser-probe.XXXXXX.log)"
+# A red probe keeps its log and names it (below); a probe stopped by Ctrl-C, `timeout` or a closed
+# terminal removes it, as a green one does.
+trap 'rm -f "$LOG"; exit 130' INT
+trap 'rm -f "$LOG"; exit 143' TERM
+trap 'rm -f "$LOG"; exit 129' HUP
 if [ -n "$SHARD" ]; then
   echo "browser-probe: running CI SHARD $SHARD of 2 entire against $(google-chrome --version 2>/dev/null || echo Chrome)"
 else

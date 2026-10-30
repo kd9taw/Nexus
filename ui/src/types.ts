@@ -277,6 +277,9 @@ export interface PathHour {
   layer: 'E' | 'F2'
   hops: number
   takeoffDeg: number
+  /** The hour's median SNR (dB in the model's 1 Hz bandwidth): only meaningful as a difference
+   * between two routes. Absent from an older shack. */
+  snrDb?: number
   /** Beyond 7000 km: the hop geometry the long-path method assumes from distance alone (the
    * same every hour and band) — an estimate, not a modelled ray. */
   estimated: boolean
@@ -298,8 +301,12 @@ export interface PathGeoHour {
   sunlitFrac: number
   greyMe: boolean
   greyDx: boolean
+  /** The stretches of the arc inside the polar cap or on the grey line in this hour (fractions
+   * from the operator, 0, to the far end, 1) — what the map draws when the day is scrubbed to it.
+   * Absent when none, and from an older shack. */
+  segments?: { from: number; to: number; kind: 'polar' | 'grey' }[]
 }
-/** Short-path geometry over the next 24 h (polar cap, auroral oval, grey line, Kp). */
+/** One route's geometry over the next 24 h (polar cap, auroral oval, grey line, Kp). */
 export interface PathGeometry {
   distKm: number
   bearingDeg: number
@@ -309,6 +316,27 @@ export interface PathGeometry {
   ovalNow?: boolean
   /** 24 entries, UTC hour 0..23. */
   hours: PathGeoHour[]
+  /** The stretches of the arc inside the polar cap or on the grey line in the request's hour, as
+   * fractions of its length from the operator (0) to the far end (1). Absent from an older shack. */
+  segmentsNow?: { from: number; to: number; kind: 'polar' | 'grey' }[]
+}
+/** Which way round the great circle the model favours for one band at the request's hour
+ * (propagation::route). The model's opinion only: never "confirmed". */
+export interface RouteCall {
+  band: string
+  verdict: 'short' | 'long' | 'either' | 'unknown'
+  confidence?: 'likely' | 'possible'
+  /** Long-path minus short-path median SNR (dB), when the model gives both. */
+  marginDb?: number
+  shortBcr: number
+  longBcr: number
+  reasons: (
+    | { kind: 'oneClosed'; open: 'short' | 'long' }
+    | { kind: 'margin'; better: 'short' | 'long' }
+    | { kind: 'withinMargin' }
+    | { kind: 'bothClosed' }
+    | { kind: 'greyLine'; route: 'short' | 'long' }
+  )[]
 }
 /** Per-path HF prediction (the PathPredictor seam): operator↔DX, best-first. */
 export interface PathPrediction {
@@ -321,6 +349,62 @@ export interface PathPrediction {
   mufHourly: number[]
   /** Path geometry, on a per-path outlook only (never the DX ring). */
   geometry?: PathGeometry
+  /** The same request along the long path, with its own geometry — P.533 only, and
+   * unvalidated for the long path (the reference implementation is short-path only). */
+  longPath?: PathPrediction
+  /** Per band, the route the model favours now; present only beside `longPath`. */
+  routes?: RouteCall[]
+  /** The request's day as the path-over-the-day strip draws it; per-path outlook only. */
+  day?: PathDay
+}
+/** One band at one UTC hour of a path's day (propagation::pathday). Modelled, never measured. */
+export interface PathDayCell {
+  /** Short-path modelled reliability, whole percent. */
+  shortPct: number
+  /** Long-path modelled reliability, when the engine models the long path (unvalidated). */
+  longPct?: number
+  /** The route the model favours that hour; absent without a long path to compare. */
+  verdict?: RouteCall['verdict']
+  confidence?: RouteCall['confidence']
+}
+/** One UTC hour's band-independent geometry in a path's day. */
+export interface PathDayHour {
+  unix: number
+  /** null exactly when `kpSource` is `unknown` (no space-weather data held). */
+  kp: number | null
+  /** Where the hour's Kp came from (see PathGeoHour.kpSource). */
+  kpSource: PathGeoHour['kpSource']
+  polarShort: boolean
+  polarLong?: boolean
+  greyMe: boolean
+  greyDx: boolean
+}
+/** A path over the day: band rows (highest first) × 24 UTC hours, both routes, plus the hours. */
+export interface PathDay {
+  nowHour: number
+  mufShort: number[]
+  mufLong?: number[]
+  /** Each route's highest geomagnetic latitude (degrees): the polar cap proper from 70°, below
+   * that only the auroral zone. Absent from an older shack. */
+  maxGmlatShort?: number
+  maxGmlatLong?: number
+  bands: { band: string; cells: PathDayCell[] }[]
+  hours: PathDayHour[]
+}
+/** One of the ten fixed DX regions with its path over the day (`get_path_regions`). */
+export interface RegionPathDay {
+  id: string
+  lat: number
+  lon: number
+  /** CQ zones the region counts (for ordering by the operator's needs and contacts). */
+  zones: number[]
+  day: PathDay
+}
+export interface PathRegions {
+  engine: string
+  /** When the model part was computed (unix s); the hours are current at every ask. */
+  computedUnix: number
+  regions: RegionPathDay[]
 }
 /** One receiver who decoded the operator ("getting out"). */
 export interface HeardMe {

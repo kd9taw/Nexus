@@ -4862,6 +4862,10 @@ export const EN = {
   'logbook.filters.activation.title': 'Show only the contacts of the activation running now ({{reference}}): its park on each UTC day it has run. Click again to show every contact.',
   'connect.pane.activation.title': 'Activation',
   'connect.pane.activation.basic': 'Your POTA or SOTA activation: each park’s count today, park to park, the rate and its contacts.',
+  'connect.pane.pathDay.title': 'Path over the day',
+  'connect.pane.pathDay.basic': 'Select a station to see when its path opens today, and which way round.',
+  'connect.pane.pathRegions.title': 'Paths to the regions',
+  'connect.pane.pathRegions.basic': 'When and which way round each DX region opens today, modelled from your grid.',
   'activation.pane.none': 'No activation running. Start one on the POTA / SOTA view.',
   'activation.pane.running': 'Running {{span}}',
   'activation.pane.midnight': '0000Z in {{span}}',
@@ -10854,7 +10858,7 @@ export const EN = {
   },
   'pathWhy.polar': 'crosses the polar cap',
   'pathWhy.auroralZone': 'crosses the auroral zone',
-  'pathWhy.kpUnknown': 'Kp unknown, no space-weather data',
+  'pathWhy.kpUnknown': 'Kp unknown (no Kp reading)',
   'pathWhy.oval': 'crosses the auroral oval right now',
   'pathWhy.grey.both': 'grey line at both ends',
   'pathWhy.grey.me': 'grey line at your end',
@@ -10871,6 +10875,8 @@ export const EN = {
   'pathWhy.detail.polar':
     'Auroral zone and polar cap: {{pct}}% of the path (poleward of {{lat}}° geomagnetic at Kp {{kp}}, {{source}})',
   'pathWhy.detail.polarUnknown': 'Auroral zone and polar cap: unknown, because Kp is unknown',
+  'pathWhy.detail.polarNever':
+    'Auroral zone and polar cap: 0% of the path (it never reaches {{floor}}° geomagnetic, the edge at Kp 9)',
   'pathWhy.detail.maxLat': 'Highest geomagnetic latitude on the path: {{lat}}°',
   'pathWhy.detail.grey': 'Grey line: {{pct}}% of the path · in daylight: {{sun}}%',
   'pathWhy.detail.oval': 'The live auroral oval lies across the path.',
@@ -10879,7 +10885,100 @@ export const EN = {
   'pathWhy.kpSource.measured': 'measured',
   'pathWhy.kpSource.forecast': 'forecast',
   'pathWhy.kpSource.current': 'latest reading, no forecast for this hour',
-  'pathWhy.kpSource.unknown': 'unknown, no space-weather data',
+  'pathWhy.kpSource.unknown': 'unknown (no Kp reading)',
+  // Short path or long path (features/pathRoute.ts): the heading hint on the Path card and the
+  // selected station card, the polar chip, and the map's long-path button. The route call is the
+  // P.533 model's opinion (a monthly median), so the confidence words are "likely" / "possible",
+  // never "confirmed"; the long path has no reference fixture, so wherever it is shown it is
+  // labelled modelled and unvalidated, and the engine never calls it more than "possible". The hint is advice: nothing turns the rotator. `{{brg}}`,
+  // `{{sp}}` and `{{lp}}` are degrees (true), `{{band}}` (20m) and `{{time}}` (1800Z) invariant.
+  // The hint is wrapped by `pathWhy.sentence`. The chip names the polar cap or the auroral zone as
+  // the why line does; its title's `{{source}}` is a `pathWhy.kpSource.*` phrase.
+  'pathRoute.conf.likely': 'likely',
+  'pathRoute.conf.possible': 'possible',
+  'pathRoute.hint.short': 'Beam {{brg}}° for {{band}}: short path ({{conf}})',
+  'pathRoute.hint.long': 'Beam {{brg}}° for {{band}}: long path ({{conf}})',
+  'pathRoute.hint.either':
+    '{{band}} works either way: short path {{sp}}° or long path {{lp}}°, modelled within 6 dB',
+  'pathRoute.hint.eitherGreyLong':
+    '{{band}} could go either way: the short path {{sp}}° is modelled stronger, the long path {{lp}}° lies along the grey line',
+  'pathRoute.hint.eitherGreyShort':
+    '{{band}} could go either way: the long path {{lp}}° is modelled stronger, the short path {{sp}}° lies along the grey line',
+  'pathRoute.antipode': 'Near the antipode: every heading is about the same distance',
+  'pathRoute.why.shortClosed': ' — the short path is modelled closed now',
+  'pathRoute.why.margin': ', modelled about {{db}} dB better now',
+  'pathRoute.why.grey': ', the grey line lies along it',
+  'pathRoute.detail.now':
+    'Now on {{band}}: short path {{sp}}°, reliability {{spPct}}% · long path {{lp}}°, reliability {{lpPct}}% (P.533 monthly median)',
+  'pathRoute.detail.margin': 'Long path minus short path: {{db}} dB median SNR',
+  'pathRoute.lpCaveat':
+    'Modelled, unvalidated for long path: the reference model is checked for the short path only.',
+  'pathRoute.lpBadge': 'modelled, unvalidated for long path',
+  'pathRoute.chip.polar': 'Polar path',
+  'pathRoute.chip.storm': 'Polar path · Kp {{kp}} forecast from {{time}}',
+  'pathRoute.chip.zone': 'Auroral zone',
+  'pathRoute.chip.zoneStorm': 'Auroral zone · Kp {{kp}} forecast from {{time}}',
+  'pathRoute.chip.stormIf': 'Auroral zone if Kp {{kp}} (forecast from {{time}})',
+  'pathRoute.chip.title.cap':
+    'This route crosses the polar cap, where an aurora brings fading and flutter. The model has no storms; this comes from space weather. Kp this hour: {{source}}.',
+  'pathRoute.chip.title.zone':
+    'This route crosses the auroral zone, where an aurora brings fading and flutter. The model has no storms; this comes from space weather. Kp this hour: {{source}}.',
+  'pathRoute.chip.title.stormIf':
+    'The space-weather forecast puts the auroral zone over this route from {{time}} (Kp {{kp}}, forecast). The model has no storms.',
+  'map.path.long.suggested':
+    'The model favours the long path now (modelled, unvalidated for long path). Advice only: the rotator does not move.',
+  // Path over the day (components/prop/PathDayStrip.tsx, features/pathDay.ts): the selected
+  // station's band x UTC-hour strip and the ten DX regions' strips. Every figure is the model's
+  // monthly median, never a measurement; the long path is unvalidated (pathRoute.lpBadge shows
+  // beside it). Kp is labelled with its source (pathWhy.kpSource.*). `{{time}}`, `{{from}}` and
+  // `{{to}}` are UTC hours (14Z), `{{band}}` (20m), `{{pct}}` a whole percent, `{{kp}}` a number;
+  // Kp and MUF are invariant tokens. `pathDay.best.*` items are joined by `pathDay.best.sep` and
+  // wrapped by `pathDay.best.lead`.
+  'pathDay.mode.best': 'Best',
+  'pathDay.mode.aria': 'Which route the strip shows',
+  'pathDay.mode.title.best': 'Colour each hour by the route the model favours',
+  'pathDay.mode.title.short': 'Colour each hour by the short path',
+  'pathDay.mode.title.long': 'Colour each hour by the long path (modelled, unvalidated)',
+  'pathDay.aria': 'Path over the day: modelled reliability per band and UTC hour',
+  'pathDay.hour.title': 'Show {{time}} on the map',
+  'pathDay.cell.title': '{{band}} {{time}}, modelled: {{text}}',
+  'pathDay.cell.short': 'short path {{pct}}%',
+  'pathDay.cell.long': 'long path {{pct}}%',
+  'pathDay.cell.favours.short': 'the model favours the short path ({{conf}})',
+  'pathDay.cell.favours.long': 'the model favours the long path ({{conf}})',
+  'pathDay.cell.either': 'either way',
+  'pathDay.cell.closed': 'both ways modelled closed',
+  'pathDay.cell.aboveMuf': 'above the MUF',
+  'pathDay.grey.title': '{{time}}: {{text}}',
+  'pathDay.kp.title': '{{time}}: Kp {{kp}}, {{source}}',
+  'pathDay.legend.short': 'short path',
+  'pathDay.legend.long': 'long path',
+  'pathDay.legend.polar': 'auroral zone / polar cap',
+  'pathDay.legend.muf': 'MUF ceiling',
+  'pathDay.legend.kp': 'Kp: solid measured, hollow forecast, dashed the latest reading carried forward, dotted unknown',
+  'pathDay.legend.modelled': 'Modelled monthly median, not a measurement',
+  'pathDay.best.lead': 'Best: {{text}}.',
+  'pathDay.best.sep': '; ',
+  'pathDay.best.short': '{{band}} {{from}}–{{to}} by the short path',
+  'pathDay.best.long': '{{band}} {{from}}–{{to}} by the long path',
+  'pathDay.best.either': '{{band}} {{from}}–{{to}} either way',
+  'pathDay.best.plain': '{{band}} {{from}}–{{to}}',
+  'pathDay.best.none': 'No band is modelled open on this path today.',
+  'pathDay.scrub.map': 'Map at {{time}}',
+  'pathDay.scrub.back': 'Now',
+  'pathDay.region.eu': 'Europe',
+  'pathDay.region.ja': 'Japan & East Asia',
+  'pathDay.region.vk': 'Australia & New Zealand',
+  'pathDay.region.pacific': 'Pacific',
+  'pathDay.region.sa': 'South America',
+  'pathDay.region.af': 'Africa',
+  'pathDay.region.carib': 'Caribbean',
+  'pathDay.region.me': 'Middle East',
+  'pathDay.region.sas': 'South Asia',
+  'pathDay.region.polar': 'Antarctica',
+  'pathDay.region.expand': 'Show every band for {{region}}',
+  'pathDay.region.collapse': 'Show only the best band for {{region}}',
+  'pathDay.region.order': 'Ordered by the needed stations heard, then your logged contacts, in each region',
   'connect.outlook.heading': 'Band outlook',
   'connect.outlook.muf.title':
     'Maximum Usable Frequency — the modeled ceiling to long-haul DX right now. Bands below it are open; above it, closed.',

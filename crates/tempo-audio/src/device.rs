@@ -1293,6 +1293,33 @@ where
     }
 }
 
+/// A [`resolve_configured`] device factory that asks the host ONCE, on first use, and hands
+/// every later pass a copy of that same list.
+///
+/// Resolution can take three passes, and when the saved device is absent it takes all three —
+/// on every attempt the radio loop makes to reopen it. Each pass used to enumerate the host
+/// afresh, so a missing codec cost three enumerations per retry.
+///
+/// ⚠️ SAFE ONLY BECAUSE cpal 0.18 DEVICES HOLD NO HANDLES. [`resolve_configured`]'s lazy,
+/// drop-each-device-before-the-next-probe shape exists for cpal 0.15's ALSA enumerator, which
+/// probe-opened every hint and kept the handles in the yielded `Device`. 0.18's ALSA `Device` is
+/// a PCM id, a description and a direction (its enumerator builds the whole list up front), and
+/// the WASAPI and CoreAudio devices are endpoint references, so holding the list cannot make a
+/// card busy against itself. A cpal upgrade that brings handle-holding devices back must drop
+/// this cache from [`CpalBackend::open`].
+///
+/// Nothing is enumerated if no pass ever asks (an empty selection is the system default).
+pub(crate) fn enumerated_once<D: Clone, I: Iterator<Item = D>>(
+    enumerate: impl Fn() -> Option<I>,
+) -> impl Fn() -> Option<std::vec::IntoIter<D>> {
+    let list: std::cell::OnceCell<Option<Vec<D>>> = std::cell::OnceCell::new();
+    move || {
+        list.get_or_init(|| enumerate().map(Iterator::collect))
+            .clone()
+            .map(Vec::into_iter)
+    }
+}
+
 /// Swap a system-default device handle for its enumerated twin (macOS input; see the call
 /// site in [`CpalBackend::open`]).
 ///
@@ -1829,15 +1856,17 @@ impl CpalBackend {
         let _host_guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let host = cpal::default_host();
         let in_default = host.default_input_device();
+        // One enumeration per direction per open, however many resolution passes ask for it —
+        // an absent device runs them all on every retry (see `enumerated_once`).
+        let inputs = enumerated_once(|| host.input_devices().ok());
         // macOS: the default-INPUT handle streams pinned to the concrete device but with NO
         // disconnect listener — swap it for its enumerated twin so an unplug/sleep-wake death
         // actually reports (see enumerated_default). Input only, deliberately: the empty
         // OUTPUT gets cpal's DefaultOutput unit, which genuinely follows macOS default
         // switches, and trading that away is not this fix's call to make.
         #[cfg(target_os = "macos")]
-        let in_default = in_default.map(|d| enumerated_default(|| host.input_devices().ok(), d));
-        let in_dev =
-            resolve_configured(|| host.input_devices().ok(), in_name, in_default, "input")?;
+        let in_default = in_default.map(|d| enumerated_default(&inputs, d));
+        let in_dev = resolve_configured(&inputs, in_name, in_default, "input")?;
         let capture_input = in_dev
             .device_name()
             .filter(|name| !name.trim().is_empty())
@@ -1876,7 +1905,7 @@ impl CpalBackend {
         let out_dev = match same_card.then(|| in_dev.clone()) {
             Some(d) if d.default_output_config().is_ok() => d,
             _ => resolve_configured(
-                || host.output_devices().ok(),
+                enumerated_once(|| host.output_devices().ok()),
                 out_name,
                 host.default_output_device(),
                 "output",
@@ -4597,8 +4626,8 @@ mod tests {
             "hw:CARD=CODEC,DEV=0"
         ));
     }
-    use super::{pick_device, resolve_configured, NamedDevice};
-    use std::cell::RefCell;
+    use super::{enumerated_once, pick_device, resolve_configured, NamedDevice};
+    use std::cell::{Cell, RefCell};
     use std::collections::HashSet;
     use std::rc::Rc;
 
@@ -4674,6 +4703,54 @@ mod tests {
         )
         .expect("the saved plughw pick must resolve once probes are dropped between hints");
         assert_eq!(dev.name, "plughw:CARD=CODEC,DEV=0");
+    }
+
+    /// An open of a device that is not there runs all three resolution passes, and the radio
+    /// loop retries that open for as long as the device stays away. Each pass used to enumerate
+    /// the host afresh; through `enumerated_once` the host is asked once per open, and the
+    /// answer is the same as asking it every pass.
+    #[test]
+    fn one_open_enumerates_the_host_once_however_many_passes_it_takes() {
+        let asked = Cell::new(0usize);
+        let devices = enumerated_once(|| {
+            asked.set(asked.get() + 1);
+            Some(host().into_iter())
+        });
+        // A saved ALSA name that misses all three passes (exact, trimmed, same card).
+        assert!(
+            resolve_configured(&devices, Some("plughw:CARD=Gone,DEV=0"), None, "input").is_err()
+        );
+        assert_eq!(asked.get(), 1, "the host was enumerated once per open");
+        // Control: through the cache the ordinal still finds the SECOND identical codec.
+        assert_eq!(
+            resolve_configured(
+                &devices,
+                Some("Microphone (USB Audio CODEC) #2"),
+                None,
+                "input"
+            ),
+            Ok(("Microphone (USB Audio CODEC)".to_string(), 3))
+        );
+        assert_eq!(
+            asked.get(),
+            1,
+            "the cached list served the second resolve too"
+        );
+    }
+
+    #[test]
+    fn an_unused_device_cache_never_enumerates() {
+        // "System default" never looks at the list, so it must not pay for one.
+        let asked = Cell::new(0usize);
+        let devices = enumerated_once(|| {
+            asked.set(asked.get() + 1);
+            Some(host().into_iter())
+        });
+        assert_eq!(
+            resolve_configured(&devices, None, Some(default_dev()), "input"),
+            Ok(default_dev())
+        );
+        assert_eq!(asked.get(), 0);
     }
 
     /// A stand-in host — cpal exposes no `Device` constructor, so this is the only way to

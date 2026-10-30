@@ -27,7 +27,8 @@ use super::geometry::Location;
 use super::noise::ManMadeCategory;
 use super::power::Dominant;
 use super::reliability::bcr_for_required_snr;
-use super::{run_p533, P533Params, P533Run};
+use super::{run_p533_route, P533Params, P533Run};
+use crate::route::Route;
 
 /// Required SNR (dB in 1 Hz) per operating mode, for the per-mode "workable
 /// now" rows. VOACAP-conventional figures: FT8 13 dB·Hz (−21 dB in 2.5 kHz),
@@ -73,6 +74,15 @@ impl P533Config {
             ..Self::default()
         }
     }
+}
+
+/// The sunspot number the engine runs on: the R12 held, else the one derived from the SFI. Every
+/// cache of this engine's answers keys on this, never on the held R12 alone, so a changed SFI is a
+/// different answer when no R12 is held.
+pub fn effective_ssn(wx: &SpaceWx) -> f64 {
+    wx.ssn
+        .map(f64::from)
+        .unwrap_or_else(|| ssn_from_sfi(wx.sfi as f64))
 }
 
 /// Smoothed sunspot number from SFI by inverting Covington
@@ -128,6 +138,7 @@ fn path_hour(run: &P533Run) -> Option<PathHour> {
         layer,
         hops: hops.min(u8::MAX as usize) as u8,
         takeoff_deg: ele.to_degrees() as f32,
+        snr_db: run.rel.snr as f32,
         estimated,
     })
 }
@@ -177,6 +188,39 @@ impl PathPredictor for P533Engine {
     }
 
     fn predict(&self, dx: (f64, f64), from_unix: i64, wx: &SpaceWx) -> PathPrediction {
+        self.predict_on(dx, Route::Short, from_unix, wx)
+    }
+
+    fn predict_route(
+        &self,
+        dx: (f64, f64),
+        route: Route,
+        from_unix: i64,
+        wx: &SpaceWx,
+    ) -> Option<PathPrediction> {
+        // The long route of two co-located stations is the whole circle, which has no
+        // direction; there is nothing to model.
+        if route == Route::Long {
+            let me = self.me?;
+            if geo::haversine_km(me, dx) < MIN_LONG_PATH_SPAN_KM {
+                return None;
+            }
+        }
+        Some(self.predict_on(dx, route, from_unix, wx))
+    }
+}
+
+/// Below this short-path distance the long path is not offered (see `predict_route`).
+const MIN_LONG_PATH_SPAN_KM: f64 = 10.0;
+
+impl P533Engine {
+    fn predict_on(
+        &self,
+        dx: (f64, f64),
+        route: Route,
+        from_unix: i64,
+        wx: &SpaceWx,
+    ) -> PathPrediction {
         // No operator anchor → empty outlooks, mirroring HeuristicEngine.
         let Some(me) = self.me else {
             return PathPrediction {
@@ -185,13 +229,13 @@ impl PathPredictor for P533Engine {
                 muf_now: 0.0,
                 muf_hourly: vec![0.0; 24],
                 geometry: None,
+                long_path: None,
+                routes: None,
+                day: None,
             };
         };
 
-        let ssn = wx
-            .ssn
-            .map(f64::from)
-            .unwrap_or_else(|| ssn_from_sfi(wx.sfi as f64));
+        let ssn = effective_ssn(wx);
 
         // The day containing the request, anchored to UTC midnight like the
         // heuristic (predict.rs) so heatmap x-axes align; month from that day.
@@ -227,7 +271,7 @@ impl PathPredictor for P533Engine {
             for (h, slot_score) in hourly.iter_mut().enumerate() {
                 // UT hour h ↔ reference slot h−1 (slot i is UT i+1).
                 let slot = ((h + 23) % 24) as i32;
-                let run = run_p533(tx, rx, month0, slot, ssn, freq, &sys);
+                let run = run_p533_route(tx, rx, route, month0, slot, ssn, freq, &sys);
                 *slot_score = (run.rel.bcr / 100.0).clamp(0.0, 1.0) as f32;
                 detail[h] = path_hour(&run);
                 // The MUF ceiling is per-path (band-independent); fill once.
@@ -277,6 +321,9 @@ impl PathPredictor for P533Engine {
             muf_now: muf_hourly[now_hour],
             muf_hourly,
             geometry: None,
+            long_path: None,
+            routes: None,
+            day: None,
         }
     }
 }
@@ -284,6 +331,7 @@ impl PathPredictor for P533Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::p533::run_p533;
 
     #[test]
     fn covington_inversion_roundtrips() {

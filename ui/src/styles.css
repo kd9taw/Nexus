@@ -3315,8 +3315,248 @@ body.resizing-row {
   font-size: var(--fs-micro);
   color: var(--text-dim);
 }
+/* Short path or long path: the polar chip, the heading hint, the long-path label (PathRoute). */
+.connect-path .cp-route {
+  display: block;
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+.route-polar-chip {
+  display: inline-block;
+  margin-right: var(--space-1);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--route-polar);
+  border-radius: var(--space-1);
+  color: var(--route-polar);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+.route-lp-badge {
+  margin-left: var(--space-1);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  font-style: italic;
+}
 .cp-grayline {
   color: var(--accent);
+}
+/* Path over the day (PathDayStrip): one grid of 25 columns — the label, then 24 UTC hours that
+   shrink with the box (minmax(0, 1fr): nothing in a cell may floor its width). Rows are
+   `display: contents`, so every row's cells share the axis's columns. The box's body scrolls
+   the grid when its slot is shorter than the rows. */
+.path-day {
+  font-size: var(--fs-micro);
+}
+.pd-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-1);
+}
+.pd-summary {
+  flex: 1 1 12em;
+  min-width: 0;
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+.pd-modes {
+  display: inline-flex;
+  gap: 1px;
+}
+.pd-mode {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+.pd-mode.on {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.pd-mode:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.pd-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3.2em) repeat(24, minmax(0, 1fr));
+  gap: 1px;
+  align-items: center;
+}
+/* A region's name and band: as wide as they are, up to two-fifths of the strip (the rest is
+   ellipsised, the whole name is in the hover). */
+.pd-grid.regions {
+  grid-template-columns: fit-content(40%) repeat(24, minmax(0, 1fr));
+}
+.pd-row {
+  display: contents;
+}
+.pd-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pd-region {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.pd-region::before {
+  content: '▸ ';
+  color: var(--text-faint);
+}
+.pd-region[aria-expanded='true']::before {
+  content: '▾ ';
+}
+.pd-band {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.pd-hour {
+  height: 12px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: calc(9px * var(--text-scale));
+  line-height: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.pd-hour.major {
+  color: var(--text-dim);
+}
+.pd-hour:disabled {
+  cursor: default;
+}
+.pd-cell {
+  height: 14px;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 1px;
+  color: #fff;
+  text-shadow: 0 0 2px #000;
+  font-size: calc(8px * var(--text-scale));
+  line-height: 14px;
+  text-align: center;
+  cursor: pointer;
+}
+/* No figure in this mode (the long path where the engine models none): hatched, never black. */
+.pd-cell.none {
+  background: repeating-linear-gradient(45deg, var(--border) 0 2px, transparent 2px 4px);
+}
+.pd-cell.polar {
+  box-shadow: inset 0 -2px 0 var(--route-polar);
+}
+.pd-cell.ceil {
+  box-shadow: inset 0 2px 0 var(--text);
+}
+.pd-cell.ceil.polar {
+  box-shadow:
+    inset 0 2px 0 var(--text),
+    inset 0 -2px 0 var(--route-polar);
+}
+.pd-cell.now,
+.pd-hour.now {
+  outline: 1px solid var(--text);
+  outline-offset: -1px;
+}
+.pd-cell.scrub,
+.pd-hour.scrub,
+.pd-greycell.scrub,
+.pd-kpcell.scrub {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.pd-greycell {
+  height: 10px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent);
+  font-size: calc(8px * var(--text-scale));
+  line-height: 10px;
+  text-align: center;
+}
+/* The Kp ribbon: the Kp outlook box's convention — measured solid, forecast hollow — plus the
+   current value carried forward into hours no outlook sample covers, dashed and faint. */
+.pd-kpcell {
+  height: 6px;
+  min-width: 0;
+  border-radius: 1px;
+}
+.pd-kpcell.good {
+  --kp-tone: var(--state-good);
+}
+.pd-kpcell.warn {
+  --kp-tone: var(--state-warn);
+}
+.pd-kpcell.bad {
+  --kp-tone: var(--state-bad);
+}
+.pd-kpcell.measured {
+  background: var(--kp-tone);
+}
+.pd-kpcell.forecast {
+  border: 1px solid var(--kp-tone);
+}
+.pd-kpcell.current {
+  border: 1px dashed var(--kp-tone);
+  opacity: 0.6;
+}
+/* No space-weather data: an empty dotted slot in the neutral border ink, never a tone. */
+.pd-kpcell.unknown {
+  border: 1px dotted var(--border);
+}
+.pd-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  margin-top: var(--space-1);
+  color: var(--text-faint);
+  font-size: calc(9px * var(--text-scale));
+}
+.pd-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  vertical-align: middle;
+}
+.pd-swatch.polar {
+  background: var(--route-polar);
+}
+.pd-swatch.ceil {
+  background: var(--text);
+}
+.pd-modelled {
+  font-style: italic;
+}
+.pd-map-now {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
 }
 .connect-path-list {
   list-style: none;
@@ -4376,6 +4616,10 @@ body.resizing-row {
   font-size: calc(10px * var(--text-scale));
   padding: 1px 6px;
 }
+/* The model favours the long path now: the LP button is ringed (advice; it moves nothing). */
+.map-path-toggle button.suggested {
+  box-shadow: inset 0 0 0 2px var(--band-open);
+}
 .map-legend {
   position: absolute;
   left: 50%;
@@ -4743,6 +4987,8 @@ body.resizing-row {
   --band-open: #69d98d;
   --band-marginal: #f1ca47;
   --band-closed: #747b81;
+  --route-polar: #c77dff; /* the map's aurora violet: a path stretch inside the polar cap */
+  --route-grey: rgba(255, 200, 110, 0.95); /* the terminator's gold: a path stretch on the grey line */
   --alert-critical: #ff6100;
   --alert-warning: #f7c243;
   --alert-info: #79c0f1;
@@ -4860,6 +5106,8 @@ body.resizing-row {
   --band-open: #007f35;
   --band-marginal: #a27000;
   --band-closed: #80878d;
+  --route-polar: #7c44c3;
+  --route-grey: #e08a00;
   --alert-critical: #9c0000;
   --alert-warning: #a76d00;
   --alert-info: #0070a6;
@@ -8394,8 +8642,24 @@ select optgroup {
 /* The selected card's path "why" sentence: a full-width row under the card's own row (the card
    wraps only for it — `flex-basis: 100%`), three lines at most so a narrow rail's card does not
    grow a column of prose; the whole sentence and its numbers are in the hover. */
-.station-card:has(> .station-why) {
+.station-card:has(> .station-why),
+.station-card:has(> .station-route) {
   flex-wrap: wrap;
+}
+/* The selected card's heading hint: the same full-width row, four lines at most — enough at the
+   narrowest card for the hint and the long-path label; the reasons are in the hover. */
+.station-route {
+  flex: 1 0 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-left: var(--space-5);
+  margin-bottom: 2px;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text);
 }
 .station-why {
   flex: 1 0 100%;

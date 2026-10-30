@@ -45,6 +45,7 @@ pub mod model;
 pub mod needalert;
 pub mod opening;
 pub mod p533;
+pub mod pathday;
 pub mod pathgeo;
 pub mod pca;
 pub mod pota;
@@ -53,6 +54,7 @@ pub mod predict;
 pub mod province;
 pub mod pskr_mqtt;
 pub mod repeaters;
+pub mod route;
 pub mod sat;
 pub mod satneeds;
 pub mod satsked;
@@ -123,7 +125,14 @@ pub use opening::{
     classify as classify_opening, detect as detect_openings_v2, reciprocity, BandFeatures,
     BandSignal, OpeningConfig, OpeningEpisode, OpeningEvent, OpeningTracker,
 };
-pub use pathgeo::{path_geometry, KpSource, PathGeoHour, PathGeometry};
+pub use pathday::{
+    day_is_well_formed, path_day, refresh_hours, refresh_regions, sweep_regions, PathDay,
+    PathDayBand, PathDayCell, PathDayHour, PathRegion, RegionDay, PATH_REGIONS,
+};
+pub use pathgeo::{
+    path_geometry, path_geometry_route, KpSource, PathGeoHour, PathGeometry, PathSegment,
+    SegmentKind,
+};
 pub use pota::{parse_pota_spots, parse_sota_spots, OtaSpot};
 pub use predict::{
     band_outlook_ring, make_predictor, modeled_now, representative_muf, HeuristicEngine,
@@ -134,6 +143,9 @@ pub use pskr_mqtt::{
     hf_region_topics, mqtt_topics as pskr_mqtt_topics, parse_mqtt_report as parse_pskr_mqtt,
     parse_mqtt_report_payload as parse_pskr_mqtt_payload, region_topics as pskr_region_topics,
     LiveSpots, REGION_SPOT_CAP,
+};
+pub use route::{
+    compare_routes, compare_routes_at, Route, RouteCall, RouteConfidence, RouteReason, RouteVerdict,
 };
 pub use sat::{passes as sat_passes, subpoint as sat_subpoint, tle_age_days, Pass, Tle};
 pub use satneeds::{pass_earn, SatNeeds, SatPassEarn};

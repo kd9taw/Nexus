@@ -143,6 +143,9 @@ export interface PaneContextInput {
   /** The call in the log entry of the cockpit beside the box (PaneContext `entryCall`); absent on every
    *  surface with no cockpit beside it. */
   entryCall?: string | null
+  /** The path-over-the-day scrub and its setter (PaneContext `dayScrub` / `onDayScrub`): Connect only. */
+  dayScrub?: PaneContext['dayScrub']
+  onDayScrub?: PaneContext['onDayScrub']
 }
 
 /** A box context, and the X-ray reading the map's flare layer draws (it is not a box's). */
@@ -193,6 +196,8 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
     onPoint: i.onPoint,
     toggleFocusBand: i.toggleFocusBand,
     entryCall: i.entryCall ?? null,
+    dayScrub: i.dayScrub ?? null,
+    onDayScrub: i.onDayScrub,
   }
   return { ctx, xrayNow: f.xrayNow }
 }
