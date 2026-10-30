@@ -11524,6 +11524,20 @@ export const EN = {
   'operate.decodes.sort.time': 'Time',
   'operate.decodes.sort.freq': 'Freq',
 
+  // The Band Activity search box (in the pane's title row). It narrows the list to the lines that
+  // contain every word typed; `*` and `?` are wildcards. `{{shown}}` is how many rows are on screen,
+  // `{{total}}` how many the chips would show with the box empty.
+  'operate.decodes.search.placeholder': 'Search',
+  'operate.decodes.search.aria': 'Search Band Activity',
+  'operate.decodes.search.title':
+    'Show only the lines that contain what you type: a call, grid, report, CQ DX or POTA, or a country. Every word must match; * and ? are wildcards. Only this list changes: decoding, alerts and transmitting do not. ✕ or Esc clears it (Esc also stops transmitting, as everywhere).',
+  'operate.decodes.search.clear': 'Clear the search',
+  'operate.decodes.search.count': '{{shown}} of {{total}} match',
+  'operate.decodes.search.count.title':
+    'The search box is hiding the lines that do not match. Clear it to see the whole list.',
+  'operate.decodes.emptySearch.detail':
+    '{{count}} decodes are hidden by the search — clear it to see them.',
+
   // `{{count}}` is how many rows the pane is showing.
   'operate.decodes.heard': '{{count}} heard',
   'operate.decodes.reviewing': '▲ reviewing — scroll to bottom to follow',

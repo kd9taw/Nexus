@@ -518,6 +518,9 @@ export function OperateCockpit({
   // and the dashboard rail's boxes folding in below `lg` and out again), and a sort held in the pane
   // went back to Time or Need each time.
   const [bandSort, setBandSort] = useState<DecodeSort>('time')
+  // Band Activity's search box text, held here for the same reason, and like the sort never stored:
+  // a restart opens on the whole band.
+  const [bandSearch, setBandSearch] = useState('')
   const [rosterSort, setRosterSort] = useState<RosterSort>(DEFAULT_ROSTER_SORT)
   // The RF scope pane's FT overlay: the newest slot's decodes and the RX/TX offsets, at dial ± offset.
   const rfFt = useMemo(
@@ -1359,6 +1362,8 @@ export function OperateCockpit({
             history={bandHistRef.current}
             sort={bandSort}
             onSort={setBandSort}
+            search={bandSearch}
+            onSearch={setBandSearch}
             decodes={snap.recentDecodes}
             slot={snap.radio.slot}
             rxOffsetHz={snap.radio.rxOffsetHz}
@@ -2181,6 +2186,8 @@ export function OperateCockpit({
                         history={bandHistRef.current}
                         sort={bandSort}
                         onSort={setBandSort}
+                        search={bandSearch}
+                        onSearch={setBandSearch}
                         decodes={snap.recentDecodes}
                         late={snap.lateDecodes}
                         slot={snap.radio.slot}
@@ -2268,6 +2275,8 @@ export function OperateCockpit({
                     history={bandHistRef.current}
                     sort={bandSort}
                     onSort={setBandSort}
+                    search={bandSearch}
+                    onSearch={setBandSearch}
                     decodes={snap.recentDecodes}
                     late={snap.lateDecodes}
                     slot={snap.radio.slot}

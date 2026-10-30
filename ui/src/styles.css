@@ -22477,6 +22477,51 @@ button.cq-skiptx1.on {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* The search box, between the title and the ✕ (whose own auto margin keeps it at the right edge,
+   so this box carries none). It takes the title row's slack and gives it back:
+   `min-width: 0` lets it shrink to the room a 260px rail leaves beside the title, so it never
+   wraps the row or pushes the ✕ out of the clip. The shape is the Stations search's
+   (.station-search). */
+.od-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 6em;
+  min-width: 0;
+  max-width: 16em;
+}
+.od-search input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.75rem;
+  /* 26px right clears the ✕, as .station-search input does. */
+  padding: 2px 26px 2px var(--space-2);
+  width: 100%;
+  min-width: 0;
+  transition: var(--transition);
+}
+.od-search input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.od-search input::placeholder {
+  color: var(--text-faint);
+}
+.od-search-clear {
+  position: absolute;
+  right: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.od-search-clear:hover {
+  color: var(--text);
+}
 .od-controls {
   display: flex;
   align-items: center;
@@ -22568,6 +22613,16 @@ button.cq-skiptx1.on {
    of spreading across the row once there is more than one of them. */
 .od-paused {
   margin-right: auto;
+}
+/* The search's "N of M match": the hidden-country chip's colour, since both say this pane is hiding
+   rows, but bare text rather than a bordered chip, so it costs the status row no height. A chip's
+   border and padding made the row 6px taller the moment the box got text, and on a short window
+   the list is already at its one-row floor. */
+.od-search-count {
+  flex: none;
+  color: var(--alert-warning);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* --- Country exclusion: the picker (portaled) + the "N countries hidden" chip ---
