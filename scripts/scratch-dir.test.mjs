@@ -31,18 +31,21 @@ const a = make('one-'), b = make('two-')
 writeFileSync(join(a, 'file'), 'x')
 mkdirSync(join(b, 'nested', 'deep'), { recursive: true })
 console.log(JSON.stringify([a, b]))
+// The ending ones wait for the parent's go, or their own exit could remove the folders before the
+// parent has seen them exist.
+if (how === 'end' || how === 'exit1' || how === 'throw') await new Promise((resolve) => process.stdin.once('data', resolve))
 if (how === 'throw') throw new Error('planted')
 if (how === 'exit1') process.exit(1)
 if (how === 'wait' || how === 'unhelped') setInterval(() => {}, 1000)
 `
 
-// Runs the child in its own empty TMPDIR; `signal` is sent once its folders exist.
+// Runs the child in its own empty TMPDIR; once its folders exist it is sent `signal`, or told to go on.
 async function run(how, signal) {
   const tmp = join(box, `${how}-${signal ?? 'none'}`)
   mkdirSync(tmp)
   const child = spawn(process.execPath, ['--input-type=module', '-e', CHILD, how], {
     env: { ...process.env, TMPDIR: tmp },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   })
   let out = ''
   child.stdout.on('data', (c) => (out += c))
@@ -51,6 +54,7 @@ async function run(how, signal) {
   const dirs = JSON.parse(out.split('\n')[0])
   assert.ok(dirs.every((d) => existsSync(d)), `${how}: the folders must exist while the child runs`)
   if (signal) child.kill(signal)
+  else child.stdin.end('go\n')
   const [code] = await closed
   return { code, left: readdirSync(tmp) }
 }

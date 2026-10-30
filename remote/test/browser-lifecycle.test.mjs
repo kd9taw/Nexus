@@ -77,7 +77,7 @@ test('a Worker that fails to start leaves no process behind and the runner exits
 // `timeout`, Ctrl-C or SIGKILL left it running, and thirty such Chromes, each holding a profile of a few
 // hundred MB, filled a RAM-disk /tmp. Each case first sees the profile and (on Linux) a Chrome using it,
 // so "gone afterwards" cannot pass by their never having existed.
-test('a Chrome whose owner dies without stopping it is ended and its profile removed', { timeout: 120000 }, async () => {
+test('a Chrome whose owner dies without stopping it is ended and its profile removed', { timeout: 300000 }, async () => {
   const fixture = fileURLToPath(new URL('./fixtures/browser-orphan-owner.mjs', import.meta.url))
   const chromesUsing = async profile => {
     if (process.platform !== 'linux') return []
@@ -109,7 +109,8 @@ test('a Chrome whose owner dies without stopping it is ended and its profile rem
       if (process.platform === 'linux') assert.notDeepEqual(await chromesUsing(profile), [], `${signal}: no Chrome found using the profile`)
       child.kill(signal)
       await exited
-      const deadline = performance.now() + 20_000
+      // The guard's rm -rf of a few hundred MB took about 40 s on a loaded box.
+      const deadline = performance.now() + 90_000
       while (performance.now() < deadline && (existsSync(profile) || (await chromesUsing(profile)).length)) await new Promise(resolve => setTimeout(resolve, 100))
       assert.deepEqual(await chromesUsing(profile), [], `${signal}: Chrome outlived its owner`)
       assert.equal(existsSync(profile), false, `${signal}: the profile outlived its owner`)
