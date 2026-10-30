@@ -14,6 +14,7 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { useState } from 'react'
 import { OperateDecodes } from './OperateDecodes'
 import type { DecodeRow } from '../types'
+import { MAX_ROWS } from '../decodeHistory'
 
 vi.mock('../api', () => ({ openQrzPage: vi.fn() }))
 
@@ -152,6 +153,33 @@ describe('a filtered list says so, with a count', () => {
     expect(screen.queryByText('No decodes yet')).toBeNull()
     expect(screen.getByText('Nothing matches “zz9zz”')).toBeTruthy()
     expect(screen.getByTestId('od-search-count').textContent).toBe('0 of 5 match')
+  })
+
+  // The pane draws only the newest MAX_ROWS, but the search runs over the whole history, so the
+  // count must too. A busy band passes MAX_ROWS in minutes; a count capped at the drawn rows read
+  // "300 of 300 match" while the search hid hundreds of lines.
+  describe('with more history than the pane draws', () => {
+    const BIG: DecodeRow[] = Array.from({ length: 1000 }, (_, i) =>
+      i % 2 === 0
+        ? decode({ from: `JA${i}X`, message: `CQ JA${i}X PM95`, freqHz: 300 + i * 2 })
+        : decode({ from: `W${i}Q`, message: `K1ABC W${i}Q FN31`, freqHz: 300 + i * 2, isCq: false }),
+    )
+
+    it('counts every match in the history, not only the drawn rows', () => {
+      mount({ decodes: BIG })
+      type('CQ')
+      expect(screen.getByTestId('od-search-count').textContent).toBe('500 of 1000 match')
+      expect(document.querySelectorAll('.decode-row')).toHaveLength(MAX_ROWS)
+    })
+
+    it('with no match, the count agrees with the empty state', () => {
+      mount({ decodes: BIG })
+      type('ZZZZZ')
+      expect(screen.getByTestId('od-search-count').textContent).toBe('0 of 1000 match')
+      expect(
+        screen.getByText('1000 decodes are hidden by the search — clear it to see them.'),
+      ).toBeTruthy()
+    })
   })
 })
 

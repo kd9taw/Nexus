@@ -753,14 +753,16 @@ export function OperateDecodes({
             : t('operate.decodes.reviewing')}
         </span>
         {/* While the box holds a search, say so with what it leaves, so a filtered list never
-            reads as a quiet band — in "reviewing" too, which replaces the heard count. */}
+            reads as a quiet band — in "reviewing" too, which replaces the heard count. It counts
+            `list` of `kept`, not the drawn rows: the search reaches the whole history, so a count
+            capped at MAX_ROWS would read "300 of 300" while hiding hundreds of lines. */}
         {searchTests.length > 0 && (
           <span
             className="od-search-count"
             data-testid="od-search-count"
             title={t('operate.decodes.search.count.title')}
           >
-            {t('operate.decodes.search.count', { shown: shown.length, total: renderWindow(kept).length })}
+            {t('operate.decodes.search.count', { shown: list.length, total: kept.length })}
           </span>
         )}
         {/* Beside the count, so a pane that is hiding rows always says so — including the
