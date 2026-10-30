@@ -1097,11 +1097,12 @@ mod tests {
     }
 
     /// THE SHAPE IN CLUBLOG'S LOG: both endpoints answering 200, the pair asked again every
-    /// ~1.5 s. A running Nexus cannot do that (snapshots refresh at most every 300 s, and a
-    /// refresh that reached most-wanted had stored the plans for 30 min), but a Nexus started
-    /// over and over can: the warm-up runs on every launch, before the window is built, and
-    /// nothing was kept from one launch to the next. Twenty launches 2 s apart, every source
-    /// answering: ClubLog is asked once per endpoint, not once per launch.
+    /// ~1.5 s. One running Nexus cannot do that past its first two pairs (snapshots refresh at
+    /// most every 300 s, and a refresh that reached most-wanted had stored the plans for 30 min);
+    /// fresh processes can — the radio picker's second process, several radio windows, a Nexus
+    /// started over and over — because the warm-up runs on every launch, before the window is
+    /// built, and nothing was kept from one process to the next. Twenty launches 2 s apart on one
+    /// data folder, every source answering: ClubLog is asked once per endpoint, not per launch.
     #[test]
     fn a_relaunch_loop_with_club_log_answering_asks_it_once_not_once_per_launch() {
         let dir = scratch_dir("relaunch-loop");
