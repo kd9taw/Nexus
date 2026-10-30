@@ -28,7 +28,7 @@ import { fmtDistanceKm } from '../../units'
 import { dualStateLabel, kpImpact, sortInsights } from '../../propViz'
 import { buildChaseTargets, chaseSummaryLine } from '../../features/chase'
 import { buildChaseFeed, chaseFeedLine as feedSummary } from '../../features/chaseFeed'
-import { getoutSummary } from '../../features/getout'
+import { fmtSinceUtc, getoutSummary } from '../../features/getout'
 import type { PropagationSnapshot } from '../../types'
 import type { PaneContext } from './paneContext'
 
@@ -212,16 +212,21 @@ export function spaceWxLine(c: PaneContext): string {
   return t('connect.basic.spaceWx', vals)
 }
 
+/** A Start fresh time narrows the count, so the sentence names it whenever one is set. */
 export function getoutLine(c: PaneContext): string {
   const g = c.getout
-  if (!g || g.count === 0) return t('connect.getout.none')
+  const time = c.getoutSince != null ? fmtSinceUtc(c.getoutSince) : null
+  if (!g || g.count === 0)
+    return time != null ? t('connect.getout.none.since', { time }) : t('connect.getout.none')
   const dir = getoutSummary(g.reports, c.units)
+  const dist = fmtDistanceKm(g.maxKm, c.units)
+  if (time != null)
+    return dir
+      ? t('connect.basic.getout.dir.since', { count: g.count, time, dir })
+      : t('connect.basic.getout.furthest.since', { count: g.count, time, dist })
   return dir
     ? t('connect.basic.getout.dir', { count: g.count, dir })
-    : t('connect.basic.getout.furthest', {
-        count: g.count,
-        dist: fmtDistanceKm(g.maxKm, c.units),
-      })
+    : t('connect.basic.getout.furthest', { count: g.count, dist })
 }
 
 // ---- B2 Tier-1 pane projections ----

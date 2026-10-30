@@ -3457,6 +3457,40 @@ body.resizing-row {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-label);
 }
+/* The heading's line also carries one button, Start fresh or Show all: it wraps under the heading in
+   a narrow box rather than taking a line of the body. */
+.getout-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  row-gap: 2px;
+  margin: 0 0 var(--space-2);
+}
+.getout-head h3 {
+  margin: 0;
+  margin-right: auto;
+}
+/* "since HH:MM:SS UTC" at the end of the count's line. */
+.getout-since {
+  margin-left: var(--space-2);
+  font-family: var(--font-mono);
+}
+/* The word in the theme's ink, the accent as its mark (the pill's edge): accent lettering does not read
+   on the light themes' panes. */
+.getout-fresh {
+  font-size: var(--fs-micro);
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--text);
+  padding: 0 var(--space-2);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.getout-fresh:hover {
+  background: var(--border-soft);
+}
 .connect-getout .cp-none {
   margin: 0;
   font-size: var(--fs-micro);

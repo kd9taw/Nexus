@@ -10815,6 +10815,12 @@ export const EN = {
   'connect.getout.none': 'No reception reports yet — call CQ, then watch who hears you.',
   'connect.getout.summary': '<b>{{count}}</b> hearing you · furthest <b>{{dist}}</b>',
   'connect.getout.select.title': 'Select {{call}} on the map',
+  'connect.getout.fresh': 'Start fresh',
+  'connect.getout.fresh.title': 'Count only the reception reports that arrive from now on, for trying an antenna. Nothing is deleted.',
+  'connect.getout.since': 'since {{time}}',
+  'connect.getout.showAll': 'Show all',
+  'connect.getout.showAll.title': 'Count every reception report again',
+  'connect.getout.none.since': 'No reception reports since {{time}} yet — call CQ, then watch who hears you.',
 
   // ── The Basic projections — one whole sentence per pane, per state ──────────────────
   // Every one of these was assembled from fragments. They are whole sentences now, with
@@ -10853,6 +10859,8 @@ export const EN = {
     'SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} flare in progress; R{{scale}} radio blackout.',
   'connect.basic.getout.dir': '{{count}} hearing you — {{dir}}.',
   'connect.basic.getout.furthest': '{{count}} hearing you — furthest {{dist}}.',
+  'connect.basic.getout.dir.since': '{{count}} hearing you since {{time}} — {{dir}}.',
+  'connect.basic.getout.furthest.since': '{{count}} hearing you since {{time}} — furthest {{dist}}.',
   'connect.basic.bestband.none': 'No region reachable on any band yet.',
   'connect.basic.bestband': 'To {{region}}: try {{band}} ({{word}}).',
   'connect.basic.activity.offline': 'No live activity data right now.',

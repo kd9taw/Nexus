@@ -43,6 +43,9 @@ export const PER_SURFACE = [
   // picks a layout of its own, like the placement it is read back with.
   'nexus.connect.bar',
   'nexus.connect.config',
+  // The Getting Out box's Start fresh time (features/getoutSince): an antenna test in THIS window. A
+  // pop-out starts on the main window's and diverges at its first press; a restart keeps it.
+  'nexus.connect.getout.since',
   'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',
   'nexus.connect.intent',

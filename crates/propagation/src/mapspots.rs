@@ -23,6 +23,11 @@ pub struct MapSpot {
     /// This station heard ME (the "getting out" set) vs general band activity.
     pub heard_me: bool,
     pub age_secs: i64,
+    /// When the kept report was made (Unix secs). The snapshot's `as_of` is not on this clock: a
+    /// cached snapshot is served for minutes (and indefinitely while its refetch fails) while its
+    /// spots are rebuilt on every poll, so `as_of - age_secs` is not the report's time. Getting
+    /// Out's Start fresh filters the map's "hearing you" dots on this.
+    pub time: i64,
     /// Placed by DXCC centroid (true) rather than an exact grid (false).
     pub approx: bool,
     /// Exact spot frequency (MHz) when the source carried one (cluster/RBN, PSKR
@@ -79,6 +84,7 @@ pub fn build_map_spots(now: i64, me_call: &str, spots: &[PathSpot], cap: usize) 
             band: s.band.label().to_string(),
             heard_me,
             age_secs: age,
+            time: s.time,
             approx,
             freq_mhz: s.freq_mhz,
             mode: s.mode.clone(),
@@ -191,6 +197,7 @@ mod tests {
         assert_eq!(out.len(), 1, "capped to 1");
         assert_eq!(out[0].call, "DL1ABC", "freshest kept (20s DL beats 50s F5)");
         assert_eq!(out[0].age_secs, 20);
+        assert_eq!(out[0].time, NOW - 20, "the kept report's own time");
     }
 
     #[test]

@@ -28,14 +28,15 @@ import { useEntityCentroids } from '../../features/entityCentroids'
 import {
   BAND_OUTLOOK,
   DXPED_WINDOWS,
-  GETTING_OUT,
   KC2G_MUF,
   PATH_OUTLOOK,
   SPACE_WX_SCALES,
   XRAY_NOW,
+  gettingOutFeed,
   useFeed,
   useKeyedFeed,
 } from '../../features/connectFeeds'
+import { useGetoutSince } from '../../features/getoutSince'
 import { provLabel } from './paneFormat'
 import type { NeededBoard, OtaBoard, PaneContext, SpotsFeed } from './paneContext'
 
@@ -76,6 +77,8 @@ export function resolveSelection(
 export interface ConnectFeedValues {
   bandOutlook: PathPrediction | null
   getout: GettingOut | null
+  /** The Start fresh time `getout` counts from (features/getoutSince); null = every report. */
+  getoutSince: number | null
   scales: NoaaScalesView | null
   alerts: AlertView[]
   muf: MufStation[]
@@ -91,7 +94,8 @@ const NO_MUF: MufStation[] = []
  *  nothing (the hosted Remote page). */
 export function useConnectFeeds(enabled = true): ConnectFeedValues {
   const bandOutlook = useFeed(BAND_OUTLOOK, enabled).value ?? null
-  const getout = useFeed(GETTING_OUT, enabled).value ?? null
+  const getoutSince = useGetoutSince()
+  const getout = useFeed(gettingOutFeed(getoutSince), enabled).value ?? null
   const swx = useFeed(SPACE_WX_SCALES, enabled).value
   const muf = useFeed(KC2G_MUF, enabled).value
   const xray = useFeed(XRAY_NOW, enabled).value
@@ -100,6 +104,7 @@ export function useConnectFeeds(enabled = true): ConnectFeedValues {
   return {
     bandOutlook,
     getout,
+    getoutSince,
     scales: swx?.scales ?? null,
     alerts: swx?.alerts ?? NO_ALERTS,
     muf: muf ?? NO_MUF,
@@ -171,6 +176,7 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
     pathOpen: pathPred?.bands.filter((b) => b.workability !== 'Closed') ?? [],
     outlookOpen: f.bandOutlook?.bands.filter((b) => b.workability !== 'Closed') ?? [],
     getout: f.getout,
+    getoutSince: f.getoutSince,
     focusBand: i.focusBand,
     scales: f.scales,
     alerts: f.alerts,
