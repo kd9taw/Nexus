@@ -65,6 +65,15 @@ describe('the bar draws no stand-in', () => {
     expect(of(live({ kp: 6 }), 'Kp').warn).toBe(true)
   })
 
+  it('a stale or missing number is dimmed, as its gauge is; a fresh one is not', () => {
+    const kpAt = NOW - WX_STALE_SECS.kp - 45 * 60
+    expect(of(live({ kp: 6, kpAt }), 'Kp')).toMatchObject({ value: '6', dim: true })
+    expect(of(live({ xrayAt: NOW - WX_STALE_SECS.xray - 60 }), 'X-ray').dim).toBe(true)
+    expect(of(live({ kpAt: null }), 'Kp')).toMatchObject({ value: '—', dim: true })
+    // Negative control: every fresh reading is drawn in full ink.
+    for (const k of ['SFI', 'Kp', 'A', 'X-ray']) expect(of(live({ kp: 6 }), k).dim, k).toBeFalsy()
+  })
+
   it('the A is the daily planetary A, dated, never the ap estimate', () => {
     expect(of(live(), 'A')).toMatchObject({ value: '4', day: dayLabel(DAY) })
     expect(of(live({ aDay: null }), 'A').value).toBe('—')

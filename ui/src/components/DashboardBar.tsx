@@ -28,8 +28,9 @@
 //
 // STAND-IN HONESTY, per number (propViz `wxReading`): a partial snapshot's numbers are the model's
 // stand-ins wherever NOAA did not answer, with no sample time — each is a dash. A reading past its
-// product's cadence keeps its number, loses its warning mark, and says how old it is on hover. The
-// A is NOAA's daily planetary A, dated like the SSN.
+// product's cadence keeps its number, loses its warning mark, and says how old it is on hover. Both
+// are dimmed (`data-dim`), as their gauges are, so a stale Kp 6 is never read across the room as
+// the field now. The A is NOAA's daily planetary A, dated like the SSN.
 //
 // OFFLINE HONESTY, Connect's rule (connect/panes.tsx): an offline snapshot is non-null and
 // carries MODELLED values (SFI 120 …), so the bar draws a dash for every index then and says NO
@@ -71,6 +72,8 @@ export interface BarIndex {
   title: string
   /** Its Space Wx gauge is at the warning level (Kp, X-ray and the solar wind only). */
   warn?: boolean
+  /** A stand-in or a reading past its cadence: dimmed, as its Space Wx gauge dims it. */
+  dim?: boolean
 }
 
 /**
@@ -89,10 +92,10 @@ export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null): B
    *  `marks`: the index can carry the storm mark (Kp and X-ray), only while fresh. */
   const index = (key: string, k: WxKey, value: string, impact: Impact, marks: boolean, day?: string): BarIndex => {
     const r = wxReading(wx, k, now)
-    if (!r.real) return { key, value: DASH, title: t('prop.spaceWx.none') }
+    if (!r.real) return { key, value: DASH, title: t('prop.spaceWx.none'), dim: true }
     const stale = r.stale && r.ageSecs != null
     const title = stale ? t('prop.spaceWx.stale', { ago: agoLabel(r.ageSecs ?? 0) }) : impact.text
-    const i: BarIndex = day ? { key, value, day, title } : { key, value, title }
+    const i: BarIndex = { key, value, ...(day ? { day } : {}), title, ...(r.stale ? { dim: true } : {}) }
     return marks ? { ...i, warn: !stale && impact.sev === 'warn' } : i
   }
   return [
@@ -173,7 +176,7 @@ export function DashboardBar({ call, grid, prop, clock, children }: Props) {
       {clock ?? <DashClock />}
       <ul className="dash-indices" aria-label={t('prop.spaceWx.aria')}>
         {indices.map((i) => (
-          <li key={i.key} className="dash-index" data-warn={i.warn ? '' : undefined} title={i.title || undefined}>
+          <li key={i.key} className="dash-index" data-warn={i.warn ? '' : undefined} data-dim={i.dim ? '' : undefined} title={i.title || undefined}>
             <span className="dash-index-k">{i.key}</span>
             <span className="dash-index-v">{i.value}</span>
             {i.day && <span className="dash-index-d">{i.day}</span>}

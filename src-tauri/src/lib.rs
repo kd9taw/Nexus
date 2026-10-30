@@ -8051,40 +8051,7 @@ async fn get_propagation(
         record_opening_episodes(tr.drain_closed());
     }
 
-    // Rebuild the band advisor on the ANCHORED (operator-reachable) window — "best
-    // band FOR YOU", reflecting activity AROUND the operator, NOT the busiest band
-    // worldwide. Rebuild whenever we have any anchored evidence (own-call MQTT,
-    // near-region, or own decodes); when empty we keep the cached snapshot's
-    // own-call advisory (never the global firehose, which `anchored` excludes).
-    // The model's words need a usable solar flux and Kp; otherwise the advisor reports only what
-    // was heard (`PropAdvisor::without_model`), here and for the worldwide ranking below.
-    let model_usable = stamps.model_usable(now);
-    let advisor_for = |call: &str, grid: &str| {
-        let a = propagation::PropAdvisor::new(call, grid);
-        if model_usable {
-            a
-        } else {
-            a.without_model()
-        }
-    };
-    if !anchored.is_empty() {
-        let advisor = advisor_for(&mycall, &mygrid);
-        snap.advisory = advisor.advise(now, &anchored, &wx);
-        // Best-band-per-region recommender + the (region, band) activity matrix, from the
-        // SAME anchored window (operator-reachable only — never the firehose). One pass.
-        let rb = advisor.region_band(now, &anchored, &snap.advisory.bands);
-        snap.best_to_region = rb.best_to_region;
-        snap.region_band = rb.cells;
-    }
-    // A served snapshot's banners were built from the numbers it was fetched with: rebuild
-    // them from the ones that may speak for now, rebuilt advisory or not.
-    snap.advisory.banners = advisor_for(&mycall, &mygrid).banners(&wx);
-    // "Worldwide activity" = the SAME advisor over the GLOBAL firehose window, so the
-    // UI can show busy-worldwide beside best-FOR-YOU (workable vs merely-loud). Only
-    // when the firehose actually adds something beyond the anchored set.
-    if wide.len() > anchored.len() {
-        snap.worldwide = Some(advisor_for(&mycall, &mygrid).advise(now, &wide, &wx));
-    }
+    advise_for_now(&mut snap, &mycall, &mygrid, now, &anchored, &wide, &wx);
 
     // Locate the merged window for the map (grid or DXCC centroid), so the map
     // fills with the cluster/RBN/PSKR firehose + own decodes, not just the native
@@ -8220,12 +8187,9 @@ async fn get_path_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
-                sfi: s.space_wx.sfi,
-                ssn: LAST_SSN.lock().ok().and_then(|g| *g),
-                kp: s.space_wx.kp,
-                a_index: s.space_wx.a_index,
-                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
+            .map(|(_, s)| {
+                let ssn = LAST_SSN.lock().ok().and_then(|g| *g);
+                outlook_wx(&s.space_wx, ssn, now_unix())
             })
             .unwrap_or_default()
     };
@@ -8269,6 +8233,161 @@ async fn get_path_outlook(
     .map_err(|e| e.to_string())
 }
 
+/// The band advice of a served snapshot (fresh, or cached at any age), made for `now`: the
+/// advisor, the best band per region, the banners and the worldwide ranking, from the windows
+/// `get_propagation` gathered and from `wx`, the Kp and X-ray that may speak for now.
+fn advise_for_now(
+    snap: &mut propagation::PropagationSnapshot,
+    call: &str,
+    grid: &str,
+    now: i64,
+    anchored: &[propagation::PathSpot],
+    wide: &[propagation::PathSpot],
+    wx: &propagation::SpaceWx,
+) {
+    // Rebuild the band advisor on the ANCHORED (operator-reachable) window — "best
+    // band FOR YOU", reflecting activity AROUND the operator, NOT the busiest band
+    // worldwide. Rebuild whenever we have any anchored evidence (own-call MQTT,
+    // near-region, or own decodes); when empty we keep the cached snapshot's
+    // own-call advisory (never the global firehose, which `anchored` excludes).
+    // The model's words need a usable solar flux and Kp; otherwise the advisor reports only what
+    // was heard (`PropAdvisor::without_model`), here and for the worldwide ranking below.
+    let model_usable = snap.space_wx.stamps.model_usable(now);
+    let advisor_for = || {
+        let a = propagation::PropAdvisor::new(call, grid);
+        if model_usable {
+            a
+        } else {
+            a.without_model()
+        }
+    };
+    if !anchored.is_empty() {
+        let advisor = advisor_for();
+        snap.advisory = advisor.advise(now, anchored, wx);
+        // Best-band-per-region recommender + the (region, band) activity matrix, from the
+        // SAME anchored window (operator-reachable only — never the firehose). One pass.
+        let rb = advisor.region_band(now, anchored, &snap.advisory.bands);
+        snap.best_to_region = rb.best_to_region;
+        snap.region_band = rb.cells;
+    } else if !model_usable {
+        // Not rebuilt: the served words are the model's at the fetch, from a Kp and an hour of
+        // the day that are gone. Once the model may not speak, the bands say only what was heard.
+        for b in &mut snap.advisory.bands {
+            b.modeled.clear();
+            b.modeled_reason.clear();
+        }
+        for r in &mut snap.best_to_region {
+            r.modeled.clear();
+        }
+    }
+    // A served snapshot's banners were built from the numbers it was fetched with: rebuild
+    // them from the ones that may speak for now, rebuilt advisory or not.
+    snap.advisory.banners = advisor_for().banners(wx);
+    // "Worldwide activity" = the SAME advisor over the GLOBAL firehose window, so the
+    // UI can show busy-worldwide beside best-FOR-YOU (workable vs merely-loud). Only
+    // when the firehose actually adds something beyond the anchored set.
+    if wide.len() > anchored.len() {
+        snap.worldwide = Some(advisor_for().advise(now, wide, wx));
+    }
+}
+
+#[cfg(test)]
+mod served_advisory_tests {
+    use super::advise_for_now;
+    use propagation::model::{ActivityTier, SpaceWxStamps};
+
+    const NOW: i64 = 1_761_800_000;
+    const FETCHED: i64 = NOW - 2 * 3600;
+
+    /// A snapshot fetched two hours ago with a measured flux and Kp, so its bands carry the
+    /// model's words from then, and a best-to-region row carrying one too. Its Kp is stamped at
+    /// the fetch; `kp_at` restamps it.
+    fn cached(kp_at: i64) -> propagation::PropagationSnapshot {
+        let wx = propagation::SpaceWx::default();
+        let mut snap = propagation::PropagationEngine::new("KD9TAW", "EN52").snapshot_measured(
+            FETCHED,
+            &[],
+            &wx,
+            true,
+            &[],
+            &propagation::NeedsSet::default(),
+        );
+        snap.source = "cached".into();
+        snap.space_wx.fetched = true;
+        snap.space_wx.stamps = SpaceWxStamps {
+            sfi_at: Some(FETCHED - 3600),
+            kp_at: Some(kp_at),
+            xray_at: Some(kp_at),
+            a_day: None,
+        };
+        snap.best_to_region = vec![propagation::advisor::RegionBest {
+            region: "Europe".into(),
+            octant: "NE".into(),
+            bearing_deg: 45.0,
+            band: "20m".into(),
+            tier: ActivityTier::Quiet,
+            modeled: "Open".into(),
+            stations: 1,
+            bidirectional: false,
+            score: 0.1,
+        }];
+        snap
+    }
+
+    fn model_words(snap: &propagation::PropagationSnapshot) -> Vec<String> {
+        let bands = snap.advisory.bands.iter();
+        bands
+            .flat_map(|b| [&b.modeled, &b.modeled_reason])
+            .chain(snap.best_to_region.iter().map(|r| &r.modeled))
+            .filter(|w| !w.is_empty())
+            .cloned()
+            .collect()
+    }
+
+    /// A cached snapshot with nothing heard since: its Kp is two hours old, so the model may not
+    /// speak, and the words it spoke at the fetch are not served as now's.
+    #[test]
+    fn a_cached_snapshot_keeps_no_model_words_once_its_kp_is_old() {
+        let mut snap = cached(FETCHED);
+        assert!(!model_words(&snap).is_empty(), "control: the fetch spoke");
+        let wx = propagation::SpaceWx::default();
+        advise_for_now(&mut snap, "KD9TAW", "EN52", NOW, &[], &[], &wx);
+        assert_eq!(model_words(&snap), Vec::<String>::new());
+        assert_eq!(
+            snap.advisory.bands.len(),
+            propagation::model::Band::ALL.len()
+        );
+    }
+
+    /// The negative control: a Kp that may still speak keeps the served words.
+    #[test]
+    fn a_cached_snapshot_with_a_fresh_kp_keeps_its_model_words() {
+        let mut snap = cached(NOW - 60);
+        let before = model_words(&snap);
+        let wx = propagation::SpaceWx::default();
+        advise_for_now(&mut snap, "KD9TAW", "EN52", NOW, &[], &[], &wx);
+        assert!(!before.is_empty());
+        assert_eq!(model_words(&snap), before);
+    }
+}
+
+/// The space weather a path, band or DXpedition outlook runs on, from the propagation cache's
+/// snapshot: its Kp and X-ray only while they may speak for `now`
+/// ([`propagation::SpaceWx::speaking_now`]), since a cached snapshot is served at any age and an
+/// hours-old Kp 6 or a GOES gap's last flare would otherwise shape the forecast. `ssn` is the R12
+/// for the engines that read it. The path and band outlooks once passed only the flare flag as a
+/// flux (M1 or B1); their engines read no X-ray, so the measured flux changes none of their numbers.
+fn outlook_wx(v: &propagation::SpaceWxView, ssn: Option<f32>, now: i64) -> propagation::SpaceWx {
+    propagation::SpaceWx {
+        sfi: v.sfi,
+        ssn,
+        kp: v.kp,
+        a_index: v.a_index,
+        xray_long: v.xray_long,
+    }
+    .speaking_now(&v.stamps, now)
+}
+
 /// The Kp SWPC actually reported, from the propagation cache's snapshot, when it may speak for
 /// `now` — `None` when the cache is cold, when the Kp is the model's stand-in (its product did
 /// not answer), or when its sample is older than the gauge's limit (a cached snapshot is served
@@ -8281,7 +8400,7 @@ fn swpc_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f32> {
 
 #[cfg(test)]
 mod path_outlook_kp_tests {
-    use super::swpc_kp;
+    use super::{outlook_wx, swpc_kp};
 
     const NOW: i64 = 1_761_800_000;
 
@@ -8334,6 +8453,32 @@ mod path_outlook_kp_tests {
     fn an_hours_old_cached_kp_is_not_now() {
         assert_eq!(swpc_kp(Some(&view(6.0, Some(NOW - 2 * 3600))), NOW), None);
     }
+
+    /// The path, band and DXpedition outlooks run on the cached snapshot's Kp and X-ray only
+    /// while each may speak for now: an hours-old storm and flare shape no forecast.
+    #[test]
+    fn the_outlooks_take_only_a_kp_and_flare_that_speak_for_now() {
+        let quiet = propagation::SpaceWx::default();
+        let storm = |at: i64| {
+            let mut v = view(6.0, Some(at));
+            v.xray_long = 2e-4;
+            v.flare = true;
+            v.stamps.xray_at = Some(at);
+            v
+        };
+        let old = outlook_wx(&storm(NOW - 2 * 3600), Some(80.0), NOW);
+        assert_eq!((old.kp, old.xray_long), (quiet.kp, quiet.xray_long));
+        assert!(!old.flare_in_progress());
+        // Positive control: the same storm, measured a minute ago, reaches the outlook whole.
+        let fresh = outlook_wx(&storm(NOW - 60), Some(80.0), NOW);
+        assert_eq!(
+            (fresh.kp, fresh.xray_long, fresh.ssn),
+            (6.0, 2e-4, Some(80.0))
+        );
+        assert!(fresh.flare_in_progress());
+        // The flux and A are not the gate's: they pass as they are.
+        assert_eq!((old.sfi, old.a_index), (120.0, 8.0));
+    }
 }
 
 /// Ring-outlook cache (p533 only): (computed-at, params-key, value). The 8-azimuth
@@ -8378,18 +8523,15 @@ async fn get_band_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
+            .map(|(_, s)| {
                 // R12 only matters to p533; withholding it from the heuristic keeps
                 // that path byte-identical to its pre-engine-seam behavior.
-                ssn: if p533 {
+                let ssn = if p533 {
                     LAST_SSN.lock().ok().and_then(|g| *g)
                 } else {
                     None
-                },
-                sfi: s.space_wx.sfi,
-                kp: s.space_wx.kp,
-                a_index: s.space_wx.a_index,
-                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
+                };
+                outlook_wx(&s.space_wx, ssn, now_unix())
             })
             .unwrap_or_default()
     };
@@ -8594,13 +8736,11 @@ async fn get_dxped_windows(
                 ));
             }
         }
-        let wx = propagation::SpaceWx {
-            sfi: s.space_wx.sfi,
-            ssn: LAST_SSN.lock().ok().and_then(|g| *g),
-            kp: s.space_wx.kp,
-            a_index: s.space_wx.a_index,
-            xray_long: s.space_wx.xray_long,
-        };
+        let wx = outlook_wx(
+            &s.space_wx,
+            LAST_SSN.lock().ok().and_then(|g| *g),
+            now_unix(),
+        );
         (targets, wx)
     };
     if targets.is_empty() {

@@ -33386,6 +33386,11 @@ tr.sel .aprs-sym {
   text-decoration-thickness: 0.15em;
   text-underline-offset: 0.25em;
 }
+/* An old or missing reading's number takes the dim ink, as its Space Wx gauge's does (`.swx-v[data-dim]`):
+   never full ink. A dimmed index never carries the storm mark (DashboardBar drops it). */
+.dash-index[data-dim] .dash-index-v {
+  color: var(--text-dim);
+}
 /* The provenance chip (cached, partial, no live data): the warning on its EDGE, the word in the
    bar's ink. Not the panes' `.prop-prov`, which letters its warning in the warning colour: that
    measured 4.23:1 on this bar in the light theme, under the 4.5:1 floor. An edge is held to 3:1
