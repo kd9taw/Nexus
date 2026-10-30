@@ -1153,3 +1153,28 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
     ).toEqual([])
   })
 })
+
+describe('a pane frame holds its own positioned content, without a backdrop blur', () => {
+  // The region's comment (cockpit-panes.css, `.cockpit-panes`) relies on every frame being the
+  // containing block of what is absolutely positioned inside it, and on each frame stacking on
+  // its own: that is why the region contains only the column dividers and a drag's marks. A
+  // backdrop blur used to supply both, as a side effect. It was dropped from the frames (it cost
+  // a blurred compositing surface per pane and blurred only the page behind an 82 %-opaque fill),
+  // so the two are now declared outright, and these winners pin them.
+  it('the winning position on .pane-frame is relative (the containing block of its content)', () => {
+    const w = classWinner('pane-frame', blockDecl('position'))
+    expect(w?.value, `.pane-frame position is won by ${w?.selector} in ${w?.sheet}`).toBe('relative')
+  })
+
+  it('the winning isolation on .pane-frame is isolate (a stacking context of its own)', () => {
+    const w = classWinner('pane-frame', blockDecl('isolation'))
+    expect(w?.value, `.pane-frame isolation is won by ${w?.selector} in ${w?.sheet}`).toBe('isolate')
+  })
+
+  it('no rule on .pane-frame brings the backdrop blur back', () => {
+    for (const prop of ['backdrop-filter', '-webkit-backdrop-filter']) {
+      const w = classWinner('pane-frame', blockDecl(prop))
+      expect(w?.value ?? 'none', `${prop} on .pane-frame from ${w?.selector} in ${w?.sheet}`).toBe('none')
+    }
+  })
+})

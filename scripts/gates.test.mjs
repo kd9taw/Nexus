@@ -378,6 +378,47 @@ jobs:
   assert.ok(/working-directory: ui/.test(list), 'the working-directory was not shown');
 });
 
+test("the link-profile expression is evaluated against this checkout's ref, and nothing else is guessed", () => {
+  // ci.yml picks the Windows and Pi link profile from github.ref. Left unresolved, it held the
+  // Windows cross gate back on every box, including the ones that can run it.
+  const pick = "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/'))";
+  const file = scratch(
+    'ref-choice.yml',
+    MINIMAL.replace(
+      '      - name: alpha gate\n',
+      `      - name: profile gate\n        env:\n          PICK: \${{ ${pick} && 'true' || 'false' }}\n        run: echo "picked [$PICK]"\n      - name: alpha gate\n`
+    )
+  );
+  const as = (ref, args) => {
+    const r = spawnSync(GATES, args, { encoding: 'utf8', cwd: ROOT, env: { ...env, GATES_GITHUB_REF: ref } });
+    return { code: r.status, out: `${r.stdout}${r.stderr}` };
+  };
+  for (const [ref, want] of [
+    ['refs/heads/land/some-batch', 'false'],
+    ['refs/pull/12/merge', 'false'],
+    ['refs/heads/mainline', 'false'],
+    ['refs/heads/main', 'true'],
+    ['refs/heads/release/1.2.3', 'true'],
+    ['refs/tags/v1.2.3', 'true'],
+  ]) {
+    const r = as(ref, ['--workflow', file]);
+    assert.equal(r.code, 0, `${ref}:\n${r.out}`);
+    assert.ok(r.out.includes(`picked [${want}]`), `${ref} should pick ${want}:\n${r.out}`);
+  }
+  // CONTROL: any other shape that reads github.ref is still unresolved and holds the gate back.
+  const other = scratch('ref-other.yml', MINIMAL.replace('      - name: alpha gate\n',
+    "      - name: other gate\n        env:\n          WHERE: ${{ github.ref }}\n        run: echo \"where [$WHERE]\"\n      - name: alpha gate\n"));
+  const o = as('refs/heads/main', ['--workflow', other]);
+  assert.notEqual(o.code, 0, o.out);
+  assert.ok(o.out.includes('unexpanded workflow expression'), o.out);
+  assert.ok(!o.out.includes('where ['), 'an unresolved ref was run anyway');
+  // CONTROL: with no ref to read (a detached checkout), the expression is not guessed either.
+  const d = spawnSync(GATES, ['--list', '--unrunnable', '--workflow', file], {
+    encoding: 'utf8', cwd: ROOT, env: { ...env, GATES_GITHUB_REF: '', GIT_DIR: path.join(tmp, 'no-such-git-dir') },
+  });
+  assert.ok(`${d.stdout}${d.stderr}`.includes('unexpanded workflow expression'), `${d.stdout}${d.stderr}`);
+});
+
 test('`if:` is shown, and one that cannot be evaluated blocks the step instead of guessing', () => {
   const file = scratch(
     'conditional.yml',
