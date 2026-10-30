@@ -979,3 +979,63 @@ test('every job that stages the IOTA list sets up Node first', () => {
   );
   assert.deepEqual(iotaStagedWithoutNode(readWorkflow(planted)), ['pi']);
 });
+
+// The shipped link. src-tauri's [profile.release] links with fat LTO and one codegen unit. ci.yml's
+// branch runs build the Windows and Pi checks with cargo's ordinary release linking instead, through
+// cargo's CARGO_PROFILE_RELEASE_LTO / _CODEGEN_UNITS overrides, so that only main and a tag prove the
+// shipped link. A release must never take the branch values: no workflow but ci.yml names the
+// overrides, Dockerfile.pi's defaults (what release.yml builds with, passing neither) are the profile's,
+// every value ci.yml sets is the profile's on main and on a tag, and ci.yml never hands the container
+// a literal value.
+const CARGO_TAURI = process.env.CARGO_TAURI || path.join(ROOT, 'src-tauri', 'Cargo.toml');
+const OVERRIDE = /CARGO_PROFILE_RELEASE_(?:LTO|CODEGEN_UNITS)/;
+function releaseProfile(cargoToml) {
+  const section = cargoToml.split(/^\[profile\.release\]\s*$/m)[1]?.split(/^\[/m)[0] ?? '';
+  const lto = section.match(/^lto\s*=\s*"?([\w]+)"?\s*$/m)?.[1];
+  const cgu = section.match(/^codegen-units\s*=\s*(\d+)\s*$/m)?.[1];
+  assert.ok(lto && cgu, 'src-tauri/Cargo.toml [profile.release] no longer states lto and codegen-units');
+  return { LTO: lto, CODEGEN_UNITS: cgu };
+}
+function linkProfileFindings({ workflows, ci, docker, cargo }) {
+  const shipped = releaseProfile(cargo);
+  const bad = [];
+  for (const [file, text] of workflows) {
+    if (OVERRIDE.test(text)) bad.push(`${file}: names a link-profile override; only ci.yml's branch runs may`);
+  }
+  const branch = { LTO: 'false', CODEGEN_UNITS: '16' };
+  for (const key of ['LTO', 'CODEGEN_UNITS']) {
+    const want = `\${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && '${shipped[key]}' || '${branch[key]}' }}`;
+    const set = [...ci.matchAll(new RegExp(`^\\s*CARGO_PROFILE_RELEASE_${key}:\\s*(.*?)\\s*$`, 'gm'))].map((m) => m[1]);
+    if (!set.length) bad.push(`ci.yml: sets no CARGO_PROFILE_RELEASE_${key}`);
+    for (const v of set) if (v !== want) bad.push(`ci.yml: CARGO_PROFILE_RELEASE_${key} is \`${v}\`, not \`${want}\``);
+    const arg = docker.match(new RegExp(`^ARG\\s+CARGO_PROFILE_RELEASE_${key}=(\\S+)\\s*$`, 'm'))?.[1];
+    if (arg !== shipped[key]) bad.push(`Dockerfile.pi: ARG CARGO_PROFILE_RELEASE_${key} defaults to ${arg ?? '(nothing)'}, not the profile's ${shipped[key]}`);
+  }
+  if (/--build-arg\s+CARGO_PROFILE_RELEASE_\w+=/.test(ci)) bad.push('ci.yml: hands the container a literal link profile instead of the step env');
+  return bad;
+}
+const OTHER_WORKFLOWS = fs
+  .readdirSync(path.dirname(WORKFLOW))
+  .filter((f) => /\.ya?ml$/.test(f) && f !== path.basename(CI_WORKFLOW) && f !== path.basename(WORKFLOW))
+  .map((f) => [f, fs.readFileSync(path.join(path.dirname(WORKFLOW), f), 'utf8')]);
+const LINK = {
+  workflows: [[path.basename(WORKFLOW), TEXT], ...OTHER_WORKFLOWS],
+  ci: CI_TEXT,
+  docker: DOCKERFILE,
+  cargo: fs.readFileSync(CARGO_TAURI, 'utf8'),
+};
+
+test('only ci.yml branch runs leave the shipped link profile; release, main and tags keep it', () => {
+  assert.deepEqual(linkProfileFindings(LINK), []);
+  const has = (findings, needle) =>
+    assert.ok(findings.some((x) => x.includes(needle)), `not reported: ${needle}\ngot:\n  ${findings.join('\n  ') || '(nothing)'}`);
+  // Positive controls: the override in release.yml, a branch value on main, a non-release Dockerfile
+  // default, and a literal value handed to the container are each reported.
+  const release = plant(TEXT, '      - name: Build .deb in a debian:${{ matrix.base }} container\n        env:\n',
+    '      - name: Build .deb in a debian:${{ matrix.base }} container\n        env:\n          CARGO_PROFILE_RELEASE_LTO: "false"\n');
+  has(linkProfileFindings({ ...LINK, workflows: [[path.basename(WORKFLOW), release]] }), 'names a link-profile override');
+  const anchor = "out of release.yml.\n          CARGO_PROFILE_RELEASE_LTO: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && 'true'";
+  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, anchor, anchor.replace(/'true'$/, "'false'")) }), 'CARGO_PROFILE_RELEASE_LTO is');
+  has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, 'ARG CARGO_PROFILE_RELEASE_LTO=true', 'ARG CARGO_PROFILE_RELEASE_LTO=false') }), 'defaults to false');
+  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, '--build-arg CARGO_PROFILE_RELEASE_LTO\n', '--build-arg CARGO_PROFILE_RELEASE_LTO=false\n') }), 'literal link profile');
+});

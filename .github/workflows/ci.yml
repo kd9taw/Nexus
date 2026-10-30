@@ -1209,6 +1209,16 @@ jobs:
           # only — the gate exists to stop a SHIPPING build (build-windows-cross.sh
           # and any local `cargo tauri build`) going out with no CAT.
           NEXUS_ALLOW_MISSING_HAMLIB: "1"
+          # THE LINK PROFILE. On main and on a tag this is src-tauri's own [profile.release],
+          # fat LTO and one codegen unit, as release.yml links the installer. Anywhere else (a
+          # land/* or topic branch, a pull request) it is cargo's ordinary release linking,
+          # `lto = false` (no cross-crate LTO) and 16 codegen units: the same code compiled
+          # and linked for Windows, in minutes. A BRANCH RUN THEREFORE DOES NOT PROVE THE FAT-LTO LINK; main's run does,
+          # before any tag. Measured 2026-10-30: the src-tauri crate under fat LTO had grown
+          # from 15 to 37 minutes of this job. scripts/release-secrets.test.mjs holds the main
+          # and tag values to the profile and keeps the override out of release.yml.
+          CARGO_PROFILE_RELEASE_LTO: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && 'true' || 'false' }}
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && '1' || '16' }}
         run: >
           cargo build --release
           --manifest-path src-tauri/Cargo.toml
@@ -1329,12 +1339,25 @@ jobs:
       # The WSJT-X-derived modem source is vendored in-tree at libtempo/vendor/wsjtx
       # and is CMake's default WX, so the checkout is self-contained — no external
       # tree to stage, which is what previously forced a dev-box path into the image.
+      #
+      # THE LINK PROFILE, as the Windows job's: src-tauri's fat LTO and one codegen unit on main
+      # and on a tag, cargo's ordinary release linking anywhere else. A BRANCH RUN THEREFORE DOES
+      # NOT PROVE THE FAT-LTO LINK, and its uploaded .deb is not linked as a release's is. The
+      # two bare `--build-arg NAME`s hand the container these values from the step env;
+      # Dockerfile.pi's own defaults are the release profile, which is what release.yml (passing
+      # neither) builds. Measured 2026-10-30: the src-tauri crate under fat LTO had grown from
+      # 18 to 36 minutes of this job.
       - name: Build .deb in a debian:${{ matrix.base }} container
+        env:
+          CARGO_PROFILE_RELEASE_LTO: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && 'true' || 'false' }}
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && '1' || '16' }}
         run: >
           docker buildx build
           --platform linux/arm64
           -f scripts/Dockerfile.pi
           --build-arg BASE=${{ matrix.base }}
+          --build-arg CARGO_PROFILE_RELEASE_LTO
+          --build-arg CARGO_PROFILE_RELEASE_CODEGEN_UNITS
           --progress=plain
           --target export
           --output type=local,dest=pi-out/${{ matrix.base }}
