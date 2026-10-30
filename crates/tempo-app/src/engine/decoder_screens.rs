@@ -455,6 +455,10 @@ mod tests {
         let t0 = Instant::now();
         e.poll_remote_transmit(t0);
         assert!(!e.remote_presence_live(t0), "premise: no presence");
+        assert!(
+            !e.remote_transmit_held(),
+            "a held lease holds nothing from transmit"
+        );
         (e, lease, t0)
     }
 

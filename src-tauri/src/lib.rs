@@ -44297,10 +44297,6 @@ mod tests {
         }
     }
 
-    /// ⭐ THE CONTEST LOGGER WINDOW: its strip shares the contact in progress only if the put is
-    /// REGISTERED, the sharing starts when that window is built and ends when it is destroyed,
-    /// and all three log commands log through the engine's claim (`contest_log_entry`) — the one
-    /// hold of the lock that makes Enter in both windows log the contact once.
     /// The SSTV picture viewer keeps the SSTV screen in its section from the moment its window is
     /// built to its `Destroyed` event (the engine's flag the decoders' held-leave poll reads; the
     /// leave command itself also reads the live window). The contest logger's test, below, is the
@@ -44350,6 +44346,10 @@ mod tests {
         );
     }
 
+    /// ⭐ THE CONTEST LOGGER WINDOW: its strip shares the contact in progress only if the put is
+    /// REGISTERED, the sharing starts when that window is built and ends when it is destroyed,
+    /// and all three log commands log through the engine's claim (`contest_log_entry`) — the one
+    /// hold of the lock that makes Enter in both windows log the contact once.
     #[test]
     fn the_contest_logger_window_shares_the_entry_from_its_open_to_its_destroy() {
         let src = include_str!("lib.rs");
