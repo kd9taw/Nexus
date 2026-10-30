@@ -1328,3 +1328,82 @@ fn the_programs_iq_reaches_the_tap_centred_where_the_program_says() {
         "no tap: nothing handed"
     );
 }
+
+/// ⭐ A DRIVER THAT DIES BETWEEN ITS KEY AND ITS PUBLISH STILL BELIEVES IT KEYED. The key is written
+/// in a step that publishes only once it is done, so a driver that dies inside that step leaves the
+/// state from before the key published. What reads it after: the daemon's watcher, whose alarm asks
+/// `ours_on_air` once the events end, the radio loop through the daemon's `keyed`, and the daemon's
+/// teardown, which hands the published key on to the next session for it to stop first. A dying
+/// driver must publish what its session believed, never less. Every window ends with that key:
+/// - the driver dies just after the key, and its own stop goes out;
+/// - the same, but the link went with it, so not even its stop goes out;
+/// - the driver dies just after our own stop, which it sends again on the way down.
+///
+/// Nothing ever keys twice.
+#[test]
+fn a_driver_that_dies_between_its_key_and_its_publish_still_believes_it_keyed() {
+    let owed = OurKey {
+        trx: trx0(),
+        kind: TxStart::Audio,
+    };
+    for (on, later_fail, stop_first) in [
+        ("trx:0,true", false, false),
+        ("trx:0,true", true, false),
+        ("trx:0,false", false, true),
+    ] {
+        let window = format!("panic after {on:?}, later writes fail {later_fail}");
+        let s = sim(SimDialect::expert_sdr3(), []);
+        NEXT_TRAP.set(Some(Trap {
+            on,
+            later_fail,
+            fired: false,
+        }));
+        let conn = connect(&s, Config::new(trx0()));
+        ready(&conn, true);
+        let _ = conn.key(TxStart::Audio);
+        if stop_first {
+            expect(&conn, "the echo", |e| {
+                *e == Event::KeyConfirmed(TxStart::Audio)
+            });
+            let _ = conn.end_ours();
+        }
+        // As the daemon's watcher reads it: every event, then the belief.
+        let deadline = Instant::now() + WAIT;
+        loop {
+            match conn.recv_event(WAIT) {
+                Ok(_) => assert!(Instant::now() < deadline, "{window}: events without end"),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => panic!("{window}: the driver never ended"),
+            }
+        }
+        assert_eq!(conn.read(|s| s.phase), Phase::Closed, "{window}");
+        assert!(conn.ours_on_air(), "{window}: the belief keeps the key");
+        assert_eq!(
+            conn.read(|s| s.keyed),
+            Some(owed),
+            "{window}: the teardown carries the key"
+        );
+        let stops = |log: &[Logged]| {
+            log.iter()
+                .filter(|l| {
+                    matches!(
+                        &l.event,
+                        SimEvent::Command { conn: 0, text, .. } if text == "trx:0,false"
+                    )
+                })
+                .count()
+        };
+        if later_fail {
+            assert_eq!(stops(&s.log()), 0, "{window}: nothing more reached it");
+        } else {
+            let sent = 1 + usize::from(stop_first);
+            wait_log(&s, "the stop", |log| stops(log) >= sent);
+        }
+        let keys = s
+            .commands_from(0)
+            .iter()
+            .filter(|c| c.starts_with("trx:0,true"))
+            .count();
+        assert_eq!(keys, 1, "{window}: keyed once");
+    }
+}
