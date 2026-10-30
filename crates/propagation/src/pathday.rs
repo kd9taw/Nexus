@@ -477,6 +477,24 @@ mod tests {
             .hours
             .iter()
             .all(|h| h.polar_short && h.polar_long == Some(true)));
+        // … each route on its own: Quito–Santiago's short arc stays at low latitude while its long
+        // arc runs over both poles, so only the long path is in the cap …
+        let qs = |route| {
+            path_geometry_route(
+                (-0.18, -78.47),
+                (-33.45, -70.67),
+                route,
+                MAY_12Z,
+                Some(3.0),
+                None,
+                None,
+            )
+        };
+        refresh_hours(&mut d, &qs(Route::Short), Some(&qs(Route::Long)));
+        assert!(d
+            .hours
+            .iter()
+            .all(|h| !h.polar_short && h.polar_long == Some(true)));
         // … negative control: Singapore–Nairobi never is, even at Kp 9.
         let eq = |route| {
             path_geometry_route(

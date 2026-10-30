@@ -129,8 +129,8 @@ describe('Frame + bar — the default view to try', () => {
   it('the tab plan: every box Connect keeps is on screen or behind one tab, the shown one first', () => {
     expect(A().tabs).toEqual({
       left1: ['bandTiles', 'bandAdvisor', 'bestband', 'activity', 'advisory'],
-      left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours'],
-      right1: ['chase', 'chaseFeed', 'selection', 'contests', 'satPasses'],
+      left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours', 'pathRegions'],
+      right1: ['chase', 'chaseFeed', 'selection', 'pathDay', 'contests', 'satPasses'],
       right2: ['getout', 'spacewx', 'kpOutlook', 'measuredMuf', 'beacons', 'greyline'],
       bottom1: ['outlook', 'clock'],
       bottom2: ['rotor', 'amp'],

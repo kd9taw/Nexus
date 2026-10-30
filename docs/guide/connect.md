@@ -197,8 +197,9 @@ across the top of Conditions: your
 callsign and grid, a big UTC clock beside your local time, and the day's SFI, Kp,
 sunspot number, A, X-ray and solar-wind speed. Its four boxes keep the others one
 click away as tabs: Band Advisor, Bands by region, Activity Matrix and Best band
-behind Bands for you; Sporadic-E, Openings Log, Insights and 24h Band×Hour behind
-Openings; Chase Feed, Selection, Contests and Satellite Passes behind Chase; Space Wx,
+behind Bands for you; Sporadic-E, Openings Log, Insights, 24h Band×Hour and Paths to
+the regions behind Openings; Chase Feed, Selection, Path over the day, Contests and
+Satellite Passes behind Chase; Space Wx,
 Kp outlook, Measured MUF, NCDXF Beacons and Greyline behind Getting Out. The closed
 bottom row keeps Band Outlook and the Clock, Rotor and Amplifier, and Band Scope.
 Clicking a tab is not a change of layout. The bar stays while you change things

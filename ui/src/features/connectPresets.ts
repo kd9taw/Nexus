@@ -185,6 +185,8 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
   // its box behind a tab), and THE TAB PLAN (the operator: "Ship the tab plan") puts the rest of
   // Connect's own boxes one click behind the four: the band boxes behind Bands for you, the opening
   // boxes behind Openings, the activity boxes behind Chase, the conditions boxes behind Getting Out.
+  // Path over the day sits behind Chase beside Selection (it draws the selected station); Paths to the
+  // regions behind Openings (when each region opens).
   // The closed row keeps Band Outlook and the Clock, the rotor and the amplifier, and the band scope,
   // for ⊞ Panels to bring back. The map is not this layout's: its card, its layers and its look stay as
   // the operator has them.
@@ -200,8 +202,8 @@ export const CONNECT_PRESETS: Record<ConnectPresetId, ConnectLayout> = {
     },
     tabs: {
       left1: ['bandTiles', 'bandAdvisor', 'bestband', 'activity', 'advisory'],
-      left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours'],
-      right1: ['chase', 'chaseFeed', 'selection', 'contests', 'satPasses'],
+      left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours', 'pathRegions'],
+      right1: ['chase', 'chaseFeed', 'selection', 'pathDay', 'contests', 'satPasses'],
       right2: ['getout', 'spacewx', 'kpOutlook', 'measuredMuf', 'beacons', 'greyline'],
       bottom1: ['outlook', 'clock'],
       bottom2: ['rotor', 'amp'],
@@ -235,7 +237,7 @@ export const TV_FRAME_BAR: ConnectLayout = {
   },
   tabs: {
     left1: ['bandTiles', 'bandAdvisor', 'bestband', 'activity', 'advisory'],
-    left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours'],
+    left2: ['openings', 'esNowcast', 'openingsLog', 'insights', 'bandHours', 'pathRegions'],
     right1: ['spacewx', 'kpOutlook'],
     right2: ['getout', 'measuredMuf', 'beacons', 'greyline'],
   },

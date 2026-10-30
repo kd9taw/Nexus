@@ -13,7 +13,7 @@
 // Display only: a click scrubs the map's terminator and ribbon, and turns nothing.
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import type { NeedAlert, PathDay, PathDayCell, PathDayHour, PathPrediction, ZoneTally } from '../../types'
-import { t, type MessageKey } from '../../i18n'
+import { t } from '../../i18n'
 import { fmtZ, heatColor } from '../../propViz'
 import { getLogStats } from '../../api'
 import { PATH_REGIONS, useFeed } from '../../features/connectFeeds'
@@ -41,30 +41,54 @@ const MAJOR = [0, 6, 12, 18]
 const KP_LABEL = 'Kp'
 const GREY_GLYPH = '◐'
 
-const KP_SOURCE: Record<PathDayHour['kpSource'], { labelKey: MessageKey }> = {
-  measured: { labelKey: 'pathWhy.kpSource.measured' },
-  forecast: { labelKey: 'pathWhy.kpSource.forecast' },
-  current: { labelKey: 'pathWhy.kpSource.current' },
-  unknown: { labelKey: 'pathWhy.kpSource.unknown' },
+// Literal keys in each switch, so the catalog's checks read every one of them.
+function kpSourceText(s: PathDayHour['kpSource']): string {
+  switch (s) {
+    case 'measured':
+      return t('pathWhy.kpSource.measured')
+    case 'forecast':
+      return t('pathWhy.kpSource.forecast')
+    case 'current':
+      return t('pathWhy.kpSource.current')
+    case 'unknown':
+      return t('pathWhy.kpSource.unknown')
+  }
 }
 
-const MODE_TITLE: Record<DayMode, { labelKey: MessageKey }> = {
-  best: { labelKey: 'pathDay.mode.title.best' },
-  short: { labelKey: 'pathDay.mode.title.short' },
-  long: { labelKey: 'pathDay.mode.title.long' },
+function modeTitle(m: DayMode): string {
+  return m === 'best'
+    ? t('pathDay.mode.title.best')
+    : m === 'short'
+      ? t('pathDay.mode.title.short')
+      : t('pathDay.mode.title.long')
 }
 
-const REGION_NAME: Record<string, { labelKey: MessageKey }> = {
-  eu: { labelKey: 'pathDay.region.eu' },
-  ja: { labelKey: 'pathDay.region.ja' },
-  vk: { labelKey: 'pathDay.region.vk' },
-  pacific: { labelKey: 'pathDay.region.pacific' },
-  sa: { labelKey: 'pathDay.region.sa' },
-  af: { labelKey: 'pathDay.region.af' },
-  carib: { labelKey: 'pathDay.region.carib' },
-  me: { labelKey: 'pathDay.region.me' },
-  sas: { labelKey: 'pathDay.region.sas' },
-  polar: { labelKey: 'pathDay.region.polar' },
+/** A region's name, or null for an id this build does not know. */
+function regionName(id: string): string | null {
+  switch (id) {
+    case 'eu':
+      return t('pathDay.region.eu')
+    case 'ja':
+      return t('pathDay.region.ja')
+    case 'vk':
+      return t('pathDay.region.vk')
+    case 'pacific':
+      return t('pathDay.region.pacific')
+    case 'sa':
+      return t('pathDay.region.sa')
+    case 'af':
+      return t('pathDay.region.af')
+    case 'carib':
+      return t('pathDay.region.carib')
+    case 'me':
+      return t('pathDay.region.me')
+    case 'sas':
+      return t('pathDay.region.sas')
+    case 'polar':
+      return t('pathDay.region.polar')
+    default:
+      return null
+  }
 }
 
 function kpText(kp: number): string {
@@ -193,7 +217,7 @@ function Grid({
           if (!x) return <span key={h} />
           const k = kpCell(x)
           // An unknown Kp has no number to print: the hover says only that it is unknown.
-          const source = t(KP_SOURCE[x.kpSource].labelKey)
+          const source = kpSourceText(x.kpSource)
           return (
             <span
               key={h}
@@ -222,7 +246,7 @@ function ModeToggle({ mode, onMode, hasLong }: { mode: DayMode; onMode: (m: DayM
           className={`pd-mode${m === mode ? ' on' : ''}`}
           aria-pressed={m === mode}
           disabled={m !== 'short' && !hasLong}
-          title={t(MODE_TITLE[m].labelKey)}
+          title={modeTitle(m)}
           onClick={() => onMode(m)}
         >
           {label[m]}
@@ -337,9 +361,8 @@ export function PathRegionsPane({
     () =>
       regions.flatMap((r) => {
         // A region this build has no name for (a newer shack's) is left out, never mislabelled.
-        const label = REGION_NAME[r.id]
-        if (!label) return []
-        const name = t(label.labelKey)
+        const name = regionName(r.id)
+        if (name == null) return []
         const expanded = open.has(r.id)
         const toggle = (
           <button
