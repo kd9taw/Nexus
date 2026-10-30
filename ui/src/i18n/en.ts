@@ -10808,6 +10808,53 @@ export const EN = {
   'connect.path.greyline.title': 'Greyline (terminator) opening',
   'connect.path.modeChip.title':
     '{{mode}}: ~{{pct}}% of days this circuit works right now (P.533)',
+  // The path "why" line (features/pathWhy.ts) — one sentence under the Path card's ceiling and
+  // on the selected station card. Clauses are joined with `pathWhy.sep`, a storm warning with
+  // `pathWhy.sepWarn`, and the whole is wrapped by `pathWhy.sentence`, so each language sets its
+  // own punctuation. `{{band}}` (20m), `{{layer}}` (E / F2), `{{mode}}` (2F2), `{{time}}` (1800Z)
+  // and Kp are invariant tokens. The hops and take-off angle are the P.533 model's monthly
+  // median (beyond 7000 km an estimate, `hopsEstimate` / `detail.modeEstimate`); the auroral
+  // zone, the polar cap and the aurora are space weather laid over it — the storm clauses say
+  // "may", never "will", and an unknown Kp is said to be unknown. The auroral zone is the band
+  // a quiet-time cap edge (~64° geomagnetic) sits in; the polar cap proper lies poleward of it.
+  'pathWhy.lead.band': '{{band}} short path',
+  'pathWhy.lead': 'Short path',
+  'pathWhy.hops': {
+    one: '{{count}} {{layer}} hop',
+    other: '{{count}} {{layer}} hops',
+  },
+  'pathWhy.hopsEstimate': {
+    one: 'about {{count}} {{layer}} hop',
+    other: 'about {{count}} {{layer}} hops',
+  },
+  'pathWhy.polar': 'crosses the polar cap',
+  'pathWhy.auroralZone': 'crosses the auroral zone',
+  'pathWhy.kpUnknown': 'Kp unknown, no space-weather data',
+  'pathWhy.oval': 'crosses the auroral oval right now',
+  'pathWhy.grey.both': 'grey line at both ends',
+  'pathWhy.grey.me': 'grey line at your end',
+  'pathWhy.grey.dx': 'grey line at their end',
+  'pathWhy.storm.aurora': 'an aurora (Kp {{kp}} forecast at {{time}}) may weaken it',
+  'pathWhy.storm.cap': 'a storm (Kp {{kp}} forecast at {{time}}) may push the auroral zone over it',
+  'pathWhy.sep': ', ',
+  'pathWhy.sepWarn': ' — ',
+  'pathWhy.sentence': '{{text}}.',
+  'pathWhy.detail.summary': 'Details',
+  'pathWhy.detail.mode': 'Mode {{mode}}, take-off {{deg}}° (P.533 monthly median)',
+  'pathWhy.detail.modeEstimate':
+    'Mode {{mode}}, take-off {{deg}}° (an estimate: beyond 7000 km P.533 assumes this hop geometry from the distance alone, so it is the same every hour)',
+  'pathWhy.detail.polar':
+    'Auroral zone and polar cap: {{pct}}% of the path (poleward of {{lat}}° geomagnetic at Kp {{kp}}, {{source}})',
+  'pathWhy.detail.polarUnknown': 'Auroral zone and polar cap: unknown, because Kp is unknown',
+  'pathWhy.detail.maxLat': 'Highest geomagnetic latitude on the path: {{lat}}°',
+  'pathWhy.detail.grey': 'Grey line: {{pct}}% of the path · in daylight: {{sun}}%',
+  'pathWhy.detail.oval': 'The live auroral oval lies across the path.',
+  'pathWhy.detail.note':
+    'The model is a monthly median and does not include storms; the auroral zone, the polar cap and the aurora are laid over it from space weather. Kp this hour: {{source}}.',
+  'pathWhy.kpSource.measured': 'measured',
+  'pathWhy.kpSource.forecast': 'forecast',
+  'pathWhy.kpSource.current': 'latest reading, no forecast for this hour',
+  'pathWhy.kpSource.unknown': 'unknown, no space-weather data',
   'connect.outlook.heading': 'Band outlook',
   'connect.outlook.muf.title':
     'Maximum Usable Frequency — the modeled ceiling to long-haul DX right now. Bands below it are open; above it, closed.',
