@@ -93,7 +93,10 @@ fn route_lan(target: &Url, page: &Url) -> Route {
                 .trim_start_matches('[')
                 .trim_end_matches(']')
                 .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified())
+                .is_ok_and(|ip| {
+                    let ip = ip.to_canonical();
+                    ip.is_loopback() || ip.is_unspecified()
+                })
     });
     if own {
         Route::Refuse

@@ -376,7 +376,7 @@ async fn serve(
 }
 
 fn loopback(peer: SocketAddr) -> bool {
-    peer.ip().is_loopback()
+    peer.ip().to_canonical().is_loopback()
 }
 
 /// Read one request head, within [`HEAD_BYTES`]: the head, and whatever arrived after it.

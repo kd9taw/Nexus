@@ -196,7 +196,7 @@ impl Hub {
 
     /// Take a new TCP connection, or tell it there is no room and close it.
     fn admit(self: &Arc<Self>, stream: TcpStream, peer: SocketAddr) {
-        if !peer.ip().is_loopback() {
+        if !peer.ip().to_canonical().is_loopback() {
             let _ = stream.shutdown(Shutdown::Both);
             return;
         }
@@ -351,7 +351,10 @@ fn serve_udp(socket: UdpSocket, hub: Arc<Hub>, stop: Arc<AtomicBool>) {
     while !stop.load(Ordering::Relaxed) {
         match socket.recv_from(&mut buf) {
             Ok((n, from)) => {
-                if n > MAX_REQUEST_BYTES || !from.ip().is_loopback() || !hub.accepts(Via::Udp) {
+                if n > MAX_REQUEST_BYTES
+                    || !from.ip().to_canonical().is_loopback()
+                    || !hub.accepts(Via::Udp)
+                {
                     continue;
                 }
                 if let Some(out) = Request::parse(&buf[..n])

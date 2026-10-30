@@ -156,7 +156,7 @@ fn bind_replies(to: SocketAddr) -> std::io::Result<UdpSocket> {
             ),
         )
     })?;
-    let any: std::net::IpAddr = match to.ip() {
+    let any: std::net::IpAddr = match to.ip().to_canonical() {
         ip if ip.is_loopback() => ip,
         ip if ip.is_ipv6() => Ipv6Addr::UNSPECIFIED.into(),
         _ => Ipv4Addr::UNSPECIFIED.into(),

@@ -2343,9 +2343,10 @@ Auto-forward each logged QSO to your self-hosted Cloudlog or Wavelog logbook ove
 HTTP.
 
 - **Base URL** — your site root. "Leave blank to disable." It must be `https://`, except
-  for an instance on your own network: a 192.168.x.x, 10.x.x.x, 172.16–31.x.x or
-  127.x.x.x address (or a local IPv6 one), or a name whose every address is one of those,
-  may use plain `http://`. The API key then travels unencrypted, so a note under the field
+  for an instance on your own network: a 192.168.x.x, 10.x.x.x, 172.16–31.x.x, 127.x.x.x,
+  169.254.x.x or 100.64–127.x.x address (or a local IPv6 one — loopback, unique-local,
+  link-local or site-local), or a name whose every address is one of those, may use plain
+  `http://`. The API key then travels unencrypted, so a note under the field
   says so, and the Connections log says where it went, once a session for each address.
 - **Station profile id** — "Your station location number — in Wavelog or Cloudlog
   ▸ Station Locations, it is the number at the end of that location's Edit link

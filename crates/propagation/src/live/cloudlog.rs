@@ -285,22 +285,64 @@ impl Destination {
 
 /// Is `ip` on the operator's own network, so that a key sent to it in the clear stays there?
 ///
-/// Loopback (127/8, `::1`), the private IPv4 ranges (10/8, 172.16/12, 192.168/16), link-local
-/// (169.254/16, fe80::/10, which are never routed off the link) and IPv6 unique-local
-/// (fc00::/7). An IPv4-mapped IPv6 address counts as the IPv4 address it carries.
+/// Every local-use unicast range, not just RFC 1918:
 ///
-/// Deliberately not on it: 100.64/10, the carrier-grade NAT range, which a provider's own
-/// network uses as readily as a home VPN does; the unspecified, broadcast and multicast
-/// addresses; and every global address, a home's own IPv6 prefix included, because nothing in
-/// an address says which global addresses are the operator's.
+/// - IPv4 loopback (127/8), the private ranges (10/8, 172.16/12, 192.168/16), link-local
+///   (169.254/16) and the carrier-grade NAT / overlay-network shared space (100.64/10, RFC 6598,
+///   which Tailscale and other VPNs number their interfaces from).
+/// - IPv6 loopback (`::1`), unique-local (fc00::/7), link-local (fe80::/10) and the deprecated
+///   site-local range (fec0::/10), which is still used by some private networks.
+/// - Every IPv6 form that carries an IPv4 address: IPv4-mapped (`::ffff:0:0/96`) and the
+///   deprecated IPv4-compatible (`::/96`) form are read as the IPv4 address they carry.
+///
+/// Deliberately not on it: the unspecified, broadcast and multicast addresses; the documentation
+/// and benchmarking blocks, which are examples rather than anyone's network; and every global
+/// address, a home's own IPv6 prefix included, because nothing in an address says which global
+/// addresses are the operator's.
 fn on_own_network(ip: std::net::IpAddr) -> bool {
     match ip {
-        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
-        std::net::IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
-            Some(v4) => on_own_network(std::net::IpAddr::V4(v4)),
-            None => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
-        },
+        std::net::IpAddr::V4(v4) => local_v4(v4),
+        std::net::IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                return true;
+            }
+            if let Some(v4) = carried_v4(v6) {
+                return local_v4(v4);
+            }
+            let first = v6.segments()[0];
+            v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                // Site-local fec0::/10 (RFC 3879, deprecated but still deployed on private nets).
+                || (first & 0xffc0) == 0xfec0
+        }
     }
+}
+
+/// The IPv4 address an IPv6 address carries, if it carries one: IPv4-mapped (`::ffff:0:0/96`) or
+/// the deprecated IPv4-compatible form (`::/96`, excluding `::` and `::1`).
+fn carried_v4(v6: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    if let Some(v4) = v6.to_ipv4_mapped() {
+        return Some(v4);
+    }
+    let segments = v6.segments();
+    if segments[..6].iter().all(|segment| *segment == 0)
+        && !v6.is_loopback()
+        && !v6.is_unspecified()
+    {
+        let o = v6.octets();
+        return Some(std::net::Ipv4Addr::new(o[12], o[13], o[14], o[15]));
+    }
+    None
+}
+
+/// Is `v4` a local-use unicast address (see [`on_own_network`])?
+fn local_v4(v4: std::net::Ipv4Addr) -> bool {
+    let [a, b, ..] = v4.octets();
+    v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        // Carrier-grade NAT / overlay VPN shared space, 100.64.0.0/10 (RFC 6598).
+        || (a == 100 && (64..=127).contains(&b))
 }
 
 /// The refusal for plain http anywhere but the operator's own network. `why` says what about
@@ -311,8 +353,9 @@ fn plain_http_refused(why: &str) -> CloudlogError {
         format!(
             "Cloudlog/Wavelog: the instance URL must be https://. Plain http:// is accepted only \
              for an address on your own network (192.168.x.x, 10.x.x.x, 172.16–31.x.x, \
-             127.x.x.x and the like, or a name that resolves only to such addresses), because \
-             the API key travels unencrypted, and {why}. Nothing was sent"
+             127.x.x.x, 169.254.x.x, 100.64–127.x.x and the local IPv6 ranges, or a name that \
+             resolves only to such addresses), because the API key travels unencrypted, and \
+             {why}. Nothing was sent"
         ),
     )
 }
@@ -1923,10 +1966,15 @@ mod tests {
             "172.31.255.255",
             "192.168.1.20",
             "169.254.10.20",
+            "100.64.0.1",
+            "100.127.255.255",
             "[::1]",
             "[fd00::20]",
             "[fe80::1]",
+            "[fec0::1]",
             "[::ffff:192.168.1.20]",
+            "[::ffff:100.64.0.1]",
+            "[::192.168.1.20]",
         ] {
             match Destination::check_with(&format!("http://{host}:8086/wavelog"), &lookup) {
                 Ok(d) => assert!(
@@ -1964,10 +2012,12 @@ mod tests {
         for host in [
             "203.0.113.7",
             "8.8.8.8",
-            "100.64.0.1",
+            "100.63.255.255",
+            "100.128.0.0",
             "0.0.0.0",
             "172.32.0.1",
             "192.169.1.1",
+            "198.18.0.1",
             "224.0.0.1",
             "255.255.255.255",
             "[2001:db8::20]",
