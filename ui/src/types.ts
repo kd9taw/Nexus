@@ -279,18 +279,23 @@ export interface PathHour {
   /** The hour's median SNR (dB in the model's 1 Hz bandwidth): only meaningful as a difference
    * between two routes. Absent from an older shack. */
   snrDb?: number
+  /** Beyond 7000 km: the hop geometry the long-path method assumes from distance alone (the
+   * same every hour and band) — an estimate, not a modelled ray. */
+  estimated: boolean
 }
 /** One UTC hour of model-free path geometry (propagation::pathgeo). */
 export interface PathGeoHour {
   /** Start of the hour described: the NEXT occurrence of that UTC hour (unix s). */
   unix: number
-  kp: number
+  /** null exactly when `kpSource` is `unknown`, and so are `capLatDeg` and `polarFrac`. */
+  kp: number | null
   /** `forecast` = SWPC's prediction; `measured` = observed; `current` = no outlook sample
-   * covers the hour, so the current Kp is assumed. Word a forecast as a forecast. */
-  kpSource: 'measured' | 'forecast' | 'current'
-  capLatDeg: number
+   * covers the hour, so SWPC's latest reading is carried forward; `unknown` = no space-weather
+   * data held at all. Word a forecast as a forecast, and an unknown Kp as unknown. */
+  kpSource: 'measured' | 'forecast' | 'current' | 'unknown'
+  capLatDeg: number | null
   /** Shares of the path (0..1): poleward of the cap, on the grey line, sunlit. */
-  polarFrac: number
+  polarFrac: number | null
   greylineFrac: number
   sunlitFrac: number
   greyMe: boolean
@@ -364,7 +369,8 @@ export interface PathDayCell {
 /** One UTC hour's band-independent geometry in a path's day. */
 export interface PathDayHour {
   unix: number
-  kp: number
+  /** null exactly when `kpSource` is `unknown` (no space-weather data held). */
+  kp: number | null
   /** Where the hour's Kp came from (see PathGeoHour.kpSource). */
   kpSource: PathGeoHour['kpSource']
   polarShort: boolean

@@ -55,9 +55,11 @@ pub struct PathDayBand {
 pub struct PathDayHour {
     /// Start of the hour described: its NEXT occurrence from the request (unix seconds UTC).
     pub unix: i64,
-    pub kp: f32,
+    /// `None` exactly when `kp_source` is unknown (no space-weather data held).
+    pub kp: Option<f32>,
     pub kp_source: KpSource,
-    /// The short / long path crosses the polar cap at that hour's Kp.
+    /// The short / long path is known to cross the polar cap at that hour's Kp — false when it
+    /// does not, and when the Kp is unknown (nothing is claimed).
     pub polar_short: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub polar_long: Option<bool>,
@@ -130,6 +132,11 @@ pub fn path_day(sp: &PathPrediction, lp: Option<&PathPrediction>) -> Option<Path
     Some(day)
 }
 
+/// A polar share known to be above zero.
+fn crosses(polar_frac: Option<f32>) -> bool {
+    polar_frac.is_some_and(|p| p > 0.0)
+}
+
 /// Re-derive the day's per-hour geometry (Kp, its source, polar crossings, grey ends) and its
 /// current hour from fresh geometry — what a cached day needs before it is served again.
 pub fn refresh_hours(day: &mut PathDay, gsp: &PathGeometry, glp: Option<&PathGeometry>) {
@@ -142,8 +149,10 @@ pub fn refresh_hours(day: &mut PathDay, gsp: &PathGeometry, glp: Option<&PathGeo
             unix: s.unix,
             kp: s.kp,
             kp_source: s.kp_source,
-            polar_short: s.polar_frac > 0.0,
-            polar_long: glp.and_then(|g| g.hours.get(h)).map(|l| l.polar_frac > 0.0),
+            polar_short: crosses(s.polar_frac),
+            polar_long: glp
+                .and_then(|g| g.hours.get(h))
+                .map(|l| crosses(l.polar_frac)),
             grey_me: s.grey_me,
             grey_dx: s.grey_dx,
         })
@@ -257,7 +266,7 @@ fn anchor_geometry(
     me: (f64, f64),
     r: &PathRegion,
     t: i64,
-    kp_now: f32,
+    kp_now: Option<f32>,
     forecast: Option<&KpForecast>,
 ) -> (PathGeometry, PathGeometry) {
     let g = |route| path_geometry_route(me, (r.lat, r.lon), route, t, kp_now, forecast, None);
@@ -273,7 +282,7 @@ pub fn sweep_regions(
     me: (f64, f64),
     t: i64,
     wx: &SpaceWx,
-    kp_now: f32,
+    kp_now: Option<f32>,
     forecast: Option<&KpForecast>,
 ) -> Vec<RegionDay> {
     PATH_REGIONS
@@ -305,7 +314,7 @@ pub fn refresh_regions(
     days: &mut Vec<RegionDay>,
     me: (f64, f64),
     t: i64,
-    kp_now: f32,
+    kp_now: Option<f32>,
     forecast: Option<&KpForecast>,
 ) {
     days.retain(|d| day_is_well_formed(&d.day));
@@ -354,7 +363,13 @@ mod tests {
             muf_now: 0.0,
             muf_hourly: (0..24).map(|h| 10.0 + h as f32).collect(),
             geometry: Some(path_geometry_route(
-                BOSTON, SYDNEY, route, MAY_12Z, 3.0, None, None,
+                BOSTON,
+                SYDNEY,
+                route,
+                MAY_12Z,
+                Some(3.0),
+                None,
+                None,
             )),
             long_path: None,
             routes: None,
@@ -446,15 +461,16 @@ mod tests {
                 (d.unix, d.kp, d.kp_source),
                 (gs.hours[h].unix, gs.hours[h].kp, gs.hours[h].kp_source)
             );
-            assert_eq!(d.polar_short, gs.hours[h].polar_frac > 0.0);
-            assert_eq!(d.polar_long, Some(gl.hours[h].polar_frac > 0.0));
+            assert_eq!(d.polar_short, gs.hours[h].polar_frac.unwrap() > 0.0);
+            assert_eq!(d.polar_long, Some(gl.hours[h].polar_frac.unwrap() > 0.0));
             assert_eq!(
                 (d.grey_me, d.grey_dx),
                 (gs.hours[h].grey_me, gs.hours[h].grey_dx)
             );
         }
         // Positive control: Boston–Tokyo is in the cap both ways round every hour at Kp 3 …
-        let tokyo = |route| path_geometry_route(BOSTON, TOKYO, route, MAY_12Z, 3.0, None, None);
+        let tokyo =
+            |route| path_geometry_route(BOSTON, TOKYO, route, MAY_12Z, Some(3.0), None, None);
         let mut d = day.clone();
         refresh_hours(&mut d, &tokyo(Route::Short), Some(&tokyo(Route::Long)));
         assert!(d
@@ -468,7 +484,7 @@ mod tests {
                 (-1.29, 36.82),
                 route,
                 MAY_12Z,
-                9.0,
+                Some(9.0),
                 None,
                 None,
             )
@@ -481,6 +497,18 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_kp_is_carried_as_unknown_and_claims_no_polar_crossing() {
+        let sp = pred(vec![band("20m", ramp(true))], Route::Short);
+        let mut day = path_day(&sp, None).unwrap();
+        let tokyo = |route| path_geometry_route(BOSTON, TOKYO, route, MAY_12Z, None, None, None);
+        refresh_hours(&mut day, &tokyo(Route::Short), Some(&tokyo(Route::Long)));
+        for h in &day.hours {
+            assert_eq!((h.kp, h.kp_source), (None, KpSource::Unknown));
+            assert!(!h.polar_short && h.polar_long == Some(false));
+        }
+    }
+
+    #[test]
     fn a_cached_day_takes_fresh_hours_and_keeps_its_cells() {
         let sp = pred(vec![band("20m", ramp(true))], Route::Short);
         let mut day = path_day(&sp, None).unwrap();
@@ -490,13 +518,13 @@ mod tests {
             SYDNEY,
             Route::Short,
             MAY_12Z + 5 * 3600,
-            9.0,
+            Some(9.0),
             None,
             None,
         );
         refresh_hours(&mut day, &later, None);
         assert_eq!(day.now_hour, 17);
-        assert!(day.hours.iter().all(|h| h.kp == 9.0));
+        assert!(day.hours.iter().all(|h| h.kp == Some(9.0)));
         assert_eq!(day.bands, cells);
     }
 
@@ -526,7 +554,7 @@ mod tests {
     fn the_sweep_gives_every_region_a_day_and_a_kept_one_is_made_current() {
         let wx = SpaceWx::default();
         let eng = HeuristicEngine::new(Some(BOSTON));
-        let mut days = sweep_regions(&eng, BOSTON, MAY_12Z, &wx, 2.0, None);
+        let mut days = sweep_regions(&eng, BOSTON, MAY_12Z, &wx, Some(2.0), None);
         let ids: Vec<&str> = days.iter().map(|d| d.id.as_str()).collect();
         let want: Vec<&str> = PATH_REGIONS.iter().map(|r| r.id).collect();
         assert_eq!(ids, want);
@@ -546,7 +574,7 @@ mod tests {
         let mut broken = days[0].clone();
         broken.day.hours.clear();
         days.push(broken);
-        refresh_regions(&mut days, BOSTON, MAY_12Z + 5 * 3600, 9.0, None);
+        refresh_regions(&mut days, BOSTON, MAY_12Z + 5 * 3600, Some(9.0), None);
         assert_eq!(
             days.len(),
             10,
@@ -554,7 +582,7 @@ mod tests {
         );
         assert!(days
             .iter()
-            .all(|d| d.day.now_hour == 17 && d.day.hours.iter().all(|h| h.kp == 9.0)));
+            .all(|d| d.day.now_hour == 17 && d.day.hours.iter().all(|h| h.kp == Some(9.0))));
         assert_eq!(
             days.iter().map(|d| d.day.bands.clone()).collect::<Vec<_>>(),
             cells

@@ -118,12 +118,22 @@ describe('the selected station strip', () => {
     expect(kp[18].className).toContain('bad')
     expect(kp[18].title).toBe('18Z: Kp 5.3, forecast')
     expect(kp[23].className).toContain('current')
-    expect(kp[23].title).toContain('current value, no forecast for this hour')
+    expect(kp[23].title).toContain('latest reading, no forecast for this hour')
     expect(kp[3].title).toContain('measured')
     // The grey line at the operator's end at 10Z.
     const grey = [...container.querySelectorAll('.pd-greycell')]
     expect(grey[10].textContent).toBe('◐')
     expect(grey[11].textContent).toBe('')
+  })
+
+  it('with no space-weather data a Kp hour is empty and says unknown, never a quiet number', () => {
+    const d = day()
+    d.hours = d.hours.map((h) => ({ ...h, kp: null, kpSource: 'unknown' as const }))
+    const { container } = render(<PathDayPane pred={pred(d)} scrub={null} />)
+    const kp = [...container.querySelectorAll('.pd-kpcell')] as HTMLElement[]
+    expect(kp[5].className).toContain('unknown')
+    expect(kp[5].className).not.toMatch(/good|warn|bad/)
+    expect(kp[5].title).toBe('05Z: unknown, no space-weather data')
   })
 
   it('an hour scrubs the map to the middle of that hour, and the same hour goes back to now', () => {
@@ -176,6 +186,13 @@ describe('the region strips', () => {
     fireEvent.click(container.querySelector('.pd-region')!)
     expect(rows(container)).toHaveLength(4)
     expect(container.querySelector('.pd-region')!.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('leaves out a region it has no name for', async () => {
+    fx.regions = { engine: 'p533', computedUnix: T0, regions: [region('atlantis', [1]), region('eu', [14])] }
+    const { container } = render(<PathRegionsPane needs={[]} scrub={null} />)
+    await waitFor(() => expect(names(container)).toEqual(['Europe']))
+    expect(rows(container)).toHaveLength(1)
   })
 
   it('puts the needed stations first, then the logged contacts', async () => {

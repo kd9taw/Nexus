@@ -10815,36 +10815,48 @@ export const EN = {
   // `pathWhy.sepWarn`, and the whole is wrapped by `pathWhy.sentence`, so each language sets its
   // own punctuation. `{{band}}` (20m), `{{layer}}` (E / F2), `{{mode}}` (2F2), `{{time}}` (1800Z)
   // and Kp are invariant tokens. The hops and take-off angle are the P.533 model's monthly
-  // median; Kp, the polar cap and the aurora are a FORECAST laid over it — the storm clauses
-  // say "may", never "will".
+  // median (beyond 7000 km an estimate, `hopsEstimate` / `detail.modeEstimate`); the auroral
+  // zone, the polar cap and the aurora are space weather laid over it — the storm clauses say
+  // "may", never "will", and an unknown Kp is said to be unknown. The auroral zone is the band
+  // a quiet-time cap edge (~64° geomagnetic) sits in; the polar cap proper lies poleward of it.
   'pathWhy.lead.band': '{{band}} short path',
   'pathWhy.lead': 'Short path',
   'pathWhy.hops': {
     one: '{{count}} {{layer}} hop',
     other: '{{count}} {{layer}} hops',
   },
+  'pathWhy.hopsEstimate': {
+    one: 'about {{count}} {{layer}} hop',
+    other: 'about {{count}} {{layer}} hops',
+  },
   'pathWhy.polar': 'crosses the polar cap',
+  'pathWhy.auroralZone': 'crosses the auroral zone',
+  'pathWhy.kpUnknown': 'Kp unknown, no space-weather data',
   'pathWhy.oval': 'crosses the auroral oval right now',
   'pathWhy.grey.both': 'grey line at both ends',
   'pathWhy.grey.me': 'grey line at your end',
   'pathWhy.grey.dx': 'grey line at their end',
   'pathWhy.storm.aurora': 'an aurora (Kp {{kp}} forecast at {{time}}) may weaken it',
-  'pathWhy.storm.cap': 'a storm (Kp {{kp}} forecast at {{time}}) may spread the polar cap over it',
+  'pathWhy.storm.cap': 'a storm (Kp {{kp}} forecast at {{time}}) may push the auroral zone over it',
   'pathWhy.sep': ', ',
   'pathWhy.sepWarn': ' — ',
   'pathWhy.sentence': '{{text}}.',
   'pathWhy.detail.summary': 'Details',
   'pathWhy.detail.mode': 'Mode {{mode}}, take-off {{deg}}° (P.533 monthly median)',
+  'pathWhy.detail.modeEstimate':
+    'Mode {{mode}}, take-off {{deg}}° (an estimate: beyond 7000 km P.533 assumes this hop geometry from the distance alone, so it is the same every hour)',
   'pathWhy.detail.polar':
-    'Polar cap: {{pct}}% of the path (edge at {{lat}}° geomagnetic for Kp {{kp}}, {{source}})',
+    'Auroral zone and polar cap: {{pct}}% of the path (poleward of {{lat}}° geomagnetic at Kp {{kp}}, {{source}})',
+  'pathWhy.detail.polarUnknown': 'Auroral zone and polar cap: unknown, because Kp is unknown',
   'pathWhy.detail.maxLat': 'Highest geomagnetic latitude on the path: {{lat}}°',
   'pathWhy.detail.grey': 'Grey line: {{pct}}% of the path · in daylight: {{sun}}%',
   'pathWhy.detail.oval': 'The live auroral oval lies across the path.',
   'pathWhy.detail.note':
-    'The model is a monthly median and does not include storms; Kp, the polar cap and the aurora come from the space-weather forecast.',
+    'The model is a monthly median and does not include storms; the auroral zone, the polar cap and the aurora are laid over it from space weather. Kp this hour: {{source}}.',
   'pathWhy.kpSource.measured': 'measured',
   'pathWhy.kpSource.forecast': 'forecast',
-  'pathWhy.kpSource.current': 'current value, no forecast for this hour',
+  'pathWhy.kpSource.current': 'latest reading, no forecast for this hour',
+  'pathWhy.kpSource.unknown': 'unknown, no space-weather data',
   // Short path or long path (features/pathRoute.ts): the heading hint on the Path card and the
   // selected station card, the polar chip, and the map's long-path button. The route call is the
   // P.533 model's opinion (a monthly median), so the confidence words are "likely" / "possible",
@@ -10902,7 +10914,7 @@ export const EN = {
   'pathDay.legend.long': 'long path',
   'pathDay.legend.polar': 'polar cap',
   'pathDay.legend.muf': 'MUF ceiling',
-  'pathDay.legend.kp': 'Kp: solid measured, hollow forecast, dashed the current value carried forward',
+  'pathDay.legend.kp': 'Kp: solid measured, hollow forecast, dashed the latest reading carried forward, dotted unknown',
   'pathDay.legend.modelled': 'Modelled monthly median, not a measurement',
   'pathDay.best.lead': 'Best: {{text}}.',
   'pathDay.best.sep': '; ',

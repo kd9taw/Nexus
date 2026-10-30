@@ -65,15 +65,17 @@ export function ceilingRow(day: PathDay, mode: DayMode): (number | null)[] {
 }
 
 export interface KpCellView {
-  /** measured = solid, forecast = hollow, current = the current value carried forward (no outlook
-   * sample covers the hour) — drawn faint and dashed, never as a forecast. */
+  /** measured = solid, forecast = hollow, current = SWPC's latest reading carried forward (no
+   * outlook sample covers the hour) — drawn faint and dashed, never as a forecast; unknown = no
+   * space-weather data at all — no tone, nothing that reads as a value. */
   fill: PathDayHour['kpSource']
-  tone: 'good' | 'warn' | 'bad'
+  tone: 'good' | 'warn' | 'bad' | null
 }
 
 /** How the Kp ribbon draws one hour (the Kp outlook pane's tones: storm from 5, active from 4). */
 export function kpCell(h: PathDayHour): KpCellView {
-  return { fill: h.kpSource, tone: h.kp >= 5 ? 'bad' : h.kp >= 4 ? 'warn' : 'good' }
+  const kp = h.kpSource === 'unknown' ? null : h.kp
+  return { fill: h.kpSource, tone: kp == null ? null : kp >= 5 ? 'bad' : kp >= 4 ? 'warn' : 'good' }
 }
 
 export interface OpenRun {

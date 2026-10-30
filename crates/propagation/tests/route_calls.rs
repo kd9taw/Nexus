@@ -59,11 +59,19 @@ fn call_at(
         dx,
         Route::Short,
         t,
-        2.0,
+        Some(2.0),
         None,
         None,
     ));
-    lp.geometry = Some(path_geometry_route(me, dx, Route::Long, t, 2.0, None, None));
+    lp.geometry = Some(path_geometry_route(
+        me,
+        dx,
+        Route::Long,
+        t,
+        Some(2.0),
+        None,
+        None,
+    ));
     compare_routes(&sp, &lp)
         .into_iter()
         .find(|c| c.band == band)
@@ -86,7 +94,7 @@ fn w_to_vk_on_20m_goes_long_path_at_bostons_sunset_and_short_at_midday() {
         SYDNEY,
         Route::Long,
         MAY_00Z + 23 * 3600,
-        2.0,
+        Some(2.0),
         None,
         None,
     );
@@ -104,8 +112,11 @@ fn a_polar_short_path_and_its_long_path_trade_hours() {
     let preds = both(BOSTON, TOKYO);
     // Both routes cross a cap, so neither route escapes the aurora: the hours decide.
     for route in [Route::Short, Route::Long] {
-        let g = path_geometry_route(BOSTON, TOKYO, route, MAY_00Z, 2.0, None, None);
-        assert!(g.hours.iter().all(|h| h.polar_frac > 0.0), "{route:?}");
+        let g = path_geometry_route(BOSTON, TOKYO, route, MAY_00Z, Some(2.0), None, None);
+        assert!(
+            g.hours.iter().all(|h| h.polar_frac.unwrap() > 0.0),
+            "{route:?}"
+        );
     }
     let morning = call_at(BOSTON, TOKYO, &preds, "20m", 11);
     assert_eq!(morning.verdict, RouteVerdict::Short, "{morning:?}");

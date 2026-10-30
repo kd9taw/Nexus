@@ -136,7 +136,8 @@ pub(crate) struct Ask {
     pub(crate) engine: Box<dyn propagation::PathPredictor>,
     pub(crate) t: i64,
     pub(crate) wx: SpaceWx,
-    pub(crate) kp_now: f32,
+    /// The Kp SWPC last reported; `None` when none is held (the hours then say unknown).
+    pub(crate) kp_now: Option<f32>,
     pub(crate) forecast: Option<KpForecast>,
 }
 
@@ -213,7 +214,7 @@ mod tests {
 
     fn heuristic_sweep() -> Vec<RegionDay> {
         let eng = propagation::HeuristicEngine::new(Some(BOSTON));
-        propagation::sweep_regions(&eng, BOSTON, T, &SpaceWx::default(), 2.0, None)
+        propagation::sweep_regions(&eng, BOSTON, T, &SpaceWx::default(), Some(2.0), None)
     }
 
     fn stored(key: &str, at: i64) -> Stored {
@@ -296,7 +297,7 @@ mod tests {
                 engine: Box::new(propagation::HeuristicEngine::new(Some(BOSTON))),
                 t: T,
                 wx: SpaceWx::default(),
-                kp_now: 2.0,
+                kp_now: Some(2.0),
                 forecast: None,
             },
             &path,
@@ -318,13 +319,13 @@ mod tests {
         let key = "kept-sweep-test";
         let s = stored(key, T - 3600);
         save(&path, &s);
-        let ask = |kp| Ask {
+        let ask = |kp: f32| Ask {
             me: BOSTON,
             key: key.into(),
             engine: propagation::make_predictor("p533", Some(BOSTON), None, 0.0),
             t: T,
             wx: SpaceWx::default(),
-            kp_now: kp,
+            kp_now: Some(kp),
             forecast: None,
         };
         let started = std::time::Instant::now();
@@ -334,14 +335,14 @@ mod tests {
         assert!(v
             .regions
             .iter()
-            .all(|r| r.day.hours.iter().all(|h| h.kp == 9.0)));
+            .all(|r| r.day.hours.iter().all(|h| h.kp == Some(9.0))));
         std::fs::remove_file(&path).unwrap();
         let v = serve(ask(1.0), &path);
         assert_eq!(v.computed_unix, T - 3600, "held in memory once read");
         assert!(v
             .regions
             .iter()
-            .all(|r| r.day.hours.iter().all(|h| h.kp == 1.0)));
+            .all(|r| r.day.hours.iter().all(|h| h.kp == Some(1.0))));
         assert!(started.elapsed().as_secs() < 5, "no P.533 sweep ran");
     }
 }

@@ -12,7 +12,7 @@
 //
 // Display only: a click scrubs the map's terminator and ribbon, and turns nothing.
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
-import type { PathDay, PathDayCell, PathDayHour, PathPrediction, ZoneTally } from '../../types'
+import type { NeedAlert, PathDay, PathDayCell, PathDayHour, PathPrediction, ZoneTally } from '../../types'
 import { t, type MessageKey } from '../../i18n'
 import { fmtZ, heatColor } from '../../propViz'
 import { getLogStats } from '../../api'
@@ -28,7 +28,6 @@ import {
   type DayMode,
 } from '../../features/pathDay'
 import { ROUTE_LP, ROUTE_SP } from '../../features/pathRibbon'
-import type { NeedAlert } from '../../types'
 
 /** The hour a strip is scrubbed to: its UTC hour and the middle of that hour (ms) for the map. */
 export interface DayScrub {
@@ -46,6 +45,7 @@ const KP_SOURCE: Record<PathDayHour['kpSource'], { labelKey: MessageKey }> = {
   measured: { labelKey: 'pathWhy.kpSource.measured' },
   forecast: { labelKey: 'pathWhy.kpSource.forecast' },
   current: { labelKey: 'pathWhy.kpSource.current' },
+  unknown: { labelKey: 'pathWhy.kpSource.unknown' },
 }
 
 const MODE_TITLE: Record<DayMode, { labelKey: MessageKey }> = {
@@ -192,11 +192,17 @@ function Grid({
           const x = hours[h]
           if (!x) return <span key={h} />
           const k = kpCell(x)
+          // An unknown Kp has no number to print: the hover says only that it is unknown.
+          const source = t(KP_SOURCE[x.kpSource].labelKey)
           return (
             <span
               key={h}
-              className={`pd-kpcell ${k.fill} ${k.tone}${col(h)}`}
-              title={t('pathDay.kp.title', { time: fmtZ(h), kp: kpText(x.kp), source: t(KP_SOURCE[x.kpSource].labelKey) })}
+              className={`pd-kpcell ${k.fill}${k.tone ? ` ${k.tone}` : ''}${col(h)}`}
+              title={
+                x.kp == null || k.tone == null
+                  ? t('pathDay.grey.title', { time: fmtZ(h), text: source })
+                  : t('pathDay.kp.title', { time: fmtZ(h), kp: kpText(x.kp), source })
+              }
             />
           )
         })}
@@ -330,7 +336,10 @@ export function PathRegionsPane({
   const rows = useMemo<Row[]>(
     () =>
       regions.flatMap((r) => {
-        const name = t(REGION_NAME[r.id]?.labelKey ?? 'pathDay.region.eu')
+        // A region this build has no name for (a newer shack's) is left out, never mislabelled.
+        const label = REGION_NAME[r.id]
+        if (!label) return []
+        const name = t(label.labelKey)
         const expanded = open.has(r.id)
         const toggle = (
           <button

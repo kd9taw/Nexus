@@ -88,6 +88,8 @@ describe('kpCell', () => {
     expect(kpCell(hour({ kp: 3, kpSource: 'measured' }))).toMatchObject({ fill: 'measured', tone: 'good' })
     expect(kpCell(hour({ kp: 5.3, kpSource: 'forecast' }))).toMatchObject({ fill: 'forecast', tone: 'bad' })
     expect(kpCell(hour({ kp: 4, kpSource: 'current' }))).toMatchObject({ fill: 'current', tone: 'warn' })
+    // No space-weather data: no tone at all, so nothing reads as a quiet Kp.
+    expect(kpCell(hour({ kp: null, kpSource: 'unknown' }))).toEqual({ fill: 'unknown', tone: null })
   })
 })
 

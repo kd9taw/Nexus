@@ -3341,8 +3341,10 @@ body.resizing-row {
   gap: 1px;
   align-items: center;
 }
+/* A region's name and band: as wide as they are, up to two-fifths of the strip (the rest is
+   ellipsised, the whole name is in the hover). */
 .pd-grid.regions {
-  grid-template-columns: minmax(0, 8em) repeat(24, minmax(0, 1fr));
+  grid-template-columns: fit-content(40%) repeat(24, minmax(0, 1fr));
 }
 .pd-row {
   display: contents;
@@ -3473,6 +3475,10 @@ body.resizing-row {
 .pd-kpcell.current {
   border: 1px dashed var(--kp-tone);
   opacity: 0.6;
+}
+/* No space-weather data: an empty dotted slot in the neutral border ink, never a tone. */
+.pd-kpcell.unknown {
+  border: 1px dotted var(--border);
 }
 .pd-legend {
   display: flex;
@@ -8592,7 +8598,7 @@ select optgroup {
   box-sizing: border-box;
   padding-left: var(--space-5); /* under the call, roughly past the presence dot and its gap */
   margin-bottom: 2px;
-  font-size: calc(11px * var(--text-scale));
+  font-size: var(--fs-micro);
   color: var(--text-dim);
 }
 

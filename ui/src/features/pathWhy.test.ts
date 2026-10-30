@@ -35,17 +35,24 @@ function band(name: string, nowScore: number, hop?: PathHour | null): BandOutloo
   }
 }
 
-function pred(bands: BandOutlook[], geo: PathGeoHour[], ovalNow?: boolean): PathPrediction {
+function pred(
+  bands: BandOutlook[],
+  geo: PathGeoHour[],
+  ovalNow?: boolean,
+  maxGmlatDeg = 71,
+): PathPrediction {
   return {
     engine: 'p533',
     bands,
     mufNow: 21,
     mufHourly: Array(24).fill(21),
-    geometry: { distKm: 10800, bearingDeg: 335, maxGmlatDeg: 71, nowHour: 12, hours: geo, ovalNow },
+    geometry: { distKm: 10800, bearingDeg: 335, maxGmlatDeg, nowHour: 12, hours: geo, ovalNow },
   }
 }
 
-const TWO_F2: PathHour = { layer: 'F2', hops: 2, takeoffDeg: 11.24 }
+const TWO_F2: PathHour = { layer: 'F2', hops: 2, takeoffDeg: 11.24, estimated: false }
+/** No SWPC data at all: no reading, no outlook. */
+const UNKNOWN = { kp: null, kpSource: 'unknown' as const, capLatDeg: null, polarFrac: null }
 
 describe('the path why line', () => {
   it('a polar path with a storm forecast: model clause, overlay clause, and the forecast worded as one', () => {
@@ -68,7 +75,7 @@ describe('the path why line', () => {
     expect(f?.polarNow).toBe(false)
     expect(f?.storm).toEqual({ kp: 7, unix: T12 + 7 * 3600 })
     expect(pathWhyLine(f)).toBe(
-      '20m short path, 2 F2 hops — a storm (Kp 7 forecast at 1900Z) may spread the polar cap over it.',
+      '20m short path, 2 F2 hops — a storm (Kp 7 forecast at 1900Z) may push the auroral zone over it.',
     )
   })
 
@@ -93,7 +100,7 @@ describe('the path why line', () => {
   })
 
   it('grey line at either end, and one hop is singular', () => {
-    const one: PathHour = { layer: 'E', hops: 1, takeoffDeg: 6 }
+    const one: PathHour = { layer: 'E', hops: 1, takeoffDeg: 6, estimated: false }
     const geo = hours((h) => (h === 12 ? { greyDx: true } : {}))
     expect(pathWhyLine(pathWhyFacts(pred([band('40m', 0.9, one)], geo)))).toBe(
       '40m short path, 1 E hop, grey line at their end.',
@@ -140,14 +147,72 @@ describe('the path why line', () => {
     const rows = pathWhyDetail(pathWhyFacts(pred([band('20m', 0.8, TWO_F2)], geo)), 71.2)
     expect(rows).toEqual([
       'Mode 2F2, take-off 11.2° (P.533 monthly median)',
-      'Polar cap: 23% of the path (edge at 64° geomagnetic for Kp 2.3, current value, no forecast for this hour)',
+      'Auroral zone and polar cap: 23% of the path (poleward of 64° geomagnetic at Kp 2.3, latest reading, no forecast for this hour)',
       'Highest geomagnetic latitude on the path: 71°',
       'Grey line: 40% of the path · in daylight: 60%',
-      'The model is a monthly median and does not include storms; Kp, the polar cap and the aurora come from the space-weather forecast.',
+      'The model is a monthly median and does not include storms; the auroral zone, the polar cap and the aurora are laid over it from space weather. Kp this hour: latest reading, no forecast for this hour.',
     ])
     // The heuristic carries no mode: the row is absent, not invented.
     const h = pathWhyDetail(pathWhyFacts(pred([band('20m', 0.8)], geo)), 71.2)
     expect(h.some((r) => r.startsWith('Mode'))).toBe(false)
+  })
+
+  it('with no space-weather data, Kp is said to be unknown and nothing that depends on it is claimed', () => {
+    // A high-latitude path, cold cache: no Kp, no cap edge, no polar share — at every hour.
+    const geo = hours(() => UNKNOWN)
+    const f = pathWhyFacts(pred([band('20m', 0.8, TWO_F2)], geo, undefined, 64.7))
+    expect(f?.polarNow).toBe(false)
+    expect(f?.storm).toBeNull()
+    const line = pathWhyLine(f)
+    expect(line).toBe('20m short path, 2 F2 hops, Kp unknown, no space-weather data.')
+    expect(line).not.toMatch(/polar cap|auroral zone|latest reading|current/)
+    expect(pathWhyDetail(f, 64.7)).toEqual([
+      'Mode 2F2, take-off 11.2° (P.533 monthly median)',
+      'Auroral zone and polar cap: unknown, because Kp is unknown',
+      'Highest geomagnetic latitude on the path: 65°',
+      'Grey line: 0% of the path · in daylight: 100%',
+      'The model is a monthly median and does not include storms; the auroral zone, the polar cap and the aurora are laid over it from space weather. Kp this hour: unknown, no space-weather data.',
+    ])
+    // Negative control: a path that never reaches the edge at any Kp loses nothing by it.
+    const low = pathWhyLine(pathWhyFacts(pred([band('20m', 0.8)], geo, undefined, 30)))
+    expect(low).toBe('20m short path.')
+  })
+
+  it('the note names the real source of this hour\'s Kp', () => {
+    const note = (src: PathGeoHour['kpSource']) => {
+      const rows = pathWhyDetail(pathWhyFacts(pred([band('20m', 0.8)], hours(() => ({ kpSource: src })))), 71)
+      return rows[rows.length - 1]
+    }
+    expect(note('measured')).toMatch(/Kp this hour: measured\.$/)
+    expect(note('forecast')).toMatch(/Kp this hour: forecast\.$/)
+    expect(note('current')).toMatch(/Kp this hour: latest reading, no forecast for this hour\.$/)
+  })
+
+  it('a path that only grazes the quiet-time edge crosses the auroral zone, not the polar cap', () => {
+    // Minneapolis → Tokyo: highest geomagnetic latitude ~64.7°, just past the Kp 2 edge (63.6°).
+    const graze = hours(() => ({ polarFrac: 0.17 }))
+    expect(pathWhyLine(pathWhyFacts(pred([band('20m', 0.8)], graze, undefined, 64.7)))).toBe(
+      '20m short path, crosses the auroral zone.',
+    )
+    // At Kp 1 (edge 64.8°) the same path is out of it: nothing is said.
+    const out = hours(() => ({ kp: 1, capLatDeg: 64.8, polarFrac: 0 }))
+    expect(pathWhyLine(pathWhyFacts(pred([band('20m', 0.8)], out, undefined, 64.7)))).toBe(
+      '20m short path.',
+    )
+    // Boston → Tokyo reaches 75°: that is the polar cap proper.
+    expect(pathWhyLine(pathWhyFacts(pred([band('20m', 0.8)], graze, undefined, 75)))).toBe(
+      '20m short path, crosses the polar cap.',
+    )
+  })
+
+  it('beyond 7000 km the hops and take-off are worded as an estimate', () => {
+    const est: PathHour = { layer: 'F2', hops: 4, takeoffDeg: 6.1, estimated: true }
+    const f = pathWhyFacts(pred([band('20m', 0.8, est)], hours(), undefined, 30))
+    expect(pathWhyLine(f)).toBe('20m short path, about 4 F2 hops.')
+    expect(pathWhyDetail(f, 30)[0]).toBe(
+      'Mode 4F2, take-off 6.1° (an estimate: beyond 7000 km P.533 assumes this hop geometry from the distance alone, so it is the same every hour)',
+    )
+    expect(pathWhyDetail(f, 30)[0]).not.toMatch(/monthly median/)
   })
 
   it('formats the hour as the outlook windows do', () => {
