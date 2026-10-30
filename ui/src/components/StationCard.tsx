@@ -16,6 +16,7 @@ import { WatchTile } from './WatchTile'
 import { NEED_CHIP } from '../features/needVisuals'
 import type { WatchFilter } from '../watchlist'
 import { PATH_OUTLOOK, useKeyedFeed } from '../features/connectFeeds'
+import { PathRoute } from './prop/PathRoute'
 import { pathWhyDetail, pathWhyFacts, pathWhyLine } from '../features/pathWhy'
 
 interface Props {
@@ -203,6 +204,8 @@ export function StationCard({
           {why}
         </span>
       )}
+      {/* Short path or long path, and which way to beam: same card, same one request. */}
+      {selected && <PathRoute pred={pathPred} className="station-route" short />}
     </div>
   )
 }

@@ -77,6 +77,8 @@ import {
 } from '../grid'
 import { heatBoost, sectorPulse } from '../features/pulse'
 import { txPaths, rxPaths, type MapPath } from '../features/mapPaths'
+import { ribbonFor } from '../features/pathRibbon'
+import type { RibbonInk } from '../features/pathRoute'
 import { openingModeColor } from '../bandColors'
 import { relLuminance } from '../colormaps'
 import {
@@ -667,6 +669,8 @@ const RINGS_KM = [1000, 3000, 5000, 10000]
  * catalog. */
 const PATH_SP = 'SP'
 const PATH_LP = 'LP'
+/** The grey-line stretch of the path ribbon: the terminator line's own gold. */
+const RIBBON_GREY = 'rgba(255, 200, 110, 0.95)'
 
 // Cartographic palette — a map should read as a MAP (filled land + ocean), not a
 // wireframe. The basemap's colours are THEME TOKENS (styles.css MAP BASEMAP): the standard
@@ -1354,6 +1358,14 @@ export function MapView({
       lp: { brg: Math.round((spBrg + 180) % 360), km: EARTH_CIRC_KM - spKm },
     }
   }, [me, selStation])
+
+  // The model's route for the selected station (features/pathRoute): the LP button is lit when
+  // it favours the long path now. Advice only — this card never turns a rotator.
+  const lpSuggested = useMemo(() => {
+    if (!me || !selStation?.grid) return false
+    const sll = gridToLatLon(selStation.grid)
+    return sll != null && ribbonFor(me, sll, outlook, focusBand).favoured === 'long'
+  }, [me, selStation, outlook, focusBand])
 
   // With no station location the canvas is absent, not merely hidden. Attach
   // when it appears, and attach again after unavailable station data recovers.
@@ -2831,27 +2843,30 @@ export function MapView({
       ctx.globalAlpha = 1
     }
 
-    // Selected path: short-path = the geodesic (geoPath clips it cleanly); long-
-    // path = the same great circle the other way, sampled along the reversed
-    // bearing and dashed to distinguish it. (A manual polyline can jump the
-    // antimeridian in the world view, so break the line on a big screen-x jump.)
+    // Selected path ribbon: BOTH routes at once whenever a station is selected — short path
+    // solid, long path dashed (the rest of the same great circle) — each in its modelled
+    // reliability ink on the band in focus (or the best band now: green open, amber marginal,
+    // grey closed; the accent when the engine gave no figure), with the stretches inside the
+    // polar cap (aurora violet) and on the grey line (the terminator's gold) drawn over it and a
+    // bearing label at the QTH end. The route the SP/LP toggle follows is drawn heavier. A
+    // sampled polyline can jump the antimeridian in the world view, so it breaks on a big
+    // screen-x jump, and on any point the projection cannot show.
     if (layers.paths.visible && selStation?.grid) {
       const sll = gridToLatLon(selStation.grid)
       if (sll) {
-        ctx.strokeStyle = cssVar('--accent')
-        ctx.lineWidth = 1.5
-        if (pathMode === 'sp') {
-          ctx.beginPath()
-          path(greatCircle(me, sll))
-          ctx.stroke()
-        } else {
-          const lpKm = EARTH_CIRC_KM - haversineKm(me, sll)
-          const lpBrg = (bearingDeg(me, sll) + 180) % 360
-          ctx.setLineDash([5, 4])
-          ctx.beginPath()
+        const rib = ribbonFor(me, sll, outlook, focusBand)
+        const inkOf = (i: RibbonInk | null) =>
+          i === 'open'
+            ? cssVar('--band-open')
+            : i === 'marginal'
+              ? cssVar('--band-marginal')
+              : i === 'closed'
+                ? cssVar('--band-closed')
+                : cssVar('--accent')
+        const polyline = (pts: LatLon[]) => {
           let prevX: number | null = null
-          for (let i = 0; i <= 48; i++) {
-            const p = placePoint(kind, proj, destinationPoint(me, lpBrg, (lpKm * i) / 48))
+          for (const ll of pts) {
+            const p = placePoint(kind, proj, ll)
             if (!p) {
               prevX = null
               continue
@@ -2860,8 +2875,31 @@ export function MapView({
             else ctx.lineTo(p[0], p[1])
             prevX = p[0]
           }
+        }
+        ctx.font = `${Math.round(10 * ms)}px system-ui`
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'middle'
+        for (const l of rib.lines) {
+          const width = (pathMode === 'lp') === (l.route === 'long') ? 2.5 : 1.5
+          ctx.setLineDash(l.route === 'long' ? [5, 4] : [])
+          ctx.strokeStyle = inkOf(l.ink)
+          ctx.lineWidth = width
+          ctx.beginPath()
+          polyline(l.points)
           ctx.stroke()
+          for (const st of l.stretches) {
+            ctx.strokeStyle = st.kind === 'polar' ? cssVar('--route-polar') : RIBBON_GREY
+            ctx.lineWidth = width + 1.5
+            ctx.beginPath()
+            polyline(st.points)
+            ctx.stroke()
+          }
           ctx.setLineDash([])
+          const at = placePoint(kind, proj, l.labelAt)
+          if (at) {
+            ctx.fillStyle = inkOf(l.ink)
+            haloText(l.label, at[0] + 4 * ms, at[1] - 6 * ms)
+          }
         }
       }
     }
@@ -3082,7 +3120,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
+  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -3922,7 +3960,11 @@ export function MapView({
                 <button className={pathMode === 'sp' ? 'active' : ''} onClick={() => setPathMode('sp')} title={t('map.path.short.title')}>
                   {PATH_SP}
                 </button>
-                <button className={pathMode === 'lp' ? 'active' : ''} onClick={() => setPathMode('lp')} title={t('map.path.long.title')}>
+                <button
+                  className={`${pathMode === 'lp' ? 'active' : ''}${lpSuggested ? ' suggested' : ''}`}
+                  onClick={() => setPathMode('lp')}
+                  title={lpSuggested ? t('map.path.long.suggested') : t('map.path.long.title')}
+                >
                   {PATH_LP}
                 </button>
               </div>

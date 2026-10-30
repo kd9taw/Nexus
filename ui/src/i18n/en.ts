@@ -10841,6 +10841,34 @@ export const EN = {
   'pathWhy.kpSource.measured': 'measured',
   'pathWhy.kpSource.forecast': 'forecast',
   'pathWhy.kpSource.current': 'current value, no forecast for this hour',
+  // Short path or long path (features/pathRoute.ts): the heading hint on the Path card and the
+  // selected station card, the polar chip, and the map's long-path button. The route call is the
+  // P.533 model's opinion (a monthly median), so the confidence words are "likely" / "possible",
+  // never "confirmed"; the long path has no reference fixture, so wherever it is shown it is
+  // labelled modelled and unvalidated. The hint is advice: nothing turns the rotator. `{{brg}}`,
+  // `{{sp}}` and `{{lp}}` are degrees (true), `{{band}}` (20m) and `{{time}}` (1800Z) invariant.
+  // The hint is wrapped by `pathWhy.sentence`.
+  'pathRoute.conf.likely': 'likely',
+  'pathRoute.conf.possible': 'possible',
+  'pathRoute.hint.short': 'Beam {{brg}}° for {{band}}: short path ({{conf}})',
+  'pathRoute.hint.long': 'Beam {{brg}}° for {{band}}: long path ({{conf}})',
+  'pathRoute.hint.either':
+    '{{band}} works either way: short path {{sp}}° or long path {{lp}}°, modelled within 6 dB',
+  'pathRoute.why.shortClosed': ' — the short path is modelled closed now',
+  'pathRoute.why.margin': ', modelled about {{db}} dB better now',
+  'pathRoute.why.grey': ', the grey line lies along it',
+  'pathRoute.detail.now':
+    'Now on {{band}}: short path {{sp}}°, reliability {{spPct}}% · long path {{lp}}°, reliability {{lpPct}}% (P.533 monthly median)',
+  'pathRoute.detail.margin': 'Long path minus short path: {{db}} dB median SNR',
+  'pathRoute.lpCaveat':
+    'Modelled, unvalidated for long path: the reference model is checked for the short path only.',
+  'pathRoute.lpBadge': 'modelled, unvalidated for long path',
+  'pathRoute.chip.polar': 'Polar path',
+  'pathRoute.chip.storm': 'Polar path · Kp {{kp}} forecast at {{time}}',
+  'pathRoute.chip.title':
+    'This route crosses the polar cap, where an aurora brings fading and flutter. The model has no storms; the cap and Kp come from the space-weather forecast.',
+  'map.path.long.suggested':
+    'The model favours the long path now (modelled, unvalidated for long path). Advice only: the rotator does not move.',
   'connect.outlook.heading': 'Band outlook',
   'connect.outlook.muf.title':
     'Maximum Usable Frequency — the modeled ceiling to long-haul DX right now. Bands below it are open; above it, closed.',

@@ -276,6 +276,9 @@ export interface PathHour {
   layer: 'E' | 'F2'
   hops: number
   takeoffDeg: number
+  /** The hour's median SNR (dB in the model's 1 Hz bandwidth): only meaningful as a difference
+   * between two routes. Absent from an older shack. */
+  snrDb?: number
 }
 /** One UTC hour of model-free path geometry (propagation::pathgeo). */
 export interface PathGeoHour {
@@ -293,7 +296,7 @@ export interface PathGeoHour {
   greyMe: boolean
   greyDx: boolean
 }
-/** Short-path geometry over the next 24 h (polar cap, auroral oval, grey line, Kp). */
+/** One route's geometry over the next 24 h (polar cap, auroral oval, grey line, Kp). */
 export interface PathGeometry {
   distKm: number
   bearingDeg: number
@@ -303,6 +306,27 @@ export interface PathGeometry {
   ovalNow?: boolean
   /** 24 entries, UTC hour 0..23. */
   hours: PathGeoHour[]
+  /** The stretches of the arc inside the polar cap or on the grey line in the request's hour, as
+   * fractions of its length from the operator (0) to the far end (1). Absent from an older shack. */
+  segmentsNow?: { from: number; to: number; kind: 'polar' | 'grey' }[]
+}
+/** Which way round the great circle the model favours for one band at the request's hour
+ * (propagation::route). The model's opinion only: never "confirmed". */
+export interface RouteCall {
+  band: string
+  verdict: 'short' | 'long' | 'either' | 'unknown'
+  confidence?: 'likely' | 'possible'
+  /** Long-path minus short-path median SNR (dB), when the model gives both. */
+  marginDb?: number
+  shortBcr: number
+  longBcr: number
+  reasons: (
+    | { kind: 'oneClosed'; open: 'short' | 'long' }
+    | { kind: 'margin'; better: 'short' | 'long' }
+    | { kind: 'withinMargin' }
+    | { kind: 'bothClosed' }
+    | { kind: 'greyLine'; route: 'short' | 'long' }
+  )[]
 }
 /** Per-path HF prediction (the PathPredictor seam): operator↔DX, best-first. */
 export interface PathPrediction {
@@ -315,6 +339,11 @@ export interface PathPrediction {
   mufHourly: number[]
   /** Path geometry, on a per-path outlook only (never the DX ring). */
   geometry?: PathGeometry
+  /** The same request along the long path, with its own geometry — P.533 only, and
+   * unvalidated for the long path (the reference implementation is short-path only). */
+  longPath?: PathPrediction
+  /** Per band, the route the model favours now; present only beside `longPath`. */
+  routes?: RouteCall[]
 }
 /** One receiver who decoded the operator ("getting out"). */
 export interface HeardMe {

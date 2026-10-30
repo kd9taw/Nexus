@@ -28,6 +28,7 @@ import type { PaneContext } from './paneContext'
 import type { BandOutlook } from '../../types'
 import { bandTiming } from '../../propViz'
 import { PathWhy } from '../prop/PathWhy'
+import { PathRoute } from '../prop/PathRoute'
 import { azimuthLabel, azimuthTitle } from '../../grid'
 import { SpaceWxGauges } from '../prop/SpaceWxGauges'
 import { BandAdvisor } from '../prop/BandAdvisor'
@@ -274,6 +275,7 @@ function renderPath(c: PaneContext): ReactNode {
         </p>
       )}
       <PathWhy pred={p} />
+      <PathRoute pred={p} focusBand={c.focusBand} className="cp-route" />
       {c.pathOpen.length === 0 ? (
         <p className="cp-none">{t('connect.path.none')}</p>
       ) : (

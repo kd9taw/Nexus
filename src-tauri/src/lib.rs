@@ -7929,6 +7929,8 @@ async fn get_path_outlook(
             muf_now: 0.0,
             muf_hourly: Vec::new(),
             geometry: None,
+            long_path: None,
+            routes: None,
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
@@ -7962,16 +7964,31 @@ async fn get_path_outlook(
             .map(|(_, pts)| pts.iter().map(|p| (p.lat, p.lon)).collect())
     });
     tauri::async_runtime::spawn_blocking(move || {
-        let mut pred = eng.predict(dx, t, &wx);
+        // Both routes at once on their own threads: the long path costs the same chain again,
+        // so this keeps the card's wait at one prediction's. Neither holds any lock.
+        let (mut pred, long) = std::thread::scope(|s| {
+            let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
+            let sp = eng.predict(dx, t, &wx);
+            (sp, lp.join().ok().flatten())
+        });
         if let Some(me) = me {
-            pred.geometry = Some(propagation::path_geometry(
-                me,
-                dx,
-                t,
-                wx.kp,
-                forecast.as_ref(),
-                oval.as_deref(),
-            ));
+            let geom = |route| {
+                propagation::path_geometry_route(
+                    me,
+                    dx,
+                    route,
+                    t,
+                    wx.kp,
+                    forecast.as_ref(),
+                    oval.as_deref(),
+                )
+            };
+            pred.geometry = Some(geom(propagation::Route::Short));
+            if let Some(mut lp) = long {
+                lp.geometry = Some(geom(propagation::Route::Long));
+                pred.routes = Some(propagation::compare_routes(&pred, &lp));
+                pred.long_path = Some(Box::new(lp));
+            }
         }
         pred
     })
@@ -8014,6 +8031,8 @@ async fn get_band_outlook(
             muf_now: 0.0,
             muf_hourly: Vec::new(),
             geometry: None,
+            long_path: None,
+            routes: None,
         });
     };
     let p533 = prop_engine == "p533";

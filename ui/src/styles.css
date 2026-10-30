@@ -3268,6 +3268,29 @@ body.resizing-row {
   font-size: var(--fs-micro);
   color: var(--text-dim);
 }
+/* Short path or long path: the polar chip, the heading hint, the long-path label (PathRoute). */
+.connect-path .cp-route {
+  display: block;
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+.route-polar-chip {
+  display: inline-block;
+  margin-right: var(--space-1);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--route-polar);
+  border-radius: var(--space-1);
+  color: var(--route-polar);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+.route-lp-badge {
+  margin-left: var(--space-1);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  font-style: italic;
+}
 .cp-grayline {
   color: var(--accent);
 }
@@ -4295,6 +4318,10 @@ body.resizing-row {
   font-size: calc(10px * var(--text-scale));
   padding: 1px 6px;
 }
+/* The model favours the long path now: the LP button is ringed (advice; it moves nothing). */
+.map-path-toggle button.suggested {
+  box-shadow: inset 0 0 0 2px var(--band-open);
+}
 .map-legend {
   position: absolute;
   left: 50%;
@@ -4652,6 +4679,7 @@ body.resizing-row {
   --band-open: #69d98d;
   --band-marginal: #f1ca47;
   --band-closed: #747b81;
+  --route-polar: #c77dff; /* the map's aurora violet: a path stretch inside the polar cap */
   --alert-critical: #ff6100;
   --alert-warning: #f7c243;
   --alert-info: #79c0f1;
@@ -4769,6 +4797,7 @@ body.resizing-row {
   --band-open: #007f35;
   --band-marginal: #a27000;
   --band-closed: #80878d;
+  --route-polar: #7c44c3;
   --alert-critical: #9c0000;
   --alert-warning: #a76d00;
   --alert-info: #0070a6;
@@ -8323,8 +8352,24 @@ select optgroup {
 /* The selected card's path "why" sentence: a full-width row under the card's own row (the card
    wraps only for it — `flex-basis: 100%`), three lines at most so a narrow rail's card does not
    grow a column of prose; the whole sentence and its numbers are in the hover. */
-.station-card:has(> .station-why) {
+.station-card:has(> .station-why),
+.station-card:has(> .station-route) {
   flex-wrap: wrap;
+}
+/* The selected card's heading hint: the same full-width row, four lines at most — enough at the
+   narrowest card for the hint and the long-path label; the reasons are in the hover. */
+.station-route {
+  flex: 1 0 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-left: var(--space-5);
+  margin-bottom: 2px;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text);
 }
 .station-why {
   flex: 1 0 100%;

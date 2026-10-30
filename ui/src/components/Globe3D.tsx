@@ -69,6 +69,8 @@ import { logSource } from '../features/logSource'
 import cqzonesUrl from '../data/cqzones.geojson?url'
 import { spotTooltip } from '../propViz'
 import { txPaths, rxPaths } from '../features/mapPaths'
+import { ribbonFor } from '../features/pathRibbon'
+import type { RibbonInk } from '../features/pathRoute'
 import { t, type MessageKey } from '../i18n'
 import { fmtDistanceKm, useUnits } from '../units'
 import { MapInsightRail } from './prop/MapInsightRail'
@@ -239,22 +241,36 @@ function syncLines(
   opacity: number,
   visible: boolean,
   alt = 0.002,
+  dashed = false,
 ) {
   const prev = store[key]
   if (prev) {
     g.scene().remove(prev)
-    prev.traverse((o) => (o as THREE.Line).geometry?.dispose?.())
+    // The group's lines share one material: dispose each geometry, and the material once.
+    let mat: THREE.Material | null = null
+    prev.traverse((o) => {
+      const l = o as THREE.Line
+      l.geometry?.dispose?.()
+      if (l.material) mat = l.material as THREE.Material
+    })
+    ;(mat as THREE.Material | null)?.dispose()
     delete store[key]
   }
   if (!visible || polylines.length === 0) return
   const grp = new THREE.Group()
-  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity })
+  // Dash lengths in world units (the globe's radius is 100).
+  const mat = dashed
+    ? new THREE.LineDashedMaterial({ color, transparent: true, opacity, dashSize: 1.6, gapSize: 1.1 })
+    : new THREE.LineBasicMaterial({ color, transparent: true, opacity })
   for (const line of polylines) {
     const pts = line.map(([la, lo]) => {
       const c = g.getCoords(la, lo, alt)
       return new THREE.Vector3(c.x, c.y, c.z)
     })
-    if (pts.length > 1) grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat))
+    if (pts.length < 2) continue
+    const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat)
+    if (dashed) l.computeLineDistances()
+    grp.add(l)
   }
   store[key] = grp
   g.scene().add(grp)
@@ -337,6 +353,20 @@ function glowSprite(): THREE.CanvasTexture {
 
 /** Canvas-text sprite for the opening-sector labels ("6m Sporadic-E") — the 2-D map
  * labels its sectors; the globe must too (2D↔3D parity). */
+/** A theme colour from the document root, for THREE materials (which cannot read a CSS var). */
+function rootInk(name: string, fallback: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+}
+/** The path ribbon's reliability inks — the same theme colours the 2-D map strokes. */
+function ribbonInk(i: RibbonInk | null): string {
+  if (i === 'open') return rootInk('--band-open', '#69d98d')
+  if (i === 'marginal') return rootInk('--band-marginal', '#f1ca47')
+  if (i === 'closed') return rootInk('--band-closed', '#747b81')
+  return rootInk('--accent', '#a9d4ff')
+}
+/** The ribbon sits just above the other line overlays (greyline 0.004). */
+const PATH_ALT = 0.005
+
 function textSprite(text: string, color: string): THREE.Sprite {
   const c = document.createElement('canvas')
   c.width = 256
@@ -688,13 +718,12 @@ function Globe3DView({
       color,
     })
     const out: Array<ReturnType<typeof leg>> = []
-    // Kept out of the TX fan and drawn in the selection colour, exactly as before — one arc
-    // per station, never a blue and a green stroke over the same geometry.
+    // The selected station is kept out of the TX fan: its path is the ribbon (below), both
+    // routes, never a TX arc over the same geometry.
     const sel = spots.find((s) => s.call === selectedCall)
     const tx = show.arcs ? txPaths(spots).filter((p) => p.call !== sel?.call) : []
     if (show.arcs) {
       for (const p of tx) out.push(leg(p.ll.lat, p.ll.lon, GETTING_OUT))
-      if (sel) out.push(leg(sel.lat, sel.lon, '#a9d4ff'))
     }
     if (show.rxarcs) {
       for (const p of rxPaths(stations ?? [], tx)) out.push(leg(p.ll.lat, p.ll.lon, PATH_RX))
@@ -1713,6 +1742,61 @@ function Globe3DView({
       show.coverage,
     )
   }, [ready, nowMs, qth, show.rings, show.cqzones, show.coverage, show.greyline, show.openings, cqzones, workedGrids, prop])
+
+  // The selected station's path ribbon (features/pathRibbon — the 2-D map draws the same lines):
+  // the short path solid and the long path dashed, in their modelled reliability inks on the band
+  // in focus, the polar-cap and grey-line stretches over them, and a bearing label for each at the
+  // QTH end. On whenever a station is selected. Keyed by the selection's coordinates, not the
+  // 300 ms snapshot's arrays; the cleanup removes and disposes every line, material and label it
+  // added, before the next build and before the globe lets go of its context.
+  const selLL = useMemo(() => {
+    if (!selectedCall) return null
+    const sp = spots.find((s) => s.call === selectedCall)
+    if (sp) return { lat: sp.lat, lon: sp.lon }
+    const st = stations?.find((s) => s.call === selectedCall)
+    return st?.grid ? gridToLatLon(st.grid) : null
+  }, [spots, stations, selectedCall])
+  const selLat = selLL?.lat ?? null
+  const selLon = selLL?.lon ?? null
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready || !qth || selLat == null || selLon == null) return
+    const rib = ribbonFor(qth, { lat: selLat, lon: selLon }, outlook, activeBand)
+    const asLatLng = (pts: { lat: number; lon: number }[]) =>
+      pts.map((p) => [p.lat, p.lon] as [number, number])
+    const keys: string[] = []
+    for (const l of rib.lines) {
+      const key = l.route === 'short' ? 'path-sp' : 'path-lp'
+      const dashed = l.route === 'long'
+      keys.push(key)
+      syncLines(g, linesRef.current, key, [asLatLng(l.points)], ribbonInk(l.ink), 0.95, true, PATH_ALT, dashed)
+      for (const kind of ['polar', 'grey'] as const) {
+        const parts = l.stretches.filter((st) => st.kind === kind).map((st) => asLatLng(st.points))
+        const k = `${key}-${kind}`
+        keys.push(k)
+        const ink = kind === 'polar' ? rootInk('--route-polar', '#c77dff') : '#ffc86e'
+        syncLines(g, linesRef.current, k, parts, ink, 1, parts.length > 0, PATH_ALT + 0.001, dashed)
+      }
+    }
+    const scene = g.scene()
+    const labels = rib.lines.map((l) => {
+      const pos = g.getCoords(l.labelAt.lat, l.labelAt.lon, 0.03)
+      const sp = textSprite(l.label, ribbonInk(l.ink))
+      sp.position.set(pos.x, pos.y, pos.z)
+      scene.add(sp)
+      return sp
+    })
+    frameRef.current()
+    return () => {
+      for (const k of keys) syncLines(g, linesRef.current, k, [], '#000', 0, false)
+      for (const sp of labels) {
+        scene.remove(sp)
+        sp.material.map?.dispose()
+        sp.material.dispose()
+      }
+      frameRef.current()
+    }
+  }, [ready, qth, selLat, selLon, outlook, activeBand])
 
   // My decodes + DXpeditions as distinct point clouds.
   useEffect(() => {
