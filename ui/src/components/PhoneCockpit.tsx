@@ -120,7 +120,15 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
 import { PASSBAND_LIMITS } from '../spectrum/markers'
 import { scopeSpots } from '../spectrum/scopeSpots'
-import { bandWindow, loadRfSpan, onlyPart, saveRfSpan, useSpanAsk } from '../spectrum/rfSpan'
+import {
+  bandWindow,
+  loadRfSpan,
+  onlyPart,
+  saveRfSpan,
+  sweepFor,
+  useSpanAsk,
+  type TaggedSweep,
+} from '../spectrum/rfSpan'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
 import { SplitControl } from './SplitControl'
@@ -836,8 +844,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
     setRfSpanState(sp)
     saveRfSpan('phone', sp.id)
   }
-  // The row's own span as the source sweeps it (PhoneScope `onSweep`), for `useSpanAsk`.
-  const [scopeSweep, setScopeSweep] = useState<{ loHz: number; hiHz: number } | null>(null)
+  // The row's own span as the source sweeps it (PhoneScope `onSweep`), for `useSpanAsk`, tagged with
+  // the radio and source it was reported under (`sweepFor`: after a swap it is the old radio's).
+  const [scopeSweep, setScopeSweep] = useState<TaggedSweep | null>(null)
   // Live scope feed (reported by PhoneScope) — keeps the "RX audio" label honest when a
   // native RF panadapter is driving the scope (show the real RF span instead).
   const [scopeFeed, setScopeFeed] = useState<{ source: string; loHz: number; hiHz: number } | null>(
@@ -865,7 +874,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
     dialHz: dialHzNow,
     want: rfWant,
     choice: rfSpan.id,
-    sweep: scopeSweep,
+    sweep: sweepFor(scopeSweep, snap.activeRadioId, nativeRf && scopeFeed ? scopeFeed.source : null),
     transmitting: snap.radio.transmitting || keyed,
     send: (a) =>
       void (a.kind === 'civ' ? setScopeSpan(a.halfHz) : setFlexPanSpan(a.hz))
@@ -3069,7 +3078,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
             onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
             rfViewHz={nativeRf && !yaesuRf ? bandFit : null}
-            onSweep={(_source, loHz, hiHz) => setScopeSweep({ loHz, hiHz })}
+            onSweep={(source, loHz, hiHz) => setScopeSweep({ loHz, hiHz, radio: snap.activeRadioId, source })}
             onTune={onScopeTune}
             filterWidthHz={filterHz ?? 2400}
             passbandHz={filterHz}

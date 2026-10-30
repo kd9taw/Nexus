@@ -13,8 +13,10 @@ import {
   saveRfSpan,
   spanAsk,
   sweepFits,
+  sweepFor,
   useSpanAsk,
   type SpanAsk,
+  type TaggedSweep,
 } from './rfSpan'
 
 describe('bandWindow', () => {
@@ -286,6 +288,101 @@ describe('useSpanAsk', () => {
     ])
     rerender(p(24_940_000, 10_000))
     expect(send.mock.calls).toEqual([[{ kind: 'civ', halfHz: 100_000 }], [{ kind: 'civ', halfHz: 100_000 }]])
+  })
+  // THE SCOPE ROW AND THE DIAL ARRIVE BY DIFFERENT PATHS (the source's frame header, the snapshot
+  // poll), so while the knob turns they disagree for a render on most steps. A sweep already at the
+  // chip's width is not asked again for that: only a sweep narrower than the ask is the dial moving.
+  const lagging = (source: string, half: number, start: number, step: number, rowAhead: boolean) => {
+    const send = vi.fn()
+    const props = (dial: number, rowAt: number) => ({
+      source,
+      dialHz: dial,
+      want: { loHz: dial - half, hiHz: dial + half },
+      choice: `±${half / 1000}k`,
+      sweep: { loHz: rowAt - half, hiHz: rowAt + half },
+      transmitting: false,
+    })
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: props(start, start) })
+    for (let i = 1, d = start + step; i <= 20; i++, d += step) {
+      rerender(rowAhead ? props(d - step, d) : props(d, d - step))
+      rerender(props(d, d))
+    }
+    return send
+  }
+  it('Icom ±5k, the radio already there, the scope row a step behind the knob: nothing is sent', () => {
+    expect(lagging('civ', 5_000, 14_074_000, 100, false)).not.toHaveBeenCalled()
+  })
+  it('Icom ±25k, the scope row a step ahead of the dial poll: nothing is sent', () => {
+    expect(lagging('civ', 25_000, 7_074_000, 500, true)).not.toHaveBeenCalled()
+  })
+  it('Flex ±25k, the pan centre a step behind the dial: nothing is sent', () => {
+    expect(lagging('flex', 25_000, 14_074_000, 500, false)).not.toHaveBeenCalled()
+  })
+  it('a Fixed-mode Icom whose window is exactly the ask is told once, however often the dial crosses it', () => {
+    // Edges 14.000–14.050 on the ±25k chip: the sweep fits each time the dial passes 14.025.
+    const send = vi.fn()
+    const fixed = { loHz: 14_000_000, hiHz: 14_050_000 }
+    const props = (dial: number) => ({
+      source: 'civ',
+      dialHz: dial,
+      want: { loHz: dial - 25_000, hiHz: dial + 25_000 },
+      choice: '±25k',
+      sweep: { ...fixed },
+      transmitting: false,
+    })
+    const { rerender } = renderHook((p) => useSpanAsk({ ...p, send }), { initialProps: props(14_020_000) })
+    for (let i = 0; i < 3; i++) {
+      for (let d = 14_020_000; d <= 14_030_000; d += 100) rerender(props(d))
+      for (let d = 14_030_000; d >= 14_020_000; d -= 100) rerender(props(d))
+    }
+    expect(send.mock.calls).toEqual([[{ kind: 'civ', halfHz: 25_000 }]])
+  })
+})
+
+describe('the sweep a cockpit hands useSpanAsk (sweepFor)', () => {
+  // As the cockpits keep it: the last sweep the scope reported, tagged with the radio and source
+  // it came under, and never cleared — so after a swap it is the old radio's until the new one's
+  // first row arrives.
+  const dial = 10_120_000
+  const at = (half: number) => ({ loHz: dial - half, hiHz: dial + half })
+  const cockpit = (send: (a: SpanAsk) => void) => {
+    const p = (radio: number, source: string, kept: TaggedSweep) => ({
+      radio,
+      source,
+      dialHz: dial,
+      want: bandWindow(dial),
+      choice: 'band',
+      sweep: sweepFor(kept, radio, source),
+      transmitting: false,
+      send,
+    })
+    return p
+  }
+  it('swapping to a radio at another span asks the new radio (30 m Band, ±50k, then a radio at ±10k)', () => {
+    const send = vi.fn()
+    const p = cockpit(send)
+    const { rerender } = renderHook((q) => useSpanAsk(q), {
+      initialProps: p(1, 'civ', { ...at(10_000), radio: 1, source: 'civ' }),
+    })
+    rerender(p(1, 'civ', { ...at(50_000), radio: 1, source: 'civ' })) // radio 1 took the ask
+    rerender(p(2, 'civ', { ...at(50_000), radio: 1, source: 'civ' })) // swapped; radio 1's row still kept
+    rerender(p(2, 'civ', { ...at(10_000), radio: 2, source: 'civ' })) // radio 2's own row
+    expect(send.mock.calls).toEqual([[{ kind: 'civ', halfHz: 50_000 }], [{ kind: 'civ', halfHz: 50_000 }]])
+  })
+  it('an Icom sweep left over when the source becomes the Flex pan is not the pan’s', () => {
+    const send = vi.fn()
+    const p = cockpit(send)
+    const { rerender } = renderHook((q) => useSpanAsk(q), {
+      initialProps: p(1, 'civ', { ...at(50_000), radio: 1, source: 'civ' }), // fits Band already
+    })
+    rerender(p(1, 'flex', { ...at(50_000), radio: 1, source: 'civ' }))
+    rerender(p(1, 'flex', { ...at(1_000_000), radio: 1, source: 'flex' })) // the pan's own 2 MHz
+    expect(send.mock.calls).toEqual([[{ kind: 'flex', hz: 70_000 }]])
+  })
+  it('the same radio and source: the kept sweep is handed on', () => {
+    expect(sweepFor({ loHz: 1, hiHz: 2, radio: 3, source: 'civ' }, 3, 'civ')).toEqual({ loHz: 1, hiHz: 2 })
+    expect(sweepFor(null, 3, 'civ')).toBeNull()
+    expect(sweepFor({ loHz: 1, hiHz: 2, source: 'civ' }, undefined, 'civ')).toEqual({ loHz: 1, hiHz: 2 })
   })
 })
 

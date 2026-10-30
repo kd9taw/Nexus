@@ -105,6 +105,22 @@ export function onlyPart(
   return drawn.loHz > want.loHz + slack || drawn.hiHz < want.hiHz - slack
 }
 
+/** A sweep as the scope reported it, with the radio (the active radio's id) and source it was
+ *  reported under. */
+export type TaggedSweep = { loHz: number; hiHz: number; radio?: number; source: string }
+
+/** The reported sweep if it is `radio`'s on `source`, else null. A cockpit keeps the last sweep
+ *  reported, so after a radio swap (or the source changing, Icom to Flex) it still holds the old
+ *  one until the new radio's first row: that sweep says nothing about the new radio's span. */
+export function sweepFor(
+  tagged: TaggedSweep | null,
+  radio: number | undefined,
+  source: string | null,
+): { loHz: number; hiHz: number } | null {
+  if (!tagged || tagged.radio !== radio || tagged.source !== source) return null
+  return { loHz: tagged.loHz, hiHz: tagged.hiHz }
+}
+
 /** Two sweep widths within this fraction of each other are the same width: a radio reporting the
  *  span it was asked for a few hertz off is still on it. Icom's rungs are 2x apart and more. */
 const SAME_WIDTH = 0.01
@@ -117,13 +133,17 @@ const SAME_WIDTH = 0.01
  *
  *  Under one ask, the sweep's WIDTH says who moved it. The width the ask set (or, for an ask the
  *  sweep already fitted when first seen, the width it had then) is Nexus's; once a sweep of that
- *  width has fitted, a sweep of the same width that stops fitting means the DIAL moved, and it is
- *  asked again. Any other width is the operator's or another window's, and stands: a span set on the
- *  radio's own knob, the Rig Scope chips or a Flex pan chip, a radio that refuses (an Icom in Fixed
- *  mode, whose sweep never fits after the ask) told once, and two scopes asking different spans of
- *  one radio each asking once rather than taking turns undoing the other. Nothing is sent before the
- *  source has reported a sweep, while transmitting (the ask waits for unkey), or for a source whose
- *  sweep Nexus does not set. */
+ *  width has fitted, a sweep of the same width that stops fitting because the window now needs a
+ *  WIDER sweep means the DIAL moved, and it is asked again (a row that only lags the dial by a
+ *  poll misses an edge at the same width, and is not). Any other width is the operator's or
+ *  another window's, and stands: a span set on the radio's own knob, the Rig Scope chips or a Flex
+ *  pan chip, a radio that refuses (an Icom in Fixed mode, whose sweep never fits after the ask)
+ *  told once, and two scopes asking different spans of one radio each asking once rather than
+ *  taking turns undoing the other. Nothing is sent before the source has reported a sweep, while
+ *  transmitting (the ask waits for unkey), or for a source whose sweep Nexus does not set.
+ *
+ *  `sweep` must be THIS radio's and this source's (`sweepFor`): another radio's sweep left in the
+ *  cockpit would be read as the new ask's first sight. */
 export function useSpanAsk({
   radio,
   source,
@@ -160,7 +180,9 @@ export function useSpanAsk({
     if (s?.key === key) {
       if (Math.abs(width - s.width) > s.width * SAME_WIDTH) return
       if (fits) s.fitted = true
-      if (fits || !s.fitted) return
+      // Only a sweep narrower than the ask is the dial moving: both sources sweep centred on the
+      // dial, and a row a poll behind the dial misses an edge by a step while being exactly as wide.
+      if (fits || !s.fitted || askWidth(ask) <= s.width) return
     } else if (fits) {
       spent.current = { key, width, fitted: true }
       return
