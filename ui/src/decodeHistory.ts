@@ -61,6 +61,14 @@ export const RX_TOL_HZ = 50
 /** Fallback own-TX cycle key width (ms) when a mine row carries no txAt. */
 const SLOT_MS = 15_000
 
+/** Same fields, same values. Every DecodeEntry field is a primitive except `heard`, which only
+ *  late rows carry and which {@link DecodeHistory.ingest} never builds. */
+function sameEntry(a: DecodeEntry, b: DecodeEntry): boolean {
+  const ka = Object.keys(a) as (keyof DecodeEntry)[]
+  if (ka.length !== Object.keys(b).length) return false
+  return ka.every((k) => a[k] === b[k])
+}
+
 /** T/R period per tier (s) — mirrors the engine's modes::slot_secs. The slot
  * index is floor(epoch_ms / period_ms), so slot × period = the period's UTC start. */
 export const TIER_PERIOD_SECS: Record<Tier, number> = {
@@ -199,6 +207,19 @@ export class DecodeHistory {
   private erasedThroughSec: number | null = null
   /** The last NAMED band this pane was bound to — what an off-band dial keeps pointing at. */
   private lastBand = ''
+  /**
+   * Bumped by every change to what {@link entries} returns, and only then.
+   *
+   * The snapshot re-offers the same decode list at 4 Hz for a whole period, so most polls change
+   * nothing; the pane keys its filter/sort pipeline and its re-render on this counter, so a poll
+   * that changed nothing costs neither (two panes × 3,000 rows × every poll was a CPU report).
+   */
+  private ver = 0
+
+  /** The change counter (see `ver`): equal values mean equal {@link entries}. */
+  get version(): number {
+    return this.ver
+  }
 
   /**
    * Bind the history to a band+tier; a change WIPES it. Returns true if reset.
@@ -220,6 +241,7 @@ export class DecodeHistory {
     if (this.scope === key) return false
     this.scope = key
     this.map.clear()
+    this.ver++
     // A scope change is a fresh pane, not an erase: the new band's own-TX rows are all still
     // to come, and carrying a watermark across would silently hide the first overs on it.
     this.erasedThroughSec = null
@@ -230,11 +252,18 @@ export class DecodeHistory {
   reset(): void {
     this.map.clear()
     this.erasedThroughSec = null
+    this.ver++
   }
 
-  /** Ingest one snapshot poll's decode list for the given slot. */
-  ingest(decodes: DecodeRow[], slot: number, now: number = Date.now()): void {
+  /**
+   * Ingest one snapshot poll's decode list for the given slot. Returns whether the history
+   * changed. A re-polled row that changed nothing keeps its existing entry OBJECT, so a row the
+   * pane already drew is the same value next poll; a row whose flags moved (worked, needs) is a
+   * new one.
+   */
+  ingest(decodes: DecodeRow[], slot: number, now: number = Date.now()): boolean {
     const m = this.map
+    let changed = false
     for (const d of decodes) {
       // Skip an own-TX row the operator has already erased — the engine re-offers its whole
       // ring every poll (see `erasedThroughSec`). Only `mine` rows carry `txAt`, and a row
@@ -265,30 +294,52 @@ export class DecodeHistory {
         (d.mine && d.txAt != null
           ? slot - Math.max(0, Math.round((now - d.txAt * 1000) / SLOT_MS))
           : slot)
-      m.set(id, { ...d, slot: slotFor, at, id })
+      const next: DecodeEntry = { ...d, slot: slotFor, at, id }
+      if (prev && sameEntry(prev, next)) continue
+      m.set(id, next)
+      changed = true
     }
     if (m.size > MAX_HISTORY) {
       const drop = m.size - MAX_HISTORY
       const it = m.keys()
       for (let i = 0; i < drop; i++) m.delete(it.next().value as string)
     }
+    if (changed) this.ver++
+    return changed
   }
 
   /**
    * Ingest the period a band or mode change caught while it was decoding (the snapshot's
    * `lateDecodes`), as WSJT-X shows it: after the wipe the change made, under its own slot, with
-   * the band, mode, dial and period it was heard on kept on every row.
+   * the band, mode, dial and period it was heard on kept on every row. Returns whether the
+   * history changed; an unchanged re-poll keeps each entry object, as {@link ingest} does.
    */
-  ingestLate(late: LateDecodes, now: number = Date.now()): void {
+  ingestLate(late: LateDecodes, now: number = Date.now()): boolean {
     const heard = { band: late.band, dialMhz: late.dialMhz, tier: late.tier, periodStartMs: late.periodStartMs }
+    let changed = false
     for (const d of late.rows) {
       const id = `late|${late.slot}|${d.message}|${Math.round(d.freqHz / 5)}`
-      this.map.set(id, { ...d, slot: late.slot, at: this.map.get(id)?.at ?? now, id, heard })
+      const prev = this.map.get(id)
+      const next: DecodeEntry = { ...d, slot: late.slot, at: prev?.at ?? now, id, heard }
+      // `heard` is a fresh object per call: compare it by its fields, then the rest by value.
+      if (
+        prev?.heard &&
+        prev.heard.band === heard.band &&
+        prev.heard.dialMhz === heard.dialMhz &&
+        prev.heard.tier === heard.tier &&
+        prev.heard.periodStartMs === heard.periodStartMs &&
+        sameEntry(prev, { ...next, heard: prev.heard })
+      )
+        continue
+      this.map.set(id, next)
+      changed = true
     }
     if (this.map.size > MAX_HISTORY) {
       const it = this.map.keys()
       for (let i = this.map.size - MAX_HISTORY; i > 0; i--) this.map.delete(it.next().value as string)
     }
+    if (changed) this.ver++
+    return changed
   }
 
   /**
@@ -299,6 +350,7 @@ export class DecodeHistory {
    */
   erase(nowSec: number = Math.floor(Date.now() / 1000)): void {
     this.map.clear()
+    this.ver++
     this.erasedThroughSec =
       this.erasedThroughSec == null ? nowSec : Math.max(this.erasedThroughSec, nowSec)
   }
