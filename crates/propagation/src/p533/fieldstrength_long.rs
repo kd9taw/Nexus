@@ -83,6 +83,11 @@ pub struct LongPath {
     pub ptick: f64,
     /// Correction factors at the two control points — `path->K[2]`.
     pub k: [f64; 2],
+    /// Hop count of the fM geometry (`nM + 1`) and its elevation angle (rad) — the hops
+    /// the long model assumes, set for every path ≥ 7000 km (the reference keeps them as
+    /// locals; they are carried out for display, never fed back into the chain).
+    pub hops_m: u32,
+    pub ele_m: f64,
 
     // The following are set only when distance > 9000 km (long model exclusive).
     /// Composite elevation angle — `path->ele`.
@@ -174,6 +179,8 @@ pub fn median_skywave_field_strength_long(
         d_m = distance / (n_m as f64 + 1.0);
         delta_m = muf::elevation_angle(d_m, hr);
     }
+    out.hops_m = n_m as u32 + 1;
+    out.ele_m = delta_m;
 
     // (reference lines 179-186) 90-km penetration geometry.
     let i90 = muf::incidence_angle(delta_l, 90.0);

@@ -75,8 +75,9 @@ decodes and earcons let you operate by ear. Nothing changes for sighted operator
 - **A decoder you can check.** Built from WSJT-X's own DSP sources, tracking
   upstream 3.0.2. On identical recorded audio the decode floor measures **−21.3 dB
   against stock WSJT-X's −20.7**, with no false decodes, and it is tested against
-  pure noise so silence stays silent. Rovers keep decoding here, where upstream
-  3.0.2 discards any call carrying `/R` outside contest mode.
+  pure noise so silence stays silent. As in upstream 3.0.2, rover (`/R`) and `TU;`
+  decodes are dropped outside a contest, where they are almost always false, and kept
+  with Contest mode on or as a Hound.
 - **Real rig control.** On a native-CI-V Icom or a network FlexRadio, the rig's
   **own RF panadapter** streams into the cockpit with AGC, noise reduction, filter
   width and mic gain mirroring the front panel. The waterfall pauses and rewinds

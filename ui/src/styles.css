@@ -478,6 +478,39 @@ html {
   color: var(--text-faint);
   pointer-events: none;
 }
+/* A disabled item the keyboard still stops on (Menu's focusableWhenDisabled): a ring, not the
+   accent fill, so it still reads as disabled. */
+.ui-menu-item[data-disabled][data-highlighted] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+/* An item's state line under its label ("Uploaded, 2026-10-28 14:06", or why it cannot be chosen
+   now), a rule between groups, a submenu's arrow, and a destructive item. */
+.ui-menu-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ui-menu-hint {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.ui-menu-item[data-highlighted] .ui-menu-hint {
+  color: inherit;
+}
+.ui-menu-subarrow {
+  margin-left: auto;
+  padding-left: var(--space-2);
+}
+.ui-menu-sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border-soft);
+}
+.ui-menu-item.danger:not([data-highlighted]) {
+  color: var(--state-weak);
+}
 /* A Connect box's ⋯ menu (connect/BoxMenu): a heading line that reads the current value back, and
    the A− / A+ glyphs in a column of their own so the two words line up. */
 .box-menu-label {
@@ -3253,6 +3286,30 @@ body.resizing-row {
 .connect-path .cp-muf strong {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
+}
+/* The path "why" line: the sentence is the disclosure's summary, the numbers sit behind it. */
+.connect-path .cp-why {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+.connect-path .cp-why > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.connect-path .cp-why > summary::-webkit-details-marker {
+  display: none;
+}
+.connect-path .cp-why-more {
+  font-size: var(--fs-micro);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.connect-path .cp-why-detail {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.2em;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
 }
 .cp-grayline {
   color: var(--accent);
@@ -6944,26 +7001,6 @@ select {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-/* The Logbook's per-row QSL menu. THE SANCTIONED EXCEPTION to the arrow above, and the one
-   place in the sheet where a select draws none: its closed label is the token `QSL▸`, which
-   ends in an arrowhead of its own. The base rule's purpose — a select must not read as a text
-   input — is met by the label itself, and drawing the engine arrow as well printed a second
-   arrowhead ON TOP of the text (the box is 22px tall and was 22px wide; `background-position:
-   center` put the 5px arrow exactly where "QSL▸" already was). That overlap is part of what
-   was reported on 2026-09-16, so the arrow goes and the gutter it needed goes with it.
-
-   ⚠️ AND THE WIDTH IS PINNED, DELIBERATELY. A <select> is as wide as its WIDEST OPTION, not
-   its closed label, and these options are translated prose — "Card NOT received", "Karte
-   NICHT erhalten". Left to size itself the control measures 98px in English and 110px in
-   German (harness, 2026-09-16), so the row's action cluster — and the grid floor that has to
-   hold it — would become a property of the catalog, changing width when an operator changes
-   language. The closed label needs 34px here (harness `qslLabelW`), so 44 carries about 29%
-   for a wider face; the label is an invariant token, so it cannot grow behind this number. */
-select.log-rowbtn {
-  background-image: none !important;
-  padding-right: 0 !important;
-  width: 44px;
-}
 /* Native <select> POPUPS render on the OS's (usually light) background, so the app's dim
    text is nearly unreadable there. Force a dark popup + readable text for EVERY dropdown
    (band pickers on each mode, settings, sorts).
@@ -8340,6 +8377,25 @@ select optgroup {
 .station-heard {
   color: var(--text-faint);
 }
+/* The selected card's path "why" sentence: a full-width row under the card's own row (the card
+   wraps only for it — `flex-basis: 100%`), three lines at most so a narrow rail's card does not
+   grow a column of prose; the whole sentence and its numbers are in the hover. */
+.station-card:has(> .station-why) {
+  flex-wrap: wrap;
+}
+.station-why {
+  flex: 1 0 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-left: var(--space-5); /* under the call, roughly past the presence dot and its gap */
+  margin-bottom: 2px;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
 
 .unread-badge {
   background: var(--accent);
@@ -8900,6 +8956,23 @@ select optgroup {
 }
 .park-review:focus {
   outline: none;
+}
+/* The Spot dialog (SpotDialog.tsx): a ui/Dialog whose BOX only centres what it holds, a `.logconfirm`
+   inside its zoomed content, so the card is drawn and sized as it was when it sat in the page —
+   capped to the window and scrolling itself (the `.logconfirm` rule). Centred both ways by the
+   inset + auto margins, which leave the box exactly the card's size. */
+.ui-dialog.spot-dialog {
+  inset: 0;
+  margin: auto;
+  transform: none;
+  width: fit-content;
+  height: fit-content;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
 }
 .park-review-intro,
 .park-review-note {
@@ -18199,8 +18272,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .log-rowactions {
   display: inline-flex;
-  gap: var(--space-1);
+  /* 8px between the row's buttons (6px at the narrow sizes' spacing scale), so a click aimed at
+     one does not land on its neighbour. */
+  gap: var(--space-2);
   justify-content: flex-end;
+  align-items: center;
 }
 .log-rowbtn {
   cursor: pointer;
@@ -18228,12 +18304,27 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   white-space: nowrap;
   line-height: 1;
   font-size: 0.8rem;
-  opacity: 0;
-  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition: color 0.12s ease, border-color 0.12s ease;
 }
-.logbook-row:hover .log-rowbtn,
-.logbook-row:focus-within .log-rowbtn {
-  opacity: 1;
+/* THE LOGBOOK ROW'S BUTTONS ARE MOUSE TARGETS, not glyph-sized marks (operator, 2026-10-30: each
+   entry was "very thin", its buttons "hard to click"). Every one is at least 32×32 px at the default
+   density — above the 24 px minimum target size of WCAG 2.5.8, for a mouse on a shack PC — and the
+   row grows with them (the row's own padding is unchanged). The HEIGHT follows Settings ▸ Density:
+   Comfortable is roomier still, and Compact (`dense`) brings the row back to about the old 43 px (26 px buttons)
+   for an operator who wants more contacts on screen. The width floor does not follow it, so the
+   one-glyph buttons stay wide enough to hit. Scoped to the Logbook's rows: the contact card reuses
+   the class for a small inline remove button beside a field. Measured in real Chrome by
+   `scripts/browser-probe --desktop logbook` (the row sweep).
+   ⛔ AND THEY ARE ALWAYS VISIBLE: two of them, ✎ and ⋯, quiet (dim glyph, soft border, no fill)
+   until pointed at. They were `opacity: 0` until the row was hovered, which hid them from the eye
+   and not from the pointer: a click, or a touchscreen tap where there is no hover, on the blank
+   right end of a row fired the button under it and uploaded the contact. Nothing in a row may be
+   clickable while it cannot be seen (Logbook.rowMenu.test.tsx resolves this cascade for a row the
+   pointer never visited). */
+.logbook-row .log-rowbtn {
+  min-width: 32px;
+  height: calc(32px * var(--density-scale));
+  background: transparent;
 }
 .log-rowbtn:hover {
   color: var(--text);
@@ -18242,6 +18333,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .log-rowbtn.danger:hover {
   color: var(--state-weak);
   border-color: var(--state-weak);
+}
+/* The row's ⋯ menu (Logbook.tsx, ui/Menu): a long satellite list scrolls inside the menu rather than
+   running off the window (Radix gives the room it has below or above the button), and each item is
+   a 32 px target like the row's buttons. */
+.log-rowmenu {
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
+}
+.log-rowmenu .ui-menu-item {
+  min-height: 32px;
 }
 .log-searchbar {
   display: flex;
@@ -18343,11 +18444,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    counted against them by hand (it was one short from 2026-08-23, and the action cluster wrapped
    under the callsign). A table showing columns beyond the defaults keeps every one at every
    width and scrolls sideways, as "More columns" did. */
-/* keep edit/delete reachable on touch (no hover) */
-[data-viewport='sm'] .logbook-row .log-rowbtn,
-[data-viewport='xs'] .logbook-row .log-rowbtn {
-  opacity: 1;
-}
 /* The wide log: any column beyond the defaults shown (#239's "More columns" was the first).
    `.log-scroll` stays the ONE scroll owner and only gains the horizontal axis in this mode; the
    sticky search + header ride inside it, so header and rows scroll sideways together. The floor is

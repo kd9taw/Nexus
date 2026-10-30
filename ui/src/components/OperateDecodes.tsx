@@ -3,7 +3,7 @@
 // DT in seconds, the audio offset in Hz, the UTC stamp, the band, the tier and the country.
 // So do the TOKENS the pane is built out of — gathered in DECODE_TOKENS below so a translator
 // can see the whole set at once. What moved is the prose around them.
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { useRovingList } from '../useRovingList'
@@ -230,6 +230,16 @@ const NO_ENTITIES: ReadonlySet<string> = new Set()
 
 /** Max need micro-icons shown per row before collapsing into a "+N" chip. */
 const MAX_NEED_ICONS = 3
+
+/**
+ * Below this height (in the pane's own em) the filter row folds behind one "Filters" button in the
+ * title row. The wrapped row is about three lines in a narrow rail, and with the status row it left
+ * a short pane's list one decode row: FT's Roster rail at the 1024×768 floor gives Band Activity
+ * about ten lines. At 15em and up, the unfolded head still leaves the list about three rows in the
+ * narrowest rail, so every taller pane (Classic at 1024×768, any pane at 1920×1080) keeps its chips
+ * on screen exactly as before. Measured in Chrome; em, so it follows the text size and the zoom.
+ */
+const FOLD_CHIPS_BELOW_EM = 15
 
 /**
  * Band Activity / Rx Frequency pane with stock WSJT-X flow: oldest at the top,
@@ -460,6 +470,35 @@ export function OperateDecodes({
     }
   }, [clearTick, repin])
 
+  // The fold (FOLD_CHIPS_BELOW_EM). The pane's height comes from its host (a rail share, a grid
+  // cell, a floor), never from its head, so folding cannot feed back into the measurement. A 0 px
+  // reading is a keep-alive host hiding the pane: it keeps the state it had.
+  const paneRef = useRef<HTMLElement>(null)
+  const [chipsFolded, setChipsFolded] = useState(false)
+  const [chipsOpen, setChipsOpen] = useState(false)
+  const chipsId = useId()
+  useEffect(() => {
+    const el = paneRef.current
+    if (!el || compact || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      const h = el.clientHeight
+      if (h === 0) return
+      const em = parseFloat(getComputedStyle(el).fontSize) || 16
+      setChipsFolded(h < FOLD_CHIPS_BELOW_EM * em)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [compact])
+  // What the folded button counts: the chips that hide rows and show it only by being lit. The
+  // hidden-country chip and the search count already say so in the status row.
+  const litFilters =
+    (filter !== 'all' ? 1 : 0) +
+    (hideBlocked ? 1 : 0) +
+    (hideConfirmed ? 1 : 0) +
+    (hideB4 && filter !== 'b4' ? 1 : 0) +
+    (hideCalls.entries.length > 0 ? 1 : 0)
+  const showChips = !chipsFolded || chipsOpen
+
   const ignores = ignoredCalls ?? NO_IGNORES
   // The period the separators, the time column and the search date rows by (see the `periodSecs` prop).
   const periodS = periodSecs && periodSecs > 0 ? periodSecs : undefined
@@ -625,7 +664,7 @@ export function OperateDecodes({
   )
 
   return (
-    <section className={`operate-decodes${compact ? ' compact' : ''}`}>
+    <section ref={paneRef} className={`operate-decodes${compact ? ' compact' : ''}`}>
       <div className="od-head" data-pane-grip={grip}>
         {/* Title + ✕ on one line, so the close button sits at the pane's top-right in BOTH
             head layouts — the full head is a flex COLUMN (title over the filter row) and a
@@ -662,6 +701,22 @@ export function OperateDecodes({
               )}
             </span>
           )}
+          {/* An .od-chip, lit while a folded chip is, so a folded row never hides that the list
+              is filtered. Before the ✕, whose auto margin keeps it at the corner. */}
+          {!compact && chipsFolded && (
+            <button
+              type="button"
+              className={`od-chip od-fold${litFilters > 0 ? ' active' : ''}`}
+              aria-expanded={chipsOpen}
+              aria-controls={chipsId}
+              onClick={() => setChipsOpen((o) => !o)}
+              title={t('operate.decodes.fold.title')}
+            >
+              {litFilters > 0
+                ? t('operate.decodes.fold.labelLit', { count: litFilters })
+                : t('operate.decodes.fold.label')}
+            </button>
+          )}
           <PaneCloseButton title={paneTitle ?? title} onRemove={onRemove} hideNote={hideNote} />
         </div>
         {compact ? (
@@ -676,8 +731,8 @@ export function OperateDecodes({
           ) : (
             eraseBtn
           )
-        ) : (
-          <div className="od-controls">
+        ) : showChips && (
+          <div className="od-controls" id={chipsId}>
             <div className="od-filters" role="group" aria-label={t('operate.decodes.filters.aria')}>
               {DECODE_FILTERS.map((f) => (
                 <button

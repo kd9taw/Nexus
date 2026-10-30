@@ -28,10 +28,12 @@ fn hear(text: &str) -> Vec<String> {
     for (s, &x) in frame.iter_mut().zip(&wave) {
         *s = (x * 1_000.0) as i16;
     }
-    ft8::decode_frame(&frame, 200, 3_000, 3, MYCALL, "", 0, 1_766, true, false)
-        .into_iter()
-        .map(|d| d.message.trim().to_string())
-        .collect()
+    ft8::decode_frame(
+        &frame, 200, 3_000, 3, MYCALL, "", 0, 1_766, true, false, false,
+    )
+    .into_iter()
+    .map(|d| d.message.trim().to_string())
+    .collect()
 }
 
 #[test]
