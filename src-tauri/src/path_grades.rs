@@ -119,8 +119,20 @@ struct KeptOutlook {
 
 static OUTLOOKS: Mutex<VecDeque<KeptOutlook>> = Mutex::new(VecDeque::new());
 
-/// Keep the path card `get_path_outlook` just computed (both routes) for the log-time grade.
-pub(crate) fn keep_outlook(mygrid: &str, dxgrid: &str, at: i64, pred: &PathPrediction) {
+/// Keep the path card `get_path_outlook` just computed at `at` (both routes) for the log-time
+/// grade — only when `stamps`, the space weather it was computed from, say the solar flux and Kp
+/// were readings that may speak for `at` ([`grade_card_measured`]). A card from a cold cache
+/// (`None`), a stand-in flux or an old Kp is not kept, so it grades no contact.
+pub(crate) fn keep_outlook(
+    mygrid: &str,
+    dxgrid: &str,
+    at: i64,
+    pred: &PathPrediction,
+    stamps: Option<&propagation::model::SpaceWxStamps>,
+) {
+    if !grade_card_measured(stamps, at) {
+        return;
+    }
     let (Some(me4), Some(dx4)) = (grid4(mygrid), grid4(dxgrid)) else {
         return;
     };
@@ -138,6 +150,13 @@ pub(crate) fn keep_outlook(mygrid: &str, dxgrid: &str, at: i64, pred: &PathPredi
     while kept.len() > OUTLOOKS_KEPT {
         kept.pop_front();
     }
+}
+
+/// Whether a card computed at `now` from space weather stamped `stamps` may grade a contact: the
+/// flux and Kp measured and current ([`propagation::model::SpaceWxStamps::model_usable`]). A
+/// contact with no card logs with no grade; the display-only pass grades it from its logged SFI.
+fn grade_card_measured(stamps: Option<&propagation::model::SpaceWxStamps>, now: i64) -> bool {
+    stamps.is_some_and(|s| s.model_usable(now))
 }
 
 fn month_of(t: i64) -> (i64, u32) {

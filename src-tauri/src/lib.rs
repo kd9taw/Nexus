@@ -8223,15 +8223,16 @@ async fn get_path_outlook(
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
-    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold. Whether the
-    // card may be kept for a contact's grade is decided from the same snapshot.
-    let (wx, measured) = {
+    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold. Its stamps go
+    // with the card to `path_grades::keep_outlook`, which keeps it for a contact's grade only
+    // when they say the flux and Kp were measured and current.
+    let (wx, stamps) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
         let view = guard.as_ref().map(|(_, s)| &s.space_wx);
         let wx = view
             .map(|v| outlook_wx(v, LAST_SSN.lock().ok().and_then(|g| *g), now_unix()))
             .unwrap_or_default();
-        (wx, grade_card_measured(view, now_unix()))
+        (wx, view.map(|v| v.stamps))
     };
     // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or
     // the heuristic fallback. p533 is compute-heavy → keep it off the async core.
@@ -8314,11 +8315,9 @@ async fn get_path_outlook(
                 pred.long_path = Some(Box::new(lp));
             }
         }
-        // Kept for the grade of a contact logged with this station (`path_grades::at_log`), only
-        // when it was computed from measured space weather (`grade_card_measured`).
-        if measured {
-            path_grades::keep_outlook(&mygrid, &grid, t, &pred);
-        }
+        // Kept for the grade of a contact logged with this station (`path_grades::at_log`), when
+        // it was computed from measured space weather (`keep_outlook` decides).
+        path_grades::keep_outlook(&mygrid, &grid, t, &pred, stamps.as_ref());
         pred
     })
     .await
@@ -8680,15 +8679,6 @@ fn outlook_wx(v: &propagation::SpaceWxView, ssn: Option<f32>, now: i64) -> propa
     .speaking_now(&v.stamps, now)
 }
 
-/// Whether a path outlook computed now may be kept as the grade of a contact logged with the
-/// station: only when the snapshot's solar flux and Kp are readings that may speak for `now`
-/// ([`propagation::model::SpaceWxStamps::model_usable`]). A card from a cold cache, a stand-in
-/// flux or an old Kp grades nothing: the contact logs with no grade, and the display-only pass
-/// grades it from its own logged numbers (`path_grades`).
-fn grade_card_measured(wx: Option<&propagation::SpaceWxView>, now: i64) -> bool {
-    wx.is_some_and(|w| w.stamps.model_usable(now))
-}
-
 /// The Kp SWPC actually reported, from the propagation cache's snapshot, when it may speak for
 /// `now` — `None` when the cache is cold, when the Kp is the model's stand-in (its product did
 /// not answer), or when its sample is older than the gauge's limit (a cached snapshot is served
@@ -8726,7 +8716,7 @@ mod ring_key_tests {
 
 #[cfg(test)]
 mod path_outlook_kp_tests {
-    use super::{grade_card_measured, outlook_wx, swpc_kp};
+    use super::{outlook_wx, swpc_kp};
 
     const NOW: i64 = 1_761_800_000;
 
@@ -8772,22 +8762,6 @@ mod path_outlook_kp_tests {
         v.stamps.sfi_at = Some(NOW - 3600);
         v.fetched = true;
         assert_eq!(swpc_kp(Some(&v), NOW), None);
-    }
-
-    /// The outlook card kept for a contact's log-time grade rests on measured space weather only.
-    #[test]
-    fn only_a_card_from_a_measured_flux_and_kp_is_kept_for_grading() {
-        let measured = |sfi_at: Option<i64>, kp_at: Option<i64>| {
-            let mut v = view(3.0, kp_at);
-            v.stamps.sfi_at = sfi_at;
-            grade_card_measured(Some(&v), NOW)
-        };
-        assert!(!grade_card_measured(None, NOW), "cold cache");
-        assert!(!measured(None, Some(NOW - 60)), "stand-in flux");
-        assert!(!measured(Some(NOW - 3600), Some(NOW - 2 * 3600)), "old Kp");
-        assert!(!measured(Some(NOW - 3600), None), "stand-in Kp");
-        // Positive control: both measured and current.
-        assert!(measured(Some(NOW - 3600), Some(NOW - 60)));
     }
 
     /// A cached snapshot's Kp from two hours ago says nothing about the path now.
