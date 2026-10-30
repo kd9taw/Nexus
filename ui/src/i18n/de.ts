@@ -7192,6 +7192,8 @@ export const DE: PartialCatalog = {
   "connect.basic.spaceWx.flareBlackout": "SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}}-Flare im Gange; Funk-Blackout R{{scale}}.",
   "connect.basic.getout.dir": "{{count}} hören Sie — {{dir}}.",
   "connect.basic.getout.furthest": "{{count}} hören Sie — am weitesten {{dist}}.",
+  "connect.basic.getout.dir.since": "{{count}} hören Sie seit {{time}} — {{dir}}.",
+  "connect.basic.getout.furthest.since": "{{count}} hören Sie seit {{time}} — am weitesten {{dist}}.",
   "connect.basic.bestband.none": "Noch keine Region auf irgendeinem Band erreichbar.",
   "connect.basic.bestband": "Nach {{region}}: {{band}} versuchen ({{word}}).",
   "connect.basic.activity.offline": "Derzeit keine Live-Aktivitätsdaten.",

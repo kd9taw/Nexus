@@ -6871,6 +6871,8 @@ export const JA: PartialCatalog = {
   "connect.basic.spaceWx.flareBlackout": "SFI {{sfi}}、Kp {{kp}}: {{impact}}。{{xray}}フレアが発生中。R{{scale}}デリンジャー現象。",
   "connect.basic.getout.dir": "{{count}}局が自局を受信中 — {{dir}}。",
   "connect.basic.getout.furthest": "{{count}}局が自局を受信中 — 最遠 {{dist}}。",
+  "connect.basic.getout.dir.since": "{{time}} 以降、{{count}}局が自局を受信中 — {{dir}}。",
+  "connect.basic.getout.furthest.since": "{{time}} 以降、{{count}}局が自局を受信中 — 最遠 {{dist}}。",
   "connect.basic.bestband.none": "まだどのバンドでも届く地域がありません。",
   "connect.basic.bestband": "{{region}}向け: {{band}}がおすすめ（{{word}}）。",
   "connect.basic.activity.offline": "現在ライブのアクティビティデータがありません。",

@@ -10859,6 +10859,8 @@ export const EN = {
     'SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} flare in progress; R{{scale}} radio blackout.',
   'connect.basic.getout.dir': '{{count}} hearing you — {{dir}}.',
   'connect.basic.getout.furthest': '{{count}} hearing you — furthest {{dist}}.',
+  'connect.basic.getout.dir.since': '{{count}} hearing you since {{time}} — {{dir}}.',
+  'connect.basic.getout.furthest.since': '{{count}} hearing you since {{time}} — furthest {{dist}}.',
   'connect.basic.bestband.none': 'No region reachable on any band yet.',
   'connect.basic.bestband': 'To {{region}}: try {{band}} ({{word}}).',
   'connect.basic.activity.offline': 'No live activity data right now.',

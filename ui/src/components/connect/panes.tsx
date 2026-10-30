@@ -356,8 +356,9 @@ function renderGetout(c: PaneContext): ReactNode {
     <section className="connect-getout panel">
       {/* START FRESH (features/getoutSince): count only what is heard from now on, for trying an
           antenna. The station leaves the earlier reports out of everything below, and the map's
-          "hearing you" dots follow; Show all brings them back. Nothing is deleted. On the heading's
-          line, so the box's body keeps its height. */}
+          "hearing you" dots follow; Show all brings them back. Nothing is deleted. One button on the
+          heading's line, Start fresh or Show all, so the press never adds a line to the heading; the
+          "since" time is part of the count's line below. It ends by itself after 30 minutes. */}
       <div className="getout-head">
         <h3>{t('connect.getout.heading')}</h3>
         {since == null ? (
@@ -370,17 +371,14 @@ function renderGetout(c: PaneContext): ReactNode {
             {t('connect.getout.fresh')}
           </button>
         ) : (
-          <>
-            <span className="getout-since">{t('connect.getout.since', { time: fmtSinceUtc(since) })}</span>
-            <button
-              type="button"
-              className="getout-fresh"
-              onClick={() => setGetoutSince(null)}
-              title={t('connect.getout.showAll.title')}
-            >
-              {t('connect.getout.showAll')}
-            </button>
-          </>
+          <button
+            type="button"
+            className="getout-fresh"
+            onClick={() => setGetoutSince(null)}
+            title={t('connect.getout.showAll.title')}
+          >
+            {t('connect.getout.showAll')}
+          </button>
         )}
       </div>
       {!g || g.count === 0 ? (
@@ -395,6 +393,9 @@ function renderGetout(c: PaneContext): ReactNode {
               vals={{ count: g.count, dist: fmtDistanceKm(g.maxKm, c.units) }}
               tags={{ b: <strong /> }}
             />
+            {since != null && (
+              <span className="getout-since">{t('connect.getout.since', { time: fmtSinceUtc(since) })}</span>
+            )}
           </p>
           <div className="getout-rose-wrap">
             <GetoutCompass reports={g.reports} maxKm={g.maxKm} units={c.units} />

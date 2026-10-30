@@ -8466,6 +8466,11 @@ async fn get_getting_out(
     ))
 }
 
+/// The TV page's `since` for `get_getting_out`: the same key the desktop's IPC call carries.
+fn tv_getting_out_since(args: &serde_json::Value) -> Option<i64> {
+    args.get("since").and_then(|x| x.as_i64())
+}
+
 /// The current OVATION aurora oval (downsampled prob ≥ 8 %), for the map overlay.
 /// Cached `AURORA_TTL_SECS`; serves the last-good set on a fetch failure.
 #[tauri::command]
@@ -33851,8 +33856,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
                 ok(get_path_outlook(grid, app.state(), app.state()).await)
             }
             "get_getting_out" => {
-                let since = v.get("since").and_then(|x| x.as_i64());
-                ok(get_getting_out(since, app.state(), app.state()).await)
+                ok(get_getting_out(tv_getting_out_since(&v), app.state(), app.state()).await)
             }
             "get_dxped_windows" => {
                 let days = v.get("days").and_then(|x| x.as_u64()).map(|d| d as u32);
@@ -61028,5 +61032,91 @@ mod upload_backlog_tests {
             Default::default(),
             "and the window's settings hold none"
         );
+    }
+}
+
+#[cfg(test)]
+mod getting_out_since_tests {
+    //! Getting Out's Start fresh `since`, from the screen to the station's filter. At the end of the
+    //! file: the registration tests read the FIRST `generate_handler!` in lib.rs as the app's list,
+    //! so a test's own handler list must come after it.
+    use super::*;
+    use crate::command_dispatch::{tauri_runner, Runner};
+    use serde_json::{json, Value};
+
+    /// A report of the operator heard by `rx` at `time`.
+    fn heard_me(rx: &str, grid: &str, time: i64) -> propagation::PathSpot {
+        propagation::PathSpot {
+            time,
+            tx_call: "W9XYZ".to_string(),
+            tx_grid: Some("EN52".to_string()),
+            rx_call: rx.to_string(),
+            rx_grid: Some(grid.to_string()),
+            band: propagation::Band::B20,
+            mode: Some("FT8".to_string()),
+            snr: Some(-12.0),
+            freq_mhz: None,
+        }
+    }
+
+    /// The `since` a screen sends reaches the station's filter through the real command handler:
+    /// with it only the later receiver counts, without it both do.
+    #[test]
+    fn the_command_counts_from_the_since_it_is_sent() {
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let now = now_unix();
+        let live: SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        {
+            let mut b = live.lock().unwrap();
+            b.push(heard_me("VK3AA", "QF22", now - 600));
+            b.push(heard_me("DL1AA", "JN58", now - 60));
+        }
+        let app = tauri::test::mock_builder()
+            .manage(engine)
+            .manage(live)
+            .invoke_handler(tauri::generate_handler![get_getting_out])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |args: Value| -> Vec<String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "get_getting_out".to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            let said = answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+                .expect("an answer");
+            let mut calls: Vec<String> = said["reports"]
+                .as_array()
+                .expect("reports")
+                .iter()
+                .map(|r| r["call"].as_str().unwrap_or_default().to_string())
+                .collect();
+            calls.sort();
+            calls
+        };
+        assert_eq!(ask(json!({ "since": now - 300 })), ["DL1AA"]);
+        assert_eq!(ask(json!({})), ["DL1AA", "VK3AA"], "no start: every report");
+    }
+
+    /// The TV page reads the same key.
+    #[test]
+    fn the_tv_page_reads_since_from_its_arguments() {
+        assert_eq!(
+            tv_getting_out_since(&json!({ "since": 1_793_369_130_i64 })),
+            Some(1_793_369_130)
+        );
+        assert_eq!(tv_getting_out_since(&json!({})), None);
+        assert_eq!(tv_getting_out_since(&Value::Null), None);
     }
 }

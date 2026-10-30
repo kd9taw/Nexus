@@ -2,20 +2,28 @@
 //
 // GETTING OUT'S START FRESH, through the real ConnectView: one press sets a start time, the box asks
 // the station for the reports from then on (the station leaves the earlier ones out of the count, the
-// furthest, the compass and the list), shows "since HH:MM UTC", and the map's "hearing you" dots
-// follow the same time. Show all brings everything back. The station half (what it leaves out) is
+// furthest, the compass and the list), shows "since HH:MM:SS UTC", and the map's "hearing you" dots
+// (2-D and 3-D) follow the same time. A start more than 30 minutes old has ended. Show all brings everything back. The station half (what it leaves out) is
 // pinned in crates/propagation's gettingout tests; here the stand-in answers as the station does.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { GettingOut, MapSpot, PropagationSnapshot } from '../../types'
 
-const maps = vi.hoisted(() => ({ spots: [] as (MapSpot[] | undefined)[] }))
+const maps = vi.hoisted(() => ({ spots: [] as (MapSpot[] | undefined)[], globe: [] as (MapSpot[] | undefined)[] }))
 vi.mock('../MapView', () => ({
   MapView: (p: { prop: PropagationSnapshot | null }) => {
     maps.spots.push(p.prop?.spots)
     return <div data-testid="map" />
   },
 }))
+// The 3-D globe draws the same dots: stubbed to see the spots it is handed.
+vi.mock('../Globe3D', () => ({
+  default: (p: { prop: PropagationSnapshot | null }) => {
+    maps.globe.push(p.prop?.spots)
+    return <div data-testid="globe3d" />
+  },
+}))
+vi.mock('../../gpu', () => ({ gpuCapableForGlobe: () => true, webgl2ForGlobe: () => true }))
 vi.mock('../Waterfall', () => ({ Waterfall: () => <div data-testid="waterfall" /> }))
 
 // 14:05:30 UTC: the press, and the clock the snapshot was taken by.
@@ -67,7 +75,7 @@ import { setUnitsMirror } from '../../units'
 vi.setConfig({ testTimeout: 15_000 })
 
 const spot = (call: string, ageSecs: number, heardMe: boolean): MapSpot => ({
-  call, lat: 48, lon: 11, band: '20m', heardMe, ageSecs, approx: false,
+  call, lat: 48, lon: 11, band: '20m', heardMe, ageSecs, time: START - ageSecs, approx: false,
 })
 // The same two receivers on the map (VK heard before the press, DL after), and a station heard
 // before the press that did not hear me: activity, which Start fresh leaves alone.
@@ -100,6 +108,7 @@ beforeEach(() => {
   setGetoutSince(null)
   setUnitsMirror('metric')
   maps.spots = []
+  maps.globe = []
   vi.mocked(api.getGettingOut).mockImplementation(async (since?: number | null) => (since == null ? ALL : SINCE))
   globalThis.ResizeObserver = class {
     observe() {}
@@ -138,7 +147,9 @@ describe('Getting Out: Start fresh', () => {
     expect(vi.mocked(api.getGettingOut)).toHaveBeenLastCalledWith(START)
     expect(document.querySelectorAll('.getout-summary strong')[0]?.textContent, 'the count').toBe('1')
     expect(document.querySelectorAll('.getout-summary strong')[1]?.textContent, 'the furthest').toBe('7000 km')
-    expect(document.querySelector('.getout-since')?.textContent).toBe('since 14:05 UTC')
+    // The time is on the count's line; the heading keeps its one button.
+    expect(document.querySelector('.getout-summary .getout-since')?.textContent).toBe('since 14:05:30 UTC')
+    expect([...document.querySelectorAll('.getout-head button')].map((b) => b.textContent)).toEqual(['Show all'])
     // The compass draws only the later receiver's direction.
     expect([...document.querySelectorAll('.getout-rose line title')].map((el) => el.textContent)).toEqual([
       'NE: 1 station, out to 7000 km',
@@ -167,9 +178,42 @@ describe('Getting Out: Start fresh', () => {
     render(<ConnectView {...connectProps} />)
     await waitFor(() =>
       expect(document.querySelector('.connect-getout .cp-none')?.textContent).toBe(
-        'No reception reports since 14:05 UTC yet — call CQ, then watch who hears you.',
+        'No reception reports since 14:05:30 UTC yet — call CQ, then watch who hears you.',
       ),
     )
+    expect(screen.getByRole('button', { name: 'Show all' })).toBeTruthy()
+  })
+
+  it('the 3-D globe\'s "hearing you" dots follow the start too', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW_MS)
+    localStorage.setItem('nexus.connect.intent', 'dx')
+    localStorage.setItem('nexus.connect.intents', JSON.stringify({ dx: { map: '3d' } }))
+    setGetoutSince(START)
+    render(<ConnectView {...connectProps} />)
+    await waitFor(() => expect(maps.globe.length).toBeGreaterThan(0))
+    const last = maps.globe[maps.globe.length - 1] ?? []
+    expect(last.filter((s) => s.heardMe).map((s) => s.call)).toEqual(['DL1AA'])
+    expect(last.map((s) => s.call), 'other activity stays').toContain('JA1AA')
+  })
+
+  // The box shows the station's last 30 minutes: a start older than that has ended, so a box opened
+  // (or a window restarted) after it reads as it does with no start — and one inside it keeps it.
+  it('a start more than 30 minutes old has ended: the box asks for every report', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW_MS)
+    setGetoutSince(START - 1801)
+    render(<ConnectView {...connectProps} />)
+    await waitFor(() => expect(listed()).toEqual(['VK3AA', 'DL1AA']))
+    expect(vi.mocked(api.getGettingOut)).not.toHaveBeenCalledWith(START - 1801)
+    expect(screen.getByRole('button', { name: 'Start fresh' })).toBeTruthy()
+    expect(document.querySelector('.getout-since')).toBeNull()
+    expect(lastMapCalls(), 'the map shows every receiver again').toEqual(['VK3AA', 'DL1AA'])
+  })
+
+  it('a start exactly 30 minutes old still counts from the start', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW_MS)
+    setGetoutSince(START - 1800)
+    render(<ConnectView {...connectProps} />)
+    await waitFor(() => expect(vi.mocked(api.getGettingOut)).toHaveBeenCalledWith(START - 1800))
     expect(screen.getByRole('button', { name: 'Show all' })).toBeTruthy()
   })
 })

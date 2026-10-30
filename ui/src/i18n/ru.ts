@@ -5806,6 +5806,8 @@ export const RU: PartialCatalog = {
   "connect.basic.spaceWx.flareBlackout": "SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} вспышка в процессе; R{{scale}} радиозатемнение.",
   "connect.basic.getout.dir": "Вас слышат: {{count}} — {{dir}}.",
   "connect.basic.getout.furthest": "Вас слышат: {{count}} — дальше всего {{dist}}.",
+  "connect.basic.getout.dir.since": "Вас слышат с {{time}}: {{count}} — {{dir}}.",
+  "connect.basic.getout.furthest.since": "Вас слышат с {{time}}: {{count}} — дальше всего {{dist}}.",
   "connect.basic.bestband.none": "Пока ни один регион недоступен ни на одном диапазоне.",
   "connect.basic.bestband": "На {{region}}: попробуйте {{band}} ({{word}}).",
   "connect.basic.activity.offline": "Сейчас нет данных о живой активности.",

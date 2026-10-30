@@ -212,19 +212,21 @@ export function spaceWxLine(c: PaneContext): string {
   return t('connect.basic.spaceWx', vals)
 }
 
+/** A Start fresh time narrows the count, so the sentence names it whenever one is set. */
 export function getoutLine(c: PaneContext): string {
   const g = c.getout
+  const time = c.getoutSince != null ? fmtSinceUtc(c.getoutSince) : null
   if (!g || g.count === 0)
-    return c.getoutSince != null
-      ? t('connect.getout.none.since', { time: fmtSinceUtc(c.getoutSince) })
-      : t('connect.getout.none')
+    return time != null ? t('connect.getout.none.since', { time }) : t('connect.getout.none')
   const dir = getoutSummary(g.reports, c.units)
+  const dist = fmtDistanceKm(g.maxKm, c.units)
+  if (time != null)
+    return dir
+      ? t('connect.basic.getout.dir.since', { count: g.count, time, dir })
+      : t('connect.basic.getout.furthest.since', { count: g.count, time, dist })
   return dir
     ? t('connect.basic.getout.dir', { count: g.count, dir })
-    : t('connect.basic.getout.furthest', {
-        count: g.count,
-        dist: fmtDistanceKm(g.maxKm, c.units),
-      })
+    : t('connect.basic.getout.furthest', { count: g.count, dist })
 }
 
 // ---- B2 Tier-1 pane projections ----

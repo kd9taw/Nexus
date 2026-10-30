@@ -1401,6 +1401,8 @@ export const FR: PartialCatalog = {
   "connect.basic.es.season": "Saison Es : surveillez {{freq}} pour du DX 6m soudain.",
   "connect.basic.getout.dir": "{{count}} vous entendent — {{dir}}.",
   "connect.basic.getout.furthest": "{{count}} vous entendent — le plus loin {{dist}}.",
+  "connect.basic.getout.dir.since": "{{count}} vous entendent depuis {{time}} — {{dir}}.",
+  "connect.basic.getout.furthest.since": "{{count}} vous entendent depuis {{time}} — le plus loin {{dist}}.",
   "connect.basic.greyline.in.hours": "{{hours}} h {{mins}} min",
   "connect.basic.greyline.in.mins": "{{mins}} min",
   "connect.basic.greyline.noGrid": "Indiquez votre locator dans les Réglages pour voir vos fenêtres de ligne grise.",

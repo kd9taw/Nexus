@@ -3457,8 +3457,8 @@ body.resizing-row {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-label);
 }
-/* The heading's line also carries Start fresh, or "since HH:MM UTC" and Show all: it wraps under the
-   heading in a narrow box rather than taking a line of the body. */
+/* The heading's line also carries one button, Start fresh or Show all: it wraps under the heading in
+   a narrow box rather than taking a line of the body. */
 .getout-head {
   display: flex;
   flex-wrap: wrap;
@@ -3471,9 +3471,9 @@ body.resizing-row {
   margin: 0;
   margin-right: auto;
 }
+/* "since HH:MM:SS UTC" at the end of the count's line. */
 .getout-since {
-  font-size: var(--fs-micro);
-  color: var(--text-dim);
+  margin-left: var(--space-2);
   font-family: var(--font-mono);
 }
 /* The word in the theme's ink, the accent as its mark (the pill's edge): accent lettering does not read
