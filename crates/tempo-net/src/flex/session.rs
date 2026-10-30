@@ -96,6 +96,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::num::NonZeroU64;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -617,6 +618,12 @@ impl Session {
     }
 
     pub fn snapshot(&self) -> Snapshot {
+        self.snapshot_with(self.model.clone())
+    }
+
+    /// [`Self::snapshot`] around a copy of the model the caller already has: the driver's publish
+    /// hands back the one it published while the model has not changed.
+    fn snapshot_with(&self, model: StatusModel) -> Snapshot {
         Snapshot {
             phase: self.phase,
             transmit_protocol: self.protocol == Protocol::Supported,
@@ -625,7 +632,7 @@ impl Session {
             ours_on_air: self.ours_on_air(),
             transmit_ready: self.transmit_ready(),
             dax_tx_stream: self.dax_tx_stream,
-            model: self.model.clone(),
+            model,
         }
     }
 
@@ -1694,6 +1701,14 @@ impl Session {
 
 // ── The thread driver ────────────────────────────────────────────────────────────────────────
 
+/// The driver's thread. It catches its own panic and sends the stops after it
+/// ([`crate::on_a_transmit_driver`]).
+pub const DRIVER_THREAD: &str = "flex-session";
+
+/// How long a driver that died reads on after its stops, dropping what comes, before it lets the
+/// socket go ([`died`]).
+const DIED_DRAIN: Duration = Duration::from_millis(200);
+
 /// How long the driver waits for bytes before it looks at requests and time again. A stop waits
 /// at most this long behind a read.
 pub const READ_POLL: Duration = Duration::from_millis(20);
@@ -1818,8 +1833,26 @@ impl Connection {
         let thread = {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
-                .name("flex-session".into())
-                .spawn(move || drive(io, session, epoch, &request_rx, &event_tx, &shared))?
+                .name(DRIVER_THREAD.into())
+                .spawn(move || {
+                    let (mut io, mut session) = (io, session);
+                    let driven = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        drive(
+                            &mut io,
+                            &mut session,
+                            epoch,
+                            &request_rx,
+                            &event_tx,
+                            &shared,
+                        );
+                    }));
+                    // A request from here is answered at once as not connected, rather than after
+                    // a dead driver's stops, each of which may take up to `WRITE_TIMEOUT`.
+                    drop(request_rx);
+                    if driven.is_err() {
+                        died(&mut io, &mut session, epoch, &shared);
+                    }
+                })?
         };
         Ok(Connection {
             requests,
@@ -1912,7 +1945,14 @@ impl Connection {
 
     /// The next event, waiting up to `timeout`.
     pub fn next_event(&self, timeout: Duration) -> Option<Event> {
-        lock(&self.events).recv_timeout(timeout).ok()
+        self.recv_event(timeout).ok()
+    }
+
+    /// The next event, waiting up to `timeout`, or `Disconnected` once the driver has stopped and
+    /// every event it sent has been taken: from then on the channel answers at once, so a reader
+    /// that waits on it in a loop must stop there, whatever the session's phase reads.
+    pub fn recv_event(&self, timeout: Duration) -> Result<Event, mpsc::RecvTimeoutError> {
+        lock(&self.events).recv_timeout(timeout)
     }
 
     /// The session's state as of its last step. Each step's state is published before its answers
@@ -1987,7 +2027,7 @@ fn retryable(e: &io::Error) -> bool {
 
 fn drive<S: Read + Write>(
     mut io: S,
-    mut session: Session,
+    session: &mut Session,
     epoch: Instant,
     requests: &Receiver<Request>,
     events: &Sender<Event>,
@@ -2004,23 +2044,23 @@ fn drive<S: Read + Write>(
                     Ok(seq) => {
                         waiters.insert(seq, reply);
                     }
-                    Err(e) => answer(&session, shared, reply, Err(ConnError::Refused(e))),
+                    Err(e) => answer(session, shared, reply, Err(ConnError::Refused(e))),
                 },
                 Ok(Request::Start(start, lasting_ms, reply)) => {
                     let started = session.start_lasting(&mut io, start, lasting_ms, now());
-                    answer(&session, shared, reply, started);
+                    answer(session, shared, reply, started);
                 }
                 Ok(Request::Stop(stop, reply)) => {
                     let stopped = session.stop(&mut io, stop, now());
-                    answer(&session, shared, reply, stopped);
+                    answer(session, shared, reply, stopped);
                 }
                 Ok(Request::EndOurs(reply)) => {
                     let ended = session.end_ours(&mut io, now());
-                    answer(&session, shared, reply, ended);
+                    answer(session, shared, reply, ended);
                 }
                 Ok(Request::Route(audio, reply)) => {
                     let routed = session.route(&mut io, audio, now());
-                    answer(&session, shared, reply, routed);
+                    answer(session, shared, reply, routed);
                 }
                 Ok(Request::Close) | Err(TryRecvError::Disconnected) => {
                     session.close(&mut io, now());
@@ -2038,7 +2078,7 @@ fn drive<S: Read + Write>(
             }
             session.poll(&mut io, now());
         }
-        publish(&session, shared);
+        publish(session, shared);
         for event in session.take_events() {
             if let Event::Reply { seq, code, message } = &event {
                 if let Some(waiter) = waiters.remove(seq) {
@@ -2064,14 +2104,77 @@ fn drive<S: Read + Write>(
     let _ = io.flush();
 }
 
+/// The driver panicked: a bug in the session, never a state it is meant to reach. TX SAFETY: end
+/// everything of ours that may be on the air first ([`Session::end_ours`], best effort: the session
+/// may be part way through a step), then publish the session closed, so every reader sees it gone
+/// (the radio loop's liveness check, a wait on the state, the DAX pacer) rather than open forever,
+/// and the event channel, dropped with the thread, ends the watcher. The rest of the teardown waits
+/// on replies a dead driver cannot read: the connection goes once the radio has had [`DIED_DRAIN`]
+/// to read the stops. A socket let go with the radio's lines still unread ends in a reset, and the
+/// radio's system may drop what it has not read yet on a reset: the stops just written.
+///
+/// What is published as on the air is the last published belief OR the session's own, never less:
+/// a step publishes only once it is done, so a driver that died inside the step that wrote a key
+/// left the state from before that key published, and the radio loop's dead-daemon path and the
+/// watcher's alarm read from it. Nothing is published as off the air: no readback can prove the
+/// unkey now, and the stops below may never have reached the radio.
+///
+/// The stops go out whatever was already sent. A stop or an escalation may already have gone (a
+/// normal teardown would not send them again), but the panic may have come between a stop arming
+/// its clock and its write, and every stop is idempotent and can never key: a repeat costs a line,
+/// a skipped unkey is a stuck transmitter.
+fn died<S: Read + Write>(io: &mut S, session: &mut Session, epoch: Instant, shared: &Shared) {
+    let now = u64::try_from(epoch.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let keyed = session.keyed();
+    let on_air =
+        std::panic::catch_unwind(AssertUnwindSafe(|| session.ours_on_air())).unwrap_or(true);
+    let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = session.end_ours(io, now);
+        let _ = io.flush();
+    }));
+    let mut published = lock(&shared.snapshot);
+    published.phase = Phase::Closed;
+    published.keyed |= keyed;
+    if on_air {
+        published.ours_on_air = true;
+        shared.on_air.store(true, Ordering::Release);
+    }
+    drop(published);
+    shared.open.store(false, Ordering::Release);
+    shared.changed.notify_all();
+    let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let until = Instant::now() + DIED_DRAIN;
+        let mut dropped = [0u8; 4096];
+        while Instant::now() < until {
+            match io.read(&mut dropped) {
+                Ok(0) => return,
+                Ok(_) => {}
+                Err(e) if retryable(&e) => {}
+                Err(_) => return,
+            }
+        }
+    }));
+}
+
 /// Store the session's state for [`Connection::snapshot`] and wake [`Connection::wait_until`].
 /// The driver does this before it announces anything a step did (an answer, a reply, an event),
 /// so a reader woken by an announcement reads the state it reports, or a later one, never the
 /// state from before it.
 fn publish(session: &Session, shared: &Shared) {
-    let snapshot = session.snapshot();
+    let mut published = lock(&shared.snapshot);
+    // Built before anything published is touched: a panic part way leaves the last state whole.
+    let mut snapshot = session.snapshot_with(StatusModel::default());
+    // The model is everything the radio has reported, and the driver publishes every turn, fifty a
+    // second on an idle link that changes none of it: the copy already published stands while it
+    // is equal, and only a changed model is copied again.
+    snapshot.model = if published.model == session.model {
+        std::mem::take(&mut published.model)
+    } else {
+        session.model.clone()
+    };
     shared.on_air.store(snapshot.ours_on_air, Ordering::Release);
-    *lock(&shared.snapshot) = snapshot;
+    *published = snapshot;
+    drop(published);
     // An over handed to the operator's mic carries no more of our audio.
     let over = session
         .keyed

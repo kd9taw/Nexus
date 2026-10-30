@@ -334,6 +334,9 @@ struct FeedRows {
     /// The one source the operator picked for the RF slot, when they picked one over the radio's
     /// own: see [`SpectrumFeed::claim_rf`].
     rf_owner: Option<&'static str>,
+    /// The RF windows the scopes on screen are drawing (absolute Hz), each with when it was last
+    /// asked for: see [`SpectrumFeed::request_rf_view`].
+    rf_views: Vec<(f64, f64, Instant)>,
 }
 
 impl FeedRows {
@@ -996,6 +999,65 @@ impl SpectrumFeed {
                 slice: None,
                 bins: Vec::new(),
             }),
+        }
+    }
+
+    /// How long one scope's RF window counts towards [`Self::rf_view`] after the poll that asked
+    /// for it: far longer than any scope's poll period (33 ms, 120 ms under reduced motion), and
+    /// short enough that a window left behind by tuning stops widening the union within a second.
+    const RF_VIEW_TTL: Duration = Duration::from_secs(1);
+    /// The most distinct windows held at once; the oldest goes first.
+    const RF_VIEWS_MAX: usize = 8;
+    /// The narrowest window worth asking for.
+    const RF_VIEW_MIN_SPAN_HZ: f64 = 100.0;
+
+    /// A scope is drawing `lo_hz..hi_hz` of absolute RF: the window an IQ panadapter (TCI, SDRconnect)
+    /// may compute its rows over, at a finer resolution than its whole span allows.
+    ///
+    /// THE REQUEST RIDES THE POLL, as the scope span's does ([`Self::scope_row`]): it lapses
+    /// [`Self::RF_VIEW_TTL`] after the scope stops asking, so a hidden scope leaves no zoom behind.
+    /// A window that is not finite, is reversed or is narrower than [`Self::RF_VIEW_MIN_SPAN_HZ`] is
+    /// ignored. Only the IQ panadapters read it: a radio's own scope sweeps what the radio is set to.
+    pub fn request_rf_view(&self, lo_hz: f64, hi_hz: f64) {
+        if !(lo_hz.is_finite() && hi_hz.is_finite() && hi_hz - lo_hz >= Self::RF_VIEW_MIN_SPAN_HZ) {
+            return;
+        }
+        if let Ok(mut g) = self.rows.lock() {
+            let now = Instant::now();
+            g.rf_views.retain(|&(lo, hi, at)| {
+                now.duration_since(at) < Self::RF_VIEW_TTL && (lo, hi) != (lo_hz, hi_hz)
+            });
+            g.rf_views.push((lo_hz, hi_hz, now));
+            if g.rf_views.len() > Self::RF_VIEWS_MAX {
+                g.rf_views.remove(0);
+            }
+        }
+    }
+
+    /// The RF window an IQ panadapter should cover: the UNION of the windows asked for within
+    /// [`Self::RF_VIEW_TTL`], or `None` when no scope is asking.
+    ///
+    /// A union, not the latest: two scopes drawing different windows at once (the shack's and a
+    /// Remote viewer's) would otherwise take turns, and each turn would start the panadapter's rows
+    /// over. The union covers both, so each draws its own window from the one row.
+    pub fn rf_view(&self) -> Option<(f64, f64)> {
+        let g = self.rows.lock().ok()?;
+        let now = Instant::now();
+        g.rf_views
+            .iter()
+            .filter(|(_, _, at)| now.duration_since(*at) < Self::RF_VIEW_TTL)
+            .fold(None, |acc: Option<(f64, f64)>, &(lo, hi, _)| {
+                Some(acc.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))))
+            })
+    }
+
+    /// Test-only: age every RF window request to simulate scopes that stopped polling.
+    #[cfg(test)]
+    pub fn backdate_rf_views_for_test(&self, by: Duration) {
+        if let Ok(mut g) = self.rows.lock() {
+            for v in g.rf_views.iter_mut() {
+                v.2 = Instant::now() - by;
+            }
         }
     }
 
@@ -2094,6 +2156,10 @@ pub struct DecodeJob {
     /// CQ-only AP restriction (FT8 + FT4 lapcqonly). Native branch only.
     ap: bool,
     ap_cq_only: bool,
+    /// The operator is in a WSJT-X Special Operating Activity — Contest mode, or a Hound
+    /// ([`Engine::special_activity`]). Without one FT8 drops rover (`/R`) and `TU; ` decodes,
+    /// as WSJT-X does. Native branch only.
+    activity: bool,
     frame_time_ms: i64,
     /// Native branch: clear FT1 IR-HARQ buffers before decoding (HARQ disabled).
     harq_reset: bool,
@@ -2377,6 +2443,7 @@ pub fn run_js8_multi_job(job: Js8MultiJob) -> Vec<DecodeResult> {
                                     0,
                                     false,
                                     false,
+                                    false,
                                 )
                             }))
                             .unwrap_or_else(|_| {
@@ -2546,6 +2613,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         nftx,
         ap,
         ap_cq_only,
+        activity,
         frame_time_ms,
         harq_reset,
         pass,
@@ -2629,6 +2697,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
                 frame_time_ms,
                 ap,
                 ap_cq_only,
+                activity,
                 partial: pass.is_partial(),
             };
             src.decode_streaming(&req, pass.a7_final(), &mut sink)
@@ -31075,6 +31144,18 @@ contact yourself."
         }
     }
 
+    /// Whether the operator is in what WSJT-X calls a Special Operating Activity, the decoder's
+    /// `ncontest /= 0` (`decoder.f90:137`, from `int(m_specOp)` at `mainwindow.cpp:5492`): any
+    /// contest it runs, or a Hound. Here that is Contest mode on, whichever contest is picked, or
+    /// a Hound. Without one, FT8 drops rover (`/R`) and `TU; ` decodes (`ft8b.f90:452-455`).
+    fn special_activity(&self) -> bool {
+        self.settings.fd_active
+            || matches!(
+                self.settings.special_op,
+                crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
+            )
+    }
+
     pub fn build_decode_job(&self, frame: Vec<f32>, slot: u64, pass: DecodePass) -> DecodeJob {
         let source = self.source.clone();
         let next_source = self.next_source.clone();
@@ -31110,6 +31191,7 @@ contact yourself."
                 nftx: 0,
                 ap: true, // ignored: companion decodes arrive pre-made over UDP
                 ap_cq_only: false,
+                activity: false,
                 frame_time_ms: 0,
                 harq_reset: false,
                 pass,
@@ -31139,6 +31221,7 @@ contact yourself."
                 nftx: 0,
                 ap: true, // ignored: DX1's robust path has no WSJT-X AP machinery
                 ap_cq_only: false,
+                activity: false,
                 frame_time_ms: 0,
                 harq_reset: false,
                 pass,
@@ -31267,6 +31350,7 @@ contact yourself."
             // the operator deviate deliberately.
             ap: self.settings.ap_decode,
             ap_cq_only: self.settings.ap_cq_only,
+            activity: self.special_activity(),
             frame_time_ms,
             harq_reset,
             pass,
@@ -34288,6 +34372,11 @@ contact yourself."
     /// See [`StationCore::sstv_gallery`].
     pub fn sstv_gallery(&self) -> &[crate::dto::SstvGalleryEntry] {
         self.station.sstv_gallery()
+    }
+
+    /// See [`StationCore::sstv_gallery_snapshot`].
+    pub fn sstv_gallery_snapshot(&self) -> (u64, Vec<crate::dto::SstvGalleryEntry>) {
+        self.station.sstv_gallery_snapshot()
     }
 
     /// See [`StationCore::set_clock_offset_ms`].
@@ -38640,6 +38729,56 @@ mod tests {
         // Startup seed replaces the session list (and caps defensively).
         e.load_sstv_gallery(vec![crate::dto::SstvGalleryEntry::default()]);
         assert_eq!(e.sstv_gallery().len(), 1);
+    }
+
+    /// The decoder saves a picture's file before it takes the lock to list it, so a gallery
+    /// delete reading the folder in between can adopt the file first. The decoder's own record
+    /// must then replace that bare entry, not sit beside it: one picture, listed once, with the
+    /// frequency and line count only the decoder knows.
+    #[test]
+    fn a_picture_already_adopted_from_the_folder_is_listed_once_when_the_decoder_records_it() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let older = crate::dto::SstvGalleryEntry {
+            path: "/tmp/sstv/20261030T100000Z_scottie1.png".into(),
+            mode: "Scottie 1".into(),
+            finished_utc: "2026-10-30T10:00:00Z".into(),
+            freq_mhz: 14.230,
+            lines: 256,
+            fsk_id: None,
+        };
+        let adopted = crate::dto::SstvGalleryEntry {
+            path: "/tmp/sstv/20261030T100500Z_pd120.png".into(),
+            mode: "pd120".into(),
+            finished_utc: "2026-10-30T10:05:00Z".into(),
+            ..Default::default()
+        };
+        e.load_sstv_gallery(vec![older.clone(), adopted.clone()]);
+        let (gen_before, _) = e.sstv_gallery_snapshot();
+
+        let decoded = crate::dto::SstvGalleryEntry {
+            mode: "PD 120".into(),
+            freq_mhz: 14.233,
+            lines: 496,
+            ..adopted.clone()
+        };
+        e.push_sstv_gallery(decoded.clone());
+        assert_eq!(
+            e.sstv_gallery(),
+            &[older.clone(), decoded.clone()][..],
+            "the decoder's record replaces the adopted entry"
+        );
+        assert!(
+            e.sstv_gallery_snapshot().0 > gen_before,
+            "a replacement is still a change for gallery.json"
+        );
+
+        // A different picture still appends.
+        let newer = crate::dto::SstvGalleryEntry {
+            path: "/tmp/sstv/20261030T101000Z_robot36.png".into(),
+            ..decoded.clone()
+        };
+        e.push_sstv_gallery(newer.clone());
+        assert_eq!(e.sstv_gallery(), &[older, decoded, newer][..]);
     }
 
     /// #202 — a manual receive start is a one-shot request the decode thread collects,
@@ -62262,6 +62401,82 @@ mod tests {
         assert!(job.ap_cq_only, "ap_cq_only = true must reach the job");
     }
 
+    /// WSJT-X's rover and `TU; ` filter is on with no Special Operating Activity and off in one:
+    /// Contest mode, or a Hound, reaches the decode job as `activity`.
+    #[test]
+    fn contest_mode_and_hound_reach_the_decode_job_as_an_activity() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let frame = vec![0.0f32; 1024];
+        let job = |e: &Engine| e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+
+        assert!(!job(&e).activity, "no contest, no Hound: no activity");
+
+        e.settings.fd_active = true;
+        assert!(job(&e).activity, "Contest mode is an activity");
+        e.settings.fd_active = false;
+        assert!(!job(&e).activity, "Contest mode off again: no activity");
+
+        for hound in [
+            crate::settings::SpecialOp::Hound,
+            crate::settings::SpecialOp::SuperHound,
+        ] {
+            e.settings.special_op = hound;
+            assert!(job(&e).activity, "{hound:?} is an activity");
+        }
+        e.settings.special_op = crate::settings::SpecialOp::None;
+        assert!(!job(&e).activity, "Hound off again: no activity");
+    }
+
+    /// The decoder is CALLED with the activity: the worker's hop from [`DecodeJob`] to
+    /// `modes::DecodeRequest`, through `ingest` and `ingest_early`. A hop that dropped it would
+    /// silently filter every rover in Contest mode; one that forced it on would let them through
+    /// with no contest.
+    #[test]
+    fn the_activity_reaches_the_decoder_through_ingest() {
+        struct ActivityRecorder(std::sync::Arc<std::sync::Mutex<Vec<bool>>>);
+        impl SignalSource for ActivityRecorder {
+            fn label(&self) -> String {
+                "activity-recorder".into()
+            }
+            fn mode_kind(&self) -> Option<modes::ModeKind> {
+                Some(modes::ModeKind::Ft8)
+            }
+            fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+                Vec::new()
+            }
+            fn decode_a7(
+                &mut self,
+                req: &modes::DecodeRequest,
+                _a7_final: bool,
+            ) -> Vec<modes::Decode> {
+                self.0.lock().unwrap().push(req.activity);
+                Vec::new()
+            }
+        }
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        e.install_source(Box::new(ActivityRecorder(seen.clone())));
+        let frame = vec![0.0f32; 1024];
+
+        e.ingest(&frame, 1); // no contest, no Hound
+        e.settings.fd_active = true;
+        e.ingest_early(&frame, 2); // Contest mode, early pass
+        e.ingest(&frame, 2); // Contest mode, boundary
+        e.settings.fd_active = false;
+        e.settings.special_op = crate::settings::SpecialOp::Hound;
+        e.ingest(&frame, 3); // Hound
+        e.settings.special_op = crate::settings::SpecialOp::None;
+        e.ingest(&frame, 4); // off again
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![false, true, true, true, false],
+            "the decoder must see: none=false, Contest early=true, Contest=true, Hound=true, \
+             off=false"
+        );
+    }
+
     /// Single decode narrows the search band the decoder is CALLED with to the
     /// RX offset ± 25 Hz (WSJT-X's own "decode this one station" window, from
     /// its double-click redecode path) — and NEVER produces an empty band: with
@@ -63675,6 +63890,42 @@ mod tests {
         );
         let _ = feed.rf_frame_after(0);
         assert!(feed.rf_wanted(), "and the next read renews it");
+    }
+
+    /// THE RF WINDOW A SCOPE DRAWS IS A STANDING REQUEST: the union of the windows asked for in the
+    /// last second, none once every scope stops asking, and nothing taken from a window that is not one.
+    #[test]
+    fn the_rf_view_is_the_union_of_the_windows_asked_for_and_lapses() {
+        let feed = SpectrumFeed::default();
+        assert_eq!(feed.rf_view(), None, "nobody asked");
+        // 30 m with its margin, then a +-25 kHz window round a dial at 10.120 MHz.
+        feed.request_rf_view(10_095_000.0, 10_155_000.0);
+        assert_eq!(feed.rf_view(), Some((10_095_000.0, 10_155_000.0)));
+        feed.request_rf_view(10_095_000.0, 10_145_000.0);
+        assert_eq!(
+            feed.rf_view(),
+            Some((10_095_000.0, 10_155_000.0)),
+            "a second scope's window inside the first leaves the union as it was"
+        );
+        feed.request_rf_view(10_050_000.0, 10_100_000.0);
+        assert_eq!(feed.rf_view(), Some((10_050_000.0, 10_155_000.0)));
+        // Not windows: reversed, too narrow, not finite. None of them moves the union.
+        feed.request_rf_view(10_200_000.0, 10_100_000.0);
+        feed.request_rf_view(10_100_000.0, 10_100_050.0);
+        feed.request_rf_view(f64::NEG_INFINITY, 10_100_000.0);
+        feed.request_rf_view(f64::NAN, 10_100_000.0);
+        assert_eq!(feed.rf_view(), Some((10_050_000.0, 10_155_000.0)));
+        feed.backdate_rf_views_for_test(Duration::from_millis(900));
+        assert!(feed.rf_view().is_some(), "still standing inside the TTL");
+        feed.backdate_rf_views_for_test(Duration::from_millis(1100));
+        assert_eq!(
+            feed.rf_view(),
+            None,
+            "scopes that stopped asking leave no zoom behind"
+        );
+        // Only the newest window counts once the others lapse.
+        feed.request_rf_view(14_000_000.0, 14_350_000.0);
+        assert_eq!(feed.rf_view(), Some((14_000_000.0, 14_350_000.0)));
     }
 
     /// A radio that stopped sweeping reads as no scope — but an over does not: the CI-V stream is

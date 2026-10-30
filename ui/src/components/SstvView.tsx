@@ -1907,6 +1907,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             <Waterfall
               {...closeProps('scope')}
               paneTitle={sstvPanelLabels().scope}
+              zoomKey="nexus.waterfall.sstv.zoom"
               theme={theme}
               active={active}
               rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default

@@ -10,8 +10,9 @@ import { oneLineTyped } from '../typedInput'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { Activation, ImportStats, LogExport, LoggedActivation, LoggedQso } from '../types'
+import type { Activation, ImportStats, LogExport, LoggedActivation, LoggedQso, UploadStatus } from '../types'
 import { ContactCard, type CardContact } from './ContactCard'
+import { Menu, type MenuEntry } from './ui/Menu'
 import { RecentlyDeleted } from './RecentlyDeleted'
 import { LogTools, type LogTool } from './LogTools'
 import { useCallbookUpdateEnd } from './LogCallbookUpdate'
@@ -206,17 +207,9 @@ async function keyedRow(id: string): Promise<{ row: LoggedQso; editKey: string }
 
 /** Q-codes and service names printed as labels. Proper nouns and shorthand, not words. */
 const QRZ_LABEL = 'QRZ'
-/** The row's "correct at QRZ" mark — the service name plus a pencil, not prose. */
-const QRZ_CORRECT_LABEL = 'QRZ✎'
 const EQSL_LABEL = 'eQSL'
-const CLUBLOG_LABEL = 'CL'
-const HRDLOG_LABEL = 'HL'
-// Technical product token, not prose — same ruling as the labels above.
-const WRL_LABEL = 'WRL'
-const LOTW_LABEL = 'LoTW'
-const QSL_MENU_LABEL = 'QSL▸'
-/** The satellite tag menu. `SAT` is the ADIF `PROP_MODE` value itself, not a word. */
-const SAT_MENU_LABEL = 'SAT▸'
+/** The row's ⋯ button: a glyph, its words are in its name. */
+const MORE_LABEL = '⋯'
 /** The QSL column's header is the Q-code itself, not a word for it. */
 const QSL_HEADER = 'QSL'
 /** An upload column's mark, a glyph per state; its words are in the tooltip. */
@@ -288,8 +281,8 @@ type SortKey = LogSortKey
 
 /** Rows per Logbook page: what the list asks its source for at a time (SPEC-2 v2 §6). */
 const LOG_PAGE = 128
-/** A row's height before it is measured: its 22 px buttons plus padding. */
-const ROW_ESTIMATE = 43
+/** A row's height before it is measured: its 32 px buttons plus padding, at the default density. */
+const ROW_ESTIMATE = 53
 /** Rows the list renders beyond the viewport on each side (the virtualizer's `overscan`). */
 const OVERSCAN = 12
 /** Pages the list keeps of the orders it has read — the order on screen, and one coming. */
@@ -2132,6 +2125,123 @@ export function Logbook({
         return v ? [[columnName(c), v]] : []
       })
     : []
+  /** One service's state for this contact, as its upload column words it ("Uploaded, <date>",
+   *  "Not uploaded"). */
+  const sentState = (st: UploadStatus | undefined) => {
+    const word = uploadWord(uploadMark(st))
+    return st?.whenUnix ? t('logbook.upload.title', { state: word, date: fmtUtc(st.whenUnix) }) : word
+  }
+  // The row's ⋯ menu. Each item does exactly what the row's own button or menu entry did, with the
+  // same handler; only the way to it changed. HRDLog and World Radio League keep no per-contact
+  // state in the log, so their items say none.
+  const rowMenu = (q: LoggedQso, key: string, ref: RowRef | null): MenuEntry[] => [
+    {
+      label: t('logbook.row.menu.spot'),
+      title: t('logbook.row.spot.title', { call: q.call }),
+      onSelect: () => setSpotSeed({ call: q.call, freq: q.freqMhz, mode: q.mode }),
+    },
+    {
+      label: t('logbook.row.menu.qrz'),
+      hint: sentState(q.upload?.qrz),
+      title: t('logbook.row.pushQrz.title', { call: q.call }),
+      onSelect: () => void onPushQrz(q),
+      separatorBefore: true,
+    },
+    {
+      label: t('logbook.row.menu.qrzCorrect'),
+      title: t('logbook.row.qrzCorrect.title', { call: q.call }),
+      onSelect: () => void onCorrectQrz(q),
+    },
+    {
+      label: t('logbook.row.menu.clublog'),
+      hint: sentState(q.upload?.clublog),
+      title: t('logbook.row.pushClublog.title', { call: q.call }),
+      onSelect: () => void onPushClublog(q),
+    },
+    {
+      label: t('logbook.row.menu.hrdlog'),
+      title: t('logbook.row.pushHrdlog.title', { call: q.call }),
+      onSelect: () => void onPushHrdlog(q),
+    },
+    {
+      label: t('logbook.row.menu.wrl'),
+      title: t('logbook.row.pushWrl.title', { call: q.call }),
+      onSelect: () => void onPushWrl(q),
+    },
+    {
+      label: t('logbook.row.menu.lotw'),
+      // One TQSL run at a time: while one runs, the item says so rather than going quietly dead.
+      hint: uploading ? t('logbook.row.menu.lotwBusy') : sentState(q.upload?.lotw),
+      disabled: uploading,
+      // …and the keyboard still stops on it, so the reason is heard, not only seen.
+      focusableWhenDisabled: true,
+      title: t('logbook.row.pushLotw.title', { call: q.call }),
+      onSelect: () => void onPushLotw(q, ref),
+    },
+    // QSL handling for the row: mark a request SENT (once), and record the paper card that came
+    // BACK. Operator-declared, not a confirmation.
+    //
+    // ⚠️ THE GATE USED TO BE `needsConfirmOnly && !q.qslSent?.sent`, and both halves were wrong
+    // (#152, reported again after the 1.8.0 fix shipped). The filter half hid the whole menu unless
+    // the "needs confirmation" chip happened to be on, so the reporter looked in the ordinary
+    // Logbook — where anyone handling a stack of cards is — and found nothing. The sent half is
+    // worse: a paper QSL is a ROUND TRIP, and removing the menu the moment you marked one sent
+    // deleted the control for the arrival. `q.qslSent?.sent` now hides only the SEND entries — you
+    // still cannot send twice — while the inbound entries stay for the life of the contact.
+    {
+      label: QSL_HEADER,
+      title: t('logbook.row.qslSent.title', { call: q.call }),
+      separatorBefore: true,
+      items: [
+        ...(!q.qslSent?.sent
+          ? [
+              // The ADIF QSL_SENT_VIA letters; only the labels are prose.
+              { label: t('logbook.row.qslSent.bureau'), onSelect: () => void onMarkQslSent(q, ref, 'B') },
+              { label: t('logbook.row.qslSent.direct'), onSelect: () => void onMarkQslSent(q, ref, 'D') },
+              { label: t('logbook.row.qslSent.electronic'), onSelect: () => void onMarkQslSent(q, ref, 'E') },
+              // The cards-to-send queue (ADIF QSL_SENT=Q), in and out.
+              cardQueued(q)
+                ? { label: t('logbook.row.qslQueue.remove'), onSelect: () => void onQueueCard(q, ref, false) }
+                : { label: t('logbook.row.qslQueue.add'), onSelect: () => void onQueueCard(q, ref, true) },
+            ]
+          : // ...and the way back out of it (#180), shown on exactly the condition that hides the
+            // sends: a clear that disappears once sent would be the same trap with an extra step.
+            [{ label: t('logbook.row.qslSent.clear'), onSelect: () => void onMarkQslSent(q, ref, null) }]),
+        // INBOUND: the paper card that arrived. Nothing on the internet can report this, so the
+        // operator is the only source — and it is award-eligible. The clear entry is for a mis-tick.
+        { label: t('logbook.row.qslRcvd.card'), onSelect: () => void onMarkQslCard(q, ref, true), separatorBefore: true },
+        ...(q.qslRcvd?.card ? [{ label: t('logbook.row.qslRcvd.clear'), onSelect: () => void onMarkQslCard(q, ref, false) }] : []),
+      ],
+    },
+    // SATELLITE TAG (PROP_MODE=SAT + SAT_NAME). The edit form carries neither field, deliberately:
+    // a blank field there means LEAVE ALONE, which is what stops a busted-call fix stripping a tag
+    // the contact earned. So the repair lives here, where choosing "clear" is unmistakably a
+    // decision. Both halves of the pair move together in the backend: TQSL rejects a lone member.
+    ...(satNames.length > 0
+      ? [
+          {
+            label: t('logbook.row.menu.sat'),
+            hint: q.satName ?? undefined,
+            title: t('logbook.row.sat.title', { call: q.call }),
+            items: [
+              ...satNames.map((n) => ({ label: n, onSelect: () => void onSetSatTag(q, ref, n) })),
+              // Offered when EITHER field is set: a lone PROP_MODE=SAT or a lone SAT_NAME is the
+              // half-pair TQSL rejects, and clearing it is exactly the repair that record needs.
+              ...(q.propMode || q.satName
+                ? [{ label: t('logbook.row.sat.clear'), onSelect: () => void onSetSatTag(q, ref, null), separatorBefore: true }]
+                : []),
+            ],
+          },
+        ]
+      : []),
+    {
+      label: t('logbook.row.menu.delete'),
+      title: t('logbook.row.delete', { call: q.call }),
+      danger: true,
+      separatorBefore: true,
+      onSelect: () => void onDelete(q, key, ref),
+    },
+  ]
   // A column the table did not have before the chooser: its text, or the upload mark.
   const addedCell = (c: LogColumn, q: LoggedQso) => {
     if (c.group === 'uploads') {
@@ -3058,8 +3168,8 @@ export function Logbook({
                       style={placed}
                     >
                       <span className="log-cell">{t('logbook.rows.loading')}</span>
-                      {/* The row buttons' own box, unseen: a row's height is its 22 px buttons
-                          plus padding, so a placeholder holding one is exactly as tall as the row
+                      {/* The row buttons' own box, unseen: a row's height is its buttons plus
+                          padding, so a placeholder holding one is exactly as tall as the row
                           it stands for — nothing below it moves when the row lands, and the list
                           never measures a short row it then has to correct. */}
                       <span className="log-cell log-rowactions" aria-hidden="true">
@@ -3116,7 +3226,12 @@ export function Logbook({
                     case 'freq':
                       return (
                         <>
-                          <span className="log-cell mono">{q.freqMhz.toFixed(4)}</span>
+                          {/* The numeric cells carry their own text as a tooltip: at the narrow end of a
+                              size class the table's shares can cut a frequency, date or time short,
+                              and a cut number must still be readable in full. */}
+                          <span className="log-cell mono" title={q.freqMhz.toFixed(4)}>
+                            {q.freqMhz.toFixed(4)}
+                          </span>
                         </>
                       )
                     case 'mode':
@@ -3140,7 +3255,9 @@ export function Logbook({
                     case 'date':
                       return (
                         <>
-                          <span className="log-cell mono">{utcDate(q.whenUnix)}</span>
+                          <span className="log-cell mono" title={utcDate(q.whenUnix)}>
+                            {utcDate(q.whenUnix)}
+                          </span>
                         </>
                       )
                     case 'time':
@@ -3156,7 +3273,7 @@ export function Logbook({
                               and eQSL forever. */}
                           <span
                             className="log-cell mono"
-                            title={q.timeKnown === false ? t('logbook.row.time.dateOnly') : ''}
+                            title={q.timeKnown === false ? t('logbook.row.time.dateOnly') : utcTime(q.whenUnix)}
                           >
                             {q.timeKnown === false ? '—' : utcTime(q.whenUnix)}
                           </span>
@@ -3366,207 +3483,41 @@ export function Logbook({
                       )
                     case 'actions':
                       return (
-                        <>
-                          <span className="log-cell log-rowactions">
-                            <button
-                              type="button"
-                              className="log-rowbtn"
-                              onClick={() => setSpotSeed({ call: q.call, freq: q.freqMhz, mode: q.mode })}
-                              title={t('logbook.row.spot.title', { call: q.call })}
-                              aria-label={t('logbook.row.spot.aria', { call: q.call })}
-                            >
-                              📢
-                            </button>
-                            <button
-                              type="button"
-                              className="log-rowbtn"
-                              onClick={() => void onPushQrz(q)}
-                              title={t('logbook.row.pushQrz.title', { call: q.call })}
-                              aria-label={t('logbook.row.pushQrz.aria', { call: q.call })}
-                            >
-                              {/* #270: this was a bare ↥, and an operator looking for "Upload to QRZ"
-                                  reported the button as gone. Named like its CL / HL / WRL siblings. */}
-                              {QRZ_LABEL}
-                            </button>
-                            <button
-                              type="button"
-                              className="log-rowbtn"
-                              onClick={() => void onCorrectQrz(q)}
-                              title={t('logbook.row.qrzCorrect.title', { call: q.call })}
-                              aria-label={t('logbook.row.qrzCorrect.aria', { call: q.call })}
-                            >
-                              {QRZ_CORRECT_LABEL}
-                            </button>
-                            <button
-                              type="button"
-                              className="log-rowbtn"
-                              onClick={() => void onPushClublog(q)}
-                              title={t('logbook.row.pushClublog.title', { call: q.call })}
-                              aria-label={t('logbook.row.pushClublog.aria', { call: q.call })}
-                            >
-                              {CLUBLOG_LABEL}
-                            </button>
-                            <button
-                              type="button"
-                              className="log-rowbtn"
-                              onClick={() => void onPushHrdlog(q)}
-                              title={t('logbook.row.pushHrdlog.title', { call: q.call })}
-                              aria-label={t('logbook.row.pushHrdlog.aria', { call: q.call })}
-                            >
-                              {HRDLOG_LABEL}
-                            </button>
-                            <button
-                              type="button"
-                              className="log-rowbtn"
-                              onClick={() => void onPushWrl(q)}
-                              title={t('logbook.row.pushWrl.title', { call: q.call })}
-                              aria-label={t('logbook.row.pushWrl.aria', { call: q.call })}
-                            >
-                              {WRL_LABEL}
-                            </button>
-                            <button
-                              type="button"
-                              className="log-rowbtn"
-                              onClick={() => void onPushLotw(q, ref)}
-                              disabled={uploading}
-                              title={t('logbook.row.pushLotw.title', { call: q.call })}
-                              aria-label={t('logbook.row.pushLotw.aria', { call: q.call })}
-                            >
-                              {LOTW_LABEL}
-                            </button>
-                            {/* QSL handling for the row: mark a request SENT (once), and record the
-                                paper card that came BACK. Operator-declared, not a confirmation.
-                                
-                                ⚠️ THE GATE USED TO BE `needsConfirmOnly && !q.qslSent?.sent`, and both
-                                halves were wrong (#152, reported again after the 1.8.0 fix shipped).
-                                
-                                The filter half hid the whole menu unless the "needs confirmation" chip
-                                happened to be on, so the reporter looked in the ordinary Logbook — where
-                                anyone handling a stack of cards is — and found nothing. A fix nobody can
-                                reach is not a fix.
-                                
-                                The sent half is worse: a paper QSL is a ROUND TRIP. You send, you wait
-                                months, a card arrives. Removing the menu the moment you marked one sent
-                                deleted the control for the arrival, so the very card the feature exists
-                                to record could never be recorded. `q.qslSent?.sent` now hides only the
-                                three SEND entries — you still cannot send twice — while the inbound
-                                entries stay reachable for the life of the contact. */}
-                            <select
-                              className="log-rowbtn"
-                              style={{ fontSize: '0.85em' }}
-                              value=""
-                              onChange={(e) => {
-                                const v = e.target.value as 'B' | 'D' | 'E' | 'R' | 'r' | 's' | 'Q' | 'q' | ''
-                                // R/r/s are NOT ADIF letters — they are this menu's own entries for
-                                // the RECEIVED card (#152), which has no QSL_SENT_VIA code because it
-                                // is not a send at all, and for CLEARING the send (#180). Kept in the
-                                // same menu because an operator handling a card thinks about one row,
-                                // not two controls.
-                                if (v === 'R') void onMarkQslCard(q, ref, true)
-                                else if (v === 'r') void onMarkQslCard(q, ref, false)
-                                else if (v === 's') void onMarkQslSent(q, ref, null)
-                                // Q/q: the cards-to-send queue (ADIF QSL_SENT=Q), in and out.
-                                else if (v === 'Q') void onQueueCard(q, ref, true)
-                                else if (v === 'q') void onQueueCard(q, ref, false)
-                                else if (v) void onMarkQslSent(q, ref, v as 'B' | 'D' | 'E')
-                              }}
-                              title={t('logbook.row.qslSent.title', { call: q.call })}
-                              aria-label={t('logbook.row.qslSent.aria', { call: q.call })}
-                            >
-                              {/* The VALUES are the ADIF QSL_SENT_VIA letters; only the labels are prose. */}
-                              <option value="">{QSL_MENU_LABEL}</option>
-                              {/* Sending is once-only; the arrival below is not. */}
-                              {!q.qslSent?.sent && (
-                                <>
-                                  <option value="B">{t('logbook.row.qslSent.bureau')}</option>
-                                  <option value="D">{t('logbook.row.qslSent.direct')}</option>
-                                  <option value="E">{t('logbook.row.qslSent.electronic')}</option>
-                                  {cardQueued(q) ? (
-                                    <option value="q">{t('logbook.row.qslQueue.remove')}</option>
-                                  ) : (
-                                    <option value="Q">{t('logbook.row.qslQueue.add')}</option>
-                                  )}
-                                </>
-                              )}
-                              {/* ...and the way back out of it (#180). It has to be shown on exactly
-                                  the condition that HIDES the three above: a clear that disappears
-                                  once sent would be the same trap with an extra step in it. */}
-                              {q.qslSent?.sent && (
-                                <option value="s">{t('logbook.row.qslSent.clear')}</option>
-                              )}
-                              {/* INBOUND: the paper card that arrived. Nothing on the internet can
-                                  report this, so the operator is the only source — and it is
-                                  award-eligible (card OR LoTW), which is why its absence understated
-                                  the awards view. The clear entry exists for a mis-tick. */}
-                              <option value="R">{t('logbook.row.qslRcvd.card')}</option>
-                              {q.qslRcvd?.card && (
-                                <option value="r">{t('logbook.row.qslRcvd.clear')}</option>
-                              )}
-                            </select>
-                            {/* SATELLITE TAG (PROP_MODE=SAT + SAT_NAME). The guide used to send an
-                                operator who mis-tagged a contact out of the app — close Nexus, open
-                                log.adi in a text editor — because the edit form carries neither field.
-                                It still does not, deliberately: a blank field there means LEAVE ALONE,
-                                which is what stops a busted-call fix stripping a tag the contact earned.
-                                So the repair lives here, where choosing "Clear" is unmistakably a
-                                decision and not a blank box submitted with everything else.
-
-                                Both halves of the pair move together in the backend: TQSL rejects a lone
-                                member and takes the batch with it. */}
-                            {satNames.length > 0 && (
-                              <select
-                                className="log-rowbtn"
-                                style={{ fontSize: '0.85em' }}
-                                value=""
-                                onChange={(e) => {
-                                  const v = e.target.value
-                                  // '' is the PLACEHOLDER — the state the select sits in when nothing
-                                  // has been chosen. A non-choice must never clear a tag, so only the
-                                  // explicit 'clear' entry passes null.
-                                  if (v === 'clear') void onSetSatTag(q, ref, null)
-                                  else if (v) void onSetSatTag(q, ref, v)
-                                }}
-                                title={t('logbook.row.sat.title', { call: q.call })}
-                                aria-label={t('logbook.row.sat.aria', { call: q.call })}
+                        <span className="log-cell log-rowactions">
+                          <button
+                            type="button"
+                            className="log-rowbtn log-rowedit"
+                            onClick={() => {
+                              formFromGrid.current = key
+                              formWanted.current = true
+                              startEdit(q, key, ref)
+                            }}
+                            title={t('logbook.row.edit', { call: q.call })}
+                            aria-label={t('logbook.row.edit', { call: q.call })}
+                          >
+                            ✎
+                          </button>
+                          {/* EVERYTHING ELSE IS ONE DELIBERATE CHOICE IN THE ⋯ MENU. The row used to
+                              carry eleven controls that were invisible until the row was hovered,
+                              yet still took clicks: a click or a touchscreen tap on the blank-looking
+                              right end of a row fired the hidden button under it and uploaded the
+                              contact. Now the row shows two buttons, always, and each upload names
+                              its service in full and says whether this contact already went there. */}
+                          <Menu
+                            className="log-rowmenu"
+                            trigger={
+                              <button
+                                type="button"
+                                className="log-rowbtn log-rowmore"
+                                title={t('logbook.row.more', { call: q.call })}
+                                aria-label={t('logbook.row.more', { call: q.call })}
                               >
-                                <option value="">{SAT_MENU_LABEL}</option>
-                                {satNames.map((n) => (
-                                  <option key={n} value={n}>
-                                    {n}
-                                  </option>
-                                ))}
-                                {/* Shown when EITHER field is set: a record carrying a lone PROP_MODE=SAT
-                                    or a lone SAT_NAME is the half-pair TQSL rejects, and clearing it is
-                                    exactly the repair that record needs. */}
-                                {(q.propMode || q.satName) && (
-                                  <option value="clear">{t('logbook.row.sat.clear')}</option>
-                                )}
-                              </select>
-                            )}
-                            <button
-                              type="button"
-                              className="log-rowbtn"
-                              onClick={() => {
-                                formFromGrid.current = key
-                                formWanted.current = true
-                                startEdit(q, key, ref)
-                              }}
-                              title={t('logbook.row.edit', { call: q.call })}
-                              aria-label={t('logbook.row.edit', { call: q.call })}
-                            >
-                              ✎
-                            </button>
-                            <button
-                              type="button"
-                              className="log-rowbtn danger"
-                              onClick={() => onDelete(q, key, ref)}
-                              title={t('logbook.row.delete', { call: q.call })}
-                              aria-label={t('logbook.row.delete', { call: q.call })}
-                            >
-                              ✕
-                            </button>
-                          </span>
-                        </>
+                                {MORE_LABEL}
+                              </button>
+                            }
+                            items={rowMenu(q, key, ref)}
+                          />
+                        </span>
                       )
                     default:
                       return addedCell(c, q)
@@ -3586,9 +3537,11 @@ export function Logbook({
                     // because the affordance is otherwise invisible.
                     onDoubleClick={() => setCard({ row: q, ref })}
                     // Ctrl/⌘-click picks the row for "Export selected", Shift-click a run — on the
-                    // row itself, never through one of its controls.
+                    // row itself, never through one of its controls, nor through its ⋯ menu (portaled
+                    // out of the row, but React still bubbles its clicks here).
                     onClick={(e) => {
                       if (!(e.ctrlKey || e.metaKey || e.shiftKey)) return
+                      if (!e.currentTarget.contains(e.target as Node)) return
                       if ((e.target as HTMLElement).closest('button, a, input, select, textarea, label')) return
                       e.preventDefault()
                       pickRows(vrow.index, e.shiftKey)

@@ -159,6 +159,7 @@ describe('spotTooltip', () => {
     band: '20m',
     heardMe: false,
     ageSecs: 30,
+    time: 0,
     approx: false,
   }
   it('builds call · band mode · freq · age with fresh (<60s) age in seconds', () => {

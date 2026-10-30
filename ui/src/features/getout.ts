@@ -3,7 +3,7 @@
 // testable (mirrors features/needs.ts); the compass rose + summary render it. Answers the
 // elite-op question the flat receiver list doesn't: "which way am I getting out, and which
 // way am I deaf?".
-import type { HeardMe } from '../types'
+import type { HeardMe, PropagationSnapshot } from '../types'
 import { fmtDistanceKm, type Units } from '../units'
 
 /** Compass octants clockwise from North — the vocabulary HeardMe.octant uses. */
@@ -57,4 +57,23 @@ export function getoutSummary(reports: HeardMe[], units: Units): string {
     return `${strong}; little/nothing to the ${dead.join('/')}`
   }
   return strong
+}
+
+/** The map's spots with every "heard me" report from before the Start fresh time left out, so its
+ * "hearing you" dots count what the Getting Out box counts. It goes by each spot's own report time,
+ * as the box does — never `asOf` less the age: a cached snapshot keeps its `asOf` while its spots are
+ * rebuilt on every poll. The snapshot keeps the newest "heard me" report per station, so a station
+ * heard again after the start stays. Other spots are untouched. `since` null → the snapshot as is. */
+export function heardMeSince(prop: PropagationSnapshot | null, since: number | null): PropagationSnapshot | null {
+  if (!prop?.spots || since == null) return prop
+  const spots = prop.spots.filter((s) => !s.heardMe || s.time >= since)
+  return spots.length === prop.spots.length ? prop : { ...prop, spots }
+}
+
+/** The Start fresh time as the station clock shows it, to the second (a report earlier in the same
+ *  minute is left out): HH:MM:SS UTC. */
+export function fmtSinceUtc(secs: number): string {
+  const d = new Date(secs * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} UTC`
 }

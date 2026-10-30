@@ -84,6 +84,9 @@ export interface PaneContext {
   outlookOpen: BandOutlook[]
   // getting-out + band focus
   getout: GettingOut | null
+  /** The Start fresh time (Unix seconds) `getout` counts from (features/getoutSince); null or absent =
+   *  every report in the window. */
+  getoutSince?: number | null
   focusBand: string | null
   /** The active radio's amplifier, straight off the snapshot App already polls at 300 ms —
    * NOT a poll of its own. `null`/absent = no amplifier configured, which is what makes the

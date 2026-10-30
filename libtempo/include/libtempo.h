@@ -258,6 +258,11 @@ typedef struct {
  *                   one AP pass, iaptype=1). WSJT-X derives this automatically
  *                   (>300 s without TX); here the caller decides. Ignored when
  *                   lft8apon = 0.
+ *   lactivity     : nonzero = the operator is in a Special Operating Activity
+ *                   (Contest mode, or a Hound). 0 drops decodes of message type
+ *                   1-3 holding '/R' (a rover) or starting 'TU; ', as WSJT-X
+ *                   3.0.2 does with no activity selected (ft8b.f90:452-455);
+ *                   nonzero keeps them.
  *   out           : caller array of ft8_decode_t (capacity max_out)
  *   max_out       : capacity of out
  *
@@ -269,7 +274,7 @@ int ft8_decode_frame(const int16_t *iwave /*[FT8_NMAX]*/,
                      const char *mycall, const char *hiscall,
                      int nqso_progress, int nfqso, int nftx, int nzhsym,
                      int nutc, int la7final,
-                     int lft8apon, int lapcqonly,
+                     int lft8apon, int lapcqonly, int lactivity,
                      ft8_decode_t *out, int max_out);
 
 /*
@@ -295,7 +300,7 @@ int ft8_decode_frame_cb(const int16_t *iwave /*[FT8_NMAX]*/,
                         const char *mycall, const char *hiscall,
                         int nqso_progress, int nfqso, int nftx, int nzhsym,
                         int nutc, int la7final,
-                        int lft8apon, int lapcqonly,
+                        int lft8apon, int lapcqonly, int lactivity,
                         ft8_decode_t *out, int max_out,
                         tempo_decode_cb cb, void *user);
 
@@ -332,7 +337,7 @@ int ft8_decode_frame_dp(const int16_t *iwave /*[FT8_NMAX]*/,
                         const char *mycall, const char *hiscall,
                         int nqso_progress, int nfqso, int nftx, int nzhsym,
                         int nutc, int la7final,
-                        int lft8apon, int lapcqonly,
+                        int lft8apon, int lapcqonly, int lactivity,
                         ft8_decode_t *out, int max_out,
                         tempo_decode_cb cb, void *user,
                         ft8_sub_t *subs, int nearly,

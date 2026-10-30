@@ -15,7 +15,7 @@ workspace = true
 # system deps. The `device` feature pulls in cpal for real sound-card I/O — gate
 # it on so the workspace test build needs no audio libraries.
 default = []
-device = ["dep:cpal", "dep:tempo-net", "dep:tempo-sstv", "dep:alsa"]
+device = ["dep:cpal", "dep:tempo-net", "dep:tempo-sstv", "dep:alsa", "dep:rustfft"]
 # Serial PTT + COM-port enumeration via `serialport`. OFF by default: the
 # headless workspace build has no libudev. The station PC enables it.
 serial = ["dep:serialport"]
@@ -64,6 +64,11 @@ tempo-net = { path = "../tempo-net", optional = true }
 tempo-sstv = { path = "../tempo-sstv", optional = true }
 # SSTV gallery persistence (gallery.json load/save in `sstv_store`). Pure.
 serde_json = "1"
+# The IQ panadapters' zoomed rows (`tci::iq`): a complex FFT longer than tempo-core's fixed
+# `microfft` kernels reach. Already compiled into the station build through tempo-sstv (and js8)
+# at this version, so this adds no new code to the tree; MIT OR Apache-2.0, already in NOTICE.
+# Rides `device` like the IQ sources that use it.
+rustfft = { version = "6", optional = true }
 
 # Linux-only: read ALSA's PCM hints ourselves, so the device picker can show the card
 # DESCRIPTION ("USB AUDIO CODEC") the operator's system, `aplay -l`, KDE, pavucontrol and

@@ -87,6 +87,18 @@ export interface Held<T> {
 export const BAND_OUTLOOK: Feed<PathPrediction> = { name: 'bandOutlook', load: () => getBandOutlook(), everyMs: 60_000 }
 /** Who hears me now: the backend reads the live PSK Reporter / RBN firehose on every call. */
 export const GETTING_OUT: Feed<GettingOut> = { name: 'gettingOut', load: () => getGettingOut(), everyMs: 30_000 }
+const GETTING_OUT_SINCE = new Map<number, Feed<GettingOut>>()
+/** Who hears me since a Start fresh time (Unix seconds); `null` is GETTING_OUT itself. One feed per
+ *  start time, so a new start asks afresh and never shows the last answer under the new start. */
+export function gettingOutFeed(since: number | null): Feed<GettingOut> {
+  if (since == null) return GETTING_OUT
+  let feed = GETTING_OUT_SINCE.get(since)
+  if (!feed) {
+    feed = { name: `gettingOut:${since}`, load: () => getGettingOut(since), everyMs: 30_000 }
+    GETTING_OUT_SINCE.set(since, feed)
+  }
+  return feed
+}
 /** NOAA's R/S/G scales and alerts: a 15-minute server cache, asked every 5 minutes (cheap). */
 export const SPACE_WX_SCALES: Feed<{ scales: NoaaScalesView; alerts: AlertView[] }> = {
   name: 'spaceWxScales',
