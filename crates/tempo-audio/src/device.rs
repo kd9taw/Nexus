@@ -3104,7 +3104,7 @@ mod tx_unit_end_tests {
         tune_ticks(&mut card, 50);
         assert_eq!(card.counted, 0, "a clean tune is clean");
         assert!(
-            card.ring.len() % 480 != 0,
+            !card.ring.len().is_multiple_of(480),
             "premise: the stall runs dry part-way through a block"
         );
         card.blocks(150, 480); // the loop stalls 1.5 s
