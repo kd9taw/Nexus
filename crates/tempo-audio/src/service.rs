@@ -10967,10 +10967,11 @@ impl RadioLoop {
                 // Yaesu's own reference defines where Hamlib sends none
                 // (`rigmodels::cw_playback_stops`), sent in the form Hamlib does not wait on, so
                 // the unkey after them is not held for the radio's read timeout
-                // (`Rig::send_raw_set`).
+                // (`Rig::send_raw_set`). Both are stops: each goes out at once behind a late key's
+                // owed answer, as the release does, never held back by it (`Rig::command_lines`).
                 let _ = rig.stop_morse();
                 for stop in crate::rigmodels::cw_playback_stops(self.applied.rig_model) {
-                    rig.send_raw_set(stop);
+                    rig.send_raw_stop(stop);
                 }
                 self.cw_busy_until = 0.0; // a fresh macro after Stop keys immediately
                 self.cw_keying_until = 0.0;
@@ -18094,9 +18095,9 @@ fn open_cat(
             // Auto-coexist: connect THROUGH it instead of fighting for the serial port.
             let mut rig = Rig::with_control(Some(addr.clone()), ptt_mode);
             rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
+            // network chains + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200
+            // baud) get the long command deadline
             rig.set_network_chain(t.is_network()); // a key-down waits the network window
-                                                   // network chains + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200
-                                                   // baud) get the long command deadline
             let mut probe = finish_cat_open(&mut rig, t);
             probe.detail = format!(
                 "Sharing the rigctld already on :{} — {}",

@@ -628,6 +628,36 @@ fn a_phone_ptt_not_answered_in_time_reads_not_confirmed_and_a_refusal_not_accept
     }
 }
 
+/// On a network chain the loop's own overs and the operator's PTT wait the network window for the
+/// key's answer: a key answered after the local PTT deadline but inside that window is a key, with
+/// no warning, and the voice message plays. The local controls are the `a_late_answer_*` tests and
+/// `a_phone_ptt_not_answered_in_time_*`, the same answer read as not confirmed.
+#[test]
+fn on_a_network_chain_a_key_answered_inside_its_window_is_confirmed() {
+    let mut ptt = Scene::new(Key::AnswersLate, |e| {
+        phone(e);
+        e.set_ptt(true);
+    });
+    ptt.rig.set_network_chain(true);
+    ptt.run_to(300.0);
+    assert!(ptt.keys() >= 1, "premise: the PTT tried the key");
+    assert_eq!(ptt.banner(), None, "the operator's PTT");
+
+    let mut voice = Scene::new(Key::AnswersLate, |e| {
+        phone(e);
+        e.send_voice(vec![0.05; 12_000]).unwrap();
+    });
+    voice.rig.set_network_chain(true);
+    voice.run_to(2_000.0);
+    assert!(voice.keys() >= 1, "premise: the keyer tried the key");
+    assert_eq!(voice.banner(), None, "the voice keyer");
+    assert_eq!(
+        voice.backend.played.len(),
+        12_000,
+        "the message was not played"
+    );
+}
+
 /// ⭐ A VOICE MESSAGE WHOSE KEY IS ANSWERED LATE IS PLAYED, WHOLE, WITH THE WARNING.
 #[test]
 fn a_late_answer_to_the_voice_keyers_key_still_plays_the_message() {
