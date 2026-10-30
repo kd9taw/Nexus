@@ -11490,6 +11490,9 @@ export const EN = {
   // The filter chips. `CQ`, `CQ+73` and `B4` are Q-code/log tokens and stay in the code;
   // these four are words. Every chip's EXPLANATION is a word.
   'operate.decodes.filters.aria': 'Filter decodes',
+  'operate.decodes.fold.label': 'Filters',
+  'operate.decodes.fold.labelLit': 'Filters · {{count}}',
+  'operate.decodes.fold.title': "Show or hide this pane's filter and sort controls. They fold away when the pane is short, so the list keeps its rows. Lit while a filter is on.",
   'operate.decodes.filter.all': 'All',
   'operate.decodes.filter.me': 'To me',
   'operate.decodes.filter.rx': 'On RX',
