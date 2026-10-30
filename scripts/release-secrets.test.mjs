@@ -518,6 +518,53 @@ test('the macOS job that holds the Apple keys runs on exactly the two approved l
   assert.equal(matrixLegs(readWorkflow(planted), 'macos').length, 3);
 });
 
+// The macOS app links Homebrew gcc's static runtime, whose objects are built for the runner's macOS,
+// not the app's minimum. The one check on it is what those objects import, held to the reviewed list
+// by scripts/check-macho-bundle.mjs --archive, before signing. A report that greps the build log for
+// the linker's "built for newer" warning can never fire (rustc hides a successful link's output) and
+// printed a false all-clear, so it must not come back. Returns what is wrong; empty when it holds.
+const PRESIGN_CHECK = 'Check every Mach-O against the minimum macOS before signing';
+const STATIC_RUNTIMES = ['libgfortran.a', 'libquadmath.a', 'libemutls_w.a'];
+const IMPORT_LIST = 'scripts/macos-static-runtime-imports.txt';
+function staticRuntimeGate(wf) {
+  const bad = [];
+  const steps = wf.jobs.get('macos')?.steps ?? [];
+  const at = steps.findIndex((s) => s?.name === PRESIGN_CHECK);
+  const code = (steps[at]?.run ?? '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  if (at < 0) bad.push(`no step "${PRESIGN_CHECK}" in job macos`);
+  if (!code.includes(`--imports ${IMPORT_LIST}`)) bad.push(`"${PRESIGN_CHECK}" does not hold the archives to ${IMPORT_LIST}`);
+  for (const a of STATIC_RUNTIMES) {
+    // `--archive "<dir>/lib.a"`, or `--archive "$("$fc" -print-file-name=lib.a)"`.
+    const arg = new RegExp(`--archive "(?:[^"\\n]*|\\$\\("\\$fc" -print-file-name=)${a.replace('.', '\\.')}`);
+    if (!arg.test(code)) bad.push(`"${PRESIGN_CHECK}" does not check ${a}`);
+  }
+  const imp = steps.findIndex((s) => s?.name === IMPORT);
+  if (at >= 0 && !(imp > at)) bad.push(`"${PRESIGN_CHECK}" does not run before "${IMPORT}"`);
+  if (!fs.existsSync(path.join(ROOT, IMPORT_LIST))) bad.push(`${IMPORT_LIST} is missing`);
+  for (const j of wf.jobs.values()) {
+    for (const s of j.steps) if (/built for newer/.test(s?.run ?? '')) bad.push(`job ${j.id}, step "${s.label}" reads the linker's "built for newer" warning, which rustc never shows`);
+  }
+  return bad;
+}
+
+test('the macOS job holds the static gcc runtime to the reviewed import list before signing', () => {
+  assert.deepEqual(staticRuntimeGate(WF), []);
+  // Positive controls: one archive dropped, the list swapped, and the dead log report put back.
+  const dropped = plant(TEXT, ' --archive "$gcc_lib/libquadmath.a"', '');
+  assert.deepEqual(staticRuntimeGate(readWorkflow(dropped)), [`"${PRESIGN_CHECK}" does not check libquadmath.a`]);
+  const unlisted = plant(TEXT, `--imports ${IMPORT_LIST}`, '--imports /dev/null');
+  assert.deepEqual(staticRuntimeGate(readWorkflow(unlisted)), [`"${PRESIGN_CHECK}" does not hold the archives to ${IMPORT_LIST}`]);
+  const dead = plant(
+    TEXT,
+    '            --archive "$("$fc" -print-file-name=libemutls_w.a)"\n',
+    '            --archive "$("$fc" -print-file-name=libemutls_w.a)"\n' +
+      '          grep -c \'built for newer\' "$RUNNER_TEMP/compile.log" || true\n',
+  );
+  assert.deepEqual(staticRuntimeGate(readWorkflow(dead)), [
+    `job macos, step "${PRESIGN_CHECK}" reads the linker's "built for newer" warning, which rustc never shows`,
+  ]);
+});
+
 test('release.yml: no step or job that builds or runs third-party code can see a secret', () => {
   const v = violations(WF);
   assert.deepEqual(v, [], `\n${v.join('\n')}\n`);
