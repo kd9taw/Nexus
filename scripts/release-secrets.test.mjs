@@ -981,14 +981,22 @@ test('every job that stages the IOTA list sets up Node first', () => {
 });
 
 // The shipped link. src-tauri's [profile.release] links with fat LTO and one codegen unit. ci.yml's
-// branch runs build the Windows and Pi checks with cargo's ordinary release linking instead, through
-// cargo's CARGO_PROFILE_RELEASE_LTO / _CODEGEN_UNITS overrides, so that only main and a tag prove the
-// shipped link. A release must never take the branch values: no workflow but ci.yml names the
-// overrides, Dockerfile.pi's defaults (what release.yml builds with, passing neither) are the profile's,
-// every value ci.yml sets is the profile's on main and on a tag, and ci.yml never hands the container
-// a literal value.
+// land/* and topic runs build the Windows and Pi checks with cargo's ordinary release linking
+// instead, through cargo's CARGO_PROFILE_RELEASE_LTO / _CODEGEN_UNITS overrides; its runs on main, a
+// release/* branch and a tag keep the profile, and scripts/require-green-ci accepts a release only on
+// one of those. A release must never take the branch values, and nothing may move the profile
+// behind the manifest's back:
+//  - no workflow but ci.yml, and neither release build entry point (build-linux.sh,
+//    build-windows-cross.sh), names an override;
+//  - no workflow, build script or Dockerfile passes `--config profile.release.*` to cargo;
+//  - no .cargo/config* (repository root or src-tauri) carries a [profile.release], which cargo
+//    would apply over the manifest;
+//  - Dockerfile.pi's defaults (what release.yml builds with, passing neither) are the profile's;
+//  - every value ci.yml sets is the profile's on main, release/* and tags;
+//  - ci.yml never hands the container a literal value.
 const CARGO_TAURI = process.env.CARGO_TAURI || path.join(ROOT, 'src-tauri', 'Cargo.toml');
 const OVERRIDE = /CARGO_PROFILE_RELEASE_(?:LTO|CODEGEN_UNITS)/;
+const CONFIG_OVERRIDE = /profile\.release\./;
 function releaseProfile(cargoToml) {
   const section = cargoToml.split(/^\[profile\.release\]\s*$/m)[1]?.split(/^\[/m)[0] ?? '';
   const lto = section.match(/^lto\s*=\s*"?([\w]+)"?\s*$/m)?.[1];
@@ -996,15 +1004,22 @@ function releaseProfile(cargoToml) {
   assert.ok(lto && cgu, 'src-tauri/Cargo.toml [profile.release] no longer states lto and codegen-units');
   return { LTO: lto, CODEGEN_UNITS: cgu };
 }
-function linkProfileFindings({ workflows, ci, docker, cargo }) {
+const FAT_REFS = "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/'))";
+function linkProfileFindings({ workflows, buildScripts, cargoConfigs, ci, docker, cargo }) {
   const shipped = releaseProfile(cargo);
   const bad = [];
-  for (const [file, text] of workflows) {
+  for (const [file, text] of [...workflows, ...buildScripts]) {
     if (OVERRIDE.test(text)) bad.push(`${file}: names a link-profile override; only ci.yml's branch runs may`);
+  }
+  for (const [file, text] of [...workflows, ...buildScripts, ['ci.yml', ci], ['Dockerfile.pi', docker]]) {
+    if (CONFIG_OVERRIDE.test(text)) bad.push(`${file}: overrides the release profile with --config profile.release.*`);
+  }
+  for (const [file, text] of cargoConfigs) {
+    if (/^\s*\[profile\.release\b|^\s*profile\.release\b/m.test(text)) bad.push(`${file}: sets a [profile.release], which cargo applies over the manifest`);
   }
   const branch = { LTO: 'false', CODEGEN_UNITS: '16' };
   for (const key of ['LTO', 'CODEGEN_UNITS']) {
-    const want = `\${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && '${shipped[key]}' || '${branch[key]}' }}`;
+    const want = `\${{ ${FAT_REFS} && '${shipped[key]}' || '${branch[key]}' }}`;
     const set = [...ci.matchAll(new RegExp(`^\\s*CARGO_PROFILE_RELEASE_${key}:\\s*(.*?)\\s*$`, 'gm'))].map((m) => m[1]);
     if (!set.length) bad.push(`ci.yml: sets no CARGO_PROFILE_RELEASE_${key}`);
     for (const v of set) if (v !== want) bad.push(`ci.yml: CARGO_PROFILE_RELEASE_${key} is \`${v}\`, not \`${want}\``);
@@ -1018,24 +1033,45 @@ const OTHER_WORKFLOWS = fs
   .readdirSync(path.dirname(WORKFLOW))
   .filter((f) => /\.ya?ml$/.test(f) && f !== path.basename(CI_WORKFLOW) && f !== path.basename(WORKFLOW))
   .map((f) => [f, fs.readFileSync(path.join(path.dirname(WORKFLOW), f), 'utf8')]);
+const BUILD_WINDOWS_CROSS = process.env.BUILD_WINDOWS_CROSS || path.join(ROOT, 'scripts', 'build-windows-cross.sh');
+const CARGO_CONFIGS = ['.cargo', path.join('src-tauri', '.cargo')].flatMap((dir) =>
+  ['config', 'config.toml']
+    .map((f) => path.join(dir, f))
+    .filter((f) => fs.existsSync(path.join(ROOT, f)))
+    .map((f) => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]),
+);
 const LINK = {
   workflows: [[path.basename(WORKFLOW), TEXT], ...OTHER_WORKFLOWS],
+  buildScripts: [
+    ['build-linux.sh', fs.readFileSync(BUILD_LINUX, 'utf8')],
+    ['build-windows-cross.sh', fs.readFileSync(BUILD_WINDOWS_CROSS, 'utf8')],
+  ],
+  cargoConfigs: CARGO_CONFIGS,
   ci: CI_TEXT,
   docker: DOCKERFILE,
   cargo: fs.readFileSync(CARGO_TAURI, 'utf8'),
 };
 
-test('only ci.yml branch runs leave the shipped link profile; release, main and tags keep it', () => {
+test('only ci.yml land/topic runs leave the shipped link profile; release, main, release/* and tags keep it', () => {
   assert.deepEqual(linkProfileFindings(LINK), []);
   const has = (findings, needle) =>
     assert.ok(findings.some((x) => x.includes(needle)), `not reported: ${needle}\ngot:\n  ${findings.join('\n  ') || '(nothing)'}`);
-  // Positive controls: the override in release.yml, a branch value on main, a non-release Dockerfile
-  // default, and a literal value handed to the container are each reported.
+  // Positive controls, one per rule: each planted violation is reported.
   const release = plant(TEXT, '      - name: Build .deb in a debian:${{ matrix.base }} container\n        env:\n',
     '      - name: Build .deb in a debian:${{ matrix.base }} container\n        env:\n          CARGO_PROFILE_RELEASE_LTO: "false"\n');
   has(linkProfileFindings({ ...LINK, workflows: [[path.basename(WORKFLOW), release]] }), 'names a link-profile override');
-  const anchor = "out of release.yml.\n          CARGO_PROFILE_RELEASE_LTO: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && 'true'";
+  const [, cross] = LINK.buildScripts[1];
+  has(linkProfileFindings({ ...LINK, buildScripts: [['build-windows-cross.sh', `export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16\n${cross}`]] }),
+    'build-windows-cross.sh: names a link-profile override');
+  const [, linux] = LINK.buildScripts[0];
+  has(linkProfileFindings({ ...LINK, buildScripts: [['build-linux.sh', linux.replace('cargo tauri build', 'cargo tauri build --config profile.release.lto=false')]] }),
+    'build-linux.sh: overrides the release profile with --config');
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '[profile.release]\nlto = false\n']] }), 'sets a [profile.release]');
+  const anchor = `out of release.yml and the build scripts.\n          CARGO_PROFILE_RELEASE_LTO: \${{ ${FAT_REFS} && 'true'`;
   has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, anchor, anchor.replace(/'true'$/, "'false'")) }), 'CARGO_PROFILE_RELEASE_LTO is');
+  // The release/* clause itself: without it a release branch's run, the one require-green-ci
+  // accepts for a tag, would link thin.
+  has(linkProfileFindings({ ...LINK, ci: CI_TEXT.replaceAll(" || startsWith(github.ref, 'refs/heads/release/')", '') }), 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS is');
   has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, 'ARG CARGO_PROFILE_RELEASE_LTO=true', 'ARG CARGO_PROFILE_RELEASE_LTO=false') }), 'defaults to false');
   has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, '--build-arg CARGO_PROFILE_RELEASE_LTO\n', '--build-arg CARGO_PROFILE_RELEASE_LTO=false\n') }), 'literal link profile');
 });

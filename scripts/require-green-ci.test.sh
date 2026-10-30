@@ -13,7 +13,7 @@
 #
 # What IS here is every shape the live API will not produce on demand: a run still in
 # progress, a headSha that is not the commit, a pull_request run, the five non-success
-# conclusions, and the override. Each is fed to the SAME script through its own
+# conclusions, a run from a branch whose link is not the shipped one, and the override. Each is fed to the SAME script through its own
 # NEXUS_CI_RUNS_JSON seam — the file under test is the file that ships, not a copy.
 #
 # BOTH DIRECTIONS EVERY TIME. A refusal case is worthless without a pass case built the
@@ -47,21 +47,21 @@ run() {
   fi
 }
 
-green_run() { printf '[{"databaseId":1,"status":"completed","conclusion":"success","headSha":"%s","event":"push","createdAt":"2026-09-15T00:00:00Z","url":"u"}]' "$SHA"; }
+green_run() { printf '[{"databaseId":1,"headBranch":"main","status":"completed","conclusion":"success","headSha":"%s","event":"push","createdAt":"2026-09-15T00:00:00Z","url":"u"}]' "$SHA"; }
 
 echo "require-green-ci regression suite — $SCRIPT"
 echo
 echo "1. THE POSITIVE CONTROL. Everything below is only meaningful because this passes."
 run 0 "completed + success + right sha + push  => PASS" "$(green_run)"
 run 0 "same, via workflow_dispatch             => PASS" \
-  "[{\"databaseId\":1,\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+  "[{\"databaseId\":1,\"headBranch\":\"main\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\"}]"
 
 echo
 echo "2. NOT COMPLETED. The clause 'not failed' gets wrong: conclusion is null while a run"
 echo "   is still going, and null != \"failure\"."
 for st in in_progress queued requested waiting pending; do
   run 1 "status=$st, conclusion=null          => REFUSE" \
-    "[{\"databaseId\":2,\"status\":\"$st\",\"conclusion\":null,\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+    "[{\"databaseId\":2,\"headBranch\":\"main\",\"status\":\"$st\",\"conclusion\":null,\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"}]"
 done
 
 echo
@@ -69,7 +69,7 @@ echo "3. COMPLETED BUT NOT SUCCESS. Every one of these is != \"failure\"; none i
 echo "   'cancelled' is the 1.12.0 specimen and 43% of recent main runs."
 for c in cancelled timed_out action_required neutral skipped stale failure; do
   run 1 "conclusion=$c                  => REFUSE" \
-    "[{\"databaseId\":3,\"status\":\"completed\",\"conclusion\":\"$c\",\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+    "[{\"databaseId\":3,\"headBranch\":\"main\",\"status\":\"completed\",\"conclusion\":\"$c\",\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"}]"
 done
 
 echo
@@ -77,13 +77,13 @@ echo "4. WRONG COMMIT. A green run on a DIFFERENT sha — this is the case an an
 echo "   ('is the green commit an ancestor of the tag?') would wave through, and it is the"
 echo "   exact footing 1.12.0 shipped on: green parents, an unproven tag."
 run 1 "green run, but headSha is another commit => REFUSE" \
-  "[{\"databaseId\":4,\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$OTHER\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+  "[{\"databaseId\":4,\"headBranch\":\"main\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$OTHER\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"}]"
 
 echo
 echo "5. PULL_REQUEST RUNS. headSha is the branch commit, but Actions tested the MERGE of"
 echo "   it with the base tip — a tree that is not what the tag points at."
 run 1 "green, right sha, event=pull_request    => REFUSE" \
-  "[{\"databaseId\":5,\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"pull_request\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+  "[{\"databaseId\":5,\"headBranch\":\"main\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"pull_request\",\"createdAt\":\"t\",\"url\":\"u\"}]"
 
 echo
 echo "6. NO RUNS AT ALL — the release.yml hole as it stands today."
@@ -92,12 +92,12 @@ run 1 "empty run list                          => REFUSE" '[]'
 echo
 echo "7. MIXED LISTS. One good run among noise must still pass; noise alone must not."
 run 0 "cancelled + in_progress + one green      => PASS" \
-  "[{\"databaseId\":6,\"status\":\"completed\",\"conclusion\":\"cancelled\",\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"},
-    {\"databaseId\":7,\"status\":\"in_progress\",\"conclusion\":null,\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"},
-    {\"databaseId\":8,\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+  "[{\"databaseId\":6,\"headBranch\":\"main\",\"status\":\"completed\",\"conclusion\":\"cancelled\",\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"},
+    {\"databaseId\":7,\"headBranch\":\"main\",\"status\":\"in_progress\",\"conclusion\":null,\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"},
+    {\"databaseId\":8,\"headBranch\":\"main\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"}]"
 run 1 "cancelled + in_progress, no green        => REFUSE" \
-  "[{\"databaseId\":6,\"status\":\"completed\",\"conclusion\":\"cancelled\",\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"},
-    {\"databaseId\":7,\"status\":\"in_progress\",\"conclusion\":null,\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+  "[{\"databaseId\":6,\"headBranch\":\"main\",\"status\":\"completed\",\"conclusion\":\"cancelled\",\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"},
+    {\"databaseId\":7,\"headBranch\":\"main\",\"status\":\"in_progress\",\"conclusion\":null,\"headSha\":\"$SHA\",\"event\":\"push\",\"createdAt\":\"t\",\"url\":\"u\"}]"
 
 echo
 echo "8. THE OVERRIDE. Keyed to the ref, deliberately not a boolean, so one left set after"
@@ -136,7 +136,7 @@ done
 echo
 echo "11. THE REFUSAL HAS TO SAY WHY. A bare exit 1 cannot be told apart from a broken gate,"
 echo "    which is how a gate gets worked around instead of fixed."
-printf '[{"databaseId":9,"status":"completed","conclusion":"cancelled","headSha":"%s","event":"push","createdAt":"t","url":"u"}]' "$SHA" > "$LAB/runs.json"
+printf '[{"databaseId":9,"headBranch":"main","status":"completed","conclusion":"cancelled","headSha":"%s","event":"push","createdAt":"t","url":"u"}]' "$SHA" > "$LAB/runs.json"
 msg=$(NEXUS_CI_RUNS_JSON="$LAB/runs.json" "$SCRIPT" --sha "$SHA" --ref "$REF" --repo owner/repo 2>&1)
 for want in 'conclusion=cancelled' 'NEXUS_ALLOW_UNVERIFIED_CI' "$SHA"; do
   if printf '%s' "$msg" | grep -qF "$want"; then
@@ -145,6 +145,34 @@ for want in 'conclusion=cancelled' 'NEXUS_ALLOW_UNVERIFIED_CI' "$SHA"; do
     fail=$((fail+1)); printf '  FAIL %-58s\n' "refusal does NOT name '$want'"
   fi
 done
+
+echo
+echo "12. WHERE THE RUN CAME FROM. ci.yml links the Windows and Pi builds with the shipped fat-LTO"
+echo "    profile only on main, release/* and a tag; a green run from any other branch proves the"
+echo "    tests but not the link that ships, so it is not release evidence."
+branch_run() { printf '[{"databaseId":12,"headBranch":%s,"status":"completed","conclusion":"success","headSha":"%s","event":"workflow_dispatch","createdAt":"t","url":"u"}]' "$1" "$SHA"; }
+run 0 "green on release/1.2.3-2026-10-26        => PASS" "$(branch_run '"release/1.2.3-2026-10-26"')"
+run 0 "green on the tag being released ($REF)    => PASS" "$(branch_run "\"$REF\"")"
+run 0 "green on main                            => PASS" "$(branch_run '"main"')"
+run 1 "green on land/some-batch                 => REFUSE" "$(branch_run '"land/some-batch"')"
+run 1 "green on a topic branch                  => REFUSE" "$(branch_run '"fix/something"')"
+run 1 "green on a DIFFERENT tag (v1.0.0)        => REFUSE" "$(branch_run '"v1.0.0"')"
+run 1 "green on 'mainline' (not main)           => REFUSE" "$(branch_run '"mainline"')"
+run 1 "green on 'release' (no slash)            => REFUSE" "$(branch_run '"release"')"
+run 1 "green on 'xrelease/1.2' (prefix inside)  => REFUSE" "$(branch_run '"xrelease/1.2"')"
+run 1 "green, headBranch null                   => REFUSE" "$(branch_run 'null')"
+run 1 "green, headBranch missing                => REFUSE" \
+  "[{\"databaseId\":13,\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+run 0 "land run green + release/* run green     => PASS" \
+  "[{\"databaseId\":14,\"headBranch\":\"land/x\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\"},
+    {\"databaseId\":15,\"headBranch\":\"release/9.9\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+printf '[{"databaseId":16,"headBranch":"land/x","status":"completed","conclusion":"success","headSha":"%s","event":"workflow_dispatch","createdAt":"t","url":"u"}]' "$SHA" > "$LAB/runs.json"
+msg=$(NEXUS_CI_RUNS_JSON="$LAB/runs.json" "$SCRIPT" --sha "$SHA" --ref "$REF" --repo owner/repo 2>&1)
+if printf '%s' "$msg" | grep -qF 'branch=land/x'; then
+  pass=$((pass+1)); printf '  ok   %-58s\n' "a land-branch refusal names the branch"
+else
+  fail=$((fail+1)); printf '  FAIL %-58s\n' "a land-branch refusal does NOT name the branch"
+fi
 
 echo
 echo "--------------------------------------------------------------"

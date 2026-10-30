@@ -25,6 +25,7 @@
 #                             them is evidence. 1.12.0's run is `cancelled`; a gate written
 #                             as a not-failure test would have passed it.
 #   headSha == the commit being released, EXACTLY.
+#   headBranch is main, release/*, or the ref being released (see WHY THE BRANCH MATTERS).
 #
 # WHY EXACT SHA AND NOT `git merge-base --is-ancestor`. Ancestry is the wrong relation and
 # it fails open in the one direction that matters. A green run on an ANCESTOR of the tag
@@ -38,6 +39,16 @@
 # branch's then-tip — a tree that exists nowhere and is not what a tag points at. So a
 # pull_request run is not evidence about the commit's own tree, and this script does not
 # accept one. `push` and `workflow_dispatch` runs check out the commit itself; both count.
+#
+# WHY THE BRANCH MATTERS TOO. ci.yml links the Windows and Pi builds with the shipped profile
+# (fat LTO, one codegen unit) only on main, on a release/* branch and on a tag; every other
+# branch run uses cargo's ordinary release linking to finish in a fraction of the time. A green
+# run from a land/* or topic branch therefore proves the tree's tests but NOT the link that
+# ships, and a release accepted on one would meet its first fat-LTO link in release.yml itself,
+# with the tag already public (a Pi link failure there publishes the release without Pi
+# packages). So the accepted run must come from main, a release/* branch, or the very tag being
+# released (a ci.yml dispatch on the tag records the tag as its branch). The run's own
+# headBranch says which; a run that does not say is not accepted.
 #
 # THE SHORT-SHA TRAP, found while building this. `gh run list --commit 5badb66d` returns
 # `[]` — an empty list, exit 0 — for a commit that HAS a run. The API matches head_sha
@@ -166,7 +177,7 @@ named override if this is a genuine break-glass release."
       || die_usage "could not determine the repository — pass --repo owner/name"
   fi
   runs=$(gh run list --repo "$repo" --workflow "$WORKFLOW" --commit "$sha" --limit 100 \
-           --json databaseId,status,conclusion,headSha,event,createdAt,url 2>&1)
+           --json databaseId,status,conclusion,headSha,headBranch,event,createdAt,url 2>&1)
   rc=$?
   if [ $rc -ne 0 ]; then
     echo "require-green-ci: could not read ci.yml runs for $sha from $repo:" >&2
@@ -186,17 +197,19 @@ Refusing rather than reading a shape this gate cannot place."
 
 # The accept predicate, and the ONLY one. Every clause is a separate way a release has been
 # or could be published on evidence that does not exist; see the header for each.
-green=$(printf '%s' "$runs" | jq -r --arg sha "$sha" '
+green=$(printf '%s' "$runs" | jq -r --arg sha "$sha" --arg ref "$ref" '
   [ .[]
     | select(.headSha == $sha)
     | select(.status == "completed")
     | select(.conclusion == "success")
     | select(.event == "push" or .event == "workflow_dispatch")
-  ] | .[0] // empty | "\(.databaseId)\t\(.event)\t\(.createdAt)\t\(.url)"')
+    | select((.headBranch | type) == "string")
+    | select(.headBranch == "main" or (.headBranch | startswith("release/")) or .headBranch == $ref)
+  ] | .[0] // empty | "\(.databaseId)\t\(.event)\t\(.headBranch)\t\(.createdAt)\t\(.url)"')
 
 if [ -n "$green" ]; then
-  IFS=$'\t' read -r gid gevent gcreated gurl <<<"$green"
-  echo "require-green-ci: OK — ci.yml run $gid ($gevent, $gcreated) completed successfully"
+  IFS=$'\t' read -r gid gevent gbranch gcreated gurl <<<"$green"
+  echo "require-green-ci: OK — ci.yml run $gid ($gevent on $gbranch, $gcreated) completed successfully"
   echo "require-green-ci:      on exactly $sha"
   [ -n "$gurl" ] && [ "$gurl" != "null" ] && echo "require-green-ci:      $gurl"
   exit 0
@@ -212,14 +225,16 @@ fi
   echo "  commit: $sha"
   echo "  repo:   ${repo:-<recorded>}"
   echo
-  echo "No COMPLETED, SUCCESSFUL $WORKFLOW run exists for this exact commit."
+  echo "No COMPLETED, SUCCESSFUL $WORKFLOW run from main, a release/* branch or '$ref'"
+  echo "exists for this exact commit. A run from any other branch links the Windows and Pi"
+  echo "builds without the shipped LTO profile, so it does not prove what ships."
   echo "What the evidence actually shows:"
   n=$(printf '%s' "$runs" | jq 'length')
   if [ "$n" = "0" ]; then
     echo "  (no $WORKFLOW run has ever been recorded for this commit)"
   else
     printf '%s' "$runs" | jq -r --arg sha "$sha" '.[] |
-      "  run \(.databaseId)  status=\(.status)  conclusion=\(.conclusion // "null")  event=\(.event)"
+      "  run \(.databaseId)  status=\(.status)  conclusion=\(.conclusion // "null")  event=\(.event)  branch=\(.headBranch // "null")"
       + (if .headSha == $sha then "" else "  ⚠ headSha=\(.headSha) — NOT this commit" end)'
   fi
   echo
