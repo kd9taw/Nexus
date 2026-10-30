@@ -4050,6 +4050,11 @@ struct RadioLoop {
     /// ladder (see [`audio_retry_after`]). Restarted by every rebuild the timer did not ask for;
     /// after a successful open the timer is disarmed, so the next failure always counts as one.
     audio_retry_failures: usize,
+    /// The flat 2 s retry clock the loop ran before the backoff, still kept while a device is
+    /// failing. It drives an attempt only while the rig is KEYED: every rebuild ends the over
+    /// (flush + unkey + halt), so a retry is also how a keyed rig on a missing card has been
+    /// unkeyed, within 2 s, and the backoff must not stretch that. Unkeyed, it just keeps time.
+    audio_retry_clock_at: Option<f64>,
     /// A stream error arrived and the card is on probation: the time it was reported, and the
     /// message to use if the silence that follows confirms it. Cleared the moment frames arrive.
     audio_suspect: Option<(f64, String)>,
@@ -4751,6 +4756,7 @@ impl RadioLoop {
             audio_retry_at: None,
             audio_retry_due: false,
             audio_retry_failures: 0,
+            audio_retry_clock_at: None,
             audio_suspect: None,
             audio_rebuild_pending: None,
             audio_rebuild_floor: 0.0,
@@ -8279,7 +8285,14 @@ impl RadioLoop {
             // name compares equal — e.g. two "system default"s); else rebuild only on a real change.
             // A due retry re-arms the rebuild without touching `applied` — the device name has
             // not changed, only its availability, so `audio_differs` can never see this.
-            if self.audio_retry_at.is_some_and(|t| now >= t) {
+            // While KEYED the old 2 s cadence still applies (see `audio_retry_clock_at`): the
+            // backoff may only ever lengthen the wait of an unkeyed loop, never how soon a
+            // retry's rebuild ends an over. Unkeyed, the clock ticks on without an attempt.
+            let clock_due = self.audio_retry_clock_at.is_some_and(|t| now >= t);
+            if clock_due && !rig.keyed {
+                self.audio_retry_clock_at = Some(now + AUDIO_RETRY_MS);
+            }
+            if self.audio_retry_at.is_some_and(|t| now >= t) || (clock_due && rig.keyed) {
                 self.audio_retry_at = None;
                 self.audio_retry_due = true;
             }
@@ -8423,10 +8436,11 @@ impl RadioLoop {
                         self.err_owner = ErrOwner::Device;
                         self.audio_awaiting_samples = true;
                         self.audio_retry_at = None; // it opened — stop retrying
-                                                    // The fresh backend has NO mic stream — a stale-true flag
-                                                    // here fed the recorder empty audio for the rest of a
-                                                    // live recording, silently (review MAJOR). The rising
-                                                    // edge reopens the mic on the new backend next loop.
+                        self.audio_retry_clock_at = None;
+                        // The fresh backend has NO mic stream — a stale-true flag
+                        // here fed the recorder empty audio for the rest of a
+                        // live recording, silently (review MAJOR). The rising
+                        // edge reopens the mic on the new backend next loop.
                         self.voice_mic_open = false;
                     }
                     Err(e) => {
@@ -8467,6 +8481,12 @@ impl RadioLoop {
                         // moment by another app, now recovers on its own instead of stranding
                         // the operator on the fallback device — see `audio_retry_at`.
                         self.audio_retry_at = Some(now + wait_ms);
+                        // The 2 s clock restarts where the flat retry's would have: from a fresh
+                        // open, or from an attempt the clock itself drove. A backoff attempt
+                        // between its ticks leaves it alone.
+                        if fresh_reason || self.audio_retry_clock_at.is_none_or(|t| now >= t) {
+                            self.audio_retry_clock_at = Some(now + AUDIO_RETRY_MS);
+                        }
                     }
                 }
             } else {
@@ -32145,6 +32165,121 @@ mod tests {
             vec![75_000.0, 77_000.0, 81_000.0, 89_000.0],
             "a new setting opens at once and restarts the ladder"
         );
+    }
+
+    #[test]
+    fn a_keyed_rig_on_a_missing_card_is_still_retried_and_unkeyed_every_two_seconds() {
+        // The backoff must not change keying. Every audio rebuild ends the over (flush, unkey,
+        // halt), so with the card missing a keyed rig has always been unkeyed by the next 2 s
+        // retry. While keyed that cadence holds exactly; only an unkeyed loop backs off.
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut state = loop_state();
+        let mut rig = Rig::vox();
+        let (sinks, mut rr) = (no_sinks(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut backend = MockBackend::new();
+        let attempts = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let now = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let mut reopen = {
+            let (attempts, now) = (attempts.clone(), now.clone());
+            move |_: &Transport| -> Result<MockBackend, String> {
+                attempts.borrow_mut().push(now.get());
+                Err("no such device".into())
+            }
+        };
+        state.force_audio_rebuild = true;
+        let mut unkeyed_by_attempt = Vec::new();
+        while now.get() <= 80_000.0 {
+            // The operator holds PTT from 37 s to 46 s: between the flat clock's 36 s and 38 s
+            // ticks, which it kept counting while unkeyed, so the first keyed retry is at 38 s.
+            let keyed_window = (37_000.0..=46_000.0).contains(&now.get());
+            if keyed_window {
+                rig.keyed = true;
+            }
+            let before = attempts.borrow().len();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now.get(),
+                    &mut reopen,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            if keyed_window && attempts.borrow().len() > before {
+                unkeyed_by_attempt.push((now.get(), rig.keyed));
+            }
+            now.set(now.get() + 500.0);
+        }
+        assert_eq!(
+            *attempts.borrow(),
+            vec![
+                0.0, 2_000.0, 6_000.0, 14_000.0, 30_000.0, // unkeyed: backing off
+                38_000.0, 40_000.0, 42_000.0, 44_000.0, 46_000.0, // keyed: the 2 s clock
+                76_000.0, // unkeyed again: back on the 30 s rung
+            ],
+        );
+        assert_eq!(
+            unkeyed_by_attempt,
+            vec![
+                (38_000.0, false),
+                (40_000.0, false),
+                (42_000.0, false),
+                (44_000.0, false),
+                (46_000.0, false)
+            ],
+            "each keyed retry ends the over exactly as before the backoff"
+        );
+    }
+
+    #[test]
+    fn a_card_that_opened_is_not_retried_while_keyed() {
+        // Control for the keyed 2 s clock: it belongs to a failing device only. Once the card
+        // opens, keying must never trigger a rebuild (which would end the over).
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut state = loop_state();
+        let mut rig = Rig::vox();
+        let (sinks, mut rr) = (no_sinks(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut backend = MockBackend::new();
+        let attempts = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let now = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let mut reopen = {
+            let (attempts, now) = (attempts.clone(), now.clone());
+            move |_: &Transport| -> Result<MockBackend, String> {
+                attempts.borrow_mut().push(now.get());
+                if now.get() < 5_000.0 {
+                    Err("no such device".into())
+                } else {
+                    Ok(MockBackend::new())
+                }
+            }
+        };
+        state.force_audio_rebuild = true;
+        while now.get() <= 20_000.0 {
+            if now.get() >= 7_000.0 {
+                rig.keyed = true;
+            }
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now.get(),
+                    &mut reopen,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            now.set(now.get() + 500.0);
+        }
+        // `rig.keyed` is re-set every tick (the loop's own idle self-heal drops a key with no
+        // TX behind it, which is not this test's subject); a retry would show as an attempt.
+        assert_eq!(*attempts.borrow(), vec![0.0, 2_000.0, 6_000.0]);
     }
 
     #[test]
