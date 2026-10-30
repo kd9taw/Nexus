@@ -30016,6 +30016,35 @@ button.sat-chip:disabled {
 .sstv-thumb-del:focus-visible {
   opacity: 1;
 }
+/* Clearing out the gallery: the selection toolbar above the grid, and a tick box on each card.
+   The tick box is always shown, unlike ✕ and ✎ — the ticks are what the operator checks before
+   pressing Delete selected — and a ticked card carries an accent outline so it reads at a glance.
+   The toolbar wraps rather than clips in a narrow gallery, and a button wider than the pane wraps
+   its own label (the shared pop-out button style never wraps) instead of running past the edge. */
+.sstv-gallery-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+.sstv-gallery-tools .cockpit-popout {
+  margin-left: 0;
+  max-width: 100%;
+  white-space: normal;
+}
+.sstv-thumb-pick {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+.sstv-thumb.picked .sstv-thumb-img {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .sstv-thumb-caption {
   display: flex;
   flex-direction: column;
