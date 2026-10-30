@@ -29,6 +29,7 @@ import type { BandOutlook } from '../../types'
 import { bandTiming } from '../../propViz'
 import { PathWhy } from '../prop/PathWhy'
 import { PathRoute } from '../prop/PathRoute'
+import { PathDayPane, PathRegionsPane } from '../prop/PathDayStrip'
 import { azimuthLabel, azimuthTitle } from '../../grid'
 import { SpaceWxGauges } from '../prop/SpaceWxGauges'
 import { BandAdvisor } from '../prop/BandAdvisor'
@@ -837,6 +838,39 @@ export const PANES: PaneDef[] = [
     category: 'activity',
     basic: () => t('connect.pane.activation.basic'),
     expert: (c) => (c.activation ? <ActivationPane act={c.activation.act} logTick={c.activation.logTick} /> : null),
+  },
+  {
+    // PATH OVER THE DAY — the selected station's band × UTC-hour strip, both routes, the route the
+    // model favours each hour, the MUF ceiling and the Kp ribbon (PathDayStrip). Its hours scrub the
+    // map. No selection, or no day from the shack, and it draws its one line.
+    id: 'pathDay',
+    get title() {
+      return t('connect.pane.pathDay.title')
+    },
+    category: 'bands',
+    basic: () => t('connect.pane.pathDay.basic'),
+    expert: (c) => (
+      <PathDayPane pred={c.selectedCall ? c.pathPred : null} scrub={c.dayScrub?.hour ?? null} onScrub={c.onDayScrub} />
+    ),
+  },
+  {
+    // PATHS TO THE REGIONS — the same strip for ten fixed DX regions (self-fetching get_path_regions,
+    // which the shack keeps six hours), ordered by the operator's needs and contacts there.
+    id: 'pathRegions',
+    get title() {
+      return t('connect.pane.pathRegions.title')
+    },
+    category: 'bands',
+    basic: () => t('connect.pane.pathRegions.basic'),
+    expert: (c) => (
+      <PathRegionsPane
+        needs={c.needAlerts}
+        scrub={c.dayScrub?.hour ?? null}
+        onScrub={c.onDayScrub}
+        myGrid={c.myGrid}
+        engine={c.bandOutlook?.engine}
+      />
+    ),
   },
 ]
 

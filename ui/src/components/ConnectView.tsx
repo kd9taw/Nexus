@@ -37,6 +37,8 @@ import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
 import type { NeededBoard, OtaBoard, SpotsFeed } from './connect/paneContext'
+import type { DayScrub } from './prop/PathDayStrip'
+import { fmtZ } from '../propViz'
 import {
   SLOT_IDS,
   addableTo,
@@ -540,6 +542,11 @@ export function ConnectView({
   // selection — built by the code the dashboard rail beside the cockpits uses too
   // (connect/usePaneContext), so a box reads the same in both places and nothing is polled twice.
   const selection = useMemo(() => resolveSelection(selectedCall, stations, prop), [selectedCall, stations, prop])
+  // PATH OVER THE DAY: the hour a strip is scrubbed to. The 2-D map draws its terminator, sun, moon
+  // and the selected station's ribbon at it, and says so above the map; a new selection goes back
+  // to now (the hour belonged to the last station's strip).
+  const [dayScrub, setDayScrub] = useState<DayScrub | null>(null)
+  useEffect(() => setDayScrub(null), [selectedCall])
   const { ctx, xrayNow } = usePaneContext({
     myGrid,
     theme,
@@ -561,6 +568,8 @@ export function ConnectView({
     neededBoard,
     fieldDay,
     activation,
+    dayScrub,
+    onDayScrub: setDayScrub,
   })
   const { pathPred, bandOutlook, muf } = ctx
   // The map's "hearing you" dots count from the Getting Out box's Start fresh time, as the box does.
@@ -870,6 +879,15 @@ export function ConnectView({
                     : undefined
                 }
               />
+              {/* The 3-D globe draws now only, so the note (and the scrubbed map) is the 2-D map's. */}
+              {dayScrub && !map3d && (
+                <span className="connect-map-note pd-map-note" role="status">
+                  {t('pathDay.scrub.map', { time: fmtZ(dayScrub.hour) })}{' '}
+                  <button type="button" className="pd-map-now" onClick={() => setDayScrub(null)}>
+                    {t('pathDay.scrub.back')}
+                  </button>
+                </span>
+              )}
               {streetWhy && (
                 <span className="connect-map-note" role="status">
                   {streetWhy}
@@ -924,6 +942,7 @@ export function ConnectView({
               focusBand={focusBand}
               onFocusBand={toggleFocusBand}
               outlook={selectedCall ? pathPred : bandOutlook}
+              scrubMs={dayScrub?.ms ?? null}
               muf={muf}
               xrayLong={xrayLong}
               onFullChange={setMapFull}

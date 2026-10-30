@@ -49,6 +49,11 @@ pub struct PathPrediction {
     /// ([`crate::route::compare_routes`]). Present only beside `long_path`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routes: Option<Vec<crate::route::RouteCall>>,
+    /// The request's day as a band × UTC-hour grid of both routes, with the route the model
+    /// favours each hour and the hour's Kp ([`crate::pathday::path_day`]) — what the
+    /// path-over-the-day strip draws. Attached by the per-path caller; absent, the key is omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub day: Option<crate::pathday::PathDay>,
 }
 
 impl PathPrediction {
@@ -174,6 +179,7 @@ impl PathPredictor for HeuristicEngine {
             geometry: None,
             long_path: None,
             routes: None,
+            day: None,
         }
     }
 }
@@ -308,6 +314,7 @@ pub fn band_outlook_ring(
         geometry: None,
         long_path: None,
         routes: None,
+        day: None,
     }
 }
 
