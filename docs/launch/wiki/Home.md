@@ -111,8 +111,9 @@ Nexus against its own decoder.
 **A decoder you can check.** Built from WSJT-X's own DSP sources, tracking upstream
 3.0.2. On identical recorded audio its floor measures **−21.3 dB against stock
 WSJT-X's −20.7** with no false decodes, and it is tested against pure noise so
-silence stays silent. As in upstream 3.0.2, rover (`/R`) calls decode in Contest
-mode and are dropped outside it, where they are almost always false. It speaks WSJT-X's UDP protocol
+silence stays silent. As in upstream 3.0.2, rover (`/R`) and `TU;` decodes are
+dropped outside a contest, where they are almost always false, and kept with
+Contest mode on or as a Hound. It speaks WSJT-X's UDP protocol
 byte-for-byte, so **GridTracker, JTAlert and your logger keep working**.
 
 **Real rig control.** On a native-CI-V Icom or a network FlexRadio the rig's own RF
