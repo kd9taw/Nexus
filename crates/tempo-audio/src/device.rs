@@ -67,9 +67,27 @@ const TX_RING_SECONDS: usize = 20;
 const TX_PENDING_SECONDS: usize = 1800;
 
 /// How much device-rate capture audio the RX ring holds, in seconds. The radio loop drains it
-/// every tick (~20 ms), so this is pure headroom against a stalled loop; a stall long enough to
-/// overflow it has already cost the decode.
-const RX_RING_SECONDS: usize = 4;
+/// every tick (~20 ms), so this is headroom against a stalled loop: audio that fits is fed late
+/// but whole, audio that does not is dropped (and counted, [`AudioHealth::rx_dropped`]).
+///
+/// ⚠️ THE LOOP STALLS FOR LONGER THAN A FEW SECONDS BY DESIGN, and this used to be 4 s on the
+/// belief that it could not. The loop is single-threaded and does its CAT work itself, each step
+/// bounded on its own (`rig.rs`: a 700 ms unkey, a 2.5 s slow read, a 3 s connect) but run back to
+/// back when a link is rebuilt: unkey through the old daemon, spawn the new one, wait 700 ms for it
+/// to bind, probe the rig, unkey again, retune. Against a radio whose CAT does not answer that
+/// whole sequence measured ~7.9 s on a Windows FTDX10 station (2026-10-29), repeated on the
+/// silence-rebuild backoff for as long as the rig stayed silent. At 44.1 kHz the 4 s ring rounds to
+/// 262,144 samples (5.9 s), so every rebuild threw away the newest ~1.9 s of the band — the
+/// ~84,000 `rx_dropped` per rebuild in that log, a torn FT window each time.
+///
+/// 16 s covers that stall twice over; [`SpscRing::new`] rounds it to 2^20 samples (4 MB, ~22 s)
+/// at 44.1 and 48 kHz, the same as the TX ring. See [`rx_ring_len`].
+const RX_RING_SECONDS: usize = 16;
+
+/// The RX ring's requested length for a capture stream at `in_rate` Hz — [`RX_RING_SECONDS`] of it.
+fn rx_ring_len(in_rate: u32) -> usize {
+    (in_rate as usize).saturating_mul(RX_RING_SECONDS).max(4096)
+}
 
 /// Realtime health counters for the sound-card path (#172) — what the rings dropped and where the
 /// callbacks ran dry.
@@ -1691,9 +1709,7 @@ impl CpalBackend {
         // monitor has always used; what a full ring drops is counted (see `audio_health`) rather
         // than paid for in callback latency. The TX ring must hold a whole over in one push — see
         // TX_RING_SECONDS.
-        let in_ring = Arc::new(SpscRing::new(
-            (in_rate as usize).saturating_mul(RX_RING_SECONDS).max(4096),
-        ));
+        let in_ring = Arc::new(SpscRing::new(rx_ring_len(in_rate)));
         let out_ring = Arc::new(SpscRing::new(
             (out_rate as usize)
                 .saturating_mul(TX_RING_SECONDS)
@@ -2419,6 +2435,51 @@ impl AudioBackend for CpalBackend {
             .as_ref()
             .map(CaptureStream::drain)
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod rx_ring_tests {
+    use super::{rx_ring_len, SpscRing};
+
+    /// What one stall of the radio loop costs the decoder: the capture callback keeps pushing
+    /// `secs` of audio at `rate` while nothing drains, and every sample the ring refuses is gone.
+    fn dropped_over_a_stall(ring: &SpscRing, rate: u32, secs: f64) -> usize {
+        let n = (f64::from(rate) * secs) as usize;
+        (0..n).filter(|_| !ring.push(0.0)).count()
+    }
+
+    /// The 2026-10-29 field log: a CAT rebuild against a silent FTDX10 held the loop ~7.9 s, every
+    /// ~90 s for hours, and each one added ~84,000 to `rx_dropped` at 44.1 kHz. The ring must ride
+    /// that out at every rate a sound card opens at.
+    #[test]
+    fn a_cat_rebuild_stall_drops_no_capture() {
+        const STALL_S: f64 = 7.9;
+        // Control: the old 4 s sizing reproduces the log's number, so this models the field.
+        let old = SpscRing::new(44_100 * 4);
+        let lost = dropped_over_a_stall(&old, 44_100, STALL_S);
+        assert!(
+            (80_000..90_000).contains(&lost),
+            "the 4 s ring should lose what the log lost per rebuild (~84,000), lost {lost}"
+        );
+        for rate in [8_000u32, 22_050, 44_100, 48_000, 96_000, 192_000] {
+            let ring = SpscRing::new(rx_ring_len(rate));
+            assert_eq!(
+                dropped_over_a_stall(&ring, rate, STALL_S),
+                0,
+                "{rate} Hz: a {STALL_S} s loop stall must not drop capture"
+            );
+        }
+    }
+
+    /// The other side of the bound: a stall past the ring still drops, so the health counter keeps
+    /// meaning "the loop stopped draining" rather than growing a buffer without limit.
+    #[test]
+    fn a_stall_past_the_ring_still_drops() {
+        let ring = SpscRing::new(rx_ring_len(48_000));
+        assert!(ring.capacity() <= 1 << 20, "4 MB at 48 kHz, as the TX ring");
+        let lost = dropped_over_a_stall(&ring, 48_000, 30.0);
+        assert_eq!(lost, 48_000 * 30 - ring.capacity());
     }
 }
 
