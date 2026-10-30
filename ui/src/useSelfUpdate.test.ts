@@ -604,13 +604,17 @@ describe('the way out of a failed update', () => {
 // waiting for Install was downloaded again by every hourly re-check and the old copy never
 // closed: about one installer's worth of memory and bandwidth an hour on Windows.
 describe('the hourly re-check while an update waits', () => {
-  /** The plugin's `Update` with the resource accounting that matters here. */
+  /** The plugin's `Update` with the resource accounting that matters here, as tauri-plugin-updater
+   *  2.10.1 keeps it: the download runs on in Rust after a `close()`, and its bytes land in the
+   *  resource table when it ends, closed or not. Only a `close()` after that frees them. */
   class CountedUpdate {
     static made: CountedUpdate[] = []
     available = true
     downloads = 0
     closes = 0
     installs = 0
+    /** The downloaded installer is held in the plugin's memory. */
+    bytes = false
     constructor(
       public version: string,
       private fetch: () => Promise<void> = () => Promise.resolve(),
@@ -620,19 +624,23 @@ describe('the hourly re-check while an update waits', () => {
     async download(): Promise<void> {
       this.downloads++
       await this.fetch()
+      this.bytes = true
     }
     async install(): Promise<void> {
       if (this.closes) throw new Error('Update.install on a closed Update')
+      if (!this.bytes) throw new Error('Update.install called before Update.download')
       this.installs++
     }
     async close(): Promise<void> {
+      this.bytes = false
       this.closes++
     }
   }
   const made = () => CountedUpdate.made
   const downloads = () => made().reduce((n, u) => n + u.downloads, 0)
-  /** Updates still open in the plugin other than `kept`: memory nothing will ever free. */
-  const leaked = (kept: CountedUpdate | null) => made().filter((u) => u !== kept && u.closes === 0)
+  /** Updates still open in the plugin other than `kept`, or whose bytes arrived after their close:
+   *  memory nothing will ever free. */
+  const leaked = (kept: CountedUpdate | null) => made().filter((u) => u !== kept && (u.closes === 0 || u.bytes))
   const offeringCounted = (version: string) => () => Promise.resolve(new CountedUpdate(version) as unknown as Handle)
   const hours = async (n: number) => {
     await act(async () => {
@@ -700,35 +708,108 @@ describe('the hourly re-check while an update waits', () => {
   })
 
   // A download can outlast the hour on a slow line. If a newer version replaces it meanwhile, the
-  // replaced download ending (finishing, or failing because it was closed) must not take the
-  // banner from the newer one.
+  // replaced download is closed when it ends (closing it earlier frees nothing: its bytes arrive
+  // after), and its ending does not take the banner from the newer one.
   for (const ending of ['finishes', 'fails'] as const) {
-    it(`a newer version arriving mid-download wins when the replaced download ${ending}`, async () => {
+    it(`a newer version arriving mid-download wins, and the replaced download is freed when it ${ending}`, async () => {
       const ends: Array<() => void> = []
-      const slow = (version: string) => () => {
-        const up: CountedUpdate = new CountedUpdate(version, () =>
-          new Promise<void>((resolve, reject) =>
-            ends.push(() => (ending === 'fails' && up.closes ? reject(new Error('closed')) : resolve())),
-          ),
+      const slow = (version: string) => () =>
+        Promise.resolve(
+          new CountedUpdate(version, () =>
+            new Promise<void>((resolve, reject) =>
+              ends.push(() => (ending === 'fails' && version === '9.9.9' ? reject(new Error('connection reset')) : resolve())),
+            ),
+          ) as unknown as Handle,
         )
-        return Promise.resolve(up as unknown as Handle)
-      }
       nextCheck = slow('9.9.9')
       const { result } = renderHook(() => useSelfUpdate(false))
       await settle()
       nextCheck = slow('10.0.0')
       await hours(1)
-      expect(made()[0].closes, 'the replaced download is freed').toBe(1)
+      const [old, newer] = made()
+      expect(newer.downloads, 'premise: the newer download started').toBe(1)
       await act(async () => {
         ends[0]()
         await vi.advanceTimersByTimeAsync(0)
       })
+      expect(old.closes, 'closed once, after its download ended').toBe(1)
+      expect(old.bytes, 'its bytes are not left in memory').toBe(false)
       expect(result.current.phase, 'the newer download is still on its way').toBe('downloading')
       expect(result.current.version).toBe('10.0.0')
       await act(async () => {
         ends[1]()
         await vi.advanceTimersByTimeAsync(0)
       })
+      expect(result.current.phase).toBe('ready')
+      expect(result.current.version).toBe('10.0.0')
+      expect(leaked(newer)).toHaveLength(0)
+      expect(newer.closes).toBe(0)
+      expect(old.closes, 'and only once').toBe(1)
+    })
+  }
+
+  it('unmounting mid-download frees the download when it ends', async () => {
+    let finish: () => void = () => {}
+    nextCheck = () =>
+      Promise.resolve(new CountedUpdate('9.9.9', () => new Promise<void>((resolve) => (finish = resolve))) as unknown as Handle)
+    const { unmount } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    unmount()
+    await act(async () => {
+      finish()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(made()[0].closes).toBe(1)
+    expect(leaked(null)).toHaveLength(0)
+  })
+
+  // Install waits on the backend (the TX check, the journal flush) before it reaches the plugin.
+  // A re-check landing in that wait must not swap a newer, undownloaded update in under the press.
+  it('Install pressed while a newer version is found installs the version pressed', async () => {
+    nextCheck = offeringCounted('9.9.9')
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    const pressed = made()[0]
+    const core = (window as unknown as { __TAURI__: { core: { invoke: (cmd: string) => Promise<unknown> } } }).__TAURI__.core
+    const bridge = core.invoke
+    let flushed: () => void = () => {}
+    core.invoke = (cmd: string) =>
+      cmd === 'prepare_update_install' ? new Promise<undefined>((resolve) => (flushed = () => resolve(undefined))) : bridge(cmd)
+    act(() => result.current.install())
+    await settle()
+    expect(result.current.phase, 'premise: waiting on the flush').toBe('installing')
+    nextCheck = offeringCounted('10.0.0')
+    await hours(1)
+    expect(checkCalls, 'control: the hour checked').toHaveLength(2)
+    await act(async () => {
+      flushed()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.error).toBeNull()
+    expect(pressed.installs, 'the version pressed is installed').toBe(1)
+    expect(pressed.closes).toBe(0)
+    expect(invoked).toContain('restart_app')
+    const newer = made()[1]
+    expect(newer.downloads, 'the newer one waits for the next launch').toBe(0)
+    expect(newer.closes).toBe(1)
+  })
+
+  for (const refused of ['blocked', 'held'] as const) {
+    it(`CONTROL: an Install press ${refused}, installing nothing, does not stop a newer version landing`, async () => {
+      if (refused === 'held') driving = { phase: 'live', stationBuild: '1.15.0' }
+      else {
+        const core = (window as unknown as { __TAURI__: { core: { invoke: (cmd: string) => Promise<unknown> } } }).__TAURI__.core
+        const bridge = core.invoke
+        core.invoke = (cmd: string) => (cmd === 'update_install_block' ? Promise.resolve('TX is armed') : bridge(cmd))
+      }
+      nextCheck = offeringCounted('9.9.9')
+      const { result } = renderHook(() => useSelfUpdate(false))
+      await settle()
+      act(() => result.current.install())
+      await settle()
+      expect(made()[0].installs, 'premise: nothing installed').toBe(0)
+      nextCheck = offeringCounted('10.0.0')
+      await hours(1)
       expect(result.current.phase).toBe('ready')
       expect(result.current.version).toBe('10.0.0')
     })
