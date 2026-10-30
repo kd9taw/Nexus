@@ -1,4 +1,4 @@
-//! `get_path_outlook`'s kept predictions — the per-path card's budget (plan §3.2).
+//! `get_path_outlook`'s kept predictions — the per-path card's compute budget.
 //!
 //! With P.533 a path outlook is two full prediction chains (short and long path, ~100 ms each in
 //! release). The answer is a monthly-median day: it changes with the UTC day, the two grids, the
