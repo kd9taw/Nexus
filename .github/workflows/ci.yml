@@ -1264,7 +1264,7 @@ jobs:
 
   # Job 5b — the client core for iOS. The only macOS job on branch and main CI.
   #
-  # The macOS APP is not built here. Its compile checks (one on macos-14 for Apple Silicon, one on
+  # The macOS APP is not built here. Its compile checks (one on macos-15 for Apple Silicon, one on
   # macos-15-intel for Intel) left this workflow because they cost too much on every run: the Intel
   # one alone took over two hours (release profile, fat LTO and one codegen unit, on GitHub's slow
   # Intel runner), and the slowest job is the whole run's wall time. Every check they made is still
@@ -1284,7 +1284,7 @@ jobs:
   # the cc crate finds through xcrun. No app build, no web UI, no Fortran: minutes, not hours.
   ios-client-check:
     name: iOS client core check (tempo-client)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v7
