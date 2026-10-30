@@ -30752,6 +30752,8 @@ mod tests {
             frame_time_ms: 0,
             ap: false,
             ap_cq_only: false,
+            // Read what went on the air whole: a rover or `TU; ` over is ours, not a false decode.
+            activity: true,
             partial: false,
         };
         NativeSource::from_kind(kind)

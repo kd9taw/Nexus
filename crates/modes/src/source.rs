@@ -53,6 +53,12 @@ pub struct DecodeRequest<'a> {
     /// Restrict AP to the CQ hypothesis (ft8b/ft4_decode `lapcqonly`,
     /// iaptype 1). Consumed by FT8 AND FT4. `false` is stock.
     pub ap_cq_only: bool,
+    /// The operator is in a WSJT-X Special Operating Activity: Contest mode, or a
+    /// Hound (upstream's `ncontest /= 0`). Without one, FT8 drops decodes of
+    /// message type 1-3 holding `/R` (a rover) or starting `TU; `, as WSJT-X
+    /// 3.0.2 does (`ft8b.f90:452-455`): outside a contest they are almost always
+    /// false decodes. FT8 only. `false` (no activity) is stock.
+    pub activity: bool,
     /// This is WSJT-X's EARLY decode over a partial, tail-zeroed frame
     /// (`nzhsym = 41`, `mainwindow.cpp:1878`) rather than the full-frame pass
     /// (`nzhsym = 50`, `mainwindow.cpp:1877`). Upstream runs the early pass
@@ -85,6 +91,7 @@ impl<'a> DecodeRequest<'a> {
             frame_time_ms: 0,
             ap: true,          // stock WSJT-X: AP on
             ap_cq_only: false, // stock WSJT-X: all AP hypotheses
+            activity: false,   // stock WSJT-X: no Special Operating Activity
             partial: false,    // full frame
         }
     }
@@ -224,6 +231,7 @@ impl SignalSource for NativeSource {
             req.frame_time_ms,
             req.ap,
             req.ap_cq_only,
+            req.activity,
         );
         // Tag each decode with the mode that produced it (the conversion can't
         // know; we do).
@@ -250,6 +258,7 @@ impl SignalSource for NativeSource {
             req.partial,
             req.ap,
             req.ap_cq_only,
+            req.activity,
         );
         for d in &mut decs {
             d.mode = Some(kind);
@@ -300,6 +309,7 @@ impl SignalSource for NativeSource {
             req.partial,
             req.ap,
             req.ap_cq_only,
+            req.activity,
             &mut self.carry,
             &mut Tagged { kind, sink },
         );
