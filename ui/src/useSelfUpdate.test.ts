@@ -598,3 +598,228 @@ describe('the way out of a failed update', () => {
     expect(result.current.phase).toBe('error')
   })
 })
+
+// The plugin keeps each downloaded installer in memory until its `Update` is closed (the bytes
+// sit in the webview's resource table), and every `check()` makes a new `Update`. An update left
+// waiting for Install was downloaded again by every hourly re-check and the old copy never
+// closed: about one installer's worth of memory and bandwidth an hour on Windows.
+describe('the hourly re-check while an update waits', () => {
+  /** The plugin's `Update` with the resource accounting that matters here. */
+  class CountedUpdate {
+    static made: CountedUpdate[] = []
+    available = true
+    downloads = 0
+    closes = 0
+    installs = 0
+    constructor(
+      public version: string,
+      private fetch: () => Promise<void> = () => Promise.resolve(),
+    ) {
+      CountedUpdate.made.push(this)
+    }
+    async download(): Promise<void> {
+      this.downloads++
+      await this.fetch()
+    }
+    async install(): Promise<void> {
+      if (this.closes) throw new Error('Update.install on a closed Update')
+      this.installs++
+    }
+    async close(): Promise<void> {
+      this.closes++
+    }
+  }
+  const made = () => CountedUpdate.made
+  const downloads = () => made().reduce((n, u) => n + u.downloads, 0)
+  /** Updates still open in the plugin other than `kept`: memory nothing will ever free. */
+  const leaked = (kept: CountedUpdate | null) => made().filter((u) => u !== kept && u.closes === 0)
+  const offeringCounted = (version: string) => () => Promise.resolve(new CountedUpdate(version) as unknown as Handle)
+  const hours = async (n: number) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(n * HOUR)
+    })
+  }
+
+  beforeEach(() => {
+    CountedUpdate.made = []
+  })
+
+  it('three hours of checks download the waiting version once and leak nothing', async () => {
+    nextCheck = offeringCounted('9.9.9')
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(result.current.phase).toBe('ready')
+    const first = made()[0]
+    await hours(3)
+    expect(checkCalls, 'control: the hourly checks still run').toHaveLength(4)
+    expect(downloads(), 'downloaded once').toBe(1)
+    expect(leaked(first), 'each re-check’s own Update is closed').toHaveLength(0)
+    expect(first.closes, 'the download waiting for Install stays open').toBe(0)
+    expect(result.current.phase, 'the banner never left').toBe('ready')
+
+    act(() => result.current.install())
+    await settle()
+    expect(first.installs, 'Install uses the download that waited').toBe(1)
+  })
+
+  it('a newer version closes the waiting one exactly once and downloads the newer', async () => {
+    nextCheck = offeringCounted('9.9.9')
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    const old = made()[0]
+    nextCheck = offeringCounted('10.0.0')
+    await hours(1)
+    const newer = made()[1]
+    expect(result.current.phase).toBe('ready')
+    expect(result.current.version).toBe('10.0.0')
+    expect(newer.downloads).toBe(1)
+    expect(old.closes, 'the replaced download is freed').toBe(1)
+    await hours(2)
+    expect(old.closes, 'and only once').toBe(1)
+    expect(downloads(), '9.9.9 once, 10.0.0 once').toBe(2)
+    expect(leaked(newer)).toHaveLength(0)
+    expect(newer.closes).toBe(0)
+  })
+
+  it('a download still on its way at the hour is not started again', async () => {
+    let finish: () => void = () => {}
+    nextCheck = () =>
+      Promise.resolve(new CountedUpdate('9.9.9', () => new Promise<void>((resolve) => (finish = resolve))) as unknown as Handle)
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(result.current.phase, 'premise: downloading').toBe('downloading')
+    await hours(1)
+    expect(checkCalls, 'control: the hour checked').toHaveLength(2)
+    expect(downloads()).toBe(1)
+    await act(async () => {
+      finish()
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(result.current.phase).toBe('ready')
+    expect(leaked(made()[0])).toHaveLength(0)
+  })
+
+  // A download can outlast the hour on a slow line. If a newer version replaces it meanwhile, the
+  // replaced download ending (finishing, or failing because it was closed) must not take the
+  // banner from the newer one.
+  for (const ending of ['finishes', 'fails'] as const) {
+    it(`a newer version arriving mid-download wins when the replaced download ${ending}`, async () => {
+      const ends: Array<() => void> = []
+      const slow = (version: string) => () => {
+        const up: CountedUpdate = new CountedUpdate(version, () =>
+          new Promise<void>((resolve, reject) =>
+            ends.push(() => (ending === 'fails' && up.closes ? reject(new Error('closed')) : resolve())),
+          ),
+        )
+        return Promise.resolve(up as unknown as Handle)
+      }
+      nextCheck = slow('9.9.9')
+      const { result } = renderHook(() => useSelfUpdate(false))
+      await settle()
+      nextCheck = slow('10.0.0')
+      await hours(1)
+      expect(made()[0].closes, 'the replaced download is freed').toBe(1)
+      await act(async () => {
+        ends[0]()
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(result.current.phase, 'the newer download is still on its way').toBe('downloading')
+      expect(result.current.version).toBe('10.0.0')
+      await act(async () => {
+        ends[1]()
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(result.current.phase).toBe('ready')
+      expect(result.current.version).toBe('10.0.0')
+    })
+  }
+
+  it('a check that answers after unmount is closed', async () => {
+    let answer: (h: Handle) => void = () => {}
+    nextCheck = () => new Promise<Handle>((resolve) => (answer = resolve))
+    const { unmount } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    unmount()
+    const late = new CountedUpdate('9.9.9')
+    await act(async () => {
+      answer(late as unknown as Handle)
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(late.downloads).toBe(0)
+    expect(late.closes).toBe(1)
+  })
+
+  it('CONTROL: a download that failed is tried again on the hour, and the failed one closed', async () => {
+    let fail = true
+    nextCheck = () =>
+      Promise.resolve(
+        new CountedUpdate('9.9.9', () => (fail ? Promise.reject(new Error('connection reset')) : Promise.resolve())) as unknown as Handle,
+      )
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(result.current.phase, 'premise: a quiet failure').toBe('idle')
+    fail = false
+    await hours(1)
+    expect(result.current.phase).toBe('ready')
+    expect(downloads()).toBe(2)
+    expect(made()[0].closes).toBe(1)
+    expect(leaked(made()[1])).toHaveLength(0)
+  })
+
+  it('"Not now" closes the waiting download, and so does unmounting', async () => {
+    nextCheck = offeringCounted('9.9.9')
+    const first = renderHook(() => useSelfUpdate(false))
+    await settle()
+    act(() => first.result.current.dismiss())
+    expect(made()[0].closes).toBe(1)
+    await hours(1)
+    expect(downloads(), 'the dismissed version is not downloaded again').toBe(1)
+    expect(leaked(null)).toHaveLength(0)
+    first.unmount()
+    expect(made()[0].closes, 'closed once, not again at unmount').toBe(1)
+
+    CountedUpdate.made = []
+    const second = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(second.result.current.phase).toBe('ready')
+    second.unmount()
+    expect(made()[0].closes).toBe(1)
+  })
+
+  it('CONTROL: after a failed Install the next check downloads it afresh and offers it again', async () => {
+    let broken = true
+    class FailingInstall extends CountedUpdate {
+      async install(): Promise<void> {
+        if (broken) throw new Error('Read-only file system (os error 30)')
+        return super.install()
+      }
+    }
+    nextCheck = () => Promise.resolve(new FailingInstall('9.9.9') as unknown as Handle)
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    act(() => result.current.install())
+    await settle()
+    expect(result.current.phase, 'premise: the install failed').toBe('error')
+    broken = false
+    await hours(1)
+    expect(result.current.phase).toBe('ready')
+    expect(downloads()).toBe(2)
+    expect(made()[0].closes).toBe(1)
+  })
+
+  it('a failed hourly check keeps the downloaded update on screen', async () => {
+    let fail = false
+    nextCheck = () => (fail ? Promise.reject(new Error('offline')) : offeringCounted('9.9.9')())
+    const { result } = renderHook(() => useSelfUpdate(false))
+    await settle()
+    expect(result.current.phase).toBe('ready')
+    fail = true
+    await hours(1)
+    expect(checkCalls, 'control: the hour checked').toHaveLength(2)
+    expect(result.current.phase).toBe('ready')
+    expect(result.current.version).toBe('9.9.9')
+    act(() => result.current.install())
+    await settle()
+    expect(made()[0].installs, 'and it still installs').toBe(1)
+  })
+})
