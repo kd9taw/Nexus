@@ -5473,8 +5473,18 @@ impl StationCore {
 
     /// Append a completed SSTV image to the session gallery (newest last),
     /// capped at [`SSTV_GALLERY_CAP`]. Decode-thread only.
+    ///
+    /// A picture already listed under the same path is replaced, not listed twice. The decoder
+    /// saves the file before it takes the lock to push, so a gallery delete reading the folder in
+    /// between can adopt the file first as a bare entry; the decoder's record (frequency, lines)
+    /// then takes its place. Compared as strings: both build the path by joining the file name
+    /// onto the gallery folder, and no file lookup may run under the Engine lock.
     pub fn push_sstv_gallery(&mut self, entry: crate::dto::SstvGalleryEntry) {
         self.sstv_gallery_gen += 1;
+        if let Some(listed) = self.sstv_gallery.iter_mut().find(|e| e.path == entry.path) {
+            *listed = entry;
+            return;
+        }
         self.sstv_gallery.push(entry);
         if self.sstv_gallery.len() > SSTV_GALLERY_CAP {
             let excess = self.sstv_gallery.len() - SSTV_GALLERY_CAP;

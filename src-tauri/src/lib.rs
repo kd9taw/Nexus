@@ -6555,11 +6555,31 @@ pub(crate) fn delete_sstv_gallery_image(
     dir: &std::path::Path,
     path: &str,
 ) -> Result<(), String> {
+    let _deleting = sstv_gallery_delete_lock();
     let listed = engine_lock(engine).sstv_gallery().to_vec();
     unlink_sstv_gallery_file(dir, &canonical_gallery_paths(&listed), path)?;
     let (gen, entries) = rewrite_sstv_gallery_index(engine, dir, &[path]);
     tempo_app::sstv_gallery::write_gallery_json(dir, gen, &entries);
     Ok(())
+}
+
+/// One gallery delete at a time, single or batch, for the whole of the delete.
+///
+/// A delete reads the gallery folder with the Engine lock released, then relocks and adopts the
+/// files the read found that its copy did not list. If a second delete could remove such a file
+/// in between (a picture received after the first delete's copy, deleted from the desktop and from
+/// Remote at the same moment), the first would put it back as an entry whose file is gone. With
+/// deletes serialised, only the decoder changes the gallery during the read, and it only adds.
+///
+/// ⛔ Lock order: this lock first, then the Engine lock, briefly. Never the reverse: nothing takes
+/// this lock while holding the Engine lock, and the decoder and the radio loop never take it, so
+/// they never wait on a delete. Not the Engine lock itself, which would put the folder read back
+/// under the lock the radio loop and Stop TX wait on.
+fn sstv_gallery_delete_lock() -> std::sync::MutexGuard<'static, ()> {
+    static SSTV_GALLERY_DELETE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SSTV_GALLERY_DELETE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// One picture the batch delete could not remove, and why, in the words the single delete uses.
@@ -6604,6 +6624,7 @@ fn delete_sstv_gallery_images(
     dir: &std::path::Path,
     paths: &[String],
 ) -> Vec<SstvDeleteFailure> {
+    let _deleting = sstv_gallery_delete_lock();
     let listed = engine_lock(engine).sstv_gallery().to_vec();
     let pictures = canonical_gallery_paths(&listed);
     let mut asked = std::collections::HashSet::new();
@@ -47980,6 +48001,117 @@ mod tests {
             assert!(!dir.join(names[0]).exists());
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// Two deletes at once must not resurrect a picture. A delete reads the folder with the Engine
+    /// lock released and then adopts files its copy did not list; a picture received after that
+    /// copy and deleted by a second delete before the first relocks would come back as an entry
+    /// with no file. So deletes run one at a time: a second delete (B) waits while the first (A)
+    /// is between its copy and its relock, and the picture B deletes stays deleted.
+    #[test]
+    fn a_second_gallery_delete_waits_for_the_first_and_its_picture_stays_deleted() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-two-deletes", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let a = dir.join(names[0]).to_string_lossy().into_owned();
+        let z = dir
+            .join("20261030T100500Z_pd120.png")
+            .to_string_lossy()
+            .into_owned();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let b_ran_while_a_was_parked = std::rc::Rc::new(std::cell::Cell::new(None));
+        let b_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        {
+            let (engine, dir, z) = (engine.clone(), dir.clone(), z.clone());
+            let (seen, b_thread) = (b_ran_while_a_was_parked.clone(), b_thread.clone());
+            super::ON_GALLERY_DISK_WORK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |step| {
+                    if step != "reconcile" {
+                        return;
+                    }
+                    // A has its copy and has not read the folder. The decoder finishes Z...
+                    std::fs::write(&z, b"PNG-not-really").unwrap();
+                    engine_lock(&engine)
+                        .push_sstv_gallery(entry(std::path::Path::new(&z), "2026-10-30T10:05:00Z"));
+                    // ...and B deletes it from another thread.
+                    let (engine, dir, z, done_tx) =
+                        (engine.clone(), dir.clone(), z.clone(), done_tx.clone());
+                    *b_thread.borrow_mut() = Some(std::thread::spawn(move || {
+                        let got = super::delete_sstv_gallery_image(&engine, &dir, &z);
+                        // Only a signal; nobody listens once A has moved on.
+                        let _ = done_tx.send(());
+                        got
+                    }));
+                    seen.set(Some(
+                        done_rx
+                            .recv_timeout(std::time::Duration::from_secs(1))
+                            .is_ok(),
+                    ));
+                }));
+            });
+        }
+        assert_eq!(super::delete_sstv_gallery_image(&engine, &dir, &a), Ok(()));
+        super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+        assert_eq!(
+            b_ran_while_a_was_parked.get(),
+            Some(false),
+            "the second delete must wait while the first is between its copy and its relock"
+        );
+        let b_thread = b_thread.borrow_mut().take().unwrap();
+        assert_eq!(b_thread.join().unwrap(), Ok(()), "B's delete then runs");
+
+        let kept = dir.join(names[1]).to_string_lossy().into_owned();
+        let mem: Vec<String> = engine_lock(&engine)
+            .sstv_gallery()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        assert_eq!(mem, vec![kept.clone()], "in memory");
+        assert_eq!(index_paths(&dir), vec![kept], "on disk");
+        assert!(!std::path::Path::new(&z).exists(), "B removed Z's file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The adoption takes only files the delete's copy did not list. A picture the copy listed and
+    /// the gallery no longer has at the relock was removed by another delete in between, and must
+    /// not come back, even though the folder read still saw its file.
+    #[test]
+    fn a_picture_another_delete_removed_during_the_folder_read_does_not_come_back() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+            "20261030T100200Z_pd120.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-listed-removed", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let x = dir.join(names[0]).to_string_lossy().into_owned();
+        let y = dir.join(names[1]).to_string_lossy().into_owned();
+        {
+            let (engine, y) = (engine.clone(), y.clone());
+            super::ON_GALLERY_DISK_WORK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |step| {
+                    if step == "reconcile" {
+                        // The other delete's relock; its unlink lands after this read.
+                        engine_lock(&engine).remove_sstv_gallery(&y);
+                    }
+                }));
+            });
+        }
+        assert_eq!(super::delete_sstv_gallery_image(&engine, &dir, &x), Ok(()));
+        super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+        std::fs::remove_file(&y).unwrap();
+        let c = dir.join(names[2]).to_string_lossy().into_owned();
+        let mem: Vec<String> = engine_lock(&engine)
+            .sstv_gallery()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        assert_eq!(mem, vec![c.clone()], "in memory");
+        assert_eq!(index_paths(&dir), vec![c], "on disk");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn index_paths(dir: &std::path::Path) -> Vec<String> {
