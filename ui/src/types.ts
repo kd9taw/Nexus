@@ -66,7 +66,8 @@ export interface RegionBest {
   bearingDeg: number
   band: string
   tier: ActivityTier
-  modeled: BandModeled
+  /** Absent when the station advised without the model (its solar flux was not measured). */
+  modeled?: BandModeled
   stations: number
   bidirectional: boolean
   score: number
@@ -484,6 +485,15 @@ export interface AuroraPoint {
   lon: number
   prob: number
 }
+/** The OVATION oval (get_aurora) and what it is: a FORECAST for `forecastAt`, made from the
+ *  solar wind observed at `observedAt` (both NOAA's own stamps, Unix seconds UTC, null when the
+ *  file carried none), in the copy fetched at `fetchedAt`. */
+export interface AuroraOval {
+  points: AuroraPoint[]
+  observedAt: number | null
+  forecastAt: number | null
+  fetchedAt?: number | null
+}
 /** A forward-calendar entry — an announced DXpedition to plan for. */
 export interface CalendarEntry {
   call: string
@@ -542,9 +552,12 @@ export interface PcaView {
   /** Day/night 30 MHz polar-cap absorption (dB). */
   a30Day: number
   a30Night: number
-  /** Polar-cap cutoff (geomagnetic latitude, °) at the current Kp. */
-  cutoffDeg: number
+  /** Polar-cap cutoff (geomagnetic latitude, °) at the measured Kp; null without a measured Kp
+   *  (the edge is unknown, and `points` is drawn at the quiet-field cap). */
+  cutoffDeg: number | null
   points: { lat: number; lon: number; db30: number }[]
+  /** The GOES proton sample's own time (Unix seconds); absent from an older station. */
+  protonsAt?: number | null
 }
 
 /** Satellites view (get_satellites): amateur-bird subpoints now + next-24h passes
@@ -999,6 +1012,18 @@ export interface SpaceWxView {
   xrayLong?: number
   /** Real-time solar wind; absent when the DSCOVR feed is unavailable. */
   solarWind?: SolarWind | null
+  /** Whether any number above is a reading NOAA answered rather than the model's stand-in.
+   *  Absent from an older station, whose numbers read as they always did. */
+  fetched?: boolean
+  /** When each number was measured, NOAA's own sample time (Unix seconds UTC). null = that
+   *  number is a stand-in, never a reading: it is drawn as "no data". `aDay` is 00:00 UT of the
+   *  day the daily planetary A (`aIndex`) belongs to. See propViz `wxReading`. */
+  sfiAt?: number | null
+  kpAt?: number | null
+  xrayAt?: number | null
+  aDay?: number | null
+  /** The instantaneous ap estimated from the measured Kp — an estimate, shown on hover only. */
+  apNow?: number | null
 }
 
 /** The 60 s X-ray fast lane (`get_xray_now`) — fresher than the 5-min prop
@@ -1006,7 +1031,8 @@ export interface SpaceWxView {
 export interface XrayNow {
   /** GOES long-band X-ray flux, W/m². */
   flux: number
-  /** When the reading was fetched (Unix seconds, UTC). */
+  /** The GOES sample's own time (Unix seconds, UTC), not the fetch time — a feed gap shows
+   *  as an old sample (propViz `xrayFastFresh`). */
   asOf: number
 }
 export interface PropagationSnapshot {
@@ -1201,6 +1227,8 @@ export interface KpPoint {
 /** The NOAA planetary-K outlook: about a week back and three days forward. */
 export interface KpForecast {
   points: KpPoint[]
+  /** When the station fetched this copy (Unix seconds); absent from an older station. */
+  fetchedAt?: number | null
 }
 
 /** One day of NOAA SWPC's daily solar indices. `null` = SWPC published no value for that day —

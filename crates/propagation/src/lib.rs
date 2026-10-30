@@ -99,7 +99,7 @@ pub use fccstate::FccStates;
 pub use gettingout::{getting_out, GettingOut, HeardMe};
 pub use gridrarity::{grid_rarity, GridRarity};
 pub use gridstate::state_for_grid;
-pub use insight::{generate_insights, Insight, InsightKind, InsightLevel};
+pub use insight::{generate_insights, insight_speaks_now, Insight, InsightKind, InsightLevel};
 pub use journey::{
     compute as compute_journey, model as journey_model, Cell as JourneyCell,
     Collection as JourneyCollection, Feat, First, JourneyModel, JourneyQso, JourneySummary, Ladder,

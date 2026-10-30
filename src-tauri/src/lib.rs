@@ -612,14 +612,7 @@ mod whole_log_reader_tests {
 
 /// TTL cache for the OVATION aurora oval (distinct payload type from PropCache, so
 /// a distinct TypeId for `.manage()`).
-type AuroraCache = Arc<
-    Mutex<
-        Option<(
-            std::time::Instant,
-            Vec<propagation::live::aurora::AuroraPoint>,
-        )>,
-    >,
->;
+type AuroraCache = Arc<Mutex<Option<(std::time::Instant, propagation::live::aurora::AuroraOval)>>>;
 /// TTL cache for the KC2G ionosonde MUF map. Distinct payload type → distinct
 /// TypeId for `.manage()`.
 type Kc2gCache = Arc<Mutex<Option<(std::time::Instant, Vec<propagation::MufStation>)>>>;
@@ -2192,12 +2185,14 @@ static LAST_SOLAR_WIND: Mutex<Option<propagation::SolarWind>> = Mutex::new(None)
 /// to a Covington inversion of SFI). Refreshed on the space-wx fetch cadence.
 static LAST_SSN: Mutex<Option<f32>> = Mutex::new(None);
 
-/// The smoothed sunspot number the solar-cycle feed last gave, if it has given one.
+/// The smoothed sunspot number the solar-cycle feed last gave, if it has given one. Only a value
+/// NOAA's feed answered is ever stored (`LAST_SSN` is written on a successful fetch alone), so it
+/// is never the model's stand-in; the grades take it only for a recent contact.
 fn current_ssn() -> Option<f64> {
     LAST_SSN.lock().ok().and_then(|g| *g).map(f64::from)
 }
 
-/// The X-ray "fast lane" cache: (fetched-at, flux W/m², reading unix time). A
+/// The X-ray "fast lane" cache: (fetched-at, flux W/m², the GOES sample's unix time). A
 /// flare's rise takes minutes, so `get_xray_now` refetches GOES every 60 s —
 /// much fresher than the 5-min snapshot TTL — and serves last-good on failure.
 static LAST_XRAY: Mutex<Option<(std::time::Instant, f32, i64)>> = Mutex::new(None);
@@ -7793,6 +7788,26 @@ fn set_source(state: State<'_, SharedEngine>, kind: String) -> Result<AppSnapsho
     Ok(eng.snapshot())
 }
 
+/// The space weather a logged contact may carry, each number only if it is a reading and each
+/// with its own stamp: the planetary Kp and its sample time, NOAA's daily planetary A for every
+/// UT day it has published (`a_by_day`, each with its day; never the Kp-derived ap estimate),
+/// and the solar flux with its measurement time. The engine judges each stamp against the
+/// contact's own time when it logs one, and takes only the contact's own day's A. A stand-in is
+/// `None`, so its ADIF field is left off rather than filled with a guess.
+#[allow(clippy::type_complexity)] // three stamped readings, named by the doc above
+fn space_wx_for_log(
+    wx: &propagation::SpaceWx,
+    stamps: &propagation::model::SpaceWxStamps,
+    a_by_day: &[(i64, f32)],
+) -> (Option<(f32, u64)>, Vec<(f32, u64)>, Option<(f32, u64)>) {
+    let at = |t: i64| t.max(0) as u64;
+    (
+        stamps.kp_at.map(|t| (wx.kp, at(t))),
+        a_by_day.iter().map(|&(day, a)| (a, at(day))).collect(),
+        stamps.sfi_at.map(|t| (wx.sfi, at(t))),
+    )
+}
+
 /// The propagation & opening-intelligence nowcast, built from LIVE NOAA SWPC +
 /// PSK Reporter data for the operator's call/grid. Cached for [`PROP_TTL_SECS`]
 /// to respect PSK Reporter's query cadence; falls back to the last good snapshot
@@ -7940,7 +7955,8 @@ async fn get_propagation(
     // live-spot window (the detector's full baseline) and replaces the snapshot's
     // openings with the tracker-stamped set (hysteresis-entered, onset-timed).
     let cfg = propagation::OpeningConfig::default();
-    let wx = propagation::SpaceWx {
+    let stamps = snap.space_wx.stamps;
+    let measured = propagation::SpaceWx {
         sfi: snap.space_wx.sfi,
         ssn: None, // opening detector/heuristic don't read R12
         kp: snap.space_wx.kp,
@@ -7949,6 +7965,10 @@ async fn get_propagation(
         // true R-scale — an X-class blackout no longer collapses to "R1 / M-class".
         xray_long: snap.space_wx.xray_long,
     };
+    // What the detector, advisor, banners, insights and model run on: only the Kp and X-ray
+    // that may speak for now. A cached snapshot is served at any age, and a GOES gap keeps its
+    // last flux, so an hours-old Kp 6 or flare would otherwise raise a storm or flare line.
+    let wx = measured.speaking_now(&stamps, now);
     // ANCHORED window = operator-REACHABLE evidence only: own-call PSK Reporter MQTT
     // + the near-region (≤REGION_RADIUS_KM) census (disjoint — the region feed drops
     // own-call spots) + the operator's own decodes. This is what drives the BAND
@@ -8069,27 +8089,7 @@ async fn get_propagation(
         record_opening_episodes(tr.drain_closed());
     }
 
-    // Rebuild the band advisor on the ANCHORED (operator-reachable) window — "best
-    // band FOR YOU", reflecting activity AROUND the operator, NOT the busiest band
-    // worldwide. Rebuild whenever we have any anchored evidence (own-call MQTT,
-    // near-region, or own decodes); when empty we keep the cached snapshot's
-    // own-call advisory (never the global firehose, which `anchored` excludes).
-    if !anchored.is_empty() {
-        let advisor = propagation::PropAdvisor::new(&mycall, &mygrid);
-        snap.advisory = advisor.advise(now, &anchored, &wx);
-        // Best-band-per-region recommender + the (region, band) activity matrix, from the
-        // SAME anchored window (operator-reachable only — never the firehose). One pass.
-        let rb = advisor.region_band(now, &anchored, &snap.advisory.bands);
-        snap.best_to_region = rb.best_to_region;
-        snap.region_band = rb.cells;
-    }
-    // "Worldwide activity" = the SAME advisor over the GLOBAL firehose window, so the
-    // UI can show busy-worldwide beside best-FOR-YOU (workable vs merely-loud). Only
-    // when the firehose actually adds something beyond the anchored set.
-    if wide.len() > anchored.len() {
-        snap.worldwide =
-            Some(propagation::PropAdvisor::new(&mycall, &mygrid).advise(now, &wide, &wx));
-    }
+    advise_for_now(&mut snap, &mycall, &mygrid, now, &anchored, &wide, &wx);
 
     // Locate the merged window for the map (grid or DXCC centroid), so the map
     // fills with the cluster/RBN/PSKR firehose + own decodes, not just the native
@@ -8101,25 +8101,36 @@ async fn get_propagation(
     // trend and regenerate the insight feed with it (overwriting the engine layer's
     // threshold-only insights). me_ll drives the representative MUF + greyline test.
     let me_ll = propagation::geo::maidenhead_to_latlon(&mygrid);
-    // A reading SWPC actually answered, for the opt-in space weather on each logged contact —
-    // never the model's stand-in values a failed fetch leaves in the snapshot.
+    // The readings SWPC actually answered, each on its own with its stamp, for the opt-in space
+    // weather on each logged contact — never the model's stand-in values a failed product leaves
+    // in the snapshot (`space_wx_for_log`).
     if fetched_fresh && snap.space_wx.fetched {
-        let (kp, a_index, sfi, at) = (wx.kp, wx.a_index, wx.sfi, now.max(0) as u64);
+        let (kp, a_daily, sfi) = space_wx_for_log(&measured, &stamps, &snap.space_wx.a_by_day);
+        let at = now.max(0) as u64;
         let _ = with_engine(&state, move |mut eng| {
-            eng.note_space_weather(kp, a_index, sfi, at)
+            eng.note_space_weather(kp, &a_daily, sfi, at)
         })
         .await;
     }
+    // The trend history takes only a whole sample that speaks for now: a stand-in SFI 120
+    // between two real 90s would read as "flux rising" and its model MUF as "MUF building", and
+    // a frozen feed's old number would be filed as now's.
+    let sample_measured = {
+        use propagation::model::WxKey;
+        [WxKey::Sfi, WxKey::Kp, WxKey::Xray]
+            .into_iter()
+            .all(|k| stamps.usable(k, now))
+    };
     if fetched_fresh {
-        if let Ok(mut h) = wx_history.lock() {
+        if let Some(mut h) = wx_history.lock().ok().filter(|_| sample_measured) {
             let muf = me_ll
-                .map(|me| propagation::representative_muf(me, now, &wx))
+                .map(|me| propagation::representative_muf(me, now, &measured))
                 .unwrap_or(0.0);
             h.push(propagation::SpaceWxSample {
                 t: now,
-                sfi: wx.sfi,
-                kp: wx.kp,
-                xray_long: wx.xray_long,
+                sfi: measured.sfi,
+                kp: measured.kp,
+                xray_long: measured.xray_long,
                 muf,
             });
         }
@@ -8155,10 +8166,12 @@ async fn get_propagation(
         .lock()
         .map(|h| h.trend(now, 3 * 3600))
         .unwrap_or_default();
+    // The trend lines ("MUF building", "flux rising") speak only while the flux they rest on
+    // is measured; with a stand-in SFI the model MUF behind them is the stand-in's.
     snap.insights = propagation::generate_insights(
         now,
         &wx,
-        Some(&snap.wx_trend),
+        Some(&snap.wx_trend).filter(|_| stamps.usable(propagation::model::WxKey::Sfi, now)),
         &snap.advisory.bands,
         &snap.openings,
         me_ll,
@@ -8210,19 +8223,16 @@ async fn get_path_outlook(
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
-    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold.
-    let wx = {
+    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold. Its stamps go
+    // with the card to `path_grades::keep_outlook`, which keeps it for a contact's grade only
+    // when they say the flux and Kp were measured and current.
+    let (wx, stamps) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        guard
-            .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
-                sfi: s.space_wx.sfi,
-                ssn: LAST_SSN.lock().ok().and_then(|g| *g),
-                kp: s.space_wx.kp,
-                a_index: s.space_wx.a_index,
-                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
-            })
-            .unwrap_or_default()
+        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+        let wx = view
+            .map(|v| outlook_wx(v, LAST_SSN.lock().ok().and_then(|g| *g), now_unix()))
+            .unwrap_or_default();
+        (wx, view.map(|v| v.stamps))
     };
     // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or
     // the heuristic fallback. p533 is compute-heavy → keep it off the async core.
@@ -8237,14 +8247,14 @@ async fn get_path_outlook(
     let oval: Option<Vec<(f32, f32)>> = aurora.lock().ok().and_then(|g| {
         g.as_ref()
             .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
-            .map(|(_, pts)| pts.iter().map(|p| (p.lat, p.lon)).collect())
+            .map(|(_, oval)| oval.points.iter().map(|p| (p.lat, p.lon)).collect())
     });
     // The geometry's Kp is only ever one SWPC reported: `wx.kp` above may be the cold-cache
     // default or a failed fetch's stand-in, which the engine may use but no label may call a
     // reading.
     let kp_now = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx))
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), t)
     };
     // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
     // serving hour's scalars and the geometry are recomputed then.
@@ -8305,8 +8315,9 @@ async fn get_path_outlook(
                 pred.long_path = Some(Box::new(lp));
             }
         }
-        // Kept for the grade of a contact logged with this station (`path_grades::at_log`).
-        path_grades::keep_outlook(&mygrid, &grid, t, &pred);
+        // Kept for the grade of a contact logged with this station (`path_grades::at_log`), when
+        // it was computed from measured space weather (`keep_outlook` decides).
+        path_grades::keep_outlook(&mygrid, &grid, t, &pred, stamps.as_ref());
         pred
     })
     .await
@@ -8390,17 +8401,16 @@ async fn get_path_regions(
             regions: Vec::new(),
         });
     };
-    // The same space weather get_path_outlook reads, from the propagation cache's last snapshot.
+    // The same space weather get_path_outlook reads, from the propagation cache's last snapshot:
+    // its Kp and X-ray only while they may speak for now (`outlook_wx`).
+    let t = now_unix();
     let wx = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
-                sfi: s.space_wx.sfi,
-                ssn: LAST_SSN.lock().ok().and_then(|g| *g),
-                kp: s.space_wx.kp,
-                a_index: s.space_wx.a_index,
-                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
+            .map(|(_, s)| {
+                let ssn = LAST_SSN.lock().ok().and_then(|g| *g);
+                outlook_wx(&s.space_wx, ssn, t)
             })
             .unwrap_or_default()
     };
@@ -8411,9 +8421,8 @@ async fn get_path_regions(
     // Only a Kp SWPC reported labels an hour (see `swpc_kp`); the engine may use the stand-in.
     let kp_now = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx))
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), t)
     };
-    let t = now_unix();
     let ask = path_regions::Ask {
         me,
         key: path_regions::sweep_key(t, &mygrid, &prop_engine, station_power_w, ant_gain_dbi, &wx),
@@ -8430,11 +8439,254 @@ async fn get_path_regions(
     .map_err(|e| e.to_string())
 }
 
-/// The Kp SWPC actually reported, from the propagation cache's snapshot — `None` when the cache
-/// is cold, or when the last fetch failed and the snapshot carries the model's stand-in values
-/// (the same rule that keeps stand-ins off logged contacts).
-fn swpc_kp(wx: Option<&propagation::SpaceWxView>) -> Option<f32> {
-    wx.filter(|w| w.fetched).map(|w| w.kp)
+/// The band advice of a served snapshot (fresh, or cached at any age), made for `now`: the
+/// advisor, the best band per region, the banners and the worldwide ranking, from the windows
+/// `get_propagation` gathered and from `wx`, the Kp and X-ray that may speak for now.
+fn advise_for_now(
+    snap: &mut propagation::PropagationSnapshot,
+    call: &str,
+    grid: &str,
+    now: i64,
+    anchored: &[propagation::PathSpot],
+    wide: &[propagation::PathSpot],
+    wx: &propagation::SpaceWx,
+) {
+    // Rebuild the band advisor on the ANCHORED (operator-reachable) window — "best
+    // band FOR YOU", reflecting activity AROUND the operator, NOT the busiest band
+    // worldwide. Rebuild whenever we have any anchored evidence (own-call MQTT,
+    // near-region, or own decodes); when empty we keep the cached snapshot's
+    // own-call advisory (never the global firehose, which `anchored` excludes).
+    // The model's words need a usable solar flux and Kp; otherwise the advisor reports only what
+    // was heard (`PropAdvisor::without_model`), here and for the worldwide ranking below.
+    let model_usable = snap.space_wx.stamps.model_usable(now);
+    let advisor_for = || {
+        let a = propagation::PropAdvisor::new(call, grid);
+        if model_usable {
+            a
+        } else {
+            a.without_model()
+        }
+    };
+    if !anchored.is_empty() {
+        let advisor = advisor_for();
+        snap.advisory = advisor.advise(now, anchored, wx);
+        // Best-band-per-region recommender + the (region, band) activity matrix, from the
+        // SAME anchored window (operator-reachable only — never the firehose). One pass.
+        let rb = advisor.region_band(now, anchored, &snap.advisory.bands);
+        snap.best_to_region = rb.best_to_region;
+        snap.region_band = rb.cells;
+    } else if !model_usable {
+        // Not rebuilt: the served words are the model's at the fetch, from a Kp and an hour of
+        // the day that are gone. Once the model may not speak, the bands say only what was heard.
+        served_without_model(snap, call, grid);
+    }
+    // A served snapshot's banners were built from the numbers it was fetched with: rebuild
+    // them from the ones that may speak for now, rebuilt advisory or not.
+    snap.advisory.banners = advisor_for().banners(wx);
+    // "Worldwide activity" = the SAME advisor over the GLOBAL firehose window, so the
+    // UI can show busy-worldwide beside best-FOR-YOU (workable vs merely-loud). Only
+    // when the firehose actually adds something beyond the anchored set.
+    if wide.len() > anchored.len() {
+        snap.worldwide = Some(advisor_for().advise(now, wide, wx));
+    }
+}
+
+#[cfg(test)]
+mod served_advisory_tests {
+    use super::advise_for_now;
+    use propagation::model::{ActivityTier, SpaceWxStamps};
+
+    const NOW: i64 = 1_761_800_000;
+    const FETCHED: i64 = NOW - 2 * 3600;
+
+    /// A snapshot fetched two hours ago with a measured flux and Kp, so its bands carry the
+    /// model's words from then, and a best-to-region row carrying one too. Its Kp is stamped at
+    /// the fetch; `kp_at` restamps it.
+    fn cached(kp_at: i64) -> propagation::PropagationSnapshot {
+        let wx = propagation::SpaceWx::default();
+        let mut snap = propagation::PropagationEngine::new("KD9TAW", "EN52").snapshot_measured(
+            FETCHED,
+            &[],
+            &wx,
+            true,
+            &[],
+            &propagation::NeedsSet::default(),
+        );
+        snap.source = "cached".into();
+        snap.space_wx.fetched = true;
+        snap.space_wx.stamps = SpaceWxStamps {
+            sfi_at: Some(FETCHED - 3600),
+            kp_at: Some(kp_at),
+            xray_at: Some(kp_at),
+            a_day: None,
+        };
+        snap.best_to_region = vec![propagation::advisor::RegionBest {
+            region: "Europe".into(),
+            octant: "NE".into(),
+            bearing_deg: 45.0,
+            band: "20m".into(),
+            tier: ActivityTier::Quiet,
+            modeled: "Open".into(),
+            stations: 1,
+            bidirectional: false,
+            score: 0.1,
+        }];
+        snap
+    }
+
+    fn model_words(snap: &propagation::PropagationSnapshot) -> Vec<String> {
+        let bands = snap.advisory.bands.iter();
+        bands
+            .flat_map(|b| [&b.modeled, &b.modeled_reason])
+            .chain(snap.best_to_region.iter().map(|r| &r.modeled))
+            .filter(|w| !w.is_empty())
+            .cloned()
+            .collect()
+    }
+
+    /// A cached snapshot with nothing heard since: its Kp is two hours old, so the model may not
+    /// speak, and the words it spoke at the fetch are not served as now's.
+    #[test]
+    fn a_cached_snapshot_keeps_no_model_words_once_its_kp_is_old() {
+        let mut snap = cached(FETCHED);
+        assert!(!model_words(&snap).is_empty(), "control: the fetch spoke");
+        let wx = propagation::SpaceWx::default();
+        advise_for_now(&mut snap, "KD9TAW", "EN52", NOW, &[], &[], &wx);
+        assert_eq!(model_words(&snap), Vec::<String>::new());
+        assert_eq!(heard_only_wrongs(&snap.advisory), Vec::<String>::new());
+        assert_eq!(
+            snap.advisory.bands.len(),
+            propagation::model::Band::ALL.len()
+        );
+    }
+
+    /// What a band nobody heard may not say once the model is gone: the model's reason ("open
+    /// per model", "solar flux too low"), or the Quiet tier and meter its prior gave; and the
+    /// headline may not name a band to try. Every band of the fixture was heard by nobody.
+    fn heard_only_wrongs(a: &propagation::PropAdvisory) -> Vec<String> {
+        let mut out: Vec<String> = a
+            .bands
+            .iter()
+            .filter(|b| {
+                b.reason != "no activity heard" || b.tier != ActivityTier::Closed || b.score != 0.0
+            })
+            .map(|b| format!("{} {:?} {:.3} {}", b.band, b.tier, b.score, b.reason))
+            .collect();
+        if a.headline.contains("safest bet") {
+            out.push(a.headline.clone());
+        }
+        out
+    }
+
+    /// The TV summary page reads the cached snapshot itself, not through `get_propagation`, so
+    /// it takes the same rule: no model word, model reason or model tier once the Kp is old.
+    #[test]
+    fn the_tv_board_serves_no_model_words_once_the_kp_is_old() {
+        let board =
+            super::connect_board(cached(FETCHED), "KD9TAW".into(), "EN52".into(), None, NOW);
+        let wrong: Vec<String> = board
+            .bands
+            .iter()
+            .filter(|b| {
+                !b.modeled.is_empty() || b.reason != "no activity heard" || b.tier != "Closed"
+            })
+            .map(|b| format!("{} {} {} {}", b.band, b.tier, b.modeled, b.reason))
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new());
+        assert!(!board.headline.contains("safest bet"), "{}", board.headline);
+        // A fresh Kp beside a stand-in flux is no model either: the board strips on the flux too.
+        let mut standin = cached(NOW - 60);
+        standin.space_wx.stamps.sfi_at = None;
+        let board = super::connect_board(standin, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert!(board
+            .bands
+            .iter()
+            .all(|b| b.modeled.is_empty() && b.reason == "no activity heard"));
+        // Negative control: with a Kp that may speak, the board carries the model's words.
+        let fresh =
+            super::connect_board(cached(NOW - 60), "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert!(fresh.bands.iter().any(|b| !b.modeled.is_empty()));
+    }
+
+    /// The TV summary prints an index only while it may speak for now: the hours-old Kp and X-ray
+    /// and the stand-in A are dashes, never the raw numbers. The flux, measured 3 h ago, speaks.
+    #[test]
+    fn the_tv_board_prints_no_stand_in_or_old_index() {
+        let board =
+            super::connect_board(cached(FETCHED), "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(
+            (board.sfi, board.kp, board.a_index, board.xray_class),
+            (Some(120.0), None, None, None)
+        );
+        let mut standin = cached(NOW - 60);
+        standin.space_wx.stamps.sfi_at = None;
+        let board = super::connect_board(standin, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(board.sfi, None, "a stand-in flux is no reading");
+        // Positive control: a Kp and X-ray measured a minute ago are printed.
+        assert_eq!(board.kp, Some(2.0));
+        assert!(board.xray_class.is_some());
+        // Each index on its own stamp: a fresh Kp beside an old X-ray, and the reverse.
+        let mut old_xray = cached(NOW - 60);
+        old_xray.space_wx.stamps.xray_at = Some(NOW - 2 * 3600);
+        let board = super::connect_board(old_xray, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!((board.kp, board.xray_class), (Some(2.0), None));
+        let mut old_kp = cached(NOW - 2 * 3600);
+        old_kp.space_wx.stamps.xray_at = Some(NOW - 60);
+        let board = super::connect_board(old_kp, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(board.kp, None);
+        assert!(board.xray_class.is_some());
+    }
+
+    /// The negative control: a Kp that may still speak keeps the served words.
+    #[test]
+    fn a_cached_snapshot_with_a_fresh_kp_keeps_its_model_words() {
+        let mut snap = cached(NOW - 60);
+        let before = model_words(&snap);
+        let wx = propagation::SpaceWx::default();
+        advise_for_now(&mut snap, "KD9TAW", "EN52", NOW, &[], &[], &wx);
+        assert!(!before.is_empty());
+        assert_eq!(model_words(&snap), before);
+    }
+}
+
+/// A served snapshot's band advice told again with no model, from the stations it heard at the
+/// fetch ([`propagation::PropAdvisor::forget_model`]): no model word, reason, tier or rank, and
+/// no best-to-region word. For a cached snapshot once its solar flux or Kp may not speak; the
+/// desktop, Remote and TV page (`advise_for_now`) and the TV summary (`connect_board`) share it.
+fn served_without_model(snap: &mut propagation::PropagationSnapshot, call: &str, grid: &str) {
+    propagation::PropAdvisor::new(call, grid)
+        .without_model()
+        .forget_model(&mut snap.advisory);
+    for r in &mut snap.best_to_region {
+        r.modeled.clear();
+    }
+}
+
+/// The space weather a path, band or DXpedition outlook runs on, from the propagation cache's
+/// snapshot: its Kp and X-ray only while they may speak for `now`
+/// ([`propagation::SpaceWx::speaking_now`]), since a cached snapshot is served at any age and an
+/// hours-old Kp 6 or a GOES gap's last flare would otherwise shape the forecast. `ssn` is the R12
+/// for the engines that read it. The path and band outlooks once passed only the flare flag as a
+/// flux (M1 or B1); their engines read no X-ray, so the measured flux changes none of their numbers.
+fn outlook_wx(v: &propagation::SpaceWxView, ssn: Option<f32>, now: i64) -> propagation::SpaceWx {
+    propagation::SpaceWx {
+        sfi: v.sfi,
+        ssn,
+        kp: v.kp,
+        a_index: v.a_index,
+        xray_long: v.xray_long,
+    }
+    .speaking_now(&v.stamps, now)
+}
+
+/// The Kp SWPC actually reported, from the propagation cache's snapshot, when it may speak for
+/// `now` — `None` when the cache is cold, when the Kp is the model's stand-in (its product did
+/// not answer), or when its sample is older than the gauge's limit (a cached snapshot is served
+/// at any age). The Kp's own stamp decides, not `fetched`, which is true when any one product
+/// answered ([`propagation::model::SpaceWxStamps::usable`]).
+fn swpc_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f32> {
+    wx.filter(|w| w.stamps.usable(propagation::model::WxKey::Kp, now))
+        .map(|w| w.kp)
 }
 
 #[cfg(test)]
@@ -8464,9 +8716,12 @@ mod ring_key_tests {
 
 #[cfg(test)]
 mod path_outlook_kp_tests {
-    use super::swpc_kp;
+    use super::{outlook_wx, swpc_kp};
 
-    fn view(kp: f32, fetched: bool) -> propagation::SpaceWxView {
+    const NOW: i64 = 1_761_800_000;
+
+    /// A snapshot's space weather whose Kp was sampled at `kp_at` (`None` = the stand-in).
+    fn view(kp: f32, kp_at: Option<i64>) -> propagation::SpaceWxView {
         propagation::SpaceWxView {
             sfi: 120.0,
             kp,
@@ -8475,23 +8730,70 @@ mod path_outlook_kp_tests {
             flare: false,
             xray_long: 1e-7,
             solar_wind: None,
-            fetched,
+            fetched: kp_at.is_some(),
+            stamps: propagation::model::SpaceWxStamps {
+                kp_at,
+                ..Default::default()
+            },
+            ap_now: None,
+            a_by_day: Vec::new(),
         }
     }
 
     #[test]
     fn a_cold_cache_gives_no_kp() {
-        assert_eq!(swpc_kp(None), None);
+        assert_eq!(swpc_kp(None, NOW), None);
     }
 
     #[test]
     fn a_failed_fetchs_stand_in_kp_is_not_a_reading() {
-        assert_eq!(swpc_kp(Some(&view(2.0, false))), None);
+        assert_eq!(swpc_kp(Some(&view(2.0, None)), NOW), None);
     }
 
     #[test]
     fn a_fetched_kp_is_passed_on() {
-        assert_eq!(swpc_kp(Some(&view(3.33, true))), Some(3.33));
+        assert_eq!(swpc_kp(Some(&view(3.33, Some(NOW - 60))), NOW), Some(3.33));
+    }
+
+    /// Another product answering does not make the Kp a reading: its own stamp decides.
+    #[test]
+    fn a_stand_in_kp_beside_a_measured_flux_is_not_a_reading() {
+        let mut v = view(2.0, None);
+        v.stamps.sfi_at = Some(NOW - 3600);
+        v.fetched = true;
+        assert_eq!(swpc_kp(Some(&v), NOW), None);
+    }
+
+    /// A cached snapshot's Kp from two hours ago says nothing about the path now.
+    #[test]
+    fn an_hours_old_cached_kp_is_not_now() {
+        assert_eq!(swpc_kp(Some(&view(6.0, Some(NOW - 2 * 3600))), NOW), None);
+    }
+
+    /// The path, band and DXpedition outlooks run on the cached snapshot's Kp and X-ray only
+    /// while each may speak for now: an hours-old storm and flare shape no forecast.
+    #[test]
+    fn the_outlooks_take_only_a_kp_and_flare_that_speak_for_now() {
+        let quiet = propagation::SpaceWx::default();
+        let storm = |at: i64| {
+            let mut v = view(6.0, Some(at));
+            v.xray_long = 2e-4;
+            v.flare = true;
+            v.stamps.xray_at = Some(at);
+            v
+        };
+        let old = outlook_wx(&storm(NOW - 2 * 3600), Some(80.0), NOW);
+        assert_eq!((old.kp, old.xray_long), (quiet.kp, quiet.xray_long));
+        assert!(!old.flare_in_progress());
+        // Positive control: the same storm, measured a minute ago, reaches the outlook whole.
+        let fresh = outlook_wx(&storm(NOW - 60), Some(80.0), NOW);
+        assert_eq!(
+            (fresh.kp, fresh.xray_long, fresh.ssn),
+            (6.0, 2e-4, Some(80.0))
+        );
+        assert!(fresh.flare_in_progress());
+        // The flux and A are not the gate's: they pass as they are.
+        assert_eq!((old.sfi, old.a_index), (120.0, 8.0));
     }
 
     #[test]
@@ -8505,13 +8807,16 @@ mod path_outlook_kp_tests {
                 .any(|s| s.kind == propagation::SegmentKind::Polar)
         };
         for route in [propagation::Route::Short, propagation::Route::Long] {
-            assert!(!polar(swpc_kp(None), route), "cold cache, {route:?}");
+            assert!(!polar(swpc_kp(None, NOW), route), "cold cache, {route:?}");
             assert!(
-                !polar(swpc_kp(Some(&view(2.0, false))), route),
+                !polar(swpc_kp(Some(&view(2.0, None)), NOW), route),
                 "stand-in, {route:?}"
             );
             // Positive control: the same Kp, really reported, draws the stretch.
-            assert!(polar(swpc_kp(Some(&view(2.0, true))), route), "{route:?}");
+            assert!(
+                polar(swpc_kp(Some(&view(2.0, Some(NOW - 60))), NOW), route),
+                "{route:?}"
+            );
         }
     }
 }
@@ -8561,18 +8866,15 @@ async fn get_band_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
+            .map(|(_, s)| {
                 // R12 only matters to p533; withholding it from the heuristic keeps
                 // that path byte-identical to its pre-engine-seam behavior.
-                ssn: if p533 {
+                let ssn = if p533 {
                     LAST_SSN.lock().ok().and_then(|g| *g)
                 } else {
                     None
-                },
-                sfi: s.space_wx.sfi,
-                kp: s.space_wx.kp,
-                a_index: s.space_wx.a_index,
-                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
+                };
+                outlook_wx(&s.space_wx, ssn, now_unix())
             })
             .unwrap_or_default()
     };
@@ -8798,13 +9100,11 @@ async fn get_dxped_windows(
                 ));
             }
         }
-        let wx = propagation::SpaceWx {
-            sfi: s.space_wx.sfi,
-            ssn: LAST_SSN.lock().ok().and_then(|g| *g),
-            kp: s.space_wx.kp,
-            a_index: s.space_wx.a_index,
-            xray_long: s.space_wx.xray_long,
-        };
+        let wx = outlook_wx(
+            &s.space_wx,
+            LAST_SSN.lock().ok().and_then(|g| *g),
+            now_unix(),
+        );
         (targets, wx)
     };
     if targets.is_empty() {
@@ -8957,12 +9257,14 @@ fn tv_getting_out_since(args: &serde_json::Value) -> Option<i64> {
     args.get("since").and_then(|x| x.as_i64())
 }
 
-/// The current OVATION aurora oval (downsampled prob ≥ 8 %), for the map overlay.
-/// Cached `AURORA_TTL_SECS`; serves the last-good set on a fetch failure.
+/// The current OVATION aurora oval (downsampled prob ≥ 8 %), for the map overlay, with the
+/// time it is a forecast for, when its input was observed, and when this copy was fetched.
+/// Cached `AURORA_TTL_SECS`; serves the last-good oval on a fetch failure, its stamps saying
+/// how old it is; an empty oval with no stamps if we never had one.
 #[tauri::command]
 async fn get_aurora(
     cache: State<'_, AuroraCache>,
-) -> Result<Vec<propagation::live::aurora::AuroraPoint>, String> {
+) -> Result<propagation::live::aurora::AuroraOval, String> {
     const AURORA_TTL_SECS: u64 = 600;
     {
         let g = cache.lock().map_err(|e| e.to_string())?;
@@ -8978,11 +9280,12 @@ async fn get_aurora(
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
     match fetched {
-        Ok(pts) => {
+        Ok(mut oval) => {
+            oval.fetched_at = Some(now_unix());
             if let Ok(mut g) = cache.lock() {
-                *g = Some((std::time::Instant::now(), pts.clone()));
+                *g = Some((std::time::Instant::now(), oval.clone()));
             }
-            Ok(pts)
+            Ok(oval)
         }
         Err(_) => {
             // Serve a stale oval rather than nothing; empty if we never had one.
@@ -9006,10 +9309,15 @@ struct PcaView {
     /// Day/night 30 MHz cap absorption (dB) — the headline numbers.
     a30_day: f64,
     a30_night: f64,
-    /// Polar-cap cutoff (geomagnetic latitude, °) at the current Kp.
-    cutoff_deg: f64,
+    /// Polar-cap cutoff (geomagnetic latitude, °) at the measured Kp. `None` without a measured
+    /// Kp: the edge is then unknown, and the shading below is drawn at the quiet-field cutoff
+    /// (Kp 0, the most poleward cap), the least it can be — never at a stand-in Kp.
+    cutoff_deg: Option<f64>,
     /// Polar shading samples (empty when quiet — draw nothing).
     points: Vec<propagation::pca::PcaPoint>,
+    /// The GOES proton sample's own time (Unix seconds), so a copy served after a failed
+    /// refetch says how old it is.
+    protons_at: Option<i64>,
 }
 
 #[tauri::command]
@@ -9050,21 +9358,28 @@ async fn get_pca(
     let Some(flux) = flux else {
         return Ok(None); // never fetched — honest offline, not a fabricated quiet
     };
+    // Only a measured, fresh Kp places the cap edge: a cold cache, a snapshot whose Kp is a
+    // stand-in, or an hours-old cached one gives none (`pca_kp`).
+    let now = now_unix();
     let kp = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        guard
-            .as_ref()
-            .map(|(_, s)| s.space_wx.kp as f64)
-            .unwrap_or(0.0)
+        pca_kp(guard.as_ref().map(|(_, s)| &s.space_wx), now)
     };
-    let now = now_unix();
     Ok(Some(PcaView {
         j10: flux.j10,
         a30_day: propagation::pca::a30_day(flux.j5),
         a30_night: propagation::pca::a30_night(flux.j1),
-        cutoff_deg: propagation::pca::cutoff_lat_deg(kp),
-        points: propagation::pca::pca_layer(flux.j5, flux.j1, kp, now, MIN_DB),
+        cutoff_deg: kp.map(propagation::pca::cutoff_lat_deg),
+        points: propagation::pca::pca_layer(flux.j5, flux.j1, kp.unwrap_or(0.0), now, MIN_DB),
+        protons_at: flux.at,
     }))
+}
+
+/// The Kp the polar-cap edge is placed at: the snapshot's Kp only when it may speak for `now`
+/// ([`swpc_kp`]), never the stand-in a failed fetch leaves or an hours-old cached reading, and
+/// nothing on a cold cache.
+fn pca_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f64> {
+    swpc_kp(wx, now).map(f64::from)
 }
 
 /// Magnetic declination (degrees, east-positive) at the operator's QTH right
@@ -14473,7 +14788,9 @@ async fn get_kp_forecast(
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
     match fetched {
-        Ok(v) => {
+        Ok(mut v) => {
+            // When this copy was fetched, so a last-good one served after a failure says how old.
+            v.fetched_at = Some(now_unix());
             if let Ok(mut g) = cache.lock() {
                 *g = Some((std::time::Instant::now(), v.clone()));
             }
@@ -14552,11 +14869,27 @@ async fn get_kc2g_muf(cache: State<'_, Kc2gCache>) -> Result<Vec<propagation::Mu
             Ok(v)
         }
         Err(_) => {
-            // Serve a stale set rather than nothing; empty if we never had one.
+            // Serve a stale set rather than nothing; empty if we never had one. Each station's
+            // age was measured when the copy was fetched, so it grows by the time since — a
+            // reading kept through an outage is not as young as it was then.
             let g = cache.lock().map_err(|e| e.to_string())?;
-            Ok(g.as_ref().map(|(_, v)| v.clone()).unwrap_or_default())
+            Ok(g.as_ref()
+                .map(|(when, v)| kc2g_aged(v, when.elapsed().as_secs()))
+                .unwrap_or_default())
         }
     }
+}
+
+/// A cached KC2G set with every station's age moved on by `elapsed` seconds.
+fn kc2g_aged(v: &[propagation::MufStation], elapsed: u64) -> Vec<propagation::MufStation> {
+    let elapsed = i64::try_from(elapsed).unwrap_or(i64::MAX);
+    v.iter()
+        .cloned()
+        .map(|mut s| {
+            s.age_secs = s.age_secs.saturating_add(elapsed);
+            s
+        })
+        .collect()
 }
 
 /// The freshest GOES long-band X-ray flux for the D-RAP flare layer + heads-up.
@@ -14565,7 +14898,8 @@ async fn get_kc2g_muf(cache: State<'_, Kc2gCache>) -> Result<Vec<propagation::Mu
 struct XrayNow {
     /// GOES 0.1–0.8 nm flux, W/m².
     flux: f32,
-    /// When the reading was fetched (Unix seconds, UTC).
+    /// The GOES sample's own time (Unix seconds, UTC) — never the fetch time, so a feed gap
+    /// reads as an old sample and not as "now".
     as_of: i64,
 }
 
@@ -14584,8 +14918,10 @@ async fn get_xray_now() -> Result<XrayNow, String> {
         .await
         .map_err(|e| e.to_string())?;
     match fetched {
-        Ok(flux) => {
-            let as_of = now_unix();
+        Ok(propagation::live::swpc::Sample {
+            value: flux,
+            at: as_of,
+        }) => {
             if let Ok(mut g) = LAST_XRAY.lock() {
                 *g = Some((std::time::Instant::now(), flux, as_of));
             }
@@ -34254,7 +34590,6 @@ fn build_connect_board(
     prop: &PropCache,
     kp: &KpForecastCache,
 ) -> Option<tempo_app::connect_web::ConnectBoardData> {
-    use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
     // One bounded clone under each lock; everything else is built off-lock.
     let snap = prop.lock().ok()?.as_ref().map(|(_, p)| p.clone())?;
     let (call, grid) = {
@@ -34270,11 +34605,42 @@ fn build_connect_board(
         .ok()
         .and_then(|g| g.as_ref().map(|(_, f)| f.clone()))
         .and_then(|f| f.peak_ahead().cloned());
-    Some(ConnectBoardData {
+    Some(connect_board(snap, call, grid, peak, now_unix()))
+}
+
+/// The TV summary page's payload from one propagation snapshot, the station, and the Kp
+/// forecast's peak, for `now` ([`build_connect_board`] gathers them under their locks).
+fn connect_board(
+    mut snap: propagation::PropagationSnapshot,
+    call: String,
+    grid: String,
+    peak: Option<propagation::KpPoint>,
+    now: i64,
+) -> tempo_app::connect_web::ConnectBoardData {
+    use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
+    // The cached snapshot is served at any age: its storm and flare lines speak only while the
+    // Kp or X-ray they rest on may speak for now, as on the desktop (`get_propagation`).
+    let stamps = snap.space_wx.stamps;
+    // Its band advice, as `get_propagation` serves it, once the model may not speak.
+    if !stamps.model_usable(now) {
+        served_without_model(&mut snap, &call, &grid);
+    }
+    // A number is shown only while it may speak for now: a stand-in or an old reading is a dash,
+    // as on the gauges (this page has no dimmed ink to age one in).
+    let speaks = |k: propagation::model::WxKey| stamps.usable(k, now);
+    let wx_now = propagation::SpaceWx {
+        sfi: snap.space_wx.sfi,
+        ssn: None,
+        kp: snap.space_wx.kp,
+        a_index: snap.space_wx.a_index,
+        xray_long: snap.space_wx.xray_long,
+    }
+    .speaking_now(&stamps, now);
+    ConnectBoardData {
+        banners: propagation::PropAdvisor::new(&call, &grid).banners(&wx_now),
         call,
         grid,
         headline: snap.advisory.headline.clone(),
-        banners: snap.advisory.banners.clone(),
         bands: snap
             .advisory
             .bands
@@ -34299,16 +34665,22 @@ fn build_connect_board(
                 is_new: o.is_new,
             })
             .collect(),
-        sfi: snap.space_wx.sfi,
-        kp: snap.space_wx.kp,
-        a_index: snap.space_wx.a_index,
-        xray_class: snap.space_wx.xray_class.clone(),
-        insights: snap.insights.iter().map(|i| i.plain.clone()).collect(),
+        sfi: speaks(propagation::model::WxKey::Sfi).then_some(snap.space_wx.sfi),
+        kp: speaks(propagation::model::WxKey::Kp).then_some(snap.space_wx.kp),
+        a_index: speaks(propagation::model::WxKey::A).then_some(snap.space_wx.a_index),
+        xray_class: speaks(propagation::model::WxKey::Xray)
+            .then(|| snap.space_wx.xray_class.clone()),
+        insights: snap
+            .insights
+            .iter()
+            .filter(|i| propagation::insight_speaks_now(i, &stamps, now))
+            .map(|i| i.plain.clone())
+            .collect(),
         kp_peak_ahead: peak.as_ref().map(|p| p.kp),
         kp_peak_unix: peak.as_ref().map(|p| p.time_unix),
         source: snap.source.clone(),
         as_of_unix: snap.as_of,
-    })
+    }
 }
 
 /// The app handle the TV page's closures read at call time. Set once in `.setup()`;
@@ -50315,6 +50687,77 @@ mod tests {
         }
         offenders.dedup();
         offenders
+    }
+
+    /// A logged contact takes each space-weather number only when it is a reading, each with its
+    /// own stamp (the engine judges the stamps against the contact's time): the Kp and its sample
+    /// time, NOAA's daily A with its day (never the Kp-derived estimate), the SFI and when it was
+    /// measured. A stand-in gives `None`, so the field is left off.
+    #[test]
+    fn a_contact_takes_only_measured_space_weather() {
+        let now = 1_761_800_000;
+        let wx = propagation::SpaceWx {
+            sfi: 89.0,
+            ssn: None,
+            kp: 0.67,
+            a_index: 4.0,
+            xray_long: 2.1e-7,
+        };
+        let all = propagation::model::SpaceWxStamps {
+            sfi_at: Some(now - 6 * 3600),
+            kp_at: Some(now - 360),
+            xray_at: Some(now - 240),
+            a_day: Some(now / 86_400 * 86_400 - 86_400),
+        };
+        let u = |t: i64| t as u64;
+        let day = now / 86_400 * 86_400;
+        let table = [(day - 2 * 86_400, 7.0), (day - 86_400, 4.0)];
+        assert_eq!(
+            crate::space_wx_for_log(&wx, &all, &table),
+            (
+                Some((0.67, u(now - 360))),
+                vec![(7.0, u(day - 2 * 86_400)), (4.0, u(day - 86_400))],
+                Some((89.0, u(now - 6 * 3600)))
+            )
+        );
+        // Every number a stand-in: nothing.
+        let none = propagation::model::SpaceWxStamps::default();
+        assert_eq!(
+            crate::space_wx_for_log(&wx, &none, &[]),
+            (None, vec![], None)
+        );
+    }
+
+    /// The polar-cap edge sits at a MEASURED Kp only: none on a cold cache, none on a snapshot
+    /// whose Kp is the stand-in, the reading when it is one.
+    #[test]
+    fn the_pca_edge_needs_a_measured_kp() {
+        let mut snap = propagation::offline(1_761_800_000, "K1ABC", "FN31").space_wx;
+        snap.kp = 2.0; // the stand-in a failed fetch leaves
+        let now = 1_761_800_000;
+        assert_eq!(crate::pca_kp(None, now), None, "cold cache");
+        assert_eq!(crate::pca_kp(Some(&snap), now), None, "stand-in Kp");
+        snap.kp = 5.33;
+        snap.stamps.kp_at = Some(1_761_799_700);
+        assert_eq!(crate::pca_kp(Some(&snap), now), Some(5.33_f32 as f64));
+        // A cached snapshot's measured Kp from two hours ago places no edge.
+        snap.stamps.kp_at = Some(now - 2 * 3600);
+        assert_eq!(crate::pca_kp(Some(&snap), now), None, "an hours-old Kp");
+    }
+
+    /// A KC2G set served after a failed refetch is older by the time since it was fetched.
+    #[test]
+    fn a_stale_kc2g_set_ages() {
+        let st = propagation::MufStation {
+            lat: 40.0,
+            lon: -105.0,
+            muf_mhz: Some(18.0),
+            fof2_mhz: Some(6.0),
+            age_secs: 300,
+            confidence: None,
+        };
+        let aged = crate::kc2g_aged(&[st], 3600);
+        assert_eq!(aged[0].age_secs, 3900);
     }
 
     /// A command body runs on a runtime WORKER — an `async fn`, or a sync fn under

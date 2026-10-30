@@ -369,6 +369,7 @@ mod tests {
                     noaa_scale: Some("G4".into()),
                 },
             ],
+            fetched_at: None,
         };
         let g = path_geometry(BOSTON, LONDON, MAY_12Z + 600, Some(2.0), Some(&f), None);
         assert_eq!(g.now_hour, 12);
@@ -453,6 +454,7 @@ mod tests {
                 kind: KpKind::Predicted,
                 noaa_scale: None,
             }],
+            fetched_at: None,
         };
         let g = path_geometry(MINNEAPOLIS, TOKYO, MAY_12Z, None, Some(&f), None);
         assert_eq!(

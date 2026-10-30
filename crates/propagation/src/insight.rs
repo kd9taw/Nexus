@@ -114,6 +114,23 @@ fn dir_suffix(dir: TrendDir) -> &'static str {
 /// snapshot (no history yet) still emits the threshold-only insights (flux, Kp,
 /// flare, greyline, Es); the live command layer passes the real trend for the
 /// "building/falling" lines.
+/// Whether a line already built into a served snapshot may still be shown at `now`: a storm line
+/// needs a Kp, and a flare line an X-ray, that may speak for now
+/// ([`crate::model::SpaceWxStamps::usable`]). For a reader of the cached snapshot that does not
+/// rebuild its lines (the TV page); every other line is kept.
+pub fn insight_speaks_now(
+    insight: &Insight,
+    stamps: &crate::model::SpaceWxStamps,
+    now: i64,
+) -> bool {
+    use crate::model::WxKey;
+    match insight.kind {
+        InsightKind::Geomagnetic => stamps.usable(WxKey::Kp, now),
+        InsightKind::Flare => stamps.usable(WxKey::Xray, now),
+        _ => true,
+    }
+}
+
 pub fn generate_insights(
     now: i64,
     wx: &SpaceWx,
@@ -515,6 +532,59 @@ mod tests {
             a_index: 8.0,
             xray_long: xray,
         }
+    }
+
+    /// A cached snapshot (served at any age) carrying a Kp 6 and an X1 flux stamped two hours
+    /// ago raises no storm or flare line and no banner: the station's lines run on the numbers
+    /// that may speak for now ([`SpaceWx::speaking_now`]). The same readings fresh raise both.
+    #[test]
+    fn a_cached_hours_old_storm_and_flare_raise_nothing() {
+        use crate::model::SpaceWxStamps;
+        let storm = wx(150.0, 6.0, 1e-4);
+        let stamped = |age: i64| SpaceWxStamps {
+            sfi_at: Some(NOW - 3600),
+            kp_at: Some(NOW - age),
+            xray_at: Some(NOW - age),
+            a_day: None,
+        };
+        let lines = |age: i64| {
+            let now_wx = storm.speaking_now(&stamped(age), NOW);
+            let kinds: Vec<InsightKind> =
+                generate_insights(NOW, &now_wx, None, &[], &[], Some((43.0, -89.0)), None)
+                    .into_iter()
+                    .map(|i| i.kind)
+                    .collect();
+            let banners = crate::advisor::PropAdvisor::new("K1ABC", "EN53").banners(&now_wx);
+            (kinds, banners)
+        };
+        let (kinds, banners) = lines(2 * 3600);
+        assert!(!kinds.contains(&InsightKind::Geomagnetic), "{kinds:?}");
+        assert!(!kinds.contains(&InsightKind::Flare), "{kinds:?}");
+        assert!(banners.is_empty(), "{banners:?}");
+        let (kinds, banners) = lines(60);
+        assert!(kinds.contains(&InsightKind::Geomagnetic), "{kinds:?}");
+        assert!(kinds.contains(&InsightKind::Flare), "{kinds:?}");
+        assert_eq!(banners.len(), 2, "{banners:?}");
+        // A reader of the cached snapshot that keeps its built lines drops exactly those two once
+        // their readings are old, and keeps the rest.
+        let built = generate_insights(NOW, &storm, None, &[], &[], Some((43.0, -89.0)), None);
+        let kept = |age: i64| -> Vec<InsightKind> {
+            built
+                .iter()
+                .filter(|i| insight_speaks_now(i, &stamped(age), NOW))
+                .map(|i| i.kind)
+                .collect()
+        };
+        let all: Vec<InsightKind> = built.iter().map(|i| i.kind).collect();
+        assert_eq!(kept(60), all);
+        let old = kept(2 * 3600);
+        assert!(!old.contains(&InsightKind::Geomagnetic) && !old.contains(&InsightKind::Flare));
+        assert_eq!(
+            old.len(),
+            all.iter()
+                .filter(|k| !matches!(k, InsightKind::Geomagnetic | InsightKind::Flare))
+                .count()
+        );
     }
 
     fn rising_muf(now_mhz: f32, per_hr: f32) -> WxTrend {

@@ -857,6 +857,10 @@ button.nb-chip:hover {
   font-size: var(--fs-label);
   line-height: var(--lh-tight);
 }
+/* An old or missing reading's number takes the dim ink, as its caption does: never full ink. */
+.swx-v[data-dim] {
+  color: var(--text-dim);
+}
 /* A unit after a gauge's value (the solar wind's km/s): smaller, so the number stays short. */
 .swx-vu {
   display: inline-flex;
@@ -4861,6 +4865,16 @@ body.resizing-row {
 .map-layer input[type='range'] {
   width: 100%;
   margin-top: var(--space-1);
+}
+/* A layer row's second line — what the layer IS (the aurora oval: a forecast, and for when). A
+   forecast time long gone dims, the way the space-weather gauges dim an old reading. */
+.map-layer-note {
+  display: block;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.map-layer-note[data-stale] {
+  color: var(--text-faint);
 }
 /* STREET SCALE (MapView, features/streetOverlay.ts): a world-scale field shows no detail at street
    zoom, so its row reads dimmed and its tooltip says why. It stays a working control; only the ink
@@ -33672,6 +33686,11 @@ tr.sel .aprs-sym {
   text-decoration-color: var(--alert-warning);
   text-decoration-thickness: 0.15em;
   text-underline-offset: 0.25em;
+}
+/* An old or missing reading's number takes the dim ink, as its Space Wx gauge's does (`.swx-v[data-dim]`):
+   never full ink. A dimmed index never carries the storm mark (DashboardBar drops it). */
+.dash-index[data-dim] .dash-index-v {
+  color: var(--text-dim);
 }
 /* The provenance chip (cached, partial, no live data): the warning on its EDGE, the word in the
    bar's ink. Not the panes' `.prop-prov`, which letters its warning in the warning colour: that

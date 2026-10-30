@@ -47,6 +47,15 @@ impl Drop for Dir {
 
 const NOW: i64 = 1_778_150_000; // 2026-05-07 ~10:33Z
 
+/// Space weather a card may grade from: a flux measured an hour before `NOW`, a Kp a minute before.
+fn measured() -> propagation::model::SpaceWxStamps {
+    propagation::model::SpaceWxStamps {
+        sfi_at: Some(NOW - 3600),
+        kp_at: Some(NOW - 60),
+        ..Default::default()
+    }
+}
+
 fn adif_date(t: i64) -> (String, String) {
     // Days since 1970-01-01 to a civil date (proleptic Gregorian).
     let z = t.div_euclid(86_400) + 719_468;
@@ -375,7 +384,7 @@ fn a_new_contact_is_graded_from_the_card_kept_for_its_station() {
     // No card for the station: no grade.
     assert_eq!(at_log(&rec, "", &live, &region, &[]), None);
     let card = sydney_card("FN42", NOW);
-    keep_outlook("FN42aa", "QF56", NOW, &card);
+    keep_outlook("FN42aa", "QF56", NOW, &card, Some(&measured()));
     let got = at_log(&rec, "", &live, &region, &[]).expect("graded");
     let hour = (NOW.rem_euclid(86_400) / 3600) as usize;
     let want = propagation::compare_routes_at(&card, card.long_path.as_deref().unwrap(), hour)
@@ -543,7 +552,13 @@ fn receivers_along_one_route_are_said_and_raise_nothing() {
     let _s = serial();
     let live = Mutex::new(propagation::LiveSpots::default());
     let region = Mutex::new(propagation::LiveSpots::default());
-    keep_outlook("FN42", "QF56", NOW, &sydney_card("FN42", NOW));
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&measured()),
+    );
     let rec = qso("VK2AA", "QF56", "20m", NOW, None);
     let plain = at_log(&rec, "", &live, &region, &[]).unwrap();
     // A receiver half-way round the long path heard the worked station within the quarter hour.
@@ -579,7 +594,13 @@ fn a_contact_that_did_not_go_by_the_ionosphere_is_never_graded() {
     assert!(!ionospheric(Some("SAT")) && !ionospheric(Some("EME")) && !ionospheric(Some("RPT")));
     let live = Mutex::new(propagation::LiveSpots::default());
     let region = Mutex::new(propagation::LiveSpots::default());
-    keep_outlook("FN42", "QF56", NOW, &sydney_card("FN42", NOW));
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&measured()),
+    );
     let ion = qso("VK2AA", "QF56", "20m", NOW, Some("150"));
     let mut sat = ion.clone();
     sat.prop_mode = Some("SAT".into());
@@ -643,4 +664,75 @@ fn a_pass_of_many_chunks_keeps_every_chunk() {
         "every chunk in the file"
     );
     assert_eq!(held.len(), lock(&GRADES).cells.len());
+}
+
+/// A card is kept for a contact's grade only when the space weather it was computed from was
+/// measured and current: from a cold cache, a stand-in flux, an old Kp or a stand-in Kp, the
+/// contact logged against it gets no grade. Positive control: measured, it is graded. And a kept
+/// card grades a later contact only while its space weather still speaks at that contact's time.
+#[test]
+fn only_a_card_from_measured_space_weather_grades_a_new_contact() {
+    let _s = serial();
+    let live = Mutex::new(propagation::LiveSpots::default());
+    let region = Mutex::new(propagation::LiveSpots::default());
+    let stamps = |sfi_at: Option<i64>, kp_at: Option<i64>| propagation::model::SpaceWxStamps {
+        sfi_at,
+        kp_at,
+        ..Default::default()
+    };
+    let rec = qso("VK2AA", "QF56", "20m", NOW, Some("150"));
+    for (what, s) in [
+        ("cold cache", None),
+        ("stand-in flux", Some(stamps(None, Some(NOW - 60)))),
+        (
+            "old Kp",
+            Some(stamps(Some(NOW - 3600), Some(NOW - 20 * 60))),
+        ),
+        ("stand-in Kp", Some(stamps(Some(NOW - 3600), None))),
+    ] {
+        lock(&OUTLOOKS).clear();
+        keep_outlook("FN42", "QF56", NOW, &sydney_card("FN42", NOW), s.as_ref());
+        assert_eq!(
+            at_log(&rec, "", &live, &region, &[]),
+            None,
+            "{what}: graded"
+        );
+    }
+    lock(&OUTLOOKS).clear();
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&measured()),
+    );
+    assert!(
+        at_log(&rec, "", &live, &region, &[]).is_some(),
+        "measured: not graded"
+    );
+    // Fail closed at log time: the same kept card, for a contact made once its Kp has gone
+    // stale (still inside the card's six hours), grades nothing.
+    let later = qso("VK2AA", "QF56", "20m", NOW + 20 * 60, Some("150"));
+    assert_eq!(
+        at_log(&later, "", &live, &region, &[]),
+        None,
+        "Kp stale at log time: graded"
+    );
+    // And a card computed on a Kp already stale is not kept, even for a contact from before,
+    // when that Kp still spoke: the card itself never rested on a current reading.
+    lock(&OUTLOOKS).clear();
+    let old_kp = stamps(Some(NOW - 3600), Some(NOW - 20 * 60));
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&old_kp),
+    );
+    let before = qso("VK2AA", "QF56", "20m", NOW - 10 * 60, Some("150"));
+    assert_eq!(
+        at_log(&before, "", &live, &region, &[]),
+        None,
+        "a stale card was kept"
+    );
 }

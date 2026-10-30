@@ -38,6 +38,7 @@ import {
 } from '../../features/connectFeeds'
 import { useGetoutSince } from '../../features/getoutSince'
 import { provLabel } from './paneFormat'
+import { xrayFastFresh } from '../../propViz'
 import type { NeededBoard, OtaBoard, PaneContext, SpotsFeed } from './paneContext'
 
 /** What the selected call resolves to, against EVERYTHING plotted: a decoded station, a live spot,
@@ -108,7 +109,8 @@ export function useConnectFeeds(enabled = true): ConnectFeedValues {
     scales: swx?.scales ?? null,
     alerts: swx?.alerts ?? NO_ALERTS,
     muf: muf ?? NO_MUF,
-    xrayNow: xray?.flux ?? null,
+    // The fast lane's flux only while its GOES sample is young enough to be now (a gap ages it).
+    xrayNow: xrayFastFresh(xray, Date.now()),
     dxpedWindows,
   }
 }

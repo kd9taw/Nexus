@@ -1109,7 +1109,7 @@ function Globe3DView({
     let live = true
     const poll = () =>
       getAurora()
-        .then((a) => live && setAuroraPts(a ?? []))
+        .then((a) => live && setAuroraPts(a?.points ?? []))
         .catch(() => {})
     poll()
     const id = setInterval(poll, 600_000)

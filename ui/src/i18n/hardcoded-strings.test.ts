@@ -230,6 +230,8 @@ const MIGRATED = [
   'propViz.ts',
   'openingAlert.ts',
   'stormAlert.ts',
+  // The flare heads-up toast, its copy in the catalog like the storm toast's.
+  'flareAlert.ts',
   'tv/ConnectTv.tsx',
   // The dashboard bar over the Connect pop-out and the TV page: the index names, `UTC` and the
   // clock digits are tokens; its prose (the Stay behind toggle, the hover words) is the catalog's.
