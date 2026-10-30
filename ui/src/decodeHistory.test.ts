@@ -91,6 +91,138 @@ describe('decode history — WSJT-X chronological flow', () => {
   })
 })
 
+describe('an own transmission sorts after the decodes it answered', () => {
+  // FT8 period P = slot 100 starts at 1,500,000 ms. Decodes ingested at slot P were HEARD in
+  // P-1; the over sent in P answers them and must list below them, however the decode's arrival
+  // time and the over's whole-second transmit stamp happen to fall.
+  const P = 100
+  const START = P * 15_000
+  const rr73 = row({ message: 'KD9TAW W9XYZ RR73', freqHz: 1200, directedToMe: true })
+  const my73 = row({ message: 'W9XYZ KD9TAW 73', freqHz: 1500, mine: true, txAt: START / 1000 })
+  const order = (h: DecodeHistory) => orderEntries(h.entries(), 'time').map((d) => d.message)
+
+  it('a decode that arrives after the over started still lists above it', () => {
+    // The RR73 lands 1.8 s into P (a later decode pass); the 73 went out at P+0.
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([rr73], P, START + 1_800)
+    h.ingest([rr73, my73], P, START + 2_000)
+    expect(order(h)).toEqual(['KD9TAW W9XYZ RR73', 'W9XYZ KD9TAW 73'])
+  })
+
+  it('the whole-second transmit stamp cannot pull the over above the decode', () => {
+    // RR73 at P+1.3 s, 73 released at P+1.6 s but stamped P+1 s (the engine's Unix seconds).
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([rr73], P, START + 1_300)
+    h.ingest([rr73, { ...my73, txAt: START / 1000 + 1 }], P, START + 1_700)
+    expect(order(h)).toEqual(['KD9TAW W9XYZ RR73', 'W9XYZ KD9TAW 73'])
+  })
+
+  it('the next period’s decodes still list below the over (boundary)', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    // The 73 is stamped after the RR73 arrived, so this holds on arrival order alone.
+    const late73 = { ...my73, txAt: START / 1000 + 1 }
+    h.ingest([rr73], P, START + 400)
+    h.ingest([rr73, late73], P, START + 1_200)
+    const next = row({ message: 'CQ K2DEF FN20', freqHz: 800, isCq: true })
+    h.ingest([next, late73], P + 1, START + 15_400) // heard during P, arrives in P+1
+    expect(order(h)).toEqual(['KD9TAW W9XYZ RR73', 'W9XYZ KD9TAW 73', 'CQ K2DEF FN20'])
+  })
+
+  it('within one side, rows keep time order: decodes first-heard, overs by transmit time', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    const cq = row({ message: 'CQ K2DEF FN20', freqHz: 800, isCq: true })
+    const second = { ...my73, message: 'W9XYZ KD9TAW RR73', txAt: START / 1000 + 5 }
+    h.ingest([second, my73], P, START + 5_500)
+    h.ingest([second, my73, rr73], P, START + 6_000)
+    h.ingest([second, my73, rr73, cq], P, START + 7_000)
+    expect(order(h)).toEqual(['KD9TAW W9XYZ RR73', 'CQ K2DEF FN20', 'W9XYZ KD9TAW 73', 'W9XYZ KD9TAW RR73'])
+  })
+
+  it('only the time order changes: SNR order still ranks by SNR', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([{ ...rr73, snr: -20 }, { ...my73, snr: 0 }], P, START + 2_000)
+    expect(orderEntries(h.entries(), 'snr').map((d) => d.message)).toEqual(['W9XYZ KD9TAW 73', 'KD9TAW W9XYZ RR73'])
+  })
+})
+
+describe('an own transmission takes the period it was sent in, not the last decoded one', () => {
+  // The pane's `slot` is the last DECODED slot. An over keyed at a boundary before any of that
+  // period's decodes have folded (an empty early pass, a full pass still running, and every tier
+  // with no early pass: Q65, FST4, MSK144) arrives while it still names the period two back.
+  const FT8 = { periodMs: 15_000, offsetMs: 0 }
+  const seen = (h: DecodeHistory) => orderEntries(h.entries(), 'time').map((d) => `${d.slot}:${d.message}`)
+  const rr73 = row({ message: 'KD9TAW A1AA RR73', freqHz: 1200, from: 'A1AA', directedToMe: true })
+  const over = (message: string, txAt: number) => row({ message, freqHz: 1500, from: 'KD9TAW', mine: true, txAt })
+
+  it('a mid-over switch to 73 lists below the RR73 that caused it, both in the over’s period', () => {
+    // FT8 slot 102 starts at 1,530,000 ms. The repeated report keys at 0.3 s while the pane's
+    // slot still says 100; the RR73 heard in 101 then folds (slot 102) and the 73 replaces the
+    // report on the air in the same second.
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    const report = over('A1AA KD9TAW R-10', 1530)
+    h.ingest([report], 100, 1_530_400, FT8)
+    h.ingest([rr73, report, over('A1AA KD9TAW 73', 1530)], 102, 1_531_800, FT8)
+    expect(seen(h)).toEqual(['102:KD9TAW A1AA RR73', '102:A1AA KD9TAW R-10', '102:A1AA KD9TAW 73'])
+  })
+
+  it('both overs of a same-second switch keep a row', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    const both = [over('A1AA KD9TAW R-10', 1530), over('A1AA KD9TAW 73', 1530)]
+    h.ingest(both, 102, 1_531_000, FT8)
+    expect(h.entries().map((d) => d.message)).toEqual(['A1AA KD9TAW R-10', 'A1AA KD9TAW 73'])
+    expect(h.ingest(both, 102, 1_531_250, FT8)).toBe(false) // a re-poll still changes nothing
+  })
+
+  it('Q65-60: an over keyed at the boundary lists after the period before it', () => {
+    // Slot 30 starts at 1,800,000 ms. The pane still says slot 28 (period 29 not decoded yet).
+    const h = new DecodeHistory()
+    h.setScope('2m', 'Q65')
+    const clock = { periodMs: 60_000, offsetMs: 0 }
+    h.ingest([over('A1AA KD9TAW R-10', 1800)], 28, 1_800_500, clock)
+    h.ingest([rr73], 30, 1_806_000, clock) // heard in 29, folds in 30
+    expect(seen(h)).toEqual(['30:KD9TAW A1AA RR73', '30:A1AA KD9TAW R-10'])
+  })
+
+  it('FST4-120: the over takes its own period', () => {
+    const h = new DecodeHistory()
+    h.setScope('160m', 'FST4')
+    const clock = { periodMs: 120_000, offsetMs: 0 }
+    h.ingest([over('A1AA KD9TAW 73', 1_200_000 / 1000 + 1)], 8, 1_201_500, clock)
+    expect(h.entries()[0].slot).toBe(10)
+  })
+
+  it('FT4: a boundary half a second past the whole second is not lost to the truncated stamp', () => {
+    // Slot 101 starts at 757,500 ms; keyed at 757,800, stamped 757 s.
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT4')
+    h.ingest([over('A1AA KD9TAW 73', 757)], 99, 758_000, { periodMs: 7_500, offsetMs: 0 })
+    expect(h.entries()[0].slot).toBe(101)
+  })
+
+  it('a computer clock running slow still lands the over in its period', () => {
+    // The station steers by -400 ms: keyed 100 ms into slot 102 on the corrected clock is
+    // 1,529,700 on the computer's, stamped 1529 s.
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([over('A1AA KD9TAW 73', 1529)], 100, 1_530_000, { periodMs: 15_000, offsetMs: -400 })
+    expect(h.entries()[0].slot).toBe(102)
+  })
+
+  it('a row first seen in its own period stays in that period (control)', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([over('CQ KD9TAW EN52', 1530)], 102, 1_530_600, FT8)
+    expect(h.entries()[0].slot).toBe(102)
+  })
+})
+
 describe('Rx Frequency filter (rx)', () => {
   it('passes a directedToMe decode at a FAR audio offset (the missed-caller fix)', () => {
     const d = row({ message: 'KD9TAW JA1ABC -15', freqHz: 2400, directedToMe: true })

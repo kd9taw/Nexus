@@ -94,10 +94,12 @@ export function ribbonFor(
   dx: LatLon,
   outlook: PathPrediction | null | undefined,
   focusBand?: string | null,
+  /** The UTC hour the day is scrubbed to (the path-over-the-day strip); null = now. */
+  hour?: number | null,
 ): { lines: RibbonLine[]; favoured: RouteName | null } {
   const km = haversineKm(me, dx)
   const g = outlook?.geometry
   const mine = g != null && Math.abs(g.distKm - km) <= 20 + km * 0.01
-  const model = mine ? ribbonRoutes(outlook, focusBand) : null
+  const model = mine ? ribbonRoutes(outlook, focusBand, hour) : null
   return { lines: ribbonLines(me, dx, model), favoured: model?.favoured ?? null }
 }

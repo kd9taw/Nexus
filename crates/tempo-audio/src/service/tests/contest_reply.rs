@@ -21,11 +21,15 @@ use std::time::Instant;
 /// W1AW's CQ FD has been decoded. "Double-click on call sets Tx enable" is off: a logger's Reply
 /// arms TX whatever it says, as WSJT-X's does.
 fn station(tag: &str, on: bool, mode: &str) -> (std::path::PathBuf, Arc<Mutex<Engine>>) {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("nexus-contest-reply-{tag}-{nanos}"));
+    let dir = std::env::temp_dir().join(format!(
+        "nexus-contest-reply-{tag}-{nanos}-{}",
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&dir).expect("scratch");
     std::fs::write(dir.join("log.adi"), tempo_core::logbook::adif_header()).expect("log");
     let store = tempo_app::logstore::open(

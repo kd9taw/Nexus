@@ -28,7 +28,7 @@
 //! modelled; "confirmed" needs evidence from the station itself (a beam heading), which this
 //! module never claims.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::model::Band;
 use crate::predict::PathPrediction;
@@ -42,7 +42,7 @@ pub enum Route {
 }
 
 /// The model's answer for one band at one hour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RouteVerdict {
     Short,
@@ -54,7 +54,7 @@ pub enum RouteVerdict {
 }
 
 /// How strongly the model favours the route it names (`Short`/`Long` verdicts only).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RouteConfidence {
     Likely,
@@ -267,7 +267,17 @@ pub fn compare_routes(sp: &PathPrediction, lp: &PathPrediction) -> Vec<RouteCall
     if lg.dist_km - sg.dist_km < NEAR_ANTIPODE_KM {
         return Vec::new();
     }
-    let h = sg.now_hour as usize;
+    compare_routes_at(sp, lp, sg.now_hour as usize)
+}
+
+/// [`compare_routes`] at UTC hour `h` (0..23) — the path-over-the-day strip asks it for every
+/// hour, so each cell carries the call the card would make at that hour (none near the antipode).
+pub fn compare_routes_at(sp: &PathPrediction, lp: &PathPrediction, h: usize) -> Vec<RouteCall> {
+    if let (Some(sg), Some(lg)) = (sp.geometry.as_ref(), lp.geometry.as_ref()) {
+        if lg.dist_km - sg.dist_km < NEAR_ANTIPODE_KM {
+            return Vec::new();
+        }
+    }
     let evidence = |p: &PathPrediction, b: &crate::likelihood::BandOutlook| RouteEvidence {
         bcr: b.hourly.get(h).copied().unwrap_or(0.0),
         snr_db: b

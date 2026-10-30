@@ -209,6 +209,7 @@ pub const RPC_ALLOWLIST: &[&str] = &[
     "get_solar_indices",   // NOAA daily SFI + sunspot number (Space Wx pane's trends)
     "get_band_outlook",    // per-band outlook pane
     "get_path_outlook",    // outlook for a clicked spot
+    "get_path_regions",    // path over the day to the ten DX regions
     "get_getting_out",     // the getting-out pane
     "get_dxped_windows",   // DXpedition windows pane
     "get_openings_log",    // the openings history pane

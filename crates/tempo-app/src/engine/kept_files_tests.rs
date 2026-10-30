@@ -17,11 +17,15 @@ const STAMP: &str = "20260930-142233";
 
 /// A unique scratch directory; the name carries the test's own label.
 fn scratch(label: &str) -> PathBuf {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("nexus-kept-{label}-{nanos}"));
+    let dir = std::env::temp_dir().join(format!(
+        "nexus-kept-{label}-{nanos}-{}",
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&dir).expect("scratch dir");
     dir
 }

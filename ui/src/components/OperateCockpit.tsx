@@ -1386,6 +1386,7 @@ export function OperateCockpit({
             band={snap.radio.band}
             tier={tier}
             periodSecs={snap.link.periodSecs}
+            clockOffsetMs={snap.radio.clockOffsetMs}
             harqRescues={snap.harqRescues}
             onCall={onCall}
             needAlertsByCall={needAlertsByCall}
@@ -1412,6 +1413,7 @@ export function OperateCockpit({
             band={snap.radio.band}
             tier={tier}
             periodSecs={snap.link.periodSecs}
+            clockOffsetMs={snap.radio.clockOffsetMs}
             harqRescues={snap.harqRescues}
             onCall={onCall}
             needAlertsByCall={needAlertsByCall}
@@ -2213,6 +2215,7 @@ export function OperateCockpit({
                         band={snap.radio.band}
                         tier={tier}
                         periodSecs={snap.link.periodSecs}
+                        clockOffsetMs={snap.radio.clockOffsetMs}
                         harqRescues={snap.harqRescues}
                         onCall={onCall}
                         needAlertsByCall={needAlertsByCall}
@@ -2250,6 +2253,7 @@ export function OperateCockpit({
                         band={snap.radio.band}
                         tier={tier}
                         periodSecs={snap.link.periodSecs}
+                        clockOffsetMs={snap.radio.clockOffsetMs}
                         harqRescues={snap.harqRescues}
                         onCall={onCall}
                         needAlertsByCall={needAlertsByCall}
@@ -2303,6 +2307,7 @@ export function OperateCockpit({
                     band={snap.radio.band}
                     tier={tier}
                     periodSecs={snap.link.periodSecs}
+                    clockOffsetMs={snap.radio.clockOffsetMs}
                     harqRescues={snap.harqRescues}
                     onCall={onCall}
                     needAlertsByCall={needAlertsByCall}
@@ -2334,6 +2339,7 @@ export function OperateCockpit({
                         band={snap.radio.band}
                         tier={tier}
                         periodSecs={snap.link.periodSecs}
+                        clockOffsetMs={snap.radio.clockOffsetMs}
                         harqRescues={snap.harqRescues}
                         onCall={onCall}
                         needAlertsByCall={needAlertsByCall}

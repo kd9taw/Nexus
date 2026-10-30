@@ -255,4 +255,23 @@ describe('the map ribbon', () => {
     expect(h?.favoured).toBeNull()
     expect(ribbonRoutes(null)).toBeNull()
   })
+
+  it('scrubbed to another hour, inks and stretches come from that hour of the day', () => {
+    const seg3 = [{ from: 0.1, to: 0.4, kind: 'polar' as const }]
+    const now = [{ from: 0.5, to: 0.6, kind: 'grey' as const }]
+    const p = pred([LONG_ONLY], geo(260, 16_000, hours((h) => (h === 3 ? { segments: seg3 } : {})), now))
+    const cells = Array.from({ length: 24 }, (_, h) =>
+      h === 3 ? { shortPct: 80, longPct: 4, verdict: 'short' as const, confidence: 'likely' as const } : { shortPct: 0, longPct: 92, verdict: 'long' as const, confidence: 'likely' as const },
+    )
+    p.day = { nowHour: 12, mufShort: [], bands: [{ band: '20m', cells }], hours: [] }
+    const r = ribbonRoutes(p, null, 3)
+    expect(r?.short).toEqual({ ink: 'open', segments: seg3, brgDeg: 260 })
+    expect(r?.long?.ink).toBe('closed')
+    expect(r?.favoured).toBe('short')
+    // The current hour (or no hour) is exactly the unscrubbed ribbon.
+    expect(ribbonRoutes(p, null, 12)).toEqual(ribbonRoutes(p))
+    expect(ribbonRoutes(p, null, null)).toEqual(ribbonRoutes(p))
+    // A focused band the day has no row for falls back to the best band that hour.
+    expect(ribbonRoutes(p, '40m', 3)?.favoured).toBe('short')
+  })
 })

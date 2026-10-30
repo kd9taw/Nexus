@@ -24,7 +24,7 @@ const STORM_KP = 5
 /** Geomagnetic latitude from which a crossing is the polar cap proper. The cap edge the
  * geometry uses (66° − 1.2·Kp) sits near 64° at quiet Kp, inside the auroral zone, so a path
  * that only gets between that edge and here crosses the auroral zone, not the cap. */
-const POLAR_CAP_DEG = 70
+export const POLAR_CAP_DEG = 70
 /** The furthest equatorward that edge ever comes (its floor at Kp 9): a path that never
  * reaches it is out of the auroral zone at any Kp, so an unknown Kp changes nothing for it. */
 const EDGE_FLOOR_DEG = 55

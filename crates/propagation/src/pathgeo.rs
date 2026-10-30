@@ -40,7 +40,7 @@ const CIRCUMFERENCE_KM: f64 = 2.0 * std::f64::consts::PI * 6371.0;
 pub const GREYLINE_DEG: f64 = 6.0;
 
 /// Where an hour's Kp came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum KpSource {
     /// SWPC measured it (the period has passed or is in progress with final data).
@@ -75,6 +75,10 @@ pub struct PathGeoHour {
     /// Grey line at the operator's end / the far end.
     pub grey_me: bool,
     pub grey_dx: bool,
+    /// The stretches of the arc inside the polar cap or on the grey line in this hour — what a
+    /// map draws over the path when the operator scrubs the day to it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<PathSegment>,
 }
 
 /// What a stretch of the arc is crossing in the request's hour.
@@ -257,14 +261,14 @@ pub fn path_geometry_route(
                 .map(|&(la, lo)| geo::solar_elevation_deg(la, lo, mid))
                 .collect();
             let grey = |e: f64| e.abs() <= GREYLINE_DEG;
+            let mut segments = Vec::new();
+            // No polar stretch to draw when the Kp, and so the cap edge, is unknown.
+            let polars: Vec<bool> = gmlat.iter().map(|&g| cap.is_some_and(|c| g >= c)).collect();
+            let greys: Vec<bool> = elev.iter().map(|&e| grey(e)).collect();
+            segments_of(&polars, SegmentKind::Polar, &mut segments);
+            segments_of(&greys, SegmentKind::Grey, &mut segments);
             if h == now_hour {
-                // An unknown Kp has no cap edge, so no polar stretch is drawn from it.
-                if let Some(cap) = cap {
-                    let polar: Vec<bool> = gmlat.iter().map(|&g| g >= cap).collect();
-                    segments_of(&polar, SegmentKind::Polar, &mut segments_now);
-                }
-                let greys: Vec<bool> = elev.iter().map(|&e| grey(e)).collect();
-                segments_of(&greys, SegmentKind::Grey, &mut segments_now);
+                segments_now = segments.clone();
             }
             PathGeoHour {
                 unix,
@@ -276,6 +280,7 @@ pub fn path_geometry_route(
                 sunlit_frac: elev.iter().filter(|&&e| e > 0.0).count() as f32 / n,
                 grey_me: grey(elev[0]),
                 grey_dx: grey(elev[samples - 1]),
+                segments,
             }
         })
         .collect();
@@ -428,6 +433,105 @@ mod tests {
         assert_eq!(g.oval_now, Some(false));
     }
 
+    const MINNEAPOLIS: (f64, f64) = (44.98, -93.27);
+
+    #[test]
+    fn with_no_space_weather_kp_is_unknown_and_nothing_depends_on_it() {
+        // Cold cache or a failed SWPC fetch: no reading is handed in, no outlook is held.
+        let g = path_geometry(MINNEAPOLIS, TOKYO, MAY_12Z, None, None, None);
+        for h in &g.hours {
+            assert_eq!(h.kp_source, KpSource::Unknown);
+            assert_eq!((h.kp, h.cap_lat_deg, h.polar_frac), (None, None, None));
+        }
+        // The model-free geometry is still there.
+        assert!(g.max_gmlat_deg > 60.0);
+        // An outlook still answers the hours it covers; only the gaps are unknown.
+        let f = KpForecast {
+            points: vec![KpPoint {
+                time_unix: MAY_12Z,
+                kp: 3.0,
+                kind: KpKind::Predicted,
+                noaa_scale: None,
+            }],
+        };
+        let g = path_geometry(MINNEAPOLIS, TOKYO, MAY_12Z, None, Some(&f), None);
+        assert_eq!(
+            (g.hours[13].kp, g.hours[13].kp_source),
+            (Some(3.0), KpSource::Forecast)
+        );
+        assert!(g.hours[13].polar_frac.is_some());
+        assert_eq!(g.hours[15].kp_source, KpSource::Unknown);
+        assert_eq!(g.hours[15].polar_frac, None);
+        // Positive control: a reading SWPC gave is carried, labelled as the latest reading.
+        let g = path_geometry(MINNEAPOLIS, TOKYO, MAY_12Z, Some(2.0), Some(&f), None);
+        assert_eq!(
+            (g.hours[15].kp, g.hours[15].kp_source),
+            (Some(2.0), KpSource::Current)
+        );
+    }
+
+    #[test]
+    fn minneapolis_tokyo_grazes_the_edge_between_kp_1_and_kp_2() {
+        // Its highest geomagnetic latitude (~64.7°) lies between the Kp 2 edge (63.6°) and the
+        // Kp 1 edge (64.8°): exactly the case a stand-in Kp would decide.
+        let at2 = quiet(MINNEAPOLIS, TOKYO, 2.0);
+        assert!(
+            (cutoff_lat_deg(2.0) as f32..cutoff_lat_deg(1.0) as f32).contains(&at2.max_gmlat_deg),
+            "{}",
+            at2.max_gmlat_deg
+        );
+        assert!(at2.hours.iter().all(|h| h.polar_frac.unwrap() > 0.0));
+        let at1 = quiet(MINNEAPOLIS, TOKYO, 1.0);
+        assert!(at1.hours.iter().all(|h| h.polar_frac == Some(0.0)));
+    }
+
+    #[test]
+    fn grey_line_is_told_apart_at_each_end() {
+        // Equinox 06Z: sunrise at London, mid-morning in Moscow.
+        let eq_06z = 1_773_986_400;
+        let moscow = (55.75, 37.62);
+        let g = path_geometry(LONDON, moscow, eq_06z, Some(2.0), None, None);
+        assert_eq!((g.hours[6].grey_me, g.hours[6].grey_dx), (true, false));
+        // The same path the other way round swaps the ends.
+        let r = path_geometry(moscow, LONDON, eq_06z, Some(2.0), None, None);
+        assert_eq!((r.hours[6].grey_me, r.hours[6].grey_dx), (false, true));
+    }
+
+    #[test]
+    fn twilight_is_grey_line_not_daylight_and_the_sun_is_taken_mid_hour() {
+        // A 10 km path on the Dutch coast, equinox: at 05:30Z the sun is ~4° below the horizon
+        // (civil twilight), at 05:00Z ~9° below (dark), at 06:30Z ~5° up.
+        let eq_05z = 1_773_986_400 - 3600;
+        let g = path_geometry((51.5, 3.0), (51.59, 3.0), eq_05z, Some(2.0), None, None);
+        let h = &g.hours[5];
+        // Mid-hour sun: twilight, so all grey line. At the hour's start it would be none.
+        assert_eq!(h.greyline_frac, 1.0);
+        // Below the horizon is not daylight, twilight or not.
+        assert_eq!(h.sunlit_frac, 0.0);
+        // Positive control: an hour later the sun is up and still low — grey and sunlit.
+        assert_eq!(
+            (g.hours[6].greyline_frac, g.hours[6].sunlit_frac),
+            (1.0, 1.0)
+        );
+        // Negative control: noon is full daylight, no grey line.
+        assert_eq!(
+            (g.hours[12].greyline_frac, g.hours[12].sunlit_frac),
+            (0.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn the_oval_counts_within_one_cell_of_the_path_and_no_further() {
+        // A short path near Boston, all on the 42° cell row; one oval cell straight north.
+        let near = (42.36, -70.0);
+        let one_north = [(44.0f32, -71.0f32)];
+        let g = path_geometry(BOSTON, near, MAY_12Z, Some(2.0), None, Some(&one_north));
+        assert_eq!(g.oval_now, Some(true), "one cell away counts");
+        let two_north = [(46.0f32, -71.0f32)];
+        let g = path_geometry(BOSTON, near, MAY_12Z, Some(2.0), None, Some(&two_north));
+        assert_eq!(g.oval_now, Some(false), "two cells away does not");
+    }
+
     fn long(me: (f64, f64), dx: (f64, f64), kp: f32) -> PathGeometry {
         path_geometry_route(me, dx, Route::Long, MAY_12Z, Some(kp), None, None)
     }
@@ -541,103 +645,31 @@ mod tests {
         assert!(grey[0].from == 0.0 && grey[0].to == 1.0, "{grey:?}");
     }
 
-    const MINNEAPOLIS: (f64, f64) = (44.98, -93.27);
-
     #[test]
-    fn with_no_space_weather_kp_is_unknown_and_nothing_depends_on_it() {
-        // Cold cache or a failed SWPC fetch: no reading is handed in, no outlook is held.
-        let g = path_geometry(MINNEAPOLIS, TOKYO, MAY_12Z, None, None, None);
-        for h in &g.hours {
-            assert_eq!(h.kp_source, KpSource::Unknown);
-            assert_eq!((h.kp, h.cap_lat_deg, h.polar_frac), (None, None, None));
-        }
-        // The model-free geometry is still there.
-        assert!(g.max_gmlat_deg > 60.0);
-        // An outlook still answers the hours it covers; only the gaps are unknown.
-        let f = KpForecast {
-            points: vec![KpPoint {
-                time_unix: MAY_12Z,
-                kp: 3.0,
-                kind: KpKind::Predicted,
-                noaa_scale: None,
-            }],
+    fn every_hour_carries_its_own_stretches() {
+        // London -> Accra at equinox, asked at 06Z: grey end to end at 06Z, none at noon.
+        let g = path_geometry(LONDON, (5.6, -0.19), 1_773_986_400, Some(2.0), None, None);
+        assert_eq!(g.hours[g.now_hour as usize].segments, g.segments_now);
+        let grey = |h: usize| {
+            g.hours[h]
+                .segments
+                .iter()
+                .any(|s| s.kind == SegmentKind::Grey)
         };
-        let g = path_geometry(MINNEAPOLIS, TOKYO, MAY_12Z, None, Some(&f), None);
-        assert_eq!(
-            (g.hours[13].kp, g.hours[13].kp_source),
-            (Some(3.0), KpSource::Forecast)
-        );
-        assert!(g.hours[13].polar_frac.is_some());
-        assert_eq!(g.hours[15].kp_source, KpSource::Unknown);
-        assert_eq!(g.hours[15].polar_frac, None);
-        // Positive control: a reading SWPC gave is carried, labelled as the latest reading.
-        let g = path_geometry(MINNEAPOLIS, TOKYO, MAY_12Z, Some(2.0), Some(&f), None);
-        assert_eq!(
-            (g.hours[15].kp, g.hours[15].kp_source),
-            (Some(2.0), KpSource::Current)
-        );
-    }
-
-    #[test]
-    fn minneapolis_tokyo_grazes_the_edge_between_kp_1_and_kp_2() {
-        // Its highest geomagnetic latitude (~64.7°) lies between the Kp 2 edge (63.6°) and the
-        // Kp 1 edge (64.8°): exactly the case a stand-in Kp would decide.
-        let at2 = quiet(MINNEAPOLIS, TOKYO, 2.0);
-        assert!(
-            (cutoff_lat_deg(2.0) as f32..cutoff_lat_deg(1.0) as f32).contains(&at2.max_gmlat_deg),
-            "{}",
-            at2.max_gmlat_deg
-        );
-        assert!(at2.hours.iter().all(|h| h.polar_frac.unwrap() > 0.0));
-        let at1 = quiet(MINNEAPOLIS, TOKYO, 1.0);
-        assert!(at1.hours.iter().all(|h| h.polar_frac == Some(0.0)));
-    }
-
-    #[test]
-    fn grey_line_is_told_apart_at_each_end() {
-        // Equinox 06Z: sunrise at London, mid-morning in Moscow.
-        let eq_06z = 1_773_986_400;
-        let moscow = (55.75, 37.62);
-        let g = path_geometry(LONDON, moscow, eq_06z, Some(2.0), None, None);
-        assert_eq!((g.hours[6].grey_me, g.hours[6].grey_dx), (true, false));
-        // The same path the other way round swaps the ends.
-        let r = path_geometry(moscow, LONDON, eq_06z, Some(2.0), None, None);
-        assert_eq!((r.hours[6].grey_me, r.hours[6].grey_dx), (false, true));
-    }
-
-    #[test]
-    fn twilight_is_grey_line_not_daylight_and_the_sun_is_taken_mid_hour() {
-        // A 10 km path on the Dutch coast, equinox: at 05:30Z the sun is ~4° below the horizon
-        // (civil twilight), at 05:00Z ~9° below (dark), at 06:30Z ~5° up.
-        let eq_05z = 1_773_986_400 - 3600;
-        let g = path_geometry((51.5, 3.0), (51.59, 3.0), eq_05z, Some(2.0), None, None);
-        let h = &g.hours[5];
-        // Mid-hour sun: twilight, so all grey line. At the hour's start it would be none.
-        assert_eq!(h.greyline_frac, 1.0);
-        // Below the horizon is not daylight, twilight or not.
-        assert_eq!(h.sunlit_frac, 0.0);
-        // Positive control: an hour later the sun is up and still low — grey and sunlit.
-        assert_eq!(
-            (g.hours[6].greyline_frac, g.hours[6].sunlit_frac),
-            (1.0, 1.0)
-        );
-        // Negative control: noon is full daylight, no grey line.
-        assert_eq!(
-            (g.hours[12].greyline_frac, g.hours[12].sunlit_frac),
-            (0.0, 1.0)
-        );
-    }
-
-    #[test]
-    fn the_oval_counts_within_one_cell_of_the_path_and_no_further() {
-        // A short path near Boston, all on the 42° cell row; one oval cell straight north.
-        let near = (42.36, -70.0);
-        let one_north = [(44.0f32, -71.0f32)];
-        let g = path_geometry(BOSTON, near, MAY_12Z, Some(2.0), None, Some(&one_north));
-        assert_eq!(g.oval_now, Some(true), "one cell away counts");
-        let two_north = [(46.0f32, -71.0f32)];
-        let g = path_geometry(BOSTON, near, MAY_12Z, Some(2.0), None, Some(&two_north));
-        assert_eq!(g.oval_now, Some(false), "two cells away does not");
+        assert!(grey(6) && !grey(12));
+        // Boston -> Tokyo at Kp 2: the polar stretch is drawn in each hour the arc is in the cap.
+        let bt = quiet(BOSTON, TOKYO, 2.0);
+        for h in &bt.hours {
+            let polar = h.segments.iter().any(|s| s.kind == SegmentKind::Polar);
+            assert_eq!(polar, h.polar_frac.unwrap() > 0.0);
+        }
+        assert!(bt.hours.iter().all(|h| h.polar_frac.unwrap() > 0.0));
+        // With the Kp unknown there is no cap edge, so no polar stretch is drawn at any hour.
+        let unknown = path_geometry(BOSTON, TOKYO, MAY_12Z, None, None, None);
+        assert!(unknown
+            .hours
+            .iter()
+            .all(|h| h.segments.iter().all(|s| s.kind != SegmentKind::Polar)));
     }
 
     #[test]

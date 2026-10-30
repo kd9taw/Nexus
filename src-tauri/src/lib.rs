@@ -106,6 +106,10 @@ mod log_tools;
 /// Parsec presence mode's watcher thread: stop latched transmissions when the operator's Parsec
 /// session drops (off by default; started on Windows only).
 mod parsec_presence;
+/// `get_path_outlook`'s kept predictions: six hours per day, grids, engine, power and SSN.
+mod path_outlook;
+/// The region strips' sweep: ten DX regions' path over the day, kept in memory and on disk.
+mod path_regions;
 mod pouncer;
 /// The licence-class band edges the scopes draw, read from the transmit gate's own table. Display
 /// only: the gate stays `privileges::tx_allowed`.
@@ -3275,11 +3279,15 @@ mod durable_command_tests {
 
     /// A store-backed engine on a folder of the test's own, with `n` contacts.
     pub(super) fn engine_on_store(tag: &str, n: usize) -> (PathBuf, SharedEngine) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-durable-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-durable-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch");
         let mut adif = tempo_core::logbook::adif_header();
         for i in 0..n {
@@ -3779,11 +3787,15 @@ mod logbook_startup_tests {
     /// A folder of the test's own — created only when `contacts` is `Some`, holding a 1.13
     /// `log.adi` of that many contacts.
     fn folder(tag: &str, contacts: Option<usize>) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-startup-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-startup-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         if let Some(n) = contacts {
             std::fs::create_dir_all(&dir).expect("scratch");
             let mut adif = tempo_core::logbook::adif_header();
@@ -4791,11 +4803,15 @@ mod data_folder_tests {
     /// A unique scratch directory. No tempfile dependency in this crate; the name carries the
     /// test's own label so a leftover is attributable.
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-data-folder-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-data-folder-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -6054,11 +6070,15 @@ mod assistance_journal_tests {
     const ASIDE: &str = "assistance_journal.unreadable-20260930-142233.json";
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-assist-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-assist-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -7058,11 +7078,15 @@ mod conversations_file_tests {
     const ASIDE: &str = "conversations.unreadable-20260930-142233.json";
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-convs-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-convs-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -7289,11 +7313,15 @@ mod ui_state_file_tests {
     use super::*;
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-ui-state-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-ui-state-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -8170,6 +8198,7 @@ async fn get_path_outlook(
             geometry: None,
             long_path: None,
             routes: None,
+            day: None,
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
@@ -8209,14 +8238,41 @@ async fn get_path_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx))
     };
+    // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
+    // serving hour's scalars and the geometry are recomputed then.
+    let keep = prop_engine == "p533";
+    let key = path_outlook::key(
+        t,
+        &mygrid,
+        &grid,
+        &prop_engine,
+        station_power_w,
+        ant_gain_dbi,
+        &wx,
+    );
     tauri::async_runtime::spawn_blocking(move || {
-        // Both routes at once on their own threads: the long path costs the same chain again,
-        // so this keeps the card's wait at one prediction's. Neither holds any lock.
-        let (mut pred, long) = std::thread::scope(|s| {
-            let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
-            let sp = eng.predict(dx, t, &wx);
-            (sp, lp.join().ok().flatten())
-        });
+        let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
+            Some((mut sp, mut lp)) => {
+                path_outlook::refresh_now(&mut sp, t);
+                if let Some(lp) = lp.as_mut() {
+                    path_outlook::refresh_now(lp, t);
+                }
+                (sp, lp)
+            }
+            None => {
+                // Both routes at once on their own threads: the long path costs the same chain
+                // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
+                let (sp, lp) = std::thread::scope(|s| {
+                    let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
+                    let sp = eng.predict(dx, t, &wx);
+                    (sp, lp.join().ok().flatten())
+                });
+                if keep {
+                    path_outlook::put(key, sp.clone(), lp.clone());
+                }
+                (sp, lp)
+            }
+        };
         if let Some(me) = me {
             let geom = |route| {
                 propagation::path_geometry_route(
@@ -8230,8 +8286,13 @@ async fn get_path_outlook(
                 )
             };
             pred.geometry = Some(geom(propagation::Route::Short));
-            if let Some(mut lp) = long {
+            let long = long.map(|mut lp| {
                 lp.geometry = Some(geom(propagation::Route::Long));
+                lp
+            });
+            // The day as the path-over-the-day strip draws it (both routes, every hour).
+            pred.day = propagation::path_day(&pred, long.as_ref());
+            if let Some(lp) = long {
                 pred.routes = Some(propagation::compare_routes(&pred, &lp));
                 pred.long_path = Some(Box::new(lp));
             }
@@ -8242,11 +8303,104 @@ async fn get_path_outlook(
     .map_err(|e| e.to_string())
 }
 
+/// The region strips: ten fixed DX regions' path over the day from the operator's grid — both
+/// routes per band and UTC hour, the route the model favours, and each hour's Kp with its source.
+/// With P.533 the sweep (~2 s of compute, on a blocking thread, no Engine lock held) is kept six
+/// hours in memory and beside settings.json (`path_regions`); the hours' Kp is re-read from the
+/// held outlook on every ask, never fetched here. Empty when the operator's grid is unset.
+#[tauri::command]
+async fn get_path_regions(
+    state: State<'_, SharedEngine>,
+    cache: State<'_, PropCache>,
+    kp_cache: State<'_, KpForecastCache>,
+) -> Result<path_regions::PathRegionsView, String> {
+    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
+        let eng = engine_lock(&state);
+        let st = eng.settings();
+        (
+            st.mygrid.clone(),
+            st.prop_engine.clone(),
+            st.station_power_w,
+            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        )
+    };
+    let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
+        return Ok(path_regions::PathRegionsView {
+            engine: prop_engine,
+            computed_unix: 0,
+            regions: Vec::new(),
+        });
+    };
+    // The same space weather get_path_outlook reads, from the propagation cache's last snapshot.
+    let wx = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        guard
+            .as_ref()
+            .map(|(_, s)| propagation::SpaceWx {
+                sfi: s.space_wx.sfi,
+                ssn: LAST_SSN.lock().ok().and_then(|g| *g),
+                kp: s.space_wx.kp,
+                a_index: s.space_wx.a_index,
+                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
+            })
+            .unwrap_or_default()
+    };
+    let forecast = kp_cache
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+    // Only a Kp SWPC reported labels an hour (see `swpc_kp`); the engine may use the stand-in.
+    let kp_now = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx))
+    };
+    let t = now_unix();
+    let ask = path_regions::Ask {
+        me,
+        key: path_regions::sweep_key(t, &mygrid, &prop_engine, station_power_w, ant_gain_dbi, &wx),
+        engine: propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+        t,
+        kp_now,
+        wx,
+        forecast,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        path_regions::serve(ask, &path_regions::file_path())
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// The Kp SWPC actually reported, from the propagation cache's snapshot — `None` when the cache
 /// is cold, or when the last fetch failed and the snapshot carries the model's stand-in values
 /// (the same rule that keeps stand-ins off logged contacts).
 fn swpc_kp(wx: Option<&propagation::SpaceWxView>) -> Option<f32> {
     wx.filter(|w| w.fetched).map(|w| w.kp)
+}
+
+#[cfg(test)]
+mod ring_key_tests {
+    use super::ring_key;
+    use propagation::SpaceWx;
+
+    #[test]
+    fn with_no_sunspot_number_held_an_sfi_change_is_another_ring_key() {
+        let at = |sfi: f32, ssn: Option<f32>| {
+            ring_key(
+                0,
+                "FN42",
+                0.0,
+                None,
+                &SpaceWx {
+                    sfi,
+                    ssn,
+                    ..SpaceWx::default()
+                },
+            )
+        };
+        assert_ne!(at(70.0, None), at(200.0, None));
+        assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+    }
 }
 
 #[cfg(test)]
@@ -8340,6 +8494,7 @@ async fn get_band_outlook(
             geometry: None,
             long_path: None,
             routes: None,
+            day: None,
         });
     };
     let p533 = prop_engine == "p533";
@@ -8375,6 +8530,32 @@ async fn get_band_outlook(
     .await
 }
 
+/// The sunspot number a P.533 cache keys on, as a key fragment: the one the engine runs on (the
+/// R12 held, else the one it derives from the SFI — `effective_ssn`, the engine's own rule), so
+/// a changed SFI is another key whenever no R12 is held.
+pub(crate) fn ssn_key(wx: &propagation::SpaceWx) -> String {
+    format!(
+        "ssn{}",
+        propagation::p533::engine::effective_ssn(wx).round() as i32
+    )
+}
+
+/// The ring outlook's cache key: UTC day, grid, gain, power and the sunspot number the engine runs on.
+fn ring_key(
+    t: i64,
+    mygrid: &str,
+    ant_gain_dbi: f64,
+    station_power_w: Option<f64>,
+    wx: &propagation::SpaceWx,
+) -> String {
+    format!(
+        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{}",
+        t / 86_400,
+        station_power_w,
+        ssn_key(wx),
+    )
+}
+
 async fn ring_prediction(
     mygrid: String,
     prop_engine: String,
@@ -8391,12 +8572,7 @@ async fn ring_prediction(
         let eng = propagation::HeuristicEngine::new(Some(me));
         return Ok(propagation::band_outlook_ring(&eng, me, 9000.0, 8, t, &wx));
     }
-    let key = format!(
-        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{:?}",
-        t / 86_400,
-        station_power_w,
-        wx.ssn.map(|v| v.round() as i32),
-    );
+    let key = ring_key(t, &mygrid, ant_gain_dbi, station_power_w, &wx);
     if let Ok(g) = RING_OUTLOOK.lock() {
         if let Some((when, k, v)) = g.as_ref() {
             if *k == key && when.elapsed().as_secs() < RING_TTL_SECS {
@@ -14950,11 +15126,6 @@ fn save_and_publish(
                 LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
                 LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
             }
-            // Keep the live DXpedition layer's most-wanted key current (Settings
-            // override, else the build's baked application key).
-            propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-                &settings.clublog_api_key,
-            ));
             // Apply FIRST, then persist the engine's AUTHORITATIVE merged state — apply_settings keeps the
             // LIVE dual-radio roster / active radio / peg / tune (discarding the form's possibly-stale
             // copies), so saving the raw form here would write a roster that diverges from the engine and
@@ -15286,11 +15457,15 @@ mod contest_session_tests {
     /// An engine on a store of its own, with the Field Day master left on — the station a launch
     /// resumes Field Day on — and not in Field Day yet.
     fn field_day_left_on(tag: &str) -> (PathBuf, SharedEngine) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-resume-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-resume-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch");
         std::fs::write(dir.join("log.adi"), tempo_core::logbook::adif_header()).expect("log");
         let opened = tempo_app::logstore::open(
@@ -34109,6 +34284,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_solar_indices" => ok(get_solar_indices(app.state()).await),
             "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
+            "get_path_regions" => ok(get_path_regions(app.state(), app.state(), app.state()).await),
             "get_path_outlook" => {
                 let grid = v
                     .get("grid")
@@ -36965,11 +37141,15 @@ mod radioprog_file_tests {
 
     /// A unique scratch directory; the name carries the test's own label.
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-radioprog-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-radioprog-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -39532,14 +39712,10 @@ pub fn run() {
     if let Ok(mut c) = PREV_FEED_CALL.lock() {
         *c = tempo_net::cluster::login_call(&cluster_call, &cluster_ssid);
     }
-    // Feed the live DXpedition layer the ClubLog key (most-wanted ranks). Pushed,
-    // not pulled — keeps the propagation crate decoupled from settings IO.
-    {
-        let eng = engine_lock(&engine);
-        propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-            &eng.settings().clublog_api_key,
-        ));
-    }
+    // The live DXpedition layer keeps ClubLog's answers here between runs, so a restart does
+    // not ask ClubLog again before its schedule says so. Shared by every profile, like cty.dat.
+    // Disk only, and before the warm-up below asks anything.
+    propagation::live::dxped::set_cache_dir(&shared_data_dir());
     // Warm the DXpedition plan cache in the background so the Needed board's
     // expedition tagging works from launch — without it the cache stays cold until
     // the operator first opens Connect/DXpeditions.
@@ -42030,6 +42206,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         click_tci_spot,
         get_propagation,
         get_path_outlook,
+        get_path_regions,
         get_band_outlook,
         get_getting_out,
         get_aurora,
@@ -49842,7 +50019,7 @@ mod tests {
         "contests::parse_contest_rss",
         "dxped::cached_active_calls",
         "dxped::call_matches",
-        "dxped::set_clublog_key",
+        "dxped::set_cache_dir",
         "lotw_users::parse_user_activity",
         "tle::parse_mirror_manifest",
         "tle::tle_bird_ok",
