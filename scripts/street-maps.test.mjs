@@ -18,18 +18,18 @@ import { execFileSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Worker } from 'node:worker_threads'
 
 import * as sm from './street-maps.mjs'
+import { scratchDir } from './scratch-dir.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WORKFLOW = readFileSync(join(ROOT, '.github', 'workflows', 'street-maps.yml'), 'utf8')
 const HEX = (c) => c.repeat(64)
-const scratch = () => mkdtempSync(join(tmpdir(), 'street-maps-'))
+const scratch = () => scratchDir('street-maps-')
 
 // ---- The publisher's builds ----------------------------------------------------------------------
 

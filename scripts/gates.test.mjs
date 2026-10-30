@@ -17,14 +17,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+
+import { scratchDir } from './scratch-dir.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GATES = path.join(ROOT, 'scripts', 'gates');
 const CI = path.join(ROOT, '.github', 'workflows', 'ci.yml');
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gates-test-'));
+const tmp = scratchDir('gates-test-');
 const scratch = (name, text) => {
   const p = path.join(tmp, name);
   fs.writeFileSync(p, text);
@@ -1029,4 +1031,42 @@ test('two runs never share a step-script path', () => {
     !a.includes('nexus-gates-runner-temp/'),
     'the step-script directory is back to a fixed shared name'
   );
+});
+
+// ---------------------------------------------------------------------------
+// The step-script directory goes away however the run ends. Nothing removed it
+// once, and a RAM-disk /tmp filled with thousands of them. Each case first sees
+// the directory exist while its step runs, so "nothing left" cannot pass by the
+// directory never having been made.
+// ---------------------------------------------------------------------------
+
+test('a run leaves no step-script directory behind: green, red, or stopped by a signal', async () => {
+  const box = fs.mkdtempSync(path.join(tmp, 'runner-temp-'));
+  const boxEnv = { ...env, TMPDIR: box };
+  const left = () => fs.readdirSync(box).filter((n) => n.startsWith('nexus-gates-runner-'));
+  const step = (body) => MINIMAL.replace('        run: echo alpha-ran\n', `        run: |\n          ${body.join('\n          ')}\n`);
+
+  for (const [name, exit, want] of [['green', 'exit 0', 'PASS'], ['red', 'exit 1', 'FAIL']]) {
+    const r = spawnSync(GATES, ['--workflow', scratch(`runner-temp-${name}.yml`, step(['test -d "$RUNNER_TEMP" && echo runner-temp-was-there', exit]))], { encoding: 'utf8', cwd: ROOT, env: boxEnv });
+    assert.match(r.stdout, /runner-temp-was-there/, `${name}: the step never saw its directory, so the check below is vacuous`);
+    assert.match(r.stdout, new RegExp(`=== ${want}  exit`), `${name}: the step did not end as planted`);
+    assert.deepEqual(left(), [], `${name}: the run left its step-script directory behind`);
+  }
+
+  // Ctrl-C, a closed terminal and `timeout` all signal the whole process group, so the run is
+  // given a group of its own and the signal goes to all of it, step included.
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+    const file = scratch(`runner-temp-${signal}.yml`, step(['touch "$RUNNER_TEMP/started"', 'sleep 60']));
+    const child = spawn(GATES, ['--workflow', file], { cwd: ROOT, env: boxEnv, stdio: 'ignore', detached: true });
+    const closed = new Promise((resolve) => child.once('close', (code, sig) => resolve({ code, sig })));
+    const deadline = Date.now() + 30_000;
+    while (!left().some((d) => fs.existsSync(path.join(box, d, 'started')))) {
+      assert.ok(Date.now() < deadline, `${signal}: the step never started`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    process.kill(-child.pid, signal);
+    const { code } = await closed;
+    assert.equal(code, 128 + os.constants.signals[signal], `${signal}: the run must exit as a shell reports that signal`);
+    assert.deepEqual(left(), [], `${signal}: the run left its step-script directory behind`);
+  }
 });
