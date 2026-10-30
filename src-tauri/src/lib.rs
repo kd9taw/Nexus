@@ -106,8 +106,12 @@ mod log_tools;
 /// Parsec presence mode's watcher thread: stop latched transmissions when the operator's Parsec
 /// session drops (off by default; started on Windows only).
 mod parsec_presence;
-/// The region strips' sweep: ten DX regions' path over the day, kept in memory and on disk.
+/// Your contacts' paths: the log-time grade of a new contact, and the display-only grading of the
+/// existing log, kept beside settings.json.
 mod path_grades;
+/// `get_path_outlook`'s kept predictions: six hours per day, grids, engine, power and SSN.
+mod path_outlook;
+/// The region strips' sweep: ten DX regions' path over the day, kept in memory and on disk.
 mod path_regions;
 mod pouncer;
 /// The licence-class band edges the scopes draw, read from the transmit gate's own table. Display
@@ -8092,14 +8096,41 @@ async fn get_path_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx))
     };
+    // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
+    // serving hour's scalars and the geometry are recomputed then.
+    let keep = prop_engine == "p533";
+    let key = path_outlook::key(
+        t,
+        &mygrid,
+        &grid,
+        &prop_engine,
+        station_power_w,
+        ant_gain_dbi,
+        &wx,
+    );
     tauri::async_runtime::spawn_blocking(move || {
-        // Both routes at once on their own threads: the long path costs the same chain again,
-        // so this keeps the card's wait at one prediction's. Neither holds any lock.
-        let (mut pred, long) = std::thread::scope(|s| {
-            let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
-            let sp = eng.predict(dx, t, &wx);
-            (sp, lp.join().ok().flatten())
-        });
+        let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
+            Some((mut sp, mut lp)) => {
+                path_outlook::refresh_now(&mut sp, t);
+                if let Some(lp) = lp.as_mut() {
+                    path_outlook::refresh_now(lp, t);
+                }
+                (sp, lp)
+            }
+            None => {
+                // Both routes at once on their own threads: the long path costs the same chain
+                // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
+                let (sp, lp) = std::thread::scope(|s| {
+                    let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
+                    let sp = eng.predict(dx, t, &wx);
+                    (sp, lp.join().ok().flatten())
+                });
+                if keep {
+                    path_outlook::put(key, sp.clone(), lp.clone());
+                }
+                (sp, lp)
+            }
+        };
         if let Some(me) = me {
             let geom = |route| {
                 propagation::path_geometry_route(
@@ -8235,14 +8266,7 @@ async fn get_path_regions(
     let t = now_unix();
     let ask = path_regions::Ask {
         me,
-        key: path_regions::sweep_key(
-            t,
-            &mygrid,
-            &prop_engine,
-            station_power_w,
-            ant_gain_dbi,
-            wx.ssn,
-        ),
+        key: path_regions::sweep_key(t, &mygrid, &prop_engine, station_power_w, ant_gain_dbi, &wx),
         engine: propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
         t,
         kp_now,
@@ -8261,6 +8285,31 @@ async fn get_path_regions(
 /// (the same rule that keeps stand-ins off logged contacts).
 fn swpc_kp(wx: Option<&propagation::SpaceWxView>) -> Option<f32> {
     wx.filter(|w| w.fetched).map(|w| w.kp)
+}
+
+#[cfg(test)]
+mod ring_key_tests {
+    use super::ring_key;
+    use propagation::SpaceWx;
+
+    #[test]
+    fn with_no_sunspot_number_held_an_sfi_change_is_another_ring_key() {
+        let at = |sfi: f32, ssn: Option<f32>| {
+            ring_key(
+                0,
+                "FN42",
+                0.0,
+                None,
+                &SpaceWx {
+                    sfi,
+                    ssn,
+                    ..SpaceWx::default()
+                },
+            )
+        };
+        assert_ne!(at(70.0, None), at(200.0, None));
+        assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+    }
 }
 
 #[cfg(test)]
@@ -8293,6 +8342,27 @@ mod path_outlook_kp_tests {
     #[test]
     fn a_fetched_kp_is_passed_on() {
         assert_eq!(swpc_kp(Some(&view(3.33, true))), Some(3.33));
+    }
+
+    #[test]
+    fn an_unfetched_snapshot_draws_no_polar_stretch_on_either_route() {
+        // Boston -> Tokyo runs over a cap both ways round at any real Kp.
+        let (me, dx, t) = ((42.36, -71.06), (35.68, 139.69), 1_778_846_400);
+        let polar = |kp_now, route| {
+            propagation::path_geometry_route(me, dx, route, t, kp_now, None, None)
+                .segments_now
+                .iter()
+                .any(|s| s.kind == propagation::SegmentKind::Polar)
+        };
+        for route in [propagation::Route::Short, propagation::Route::Long] {
+            assert!(!polar(swpc_kp(None), route), "cold cache, {route:?}");
+            assert!(
+                !polar(swpc_kp(Some(&view(2.0, false))), route),
+                "stand-in, {route:?}"
+            );
+            // Positive control: the same Kp, really reported, draws the stretch.
+            assert!(polar(swpc_kp(Some(&view(2.0, true))), route), "{route:?}");
+        }
     }
 }
 
@@ -8369,6 +8439,32 @@ async fn get_band_outlook(
     .await
 }
 
+/// The sunspot number a P.533 cache keys on, as a key fragment: the one the engine runs on (the
+/// R12 held, else the one it derives from the SFI — `effective_ssn`, the engine's own rule), so
+/// a changed SFI is another key whenever no R12 is held.
+pub(crate) fn ssn_key(wx: &propagation::SpaceWx) -> String {
+    format!(
+        "ssn{}",
+        propagation::p533::engine::effective_ssn(wx).round() as i32
+    )
+}
+
+/// The ring outlook's cache key: UTC day, grid, gain, power and the sunspot number the engine runs on.
+fn ring_key(
+    t: i64,
+    mygrid: &str,
+    ant_gain_dbi: f64,
+    station_power_w: Option<f64>,
+    wx: &propagation::SpaceWx,
+) -> String {
+    format!(
+        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{}",
+        t / 86_400,
+        station_power_w,
+        ssn_key(wx),
+    )
+}
+
 async fn ring_prediction(
     mygrid: String,
     prop_engine: String,
@@ -8385,12 +8481,7 @@ async fn ring_prediction(
         let eng = propagation::HeuristicEngine::new(Some(me));
         return Ok(propagation::band_outlook_ring(&eng, me, 9000.0, 8, t, &wx));
     }
-    let key = format!(
-        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{:?}",
-        t / 86_400,
-        station_power_w,
-        wx.ssn.map(|v| v.round() as i32),
-    );
+    let key = ring_key(t, &mygrid, ant_gain_dbi, station_power_w, &wx);
     if let Ok(g) = RING_OUTLOOK.lock() {
         if let Some((when, k, v)) = g.as_ref() {
             if *k == key && when.elapsed().as_secs() < RING_TTL_SECS {

@@ -27,8 +27,10 @@ export interface CellView {
   /** The route that figure is for; null when the model names neither (either way, both closed). */
   route: 'short' | 'long' | null
   glyph: string
-  /** The route shown crosses the polar cap at that hour's Kp. */
+  /** The route shown crosses the auroral zone or the polar cap at that hour's Kp. */
   polar: boolean
+  /** The route that `polar` is about (the better figure's when the model names neither). */
+  polarRoute: 'short' | 'long' | null
 }
 
 /** What one cell shows in `mode`. */
@@ -37,14 +39,17 @@ export function cellView(c: PathDayCell, h: PathDayHour | undefined, mode: DayMo
     pct,
     route,
     glyph: route ? ROUTE_GLYPH[route] : '',
+    polarRoute,
     polar: polarRoute === 'long' ? h?.polarLong === true : polarRoute === 'short' ? h?.polarShort === true : false,
   })
   if (mode === 'short') return view(c.shortPct, 'short', 'short')
   if (mode === 'long') return c.longPct == null ? view(null, null, null) : view(c.longPct, 'long', 'long')
-  if (c.longPct == null || c.verdict == null) return view(c.shortPct, 'short', 'short')
+  // No long model: the short path is the only route there is.
+  if (c.longPct == null) return view(c.shortPct, 'short', 'short')
   if (c.verdict === 'short') return view(c.shortPct, 'short', 'short')
   if (c.verdict === 'long') return view(c.longPct, 'long', 'long')
-  // Either way / both closed: the better figure, and no route claimed.
+  // Either way / both closed / no call (near the antipode the shack names no route): the better
+  // figure, and no route claimed.
   const longer = c.longPct > c.shortPct
   return view(Math.max(c.shortPct, c.longPct), null, longer ? 'long' : 'short')
 }

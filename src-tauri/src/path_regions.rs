@@ -30,6 +30,9 @@ use std::sync::Mutex;
 use propagation::{KpForecast, PathDay, RegionDay, SpaceWx, PATH_REGIONS};
 use serde::{Deserialize, Serialize};
 
+/// The largest kept-sweep file read back (a sweep is ~190 KB).
+pub(crate) const MAX_FILE_BYTES: u64 = 1 << 20;
+
 /// How long a P.533 sweep is kept.
 pub(crate) const TTL_SECS: i64 = 6 * 3600;
 
@@ -72,13 +75,13 @@ pub(crate) fn sweep_key(
     engine: &str,
     station_power_w: Option<f64>,
     ant_gain_dbi: f64,
-    ssn: Option<f32>,
+    wx: &SpaceWx,
 ) -> String {
     format!(
-        "{}|{}|{engine}|{ant_gain_dbi}|{station_power_w:?}|{:?}",
+        "{}|{}|{engine}|{ant_gain_dbi}|{station_power_w:?}|{}",
         t.div_euclid(86_400),
         mygrid.trim().to_ascii_uppercase(),
-        ssn.map(|v| v.round() as i32),
+        crate::ssn_key(wx),
     )
 }
 
@@ -99,6 +102,10 @@ fn fresh(s: &Stored, key: &str, now: i64) -> bool {
 /// The kept sweep in `path`, when it is usable for `key` at `now` and every day in it is well
 /// formed. A missing, unreadable, stale or malformed file is `None`: the caller sweeps again.
 pub(crate) fn load(path: &Path, key: &str, now: i64) -> Option<Stored> {
+    // A sweep is ~190 KB; anything far past that is not one, and is not read into memory.
+    if std::fs::metadata(path).ok()?.len() > MAX_FILE_BYTES {
+        return None;
+    }
     let text = std::fs::read_to_string(path).ok()?;
     let s: Stored = serde_json::from_str(&text).ok()?;
     let known = |d: &RegionDay| PATH_REGIONS.iter().any(|r| r.id == d.id);
@@ -260,6 +267,11 @@ mod tests {
         s.regions.clear();
         save(&path, &s);
         assert_eq!(load(&path, "k", T), None, "no regions");
+        // Over the size cap: refused before it is read.
+        let mut big = serde_json::to_string(&stored("k", T)).unwrap();
+        big.push_str(&" ".repeat(MAX_FILE_BYTES as usize));
+        std::fs::write(&path, big).unwrap();
+        assert_eq!(load(&path, "k", T), None, "a file over the size cap");
         std::fs::write(&path, "{ not json").unwrap();
         assert_eq!(load(&path, "k", T), None);
         // Positive control: the same file, well formed, is used.
@@ -269,7 +281,19 @@ mod tests {
 
     #[test]
     fn the_key_moves_with_every_input_and_not_with_the_hour() {
-        let k = |t, g: &str, e: &str, p, a, s| sweep_key(t, g, e, p, a, s);
+        let k = |t, g: &str, e: &str, p, a, s: Option<f32>| {
+            sweep_key(
+                t,
+                g,
+                e,
+                p,
+                a,
+                &SpaceWx {
+                    ssn: s,
+                    ..SpaceWx::default()
+                },
+            )
+        };
         let base = k(T, "FN42", "p533", Some(100.0), 0.0, Some(105.0));
         assert_eq!(
             base,
@@ -285,6 +309,32 @@ mod tests {
         ] {
             assert_ne!(base, other);
         }
+    }
+
+    #[test]
+    fn with_no_sunspot_number_held_an_sfi_change_is_another_key_and_misses_the_file() {
+        let at = |sfi: f32, ssn: Option<f32>| {
+            sweep_key(
+                T,
+                "FN42",
+                "p533",
+                None,
+                0.0,
+                &SpaceWx {
+                    sfi,
+                    ssn,
+                    ..SpaceWx::default()
+                },
+            )
+        };
+        assert_ne!(at(70.0, None), at(200.0, None));
+        assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+        // The kept file carries the key it was swept under: a sweep at SFI 70 is not read back
+        // for SFI 200.
+        let path = crate::test_dirs::root().join("path_regions.json");
+        save(&path, &stored(&at(70.0, None), T));
+        assert!(load(&path, &at(70.0, None), T).is_some());
+        assert!(load(&path, &at(200.0, None), T).is_none());
     }
 
     #[test]

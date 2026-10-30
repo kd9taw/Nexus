@@ -42,6 +42,13 @@ describe('cellView', () => {
     expect(cellView(sp(4, 6, 'unknown'), hour(), 'best')).toMatchObject({ pct: 6, route: null })
   })
 
+  it('near the antipode (a long figure, no call) best names no route, as the card and the ribbon do', () => {
+    const c = sp(60, 70)
+    expect(cellView(c, hour(), 'best')).toMatchObject({ pct: 70, route: null, glyph: '' })
+    const d = day([{ band: '20m', cells: Array(24).fill(c) }])
+    expect(daySummary(d, 'best')).toEqual([{ band: '20m', from: 0, to: 0, route: null }])
+  })
+
   it('without a long path every mode is the short path, and the long mode has nothing', () => {
     expect(cellView(sp(60), hour(), 'best')).toMatchObject({ pct: 60, route: 'short' })
     expect(cellView(sp(60), hour(), 'short')).toMatchObject({ pct: 60, route: 'short' })

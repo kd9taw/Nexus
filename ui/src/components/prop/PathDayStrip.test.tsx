@@ -5,7 +5,7 @@
 // ribbon's three sources drawn three ways, the hours that scrub the map, the long-path label
 // wherever a long-path figure can show, and the regions in the operator's order.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fireEvent, render, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react'
 import type { PathDay, PathDayCell, PathPrediction, PathRegions } from '../../types'
 
 const fx = vi.hoisted(() => ({ regions: null as unknown, zones: [] as { zone: number; qsos: number }[] }))
@@ -19,6 +19,7 @@ vi.mock('../../api', async (importOriginal) => {
 })
 
 import { PathDayPane, PathRegionsPane } from './PathDayStrip'
+import { getPathRegions } from '../../api'
 import { heatColor } from '../../propViz'
 
 const T0 = 1_778_803_200 // 2026-05-15 00:00 UTC
@@ -97,6 +98,29 @@ describe('the selected station strip', () => {
     expect(c20[20].title).toContain('modelled')
   })
 
+  it('names a crossing as the why line does: polar cap from 70°, else auroral zone, "if" only for a forecast storm', () => {
+    const at = (d: PathDay, h: number) => {
+      const { container, unmount } = render(<PathDayPane pred={pred(d)} scrub={null} />)
+      const t = cellsOf(rows(container)[0])[h].title
+      unmount()
+      return t
+    }
+    // Deep: the long path reaches 75° geomagnetic.
+    const deep = { ...day(), maxGmlatShort: 40, maxGmlatLong: 75 }
+    expect(at(deep, 20)).toContain('crosses the polar cap')
+    // Shallow and already in the zone now (12Z): the auroral zone, even at a forecast hour.
+    const zone = { ...day(), maxGmlatShort: 40, maxGmlatLong: 65 }
+    expect(at(zone, 18)).toContain('crosses the auroral zone')
+    expect(at(zone, 18)).not.toContain('Auroral zone if')
+    // Shallow, outside the zone now; only the 18Z forecast storm brings the long path in.
+    const stormIf = day()
+    stormIf.maxGmlatShort = 40
+    stormIf.maxGmlatLong = 65
+    stormIf.hours = stormIf.hours.map((h, i) => ({ ...h, polarLong: i === 18 }))
+    expect(at(stormIf, 18)).toContain('Auroral zone if Kp 5.3 (forecast from 1800Z)')
+    expect(at(stormIf, 20)).not.toMatch(/auroral zone|polar cap/i)
+  })
+
   it('SP shows the short path alone and drops the long-path label; LP the long path', () => {
     const { container, getByRole } = render(<PathDayPane pred={pred(day())} scrub={null} />)
     fireEvent.click(getByRole('button', { name: 'SP' }))
@@ -133,7 +157,7 @@ describe('the selected station strip', () => {
     const kp = [...container.querySelectorAll('.pd-kpcell')] as HTMLElement[]
     expect(kp[5].className).toContain('unknown')
     expect(kp[5].className).not.toMatch(/good|warn|bad/)
-    expect(kp[5].title).toBe('05Z: unknown, no space-weather data')
+    expect(kp[5].title).toBe('05Z: unknown (no Kp reading)')
   })
 
   it('an hour scrubs the map to the middle of that hour, and the same hour goes back to now', () => {
@@ -186,6 +210,38 @@ describe('the region strips', () => {
     fireEvent.click(container.querySelector('.pd-region')!)
     expect(rows(container)).toHaveLength(4)
     expect(container.querySelector('.pd-region')!.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('the now column follows the clock within a minute, with no new sweep asked for', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      vi.setSystemTime(new Date((T0 + 12 * 3600 + 3540) * 1000)) // 12:59Z; the sweep says 12Z
+      const { container } = render(<PathRegionsPane needs={[]} scrub={null} myGrid="FN42" engine="p533" />)
+      await waitFor(() => expect(names(container).length).toBe(3))
+      const nowCol = () => [...container.querySelectorAll('.pd-hour')].findIndex((b) => b.classList.contains('now'))
+      expect(nowCol()).toBe(12)
+      const asked = vi.mocked(getPathRegions).mock.calls.length
+      await act(async () => {
+        vi.advanceTimersByTime(61_000) // 13:00Z
+      })
+      expect(nowCol()).toBe(13)
+      expect(vi.mocked(getPathRegions).mock.calls.length, 'no new sweep for the hour').toBe(asked)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('asks the shack again when the grid or the engine changes', async () => {
+    const { container, rerender } = render(<PathRegionsPane needs={[]} scrub={null} myGrid="FN42" engine="p533" />)
+    await waitFor(() => expect(names(container).length).toBe(3))
+    const asked = () => vi.mocked(getPathRegions).mock.calls.length
+    const before = asked()
+    rerender(<PathRegionsPane needs={[]} scrub={null} myGrid="FN42" engine="p533" />)
+    expect(asked(), 'control: the same settings ask nothing').toBe(before)
+    rerender(<PathRegionsPane needs={[]} scrub={null} myGrid="JN58" engine="p533" />)
+    await waitFor(() => expect(asked()).toBe(before + 1))
+    rerender(<PathRegionsPane needs={[]} scrub={null} myGrid="JN58" engine="heuristic" />)
+    await waitFor(() => expect(asked()).toBe(before + 2))
   })
 
   it('leaves out a region it has no name for', async () => {

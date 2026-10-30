@@ -91,6 +91,10 @@ export function reasonText(token: string): string | null {
       return t('pathGrade.why.marginS')
     case 'MARGIN_L':
       return t('pathGrade.why.marginL')
+    case 'RELIAB_S':
+      return t('pathGrade.why.reliabS')
+    case 'RELIAB_L':
+      return t('pathGrade.why.reliabL')
     case 'WITHIN':
       return t('pathGrade.why.within')
     case 'CLOSED':

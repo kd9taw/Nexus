@@ -143,3 +143,41 @@ fn an_equatorial_pair_never_goes_long_path() {
     // Positive control: the short path is named, not just "not long".
     assert!(short_hours >= 30, "{short_hours}");
 }
+
+#[test]
+fn near_the_antipode_no_route_is_called() {
+    // Every 4-character grid has an exact antipodal grid centre: FN42 (42.5, -71) and OE47
+    // (-42.5, 109). Madrid -> Wellington is about 1.5° off antipodal.
+    let all = |me: (f64, f64), dx: (f64, f64), t: i64| {
+        let e = P533Engine::new(Some(me));
+        let mut sp = e.predict(dx, t, &wx());
+        let mut lp = e
+            .predict_route(dx, Route::Long, t, &wx())
+            .expect("P.533 models the long path");
+        sp.geometry = Some(path_geometry_route(
+            me,
+            dx,
+            Route::Short,
+            t,
+            Some(2.0),
+            None,
+            None,
+        ));
+        lp.geometry = Some(path_geometry_route(
+            me,
+            dx,
+            Route::Long,
+            t,
+            Some(2.0),
+            None,
+            None,
+        ));
+        compare_routes(&sp, &lp)
+    };
+    for t in [MAY_00Z, MAY_00Z + 12 * 3600] {
+        assert!(all((42.5, -71.0), (-42.5, 109.0), t).is_empty());
+        assert!(all((40.42, -3.7), (-41.29, 174.78), t).is_empty());
+    }
+    // Positive control: a pair 30° off antipodal is called.
+    assert!(!all(BOSTON, SYDNEY, MAY_00Z).is_empty());
+}

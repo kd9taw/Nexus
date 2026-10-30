@@ -41,7 +41,7 @@ use crate::p533::engine::{ssn_from_sfi, P533Engine};
 use crate::pathgeo::path_geometry_route;
 use crate::route::{
     infer_route, Route, RouteCall, RouteConfidence, RouteEvidence, RouteReason, RouteVerdict,
-    CLOSED_BCR, MARGIN_DB, OPEN_BCR,
+    CLOSED_BCR, MARGIN_DB, NEAR_ANTIPODE_KM, OPEN_BCR,
 };
 
 /// A beam heading within this many degrees of a route's bearing points along that route.
@@ -232,8 +232,8 @@ impl ContactGrade {
 
 /// Grade a contact on `band` made at `at_unix` between `me` and `dx`, modelled at `ssn`: both
 /// routes' figures for that band and hour (one chain run each), the grey line along each arc,
-/// and the model's call ([`infer_route`]). `None` for a band the model does not cover and for
-/// two stations too close together to have a long path. Heading, receivers and DT are added by
+/// and the model's call ([`infer_route`]). `None` for a band the model does not cover, for
+/// two stations too close together to have a long path, and near the antipode. Heading, receivers and DT are added by
 /// the caller, who holds that evidence.
 pub fn grade_contact(
     engine: &P533Engine,
@@ -249,6 +249,11 @@ pub fn grade_contact(
     let h = (at_unix.rem_euclid(86_400) / 3600) as usize;
     let gs = path_geometry_route(me, dx, Route::Short, at_unix, None, None, None);
     let gl = path_geometry_route(me, dx, Route::Long, at_unix, None, None, None);
+    // Near the antipode the two routes are the same path to within noise: no call, as the card
+    // and the day strip make none ([`crate::route::compare_routes_at`]).
+    if gl.dist_km - gs.dist_km < NEAR_ANTIPODE_KM {
+        return None;
+    }
     let grey = |g: &crate::pathgeo::PathGeometry| g.hours.get(h).map(|x| x.greyline_frac);
     let call = infer_route(
         b.label(),
@@ -590,6 +595,9 @@ mod tests {
         let eng = P533Engine::new(Some(BOSTON));
         assert!(grade_contact(&eng, BOSTON, BOSTON, "20m", 1_778_150_000, 100.0).is_none());
         assert!(grade_contact(&eng, BOSTON, TOKYO, "2m", 1_778_150_000, 100.0).is_none());
+        // Near the antipode: no call (Boston and a point a few hundred km from its antipode).
+        let anti = (-BOSTON.0 + 1.0, BOSTON.1 + 180.0);
+        assert!(grade_contact(&eng, BOSTON, anti, "20m", 1_778_150_000, 100.0).is_none());
     }
 
     #[test]

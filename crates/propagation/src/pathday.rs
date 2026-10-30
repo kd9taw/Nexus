@@ -78,6 +78,12 @@ pub struct PathDay {
     pub muf_short: Vec<f32>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub muf_long: Option<Vec<f32>>,
+    /// Each route's highest geomagnetic latitude (absolute, degrees): how deep a crossing goes —
+    /// the polar cap proper, or only the auroral zone. Re-derived with the hours.
+    #[serde(default)]
+    pub max_gmlat_short: f32,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub max_gmlat_long: Option<f32>,
     /// Highest band first, so a strip's rows rise with frequency like the MUF does.
     pub bands: Vec<PathDayBand>,
     /// 24 entries, UTC hour 0..23.
@@ -125,6 +131,8 @@ pub fn path_day(sp: &PathPrediction, lp: Option<&PathPrediction>) -> Option<Path
         now_hour: gsp.now_hour,
         muf_short: sp.muf_hourly.clone(),
         muf_long: lp.map(|lp| lp.muf_hourly.clone()),
+        max_gmlat_short: 0.0,
+        max_gmlat_long: None,
         bands,
         hours: Vec::new(),
     };
@@ -141,6 +149,8 @@ fn crosses(polar_frac: Option<f32>) -> bool {
 /// current hour from fresh geometry — what a cached day needs before it is served again.
 pub fn refresh_hours(day: &mut PathDay, gsp: &PathGeometry, glp: Option<&PathGeometry>) {
     day.now_hour = gsp.now_hour;
+    day.max_gmlat_short = gsp.max_gmlat_deg;
+    day.max_gmlat_long = glp.map(|g| g.max_gmlat_deg);
     day.hours = gsp
         .hours
         .iter()
@@ -417,6 +427,36 @@ mod tests {
     }
 
     #[test]
+    fn near_the_antipode_no_hour_calls_a_route() {
+        // Boston's antipode is near 42.4° S 108.9° E: every heading is about the same distance,
+        // so the strip makes no call, as the card makes none.
+        let near = (-42.0, 109.3);
+        let at = |route| {
+            let mut p = pred(vec![band("20m", ramp(true))], route);
+            p.geometry = Some(path_geometry_route(
+                BOSTON,
+                near,
+                route,
+                MAY_12Z,
+                Some(3.0),
+                None,
+                None,
+            ));
+            p
+        };
+        let day = path_day(&at(Route::Short), Some(&at(Route::Long))).unwrap();
+        assert!(day.bands[0]
+            .cells
+            .iter()
+            .all(|c| c.verdict.is_none() && c.long_pct.is_some()));
+        // Positive control: the same figures to Sydney get a call every hour.
+        let sp = pred(vec![band("20m", ramp(true))], Route::Short);
+        let lp = pred(vec![band("20m", ramp(false))], Route::Long);
+        let d = path_day(&sp, Some(&lp)).unwrap();
+        assert!(d.bands[0].cells.iter().all(|c| c.verdict.is_some()));
+    }
+
+    #[test]
     fn without_a_long_path_the_cells_carry_the_short_path_alone() {
         let sp = pred(vec![band("20m", ramp(true))], Route::Short);
         let day = path_day(&sp, None).unwrap();
@@ -463,6 +503,10 @@ mod tests {
             );
             assert_eq!(d.polar_short, gs.hours[h].polar_frac.unwrap() > 0.0);
             assert_eq!(d.polar_long, Some(gl.hours[h].polar_frac.unwrap() > 0.0));
+            assert_eq!(
+                (day.max_gmlat_short, day.max_gmlat_long),
+                (gs.max_gmlat_deg, Some(gl.max_gmlat_deg))
+            );
             assert_eq!(
                 (d.grey_me, d.grey_dx),
                 (gs.hours[h].grey_me, gs.hours[h].grey_dx)

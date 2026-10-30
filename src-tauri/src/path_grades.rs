@@ -64,6 +64,7 @@ pub(crate) fn reason_token(r: &RouteReason) -> String {
     match r {
         RouteReason::OneClosed { open } => format!("OPEN_{}", letter(*open)),
         RouteReason::Margin { better } => format!("MARGIN_{}", letter(*better)),
+        RouteReason::Reliability { better } => format!("RELIAB_{}", letter(*better)),
         RouteReason::WithinMargin => "WITHIN".into(),
         RouteReason::BothClosed => "CLOSED".into(),
         RouteReason::GreyLine { route } => format!("GREY_{}", letter(*route)),

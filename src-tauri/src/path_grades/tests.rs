@@ -400,6 +400,12 @@ fn the_grade_reasons_are_tokens_the_logbook_can_read() {
         }),
         "MARGIN_S"
     );
+    assert_eq!(
+        reason_token(&R::Reliability {
+            better: Route::Long
+        }),
+        "RELIAB_L"
+    );
     assert_eq!(reason_token(&R::WithinMargin), "WITHIN");
     assert_eq!(reason_token(&R::BothClosed), "CLOSED");
     assert_eq!(

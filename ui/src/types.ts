@@ -437,6 +437,10 @@ export interface PathDay {
   nowHour: number
   mufShort: number[]
   mufLong?: number[]
+  /** Each route's highest geomagnetic latitude (degrees): the polar cap proper from 70°, below
+   * that only the auroral zone. Absent from an older shack. */
+  maxGmlatShort?: number
+  maxGmlatLong?: number
   bands: { band: string; cells: PathDayCell[] }[]
   hours: PathDayHour[]
 }

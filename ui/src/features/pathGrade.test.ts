@@ -100,6 +100,7 @@ describe('the Path cell', () => {
 describe('the reasons in words', () => {
   it('reads every token the shack writes, and nothing it does not', () => {
     expect(reasonText('OPEN_L')).toMatch(/only the long path/)
+    expect(reasonText('RELIAB_S')).toMatch(/short path was modelled much more reliable/)
     expect(reasonText('WITHIN')).toMatch(/within 6 dB/)
     expect(reasonText('CLOSED')).toMatch(/both paths were modelled closed/)
     expect(reasonText('GREY_S')).toMatch(/grey line along the short path/)

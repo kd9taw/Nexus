@@ -1923,6 +1923,10 @@ export const EN = {
   'pathGrade.why.openL': 'only the long path was modelled open',
   'pathGrade.why.marginS': 'the short path was modelled at least 6 dB better',
   'pathGrade.why.marginL': 'the long path was modelled at least 6 dB better',
+  'pathGrade.why.reliabS':
+    'the short path was modelled much more reliable (the model gave no signal-to-noise figure)',
+  'pathGrade.why.reliabL':
+    'the long path was modelled much more reliable (the model gave no signal-to-noise figure)',
   'pathGrade.why.within': 'the two paths were modelled within 6 dB of each other',
   'pathGrade.why.closed': 'both paths were modelled closed',
   'pathGrade.why.greyS': 'grey line along the short path',
@@ -10907,7 +10911,7 @@ export const EN = {
   },
   'pathWhy.polar': 'crosses the polar cap',
   'pathWhy.auroralZone': 'crosses the auroral zone',
-  'pathWhy.kpUnknown': 'Kp unknown, no space-weather data',
+  'pathWhy.kpUnknown': 'Kp unknown (no Kp reading)',
   'pathWhy.oval': 'crosses the auroral oval right now',
   'pathWhy.grey.both': 'grey line at both ends',
   'pathWhy.grey.me': 'grey line at your end',
@@ -10924,6 +10928,8 @@ export const EN = {
   'pathWhy.detail.polar':
     'Auroral zone and polar cap: {{pct}}% of the path (poleward of {{lat}}° geomagnetic at Kp {{kp}}, {{source}})',
   'pathWhy.detail.polarUnknown': 'Auroral zone and polar cap: unknown, because Kp is unknown',
+  'pathWhy.detail.polarNever':
+    'Auroral zone and polar cap: 0% of the path (it never reaches {{floor}}° geomagnetic, the edge at Kp 9)',
   'pathWhy.detail.maxLat': 'Highest geomagnetic latitude on the path: {{lat}}°',
   'pathWhy.detail.grey': 'Grey line: {{pct}}% of the path · in daylight: {{sun}}%',
   'pathWhy.detail.oval': 'The live auroral oval lies across the path.',
@@ -10932,20 +10938,26 @@ export const EN = {
   'pathWhy.kpSource.measured': 'measured',
   'pathWhy.kpSource.forecast': 'forecast',
   'pathWhy.kpSource.current': 'latest reading, no forecast for this hour',
-  'pathWhy.kpSource.unknown': 'unknown, no space-weather data',
+  'pathWhy.kpSource.unknown': 'unknown (no Kp reading)',
   // Short path or long path (features/pathRoute.ts): the heading hint on the Path card and the
   // selected station card, the polar chip, and the map's long-path button. The route call is the
   // P.533 model's opinion (a monthly median), so the confidence words are "likely" / "possible",
   // never "confirmed"; the long path has no reference fixture, so wherever it is shown it is
   // labelled modelled and unvalidated, and the engine never calls it more than "possible". The hint is advice: nothing turns the rotator. `{{brg}}`,
   // `{{sp}}` and `{{lp}}` are degrees (true), `{{band}}` (20m) and `{{time}}` (1800Z) invariant.
-  // The hint is wrapped by `pathWhy.sentence`.
+  // The hint is wrapped by `pathWhy.sentence`. The chip names the polar cap or the auroral zone as
+  // the why line does; its title's `{{source}}` is a `pathWhy.kpSource.*` phrase.
   'pathRoute.conf.likely': 'likely',
   'pathRoute.conf.possible': 'possible',
   'pathRoute.hint.short': 'Beam {{brg}}° for {{band}}: short path ({{conf}})',
   'pathRoute.hint.long': 'Beam {{brg}}° for {{band}}: long path ({{conf}})',
   'pathRoute.hint.either':
     '{{band}} works either way: short path {{sp}}° or long path {{lp}}°, modelled within 6 dB',
+  'pathRoute.hint.eitherGreyLong':
+    '{{band}} could go either way: the short path {{sp}}° is modelled stronger, the long path {{lp}}° lies along the grey line',
+  'pathRoute.hint.eitherGreyShort':
+    '{{band}} could go either way: the long path {{lp}}° is modelled stronger, the short path {{sp}}° lies along the grey line',
+  'pathRoute.antipode': 'Near the antipode: every heading is about the same distance',
   'pathRoute.why.shortClosed': ' — the short path is modelled closed now',
   'pathRoute.why.margin': ', modelled about {{db}} dB better now',
   'pathRoute.why.grey': ', the grey line lies along it',
@@ -10956,9 +10968,16 @@ export const EN = {
     'Modelled, unvalidated for long path: the reference model is checked for the short path only.',
   'pathRoute.lpBadge': 'modelled, unvalidated for long path',
   'pathRoute.chip.polar': 'Polar path',
-  'pathRoute.chip.storm': 'Polar path · Kp {{kp}} forecast at {{time}}',
-  'pathRoute.chip.title':
-    'This route crosses the polar cap, where an aurora brings fading and flutter. The model has no storms; the cap and Kp come from the space-weather forecast.',
+  'pathRoute.chip.storm': 'Polar path · Kp {{kp}} forecast from {{time}}',
+  'pathRoute.chip.zone': 'Auroral zone',
+  'pathRoute.chip.zoneStorm': 'Auroral zone · Kp {{kp}} forecast from {{time}}',
+  'pathRoute.chip.stormIf': 'Auroral zone if Kp {{kp}} (forecast from {{time}})',
+  'pathRoute.chip.title.cap':
+    'This route crosses the polar cap, where an aurora brings fading and flutter. The model has no storms; this comes from space weather. Kp this hour: {{source}}.',
+  'pathRoute.chip.title.zone':
+    'This route crosses the auroral zone, where an aurora brings fading and flutter. The model has no storms; this comes from space weather. Kp this hour: {{source}}.',
+  'pathRoute.chip.title.stormIf':
+    'The space-weather forecast puts the auroral zone over this route from {{time}} (Kp {{kp}}, forecast). The model has no storms.',
   'map.path.long.suggested':
     'The model favours the long path now (modelled, unvalidated for long path). Advice only: the rotator does not move.',
   // Path over the day (components/prop/PathDayStrip.tsx, features/pathDay.ts): the selected
@@ -10982,13 +11001,12 @@ export const EN = {
   'pathDay.cell.favours.long': 'the model favours the long path ({{conf}})',
   'pathDay.cell.either': 'either way',
   'pathDay.cell.closed': 'both ways modelled closed',
-  'pathDay.cell.polar': 'crosses the polar cap',
   'pathDay.cell.aboveMuf': 'above the MUF',
   'pathDay.grey.title': '{{time}}: {{text}}',
   'pathDay.kp.title': '{{time}}: Kp {{kp}}, {{source}}',
   'pathDay.legend.short': 'short path',
   'pathDay.legend.long': 'long path',
-  'pathDay.legend.polar': 'polar cap',
+  'pathDay.legend.polar': 'auroral zone / polar cap',
   'pathDay.legend.muf': 'MUF ceiling',
   'pathDay.legend.kp': 'Kp: solid measured, hollow forecast, dashed the latest reading carried forward, dotted unknown',
   'pathDay.legend.modelled': 'Modelled monthly median, not a measurement',

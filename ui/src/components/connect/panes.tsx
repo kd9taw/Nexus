@@ -829,7 +829,15 @@ export const PANES: PaneDef[] = [
     },
     category: 'bands',
     basic: () => t('connect.pane.pathRegions.basic'),
-    expert: (c) => <PathRegionsPane needs={c.needAlerts} scrub={c.dayScrub?.hour ?? null} onScrub={c.onDayScrub} />,
+    expert: (c) => (
+      <PathRegionsPane
+        needs={c.needAlerts}
+        scrub={c.dayScrub?.hour ?? null}
+        onScrub={c.onDayScrub}
+        myGrid={c.myGrid}
+        engine={c.bandOutlook?.engine}
+      />
+    ),
   },
 ]
 

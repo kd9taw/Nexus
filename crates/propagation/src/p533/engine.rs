@@ -76,6 +76,15 @@ impl P533Config {
     }
 }
 
+/// The sunspot number the engine runs on: the R12 held, else the one derived from the SFI. Every
+/// cache of this engine's answers keys on this, never on the held R12 alone, so a changed SFI is a
+/// different answer when no R12 is held.
+pub fn effective_ssn(wx: &SpaceWx) -> f64 {
+    wx.ssn
+        .map(f64::from)
+        .unwrap_or_else(|| ssn_from_sfi(wx.sfi as f64))
+}
+
 /// Smoothed sunspot number from SFI by inverting Covington
 /// (SFI ≈ 63.75 + 0.728·R + 0.00089·R²) — the offline fallback when the live
 /// solar-cycle feed hasn't supplied a real R12.
@@ -290,10 +299,7 @@ impl P533Engine {
             };
         };
 
-        let ssn = wx
-            .ssn
-            .map(f64::from)
-            .unwrap_or_else(|| ssn_from_sfi(wx.sfi as f64));
+        let ssn = effective_ssn(wx);
 
         // The day containing the request, anchored to UTC midnight like the
         // heuristic (predict.rs) so heatmap x-axes align; month from that day.
