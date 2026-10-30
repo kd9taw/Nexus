@@ -2156,6 +2156,10 @@ pub struct DecodeJob {
     /// CQ-only AP restriction (FT8 + FT4 lapcqonly). Native branch only.
     ap: bool,
     ap_cq_only: bool,
+    /// The operator is in a WSJT-X Special Operating Activity — Contest mode, or a Hound
+    /// ([`Engine::special_activity`]). Without one FT8 drops rover (`/R`) and `TU; ` decodes,
+    /// as WSJT-X does. Native branch only.
+    activity: bool,
     frame_time_ms: i64,
     /// Native branch: clear FT1 IR-HARQ buffers before decoding (HARQ disabled).
     harq_reset: bool,
@@ -2439,6 +2443,7 @@ pub fn run_js8_multi_job(job: Js8MultiJob) -> Vec<DecodeResult> {
                                     0,
                                     false,
                                     false,
+                                    false,
                                 )
                             }))
                             .unwrap_or_else(|_| {
@@ -2608,6 +2613,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         nftx,
         ap,
         ap_cq_only,
+        activity,
         frame_time_ms,
         harq_reset,
         pass,
@@ -2691,6 +2697,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
                 frame_time_ms,
                 ap,
                 ap_cq_only,
+                activity,
                 partial: pass.is_partial(),
             };
             src.decode_streaming(&req, pass.a7_final(), &mut sink)
@@ -31092,6 +31099,18 @@ contact yourself."
         }
     }
 
+    /// Whether the operator is in what WSJT-X calls a Special Operating Activity, the decoder's
+    /// `ncontest /= 0` (`decoder.f90:137`, from `int(m_specOp)` at `mainwindow.cpp:5492`): any
+    /// contest it runs, or a Hound. Here that is Contest mode on, whichever contest is picked, or
+    /// a Hound. Without one, FT8 drops rover (`/R`) and `TU; ` decodes (`ft8b.f90:452-455`).
+    fn special_activity(&self) -> bool {
+        self.settings.fd_active
+            || matches!(
+                self.settings.special_op,
+                crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
+            )
+    }
+
     pub fn build_decode_job(&self, frame: Vec<f32>, slot: u64, pass: DecodePass) -> DecodeJob {
         let source = self.source.clone();
         let next_source = self.next_source.clone();
@@ -31127,6 +31146,7 @@ contact yourself."
                 nftx: 0,
                 ap: true, // ignored: companion decodes arrive pre-made over UDP
                 ap_cq_only: false,
+                activity: false,
                 frame_time_ms: 0,
                 harq_reset: false,
                 pass,
@@ -31156,6 +31176,7 @@ contact yourself."
                 nftx: 0,
                 ap: true, // ignored: DX1's robust path has no WSJT-X AP machinery
                 ap_cq_only: false,
+                activity: false,
                 frame_time_ms: 0,
                 harq_reset: false,
                 pass,
@@ -31284,6 +31305,7 @@ contact yourself."
             // the operator deviate deliberately.
             ap: self.settings.ap_decode,
             ap_cq_only: self.settings.ap_cq_only,
+            activity: self.special_activity(),
             frame_time_ms,
             harq_reset,
             pass,
@@ -62204,6 +62226,82 @@ mod tests {
         e.settings.ap_cq_only = true;
         let job = e.build_decode_job(frame, 1, DecodePass::Boundary);
         assert!(job.ap_cq_only, "ap_cq_only = true must reach the job");
+    }
+
+    /// WSJT-X's rover and `TU; ` filter is on with no Special Operating Activity and off in one:
+    /// Contest mode, or a Hound, reaches the decode job as `activity`.
+    #[test]
+    fn contest_mode_and_hound_reach_the_decode_job_as_an_activity() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let frame = vec![0.0f32; 1024];
+        let job = |e: &Engine| e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+
+        assert!(!job(&e).activity, "no contest, no Hound: no activity");
+
+        e.settings.fd_active = true;
+        assert!(job(&e).activity, "Contest mode is an activity");
+        e.settings.fd_active = false;
+        assert!(!job(&e).activity, "Contest mode off again: no activity");
+
+        for hound in [
+            crate::settings::SpecialOp::Hound,
+            crate::settings::SpecialOp::SuperHound,
+        ] {
+            e.settings.special_op = hound;
+            assert!(job(&e).activity, "{hound:?} is an activity");
+        }
+        e.settings.special_op = crate::settings::SpecialOp::None;
+        assert!(!job(&e).activity, "Hound off again: no activity");
+    }
+
+    /// The decoder is CALLED with the activity: the worker's hop from [`DecodeJob`] to
+    /// `modes::DecodeRequest`, through `ingest` and `ingest_early`. A hop that dropped it would
+    /// silently filter every rover in Contest mode; one that forced it on would let them through
+    /// with no contest.
+    #[test]
+    fn the_activity_reaches_the_decoder_through_ingest() {
+        struct ActivityRecorder(std::sync::Arc<std::sync::Mutex<Vec<bool>>>);
+        impl SignalSource for ActivityRecorder {
+            fn label(&self) -> String {
+                "activity-recorder".into()
+            }
+            fn mode_kind(&self) -> Option<modes::ModeKind> {
+                Some(modes::ModeKind::Ft8)
+            }
+            fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+                Vec::new()
+            }
+            fn decode_a7(
+                &mut self,
+                req: &modes::DecodeRequest,
+                _a7_final: bool,
+            ) -> Vec<modes::Decode> {
+                self.0.lock().unwrap().push(req.activity);
+                Vec::new()
+            }
+        }
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        e.install_source(Box::new(ActivityRecorder(seen.clone())));
+        let frame = vec![0.0f32; 1024];
+
+        e.ingest(&frame, 1); // no contest, no Hound
+        e.settings.fd_active = true;
+        e.ingest_early(&frame, 2); // Contest mode, early pass
+        e.ingest(&frame, 2); // Contest mode, boundary
+        e.settings.fd_active = false;
+        e.settings.special_op = crate::settings::SpecialOp::Hound;
+        e.ingest(&frame, 3); // Hound
+        e.settings.special_op = crate::settings::SpecialOp::None;
+        e.ingest(&frame, 4); // off again
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![false, true, true, true, false],
+            "the decoder must see: none=false, Contest early=true, Contest=true, Hound=true, \
+             off=false"
+        );
     }
 
     /// Single decode narrows the search band the decoder is CALLED with to the
