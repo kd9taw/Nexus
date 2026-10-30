@@ -60,6 +60,14 @@
 // Every run writes target/gates/<stamp>-<pid>/ (override: GATES_LOG_DIR): one
 // .log per gate, and summary.txt with each verdict and the failing test names.
 //
+// GATES_GITHUB_REF=refs/heads/<name> sets the ref CI would see. Without it, the ref
+// is the checked-out branch's. It decides the Windows and Pi link profile ci.yml
+// picks from github.ref. A DETACHED checkout (a review or integration worktree
+// made with --detach) has no branch, so that profile cannot be read, and the
+// Windows cross gate is held back there as unrunnable. Set
+// GATES_GITHUB_REF=refs/heads/land/x to run it as a branch run, or
+// refs/heads/main to run it as main's.
+//
 // NEVER pipe this into grep/tail/head. A pipe discards the exit status of the
 // left-hand side; this project shipped a gate faked green exactly that way in
 // 1.10.3. Gates stream to the terminal and to their log from inside this

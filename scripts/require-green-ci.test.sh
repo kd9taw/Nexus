@@ -175,6 +175,44 @@ else
 fi
 
 echo
+echo "13. A BRANCH NAMED LIKE THE TAG. The run list records a name, not whether it was a branch or"
+echo "    the tag; a run accepted only because its name equals the tag is refused when a branch of"
+echo "    that name exists."
+RUNENV="NEXUS_CI_REF_IS_BRANCH=no"  run 0 "run on '$REF', no branch of that name       => PASS" "$(branch_run "\"$REF\"")"
+RUNENV="NEXUS_CI_REF_IS_BRANCH=yes" run 1 "run on '$REF', a branch '$REF' exists       => REFUSE" "$(branch_run "\"$REF\"")"
+RUNENV="NEXUS_CI_REF_IS_BRANCH=yes" run 0 "same, but a release/* run also green       => PASS" \
+  "[{\"databaseId\":17,\"headBranch\":\"$REF\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\"},
+    {\"databaseId\":18,\"headBranch\":\"release/9.9.9\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+RUNENV="NEXUS_CI_REF_IS_BRANCH=maybe" run 2 "branch answer neither yes nor no           => ERROR" "$(branch_run "\"$REF\"")"
+RUNENV="NEXUS_CI_REF_IS_BRANCH=yes" run 0 "a branch '$REF' exists, run is on main     => PASS" "$(branch_run '"main"')"
+RUNENV=""
+branch_run "\"$REF\"" > "$LAB/runs.json"
+msg=$(NEXUS_CI_RUNS_JSON="$LAB/runs.json" NEXUS_CI_REF_IS_BRANCH=yes "$SCRIPT" --sha "$SHA" --ref "$REF" --repo owner/repo 2>&1)
+if printf '%s' "$msg" | grep -qF "a BRANCH called '$REF' exists"; then
+  pass=$((pass+1)); printf '  ok   %-58s\n' "the refusal says a branch has the tag's name"
+else
+  fail=$((fail+1)); printf '  FAIL %-58s\n' "the refusal does NOT say a branch has the tag's name"
+fi
+
+echo
+echo "14. THE ADVICE WORKS WHERE THE REFUSAL IS MET. At the pre-push hook the tag is not on the"
+echo "    remote yet, so the remedy runs CI on main or a release/* branch, never on the tag."
+printf '[{"databaseId":19,"headBranch":"land/x","status":"completed","conclusion":"success","headSha":"%s","event":"workflow_dispatch","createdAt":"t","url":"u"}]' "$SHA" > "$LAB/runs.json"
+msg=$(NEXUS_CI_RUNS_JSON="$LAB/runs.json" "$SCRIPT" --sha "$SHA" --ref "$REF" --repo owner/repo 2>&1)
+for want in "--ref main" "git push origin $SHA:refs/heads/release/9.9.9" "--ref release/9.9.9"; do
+  if printf '%s' "$msg" | grep -qF -- "$want"; then
+    pass=$((pass+1)); printf '  ok   %-58s\n' "advice names '$want'"
+  else
+    fail=$((fail+1)); printf '  FAIL %-58s\n' "advice does NOT name '$want'"
+  fi
+done
+if printf '%s' "$msg" | grep -qF -- "--ref $REF"; then
+  fail=$((fail+1)); printf '  FAIL %-58s\n' "advice still says to run CI on the unpushed tag"
+else
+  pass=$((pass+1)); printf '  ok   %-58s\n' "advice never runs CI on the unpushed tag"
+fi
+
+echo
 echo "--------------------------------------------------------------"
 printf '%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

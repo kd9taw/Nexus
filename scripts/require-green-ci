@@ -50,6 +50,13 @@
 # released (a ci.yml dispatch on the tag records the tag as its branch). The run's own
 # headBranch says which; a run that does not say is not accepted.
 #
+# A BRANCH NAMED LIKE THE TAG. The run list records only a name, not whether it was a branch or
+# a tag, so a branch called `v1.2.3` would pass for the tag while linking as a branch does. A run
+# accepted ONLY because its headBranch equals the tag is therefore taken only after asking the
+# API whether a branch of that name exists; if one does, the run is refused, and an unreadable
+# answer is exit 2 as everywhere else. (Seam: NEXUS_CI_REF_IS_BRANCH=yes|no with
+# NEXUS_CI_RUNS_JSON.)
+#
 # THE SHORT-SHA TRAP, found while building this. `gh run list --commit 5badb66d` returns
 # `[]` — an empty list, exit 0 — for a commit that HAS a run. The API matches head_sha
 # literally, so a short SHA silently matches nothing, which reads exactly like "no CI run
@@ -197,15 +204,42 @@ Refusing rather than reading a shape this gate cannot place."
 
 # The accept predicate, and the ONLY one. Every clause is a separate way a release has been
 # or could be published on evidence that does not exist; see the header for each.
-green=$(printf '%s' "$runs" | jq -r --arg sha "$sha" --arg ref "$ref" '
+evidence() {  # $1: the jq condition on .headBranch that this pass accepts
+  printf '%s' "$runs" | jq -r --arg sha "$sha" --arg ref "$ref" "
   [ .[]
-    | select(.headSha == $sha)
-    | select(.status == "completed")
-    | select(.conclusion == "success")
-    | select(.event == "push" or .event == "workflow_dispatch")
-    | select((.headBranch | type) == "string")
-    | select(.headBranch == "main" or (.headBranch | startswith("release/")) or .headBranch == $ref)
-  ] | .[0] // empty | "\(.databaseId)\t\(.event)\t\(.headBranch)\t\(.createdAt)\t\(.url)"')
+    | select(.headSha == \$sha)
+    | select(.status == \"completed\")
+    | select(.conclusion == \"success\")
+    | select(.event == \"push\" or .event == \"workflow_dispatch\")
+    | select((.headBranch | type) == \"string\")
+    | select($1)
+  ] | .[0] // empty | \"\\(.databaseId)\\t\\(.event)\\t\\(.headBranch)\\t\\(.createdAt)\\t\\(.url)\""
+}
+green=$(evidence '.headBranch == "main" or (.headBranch | startswith("release/"))')
+tag_named_branch=''
+if [ -z "$green" ]; then
+  tag_run=$(evidence '.headBranch == $ref')
+  if [ -n "$tag_run" ]; then
+    # See A BRANCH NAMED LIKE THE TAG above.
+    if [ -n "$RUNS_JSON_FILE" ]; then
+      is_branch="${NEXUS_CI_REF_IS_BRANCH:-no}"
+    else
+      branch_out=$(gh api "repos/$repo/branches/$ref" --jq .name 2>&1); branch_rc=$?
+      if [ $branch_rc -eq 0 ]; then is_branch=yes
+      elif printf '%s' "$branch_out" | grep -q 'HTTP 404'; then is_branch=no
+      else
+        printf '%s\n' "$branch_out" | sed 's/^/require-green-ci:   /' >&2
+        die_usage "could not ask whether a branch named '$ref' exists — refusing rather than guessing
+whether the run on '$ref' was the tag's or a branch's."
+      fi
+    fi
+    case "$is_branch" in
+      no)  green="$tag_run" ;;
+      yes) tag_named_branch="$tag_run" ;;
+      *)   die_usage "NEXUS_CI_REF_IS_BRANCH must be yes or no (got '$is_branch')" ;;
+    esac
+  fi
+fi
 
 if [ -n "$green" ]; then
   IFS=$'\t' read -r gid gevent gbranch gcreated gurl <<<"$green"
@@ -225,6 +259,12 @@ fi
   echo "  commit: $sha"
   echo "  repo:   ${repo:-<recorded>}"
   echo
+  if [ -n "$tag_named_branch" ]; then
+    echo "A green $WORKFLOW run names '$ref' as its branch, but a BRANCH called '$ref' exists in"
+    echo "this repository, so that run may be the branch's, linked as a branch run is. It is not"
+    echo "accepted. Delete or rename that branch, or use one of the runs below."
+    echo
+  fi
   echo "No COMPLETED, SUCCESSFUL $WORKFLOW run from main, a release/* branch or '$ref'"
   echo "exists for this exact commit. A run from any other branch links the Windows and Pi"
   echo "builds without the shipped LTO profile, so it does not prove what ships."
@@ -244,10 +284,14 @@ fi
   echo "ORDINARY outcome of pushing again quickly, and 43% of recent main runs are"
   echo "cancelled. 1.12.0 published on exactly this footing."
   echo
-  echo "What to do:"
-  echo "  1. Re-run ci.yml on this commit and let it finish:"
-  echo "       gh workflow run $WORKFLOW --repo ${repo:-<owner/repo>} --ref $ref"
-  echo "     then wait for it and read the result."
+  echo "What to do (the tag is not on the remote yet if this is the pre-push hook, so CI cannot"
+  echo "be run on '$ref' itself; run it on a branch that links as a release does):"
+  echo "  1. If main is at this commit, run ci.yml on main:"
+  echo "       gh workflow run $WORKFLOW --repo ${repo:-<owner/repo>} --ref main"
+  echo "     Otherwise put this commit on a release branch and run it there:"
+  echo "       git push origin $sha:refs/heads/release/${ref#v}"
+  echo "       gh workflow run $WORKFLOW --repo ${repo:-<owner/repo>} --ref release/${ref#v}"
+  echo "     Wait for the run to finish green on exactly $sha, then push the tag again."
   echo "  2. If it is red, fix it and cut the tag again. Do not publish around it."
   echo "  3. Genuine break-glass only — deliberate, visible, and keyed to THIS ref:"
   echo "       NEXUS_ALLOW_UNVERIFIED_CI=$ref"
@@ -263,7 +307,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "Nothing was published."
     echo
     echo "Set the \`NEXUS_ALLOW_UNVERIFIED_CI\` repository variable to \`$ref\` to override"
-    echo "deliberately, or re-run CI on this commit and re-tag."
+    echo "deliberately, or run CI on main or a release/* branch at this commit and push the tag again."
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 
