@@ -920,6 +920,32 @@ export function Waterfall({
       }
     }
 
+    /** The words the paused overlay prints: the chip, then the time tape's four ages top to
+     *  bottom ('' where no row is there yet). The overlay key is built from these same strings,
+     *  so it is drawn exactly when one of them changes — each age ticks over on its own row's
+     *  rounded second (`ageLabel`), not when the wall clock's second turns. Each tape age is read
+     *  off the SAME mapping the renderer paints with — newest end at the bottom by default, at
+     *  the top when the operator has flipped the scroll direction.
+     *  ⚠️ This used to be a plain `off + (devRows-1)·i/5`, i.e. ages increasing DOWNWARD, which
+     *  was upside down against the picture in the only direction that existed: it labelled the
+     *  top (oldest) rows as the most recent. Mirrored, not merely flipped. */
+    const pausedLabels = (wfH: number): string[] => {
+      const off = offsetRef.current
+      const at = Date.now()
+      // The chip is a STATE MESSAGE and comes from the catalog; the age beside it (and the
+      // time tape below, and the axis) are measurements drawn as tick labels.
+      const newest = renderer.rowAt(off)
+      const backLabel = newest ? ageLabel(at - newest.tMs) : t('waterfall.paused.now')
+      const labels = [off > 0 ? t('waterfall.paused.back', { age: backLabel }) : t('waterfall.paused')]
+      const devRows = Math.max(1, Math.round(wfH * scaleY))
+      for (let i = 1; i <= 4; i++) {
+        const yDev = Math.round(((devRows - 1) * i) / 5)
+        const fr = renderer.rowAt(off + (newestAtTopRef.current ? yDev : devRows - 1 - yDev))
+        labels.push(fr ? `−${ageLabel(at - fr.tMs)}` : '')
+      }
+      return labels
+    }
+
     const drawOverlay = () => {
       // The axis + Rx/Tx markers render on the SEPARATE overlay canvas (transparent, fully
       // cleared each time it is drawn). This is what keeps a moved marker from freezing into the
@@ -968,36 +994,17 @@ export function Waterfall({
       // Paused: a chip + a right-edge time tape so scrollback has a scale. The tape maps
       // viewport rows → their stored timestamps (device rows ÷ scaleY = CSS rows).
       if (pausedRef.current) {
-        const off = offsetRef.current
+        const [chip, ...tape] = pausedLabels(wfH)
         octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
         octx.fillStyle = 'rgba(255,200,80,0.95)'
-        // The chip is a STATE MESSAGE and comes from the catalog; the age beside it (and the
-        // time tape below, and the axis) are measurements drawn as tick labels.
-        const newest = renderer.rowAt(off)
-        const backLabel = newest ? ageLabel(Date.now() - newest.tMs) : t('waterfall.paused.now')
-        octx.fillText(
-          off > 0 ? t('waterfall.paused.back', { age: backLabel }) : t('waterfall.paused'),
-          6 * textScale,
-          20 * textScale,
-        )
-        // Time tape: 4 evenly spaced age labels down the right edge. Each label's age is
-        // read off the SAME mapping the renderer paints with — newest end at the bottom by
-        // default, at the top when the operator has flipped the scroll direction.
-        // ⚠️ This used to be a plain `off + (devRows-1)·i/5`, i.e. ages increasing DOWNWARD,
-        // which was upside down against the picture in the only direction that existed: it
-        // labelled the top (oldest) rows as the most recent. Mirrored, not merely flipped.
+        octx.fillText(chip, 6 * textScale, 20 * textScale)
+        // Time tape: 4 evenly spaced age labels down the right edge (see `pausedLabels`).
         octx.globalAlpha = 0.7
         octx.fillStyle = ink.scale
         octx.font = `${9 * textScale}px system-ui, sans-serif`
-        const devRows = Math.max(1, Math.round(wfH * scaleY))
-        for (let i = 1; i <= 4; i++) {
-          const yCss = (wfH * i) / 5
-          const yDev = Math.round(((devRows - 1) * i) / 5)
-          const age = off + (newestAtTopRef.current ? yDev : devRows - 1 - yDev)
-          const fr = renderer.rowAt(age)
-          if (!fr) continue
-          octx.fillText(`−${ageLabel(Date.now() - fr.tMs)}`, W - 34 * textScale, yCss)
-        }
+        tape.forEach((label, i) => {
+          if (label) octx.fillText(label, W - 34 * textScale, (wfH * (i + 1)) / 5)
+        })
         octx.globalAlpha = 1
       }
 
@@ -1108,19 +1115,17 @@ export function Waterfall({
 
     /** Everything the overlay draws from, as one string: it is drawn again only when this moves
      *  (or its inks were dropped). Paused, the chip and the time tape print ages, which move with
-     *  the clock in whole seconds — so the second is in the key, with the row the picture's newest
-     *  end shows (a scrollback step moves it; a row committed while paused does not, as the offset
-     *  moves with it and the picture holds still), whether that is the live tail, and the flow the
-     *  tape is read in. */
+     *  the clock — so the words they print are in the key (`pausedLabels`): an age ticking over,
+     *  a scrollback step or a flow flip redraws at once; a row committed while paused does not, as
+     *  the offset moves with it and every printed word holds still. Live, nothing paused is drawn,
+     *  so leaving pause moves the key too and the chip and tape are cleared. */
     const overlayKeyOf = () => {
       const c = cursorsRef.current
       const named = c ? c.map((k) => `${k.hz}/${k.color}/${k.label}`).join(',') : '-'
       const band = toneBandRef.current
       const shade = band ? `${band.loHz}/${band.hiHz}/${keyedRef.current}` : '-'
       const filter = shadeRef.current
-      const held = pausedRef.current
-        ? `${Math.floor(Date.now() / 1000)}/${offsetRef.current > 0}/${renderer.rowAt(offsetRef.current)?.seq}/${newestAtTopRef.current}`
-        : '-'
+      const held = pausedRef.current ? pausedLabels(cssH - axisHFor(cssH)).join('\n') : '-'
       return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}|${shade}|${filter ? `${filter.loHz}-${filter.hiHz}` : '-'}|${held}`
     }
 

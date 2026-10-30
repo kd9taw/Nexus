@@ -8,8 +8,8 @@
 //      mounted, so 120–180 empty callbacks a second ran forever, and a pending rAF keeps the browser's
 //      frame pipeline awake at the display rate. Hidden, the loop now stops; shown again, it restarts.
 //   2. PAUSED, the overlay (pause chip and time tape) was cleared and redrawn every frame because the
-//      ages it prints move with the clock. They print whole seconds, so it is drawn when the second
-//      turns, or when anything else it shows moves (a scrollback step, a committed row).
+//      ages it prints move with the clock. It is now drawn when a word it prints changes (an age
+//      ticks over, a scrollback step), or when anything else it shows moves — and never otherwise.
 //
 // The rAF here is a hand-cranked queue, so a test counts exactly the callbacks the waterfall asks
 // for. The renderer is a recording stand-in and the overlay context a recording proxy (jsdom has
@@ -17,6 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import { Waterfall } from './Waterfall'
+import { ageLabel } from '../waterfallHistory'
 import { getSpectrumRow } from '../api'
 import type { SpectrumRenderer } from '../spectrum'
 
@@ -25,6 +26,11 @@ vi.setConfig({ testTimeout: 15_000 })
 vi.mock('../api', () => ({ getSpectrumRow: vi.fn() }))
 
 let draws = 0
+/** The stand-in rows' timestamps: row `seq` was committed at `rowTms + seq·rowGapMs`. */
+let rowTms = 0
+let rowGapMs = 1000
+/** Every string the overlay printed since the test last emptied it. */
+const texts: string[] = []
 /** Rows the stand-in renderer holds (scrollback reaches back this far). */
 let held = 0
 vi.mock('../spectrum', async (importActual) => {
@@ -43,7 +49,7 @@ vi.mock('../spectrum', async (importActual) => {
         held++
       },
       // Row `age` back from the newest, numbered as the waterfall numbers them (newest = `held`).
-      rowAt: (age: number) => (age < held ? { seq: held - age, tMs: 0, loHz: 0, hiHz: 4000 } : null),
+      rowAt: (age: number) => (age < held ? { seq: held - age, tMs: rowTms + (held - age) * rowGapMs, loHz: 0, hiHz: 4000 } : null),
       clearHistory() {},
       draw: () => {
         draws++
@@ -85,7 +91,8 @@ function recordingCtx() {
       if (prop in target) return target[prop]
       if (prop === 'measureText') return () => ({ width: 10 })
       if (prop === 'createLinearGradient') return () => ({ addColorStop() {} })
-      return () => {
+      return (...a: unknown[]) => {
+        if (prop === 'fillText') texts.push(String(a[0]))
         if (prop === 'setTransform') overlayDraws++
       }
     },
@@ -102,6 +109,9 @@ let now = 1_000_000
 
 beforeEach(() => {
   draws = 0
+  rowTms = 0
+  rowGapMs = 1000
+  texts.length = 0
   held = 0
   overlayDraws = 0
   queue = new Map()
@@ -190,16 +200,17 @@ describe('the waterfall loop while hidden', () => {
 })
 
 describe('the overlay while paused', () => {
-  it('is drawn when the second turns, not every frame', async () => {
+  it('is drawn when the ages tick over, not every frame', async () => {
+    held = 100
     const { container } = render(wf(true))
     await frames(3)
     fireEvent.click(container.querySelector('.wf-pause')!)
     await frames(2)
     const start = overlayDraws
-    // 50 frames, 800 ms, all inside one wall-clock second: at most the one draw the pause itself causes.
+    // 50 frames with the clock held still: at most the one draw the pause itself causes.
     await frames(50)
     expect(overlayDraws - start).toBeLessThanOrEqual(1)
-    // The second turns: one draw, then quiet again.
+    // A second on, every age prints one more: one draw, then quiet again.
     now += 1000
     const turned = overlayDraws
     await frames(10)
@@ -207,13 +218,17 @@ describe('the overlay while paused', () => {
   })
 
   it('is drawn at once when the flow flips (the tape is read in it)', async () => {
+    held = 100
+    // A real height, so the tape's four ages sit on four different rows (jsdom measures 0).
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, top: 0, left: 0, width: 800, height: 200, right: 800, bottom: 200, toJSON: () => ({}),
+    } as DOMRect)
     const { container } = render(wf(true))
     await frames(3)
     fireEvent.click(container.querySelector('.wf-pause')!)
     await frames(5)
     const start = overlayDraws
-    // No history here, so the offset cannot step: drive the key with the flow instead — the tape
-    // reads the direction, so flipping it while paused redraws now.
+    // The tape reads the direction, so flipping it while paused turns its ages end for end: redrawn now.
     fireEvent.click(container.querySelector('.wf-flow')!)
     await frames(2)
     expect(overlayDraws - start).toBe(1)
@@ -293,4 +308,32 @@ describe('the overlay while paused', () => {
     await frames(50)
     expect(overlayDraws - start).toBe(0)
   })
+
+  // An age prints rounded to its OWN row's whole second (`ageLabel`), so it ticks over at
+  // `tMs + k·1000 + 500`, not when the wall clock's second turns. Keyed on the wall-clock second,
+  // a row 1.2 s old at pause showed "−now" for 1.4 s of every 2 while the true label was "−2s".
+  for (const phase of [1500, 1200, 1900]) {
+    it(`prints the true age at every moment (a row ${phase} ms old at pause)`, async () => {
+      held = 1
+      rowGapMs = 0
+      rowTms = now - phase
+      const { container } = render(wf(true))
+      await frames(3)
+      texts.length = 0
+      fireEvent.click(container.querySelector('.wf-pause')!)
+      await frames(2)
+      let onScreen = texts.filter((s) => s.startsWith('−')).at(-1)
+      const stale: string[] = []
+      for (let step = 0; step < 40; step++) {
+        now += 50
+        texts.length = 0
+        await frames(1)
+        const drawn = texts.filter((s) => s.startsWith('−'))
+        if (drawn.length) onScreen = drawn.at(-1)
+        const truth = `−${ageLabel(now - rowTms)}`
+        if (onScreen !== truth) stale.push(`+${now - 1_000_000} ms: on screen ${onScreen}, true ${truth}`)
+      }
+      expect(stale).toEqual([])
+    })
+  }
 })
