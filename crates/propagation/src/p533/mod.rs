@@ -100,9 +100,37 @@ pub fn run_p533(
     frequency: f64,
     sys: &P533Params,
 ) -> P533Run {
+    run_p533_route(
+        tx,
+        rx,
+        crate::route::Route::Short,
+        month0,
+        hour_slot,
+        ssn,
+        frequency,
+        sys,
+    )
+}
+
+/// [`run_p533`] along either route. The long route places every control point on the
+/// other arc of the great circle and runs the same chain over its length (always beyond
+/// 9000 km, so the long model, §5.3, carries it). The reference implementation is
+/// shortest-arc only, so the long route has no fixture: it is the same published method
+/// applied to the other arc, modelled and unvalidated.
+pub fn run_p533_route(
+    tx: Location,
+    rx: Location,
+    route: crate::route::Route,
+    month0: usize,
+    hour_slot: i32,
+    ssn: f64,
+    frequency: f64,
+    sys: &P533Params,
+) -> P533Run {
     #[cfg(test)]
     RUNS.with(|c| c.set(c.get() + 1));
-    let mut path = muf::muf_path(tx, rx, month0, hour_slot, ssn, frequency);
+    let long_path = route == crate::route::Route::Long;
+    let mut path = muf::muf_path_on(tx, rx, long_path, month0, hour_slot, ssn, frequency);
     fieldstrength::e_layer_screening_frequency(&mut path);
     fieldstrength::median_skywave_field_strength_short(&mut path, sys.txpower);
 

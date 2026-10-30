@@ -11,9 +11,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { scratchDir } from './scratch-dir.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'xcrun-staple-retry.sh');
 
@@ -34,7 +35,7 @@ echo "passed through: $*"; exit "\${OTHER_EXIT:-0}"
 `;
 
 function run(args, env = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xcrun-staple-'));
+  const dir = scratchDir('xcrun-staple-');
   const fake = path.join(dir, 'xcrun');
   fs.writeFileSync(fake, FAKE, { mode: 0o755 });
   const log = path.join(dir, 'staple.log');

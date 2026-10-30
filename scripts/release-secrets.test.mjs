@@ -119,7 +119,7 @@ const COMPILED_IN = new Set(['CLUBLOG_API_KEY']);
 // third runner holding these keys is a change to this file, not only to the workflow.
 const SIGNS_IN_BUNDLER = new Set(['macos']);
 const MACOS_LEGS = [
-  { runner: 'macos-14', target: 'aarch64-apple-darwin' },
+  { runner: 'macos-15', target: 'aarch64-apple-darwin' },
   { runner: 'macos-15-intel', target: 'x86_64-apple-darwin' },
 ];
 

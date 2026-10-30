@@ -100,7 +100,20 @@ pub struct ControlPoints {
 
 /// Place the mode-independent control points (reference `InitializePath.c`).
 pub fn control_points(tx: Location, rx: Location) -> ControlPoints {
-    let distance = great_circle_distance(tx, rx);
+    control_points_at(tx, rx, great_circle_distance(tx, rx))
+}
+
+/// Length (km) of the long path: the rest of the great circle through both terminals.
+pub fn long_path_distance(tx: Location, rx: Location) -> f64 {
+    2.0 * std::f64::consts::PI * R0 - great_circle_distance(tx, rx)
+}
+
+/// [`control_points`] for a path of `distance` km along the great circle through `tx` and
+/// `rx`. With the short distance this is the reference placement; with
+/// [`long_path_distance`] every point lands on the other arc, because
+/// [`great_circle_point`]'s interpolation, given the reflex angle, walks the circle the long
+/// way round.
+pub fn control_points_at(tx: Location, rx: Location, distance: f64) -> ControlPoints {
     let mp = great_circle_point(tx, rx, distance, 0.5);
     let (t1k, r1k) = if distance >= 2000.0 {
         (
@@ -172,6 +185,31 @@ mod tests {
         assert!(bearing(a, north, false).to_degrees().abs() < 1e-6);
         // Long path is the reciprocal.
         assert!((bearing(a, east, true).to_degrees() - 270.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn long_path_control_points_lie_on_the_other_arc() {
+        // Boston -> Sydney: the long-path midpoint is the antipode of the short-path one, and
+        // the long path's T+1000 km point leaves Boston on the reciprocal bearing.
+        let (tx, rx) = (deg(42.36, -71.06), deg(-33.87, 151.21));
+        let short = control_points(tx, rx);
+        let long = control_points_at(tx, rx, long_path_distance(tx, rx));
+        let circ = 2.0 * std::f64::consts::PI * R0;
+        assert!((short.distance + long.distance - circ).abs() < 1e-6);
+        let (sm, lm) = (short.mp.0, long.mp.0);
+        assert!((sm.lat + lm.lat).abs() < 1e-9, "{} {}", sm.lat, lm.lat);
+        let dlng = (sm.lng - lm.lng).abs().to_degrees();
+        assert!((dlng - 180.0).abs() < 1e-6, "{dlng}");
+        let (t1, d1) = long.t1k.unwrap();
+        assert!((d1 - 1000.0).abs() < 1e-6);
+        assert!((great_circle_distance(tx, t1) - 1000.0).abs() < 1e-6);
+        let sp_brg = bearing(tx, rx, false).to_degrees();
+        let lp_brg = bearing(tx, t1, false).to_degrees();
+        let diff = (lp_brg - sp_brg).rem_euclid(360.0);
+        assert!((diff - 180.0).abs() < 1e-6, "{sp_brg} {lp_brg}");
+        // And the far end is still the far end.
+        let (r1, _) = long.r1k.unwrap();
+        assert!((great_circle_distance(rx, r1) - 1000.0).abs() < 1e-6);
     }
 
     #[test]
