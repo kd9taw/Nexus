@@ -348,9 +348,10 @@ fn most_wanted_error_breadcrumb(v: &serde_json::Value) -> Option<&'static str> {
         .map(|_| "propagation: ClubLog most-wanted refused the request")
 }
 
-/// ClubLog most-wanted list → entity-name → rank. Accepts both JSON shapes ClubLog has
-/// used: {"1":"P5",...} (rank→prefix) and {"P5":1,...} (prefix→rank). Prefixes resolve
-/// to entity names via cty.dat so plan calls can match regardless of the operation's
+/// ClubLog most-wanted list → entity-name → rank. Accepts the shape ClubLog sends,
+/// {"1":"344",...} (rank→DXCC entity number), and the two older ones, {"1":"P5",...}
+/// (rank→prefix) and {"P5":1,...} (prefix→rank). Numbers name the entity directly; prefixes
+/// resolve via cty.dat. Either way plan calls match by entity, whatever the operation's
 /// actual callsign. An error body or a list that resolves to nothing is a failure, so the
 /// schedule backs off and the last good list is kept.
 fn most_wanted(c: &reqwest::blocking::Client) -> Result<HashMap<String, u32>, String> {
@@ -373,13 +374,23 @@ fn most_wanted(c: &reqwest::blocking::Client) -> Result<HashMap<String, u32>, St
         eprintln!("{crumb}");
         return Err(crumb.to_string());
     }
+    parse_most_wanted(&v)
+}
+
+/// The ranks in a most-wanted answer, by entity name; `Err` when none resolve.
+fn parse_most_wanted(v: &serde_json::Value) -> Result<HashMap<String, u32>, String> {
     let mut out: HashMap<String, u32> = HashMap::new();
     if let Some(obj) = v.as_object() {
         for (k, val) in obj {
-            // rank→prefix shape: key parses as the rank, value is the prefix.
-            if let (Ok(rank), Some(prefix)) = (k.parse::<u32>(), val.as_str()) {
-                if let Some(info) = dxcc::resolve(prefix) {
-                    out.entry(info.entity.to_string()).or_insert(rank);
+            // rank→entity shape: key parses as the rank; the value is the DXCC entity NUMBER
+            // (what ClubLog sends today, `{"1":"344",…}`) or, in the older shape, a prefix.
+            if let (Ok(rank), Some(value)) = (k.parse::<u32>(), val.as_str()) {
+                let entity = match value.parse::<u32>() {
+                    Ok(code) => dxcc::entity_by_dxcc(code).map(|e| e.name),
+                    Err(_) => dxcc::resolve(value).map(|i| i.entity),
+                };
+                if let Some(entity) = entity {
+                    out.entry(entity.to_string()).or_insert(rank);
                 }
             // prefix→rank shape.
             } else if let Some(rank) = val.as_u64() {
@@ -989,6 +1000,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir2);
     }
 
+    /// THE SHAPE IN CLUBLOG'S LOG: both endpoints answering 200, the pair asked again every
+    /// ~1.5 s. A running Nexus cannot do that (snapshots refresh at most every 300 s, and a
+    /// refresh that reached most-wanted had stored the plans for 30 min), but a Nexus started
+    /// over and over can: the warm-up runs on every launch, before the window is built, and
+    /// nothing was kept from one launch to the next. Twenty launches 2 s apart, every source
+    /// answering: ClubLog is asked once per endpoint, not once per launch.
+    #[test]
+    fn a_relaunch_loop_with_club_log_answering_asks_it_once_not_once_per_launch() {
+        let dir = scratch_dir("relaunch-loop");
+        let fake = Fake::new(true, true, true);
+        for i in 0..20 {
+            let launch = Feeds::new();
+            launch.load_from(&dir, T0 + 2 * i);
+            let plans = launch.plans(&fake, T0 + 2 * i).expect("all sources answer");
+            assert_eq!(plans[0].most_wanted_rank, Some(42));
+        }
+        assert_eq!(
+            fake.active.load(Ordering::SeqCst),
+            1,
+            "expeditions per launch"
+        );
+        assert_eq!(
+            fake.wanted.load(Ordering::SeqCst),
+            1,
+            "most-wanted per launch"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// An ask is on disk before it goes out: Nexus started again while the first run's ask is
     /// still out (or after that run was killed mid-ask) does not ask ClubLog a second time.
     #[test]
@@ -1042,6 +1082,36 @@ mod tests {
             "held off by an ask time ten years ahead"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ClubLog's real answer to `mostwanted.php?api=1` (fetched once, 2026-10-30): rank → DXCC
+    /// entity NUMBER, as strings (`{"1":"344",…}`), 340 entities. Read as a callsign prefix,
+    /// "344" resolves to nothing, so the list came out empty, was never kept, and was asked
+    /// for again on every fetch.
+    #[test]
+    fn club_logs_real_most_wanted_answer_reads_as_ranks_by_entity() {
+        let body = include_str!("../../tests/fixtures/clublog_mostwanted_2026-10-30.json");
+        let v: serde_json::Value = serde_json::from_str(body).expect("fixture is JSON");
+        assert!(most_wanted_error_breadcrumb(&v).is_none());
+        let ranks = parse_most_wanted(&v).expect("the real answer must read");
+        let p5 = dxcc::entity_by_dxcc(344)
+            .expect("344 is a DXCC entity")
+            .name;
+        assert_eq!(ranks.get(p5), Some(&1), "rank 1 is entity 344");
+        let bouvet = dxcc::entity_by_dxcc(24).expect("24 is a DXCC entity").name;
+        assert_eq!(ranks.get(bouvet), Some(&45));
+        // Keyed as a plan's call resolves, so the merge finds it.
+        let by_call = dxcc::resolve("3Y0J").expect("cty knows 3Y").entity;
+        assert_eq!(ranks.get(by_call), Some(&45));
+        assert!(
+            ranks.len() >= 330,
+            "only {} of 340 entities read",
+            ranks.len()
+        );
+        // The two older shapes still read (prefix → entity through cty.dat).
+        let old = parse_most_wanted(&serde_json::json!({"1": "P5", "BV9P": 2})).unwrap();
+        assert_eq!(old.get(p5), Some(&1));
+        assert_eq!(old.len(), 2);
     }
 
     /// `mostwanted.php` is public: `api=1`, and no application key in ClubLog's request logs.
