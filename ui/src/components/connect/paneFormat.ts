@@ -25,7 +25,7 @@ import {
   type Azimuth,
 } from '../../grid'
 import { fmtDistanceKm } from '../../units'
-import { dualStateLabel, kpImpact, sortInsights } from '../../propViz'
+import { dualStateLabel, kpImpact, sortInsights, wxUsable } from '../../propViz'
 import { buildChaseTargets, chaseSummaryLine } from '../../features/chase'
 import { buildChaseFeed, chaseFeedLine as feedSummary } from '../../features/chaseFeed'
 import { getoutSummary } from '../../features/getout'
@@ -193,6 +193,10 @@ export function openingsLine(c: PaneContext): string {
 export function spaceWxLine(c: PaneContext): string {
   const w = c.prop?.spaceWx
   if (!w || c.prop?.source === 'offline') return t('connect.basic.spaceWx.unavailable')
+  // The line states SFI and Kp as readings and reads an impact off Kp, so both must be measured
+  // and fresh (propViz `wxUsable`): a partial snapshot's stand-ins are no line at all.
+  const now = Date.now()
+  if (!wxUsable(w, 'sfi', now) || !wxUsable(w, 'kp', now)) return t('connect.basic.spaceWx.unavailable')
   // Round (matches the gauges' toFixed(0)) and derive the geomag descriptor from the SAME
   // kpImpact bucketing the SpaceWx Kp gauge uses (no divergent threshold ladder). Append
   // the live SWPC R-scale (radio blackout) when active — it's the "so what" for HF.
@@ -206,8 +210,9 @@ export function spaceWxLine(c: PaneContext): string {
     xray: w.xrayClass,
     scale: c.scales?.r ?? 0,
   }
-  if (w.flare && blackout) return t('connect.basic.spaceWx.flareBlackout', vals)
-  if (w.flare) return t('connect.basic.spaceWx.flare', vals)
+  const flare = w.flare && wxUsable(w, 'xray', now)
+  if (flare && blackout) return t('connect.basic.spaceWx.flareBlackout', vals)
+  if (flare) return t('connect.basic.spaceWx.flare', vals)
   if (blackout) return t('connect.basic.spaceWx.blackout', vals)
   return t('connect.basic.spaceWx', vals)
 }

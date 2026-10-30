@@ -2,6 +2,7 @@
 // data (desktop-only); degrades to a plain "no live scales" line when the feed is absent.
 import type { NoaaScalesView, AlertView } from '../../types'
 import { t, type MessageKey } from '../../i18n'
+import { agoLabel } from './SpaceWxGauges'
 
 // R, S and G are the NOAA scales' own letters — technical tokens, not prose. Only what
 // each one MEANS is a catalog entry, and it is looked up when the chip renders.
@@ -10,6 +11,10 @@ const RSG: { key: 'r' | 's' | 'g'; label: string; titleKey: MessageKey }[] = [
   { key: 's', label: 'S', titleKey: 'prop.scales.s.title' },
   { key: 'g', label: 'G', titleKey: 'prop.scales.g.title' },
 ]
+
+/** The station refetches the scales every 15 min and keeps its last copy through a failure; past
+ *  three refetches that copy is drawn with its age, so an old R0 does not read as the sun now. */
+const SCALES_STALE_SECS = 45 * 60
 
 function sev(n: number): string {
   return n <= 0 ? 'quiet' : n <= 2 ? 'minor' : 'major'
@@ -26,6 +31,7 @@ export function ScalesAnnunciator({
   // offline feed must read as "no data", never as a genuinely quiet sun.
   if (!scales || !scales.asOf) return <p className="pane-basic">{t('prop.scales.none')}</p>
   const top = alerts[0]
+  const age = Math.max(0, Math.floor(Date.now() / 1000 - scales.asOf))
   return (
     <div className="swsc">
       <div className="swsc-scales">
@@ -35,6 +41,7 @@ export function ScalesAnnunciator({
             {scales[x.key]}
           </span>
         ))}
+        {age >= SCALES_STALE_SECS && <span className="swsc-fc">{t('prop.scales.asOf', { ago: agoLabel(age) })}</span>}
         {scales.gTomorrow > 0 && (
           <span className="swsc-fc" title={t('prop.scales.tomorrow.title')}>
             {t('prop.scales.tomorrow', { level: scales.gTomorrow })}

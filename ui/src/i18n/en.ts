@@ -3764,6 +3764,12 @@ export const EN = {
   'map.layer.relief.label': 'Relief (World view)',
   'map.layer.muf.label': 'Ionosonde MUF',
   'map.layer.aurora.label': 'Aurora oval',
+  // The aurora row's second line: NOAA's OVATION oval is a forecast, for {{time}} (a UTC stamp,
+  // "30 Oct 04:04Z"). {{ago}} is prop.opening.ago.* ("2h ago").
+  'map.layer.aurora.forecast': 'forecast for {{time}}',
+  'map.layer.aurora.forecast.past': 'forecast for {{time}} ({{ago}})',
+  'map.layer.aurora.forecast.title': 'NOAA OVATION aurora forecast for {{time}}',
+  'map.layer.aurora.observed': 'from the solar wind observed {{time}}',
   'map.layer.flare.label': 'Flare blackout (D-RAP)',
   'map.layer.pca.label': 'Proton polar cap (PCA)',
   'map.layer.coast.label': 'Coastlines',
@@ -3874,7 +3880,7 @@ export const EN = {
   'globe.layer.heat': 'Band heat',
   'globe.layer.openings': 'Opening sectors',
   'globe.layer.flare': 'Flare blackout',
-  'globe.layer.aurora': 'Aurora',
+  'globe.layer.aurora': 'Aurora (forecast)',
   // The MUF layer's whole name is the acronym — a token, and a constant in the component.
   'globe.layer.pca': 'Polar cap (PCA)',
   'globe.layer.greyline': 'Greyline',
@@ -3948,6 +3954,18 @@ export const EN = {
   // The Bz gauge when its reading is old or missing ({{ago}} is prop.opening.ago.*: "45m ago").
   'prop.spaceWx.bz.stale': 'last reading {{ago}}',
   'prop.spaceWx.bz.none': 'no solar-wind reading',
+  // Every other index under the same rule: a number NOAA did not give is drawn as "—" with this
+  // line (never the model's stand-in), and a reading past its product's cadence with its age.
+  'prop.spaceWx.none': 'no reading from NOAA',
+  'prop.spaceWx.stale': 'last reading {{ago}}',
+  // Each gauge's hover: where the number came from and when it was measured. {{time}} is a UTC
+  // stamp ("29 Oct 20:00Z"), {{day}} a date ("29 Oct"), {{ap}} a whole number.
+  'prop.spaceWx.src.sfi': 'NOAA · Penticton 10.7 cm solar flux, noon reading {{time}}',
+  'prop.spaceWx.src.kp': 'NOAA · estimated planetary Kp (1-minute), {{time}}',
+  'prop.spaceWx.src.xray': 'NOAA · GOES X-ray flux, {{time}}',
+  'prop.spaceWx.src.a': 'NOAA · daily planetary A for {{day}}',
+  'prop.spaceWx.src.apNow': 'ap now ≈{{ap}} (estimated from Kp)',
+  'prop.spaceWx.src.standIn': 'NOAA gave no reading of this, so none is shown',
   'prop.impact.a.storm': 'stormy day — HF rough, polar paths out',
   'prop.impact.a.active': 'active day — paths up and down',
   'prop.impact.a.unsettled': 'unsettled day — minor fading spells',
@@ -4045,6 +4063,8 @@ export const EN = {
 
   // SWPC R/S/G scales. The letters R, S and G are the scale names and stay in the code.
   'prop.scales.none': 'No live space-weather scales right now.',
+  // The scales chips' age once the station's copy is old ({{ago}} is prop.opening.ago.*).
+  'prop.scales.asOf': 'as of {{ago}}',
   'prop.scales.r.title': 'Radio blackout — HF absorption on sunlit paths',
   'prop.scales.s.title': 'Solar radiation storm — polar HF',
   'prop.scales.g.title': 'Geomagnetic storm — high-lat paths + aurora',
@@ -4120,6 +4140,11 @@ export const EN = {
   // Geomagnetic storm heads-up (stormAlert.ts). A storm is hours-to-days of degraded
   // HF, unlike a flare's minutes — the copy says what it means for operating, and the
   // forecast line is explicitly a forecast.
+  // The flare heads-up toast. {{cls}} is the flare class ("M2.0"), {{r}} the NOAA R level digit,
+  // {{mhz}} and {{mins}} whole numbers (the D-RAP ceiling and NOAA's empirical fade estimate).
+  'prop.flareAlert.now': '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded',
+  'prop.flareAlert.fade':
+    '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded · fade ~{{mins}} min',
   'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} (Kp {{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
   'prop.stormAlert.forecast': '🧲 NOAA expects G{{g}} (Kp {{kp}}) from {{when}} — HF likely degraded then',
   'prop.openingAlert.thin':

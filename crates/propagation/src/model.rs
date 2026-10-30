@@ -663,6 +663,41 @@ impl SpaceWx {
     }
 }
 
+/// When each number in a [`SpaceWx`] was measured, as NOAA's own product stamps it (Unix
+/// seconds, UTC) — the "is this real, and how old is it" half of a space-weather reading.
+///
+/// `None` means Nexus has no reading of that quantity: the number beside it is a stand-in
+/// the model runs on ([`SpaceWx::default`]), and it is never shown as a reading, written into
+/// a logged contact, or turned into band advice, an alert or a toast. `Some` is the sample's
+/// own time, never the time Nexus fetched it, so a feed that stops updating ages honestly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceWxStamps {
+    /// The 10.7 cm solar flux reading (Penticton's local-noon reading, 20:00 UT).
+    #[serde(default)]
+    pub sfi_at: Option<i64>,
+    /// The 1-minute estimated planetary Kp.
+    #[serde(default)]
+    pub kp_at: Option<i64>,
+    /// The GOES long-band (0.1–0.8 nm) X-ray sample.
+    #[serde(default)]
+    pub xray_at: Option<i64>,
+    /// 00:00 UT of the day the daily planetary A belongs to (NOAA issues a day's A after it
+    /// ends, so this is normally yesterday).
+    #[serde(default)]
+    pub a_day: Option<i64>,
+}
+
+impl SpaceWxStamps {
+    /// Whether any of the four numbers is a reading NOAA answered.
+    pub fn any(&self) -> bool {
+        self.sfi_at.is_some()
+            || self.kp_at.is_some()
+            || self.xray_at.is_some()
+            || self.a_day.is_some()
+    }
+}
+
 /// NOAA radio-blackout R-scale (0 = none) from the GOES long X-ray flux (W/m²):
 /// R1 ≥ M1 (1e-5), R2 ≥ M5 (5e-5), R3 ≥ X1 (1e-4), R4 ≥ X10 (1e-3), R5 ≥ X20 (2e-3).
 /// An M/X flare raises daytime D-layer absorption → sunlit-side HF blackout (low bands).

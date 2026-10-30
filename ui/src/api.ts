@@ -81,7 +81,7 @@ import type {
   KpForecast,
   DailySolarIndices,
 } from './types'
-import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
+import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraOval, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
 import type { TxHold } from './types'
@@ -285,9 +285,12 @@ export async function getGettingOut(): Promise<GettingOut> {
   return invoke<GettingOut>('get_getting_out')
 }
 
-/** The current OVATION aurora oval for the map overlay. */
-export async function getAurora(): Promise<AuroraPoint[]> {
-  return invoke<AuroraPoint[]>('get_aurora')
+/** The current OVATION aurora oval for the map overlay, with the time it is a forecast for.
+ *  An older station answers with the bare point list and no stamps. */
+export async function getAurora(): Promise<AuroraOval> {
+  const v = await invoke<AuroraOval | AuroraPoint[] | null>('get_aurora')
+  if (Array.isArray(v)) return { points: v, observedAt: null, forecastAt: null }
+  return v ?? { points: [], observedAt: null, forecastAt: null }
 }
 
 export async function getKc2gMuf(): Promise<MufStation[]> {

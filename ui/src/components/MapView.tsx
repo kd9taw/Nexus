@@ -41,6 +41,7 @@ import type {
   WorkableCard,
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
+import { agoLabel } from './prop/SpaceWxGauges'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
 import { getAurora, getDeclination, getPca, getSatellites, getLogStats, getOtaMapSpots, getPotaActivator } from '../api'
@@ -104,7 +105,7 @@ import {
   type Projection,
   type MapView3,
 } from '../mapGeo'
-import { needMeta, satTooltip, spotTooltip } from '../propViz'
+import { needMeta, satTooltip, spotTooltip, wxStampLabel } from '../propViz'
 import { fmtDistanceKm, useUnits } from '../units'
 import { modeClassOf } from '../features/needs'
 import { t, type MessageKey } from '../i18n'
@@ -1559,16 +1560,23 @@ export function MapView({
   // ~30–45 min, so a 10-min refresh is ample). Cleared when the layer is off.
   const [nativeAuroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
   const auroraPts=nativeAuroraPts
+  // OVATION is a FORECAST: the time it is for (and when its input was observed) label the layer row.
+  const [auroraTimes, setAuroraTimes] = useState<{ forecastAt: number | null; observedAt: number | null } | null>(null)
   const auroraOn = layers.aurora.visible
   useEffect(() => {
     if (!auroraOn) {
       setAuroraPts([])
+      setAuroraTimes(null)
       return
     }
     let live = true
     const load = () =>
       getAurora()
-        .then((p) => live && setAuroraPts(p))
+        .then((o) => {
+          if (!live) return
+          setAuroraPts(o?.points ?? [])
+          setAuroraTimes(o ? { forecastAt: o.forecastAt, observedAt: o.observedAt } : null)
+        })
         .catch(() => {})
     load()
     const id = setInterval(load, 600_000)
@@ -2573,7 +2581,8 @@ export function MapView({
       ctx.globalAlpha = 1
     }
 
-    // Aurora oval (OVATION nowcast) — green (low) → red (high) by probability.
+    // Aurora oval (OVATION forecast, labelled with its time on the layer row) — green (low) →
+    // red (high) by probability.
     // High aurora = degraded high-lat/polar HF paths, so it's both pretty and
     // operationally meaningful. Drawn over the field layers, under spots.
     if (layers.aurora.visible) {
@@ -3990,6 +3999,9 @@ export function MapView({
                     />
                     {layerLabel(k)}
                   </label>
+                  {k === 'aurora' && auroraTimes?.forecastAt != null && (
+                    <AuroraForecastNote forecastAt={auroraTimes.forecastAt} observedAt={auroraTimes.observedAt} />
+                  )}
                   {k === 'flare' && (
                     // The layer is event-driven (nothing draws below an M1 flare), so
                     // give the operator a way to SEE it on a quiet sun: a 60 s
@@ -4091,6 +4103,29 @@ function sScaleOf(j10: number): number {
   if (j10 >= 100) return 2
   if (j10 >= 10) return 1
   return 0
+}
+
+/** How long past its forecast time an OVATION oval may be before the row says how old it is: the
+ *  oval is normally a forecast for 30–90 min ahead, refreshed every few minutes, so a forecast
+ *  time half an hour gone means the feed has stopped. */
+const AURORA_PAST_SECS = 30 * 60
+
+/** The aurora layer row's second line: the oval is a forecast, for this time (NOAA OVATION's own
+ *  `Forecast Time`), from the solar wind observed at its `Observation Time` (on hover). Past
+ *  AURORA_PAST_SECS it dims and says how long ago that was. */
+export function AuroraForecastNote({ forecastAt, observedAt }: { forecastAt: number; observedAt: number | null }) {
+  const time = wxStampLabel(forecastAt)
+  const past = Math.floor(Date.now() / 1000 - forecastAt)
+  const old = past >= AURORA_PAST_SECS
+  const title =
+    observedAt != null
+      ? `${t('map.layer.aurora.forecast.title', { time })} · ${t('map.layer.aurora.observed', { time: wxStampLabel(observedAt) })}`
+      : t('map.layer.aurora.forecast.title', { time })
+  return (
+    <span className="map-layer-note" data-stale={old ? '' : undefined} title={title}>
+      {old ? t('map.layer.aurora.forecast.past', { time, ago: agoLabel(past) }) : t('map.layer.aurora.forecast', { time })}
+    </span>
+  )
 }
 
 function FlareChip({

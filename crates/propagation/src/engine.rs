@@ -76,12 +76,19 @@ pub struct SpaceWxView {
     /// the live command layer (the engine has no network); `None` when unavailable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solar_wind: Option<crate::solar_wind::SolarWind>,
-    /// Whether these numbers are a reading SWPC answered, rather than the neutral stand-ins
-    /// a snapshot carries when space weather could not be fetched ([`crate::live`]). Filled by the
-    /// live layer; read by the shell, which hands only a real reading on to the log. Never sent to
-    /// the UI.
-    #[serde(skip)]
+    /// Whether any of these numbers is a reading SWPC answered, rather than the neutral
+    /// stand-ins a snapshot carries when space weather could not be fetched ([`crate::live`]).
+    /// Filled by the live layer. The UI reads it, and each number's own stamp in `stamps`, so a
+    /// stand-in is never drawn as a reading.
     pub fetched: bool,
+    /// When each number above was measured (`sfiAt`, `kpAt`, `xrayAt`, `aDay` on the wire):
+    /// `None` = a stand-in, never a reading. See [`crate::model::SpaceWxStamps`].
+    #[serde(flatten)]
+    pub stamps: crate::model::SpaceWxStamps,
+    /// The instantaneous planetary ap estimated from the 1-minute Kp — the "ap now" a hover
+    /// shows beside the daily A. `None` without a measured Kp. An estimate: never logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ap_now: Option<f32>,
 }
 
 /// The whole propagation nowcast the UI section renders.
@@ -158,7 +165,28 @@ impl PropagationEngine {
         plans: &[DxpeditionPlan],
         needs: &dyn OperatorNeeds,
     ) -> PropagationSnapshot {
-        let advisory = self.advisor.advise(now, spots, wx);
+        self.snapshot_measured(now, spots, wx, true, plans, needs)
+    }
+
+    /// [`Self::snapshot`], saying whether `wx.sfi` is a measured solar flux. When it is a
+    /// stand-in the band advisor reports only what was heard, never the model's word on a
+    /// number nobody read ([`PropAdvisor::without_model`]).
+    pub fn snapshot_measured(
+        &self,
+        now: i64,
+        spots: &[PathSpot],
+        wx: &SpaceWx,
+        sfi_measured: bool,
+        plans: &[DxpeditionPlan],
+        needs: &dyn OperatorNeeds,
+    ) -> PropagationSnapshot {
+        let advisory = if sfi_measured {
+            self.advisor.advise(now, spots, wx)
+        } else {
+            PropAdvisor::new(&self.me_call, &self.me_grid)
+                .without_model()
+                .advise(now, spots, wx)
+        };
         let openings = self.detect_openings(now, spots, wx);
         let dxpeditions = self.tracker.dashboard(now, plans, needs, &advisory, wx);
         // Threshold-only insights here (no trend history at the engine layer); the
@@ -186,6 +214,9 @@ impl PropagationEngine {
                 xray_long: wx.xray_long,
                 solar_wind: None, // command layer fills this from the live feed
                 fetched: false,   // the live layer says when SWPC answered
+                // ...and when each number was measured; until then every one is a stand-in.
+                stamps: crate::model::SpaceWxStamps::default(),
+                ap_now: None,
             },
             // Default provenance; live/cached callers override `source`.
             source: "live".to_string(),
@@ -323,9 +354,17 @@ pub fn offline(now: i64, me_call: &str, me_grid: &str) -> PropagationSnapshot {
     // Neutral mid-cycle space weather (NOT all-zero, which reads as a dead band and
     // would mislabel high bands "solar flux too low"). This is a modeled prior, not
     // fabricated observation — `offline` still carries no spots/openings/DXpeditions.
+    // Nothing here is measured, so every stamp is `None` and the advisor speaks no model word.
     let wx = SpaceWx::default();
     let needs = NeedsSet::default();
-    let mut snap = PropagationEngine::new(me_call, me_grid).snapshot(now, &[], &wx, &[], &needs);
+    let mut snap = PropagationEngine::new(me_call, me_grid).snapshot_measured(
+        now,
+        &[],
+        &wx,
+        false,
+        &[],
+        &needs,
+    );
     snap.source = "offline".to_string();
     snap
 }
@@ -472,6 +511,26 @@ mod tests {
             s.dxpeditions.workable_now.is_empty() && s.dxpeditions.upcoming.is_empty(),
             "offline must invent no DXpeditions"
         );
+    }
+
+    /// The offline snapshot's stand-ins are marked as such on the wire: not fetched, no
+    /// number stamped, no ap estimate, and no band carries the model's word on them.
+    #[test]
+    fn offline_stand_ins_cross_the_wire_unstamped() {
+        let s = offline(1_700_000_000, "KD9TAW", "EN52");
+        assert!(!s.space_wx.fetched);
+        assert_eq!(s.space_wx.stamps, crate::model::SpaceWxStamps::default());
+        let v = serde_json::to_value(&s.space_wx).unwrap();
+        assert_eq!(v["fetched"], serde_json::json!(false));
+        for k in ["sfiAt", "kpAt", "xrayAt", "aDay"] {
+            assert_eq!(
+                v.get(k),
+                Some(&serde_json::Value::Null),
+                "{k} must be sent, and null"
+            );
+        }
+        assert!(v.get("apNow").is_none());
+        assert!(s.advisory.bands.iter().all(|b| b.modeled.is_empty()));
     }
 
     #[test]

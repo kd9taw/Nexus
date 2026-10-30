@@ -16,6 +16,7 @@ import type { AmpStatus, FieldDayStatus } from '../types'
 import type { ActivationBoard } from './ActivationPane'
 import type { Theme } from '../useTheme'
 import { effectiveXray } from '../flareAlert'
+import { snapXray } from '../propViz'
 import { gpuCapableForGlobe, webgl2ForGlobe } from '../gpu'
 import { GlobeGuard } from './GlobeGuard'
 import { gridToLatLon, type LatLon } from '../grid'
@@ -563,7 +564,8 @@ export function ConnectView({
   })
   const { pathPred, bandOutlook, muf } = ctx
   // The one flux value the map renders (dev-override > fast lane > snapshot).
-  const xrayLong = effectiveXray(xrayNow, prop?.spaceWx.xrayLong)
+  // A stand-in or old snapshot flux is no flux (propViz `snapXray`); the fast lane is fresh-gated.
+  const xrayLong = effectiveXray(xrayNow, snapXray(prop?.spaceWx, Date.now()))
   const chromeHidden = mapFull && !map3d
 
   // CLOSE + RESIZE (operator-approved 2026-09-13). Visibility is per SLOT, in the shared

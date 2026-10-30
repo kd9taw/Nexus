@@ -4517,6 +4517,16 @@ body.resizing-row {
   width: 100%;
   margin-top: var(--space-1);
 }
+/* A layer row's second line — what the layer IS (the aurora oval: a forecast, and for when). A
+   forecast time long gone dims, the way the space-weather gauges dim an old reading. */
+.map-layer-note {
+  display: block;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.map-layer-note[data-stale] {
+  color: var(--text-faint);
+}
 /* STREET SCALE (MapView, features/streetOverlay.ts): a world-scale field shows no detail at street
    zoom, so its row reads dimmed and its tooltip says why. It stays a working control; only the ink
    changes. */

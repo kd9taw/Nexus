@@ -3,6 +3,11 @@
 // plain language is the Mission-Control glanceable layer. In Simple mode (`gloss`)
 // each acronym carries a hover/tap plain-English definition so a newcomer is
 // never staring at a cryptic "SFI 142 / Kp 4"; Expert mode assumes fluency.
+//
+// ONLY WHAT NOAA MEASURED (propViz `wxReading`): a number whose stamp is null is the model's
+// stand-in and is drawn as "—" with no colour and no impact word; a reading past its product's
+// cadence keeps its number, dimmed, and says how old it is. Each gauge's sample time and source
+// are on its hover. The A is NOAA's daily planetary A, dated; the Kp-derived ap rides on hover.
 import type { CSSProperties } from 'react'
 import type { SolarWind, SpaceWxView } from '../../types'
 import {
@@ -15,10 +20,14 @@ import {
   windSpeedKms,
   solarWindAgeSecs,
   SOLAR_WIND_STALE_SECS,
+  wxReading,
+  wxStampLabel,
   type Impact,
+  type WxKey,
 } from '../../propViz'
 import { Tooltip, TooltipProvider } from '../ui/Tooltip'
 import { t, type MessageKey } from '../../i18n'
+import { dayLabel } from './SolarTrends'
 
 const SEV_VAR: Record<Impact['sev'], string> = {
   quiet: 'var(--band-open)',
@@ -60,6 +69,7 @@ function Gauge({
   impact,
   dim,
   gloss,
+  title,
 }: {
   label: string
   value: string
@@ -70,6 +80,8 @@ function Gauge({
    *  dim — an interpretation in green or amber would read as the field now. */
   dim?: boolean
   gloss?: boolean
+  /** Where the number came from and when it was measured (hover). */
+  title?: string
 }) {
   const entry = gloss ? GLOSS[label] : undefined
   const def = entry ? t(entry.glossKey) : undefined
@@ -84,7 +96,7 @@ function Gauge({
   )
   return (
     <div className="swx-gauge">
-      <div className="swx-head">
+      <div className="swx-head" title={title}>
         {key}
         {unit ? (
           <span className="swx-vu">
@@ -112,7 +124,7 @@ function Gauge({
 }
 
 /** "45m ago" / "3h ago", as the openings strip says it. */
-function agoLabel(secs: number): string {
+export function agoLabel(secs: number): string {
   const m = Math.round(secs / 60)
   return m < 60 ? t('prop.opening.ago.mins', { mins: m }) : t('prop.opening.ago.hours', { hours: Math.round(m / 60) })
 }
@@ -138,29 +150,92 @@ function BzGauge({ sw, gloss }: { sw: SolarWind | null; gloss?: boolean }) {
   )
 }
 
+/** Where each index comes from, with its sample time, for the gauge's hover. */
+function sourceLine(wx: SpaceWxView, key: WxKey, at: number): string {
+  switch (key) {
+    case 'sfi':
+      return t('prop.spaceWx.src.sfi', { time: wxStampLabel(at) })
+    case 'kp':
+      return t('prop.spaceWx.src.kp', { time: wxStampLabel(at) })
+    case 'xray':
+      return t('prop.spaceWx.src.xray', { time: wxStampLabel(at) })
+    case 'a': {
+      const line = t('prop.spaceWx.src.a', { day: dayLabel(at) })
+      return wx.apNow != null ? `${line} · ${t('prop.spaceWx.src.apNow', { ap: wx.apNow.toFixed(0) })}` : line
+    }
+  }
+}
+
+/** One index gauge under the honesty rule: a stand-in is a dash, a stale reading its age. */
+function IndexGauge({
+  wx,
+  index: k,
+  label,
+  value,
+  impact,
+  unit,
+  gloss,
+  now,
+}: {
+  wx: SpaceWxView
+  /** Which index (never a catalog key: `k` is the `<T>` key attribute the string guard reads). */
+  index: WxKey
+  label: string
+  value: string
+  impact: Impact
+  unit?: string
+  gloss?: boolean
+  now: number
+}) {
+  const r = wxReading(wx, k, now)
+  if (!r.real) {
+    return (
+      <Gauge
+        label={label}
+        value={NO_VALUE}
+        impact={{ sev: 'quiet', text: t('prop.spaceWx.none') }}
+        dim
+        gloss={gloss}
+        title={t('prop.spaceWx.src.standIn')}
+      />
+    )
+  }
+  const title = r.at != null ? sourceLine(wx, k, r.at) : undefined
+  return (
+    <Gauge
+      label={label}
+      value={value}
+      unit={unit}
+      impact={r.stale && r.ageSecs != null ? { sev: 'quiet', text: t('prop.spaceWx.stale', { ago: agoLabel(r.ageSecs) }) } : impact}
+      dim={r.stale}
+      gloss={gloss}
+      title={title}
+    />
+  )
+}
+
 export function SpaceWxGauges({ wx, gloss }: { wx: SpaceWxView; gloss?: boolean }) {
-  const windKms = windSpeedKms(wx, Date.now())
+  const now = Date.now()
+  const windKms = windSpeedKms(wx, now)
   const body = (
     <section className="swx-strip panel" aria-label={t('prop.spaceWx.aria')}>
-      <Gauge
-        label={INDEX.sfi}
-        value={wx.sfi.toFixed(0)}
-        impact={sfiImpact(wx.sfi)}
-        gloss={gloss}
-      />
-      <Gauge
-        label={INDEX.kp}
-        value={wx.kp.toFixed(0)}
-        impact={kpImpact(wx.kp)}
-        gloss={gloss}
-      />
-      <Gauge
+      <IndexGauge wx={wx} index="sfi" now={now} label={INDEX.sfi} value={wx.sfi.toFixed(0)} impact={sfiImpact(wx.sfi)} gloss={gloss} />
+      <IndexGauge wx={wx} index="kp" now={now} label={INDEX.kp} value={wx.kp.toFixed(0)} impact={kpImpact(wx.kp)} gloss={gloss} />
+      {/* The daily A carries its day, small after the number, the way the bar dates the SSN. */}
+      <IndexGauge
+        wx={wx}
+        index="a"
+        now={now}
         label={INDEX.a}
         value={wx.aIndex.toFixed(0)}
+        unit={wx.aDay != null ? dayLabel(wx.aDay) : undefined}
         impact={aImpact(wx.aIndex)}
         gloss={gloss}
       />
-      <Gauge
+      <IndexGauge
+        wx={wx}
+        index="xray"
+        now={now}
         label={INDEX.xray}
         value={wx.xrayClass.replace('-class', '')}
         impact={xrayImpact(wx.xrayClass)}

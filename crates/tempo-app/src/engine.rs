@@ -3343,12 +3343,14 @@ pub enum VoiceMemCmd {
 }
 
 /// One space-weather reading as a logged contact carries it (ADIF `K_INDEX`, `A_INDEX`, `SFI`,
-/// each a whole number), and when Nexus fetched it.
+/// each a whole number), and when Nexus fetched it. Each is `None` when NOAA gave no reading of
+/// it — the field is then left off the contact, never filled with the model's stand-in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SpaceWeatherReading {
-    k_index: u32,
-    a_index: u32,
-    sfi: u32,
+    k_index: Option<u32>,
+    /// NOAA's daily planetary A and 00:00 UT of the day it is for.
+    a_index: Option<(u32, u64)>,
+    sfi: Option<u32>,
     at_unix: u64,
 }
 
@@ -16998,18 +17000,27 @@ impl Engine {
         }
     }
 
-    /// The space weather Nexus just fetched — planetary K, A and the 10.7 cm solar flux — and
-    /// when (`at_unix`). Called by the shell's propagation poll, only for a reading SWPC actually
-    /// answered; kept for the opt-in K_INDEX / A_INDEX / SFI on each logged contact.
-    pub fn note_space_weather(&mut self, kp: f32, a_index: f32, sfi: f32, at_unix: u64) {
+    /// The space weather Nexus just fetched — planetary K, NOAA's daily planetary A with the
+    /// UT day (00:00, Unix seconds) it is for, and the 10.7 cm solar flux — and when
+    /// (`at_unix`). Called by the shell's propagation poll; each number is `Some` only when SWPC
+    /// answered with a reading of it, and is kept for the opt-in K_INDEX / A_INDEX / SFI on each
+    /// logged contact. The A is the daily index, never an estimate from Kp.
+    pub fn note_space_weather(
+        &mut self,
+        kp: Option<f32>,
+        a_daily: Option<(f32, u64)>,
+        sfi: Option<f32>,
+        at_unix: u64,
+    ) {
         let whole = |v: f32| (v.is_finite() && v >= 0.0).then(|| v.round() as u32);
-        if let (Some(k_index), Some(a_index), Some(sfi)) = (whole(kp), whole(a_index), whole(sfi)) {
-            self.space_weather = Some(SpaceWeatherReading {
-                k_index,
-                a_index,
-                sfi,
-                at_unix,
-            });
+        let reading = SpaceWeatherReading {
+            k_index: kp.and_then(whole),
+            a_index: a_daily.and_then(|(a, day)| whole(a).map(|a| (a, day))),
+            sfi: sfi.and_then(whole),
+            at_unix,
+        };
+        if reading.k_index.is_some() || reading.a_index.is_some() || reading.sfi.is_some() {
+            self.space_weather = Some(reading);
         }
     }
 
@@ -17673,15 +17684,24 @@ impl Engine {
         // it ([`Settings::log_space_weather`]) and only from a reading Nexus actually fetched
         // within three hours of the contact's start ([`Self::space_weather_at`]) — never the
         // propagation model's stand-in values, and never today's numbers on a contact typed in
-        // from yesterday.
+        // from yesterday. Each field only when it is a reading: a number NOAA did not give is
+        // left off. The A is NOAA's daily planetary A, and only for the contact's own UT day or
+        // the day before (NOAA issues a day's A after the day ends, so yesterday's is the
+        // newest there is); an older day's A is not this contact's.
         if self.settings.log_space_weather {
             if let Some(wx) = self.space_weather_at(rec.when_unix) {
+                let contact_day = rec.when_unix / 86_400 * 86_400;
+                let a_index = wx.a_index.and_then(|(a, day)| {
+                    (day <= contact_day && contact_day - day <= 86_400).then_some(a)
+                });
                 for (tag, value) in [
                     ("K_INDEX", wx.k_index),
-                    ("A_INDEX", wx.a_index),
+                    ("A_INDEX", a_index),
                     ("SFI", wx.sfi),
                 ] {
-                    tempo_core::logbook::fill_extra(&mut rec, tag, value.to_string());
+                    if let Some(value) = value {
+                        tempo_core::logbook::fill_extra(&mut rec, tag, value.to_string());
+                    }
                 }
             }
         }
@@ -49434,7 +49454,8 @@ mod tests {
     fn space_weather_is_logged_only_when_asked_and_only_while_fresh() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         let now = now_unix_secs();
-        e.note_space_weather(2.67, 7.0, 148.6, now - 60);
+        let yesterday = now / 86_400 * 86_400 - 86_400;
+        e.note_space_weather(Some(2.67), Some((7.0, yesterday)), Some(148.6), now - 60);
         let off = e.qso_record("K1OFF".into(), None, None);
         e.log_qso(off);
         e.settings.log_space_weather = true;
@@ -49444,7 +49465,12 @@ mod tests {
         let mut earlier = e.qso_record("K1YDA".into(), None, None);
         earlier.when_unix = now - 86_400;
         e.log_qso(earlier);
-        e.note_space_weather(4.0, 20.0, 160.0, now - SPACE_WEATHER_MAX_AGE_SECS - 60);
+        e.note_space_weather(
+            Some(4.0),
+            Some((20.0, yesterday)),
+            Some(160.0),
+            now - SPACE_WEATHER_MAX_AGE_SECS - 60,
+        );
         let stale = e.qso_record("K1OLD".into(), None, None);
         e.log_qso(stale);
         let log = e.stored_log();
@@ -49466,6 +49492,47 @@ mod tests {
         assert_eq!(tempo_core::logbook::extra_field(back, "SFI"), Some("149"));
         assert_eq!(tempo_core::logbook::extra_field(back, "K_INDEX"), Some("3"));
         assert_eq!(tempo_core::logbook::extra_field(back, "A_INDEX"), Some("7"));
+    }
+
+    /// A number NOAA did not give is left off the contact, never stamped with the model's
+    /// stand-in: no Kp → no K_INDEX, no daily A → no A_INDEX, with the real fields still written.
+    /// The A is NOAA's daily planetary A for the contact's own UT day or the day before; an
+    /// older day's A is not this contact's and is omitted.
+    #[test]
+    fn a_missing_or_stale_index_is_omitted_never_a_stand_in() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.log_space_weather = true;
+        let now = now_unix_secs();
+        let today = now / 86_400 * 86_400;
+        let wx_of = |e: &Engine, call: &str| {
+            let log = e.stored_log();
+            let r = log.iter().find(|r| r.call == call).unwrap();
+            ["K_INDEX", "A_INDEX", "SFI"]
+                .map(|t| tempo_core::logbook::extra_field(r, t).map(str::to_string))
+        };
+        // SFI and the daily A answered, Kp did not.
+        e.note_space_weather(None, Some((4.0, today - 86_400)), Some(89.0), now - 60);
+        let c = e.qso_record("K1NOK".into(), None, None);
+        e.log_qso(c);
+        assert_eq!(
+            wx_of(&e, "K1NOK"),
+            [None, Some("4".into()), Some("89".into())]
+        );
+        // Kp answered, the A is three days old: no A_INDEX.
+        e.note_space_weather(Some(1.0), Some((9.0, today - 3 * 86_400)), None, now - 60);
+        let c = e.qso_record("K1OLDA".into(), None, None);
+        e.log_qso(c);
+        assert_eq!(wx_of(&e, "K1OLDA"), [Some("1".into()), None, None]);
+        // Today's own A (once NOAA has it) is the contact's day: kept.
+        e.note_space_weather(None, Some((12.0, today)), None, now - 60);
+        let c = e.qso_record("K1TDA".into(), None, None);
+        e.log_qso(c);
+        assert_eq!(wx_of(&e, "K1TDA"), [None, Some("12".into()), None]);
+        // Nothing answered: the last reading stands, nothing is invented.
+        e.note_space_weather(None, None, None, now - 30);
+        let c = e.qso_record("K1NONE".into(), None, None);
+        e.log_qso(c);
+        assert_eq!(wx_of(&e, "K1NONE"), [None, Some("12".into()), None]);
     }
 
     /// A contact logged now for a time more than three hours ago — typed in afterwards — is

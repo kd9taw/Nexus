@@ -183,6 +183,7 @@ import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { processFlare, effectiveXray } from './flareAlert'
+import { snapXray, wxUsable, xrayFastFresh } from './propViz'
 import { processStorm, processStormForecast } from './stormAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
@@ -951,14 +952,18 @@ function App() {
           setProp(p)
           // The band dropdowns' opening dots read this same snapshot (bandConditions.ts).
           publishBandConditions(p)
-          // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup).
-          processFlare(effectiveXray(xrayFastRef.current, p.spaceWx.xrayLong))
+          // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup). Only a
+          // measured, fresh flux may alert: a stand-in or an old sample is no flux (propViz).
+          const nowMs = Date.now()
+          processFlare(effectiveXray(xrayFastRef.current, snapXray(p.spaceWx, nowMs)))
           // Geomagnetic storm heads-up, same edge-triggered shape over the MEASURED
           // Kp already in this snapshot — no extra fetch. Until this existed a storm
           // reached the operator only if they had the Space Weather pane in front of
-          // them, which is backwards: a flare is minutes, a storm is days.
-          processStorm(p.spaceWx.kp)
-          kpNowRef.current = p.spaceWx.kp
+          // them, which is backwards: a flare is minutes, a storm is days. A stand-in Kp
+          // or one past its cadence raises nothing and is not "the Kp now".
+          const kpNow = wxUsable(p.spaceWx, 'kp', nowMs) ? p.spaceWx.kp : null
+          processStorm(kpNow)
+          kpNowRef.current = kpNow
           // Chased-expedition window alerts (dxpedChase.ts owns the dedup).
           processDxpedAlerts(
             p.dxpeditions.workableNow,
@@ -1150,8 +1155,9 @@ function App() {
   useEffect(
     () =>
       watchFeed(XRAY_NOW, (x) => {
-        xrayFastRef.current = x.flux
-        processFlare(effectiveXray(x.flux, null))
+        // The GOES sample's own time gates it: a feed gap is an old sample, not a flare now.
+        xrayFastRef.current = xrayFastFresh(x, Date.now())
+        processFlare(effectiveXray(xrayFastRef.current, null))
       }),
     [],
   )
