@@ -739,7 +739,7 @@ jobs:
   # Apple Developer enrollment 2026-08-16) and Intel (operator decision 2026-10-27).
   #
   # ONE JOB, TWO LEGS, EACH NATIVE: the modem is Fortran, and Homebrew's gfortran is
-  # single-arch, so each architecture is built on a runner of its own kind (macos-14 is Apple
+  # single-arch, so each architecture is built on a runner of its own kind (macos-15 is Apple
   # Silicon, macos-15-intel is Intel) rather than cross-compiled or made universal; a universal
   # binary would double every Apple Silicon download. The legs share every step, so the Intel
   # build signs, notarizes and is verified exactly as the Apple Silicon one, and holds each
@@ -776,7 +776,7 @@ jobs:
       matrix:
         include:
           - label: Apple Silicon
-            runner: macos-14
+            runner: macos-15
             target: aarch64-apple-darwin
             arch: arm64        # the Mach-O name, for scripts/check-macho-bundle.mjs
             suffix: aarch64    # the file name: Nexus_<ver>_aarch64.dmg, as it always was
@@ -1114,7 +1114,7 @@ jobs:
       matrix:
         include:
           - label: Apple Silicon
-            runner: macos-14
+            runner: macos-15
             arch: arm64
             suffix: aarch64
           - label: Intel
