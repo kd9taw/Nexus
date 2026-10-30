@@ -12903,6 +12903,9 @@ export const EN = {
   'cw.rfZoom.full.label': 'Full',
   'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
   'cw.rfZoom.span.title': '±{{khz}} kHz around your dial',
+  'cw.rfZoom.band.label': 'Band',
+  'cw.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
+  'cw.rfZoom.band.partial': 'Your scope sweeps only part of this band',
 
   // ── CW ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ──────────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an
@@ -13349,6 +13352,9 @@ export const EN = {
   'phone.rfZoom.full.label': 'Full',
   'phone.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
   'phone.rfZoom.span.title': '±{{khz}} kHz around your dial',
+  'phone.rfZoom.band.label': 'Band',
+  'phone.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
+  'phone.rfZoom.band.partial': 'Your scope sweeps only part of this band',
 
   // ── Phone ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ───────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an escape

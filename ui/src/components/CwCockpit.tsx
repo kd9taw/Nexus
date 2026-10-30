@@ -115,6 +115,15 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
 import { PASSBAND_LIMITS } from '../spectrum/markers'
 import { scopeSpots } from '../spectrum/scopeSpots'
+import {
+  bandWindow,
+  loadRfSpan,
+  onlyPart,
+  saveRfSpan,
+  sweepFor,
+  useSpanAsk,
+  type TaggedSweep,
+} from '../spectrum/rfSpan'
 import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { coerceCwAudioSpan, cwAudioView, cwScopeSideSign, CW_AUDIO_SPANS, isRfScopeSource, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON, WF_F_MAX, WF_F_MIN, WF_STD_HI, type CwAudioSpan } from '../waterfall'
@@ -164,12 +173,19 @@ const AGC_CHIPS = [
   { id: 'off', labelKey: 'cw.rxDsp.agc.off' },
 ] as const satisfies readonly { id: string; labelKey: MessageKey }[]
 
-/** Client-side RF-zoom presets for a native panadapter (mirror of the Phone cockpit).
- *  The ± labels are measurements and stay written here; `Full` is a word. Both it and every
- *  title resolve when the row RENDERS (a module constant would freeze the first locale
- *  loaded), so the chips are keyed and compared on `id` — the preset itself rather than the
- *  word printed on it. */
+/** RF-zoom presets for a native panadapter (mirror of the Phone cockpit, Band and the asking
+ *  included: see its RF_SPANS). The ± labels are measurements and stay written here; `Band` and
+ *  `Full` are words. Both and every title resolve when the row RENDERS (a module constant would
+ *  freeze the first locale loaded), so the chips are keyed and compared on `id` — the preset itself
+ *  rather than the word printed on it. */
 const RF_SPANS = [
+  {
+    id: 'band',
+    lo: -1e9,
+    hi: 1e9,
+    label: () => t('cw.rfZoom.band.label'),
+    title: () => t('cw.rfZoom.band.title'),
+  },
   {
     id: 'full',
     lo: -1e9,
@@ -680,7 +696,45 @@ export function CwCockpit({
       .then((s) => onSnap?.(s))
       .catch(showWhenDriving)
   }
-  const [rfSpan, setRfSpan] = useState<(typeof RF_SPANS)[number]>(RF_SPANS[0])
+  const [rfSpan, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
+    const id = loadRfSpan('cw', RF_SPANS.map((sp) => sp.id), 'band')
+    return RF_SPANS.find((sp) => sp.id === id) ?? RF_SPANS[0]
+  })
+  const setRfSpan = (sp: (typeof RF_SPANS)[number]) => {
+    setRfSpanState(sp)
+    saveRfSpan('cw', sp.id)
+  }
+  // The row's own span as the source sweeps it (PhoneScope `onSweep`), for `useSpanAsk`, tagged with
+  // the radio and source it was reported under (`sweepFor`: after a swap it is the old radio's).
+  const [scopeSweep, setScopeSweep] = useState<TaggedSweep | null>(null)
+  // The RF window the chosen span draws, and the sweep asked of the radio for it (as Phone's).
+  const dialHzNow = snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null
+  const bandFit = rfSpan.id === 'band' ? bandWindow(dialHzNow) : null
+  const rfWant =
+    rfSpan.id === 'band'
+      ? bandFit
+      : rfSpan.id === 'full' || dialHzNow == null
+        ? null
+        : { loHz: dialHzNow + rfSpan.lo, hiHz: dialHzNow + rfSpan.hi }
+  useSpanAsk({
+    radio: snap.activeRadioId,
+    source: nativeRf && scopeFeed ? scopeFeed.source : null,
+    dialHz: dialHzNow,
+    want: rfWant,
+    choice: rfSpan.id,
+    sweep: sweepFor(scopeSweep, snap.activeRadioId, nativeRf && scopeFeed ? scopeFeed.source : null),
+    // On the air by the cockpit's own keyed state too (`keyedNow` below: a send, a tune, the rig's
+    // PTT read back), not only the snapshot's transmitting flag.
+    transmitting:
+      snap.radio.transmitting ||
+      !!snap.radio.txBusyReason ||
+      snap.radio.tuning === true ||
+      snap.radio.rigKeyed === true,
+    send: (a) =>
+      void (a.kind === 'civ' ? setScopeSpan(a.halfHz) : setFlexPanSpan(a.hz))
+        .then((s) => onSnap?.(s))
+        .catch(showWhenDriving),
+  })
   const [scopeRefTenths, setScopeRefTenths] = useState(0)
   const changeScopeRef = (tenths: number) => {
     setScopeRefTenths(tenths)
@@ -2527,6 +2581,11 @@ export function CwCockpit({
                 {sp.label()}
               </button>
             ))}
+            {bandFit && onlyPart(scopeFeed, bandFit) && (
+              <span className="ph-scope-sub" role="status">
+                {t('cw.rfZoom.band.partial')}
+              </span>
+            )}
           </div>
         )}
         {/* CW-narrow view — 800 Hz CENTERED ON THE PITCH (cwScopeWindow) — unless a native RF
@@ -2545,6 +2604,8 @@ export function CwCockpit({
           sideband={scopeMode}
           dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
           onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
+          rfViewHz={nativeRf && !yaesuRf ? bandFit : null}
+          onSweep={(source, loHz, hiHz) => setScopeSweep({ loHz, hiHz, radio: snap.activeRadioId, source })}
           onTune={onScopeTune}
           filterWidthHz={filterHz ?? 500}
           passbandHz={soundcardKeyer ? null : filterHz}

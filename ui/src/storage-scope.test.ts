@@ -26,6 +26,11 @@ import { SCALE_KEYS } from './spectrum/scaleSettings'
  *  below — the list and the code cannot drift apart. */
 export const PER_SURFACE = [
   'neededFilters',
+  // The RF panadapter's chosen span (Band, Full, ±kHz) in the CW and Phone cockpits
+  // (spectrum/rfSpan.ts): per window, like the audio scope's span chips, so a torn-off cockpit keeps
+  // its own. The main window's spelling is the bare key an earlier build kept for the whole station.
+  'nexus.cw.rfSpan',
+  'nexus.phone.rfSpan',
   'nexus-ui-scale-mode',
   // APRS's body (layout L7): the station list column's width and the side the map stands on —
   // statements about THIS window's shape, like Connect's rail widths and Operate's rail side.
