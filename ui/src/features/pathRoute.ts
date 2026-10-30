@@ -150,21 +150,38 @@ function ink(bcr: number): RibbonInk {
   return bcr >= OPEN_BCR ? 'open' : bcr >= CLOSED_BCR ? 'marginal' : 'closed'
 }
 
+/** The route calls at UTC hour `h` from the outlook's day (what the path-over-the-day strip
+ * shows for that hour), in the shape the current hour's calls have. Reasons are not carried: the
+ * map draws inks, not words. */
+function callsAt(p: PathPrediction, h: number): RouteCall[] | null {
+  if (!p.routes || !p.day) return null
+  return p.day.bands.flatMap((b) => {
+    const c = b.cells[h]
+    if (!c || c.longPct == null || !c.verdict) return []
+    return [{ band: b.band, verdict: c.verdict, confidence: c.confidence, shortBcr: c.shortPct / 100, longBcr: c.longPct / 100, reasons: [] }]
+  })
+}
+
 /** What the map draws for the selected station: each route's ink and its polar / grey-line
  * stretches. `long` is null when the engine modelled no long path (the map then draws the long
- * route as plain geometry). */
+ * route as plain geometry). `hour` (UTC) is the hour the operator scrubbed the day to; null or
+ * the current hour draws now. */
 export function ribbonRoutes(
   p: PathPrediction | null | undefined,
   focusBand?: string | null,
+  hour?: number | null,
 ): { short: RibbonRoute; long: RibbonRoute | null; favoured: RouteName | null } | null {
   const sp = p?.geometry
   if (!p || !sp) return null
   const lp = p.longPath?.geometry
-  const c = p.routes ? pickCall(p.routes, focusBand) : null
+  const scrubbed = hour != null && hour !== sp.nowHour
+  const calls = scrubbed ? callsAt(p, hour) : p.routes
+  const c = calls ? pickCall(calls, focusBand) : null
+  const segs = (g: PathGeometry) => (scrubbed ? (g.hours[hour]?.segments ?? []) : (g.segmentsNow ?? []))
   return {
-    short: { ink: c ? ink(c.shortBcr) : null, segments: sp.segmentsNow ?? [], brgDeg: Math.round(sp.bearingDeg) },
+    short: { ink: c ? ink(c.shortBcr) : null, segments: segs(sp), brgDeg: Math.round(sp.bearingDeg) },
     long: lp
-      ? { ink: c ? ink(c.longBcr) : null, segments: lp.segmentsNow ?? [], brgDeg: Math.round(lp.bearingDeg) }
+      ? { ink: c ? ink(c.longBcr) : null, segments: segs(lp), brgDeg: Math.round(lp.bearingDeg) }
       : null,
     favoured: c?.verdict === 'long' ? 'long' : c?.verdict === 'short' ? 'short' : null,
   }

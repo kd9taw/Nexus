@@ -274,6 +274,12 @@ export async function getPathOutlook(grid: string): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_path_outlook', { grid })
 }
 
+/** The ten DX regions' path over the day from the operator's grid (the region strips). The model
+ * part is kept six hours at the shack; each hour's Kp is current at every ask. */
+export async function getPathRegions(): Promise<import('./types').PathRegions> {
+  return invoke<import('./types').PathRegions>('get_path_regions')
+}
+
 /** The no-selection "Band outlook (modelled)": modeled per-band workability + MUF to
  *  a ring of representative long-haul DX directions. Needs only the operator's grid. */
 export async function getBandOutlook(): Promise<PathPrediction> {

@@ -295,6 +295,10 @@ export interface PathGeoHour {
   sunlitFrac: number
   greyMe: boolean
   greyDx: boolean
+  /** The stretches of the arc inside the polar cap or on the grey line in this hour (fractions
+   * from the operator, 0, to the far end, 1) — what the map draws when the day is scrubbed to it.
+   * Absent when none, and from an older shack. */
+  segments?: { from: number; to: number; kind: 'polar' | 'grey' }[]
 }
 /** One route's geometry over the next 24 h (polar cap, auroral oval, grey line, Kp). */
 export interface PathGeometry {
@@ -344,6 +348,52 @@ export interface PathPrediction {
   longPath?: PathPrediction
   /** Per band, the route the model favours now; present only beside `longPath`. */
   routes?: RouteCall[]
+  /** The request's day as the path-over-the-day strip draws it; per-path outlook only. */
+  day?: PathDay
+}
+/** One band at one UTC hour of a path's day (propagation::pathday). Modelled, never measured. */
+export interface PathDayCell {
+  /** Short-path modelled reliability, whole percent. */
+  shortPct: number
+  /** Long-path modelled reliability, when the engine models the long path (unvalidated). */
+  longPct?: number
+  /** The route the model favours that hour; absent without a long path to compare. */
+  verdict?: RouteCall['verdict']
+  confidence?: RouteCall['confidence']
+}
+/** One UTC hour's band-independent geometry in a path's day. */
+export interface PathDayHour {
+  unix: number
+  kp: number
+  /** Where the hour's Kp came from (see PathGeoHour.kpSource). */
+  kpSource: PathGeoHour['kpSource']
+  polarShort: boolean
+  polarLong?: boolean
+  greyMe: boolean
+  greyDx: boolean
+}
+/** A path over the day: band rows (highest first) × 24 UTC hours, both routes, plus the hours. */
+export interface PathDay {
+  nowHour: number
+  mufShort: number[]
+  mufLong?: number[]
+  bands: { band: string; cells: PathDayCell[] }[]
+  hours: PathDayHour[]
+}
+/** One of the ten fixed DX regions with its path over the day (`get_path_regions`). */
+export interface RegionPathDay {
+  id: string
+  lat: number
+  lon: number
+  /** CQ zones the region counts (for ordering by the operator's needs and contacts). */
+  zones: number[]
+  day: PathDay
+}
+export interface PathRegions {
+  engine: string
+  /** When the model part was computed (unix s); the hours are current at every ask. */
+  computedUnix: number
+  regions: RegionPathDay[]
 }
 /** One receiver who decoded the operator ("getting out"). */
 export interface HeardMe {

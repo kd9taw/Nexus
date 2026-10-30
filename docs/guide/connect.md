@@ -282,6 +282,8 @@ The panes you can assign:
 | Openings Log | every band opening Nexus has detected (6 m and 2 m tropo, sporadic-E, aurora), with its band, kind, start, length, longest path and the most stations heard, kept from one session to the next |
 | Space Wx | solar/geomagnetic gauges (the solar-wind speed among them), 30-day solar flux and sunspot-number lines from NOAA's daily indices, and the NOAA scales annunciator |
 | Kp outlook | NOAA's three-day planetary-K forecast as bars, the measured hours solid and the forecast hollow, with when a storm is expected to start or settle |
+| Path over the day | the selected station's path through the 24 UTC hours: per band, how well the model expects the short and long path to work and which way round it favours, the MUF ceiling, the grey line and the Kp ribbon; click an hour to move the 2-D map to it |
+| Paths to the regions | the same strip for ten DX regions, each on its best band (▸ for every band), the regions you need or have worked most first |
 | Getting Out | who is hearing you right now: a compass, and every station that heard you in the last half hour, with its direction and distance, band, SNR and how long ago |
 | Bands by region | the best band to reach each region |
 | Activity Matrix | a region × band grid of live activity |

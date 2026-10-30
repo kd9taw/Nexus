@@ -269,6 +269,8 @@ const MIGRATED = [
   'components/prop/PathRoute.tsx',
   'features/pathRoute.ts',
   'features/pathRibbon.ts',
+  'components/prop/PathDayStrip.tsx',
+  'features/pathDay.ts',
   'components/prop/ScalesAnnunciator.tsx',
   'components/prop/SolarTrends.tsx',
   'components/prop/SpaceWxGauges.tsx',

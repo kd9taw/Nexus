@@ -219,6 +219,7 @@ impl P533Engine {
                 geometry: None,
                 long_path: None,
                 routes: None,
+                day: None,
             };
         };
 
@@ -313,6 +314,7 @@ impl P533Engine {
             geometry: None,
             long_path: None,
             routes: None,
+            day: None,
         }
     }
 }

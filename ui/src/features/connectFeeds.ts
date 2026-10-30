@@ -37,6 +37,7 @@ import {
   getKpForecast,
   getOtaSpots,
   getPathOutlook,
+  getPathRegions,
   getSolarIndices,
   getSpaceWxScales,
   getXrayNow,
@@ -51,6 +52,7 @@ import type {
   NoaaScalesView,
   OtaSpot,
   PathPrediction,
+  PathRegions,
   XrayNow,
 } from '../types'
 import { t } from '../i18n'
@@ -101,6 +103,9 @@ export const SOLAR_INDICES: Feed<DailySolarIndices> = { name: 'solarIndices', lo
 /** The 3-day Kp forecast: the server's 15-minute cache (SWPC republishes every 30). App's storm
  *  heads-up and the Kp outlook box. */
 export const KP_FORECAST: Feed<KpForecast> = { name: 'kpForecast', load: () => getKpForecast(), everyMs: 900_000 }
+/** The ten DX regions' path over the day: the shack keeps the model six hours, so this poll only
+ *  picks up the hours' Kp as the outlook moves (SWPC republishes every 30 minutes). */
+export const PATH_REGIONS: Feed<PathRegions> = { name: 'pathRegions', load: () => getPathRegions(), everyMs: 900_000 }
 /** The outlook along the path to the selected station's grid, asked once per selection. */
 export const PATH_OUTLOOK: KeyedFeed<PathPrediction> = { name: 'pathOutlook', load: (grid) => getPathOutlook(grid) }
 

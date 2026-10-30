@@ -238,6 +238,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_ota_map_spots",              RunsAtShack, "The shack's activator spots."),
     ("get_ota_spots",                  RunsAtShack, "The shack's activator spots."),
     ("get_path_outlook",               RunsAtShack, "The shack's propagation model."),
+    ("get_path_regions",               RunsAtShack, "The shack's propagation model."),
     ("get_pca",                        RunsAtShack, "The shack's propagation feeds."),
     ("get_portless_rig_models",        RunsAtShack, "The rig catalog, for the shack's rig setup."),
     ("get_pota_activator",             RunsAtShack, "From the shack's logbook and park list."),

@@ -37,7 +37,7 @@ const CIRCUMFERENCE_KM: f64 = 2.0 * std::f64::consts::PI * 6371.0;
 pub const GREYLINE_DEG: f64 = 6.0;
 
 /// Where an hour's Kp came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum KpSource {
     /// SWPC measured it (the period has passed or is in progress with final data).
@@ -68,6 +68,10 @@ pub struct PathGeoHour {
     /// Grey line at the operator's end / the far end.
     pub grey_me: bool,
     pub grey_dx: bool,
+    /// The stretches of the arc inside the polar cap or on the grey line in this hour — what a
+    /// map draws over the path when the operator scrubs the day to it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<PathSegment>,
 }
 
 /// What a stretch of the arc is crossing in the request's hour.
@@ -247,11 +251,13 @@ pub fn path_geometry_route(
                 .map(|&(la, lo)| geo::solar_elevation_deg(la, lo, mid))
                 .collect();
             let grey = |e: f64| e.abs() <= GREYLINE_DEG;
+            let mut segments = Vec::new();
+            let polars: Vec<bool> = gmlat.iter().map(|&g| g >= cap).collect();
+            let greys: Vec<bool> = elev.iter().map(|&e| grey(e)).collect();
+            segments_of(&polars, SegmentKind::Polar, &mut segments);
+            segments_of(&greys, SegmentKind::Grey, &mut segments);
             if h == now_hour {
-                let polar: Vec<bool> = gmlat.iter().map(|&g| g >= cap).collect();
-                let greys: Vec<bool> = elev.iter().map(|&e| grey(e)).collect();
-                segments_of(&polar, SegmentKind::Polar, &mut segments_now);
-                segments_of(&greys, SegmentKind::Grey, &mut segments_now);
+                segments_now = segments.clone();
             }
             PathGeoHour {
                 unix,
@@ -263,6 +269,7 @@ pub fn path_geometry_route(
                 sunlit_frac: elev.iter().filter(|&&e| e > 0.0).count() as f32 / n,
                 grey_me: grey(elev[0]),
                 grey_dx: grey(elev[samples - 1]),
+                segments,
             }
         })
         .collect();
@@ -506,6 +513,27 @@ mod tests {
             .collect();
         assert_eq!(grey.len(), 1);
         assert!(grey[0].from == 0.0 && grey[0].to == 1.0, "{grey:?}");
+    }
+
+    #[test]
+    fn every_hour_carries_its_own_stretches() {
+        // London -> Accra at equinox, asked at 06Z: grey end to end at 06Z, none at noon.
+        let g = path_geometry(LONDON, (5.6, -0.19), 1_773_986_400, 2.0, None, None);
+        assert_eq!(g.hours[g.now_hour as usize].segments, g.segments_now);
+        let grey = |h: usize| {
+            g.hours[h]
+                .segments
+                .iter()
+                .any(|s| s.kind == SegmentKind::Grey)
+        };
+        assert!(grey(6) && !grey(12));
+        // Boston -> Tokyo at Kp 2: the polar stretch is drawn in each hour the arc is in the cap.
+        let bt = quiet(BOSTON, TOKYO, 2.0);
+        for h in &bt.hours {
+            let polar = h.segments.iter().any(|s| s.kind == SegmentKind::Polar);
+            assert_eq!(polar, h.polar_frac > 0.0);
+        }
+        assert!(bt.hours.iter().all(|h| h.polar_frac > 0.0));
     }
 
     #[test]

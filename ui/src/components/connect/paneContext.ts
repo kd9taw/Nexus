@@ -9,6 +9,7 @@ import type { SpotsPanelProps } from '../SpotsPanel'
 import type { NeededPanelProps } from '../NeededPanel'
 import type { OtaSpotClickArg } from '../PotaSotaView'
 import type { ActivationBoard } from '../ActivationPane'
+import type { DayScrub } from '../prop/PathDayStrip'
 import type {
   AlertView,
   AmpStatus,
@@ -117,6 +118,12 @@ export interface PaneContext {
   /** Point the rotator at a call (present only when a rotator is configured). */
   onPoint?: (call: string) => void
   toggleFocusBand: (band: string) => void
+  /** The hour the path-over-the-day strips are scrubbed to (the map draws its terminator and the
+   *  ribbon at it), or null for now. */
+  dayScrub?: DayScrub | null
+  /** Scrub the day (null = back to now). Absent where no map stands beside the boxes: the strips'
+   *  hours are then not buttons. */
+  onDayScrub?: (s: DayScrub | null) => void
   /** The call in the LOG ENTRY of the cockpit this box stands beside, the call its Log action would
    *  write, for the Rotor box's second line (its bearing, and Point). Absent or null where no log
    *  entry stands beside the box: Connect, the TV page and the hosted Remote page, a cockpit with no
