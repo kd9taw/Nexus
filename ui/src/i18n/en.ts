@@ -10849,7 +10849,7 @@ export const EN = {
   // selected station card, the polar chip, and the map's long-path button. The route call is the
   // P.533 model's opinion (a monthly median), so the confidence words are "likely" / "possible",
   // never "confirmed"; the long path has no reference fixture, so wherever it is shown it is
-  // labelled modelled and unvalidated. The hint is advice: nothing turns the rotator. `{{brg}}`,
+  // labelled modelled and unvalidated, and the engine never calls it more than "possible". The hint is advice: nothing turns the rotator. `{{brg}}`,
   // `{{sp}}` and `{{lp}}` are degrees (true), `{{band}}` (20m) and `{{time}}` (1800Z) invariant.
   // The hint is wrapped by `pathWhy.sentence`.
   'pathRoute.conf.likely': 'likely',

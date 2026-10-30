@@ -11,6 +11,10 @@
 //!   *unknown*: nothing the model knows explains a contact then.
 //! - **Grey line.** On 160/80/40 m, a route whose arc lies along the terminator while the
 //!   other does not moves the answer one notch toward it, and never past *likely*.
+//! - **The long path is held at *possible*.** The long route has no reference to validate it
+//!   against (and a cross-check against another model found it markedly more optimistic on the
+//!   longest arcs), so until it is validated a long-path verdict never reads *likely*. The
+//!   short path, which is validated, keeps the full scale.
 //!
 //! This is the model's opinion only. P.533 is a monthly median, the long route has no
 //! reference fixture to validate against, and skewed (off-great-circle) paths are not
@@ -210,6 +214,9 @@ pub fn infer_route(band: &str, sp: RouteEvidence, lp: RouteEvidence) -> RouteCal
             reasons.push(RouteReason::GreyLine { route });
         }
     }
+    if verdict == RouteVerdict::Long {
+        confidence = Some(RouteConfidence::Possible);
+    }
     call(verdict, confidence, reasons)
 }
 
@@ -274,9 +281,26 @@ mod tests {
     use RouteVerdict as V;
 
     #[test]
-    fn one_route_open_and_the_other_closed_is_likely_that_route() {
+    fn a_long_path_verdict_is_held_at_possible_until_the_long_path_is_validated() {
+        // Long open, short closed: the strongest long-path case the model has, still possible.
         let c = infer_route("20m", ev(0.05, 0.0), ev(0.7, 2.0));
-        assert_eq!(vc(&c), (V::Long, Some(Likely)));
+        assert_eq!(vc(&c), (V::Long, Some(Possible)));
+        // Both open, long 9 dB better: possible, not likely.
+        let c = infer_route("20m", ev(0.6, 0.0), ev(0.9, 9.0));
+        assert_eq!(vc(&c), (V::Long, Some(Possible)));
+        // A grey-line nudge cannot lift it past possible either.
+        let c = infer_route("80m", grey(ev(0.3, 0.0), 0.0), grey(ev(0.3, 7.0), 0.4));
+        assert_eq!(vc(&c), (V::Long, Some(Possible)));
+        // Negative control: the validated short path keeps "likely".
+        let c = infer_route("20m", ev(0.8, 10.0), ev(0.02, 9.0));
+        assert_eq!(vc(&c), (V::Short, Some(Likely)));
+    }
+
+    #[test]
+    fn one_route_open_and_the_other_closed_is_likely_that_route() {
+        // (The long path is held at possible until it is validated.)
+        let c = infer_route("20m", ev(0.05, 0.0), ev(0.7, 2.0));
+        assert_eq!(vc(&c), (V::Long, Some(Possible)));
         assert_eq!(
             c.reasons,
             vec![RouteReason::OneClosed { open: Route::Long }]
@@ -288,9 +312,9 @@ mod tests {
 
     #[test]
     fn a_margin_of_6_db_picks_a_route_and_less_is_either() {
-        // Both open, long 9 dB better: likely long.
+        // Both open, long 9 dB better: long (possible — the long path's cap).
         let c = infer_route("20m", ev(0.6, 0.0), ev(0.9, 9.0));
-        assert_eq!(vc(&c), (V::Long, Some(Likely)));
+        assert_eq!(vc(&c), (V::Long, Some(Possible)));
         assert_eq!(
             c.reasons,
             vec![RouteReason::Margin {
@@ -324,12 +348,12 @@ mod tests {
         assert!(c
             .reasons
             .contains(&RouteReason::GreyLine { route: Route::Long }));
-        // Possible long → likely long.
+        // Possible long → likely long, held at possible by the long path's cap.
         let c = infer_route("80m", grey(ev(0.3, 0.0), 0.0), grey(ev(0.3, 7.0), 0.4));
-        assert_eq!(vc(&c), (V::Long, Some(Likely)));
-        // Already likely long: stays likely long, not beyond.
+        assert_eq!(vc(&c), (V::Long, Some(Possible)));
+        // Already the strongest long call: no further.
         let c = infer_route("160m", grey(ev(0.05, 0.0), 0.0), grey(ev(0.8, 9.0), 0.4));
-        assert_eq!(vc(&c), (V::Long, Some(Likely)));
+        assert_eq!(vc(&c), (V::Long, Some(Possible)));
         // Toward the other route: likely short becomes possible short.
         let c = infer_route("40m", grey(ev(0.8, 9.0), 0.0), grey(ev(0.05, 0.0), 0.4));
         assert_eq!(vc(&c), (V::Short, Some(Possible)));

@@ -10,7 +10,8 @@
 //! - **An equatorial pair** (Singapore–Nairobi): the long path never wins.
 //!
 //! The long route has no reference fixture (the reference implementation is shortest-arc only);
-//! these pin what the model says, not that it is right.
+//! these pin what the model says, not that it is right, and until it is validated a long-path
+//! call is held at "possible".
 
 use propagation::p533::engine::P533Engine;
 use propagation::{
@@ -75,7 +76,7 @@ fn w_to_vk_on_20m_goes_long_path_at_bostons_sunset_and_short_at_midday() {
     let c = call_at(BOSTON, SYDNEY, &preds, "20m", 23);
     assert_eq!(
         (c.verdict, c.confidence),
-        (RouteVerdict::Long, Some(RouteConfidence::Likely)),
+        (RouteVerdict::Long, Some(RouteConfidence::Possible)),
         "{c:?}"
     );
     assert!(c.long_bcr >= 0.5 && c.short_bcr < 0.1, "{c:?}");
@@ -111,7 +112,7 @@ fn a_polar_short_path_and_its_long_path_trade_hours() {
     let evening = call_at(BOSTON, TOKYO, &preds, "20m", 22);
     assert_eq!(
         (evening.verdict, evening.confidence),
-        (RouteVerdict::Long, Some(RouteConfidence::Likely)),
+        (RouteVerdict::Long, Some(RouteConfidence::Possible)),
         "{evening:?}"
     );
     assert!(evening.margin_db.expect("P.533 gives SNR") >= 6.0);
