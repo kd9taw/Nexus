@@ -6539,7 +6539,7 @@ fn legacy_sstv_gallery_dir() -> PathBuf {
 /// stall the whole window on a slow disk. Caught by `no_engine_locking_command_runs_on_the_ui_thread`.
 #[tauri::command(async)]
 fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(), String> {
-    delete_sstv_gallery_image(&mut engine_lock(&state), &path)
+    delete_sstv_gallery_image(&mut engine_lock(&state), &sstv_gallery_dir(), &path)
 }
 
 /// Delete one received picture and reconcile the gallery index, for the desktop command above and
@@ -6547,14 +6547,112 @@ fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(),
 /// one from a browser. The caller holds the Engine lock; the file removal is inside it, which the
 /// directory read below already was.
 ///
-/// ⛔ The containment check is load-bearing whichever caller arrives: only a file inside the
-/// station's own gallery folder can be removed, and a path that does not resolve there is refused
-/// rather than followed.
+/// ⛔ The containment and membership checks are load-bearing whichever caller arrives: only a
+/// picture the gallery lists, inside the station's own gallery folder, can be removed, and a path
+/// that does not resolve there is refused rather than followed.
 pub(crate) fn delete_sstv_gallery_image(
     eng: &mut tempo_app::engine::Engine,
+    dir: &std::path::Path,
     path: &str,
 ) -> Result<(), String> {
-    let dir = sstv_gallery_dir();
+    let pictures = canonical_gallery_paths(eng.sstv_gallery());
+    unlink_sstv_gallery_file(dir, &pictures, path)?;
+    eng.remove_sstv_gallery(path);
+    rewrite_sstv_gallery_index(eng, dir);
+    Ok(())
+}
+
+/// One picture the batch delete could not remove, and why, in the words the single delete uses.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SstvDeleteFailure {
+    path: String,
+    reason: String,
+}
+
+/// Delete several received pictures at once: the gallery's "Delete selected".
+///
+/// Each path goes through the same removal the single delete uses, containment and membership
+/// checks included, so a path the single delete refuses is refused here too. The index is
+/// rewritten ONCE at the end, not once per picture. One picture that cannot be removed (already
+/// gone, locked by another program, not a gallery picture) does not stop the rest; it comes back in
+/// the list with its reason, and the UI says which ones stayed. A path asked for twice is removed
+/// once and is not a failure.
+///
+/// A picture open in the viewer needs nothing extra: the viewer reads the gallery and moves on
+/// from a picture that is no longer in it, as it does after a single delete.
+///
+/// `(async)` for the single delete's reason: the engine mutex plus file I/O, here for many files.
+#[tauri::command(async)]
+fn sstv_delete_images(
+    state: State<'_, SharedEngine>,
+    paths: Vec<String>,
+) -> Vec<SstvDeleteFailure> {
+    delete_sstv_gallery_images(&state, &sstv_gallery_dir(), &paths)
+}
+
+/// [`sstv_delete_images`] against an explicit gallery folder, so the tests can use a scratch one.
+///
+/// The Engine lock is taken twice and never across the unlinks: once to read the gallery, once to
+/// drop what went and rewrite the index. A Select all over a full gallery on a slow disk would
+/// otherwise hold the radio loop off for every file. The rewrite reconciles against the folder as
+/// it stands then, so the index matches the disk whichever unlinks failed, and a picture received
+/// in between is kept.
+fn delete_sstv_gallery_images(
+    engine: &std::sync::Mutex<tempo_app::engine::Engine>,
+    dir: &std::path::Path,
+    paths: &[String],
+) -> Vec<SstvDeleteFailure> {
+    let pictures = canonical_gallery_paths(engine_lock(engine).sstv_gallery());
+    let mut asked = std::collections::HashSet::new();
+    let mut failed = Vec::new();
+    let mut removed = Vec::new();
+    for path in paths {
+        if !asked.insert(path.as_str()) {
+            continue;
+        }
+        match unlink_sstv_gallery_file(dir, &pictures, path) {
+            Ok(()) => removed.push(path.as_str()),
+            Err(reason) => failed.push(SstvDeleteFailure {
+                path: path.clone(),
+                reason,
+            }),
+        }
+    }
+    if !removed.is_empty() {
+        let mut eng = engine_lock(engine);
+        for path in removed {
+            eng.remove_sstv_gallery(path);
+        }
+        rewrite_sstv_gallery_index(&mut eng, dir);
+    }
+    failed
+}
+
+/// The gallery's pictures as canonical paths, for the membership check below. A picture whose
+/// file is already gone has no canonical path and is left out; it could not be removed anyway.
+fn canonical_gallery_paths(
+    entries: &[tempo_app::dto::SstvGalleryEntry],
+) -> std::collections::HashSet<std::path::PathBuf> {
+    entries
+        .iter()
+        .filter_map(|e| std::path::Path::new(&e.path).canonicalize().ok())
+        .collect()
+}
+
+/// Remove one picture file. The in-memory gallery and the index on disk are the caller's to update,
+/// once, after it has removed everything it is going to.
+///
+/// ⛔ The containment check is load-bearing: only a file inside `dir` can be removed. Both sides
+/// are canonicalised, so `..` cannot walk out. ⛔ So is the membership check: inside the folder is
+/// not enough, the file must be one of the gallery's `pictures` (canonical, from
+/// [`canonical_gallery_paths`]), so an operator's own file kept there, or `gallery.json` itself, is
+/// refused.
+fn unlink_sstv_gallery_file(
+    dir: &std::path::Path,
+    pictures: &std::collections::HashSet<std::path::PathBuf>,
+    path: &str,
+) -> Result<(), String> {
     let target = std::path::Path::new(path);
     let canon_dir = dir
         .canonicalize()
@@ -6565,12 +6663,27 @@ pub(crate) fn delete_sstv_gallery_image(
     if !canon.starts_with(&canon_dir) {
         return Err("That file is not in the SSTV gallery folder".into());
     }
+    if !pictures.contains(&canon) {
+        return Err("That file is not a picture in the SSTV gallery".into());
+    }
     std::fs::remove_file(&canon)
         .map_err(|e| format!("Could not delete {}: {e}", canon.display()))?;
-    eng.remove_sstv_gallery(path);
-    // Rewrite the index from what the directory now holds, rather than from the entry we just
-    // dropped: it costs one directory read and it also sweeps up any other drift.
-    let entries = reconcile_gallery(&dir, eng.sstv_gallery().to_vec());
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread rewrote a gallery index, for the test that holds the batch
+    /// delete to one rewrite.
+    static SSTV_INDEX_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Rewrite `gallery.json` from what the directory now holds, rather than from the entries just
+/// dropped: it costs one directory read and it also sweeps up any other drift.
+fn rewrite_sstv_gallery_index(eng: &mut tempo_app::engine::Engine, dir: &std::path::Path) {
+    #[cfg(test)]
+    SSTV_INDEX_WRITES.with(|n| n.set(n.get() + 1));
+    let entries = reconcile_gallery(dir, eng.sstv_gallery().to_vec());
     if let Ok(text) = serde_json::to_string(&entries) {
         let p = dir.join("gallery.json");
         let tmp = p.with_extension("json.tmp");
@@ -6579,7 +6692,6 @@ pub(crate) fn delete_sstv_gallery_image(
         }
     }
     eng.load_sstv_gallery(entries);
-    Ok(())
 }
 
 /// Reconcile a gallery index against the files that are actually on disk.
@@ -41175,6 +41287,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         reveal_diag_log,
         recordings_location,
         sstv_delete_image,
+        sstv_delete_images,
         reveal_recordings,
         reveal_sstv_gallery,
         shack_files::shack_file_list,
@@ -47533,6 +47646,309 @@ mod tests {
             lines: 256,
             fsk_id: None,
         }
+    }
+
+    /// A gallery folder with `names` in it as pictures, an index naming them, and an engine holding
+    /// the same entries — the state the batch delete starts from.
+    fn batch_gallery(
+        label: &str,
+        names: &[&str],
+    ) -> (std::path::PathBuf, tempo_app::engine::Engine) {
+        let dir = scratch(label);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut entries = Vec::new();
+        for (i, n) in names.iter().enumerate() {
+            let p = dir.join(n);
+            std::fs::write(&p, b"PNG-not-really").unwrap();
+            entries.push(entry(&p, &format!("2026-10-30T10:0{i}:00Z")));
+        }
+        std::fs::write(
+            dir.join("gallery.json"),
+            serde_json::to_string(&entries).unwrap(),
+        )
+        .unwrap();
+        let mut eng = tempo_app::engine::Engine::new("N0CALL", "EN52", 0);
+        eng.load_sstv_gallery(entries);
+        (dir, eng)
+    }
+
+    /// The batch delete takes the Engine lock itself, so hand it the engine behind a mutex and
+    /// take it back afterwards for the assertions.
+    fn delete_batch(
+        eng: &mut tempo_app::engine::Engine,
+        dir: &std::path::Path,
+        paths: &[String],
+    ) -> Vec<super::SstvDeleteFailure> {
+        let engine = std::sync::Mutex::new(std::mem::replace(
+            eng,
+            tempo_app::engine::Engine::new("N0CALL", "EN52", 0),
+        ));
+        let failed = super::delete_sstv_gallery_images(&engine, dir, paths);
+        *eng = engine.into_inner().unwrap();
+        failed
+    }
+
+    fn index_paths(dir: &std::path::Path) -> Vec<String> {
+        let text = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+        serde_json::from_str::<Vec<tempo_app::dto::SstvGalleryEntry>>(&text)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.path)
+            .collect()
+    }
+
+    /// "Delete selected" removes exactly the pictures asked for, keeps the rest, and rewrites
+    /// gallery.json once for the whole batch.
+    #[test]
+    fn the_batch_delete_removes_exactly_the_selected_pictures_and_writes_the_index_once() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+            "20261030T100200Z_pd120.png",
+        ];
+        let (dir, mut eng) = batch_gallery("sstv-batch", &names);
+        let gone: Vec<String> = [names[0], names[2]]
+            .iter()
+            .map(|n| dir.join(n).to_string_lossy().into_owned())
+            .collect();
+        let kept = dir.join(names[1]).to_string_lossy().into_owned();
+
+        super::SSTV_INDEX_WRITES.with(|n| n.set(0));
+        let failed = delete_batch(&mut eng, &dir, &gone);
+
+        assert_eq!(
+            failed,
+            vec![],
+            "every selected picture was inside the folder"
+        );
+        assert!(!dir.join(names[0]).exists() && !dir.join(names[2]).exists());
+        assert!(
+            dir.join(names[1]).exists(),
+            "an unselected picture must stay"
+        );
+        assert_eq!(index_paths(&dir), vec![kept.clone()], "the index on disk");
+        let in_memory: Vec<String> = eng.sstv_gallery().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(in_memory, vec![kept], "and the gallery the UI reads");
+        assert_eq!(
+            super::SSTV_INDEX_WRITES.with(|n| n.get()),
+            1,
+            "two pictures deleted, one index rewrite"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ The negative control: a path outside the gallery folder is refused and the file stays,
+    /// and so is one that walks out with `..`. The pictures that were inside are still deleted,
+    /// and the refusals come back with their reasons.
+    #[test]
+    fn the_batch_delete_refuses_a_path_outside_the_gallery_and_reports_each_failure() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, mut eng) = batch_gallery("sstv-batch-out", &names);
+        let outside_dir = scratch("sstv-batch-outside");
+        let _ = std::fs::remove_dir_all(&outside_dir);
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        let outside = outside_dir.join("not-a-picture.txt");
+        std::fs::write(&outside, b"keep me").unwrap();
+        let walk_out = dir
+            .join("..")
+            .join(outside_dir.file_name().unwrap())
+            .join("not-a-picture.txt");
+        let inside = dir.join(names[0]).to_string_lossy().into_owned();
+        let missing = dir.join("never-there.png").to_string_lossy().into_owned();
+        let paths = vec![
+            outside.to_string_lossy().into_owned(),
+            inside.clone(),
+            walk_out.to_string_lossy().into_owned(),
+            missing.clone(),
+        ];
+
+        super::SSTV_INDEX_WRITES.with(|n| n.set(0));
+        let failed = delete_batch(&mut eng, &dir, &paths);
+
+        assert!(
+            outside.exists(),
+            "a file outside the gallery folder must never be deleted"
+        );
+        assert!(
+            !dir.join(names[0]).exists(),
+            "the picture that was inside is deleted"
+        );
+        assert!(dir.join(names[1]).exists(), "the unselected one stays");
+        let failed_paths: Vec<&str> = failed.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            failed_paths,
+            vec![paths[0].as_str(), paths[2].as_str(), missing.as_str()],
+            "each failure, in the order asked"
+        );
+        assert_eq!(
+            failed[0].reason,
+            "That file is not in the SSTV gallery folder"
+        );
+        assert_eq!(
+            failed[1].reason,
+            "That file is not in the SSTV gallery folder"
+        );
+        assert!(
+            failed[2].reason.starts_with("Could not find"),
+            "{}",
+            failed[2].reason
+        );
+        assert_eq!(
+            index_paths(&dir),
+            vec![dir.join(names[1]).to_string_lossy().into_owned()]
+        );
+        assert_eq!(super::SSTV_INDEX_WRITES.with(|n| n.get()), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside_dir);
+    }
+
+    /// Nothing removed, nothing rewritten: a batch that deleted no picture leaves the index alone.
+    #[test]
+    fn a_batch_that_deletes_nothing_leaves_the_index_alone() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-none", &names);
+        let before = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+        super::SSTV_INDEX_WRITES.with(|n| n.set(0));
+        let failed = delete_batch(
+            &mut eng,
+            &dir,
+            &[dir.join("gone.png").to_string_lossy().into_owned()],
+        );
+        assert_eq!(failed.len(), 1);
+        assert_eq!(super::SSTV_INDEX_WRITES.with(|n| n.get()), 0);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("gallery.json")).unwrap(),
+            before
+        );
+        assert!(dir.join(names[0]).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ Inside the folder is not enough: only a picture the gallery lists can be deleted. An
+    /// operator's own file kept in the folder and the gallery's index itself are refused and stay;
+    /// the real picture in the same batch is still deleted.
+    #[test]
+    fn the_batch_delete_refuses_a_file_in_the_folder_that_is_not_a_gallery_picture() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-member", &names);
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"the operator's notes").unwrap();
+        let index = dir.join("gallery.json");
+        let picture = dir.join(names[0]);
+        let paths: Vec<String> = [&notes, &index, &picture]
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+
+        let failed = delete_batch(&mut eng, &dir, &paths);
+
+        assert!(notes.exists(), "a file the gallery does not list must stay");
+        assert!(index.exists(), "the gallery index must stay");
+        assert!(!picture.exists(), "the gallery picture is deleted");
+        let failed_paths: Vec<&str> = failed.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(failed_paths, vec![paths[0].as_str(), paths[1].as_str()]);
+        for f in &failed {
+            assert_eq!(f.reason, "That file is not a picture in the SSTV gallery");
+        }
+        assert_eq!(index_paths(&dir), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The single delete makes the same refusal, through the same check, and still deletes a
+    /// picture the gallery lists.
+    #[test]
+    fn the_single_delete_refuses_a_file_in_the_folder_that_is_not_a_gallery_picture() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-single-member", &names);
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"the operator's notes").unwrap();
+        let index = dir.join("gallery.json");
+
+        for refused in [&notes, &index] {
+            let got = super::delete_sstv_gallery_image(&mut eng, &dir, &refused.to_string_lossy());
+            assert_eq!(
+                got,
+                Err("That file is not a picture in the SSTV gallery".to_string())
+            );
+            assert!(refused.exists(), "{} must stay", refused.display());
+        }
+        let picture = dir.join(names[0]);
+        assert_eq!(
+            super::delete_sstv_gallery_image(&mut eng, &dir, &picture.to_string_lossy()),
+            Ok(())
+        );
+        assert!(!picture.exists(), "the gallery picture is deleted");
+        assert!(eng.sstv_gallery().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same picture asked for twice is deleted once and is not reported as a failure.
+    #[test]
+    fn a_duplicate_path_in_the_gallery_batch_is_harmless() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, mut eng) = batch_gallery("sstv-batch-dup", &names);
+        let twice = dir.join(names[0]).to_string_lossy().into_owned();
+
+        let failed = delete_batch(&mut eng, &dir, &[twice.clone(), twice]);
+
+        assert_eq!(failed, vec![]);
+        assert!(!dir.join(names[0]).exists());
+        assert!(dir.join(names[1]).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A picture the OS will not let go of stays listed, on disk and in memory, while the others in
+    /// the batch are removed from both: gallery.json always matches the folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_gallery_picture_that_cannot_be_deleted_stays_in_the_index_while_the_rest_go() {
+        use std::os::unix::fs::PermissionsExt;
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-stuck", &names);
+        let held = dir.join("held");
+        std::fs::create_dir_all(&held).unwrap();
+        let stuck = held.join("20261030T100100Z_robot36.png");
+        std::fs::write(&stuck, b"PNG-not-really").unwrap();
+        let mut entries = eng.sstv_gallery().to_vec();
+        entries.push(entry(&stuck, "2026-10-30T10:01:00Z"));
+        eng.load_sstv_gallery(entries);
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root ignores the read-only folder, so there is nothing to refuse there.
+        if std::fs::write(held.join("probe"), b"").is_ok() {
+            eprintln!("skipped: running as root, a read-only folder refuses nothing");
+            let _ = std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let gone = dir.join(names[0]).to_string_lossy().into_owned();
+        let stuck_path = stuck.to_string_lossy().into_owned();
+
+        let failed = delete_batch(&mut eng, &dir, &[gone.clone(), stuck_path.clone()]);
+        let _ = std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755));
+
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].path, stuck_path);
+        assert!(
+            failed[0].reason.starts_with("Could not delete"),
+            "{}",
+            failed[0].reason
+        );
+        assert!(stuck.exists() && !dir.join(names[0]).exists());
+        assert_eq!(
+            index_paths(&dir),
+            vec![stuck_path.clone()],
+            "the index on disk"
+        );
+        let in_memory: Vec<String> = eng.sstv_gallery().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(in_memory, vec![stuck_path], "and the gallery the UI reads");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ISSUE #23, first half: deleting a `.bmp` by hand left a thumbnail over nothing, because the

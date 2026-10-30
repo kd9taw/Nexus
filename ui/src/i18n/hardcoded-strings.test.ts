@@ -946,6 +946,10 @@ const PARTIAL = [
   // this file. The rest of its palette labels are still code, the English "Auto (theme)" among
   // them, so it is partial in exactly this list's sense and does not belong on MIGRATED.
   'waterfall.ts',
+  // api.ts (2026-10-29) — for `callStation` alone: it puts the engine's English refusal of a
+  // click on a call shown as <...> in the operator's language (`shell.work.unresolved*`), which
+  // the orphan check can only see if it reads this file. Its other errors are still code.
+  'api.ts',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */
