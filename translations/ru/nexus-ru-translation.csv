@@ -516,6 +516,7 @@
 "1","shell.lane.audio.soundCard","SOUND CARD FAILED","ОШИБКА ЗВУКОВОЙ КАРТЫ","",""
 "1","shell.lane.audio.noReceiveAudio","NO RECEIVE AUDIO","НЕТ ЗВУКА ПРИЁМА","",""
 "1","shell.lane.audio.ptt","PTT NOT ACCEPTED","PTT НЕ ПРИНЯТ","PTT",""
+"1","shell.lane.audio.pttUnconfirmed","PTT NOT CONFIRMED","PTT НЕ ПОДТВЕРЖДЁН","PTT",""
 "1","shell.lane.audio.flexAudio","NO FLEX AUDIO","НЕТ ЗВУКА FLEX","",""
 "1","shell.lane.audio.flexAddress","NO FLEX RADIO IP","НЕТ IP ТРАНСИВЕРА FLEX","",""
 "1","shell.lane.audio.monitor","HEADPHONE MONITOR OFF","КОНТРОЛЬ В НАУШНИКАХ ВЫКЛ.","",""

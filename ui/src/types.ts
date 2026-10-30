@@ -6177,6 +6177,7 @@ export type AudioErrorKind =
   | 'soundCard'
   | 'noReceiveAudio'
   | 'ptt'
+  | 'pttUnconfirmed'
   | 'flexAudio'
   | 'flexAddress'
   | 'monitor'

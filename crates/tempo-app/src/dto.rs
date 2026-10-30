@@ -1499,8 +1499,10 @@ pub enum AudioErrorKind {
     /// No receive audio is arriving: a reopened card that has not delivered yet, or a capture
     /// that delivers nothing but digital zero.
     NoReceiveAudio,
-    /// The rig did not accept a PTT key (or did not answer it in time).
+    /// The rig did not accept a PTT key: it answered no.
     Ptt,
+    /// The rig did not answer a PTT key in time: not a refusal, but the key is not confirmed.
+    PttUnconfirmed,
     /// Flex native audio was selected and none arrived, so receive went back to the sound card.
     FlexAudio,
     /// The Flex native panadapter is switched on with no radio address to start it on.
@@ -5694,6 +5696,7 @@ mod tests {
             SoundCard,
             NoReceiveAudio,
             Ptt,
+            PttUnconfirmed,
             FlexAudio,
             FlexAddress,
             Monitor,
@@ -5717,6 +5720,7 @@ mod tests {
                 "soundCard",
                 "noReceiveAudio",
                 "ptt",
+                "pttUnconfirmed",
                 "flexAudio",
                 "flexAddress",
                 "monitor",

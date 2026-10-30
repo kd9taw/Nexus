@@ -8675,6 +8675,7 @@ export const JA: PartialCatalog = {
   "shell.lane.audio.soundCard": "サウンドカード障害",
   "shell.lane.audio.noReceiveAudio": "受信音声なし",
   "shell.lane.audio.ptt": "PTT 不受理",
+  "shell.lane.audio.pttUnconfirmed": "PTT 未確認",
   "shell.lane.audio.flexAudio": "Flex 音声なし",
   "shell.lane.audio.flexAddress": "Flex 無線機の IP なし",
   "shell.lane.audio.monitor": "ヘッドホンモニター停止",
