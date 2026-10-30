@@ -65,12 +65,15 @@ pub struct Sample {
 
 /// What one SWPC poll measured: the numbers the model runs on (a stand-in from
 /// [`SpaceWx::default`] wherever a product did not answer) and when each was measured.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SwpcReading {
     pub wx: SpaceWx,
     pub stamps: SpaceWxStamps,
     /// The instantaneous ap estimated from the measured Kp (`None` without one).
     pub ap_now: Option<f32>,
+    /// Every UT day's daily planetary A in DGD.txt, oldest first ([`parse_daily_planetary_a_by_day`]):
+    /// a logged contact takes its OWN day's A from here, never a neighbour's.
+    pub a_by_day: Vec<Sample>,
 }
 
 /// Fetch the current space weather from NOAA SWPC. `Err` only when NO product answered with
@@ -80,10 +83,13 @@ pub fn fetch_space_wx() -> Result<SwpcReading, String> {
     let sfi = get_json(&c, SFI_URL).ok().and_then(|v| parse_sfi(&v));
     let kp = get_json(&c, KP_URL).ok().and_then(|v| parse_kp(&v));
     let xray = get_json(&c, XRAY_URL).ok().and_then(|v| parse_xray(&v));
-    let a = get_text(&c, DGD_URL)
-        .ok()
-        .and_then(|b| parse_daily_planetary_a(&b));
-    reading_from(sfi, kp, xray, a).ok_or_else(|| "space weather: no SWPC product answered".into())
+    let a_by_day = get_text(&c, DGD_URL)
+        .map(|b| parse_daily_planetary_a_by_day(&b))
+        .unwrap_or_default();
+    let a = a_by_day.last().copied();
+    reading_from(sfi, kp, xray, a)
+        .map(|r| SwpcReading { a_by_day, ..r })
+        .ok_or_else(|| "space weather: no SWPC product answered".into())
 }
 
 /// Assemble a reading from whichever products answered. Pure. `None` when none did.
@@ -113,6 +119,7 @@ pub fn reading_from(
         },
         stamps,
         ap_now: kp.map(|s| kp_to_ap(s.value)),
+        a_by_day: Vec::new(),
     })
 }
 
@@ -164,14 +171,21 @@ pub fn parse_xray(v: &Value) -> Option<Sample> {
 }
 
 /// NOAA's daily planetary A from `DGD.txt`: the newest day with a value (the current UT day
-/// reads `-1` until it is over). `at` is 00:00 UT of that day.
+/// reads `-1` until it is over). `at` is 00:00 UT of that day. The gauge shows this one.
+pub fn parse_daily_planetary_a(body: &str) -> Option<Sample> {
+    parse_daily_planetary_a_by_day(body).pop()
+}
+
+/// Every UT day's daily planetary A in `DGD.txt` (about the last 30), oldest first, each with
+/// 00:00 UT of its day. A day with no value yet (`-1`) is not in it.
 ///
 /// Each data row is `YYYY MM DD`, then Fredericksburg A and eight K, College A and eight K,
 /// then the planetary A and eight decimal Kp. The planetary A is the token just before the
 /// first decimal one; a fixed token count would break on the unspaced `-1-1-1` of an
 /// incomplete day.
-pub fn parse_daily_planetary_a(body: &str) -> Option<Sample> {
-    body.lines()
+pub fn parse_daily_planetary_a_by_day(body: &str) -> Vec<Sample> {
+    let mut days: Vec<Sample> = body
+        .lines()
         .filter_map(|line| {
             let toks: Vec<&str> = line.split_whitespace().collect();
             let (y, m, d) = (toks.first()?, toks.get(1)?, toks.get(2)?);
@@ -183,7 +197,10 @@ pub fn parse_daily_planetary_a(body: &str) -> Option<Sample> {
             let day = crate::kc2g::parse_naive_utc_unix(&format!("{y}-{m}-{d}T00:00:00"))?;
             (a >= 0.0).then_some(Sample { value: a, at: day })
         })
-        .max_by_key(|s| s.at)
+        .collect();
+    days.sort_by_key(|s| s.at);
+    days.dedup_by_key(|s| s.at);
+    days
 }
 
 /// Standalone GOES X-ray fetch — the 60 s "fast lane" behind `get_xray_now`, so a flare's
@@ -310,6 +327,37 @@ mod tests {
         let storm = "2026 10 04    21  3 3 3 4 4 3 4 4    46  2 2 5 6 6 6 5 3    36   3.00  3.33  4.33  5.00  4.67  4.33  5.67  4.67\n";
         assert_eq!(parse_daily_planetary_a(storm).map(|s| s.value), Some(36.0));
         assert_eq!(parse_daily_planetary_a("<html>error</html>"), None);
+    }
+
+    /// The per-day table a logged contact looks its own date up in: every dated day with a
+    /// planetary A, oldest first, today's `-1` row left out, each day's own A (not its neighbour's).
+    #[test]
+    fn the_daily_a_table_holds_each_published_day_by_its_date() {
+        let days = parse_daily_planetary_a_by_day(DGD);
+        assert!(days.len() >= 2, "{days:?}");
+        assert!(
+            days.windows(2).all(|w| w[0].at < w[1].at),
+            "oldest first, one per day"
+        );
+        assert_eq!(
+            days.last().map(|s| (s.value, s.at)),
+            Some((4.0, utc("2026-10-29T00:00:00")))
+        );
+        assert!(
+            days.iter().all(|s| s.at < utc("2026-10-30T00:00:00")),
+            "today is not published"
+        );
+        // A day's A is its own row's.
+        let two = "2026 10 04    21  3 3 3 4 4 3 4 4    46  2 2 5 6 6 6 5 3    36   3.00  3.33  4.33  5.00  4.67  4.33  5.67  4.67\n\
+                   2026 10 05     5  1 1 1 2 2 1 1 1     6  1 1 1 2 2 1 1 1     6   1.00  1.00  1.00  2.00  2.00  1.00  1.00  1.00\n";
+        let t = parse_daily_planetary_a_by_day(two);
+        assert_eq!(
+            t.iter().map(|s| (s.value, s.at)).collect::<Vec<_>>(),
+            vec![
+                (36.0, utc("2026-10-04T00:00:00")),
+                (6.0, utc("2026-10-05T00:00:00"))
+            ]
+        );
     }
 
     /// One product failing keeps the others as readings and leaves only its own number a

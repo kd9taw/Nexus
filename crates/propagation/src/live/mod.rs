@@ -108,8 +108,8 @@ pub fn snapshot_with_spots(
     // Absent space weather degrades to NEUTRAL mid-cycle values, per quantity (a product that
     // did not answer leaves its number a stand-in with no stamp), not all-zero — zero SFI reads
     // as a dead band and would wrongly close the high bands when real spots are present.
-    let wx = reading.map_or_else(SpaceWx::default, |r| r.wx);
-    let stamps = reading.map(|r| r.stamps).unwrap_or_default();
+    let wx = reading.as_ref().map_or_else(SpaceWx::default, |r| r.wx);
+    let stamps = reading.as_ref().map(|r| r.stamps).unwrap_or_default();
     let now = now_unix();
     // The band advisor's modelled words need a usable solar flux and Kp: otherwise it reports
     // only what was heard ([`PropAdvisor::without_model`]). The insights, banners and model run
@@ -132,7 +132,12 @@ pub fn snapshot_with_spots(
     // only a real reading may be shown as one or reach a logged contact.
     snap.space_wx.fetched = stamps.any();
     snap.space_wx.stamps = stamps;
-    snap.space_wx.ap_now = reading.and_then(|r| r.ap_now);
+    snap.space_wx.ap_now = reading.as_ref().and_then(|r| r.ap_now);
+    // Every published day's planetary A, for a logged contact's own date (never on the wire).
+    snap.space_wx.a_by_day = reading
+        .as_ref()
+        .map(|r| r.a_by_day.iter().map(|s| (s.at, s.value)).collect())
+        .unwrap_or_default();
     // "live" only when BOTH primary feeds answered; otherwise we served partial data.
     snap.source = if reading.is_some() && xml_ok {
         "live"

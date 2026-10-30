@@ -7751,19 +7751,21 @@ fn set_source(state: State<'_, SharedEngine>, kind: String) -> Result<AppSnapsho
 }
 
 /// The space weather a logged contact may carry, each number only if it is a reading and each
-/// with its own stamp: the planetary Kp and its sample time, NOAA's daily planetary A with the
-/// UT day it belongs to (never the Kp-derived ap estimate), and the solar flux with its
-/// measurement time. The engine judges each stamp against the contact's own time when it logs
-/// one. A stand-in is `None`, so its ADIF field is left off rather than filled with a guess.
+/// with its own stamp: the planetary Kp and its sample time, NOAA's daily planetary A for every
+/// UT day it has published (`a_by_day`, each with its day; never the Kp-derived ap estimate),
+/// and the solar flux with its measurement time. The engine judges each stamp against the
+/// contact's own time when it logs one, and takes only the contact's own day's A. A stand-in is
+/// `None`, so its ADIF field is left off rather than filled with a guess.
 #[allow(clippy::type_complexity)] // three stamped readings, named by the doc above
 fn space_wx_for_log(
     wx: &propagation::SpaceWx,
     stamps: &propagation::model::SpaceWxStamps,
-) -> (Option<(f32, u64)>, Option<(f32, u64)>, Option<(f32, u64)>) {
+    a_by_day: &[(i64, f32)],
+) -> (Option<(f32, u64)>, Vec<(f32, u64)>, Option<(f32, u64)>) {
     let at = |t: i64| t.max(0) as u64;
     (
         stamps.kp_at.map(|t| (wx.kp, at(t))),
-        stamps.a_day.map(|d| (wx.a_index, at(d))),
+        a_by_day.iter().map(|&(day, a)| (a, at(day))).collect(),
         stamps.sfi_at.map(|t| (wx.sfi, at(t))),
     )
 }
@@ -8098,10 +8100,10 @@ async fn get_propagation(
     // weather on each logged contact — never the model's stand-in values a failed product leaves
     // in the snapshot (`space_wx_for_log`).
     if fetched_fresh && snap.space_wx.fetched {
-        let (kp, a_daily, sfi) = space_wx_for_log(&measured, &stamps);
+        let (kp, a_daily, sfi) = space_wx_for_log(&measured, &stamps, &snap.space_wx.a_by_day);
         let at = now.max(0) as u64;
         let _ = with_engine(&state, move |mut eng| {
-            eng.note_space_weather(kp, a_daily, sfi, at)
+            eng.note_space_weather(kp, &a_daily, sfi, at)
         })
         .await;
     }
@@ -8299,6 +8301,7 @@ mod path_outlook_kp_tests {
                 ..Default::default()
             },
             ap_now: None,
+            a_by_day: Vec::new(),
         }
     }
 
@@ -50061,17 +50064,22 @@ mod tests {
             a_day: Some(now / 86_400 * 86_400 - 86_400),
         };
         let u = |t: i64| t as u64;
+        let day = now / 86_400 * 86_400;
+        let table = [(day - 2 * 86_400, 7.0), (day - 86_400, 4.0)];
         assert_eq!(
-            crate::space_wx_for_log(&wx, &all),
+            crate::space_wx_for_log(&wx, &all, &table),
             (
                 Some((0.67, u(now - 360))),
-                Some((4.0, u(now / 86_400 * 86_400 - 86_400))),
+                vec![(7.0, u(day - 2 * 86_400)), (4.0, u(day - 86_400))],
                 Some((89.0, u(now - 6 * 3600)))
             )
         );
         // Every number a stand-in: nothing.
         let none = propagation::model::SpaceWxStamps::default();
-        assert_eq!(crate::space_wx_for_log(&wx, &none), (None, None, None));
+        assert_eq!(
+            crate::space_wx_for_log(&wx, &none, &[]),
+            (None, vec![], None)
+        );
     }
 
     /// The polar-cap edge sits at a MEASURED Kp only: none on a cold cache, none on a snapshot

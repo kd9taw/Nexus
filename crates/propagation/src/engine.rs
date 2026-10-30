@@ -89,6 +89,12 @@ pub struct SpaceWxView {
     /// shows beside the daily A. `None` without a measured Kp. An estimate: never logged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ap_now: Option<f32>,
+    /// NOAA's daily planetary A for every UT day it has published, as `(00:00 UT of the day, A)`,
+    /// oldest first: a logged contact's A_INDEX is its OWN day's row from here, or none. Filled
+    /// by the live layer; the station's own, never sent to the UI (the gauge shows the newest
+    /// day, `a_index` with `aDay`).
+    #[serde(skip)]
+    pub a_by_day: Vec<(i64, f32)>,
 }
 
 /// The whole propagation nowcast the UI section renders.
@@ -217,6 +223,7 @@ impl PropagationEngine {
                 // ...and when each number was measured; until then every one is a stand-in.
                 stamps: crate::model::SpaceWxStamps::default(),
                 ap_now: None,
+                a_by_day: Vec::new(),
             },
             // Default provenance; live/cached callers override `source`.
             source: "live".to_string(),
