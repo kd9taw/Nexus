@@ -4054,6 +4054,11 @@ struct RadioLoop {
     /// failing. It drives an attempt only while the rig is KEYED: every rebuild ends the over
     /// (flush + unkey + halt), so a retry is also how a keyed rig on a missing card has been
     /// unkeyed, within 2 s, and the backoff must not stretch that. Unkeyed, it just keeps time.
+    ///
+    /// The one case that differs from main, accepted as the safe direction: a card that comes
+    /// back while unkeyed is only noticed at the next back-off attempt (up to 30 s), so if the
+    /// operator keys before then, the next keyed tick rebuilds once and ends that over, where
+    /// main would already have reopened the card and not unkeyed. At most once per return.
     audio_retry_clock_at: Option<f64>,
     /// A stream error arrived and the card is on probation: the time it was reported, and the
     /// message to use if the silence that follows confirms it. Cleared the moment frames arrive.
@@ -8289,7 +8294,9 @@ impl RadioLoop {
             // backoff may only ever lengthen the wait of an unkeyed loop, never how soon a
             // retry's rebuild ends an over. Unkeyed, the clock ticks on without an attempt.
             let clock_due = self.audio_retry_clock_at.is_some_and(|t| now >= t);
-            if clock_due && !rig.keyed {
+            // While a handoff holds the rebuild, main's due retry was held too and re-armed only
+            // when it finally ran, so the clock waits with it rather than ticking on.
+            if clock_due && !rig.keyed && !self.handoff_deferred && !self.switch_unhanded {
                 self.audio_retry_clock_at = Some(now + AUDIO_RETRY_MS);
             }
             if self.audio_retry_at.is_some_and(|t| now >= t) || (clock_due && rig.keyed) {
@@ -32232,6 +32239,104 @@ mod tests {
                 (46_000.0, false)
             ],
             "each keyed retry ends the over exactly as before the backoff"
+        );
+    }
+
+    /// Drive the loop with a missing card at a `tick` period, keying the rig and holding the
+    /// rebuild behind a deferred handoff on the given windows, and return each attempt made while
+    /// keyed together with whether that attempt's rebuild left the rig unkeyed. The keyed
+    /// attempts on main (a flat `now + 2 s` re-arm after every attempt) are the expected values.
+    fn keyed_retry_attempts(
+        tick: f64,
+        until: f64,
+        keyed: &dyn Fn(f64) -> bool,
+        deferred: &dyn Fn(f64) -> bool,
+    ) -> Vec<(f64, bool)> {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut state = loop_state();
+        let mut rig = Rig::vox();
+        let (sinks, mut rr) = (no_sinks(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut backend = MockBackend::new();
+        let tried = std::rc::Rc::new(std::cell::Cell::new(false));
+        let mut reopen = {
+            let tried = tried.clone();
+            move |_: &Transport| -> Result<MockBackend, String> {
+                tried.set(true);
+                Err("no such device".into())
+            }
+        };
+        state.force_audio_rebuild = true;
+        let mut out = Vec::new();
+        let mut i = 0u64;
+        while i as f64 * tick <= until {
+            let t = i as f64 * tick;
+            let k = keyed(t);
+            if k {
+                rig.keyed = true;
+            }
+            state.handoff_deferred = deferred(t);
+            tried.set(false);
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut reopen,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            if k && tried.get() {
+                out.push((t, !rig.keyed));
+            }
+            i += 1;
+        }
+        out
+    }
+
+    #[test]
+    fn a_retry_held_by_a_deferred_handoff_keeps_the_keyed_clock_on_mains_ticks() {
+        // A retry fell due while a radio handoff held every rebuild (a switch the operator then
+        // abandoned), so on main it ran when the hold lifted, at 15.1 s, and the 2 s clock ran on
+        // from there. The keyed retries, each of which ends the over, must land on those ticks.
+        let got = keyed_retry_attempts(20.0, 30_000.0, &|t| t >= 20_000.0, &|t| {
+            (13_500.0..15_100.0).contains(&t)
+        });
+        assert_eq!(
+            got,
+            vec![
+                (21_100.0, true),
+                (23_100.0, true),
+                (25_100.0, true),
+                (27_100.0, true),
+                (29_100.0, true)
+            ]
+        );
+    }
+
+    #[test]
+    fn the_keyed_clock_holds_mains_phase_when_the_tick_does_not_divide_two_seconds() {
+        // The real loop does not tick on a 2 s grid (a 20 ms sleep plus however long the step
+        // took), so a back-off attempt can land a tick before the clock does. That attempt must
+        // not move the clock: keying at 20.3 s gets main's first unkey at 20.3 s, not ~2 s later.
+        let got = keyed_retry_attempts(
+            70.0,
+            30_000.0,
+            &|t| (20_300.0..40_000.0).contains(&t),
+            &|_| false,
+        );
+        assert_eq!(
+            got,
+            vec![
+                (20_300.0, true),
+                (22_330.0, true),
+                (24_360.0, true),
+                (26_390.0, true),
+                (28_420.0, true)
+            ]
         );
     }
 
