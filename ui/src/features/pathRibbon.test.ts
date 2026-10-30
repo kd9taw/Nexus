@@ -60,7 +60,7 @@ describe('the ribbon from the held outlook', () => {
     mufHourly: [],
     geometry: geometry(distKm),
     longPath: { engine: 'p533', bands: [], mufNow: 0, mufHourly: [], geometry: geometry(40_030 - distKm) },
-    routes: [{ band: '20m', verdict: 'long', confidence: 'likely', shortBcr: 0, longBcr: 0.9, reasons: [] }],
+    routes: [{ band: '20m', verdict: 'long', confidence: 'possible', shortBcr: 0, longBcr: 0.9, reasons: [{ kind: 'oneClosed', open: 'long' }] }],
   })
   it('colours the routes from an outlook for this pair, and names the favoured one', () => {
     const r = ribbonFor(BOSTON, SYDNEY, outlook(haversineKm(BOSTON, SYDNEY) + 10))

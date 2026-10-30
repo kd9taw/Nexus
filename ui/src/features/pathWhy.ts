@@ -96,7 +96,8 @@ function greyWords(g: NonNullable<PathWhyFacts['grey']>): string {
   return g === 'me' ? t('pathWhy.grey.me') : t('pathWhy.grey.dx')
 }
 
-function kpSourceWords(s: PathGeoHour['kpSource']): string {
+/** Where an hour's Kp came from, in words (also the polar chip's tooltip). */
+export function kpSourceWords(s: PathGeoHour['kpSource']): string {
   if (s === 'measured') return t('pathWhy.kpSource.measured')
   if (s === 'forecast') return t('pathWhy.kpSource.forecast')
   return s === 'current' ? t('pathWhy.kpSource.current') : t('pathWhy.kpSource.unknown')
@@ -160,7 +161,10 @@ export function pathWhyDetail(f: PathWhyFacts | null, maxGmlatDeg: number): stri
   const { kp, capLatDeg, polarFrac } = f.now
   rows.push(
     kp === null || capLatDeg === null || polarFrac === null
-      ? t('pathWhy.detail.polarUnknown')
+      ? // Out of the zone at any Kp: the share is known to be 0, Kp or not.
+        maxGmlatDeg < EDGE_FLOOR_DEG
+        ? t('pathWhy.detail.polarNever', { floor: EDGE_FLOOR_DEG })
+        : t('pathWhy.detail.polarUnknown')
       : t('pathWhy.detail.polar', {
           pct: pct(polarFrac),
           lat: capLatDeg.toFixed(0),

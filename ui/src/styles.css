@@ -4680,6 +4680,7 @@ body.resizing-row {
   --band-marginal: #f1ca47;
   --band-closed: #747b81;
   --route-polar: #c77dff; /* the map's aurora violet: a path stretch inside the polar cap */
+  --route-grey: rgba(255, 200, 110, 0.95); /* the terminator's gold: a path stretch on the grey line */
   --alert-critical: #ff6100;
   --alert-warning: #f7c243;
   --alert-info: #79c0f1;
@@ -4798,6 +4799,7 @@ body.resizing-row {
   --band-marginal: #a27000;
   --band-closed: #80878d;
   --route-polar: #7c44c3;
+  --route-grey: #e08a00;
   --alert-critical: #9c0000;
   --alert-warning: #a76d00;
   --alert-info: #0070a6;

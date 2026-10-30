@@ -8154,6 +8154,27 @@ mod path_outlook_kp_tests {
     fn a_fetched_kp_is_passed_on() {
         assert_eq!(swpc_kp(Some(&view(3.33, true))), Some(3.33));
     }
+
+    #[test]
+    fn an_unfetched_snapshot_draws_no_polar_stretch_on_either_route() {
+        // Boston -> Tokyo runs over a cap both ways round at any real Kp.
+        let (me, dx, t) = ((42.36, -71.06), (35.68, 139.69), 1_778_846_400);
+        let polar = |kp_now, route| {
+            propagation::path_geometry_route(me, dx, route, t, kp_now, None, None)
+                .segments_now
+                .iter()
+                .any(|s| s.kind == propagation::SegmentKind::Polar)
+        };
+        for route in [propagation::Route::Short, propagation::Route::Long] {
+            assert!(!polar(swpc_kp(None), route), "cold cache, {route:?}");
+            assert!(
+                !polar(swpc_kp(Some(&view(2.0, false))), route),
+                "stand-in, {route:?}"
+            );
+            // Positive control: the same Kp, really reported, draws the stretch.
+            assert!(polar(swpc_kp(Some(&view(2.0, true))), route), "{route:?}");
+        }
+    }
 }
 
 /// Ring-outlook cache (p533 only): (computed-at, params-key, value). The 8-azimuth

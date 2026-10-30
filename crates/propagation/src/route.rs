@@ -6,11 +6,18 @@
 //! answer and why without inventing either:
 //!
 //! - **Model margin.** One route open (BCR ≥ 50 %) and the other closed (< 10 %): that route,
-//!   *likely*. Otherwise a median-SNR margin of ≥ 6 dB picks the better route — *likely* when
+//!   *likely*; one route closed and the other only marginal: the marginal one, *possible*.
+//!   Otherwise a median-SNR margin of ≥ 6 dB picks the better route — *likely* when
 //!   that route is open, *possible* when it is not. Inside 6 dB it is *either*. Both closed is
-//!   *unknown*: nothing the model knows explains a contact then.
+//!   *unknown*: nothing the model knows explains a contact then. A closed route is never half
+//!   of an *either*.
 //! - **Grey line.** On 160/80/40 m, a route whose arc lies along the terminator while the
-//!   other does not moves the answer one notch toward it, and never past *likely*.
+//!   other does not moves the answer one notch toward it, never past *likely*. Toward a closed
+//!   route it can only weaken the other route's call, never reach *either*. A nudge can land on
+//!   *either* from a margin call; the margin stays among the reasons, so a surface never words
+//!   that *either* as "within the margin".
+//! - **Near the antipode** every great circle is about as long as every other, so the two
+//!   routes are the same path to within noise: no call is made ([`compare_routes`]).
 //! - **The long path is held at *possible*.** The long route has no reference to validate it
 //!   against (and a cross-check against another model found it markedly more optimistic on the
 //!   longest arcs), so until it is validated a long-path verdict never reads *likely*. The
@@ -58,10 +65,13 @@ pub enum RouteConfidence {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum RouteReason {
-    /// One route modelled open, the other closed.
+    /// One route modelled closed; `open` is the other (open for a *likely* call, marginal for
+    /// a *possible* one).
     OneClosed { open: Route },
     /// The median SNR differs by at least the margin.
     Margin { better: Route },
+    /// The model gave no SNR; the circuit reliabilities differ by at least the open–closed gap.
+    Reliability { better: Route },
     /// The two routes are modelled within the margin of each other.
     WithinMargin,
     /// Both routes modelled closed.
@@ -95,6 +105,9 @@ pub const CLOSED_BCR: f32 = 0.1;
 pub const MARGIN_DB: f32 = 6.0;
 /// Share of an arc on the grey line that counts as "along the terminator".
 pub const GREY_FRAC: f32 = 0.2;
+/// Below this long-path minus short-path distance (km) the stations are near-antipodal: every
+/// heading is about the same distance, and a route call would be made from noise.
+pub const NEAR_ANTIPODE_KM: f32 = 500.0;
 
 /// One band's evidence for one route at one hour.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -162,6 +175,15 @@ pub fn infer_route(band: &str, sp: RouteEvidence, lp: RouteEvidence) -> RouteCal
     } else if open(&lp) && closed(&sp) {
         reasons.push(RouteReason::OneClosed { open: Route::Long });
         (RouteVerdict::Long, Some(RouteConfidence::Likely))
+    } else if closed(&sp) || closed(&lp) {
+        // One closed, the other marginal: the marginal one, never "either" with a closed route.
+        let (open, v) = if closed(&sp) {
+            (Route::Long, RouteVerdict::Long)
+        } else {
+            (Route::Short, RouteVerdict::Short)
+        };
+        reasons.push(RouteReason::OneClosed { open });
+        (v, Some(RouteConfidence::Possible))
     } else {
         match margin_db {
             Some(m) if m.abs() >= MARGIN_DB => {
@@ -184,11 +206,12 @@ pub fn infer_route(band: &str, sp: RouteEvidence, lp: RouteEvidence) -> RouteCal
             }
             // No SNR from the model: the BCR alone, the better one at most "possible".
             None if (sp.bcr - lp.bcr).abs() >= OPEN_BCR - CLOSED_BCR => {
-                let v = if lp.bcr > sp.bcr {
-                    RouteVerdict::Long
+                let (better, v) = if lp.bcr > sp.bcr {
+                    (Route::Long, RouteVerdict::Long)
                 } else {
-                    RouteVerdict::Short
+                    (Route::Short, RouteVerdict::Short)
                 };
+                reasons.push(RouteReason::Reliability { better });
                 (v, Some(RouteConfidence::Possible))
             }
             _ => {
@@ -209,9 +232,21 @@ pub fn infer_route(band: &str, sp: RouteEvidence, lp: RouteEvidence) -> RouteCal
         };
         if let Some(route) = toward {
             let step = if route == Route::Long { 1 } else { -1 };
-            let n = (notch(verdict, confidence) + step).clamp(-2, 2);
-            (verdict, confidence) = from_notch(n);
-            reasons.push(RouteReason::GreyLine { route });
+            let before = notch(verdict, confidence);
+            let mut n = (before + step).clamp(-2, 2);
+            let toward_closed = match route {
+                Route::Long => closed(&lp),
+                Route::Short => closed(&sp),
+            };
+            if toward_closed && n == 0 {
+                // Grey line does not open a closed route: it can weaken the other route's call,
+                // never turn it into "either".
+                n = before;
+            }
+            if n != before || !toward_closed {
+                (verdict, confidence) = from_notch(n);
+                reasons.push(RouteReason::GreyLine { route });
+            }
         }
     }
     if verdict == RouteVerdict::Long {
@@ -223,11 +258,16 @@ pub fn infer_route(band: &str, sp: RouteEvidence, lp: RouteEvidence) -> RouteCal
 /// Route calls for every band at the request's hour, from a short-path and a long-path
 /// prediction of the same request (each with its geometry when held). Bands missing from
 /// either prediction are skipped. The hour is the short path's geometry `now_hour`; without
-/// geometry there is no hour to call, so the list is empty.
+/// geometry there is no hour to call, so the list is empty — as it is near the antipode
+/// ([`NEAR_ANTIPODE_KM`]), where the two routes are the same path to within noise.
 pub fn compare_routes(sp: &PathPrediction, lp: &PathPrediction) -> Vec<RouteCall> {
-    let Some(h) = sp.geometry.as_ref().map(|g| g.now_hour as usize) else {
+    let (Some(sg), Some(lg)) = (sp.geometry.as_ref(), lp.geometry.as_ref()) else {
         return Vec::new();
     };
+    if lg.dist_km - sg.dist_km < NEAR_ANTIPODE_KM {
+        return Vec::new();
+    }
+    let h = sg.now_hour as usize;
     let evidence = |p: &PathPrediction, b: &crate::likelihood::BandOutlook| RouteEvidence {
         bcr: b.hourly.get(h).copied().unwrap_or(0.0),
         snr_db: b
@@ -359,6 +399,56 @@ mod tests {
     }
 
     #[test]
+    fn either_is_never_called_when_one_route_is_closed() {
+        // Short closed, long marginal and within 6 dB: the long route, not "either".
+        let c = infer_route("20m", ev(0.05, 0.0), ev(0.3, 3.0));
+        assert_eq!(vc(&c), (V::Long, Some(Possible)));
+        assert_eq!(
+            c.reasons,
+            vec![RouteReason::OneClosed { open: Route::Long }]
+        );
+        let c = infer_route("20m", ev(0.3, 3.0), ev(0.05, 0.0));
+        assert_eq!(vc(&c), (V::Short, Some(Possible)));
+        // A grey-line nudge toward a closed route cannot land on either.
+        let c = infer_route("40m", grey(ev(0.3, 9.0), 0.0), grey(ev(0.05, 0.0), 0.5));
+        assert_eq!(vc(&c), (V::Short, Some(Possible)));
+        assert!(!c
+            .reasons
+            .iter()
+            .any(|r| matches!(r, RouteReason::GreyLine { .. })));
+        // Without SNR too.
+        let no = |bcr| RouteEvidence {
+            bcr,
+            snr_db: None,
+            greyline_frac: None,
+        };
+        assert_eq!(
+            vc(&infer_route("20m", no(0.05), no(0.3))),
+            (V::Long, Some(Possible))
+        );
+        // Negative control: both marginal and close is still either.
+        let c = infer_route("20m", ev(0.3, 0.0), ev(0.3, 3.0));
+        assert_eq!(vc(&c), (V::Either, None));
+    }
+
+    #[test]
+    fn an_either_from_the_grey_line_keeps_the_margin_that_it_overrode() {
+        // Short possible on a 7 dB margin, nudged one notch toward the grey long arc: either,
+        // and the reasons say so — no "within the margin" claim.
+        let c = infer_route("80m", grey(ev(0.3, 7.0), 0.0), grey(ev(0.3, 0.0), 0.4));
+        assert_eq!(vc(&c), (V::Either, None));
+        assert_eq!(
+            c.reasons,
+            vec![
+                RouteReason::Margin {
+                    better: Route::Short
+                },
+                RouteReason::GreyLine { route: Route::Long }
+            ]
+        );
+    }
+
+    #[test]
     fn without_snr_only_a_large_bcr_gap_names_a_route() {
         let no = |bcr| RouteEvidence {
             bcr,
@@ -368,6 +458,16 @@ mod tests {
         assert_eq!(
             vc(&infer_route("20m", no(0.45,), no(0.0))),
             (V::Short, Some(Possible))
+        );
+        // Neither route closed, a large reliability gap: the better one, possible.
+        let c = infer_route("20m", no(0.55), no(0.12));
+        assert_eq!(vc(&c), (V::Short, Some(Possible)));
+        // Every call carries a reason for the surface to put into words.
+        assert_eq!(
+            c.reasons,
+            vec![RouteReason::Reliability {
+                better: Route::Short
+            }]
         );
         assert_eq!(vc(&infer_route("20m", no(0.3), no(0.4))), (V::Either, None));
         assert_eq!(infer_route("20m", no(0.3), no(0.4)).margin_db, None);
