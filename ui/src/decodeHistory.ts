@@ -160,7 +160,13 @@ export function passesFilter(d: DecodeRow, filter: DecodeFilter, rxOffsetHz: num
 }
 
 /** Sort for display. 'time' is WSJT-X chronological: OLDEST first, newest at
- * the bottom (slot order, then first-heard order within a slot). */
+ * the bottom (slot order, then first-heard order within a slot).
+ *
+ * ⚠️ WITHIN A SLOT, RECEIVED ROWS COME BEFORE OWN OVERS. A decode ingested at slot s was heard in
+ * s-1; an over in slot s was sent during s, so it always answers or follows those decodes. Their
+ * two `at` clocks cannot order them: a decode's is when it reached the pane (a later pass lands
+ * seconds into s), an over's is its whole transmit second (often s+0). Compared directly, the 73
+ * sent in reply to a station's RR73 drew ABOVE that RR73. */
 export function orderEntries(list: DecodeEntry[], sort: DecodeSort): DecodeEntry[] {
   const out = [...list]
   out.sort((a, b) => {
@@ -172,7 +178,7 @@ export function orderEntries(list: DecodeEntry[], sort: DecodeSort): DecodeEntry
       case 'dt':
         return a.dtSec - b.dtSec
       default:
-        return a.slot - b.slot || a.at - b.at
+        return a.slot - b.slot || Number(!!a.mine) - Number(!!b.mine) || a.at - b.at
     }
   })
   return out

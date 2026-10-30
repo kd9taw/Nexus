@@ -91,6 +91,65 @@ describe('decode history — WSJT-X chronological flow', () => {
   })
 })
 
+describe('an own transmission sorts after the decodes it answered', () => {
+  // FT8 period P = slot 100 starts at 1,500,000 ms. Decodes ingested at slot P were HEARD in
+  // P-1; the over sent in P answers them and must list below them, however the decode's arrival
+  // time and the over's whole-second transmit stamp happen to fall.
+  const P = 100
+  const START = P * 15_000
+  const rr73 = row({ message: 'KD9TAW W9XYZ RR73', freqHz: 1200, directedToMe: true })
+  const my73 = row({ message: 'W9XYZ KD9TAW 73', freqHz: 1500, mine: true, txAt: START / 1000 })
+  const order = (h: DecodeHistory) => orderEntries(h.entries(), 'time').map((d) => d.message)
+
+  it('a decode that arrives after the over started still lists above it', () => {
+    // The RR73 lands 1.8 s into P (a later decode pass); the 73 went out at P+0.
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([rr73], P, START + 1_800)
+    h.ingest([rr73, my73], P, START + 2_000)
+    expect(order(h)).toEqual(['KD9TAW W9XYZ RR73', 'W9XYZ KD9TAW 73'])
+  })
+
+  it('the whole-second transmit stamp cannot pull the over above the decode', () => {
+    // RR73 at P+1.3 s, 73 released at P+1.6 s but stamped P+1 s (the engine's Unix seconds).
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([rr73], P, START + 1_300)
+    h.ingest([rr73, { ...my73, txAt: START / 1000 + 1 }], P, START + 1_700)
+    expect(order(h)).toEqual(['KD9TAW W9XYZ RR73', 'W9XYZ KD9TAW 73'])
+  })
+
+  it('the next period’s decodes still list below the over (boundary)', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    // The 73 is stamped after the RR73 arrived, so this holds on arrival order alone.
+    const late73 = { ...my73, txAt: START / 1000 + 1 }
+    h.ingest([rr73], P, START + 400)
+    h.ingest([rr73, late73], P, START + 1_200)
+    const next = row({ message: 'CQ K2DEF FN20', freqHz: 800, isCq: true })
+    h.ingest([next, late73], P + 1, START + 15_400) // heard during P, arrives in P+1
+    expect(order(h)).toEqual(['KD9TAW W9XYZ RR73', 'W9XYZ KD9TAW 73', 'CQ K2DEF FN20'])
+  })
+
+  it('within one side, rows keep time order: decodes first-heard, overs by transmit time', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    const cq = row({ message: 'CQ K2DEF FN20', freqHz: 800, isCq: true })
+    const second = { ...my73, message: 'W9XYZ KD9TAW RR73', txAt: START / 1000 + 5 }
+    h.ingest([second, my73], P, START + 5_500)
+    h.ingest([second, my73, rr73], P, START + 6_000)
+    h.ingest([second, my73, rr73, cq], P, START + 7_000)
+    expect(order(h)).toEqual(['KD9TAW W9XYZ RR73', 'CQ K2DEF FN20', 'W9XYZ KD9TAW 73', 'W9XYZ KD9TAW RR73'])
+  })
+
+  it('only the time order changes: SNR order still ranks by SNR', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([{ ...rr73, snr: -20 }, { ...my73, snr: 0 }], P, START + 2_000)
+    expect(orderEntries(h.entries(), 'snr').map((d) => d.message)).toEqual(['W9XYZ KD9TAW 73', 'KD9TAW W9XYZ RR73'])
+  })
+})
+
 describe('Rx Frequency filter (rx)', () => {
   it('passes a directedToMe decode at a FAR audio offset (the missed-caller fix)', () => {
     const d = row({ message: 'KD9TAW JA1ABC -15', freqHz: 2400, directedToMe: true })
