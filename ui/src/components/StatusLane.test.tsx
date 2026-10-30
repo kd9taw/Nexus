@@ -42,6 +42,18 @@ describe('the status lane remounts a chip only for a new alarm', () => {
     expect(chip('RADIO ENGINE STOPPED')).toBe(first)
   })
 
+  it('control: the same alarm re-sent on every snapshot and re-rendered keeps its chip (no flicker)', () => {
+    const { rerender } = render(<StatusLane />)
+    act(() => setStatus('audio', { tier: 'critical', message: 'RADIO ENGINE STOPPED', detail: 'unplugged' }))
+    const first = chip('RADIO ENGINE STOPPED')
+    for (let i = 0; i < 5; i++) {
+      act(() => setStatus('audio', { tier: 'critical', message: 'RADIO ENGINE STOPPED', detail: 'unplugged' }))
+      rerender(<StatusLane />)
+    }
+    expect(chip('RADIO ENGINE STOPPED')).toBe(first)
+    expect(first?.isConnected).toBe(true)
+  })
+
   it('control: another chip joining the lane leaves the alarm chip in place', () => {
     render(<StatusLane />)
     act(() => setStatus('audio', { tier: 'critical', message: 'RADIO ENGINE STOPPED' }))
