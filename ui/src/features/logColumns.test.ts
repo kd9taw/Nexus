@@ -267,6 +267,9 @@ describe('the values the added columns print', () => {
       exchSent: '599 4',
       // No exchange logged on this side: the serial.
       exchRcvd: '345',
+      // The path is not printed from the record: its cell asks the shack for the grade
+      // (components/prop/PathGradeCell.tsx, features/pathGrade).
+      path: null,
     })
   })
 

@@ -40,6 +40,8 @@ import { LogCountryPicker } from './LogCountryPicker'
 import { LogColumnsMenu } from './LogColumnsMenu'
 import { announce } from '../announce'
 import { LogFilterBar } from './LogFilterBar'
+import { PathGradeCell } from './prop/PathGradeCell'
+import { usePathGradingStatus, validationLines } from '../features/pathGrade'
 import { clickSort, filterKey, sortPlace, type LogFilter, type LogSort } from '../features/logFilter'
 import { activationFilter } from '../features/potaActivation'
 import { useViewportClass, useViewportSize } from '../useViewport'
@@ -440,6 +442,9 @@ export function Logbook({
     [madeColumns, columns, windowPx],
   )
   const cols = useMemo(() => renderedColumns(colChoice, narrowWindow), [colChoice, narrowWindow])
+  // The Path column's hover: what its marks mean, and the grading's success measures.
+  const pathStatus = usePathGradingStatus(cols.some((c) => c.id === 'path'))
+  const pathHeaderTitle = [t('logbook.column.path.title'), ...(pathStatus ? validationLines(pathStatus) : [])].join('\n')
   const gridTemplate = logGridTemplate(cols, colChoice, narrowWindow)
   const tableMinW = logTableMinWidth(cols, colChoice)
   const changeColumns = (next: LogColumnsSaved) => {
@@ -2250,6 +2255,7 @@ export function Logbook({
         </span>
       )
     }
+    if (c.id === 'path') return <PathGradeCell key={c.id} q={q} />
     const v = addedColumnText(q, c.id)
     return (
       <span className="log-cell mono" title={v ?? ''}>
@@ -3104,6 +3110,7 @@ export function Logbook({
                 // An added column's header takes the keyboard's resize (Alt+←/→); a default one
                 // keeps the tab order it always had.
                 tabIndex={c.base ? undefined : 0}
+                title={c.id === 'path' ? pathHeaderTitle : undefined}
                 {...moveHandlers(c)}
                 onKeyDown={(e) => resizeByKey(e, c)}
               >

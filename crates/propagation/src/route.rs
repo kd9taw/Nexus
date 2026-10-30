@@ -78,6 +78,13 @@ pub enum RouteReason {
     BothClosed,
     /// A low band whose arc on this route lies along the grey line and the other does not.
     GreyLine { route: Route },
+    /// Other receivers between the two ends, on this route only, heard the same signal within
+    /// the quarter hour ([`crate::contact_path::receivers_along`]). Never raises a confidence.
+    HeardAlong { route: Route, receivers: u16 },
+    /// The station's decodes sat this many milliseconds later than their periods' median, over
+    /// enough decodes to mean something ([`crate::contact_path::late_dt_ms`]). Never raises a
+    /// confidence.
+    LateDt { ms: u16, decodes: u16 },
 }
 
 /// The model's route call for one band at one hour.

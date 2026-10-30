@@ -91,6 +91,7 @@ import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { LogColumnsSaved } from './features/logColumns'
 import type { SavedLogFilter } from './features/logFilter'
 import type { LogQuery } from './features/logQuery'
+import type { DecoderScreen } from './features/decoderScreens'
 import type { StreetPack } from './features/streetPack'
 import type {
   StreetArea,
@@ -272,6 +273,23 @@ export async function getOpeningsLog(): Promise<import('./types').OpeningEpisode
 /** Per-path HF outlook to a station's grid (the PathPredictor seam). */
 export async function getPathOutlook(grid: string): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_path_outlook', { grid })
+}
+
+/** The path grade of each Logbook row: its own stamp when it carries one made for its current
+ * grid and band, else the display-only grade of the log, else null. */
+export async function logPathGrades(rows: import('./types').PathGradeAsk[]): Promise<(import('./types').PathGrade | null)[]> {
+  return invoke<(import('./types').PathGrade | null)[]>('log_path_grades', { rows })
+}
+
+/** One contact's path over the day it was made, for the contact card. Null when it has no grid
+ * square, no solar flux for its part of the cycle, or no long path to compare. */
+export async function contactPathDay(row: import('./types').PathGradeAsk): Promise<import('./types').ContactPathDay | null> {
+  return invoke<import('./types').ContactPathDay | null>('contact_path_day', { row })
+}
+
+/** How the display-only grading of the log is going, and the 30-day success measures. */
+export async function pathGradingStatus(): Promise<import('./types').PathGradingStatus> {
+  return invoke<import('./types').PathGradingStatus>('path_grading_status')
 }
 
 /** The ten DX regions' path over the day from the operator's grid (the region strips). The model
@@ -4781,6 +4799,14 @@ export async function sstvAutoArm(): Promise<SstvState> {
  * start the receiver — the decoding bug again, one ISS pass later. */
 export async function sstvAutoDisarm(): Promise<SstvState> {
   return invoke<SstvState>('sstv_auto_disarm')
+}
+
+/** The operator left a receive screen for another section (`features/decoderScreens.ts`): stop
+ * the decoder that opening it started, unless something still needs it. RX only. Resolves true
+ * when the decoder is still running on the screen's arm — ask again at the next section change.
+ * A decoder the operator armed is never stopped here. */
+export async function leaveDecoderScreen(screen: DecoderScreen): Promise<boolean> {
+  return invoke<boolean>('leave_decoder_screen', { screen })
 }
 
 /** Live SSTV RX state: in-flight progress + preview + the saved-image gallery

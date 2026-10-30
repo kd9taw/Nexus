@@ -31,6 +31,9 @@ export interface QslFilter {
 /** The awards a contact can still be needed for on its own band: worked there, not confirmed. */
 export type AwardNeed = 'dxcc' | 'was' | 'waz' | 'vucc' | 'ffma'
 
+/** The path a contact took, as the Path column grades it: the long path, or across the polar cap. */
+export type PathFilter = 'long' | 'polar'
+
 /** The Logbook's field filters. Every field is optional and they combine with AND. */
 export interface LogFilter {
   /** A call prefix (`K1`), or a pattern with `*` and `?` (`K?ABC`, or `*` then `/P` for a portable). */
@@ -61,6 +64,8 @@ export interface LogFilter {
   need?: AwardNeed
   /** Words in the comment, the name or the QTH. */
   text?: string
+  /** The path the contact's grade names (its own, else the Logbook's display-only grade). */
+  path?: PathFilter
 }
 
 /** One extra sort key after the first. */
@@ -75,6 +80,7 @@ export const MAX_SORT_KEYS = 3
 export const QSL_SERVICES = ['lotw', 'eqsl', 'card', 'qrz', 'clublog'] as const
 export type QslService = (typeof QSL_SERVICES)[number]
 export const AWARD_NEEDS: readonly AwardNeed[] = ['dxcc', 'was', 'waz', 'vucc', 'ffma']
+export const PATH_FILTERS: readonly PathFilter[] = ['long', 'polar']
 export const CONTINENTS = ['AF', 'AN', 'AS', 'EU', 'NA', 'OC', 'SA'] as const
 
 const TEXT_FIELDS = ['call', 'band', 'mode', 'entity', 'continent', 'grid', 'state', 'county', 'iota', 'reference', 'myRef', 'contest', 'text'] as const
@@ -105,6 +111,7 @@ export function cleanFilter(raw: unknown): LogFilter {
   if (isWhole(r.cqZone, 1, 40)) out.cqZone = r.cqZone
   if (isWhole(r.ituZone, 1, 90)) out.ituZone = r.ituZone
   if (typeof r.need === 'string' && (AWARD_NEEDS as readonly string[]).includes(r.need)) out.need = r.need as AwardNeed
+  if (typeof r.path === 'string' && (PATH_FILTERS as readonly string[]).includes(r.path)) out.path = r.path as PathFilter
   if (r.qsl && typeof r.qsl === 'object') {
     const q = r.qsl as Record<string, unknown>
     const qsl: QslFilter = {}

@@ -95,9 +95,9 @@ function regionName(id: string): string | null {
 
 /** The current UTC hour, re-read every minute. */
 function useUtcHour(): number {
-  const [h, setH] = useState(() => new Date().getUTCHours())
+  const [h, setUtcHour] = useState(() => new Date().getUTCHours())
   useEffect(() => {
-    const id = setInterval(() => setH(new Date().getUTCHours()), 60_000)
+    const id = setInterval(() => setUtcHour(new Date().getUTCHours()), 60_000)
     return () => clearInterval(id)
   }, [])
   return h

@@ -565,6 +565,53 @@ test('the macOS job holds the static gcc runtime to the reviewed import list bef
   ]);
 });
 
+// Homebrew has stopped publishing Intel bottles of gcc and much of what it pulls in, so a plain
+// `brew install gcc` on the Intel runner compiles GCC until the job's 6-hour limit. The macOS job
+// installs gcc only as the bottle the import list above was reviewed against, by digest, poured
+// with flags that cannot build from source, in a step with a short timeout. Returns what is wrong.
+const DEPS = 'Install build dependencies';
+const GCC_BOTTLES = [
+  { arch: 'arm64', gcc_bottle: 'arm64_sequoia', gcc_bottle_sha256: '8c57a4e5c65c93b90b280e3e761833f946b5a7d186f2067d239af44b71c5a577' },
+  { arch: 'x86_64', gcc_bottle: 'sequoia', gcc_bottle_sha256: 'd9c228e06901cfdc5c91b01f0119a56ea634ae3ed6504d15a3af03a65ae687f0' },
+];
+function pinnedToolchain(wf) {
+  const bad = [];
+  const legs = matrixLegs(wf, 'macos').map(({ arch, gcc_bottle, gcc_bottle_sha256 }) => ({ arch, gcc_bottle, gcc_bottle_sha256 }));
+  if (JSON.stringify(legs) !== JSON.stringify(GCC_BOTTLES)) bad.push(`the macOS legs pin gcc bottles ${JSON.stringify(legs)}, not the reviewed ones`);
+  const steps = wf.jobs.get('macos')?.steps ?? [];
+  const deps = steps.find((s) => s?.name === DEPS);
+  if (!deps) return [...bad, `no step "${DEPS}" in job macos`];
+  const timeout = deps.entries.find((e) => e.path.length === 5 && e.path[4] === 'timeout-minutes')?.value;
+  if (!(Number(timeout) > 0 && Number(timeout) <= 30)) bad.push(`"${DEPS}" has timeout-minutes ${timeout ?? '(none)'}, not 30 or less`);
+  const code = (deps.run ?? '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  if (!code.includes('/blobs/sha256:$GCC_BOTTLE_SHA256"') || !code.includes('echo "$GCC_BOTTLE_SHA256  $bottle" | shasum -a 256 -c -')) {
+    bad.push(`"${DEPS}" does not fetch and check the gcc bottle by its pinned digest`);
+  }
+  for (const s of steps) {
+    const run = (s?.run ?? '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    for (const m of run.matchAll(/\bbrew\s+install\b[^\n]*/g)) {
+      const pinned = s === deps && /--force-bottle\b/.test(m[0]) && /--ignore-dependencies\b/.test(m[0]) && /\s"\$bottle"$/.test(m[0]);
+      if (!pinned) bad.push(`job macos, step "${s.label}": \`${m[0].trim()}\` can build from source`);
+    }
+  }
+  return bad;
+}
+
+test('the macOS job installs gcc only as the reviewed bottle, and cannot spend hours building it', () => {
+  assert.deepEqual(pinnedToolchain(WF), []);
+  // Positive controls: another digest, no timeout, a formula installed by name, a pour that may build.
+  const moved = plant(TEXT, 'gcc_bottle_sha256: d9c228e0', 'gcc_bottle_sha256: 3f961040');
+  assert.match(pinnedToolchain(readWorkflow(moved)).join('\n'), /^the macOS legs pin gcc bottles .*"3f961040.*not the reviewed ones$/);
+  const unbounded = plant(TEXT, `      - name: ${DEPS}\n        timeout-minutes: 30\n`, `      - name: ${DEPS}\n`);
+  assert.deepEqual(pinnedToolchain(readWorkflow(unbounded)), [`"${DEPS}" has timeout-minutes (none), not 30 or less`]);
+  const byName = plant(TEXT, '          set -euo pipefail\n          die() {', '          set -euo pipefail\n          brew install cmake ninja gcc boost\n          die() {');
+  assert.deepEqual(pinnedToolchain(readWorkflow(byName)), [`job macos, step "${DEPS}": \`brew install cmake ninja gcc boost\` can build from source`]);
+  const mayBuild = plant(TEXT, 'brew install --force-bottle --ignore-dependencies', 'brew install --ignore-dependencies');
+  assert.deepEqual(pinnedToolchain(readWorkflow(mayBuild)), [
+    `job macos, step "${DEPS}": \`brew install --ignore-dependencies "$bottle"\` can build from source`,
+  ]);
+});
+
 test('release.yml: no step or job that builds or runs third-party code can see a secret', () => {
   const v = violations(WF);
   assert.deepEqual(v, [], `\n${v.join('\n')}\n`);

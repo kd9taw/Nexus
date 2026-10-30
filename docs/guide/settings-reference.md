@@ -2096,7 +2096,8 @@ Nexus connects to all of them and merges what they report.*
 - **Near-region opening watch** — "Watch VHF/10 m activity near your QTH (not
   just your own contacts) so openings flag 'open around you' before you've worked
   anyone." Takes effect on restart.
-- **Log space weather on each contact** — off by default. On, every contact you
+- **Log space weather on each contact** — on for a new installation; a station that
+  already had Nexus keeps the choice it had (off unless you turned it on). On, every contact you
   log carries the planetary K index, A index and solar flux (ADIF `K_INDEX`,
   `A_INDEX`, `SFI`) from the latest reading Nexus fetched from NOAA SWPC, and
   nothing when that reading is more than 3 hours old.

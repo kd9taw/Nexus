@@ -106,6 +106,8 @@ mod cw_unassisted_tests;
 /// A CW message the radio's own keyer would not take is refused whole, before anything keys.
 #[cfg(test)]
 mod cw_whole_message_tests;
+/// The receive decoders a screen started, stopped when the operator leaves for another section.
+pub mod decoder_screens;
 mod field_day_display;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
 /// When an FT8/FT4 contact is logged by itself, offered in the confirm popup, or left for Log QSO.
@@ -4867,6 +4869,11 @@ pub struct Engine {
     /// RTTY view must not quietly restart it behind them (the APRS/SSTV/PSK
     /// decline-memory doctrine). Session-only; a manual arm retires it.
     rtty_auto_arm_declined: bool,
+    /// The RTTY decoder is running because the operator OPENED its screen
+    /// ([`Engine::rtty_auto_arm`]), not because they pressed Arm. Only such an arm ends when they
+    /// leave for another section ([`Engine::leave_decoder_screen`]); an explicit Arm clears it, so
+    /// a decoder the operator started stays started. Session-only.
+    rtty_auto_armed: bool,
     /// Drain buffer for the RTTY decode thread: 12 kHz RX audio accumulates here
     /// while armed; the thread empties it via [`Engine::take_rtty_audio`]. Empty
     /// (zero cost) while disarmed.
@@ -4888,6 +4895,9 @@ pub struct Engine {
     rtty_afc_locked: bool,
     /// The tuning scope's newest frame, pushed by the decode thread beside the characters.
     rtty_scope: RttyScope,
+    /// When the UI last read the tuning scope ([`Engine::rtty_scope`]). The decode thread builds
+    /// frames only while someone is drawing them ([`Engine::rtty_scope_wanted`]).
+    rtty_scope_read_at: Option<Instant>,
     /// One-shot: drop + rebuild the RX demodulator (the AFC-reset command — a
     /// wrong-neighbor acquire-then-freeze recovers by re-acquiring from scratch).
     rtty_afc_reset: bool,
@@ -4967,6 +4977,9 @@ pub struct Engine {
     /// the PSK view must not quietly restart it behind them (the APRS/SSTV
     /// decline-memory doctrine). Session-only; a manual arm retires it.
     psk_auto_arm_declined: bool,
+    /// The PSK decoder is running because the operator opened its screen, not because they
+    /// pressed Arm — the `rtty_auto_armed` distinction.
+    psk_auto_armed: bool,
     /// Drain buffer for the PSK decode thread: 12 kHz RX audio accumulates here
     /// while armed; the thread empties it via [`Engine::take_psk_audio`]. Empty
     /// (zero cost) while disarmed.
@@ -5046,6 +5059,10 @@ pub struct Engine {
     /// The operator explicitly stopped the decoder this session, so entering the APRS view must
     /// not quietly start it again behind them. Session-only; a manual arm always still works.
     aprs_auto_arm_declined: bool,
+    /// The APRS decoder is running because the operator opened its screen
+    /// ([`Engine::aprs_auto_arm`]) — the `rtty_auto_armed` distinction. Not [`AprsArm::Auto`]:
+    /// that also covers a Remote receive-only start, which is an operator act.
+    aprs_auto_armed: bool,
     /// Drain buffer for the APRS decode thread (same pattern as `rtty_audio`). Empty while disarmed.
     aprs_audio: Vec<f32>,
     /// Recently-decoded APRS packets, newest last, capped at [`APRS_HEARD_CAP`]. Pushed by the
@@ -5170,6 +5187,21 @@ pub struct Engine {
     /// the view must not restart it behind them. Same decision-memory as
     /// `aprs_auto_arm_declined`.
     sstv_auto_arm_declined: bool,
+    /// The SSTV picture viewer's window is open at the station
+    /// ([`Engine::set_sstv_viewer_open`]), which keeps the SSTV screen in its section.
+    sstv_viewer_open: bool,
+    /// Decoder screens left while a computer driving the station was attached, whose leave waits
+    /// for it to go ([`Engine::leave_decoder_screen`]). Opening the screen again cancels its leave.
+    decoder_leaves_held: Vec<decoder_screens::DecoderScreen>,
+    /// Some remote device holds the station lease (the authority poll's answer, refreshed every
+    /// `poll_remote_transmit` tick). Read only by the receive decoders' leave; decides no TX.
+    remote_lease_held: bool,
+    /// When no computer was last seen attached while leaves were held: the start of
+    /// [`decoder_screens::DETACH_GRACE`].
+    decoders_detached_since: Option<Instant>,
+    /// The SSTV receiver is running because the operator opened its screen, not because they
+    /// (or the ISS pass, an opt-in of theirs) armed it — the `rtty_auto_armed` distinction.
+    sstv_auto_armed: bool,
     /// What the SSTV decode thread is actually hearing — the evidence the view
     /// states instead of one hint that meant four different things.
     sstv_health: SstvHealth,
@@ -5250,6 +5282,9 @@ fn copy_names_call(copy: &str, call: &str) -> bool {
 const QSO_WAV_WINDOW: usize = 720_000;
 /// RTTY decoded-character ring cap: ~4000 chars ≈ tens of minutes of copy at 45.45 baud.
 const RTTY_TEXT_CAP: usize = 4000;
+/// How long after its last read the RTTY tuning scope still counts as on screen: several polls at
+/// the slowest cadence (5 Hz under reduced motion), so a slow frame never blanks it.
+pub const RTTY_SCOPE_WANTED_FOR: Duration = Duration::from_secs(1);
 /// PSK31 decoded-character ring cap — the RTTY sizing (PSK31 copies even slower,
 /// ~4 chars/s, so 4000 chars is comfortably tens of minutes of transcript).
 const PSK_TEXT_CAP: usize = 4000;
@@ -7184,11 +7219,13 @@ impl Engine {
             qsy,
             rtty_armed: false,
             rtty_auto_arm_declined: false,
+            rtty_auto_armed: false,
             rtty_audio: Vec::new(),
             rtty_chars: VecDeque::new(),
             rtty_afc_hz: 0.0,
             rtty_afc_locked: false,
             rtty_scope: RttyScope::default(),
+            rtty_scope_read_at: None,
             rtty_afc_reset: false,
             rtty_center: None,
             rtty_queue: VecDeque::new(),
@@ -7203,6 +7240,7 @@ impl Engine {
             rtty_auto_over: false,
             psk_armed: false,
             psk_auto_arm_declined: false,
+            psk_auto_armed: false,
             psk_audio: Vec::new(),
             psk_chars: VecDeque::new(),
             psk_afc_hz: 0.0,
@@ -7226,6 +7264,7 @@ impl Engine {
             aprs_is_status: AprsIsStatus::default(),
             aprs_is_for_js8: (false, false),
             aprs_auto_arm_declined: false,
+            aprs_auto_armed: false,
             aprs_audio: Vec::new(),
             aprs_heard: Vec::new(),
             aprs_health: AprsHealth::default(),
@@ -7243,6 +7282,11 @@ impl Engine {
             sstv_armed: false,
             sstv_manual_rx: None,
             sstv_auto_arm_declined: false,
+            sstv_viewer_open: false,
+            decoder_leaves_held: Vec::new(),
+            remote_lease_held: false,
+            decoders_detached_since: None,
+            sstv_auto_armed: false,
             sstv_health: SstvHealth::default(),
             sstv_audio: Vec::new(),
             sstv_progress: None,
@@ -17754,6 +17798,16 @@ impl Engine {
                 }
             }
         }
+        // THE PATH THIS CONTACT TOOK (`APP_NEXUS_PATH*`): the command layer's grader answers from
+        // what it already holds — the path card it computed for this station — and the record
+        // gains new fields only (`path_stamp::stamp_path`), never `ANT_AZ` or `ANT_PATH`. After
+        // the grid and the band are final, which the grade is made for.
+        if let Some(grade) = &self.station.path_at_log {
+            let late = self.late_dts_of(&rec.call);
+            if let Some(found) = grade(&rec, &late) {
+                tempo_core::logbook::path_stamp::stamp_path(&mut rec, &found);
+            }
+        }
         // THE APPEND (SPEC-2 v3 C19): the station mints the row's id, the hot index takes the
         // row, and the writer is handed it — a channel send. NO SQL and no pass over the log,
         // so the radio loop never waits on the disk (the FT gate): the duplicate guard above
@@ -19318,6 +19372,41 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // Newest first, then highest resume rank within the same slot.
             .max_by_key(|(r, _, _, slot)| (*slot, *r))
             .map(|(_, m, snr, slot)| (m, snr, slot))
+    }
+
+    /// For each decode FROM `call` in the decode history, its DT minus the median DT of every
+    /// decode in the same period (periods with fewer than three decodes are skipped: no median
+    /// worth the name) — what the path grader's aggregate DT gate reads. ⚠️ Read only, and never
+    /// evidence on its own: one decode's DT says nothing about the route (clock error is larger
+    /// than the long path's extra delay); the gate needs many (`contact_path::late_dt_ms`).
+    fn late_dts_of(&self, call: &str) -> Vec<f32> {
+        let mut by_slot: std::collections::BTreeMap<u64, Vec<f32>> = Default::default();
+        for (slot, d) in &self.decode_history {
+            by_slot.entry(*slot).or_default().push(d.dt);
+        }
+        let medians: std::collections::HashMap<u64, f32> = by_slot
+            .into_iter()
+            .filter(|(_, v)| v.len() >= 3)
+            .map(|(slot, mut v)| {
+                v.sort_by(f32::total_cmp);
+                let m = v.len() / 2;
+                let med = if v.len().is_multiple_of(2) {
+                    (v[m - 1] + v[m]) / 2.0
+                } else {
+                    v[m]
+                };
+                (slot, med)
+            })
+            .collect();
+        self.decode_history
+            .iter()
+            .filter(|(_, d)| {
+                Msg::parse(&d.message)
+                    .sender()
+                    .is_some_and(|s| same_call(s, call))
+            })
+            .filter_map(|(slot, d)| medians.get(slot).map(|m| d.dt - m))
+            .collect()
     }
 
     /// The station's latest transmission, for a click naming no message: among the decodes FROM
@@ -24109,6 +24198,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // the rest of the session.
             self.rtty_auto_arm_declined = true;
         }
+        // Either way it is now the operator's decision, not the screen's.
+        self.rtty_auto_armed = false;
         self.rtty_armed = on;
     }
 
@@ -24127,13 +24218,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// so it survives a remount and is testable without a webview. RX ONLY — arming the
     /// decoder cannot key anything; every RTTY TX path is separate and gated elsewhere.
     pub fn rtty_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Rtty);
         if self.rtty_armed || self.rtty_auto_arm_declined || !self.settings.rtty_rx_auto_arm {
             return false;
         }
-        self.rtty_chars.clear();
+        // The transcript is KEPT: the screen stops this decoder when the operator leaves for
+        // another section ([`Engine::leave_decoder_screen`]), and coming back must find what it
+        // had decoded, as it did while the decoder ran on behind them.
         self.rtty_afc_hz = 0.0;
         self.rtty_afc_locked = false;
         self.rtty_armed = true;
+        self.rtty_auto_armed = true;
         true
     }
 
@@ -24168,6 +24263,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             arm,
             ..Default::default()
         };
+        self.aprs_auto_armed = false;
         self.aprs_arm = arm;
     }
 
@@ -24186,6 +24282,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             };
             self.aprs_arm = AprsArm::Auto;
         }
+        // A Remote start is the operator's, so leaving the screen does not stop it.
+        self.aprs_auto_armed = false;
     }
 
     /// Arm the decoder because the operator ENTERED the APRS view — receive-only, never
@@ -24195,6 +24293,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// and it refuses outright once the operator has explicitly stopped the decoder this session.
     /// The policy lives here rather than in the UI so it survives a remount and is testable.
     pub fn aprs_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Aprs);
         if self.aprs_arm != AprsArm::Off || self.aprs_auto_arm_declined {
             return false;
         }
@@ -24203,6 +24302,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             ..Default::default()
         };
         self.aprs_arm = AprsArm::Auto;
+        self.aprs_auto_armed = true;
         true
     }
 
@@ -25075,13 +25175,24 @@ Pick the one you operate from on the Contesting tab in Settings.",
         };
     }
 
-    /// The tuning scope the UI polls (`get_rtty_scope`). Not live while disarmed.
-    pub fn rtty_scope(&self) -> RttyScope {
+    /// The tuning scope the UI polls (`get_rtty_scope`). Not live while disarmed. The read is
+    /// what tells the decode thread the scope is wanted ([`Self::rtty_scope_wanted`]).
+    pub fn rtty_scope(&mut self) -> RttyScope {
+        self.rtty_scope_read_at = Some(Instant::now());
         if self.rtty_armed {
             self.rtty_scope.clone()
         } else {
             RttyScope::default()
         }
+    }
+
+    /// Whether anything is drawing the tuning scope: it was read within
+    /// [`RTTY_SCOPE_WANTED_FOR`] of `now`. The scope polls at 5–20 Hz only while its pane is
+    /// shown, the RTTY screen is in front and the window is visible, so a silent poll means
+    /// nobody is looking, and the decode thread skips building frames nobody reads.
+    pub fn rtty_scope_wanted(&self, now: Instant) -> bool {
+        self.rtty_scope_read_at
+            .is_some_and(|at| now.saturating_duration_since(at) < RTTY_SCOPE_WANTED_FOR)
     }
 
     /// The compact RTTY state the UI polls (`get_rtty_state`).
@@ -25246,6 +25357,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // it for the rest of the session.
             self.psk_auto_arm_declined = true;
         }
+        // Either way it is now the operator's decision, not the screen's.
+        self.psk_auto_armed = false;
         self.psk_armed = on;
     }
 
@@ -25261,13 +25374,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// testable without a webview. RX ONLY — arming the decoder cannot key
     /// anything (TX starts only from an explicit send behind `psk_tx_gate`).
     pub fn psk_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Psk);
         if self.psk_armed || self.psk_auto_arm_declined || !self.settings.psk_rx_auto_arm {
             return false;
         }
-        self.psk_chars.clear();
+        // The transcript is kept across a leave and a return, as RTTY's is (`rtty_auto_arm`).
         self.psk_afc_hz = 0.0;
         self.psk_signal = false;
         self.psk_armed = true;
+        self.psk_auto_armed = true;
         true
     }
 
@@ -26462,6 +26577,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let mut seq = seq;
             seq.cfg = self.settings.rtty_seq_config();
             self.rtty_seq = Some(seq);
+            // The sequencer decides from what the decoder hears, so Auto takes the decoder: it is
+            // the operator's from here (a screen leave no longer stops it), and one that a leave
+            // stopped (another window left RTTY while this one stayed) starts again. Never one
+            // the operator stopped. RX only: nothing here keys or changes what Auto sends.
+            self.rtty_auto_armed = false;
+            if !self.rtty_armed && !self.rtty_auto_arm_declined {
+                self.rtty_afc_hz = 0.0;
+                self.rtty_afc_locked = false;
+                self.rtty_armed = true;
+            }
         } else {
             if let Some(seq) = self.rtty_seq.as_mut() {
                 seq.abort();
@@ -26966,6 +27091,8 @@ contact yourself."
             armed: on,
             ..Default::default()
         };
+        // Either way it is now the operator's decision (or their ISS opt-in's), not the screen's.
+        self.sstv_auto_armed = false;
         self.sstv_armed = on;
     }
 
@@ -26983,6 +27110,7 @@ contact yourself."
         self.sstv_progress = None;
         self.sstv_manual_rx = None;
         self.sstv_health = SstvHealth::default();
+        self.sstv_auto_armed = false;
         self.sstv_armed = false;
     }
 
@@ -27007,6 +27135,7 @@ contact yourself."
     /// entry path: the Arm button and the ISS pass arm both call
     /// [`Engine::set_sstv_armed`], an explicit operator act, and are unaffected.
     pub fn sstv_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Sstv);
         if self.sstv_armed || self.sstv_auto_arm_declined || !self.settings.sstv_rx_auto_arm {
             return false;
         }
@@ -27015,6 +27144,7 @@ contact yourself."
             ..Default::default()
         };
         self.sstv_armed = true;
+        self.sstv_auto_armed = true;
         true
     }
 
@@ -27036,6 +27166,8 @@ contact yourself."
         if !self.sstv_armed {
             self.set_sstv_armed(true);
         }
+        // A receiver the screen started becomes the operator's with their manual start.
+        self.sstv_auto_armed = false;
         self.sstv_manual_rx = Some(mode_slug);
     }
 
@@ -33612,6 +33744,20 @@ contact yourself."
         self.station.set_state_resolver(resolve)
     }
 
+    /// See [`StationCore::set_path_grader`].
+    pub fn set_path_grader(
+        &mut self,
+        grade: impl Fn(
+                &tempo_core::logbook::QsoRecord,
+                &[f32],
+            ) -> Option<tempo_core::logbook::path_stamp::PathStamp>
+            + Send
+            + Sync
+            + 'static,
+    ) {
+        self.station.set_path_grader(grade)
+    }
+
     /// See [`StationCore::set_grid_rarity_resolver`].
     pub fn set_grid_rarity_resolver(
         &mut self,
@@ -38373,6 +38519,26 @@ mod tests {
         assert_eq!(
             (e.rtty_state().mark_hz, e.rtty_state().space_hz),
             (1415.0, 1585.0)
+        );
+    }
+
+    #[test]
+    fn the_rtty_scope_is_wanted_only_while_something_reads_it() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let now = Instant::now();
+        assert!(
+            !e.rtty_scope_wanted(now),
+            "never read: nobody is drawing it"
+        );
+        e.rtty_scope();
+        let read = Instant::now();
+        assert!(
+            e.rtty_scope_wanted(read),
+            "just read: the scope is on screen"
+        );
+        assert!(
+            !e.rtty_scope_wanted(read + RTTY_SCOPE_WANTED_FOR),
+            "the polls stopped: the pane closed or the screen was left"
         );
     }
 
@@ -49566,6 +49732,129 @@ mod tests {
         );
     }
 
+    /// A contact being logged takes the command layer's grade as NEW fields only, and never an
+    /// antenna field: the record gains the three grade fields and nothing else, and an antenna
+    /// heading or path the record already carries is kept as it was. Without a grader nothing is
+    /// added. The grader sees the record as it will be written (grid and band final).
+    #[test]
+    fn a_new_contact_takes_the_graders_path_as_new_fields_only() {
+        use tempo_core::logbook::path_stamp::{read_path, PathStamp, StampConf, StampRoute};
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let bare = e.qso_record("JA1NONE".into(), Some("PM95".into()), None);
+        e.log_qso(bare);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let saw = std::sync::Arc::clone(&seen);
+        e.set_path_grader(move |r, _| {
+            saw.lock()
+                .unwrap()
+                .push((r.call.clone(), r.grid.clone().unwrap_or_default()));
+            Some(PathStamp {
+                route: StampRoute::Short,
+                conf: Some(StampConf::Likely),
+                why: vec!["MARGIN_S".into()],
+                key: "PM95/20m".into(),
+            })
+        });
+        let graded = e.qso_record("JA1ABC".into(), Some("PM95".into()), None);
+        e.log_qso(graded);
+        let mut typed = e.qso_record("JA1TYP".into(), Some("PM95".into()), None);
+        typed.extra = vec![
+            ("ANT_AZ".into(), "45".into()),
+            ("ANT_PATH".into(), "L".into()),
+        ];
+        e.log_qso(typed);
+        let log = e.stored_log();
+        let at = |call: &str| log.iter().find(|r| r.call == call).unwrap();
+        let tag =
+            |call: &str, t: &str| tempo_core::logbook::extra_field(at(call), t).map(str::to_string);
+        assert_eq!(read_path(at("JA1NONE")), None, "no grader, no grade");
+        let g = read_path(at("JA1ABC")).unwrap();
+        assert_eq!(
+            (g.route, g.conf),
+            (StampRoute::Short, Some(StampConf::Likely))
+        );
+        // Nexus fills no antenna field, whatever the grade.
+        assert_eq!(tag("JA1ABC", "ANT_AZ"), None);
+        assert_eq!(tag("JA1ABC", "ANT_PATH"), None);
+        // Beside the ungraded contact's fields, exactly the three grade fields.
+        let keys = |call: &str| -> std::collections::BTreeSet<String> {
+            at(call).extra.iter().map(|(k, _)| k.clone()).collect()
+        };
+        let added: Vec<String> = keys("JA1ABC")
+            .difference(&keys("JA1NONE"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            added,
+            [
+                "APP_NEXUS_PATH",
+                "APP_NEXUS_PATH_CONF",
+                "APP_NEXUS_PATH_WHY"
+            ]
+        );
+        // The operator's own values stand; the grade beside them is still added.
+        assert_eq!(tag("JA1TYP", "ANT_AZ").as_deref(), Some("45"));
+        assert_eq!(tag("JA1TYP", "ANT_PATH").as_deref(), Some("L"));
+        assert!(read_path(at("JA1TYP")).is_some());
+        assert_eq!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .map(|(c, _)| c.as_str())
+                .collect::<Vec<_>>(),
+            ["JA1ABC", "JA1TYP"]
+        );
+        // What the services are sent is the contact without its grade.
+        let out = tempo_core::logbook::adif_record(at("JA1ABC"));
+        assert!(
+            !out.contains("APP_NEXUS_PATH") && !out.contains("ANT_"),
+            "{out}"
+        );
+    }
+
+    /// The path grader is handed the worked station's decode lateness: each of its decodes' DT
+    /// minus the median DT of its period, from the decode history — a period too thin for a
+    /// median (fewer than three decodes) gives nothing, and other stations give nothing.
+    #[test]
+    fn the_grader_is_handed_the_stations_decode_lateness() {
+        let d = |message: &str, dt: f32| modes::Decode {
+            message: message.into(),
+            sync: 1.0,
+            snr: -10,
+            dt,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            raw: None,
+            mode: None,
+        };
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for slot in 10..13u64 {
+            e.ingest_decodes_for_test(
+                &[
+                    d("CQ JA1ABC PM95", 0.30),
+                    d("CQ W1AW FN31", 0.10),
+                    d("CQ G4XYZ IO91", 0.20),
+                ],
+                slot,
+            );
+        }
+        // A thin period: the station alone, no median.
+        e.ingest_decodes_for_test(&[d("CQ JA1ABC PM95", 0.9)], 13);
+        let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::<f32>::new()));
+        let put = std::sync::Arc::clone(&got);
+        e.set_path_grader(move |_, late| {
+            *put.lock().unwrap() = late.to_vec();
+            None
+        });
+        let rec = e.qso_record("JA1ABC".into(), Some("PM95".into()), None);
+        e.log_qso(rec);
+        let late = got.lock().unwrap().clone();
+        assert_eq!(late.len(), 3, "{late:?}");
+        assert!(late.iter().all(|x| (x - 0.10).abs() < 1e-5), "{late:?}");
+    }
+
     /// K_INDEX, A_INDEX and SFI go on a contact only when the operator turned the setting
     /// on, and only from a reading Nexus fetched no more than three hours earlier — never the
     /// propagation model's stand-ins, never a stale number.
@@ -49574,6 +49863,7 @@ mod tests {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         let now = now_unix_secs();
         e.note_space_weather(2.67, 7.0, 148.6, now - 60);
+        e.settings.log_space_weather = false;
         let off = e.qso_record("K1OFF".into(), None, None);
         e.log_qso(off);
         e.settings.log_space_weather = true;
@@ -49592,7 +49882,7 @@ mod tests {
             ["K_INDEX", "A_INDEX", "SFI"]
                 .map(|t| tempo_core::logbook::extra_field(r, t).map(str::to_string))
         };
-        assert_eq!(wx("K1OFF"), [None, None, None], "off by default");
+        assert_eq!(wx("K1OFF"), [None, None, None], "off when turned off");
         assert_eq!(
             wx("K1ON"),
             [Some("3".into()), Some("7".into()), Some("149".into())]
@@ -79199,6 +79489,73 @@ mod logged_frequency_tests {
             "Cabrillo moved with the on-air frequency"
         );
         assert_eq!(cabrillo_qso_lines(&low).len(), 1, "one QSO line each");
+    }
+
+    /// A station with the path grader on writes exactly the Cabrillo entry (and the contest's own
+    /// ADIF) a station without it does: the grade is the general log's fields, and
+    /// the contest's files are written from the contest's own rows. CONTROL: on the graded
+    /// station the grader is live — a general-log contact takes its grade.
+    #[test]
+    fn a_graded_contact_writes_the_same_cabrillo() {
+        use tempo_core::logbook::path_stamp::{PathStamp, StampConf, StampRoute};
+        let c = Case {
+            name: "FT8 at 14.074",
+            section: "digital",
+            setup: no_setup,
+            dial: 14.074,
+            band: "20m",
+            sideband: "USB",
+            class: "DIG",
+            submode: None,
+            word: "PKTUSB",
+            on_air_hz: 0,
+        };
+        let station = |graded: bool| {
+            let mut e = fd_station(&c);
+            if graded {
+                e.set_path_grader(|_, _| {
+                    Some(PathStamp {
+                        route: StampRoute::Short,
+                        conf: Some(StampConf::Likely),
+                        why: vec!["MARGIN_S".into()],
+                        key: "FN31/20m".into(),
+                    })
+                });
+            }
+            log_one(&mut e, &c);
+            e
+        };
+        let (plain, graded) = (station(false), station(true));
+        let whole = |e: &Engine| {
+            e.export_log("cabrillo")
+                .expect("a Cabrillo entry")
+                .lines()
+                .filter(|l| !l.starts_with("CREATED-BY") && !l.starts_with("X-"))
+                .map(|l| {
+                    if l.starts_with("QSO:") {
+                        l.split_whitespace()
+                            .enumerate()
+                            .map(|(i, f)| if i == 3 || i == 4 { "-" } else { f })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(whole(&plain), whole(&graded));
+        assert_eq!(cabrillo_qso_lines(&graded).len(), 1);
+        assert_eq!(plain.export_log("adif"), graded.export_log("adif"));
+        let mut graded = graded;
+        let rec = graded.qso_record("K1ABC".into(), Some("FN31".into()), None);
+        graded.log_qso(rec);
+        let log = crate::test_util::StoredLog::stored_log(&graded);
+        assert!(
+            log.iter()
+                .any(|r| tempo_core::logbook::path_stamp::read_path(r).is_some()),
+            "control: the graded station's general-log contact carries its grade"
+        );
     }
 
     /// ⭐ AN AUTO-SEQUENCED RTTY CONTACT — the general-log record `rtty_qso_record` builds —
