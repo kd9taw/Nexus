@@ -252,6 +252,9 @@ pub struct JttyRx {
     /// The operator explicitly stopped the decoder this session, so entering the JTTY view must
     /// not restart it behind them (the APRS/SSTV/PSK decline memory).
     auto_arm_declined: bool,
+    /// The decoder is running because the operator opened the JTTY screen, not because they
+    /// pressed Arm (`Engine::leave_decoder_screen` stops only such an arm).
+    auto_armed: bool,
     rx_hz: f32,
     ftol_hz: f32,
     low_hz: i32,
@@ -294,6 +297,7 @@ impl Default for JttyRx {
         Self {
             armed: false,
             auto_arm_declined: false,
+            auto_armed: false,
             rx_hz: JTTY_RX_HZ,
             ftol_hz: JTTY_FTOL_HZ,
             low_hz: JTTY_LOW_HZ,
@@ -680,6 +684,7 @@ impl Engine {
             self.jtty.feeding = false;
             self.jtty.auto_arm_declined = true;
         }
+        self.jtty.auto_armed = false;
         self.jtty.armed = on;
     }
 
@@ -694,7 +699,23 @@ impl Engine {
         }
         self.jtty.notice = None;
         self.jtty.armed = true;
+        self.jtty.auto_armed = true;
         true
+    }
+
+    /// The decoder is running because the JTTY screen started it ([`Engine::jtty_auto_arm`]).
+    pub(super) fn jtty_auto_armed(&self) -> bool {
+        self.jtty.armed && self.jtty.auto_armed
+    }
+
+    /// Stop the decoder because the operator left the JTTY screen for another section
+    /// (`Engine::leave_decoder_screen`, which decides whether to). An automatic stop: no decline
+    /// is remembered, so the screen starts it again, and the receive window is kept.
+    pub(super) fn jtty_auto_disarm(&mut self) {
+        self.jtty.audio.clear();
+        self.jtty.feeding = false;
+        self.jtty.auto_armed = false;
+        self.jtty.armed = false;
     }
 
     /// Whether the JTTY decoder is armed (the decode thread's gate).

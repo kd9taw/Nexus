@@ -18705,7 +18705,7 @@ struct RttyScopeDto {
 /// Receive-only: it reads what the decode thread pushed and changes nothing.
 #[tauri::command]
 async fn get_rtty_scope(state: State<'_, SharedEngine>) -> Result<RttyScopeDto, String> {
-    with_engine(&state, |eng| {
+    with_engine(&state, |mut eng| {
         let s = eng.rtty_scope();
         RttyScopeDto {
             live: s.live,
@@ -20057,6 +20057,25 @@ fn sstv_auto_disarm(state: State<'_, SharedEngine>) -> Result<SstvStateDto, Stri
     let mut eng = engine_lock(&state);
     eng.sstv_auto_disarm();
     Ok(sstv_state_dto(&eng))
+}
+
+/// The operator left a receive screen (RTTY, PSK, JTTY, SSTV, APRS) for another section: stop
+/// the decoder that opening it started, unless something still needs it. RX only — see
+/// [`tempo_app::engine::Engine::leave_decoder_screen`]. The SSTV picture viewer, open in its own
+/// window, keeps the SSTV screen in the section. Returns whether the decoder is still running on
+/// its screen's arm, so the caller asks again at the next section change.
+#[tauri::command(async)]
+fn leave_decoder_screen(
+    app: tauri::AppHandle,
+    state: State<'_, SharedEngine>,
+    screen: tempo_app::engine::decoder_screens::DecoderScreen,
+) -> Result<bool, String> {
+    use tempo_app::engine::decoder_screens::DecoderScreen;
+    let shown_elsewhere = screen == DecoderScreen::Sstv
+        && app
+            .get_webview_window(&panel_label(SSTV_VIEWER_SLUG, Instance::Main))
+            .is_some();
+    Ok(engine_lock(&state).leave_decoder_screen(screen, shown_elsewhere))
 }
 
 /// Start decoding an SSTV picture NOW, in the mode the operator named, without
@@ -22768,6 +22787,10 @@ fn set_psk_macros(
 /// second person logging at a second monitor and keyboard. Its strip shares the contact in
 /// progress with the main window's while it is open (`tempo_app::engine::contest_entry`).
 pub(crate) const CONTEST_LOGGER_SLUG: &str = "contestlog";
+
+/// The received-picture viewer's panel slug (`SstvViewer.tsx`'s `SSTV_VIEWER_PANEL`): the SSTV
+/// screen in a window of its own, which keeps that screen in the section (`leave_decoder_screen`).
+const SSTV_VIEWER_SLUG: &str = "sstvviewer";
 
 /// The contest screen window's panel slug: the main window's Contest screen below its log line
 /// (the contest switch, the controls, the club board, the scoreboard, the bonuses and the log),
@@ -41636,6 +41659,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         sstv_manual_rx,
         sstv_auto_arm,
         sstv_auto_disarm,
+        leave_decoder_screen,
         get_sstv_state,
         sstv_send,
         sstv_stop,

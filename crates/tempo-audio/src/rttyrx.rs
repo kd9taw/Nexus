@@ -9,7 +9,9 @@
 //! the demod's AFC-corrected mark and space, and its newest frame goes to the engine for the
 //! `get_rtty_scope` poll. While anything of ours holds the transmitter the scope is cleared and
 //! the frame goes dark: the receive audio is then our own signal (or the rig's muted input),
-//! and drawing it as a tuned "+" would invite a nudge that tunes nothing.
+//! and drawing it as a tuned "+" would invite a nudge that tunes nothing. While nothing is
+//! drawing it (`Engine::rtty_scope_wanted`: the pane closed, another screen in front, the
+//! window hidden) no frame is built at all.
 //!
 //! RX ONLY: nothing here keys PTT, emits TX audio, or touches `rtty_afsk`/
 //! `rtty_fsk`. Disarmed = the buffer stays empty and this loop does nothing but
@@ -58,7 +60,7 @@ fn run(engine: Arc<Mutex<Engine>>) {
             return;
         }
         std::thread::sleep(POLL);
-        let (armed, cfg, reset, keyed) = {
+        let (armed, cfg, reset, keyed, scope_wanted) = {
             let mut e = engine_lock(&engine);
             (
                 e.rtty_armed(),
@@ -66,6 +68,7 @@ fn run(engine: Arc<Mutex<Engine>>) {
                 e.take_rtty_afc_reset(),
                 // THE ONE ARBITER every TX gate asks: any keying source the engine can see.
                 e.tx_owner().is_some(),
+                e.rtty_scope_wanted(std::time::Instant::now()),
             )
         };
         if !armed {
@@ -87,7 +90,7 @@ fn run(engine: Arc<Mutex<Engine>>) {
         let (afc_hz, afc_locked) = (d.afc_offset_hz(), d.afc_locked());
         let cfg = d.config();
         let tones = (cfg.mark_hz + afc_hz, cfg.space_hz + afc_hz);
-        let frame = scope_step(&mut scope, keyed, tones, &audio);
+        let frame = scope_step(&mut scope, scope_wanted, keyed, tones, &audio);
         let mut e = engine_lock(&engine);
         e.push_rtty_decode(&chars, afc_hz, afc_locked);
         e.push_rtty_scope(frame);
@@ -96,13 +99,19 @@ fn run(engine: Arc<Mutex<Engine>>) {
 
 /// One drain's worth of the tuning scope: follow the AFC-corrected `tones`, run `audio` through
 /// it and return the newest frame, or clear it and return `None` while `keyed` (our own
-/// transmission gates it off, and it starts clean afterwards).
+/// transmission gates it off, and it starts clean afterwards). Not `wanted` (nothing is drawing
+/// it): no work at all, and the scope is dropped, so it starts clean when it is shown again.
 fn scope_step(
     scope: &mut Option<TuningScope>,
+    wanted: bool,
     keyed: bool,
     tones: (f32, f32),
     audio: &[f32],
 ) -> Option<ScopeFrame> {
+    if !wanted {
+        *scope = None;
+        return None;
+    }
     let s = scope.get_or_insert_with(|| TuningScope::new(SAMPLE_RATE, tones.0, tones.1));
     if keyed {
         s.clear();
@@ -153,24 +162,60 @@ mod tests {
     fn the_scope_draws_on_receive_and_goes_dark_while_we_transmit() {
         let mut scope = None;
         let audio = carrier(2125.0, 1200);
-        let rx = scope_step(&mut scope, false, (2125.0, 2295.0), &audio).expect("a frame on RX");
+        let rx =
+            scope_step(&mut scope, true, false, (2125.0, 2295.0), &audio).expect("a frame on RX");
         assert_eq!(rx.xy.len(), 2 * SCOPE_POINTS);
         assert!(rx.peak > 0.0);
 
         // Keyed: no frame, and the picture is cleared rather than held.
-        assert_eq!(scope_step(&mut scope, true, (2125.0, 2295.0), &audio), None);
+        assert_eq!(
+            scope_step(&mut scope, true, true, (2125.0, 2295.0), &audio),
+            None
+        );
         assert!(scope.as_ref().is_some_and(|s| s.is_empty()));
 
         // Back on receive it starts from the new audio only.
-        let after = scope_step(&mut scope, false, (2125.0, 2295.0), &audio[..40]).unwrap();
+        let after = scope_step(&mut scope, true, false, (2125.0, 2295.0), &audio[..40]).unwrap();
         assert_eq!(after.xy.len(), 2 * 40 / tempo_core::rtty::scope::DECIMATE);
+    }
+
+    /// Nobody drawing the scope: no frame and no scope state, whatever the audio.
+    #[test]
+    fn the_scope_does_no_work_while_nothing_draws_it() {
+        let mut scope = None;
+        let audio = carrier(2125.0, 1200);
+        assert_eq!(
+            scope_step(&mut scope, false, false, (2125.0, 2295.0), &audio),
+            None
+        );
+        assert!(scope.is_none(), "no scope was built");
+
+        // Shown again: it draws at once, and dropping it while hidden starts it clean.
+        assert!(scope_step(&mut scope, true, false, (2125.0, 2295.0), &audio).is_some());
+        assert_eq!(
+            scope_step(&mut scope, false, false, (2125.0, 2295.0), &audio),
+            None
+        );
+        assert!(scope.is_none(), "hidden again: the scope is dropped");
     }
 
     #[test]
     fn the_scope_follows_the_afc_corrected_tones() {
         let mut scope = None;
-        scope_step(&mut scope, false, (2125.0, 2295.0), &carrier(2125.0, 120));
-        scope_step(&mut scope, false, (2137.0, 2307.0), &carrier(2137.0, 120));
+        scope_step(
+            &mut scope,
+            true,
+            false,
+            (2125.0, 2295.0),
+            &carrier(2125.0, 120),
+        );
+        scope_step(
+            &mut scope,
+            true,
+            false,
+            (2137.0, 2307.0),
+            &carrier(2137.0, 120),
+        );
         assert_eq!(scope.unwrap().tones(), (2137.0, 2307.0));
     }
 

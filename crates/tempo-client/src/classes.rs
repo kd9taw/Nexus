@@ -339,6 +339,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("jtty_sign_off",                  StartsTx,    "Sends the JTTY sign-off."),
     ("jtty_stop",                      StopsTx,     "Stops JTTY transmit now."),
     ("leave_client_mode",              RunsHere,    "Starts this computer's Nexus again as itself."),
+    ("leave_decoder_screen",           RunsAtShack, "Stops the shack decoder a screen started when that screen is left; receive only."),
     ("log_activations",                RunsAtShack, "From the shack's logbook."),
     ("log_current_qso",                RunsAtShack, "Logs the current contact at the shack."),
     ("log_grid_fill",                  RefusedHere, "Changes many contacts of the shack's logbook at once, as large as a purge."),
