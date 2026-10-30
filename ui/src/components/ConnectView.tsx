@@ -21,6 +21,7 @@ import { gpuCapableForGlobe, webgl2ForGlobe } from '../gpu'
 import { GlobeGuard } from './GlobeGuard'
 import { gridToLatLon, type LatLon } from '../grid'
 import { packFor, useStreetMaps } from '../features/streetMaps'
+import { heardMeSince } from '../features/getout'
 import { StreetDownloadSheet } from './StreetDownloadSheet'
 import { MapView, setIntentMapLayer, type MapIntent } from './MapView'
 import { setGlobeLayer } from '../features/globeLayers'
@@ -563,6 +564,8 @@ export function ConnectView({
     activation,
   })
   const { pathPred, bandOutlook, muf } = ctx
+  // The map's "hearing you" dots count from the Getting Out box's Start fresh time, as the box does.
+  const mapProp = useMemo(() => heardMeSince(prop, ctx.getoutSince ?? null), [prop, ctx.getoutSince])
   // The one flux value the map renders (dev-override > fast lane > snapshot).
   // A stand-in or old snapshot flux is no flux (propViz `snapXray`); the fast lane is fresh-gated.
   const xrayLong = effectiveXray(xrayNow, snapXray(prop?.spaceWx, Date.now()))
@@ -892,7 +895,7 @@ export function ConnectView({
                 >
                   <Globe3D
                     myGrid={myGrid}
-                    prop={prop}
+                    prop={mapProp}
                     selectedCall={selectedCall}
                     onSelectCall={onSelectCall}
                     outlook={selectedCall ? pathPred : bandOutlook}
@@ -910,7 +913,7 @@ export function ConnectView({
               myGrid={myGrid}
               theme={theme}
               stations={stations}
-              prop={prop}
+              prop={mapProp}
               selectedCall={selectedCall}
               onSelectCall={onSelectCall}
               needByCall={needByCall}

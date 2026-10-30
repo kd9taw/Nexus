@@ -3,7 +3,7 @@
 // DT in seconds, the audio offset in Hz, the UTC stamp, the band, the tier and the country.
 // So do the TOKENS the pane is built out of — gathered in DECODE_TOKENS below so a translator
 // can see the whole set at once. What moved is the prose around them.
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { useRovingList } from '../useRovingList'
@@ -31,6 +31,7 @@ import { isCallHidden, useHideCalls } from '../features/hideCalls'
 import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
 import { HideCallsPicker } from './HideCallsPicker'
 import { gridFromMessage, isIgnored } from '../txMessages'
+import { compileTerm, searchTerms } from '../searchQuery'
 import { StateBlock } from './StateBlock'
 import { RarityChip } from './RarityChip'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
@@ -196,6 +197,12 @@ interface Props {
    * omitted, a private sort is used as before. */
   sort?: DecodeSort
   onSort?: (sort: DecodeSort) => void
+  /** Externally-owned search box text, for the same reason as `sort`: a remount must not empty
+   * the box mid-hunt. When omitted, a private one is used. Never persisted, by either owner — a
+   * search left over from the last session would open the pane on a list that looks like a quiet
+   * band. Only the pane that draws the box applies it (see `searchable`). */
+  search?: string
+  onSearch?: (search: string) => void
   /**
    * Apply the operator's country exclusion to this pane (default on).
    *
@@ -223,6 +230,16 @@ const NO_ENTITIES: ReadonlySet<string> = new Set()
 
 /** Max need micro-icons shown per row before collapsing into a "+N" chip. */
 const MAX_NEED_ICONS = 3
+
+/**
+ * Below this height (in the pane's own em) the filter row folds behind one "Filters" button in the
+ * title row. The wrapped row is about three lines in a narrow rail, and with the status row it left
+ * a short pane's list one decode row: FT's Roster rail at the 1024×768 floor gives Band Activity
+ * about ten lines. At 15em and up, the unfolded head still leaves the list about three rows in the
+ * narrowest rail, so every taller pane (Classic at 1024×768, any pane at 1920×1080) keeps its chips
+ * on screen exactly as before. Measured in Chrome; em, so it follows the text size and the zoom.
+ */
+const FOLD_CHIPS_BELOW_EM = 15
 
 /**
  * Band Activity / Rx Frequency pane with stock WSJT-X flow: oldest at the top,
@@ -270,6 +287,8 @@ export function OperateDecodes({
   history,
   sort: keptSort,
   onSort,
+  search: keptSearch,
+  onSearch,
   hideExcludedCountries = true,
   myGrid = '',
 }: Props) {
@@ -299,6 +318,16 @@ export function OperateDecodes({
   const [ownSort, setOwnSort] = useState<DecodeSort>('time')
   const sort = keptSort ?? ownSort
   const setSort = onSort ?? setOwnSort
+  // The search box. Like the chips, it exists only on the pane that draws it: a compact or
+  // locked pane (the Tempo rail, Rx Frequency) has no box, so it applies no search — a filter
+  // with no control on screen is how a pane comes to look like a quiet band.
+  const searchable = !compact && lockedFilter == null
+  const [ownSearch, setOwnSearch] = useState('')
+  const searchText = keptSearch ?? ownSearch
+  const setSearchText = onSearch ?? setOwnSearch
+  // Compiled once per render rather than per row (searchQuery's rule). Every term must match: the
+  // line is many fields flattened, so a second word narrows, as in the Spots search.
+  const searchTests = searchable ? searchTerms(searchText).map(compileTerm) : []
   // #276 "Newest on top" — an option, OFF by default so the pane keeps the WSJT-X order. It is
   // a TIME-order statement, so another sort ignores it (reversing an SNR ranking would read as a
   // broken sort), and like the chips it applies only on the pane that renders the chip bar:
@@ -399,6 +428,12 @@ export function OperateDecodes({
   const { ref: scrollRef, pinned, onScroll, repin } = usePinnedScroll<HTMLDivElement>(
     newestTop ? 'top' : 'bottom',
   )
+  // A new search follows the newest matches: the list may shrink below the pane's height, where
+  // no scroll event could ever arrive to end a "reviewing" the operator left behind.
+  const pickSearch = (q: string) => {
+    setSearchText(q)
+    repin()
+  }
   const pickNewestTop = (on: boolean) => {
     saveDecodeNewestTop(on)
     setNewestTopState(on)
@@ -435,8 +470,40 @@ export function OperateDecodes({
     }
   }, [clearTick, repin])
 
+  // The fold (FOLD_CHIPS_BELOW_EM). The pane's height comes from its host (a rail share, a grid
+  // cell, a floor), never from its head, so folding cannot feed back into the measurement. A 0 px
+  // reading is a keep-alive host hiding the pane: it keeps the state it had.
+  const paneRef = useRef<HTMLElement>(null)
+  const [chipsFolded, setChipsFolded] = useState(false)
+  const [chipsOpen, setChipsOpen] = useState(false)
+  const chipsId = useId()
+  useEffect(() => {
+    const el = paneRef.current
+    if (!el || compact || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      const h = el.clientHeight
+      if (h === 0) return
+      const em = parseFloat(getComputedStyle(el).fontSize) || 16
+      setChipsFolded(h < FOLD_CHIPS_BELOW_EM * em)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [compact])
+  // What the folded button counts: the chips that hide rows and show it only by being lit. The
+  // hidden-country chip and the search count already say so in the status row.
+  const litFilters =
+    (filter !== 'all' ? 1 : 0) +
+    (hideBlocked ? 1 : 0) +
+    (hideConfirmed ? 1 : 0) +
+    (hideB4 && filter !== 'b4' ? 1 : 0) +
+    (hideCalls.entries.length > 0 ? 1 : 0)
+  const showChips = !chipsFolded || chipsOpen
+
   const ignores = ignoredCalls ?? NO_IGNORES
-  const list = orderEntries(
+  // The period the separators, the time column and the search date rows by (see the `periodSecs` prop).
+  const periodS = periodSecs && periodSecs > 0 ? periodSecs : undefined
+  // Everything the chips and modifiers keep; the search box then narrows it (below).
+  const kept = orderEntries(
     histRef.current
       .entries()
       .filter((d) => passesFilter(d, filter, rxOffsetHz))
@@ -525,6 +592,16 @@ export function OperateDecodes({
       ),
     sort,
   )
+  // The search ANDs with all of the above and is applied last, so `kept` is exactly what the box
+  // is narrowing — the "N of M" count's M. Display only: a matching row is the same entry, so
+  // every click, double-click and key on it does what it does unfiltered.
+  const list =
+    searchTests.length > 0
+      ? kept.filter((d) => {
+          const line = decodeLineText(d, tier, periodS).toUpperCase()
+          return searchTests.every((test) => test(line))
+        })
+      : kept
   // What the pane DRAWS: the newest MAX_ROWS of what the filter kept. The store behind it is
   // ten times deeper (see decodeHistory's MAX_HISTORY) so a filtered pane can be scrolled back
   // through hours of its own frequency, but the row count that is actually painted — the cost
@@ -535,8 +612,6 @@ export function OperateDecodes({
   // The order rows are DRAWN in. Everything that addresses a row by position (the roving index,
   // the period separators) reads `drawn`; counts read `shown`, which is the same set.
   const drawn = newestTop ? [...shown].reverse() : shown
-  // The period the separators and the time column date rows by (see the `periodSecs` prop).
-  const periodS = periodSecs && periodSecs > 0 ? periodSecs : undefined
 
   // Wipe this pane (WSJT-X "Erase") and re-pin to the bottom.
   // Also calls onErase so the cockpit can mirror the gesture to loggers.
@@ -589,13 +664,59 @@ export function OperateDecodes({
   )
 
   return (
-    <section className={`operate-decodes${compact ? ' compact' : ''}`}>
+    <section ref={paneRef} className={`operate-decodes${compact ? ' compact' : ''}`}>
       <div className="od-head" data-pane-grip={grip}>
         {/* Title + ✕ on one line, so the close button sits at the pane's top-right in BOTH
             head layouts — the full head is a flex COLUMN (title over the filter row) and a
             bare button appended to it would take a row of its own. */}
         <div className="od-titlerow">
           <h2>{title}</h2>
+          {/* In the title row, not a row of its own: the box costs the feed no height. The pane
+              drags by its head, and an input is never a grip (panes/PaneDrag). Esc here empties
+              the box; it is ALSO the stop, heard first in the capture phase (useEscStop), as on
+              every operating screen — nothing on this pane prevents or stops the key. */}
+          {searchable && (
+            <span className="od-search">
+              <input
+                type="search"
+                value={searchText}
+                placeholder={t('operate.decodes.search.placeholder')}
+                onChange={(e) => pickSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') pickSearch('')
+                }}
+                aria-label={t('operate.decodes.search.aria')}
+                title={t('operate.decodes.search.title')}
+              />
+              {searchText && (
+                <button
+                  type="button"
+                  className="od-search-clear"
+                  onClick={() => pickSearch('')}
+                  aria-label={t('operate.decodes.search.clear')}
+                  title={t('operate.decodes.search.clear')}
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          )}
+          {/* An .od-chip, lit while a folded chip is, so a folded row never hides that the list
+              is filtered. Before the ✕, whose auto margin keeps it at the corner. */}
+          {!compact && chipsFolded && (
+            <button
+              type="button"
+              className={`od-chip od-fold${litFilters > 0 ? ' active' : ''}`}
+              aria-expanded={chipsOpen}
+              aria-controls={chipsId}
+              onClick={() => setChipsOpen((o) => !o)}
+              title={t('operate.decodes.fold.title')}
+            >
+              {litFilters > 0
+                ? t('operate.decodes.fold.labelLit', { count: litFilters })
+                : t('operate.decodes.fold.label')}
+            </button>
+          )}
           <PaneCloseButton title={paneTitle ?? title} onRemove={onRemove} hideNote={hideNote} />
         </div>
         {compact ? (
@@ -610,8 +731,8 @@ export function OperateDecodes({
           ) : (
             eraseBtn
           )
-        ) : (
-          <div className="od-controls">
+        ) : showChips && (
+          <div className="od-controls" id={chipsId}>
             <div className="od-filters" role="group" aria-label={t('operate.decodes.filters.aria')}>
               {DECODE_FILTERS.map((f) => (
                 <button
@@ -686,6 +807,19 @@ export function OperateDecodes({
             ? t('operate.decodes.heard', { count: shown.length })
             : t('operate.decodes.reviewing')}
         </span>
+        {/* While the box holds a search, say so with what it leaves, so a filtered list never
+            reads as a quiet band — in "reviewing" too, which replaces the heard count. It counts
+            `list` of `kept`, not the drawn rows: the search reaches the whole history, so a count
+            capped at MAX_ROWS would read "300 of 300" while hiding hundreds of lines. */}
+        {searchTests.length > 0 && (
+          <span
+            className="od-search-count"
+            data-testid="od-search-count"
+            title={t('operate.decodes.search.count.title')}
+          >
+            {t('operate.decodes.search.count', { shown: list.length, total: kept.length })}
+          </span>
+        )}
         {/* Beside the count, so a pane that is hiding rows always says so — including the
             compact panes, which render no chip bar to notice the picker in. */}
         {hideExcludedCountries && (
@@ -726,6 +860,13 @@ export function OperateDecodes({
               kind="empty"
               title={t('operate.decodes.empty.title')}
               detail={t('operate.decodes.empty.detail')}
+            />
+          ) : kept.length > 0 ? (
+            // A third: the chips keep rows and the SEARCH hides them all.
+            <StateBlock
+              kind="empty"
+              title={t('operate.decodes.emptyFiltered.title', { filter: searchText.trim() })}
+              detail={t('operate.decodes.emptySearch.detail', { count: kept.length })}
             />
           ) : (
             <StateBlock
@@ -1050,6 +1191,13 @@ const FILTER_TITLE: Record<DecodeFilter, string> = {
   get new() {
     return t('operate.decodes.filter.title.new')
   },
+}
+
+/** A row's line as the pane draws it, flattened for the search box: the mode, UTC, SNR, DT and
+ *  Hz columns, the message (callsigns, grid, report, any CQ modifier) and the country. The chips
+ *  drawn after the message (B4, need tags, LoTW) are left out: each has a filter of its own. */
+function decodeLineText(d: DecodeEntry, tier: Tier, periodS?: number): string {
+  return `${d.tier} ${fmtUtc(rowTimeMs(d, tier, periodS))} ${fmtSnr(d.snr)} ${fmtDt(d.dtSec)} ${Math.round(d.freqHz)} ${d.message} ${d.country ?? ''}`
 }
 
 /** DT (time offset, s) with sign; flags large skew. */

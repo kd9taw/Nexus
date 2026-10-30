@@ -266,6 +266,8 @@ const MIGRATED = [
   'components/prop/MeasuredMuf.tsx',
   'components/prop/OpeningStrip.tsx',
   'components/prop/OpeningsLogPane.tsx',
+  'components/prop/PathWhy.tsx',
+  'features/pathWhy.ts',
   'components/prop/ScalesAnnunciator.tsx',
   'components/prop/SolarTrends.tsx',
   'components/prop/SpaceWxGauges.tsx',

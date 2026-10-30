@@ -47,7 +47,7 @@ vi.mock('../api', () => {
 })
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn((run: () => Promise<unknown>) => run()) }))
 
-const ROW_PX = 43 // the list's own row estimate — what jsdom's zero-height rows are placed at
+const ROW_PX = 53 // the list's own row estimate — what jsdom's zero-height rows are placed at
 beforeAll(() => {
   globalThis.ResizeObserver = class {
     observe() {}

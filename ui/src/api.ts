@@ -280,9 +280,10 @@ export async function getBandOutlook(): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_band_outlook')
 }
 
-/** "Am I getting out?" — who is hearing the operator now (observed). */
-export async function getGettingOut(): Promise<GettingOut> {
-  return invoke<GettingOut>('get_getting_out')
+/** "Am I getting out?" — who is hearing the operator now (observed). `since` (Unix seconds) is the
+ *  box's Start fresh time: reports before it are left out at the station. */
+export async function getGettingOut(since: number | null = null): Promise<GettingOut> {
+  return since == null ? invoke<GettingOut>('get_getting_out') : invoke<GettingOut>('get_getting_out', { since })
 }
 
 /** The current OVATION aurora oval for the map overlay, with the time it is a forecast for.
