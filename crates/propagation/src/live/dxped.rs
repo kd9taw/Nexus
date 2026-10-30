@@ -1,11 +1,40 @@
 //! Live DXpedition feed (the `live` feature): NG3K ADXO (the forward **calendar**
 //! of announced operations — dates, entity, bands, modes) overlaid with ClubLog
-//! `expeditions.php` (which calls are **active on the air now**). Each plan's
-//! location comes from [`crate::dxcc`] so distance/bearing/region work.
+//! `expeditions.php` (which calls are **active on the air now**) and ClubLog's
+//! most-wanted ranks. Each plan's location comes from [`crate::dxcc`] so
+//! distance/bearing/region work.
+//!
+//! # How often each source is asked
+//!
+//! [`fetch_plans`] runs on every propagation snapshot, so it must never be what decides how
+//! often a third party is asked. Each of the three sources keeps its own answer and its own
+//! schedule, and none of them waits on another:
+//!
+//! | source | asked at most | first retry after a failure |
+//! |---|---|---|
+//! | NG3K calendar | every 30 min | 5 min |
+//! | ClubLog `expeditions.php` | once a day | 1 h |
+//! | ClubLog `mostwanted.php` | once every 30 days | 1 h |
+//!
+//! ⛔ Every ask is recorded before it goes out and counts as a failure until it answers. A
+//! failure waits before the next ask: the first retry above, doubling per failure in a row,
+//! never longer than the normal period. A source that has never answered gets the same
+//! back-off — "nothing kept" is not a reason to ask again, and that gap is how a dead NG3K
+//! once had ClubLog asked on every snapshot. The last good answer is served stale meanwhile.
+//! One ask per source at a time: a caller that finds an ask out is served what is kept.
+//!
+//! The two ClubLog answers are written to disk with the time of their last ask
+//! ([`set_cache_dir`]), the ask time before the ask goes out, so a restart — even one in the
+//! middle of an ask — does not ask ClubLog again before its schedule says so.
+//! `mostwanted.php` is public and asked as `?api=1`: no key goes with it.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::dxcc;
 use crate::dxped::{DxpeditionPlan, Ft8DxpMode};
@@ -14,6 +43,11 @@ use crate::model::Band;
 
 const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
 
+const NG3K_URL: &str = "https://www.ng3k.com/Misc/adxo.html";
+const EXPEDITIONS_URL: &str = "https://clublog.org/expeditions.php?api=1";
+/// Public: ClubLog asks for `api=1` here, not an application key.
+const MOST_WANTED_URL: &str = "https://clublog.org/mostwanted.php?api=1";
+
 fn now_unix() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -21,59 +55,266 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// The ClubLog API key (from Settings), pushed in by the command layer at startup
-/// and on settings save — keeps the live-fetch layer decoupled from settings IO.
-/// Empty = no key → the most-wanted ranks simply stay `None`.
-static CLUBLOG_KEY: Mutex<String> = Mutex::new(String::new());
-pub fn set_clublog_key(key: &str) {
-    if let Ok(mut k) = CLUBLOG_KEY.lock() {
-        *k = key.trim().to_string();
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// When a source may be asked again (seconds).
+#[derive(Clone, Copy)]
+struct Schedule {
+    /// The wait after a success.
+    period: i64,
+    /// The wait after the first failure in a row; doubles per further failure, capped at `period`.
+    first_retry: i64,
+}
+
+/// NG3K updates its page about daily; half an hour keeps a new announcement prompt.
+const NG3K_SCHEDULE: Schedule = Schedule {
+    period: 1800,
+    first_retry: 300,
+};
+/// ClubLog's own limit for `expeditions.php`: once a day.
+const EXPEDITIONS_SCHEDULE: Schedule = Schedule {
+    period: 86_400,
+    first_retry: 3600,
+};
+/// ClubLog's own limit for `mostwanted.php`: once a month.
+const MOST_WANTED_SCHEDULE: Schedule = Schedule {
+    period: 30 * 86_400,
+    first_retry: 3600,
+};
+
+/// The two ClubLog answers on disk, beside each other in the folder [`set_cache_dir`] names.
+const EXPEDITIONS_FILE: &str = "clublog_expeditions.json";
+const MOST_WANTED_FILE: &str = "clublog_mostwanted.json";
+
+/// One source's last good answer and when it was last asked. What is written to disk for the
+/// ClubLog sources.
+#[derive(Serialize, Deserialize)]
+struct Kept<T> {
+    data: Option<T>,
+    /// Unix seconds of the last ask, success or failure; 0 = never asked.
+    asked_unix: i64,
+    /// Failures in a row since the last success. An ask still out counts as one.
+    failures: u32,
+}
+
+impl<T> Kept<T> {
+    const fn new() -> Self {
+        Kept {
+            data: None,
+            asked_unix: 0,
+            failures: 0,
+        }
+    }
+
+    fn due(&self, s: Schedule, now: i64) -> bool {
+        if self.asked_unix == 0 {
+            return true;
+        }
+        let wait = match self.failures {
+            0 => s.period,
+            n => s
+                .first_retry
+                .saturating_mul(1i64 << (n - 1).min(30))
+                .min(s.period),
+        };
+        now >= self.asked_unix.saturating_add(wait)
     }
 }
 
-/// Plans cache: NG3K is a daily-updated page and ClubLog's active list moves
-/// slowly — refetching on every 5-min snapshot miss was needless, and a transient
-/// outage emptied the whole DXpedition board. 30 min TTL, and on a fetch FAILURE
-/// the last-good list is served stale (an expedition board that flickers empty is
-/// worse than one 30 minutes old).
-static PLANS_CACHE: Mutex<Option<(Instant, Vec<DxpeditionPlan>)>> = Mutex::new(None);
-const PLANS_TTL_SECS: u64 = 1800;
-
-/// Most-wanted cache (entity name → ClubLog rank). The list changes ~monthly;
-/// 24 h TTL is generous.
-static MOST_WANTED: Mutex<Option<(Instant, HashMap<String, u32>)>> = Mutex::new(None);
-const MOST_WANTED_TTL_SECS: u64 = 86_400;
-
-/// Fetch the merged DXpedition plan list: NG3K's announced calendar overlaid
-/// with ClubLog's currently-active callsigns (so within-window plans confirmed
-/// on the air are forced active). Cached (30 min TTL, stale-on-error).
-pub fn fetch_plans() -> Result<Vec<DxpeditionPlan>, String> {
+/// Ask `fetch` when `slot` is due; `keep` is handed the slot after each change (to write it).
+fn refresh<T>(
+    slot: &Mutex<Kept<T>>,
+    s: Schedule,
+    now: i64,
+    fetch: impl FnOnce() -> Result<T, String>,
+    keep: impl Fn(&Kept<T>),
+) {
     {
-        let cache = PLANS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((when, plans)) = cache.as_ref() {
-            if when.elapsed().as_secs() < PLANS_TTL_SECS {
-                return Ok(plans.clone());
-            }
+        let mut k = lock(slot);
+        if !k.due(s, now) {
+            return;
+        }
+        // ⛔ Recorded BEFORE the ask goes out, under the lock, and as a failure until it
+        // answers. A second caller now finds the source not due and is served what is kept
+        // (one ask at a time, without holding the lock over the network); and an ask that
+        // never answers — a hang, Nexus closed or killed mid-ask — still counts, on disk too,
+        // and backs off like any failure.
+        k.asked_unix = now;
+        k.failures = k.failures.saturating_add(1);
+        keep(&k);
+    }
+    // A failure leaves the last good answer, served stale.
+    if let Ok(v) = fetch() {
+        let mut k = lock(slot);
+        k.data = Some(v);
+        k.failures = 0;
+        keep(&k);
+    }
+}
+
+/// What the feed asks the network for — a seam, so the schedule can be driven in tests by a
+/// fake that counts asks.
+trait Source {
+    /// NG3K's ADXO page, parsed.
+    fn ng3k(&self) -> Result<Vec<DxpeditionPlan>, String>;
+    /// ClubLog's active-expeditions set (uppercased callsigns).
+    fn active(&self) -> Result<HashSet<String>, String>;
+    /// ClubLog's most-wanted ranks by entity name.
+    fn most_wanted(&self) -> Result<HashMap<String, u32>, String>;
+}
+
+struct Net(reqwest::blocking::Client);
+
+impl Source for Net {
+    fn ng3k(&self) -> Result<Vec<DxpeditionPlan>, String> {
+        let html = self
+            .0
+            .get(NG3K_URL)
+            .send()
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?
+            .text()
+            .map_err(|e| e.to_string())?;
+        Ok(parse_adxo(&html))
+    }
+    fn active(&self) -> Result<HashSet<String>, String> {
+        fetch_active(&self.0)
+    }
+    fn most_wanted(&self) -> Result<HashMap<String, u32>, String> {
+        most_wanted(&self.0)
+    }
+}
+
+/// Every source's kept answer, plus the merged plan list the Needed board reads.
+struct Feeds {
+    ng3k: Mutex<Kept<Vec<DxpeditionPlan>>>,
+    active: Mutex<Kept<HashSet<String>>>,
+    wanted: Mutex<Kept<HashMap<String, u32>>>,
+    merged: Mutex<Vec<DxpeditionPlan>>,
+    /// Where the ClubLog answers are written; `None` keeps them in memory only.
+    dir: Mutex<Option<PathBuf>>,
+}
+
+static FEEDS: Feeds = Feeds::new();
+
+impl Feeds {
+    const fn new() -> Self {
+        Feeds {
+            ng3k: Mutex::new(Kept::new()),
+            active: Mutex::new(Kept::new()),
+            wanted: Mutex::new(Kept::new()),
+            merged: Mutex::new(Vec::new()),
+            dir: Mutex::new(None),
         }
     }
-    match fetch_plans_uncached() {
-        Ok(plans) => {
-            let mut cache = PLANS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-            *cache = Some((Instant::now(), plans.clone()));
-            Ok(plans)
-        }
-        Err(e) => {
-            // Serve the last-good list stale rather than an empty board — and advance
-            // the timestamp to a short-retry point (5 min) so an outage is retried on
-            // a BACKOFF, not with a full 2-host network round-trip on every call.
-            let mut cache = PLANS_CACHE.lock().unwrap_or_else(|p| p.into_inner());
-            if let Some((when, plans)) = cache.as_mut() {
-                *when = Instant::now() - Duration::from_secs(PLANS_TTL_SECS.saturating_sub(300));
-                return Ok(plans.clone());
+
+    /// Ask whichever sources are due, then merge what is kept.
+    fn plans(&self, src: &dyn Source, now: i64) -> Result<Vec<DxpeditionPlan>, String> {
+        refresh(&self.ng3k, NG3K_SCHEDULE, now, || src.ng3k(), |_| {});
+        refresh(
+            &self.active,
+            EXPEDITIONS_SCHEDULE,
+            now,
+            || src.active(),
+            |k| self.save(k, EXPEDITIONS_FILE),
+        );
+        refresh(
+            &self.wanted,
+            MOST_WANTED_SCHEDULE,
+            now,
+            || src.most_wanted(),
+            |k| self.save(k, MOST_WANTED_FILE),
+        );
+
+        let Some(mut plans) = lock(&self.ng3k).data.clone() else {
+            return Err("the DXpedition calendar has not been fetched yet".to_string());
+        };
+        if let Some(active) = lock(&self.active).data.as_ref() {
+            for p in &mut plans {
+                if active.iter().any(|a| call_matches(a, &p.call)) {
+                    // ClubLog confirms it's on air — make sure the window includes now.
+                    if p.start_unix > now {
+                        p.start_unix = now - 3600;
+                    }
+                    if p.end_unix < now {
+                        p.end_unix = now + 3600;
+                    }
+                }
             }
-            Err(e)
+        }
+        // ClubLog most-wanted rank. The WorkableCard priority formula weights this.
+        if let Some(wanted) = lock(&self.wanted).data.as_ref() {
+            for p in &mut plans {
+                if p.most_wanted_rank.is_none() {
+                    if let Some(info) = dxcc::resolve(&p.call) {
+                        p.most_wanted_rank = wanted.get(info.entity).copied();
+                    }
+                }
+            }
+        }
+        *lock(&self.merged) = plans.clone();
+        Ok(plans)
+    }
+
+    /// Write one ClubLog answer and its ask time (tmp + rename; best effort — a failed write
+    /// only means the next start asks once more than it needed to).
+    fn save<T: Serialize>(&self, kept: &Kept<T>, name: &str) {
+        let Some(dir) = lock(&self.dir).clone() else {
+            return;
+        };
+        let Ok(text) = serde_json::to_string(kept) else {
+            return;
+        };
+        let path = dir.join(name);
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
         }
     }
+
+    /// Read both ClubLog answers back from `dir` and write there from now on.
+    fn load_from(&self, dir: &Path, now: i64) {
+        load_kept(&self.active, &dir.join(EXPEDITIONS_FILE), now);
+        load_kept(&self.wanted, &dir.join(MOST_WANTED_FILE), now);
+        *lock(&self.dir) = Some(dir.to_path_buf());
+    }
+}
+
+/// A file that does not read is ignored (that source is simply asked when due). An ask time in
+/// the future — a clock that was wrong, a file from a machine that is — is clamped to `now`:
+/// left alone it would hold the next ask off until that future date plus a whole period.
+fn load_kept<T: DeserializeOwned>(slot: &Mutex<Kept<T>>, path: &Path, now: i64) {
+    let Some(mut k) = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Kept<T>>(&t).ok())
+    else {
+        return;
+    };
+    k.asked_unix = k.asked_unix.min(now);
+    *lock(slot) = k;
+}
+
+/// Where the ClubLog answers are kept across restarts. Called once at startup, before the
+/// first [`fetch_plans`]; reads what an earlier run kept. Disk only, no network.
+pub fn set_cache_dir(dir: &Path) {
+    FEEDS.load_from(dir, now_unix());
+}
+
+/// The merged DXpedition plan list: NG3K's announced calendar overlaid with ClubLog's
+/// currently-active callsigns (so within-window plans confirmed on the air are forced active)
+/// and most-wanted ranks. Each source is asked only when its schedule says so (see the module
+/// header); otherwise this is lock-only. `Err` only while NG3K has never answered.
+pub fn fetch_plans() -> Result<Vec<DxpeditionPlan>, String> {
+    let c = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent(UA)
+        .build()
+        .map_err(|e| e.to_string())?;
+    FEEDS.plans(&Net(c), now_unix())
 }
 
 /// The currently-active expedition calls from the CACHED plan list (no network) —
@@ -81,72 +322,23 @@ pub fn fetch_plans() -> Result<Vec<DxpeditionPlan>, String> {
 /// safe on every alerts poll; warmed by [`fetch_plans`] (a startup primer spawns
 /// one). Calls are uppercased.
 pub fn cached_active_calls(now_unix: i64) -> Vec<String> {
-    let cache = PLANS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    match cache.as_ref() {
-        Some((_, plans)) => plans
-            .iter()
-            .filter(|p| p.start_unix <= now_unix && now_unix <= p.end_unix)
-            .map(|p| p.call.to_uppercase())
-            .collect(),
-        None => Vec::new(),
-    }
-}
-
-fn fetch_plans_uncached() -> Result<Vec<DxpeditionPlan>, String> {
-    let c = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .user_agent(UA)
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let active = fetch_active(&c).unwrap_or_default();
-    let html = c
-        .get("https://www.ng3k.com/Misc/adxo.html")
-        .send()
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
-        .map_err(|e| e.to_string())?;
-
-    let mut plans = parse_adxo(&html);
-    let now = now_unix();
-    for p in &mut plans {
-        if active.iter().any(|a| call_matches(a, &p.call)) {
-            // ClubLog confirms it's on air — make sure the window includes now.
-            if p.start_unix > now {
-                p.start_unix = now - 3600;
-            }
-            if p.end_unix < now {
-                p.end_unix = now + 3600;
-            }
-        }
-    }
-    // ClubLog most-wanted rank (needs an API key; absent → ranks stay None). The
-    // WorkableCard priority formula already weights this — it was just never fed.
-    let wanted = most_wanted(&c);
-    if !wanted.is_empty() {
-        for p in &mut plans {
-            if p.most_wanted_rank.is_none() {
-                if let Some(info) = dxcc::resolve(&p.call) {
-                    p.most_wanted_rank = wanted.get(info.entity).copied();
-                }
-            }
-        }
-    }
-    Ok(plans)
+    lock(&FEEDS.merged)
+        .iter()
+        .filter(|p| p.start_unix <= now_unix && now_unix <= p.end_unix)
+        .map(|p| p.call.to_uppercase())
+        .collect()
 }
 
 /// What to print when ClubLog answers `mostwanted.php` with an `{"error": …}` body — Nexus's
 /// own breadcrumb, or `None` when the body is not an error at all.
 ///
 /// ⛔ **The return type is the guard.** A `&'static str` cannot be ClubLog's sentence, and
-/// ClubLog's sentence is the thing that must not be printed: this request's URL carries the
-/// API key (`?api={key}`), so a refusal is the most likely place for the key to come back —
-/// and stderr is not a dev convenience on Linux, where the desktop session redirects a GUI
-/// process's stderr into `~/.xsession-errors`, mode 0644, kept until the next login. Same
-/// rule as `conn_log` in `src-tauri/src/lib.rs`: a service's own text goes to a screen, never
-/// to something that outlives the moment.
+/// ClubLog's sentence is the thing that must not be printed: a service's refusal is the most
+/// likely place for whatever the request carried to come back (this request carried the API key
+/// until it was made public, `?api=1`) — and stderr is not a dev convenience on Linux, where the
+/// desktop session redirects a GUI process's stderr into `~/.xsession-errors`, mode 0644, kept
+/// until the next login. Same rule as `conn_log` in `src-tauri/src/lib.rs`: a service's own text
+/// goes to a screen, never to something that outlives the moment.
 ///
 /// Split out of [`most_wanted`] so it can be driven from a hostile body without a live HTTP
 /// client — the round-4 fix shipped with nothing testing it.
@@ -156,87 +348,72 @@ fn most_wanted_error_breadcrumb(v: &serde_json::Value) -> Option<&'static str> {
         .map(|_| "propagation: ClubLog most-wanted refused the request")
 }
 
-/// ClubLog most-wanted list → entity-name → rank, cached 24 h. Accepts both JSON
-/// shapes ClubLog has used: {"1":"P5",...} (rank→prefix) and {"P5":1,...}
-/// (prefix→rank). Prefixes resolve to entity names via cty.dat so plan calls can
-/// match regardless of the operation's actual callsign.
-fn most_wanted(c: &reqwest::blocking::Client) -> HashMap<String, u32> {
-    {
-        let cache = MOST_WANTED.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((when, map)) = cache.as_ref() {
-            if when.elapsed().as_secs() < MOST_WANTED_TTL_SECS {
-                return map.clone();
-            }
-        }
-    }
-    let mut key = CLUBLOG_KEY.lock().map(|k| k.clone()).unwrap_or_default();
-    if key.is_empty() {
-        // Parity with the upload path: a build-time key works there too.
-        key = option_env!("CLUBLOG_API_KEY").unwrap_or("").to_string();
-    }
-    if key.is_empty() {
-        return HashMap::new();
-    }
-    let mut out: HashMap<String, u32> = HashMap::new();
-    let url = format!("https://clublog.org/mostwanted.php?api={key}");
-    if let Ok(resp) = c.get(&url).send() {
-        if let Ok(v) = resp.json::<serde_json::Value>() {
-            // ClubLog reports problems as {"error": "..."} with HTTP 200 — say so rather
-            // than silently behaving like "no key".
-            //
-            // ⛔ The breadcrumb names the fetcher and NOT ClubLog's sentence. The API key is
-            // in this request's URL (`?api={key}`), so ClubLog's own words about a rejected
-            // request are the most likely place for it to come back; and stderr is not a
-            // dev convenience on Linux, where the desktop session redirects a GUI process's
-            // stderr into `~/.xsession-errors`, mode 0644, kept until the next login. Same
-            // rule as `conn_log` in `src-tauri/src/lib.rs`: a service's own text goes to a
-            // screen, never to something that outlives the moment.
-            if let Some(crumb) = most_wanted_error_breadcrumb(&v) {
-                eprintln!("{crumb}");
-                return HashMap::new();
-            }
-            if let Some(obj) = v.as_object() {
-                for (k, val) in obj {
-                    // rank→prefix shape: key parses as the rank, value is the prefix.
-                    if let (Ok(rank), Some(prefix)) = (k.parse::<u32>(), val.as_str()) {
-                        if let Some(info) = dxcc::resolve(prefix) {
-                            out.entry(info.entity.to_string()).or_insert(rank);
-                        }
-                    // prefix→rank shape.
-                    } else if let Some(rank) = val.as_u64() {
-                        if let Some(info) = dxcc::resolve(k) {
-                            out.entry(info.entity.to_string()).or_insert(rank as u32);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if !out.is_empty() {
-        let mut cache = MOST_WANTED.lock().unwrap_or_else(|e| e.into_inner());
-        *cache = Some((Instant::now(), out.clone()));
-    }
-    out
-}
-
-/// ClubLog's active-expeditions set (uppercased callsigns).
-fn fetch_active(c: &reqwest::blocking::Client) -> Result<HashSet<String>, String> {
+/// ClubLog most-wanted list → entity-name → rank. Accepts both JSON shapes ClubLog has
+/// used: {"1":"P5",...} (rank→prefix) and {"P5":1,...} (prefix→rank). Prefixes resolve
+/// to entity names via cty.dat so plan calls can match regardless of the operation's
+/// actual callsign. An error body or a list that resolves to nothing is a failure, so the
+/// schedule backs off and the last good list is kept.
+fn most_wanted(c: &reqwest::blocking::Client) -> Result<HashMap<String, u32>, String> {
     let v: serde_json::Value = c
-        .get("https://clublog.org/expeditions.php?api=1")
+        .get(MOST_WANTED_URL)
         .send()
         .map_err(|e| e.to_string())?
         .json()
         .map_err(|e| e.to_string())?;
-    let mut set = HashSet::new();
-    if let Some(arr) = v.as_array() {
-        for row in arr {
-            if let Some(call) = row.get(0).and_then(|x| x.as_str()) {
-                set.insert(call.to_uppercase());
+    // ClubLog reports problems as {"error": "..."} with HTTP 200 — say so rather than
+    // silently behaving like an empty list.
+    //
+    // ⛔ The breadcrumb names the fetcher and NOT ClubLog's sentence: a service's own words
+    // about a rejected request are the most likely place for what the request carried to come
+    // back; and stderr is not a dev convenience on Linux, where the desktop session redirects
+    // a GUI process's stderr into `~/.xsession-errors`, mode 0644, kept until the next login.
+    // Same rule as `conn_log` in `src-tauri/src/lib.rs`: a service's own text goes to a
+    // screen, never to something that outlives the moment.
+    if let Some(crumb) = most_wanted_error_breadcrumb(&v) {
+        eprintln!("{crumb}");
+        return Err(crumb.to_string());
+    }
+    let mut out: HashMap<String, u32> = HashMap::new();
+    if let Some(obj) = v.as_object() {
+        for (k, val) in obj {
+            // rank→prefix shape: key parses as the rank, value is the prefix.
+            if let (Ok(rank), Some(prefix)) = (k.parse::<u32>(), val.as_str()) {
+                if let Some(info) = dxcc::resolve(prefix) {
+                    out.entry(info.entity.to_string()).or_insert(rank);
+                }
+            // prefix→rank shape.
+            } else if let Some(rank) = val.as_u64() {
+                if let Some(info) = dxcc::resolve(k) {
+                    out.entry(info.entity.to_string()).or_insert(rank as u32);
+                }
             }
         }
-    } else {
+    }
+    if out.is_empty() {
+        return Err("ClubLog most-wanted list resolved to nothing".to_string());
+    }
+    Ok(out)
+}
+
+/// ClubLog's active-expeditions set (uppercased callsigns). An empty array is a real answer
+/// (nobody on the air); any other shape is a failure, so the last good set is kept.
+fn fetch_active(c: &reqwest::blocking::Client) -> Result<HashSet<String>, String> {
+    let v: serde_json::Value = c
+        .get(EXPEDITIONS_URL)
+        .send()
+        .map_err(|e| e.to_string())?
+        .json()
+        .map_err(|e| e.to_string())?;
+    let Some(arr) = v.as_array() else {
         // Schema drift must be visible in the log, not a silent empty set.
         eprintln!("propagation: ClubLog expeditions.php unexpected JSON shape");
+        return Err("ClubLog expeditions.php unexpected JSON shape".to_string());
+    };
+    let mut set = HashSet::new();
+    for row in arr {
+        if let Some(call) = row.get(0).and_then(|x| x.as_str()) {
+            set.insert(call.to_uppercase());
+        }
     }
     Ok(set)
 }
@@ -555,12 +732,332 @@ fn parse_modes(info: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// ⛔ CLUBLOG'S OWN WORDS DO NOT REACH STDERR, AND THE API KEY IS IN THE URL.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const H: i64 = 3600;
+    const DAY: i64 = 86_400;
+    /// A fixed, realistic start time (2026-10-30), so nothing reads the wall clock.
+    const T0: i64 = 1_793_318_400;
+
+    /// One NG3K row (Mozambique, C91RU) that both ClubLog answers below can act on.
+    const ADXO: &str = r#"<table><tr><td>2026 Jun01</td><td>2026 Jun07</td><td>Mozambique</td><td>C91RU</td><td>[spots]</td><td>OQRS</td><td>NG3K</td><td>By team; HF; CW SSB FT8</td></tr></table>"#;
+
+    /// Counts every ask, per source; each source answers or fails as told.
+    struct Fake {
+        ng3k_ok: bool,
+        active_ok: bool,
+        wanted_ok: bool,
+        /// How long each ClubLog ask takes (for the single-flight test).
+        delay: Duration,
+        ng3k: AtomicUsize,
+        active: AtomicUsize,
+        wanted: AtomicUsize,
+    }
+
+    impl Fake {
+        fn new(ng3k_ok: bool, active_ok: bool, wanted_ok: bool) -> Self {
+            Fake {
+                ng3k_ok,
+                active_ok,
+                wanted_ok,
+                delay: Duration::ZERO,
+                ng3k: AtomicUsize::new(0),
+                active: AtomicUsize::new(0),
+                wanted: AtomicUsize::new(0),
+            }
+        }
+        fn clublog_asks(&self) -> usize {
+            self.active.load(Ordering::SeqCst) + self.wanted.load(Ordering::SeqCst)
+        }
+    }
+
+    fn mozambique() -> String {
+        dxcc::resolve("C91RU")
+            .expect("cty knows C9")
+            .entity
+            .to_string()
+    }
+
+    impl Source for Fake {
+        fn ng3k(&self) -> Result<Vec<DxpeditionPlan>, String> {
+            self.ng3k.fetch_add(1, Ordering::SeqCst);
+            if self.ng3k_ok {
+                Ok(parse_adxo(ADXO))
+            } else {
+                Err("ng3k down".into())
+            }
+        }
+        fn active(&self) -> Result<HashSet<String>, String> {
+            self.active.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(self.delay);
+            if self.active_ok {
+                Ok(HashSet::from(["C91RU".to_string()]))
+            } else {
+                Err("clublog down".into())
+            }
+        }
+        fn most_wanted(&self) -> Result<HashMap<String, u32>, String> {
+            self.wanted.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(self.delay);
+            if self.wanted_ok {
+                Ok(HashMap::from([(mozambique(), 42)]))
+            } else {
+                Err("clublog refused".into())
+            }
+        }
+    }
+
+    /// THE REPORTED BUG. `fetch_plans` runs on every propagation snapshot. With NG3K failing
+    /// and nothing ever kept, every snapshot asked ClubLog `expeditions.php` again (it was
+    /// asked first, before NG3K, and the failure path had no cache to back off on). Snapshots
+    /// every 5 minutes for a whole day, plus a burst of 50 at one instant: ClubLog is asked
+    /// once per endpoint, and NG3K itself is retried on a back-off, not per snapshot.
+    #[test]
+    fn a_dead_ng3k_costs_club_log_one_ask_per_endpoint_not_one_per_snapshot() {
+        let feeds = Feeds::new();
+        let fake = Fake::new(false, true, true);
+        for _ in 0..50 {
+            assert!(feeds.plans(&fake, T0).is_err());
+        }
+        let mut t = T0;
+        while t < T0 + DAY {
+            let _ = feeds.plans(&fake, t);
+            t += 300;
+        }
+        assert_eq!(
+            fake.active.load(Ordering::SeqCst),
+            1,
+            "expeditions.php asked more than once in a day"
+        );
+        assert_eq!(
+            fake.wanted.load(Ordering::SeqCst),
+            1,
+            "mostwanted.php asked more than once"
+        );
+        // NG3K: 5, 10, 20 min, then every 30 min — about 50 asks a day, never one per snapshot
+        // (338 calls here). And it IS retried: a dead source is not given up on.
+        let ng3k = fake.ng3k.load(Ordering::SeqCst);
+        assert!((2..=55).contains(&ng3k), "NG3K asked {ng3k} times in a day");
+    }
+
+    /// ⛔ A ClubLog failure is retried after 1 h, then 2, 4, 8, 16 h, then once a day — never
+    /// sooner, and never longer than the normal period. Meanwhile the last good answer is served.
+    #[test]
+    fn a_club_log_failure_backs_off_from_an_hour_to_a_day_and_serves_the_last_good_answer() {
+        let feeds = Feeds::new();
+        let good = Fake::new(true, true, true);
+        let first = feeds.plans(&good, T0).expect("all sources up");
+        assert_eq!(first[0].most_wanted_rank, Some(42));
+
+        // ClubLog goes down one normal period later; asked every minute for three days.
+        let down = Fake::new(true, false, false);
+        let mut asks: Vec<i64> = Vec::new();
+        let mut t = T0 + DAY;
+        while t < T0 + 4 * DAY {
+            let before = down.active.load(Ordering::SeqCst);
+            let plans = feeds.plans(&down, t).expect("NG3K still up");
+            if down.active.load(Ordering::SeqCst) > before {
+                asks.push(t);
+            }
+            // The rank comes from the kept most-wanted list, stale.
+            assert_eq!(
+                plans[0].most_wanted_rank,
+                Some(42),
+                "stale list dropped at {t}"
+            );
+            t += 60;
+        }
+        let gaps: Vec<i64> = asks.windows(2).map(|w| w[1] - w[0]).collect();
+        assert_eq!(
+            gaps[..5],
+            [H, 2 * H, 4 * H, 8 * H, 16 * H],
+            "the back-off must start at 1 h and double: {gaps:?}"
+        );
+        assert!(
+            gaps[5..].iter().all(|&g| g == DAY),
+            "capped at once a day: {gaps:?}"
+        );
+        // Most-wanted was last asked at T0 and is not due until 30 days later — the
+        // expeditions outage does not touch it.
+        assert_eq!(down.wanted.load(Ordering::SeqCst), 0);
+    }
+
+    /// A source that has never answered gets the same back-off (this was the hole: nothing
+    /// kept, so nothing to back off on).
+    #[test]
+    fn a_source_that_never_answered_still_backs_off() {
+        let feeds = Feeds::new();
+        let down = Fake::new(true, false, false);
+        let mut t = T0;
+        while t < T0 + H {
+            let _ = feeds.plans(&down, t);
+            t += 2;
+        }
+        assert_eq!(down.active.load(Ordering::SeqCst), 1);
+        assert_eq!(down.wanted.load(Ordering::SeqCst), 1);
+        // Control: at the first retry, each is asked again.
+        let _ = feeds.plans(&down, T0 + H);
+        assert_eq!(down.clublog_asks(), 4);
+    }
+
+    /// Healthy for 60 days, a snapshot every 5 minutes: expeditions once a day, most-wanted
+    /// once a month.
+    #[test]
+    fn healthy_club_log_is_asked_once_a_day_and_once_a_month() {
+        let feeds = Feeds::new();
+        let up = Fake::new(true, true, true);
+        let mut t = T0;
+        while t < T0 + 60 * DAY {
+            let plans = feeds.plans(&up, t).expect("all up");
+            assert_eq!(plans[0].most_wanted_rank, Some(42));
+            t += 300;
+        }
+        assert_eq!(up.active.load(Ordering::SeqCst), 60);
+        assert_eq!(up.wanted.load(Ordering::SeqCst), 2);
+        assert_eq!(up.ng3k.load(Ordering::SeqCst), 60 * 48);
+    }
+
+    /// Concurrent callers (the startup warm thread and the first snapshot land together)
+    /// make ONE ask per endpoint; the others are served what is kept.
+    #[test]
+    fn concurrent_callers_make_one_ask_per_endpoint() {
+        let feeds = Feeds::new();
+        let mut fake = Fake::new(true, true, true);
+        fake.delay = Duration::from_millis(300);
+        let gate = std::sync::Barrier::new(8);
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    gate.wait();
+                    let _ = feeds.plans(&fake, T0);
+                });
+            }
+        });
+        assert_eq!(fake.active.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.wanted.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.ng3k.load(Ordering::SeqCst), 1);
+    }
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("nexus-dxped-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    /// A restart does not ask ClubLog again: both answers and their ask times are on disk,
+    /// failures included.
+    #[test]
+    fn club_log_answers_and_ask_times_survive_a_restart() {
+        let dir = scratch_dir("restart");
+        let first = Feeds::new();
+        first.load_from(&dir, T0);
+        let _ = first.plans(&Fake::new(true, true, true), T0);
+        assert!(dir.join(EXPEDITIONS_FILE).is_file());
+        assert!(dir.join(MOST_WANTED_FILE).is_file());
+
+        // Relaunched an hour later.
+        let second = Feeds::new();
+        second.load_from(&dir, T0 + H);
+        let fake = Fake::new(true, true, true);
+        let plans = second.plans(&fake, T0 + H).expect("NG3K up");
+        assert_eq!(fake.clublog_asks(), 0, "a restart asked ClubLog again");
+        assert_eq!(
+            plans[0].most_wanted_rank,
+            Some(42),
+            "kept list not read back"
+        );
+        // Control: once a day has passed, expeditions is asked again — and only it.
+        let _ = second.plans(&fake, T0 + DAY);
+        assert_eq!(fake.active.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.wanted.load(Ordering::SeqCst), 0);
+
+        // A failed ask is kept too: a restart inside the back-off does not ask.
+        let dir2 = scratch_dir("restart-fail");
+        let third = Feeds::new();
+        third.load_from(&dir2, T0);
+        let _ = third.plans(&Fake::new(true, false, false), T0);
+        let fourth = Feeds::new();
+        fourth.load_from(&dir2, T0 + 60);
+        let fake = Fake::new(true, true, true);
+        let _ = fourth.plans(&fake, T0 + 60);
+        assert_eq!(
+            fake.clublog_asks(),
+            0,
+            "a restart after a failure asked again"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// An ask is on disk before it goes out: Nexus started again while the first run's ask is
+    /// still out (or after that run was killed mid-ask) does not ask ClubLog a second time.
+    #[test]
+    fn a_relaunch_mid_ask_does_not_ask_again() {
+        let dir = scratch_dir("mid-ask");
+        let first = Feeds::new();
+        first.load_from(&dir, T0);
+        let mut slow = Fake::new(true, true, true);
+        slow.delay = Duration::from_millis(400);
+        std::thread::scope(|s| {
+            s.spawn(|| first.plans(&slow, T0));
+            std::thread::sleep(Duration::from_millis(150));
+            let second = Feeds::new();
+            second.load_from(&dir, T0 + 1);
+            let fake = Fake::new(true, true, true);
+            let _ = second.plans(&fake, T0 + 1);
+            // The first run's expeditions ask is out (its most-wanted ask has not started, so
+            // that one is the relaunch's to make).
+            assert_eq!(
+                fake.active.load(Ordering::SeqCst),
+                0,
+                "a relaunch mid-ask asked again"
+            );
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An ask time in the future (a clock that was wrong) is clamped to now on load, so the
+    /// next ask is one period away rather than a period after that future date.
+    #[test]
+    fn a_future_ask_time_on_disk_is_clamped_to_now() {
+        let dir = scratch_dir("future");
+        let ahead = Feeds::new();
+        ahead.load_from(&dir, T0 + 3650 * DAY);
+        let _ = ahead.plans(&Fake::new(true, true, true), T0 + 3650 * DAY);
+
+        let back = Feeds::new();
+        back.load_from(&dir, T0);
+        assert_eq!(lock(&back.active).asked_unix, T0);
+        let fake = Fake::new(true, true, true);
+        let _ = back.plans(&fake, T0 + DAY - 1);
+        assert_eq!(
+            fake.active.load(Ordering::SeqCst),
+            0,
+            "asked before a day passed"
+        );
+        let _ = back.plans(&fake, T0 + DAY);
+        assert_eq!(
+            fake.active.load(Ordering::SeqCst),
+            1,
+            "held off by an ask time ten years ahead"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `mostwanted.php` is public: `api=1`, and no application key in ClubLog's request logs.
+    #[test]
+    fn most_wanted_is_asked_without_a_key() {
+        assert_eq!(MOST_WANTED_URL, "https://clublog.org/mostwanted.php?api=1");
+        assert_eq!(EXPEDITIONS_URL, "https://clublog.org/expeditions.php?api=1");
+    }
+
+    /// ⛔ CLUBLOG'S OWN WORDS DO NOT REACH STDERR.
     ///
-    /// `mostwanted.php` is fetched as `?api={key}`, so a refusal is the single most likely
-    /// answer to quote the key back — and on Linux a GUI process's stderr is redirected by
-    /// the desktop session into `~/.xsession-errors`, mode 0644, kept until the next login.
-    /// This used to print ClubLog's `error` string verbatim.
+    /// A refusal is the single most likely answer to quote back what the request carried
+    /// (`mostwanted.php` was fetched with the API key until it was made public, `?api=1`) —
+    /// and on Linux a GUI process's stderr is redirected by the desktop session into
+    /// `~/.xsession-errors`, mode 0644, kept until the next login. This used to print
+    /// ClubLog's `error` string verbatim.
     ///
     /// Driven straight through the decider, so no live client is needed; the call site is
     /// `eprintln!("{crumb}")` over this function's `&'static str`, which cannot carry a body.
