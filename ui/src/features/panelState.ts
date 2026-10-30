@@ -1066,9 +1066,9 @@ const STATS_PANEL_ID = 'stats'
  * FT has no log entry form (it logs through its confirm dialog), and its side rail is FT's log column,
  * so there the pane is a rail member of its own: at the foot of the rail (OPERATE_ARRANGE `log`), under
  * the card, the Stats pane and the rail's feeds, at its content height. The top of the rail stays about
- * the station in hand, and Classic's decode columns are not in the rail at all. Like a box, it stands only
- * in FT's arranged columns, so ticking it arranges FT: there a feed keeps its floor and the column scrolls,
- * where the stock rail's feeds have none and gave the pane their height.
+ * the station in hand, and Classic's decode columns are not in the rail at all. Ticking it keeps FT's stock
+ * layout (Classic's Rx/Tx column and its divider as they were); while it stands in the stock rail the
+ * rail's feeds keep a floor and the rail scrolls, where without one they gave the pane their height.
  *
  * Every vocabulary ships it hidden (`defaultRemoved`), as the Stats pane does where it is short of
  * room, so nobody's screen changes; one tick in ⊞ Panels shows it. Under THE STOP LINE it is a plain

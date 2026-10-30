@@ -2,12 +2,16 @@
 //
 // THE RECENT CONTACTS PANE IN FT. Phone, CW, JS8, RTTY and PSK list the last few contacts in a pane under
 // their log entry form; FT logs through its confirm dialog and has no form, so its pane stands at the foot of
-// the side rail, at its content height. Like a box it stands only in FT's arranged columns, whose feeds keep
-// a floor and whose column scrolls (the stock rail's feeds have none). These pin:
+// the side rail, at its content height. Ticking it keeps FT's stock layout (Classic's Rx/Tx column and its
+// Tx messages divider untouched); the rail it joins floors its feeds and scrolls instead of squashing them.
+// These pin:
 //  1. it ships hidden, and a record that never mentions it draws the stock rail exactly as before;
-//  2. ticked, it stands last in the arranged rail column in both layouts, through CockpitPaneFrame, content-fit;
-//  3. a row opens that contact in the Logbook's editor, as in every other cockpit;
-//  4. it stands the rail by itself when nothing else in the rail is shown.
+//  2. ticked, it stands last in the STOCK rail in both layouts, through CockpitPaneFrame, content-fit, and FT
+//     is not arranged: Classic's Rx/Tx column keeps its divider;
+//  3. ticked, the rail's feeds take the yielding floor and the card keeps its size; unticked, neither;
+//  4. in the arranged columns (arranged for another reason) it stands last in the rail column;
+//  5. a row opens that contact in the Logbook's editor, as in every other cockpit;
+//  6. it stands the rail by itself when nothing else in the rail is shown.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
@@ -124,10 +128,13 @@ function makeSnap(): AppSnapshot {
   } as unknown as AppSnapshot
 }
 
-function panelsApi(initial: Partial<Record<OperatePanelId, PanelState>> = {}): PanelLayoutApi<OperatePanelId> {
+function panelsApi(
+  initial: Partial<Record<OperatePanelId, PanelState>> = {},
+  extras?: Record<string, OperatePanelId[]>,
+): PanelLayoutApi<OperatePanelId> {
   const state: Partial<Record<string, PanelState>> = { ...initial }
   return {
-    layout: { v: 1, state, share: {} },
+    layout: { v: 1, state, share: {}, ...(extras ? { extras } : {}) },
     stateOf: (id: string) => panelStateIn(OPERATE_PANELS, { v: 1, state, share: {} }, id as OperatePanelId),
     setPanelState: vi.fn(),
     shareOf: () => 1,
@@ -147,6 +154,7 @@ function renderCockpit(opts: {
   onSetMode?: (...a: unknown[]) => void
   onClearSelection?: () => void
   onOpenLogbook?: (call: string, id?: string | null) => void
+  extras?: Record<string, OperatePanelId[]>
 } = {}) {
   const noop = () => {}
   return render(
@@ -177,7 +185,7 @@ function renderCockpit(opts: {
       onOpenLogbook={opts.onOpenLogbook}
       layoutMode={opts.layout ?? 'classic'}
       onLayoutMode={noop}
-      panels={panelsApi(opts.panelState as Partial<Record<OperatePanelId, PanelState>>)}
+      panels={panelsApi(opts.panelState as Partial<Record<OperatePanelId, PanelState>>, opts.extras)}
       active
     />,
   )
@@ -226,21 +234,69 @@ describe('the Recent contacts pane in FT', () => {
     }
   })
 
-  for (const [layout, above] of [['classic', 'stations'], ['roster', 'rxfreq']] as const) {
-    it(`${layout}: ticked, it stands last in the arranged rail column, content-fit, under the rail's own panes`, () => {
+  for (const [layout, above] of [['classic', 'cockpit-roster'], ['roster', 'cockpit-rxfreq']] as const) {
+    it(`${layout}: ticked, it stands last in the stock rail, content-fit, under the rail's own panes; FT is not arranged`, () => {
       installRecentLog()
       renderCockpit({ layout, panelState: { recent: 'docked' } })
-      const col = arrangedRail()
-      expect(col, 'ticked, FT is not drawn in its arranged columns').not.toBeNull()
-      expect(rail(), 'the stock rail stands beside the arranged one').toBeNull()
+      expect(arrangedRail(), 'ticked, FT switched to its arranged columns').toBeNull()
+      expect(document.querySelector('.cockpit-lower')!.hasAttribute('data-arranged')).toBe(false)
+      const col = rail()
+      expect(col, 'ticked, the stock rail is gone').not.toBeNull()
       const recent = recentEl()
       expect(recent, 'ticked, the Recent contacts pane is not on screen').not.toBeNull()
-      expect(recent!.parentElement, 'not a direct member of the rail column').toBe(col)
+      expect(recent!.parentElement, 'not a direct member of the stock rail').toBe(col)
       expect(recent!.getAttribute('data-fit')).toBe('content')
-      expect(recent!.nextElementSibling, 'something stands under it in the rail column').toBeNull()
-      expect(recent!.previousElementSibling?.getAttribute('data-pane'), `not directly under ${above}`).toBe(above)
+      expect(recent!.nextElementSibling, 'something stands under it in the rail').toBeNull()
+      expect(recent!.previousElementSibling?.classList.contains(above), `not directly under .${above}`).toBe(true)
       // The callsign card keeps the top of the rail.
       expect(col!.firstElementChild).toBe(cardEl())
+    })
+  }
+
+  it("classic: ticked, the Rx/Tx column and its Tx messages divider stand exactly as unticked", () => {
+    const qsocol = () => {
+      const c = document.querySelector('.cockpit-qsocol')
+      return c ? [...c.children].map((k) => k.getAttribute('aria-label') ?? k.className) : null
+    }
+    renderCockpit({ panelState: { stations: 'docked' } })
+    const stock = qsocol()
+    expect(stock, 'control: the stock Rx/Tx column stands').not.toBeNull()
+    expect(stock, 'control: the stock column has the divider').toContain('Tx messages height')
+    cleanup()
+    renderCockpit({ panelState: { stations: 'docked', recent: 'docked' } })
+    expect(qsocol()).toEqual(stock)
+  })
+
+  for (const layout of ['classic', 'roster'] as const) {
+    it(`${layout}: ticked, the rail floors its feeds and the card keeps its size; unticked, neither`, () => {
+      const feeds = () => [...rail()!.children].filter((k) => /cockpit-(roster|decodes-side|rxfreq)\b/.test(k.className))
+      const floors = () => feeds().map((f) => (f as HTMLElement).style.minHeight)
+      installRecentLog()
+      renderCockpit({ layout, panelState: { recent: 'docked' } })
+      expect(feeds().length, 'no feeds in the rail').toBe(layout === 'classic' ? 1 : 2)
+      expect(rail()!.classList.contains('op-rail-floor'), 'the rail sets no floor').toBe(true)
+      expect(floors(), 'a feed takes no floor').toEqual(feeds().map(() => 'var(--cockpit-fill-min, 0)'))
+      expect(cardEl()!.classList.contains('cockpit-recall-kept'), 'the card gives up its height to the floors').toBe(true)
+      cleanup()
+      renderCockpit({ layout, panelState: { recent: 'removed' } })
+      expect(rail()!.classList.contains('op-rail-floor')).toBe(false)
+      expect(floors()).toEqual(feeds().map(() => ''))
+      expect(cardEl()!.classList.contains('cockpit-recall-kept')).toBe(false)
+    })
+  }
+
+  // The other layout's pane added to this one arranges FT (Classic: the Call Roster; Roster: Stations).
+  for (const [layout, added] of [['classic', 'callRoster'], ['roster', 'stations']] as const) {
+    it(`${layout}: arranged for another reason, it stands last in the rail column`, () => {
+      installRecentLog()
+      renderCockpit({ layout, panelState: { recent: 'docked' }, extras: { [layout]: [added] } })
+      const col = arrangedRail()
+      expect(col, 'control: the seed arranges FT').not.toBeNull()
+      const recent = recentEl()
+      expect(recent!.parentElement).toBe(col)
+      expect(recent!.getAttribute('data-fit')).toBe('content')
+      expect(recent!.nextElementSibling).toBeNull()
+      expect(recent!.previousElementSibling?.getAttribute('data-pane')).toBe('stations')
     })
   }
 
@@ -256,8 +312,8 @@ describe('the Recent contacts pane in FT', () => {
   it('stands the rail by itself when nothing else in it is shown', () => {
     installRecentLog()
     renderCockpit({ selectedCall: null, panelState: { recent: 'docked', stations: 'removed' } })
-    expect(arrangedRail(), 'the rail does not stand for the pane').not.toBeNull()
-    expect(arrangedRail()!.contains(recentEl())).toBe(true)
+    expect(rail(), 'the rail does not stand for the pane').not.toBeNull()
+    expect(rail()!.contains(recentEl())).toBe(true)
     cleanup()
     // Control: unticked, the same screen has no rail at all.
     renderCockpit({ selectedCall: null, panelState: { stations: 'removed' } })
