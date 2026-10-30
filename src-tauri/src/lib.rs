@@ -7750,26 +7750,22 @@ fn set_source(state: State<'_, SharedEngine>, kind: String) -> Result<AppSnapsho
     Ok(eng.snapshot())
 }
 
-/// How old the 1-minute Kp may be and still be "the Kp" on a contact logged now: one planetary
-/// K period. A feed that stopped updating hours ago has no K for this contact.
-const LOG_KP_MAX_AGE_SECS: i64 = 3 * 3600;
-
-/// The space weather a contact logged now may carry, each number only if it is a reading:
-/// the planetary Kp (fresh, see [`LOG_KP_MAX_AGE_SECS`]), NOAA's daily planetary A with the
-/// UT day it belongs to (never the Kp-derived ap estimate), and the day's solar flux. A
-/// stand-in is `None`, so its ADIF field is left off rather than filled with a guess.
+/// The space weather a logged contact may carry, each number only if it is a reading and each
+/// with its own stamp: the planetary Kp and its sample time, NOAA's daily planetary A with the
+/// UT day it belongs to (never the Kp-derived ap estimate), and the solar flux with its
+/// measurement time. The engine judges each stamp against the contact's own time when it logs
+/// one. A stand-in is `None`, so its ADIF field is left off rather than filled with a guess.
+#[allow(clippy::type_complexity)] // three stamped readings, named by the doc above
 fn space_wx_for_log(
     wx: &propagation::SpaceWx,
     stamps: &propagation::model::SpaceWxStamps,
-    now: i64,
-) -> (Option<f32>, Option<(f32, u64)>, Option<f32>) {
-    let kp = stamps
-        .kp_at
-        .filter(|&at| now - at <= LOG_KP_MAX_AGE_SECS)
-        .map(|_| wx.kp);
-    let a_daily = stamps.a_day.map(|day| (wx.a_index, day.max(0) as u64));
-    let sfi = stamps.sfi_at.map(|_| wx.sfi);
-    (kp, a_daily, sfi)
+) -> (Option<(f32, u64)>, Option<(f32, u64)>, Option<(f32, u64)>) {
+    let at = |t: i64| t.max(0) as u64;
+    (
+        stamps.kp_at.map(|t| (wx.kp, at(t))),
+        stamps.a_day.map(|d| (wx.a_index, at(d))),
+        stamps.sfi_at.map(|t| (wx.sfi, at(t))),
+    )
 }
 
 /// The propagation & opening-intelligence nowcast, built from LIVE NOAA SWPC +
@@ -7919,7 +7915,8 @@ async fn get_propagation(
     // live-spot window (the detector's full baseline) and replaces the snapshot's
     // openings with the tracker-stamped set (hysteresis-entered, onset-timed).
     let cfg = propagation::OpeningConfig::default();
-    let wx = propagation::SpaceWx {
+    let stamps = snap.space_wx.stamps;
+    let measured = propagation::SpaceWx {
         sfi: snap.space_wx.sfi,
         ssn: None, // opening detector/heuristic don't read R12
         kp: snap.space_wx.kp,
@@ -7928,6 +7925,10 @@ async fn get_propagation(
         // true R-scale — an X-class blackout no longer collapses to "R1 / M-class".
         xray_long: snap.space_wx.xray_long,
     };
+    // What the detector, advisor, banners, insights and model run on: only the Kp and X-ray
+    // that may speak for now. A cached snapshot is served at any age, and a GOES gap keeps its
+    // last flux, so an hours-old Kp 6 or flare would otherwise raise a storm or flare line.
+    let wx = measured.speaking_now(&stamps, now);
     // ANCHORED window = operator-REACHABLE evidence only: own-call PSK Reporter MQTT
     // + the near-region (≤REGION_RADIUS_KM) census (disjoint — the region feed drops
     // own-call spots) + the operator's own decodes. This is what drives the BAND
@@ -8053,12 +8054,12 @@ async fn get_propagation(
     // worldwide. Rebuild whenever we have any anchored evidence (own-call MQTT,
     // near-region, or own decodes); when empty we keep the cached snapshot's
     // own-call advisory (never the global firehose, which `anchored` excludes).
-    // The model's words need a measured solar flux; on a stand-in the advisor reports only what
+    // The model's words need a usable solar flux and Kp; otherwise the advisor reports only what
     // was heard (`PropAdvisor::without_model`), here and for the worldwide ranking below.
-    let sfi_measured = snap.space_wx.stamps.sfi_at.is_some();
+    let model_usable = stamps.model_usable(now);
     let advisor_for = |call: &str, grid: &str| {
         let a = propagation::PropAdvisor::new(call, grid);
-        if sfi_measured {
+        if model_usable {
             a
         } else {
             a.without_model()
@@ -8073,6 +8074,9 @@ async fn get_propagation(
         snap.best_to_region = rb.best_to_region;
         snap.region_band = rb.cells;
     }
+    // A served snapshot's banners were built from the numbers it was fetched with: rebuild
+    // them from the ones that may speak for now, rebuilt advisory or not.
+    snap.advisory.banners = advisor_for(&mycall, &mygrid).banners(&wx);
     // "Worldwide activity" = the SAME advisor over the GLOBAL firehose window, so the
     // UI can show busy-worldwide beside best-FOR-YOU (workable vs merely-loud). Only
     // when the firehose actually adds something beyond the anchored set.
@@ -8090,32 +8094,36 @@ async fn get_propagation(
     // trend and regenerate the insight feed with it (overwriting the engine layer's
     // threshold-only insights). me_ll drives the representative MUF + greyline test.
     let me_ll = propagation::geo::maidenhead_to_latlon(&mygrid);
-    // The readings SWPC actually answered, each on its own, for the opt-in space weather on
-    // each logged contact — never the model's stand-in values a failed product leaves in the
-    // snapshot (`space_wx_for_log`).
-    let stamps = snap.space_wx.stamps;
+    // The readings SWPC actually answered, each on its own with its stamp, for the opt-in space
+    // weather on each logged contact — never the model's stand-in values a failed product leaves
+    // in the snapshot (`space_wx_for_log`).
     if fetched_fresh && snap.space_wx.fetched {
-        let (kp, a_daily, sfi) = space_wx_for_log(&wx, &stamps, now);
+        let (kp, a_daily, sfi) = space_wx_for_log(&measured, &stamps);
         let at = now.max(0) as u64;
         let _ = with_engine(&state, move |mut eng| {
             eng.note_space_weather(kp, a_daily, sfi, at)
         })
         .await;
     }
-    // The trend history takes only a whole measured sample: a stand-in SFI 120 between two
-    // real 90s would read as "flux rising" and its model MUF as "MUF building".
-    let sample_measured =
-        stamps.sfi_at.is_some() && stamps.kp_at.is_some() && stamps.xray_at.is_some();
+    // The trend history takes only a whole sample that speaks for now: a stand-in SFI 120
+    // between two real 90s would read as "flux rising" and its model MUF as "MUF building", and
+    // a frozen feed's old number would be filed as now's.
+    let sample_measured = {
+        use propagation::model::WxKey;
+        [WxKey::Sfi, WxKey::Kp, WxKey::Xray]
+            .into_iter()
+            .all(|k| stamps.usable(k, now))
+    };
     if fetched_fresh {
         if let Some(mut h) = wx_history.lock().ok().filter(|_| sample_measured) {
             let muf = me_ll
-                .map(|me| propagation::representative_muf(me, now, &wx))
+                .map(|me| propagation::representative_muf(me, now, &measured))
                 .unwrap_or(0.0);
             h.push(propagation::SpaceWxSample {
                 t: now,
-                sfi: wx.sfi,
-                kp: wx.kp,
-                xray_long: wx.xray_long,
+                sfi: measured.sfi,
+                kp: measured.kp,
+                xray_long: measured.xray_long,
                 muf,
             });
         }
@@ -8156,7 +8164,7 @@ async fn get_propagation(
     snap.insights = propagation::generate_insights(
         now,
         &wx,
-        Some(&snap.wx_trend).filter(|_| sfi_measured),
+        Some(&snap.wx_trend).filter(|_| stamps.usable(propagation::model::WxKey::Sfi, now)),
         &snap.advisory.bands,
         &snap.openings,
         me_ll,
@@ -8239,7 +8247,7 @@ async fn get_path_outlook(
     // reading.
     let kp_now = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx))
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), t)
     };
     tauri::async_runtime::spawn_blocking(move || {
         let mut pred = eng.predict(dx, t, &wx);
@@ -8259,18 +8267,24 @@ async fn get_path_outlook(
     .map_err(|e| e.to_string())
 }
 
-/// The Kp SWPC actually reported, from the propagation cache's snapshot — `None` when the cache
-/// is cold, or when the Kp is the model's stand-in (its own stamp is empty: `fetched` is true
-/// when any one product answered) — the same rule that keeps stand-ins off logged contacts.
-fn swpc_kp(wx: Option<&propagation::SpaceWxView>) -> Option<f32> {
-    wx.filter(|w| w.stamps.kp_at.is_some()).map(|w| w.kp)
+/// The Kp SWPC actually reported, from the propagation cache's snapshot, when it may speak for
+/// `now` — `None` when the cache is cold, when the Kp is the model's stand-in (its product did
+/// not answer), or when its sample is older than the gauge's limit (a cached snapshot is served
+/// at any age). The Kp's own stamp decides, not `fetched`, which is true when any one product
+/// answered ([`propagation::model::SpaceWxStamps::usable`]).
+fn swpc_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f32> {
+    wx.filter(|w| w.stamps.usable(propagation::model::WxKey::Kp, now))
+        .map(|w| w.kp)
 }
 
 #[cfg(test)]
 mod path_outlook_kp_tests {
     use super::swpc_kp;
 
-    fn view(kp: f32, fetched: bool) -> propagation::SpaceWxView {
+    const NOW: i64 = 1_761_800_000;
+
+    /// A snapshot's space weather whose Kp was sampled at `kp_at` (`None` = the stand-in).
+    fn view(kp: f32, kp_at: Option<i64>) -> propagation::SpaceWxView {
         propagation::SpaceWxView {
             sfi: 120.0,
             kp,
@@ -8279,9 +8293,9 @@ mod path_outlook_kp_tests {
             flare: false,
             xray_long: 1e-7,
             solar_wind: None,
-            fetched,
+            fetched: kp_at.is_some(),
             stamps: propagation::model::SpaceWxStamps {
-                kp_at: fetched.then_some(1_761_800_000),
+                kp_at,
                 ..Default::default()
             },
             ap_now: None,
@@ -8290,17 +8304,32 @@ mod path_outlook_kp_tests {
 
     #[test]
     fn a_cold_cache_gives_no_kp() {
-        assert_eq!(swpc_kp(None), None);
+        assert_eq!(swpc_kp(None, NOW), None);
     }
 
     #[test]
     fn a_failed_fetchs_stand_in_kp_is_not_a_reading() {
-        assert_eq!(swpc_kp(Some(&view(2.0, false))), None);
+        assert_eq!(swpc_kp(Some(&view(2.0, None)), NOW), None);
     }
 
     #[test]
     fn a_fetched_kp_is_passed_on() {
-        assert_eq!(swpc_kp(Some(&view(3.33, true))), Some(3.33));
+        assert_eq!(swpc_kp(Some(&view(3.33, Some(NOW - 60))), NOW), Some(3.33));
+    }
+
+    /// Another product answering does not make the Kp a reading: its own stamp decides.
+    #[test]
+    fn a_stand_in_kp_beside_a_measured_flux_is_not_a_reading() {
+        let mut v = view(2.0, None);
+        v.stamps.sfi_at = Some(NOW - 3600);
+        v.fetched = true;
+        assert_eq!(swpc_kp(Some(&v), NOW), None);
+    }
+
+    /// A cached snapshot's Kp from two hours ago says nothing about the path now.
+    #[test]
+    fn an_hours_old_cached_kp_is_not_now() {
+        assert_eq!(swpc_kp(Some(&view(6.0, Some(NOW - 2 * 3600))), NOW), None);
     }
 }
 
@@ -8822,13 +8851,13 @@ async fn get_pca(
     let Some(flux) = flux else {
         return Ok(None); // never fetched — honest offline, not a fabricated quiet
     };
-    // Only a MEASURED Kp places the cap edge: a cold cache or a snapshot whose Kp is a stand-in
-    // gives none (`pca_kp`).
+    // Only a measured, fresh Kp places the cap edge: a cold cache, a snapshot whose Kp is a
+    // stand-in, or an hours-old cached one gives none (`pca_kp`).
+    let now = now_unix();
     let kp = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        pca_kp(guard.as_ref().map(|(_, s)| &s.space_wx))
+        pca_kp(guard.as_ref().map(|(_, s)| &s.space_wx), now)
     };
-    let now = now_unix();
     Ok(Some(PcaView {
         j10: flux.j10,
         a30_day: propagation::pca::a30_day(flux.j5),
@@ -8839,10 +8868,11 @@ async fn get_pca(
     }))
 }
 
-/// The Kp the polar-cap edge is placed at: the snapshot's Kp only when it is a reading
-/// (stamped), never the stand-in a failed fetch leaves, and nothing on a cold cache.
-fn pca_kp(wx: Option<&propagation::SpaceWxView>) -> Option<f64> {
-    wx.filter(|w| w.stamps.kp_at.is_some()).map(|w| w.kp as f64)
+/// The Kp the polar-cap edge is placed at: the snapshot's Kp only when it may speak for `now`
+/// ([`swpc_kp`]), never the stand-in a failed fetch leaves or an hours-old cached reading, and
+/// nothing on a cold cache.
+fn pca_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f64> {
+    swpc_kp(wx, now).map(f64::from)
 }
 
 /// Magnetic declination (degrees, east-positive) at the operator's QTH right
@@ -34027,11 +34057,23 @@ fn build_connect_board(
         .ok()
         .and_then(|g| g.as_ref().map(|(_, f)| f.clone()))
         .and_then(|f| f.peak_ahead().cloned());
+    // The cached snapshot is served at any age: its storm and flare lines speak only while the
+    // Kp or X-ray they rest on may speak for now, as on the desktop (`get_propagation`).
+    let now = now_unix();
+    let stamps = snap.space_wx.stamps;
+    let wx_now = propagation::SpaceWx {
+        sfi: snap.space_wx.sfi,
+        ssn: None,
+        kp: snap.space_wx.kp,
+        a_index: snap.space_wx.a_index,
+        xray_long: snap.space_wx.xray_long,
+    }
+    .speaking_now(&stamps, now);
     Some(ConnectBoardData {
+        banners: propagation::PropAdvisor::new(&call, &grid).banners(&wx_now),
         call,
         grid,
         headline: snap.advisory.headline.clone(),
-        banners: snap.advisory.banners.clone(),
         bands: snap
             .advisory
             .bands
@@ -34060,7 +34102,12 @@ fn build_connect_board(
         kp: snap.space_wx.kp,
         a_index: snap.space_wx.a_index,
         xray_class: snap.space_wx.xray_class.clone(),
-        insights: snap.insights.iter().map(|i| i.plain.clone()).collect(),
+        insights: snap
+            .insights
+            .iter()
+            .filter(|i| propagation::insight_speaks_now(i, &stamps, now))
+            .map(|i| i.plain.clone())
+            .collect(),
         kp_peak_ahead: peak.as_ref().map(|p| p.kp),
         kp_peak_unix: peak.as_ref().map(|p| p.time_unix),
         source: snap.source.clone(),
@@ -49993,9 +50040,10 @@ mod tests {
         offenders
     }
 
-    /// A logged contact takes each space-weather number only when it is a reading: the Kp while
-    /// its sample is under three hours old, NOAA's daily A with its day (never the Kp-derived
-    /// estimate), the SFI when measured. A stand-in gives `None`, so the field is left off.
+    /// A logged contact takes each space-weather number only when it is a reading, each with its
+    /// own stamp (the engine judges the stamps against the contact's time): the Kp and its sample
+    /// time, NOAA's daily A with its day (never the Kp-derived estimate), the SFI and when it was
+    /// measured. A stand-in gives `None`, so the field is left off.
     #[test]
     fn a_contact_takes_only_measured_space_weather() {
         let now = 1_761_800_000;
@@ -50012,23 +50060,18 @@ mod tests {
             xray_at: Some(now - 240),
             a_day: Some(now / 86_400 * 86_400 - 86_400),
         };
+        let u = |t: i64| t as u64;
         assert_eq!(
-            crate::space_wx_for_log(&wx, &all, now),
+            crate::space_wx_for_log(&wx, &all),
             (
-                Some(0.67),
-                Some((4.0, (now / 86_400 * 86_400 - 86_400) as u64)),
-                Some(89.0)
+                Some((0.67, u(now - 360))),
+                Some((4.0, u(now / 86_400 * 86_400 - 86_400))),
+                Some((89.0, u(now - 6 * 3600)))
             )
         );
         // Every number a stand-in: nothing.
         let none = propagation::model::SpaceWxStamps::default();
-        assert_eq!(crate::space_wx_for_log(&wx, &none, now), (None, None, None));
-        // A Kp feed frozen four hours ago has no K for a contact now.
-        let frozen = propagation::model::SpaceWxStamps {
-            kp_at: Some(now - 4 * 3600),
-            ..all
-        };
-        assert_eq!(crate::space_wx_for_log(&wx, &frozen, now).0, None);
+        assert_eq!(crate::space_wx_for_log(&wx, &none), (None, None, None));
     }
 
     /// The polar-cap edge sits at a MEASURED Kp only: none on a cold cache, none on a snapshot
@@ -50037,11 +50080,15 @@ mod tests {
     fn the_pca_edge_needs_a_measured_kp() {
         let mut snap = propagation::offline(1_761_800_000, "K1ABC", "FN31").space_wx;
         snap.kp = 2.0; // the stand-in a failed fetch leaves
-        assert_eq!(crate::pca_kp(None), None, "cold cache");
-        assert_eq!(crate::pca_kp(Some(&snap)), None, "stand-in Kp");
+        let now = 1_761_800_000;
+        assert_eq!(crate::pca_kp(None, now), None, "cold cache");
+        assert_eq!(crate::pca_kp(Some(&snap), now), None, "stand-in Kp");
         snap.kp = 5.33;
         snap.stamps.kp_at = Some(1_761_799_700);
-        assert_eq!(crate::pca_kp(Some(&snap)), Some(5.33_f32 as f64));
+        assert_eq!(crate::pca_kp(Some(&snap), now), Some(5.33_f32 as f64));
+        // A cached snapshot's measured Kp from two hours ago places no edge.
+        snap.stamps.kp_at = Some(now - 2 * 3600);
+        assert_eq!(crate::pca_kp(Some(&snap), now), None, "an hours-old Kp");
     }
 
     /// A KC2G set served after a failed refetch is older by the time since it was fetched.

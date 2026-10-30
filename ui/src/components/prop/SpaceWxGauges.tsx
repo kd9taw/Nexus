@@ -98,13 +98,18 @@ function Gauge({
     <div className="swx-gauge">
       <div className="swx-head" title={title}>
         {key}
+        {/* An old or missing number is dimmed with its line, so it is never read as the field now. */}
         {unit ? (
           <span className="swx-vu">
-            <span className="swx-v">{value}</span>
+            <span className="swx-v" data-dim={dim ? '' : undefined}>
+              {value}
+            </span>
             <span className="swx-u">{unit}</span>
           </span>
         ) : (
-          <span className="swx-v">{value}</span>
+          <span className="swx-v" data-dim={dim ? '' : undefined}>
+            {value}
+          </span>
         )}
       </div>
       <div className="swx-bar" aria-hidden="true">

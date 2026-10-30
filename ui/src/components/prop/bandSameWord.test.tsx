@@ -68,8 +68,8 @@ describe('one band, one word, one colour', () => {
       const cell = bandConditionCell(BANDS.find((b) => b.band === band)!)
       expect([band, cell.word, cell.color]).toEqual([band, word, colour])
     }
-    // No model (an older station's report) and nobody heard: the word defaults to Open, which is not
-    // evidence, so the colour is the tier's neutral.
+    // No model (none usable, or an older station's report) and nobody heard: the word is unknown
+    // (bandNoModel.test.tsx), so the colour is the tier's neutral.
     expect(bandConditionCell(report('6m', undefined, 'Quiet')).color).toBe('var(--text-dim)')
     expect(bandConditionCell(report('6m', undefined, 'Closed')).color).toBe('var(--text-faint)')
   })

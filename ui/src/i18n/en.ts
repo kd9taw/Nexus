@@ -3962,7 +3962,7 @@ export const EN = {
   'prop.spaceWx.stale': 'last reading {{ago}}',
   // Each gauge's hover: where the number came from and when it was measured. {{time}} is a UTC
   // stamp ("29 Oct 20:00Z"), {{day}} a date ("29 Oct"), {{ap}} a whole number.
-  'prop.spaceWx.src.sfi': 'NOAA · Penticton 10.7 cm solar flux, noon reading {{time}}',
+  'prop.spaceWx.src.sfi': 'NOAA · Penticton 10.7 cm solar flux, measured {{time}}',
   'prop.spaceWx.src.kp': 'NOAA · estimated planetary Kp (1-minute), {{time}}',
   'prop.spaceWx.src.xray': 'NOAA · GOES X-ray flux, {{time}}',
   'prop.spaceWx.src.a': 'NOAA · daily planetary A for {{day}}',
@@ -10904,6 +10904,7 @@ export const EN = {
   'connect.basic.offline': 'No live propagation data right now.',
   'connect.basic.bandAdvisor.offline': 'No live band data yet.',
   'connect.basic.bandAdvisor.none': 'No bands modelled open right now.',
+  'connect.basic.bandAdvisor.unknown': 'No band heard yet, and with no current NOAA reading there is no model to say which bands are open.',
   'connect.basic.bandAdvisor.best': 'Best band now: {{band}} ({{word}}).',
   'connect.basic.bandAdvisor.bestRegion': 'Best band now: {{band}} to {{region}} ({{word}}).',
   'connect.basic.selection.none': 'Tap a station, spot, or DXpedition on the map.',
@@ -10937,6 +10938,7 @@ export const EN = {
   'connect.basic.getout.furthest.since': '{{count}} hearing you since {{time}} — furthest {{dist}}.',
   'connect.basic.bestband.none': 'No region reachable on any band yet.',
   'connect.basic.bestband': 'To {{region}}: try {{band}} ({{word}}).',
+  'connect.basic.bestband.noWord': 'To {{region}}: try {{band}}.',
   'connect.basic.activity.offline': 'No live activity data right now.',
   'connect.basic.activity.none': 'Quiet on all bands — no activity around you yet.',
   'connect.basic.activity.top': {

@@ -98,6 +98,26 @@ describe('the scales chips', () => {
     const fresh = render(<ScalesAnnunciator scales={scales(NOW - 300)} alerts={[]} />)
     expect(fresh.container.textContent).not.toContain(t('prop.scales.asOf', { ago: '' }).trim())
   })
+
+  it('an old copy keeps its letters but not their alarm colour; a fresh one is coloured', () => {
+    const storm = (asOf: number): NoaaScalesView => ({ r: 3, s: 1, g: 4, gTomorrow: 0, asOf }) as NoaaScalesView
+    const classes = (asOf: number) => {
+      const { container } = render(<ScalesAnnunciator scales={storm(asOf)} alerts={[]} />)
+      const out = [...container.querySelectorAll('.swsc-chip')].map((c) => [c.textContent, c.className])
+      cleanup()
+      return out
+    }
+    expect(classes(NOW - 3 * 3600)).toEqual([
+      ['R3', 'swsc-chip swsc-quiet'],
+      ['S1', 'swsc-chip swsc-quiet'],
+      ['G4', 'swsc-chip swsc-quiet'],
+    ])
+    expect(classes(NOW - 300)).toEqual([
+      ['R3', 'swsc-chip swsc-major'],
+      ['S1', 'swsc-chip swsc-minor'],
+      ['G4', 'swsc-chip swsc-major'],
+    ])
+  })
 })
 
 describe('the flare toast', () => {

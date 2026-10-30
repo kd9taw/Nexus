@@ -3344,19 +3344,32 @@ pub enum VoiceMemCmd {
 
 /// One space-weather reading as a logged contact carries it (ADIF `K_INDEX`, `A_INDEX`, `SFI`,
 /// each a whole number), and when Nexus fetched it. Each is `None` when NOAA gave no reading of
-/// it — the field is then left off the contact, never filled with the model's stand-in.
+/// it — the field is then left off the contact, never filled with the model's stand-in — and
+/// carries its own sample time, so each is judged against the contact's time when it is logged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SpaceWeatherReading {
-    k_index: Option<u32>,
+    /// The planetary K and when its sample was taken.
+    k_index: Option<(u32, u64)>,
     /// NOAA's daily planetary A and 00:00 UT of the day it is for.
     a_index: Option<(u32, u64)>,
-    sfi: Option<u32>,
+    /// The 10.7 cm solar flux and when it was measured.
+    sfi: Option<(u32, u64)>,
     at_unix: u64,
 }
 
 /// How old a space-weather reading may be and still go on a contact: three hours, the span of
 /// one planetary K index.
 const SPACE_WEATHER_MAX_AGE_SECS: u64 = 3 * 3600;
+
+/// How far the Kp's own sample may be from the contact's time and still be its K_INDEX: one
+/// planetary K period. Judged from the sample, not from when Nexus fetched it, so a feed that
+/// stopped updating has no K for the contact.
+const LOG_KP_MAX_AGE_SECS: u64 = 3 * 3600;
+
+/// How far the solar flux's own measurement may be from the contact's time and still be its
+/// SFI: the gauge's limit (one noon reading a day, with a missed day's slack). A feed that
+/// keeps serving an old day's flux has no SFI for the contact.
+const LOG_SFI_MAX_AGE_SECS: u64 = 48 * 3600;
 
 /// How long before now a contact may have started and still take the station's fields as they
 /// are now (grid, state, operator, rig, power): the space-weather span. One that started earlier
@@ -17000,23 +17013,25 @@ impl Engine {
         }
     }
 
-    /// The space weather Nexus just fetched — planetary K, NOAA's daily planetary A with the
-    /// UT day (00:00, Unix seconds) it is for, and the 10.7 cm solar flux — and when
-    /// (`at_unix`). Called by the shell's propagation poll; each number is `Some` only when SWPC
-    /// answered with a reading of it, and is kept for the opt-in K_INDEX / A_INDEX / SFI on each
-    /// logged contact. The A is the daily index, never an estimate from Kp.
+    /// The space weather Nexus just fetched — planetary K with its sample time, NOAA's daily
+    /// planetary A with the UT day (00:00, Unix seconds) it is for, and the 10.7 cm solar flux
+    /// with its measurement time — and when (`at_unix`). Called by the shell's propagation poll;
+    /// each number is `Some` only when SWPC answered with a reading of it, and is kept for the
+    /// opt-in K_INDEX / A_INDEX / SFI on each logged contact. The A is the daily index, never an
+    /// estimate from Kp.
     pub fn note_space_weather(
         &mut self,
-        kp: Option<f32>,
+        kp: Option<(f32, u64)>,
         a_daily: Option<(f32, u64)>,
-        sfi: Option<f32>,
+        sfi: Option<(f32, u64)>,
         at_unix: u64,
     ) {
         let whole = |v: f32| (v.is_finite() && v >= 0.0).then(|| v.round() as u32);
+        let stamped = |(v, at): (f32, u64)| whole(v).map(|v| (v, at));
         let reading = SpaceWeatherReading {
-            k_index: kp.and_then(whole),
-            a_index: a_daily.and_then(|(a, day)| whole(a).map(|a| (a, day))),
-            sfi: sfi.and_then(whole),
+            k_index: kp.and_then(stamped),
+            a_index: a_daily.and_then(stamped),
+            sfi: sfi.and_then(stamped),
             at_unix,
         };
         if reading.k_index.is_some() || reading.a_index.is_some() || reading.sfi.is_some() {
@@ -17684,20 +17699,23 @@ impl Engine {
         // it ([`Settings::log_space_weather`]) and only from a reading Nexus actually fetched
         // within three hours of the contact's start ([`Self::space_weather_at`]) — never the
         // propagation model's stand-in values, and never today's numbers on a contact typed in
-        // from yesterday. Each field only when it is a reading: a number NOAA did not give is
-        // left off. The A is NOAA's daily planetary A, and only for the contact's own UT day or
-        // the day before (NOAA issues a day's A after the day ends, so yesterday's is the
-        // newest there is); an older day's A is not this contact's.
+        // from yesterday. Each field only when it is a reading, judged by its own sample time
+        // against the contact's: the K within [`LOG_KP_MAX_AGE_SECS`], the SFI within
+        // [`LOG_SFI_MAX_AGE_SECS`]. The A is NOAA's daily planetary A for the contact's own UT
+        // day only. NOAA issues a day's A after the day ends, so a live contact usually has none
+        // yet and A_INDEX is left off; another day's A is not this contact's.
         if self.settings.log_space_weather {
             if let Some(wx) = self.space_weather_at(rec.when_unix) {
-                let contact_day = rec.when_unix / 86_400 * 86_400;
-                let a_index = wx.a_index.and_then(|(a, day)| {
-                    (day <= contact_day && contact_day - day <= 86_400).then_some(a)
-                });
+                let when = rec.when_unix;
+                let contact_day = when / 86_400 * 86_400;
+                let near = |max: u64| move |&(_, at): &(u32, u64)| when.abs_diff(at) <= max;
+                let k_index = wx.k_index.filter(near(LOG_KP_MAX_AGE_SECS));
+                let sfi = wx.sfi.filter(near(LOG_SFI_MAX_AGE_SECS));
+                let a_index = wx.a_index.filter(|&(_, day)| day == contact_day);
                 for (tag, value) in [
-                    ("K_INDEX", wx.k_index),
-                    ("A_INDEX", a_index),
-                    ("SFI", wx.sfi),
+                    ("K_INDEX", k_index.map(|(k, _)| k)),
+                    ("A_INDEX", a_index.map(|(a, _)| a)),
+                    ("SFI", sfi.map(|(f, _)| f)),
                 ] {
                     if let Some(value) = value {
                         tempo_core::logbook::fill_extra(&mut rec, tag, value.to_string());
@@ -49509,8 +49527,13 @@ mod tests {
     fn space_weather_is_logged_only_when_asked_and_only_while_fresh() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         let now = now_unix_secs();
-        let yesterday = now / 86_400 * 86_400 - 86_400;
-        e.note_space_weather(Some(2.67), Some((7.0, yesterday)), Some(148.6), now - 60);
+        let today = now / 86_400 * 86_400;
+        e.note_space_weather(
+            Some((2.67, now - 120)),
+            Some((7.0, today)),
+            Some((148.6, now - 3600)),
+            now - 60,
+        );
         let off = e.qso_record("K1OFF".into(), None, None);
         e.log_qso(off);
         e.settings.log_space_weather = true;
@@ -49520,11 +49543,12 @@ mod tests {
         let mut earlier = e.qso_record("K1YDA".into(), None, None);
         earlier.when_unix = now - 86_400;
         e.log_qso(earlier);
+        let then = now - SPACE_WEATHER_MAX_AGE_SECS - 60;
         e.note_space_weather(
-            Some(4.0),
-            Some((20.0, yesterday)),
-            Some(160.0),
-            now - SPACE_WEATHER_MAX_AGE_SECS - 60,
+            Some((4.0, then)),
+            Some((20.0, today)),
+            Some((160.0, then)),
+            then,
         );
         let stale = e.qso_record("K1OLD".into(), None, None);
         e.log_qso(stale);
@@ -49551,8 +49575,8 @@ mod tests {
 
     /// A number NOAA did not give is left off the contact, never stamped with the model's
     /// stand-in: no Kp → no K_INDEX, no daily A → no A_INDEX, with the real fields still written.
-    /// The A is NOAA's daily planetary A for the contact's own UT day or the day before; an
-    /// older day's A is not this contact's and is omitted.
+    /// The A is NOAA's daily planetary A for the contact's own UT day only; any other day's A is
+    /// not this contact's and is omitted.
     #[test]
     fn a_missing_or_stale_index_is_omitted_never_a_stand_in() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
@@ -49565,16 +49589,24 @@ mod tests {
             ["K_INDEX", "A_INDEX", "SFI"]
                 .map(|t| tempo_core::logbook::extra_field(r, t).map(str::to_string))
         };
-        // SFI and the daily A answered, Kp did not.
-        e.note_space_weather(None, Some((4.0, today - 86_400)), Some(89.0), now - 60);
+        // SFI and the daily A answered, Kp did not. The A is yesterday's, the newest NOAA issues
+        // during a day: not this contact's day, so no A_INDEX.
+        e.note_space_weather(
+            None,
+            Some((4.0, today - 86_400)),
+            Some((89.0, now - 60)),
+            now - 60,
+        );
         let c = e.qso_record("K1NOK".into(), None, None);
         e.log_qso(c);
-        assert_eq!(
-            wx_of(&e, "K1NOK"),
-            [None, Some("4".into()), Some("89".into())]
-        );
+        assert_eq!(wx_of(&e, "K1NOK"), [None, None, Some("89".into())]);
         // Kp answered, the A is three days old: no A_INDEX.
-        e.note_space_weather(Some(1.0), Some((9.0, today - 3 * 86_400)), None, now - 60);
+        e.note_space_weather(
+            Some((1.0, now - 60)),
+            Some((9.0, today - 3 * 86_400)),
+            None,
+            now - 60,
+        );
         let c = e.qso_record("K1OLDA".into(), None, None);
         e.log_qso(c);
         assert_eq!(wx_of(&e, "K1OLDA"), [Some("1".into()), None, None]);
@@ -49588,6 +49620,71 @@ mod tests {
         let c = e.qso_record("K1NONE".into(), None, None);
         e.log_qso(c);
         assert_eq!(wx_of(&e, "K1NONE"), [None, Some("12".into()), None]);
+    }
+
+    /// Each number is judged by its OWN sample time against the contact's, not by when Nexus
+    /// fetched it: a Kp sample more than three hours from the contact is not its K (a fresh
+    /// fetch of a frozen feed, which could otherwise give a K about six hours old), a flux
+    /// measured more than 48 hours from it is not its SFI, and the A is the contact's own UT day
+    /// only — so a contact at 23:59 UTC takes that day's A, and one at 00:01 does not take the
+    /// day that just ended.
+    #[test]
+    fn each_space_weather_number_is_bounded_from_the_contacts_own_time() {
+        const DAY: u64 = 1_761_782_400; // 2026-10-30 00:00 UTC
+        const H: u64 = 3600;
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.log_space_weather = true;
+        let mut n = 0;
+        let mut log_at = |e: &mut Engine,
+                          when: u64,
+                          kp: Option<(f32, u64)>,
+                          a: Option<(f32, u64)>,
+                          sfi: Option<(f32, u64)>| {
+            // The fetch itself is always fresh: only the samples' own times differ.
+            e.note_space_weather(kp, a, sfi, when - 60);
+            n += 1;
+            let call = format!("K{n}AB");
+            let mut c = e.qso_record(call.clone(), None, None);
+            c.when_unix = when;
+            e.log_qso(c);
+            let log = e.stored_log();
+            let r = log.iter().find(|r| r.call == call).unwrap();
+            ["K_INDEX", "A_INDEX", "SFI"]
+                .map(|t| tempo_core::logbook::extra_field(r, t).map(str::to_string))
+        };
+        let s = |v: &str| Some(v.to_string());
+        let when = DAY + 12 * H;
+        // Kp: inside three hours of the contact, either side, it is its K; past it, it is not.
+        let mut kp = |at| log_at(&mut e, when, Some((3.0, at)), None, None)[0].clone();
+        assert_eq!(kp(when - 3 * H), s("3"));
+        assert_eq!(kp(when + 3 * H), s("3"));
+        assert_eq!(kp(when - 3 * H - 1), None, "a sample over three hours old");
+        assert_eq!(kp(when - 6 * H + 60), None, "about six hours old");
+        // SFI: inside 48 hours of the contact; past it, none.
+        let mut sfi = |at| log_at(&mut e, when, None, None, Some((142.0, at)))[2].clone();
+        assert_eq!(sfi(when - 48 * H), s("142"));
+        assert_eq!(sfi(when - 48 * H - 1), None, "an old day's flux");
+        // A: the contact's own UT day only.
+        let mut a =
+            |e: &mut Engine, when, day| log_at(e, when, None, Some((6.0, day)), None)[1].clone();
+        let late = DAY + 24 * H - 60; // 23:59 UTC
+        let early = DAY + 24 * H + 60; // 00:01 UTC the next day
+        assert_eq!(a(&mut e, late, DAY), s("6"), "23:59 takes its own day's A");
+        assert_eq!(
+            a(&mut e, late, DAY - 24 * H),
+            None,
+            "23:59 never the day before"
+        );
+        assert_eq!(
+            a(&mut e, early, DAY),
+            None,
+            "00:01 never the day that just ended"
+        );
+        assert_eq!(
+            a(&mut e, early, DAY + 24 * H),
+            s("6"),
+            "00:01 takes its own day's A"
+        );
     }
 
     /// A contact logged now for a time more than three hours ago — typed in afterwards — is

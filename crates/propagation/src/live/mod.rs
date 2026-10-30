@@ -110,16 +110,24 @@ pub fn snapshot_with_spots(
     // as a dead band and would wrongly close the high bands when real spots are present.
     let wx = reading.map_or_else(SpaceWx::default, |r| r.wx);
     let stamps = reading.map(|r| r.stamps).unwrap_or_default();
-    // The band advisor's modelled words need a measured solar flux: on a stand-in it reports
-    // only what was heard ([`PropAdvisor::without_model`]).
+    let now = now_unix();
+    // The band advisor's modelled words need a usable solar flux and Kp: otherwise it reports
+    // only what was heard ([`PropAdvisor::without_model`]). The insights, banners and model run
+    // on only the Kp and X-ray that may speak for now (a GOES gap keeps its last flux, stamped
+    // with its own old time).
     let mut snap = PropagationEngine::new(mycall, mygrid).snapshot_measured(
-        now_unix(),
+        now,
         &spots,
-        &wx,
-        stamps.sfi_at.is_some(),
+        &wx.speaking_now(&stamps, now),
+        stamps.model_usable(now),
         &plans,
         needs,
     );
+    // The gauges show each number as NOAA gave it, beside its stamp; the UI ages it.
+    snap.space_wx.kp = wx.kp;
+    snap.space_wx.xray_long = wx.xray_long;
+    snap.space_wx.xray_class = format!("{}-class", wx.xray_class());
+    snap.space_wx.flare = wx.flare_in_progress();
     // Which numbers are SWPC's and when each was measured, not the neutral stand-ins above:
     // only a real reading may be shown as one or reach a logged contact.
     snap.space_wx.fetched = stamps.any();

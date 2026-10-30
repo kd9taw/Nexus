@@ -14,6 +14,7 @@ import {
   trendArrow,
   mufCeilingBand,
   dualStateLabel,
+  NO_MODEL_WORD,
   bandTiming,
   rarityMeta,
   spotTooltip,
@@ -115,8 +116,8 @@ describe('propViz nerve-center helpers', () => {
     // Active observed → "active"; Closed model → just "Closed".
     expect(dualStateLabel('Open', 'Active')).toEqual({ word: 'Open', sub: 'active' })
     expect(dualStateLabel('Closed', 'Quiet')).toEqual({ word: 'Closed', sub: '' })
-    // Missing modeled falls back sensibly (non-closed tier → Open).
-    expect(dualStateLabel(undefined, 'Quiet').word).toBe('Open')
+    // Missing modeled and nobody heard: unknown, never Open (bandNoModel.test.tsx).
+    expect(dualStateLabel(undefined, 'Quiet').word).toBe(NO_MODEL_WORD)
   })
 })
 

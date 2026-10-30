@@ -696,6 +696,78 @@ impl SpaceWxStamps {
             || self.xray_at.is_some()
             || self.a_day.is_some()
     }
+
+    /// The stamp of `key`'s number (`None` = a stand-in).
+    pub fn at(&self, key: WxKey) -> Option<i64> {
+        match key {
+            WxKey::Sfi => self.sfi_at,
+            WxKey::Kp => self.kp_at,
+            WxKey::Xray => self.xray_at,
+            WxKey::A => self.a_day,
+        }
+    }
+
+    /// Whether `key`'s number may speak for `now`: measured, and younger than
+    /// [`WxKey::fresh_secs`]. The server's copy of the UI's `wxUsable`, with the same limits, so
+    /// a line the station builds (an insight, a banner, a model word, the cap edge) cannot speak
+    /// from a reading the gauge beside it draws as old. A future stamp reads as fresh.
+    pub fn usable(&self, key: WxKey, now: i64) -> bool {
+        self.at(key).is_some_and(|at| now - at < key.fresh_secs())
+    }
+
+    /// Whether the propagation model may give a word: it rests on the solar flux and, for the
+    /// polar, auroral and VHF words, on the Kp, so both must be usable. Otherwise a band says
+    /// only what was heard ([`crate::PropAdvisor::without_model`]).
+    pub fn model_usable(&self, now: i64) -> bool {
+        self.usable(WxKey::Sfi, now) && self.usable(WxKey::Kp, now)
+    }
+}
+
+/// Which number of a [`SpaceWx`] a stamp belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WxKey {
+    Sfi,
+    Kp,
+    Xray,
+    A,
+}
+
+impl WxKey {
+    /// How long a reading speaks for "now", in seconds: the product's cadence plus the station's
+    /// poll — the UI's `WX_STALE_SECS`. Kp is a 1-minute product behind a 5-minute snapshot; GOES
+    /// X-ray is 1-minute; the SFI is one noon reading a day; the daily A is issued at 00:30 UT
+    /// for the day before, and its stamp is that day's 00:00.
+    pub const fn fresh_secs(self) -> i64 {
+        match self {
+            WxKey::Kp => 15 * 60,
+            WxKey::Xray => 10 * 60,
+            WxKey::Sfi => 48 * 3600,
+            WxKey::A => 50 * 3600,
+        }
+    }
+}
+
+impl SpaceWx {
+    /// This reading with every Kp and X-ray that may not speak for `now` replaced by the quiet
+    /// stand-in ([`SpaceWx::default`]): what the insights, banners, opening detector and model
+    /// run on, so an hours-old Kp 6 raises no storm line and a GOES gap's last flux no flare
+    /// line. The gauges still show the measured numbers, aged, from the snapshot's view.
+    pub fn speaking_now(&self, stamps: &SpaceWxStamps, now: i64) -> SpaceWx {
+        let quiet = SpaceWx::default();
+        SpaceWx {
+            kp: if stamps.usable(WxKey::Kp, now) {
+                self.kp
+            } else {
+                quiet.kp
+            },
+            xray_long: if stamps.usable(WxKey::Xray, now) {
+                self.xray_long
+            } else {
+                quiet.xray_long
+            },
+            ..*self
+        }
+    }
 }
 
 /// NOAA radio-blackout R-scale (0 = none) from the GOES long X-ray flux (W/m²):
@@ -829,6 +901,79 @@ pub fn classify_vhf_mode(median_km: f64, max_km: f64, wx: &SpaceWx) -> PropMode 
 
 #[cfg(test)]
 mod tests {
+
+    /// The server's freshness rule is the UI's: usable strictly before the limit, a stand-in
+    /// never, a future stamp always.
+    #[test]
+    fn a_reading_speaks_for_now_only_inside_its_products_limit() {
+        use super::{SpaceWxStamps, WxKey};
+        const NOW: i64 = 1_761_800_000;
+        for key in [WxKey::Sfi, WxKey::Kp, WxKey::Xray, WxKey::A] {
+            let at = |t: i64| {
+                let mut s = SpaceWxStamps::default();
+                match key {
+                    WxKey::Sfi => s.sfi_at = Some(t),
+                    WxKey::Kp => s.kp_at = Some(t),
+                    WxKey::Xray => s.xray_at = Some(t),
+                    WxKey::A => s.a_day = Some(t),
+                }
+                s
+            };
+            let lim = key.fresh_secs();
+            assert!(at(NOW - lim + 1).usable(key, NOW), "{key:?} just inside");
+            assert!(!at(NOW - lim).usable(key, NOW), "{key:?} at the limit");
+            assert!(at(NOW + 60).usable(key, NOW), "{key:?} future-stamped");
+            assert!(
+                !SpaceWxStamps::default().usable(key, NOW),
+                "{key:?} stand-in"
+            );
+        }
+        assert_eq!(WxKey::Kp.fresh_secs(), 900);
+        assert_eq!(WxKey::Xray.fresh_secs(), 600);
+        assert_eq!(WxKey::Sfi.fresh_secs(), 48 * 3600);
+        assert_eq!(WxKey::A.fresh_secs(), 50 * 3600);
+    }
+
+    /// An hours-old storm Kp and a GOES gap's flare flux are replaced by the quiet stand-ins
+    /// for everything that interprets them; fresh ones pass through; the SFI is untouched.
+    #[test]
+    fn only_fresh_kp_and_xray_reach_the_lines_that_interpret_them() {
+        use super::{SpaceWx, SpaceWxStamps};
+        const NOW: i64 = 1_761_800_000;
+        let storm = SpaceWx {
+            sfi: 90.0,
+            ssn: None,
+            kp: 6.0,
+            a_index: 40.0,
+            xray_long: 2e-4,
+        };
+        let old = SpaceWxStamps {
+            sfi_at: Some(NOW - 3600),
+            kp_at: Some(NOW - 2 * 3600),
+            xray_at: Some(NOW - 2 * 3600),
+            a_day: None,
+        };
+        let q = storm.speaking_now(&old, NOW);
+        assert_eq!(q.kp, SpaceWx::default().kp);
+        assert_eq!(q.xray_long, SpaceWx::default().xray_long);
+        assert!(!q.flare_in_progress());
+        assert_eq!(q.sfi, 90.0);
+        let fresh = SpaceWxStamps {
+            kp_at: Some(NOW - 60),
+            xray_at: Some(NOW - 60),
+            ..old
+        };
+        let f = storm.speaking_now(&fresh, NOW);
+        assert_eq!((f.kp, f.xray_long), (6.0, 2e-4));
+        // The model needs both a usable flux and a usable Kp.
+        assert!(fresh.model_usable(NOW));
+        assert!(!old.model_usable(NOW), "stale Kp: no model word");
+        let no_sfi = SpaceWxStamps {
+            sfi_at: None,
+            ..fresh
+        };
+        assert!(!no_sfi.model_usable(NOW));
+    }
 
     /// Reported on 1.0.3: the Needed board showed "Digital" for some rows and "FT8" for others,
     /// on the same band — and the "Digital" ones were FT8 when clicked.

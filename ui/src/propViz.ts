@@ -388,9 +388,25 @@ export function mufCeilingBand(mufMhz: number): string {
   return label
 }
 
+/** The word a silent band reads when there is no model word for it: the station had no usable
+ *  solar flux and Kp to run the model on, or (an older station) sent none. Nobody heard the band
+ *  and nothing measured says it is open or closed, so it is unknown — never "Open". */
+export const NO_MODEL_WORD = '—'
+
+/** What a band's word claims: open, marginal or closed by evidence or the model, or unknown
+ *  (`NO_MODEL_WORD`). Every surface that colours, ranks or names a band by its word asks this,
+ *  never `word !== 'Closed'`, so an unknown band can never be counted as open. */
+export function bandWordState(word: string): 'open' | 'marginal' | 'closed' | 'unknown' {
+  if (word === 'Open') return 'open'
+  if (word === 'Marginal') return 'marginal'
+  if (word === 'Closed') return 'closed'
+  return 'unknown'
+}
+
 /** Combine MODELED openness + OBSERVED tier into the dual-state label that kills the
  * false "quiet = dead" reading: a band the model says is Open but with no spots reads
- * "Open · none heard", never "Quiet"/"dead". */
+ * "Open · none heard", never "Quiet"/"dead". A silent band with no model word reads
+ * `NO_MODEL_WORD` · none heard: unknown, never Open. */
 export function dualStateLabel(
   modeled: BandModeled | undefined,
   tier: ActivityTier,
@@ -403,10 +419,11 @@ export function dualStateLabel(
   if (tier === 'Active') return { word: 'Open', sub: t('prop.state.sub.active') }
   if (tier === 'Moderate') return { word: 'Open', sub: t('prop.state.sub.someActivity') }
   // Silent band: defer to the model. Open-but-unheard reads "Open · none heard" — the
-  // key fix so a quiet band never reads as dead.
-  const m: BandModeled = modeled ?? 'Open'
-  if (m === 'Closed') return { word: 'Closed', sub: '' }
-  return { word: m, sub: t('prop.state.sub.noneHeard') }
+  // key fix so a quiet band never reads as dead. No model word (no usable space weather, or an
+  // older station that sends none): nothing says the band is open, so it is unknown.
+  if (!modeled) return { word: NO_MODEL_WORD, sub: t('prop.state.sub.noneHeard') }
+  if (modeled === 'Closed') return { word: 'Closed', sub: '' }
+  return { word: modeled, sub: t('prop.state.sub.noneHeard') }
 }
 
 /** One band's condition cell — the word, its sub-note and its colour — exactly as the Band
@@ -416,8 +433,7 @@ export function dualStateLabel(
  *  THE COLOUR FOLLOWS THE WORD. A band heard now IS open, whatever the model says, so it is green:
  *  a summer Es opening on 10 m or 6 m, which the model calls closed, used to be painted as a grey
  *  "Open". A silent band wears the model's word and that word's colour. With no model and nobody
- *  heard (a report from an older station), the word defaults to Open, which is no evidence, so the
- *  colour stays the tier's neutral: unknown is never green. */
+ *  heard, the word is `NO_MODEL_WORD` and the colour the tier's neutral: unknown is never green. */
 export function bandConditionCell(b: BandReport): { word: string; sub: string; color: string } {
   const ds = dualStateLabel(b.modeled, b.tier)
   const heard = b.tier === 'Active' || b.tier === 'Moderate'

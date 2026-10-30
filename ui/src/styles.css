@@ -853,6 +853,10 @@ button.nb-chip:hover {
   font-size: var(--fs-label);
   line-height: var(--lh-tight);
 }
+/* An old or missing reading's number takes the dim ink, as its caption does: never full ink. */
+.swx-v[data-dim] {
+  color: var(--text-dim);
+}
 /* A unit after a gauge's value (the solar wind's km/s): smaller, so the number stays short. */
 .swx-vu {
   display: inline-flex;

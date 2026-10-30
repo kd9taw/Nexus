@@ -64,6 +64,7 @@ function gauge(container: HTMLElement, label: string) {
   if (!g) throw new Error(`no ${label} gauge`)
   return {
     value: g.querySelector('.swx-v')?.textContent,
+    numberDim: g.querySelector('.swx-v')?.hasAttribute('data-dim'),
     unit: g.querySelector('.swx-u')?.textContent ?? null,
     line: g.querySelector('.swx-impact')?.textContent,
     bar: (g.querySelector('.swx-bar-fill') as HTMLElement).style.background,
@@ -112,6 +113,21 @@ describe('a real reading carries its time, and its age once old', () => {
     expect(g.inked).toBe(false)
     expect(g.line).toBe(t('prop.spaceWx.stale', { ago: t('prop.opening.ago.mins', { mins: 45 }) }))
     expect(g.line).not.toBe(kpImpact(6).text)
+  })
+
+  it('an old or missing number is dimmed with its line; a fresh one is not', () => {
+    const { container } = render(<SpaceWxGauges wx={live({ kp: 6, kpAt: NOW - 2 * 3600, sfiAt: null })} />)
+    expect(gauge(container, 'Kp').numberDim, 'stale').toBe(true)
+    expect(gauge(container, 'SFI').numberDim, 'stand-in').toBe(true)
+    expect(gauge(container, 'X-ray').numberDim, 'fresh').toBe(false)
+  })
+
+  it('the SFI hover gives the true measurement time and never calls another reading noon', () => {
+    // Penticton's 17:00 UT reading, taken when the file carried no noon row.
+    const { container } = render(<SpaceWxGauges wx={live({ sfiAt: DAY + 17 * 3600 })} />)
+    const title = gauge(container, 'SFI').title
+    expect(title).toContain('17:00Z')
+    expect(title).not.toMatch(/noon/i)
   })
 
   it('just inside the cadence it is still a reading (the boundary)', () => {

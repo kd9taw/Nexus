@@ -605,7 +605,10 @@ impl PropAdvisor {
         }
     }
 
-    fn banners(&self, wx: &SpaceWx) -> Vec<String> {
+    /// The storm and flare banners `wx` raises. Public so the command layer can rebuild them
+    /// for a served snapshot from the Kp and X-ray that may speak for now
+    /// ([`SpaceWx::speaking_now`]), not the ones it was built from.
+    pub fn banners(&self, wx: &SpaceWx) -> Vec<String> {
         let mut v = Vec::new();
         if wx.kp >= 5.0 {
             v.push(format!(

@@ -32,16 +32,18 @@ export function ScalesAnnunciator({
   if (!scales || !scales.asOf) return <p className="pane-basic">{t('prop.scales.none')}</p>
   const top = alerts[0]
   const age = Math.max(0, Math.floor(Date.now() / 1000 - scales.asOf))
+  // An old copy keeps its letters, dim, beside its age: an R3 from hours ago is no alarm now.
+  const stale = age >= SCALES_STALE_SECS
   return (
     <div className="swsc">
       <div className="swsc-scales">
         {RSG.map((x) => (
-          <span key={x.key} className={`swsc-chip swsc-${sev(scales[x.key])}`} title={t(x.titleKey)}>
+          <span key={x.key} className={`swsc-chip swsc-${stale ? 'quiet' : sev(scales[x.key])}`} title={t(x.titleKey)}>
             {x.label}
             {scales[x.key]}
           </span>
         ))}
-        {age >= SCALES_STALE_SECS && <span className="swsc-fc">{t('prop.scales.asOf', { ago: agoLabel(age) })}</span>}
+        {stale && <span className="swsc-fc">{t('prop.scales.asOf', { ago: agoLabel(age) })}</span>}
         {scales.gTomorrow > 0 && (
           <span className="swsc-fc" title={t('prop.scales.tomorrow.title')}>
             {t('prop.scales.tomorrow', { level: scales.gTomorrow })}

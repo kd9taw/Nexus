@@ -25,7 +25,7 @@ import {
   type Azimuth,
 } from '../../grid'
 import { fmtDistanceKm } from '../../units'
-import { dualStateLabel, kpImpact, sortInsights, wxUsable } from '../../propViz'
+import { bandWordState, dualStateLabel, kpImpact, sortInsights, wxUsable } from '../../propViz'
 import { buildChaseTargets, chaseSummaryLine } from '../../features/chase'
 import { buildChaseFeed, chaseFeedLine as feedSummary } from '../../features/chaseFeed'
 import { fmtSinceUtc, getoutSummary } from '../../features/getout'
@@ -94,9 +94,12 @@ export function bandAdvisorLine(c: PaneContext): string {
   // Project through the SAME dual-state word the BandAdvisor shows (modeled-open beats a
   // silent observed tier), so Basic never reads "Quiet"/"Closed" while the advisor says
   // "Open" — the false-dead-band bug the A1 dual-state work fixed.
-  const isOpen = (x: (typeof bands)[number]) => dualStateLabel(x.modeled, x.tier).word !== 'Closed'
-  const b = bands.find(isOpen) ?? bands[0]
-  if (!b) return t('connect.basic.bandAdvisor.none')
+  // A band with no model word that nobody heard is unknown, never the open one: with no band
+  // known open and none known closed, the line says so rather than naming a band.
+  const state = (x: (typeof bands)[number]) => bandWordState(dualStateLabel(x.modeled, x.tier).word)
+  const b =
+    bands.find((x) => state(x) === 'open' || state(x) === 'marginal') ?? bands.find((x) => state(x) === 'closed')
+  if (!b) return bands.length ? t('connect.basic.bandAdvisor.unknown') : t('connect.basic.bandAdvisor.none')
   const word = dualStateLabel(b.modeled, b.tier).word
   // Two whole sentences: naming the region it is best TO is a different statement.
   return b.bestRegion
@@ -241,11 +244,10 @@ export function bestbandLine(c: PaneContext): string {
   if (c.prop.source === 'offline') return t('connect.basic.offline')
   const r = c.prop.bestToRegion?.[0]
   if (!r) return t('connect.basic.bestband.none')
-  return t('connect.basic.bestband', {
-    region: r.region,
-    band: r.band,
-    word: dualStateLabel(r.modeled, r.tier).word,
-  })
+  const word = dualStateLabel(r.modeled, r.tier).word
+  // No model word and nobody heard: the band is named, its state is not guessed.
+  if (bandWordState(word) === 'unknown') return t('connect.basic.bestband.noWord', { region: r.region, band: r.band })
+  return t('connect.basic.bestband', { region: r.region, band: r.band, word })
 }
 
 export function activityLine(c: PaneContext): string {
