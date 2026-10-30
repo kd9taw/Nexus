@@ -2696,3 +2696,115 @@ fn with_the_beta_switch_off_cw_tune_and_the_atu_name_the_switch() {
          sit off the frequency Nexus checked. Turn XIT off."
     );
 }
+
+/// The session's transport, as a test can kill the session's driver through it: once tripped, the
+/// driver's next read panics, as a bug in the session would. Writes still go out.
+struct Tripwire {
+    tcp: TcpStream,
+    trip: Arc<AtomicBool>,
+}
+
+impl std::io::Read for Tripwire {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        assert!(
+            !self.trip.load(Ordering::Relaxed),
+            "the session's driver dies"
+        );
+        std::io::Read::read(&mut self.tcp, buf)
+    }
+}
+
+impl Write for Tripwire {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
+/// ⭐ A SESSION WHOSE DRIVER DIES ENDS ITS WATCHER, AND A DEATH MID-OVER IS AN ALARM. A driver that
+/// dies without reaching `Closed` drops the watcher's event channel, which then answers at once,
+/// with nothing: a watcher that took that for a quiet radio spun a whole core for the rest of the
+/// session. The watcher must end promptly, the session must read closed (so the radio loop sees
+/// the daemon gone), the transmitter must get the unkey on the way down, and an over that was on
+/// the air must be an alarm. The control: a driver that dies idle ends the watcher with no alarm
+/// and no unkey.
+#[test]
+fn a_session_whose_driver_dies_ends_its_watcher() {
+    for keyed in [false, true] {
+        let sim = simulator(SimSession::v4_gui_client(), vec![]);
+        let tcp = TcpStream::connect(sim.tcp_addr()).expect("connect");
+        tcp.set_read_timeout(Some(session::READ_POLL)).unwrap();
+        let trip = Arc::new(AtomicBool::new(false));
+        let io = Tripwire {
+            tcp,
+            trip: trip.clone(),
+        };
+        let conn = Arc::new(Connection::spawn(io, config(Vec::new())).expect("the session"));
+        assert!(conn.wait_until(WAIT, |s| s.phase == Phase::Ready));
+        if keyed {
+            let create = Command::SliceCreate {
+                pan: None,
+                freq_hz: 14_074_000.0,
+                mode: None,
+            };
+            assert!(conn.request(create, WAIT).expect("answered").is_success());
+            assert!(conn.wait_until(WAIT, |s| s.transmit_ready));
+            conn.start(TxStart::Key).expect("keyed");
+            assert!(sim.wait_for(WAIT, |log| log.iter().any(|l| matches!(
+                &l.event,
+                SimEvent::Command { text, .. } if text == "xmit 1"
+            ))));
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let alarm = Arc::new(Mutex::new(Alarm::default()));
+        let (ended_tx, ended) = std::sync::mpsc::channel();
+        let watcher = {
+            let weak = Arc::downgrade(&conn);
+            let (stop, alarm) = (stop.clone(), alarm.clone());
+            let state = Arc::new(ClientState::default());
+            let radio = sim.tcp_addr();
+            std::thread::spawn(move || {
+                watch(weak, radio, &stop, &alarm, &state);
+                let _ = ended_tx.send(());
+            })
+        };
+        trip.store(true, Ordering::Relaxed);
+        let watcher_ended = ended.recv_timeout(Duration::from_secs(5)).is_ok();
+        // A watcher still spinning is let go here, so the failure below is reported, not hung.
+        stop.store(true, Ordering::Relaxed);
+        watcher.join().unwrap();
+        assert!(watcher_ended, "keyed {keyed}: the watcher ended");
+        assert_eq!(conn.snapshot().phase, Phase::Closed, "keyed {keyed}");
+        let unkeys = || {
+            sim.commands()
+                .iter()
+                .filter(|c| c.as_str() == "xmit 0")
+                .count()
+        };
+        let alarm = lock(&alarm).text.clone();
+        if keyed {
+            assert!(
+                sim.wait_for(WAIT, |log| log.iter().any(|l| matches!(
+                    &l.event,
+                    SimEvent::Command { text, .. } if text == "xmit 0"
+                ))),
+                "the unkey went out as the driver died"
+            );
+            let alarm = alarm.expect("an alarm");
+            assert!(alarm.contains("may still be transmitting"), "{alarm}");
+        } else {
+            assert_eq!(alarm, None);
+            assert_eq!(unkeys(), 0);
+        }
+        assert_eq!(
+            sim.commands()
+                .iter()
+                .filter(|c| c.as_str() == "xmit 1")
+                .count(),
+            usize::from(keyed)
+        );
+    }
+}

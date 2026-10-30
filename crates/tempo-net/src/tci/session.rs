@@ -93,6 +93,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -670,11 +671,17 @@ impl Session {
     }
 
     pub fn snapshot(&self) -> Snapshot {
+        self.snapshot_with(self.model.clone())
+    }
+
+    /// [`Self::snapshot`] around a copy of the model the caller already has: the driver's publish
+    /// hands back the one it published while the model has not changed.
+    fn snapshot_with(&self, model: Model) -> Snapshot {
         Snapshot {
             phase: self.phase,
             trx: self.config.trx,
             dialect: self.dialect,
-            model: self.model.clone(),
+            model,
             evidence: self.evidence.clone(),
             keyed: self.keyed.map(|k| OurKey {
                 trx: k.trx,
@@ -1583,7 +1590,23 @@ impl Connection {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
                 .name("tci-session".into())
-                .spawn(move || drive(ws, session, streams, epoch, request_rx, &event_tx, &shared))?
+                .spawn(move || {
+                    let (mut ws, mut session) = (ws, session);
+                    let driven = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        drive(
+                            &mut ws,
+                            &mut session,
+                            streams,
+                            epoch,
+                            request_rx,
+                            &event_tx,
+                            &shared,
+                        );
+                    }));
+                    if driven.is_err() {
+                        died(&mut ws, &mut session, epoch, &shared);
+                    }
+                })?
         };
         Ok(Connection {
             requests,
@@ -1650,7 +1673,14 @@ impl Connection {
 
     /// The next event, waiting up to `timeout`.
     pub fn next_event(&self, timeout: Duration) -> Option<Event> {
-        lock(&self.events).recv_timeout(timeout).ok()
+        self.recv_event(timeout).ok()
+    }
+
+    /// The next event, waiting up to `timeout`, or `Disconnected` once the driver has stopped and
+    /// every event it sent has been taken: from then on the channel answers at once, so a reader
+    /// that waits on it in a loop must stop there, whatever the session's phase reads.
+    pub fn recv_event(&self, timeout: Duration) -> Result<Event, mpsc::RecvTimeoutError> {
+        lock(&self.events).recv_timeout(timeout)
     }
 
     /// The session's state as of its last step. Each step's state is published before its answers
@@ -1714,8 +1744,8 @@ fn retryable(e: &io::Error) -> bool {
 }
 
 fn drive(
-    mut ws: WebSocket<Socket>,
-    mut session: Session,
+    ws: &mut WebSocket<Socket>,
+    session: &mut Session,
     mut streams: Box<dyn Streams>,
     epoch: Instant,
     requests: Receiver<Request>,
@@ -1726,23 +1756,23 @@ fn drive(
     loop {
         // Requests first, so a stop never waits behind more than one read.
         loop {
-            let mut out = WsOut(&mut ws);
+            let mut out = WsOut(ws);
             match requests.try_recv() {
                 Ok(Request::Send(command, reply)) => {
                     let sent = session.send(&mut out, &command, now());
-                    answer(&session, shared, reply, sent);
+                    answer(session, shared, reply, sent);
                 }
                 Ok(Request::Key(start, reply)) => {
                     let keyed = session.key(&mut out, start, now());
-                    answer(&session, shared, reply, keyed);
+                    answer(session, shared, reply, keyed);
                 }
                 Ok(Request::Stop(stop, reply)) => {
                     let stopped = session.stop(&mut out, stop, now());
-                    answer(&session, shared, reply, stopped);
+                    answer(session, shared, reply, stopped);
                 }
                 Ok(Request::EndOurs(reply)) => {
                     let stopped = session.end_ours(&mut out, now());
-                    answer(&session, shared, reply, stopped);
+                    answer(session, shared, reply, stopped);
                 }
                 Ok(Request::IqTap(tap, reply)) => {
                     session.set_iq_tap(tap);
@@ -1760,7 +1790,7 @@ fn drive(
             // on the next time round, after requests and time.
             ws.get_mut().deadline = Instant::now() + READ_POLL;
             let read = ws.read();
-            let mut out = WsOut(&mut ws);
+            let mut out = WsOut(ws);
             match read {
                 Ok(Message::Text(text)) => session.on_text(&mut out, text.as_str(), now()),
                 Ok(Message::Binary(bytes)) => {
@@ -1784,7 +1814,7 @@ fn drive(
             }
             session.poll(&mut out, now());
         }
-        publish(&session, shared);
+        publish(session, shared);
         for event in session.take_events() {
             let _ = events.send(event);
         }
@@ -1794,7 +1824,7 @@ fn drive(
     }
     // Closed: a request from here is answered at once as closed, not after the drain.
     drop(requests);
-    drain(&mut ws);
+    drain(ws);
 }
 
 /// After the close frame: read on, dropping what comes, until the server's own close frame (it
@@ -1818,11 +1848,38 @@ fn drain(ws: &mut WebSocket<Socket>) {
     }
 }
 
+/// The driver panicked: a bug in the session, never a state it is meant to reach. TX SAFETY: the
+/// stops a close sends first go out first here too ([`Session::end_ours`], best effort: the session
+/// may be part way through a step), then the session is published closed, so every reader sees it
+/// gone (the radio loop's liveness check, a wait on the state, the transmit path) rather than open
+/// forever, and the event channel, dropped with the thread, ends the watcher. Nothing of ours is
+/// published as off the air: no report from the server can prove the unkey now, so the last
+/// published belief stands. The rest of the close waits on a server a dead driver cannot read: the
+/// connection just goes.
+fn died(ws: &mut WebSocket<Socket>, session: &mut Session, epoch: Instant, shared: &Shared) {
+    let now = u64::try_from(epoch.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = session.end_ours(&mut WsOut(ws), now);
+    }));
+    lock(&shared.snapshot).phase = Phase::Closed;
+    shared.audio_over.store(false, Ordering::Release);
+    shared.changed.notify_all();
+}
+
 /// Store the session's state for [`Connection::snapshot`] and wake [`Connection::wait_until`].
 /// The driver does this before it announces anything a step did (an answer, an event), so a reader
 /// woken by an announcement reads the state it reports, or a later one.
 fn publish(session: &Session, shared: &Shared) {
-    let snapshot = session.snapshot();
+    let mut published = lock(&shared.snapshot);
+    // The model is everything the server has reported, and the driver publishes every turn, fifty
+    // a second on a quiet link: the copy already published stands while it is equal, and only a
+    // changed model is copied again.
+    let model = if published.model == session.model {
+        std::mem::take(&mut published.model)
+    } else {
+        session.model.clone()
+    };
+    let snapshot = session.snapshot_with(model);
     shared
         .on_air
         .store(snapshot.ours_on_air(), Ordering::Release);
@@ -1830,7 +1887,8 @@ fn publish(session: &Session, shared: &Shared) {
         session.audio_over_open() && !session.is_closed(),
         Ordering::Release,
     );
-    *lock(&shared.snapshot) = snapshot;
+    *published = snapshot;
+    drop(published);
     shared.changed.notify_all();
 }
 
