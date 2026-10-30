@@ -8056,6 +8056,10 @@ impl RadioLoop {
                 self.dial_giveup = None; // same for the dial: the refusal may have been the link
                 self.dial_fail_count = 0;
                 self.width_unanswered = None;
+                // A new link asks again whether the radio answers `v` natively: a probe that
+                // confirms CAT at once skips the confirmation reset, and the last radio's answer
+                // would dress this one's cached VFO up as a reading.
+                self.vfo_read_native = None;
                 self.cat_dead_probes = 0;
                 self.cat_rebuild_at = now + CAT_REBUILD_BACKOFF_MS;
                 self.cat_port_present = None;
@@ -13805,6 +13809,11 @@ impl RadioLoop {
                 }
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now(); // before keying — the fail-safe must already know
+
+                // PTT is asserted here, once per Tune: in WSPR it flips a compound call's
+                // alternation whatever the radio answers, as WSJT-X's Tune does
+                // ([`Engine::note_tune_ptt_asserted`]).
+                engine_lock(engine).note_tune_ptt_asserted();
                 let refused = if native {
                     // Held at most the auto-release's time: the client's session ends it at that
                     // plus its margin even if this loop stalls.
@@ -23893,6 +23902,94 @@ mod tests {
             "B",
             "the indicator flicked back to the pre-press reading the moment the write landed"
         );
+    }
+
+    /// WHETHER `v` IS NATIVE IS A QUESTION FOR EACH RADIO, AND A REBUILD IS A NEW RADIO. Radio A
+    /// reads its VFO natively; the operator then picks another model, B, and B answers its open at
+    /// once, so no later CAT confirmation asks anything afresh. B's `v` is Hamlib's cache of our
+    /// own last write and must not be read as the radio's selection on A's answer. CONTROL: a B
+    /// that reads natively is read.
+    #[test]
+    fn a_native_vfo_read_on_one_radio_is_not_believed_for_the_next_after_a_cat_rebuild() {
+        for (what, b_cap, shown) in [("B not native", 'N', "A"), ("control: B native", 'Y', "B")] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.request_vfo(false); // Nexus commanded VFO A…
+                e.take_vfo_apply(); // …and the loop wrote it.
+            }
+            let mut backend = MockBackend::new();
+            let (addr_a, _) = mock_vfo_rigctld("VFOA", 'Y');
+            let (addr_b, log_b) = mock_vfo_rigctld("VFOB", b_cap);
+            let mut rig = Rig::rigctld(&addr_a);
+            let mut state = loop_state_for(&engine);
+            state.cat_ok = Some(true);
+            // A answered its own probe.
+            state.vfo_read_native = Some(true);
+            // The operator chooses radio B, another model.
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.rig_model += 1;
+                e.apply_settings(s);
+            }
+            let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+            let mut reopen = move |_t: &Transport, _coexist: bool| -> RigOpen {
+                (
+                    Rig::rigctld(&addr_b),
+                    None,
+                    CatProbe::status(Some(true), String::new()),
+                )
+            };
+            let mut station = StationSinks::new();
+            let mut now = 100_000.0;
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut reopen,
+                    &mut station,
+                )
+                .unwrap();
+            assert!(rig.has_control(), "{what}: premise: B connected");
+            assert_eq!(state.cat_ok, Some(true), "{what}: premise: probe-confirmed");
+            // Two read-back ticks: B's capability probe, then the read it allows.
+            for _ in 0..2 {
+                now += RIG_POLL_MS;
+                vfo_read_tick(&engine, &mut state);
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        now,
+                        &mut ra,
+                        &mut reopen,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+            let wire = log_b.lock().unwrap().clone();
+            assert!(
+                wire.iter().any(|l| l == "\\dump_caps"),
+                "{what}: B was asked its own capability: {wire:?}"
+            );
+            assert_eq!(
+                wire.iter().any(|l| l == "v"),
+                b_cap == 'Y',
+                "{what}: `v` read on B: {wire:?}"
+            );
+            assert_eq!(
+                engine.lock().unwrap().snapshot().radio.active_vfo,
+                shown,
+                "{what}: the indicator"
+            );
+        }
     }
 
     /// A REFUSED LEVEL WRITE MUST STOP BEING RE-SENT (2026-08-17 Flex audit, wave-2 #60).
@@ -36669,6 +36766,94 @@ mod tests {
             "a blocking L RFPOWER per tick, for the whole tune-up, against a chunked carrier — \
              and the ceiling was already applied before the tune keyed: {:?}",
             log.lock().unwrap()
+        );
+    }
+
+    /// ⭐ A TUNE IN WSPR FLIPS A COMPOUND CALL'S BEACON ALTERNATION, ONCE PER TUNE, WHATEVER THE
+    /// RADIO ANSWERS. WSJT-X's Tune raises PTT through the block whose WSPR branch calls
+    /// `WSPR_message` on the tick PTT rises (`widgets/mainwindow.cpp:7805`, `:7880`, `:7886`), and
+    /// PTT then stays up for the whole Tune, so one Tune flips `m_tx` once (`:15462`). FST4W builds
+    /// its message only in the branch a Tune skips (`:7916`, `:8006`), and no other mode builds one.
+    /// Through the real loop, several ticks of a held Tune.
+    #[test]
+    fn a_tune_in_wspr_flips_the_compound_call_alternation_once() {
+        use tempo_app::dto::Tier;
+        use tempo_app::engine::TxWaveform;
+        // A Tune held in `tier` for four ticks (an even number, so a count per tick would land
+        // back on the type 2) against a radio that keys or refuses, then the message the next
+        // WSPR beacon over sends.
+        let after_a_tune = |tier: Tier, refuse: bool| -> String {
+            let mut e = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+            e.set_tier(tier);
+            e.set_tune(true);
+            let engine = Arc::new(Mutex::new(e));
+            let (addr, log) = if refuse {
+                mock_rigctld_refusing(14_097_000, &["T"])
+            } else {
+                mock_rigctld_on(14_097_000, false)
+            };
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state();
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            for i in 0..4 {
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        &mut rig,
+                        &sinks,
+                        f64::from(i) * 20.0,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+            let keys = log.lock().unwrap().iter().filter(|l| *l == "T 1").count();
+            assert_eq!(keys, 1, "{tier:?} refuse={refuse}: premise: one PTT assert");
+            let mut e = engine.lock().unwrap();
+            if refuse {
+                assert!(!e.tuning(), "{tier:?}: premise: a refused Tune ends");
+            } else {
+                assert!(
+                    state.tuning_keyed && e.tuning(),
+                    "{tier:?}: premise: the Tune is up"
+                );
+            }
+            e.set_tune(false);
+            e.set_tier(Tier::Wspr);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            match e.plan_tx(10).map(|p| p.waveform) {
+                Some(TxWaveform::Native { text, .. }) => text,
+                _ => panic!("{tier:?}: a beacon over"),
+            }
+        };
+        let (two, three) = ("PJ4/K1ABC 37", "<PJ4/K1ABC> FK52UD 37");
+        assert_eq!(
+            after_a_tune(Tier::Wspr, false),
+            three,
+            "a WSPR Tune did not flip the alternation, or flipped it more than once"
+        );
+        assert_eq!(
+            after_a_tune(Tier::Wspr, true),
+            three,
+            "a WSPR Tune the radio refused did not flip the alternation"
+        );
+        assert_eq!(
+            after_a_tune(Tier::Fst4w, false),
+            two,
+            "an FST4W Tune flipped the alternation"
+        );
+        assert_eq!(
+            after_a_tune(Tier::Ft8, false),
+            two,
+            "CONTROL: an FT8 Tune flipped the beacon"
         );
     }
 

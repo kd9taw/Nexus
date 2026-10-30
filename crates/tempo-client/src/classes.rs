@@ -586,6 +586,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("sstv_auto_arm",                  RunsAtShack, "The shack's SSTV decoder; receive only."),
     ("sstv_auto_disarm",               RunsAtShack, "The shack's SSTV decoder; receive only."),
     ("sstv_delete_image",              RunsAtShack, "Deletes one received picture inside the shack's gallery."),
+    ("sstv_delete_images",             RunsAtShack, "Deletes the chosen received pictures, each inside the shack's gallery only."),
     ("sstv_manual_rx",                 RunsAtShack, "The shack's SSTV decoder; receive only."),
     ("sstv_send",                      StartsTx,    "Transmits an SSTV picture."),
     ("sstv_stop",                      StopsTx,     "Stops the SSTV transmission now."),

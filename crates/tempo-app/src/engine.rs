@@ -21173,6 +21173,19 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// The radio loop asserted PTT for a Tune, whatever the radio then answers. In WSPR it counts
+    /// toward a compound call's alternation ([`Self::beacon_overs`]) as a beacon over's assert
+    /// does, once per Tune: WSJT-X's Tune raises PTT through the same block (`or m_tune`,
+    /// `widgets/mainwindow.cpp:7805`), whose WSPR branch calls `WSPR_message` (`:7886`) on the
+    /// tick PTT rises (`:7880`) and flips `m_tx` (`:15462`); PTT then stays up for the whole Tune.
+    /// FST4W's call (`:8006`) is in the branch a Tune skips (`:7916`), so a Tune there does not
+    /// count, and neither does one in any other mode.
+    pub fn note_tune_ptt_asserted(&mut self) {
+        if self.app.tier() == Tier::Wspr {
+            self.beacon_overs += 1;
+        }
+    }
+
     /// Halt TX because the sound card's transmit audio output would not open for slot TX (FT8,
     /// FT4, JS8 and the other timed-slot modes): nothing is keyed, since a radio keyed with no
     /// audio puts a dead carrier on the air for the whole over, and every over after it while the
@@ -75100,6 +75113,45 @@ mod tests {
             text(&mut e, 10).as_deref(),
             Some("PJ4/K1ABC 37"),
             "CONTROL: an FT8 key flipped the beacon"
+        );
+    }
+
+    /// ⭐ A TUNE IN WSPR FLIPS A COMPOUND CALL'S ALTERNATION; IN FST4W AND EVERY OTHER MODE IT DOES
+    /// NOT. WSJT-X's Tune raises PTT through the block whose WSPR branch calls `WSPR_message`
+    /// (`widgets/mainwindow.cpp:7805`, `:7880`, `:7886`); FST4W builds its message only in the
+    /// branch a Tune skips (`:7916`, `:8006`). The radio loop's side, one count per Tune whatever
+    /// the radio answers, is `a_tune_in_wspr_flips_the_compound_call_alternation_once`.
+    #[test]
+    fn a_tune_flips_the_beacon_alternation_in_wspr_only() {
+        let after_a_tune = |tune_tier: Tier, beacon_tier: Tier| -> String {
+            let mut e = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+            e.set_tier(tune_tier);
+            e.note_tune_ptt_asserted();
+            e.set_tier(beacon_tier);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            match e.plan_tx(10).map(|p| p.waveform) {
+                Some(TxWaveform::Native { text, .. }) => text,
+                _ => panic!("{tune_tier:?}: a beacon over"),
+            }
+        };
+        assert_eq!(
+            after_a_tune(Tier::Wspr, Tier::Wspr),
+            "<PJ4/K1ABC> FK52UD 37",
+            "a WSPR Tune did not flip the alternation"
+        );
+        assert_eq!(
+            after_a_tune(Tier::Fst4w, Tier::Fst4w),
+            "PJ4/K1ABC 37",
+            "an FST4W Tune flipped the alternation"
+        );
+        assert_eq!(
+            after_a_tune(Tier::Ft8, Tier::Wspr),
+            "PJ4/K1ABC 37",
+            "CONTROL: an FT8 Tune flipped the beacon"
         );
     }
 
