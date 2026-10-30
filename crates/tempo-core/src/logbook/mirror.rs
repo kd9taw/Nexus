@@ -1612,4 +1612,21 @@ mod tests {
             "the next flush writes it, and then nothing is owed"
         );
     }
+
+    /// Several changes inside one debounce are one write, and once it is done nothing is owed:
+    /// every change the lane took while it waited counts as taken, or a quit after any burst of
+    /// logging would read `log.adi` as owed for good.
+    #[test]
+    fn coalesced_changes_are_not_owed_after_the_flush() {
+        let d = Dir::new("coalesce");
+        let w = lane_with_timing(d.log(), Duration::from_secs(30), Duration::from_secs(60));
+        w.submit(rows(2));
+        w.submit(rows(3)); // taken while the lane waits: the 30 s debounce has not run out
+        let s = w.flush(Duration::from_secs(30));
+        assert_eq!(
+            (s.writes, s.pending),
+            (1, false),
+            "two changes in one debounce: one write, nothing owed: {s:?}"
+        );
+    }
 }
