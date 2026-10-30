@@ -5187,6 +5187,12 @@ pub struct Engine {
     /// the view must not restart it behind them. Same decision-memory as
     /// `aprs_auto_arm_declined`.
     sstv_auto_arm_declined: bool,
+    /// The SSTV picture viewer's window is open at the station
+    /// ([`Engine::set_sstv_viewer_open`]), which keeps the SSTV screen in its section.
+    sstv_viewer_open: bool,
+    /// Decoder screens left while a computer driving the station was attached, whose leave waits
+    /// for it to go ([`Engine::leave_decoder_screen`]). Opening the screen again cancels its leave.
+    decoder_leaves_held: Vec<decoder_screens::DecoderScreen>,
     /// The SSTV receiver is running because the operator opened its screen, not because they
     /// (or the ISS pass, an opt-in of theirs) armed it — the `rtty_auto_armed` distinction.
     sstv_auto_armed: bool,
@@ -7270,6 +7276,8 @@ impl Engine {
             sstv_armed: false,
             sstv_manual_rx: None,
             sstv_auto_arm_declined: false,
+            sstv_viewer_open: false,
+            decoder_leaves_held: Vec::new(),
             sstv_auto_armed: false,
             sstv_health: SstvHealth::default(),
             sstv_audio: Vec::new(),
@@ -24157,6 +24165,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// so it survives a remount and is testable without a webview. RX ONLY — arming the
     /// decoder cannot key anything; every RTTY TX path is separate and gated elsewhere.
     pub fn rtty_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Rtty);
         if self.rtty_armed || self.rtty_auto_arm_declined || !self.settings.rtty_rx_auto_arm {
             return false;
         }
@@ -24231,6 +24240,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// and it refuses outright once the operator has explicitly stopped the decoder this session.
     /// The policy lives here rather than in the UI so it survives a remount and is testable.
     pub fn aprs_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Aprs);
         if self.aprs_arm != AprsArm::Off || self.aprs_auto_arm_declined {
             return false;
         }
@@ -25311,6 +25321,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// testable without a webview. RX ONLY — arming the decoder cannot key
     /// anything (TX starts only from an explicit send behind `psk_tx_gate`).
     pub fn psk_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Psk);
         if self.psk_armed || self.psk_auto_arm_declined || !self.settings.psk_rx_auto_arm {
             return false;
         }
@@ -27071,6 +27082,7 @@ contact yourself."
     /// entry path: the Arm button and the ISS pass arm both call
     /// [`Engine::set_sstv_armed`], an explicit operator act, and are unaffected.
     pub fn sstv_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Sstv);
         if self.sstv_armed || self.sstv_auto_arm_declined || !self.settings.sstv_rx_auto_arm {
             return false;
         }

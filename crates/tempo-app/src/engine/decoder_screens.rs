@@ -26,6 +26,7 @@
 //! stops).
 
 use super::{AprsArm, AprsHealth, Engine};
+use std::time::Instant;
 
 /// A receive screen whose decoder starts when the operator opens it. "rtty", "psk", "jtty",
 /// "sstv", "aprs" on the wire.
@@ -40,14 +41,20 @@ pub enum DecoderScreen {
 }
 
 impl Engine {
+    /// The SSTV picture viewer's window is open at the station (`open_panel_window` and the
+    /// window's `Destroyed` event keep this, and `leave_decoder_screen` refreshes it): it shows
+    /// the SSTV screen's pictures, so the screen is still in the section.
+    pub fn set_sstv_viewer_open(&mut self, open: bool) {
+        self.sstv_viewer_open = open;
+    }
+
     /// The operator left `screen` for another section. Stops its decoder if, and only if, opening
-    /// the screen is what started it and nothing else still needs it. `shown_elsewhere`: the
-    /// screen is still on show in a window of its own, which keeps it in the section.
+    /// the screen is what started it and nothing else still needs it.
     ///
     /// Returns whether the decoder is STILL running on its screen's arm — kept for one of the
     /// reasons above — so the caller can ask again at the next section change. A decoder the
     /// operator armed, or one already off, returns false: there is nothing left to ask about.
-    pub fn leave_decoder_screen(&mut self, screen: DecoderScreen, shown_elsewhere: bool) -> bool {
+    pub fn leave_decoder_screen(&mut self, screen: DecoderScreen) -> bool {
         let auto_armed = match screen {
             DecoderScreen::Rtty => self.rtty_armed && self.rtty_auto_armed,
             DecoderScreen::Psk => self.psk_armed && self.psk_auto_armed,
@@ -58,14 +65,25 @@ impl Engine {
         if !auto_armed {
             return false;
         }
-        let still_needed = shown_elsewhere
-            || match screen {
-                // The auto-sequencer reads the decode to pick its next over.
-                DecoderScreen::Rtty => self.rtty_seq.is_some(),
-                // The RX iGate contributes what this decoder hears.
-                DecoderScreen::Aprs => self.settings.aprs_is_uplink,
-                DecoderScreen::Psk | DecoderScreen::Jtty | DecoderScreen::Sstv => false,
-            };
+        // A computer driving the station is attached: its screen and the shack window's each send
+        // their own leaves against this one engine, and neither knows what the other shows. Stop
+        // nothing (a decoder left on is the safe side: receive only) and carry the leave out once
+        // that computer has gone ([`Self::carry_out_held_leaves`]).
+        if self.remote_presence_live(Instant::now()) {
+            if !self.decoder_leaves_held.contains(&screen) {
+                self.decoder_leaves_held.push(screen);
+            }
+            return true;
+        }
+        let still_needed = match screen {
+            // The auto-sequencer reads the decode to pick its next over.
+            DecoderScreen::Rtty => self.rtty_seq.is_some(),
+            // The RX iGate contributes what this decoder hears.
+            DecoderScreen::Aprs => self.settings.aprs_is_uplink,
+            // The picture viewer, open in its own window, is still the SSTV screen.
+            DecoderScreen::Sstv => self.sstv_viewer_open,
+            DecoderScreen::Psk | DecoderScreen::Jtty => false,
+        };
         if still_needed {
             return true;
         }
@@ -93,12 +111,34 @@ impl Engine {
         }
         false
     }
+
+    /// Opening `screen` again cancels a leave held for it: it is in front once more.
+    pub(super) fn decoder_screen_entered(&mut self, screen: DecoderScreen) {
+        self.decoder_leaves_held.retain(|held| *held != screen);
+    }
+
+    /// Carry out the leaves held while a computer was attached, now that none is: each decoder
+    /// still running on its screen's arm stops, unless something still needs it (that one stays
+    /// held and is asked again at the next poll). Run on the radio loop's poll
+    /// (`poll_remote_stream`); with nothing held it costs one check.
+    pub(super) fn carry_out_held_leaves(&mut self, now: Instant) {
+        if self.decoder_leaves_held.is_empty() || self.remote_presence_live(now) {
+            return;
+        }
+        for screen in std::mem::take(&mut self.decoder_leaves_held) {
+            if self.leave_decoder_screen(screen) {
+                self.decoder_leaves_held.push(screen);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_control::transmit::TransmitAuthority;
     use crate::settings::Settings;
+    use std::time::Duration;
 
     const SCREENS: [DecoderScreen; 5] = [
         DecoderScreen::Rtty,
@@ -146,7 +186,7 @@ mod tests {
         for s in SCREENS {
             let mut e = Engine::new("W9XYZ", "EN61", 0);
             assert!(auto_arm(&mut e, s), "{s:?}: opening the screen arms");
-            assert!(!e.leave_decoder_screen(s, false), "{s:?}: nothing keeps it");
+            assert!(!e.leave_decoder_screen(s), "{s:?}: nothing keeps it");
             assert!(!armed(&e, s), "{s:?}: leaving stopped the decoder");
         }
     }
@@ -158,7 +198,7 @@ mod tests {
         for s in SCREENS {
             assert!(auto_arm(&mut e, s));
         }
-        e.leave_decoder_screen(DecoderScreen::Sstv, false);
+        e.leave_decoder_screen(DecoderScreen::Sstv);
         assert!(!e.sstv_armed(), "the screen left");
         for s in SCREENS.into_iter().filter(|s| *s != DecoderScreen::Sstv) {
             assert!(armed(&e, s), "{s:?} was not left and keeps running");
@@ -173,13 +213,13 @@ mod tests {
         for s in SCREENS {
             let mut e = Engine::new("W9XYZ", "EN61", 0);
             operator_arm(&mut e, s);
-            assert!(!e.leave_decoder_screen(s, false), "{s:?}: nothing to ask");
+            assert!(!e.leave_decoder_screen(s), "{s:?}: nothing to ask");
             assert!(armed(&e, s), "{s:?}: the operator's arm survives");
 
             let mut f = Engine::new("W9XYZ", "EN61", 0);
             assert!(auto_arm(&mut f, s));
             operator_arm(&mut f, s);
-            f.leave_decoder_screen(s, false);
+            f.leave_decoder_screen(s);
             assert!(
                 armed(&f, s),
                 "{s:?}: an explicit arm after entry is the operator's"
@@ -188,7 +228,7 @@ mod tests {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         assert!(e.sstv_auto_arm());
         e.request_sstv_manual_rx("pd120".to_string());
-        e.leave_decoder_screen(DecoderScreen::Sstv, false);
+        e.leave_decoder_screen(DecoderScreen::Sstv);
         assert!(e.sstv_armed(), "a manual receive start is the operator's");
         assert_eq!(e.take_sstv_manual_rx().as_deref(), Some("pd120"));
     }
@@ -200,11 +240,11 @@ mod tests {
         for s in SCREENS {
             let mut e = Engine::new("W9XYZ", "EN61", 0);
             assert!(auto_arm(&mut e, s));
-            e.leave_decoder_screen(s, false);
+            e.leave_decoder_screen(s);
             assert!(auto_arm(&mut e, s), "{s:?}: re-entry is not refused");
             assert!(armed(&e, s), "{s:?}: running again");
             // …and it is still the screen's arm, so the next leave stops it again.
-            e.leave_decoder_screen(s, false);
+            e.leave_decoder_screen(s);
             assert!(!armed(&e, s), "{s:?}: the second leave stops it too");
         }
         let mut e = Engine::new("W9XYZ", "EN61", 0);
@@ -215,8 +255,8 @@ mod tests {
         };
         e.push_rtty_decode(&[ch('R'), ch('Y')], 0.0, false);
         e.push_psk_decode(&[ch('C'), ch('Q')], 0.0, true);
-        e.leave_decoder_screen(DecoderScreen::Rtty, false);
-        e.leave_decoder_screen(DecoderScreen::Psk, false);
+        e.leave_decoder_screen(DecoderScreen::Rtty);
+        e.leave_decoder_screen(DecoderScreen::Psk);
         assert!(e.rtty_auto_arm() && e.psk_auto_arm());
         assert_eq!(
             e.rtty_state().text,
@@ -236,10 +276,7 @@ mod tests {
     fn an_operator_stop_stays_remembered_and_an_idle_leave_does_nothing() {
         for s in SCREENS {
             let mut e = Engine::new("W9XYZ", "EN61", 0);
-            assert!(
-                !e.leave_decoder_screen(s, false),
-                "{s:?}: off, nothing to do"
-            );
+            assert!(!e.leave_decoder_screen(s), "{s:?}: off, nothing to do");
             assert!(
                 auto_arm(&mut e, s),
                 "{s:?}: an idle leave latched no decline"
@@ -253,7 +290,7 @@ mod tests {
                 DecoderScreen::Sstv => f.set_sstv_armed(false),
                 DecoderScreen::Aprs => f.set_aprs_arm(AprsArm::Off),
             }
-            f.leave_decoder_screen(s, false);
+            f.leave_decoder_screen(s);
             assert!(
                 !auto_arm(&mut f, s),
                 "{s:?}: the operator's stop still holds"
@@ -267,16 +304,101 @@ mod tests {
     fn a_screen_still_shown_in_its_own_window_keeps_its_decoder() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         assert!(e.sstv_auto_arm());
+        e.set_sstv_viewer_open(true);
         assert!(
-            e.leave_decoder_screen(DecoderScreen::Sstv, true),
+            e.leave_decoder_screen(DecoderScreen::Sstv),
             "kept: ask again"
         );
         assert!(e.sstv_armed());
+        e.set_sstv_viewer_open(false);
         assert!(
-            !e.leave_decoder_screen(DecoderScreen::Sstv, false),
+            !e.leave_decoder_screen(DecoderScreen::Sstv),
             "the window closed"
         );
         assert!(!e.sstv_armed());
+    }
+
+    /// A computer driving the station is attached: one engine, two screens (the shack window's and
+    /// that computer's), each sending its own leaves. A leave cannot tell whether the other screen
+    /// still shows the decoder, so while one is attached a leave stops nothing.
+    fn with_a_computer_attached() -> (Engine, TransmitAuthority, Instant) {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let presence = TransmitAuthority::default();
+        let t0 = Instant::now();
+        let permit = presence.permit(t0 + Duration::from_secs(5)).unwrap();
+        assert!(e.hold_remote_presence(permit, t0));
+        (e, presence, t0)
+    }
+
+    #[test]
+    fn while_a_computer_drives_the_station_no_leave_stops_a_decoder() {
+        for s in SCREENS {
+            let (mut e, _presence, _t0) = with_a_computer_attached();
+            // The shack window and the computer both opened the screen…
+            assert!(auto_arm(&mut e, s), "{s:?}: the screen arms");
+            assert!(
+                !auto_arm(&mut e, s),
+                "{s:?}: the second screen finds it running"
+            );
+            // …and each leaves it: neither may stop it under the other.
+            assert!(e.leave_decoder_screen(s), "{s:?}: kept, ask again");
+            assert!(
+                e.leave_decoder_screen(s),
+                "{s:?}: the other screen's leave too"
+            );
+            assert!(
+                armed(&e, s),
+                "{s:?}: still decoding while the computer is attached"
+            );
+        }
+    }
+
+    /// The computer goes: what was left while it was attached stops at once — the shack does not
+    /// run every decoder it ever opened for the rest of the session.
+    #[test]
+    fn when_the_computer_goes_what_was_left_stops() {
+        let (mut e, _presence, t0) = with_a_computer_attached();
+        for s in SCREENS {
+            assert!(auto_arm(&mut e, s));
+            assert!(e.leave_decoder_screen(s));
+        }
+        e.poll_remote_stream(t0 + Duration::from_secs(1));
+        assert!(
+            SCREENS.iter().all(|s| armed(&e, *s)),
+            "still attached: all running"
+        );
+        e.poll_remote_stream(t0 + Duration::from_secs(6)); // presence lapsed
+        for s in SCREENS {
+            assert!(!armed(&e, s), "{s:?}: stopped once the computer was gone");
+            assert!(
+                auto_arm(&mut e, s),
+                "{s:?}: no decline: the screen arms it again"
+            );
+        }
+        // And the next leave, with nobody attached, stops at once.
+        assert!(!e.leave_decoder_screen(DecoderScreen::Psk));
+        assert!(!e.psk_armed());
+    }
+
+    /// A screen opened again after its leave was held is in front: the computer going does not
+    /// stop it. And a held leave that something still needs waits for that to end.
+    #[test]
+    fn a_held_leave_is_cancelled_by_coming_back_and_waits_for_what_still_needs_it() {
+        let (mut e, _presence, t0) = with_a_computer_attached();
+        assert!(e.rtty_auto_arm() && e.sstv_auto_arm());
+        e.leave_decoder_screen(DecoderScreen::Rtty);
+        e.leave_decoder_screen(DecoderScreen::Sstv);
+        assert!(!e.rtty_auto_arm(), "back on RTTY (already running)");
+        e.set_sstv_viewer_open(true);
+        e.poll_remote_stream(t0 + Duration::from_secs(6));
+        assert!(e.rtty_armed(), "RTTY is in front again: not stopped");
+        assert!(e.sstv_armed(), "the viewer still shows SSTV");
+        e.set_sstv_viewer_open(false);
+        e.poll_remote_stream(t0 + Duration::from_secs(7));
+        assert!(
+            !e.sstv_armed(),
+            "the viewer closed: the held leave is carried out"
+        );
     }
 
     /// The RTTY auto-sequencer decides its next over from what the decoder hears. While it is
@@ -291,12 +413,12 @@ mod tests {
             &[("RST", "599")],
         ));
         assert!(
-            e.leave_decoder_screen(DecoderScreen::Rtty, false),
+            e.leave_decoder_screen(DecoderScreen::Rtty),
             "kept: ask again"
         );
         assert!(e.rtty_armed(), "the sequencer still hears the band");
         e.rtty_seq = None;
-        assert!(!e.leave_decoder_screen(DecoderScreen::Rtty, false));
+        assert!(!e.leave_decoder_screen(DecoderScreen::Rtty));
         assert!(!e.rtty_armed(), "Auto off: the next leave stops it");
     }
 
@@ -309,7 +431,7 @@ mod tests {
     fn switching_rtty_auto_on_starts_a_decoder_a_leave_stopped() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);
         assert!(e.rtty_auto_arm());
-        e.leave_decoder_screen(DecoderScreen::Rtty, false); // the other window left RTTY
+        e.leave_decoder_screen(DecoderScreen::Rtty); // the other window left RTTY
         assert!(!e.rtty_armed(), "premise: the leave stopped it");
         e.set_rtty_auto(true).unwrap();
         assert!(e.rtty_armed(), "Auto on starts the decoder it reads");
@@ -330,13 +452,13 @@ mod tests {
         assert!(e.rtty_auto_arm());
         e.set_rtty_auto(true).unwrap();
         assert!(
-            !e.leave_decoder_screen(DecoderScreen::Rtty, false),
+            !e.leave_decoder_screen(DecoderScreen::Rtty),
             "Auto on: the decoder is no longer the screen's to stop"
         );
         assert!(e.rtty_armed(), "Auto on, screen left: still decoding");
         e.set_rtty_auto(false).unwrap();
         assert!(
-            !e.leave_decoder_screen(DecoderScreen::Rtty, false),
+            !e.leave_decoder_screen(DecoderScreen::Rtty),
             "nothing to ask"
         );
         assert!(e.rtty_armed(), "Auto made it the operator's");
@@ -352,12 +474,12 @@ mod tests {
         });
         assert!(e.aprs_auto_arm());
         assert!(
-            e.leave_decoder_screen(DecoderScreen::Aprs, false),
+            e.leave_decoder_screen(DecoderScreen::Aprs),
             "kept: ask again"
         );
         assert!(e.aprs_armed(), "the iGate still hears the channel");
         e.settings.aprs_is_uplink = false;
-        assert!(!e.leave_decoder_screen(DecoderScreen::Aprs, false));
+        assert!(!e.leave_decoder_screen(DecoderScreen::Aprs));
         assert!(!e.aprs_armed());
         assert_eq!(e.aprs_arm_source(), AprsArm::Off);
     }
@@ -372,7 +494,7 @@ mod tests {
         }
         e.feed_rx_audio(&[0.1; 480]);
         for s in SCREENS {
-            e.leave_decoder_screen(s, false);
+            e.leave_decoder_screen(s);
         }
         assert!(e.take_rtty_audio().is_empty());
         assert!(e.take_psk_audio().is_empty());

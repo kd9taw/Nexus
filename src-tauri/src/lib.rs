@@ -20060,22 +20060,24 @@ fn sstv_auto_disarm(state: State<'_, SharedEngine>) -> Result<SstvStateDto, Stri
 }
 
 /// The operator left a receive screen (RTTY, PSK, JTTY, SSTV, APRS) for another section: stop
-/// the decoder that opening it started, unless something still needs it. RX only — see
+/// the decoder that opening it started, unless something still needs it — and, while a computer
+/// driving the station is attached, stop nothing until it has gone. RX only — see
 /// [`tempo_app::engine::Engine::leave_decoder_screen`]. The SSTV picture viewer, open in its own
-/// window, keeps the SSTV screen in the section. Returns whether the decoder is still running on
-/// its screen's arm, so the caller asks again at the next section change.
+/// window here, keeps the SSTV screen in the section; this refreshes that from the window itself
+/// before deciding. Returns whether the decoder is still running on its screen's arm, so the
+/// caller asks again at the next section change.
 #[tauri::command(async)]
 fn leave_decoder_screen(
     app: tauri::AppHandle,
     state: State<'_, SharedEngine>,
     screen: tempo_app::engine::decoder_screens::DecoderScreen,
 ) -> Result<bool, String> {
-    use tempo_app::engine::decoder_screens::DecoderScreen;
-    let shown_elsewhere = screen == DecoderScreen::Sstv
-        && app
-            .get_webview_window(&panel_label(SSTV_VIEWER_SLUG, Instance::Main))
-            .is_some();
-    Ok(engine_lock(&state).leave_decoder_screen(screen, shown_elsewhere))
+    let viewer_open = app
+        .get_webview_window(&panel_label(SSTV_VIEWER_SLUG, Instance::Main))
+        .is_some();
+    let mut eng = engine_lock(&state);
+    eng.set_sstv_viewer_open(viewer_open);
+    Ok(eng.leave_decoder_screen(screen))
 }
 
 /// Start decoding an SSTV picture NOW, in the mode the operator named, without
@@ -23031,6 +23033,13 @@ async fn open_panel_window(
     // handler). Never persisted, so a restart cannot leave it shared.
     if slug == CONTEST_LOGGER_SLUG && matches!(inst, Instance::Main) {
         share_the_contest_entry(&app);
+    }
+    // THE SSTV PICTURE VIEWER keeps the SSTV screen in its section while it is open (the station
+    // does not stop that receiver behind it), from here to its `Destroyed` event.
+    if slug == SSTV_VIEWER_SLUG && matches!(inst, Instance::Main) {
+        if let Some(engine) = app.try_state::<SharedEngine>() {
+            engine_lock(&engine).set_sstv_viewer_open(true);
+        }
     }
     if let Some(side) = docked_side {
         // Re-pin to the edge of the current work area (best-effort; ignore if unmapped) so a
@@ -42249,6 +42258,13 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                 if window.label() == panel_label(CONTEST_LOGGER_SLUG, Instance::Main) {
                     if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
                         engine_lock(&engine).contest_entry_share(false);
+                    }
+                }
+                // The SSTV picture viewer is gone: the SSTV screen no longer shows anywhere but
+                // its own screen.
+                if window.label() == panel_label(SSTV_VIEWER_SLUG, Instance::Main) {
+                    if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
+                        engine_lock(&engine).set_sstv_viewer_open(false);
                     }
                 }
             }

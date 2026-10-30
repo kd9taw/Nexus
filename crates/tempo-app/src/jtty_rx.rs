@@ -694,6 +694,7 @@ impl Engine {
     /// (`jtty_rx_auto_arm`). Returns whether this call armed it. RX ONLY — arming a decoder
     /// keys nothing.
     pub fn jtty_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(super::decoder_screens::DecoderScreen::Jtty);
         if self.jtty.armed || self.jtty.auto_arm_declined || !self.settings.jtty_rx_auto_arm {
             return false;
         }
