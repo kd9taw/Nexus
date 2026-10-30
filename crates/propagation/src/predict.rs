@@ -35,6 +35,11 @@ pub struct PathPrediction {
     /// Per-UTC-hour MUF (24 values, hour 0..23) for the day containing the scan —
     /// the ceiling line drawn above the band×hour outlook heatmap.
     pub muf_hourly: Vec<f32>,
+    /// Model-free path geometry (polar cap, auroral oval, grey line, Kp per hour) for a
+    /// per-path request. The engines never fill it — the caller attaches it with the live
+    /// space weather it holds ([`crate::path_geometry`]); absent, the key is omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<crate::pathgeo::PathGeometry>,
 }
 
 impl PathPrediction {
@@ -141,6 +146,7 @@ impl PathPredictor for HeuristicEngine {
             bands,
             muf_now,
             muf_hourly,
+            geometry: None,
         }
     }
 }
@@ -248,7 +254,10 @@ pub fn band_outlook_ring(
                 *slot = slot.max(m);
             }
         }
-        for bo in p.bands {
+        for mut bo in p.bands {
+            // The ring's bands answer "which band, any direction": one azimuth's hop
+            // geometry would be read as THE path's, so it is not carried.
+            bo.detail = None;
             best.entry(bo.band.clone())
                 .and_modify(|e| {
                     if bo.score > e.score {
@@ -269,6 +278,7 @@ pub fn band_outlook_ring(
         bands,
         muf_now,
         muf_hourly,
+        geometry: None,
     }
 }
 
@@ -454,6 +464,7 @@ mod tests {
             reliability: 0.0,
             mode_now: Vec::new(),
             mode_hourly: Vec::new(),
+            detail: None,
         }
     }
 

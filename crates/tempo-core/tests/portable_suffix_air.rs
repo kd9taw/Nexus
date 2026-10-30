@@ -20,6 +20,11 @@
 //! drops a field it has no slot for (and, for a genuinely nonstandard call, silently
 //! drops the prefix and hands the partner a well-formed message naming a DIFFERENT
 //! station). Only the recovered text proves what a partner's receiver produces.
+//!
+//! A `/R` frame is the one exception to "comes back": like WSJT-X 3.0.2, a stock FT8
+//! receiver drops a Type 1-3 rover (or "TU;") frame unless a contest or other special
+//! activity is on. So every frame is decoded twice — in a contest it must come back
+//! verbatim; outside one it must come back verbatim, except a rover frame, which must not.
 
 use modes::{make_mode, DecodeRequest, ModeKind, NativeSource, SignalSource};
 use tempo_core::message::Msg;
@@ -30,7 +35,14 @@ const F0: f32 = 1500.0;
 
 /// Pack `text`, transmit it, decode the clean frame, and return every message the
 /// receiver recovered. This — not what we intended to send — is the assertion surface.
+/// Stock receiver: no contest or other special activity, so FT8's rover / "TU;" filter
+/// is armed.
 fn on_air(kind: ModeKind, text: &str) -> Vec<String> {
+    on_air_with(kind, text, false)
+}
+
+/// [`on_air`] with the receiver's special-activity flag (Contest mode, Hound) given.
+fn on_air_with(kind: ModeKind, text: &str, activity: bool) -> Vec<String> {
     let mode = make_mode(kind);
     let tones = mode.encode(text);
     assert!(
@@ -46,22 +58,49 @@ fn on_air(kind: ModeKind, text: &str) -> Vec<String> {
         }
     }
     let mut src = NativeSource::from_kind(kind);
-    src.decode(&DecodeRequest::full_band(&iwave))
-        .into_iter()
-        .map(|d| d.message)
-        .collect()
+    let req = DecodeRequest {
+        activity,
+        ..DecodeRequest::full_band(&iwave)
+    };
+    src.decode(&req).into_iter().map(|d| d.message).collect()
+}
+
+/// Whether a stock FT8 receiver drops `text` outside a contest, as WSJT-X 3.0.2 does:
+/// a Type 1-3 frame naming a rover (`/R`) or opening with "TU; " is shown only when a
+/// contest or other special activity is on (`ft8b.f90`'s filter). FT4 has no such filter.
+fn dropped_outside_a_contest(kind: ModeKind, text: &str) -> bool {
+    kind == ModeKind::Ft8
+        && matches!(i3_of(text), Some(1..=3))
+        && (text.contains("/R") || text.starts_with("TU; "))
 }
 
 /// Assert `text` survives the modem VERBATIM. A frame that decodes to something
 /// else is the dangerous case: the partner copies a well-formed wrong message.
+/// Every frame must come back to a receiver in a contest; outside one, every frame
+/// must come back too, except a rover or "TU;" frame, which must NOT.
 #[track_caller]
 fn assert_on_air(kind: ModeKind, text: &str) {
-    let got = on_air(kind, text);
+    let got = on_air_with(kind, text, true);
     assert!(
         got.iter().any(|m| m == text),
-        "{} sent [{text}] but the receiver recovered {got:?}",
+        "{} sent [{text}] but a receiver in a contest recovered {got:?}",
         kind.as_str()
     );
+    let got = on_air(kind, text);
+    if dropped_outside_a_contest(kind, text) {
+        assert!(
+            !got.iter().any(|m| m == text),
+            "{} sent [{text}], a rover or \"TU;\" frame, but a receiver outside a contest \
+             showed it: {got:?}",
+            kind.as_str()
+        );
+    } else {
+        assert!(
+            got.iter().any(|m| m == text),
+            "{} sent [{text}] but the receiver recovered {got:?}",
+            kind.as_str()
+        );
+    }
 }
 
 /// One over: the sequencer's next transmission must be `expect`, AND `expect` must
@@ -80,8 +119,8 @@ fn over(st: &mut Station, expect: &str) {
 /// first time the station is heard. Until that happens a `<call>` token decodes to the
 /// unresolved `<...>`, which would make a hashed assertion meaningless.
 fn seed_hash(call: &str) {
-    let _ = on_air(ModeKind::Ft8, &format!("CQ {call}"));
-    let _ = on_air(ModeKind::Ft8, &format!("<W9XYZ> {call}"));
+    let _ = on_air_with(ModeKind::Ft8, &format!("CQ {call}"), true);
+    let _ = on_air_with(ModeKind::Ft8, &format!("<W9XYZ> {call}"), true);
 }
 
 /// The over the sequencer queues at Tx stage `n` (1..=5) for this pair — built by

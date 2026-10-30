@@ -1182,6 +1182,26 @@ export function cwScopeWindow(
   return { loHz, hiHz: loHz + span }
 }
 
+/** The CW audio scope's span chips. `filter` is `cwScopeWindow` — the rig's filter plus its skirt,
+ *  centred on the pitch — and stays the default: it is the zero-beating view. `std` and `full` are the
+ *  waterfalls' own fixed Std (200–3000 Hz) and Full (200–4000 Hz) views, for seeing the band. */
+export const CW_AUDIO_SPANS = ['filter', 'std', 'full'] as const
+export type CwAudioSpan = (typeof CW_AUDIO_SPANS)[number]
+/** A stored CW span, or Filter for anything else (missing, blocked, stale, foreign). */
+export function coerceCwAudioSpan(v: string | null): CwAudioSpan {
+  return CW_AUDIO_SPANS.find((x) => x === v) ?? 'filter'
+}
+/** The audio window the CW scope shows at a span. */
+export function cwAudioView(
+  span: CwAudioSpan,
+  pitchHz: number,
+  filterHz?: number | null,
+): { loHz: number; hiHz: number } {
+  if (span === 'std') return { loHz: WF_F_MIN, hiHz: WF_STD_HI }
+  if (span === 'full') return { loHz: WF_F_MIN, hiHz: WF_F_MAX }
+  return cwScopeWindow(pitchHz, filterHz)
+}
+
 /** Waterfall view options for the picker. 0 = the default "Std" 0–3 kHz view (WSJT-X-like);
  * -1 = "Full" 0–4 kHz; the rest are `spanHz`-wide windows zoomed around the RX marker. */
 export const WATERFALL_ZOOMS: { value: number; label: string }[] = [

@@ -192,8 +192,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         panel, nothing scrolls sideways at the page, the default table fits,
                         every column scrolls sideways inside the table with its header, and a
                         real drag of a header moves the column without sorting while a click
-                        still sorts, with the old centred measure as a control that must be
-                        caught (ui/probe/logbook-probe.mjs; it builds nothing)
+                        still sorts; then each row's ✎ and ⋯ buttons, call/date/time whole from
+                        1024 px up, nothing invisible clickable, and the ⋯ menu inside the window,
+                        from 1024 to 2560 at 100% and 150% in both themes (LOGBOOK_PROBE_SHOTS=<dir>
+                        saves screenshots); the old centred measure, 22 px buttons and a hidden
+                        row button are controls that must be caught (ui/probe/logbook-probe.mjs;
+                        it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE

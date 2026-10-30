@@ -113,6 +113,7 @@ import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { MemoryStrip } from './MemoryStrip'
 import type { Memory } from '../features/memories'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { setFrequency, openPanelWindow, getSettings } from '../api'
 import { bandLabelForMhz, sidebandForMhz, sidebandForQsy } from '../band'
 import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
@@ -120,6 +121,15 @@ import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
 import { PASSBAND_LIMITS } from '../spectrum/markers'
 import { scopeSpots } from '../spectrum/scopeSpots'
+import {
+  bandWindow,
+  loadRfSpan,
+  onlyPart,
+  saveRfSpan,
+  sweepFor,
+  useSpanAsk,
+  type TaggedSweep,
+} from '../spectrum/rfSpan'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
 import { SplitControl } from './SplitControl'
@@ -324,6 +334,9 @@ const PHONE_SPOT_MODES: readonly string[] = ['Phone']
 /** The Needed pane's filter record — per surface, like the board's own `neededFilters`, and
  *  never that one: a chip here and a chip on the Needed view must not move each other. */
 const PHONE_NEEDED_FILTERS = 'nexus.phone.neededFilters'
+/** PER-SURFACE: the audio scope's span chip, by its `id`. Absent or unknown ⇒ Auto (the rig's
+ *  filter width), the default; a torn-off copy may run a different chip from the docked one. */
+const PHONE_SCOPE_SPAN_KEY = 'nexus.phone.scope.span'
 /** …and what it opens on while that record is empty: the Phone needs (operator, 2026-09-27:
  *  "Phone needs only — matches the Spots pane (phone spots, this band). Its chips still widen
  *  it."). `Phone` is the board's own mode class for a voice need. */
@@ -535,13 +548,24 @@ const SPANS = [
   },
 ] as const
 
-/** RF panadapter zoom presets (used only when a native RF scope is streaming). Symmetric ±Hz
+/** RF panadapter zoom presets (used only when a native RF scope is streaming). 'Band' is the band
+ *  the dial is in, edge to edge with a small margin (`spectrum/rfSpan.ts` `bandWindow`), drawn as an
+ *  absolute window; it is the default, and a stored choice wins over it. The rest are symmetric ±Hz
  *  windows centered on the dial — scopeView maps these to absolute RF and clamps to the swept
  *  span, so "Full" (a huge window) shows the rig's WHOLE sweep rather than a passband-width sliver.
+ *  Every window but Full is ASKED of the source (`useSpanAsk`, and the scope's poll for an SDR), so
+ *  it is drawn at the source's own resolution rather than cropped out of a wider sweep.
  *
- *  The ± faces are measurements and stay written here; 'Full' is a word. Keyed and compared
- *  on `id` for the same reason SPANS is. */
+ *  The ± faces are measurements and stay written here; 'Full' and 'Band' are words. Keyed and
+ *  compared on `id` for the same reason SPANS is. */
 const RF_SPANS = [
+  {
+    id: 'band',
+    lo: -1e9,
+    hi: 1e9,
+    label: () => t('phone.rfZoom.band.label'),
+    title: () => t('phone.rfZoom.band.title'),
+  },
   {
     id: 'full',
     lo: -1e9,
@@ -815,8 +839,20 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // Bandscope span (audio-window zoom within the captured passband — this is
   // soundcard audio, not RF IQ, so "span" means which slice of the passband
   // fills the scope).
-  const [span, setSpan] = useState<(typeof SPANS)[number]>(SPANS[0])
-  const [rfSpan, setRfSpan] = useState<(typeof RF_SPANS)[number]>(RF_SPANS[0])
+  const [span, setSpan] = useState<(typeof SPANS)[number]>(
+    () => SPANS.find((sp) => sp.id === surfaceGet(PHONE_SCOPE_SPAN_KEY)) ?? SPANS[0],
+  )
+  const [rfSpan, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
+    const id = loadRfSpan('phone', RF_SPANS.map((sp) => sp.id), 'band')
+    return RF_SPANS.find((sp) => sp.id === id) ?? RF_SPANS[0]
+  })
+  const setRfSpan = (sp: (typeof RF_SPANS)[number]) => {
+    setRfSpanState(sp)
+    saveRfSpan('phone', sp.id)
+  }
+  // The row's own span as the source sweeps it (PhoneScope `onSweep`), for `useSpanAsk`, tagged with
+  // the radio and source it was reported under (`sweepFor`: after a swap it is the old radio's).
+  const [scopeSweep, setScopeSweep] = useState<TaggedSweep | null>(null)
   // Live scope feed (reported by PhoneScope) — keeps the "RX audio" label honest when a
   // native RF panadapter is driving the scope (show the real RF span instead).
   const [scopeFeed, setScopeFeed] = useState<{ source: string; loHz: number; hiHz: number } | null>(
@@ -827,6 +863,30 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // framing (the "RX audio" label and the audio-Hz span chips) so the operator sees ONE unambiguous
   // display — the panadapter — instead of RF spectrum wrapped in audio-passband chrome.
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // The RF window the chosen span draws, absolute Hz: the band's for Band (null off every band, which
+  // then draws as Full), the dial's ± for the ± chips, none for Full.
+  const dialHzNow = snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null
+  const bandFit = rfSpan.id === 'band' ? bandWindow(dialHzNow) : null
+  const rfWant =
+    rfSpan.id === 'band'
+      ? bandFit
+      : rfSpan.id === 'full' || dialHzNow == null
+        ? null
+        : { loHz: dialHzNow + rfSpan.lo, hiHz: dialHzNow + rfSpan.hi }
+  // Ask the radio for the sweep that holds it (Icom CI-V, the Flex pan); never while on the air.
+  useSpanAsk({
+    radio: snap.activeRadioId,
+    source: nativeRf && scopeFeed ? scopeFeed.source : null,
+    dialHz: dialHzNow,
+    want: rfWant,
+    choice: rfSpan.id,
+    sweep: sweepFor(scopeSweep, snap.activeRadioId, nativeRf && scopeFeed ? scopeFeed.source : null),
+    transmitting: snap.radio.transmitting || keyed,
+    send: (a) =>
+      void (a.kind === 'civ' ? setScopeSpan(a.halfHz) : setFlexPanSpan(a.hz))
+        .then((s) => onSnap?.(s))
+        .catch(showWhenDriving),
+  })
   // The scope's spot tags: Band Activity's set (SSB spots on this band), each with its mark.
   const scopeTags = useMemo(
     () => scopeSpots(spots ?? [], 'Phone', snap.radio.band, needByCall, typeByCall),
@@ -2986,6 +3046,13 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
                   {sp.label()}
                 </button>
               ))}
+              {/* Said, not pretended: the source sweeps less than the band (an IC-9700's ±500 kHz on
+                  2 m, a 48 kHz TCI stream), so what is drawn is the part it covers. */}
+              {bandFit && onlyPart(scopeFeed, bandFit) && (
+                <span className="ph-scope-sub" role="status">
+                  {t('phone.rfZoom.band.partial')}
+                </span>
+              )}
             </div>
           ) : (
             <div className="ph-span" role="group" aria-label={t('phone.scope.span.aria')}>
@@ -2996,7 +3063,10 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
                   className={`theme-chip${span.id === sp.id ? ' active' : ''}`}
                   aria-pressed={span.id === sp.id}
                   title={sp.title()}
-                  onClick={() => setSpan(sp)}
+                  onClick={() => {
+                    setSpan(sp)
+                    surfaceSet(PHONE_SCOPE_SPAN_KEY, sp.id)
+                  }}
                 >
                   {sp.label()}
                 </button>
@@ -3016,6 +3086,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
             onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
+            rfViewHz={nativeRf && !yaesuRf ? bandFit : null}
+            onSweep={(source, loHz, hiHz) => setScopeSweep({ loHz, hiHz, radio: snap.activeRadioId, source })}
             onTune={onScopeTune}
             filterWidthHz={filterHz ?? 2400}
             passbandHz={filterHz}

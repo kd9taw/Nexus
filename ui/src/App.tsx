@@ -3181,6 +3181,7 @@ function App() {
       {header && <div className="grid-header">{header}</div>}
       <Waterfall
         stripRef={tempoWfRef}
+        zoomKey="nexus.waterfall.tempo.zoom"
         transmitting={snap.radio.transmitting}
         rxOffsetHz={snap.radio.rxOffsetHz}
         txOffsetHz={snap.radio.txOffsetHz}
