@@ -50,7 +50,8 @@ function pred(routes: RouteCall[], sp = geo(260, 16_000), lp = geo(80, 24_000)):
 
 const LONG_ONLY = call('20m', {
   verdict: 'long',
-  confidence: 'likely',
+  // The engine holds every long-path call at "possible" until the long path is validated.
+  confidence: 'possible',
   marginDb: 32,
   shortBcr: 0,
   longBcr: 0.92,
@@ -62,16 +63,16 @@ describe('the heading hint', () => {
     const h = routeHint(pred([LONG_ONLY]))
     expect(h?.route).toBe('long')
     expect(h?.brgDeg).toBe(80)
-    expect(routeHintLine(h)).toBe('Beam 80° for 20m: long path (likely) — the short path is modelled closed now.')
+    expect(routeHintLine(h)).toBe('Beam 80° for 20m: long path (possible) — the short path is modelled closed now.')
     // A narrow card: the reasons go to the hover.
-    expect(routeHintLine(h, true)).toBe('Beam 80° for 20m: long path (likely).')
+    expect(routeHintLine(h, true)).toBe('Beam 80° for 20m: long path (possible).')
   })
 
   it('both open with a margin: the dB is the model median difference, rounded', () => {
     const h = routeHint(
-      pred([call('20m', { verdict: 'long', confidence: 'likely', marginDb: 9.4, shortBcr: 0.55, longBcr: 0.9, reasons: [{ kind: 'margin', better: 'long' }] })]),
+      pred([call('20m', { verdict: 'long', confidence: 'possible', marginDb: 9.4, shortBcr: 0.55, longBcr: 0.9, reasons: [{ kind: 'margin', better: 'long' }] })]),
     )
-    expect(routeHintLine(h)).toBe('Beam 80° for 20m: long path (likely), modelled about 9 dB better now.')
+    expect(routeHintLine(h)).toBe('Beam 80° for 20m: long path (possible), modelled about 9 dB better now.')
   })
 
   it('short path favoured: the short-path heading', () => {

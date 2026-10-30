@@ -60,7 +60,7 @@ function longPred(): PathPrediction {
       {
         band: '20m',
         verdict: 'long',
-        confidence: 'likely',
+        confidence: 'possible',
         marginDb: 31,
         shortBcr: 0,
         longBcr: 0.92,
@@ -70,7 +70,7 @@ function longPred(): PathPrediction {
   }
 }
 
-const HINT = 'Beam 80° for 20m: long path (likely).'
+const HINT = 'Beam 80° for 20m: long path (possible).'
 
 const station = {
   call: 'VK2ABC',
@@ -131,7 +131,7 @@ describe('the heading hint on the station card', () => {
 describe('the heading hint on the Path card', () => {
   it('a short-path answer carries no long-path label and no chip when the short route is clear', () => {
     const p = longPred()
-    p.routes = [{ ...p.routes![0], verdict: 'short', marginDb: -31, shortBcr: 0.9, longBcr: 0, reasons: [{ kind: 'oneClosed', open: 'short' }] }]
+    p.routes = [{ ...p.routes![0], verdict: 'short', confidence: 'likely', marginDb: -31, shortBcr: 0.9, longBcr: 0, reasons: [{ kind: 'oneClosed', open: 'short' }] }]
     const { container } = render(<PathRoute pred={p} className="cp-route" />)
     expect(container.querySelector('.route-hint')?.textContent).toBe('Beam 260° for 20m: short path (likely).')
     expect(container.querySelector('.route-lp-badge')).toBeNull()
