@@ -753,7 +753,9 @@ jobs:
   # app, the libtempo modem, FFTW, libusb and Hamlib are all built for it (Homebrew's bottles are
   # built for the runner's own macOS, which is why FFTW and libusb are built from source now), and
   # scripts/check-macho-bundle.mjs holds every shipped Mach-O to it before signing and again on
-  # the finished app. 1.21.0 shipped Hamlib tools built for macOS 14 with nothing to notice.
+  # the finished app. 1.21.0 shipped Hamlib tools built for macOS 14 with nothing to notice. The
+  # one part not built at the minimum is gcc's static runtime (no Homebrew bottle is); the same
+  # script holds what it imports to a reviewed list instead.
   #
   # Signing: APPLE_CERTIFICATE (base64 .p12) + APPLE_CERTIFICATE_PASSWORD into an
   # ephemeral keychain; the identity is READ BACK from the keychain rather than stored
@@ -869,21 +871,27 @@ jobs:
       # macro, and the UI build) ran holding the notarization key and the updater key, with the
       # Developer ID identity unlocked in the keychain. The ClubLog key is here because it is
       # compiled in (see the Windows job).
-      #
-      # The log is kept for the next step: objects linked in from a static archive (Homebrew gcc's
-      # libgfortran.a above all) keep the macOS they were built for, and the linker only warns.
       - name: Compile the app
         env:
           CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
         run: |
           set -euo pipefail
           ( cd src-tauri && cargo tauri build --target ${{ matrix.target }} \
-              --features radio,custom-protocol --no-bundle ) 2>&1 | tee "$RUNNER_TEMP/compile.log"
+              --features radio,custom-protocol --no-bundle )
 
       # BEFORE ANYTHING IS SIGNED: the app binary and the staged Hamlib, against the minimum and
-      # the paths an operator's Mac has. Failing here costs no notarization. The linker's "built
-      # for newer macOS" warnings are reported, not failed: the static gcc runtime has no build at
-      # the minimum to swap in, and whether it matters is the oldest-macOS bench's question.
+      # the paths an operator's Mac has. Failing here costs no notarization.
+      #
+      # Then the static gcc runtime the modem links (crates/tempo-fast-sys/build.rs: libgfortran.a
+      # and libquadmath.a beside the libgfortran.dylib gfortran reports, and libemutls_w.a where
+      # gfortran reports it; the same lookups, so these are the files the link used). Its objects
+      # are built for the runner's macOS, above the minimum, and the linked binary does not carry
+      # that over; the linker's warning about it never reaches this log, because rustc hides a
+      # successful link's output. What matters on an older Mac is what those objects call, so
+      # every symbol they import from outside themselves must be on
+      # scripts/macos-static-runtime-imports.txt, the names checked against the minimum macOS. A
+      # gcc update that calls something newer fails here and names it. Whether dyld on a real
+      # older Mac agrees is the oldest-macOS bench's question.
       - name: Check every Mach-O against the minimum macOS before signing
         run: |
           set -euo pipefail
@@ -892,13 +900,12 @@ jobs:
           node scripts/check-macho-bundle.mjs --floor "$MACOSX_DEPLOYMENT_TARGET" --arch ${{ matrix.arch }} \
             --require rigctld --require rigctl --require rotctld --require rotctl \
             --require libhamlib.4.dylib --require libusb-1.0.0.dylib src-tauri/resources/hamlib
-          newer=$(grep -c 'built for newer' "$RUNNER_TEMP/compile.log" || true)
-          if [ "${newer:-0}" -gt 0 ]; then
-            echo "::warning::the linker reported $newer object(s) built for a macOS newer than $MACOSX_DEPLOYMENT_TARGET"
-            grep 'built for newer' "$RUNNER_TEMP/compile.log" | sort -u | head -40
-          else
-            echo "the linker reported no object built for a macOS newer than $MACOSX_DEPLOYMENT_TARGET"
-          fi
+          fc="${FC:-gfortran}"
+          gcc_lib=$(dirname "$("$fc" -print-file-name=libgfortran.dylib)")
+          node scripts/check-macho-bundle.mjs --arch ${{ matrix.arch }} \
+            --imports scripts/macos-static-runtime-imports.txt \
+            --archive "$gcc_lib/libgfortran.a" --archive "$gcc_lib/libquadmath.a" \
+            --archive "$("$fc" -print-file-name=libemutls_w.a)"
 
       # Imported only now, after the last build. From here until the bundle step deletes the
       # keychain, anything this job runs can sign with the identity.
