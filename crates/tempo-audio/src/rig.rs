@@ -71,9 +71,11 @@ const PTT_DEADLINE_MS: u64 = 700;
 /// can take that long to answer a key that works. The release keeps [`PTT_DEADLINE_MS`].
 const NETWORK_KEY_DEADLINE_MS: u64 = 2_500;
 
-/// How long a connection may go on owing late answers once a RELEASE has gone out behind the key
-/// that owes them ([`Rig::command_lines`]) before it is given up and the next command opens a new
-/// one.
+/// How long a connection may go on owing late answers before it is given up and the next command
+/// opens a new one ([`Rig::command_lines`]). Counted from the first answer that went owed and is
+/// still owed without a break (not from the release), and acted on only once a RELEASE has gone
+/// out behind the last key: so the give-up comes at the first command after both, which can be
+/// sooner than this after the release.
 ///
 /// Giving it up then is safe: the key and its release are both already queued on it, in order,
 /// and rigctld carries out the lines a client sent before it closed (measured: the late `T 1` and
@@ -3559,6 +3561,33 @@ mod tests {
         assert!(
             log[2..].iter().all(|(conn, _)| *conn > 0),
             "everything after the give-up went out on a new connection: {log:?}"
+        );
+    }
+
+    /// ⛔ GIVING A CONNECTION UP NEVER CLEARS `keyed`: only a release a connection confirms does.
+    /// Here no key line is ever answered, so the give-up comes and the release on the new
+    /// connection is not confirmed either; a give-up that cleared `keyed` would stop the idle
+    /// self-heal unkeying a radio that may still be keyed.
+    #[test]
+    fn a_given_up_connection_leaves_the_rig_keyed() {
+        let (addr, log) = mock_rigctld_paced(|line| match line {
+            "T 1" | "T 0" => None,
+            _ => Some((Duration::ZERO, "RPRT 0\n".to_string())),
+        });
+        let mut rig = Rig::rigctld(&addr);
+        rig.owed_bound = Duration::from_millis(1_500);
+        assert!(rig.ptt(true).is_err());
+        for n in 0..5 {
+            assert!(rig.ptt(false).is_err());
+            assert!(
+                rig.keyed,
+                "keyed cleared after release {n} with no release confirmed"
+            );
+        }
+        let log = wait_for_lines(&log, 6);
+        assert!(
+            log.iter().any(|(conn, _)| *conn > 0),
+            "premise: a give-up happened: {log:?}"
         );
     }
 
