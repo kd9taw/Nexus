@@ -710,6 +710,12 @@ jobs:
       - name: The macOS release retries stapling the notarization ticket, and gives up loudly
         run: node --test scripts/xcrun-staple-retry.test.mjs
 
+      # The script tests above make their scratch folders with scripts/scratch-dir.mjs, which
+      # removes them however the run ends, Ctrl-C and SIGTERM included. Before it they removed
+      # nothing, and on a developer box with a RAM-disk /tmp they helped fill it.
+      - name: Script tests remove their scratch folders on every exit, signals included
+        run: node --test scripts/scratch-dir.test.mjs
+
       # Exactly the same argument, one file over. `.githooks/pre-push` is the one gate in this
       # project that is mechanism rather than prose — wrong-remote, release-tag, identity, the
       # per-commit content scrub and the licence/NOTICE guard — and `.githooks/pre-push.test.sh`

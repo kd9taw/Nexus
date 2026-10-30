@@ -12,11 +12,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { readMachO, checkSlices, parseVersion, plistMinimum } from './check-macho-bundle.mjs';
+import { scratchDir } from './scratch-dir.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'check-macho-bundle.mjs');
 const CPU = { arm64: 0x0100000c, x86_64: 0x01000007 };
@@ -115,7 +115,7 @@ ${v === null ? '' : `  <key>LSMinimumSystemVersion</key>\n  <string>${v}</string
 
 /** A scratch .app laid out as the bundler lays Nexus out. Overrides replace or add files. */
 function app(over = {}, { arch = 'arm64', plist = '12.0' } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'macho-check-'));
+  const root = scratchDir('macho-check-');
   const a = path.join(root, 'Nexus.app');
   const hl = 'Contents/Resources/resources/hamlib';
   const files = {
@@ -218,7 +218,7 @@ test('positive controls: no minimum recorded, no libSystem, or a non-macOS platf
 });
 
 test('a folder with no Mach-O in it fails rather than passing on nothing read', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'macho-empty-'));
+  const root = scratchDir('macho-empty-');
   fs.writeFileSync(path.join(root, 'COPYING.txt'), 'text');
   const r = run(['--floor', '12.0', '--arch', 'arm64', root]);
   assert.equal(r.code, 1);
@@ -280,7 +280,7 @@ test('a Java class file (same magic as a universal file) is not mistaken for one
 
 test('symbolic links are not followed, so a link out of the bundle reads nothing', () => {
   const a = app();
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'macho-outside-'));
+  const outside = scratchDir('macho-outside-');
   fs.writeFileSync(path.join(outside, 'bad'), macho({ minos: '15.0' }));
   fs.symlinkSync(path.join(outside, 'bad'), path.join(a, HL, 'linked'));
   assert.equal(full(a).code, 0);
