@@ -34253,6 +34253,11 @@ contact yourself."
         self.station.sstv_gallery()
     }
 
+    /// See [`StationCore::sstv_gallery_snapshot`].
+    pub fn sstv_gallery_snapshot(&self) -> (u64, Vec<crate::dto::SstvGalleryEntry>) {
+        self.station.sstv_gallery_snapshot()
+    }
+
     /// See [`StationCore::set_clock_offset_ms`].
     pub fn set_clock_offset_ms(&mut self, ms: Option<i64>) {
         self.station.set_clock_offset_ms(ms)
@@ -38603,6 +38608,56 @@ mod tests {
         // Startup seed replaces the session list (and caps defensively).
         e.load_sstv_gallery(vec![crate::dto::SstvGalleryEntry::default()]);
         assert_eq!(e.sstv_gallery().len(), 1);
+    }
+
+    /// The decoder saves a picture's file before it takes the lock to list it, so a gallery
+    /// delete reading the folder in between can adopt the file first. The decoder's own record
+    /// must then replace that bare entry, not sit beside it: one picture, listed once, with the
+    /// frequency and line count only the decoder knows.
+    #[test]
+    fn a_picture_already_adopted_from_the_folder_is_listed_once_when_the_decoder_records_it() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let older = crate::dto::SstvGalleryEntry {
+            path: "/tmp/sstv/20261030T100000Z_scottie1.png".into(),
+            mode: "Scottie 1".into(),
+            finished_utc: "2026-10-30T10:00:00Z".into(),
+            freq_mhz: 14.230,
+            lines: 256,
+            fsk_id: None,
+        };
+        let adopted = crate::dto::SstvGalleryEntry {
+            path: "/tmp/sstv/20261030T100500Z_pd120.png".into(),
+            mode: "pd120".into(),
+            finished_utc: "2026-10-30T10:05:00Z".into(),
+            ..Default::default()
+        };
+        e.load_sstv_gallery(vec![older.clone(), adopted.clone()]);
+        let (gen_before, _) = e.sstv_gallery_snapshot();
+
+        let decoded = crate::dto::SstvGalleryEntry {
+            mode: "PD 120".into(),
+            freq_mhz: 14.233,
+            lines: 496,
+            ..adopted.clone()
+        };
+        e.push_sstv_gallery(decoded.clone());
+        assert_eq!(
+            e.sstv_gallery(),
+            &[older.clone(), decoded.clone()][..],
+            "the decoder's record replaces the adopted entry"
+        );
+        assert!(
+            e.sstv_gallery_snapshot().0 > gen_before,
+            "a replacement is still a change for gallery.json"
+        );
+
+        // A different picture still appends.
+        let newer = crate::dto::SstvGalleryEntry {
+            path: "/tmp/sstv/20261030T101000Z_robot36.png".into(),
+            ..decoded.clone()
+        };
+        e.push_sstv_gallery(newer.clone());
+        assert_eq!(e.sstv_gallery(), &[older, decoded, newer][..]);
     }
 
     /// #202 — a manual receive start is a one-shot request the decode thread collects,
