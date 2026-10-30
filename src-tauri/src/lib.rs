@@ -15102,11 +15102,6 @@ fn save_and_publish(
                 LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
                 LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
             }
-            // Keep the live DXpedition layer's most-wanted key current (Settings
-            // override, else the build's baked application key).
-            propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-                &settings.clublog_api_key,
-            ));
             // Apply FIRST, then persist the engine's AUTHORITATIVE merged state — apply_settings keeps the
             // LIVE dual-radio roster / active radio / peg / tune (discarding the form's possibly-stale
             // copies), so saving the raw form here would write a roster that diverges from the engine and
@@ -39685,14 +39680,10 @@ pub fn run() {
     if let Ok(mut c) = PREV_FEED_CALL.lock() {
         *c = tempo_net::cluster::login_call(&cluster_call, &cluster_ssid);
     }
-    // Feed the live DXpedition layer the ClubLog key (most-wanted ranks). Pushed,
-    // not pulled — keeps the propagation crate decoupled from settings IO.
-    {
-        let eng = engine_lock(&engine);
-        propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-            &eng.settings().clublog_api_key,
-        ));
-    }
+    // The live DXpedition layer keeps ClubLog's answers here between runs, so a restart does
+    // not ask ClubLog again before its schedule says so. Shared by every profile, like cty.dat.
+    // Disk only, and before the warm-up below asks anything.
+    propagation::live::dxped::set_cache_dir(&shared_data_dir());
     // Warm the DXpedition plan cache in the background so the Needed board's
     // expedition tagging works from launch — without it the cache stays cold until
     // the operator first opens Connect/DXpeditions.
@@ -49996,7 +49987,7 @@ mod tests {
         "contests::parse_contest_rss",
         "dxped::cached_active_calls",
         "dxped::call_matches",
-        "dxped::set_clublog_key",
+        "dxped::set_cache_dir",
         "lotw_users::parse_user_activity",
         "tle::parse_mirror_manifest",
         "tle::tle_bird_ok",
