@@ -668,7 +668,8 @@ fn a_pass_of_many_chunks_keeps_every_chunk() {
 
 /// A card is kept for a contact's grade only when the space weather it was computed from was
 /// measured and current: from a cold cache, a stand-in flux, an old Kp or a stand-in Kp, the
-/// contact logged against it gets no grade. Positive control: measured, it is graded.
+/// contact logged against it gets no grade. Positive control: measured, it is graded. And a kept
+/// card grades a later contact only while its space weather still speaks at that contact's time.
 #[test]
 fn only_a_card_from_measured_space_weather_grades_a_new_contact() {
     let _s = serial();
@@ -708,5 +709,30 @@ fn only_a_card_from_measured_space_weather_grades_a_new_contact() {
     assert!(
         at_log(&rec, "", &live, &region, &[]).is_some(),
         "measured: not graded"
+    );
+    // Fail closed at log time: the same kept card, for a contact made once its Kp has gone
+    // stale (still inside the card's six hours), grades nothing.
+    let later = qso("VK2AA", "QF56", "20m", NOW + 20 * 60, Some("150"));
+    assert_eq!(
+        at_log(&later, "", &live, &region, &[]),
+        None,
+        "Kp stale at log time: graded"
+    );
+    // And a card computed on a Kp already stale is not kept, even for a contact from before,
+    // when that Kp still spoke: the card itself never rested on a current reading.
+    lock(&OUTLOOKS).clear();
+    let old_kp = stamps(Some(NOW - 3600), Some(NOW - 20 * 60));
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&old_kp),
+    );
+    let before = qso("VK2AA", "QF56", "20m", NOW - 10 * 60, Some("150"));
+    assert_eq!(
+        at_log(&before, "", &live, &region, &[]),
+        None,
+        "a stale card was kept"
     );
 }

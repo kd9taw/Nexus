@@ -115,6 +115,9 @@ struct KeptOutlook {
     dx4: String,
     at: i64,
     pred: Arc<PathPrediction>,
+    /// The stamps of the space weather the card was computed from, checked again for each
+    /// contact it would grade ([`outlook_for`]).
+    stamps: propagation::model::SpaceWxStamps,
 }
 
 static OUTLOOKS: Mutex<VecDeque<KeptOutlook>> = Mutex::new(VecDeque::new());
@@ -122,7 +125,8 @@ static OUTLOOKS: Mutex<VecDeque<KeptOutlook>> = Mutex::new(VecDeque::new());
 /// Keep the path card `get_path_outlook` just computed at `at` (both routes) for the log-time
 /// grade — only when `stamps`, the space weather it was computed from, say the solar flux and Kp
 /// were readings that may speak for `at` ([`grade_card_measured`]). A card from a cold cache
-/// (`None`), a stand-in flux or an old Kp is not kept, so it grades no contact.
+/// (`None`), a stand-in flux or an old Kp is not kept, so it grades no contact. A kept card grades
+/// a contact only while those stamps still may speak for the contact's time ([`outlook_for`]).
 pub(crate) fn keep_outlook(
     mygrid: &str,
     dxgrid: &str,
@@ -130,9 +134,9 @@ pub(crate) fn keep_outlook(
     pred: &PathPrediction,
     stamps: Option<&propagation::model::SpaceWxStamps>,
 ) {
-    if !grade_card_measured(stamps, at) {
+    let Some(&stamps) = stamps.filter(|s| grade_card_measured(Some(s), at)) else {
         return;
-    }
+    };
     let (Some(me4), Some(dx4)) = (grid4(mygrid), grid4(dxgrid)) else {
         return;
     };
@@ -146,6 +150,7 @@ pub(crate) fn keep_outlook(
         dx4,
         at,
         pred: Arc::new(pred.clone()),
+        stamps,
     });
     while kept.len() > OUTLOOKS_KEPT {
         kept.pop_front();
@@ -163,6 +168,10 @@ fn month_of(t: i64) -> (i64, u32) {
     propagation::solar_cycle::year_month(t)
 }
 
+/// The card kept for this pair that may grade a contact made at `when`: computed within
+/// [`OUTLOOK_FRESH_SECS`] of it in the same UTC month, and from space weather that still may speak
+/// for `when` (fail closed: a card gated on a Kp that has since gone stale grades nothing, and the
+/// contact logs with no grade).
 fn outlook_for(me4: &str, dx4: &str, when: i64) -> Option<Arc<PathPrediction>> {
     lock(&OUTLOOKS)
         .iter()
@@ -172,6 +181,7 @@ fn outlook_for(me4: &str, dx4: &str, when: i64) -> Option<Arc<PathPrediction>> {
                 && k.dx4 == dx4
                 && (k.at - when).abs() <= OUTLOOK_FRESH_SECS
                 && month_of(k.at) == month_of(when)
+                && grade_card_measured(Some(&k.stamps), when)
         })
         .map(|k| Arc::clone(&k.pred))
 }
