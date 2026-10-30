@@ -8272,13 +8272,7 @@ fn advise_for_now(
     } else if !model_usable {
         // Not rebuilt: the served words are the model's at the fetch, from a Kp and an hour of
         // the day that are gone. Once the model may not speak, the bands say only what was heard.
-        for b in &mut snap.advisory.bands {
-            b.modeled.clear();
-            b.modeled_reason.clear();
-        }
-        for r in &mut snap.best_to_region {
-            r.modeled.clear();
-        }
+        served_without_model(snap, call, grid);
     }
     // A served snapshot's banners were built from the numbers it was fetched with: rebuild
     // them from the ones that may speak for now, rebuilt advisory or not.
@@ -8353,10 +8347,70 @@ mod served_advisory_tests {
         let wx = propagation::SpaceWx::default();
         advise_for_now(&mut snap, "KD9TAW", "EN52", NOW, &[], &[], &wx);
         assert_eq!(model_words(&snap), Vec::<String>::new());
+        assert_eq!(heard_only_wrongs(&snap.advisory), Vec::<String>::new());
         assert_eq!(
             snap.advisory.bands.len(),
             propagation::model::Band::ALL.len()
         );
+    }
+
+    /// What a band nobody heard may not say once the model is gone: the model's reason ("open
+    /// per model", "solar flux too low"), or the Quiet tier and meter its prior gave; and the
+    /// headline may not name a band to try. Every band of the fixture was heard by nobody.
+    fn heard_only_wrongs(a: &propagation::PropAdvisory) -> Vec<String> {
+        let mut out: Vec<String> = a
+            .bands
+            .iter()
+            .filter(|b| {
+                b.reason != "no activity heard" || b.tier != ActivityTier::Closed || b.score != 0.0
+            })
+            .map(|b| format!("{} {:?} {:.3} {}", b.band, b.tier, b.score, b.reason))
+            .collect();
+        if a.headline.contains("safest bet") {
+            out.push(a.headline.clone());
+        }
+        out
+    }
+
+    /// The TV summary page reads the cached snapshot itself, not through `get_propagation`, so
+    /// it takes the same rule: no model word, model reason or model tier once the Kp is old.
+    #[test]
+    fn the_tv_board_serves_no_model_words_once_the_kp_is_old() {
+        let board =
+            super::connect_board(cached(FETCHED), "KD9TAW".into(), "EN52".into(), None, NOW);
+        let wrong: Vec<String> = board
+            .bands
+            .iter()
+            .filter(|b| {
+                !b.modeled.is_empty() || b.reason != "no activity heard" || b.tier != "Closed"
+            })
+            .map(|b| format!("{} {} {} {}", b.band, b.tier, b.modeled, b.reason))
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new());
+        assert!(!board.headline.contains("safest bet"), "{}", board.headline);
+        // Negative control: with a Kp that may speak, the board carries the model's words.
+        let fresh =
+            super::connect_board(cached(NOW - 60), "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert!(fresh.bands.iter().any(|b| !b.modeled.is_empty()));
+    }
+
+    /// The TV summary prints an index only while it may speak for now: the hours-old Kp and X-ray
+    /// and the stand-in A are dashes, never the raw numbers. The flux, measured 3 h ago, speaks.
+    #[test]
+    fn the_tv_board_prints_no_stand_in_or_old_index() {
+        let board =
+            super::connect_board(cached(FETCHED), "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(
+            (board.sfi, board.kp, board.a_index, board.xray_class),
+            (Some(120.0), None, None, None)
+        );
+        let mut standin = cached(NOW - 60);
+        standin.space_wx.stamps.sfi_at = None;
+        let board = super::connect_board(standin, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(board.sfi, None, "a stand-in flux is no reading");
+        // Positive control: a Kp and X-ray measured a minute ago are printed.
+        assert_eq!(board.kp, Some(2.0));
+        assert!(board.xray_class.is_some());
     }
 
     /// The negative control: a Kp that may still speak keeps the served words.
@@ -8368,6 +8422,19 @@ mod served_advisory_tests {
         advise_for_now(&mut snap, "KD9TAW", "EN52", NOW, &[], &[], &wx);
         assert!(!before.is_empty());
         assert_eq!(model_words(&snap), before);
+    }
+}
+
+/// A served snapshot's band advice told again with no model, from the stations it heard at the
+/// fetch ([`propagation::PropAdvisor::forget_model`]): no model word, reason, tier or rank, and
+/// no best-to-region word. For a cached snapshot once its solar flux or Kp may not speak; the
+/// desktop, Remote and TV page (`advise_for_now`) and the TV summary (`connect_board`) share it.
+fn served_without_model(snap: &mut propagation::PropagationSnapshot, call: &str, grid: &str) {
+    propagation::PropAdvisor::new(call, grid)
+        .without_model()
+        .forget_model(&mut snap.advisory);
+    for r in &mut snap.best_to_region {
+        r.modeled.clear();
     }
 }
 
@@ -34195,7 +34262,6 @@ fn build_connect_board(
     prop: &PropCache,
     kp: &KpForecastCache,
 ) -> Option<tempo_app::connect_web::ConnectBoardData> {
-    use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
     // One bounded clone under each lock; everything else is built off-lock.
     let snap = prop.lock().ok()?.as_ref().map(|(_, p)| p.clone())?;
     let (call, grid) = {
@@ -34211,10 +34277,29 @@ fn build_connect_board(
         .ok()
         .and_then(|g| g.as_ref().map(|(_, f)| f.clone()))
         .and_then(|f| f.peak_ahead().cloned());
+    Some(connect_board(snap, call, grid, peak, now_unix()))
+}
+
+/// The TV summary page's payload from one propagation snapshot, the station, and the Kp
+/// forecast's peak, for `now` ([`build_connect_board`] gathers them under their locks).
+fn connect_board(
+    mut snap: propagation::PropagationSnapshot,
+    call: String,
+    grid: String,
+    peak: Option<propagation::KpPoint>,
+    now: i64,
+) -> tempo_app::connect_web::ConnectBoardData {
+    use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
     // The cached snapshot is served at any age: its storm and flare lines speak only while the
     // Kp or X-ray they rest on may speak for now, as on the desktop (`get_propagation`).
-    let now = now_unix();
     let stamps = snap.space_wx.stamps;
+    // Its band advice, as `get_propagation` serves it, once the model may not speak.
+    if !stamps.model_usable(now) {
+        served_without_model(&mut snap, &call, &grid);
+    }
+    // A number is shown only while it may speak for now: a stand-in or an old reading is a dash,
+    // as on the gauges (this page has no dimmed ink to age one in).
+    let speaks = |k: propagation::model::WxKey| stamps.usable(k, now);
     let wx_now = propagation::SpaceWx {
         sfi: snap.space_wx.sfi,
         ssn: None,
@@ -34223,7 +34308,7 @@ fn build_connect_board(
         xray_long: snap.space_wx.xray_long,
     }
     .speaking_now(&stamps, now);
-    Some(ConnectBoardData {
+    ConnectBoardData {
         banners: propagation::PropAdvisor::new(&call, &grid).banners(&wx_now),
         call,
         grid,
@@ -34252,10 +34337,11 @@ fn build_connect_board(
                 is_new: o.is_new,
             })
             .collect(),
-        sfi: snap.space_wx.sfi,
-        kp: snap.space_wx.kp,
-        a_index: snap.space_wx.a_index,
-        xray_class: snap.space_wx.xray_class.clone(),
+        sfi: speaks(propagation::model::WxKey::Sfi).then_some(snap.space_wx.sfi),
+        kp: speaks(propagation::model::WxKey::Kp).then_some(snap.space_wx.kp),
+        a_index: speaks(propagation::model::WxKey::A).then_some(snap.space_wx.a_index),
+        xray_class: speaks(propagation::model::WxKey::Xray)
+            .then(|| snap.space_wx.xray_class.clone()),
         insights: snap
             .insights
             .iter()
@@ -34266,7 +34352,7 @@ fn build_connect_board(
         kp_peak_unix: peak.as_ref().map(|p| p.time_unix),
         source: snap.source.clone(),
         as_of_unix: snap.as_of,
-    })
+    }
 }
 
 /// The app handle the TV page's closures read at call time. Set once in `.setup()`;

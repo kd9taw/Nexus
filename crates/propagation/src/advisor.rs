@@ -93,6 +93,10 @@ pub struct BandReport {
     /// One-clause reason for the modeled state ("open per model" / "below MUF").
     #[serde(skip_serializing_if = "String::is_empty")]
     pub modeled_reason: String,
+    /// The distinct stations heard on the band in the window: the evidence the score rests on,
+    /// kept so a served advisory can be told again with no model ([`PropAdvisor::forget_model`]).
+    #[serde(skip)]
+    pub observed: u32,
 }
 
 /// The full advisory the UI renders.
@@ -151,6 +155,11 @@ fn vhf_modeled(band: Band, now: i64, wx: &SpaceWx) -> (Workability, f32) {
     }
 }
 
+/// A band's reason when `observed` (> 0) stations were heard on it.
+fn stations_heard(observed: usize) -> String {
+    format!("{observed} station{}", if observed == 1 { "" } else { "s" })
+}
+
 /// Produces a [`PropAdvisory`] from a window of [`PathSpot`]s + space weather.
 pub struct PropAdvisor {
     pub config: AdvisorConfig,
@@ -199,7 +208,7 @@ impl PropAdvisor {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let headline = self.headline(&reports);
+        let headline = self.headline(&reports, self.model);
         let banners = self.banners(wx);
         PropAdvisory {
             headline,
@@ -321,10 +330,7 @@ impl PropAdvisor {
         //   "everything quiet" complaint).
         // - w: rises with spot count — trust observation as spots accumulate, lean on
         //   the modeled prior when silent.
-        let obs = 1.0 - (-(observed as f32) / self.config.saturate_k).exp();
-        let prior = self.config.prior_cap * mscore;
-        let w = (observed as f32 / self.config.obs_full).clamp(0.0, 1.0);
-        let score = w * obs + (1.0 - w) * prior;
+        let score = self.blend(observed, mscore);
         let tier = ActivityTier::from_score(score);
         let bidirectional = best_region
             .as_ref()
@@ -333,7 +339,7 @@ impl PropAdvisor {
         let confidence = Confidence::from_evidence(observed, bidirectional);
 
         let reason = if observed > 0 {
-            format!("{observed} station{}", if observed == 1 { "" } else { "s" })
+            stations_heard(observed)
         } else if let Some(r) = sfi_closed_reason(band, wx.sfi).filter(|_| self.model) {
             r // physically suppressed (e.g. high band, low flux)
         } else if modeled_work.is_open() {
@@ -377,7 +383,48 @@ impl PropAdvisor {
                 String::new()
             },
             modeled_reason,
+            observed: observed as u32,
         }
+    }
+
+    /// The gradient fusion `band_report` describes: `observed` stations' evidence blended with
+    /// the model's openness `mscore` (0 when there is no model).
+    fn blend(&self, observed: usize, mscore: f32) -> f32 {
+        let obs = 1.0 - (-(observed as f32) / self.config.saturate_k).exp();
+        let prior = self.config.prior_cap * mscore;
+        let w = (observed as f32 / self.config.obs_full).clamp(0.0, 1.0);
+        w * obs + (1.0 - w) * prior
+    }
+
+    /// An advisory a model-on advisor made, told again with no model, from the evidence it was
+    /// made from: each band's score, tier and reason are what [`Self::without_model`] gives for
+    /// the stations it heard, its model word and reason are cleared, the bands are ranked again
+    /// and the headline is the no-model one. For a served snapshot whose model words came from
+    /// space weather that may no longer speak; the banners are the caller's.
+    pub fn forget_model(&self, advisory: &mut PropAdvisory) {
+        for b in &mut advisory.bands {
+            let observed = b.observed as usize;
+            b.score = self.blend(observed, 0.0);
+            b.tier = ActivityTier::from_score(b.score);
+            b.reason = if observed > 0 {
+                stations_heard(observed)
+            } else {
+                "no activity heard".to_string()
+            };
+            b.modeled.clear();
+            b.modeled_reason.clear();
+        }
+        // Ranked as `advise` ranks: by score, ties in band order (a stable sort over band order),
+        // never in the order the model's prior left them.
+        advisory
+            .bands
+            .sort_by_key(|b| Band::ALL.iter().position(|x| x.label() == b.band));
+        advisory.bands.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        advisory.headline = self.headline(&advisory.bands, false);
     }
 
     fn best_region(
@@ -557,11 +604,16 @@ impl PropAdvisor {
         }
     }
 
-    fn headline(&self, reports: &[BandReport]) -> String {
+    /// The one-sentence advice. `model`: whether a band nobody heard may be suggested at all —
+    /// with no model nothing says one is open, so the quiet case only says nothing was heard.
+    fn headline(&self, reports: &[BandReport], model: bool) -> String {
         let best = reports
             .iter()
             .find(|r| matches!(r.tier, ActivityTier::Active | ActivityTier::Moderate));
         let Some(b) = best else {
+            if !model {
+                return "Nothing heard yet.".to_string();
+            }
             // Nothing open: nudge to the most reliable low band.
             let fallback = reports
                 .iter()
@@ -980,6 +1032,66 @@ mod tests {
         assert!(matches!(ten.tier, ActivityTier::Closed));
         assert!(ten.reason.contains("solar flux"));
         assert!(adv.headline.contains("quiet"));
+    }
+
+    #[test]
+    fn a_model_advisory_forgotten_is_the_no_model_advisory_of_the_same_evidence() {
+        // Heard: 20m by three stations (two hear me), 40m by one. The rest by nobody.
+        let me = "K9ME";
+        let now = 1_750_000_000;
+        let spot = |rx: &str, band: Band| PathSpot {
+            time: now - 60,
+            tx_call: me.into(),
+            tx_grid: Some("EN52".into()),
+            rx_call: rx.into(),
+            rx_grid: Some("JO01".into()),
+            band,
+            mode: None,
+            snr: None,
+            freq_mhz: None,
+        };
+        let spots = [
+            spot("G1AAA", Band::B20),
+            spot("G2BBB", Band::B20),
+            spot("G3CCC", Band::B20),
+            spot("G4DDD", Band::B40),
+        ];
+        let wx = SpaceWx::default();
+        let with = PropAdvisor::new(me, "EN52").advise(now, &spots, &wx);
+        let none = PropAdvisor::new(me, "EN52").without_model();
+        let want = none.advise(now, &spots, &wx);
+        assert!(
+            with.bands.iter().any(|b| b.reason.contains("per model")),
+            "control: the model spoke"
+        );
+        let mut told = with.clone();
+        none.forget_model(&mut told);
+        let view = |a: &PropAdvisory| -> Vec<String> {
+            a.bands
+                .iter()
+                .map(|b| {
+                    format!(
+                        "{} {:?} {:.4} {} [{}|{}]",
+                        b.band, b.tier, b.score, b.reason, b.modeled, b.modeled_reason
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(view(&told), view(&want));
+        assert_eq!(told.headline, want.headline);
+    }
+
+    #[test]
+    fn with_no_model_and_nothing_heard_the_headline_names_no_band() {
+        let a = PropAdvisor::new("K9ME", "EN52").without_model().advise(
+            1_750_000_000,
+            &[],
+            &SpaceWx::default(),
+        );
+        assert_eq!(a.headline, "Nothing heard yet.");
+        // Negative control: the model's rule of thumb still names a band.
+        let m = PropAdvisor::new("K9ME", "EN52").advise(1_750_000_000, &[], &SpaceWx::default());
+        assert!(m.headline.contains("safest bet"), "{}", m.headline);
     }
 
     #[test]

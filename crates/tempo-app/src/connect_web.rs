@@ -80,10 +80,12 @@ pub struct ConnectBoardData {
     pub banners: Vec<String>,
     pub bands: Vec<ConnectBand>,
     pub openings: Vec<ConnectOpening>,
-    pub sfi: f32,
-    pub kp: f32,
-    pub a_index: f32,
-    pub xray_class: String,
+    /// Each index only while it may speak for now; `None` (a dash) for a stand-in NOAA did not
+    /// give, or a reading past its product's cadence.
+    pub sfi: Option<f32>,
+    pub kp: Option<f32>,
+    pub a_index: Option<f32>,
+    pub xray_class: Option<String>,
     /// Plain-language insight lines, already ranked.
     pub insights: Vec<String>,
     /// Worst planetary K still forecast, and when — `None` when NOAA has published
