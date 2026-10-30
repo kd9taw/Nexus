@@ -13,6 +13,7 @@ import { ES } from './i18n/es'
 import { FR } from './i18n/fr'
 import { JA } from './i18n/ja'
 import { RU } from './i18n/ru'
+import { ZH } from './i18n/zh'
 import { installExternalLinkInterceptor } from './externalLinks'
 import { clientStatus, isTauri, openExternalUrl } from './api'
 import { pushToast } from './toast'
@@ -128,6 +129,7 @@ void (async () => {
   installCatalog('fr', FR)
   installCatalog('ja', JA)
   installCatalog('ru', RU)
+  installCatalog('zh', ZH)
   initLocale()
   createRoot(document.getElementById('root')!).render(tree)
 })

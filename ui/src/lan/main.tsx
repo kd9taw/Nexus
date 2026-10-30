@@ -8,6 +8,7 @@ import { ES } from '../i18n/es'
 import { FR } from '../i18n/fr'
 import { JA } from '../i18n/ja'
 import { RU } from '../i18n/ru'
+import { ZH } from '../i18n/zh'
 import { LanApp } from './LanApp'
 import '../styles.css'
 
@@ -18,6 +19,7 @@ installCatalog('es', ES)
 installCatalog('fr', FR)
 installCatalog('ja', JA)
 installCatalog('ru', RU)
+installCatalog('zh', ZH)
 initLocale()
 const asked = new URLSearchParams(location.search).get('lang')
 if (asked) setLocale(asked)
