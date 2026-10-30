@@ -356,7 +356,7 @@ function ar(members, { index = true } = {}) {
 
 /** The three runtimes as the app links them; each override replaces one archive (null: absent). */
 function runtimes({ gfortran, quadmath, emutls } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'macho-ar-'));
+  const dir = scratchDir('macho-ar-');
   const files = {
     'libgfortran.a': gfortran ?? ar([
       ['write.o', object({ defs: ['__gfortran_st_write'], undefs: ['_malloc', '_memcpy', '_quadmath_snprintf', '___emutls_get_address'] })],
@@ -369,7 +369,7 @@ function runtimes({ gfortran, quadmath, emutls } = {}) {
   return dir;
 }
 function allow(names) {
-  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'macho-allow-')), 'imports.txt');
+  const f = path.join(scratchDir('macho-allow-'), 'imports.txt');
   fs.writeFileSync(f, `# reviewed\n\n${names.join('\n')}\n`);
   return f;
 }
