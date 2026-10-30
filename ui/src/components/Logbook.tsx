@@ -2134,7 +2134,6 @@ export function Logbook({
       label: t('logbook.row.menu.spot'),
       title: t('logbook.row.spot.title', { call: q.call }),
       onSelect: () => setSpotSeed({ call: q.call, freq: q.freqMhz, mode: q.mode }),
-      opensDialog: true,
     },
     {
       label: t('logbook.row.menu.qrz'),

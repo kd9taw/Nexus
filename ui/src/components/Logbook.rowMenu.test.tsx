@@ -330,6 +330,24 @@ describe('Spot from the ⋯ menu', () => {
     expect(document.activeElement).toBe(more)
   })
 
+  it('the dialog holds the keyboard: Tab from Spot wraps to the call box, and Esc from Cancel closes it back to ⋯', async () => {
+    await renderLog()
+    const more = rowMore('K0ABC')
+    more.focus()
+    await chooseRowAction('K0ABC', t('logbook.row.menu.spot'))
+    await expectKeyboardInDialog()
+    const submit = within(spotDialog()).getByRole('button', { name: t('spots.post.submit') })
+    submit.focus()
+    expect(fireEvent.keyDown(submit, { key: 'Tab' }), 'the browser does not move the keyboard out').toBe(false)
+    expect(document.activeElement).toBe(callBox())
+    const cancel = within(spotDialog()).getByRole('button', { name: t('spots.post.cancel') })
+    cancel.focus()
+    fireEvent.keyDown(cancel, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(document.activeElement, 'the keyboard is back on the row’s ⋯').toBe(more)
+    expect(postSpot).not.toHaveBeenCalled()
+  })
+
   it('CONTROL: an item that opens nothing still gives the keyboard back to ⋯', async () => {
     await renderLog()
     const more = rowMore('K0ABC')

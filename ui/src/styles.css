@@ -8870,6 +8870,23 @@ select optgroup {
 .park-review:focus {
   outline: none;
 }
+/* The Spot dialog (SpotDialog.tsx): a ui/Dialog whose BOX only centres what it holds, a `.logconfirm`
+   inside its zoomed content, so the card is drawn and sized as it was when it sat in the page —
+   capped to the window and scrolling itself (the `.logconfirm` rule). Centred both ways by the
+   inset + auto margins, which leave the box exactly the card's size. */
+.ui-dialog.spot-dialog {
+  inset: 0;
+  margin: auto;
+  transform: none;
+  width: fit-content;
+  height: fit-content;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
 .park-review-intro,
 .park-review-note {
   margin: 0 0 var(--space-3);
