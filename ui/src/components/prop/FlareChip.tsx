@@ -1,7 +1,7 @@
 // The flare chip — the words beside the flare layer, on the 2-D map and the 3-D globe alike.
 //
 // Folded it is two lines: what the flare is (class, R-scale, how high HF is absorbed under the
-// sun) and where it is (NOAA's began / peak / ended, or our trend word marked estimated), then
+// sun) and where it is (NOAA's began / peak / ended, or the GOES trace's direction marked estimated), then
 // what the picture is drawn from and when. Unfolded it adds the bands out and weakened under the
 // sun and at the operator's QTH, how long until HF recovers, and the six-hour X-ray sparkline.
 //
@@ -35,7 +35,6 @@ export function FlareChip({
   xrayLong,
   foot,
   noaa,
-  trend,
   qth,
   nowMs,
   snapAt = null,
@@ -45,7 +44,6 @@ export function FlareChip({
   foot: FlareFootprint
   /** NOAA's trace, event and grid; null for simulated flux. */
   noaa: FlareNoaa | null
-  trend: 'rising' | 'steady' | 'falling' | null
   qth: { lat: number; lon: number } | null
   nowMs: number
   /** The prop snapshot's GOES sample time: the class comes from the snapshot when NOAA's fast lane
@@ -69,7 +67,7 @@ export function FlareChip({
       </div>
     )
   }
-  const phase = flarePhase(noaa?.event, trend, nowMs, xrayLong, noaa?.series)
+  const phase = flarePhase(noaa?.event, nowMs, xrayLong, noaa?.series)
   const phaseLine = phase.noaa
     ? phase.kind === 'ended'
       ? t('map.flare.noaa.ended', { end: hm(phase.endAt!), begin: hm(phase.beginAt!) })

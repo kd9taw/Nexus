@@ -56,7 +56,7 @@ const noaa = (o: Partial<FlareNoaa> = {}): FlareNoaa => ({
 
 function chip(
   n: FlareNoaa | null,
-  extra: { preview?: boolean; trend?: 'rising' | 'falling' | null; snapAt?: number | null } = {},
+  extra: { preview?: boolean; snapAt?: number | null } = {},
 ) {
   const foot = flareFootprint(NOW, M5, n?.drap)!
   return render(
@@ -65,7 +65,6 @@ function chip(
         xrayLong={M5}
         foot={foot}
         noaa={n}
-        trend={extra.trend ?? null}
         qth={{ lat: 41.9, lon: -87.6 }}
         nowMs={NOW}
         snapAt={extra.snapAt}
@@ -79,12 +78,12 @@ function chip(
 }
 
 describe('FlareChip words', () => {
-  // After NOAA ends a flare the shack's 3-hour trend still says "rising" through the decay; the
-  // chip reads "rising again" from the lane's own GOES trace instead.
+  // After NOAA ends a flare the shack's 3-hour trend still says "rising" through the decay, so the
+  // chip takes no word from it: "rising again" is read from the lane's own GOES trace.
   const ended: FlareEvent = { ...event, maxClass: 'M6.0', maxFlux: 6e-5, endAt: NOW_S - 300 }
-  it("keeps NOAA's \"ended\" through the decay, though the 3-hour trend says rising", () => {
+  it("keeps NOAA's \"ended\" through the decay", () => {
     const decay: [number, number][] = [[NOW_S - 600, 6e-5], [NOW_S - 240, 5.5e-5], [NOW_S - 60, 5e-5]]
-    const text = chip(noaa({ event: ended, series: decay }), { trend: 'rising' }).container.textContent ?? ''
+    const text = chip(noaa({ event: ended, series: decay })).container.textContent ?? ''
     expect(text).toContain(t('map.flare.noaa.ended', { end: '17:55Z', begin: '17:38Z' }))
     expect(text).not.toContain(t('map.flare.est.rising'))
   })
@@ -95,6 +94,38 @@ describe('FlareChip words', () => {
     expect(text).not.toContain('17:55Z')
   })
 
+  // NOAA's event is too old to quote (over three hours ago): the direction word comes from the
+  // lane's GOES trace alone (the chip no longer takes the 3-hour trend), and without a trace there
+  // is none.
+  const old: FlareEvent = {
+    ...event,
+    at: NOW_S - 60,
+    beginAt: NOW_S - 4 * 3600,
+    maxAt: NOW_S - 3.5 * 3600,
+    maxClass: 'X2.0',
+    maxFlux: 2e-4,
+    endAt: NOW_S - 3 * 3600,
+  }
+  const stale = (series: [number, number][]) => noaa({ event: old, series })
+  const est = (text: string) => ({
+    rising: text.includes(t('map.flare.est.rising')),
+    falling: text.includes(t('map.flare.est.falling')),
+  })
+  it('a long decay beside a stale NOAA event reads Falling, not Rising', () => {
+    const decay: [number, number][] = [[NOW_S - 1500, 9e-5], [NOW_S - 900, 7e-5], [NOW_S - 300, 5.5e-5], [NOW_S - 60, 5e-5]]
+    expect(est(chip(stale(decay)).container.textContent ?? '')).toEqual({ rising: false, falling: true })
+  })
+  it('CONTROL: a genuine rise beside a stale NOAA event reads Rising (estimated)', () => {
+    const rise: [number, number][] = [[NOW_S - 1500, 2e-5], [NOW_S - 900, 2.5e-5], [NOW_S - 300, 3e-5], [NOW_S - 60, 5e-5]]
+    expect(est(chip(stale(rise)).container.textContent ?? '')).toEqual({ rising: true, falling: false })
+  })
+  it('no trace, or an old one, gives no direction word', () => {
+    const oldTrace: [number, number][] = [[NOW_S - 3000, 2e-5], [NOW_S - 2400, 5e-5], [NOW_S - 1800, 6e-5]]
+    for (const series of [[], oldTrace]) {
+      expect(est(chip(stale(series)).container.textContent ?? '')).toEqual({ rising: false, falling: false })
+    }
+  })
+
   it("names NOAA's grid and its valid time, and NOAA's event times", () => {
     const { container } = chip(noaa())
     const text = container.textContent ?? ''
@@ -103,8 +134,8 @@ describe('FlareChip words', () => {
     expect(container.querySelector('.flare-chip-src')!.getAttribute('data-source')).toBe('noaa')
   })
 
-  it('says "estimated from GOES" when there is no current NOAA grid, and uses the trend word', () => {
-    const { container } = chip(noaa({ drap: null, event: null }), { trend: 'falling' })
+  it('says "estimated from GOES" when there is no current NOAA grid, and uses the trace\'s direction word', () => {
+    const { container } = chip(noaa({ drap: null, event: null }))
     const text = container.textContent ?? ''
     expect(text).toContain(t('map.flare.src.goes', { xtime: '17:59Z' }))
     expect(text).toContain(t('map.flare.est.falling'))

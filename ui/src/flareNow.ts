@@ -14,10 +14,10 @@
 //
 // PHASES. NOAA's event list says began / peak / ended in NOAA's words. When it is silent or stale,
 // or its event is a previous flare (the flux is now above that event's peak, or GOES's own trace
-// has turned up again since it ended), the phase falls back to our X-ray trend word, marked
-// estimated. "Turned up again" is read from the fast lane's trace, never from the shack's 3-hour
-// trend: that one compares now with the oldest sample in three hours, so it says "rising" all
-// through an ordinary flare's decay.
+// has turned up again since it ended), the phase falls back to the direction of the fast lane's
+// GOES trace, marked estimated, and to no word at all without a current trace. Never the shack's
+// 3-hour trend: that one compares now with the oldest sample in three hours, so it says "rising"
+// all through an ordinary flare's decay.
 //
 // EXTENSION POINT. A later overlay (the proton cap, the aurora edge) adds its own footprint
 // function beside `flareFootprint` and hands its rings to the same `WxRing` drawing on both
@@ -241,7 +241,7 @@ export function flareUnderSun(foot: FlareFootprint): { out: string | null; weak:
 
 export type FlarePhaseKind = 'rising' | 'peaked' | 'ended' | 'falling'
 
-/** Where the flare is: in NOAA's words (`noaa`) with NOAA's times, or our trend word. */
+/** Where the flare is: in NOAA's words (`noaa`) with NOAA's times, or the GOES trace's direction. */
 export interface FlarePhase {
   kind: FlarePhaseKind | null
   noaa: boolean
@@ -261,6 +261,8 @@ export const EVENT_FRESH_SECS = 600
 const NEW_FLARE_OVER_PEAK = 1.1
 /** The trace speaks for now only while its newest sample is this recent (the UI's X-ray age). */
 const TRACE_LIVE_SECS = 600
+/** The direction word compares the newest sample with the trace's last half hour before it. */
+const TRACE_WINDOW_SECS = 30 * 60
 /** The flare layer's onset (M1). */
 const M1 = 1e-5
 
@@ -284,6 +286,23 @@ function risenSince(series: ReadonlyArray<[number, number]> | undefined, since: 
   return last > low * NEW_FLARE_OVER_PEAK
 }
 
+/** The trace's direction now: its newest sample (≤ TRACE_LIVE_SECS old) against the samples of the
+ *  half hour before it. Rising when more than the margin above their lowest (checked first: a
+ *  re-rise during a decay is the news), falling when more than the margin below their highest,
+ *  else none. No trace, too few samples or an old one is none: no measurement, no word. */
+function traceDirection(series: ReadonlyArray<[number, number]> | undefined, now: number): 'rising' | 'falling' | null {
+  const s = series ?? []
+  if (s.length < 2) return null
+  const [lastAt, last] = s[s.length - 1]
+  if (now - lastAt > TRACE_LIVE_SECS) return null
+  const before = s.slice(0, -1).filter(([t]) => t >= lastAt - TRACE_WINDOW_SECS)
+  if (before.length === 0) return null
+  const fluxes = before.map(([, f]) => f)
+  if (last > Math.min(...fluxes) * NEW_FLARE_OVER_PEAK) return 'rising'
+  if (last * NEW_FLARE_OVER_PEAK < Math.max(...fluxes)) return 'falling'
+  return null
+}
+
 /** `xray` is the flux now (null when unknown); `series` is the fast lane's GOES trace. An event
  *  that has peaked or ended is this flare's only while the flux is not above its peak and, once
  *  ended, the trace has not turned up again: NOAA lists a flare only after minutes of rise, so
@@ -293,7 +312,6 @@ function risenSince(series: ReadonlyArray<[number, number]> | undefined, since: 
  *  flux rose, and NOAA's word about its own event is true. */
 export function flarePhase(
   event: FlareEvent | null | undefined,
-  trend: 'rising' | 'steady' | 'falling' | null,
   nowMs: number,
   xray: number | null,
   series?: ReadonlyArray<[number, number]>,
@@ -322,8 +340,8 @@ export function flarePhase(
     }
   }
   return {
-    // The trace's own rise is a measurement; otherwise the trend word.
-    kind: risen || trend === 'rising' ? 'rising' : trend === 'falling' ? 'falling' : null,
+    // Measured from the trace's last half hour, or nothing.
+    kind: traceDirection(series, now),
     noaa: false,
     beginAt: null,
     peakAt: null,

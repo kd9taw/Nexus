@@ -195,21 +195,24 @@ describe('flarePhase', () => {
   const trace = (pts: Array<[number, number]>): [number, number][] => pts.map(([m, f]) => [NOW_S - m * 60, f])
 
   it("speaks NOAA's words with NOAA's times", () => {
-    expect(flarePhase(ev({}), 'falling', NOW, null)).toMatchObject({ kind: 'rising', noaa: true, beginAt: NOW_S - 1200 })
-    expect(flarePhase(ev({ maxAt: NOW_S - 600, maxClass: 'M4.2' }), 'rising', NOW, null)).toMatchObject({
+    expect(flarePhase(ev({}), NOW, null)).toMatchObject({ kind: 'rising', noaa: true, beginAt: NOW_S - 1200 })
+    expect(flarePhase(ev({ maxAt: NOW_S - 600, maxClass: 'M4.2' }), NOW, null)).toMatchObject({
       kind: 'peaked',
       noaa: true,
       peakAt: NOW_S - 600,
       peakClass: 'M4.2',
     })
-    expect(flarePhase(ev({ maxAt: NOW_S - 600, endAt: NOW_S - 120 }), null, NOW, null)).toMatchObject({
+    expect(flarePhase(ev({ maxAt: NOW_S - 600, endAt: NOW_S - 120 }), NOW, null)).toMatchObject({
       kind: 'ended',
       noaa: true,
       endAt: NOW_S - 120,
     })
   })
 
-  it('falls back to the trend word, not NOAA, when the list is stale, old or absent', () => {
+  // Falling over the last half hour, newest sample a minute old.
+  const FALLING = trace([[25, 6e-5], [15, 4.5e-5], [5, 3.5e-5], [1, 3.2e-5]])
+
+  it("falls back to the GOES trace's word, not NOAA, when the list is stale, old or absent", () => {
     const fallbacks: Array<FlareEvent | null> = [
       null,
       ev({ at: NOW_S - 11 * 60 }), // the list stopped updating
@@ -217,7 +220,7 @@ describe('flarePhase', () => {
       ev({ maxAt: NOW_S - 3 * 3600, endAt: NOW_S - 2 * 3600 }), // over for two hours
     ]
     for (const e of fallbacks) {
-      expect(flarePhase(e, 'falling', NOW, null)).toEqual({
+      expect(flarePhase(e, NOW, null, FALLING)).toEqual({
         kind: 'falling',
         noaa: false,
         beginAt: null,
@@ -225,7 +228,8 @@ describe('flarePhase', () => {
         peakClass: null,
         endAt: null,
       })
-      expect(flarePhase(e, 'steady', NOW, null).kind).toBeNull()
+      // No trace: no direction word.
+      expect(flarePhase(e, NOW, null).kind).toBeNull()
     }
   })
 
@@ -243,15 +247,17 @@ describe('flarePhase', () => {
 
   it("never quotes the previous flare's words for a new one", () => {
     // A C8 ended 30 min ago; an M2 is rising now and NOAA has not listed it yet.
-    expect(flarePhase(C8_ENDED, 'rising', NOW, 2e-5)).toMatchObject({ kind: 'rising', noaa: false, endAt: null })
-    // The flux is well above the event's peak, whatever the trend says.
-    expect(flarePhase(C8_ENDED, 'steady', NOW, 2e-5)).toMatchObject({ kind: null, noaa: false })
-    // Peaked (not ended) at C8, and the flux now an M2: not that event either.
+    const m2Rising = trace([[20, 3e-6], [10, 8e-6], [1, 2e-5]])
+    expect(flarePhase(C8_ENDED, NOW, 2e-5, m2Rising)).toMatchObject({ kind: 'rising', noaa: false, endAt: null })
+    // The flux is well above the event's peak, with no trace to give it a direction.
+    expect(flarePhase(C8_ENDED, NOW, 2e-5)).toMatchObject({ kind: null, noaa: false })
+    // Peaked (not ended) at C8, and the flux now an M2 that is fading: not that event either.
     const peaked = { ...C8_ENDED, endAt: null }
-    expect(flarePhase(peaked, 'falling', NOW, 2e-5)).toMatchObject({ kind: 'falling', noaa: false })
+    const m2Falling = trace([[20, 4e-5], [10, 3e-5], [1, 2e-5]])
+    expect(flarePhase(peaked, NOW, 2e-5, m2Falling)).toMatchObject({ kind: 'falling', noaa: false })
     // Ended, and GOES's own trace has turned up again since: a new rise, below the old peak.
     const upAgain = trace([[25, 4e-6], [20, 3.5e-6], [15, 3.2e-6], [10, 4.5e-6], [5, 6e-6]])
-    expect(flarePhase({ ...C8_ENDED, maxFlux: null }, 'steady', NOW, 6e-6, upAgain)).toMatchObject({
+    expect(flarePhase({ ...C8_ENDED, maxFlux: null }, NOW, 6e-6, upAgain)).toMatchObject({
       kind: 'rising',
       noaa: false,
     })
@@ -282,16 +288,13 @@ describe('flarePhase', () => {
     [1, 2e-5],
   ])
 
-  it("keeps NOAA's \"ended\" through the decay, though the 3-hour trend says rising", () => {
-    expect(flarePhase(M5_ENDED, 'rising', NOW, 2e-5, DECAY)).toMatchObject({ kind: 'ended', noaa: true, endAt: NOW_S - 600 })
+  it("keeps NOAA's \"ended\" through the decay", () => {
+    expect(flarePhase(M5_ENDED, NOW, 2e-5, DECAY)).toMatchObject({ kind: 'ended', noaa: true, endAt: NOW_S - 600 })
   })
 
   it('POSITIVE CONTROL: a genuine new rise after the end reads Rising (estimated)', () => {
     const rise: [number, number][] = [...DECAY.slice(0, -2), [NOW_S - 5 * 60, 2.2e-5], [NOW_S - 60, 3e-5]]
-    // Rising from the trace itself, whatever the 3-hour trend says.
-    for (const trend of ['rising', 'steady', null] as const) {
-      expect(flarePhase(M5_ENDED, trend, NOW, 3e-5, rise)).toMatchObject({ kind: 'rising', noaa: false, endAt: null })
-    }
+    expect(flarePhase(M5_ENDED, NOW, 3e-5, rise)).toMatchObject({ kind: 'rising', noaa: false, endAt: null })
   })
 
   it("without a current trace, NOAA's \"ended\" stands: nothing measured says it rose", () => {
@@ -299,42 +302,71 @@ describe('flarePhase', () => {
     const ended30 = { ...M5_ENDED, endAt: NOW_S - 30 * 60 }
     const old = trace([[25, 2.4e-5], [20, 3e-5], [12, 3.5e-5]])
     for (const series of [undefined, [], old]) {
-      expect(flarePhase(ended30, 'rising', NOW, 3.5e-5, series)).toMatchObject({ kind: 'ended', noaa: true })
+      expect(flarePhase(ended30, NOW, 3.5e-5, series)).toMatchObject({ kind: 'ended', noaa: true })
     }
     // CONTROL: the same rise, still being sampled, is a new rise.
     const live = trace([[25, 2.4e-5], [20, 3e-5], [12, 3.5e-5], [2, 3.6e-5]])
-    expect(flarePhase(ended30, 'rising', NOW, 3.6e-5, live)).toMatchObject({ kind: 'rising', noaa: false })
+    expect(flarePhase(ended30, NOW, 3.6e-5, live)).toMatchObject({ kind: 'rising', noaa: false })
+  })
+
+  // NOAA'S EVENT TOO OLD TO QUOTE. The direction word comes from the trace alone: the 3-hour trend
+  // would say "rising" through a long decay, so it is not an input at all.
+  const LONG_AGO = { ...M5_ENDED, beginAt: NOW_S - 4 * 3600, maxAt: NOW_S - 3.5 * 3600, endAt: NOW_S - 3 * 3600 }
+  it('a long decay beside a stale NOAA event reads Falling, never Rising', () => {
+    const decay = trace([[50, 4e-5], [40, 3.5e-5], [30, 3.1e-5], [20, 2.7e-5], [10, 2.4e-5], [1, 2.1e-5]])
+    expect(flarePhase(LONG_AGO, NOW, 2.1e-5, decay)).toMatchObject({ kind: 'falling', noaa: false })
+    // A decay too slow to pass the margin in half an hour has no word, not "rising".
+    const slow = trace([[30, 2.2e-5], [15, 2.15e-5], [1, 2.1e-5]])
+    expect(flarePhase(LONG_AGO, NOW, 2.1e-5, slow)).toMatchObject({ kind: null, noaa: false })
+    // Nor does a flux a few percent up from its low: noise is not a rise.
+    const flat = trace([[20, 2e-5], [10, 2.05e-5], [1, 2.08e-5]])
+    expect(flarePhase(LONG_AGO, NOW, 2.08e-5, flat)).toMatchObject({ kind: null, noaa: false })
+  })
+  it('CONTROL: a genuine rise beside a stale NOAA event reads Rising (estimated)', () => {
+    // Below the old peak and before NOAA's end window: the half hour's own rise, not risenSince's.
+    const ev2 = { ...LONG_AGO, endAt: null, at: NOW_S - 20 * 60 }
+    const rise = trace([[25, 1.2e-5], [15, 1.3e-5], [5, 1.6e-5], [1, 2e-5]])
+    expect(flarePhase(ev2, NOW, 2e-5, rise)).toMatchObject({ kind: 'rising', noaa: false })
+    // A re-rise inside a decay is rising: checked before falling.
+    const dipUp = trace([[25, 6e-5], [15, 2e-5], [5, 1.8e-5], [1, 2.5e-5]])
+    expect(flarePhase(ev2, NOW, 2.5e-5, dipUp)).toMatchObject({ kind: 'rising', noaa: false })
+  })
+  it('no trace, an old one or one sample gives no direction word', () => {
+    const old = trace([[40, 6e-5], [30, 4e-5], [15, 3e-5]])
+    for (const series of [undefined, [], old, trace([[1, 2e-5]]), trace([[45, 6e-5], [1, 2e-5]])]) {
+      expect(flarePhase(LONG_AGO, NOW, 2e-5, series)).toMatchObject({ kind: null, noaa: false })
+    }
   })
 
   it('a missing peak flux fails closed', () => {
     // No maxFlux: NOAA's peak class stands in for it.
-    expect(flarePhase({ ...C8_ENDED, maxFlux: null }, 'falling', NOW, 2e-5)).toMatchObject({ noaa: false })
-    expect(flarePhase({ ...C8_ENDED, maxFlux: null, endAt: null }, 'falling', NOW, 2e-5)).toMatchObject({ noaa: false })
+    expect(flarePhase({ ...C8_ENDED, maxFlux: null }, NOW, 2e-5)).toMatchObject({ noaa: false })
+    expect(flarePhase({ ...C8_ENDED, maxFlux: null, endAt: null }, NOW, 2e-5)).toMatchObject({ noaa: false })
     // CONTROL: at the event's own flux it is still the event.
-    expect(flarePhase({ ...C8_ENDED, maxFlux: null }, 'falling', NOW, 5e-6)).toMatchObject({ kind: 'ended', noaa: true })
+    expect(flarePhase({ ...C8_ENDED, maxFlux: null }, NOW, 5e-6)).toMatchObject({ kind: 'ended', noaa: true })
     // The class is read as a flux: an M5 that decayed to M2 is still that M5; 9e-6 is over C8 + 10 %.
-    expect(flarePhase({ ...M5_ENDED, maxFlux: null }, 'falling', NOW, 2e-5)).toMatchObject({ kind: 'ended', noaa: true })
-    expect(flarePhase({ ...C8_ENDED, maxFlux: null }, 'falling', NOW, 9e-6)).toMatchObject({ noaa: false })
+    expect(flarePhase({ ...M5_ENDED, maxFlux: null }, NOW, 2e-5)).toMatchObject({ kind: 'ended', noaa: true })
+    expect(flarePhase({ ...C8_ENDED, maxFlux: null }, NOW, 9e-6)).toMatchObject({ noaa: false })
     // Neither: a settled event is not this M1+ flare's (the chip only shows M1+).
     const blind = { ...C8_ENDED, maxFlux: null, maxClass: null }
-    expect(flarePhase(blind, 'falling', NOW, 1e-5)).toMatchObject({ kind: 'falling', noaa: false })
-    expect(flarePhase({ ...blind, endAt: null }, 'steady', NOW, 9e-5)).toMatchObject({ kind: null, noaa: false })
+    expect(flarePhase(blind, NOW, 1e-5)).toMatchObject({ kind: null, noaa: false })
+    expect(flarePhase({ ...blind, endAt: null }, NOW, 9e-5)).toMatchObject({ kind: null, noaa: false })
     // CONTROL: a rising event has no peak yet and is still this flare's.
-    expect(flarePhase(ev({}), 'rising', NOW, 9e-5)).toMatchObject({ kind: 'rising', noaa: true })
+    expect(flarePhase(ev({}), NOW, 9e-5)).toMatchObject({ kind: 'rising', noaa: true })
   })
 
   it('the 10 % margin: 1.2× the peak is a new flare, 1.05× is not', () => {
     const peaked = { ...C8_ENDED, endAt: null }
-    expect(flarePhase(peaked, 'falling', NOW, 8e-6 * 1.2)).toMatchObject({ noaa: false })
-    expect(flarePhase(peaked, 'falling', NOW, 8e-6 * 1.05)).toMatchObject({ kind: 'peaked', noaa: true })
+    expect(flarePhase(peaked, NOW, 8e-6 * 1.2)).toMatchObject({ noaa: false })
+    expect(flarePhase(peaked, NOW, 8e-6 * 1.05)).toMatchObject({ kind: 'peaked', noaa: true })
   })
 
   it("POSITIVE CONTROL: the same event at its own flux keeps NOAA's words", () => {
-    expect(flarePhase(C8_ENDED, 'falling', NOW, 5e-6)).toMatchObject({ kind: 'ended', noaa: true, endAt: NOW_S - 1800 })
+    expect(flarePhase(C8_ENDED, NOW, 5e-6)).toMatchObject({ kind: 'ended', noaa: true, endAt: NOW_S - 1800 })
     // Within 10 % of NOAA's peak is the same flare (the GOES sample and NOAA's peak differ a little).
-    expect(flarePhase({ ...C8_ENDED, endAt: null }, 'falling', NOW, 8.5e-6)).toMatchObject({ kind: 'peaked', noaa: true })
+    expect(flarePhase({ ...C8_ENDED, endAt: null }, NOW, 8.5e-6)).toMatchObject({ kind: 'peaked', noaa: true })
     // A rising event is this flare's however high the flux goes.
-    expect(flarePhase(ev({}), 'rising', NOW, 2e-4)).toMatchObject({ kind: 'rising', noaa: true })
+    expect(flarePhase(ev({}), NOW, 2e-4)).toMatchObject({ kind: 'rising', noaa: true })
   })
 })
 

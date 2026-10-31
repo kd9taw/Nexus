@@ -2021,7 +2021,6 @@ function Globe3DView({
             xrayLong={xrayLong}
             foot={flareFoot}
             noaa={flareNoaa}
-            trend={prop?.wxTrend?.xray.dir ?? null}
             qth={qth}
             nowMs={nowMs}
             snapAt={prop?.spaceWx?.xrayAt ?? null}

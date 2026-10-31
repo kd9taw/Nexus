@@ -4206,7 +4206,6 @@ export function MapView({
                   xrayLong={xrayEff}
                   foot={flareFoot}
                   noaa={noaaNow}
-                  trend={flarePreview ? null : (prop?.wxTrend?.xray.dir ?? null)}
                   qth={myQth ?? me}
                   nowMs={nowMs}
                   snapAt={prop?.spaceWx?.xrayAt ?? null}
