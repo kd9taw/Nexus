@@ -2192,10 +2192,22 @@ fn current_ssn() -> Option<f64> {
     LAST_SSN.lock().ok().and_then(|g| *g).map(f64::from)
 }
 
-/// The X-ray "fast lane" cache: (fetched-at, flux W/m², the GOES sample's unix time). A
-/// flare's rise takes minutes, so `get_xray_now` refetches GOES every 60 s —
-/// much fresher than the 5-min snapshot TTL — and serves last-good on failure.
-static LAST_XRAY: Mutex<Option<(std::time::Instant, f32, i64)>> = Mutex::new(None);
+/// The flare lanes behind `get_xray_now`. A flare's rise takes minutes, so GOES, NOAA's event
+/// list and (during a flare) NOAA's D-RAP grid are each asked at most once a minute — much
+/// fresher than the 5-min snapshot TTL — and each serves its last good answer on failure.
+/// The lane stamps every ask before it goes out and backs off while failing, so neither a
+/// poll nor a NOAA outage ever turns into a request per call (`propagation::flare::Lane`).
+static XRAY_LANE: Mutex<propagation::flare::Lane<propagation::live::swpc::XrayTrace>> =
+    Mutex::new(propagation::flare::Lane::new());
+static FLARE_EVENT_LANE: Mutex<propagation::flare::Lane<propagation::flare::FlareEvent>> =
+    Mutex::new(propagation::flare::Lane::new());
+static DRAP_LANE: Mutex<propagation::flare::Lane<propagation::flare::DrapGrid>> =
+    Mutex::new(propagation::flare::Lane::new());
+/// Once a minute while answering; after failures 2, 4, 8 … minutes, capped at 15.
+const FLARE_LANE_CADENCE: propagation::flare::Cadence = propagation::flare::Cadence {
+    period: 60,
+    cap: 900,
+};
 
 /// The base config root: `%APPDATA%` on Windows, `$XDG_CONFIG_HOME`/`~/.config` on Unix,
 /// else the CWD. The `tempo[-<profile>]` app directory hangs off this.
@@ -14892,8 +14904,9 @@ fn kc2g_aged(v: &[propagation::MufStation], elapsed: u64) -> Vec<propagation::Mu
         .collect()
 }
 
-/// The freshest GOES long-band X-ray flux for the D-RAP flare layer + heads-up.
-#[derive(serde::Serialize, Clone, Copy)]
+/// The freshest GOES long-band X-ray flux for the D-RAP flare layer + heads-up, with what
+/// NOAA says about the flare: its event times and (during a flare) its absorption grid.
+#[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct XrayNow {
     /// GOES 0.1–0.8 nm flux, W/m².
@@ -14901,6 +14914,32 @@ struct XrayNow {
     /// The GOES sample's own time (Unix seconds, UTC) — never the fetch time, so a feed gap
     /// reads as an old sample and not as "now".
     as_of: i64,
+    /// The six-hour trace, `[unix, flux]` per five minutes (each bucket's peak), oldest first.
+    series: Vec<(i64, f32)>,
+    /// NOAA's newest flare event, when its list has answered.
+    event: Option<propagation::flare::FlareEvent>,
+    /// NOAA's D-RAP grid, only while the flux is at a flare (M1+, where the map draws it):
+    /// it is not asked on a quiet sun, and not sent where nothing would draw it.
+    drap: Option<propagation::flare::DrapGrid>,
+}
+
+/// Ask one lane if it is due (off the async runtime), then serve what it keeps.
+async fn lane_ask<T: Clone + Send + 'static>(
+    lane: &'static Mutex<propagation::flare::Lane<T>>,
+    fetch: fn() -> Result<T, String>,
+) -> Option<T> {
+    let go = lane
+        .lock()
+        .map(|mut l| l.claim(now_unix(), FLARE_LANE_CADENCE))
+        .unwrap_or(false);
+    if go {
+        if let Ok(Ok(v)) = tauri::async_runtime::spawn_blocking(fetch).await {
+            if let Ok(mut l) = lane.lock() {
+                l.answered(v);
+            }
+        }
+    }
+    lane.lock().ok().and_then(|l| l.kept().cloned())
 }
 
 /// The 60 s X-ray fast lane: refetches GOES far more often than the 5-min prop
@@ -14908,41 +14947,23 @@ struct XrayNow {
 /// last-good reading on a fetch failure; errors only when we never had one.
 #[tauri::command]
 async fn get_xray_now() -> Result<XrayNow, String> {
-    const XRAY_TTL_SECS: u64 = 60;
-    if let Some((when, flux, as_of)) = LAST_XRAY.lock().ok().and_then(|g| *g) {
-        if when.elapsed().as_secs() < XRAY_TTL_SECS {
-            return Ok(XrayNow { flux, as_of });
-        }
-    }
-    let fetched = tauri::async_runtime::spawn_blocking(propagation::live::swpc::fetch_xray_now)
+    use propagation::live::swpc;
+    let x = lane_ask(&XRAY_LANE, swpc::fetch_xray_trace)
         .await
-        .map_err(|e| e.to_string())?;
-    match fetched {
-        Ok(propagation::live::swpc::Sample {
-            value: flux,
-            at: as_of,
-        }) => {
-            if let Ok(mut g) = LAST_XRAY.lock() {
-                *g = Some((std::time::Instant::now(), flux, as_of));
-            }
-            Ok(XrayNow { flux, as_of })
-        }
-        Err(e) => {
-            // Serve stale rather than nothing (and re-arm the TTL so a NOAA outage
-            // is retried once a minute, not on every UI poll).
-            if let Ok(mut g) = LAST_XRAY.lock() {
-                if let Some(entry) = g.as_mut() {
-                    entry.0 = std::time::Instant::now();
-                }
-            }
-            LAST_XRAY
-                .lock()
-                .ok()
-                .and_then(|g| *g)
-                .map(|(_, flux, as_of)| XrayNow { flux, as_of })
-                .ok_or(e)
-        }
-    }
+        .ok_or("xray: no GOES reading yet")?;
+    let event = lane_ask(&FLARE_EVENT_LANE, swpc::fetch_flare_latest).await;
+    let drap = if propagation::flare::wants_drap(x.now.value) {
+        lane_ask(&DRAP_LANE, swpc::fetch_drap_grid).await
+    } else {
+        None
+    };
+    Ok(XrayNow {
+        flux: x.now.value,
+        as_of: x.now.at,
+        series: x.series,
+        event,
+        drap,
+    })
 }
 
 /// Fetch the NOAA R/S/G space-weather scales (today + tomorrow's G) plus the most
