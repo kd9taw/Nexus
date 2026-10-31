@@ -1,0 +1,7 @@
+{
+  "title": "正在将你的日志簿移入新数据库",
+  "once": "这只会发生一次。完成后 Nexus 会自动打开。",
+  "count": "{{done}} / {{total}} 个通联",
+  "finishing": "正在收尾…",
+  "opening": "正在打开 Nexus…"
+}

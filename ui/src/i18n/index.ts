@@ -151,7 +151,8 @@ export function setLocale(locale: string): void {
  * Called once before first paint. The OS default is deliberate — an operator running a German
  * Windows gets a German Nexus without being asked, which is the "works without being configured"
  * premise — and it is matched by LANGUAGE ONLY (`de-AT` → `de`): a region-specific catalog we do
- * not ship must not silently fall back to English when the language one exists.
+ * not ship must not silently fall back to English when the language one exists. Exception: a language we
+ * ship in two scripts.
  */
 export function initLocale(): void {
   let stored: string | null = null
@@ -171,7 +172,13 @@ export function initLocale(): void {
     return
   }
   const lang = os.split('-')[0]
-  if (lang && catalogs.has(lang)) active = lang
+  if (!lang) return
+  // A Traditional system reports zh-TW; the language alone would pick the Simplified catalog.
+  if (catalogs.has(lang + '-hant') && (/hant/i.test(os) || /^zh-(tw|hk|mo)$/i.test(os))) {
+    active = lang + '-hant'
+    return
+  }
+  if (catalogs.has(lang)) active = lang
 }
 
 /** The active prose locale. Never consult this to format a number — see the rule above. */
