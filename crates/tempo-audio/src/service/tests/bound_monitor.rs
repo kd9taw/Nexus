@@ -83,3 +83,24 @@ fn the_monitor_takes_its_scope_from_the_process_config() {
         vec![1, 2]
     );
 }
+
+/// The two hops the test above cannot reach: the spawn in `run_radio` and the snapshot inside
+/// `monitor_loop`, a thread that never returns and opens real rig daemons. Source-scanned,
+/// because what is pinned is what each one hands on: the process's scope, and nothing else.
+#[test]
+fn the_monitor_thread_is_spawned_with_and_reads_through_the_process_scope() {
+    fn body_of<'a>(src: &'a str, sig: &str) -> &'a str {
+        let rest = &src[src.find(&format!("\n{sig}")).expect(sig) + 1..];
+        &rest[..rest.find("\n}\n").expect("the end of the function")]
+    }
+    let src = include_str!("../../service.rs");
+    assert!(
+        body_of(src, "pub fn run_radio(").contains("let scope = MonitorScope::of(&cfg);"),
+        "run_radio hands the monitor its own config's scope"
+    );
+    let monitor = body_of(src, "fn monitor_loop(");
+    assert!(
+        monitor.contains("scope.want(") && !monitor.contains("monitor_want("),
+        "the monitor's want-list goes through its scope"
+    );
+}

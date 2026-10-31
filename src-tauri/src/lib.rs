@@ -2112,6 +2112,36 @@ mod bound_radio_wiring_tests {
             );
         }
     }
+
+    /// The call sites the test above cannot reach: each feed's client id is taken inside its own
+    /// thread, once per process, on a connection to the public broker, and `run` starts the
+    /// whole app. Source-scanned, because what is pinned is which function each one calls.
+    #[test]
+    fn the_feeds_and_the_launch_take_the_wired_values() {
+        fn body_of<'a>(src: &'a str, sig: &str) -> &'a str {
+            let rest = &src[src.find(&format!("\n{sig}")).expect(sig) + 1..];
+            &rest[..rest.find("\n}\n").expect("the end of the function")]
+        }
+        let src = include_str!("lib.rs");
+        for (feed, call) in [
+            ("fn start_pskr_feed(", "&pskr_feed_client_id(\"\", &call),"),
+            (
+                "fn start_pskr_region_feed(",
+                "&pskr_feed_client_id(\"rgn-\", &call),",
+            ),
+        ] {
+            let body = body_of(src, feed);
+            assert!(
+                body.contains(call) && !body.contains("pskr_client_id("),
+                "{feed} takes its id from pskr_feed_client_id"
+            );
+        }
+        let run = body_of(src, "pub fn run() {");
+        assert!(
+            run.contains("radio_config_for(&settings,") && !run.contains("RadioConfig {"),
+            "run builds the radio config through radio_config_for"
+        );
+    }
 }
 
 /// Spawn the near-region opening MQTT thread once per process (Phase 2). No-op
