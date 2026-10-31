@@ -45,14 +45,22 @@ export function effectiveXray(
   fast: number | null | undefined,
   snap: number | null | undefined,
 ): number | null {
+  const dev = devXrayOverride()
+  if (dev != null) return dev
+  if (typeof fast === 'number' && Number.isFinite(fast) && fast > 0) return fast
+  if (typeof snap === 'number' && Number.isFinite(snap) && snap > 0) return snap
+  return null
+}
+
+/** The dev override flux (`localStorage['nexus.dev.xray']`, W/m²), or null. Simulated: the map
+ *  draws it with the analytic field only, never with NOAA's grid or event list beside it. */
+export function devXrayOverride(): number | null {
   try {
     const dev = Number(localStorage.getItem('nexus.dev.xray'))
     if (Number.isFinite(dev) && dev > 0) return dev
   } catch {
     /* storage blocked — live values still apply */
   }
-  if (typeof fast === 'number' && Number.isFinite(fast) && fast > 0) return fast
-  if (typeof snap === 'number' && Number.isFinite(snap) && snap > 0) return snap
   return null
 }
 
