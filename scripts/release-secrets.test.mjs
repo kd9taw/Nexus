@@ -1106,6 +1106,10 @@ test('every job that stages the IOTA list sets up Node first', () => {
 //    rustc takes those over the profile's;
 //  - no .cargo/config* (repository root or src-tauri) carries any profile table, which cargo
 //    would apply over the manifest;
+//  - no workflow but ci.yml, no build script and not Dockerfile.pi builds with another profile than
+//    release: a command that may run cargo (cut at `;`, `&`, `|`) passes no `--profile <name>` but
+//    `release`, and no `--debug` (the tauri CLI's, also `-d` in a command naming tauri), whichever
+//    side of tauri's `--` it is on. rustup's own `--profile minimal` names no cargo and passes;
 //  - in ci.yml and Dockerfile.pi every mention of CARGO_PROFILE_RELEASE_* is one of the exact lines
 //    this design needs: the four step-env lines, whose fat value is the profile's on main,
 //    release/* and tags; the two bare `--build-arg NAME`s; and the two ARGs, whose defaults (what
@@ -1141,6 +1145,12 @@ const configFiles = (line) =>
     : [];
 // rustc's flag on one line and its value on the next, as a multi-line TOML array writes them
 // (`"-C",` then `"lto=off",`); a trailing comment on the first line is dropped before joining.
+// A build with another profile than release: cargo's `--profile <name>` (any name but `release`),
+// the tauri CLI's `--debug`, and its `-d` in a command that names tauri. Read per command, so
+// `test -d x && cargo …` and rustup's `--profile minimal` beside a cargo command are not taken for one.
+const OTHER_PROFILE = /--profile(?:\s+|=)["']?(?!release["']?(?:\s|$))\S|--debug\b/;
+const otherProfile = (line) =>
+  line.split(/[;&|]/).some((c) => RUNS_CARGO.test(c) && (OTHER_PROFILE.test(c) || (/\btauri\b/i.test(c) && /(?:^|\s)-d(?:\s|$)/.test(c))));
 const splitLinkFlag = (lines, i) =>
   i + 1 < lines.length &&
   !RUSTC_LINK_FLAG.test(lines[i]) &&
@@ -1177,6 +1187,9 @@ function linkProfileFindings({ workflows, buildScripts, cargoConfigs, ci, docker
   const bad = [];
   for (const [file, text] of [...workflows, ...buildScripts]) {
     for (const l of codeLines(text)) if (ANY_OVERRIDE.test(l)) bad.push(`${file}: names a link-profile override; only ci.yml's branch runs may: ${l}`);
+  }
+  for (const [file, text] of [...workflows, ...buildScripts, ['Dockerfile.pi', docker]]) {
+    for (const l of codeLines(text)) if (otherProfile(l)) bad.push(`${file}: builds with another profile than release: ${l}`);
   }
   for (const [file, text] of [...workflows, ...buildScripts, ['ci.yml', ci], ['Dockerfile.pi', docker]]) {
     const lines = codeLines(text);
@@ -1344,6 +1357,25 @@ test('only ci.yml land/topic runs leave the shipped link profile; release, main,
   // in it, are not reported.
   assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', `${linux}\n# never: -Ccodegen-units=16, profile = { release = {} }, --config thin.toml\n`)), []);
   assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', "cargo tauri build --config 'net.git-fetch-with-cli=true' --features"))), []);
+  // Another profile than release, on either side of tauri's `--`, and tauri's debug build.
+  for (const run of [
+    'cargo tauri build --debug',
+    'npx tauri build -d --features radio',
+    'cargo tauri build -- --profile dev',
+    'cargo tauri build -- --profile=release-thin',
+    '"$CARGO" build --profile "dev"',
+    'cross build --profile ci',
+    'test -d target && cargo tauri build --debug',
+  ]) {
+    has(linkProfileFindings(scripts('build-linux.sh', `${linux}\n${run}\n`)), `build-linux.sh: builds with another profile than release: ${run}`);
+  }
+  has(linkProfileFindings({ ...LINK, workflows: [[path.basename(WORKFLOW), plant(TEXT, '/tmp/rustup-init -y', 'cargo tauri build --debug\n          /tmp/rustup-init -y')]] }), 'release.yml: builds with another profile than release');
+  has(linkProfileFindings({ ...LINK, docker: `${DOCKERFILE}\nRUN cargo build --profile dev\n` }), 'Dockerfile.pi: builds with another profile than release');
+  // The release profile by name, rustup's own profile, `-d` outside a tauri command (even one that
+  // names `.cargo`), and ci.yml's
+  // branch runs, which may build however they like.
+  assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', `${linux}\ncargo build --profile release\ncargo tauri build -- --profile=release\nrustup toolchain install 1.93.1 --profile minimal && cargo tauri build\nunzip -d out x.zip; cargo tauri build\ninstall -d "$HOME/.cargo/bin"\n`)), []);
+  assert.deepEqual(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, nai, `          cargo test --profile dev\n${nai}`) }), []);
   // A git `-C <dir>` whose name starts with a flag's word, a shell's `-c` and a checksum's `-c`, and a
   // multi-line list whose `-C` takes another value.
   assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', `${linux}\ngit -C lto-src status\ngit -C codegen-units.d log\n`)), []);
