@@ -185,6 +185,36 @@ describe('the selected station strip', () => {
     expect(container.textContent).not.toMatch(/long path/)
   })
 
+  it('hatches the now cell a flare hits on the route that cell shows, and nothing else', () => {
+    const over = (band: string, db: number) => ({
+      unix: T0 + 12 * 3600,
+      kp: 2,
+      kpSource: 'measured' as const,
+      capLatDeg: 63.6,
+      source: { xrayAt: T0 + 12 * 3600 - 60, xrayLong: 1e-4, haf: 'goes' as const },
+      bands: [{ band, hops: 2, hopsModelled: true, flareDb: db }],
+    })
+    const p = pred(day())
+    // 20m at 12Z favours the long path: Best shows the long route's overlay there.
+    p.overlay = over('20m', 0.2)
+    p.longPath = { engine: 'p533', bands: [], mufNow: 16, mufHourly: [], overlay: over('20m', 14) }
+    const { container, getByRole } = render(<PathDayPane pred={p} scrub={null} />)
+    const c20 = cellsOf(rows(container)[0])
+    expect(c20[12].classList.contains('now-hit')).toBe(true)
+    expect(c20[12].classList.contains('now-flare')).toBe(true)
+    expect(c20[12].title).toContain('Now: ~14 dB of flare absorption on 20m (estimated from GOES 11:59Z)')
+    // The modelled colour stays as it is under the hatch.
+    expect(c20[12].style.background).toBe(heatColor(0.7))
+    // Only the current hour, only the band hit.
+    expect(c20.filter((c) => c.classList.contains('now-hit'))).toHaveLength(1)
+    expect(cellsOf(rows(container)[1]).some((c) => c.classList.contains('now-hit'))).toBe(false)
+    expect(container.querySelector('.pd-swatch.now-flare')).not.toBeNull()
+    // SP shows the short route, whose 0.2 dB is below the line: no hatch, no legend.
+    fireEvent.click(getByRole('button', { name: 'SP' }))
+    expect(cellsOf(rows(container)[0])[12].classList.contains('now-hit')).toBe(false)
+    expect(container.querySelector('.pd-swatch.now-flare')).toBeNull()
+  })
+
   it('without the day it draws its one line', () => {
     const { container } = render(<PathDayPane pred={pred(undefined)} scrub={null} />)
     expect(container.querySelector('.pane-basic')).not.toBeNull()

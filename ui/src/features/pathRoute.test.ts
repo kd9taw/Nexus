@@ -236,6 +236,37 @@ describe('the polar chip', () => {
 })
 
 describe('the map ribbon', () => {
+  it('lays what a flare hits NOW on the drawn band over each route, the long route from its own overlay', () => {
+    const o = (kind: 'flareOut' | 'flareWeak' | 'pca', band = '20m') => ({
+      unix: T12,
+      kp: 2,
+      kpSource: 'measured' as const,
+      capLatDeg: 63.6,
+      source: { xrayAt: T12 - 60, xrayLong: 1e-4, haf: 'goes' as const },
+      bands: [{ band, hops: 2, hopsModelled: true, flareDb: 12, segments: [{ from: 0.2, to: 0.7, kind }] }],
+    })
+    const polar = [{ from: 0.4, to: 0.6, kind: 'polar' as const }]
+    const p = pred([LONG_ONLY], geo(260, 16_000, hours(), polar))
+    p.overlay = o('flareOut')
+    p.longPath!.overlay = o('flareWeak')
+    const r = ribbonRoutes(p)
+    // Drawn over the polar stretch: the geometry's first, the overlay after.
+    expect(r?.short.segments.map((x) => x.kind)).toEqual(['polar', 'flareOut'])
+    expect(r?.long?.segments.map((x) => x.kind)).toEqual(['flareWeak'])
+    // Only for the band the ribbon is inked for: an overlay on another band adds nothing.
+    p.overlay = o('flareOut', '40m')
+    expect(ribbonRoutes(p)?.short.segments.map((x) => x.kind)).toEqual(['polar'])
+    // Now only: a scrubbed hour draws the geometry alone.
+    p.overlay = o('flareOut')
+    p.day = {
+      nowHour: 12,
+      mufShort: [],
+      bands: [{ band: '20m', cells: Array.from({ length: 24 }, () => ({ shortPct: 50, longPct: 50, verdict: 'either' as const })) }],
+      hours: [],
+    }
+    expect(ribbonRoutes(p, null, 3)?.short.segments).toEqual([])
+  })
+
   it('colours each route by its reliability on the hinted band and carries its stretches', () => {
     const seg = [{ from: 0.4, to: 0.6, kind: 'polar' as const }]
     const r = ribbonRoutes(pred([LONG_ONLY], geo(260, 16_000, hours(), seg)))

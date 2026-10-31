@@ -284,6 +284,9 @@ const MIGRATED = [
   'features/pathRibbon.ts',
   'components/prop/PathDayStrip.tsx',
   'features/pathDay.ts',
+  // The flare / proton overlay on a path and the outlook's "now" line (solar paths and outlook).
+  'features/pathNow.ts',
+  'components/prop/SpaceNowLine.tsx',
   'features/pathGrade.ts',
   'components/prop/PathGradeCell.tsx',
   'components/prop/ContactPath.tsx',

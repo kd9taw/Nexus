@@ -193,4 +193,38 @@ describe('the path ribbon on the globe', () => {
     const lastMats = inked.lines.filter((l) => !before.lines.includes(l)).map((l) => l.material)
     for (const m of lastMats) expect(disposed.has(m)).toBe(true)
   })
+
+  it('draws what a flare hits NOW on the drawn band over each route, in its own ink, and drops it when the flare goes', async () => {
+    const base = { myGrid: 'EN52', onSelectCall: () => {}, stations: [] }
+    const over = (kind: 'flareOut' | 'flareWeak') => ({
+      unix: 1,
+      kp: 2,
+      kpSource: 'measured' as const,
+      capLatDeg: 63.6,
+      source: { xrayAt: 1, xrayLong: 1e-4, haf: 'goes' as const },
+      bands: [{ band: '20m', hops: 4, hopsModelled: true, flareDb: 40, segments: [{ from: 0.1, to: 0.3, kind }] }],
+    })
+    const hit = outlook()
+    hit.overlay = over('flareOut')
+    hit.longPath!.overlay = over('flareWeak')
+    const r = render(<Globe3D {...base} prop={snap()} selectedCall="VK2ABC" outlook={hit} />)
+    await act(async () => {})
+    const ink = (name: string) => {
+      const grp = scene.getObjectByName(name)
+      const line = grp?.children[0] as THREE.Line | undefined
+      return line ? `#${(line.material as THREE.LineBasicMaterial).color.getHexString()}` : null
+    }
+    expect(ink('path-sp-flareOut')).toBe('#ff4d4d')
+    expect(ink('path-lp-flareWeak')).toBe('#ffa64d')
+    expect(ink('path-sp-flareWeak')).toBeNull()
+    // Drawn over the polar stretch: added to the scene after it.
+    const order = scene.children.map((c) => c.name)
+    expect(order.indexOf('path-sp-flareOut')).toBeGreaterThan(order.indexOf('path-sp-polar'))
+    // The flare is over: the overlay is gone, and so are its lines.
+    r.rerender(<Globe3D {...base} prop={snap()} selectedCall="VK2ABC" outlook={outlook()} />)
+    await act(async () => {})
+    expect(scene.getObjectByName('path-sp-flareOut')).toBeUndefined()
+    expect(scene.getObjectByName('path-lp-flareWeak')).toBeUndefined()
+    expect(ink('path-sp-polar')).not.toBeNull()
+  })
 })

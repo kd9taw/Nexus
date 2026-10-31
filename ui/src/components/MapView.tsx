@@ -14,7 +14,7 @@ import { callCardTrigger } from './CallCard'
 import { flushSync } from 'react-dom'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
-import type { OtaMapSpot } from '../types'
+import type { OtaMapSpot, PathSegmentNow } from '../types'
 import {
   ageFade,
   aprsRedrawMs,
@@ -678,6 +678,16 @@ const RINGS_KM = [1000, 3000, 5000, 10000]
  * catalog. */
 const PATH_SP = 'SP'
 const PATH_LP = 'LP'
+/** The ink of each ribbon stretch: the polar cap and the grey line, then what a flare or a proton
+ * event hits on the drawn band NOW (features/pathNow; weakened ≥ 1 dB / out ≥ 10 dB on a vertical
+ * pass, the flare rings' lines; ≥ 1 dB of proton absorption). */
+const STRETCH_INK: Record<PathSegmentNow['kind'], string> = {
+  polar: '--route-polar',
+  grey: '--route-grey',
+  flareWeak: '--route-flare-weak',
+  flareOut: '--route-flare-out',
+  pca: '--route-pca',
+}
 
 // Cartographic palette — a map should read as a MAP (filled land + ocean), not a
 // wireframe. The basemap's colours are THEME TOKENS (styles.css MAP BASEMAP): the standard
@@ -2966,7 +2976,7 @@ export function MapView({
           polyline(l.points)
           ctx.stroke()
           for (const st of l.stretches) {
-            ctx.strokeStyle = cssVar(st.kind === 'polar' ? '--route-polar' : '--route-grey')
+            ctx.strokeStyle = cssVar(STRETCH_INK[st.kind])
             ctx.lineWidth = width + 1.5
             ctx.beginPath()
             polyline(st.points)

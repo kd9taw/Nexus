@@ -28,6 +28,7 @@ import type { PaneContext } from './paneContext'
 import type { BandOutlook } from '../../types'
 import { bandTiming } from '../../propViz'
 import { PathWhy } from '../prop/PathWhy'
+import { SpaceNowLine } from '../prop/SpaceNowLine'
 import { PathRoute } from '../prop/PathRoute'
 import { PathDayPane, PathRegionsPane } from '../prop/PathDayStrip'
 import { azimuthLabel, azimuthTitle } from '../../grid'
@@ -316,6 +317,7 @@ function renderOutlook(c: PaneContext): ReactNode {
         {t('connect.outlook.heading')}
         <span className="cp-engine">{t('connect.engine.outlook')}</span>
       </h3>
+      <SpaceNowLine now={o.spaceNow} nowSec={Math.floor(Date.now() / 1000)} />
       {o.mufNow > 0 && (
         <p className="cp-muf" title={t('connect.outlook.muf.title')}>
           <T
