@@ -784,6 +784,59 @@ mod tests {
         assert_eq!(e.settings().dial_hz(), tx);
     }
 
+    /// Handing the dial back voids the confirmation too, not only taking it. While a pass holds
+    /// the dial the radio acknowledges and reads back the uplink itself; once the pass hands the
+    /// dial back, the frame must not key on that confirmation (the radio may have moved since,
+    /// on a write that never answered). Control: a fresh ack and read-back of the uplink keys it.
+    #[test]
+    fn a_confirmation_latched_while_a_satellite_pass_held_the_dial_is_void_after_the_hand_back() {
+        let mut e = on_the_iss();
+        e.aprs_iss_tick(APPROACHING, at(10_000), false);
+        radio_takes_the_dial(&mut e);
+        beacon(&mut e);
+        assert!(e.poll_aprs_tx().is_none());
+        let tx = e.settings().dial_hz();
+        e.set_sat_dial_owner(Some(("ISS|fm".to_string(), 0)));
+        e.steer_sat_dial(145.830);
+        radio_takes_the_dial(&mut e);
+        e.steer_sat_dial(tx as f64 / 1_000_000.0);
+        radio_takes_the_dial(&mut e);
+        e.set_sat_dial_owner(None);
+        assert_eq!(e.settings().dial_hz(), tx, "precondition: on the uplink");
+        assert!(
+            e.poll_aprs_tx().is_none(),
+            "keyed on a confirmation latched while the pass held the dial"
+        );
+        radio_takes_the_dial(&mut e);
+        assert!(
+            e.poll_aprs_tx().is_some(),
+            "a fresh confirmation did not key"
+        );
+    }
+
+    /// ⛔ NEVER RETUNE WHILE KEYED, for a waiting frame too: the poll's ISS gate runs after every
+    /// refusal and after the transmitter's owner is asked, so a frame queued while the operator
+    /// holds PTT never moves the dial to the uplink under the live over. Control: released, it
+    /// does.
+    #[test]
+    fn a_frame_polled_under_another_transmission_never_moves_the_dial() {
+        let mut e = on_the_iss();
+        e.aprs_iss_tick(APPROACHING, at(10_000), false);
+        radio_takes_the_dial(&mut e);
+        let rx = e.settings().dial_hz();
+        beacon(&mut e);
+        e.manual_ptt = true;
+        assert!(e.poll_aprs_tx().is_none());
+        assert_eq!(
+            e.settings().dial_hz(),
+            rx,
+            "the dial moved under a held PTT"
+        );
+        e.manual_ptt = false;
+        assert!(e.poll_aprs_tx().is_none());
+        assert_ne!(e.settings().dial_hz(), rx, "control: released, it moves");
+    }
+
     /// A driver that hangs (no panic, no more ticks) must not leave frames keying on a frozen
     /// correction: once its reading is older than [`SKY_FRESH`] the correction is off and says it
     /// stopped, and the next frame goes out on 145.825. Control: a fresh reading turns it back on.
