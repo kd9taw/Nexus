@@ -9011,7 +9011,8 @@ type DxpedWindowsCache = Mutex<Vec<(std::time::Instant, String, Vec<DxpedWindow>
 static DXPED_WINDOWS: DxpedWindowsCache = Mutex::new(Vec::new());
 const DXPED_WINDOWS_TTL_SECS: u64 = 6 * 3600;
 
-/// Identical cache identity for the native producer and passive Remote reader.
+/// Identical cache identity for the native producer and passive Remote reader. The sunspot
+/// number is the one the engine runs on ([`ssn_key`]), as the ring and path caches key it.
 #[allow(clippy::too_many_arguments)]
 fn dxped_windows_key(
     day: i64,
@@ -9020,16 +9021,38 @@ fn dxped_windows_key(
     prop_engine: &str,
     station_power_w: Option<f64>,
     ant_gain_dbi: f64,
-    ssn: Option<f32>,
+    wx: &propagation::SpaceWx,
     mut calls: Vec<&str>,
 ) -> String {
     calls.sort_unstable();
     format!(
-        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{:?}|{}",
+        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{}|{}",
         station_power_w,
-        ssn.map(|v| v.round() as i32),
+        ssn_key(wx),
         calls.join(",")
     )
+}
+
+#[cfg(test)]
+mod dxped_windows_key_tests {
+    use super::dxped_windows_key;
+    use propagation::SpaceWx;
+
+    /// The DXpedition windows key on the sunspot number the engine runs on, as the ring and path
+    /// caches do: with no R12 held, a changed SFI is another key; with one held, it is not.
+    #[test]
+    fn with_no_sunspot_number_held_an_sfi_change_is_another_dxped_key() {
+        let at = |sfi: f32, ssn: Option<f32>| {
+            let wx = SpaceWx {
+                sfi,
+                ssn,
+                ..SpaceWx::default()
+            };
+            dxped_windows_key(0, 7, "FN42", "p533", None, 0.0, &wx, vec!["VP8A"])
+        };
+        assert_ne!(at(70.0, None), at(200.0, None));
+        assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+    }
 }
 
 /// Modelled best-contact windows for every active + upcoming DXpedition, from
@@ -9118,7 +9141,7 @@ async fn get_dxped_windows(
         &prop_engine,
         station_power_w,
         ant_gain_dbi,
-        wx.ssn,
+        &wx,
         targets.iter().map(|(c, ..)| c.as_str()).collect(),
     );
     if let Ok(g) = DXPED_WINDOWS.lock() {
