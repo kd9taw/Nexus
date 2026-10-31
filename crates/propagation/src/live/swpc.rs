@@ -203,11 +203,44 @@ pub fn parse_daily_planetary_a_by_day(body: &str) -> Vec<Sample> {
     days
 }
 
+/// NOAA's flare event list: the newest event with its begin / peak / end.
+const FLARES_LATEST_URL: &str =
+    "https://services.swpc.noaa.gov/json/goes/primary/xray-flares-latest.json";
+/// NOAA's D-RAP global absorption grid, refreshed every minute.
+const DRAP_URL: &str = "https://services.swpc.noaa.gov/text/drap_global_frequencies.txt";
+
+/// The GOES long-band reading and its six-hour trace, from one request.
+#[derive(Debug, Clone)]
+pub struct XrayTrace {
+    /// The newest dated sample.
+    pub now: Sample,
+    /// Peak flux per five minutes over the file's six hours, oldest first.
+    pub series: Vec<(i64, f32)>,
+}
+
 /// Standalone GOES X-ray fetch — the 60 s "fast lane" behind `get_xray_now`, so a flare's
-/// onset reaches the UI in ~1 min instead of the 5-min snapshot TTL. Carries the sample time.
-pub fn fetch_xray_now() -> Result<Sample, String> {
+/// onset reaches the UI in ~1 min instead of the 5-min snapshot TTL. Carries the sample time,
+/// and the trace the flare chip's sparkline draws (the same file, no second request).
+pub fn fetch_xray_trace() -> Result<XrayTrace, String> {
     let v = get_json(&client()?, XRAY_URL)?;
-    parse_xray(&v).ok_or_else(|| "xray: no dated long-band sample".to_string())
+    let now = parse_xray(&v).ok_or_else(|| "xray: no dated long-band sample".to_string())?;
+    Ok(XrayTrace {
+        now,
+        series: crate::flare::xray_series(&v, 300),
+    })
+}
+
+/// NOAA's newest flare event (`xray-flares-latest.json`).
+pub fn fetch_flare_latest() -> Result<crate::flare::FlareEvent, String> {
+    let v = get_json(&client()?, FLARES_LATEST_URL)?;
+    crate::flare::parse_flare_latest(&v).ok_or_else(|| "flares: no dated event".to_string())
+}
+
+/// NOAA's D-RAP grid. An answer that is not a whole, dated grid is an error, so the last good
+/// grid keeps being served with its own valid time.
+pub fn fetch_drap_grid() -> Result<crate::flare::DrapGrid, String> {
+    let body = get_text(&client()?, DRAP_URL)?;
+    crate::flare::parse_drap_grid(&body).ok_or_else(|| "drap: not a whole dated grid".to_string())
 }
 
 /// Kp → instantaneous ap (the standard Kp-to-ap table, interpolated): the "ap now"

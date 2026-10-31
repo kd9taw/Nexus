@@ -49,3 +49,7 @@ required-features = ["live"]
 [[example]]
 name = "dxped_calendar"
 required-features = ["live"]
+
+[[example]]
+name = "drap_compare"
+required-features = ["live"]
