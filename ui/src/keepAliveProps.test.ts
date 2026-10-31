@@ -1,7 +1,7 @@
 // The hidden keep-alive cockpit's memo comparator.
 import { describe, it, expect } from 'vitest'
 import { createElement } from 'react'
-import { keepAlivePropsEqual, LIVE_FIELDS } from './keepAliveProps'
+import { keepAlivePropsEqual, operatePropsEqual, LIVE_FIELDS } from './keepAliveProps'
 
 const snap = () => ({
   mycall: 'W9XYZ',
@@ -76,5 +76,38 @@ describe('keepAlivePropsEqual', () => {
     const h = props(false)
     expect(keepAlivePropsEqual(h, { ...h, active: true })).toBe(false)
     expect(keepAlivePropsEqual({ ...h, active: true }, h)).toBe(false)
+  })
+})
+
+describe('operatePropsEqual (the FT cockpit)', () => {
+  type Ticks = { clearTick?: number; rxFreqClearTick?: number }
+  const ft = (ticks: Ticks = {}) => ({ active: false, snap: { ...snap(), ...ticks } })
+
+  for (const tick of ['clearTick', 'rxFreqClearTick'] as const) {
+    it(`hidden: renders on the ${tick} poll and on the one poll after it, then sits out again`, () => {
+      const before = ft({ [tick]: 0 })
+      const clear = ft({ [tick]: 1 })
+      const after = ft({ [tick]: 1 })
+      expect(operatePropsEqual(before, clear)).toBe(false)
+      // The poll after the Clear, unchanged in value: it refills the panes, so it renders.
+      expect(operatePropsEqual(clear, after)).toBe(false)
+      // The one after that is sat out, as any unchanged poll is.
+      expect(operatePropsEqual(after, ft({ [tick]: 1 }))).toBe(true)
+    })
+  }
+
+  it('hidden: no Clear, no extra render; the same snapshot again is no poll', () => {
+    const a = ft({ clearTick: 3, rxFreqClearTick: 2 })
+    const b = ft({ clearTick: 3, rxFreqClearTick: 2 })
+    expect(operatePropsEqual(a, b)).toBe(true)
+    expect(operatePropsEqual(b, ft({ clearTick: 3, rxFreqClearTick: 2 }))).toBe(true)
+    // A re-render of App with the Clear's own snapshot is not the poll after it.
+    const clear = ft({ clearTick: 4, rxFreqClearTick: 2 })
+    expect(operatePropsEqual(b, clear)).toBe(false)
+    expect(operatePropsEqual(clear, { ...clear })).toBe(true)
+    // Everything else is `keepAlivePropsEqual`: a real change still renders.
+    const dial = ft({ clearTick: 3, rxFreqClearTick: 2 })
+    dial.snap.radio.dialMhz = 7.074
+    expect(operatePropsEqual(a, dial)).toBe(false)
   })
 })

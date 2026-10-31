@@ -125,7 +125,7 @@ import { Js8SoundPlayer } from './components/Js8SoundPlayer'
 import { js8ComposeConfig } from './js8Compose'
 import { SstvView as SstvViewScreen } from './components/SstvView'
 import { AprsCockpit as AprsCockpitView } from './components/AprsCockpit'
-import { keepAlivePropsEqual } from './keepAliveProps'
+import { keepAlivePropsEqual, operatePropsEqual } from './keepAliveProps'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
 import { StatsView } from './components/StatsView'
 import { DxpeditionsView } from './components/DxpeditionsView'
@@ -335,8 +335,9 @@ const SCREEN_BY_SECTION: Partial<Record<string, View>> = {
   jtty: 'jtty',
 }
 /** The seven keep-alive cockpits, each memoised so that while hidden it sits out a snapshot poll that
- *  changed nothing it shows (`keepAliveProps.ts`). On screen each renders exactly as before. */
-const OperateCockpit = memo(OperateCockpitView, keepAlivePropsEqual)
+ *  changed nothing it shows (`keepAliveProps.ts`). On screen each renders exactly as before. FT also
+ *  renders, hidden, on the poll after a decode-pane Clear: that poll refills the panes. */
+const OperateCockpit = memo(OperateCockpitView, operatePropsEqual)
 const RttyCockpit = memo(RttyCockpitView, keepAlivePropsEqual)
 const PskCockpit = memo(PskCockpitView, keepAlivePropsEqual)
 const JttyCockpit = memo(JttyCockpitView, keepAlivePropsEqual)
@@ -346,6 +347,8 @@ const Js8Cockpit = memo(Js8CockpitView, keepAlivePropsEqual)
 /** The block list before settings load: one array, so the FT cockpit's `blockedCalls` (and the decode
  *  panes' ignore set built from it) keeps its identity from one render to the next. */
 const NO_CALLS: string[] = []
+/** Each cockpit's ENTER SENDS MESSAGE setting: the one map both the switch's save and its reading use. */
+const ESM_FIELD = { cw: 'contestEsmCw', rtty: 'contestEsmRtty', phone: 'contestEsmPhone' } as const
 
 /** Each decoder screen's entry arm — what its cockpit calls on the rising edge of `active`. */
 const ENTRY_ARM: Record<DecoderScreen, () => Promise<unknown>> = {
@@ -3051,7 +3054,7 @@ function App() {
   // ENTER SENDS MESSAGE's switch save, one per cockpit (`esmSettingFor` below lends it).
   const esmSwitch = useMemo(() => {
     const make = (cockpit: 'cw' | 'rtty' | 'phone') => (on: boolean) => {
-      const field = cockpit === 'cw' ? 'contestEsmCw' : cockpit === 'rtty' ? 'contestEsmRtty' : 'contestEsmPhone'
+      const field = ESM_FIELD[cockpit]
       setSettings((prev) => (prev ? { ...prev, [field]: on } : prev))
       setContestEsm(cockpit, on).catch(() => {
         setSettings((prev) => (prev ? { ...prev, [field]: !on } : prev))
@@ -3470,7 +3473,7 @@ function App() {
    *  save: that one field (`set_contest_esm`), never a settings-form save, which would clear the
    *  transmit queues mid-contest. Shown at once and put back if the save fails. */
   const esmSettingFor = (cockpit: 'cw' | 'rtty' | 'phone'): EsmSetting | undefined => {
-    const field = cockpit === 'cw' ? 'contestEsmCw' : cockpit === 'rtty' ? 'contestEsmRtty' : 'contestEsmPhone'
+    const field = ESM_FIELD[cockpit]
     return {
       on: settings?.[field] === true,
       callOnce: settings?.contestEsmCallOnce === true,

@@ -83,3 +83,33 @@ export function keepAlivePropsEqual<P extends { active?: boolean }>(prev: Readon
   }
   return quietEqual(prev, next, 0)
 }
+
+/** Snapshots that arrived carrying a Clear of an FT decode pane: `clearTick` (Band Activity) or
+ *  `rxFreqClearTick` (Rx Frequency) moved since the poll before. Held weakly, per snapshot object. */
+const clearPolls = new WeakSet<object>()
+
+type ClearTicks = { clearTick?: number; rxFreqClearTick?: number }
+
+/**
+ * The FT cockpit's comparator: `keepAlivePropsEqual`, except that a hidden FT cockpit also renders
+ * on the first poll after a decode-pane Clear.
+ *
+ * WHY. A Clear empties the pane, and the poll after it, unchanged, fills it again with the period
+ * the engine still holds: the panes re-ingest each new decode list (`OperateDecodes`). That refill is
+ * the only thing a hidden FT cockpit did on an unchanged poll that the operator can later see. Skip
+ * it and a new period arriving before FT is opened leaves the cleared period's rows gone for good,
+ * where they used to be back. So that one poll renders, exactly as every poll did; the polls after
+ * it are sat out again.
+ */
+export function operatePropsEqual<P extends { active?: boolean; snap?: ClearTicks | null }>(
+  prev: Readonly<P>,
+  next: Readonly<P>,
+): boolean {
+  const before = prev.snap
+  const now = next.snap
+  if (before && now && before !== now) {
+    if (before.clearTick !== now.clearTick || before.rxFreqClearTick !== now.rxFreqClearTick) clearPolls.add(now)
+    if (clearPolls.has(before)) return false
+  }
+  return keepAlivePropsEqual(prev, next)
+}

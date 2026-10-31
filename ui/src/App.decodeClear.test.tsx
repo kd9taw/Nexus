@@ -8,7 +8,8 @@
 // the last period's rows. That refill rides the panes re-ingesting every new decode list, so it holds
 // only while App hands the cockpit the snapshot as polled, a new list each time. The keep-alive CPU
 // work must leave this exactly as it was: this pins it, on screen and for a Clear that arrives while
-// the FT screen is hidden.
+// the FT screen is hidden, including a hidden Clear followed by the next period before FT is opened
+// (the cleared period's rows are back, because the poll after the Clear refilled the hidden panes).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor, act, fireEvent } from '@testing-library/react'
 import type { AppSnapshot } from './types'
@@ -154,7 +155,8 @@ const send = async (s: AppSnapshot) => {
   })
 }
 /** Whether the FT cockpit's decode panes show JA1XYZ's row. */
-const shown = () => (document.querySelector('.operate-host')?.textContent ?? '').includes('CQ JA1XYZ PM95')
+const shownIn = (sel: string, msg: string) => (document.querySelector(sel)?.textContent ?? '').includes(msg)
+const shown = () => shownIn('.operate-host', 'CQ JA1XYZ PM95')
 const go = async (label: string) => {
   const btn = [...document.querySelectorAll<HTMLButtonElement>('.mode-nav .mode-btn')].find(
     (b) => b.querySelector('.mode-label')?.textContent === label,
@@ -188,5 +190,48 @@ describe('a UDP Clear on the FT decode panes', () => {
     await send(poll((s) => (s.clearTick = 1)))
     await go('FT')
     await waitFor(() => expect(shown()).toBe(true))
+  })
+
+  // The next period, polled while FT is still hidden: the engine's decode list now holds only that
+  // period, so the cleared period's rows are back only if the poll right after the Clear refilled the
+  // hidden panes, as every poll did before the keep-alive work.
+  const nextPeriod = (s: AppSnapshot) => {
+    ;(s.radio as { slot: number }).slot = 101
+    s.recentDecodes = [{ ...s.recentDecodes[0], from: 'K1ABC', freqHz: 1520, message: 'CQ K1ABC FN42' }]
+  }
+
+  it('hidden: a Clear, an unchanged poll, then a new period before FT is opened: the cleared rows are back', async () => {
+    await mount('logbook')
+    await send(poll((s) => (s.clearTick = 1)))
+    await send(poll((s) => (s.clearTick = 1)))
+    const later = (s: AppSnapshot) => {
+      s.clearTick = 1
+      nextPeriod(s)
+    }
+    await send(poll(later))
+    await send(poll(later))
+    await go('FT')
+    await waitFor(() => expect(shownIn('.operate-host', 'CQ K1ABC FN42')).toBe(true))
+    expect(shown()).toBe(true)
+  })
+
+  it('hidden: the same for a Clear of Rx Frequency, in the Rx Frequency pane', async () => {
+    const atRx = (s: AppSnapshot) => (s.recentDecodes[0].freqHz = 1510)
+    latest = poll(atRx)
+    window.location.hash = '#logbook'
+    render(<App />)
+    await waitFor(() => expect(deliver).toBeTruthy())
+    await send(poll(atRx))
+    await send(poll((s) => (atRx(s), (s.rxFreqClearTick = 1))))
+    await send(poll((s) => (atRx(s), (s.rxFreqClearTick = 1))))
+    const later = (s: AppSnapshot) => {
+      s.rxFreqClearTick = 1
+      nextPeriod(s)
+    }
+    await send(poll(later))
+    await send(poll(later))
+    await go('FT')
+    await waitFor(() => expect(shownIn('.cockpit-rxfreq', 'CQ K1ABC FN42')).toBe(true))
+    expect(shownIn('.cockpit-rxfreq', 'CQ JA1XYZ PM95')).toBe(true)
   })
 })

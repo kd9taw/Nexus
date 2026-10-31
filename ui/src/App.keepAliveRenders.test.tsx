@@ -137,6 +137,9 @@ vi.mock('./components/JttyCockpit', async (o) => ({ ...(await o<object>()), Jtty
 vi.mock('./components/SstvView', async (o) => ({ ...(await o<object>()), SstvView: stub('sstv') }))
 vi.mock('./components/AprsCockpit', async (o) => ({ ...(await o<object>()), AprsCockpit: stub('aprs') }))
 vi.mock('./components/Js8Cockpit', async (o) => ({ ...(await o<object>()), Js8Cockpit: stub('js8') }))
+// CW and Phone are not kept alive; stubbed so the ENTER SENDS MESSAGE switch each is lent can be read.
+vi.mock('./components/CwCockpit', async (o) => ({ ...(await o<object>()), CwCockpit: stub('cw') }))
+vi.mock('./components/PhoneCockpit', async (o) => ({ ...(await o<object>()), PhoneCockpit: stub('phone') }))
 
 import App from './App'
 
@@ -379,5 +382,36 @@ describe('a snapshot poll renders only what it changed', () => {
     }
     expect(last.operate.blockedCalls).toBe(held.blockedCalls)
     expect(last.rtty.onMacrosSaved).toBe(last.psk.onMacrosSaved)
+  })
+
+  it("each cockpit's ENTER SENDS MESSAGE switch saves that cockpit's own setting", async () => {
+    const { setContestEsm } = await import('./api')
+    await mount('logbook')
+    type Esm = { on: boolean; onSwitch: (on: boolean) => void }
+    const esmOf = (c: string) => last[c].esmSetting as Esm
+    const flip = async (c: 'cw' | 'rtty' | 'phone') => {
+      vi.mocked(setContestEsm).mockClear()
+      await act(async () => {
+        esmOf(c).onSwitch(true)
+      })
+      expect(setContestEsm).toHaveBeenCalledExactlyOnceWith(c, true)
+    }
+    // RTTY, hidden: its switch turns RTTY's on and nothing else.
+    expect(esmOf('rtty').on).toBe(false)
+    await flip('rtty')
+    expect(esmOf('rtty').on).toBe(true)
+    // CW: still off after RTTY's, and its own switch turns CW's on.
+    await go('CW')
+    await waitFor(() => expect(last.cw).toBeTruthy())
+    expect(esmOf('cw').on).toBe(false)
+    await flip('cw')
+    expect(esmOf('cw').on).toBe(true)
+    // Phone: off after the other two, then on through its own switch, and the other two stay on.
+    await go('Phone')
+    await waitFor(() => expect(last.phone).toBeTruthy())
+    expect(esmOf('phone').on).toBe(false)
+    await flip('phone')
+    expect(esmOf('phone').on).toBe(true)
+    expect(esmOf('rtty').on).toBe(true)
   })
 })
