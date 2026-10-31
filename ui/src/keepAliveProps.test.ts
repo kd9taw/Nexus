@@ -1,7 +1,7 @@
-// Structural sharing of the snapshot, and the hidden keep-alive cockpit's memo comparator.
+// The hidden keep-alive cockpit's memo comparator.
 import { describe, it, expect } from 'vitest'
 import { createElement } from 'react'
-import { keepAlivePropsEqual, shareSnapshot } from './snapshotShare'
+import { keepAlivePropsEqual, LIVE_FIELDS } from './keepAliveProps'
 
 const snap = () => ({
   mycall: 'W9XYZ',
@@ -9,60 +9,6 @@ const snap = () => ({
   stations: [{ call: 'K1ABC', snr: -5 }, { call: 'JA1XYZ', snr: -12 }],
   recentDecodes: [{ id: 'a', text: 'CQ K1ABC FN42' }],
   qso: null as null | { dxcall: string },
-})
-
-describe('shareSnapshot', () => {
-  it('hands back the old snapshot itself when the new one is equal', () => {
-    const a = snap()
-    expect(shareSnapshot(a, snap())).toBe(a)
-  })
-
-  it('keeps every unchanged part and makes new only the path to what changed', () => {
-    const a = snap()
-    const next = snap()
-    next.stations[1].snr = -3
-    const s = shareSnapshot(a, next)
-    expect(s).not.toBe(a)
-    expect(s.radio).toBe(a.radio)
-    expect(s.recentDecodes).toBe(a.recentDecodes)
-    expect(s.stations).not.toBe(a.stations)
-    expect(s.stations[0]).toBe(a.stations[0])
-    expect(s.stations[1]).not.toBe(a.stations[1])
-    expect(s.stations[1].snr).toBe(-3)
-    expect(s).toEqual(next)
-    // The old snapshot is never edited.
-    expect(a.stations[1].snr).toBe(-12)
-  })
-
-  it('follows a list that grows or shrinks, and a field that appears, leaves or changes type', () => {
-    const a = snap()
-    const grown = snap()
-    grown.recentDecodes.push({ id: 'b', text: 'CQ DL1QQ JO62' })
-    const g = shareSnapshot(a, grown)
-    expect(g.recentDecodes).not.toBe(a.recentDecodes)
-    expect(g.recentDecodes[0]).toBe(a.recentDecodes[0])
-    expect(g.recentDecodes).toEqual(grown.recentDecodes)
-
-    const shrunk = snap()
-    shrunk.stations.pop()
-    expect(shareSnapshot(a, shrunk).stations).toEqual([{ call: 'K1ABC', snr: -5 }])
-
-    const added = { ...snap(), extra: 1 }
-    expect(shareSnapshot(a, added)).toEqual(added)
-    const { qso: _gone, ...left } = snap()
-    expect(shareSnapshot(a, left)).toEqual(left)
-    expect('qso' in shareSnapshot(a, left)).toBe(false)
-
-    const typed = { ...snap(), qso: { dxcall: 'K1ABC' } }
-    expect(shareSnapshot(a, typed).qso).toEqual({ dxcall: 'K1ABC' })
-    expect(shareSnapshot(typed, snap()).qso).toBeNull()
-  })
-
-  it('takes the new value when there is no old one', () => {
-    const n = snap()
-    expect(shareSnapshot(null, n)).toBe(n)
-    expect(shareSnapshot(n, null)).toBeNull()
-  })
 })
 
 describe('keepAlivePropsEqual', () => {
@@ -92,6 +38,28 @@ describe('keepAlivePropsEqual', () => {
     expect(keepAlivePropsEqual(el(r1), el({ ...r1, nextSlotMs: 1 }))).toBe(true)
     expect(keepAlivePropsEqual(el(r1), el({ ...r1, dialMhz: 3.5 }))).toBe(false)
     expect(keepAlivePropsEqual(el(r1), { active: false, txStrip: createElement('span', { radio: r1 }) })).toBe(false)
+  })
+
+  it('hidden: the fields it ignores are exactly the four per-poll meter fields', () => {
+    expect([...LIVE_FIELDS].sort()).toEqual(['clockAgeSecs', 'nextSlotMs', 'rxLevel', 'smeterDb'])
+    // Every other radio field a poll can carry is a change, the slot and the dial among them.
+    for (const k of ['slot', 'dialMhz', 'txEnabled', 'transmitting', 'rxOffsetHz']) {
+      const a = { active: false, radio: { [k]: 1 } }
+      expect(keepAlivePropsEqual(a, { active: false, radio: { [k]: 2 } }), k).toBe(false)
+    }
+  })
+
+  it('hidden: past the depth it looks to, a new object counts as a change, never as equal', () => {
+    const nest = (depth: number, leaf: unknown): unknown => (depth === 0 ? leaf : { n: nest(depth - 1, leaf) })
+    // Equal in value but rebuilt, and deeper than the compare looks: render rather than guess.
+    expect(keepAlivePropsEqual({ active: false, deep: nest(40, { v: 1 }) }, { active: false, deep: nest(40, { v: 1 }) })).toBe(false)
+    // The same object at any depth is still no change.
+    const same = nest(40, { v: 1 })
+    expect(keepAlivePropsEqual({ active: false, deep: same }, { active: false, deep: same })).toBe(true)
+    // Everything a cockpit is handed lies inside the depth: a message's `incomplete` pair under
+    // boxes → otaBoard → snap → conversations → messages, rebuilt and equal, is no change.
+    const boxes = () => ({ otaBoard: { snap: { conversations: [{ peer: 'K1ABC', messages: [{ text: 'hi', incomplete: [1, 3] }] }] } } })
+    expect(keepAlivePropsEqual({ active: false, boxes: boxes() }, { active: false, boxes: boxes() })).toBe(true)
   })
 
   it('hidden: a handler is compared by identity, never by what it looks like', () => {

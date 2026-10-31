@@ -1,17 +1,18 @@
-// What one snapshot poll costs the React tree: structural sharing on arrival, and the comparator
-// that lets a hidden keep-alive cockpit sit out a poll that changed nothing it shows.
+// The comparator that lets a hidden keep-alive cockpit sit out a snapshot poll that changed nothing
+// it shows.
 //
-// WHY. App polls `get_snapshot` every 300 ms and used to `setSnap` the decoded JSON as it came:
-// a brand-new object graph each time, equal or not. Every `useMemo`/`useEffect` keyed on a slice
-// of it (`snap.recentDecodes`, `snap.conversations`, `snap.radio`, …) therefore re-ran on every
-// poll, and the seven cockpits App keeps mounted behind `hidden` hosts (Operate, RTTY, PSK, JTTY,
-// SSTV, APRS, JS8 — mounted so their decoders and histories keep accumulating) re-rendered their
-// whole trees 3.3 times a second while nobody could see them. `display:none` skips paint, not
-// reconciliation.
+// WHY. App polls `get_snapshot` every 300 ms and sets the decoded JSON as it comes: a brand-new
+// object graph each time, equal or not. The seven cockpits App keeps mounted behind `hidden` hosts
+// (Operate, RTTY, PSK, JTTY, SSTV, APRS, JS8 — mounted so their decoders and histories keep
+// accumulating) re-rendered their whole trees on every one of those polls while nobody could see
+// them. `display:none` skips paint, not reconciliation.
 //
-// WHAT IS SHARED. `shareSnapshot` walks the new snapshot against the last one and hands back the
-// last one's object for every part that is deep-equal, so identity means "unchanged" from the
-// root down. Plain JSON only (what the IPC bridge decodes): plain objects, arrays, primitives.
+// ⚠️ WHY THE SNAPSHOT ITSELF IS NOT SHARED. Handing back the last poll's objects for unchanged parts
+// (structural sharing) would save more, but it changes what the screen on show does: the FT decode
+// panes re-ingest the decode list whenever its array is a new one, and that is what brings the
+// last period's rows back on the next poll after Erase or a UDP Clear. A shared, unchanged list
+// never re-ingests, so the cleared rows stayed gone until the list changed. The snapshot App holds
+// is therefore exactly the one the bridge decoded, and only the hidden cockpits compare by value.
 //
 // WHAT A HIDDEN COCKPIT SKIPS. `keepAlivePropsEqual` is the `React.memo` comparator for those
 // seven hosts. On screen (or crossing on/off screen) it is React's own shallow compare, so the
@@ -28,9 +29,10 @@ import { isValidElement } from 'react'
  *  them each pass), whether or not anything else did. A hidden cockpit ignores them; see above. */
 export const LIVE_FIELDS: ReadonlySet<string> = new Set(['nextSlotMs', 'rxLevel', 'smeterDb', 'clockAgeSecs'])
 
-/** How deep the hidden-cockpit compare looks before falling back to identity. The deepest value
- *  it has to see through is a box source's board → snapshot → radio → field. */
-const MAX_DEPTH = 6
+/** How deep the hidden-cockpit compare looks; past it, a value that is not the same object counts
+ *  as CHANGED (a render, never a skip). The deepest snapshot part a cockpit is handed is under its
+ *  box source: boxes → otaBoard → snap → conversations → [i] → messages → [j] → incomplete (8). */
+const MAX_DEPTH = 12
 
 const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 
@@ -38,41 +40,6 @@ function isPlain(v: unknown): v is Record<string, unknown> {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return false
   const proto = Object.getPrototypeOf(v)
   return proto === Object.prototype || proto === null
-}
-
-/**
- * `next`, with every part deep-equal to the same part of `prev` replaced by `prev`'s own object.
- * Returns `prev` itself when the two are deep-equal. Neither argument is mutated; a changed part is
- * a new object or array, never an edited old one.
- */
-export function shareSnapshot<T>(prev: unknown, next: T): T {
-  if (Object.is(prev, next)) return prev as T
-  if (Array.isArray(prev) && Array.isArray(next)) {
-    let out: unknown[] | null = prev.length === next.length ? null : new Array(next.length)
-    for (let i = 0; i < next.length; i++) {
-      const v = i < prev.length ? shareSnapshot(prev[i], next[i]) : next[i]
-      if (out === null && v !== prev[i]) out = prev.slice(0, i)
-      if (out !== null) out[i] = v
-    }
-    return (out ?? prev) as T
-  }
-  if (isPlain(prev) && isPlain(next)) {
-    const keys = Object.keys(next)
-    // A key that left `prev` makes the result new even if every remaining value is shared.
-    let out: Record<string, unknown> | null = keys.length === Object.keys(prev).length ? null : {}
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i]
-      const had = hasOwn(prev, k)
-      const v = had ? shareSnapshot(prev[k], next[k]) : next[k]
-      if (out === null && (!had || v !== prev[k])) {
-        out = {}
-        for (let j = 0; j < i; j++) out[keys[j]] = prev[keys[j]]
-      }
-      if (out !== null) out[k] = v
-    }
-    return (out ?? prev) as T
-  }
-  return next
 }
 
 /** Equal in value for a hidden cockpit: identity, or the same plain object / array / element

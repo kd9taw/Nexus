@@ -222,12 +222,12 @@ describe('a snapshot poll renders only what it changed', () => {
     for (const c of HIDDEN_FROM_OPERATE) expect(renders[c], c).toBe(0)
     // The screen on show still renders on every poll (its render-time clocks ride it) …
     expect(renders.operate).toBe(2)
-    // … and an unchanged slice keeps its object, so memos and effects keyed on it hold.
+    // … with the snapshot exactly as polled: a new decode list every poll, equal or not. The FT
+    // decode panes re-ingest on a new list, which is what refills them after Erase or a UDP Clear.
     const after = snapOf('operate')
     expect(after).not.toBe(before)
-    expect(after.recentDecodes).toBe(before.recentDecodes)
-    expect(after.radio).toBe(before.radio)
-    expect(after.stations).toBe(before.stations)
+    expect(after.recentDecodes).not.toBe(before.recentDecodes)
+    expect(after.recentDecodes).toEqual(before.recentDecodes)
     // No block list loaded: still one array, so the decode panes' ignore set is not rebuilt per poll.
     expect(last.operate.blockedCalls).toBe(blockedBefore)
 
@@ -244,7 +244,7 @@ describe('a snapshot poll renders only what it changed', () => {
     for (const c of HIDDEN_FROM_OPERATE) expect(renders[c], c).toBe(0)
     expect(renders.operate).toBe(1)
     expect(snapOf('operate').radio.nextSlotMs).toBe(1200)
-    expect(snapOf('operate').recentDecodes).toBe(after.recentDecodes)
+    expect(snapOf('operate').recentDecodes).not.toBe(after.recentDecodes)
   })
 
   it('a hidden cockpit renders, with the new value, when what it is given changes', async () => {

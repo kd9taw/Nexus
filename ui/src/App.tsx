@@ -125,7 +125,7 @@ import { Js8SoundPlayer } from './components/Js8SoundPlayer'
 import { js8ComposeConfig } from './js8Compose'
 import { SstvView as SstvViewScreen } from './components/SstvView'
 import { AprsCockpit as AprsCockpitView } from './components/AprsCockpit'
-import { keepAlivePropsEqual, shareSnapshot } from './snapshotShare'
+import { keepAlivePropsEqual } from './keepAliveProps'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
 import { StatsView } from './components/StatsView'
 import { DxpeditionsView } from './components/DxpeditionsView'
@@ -335,7 +335,7 @@ const SCREEN_BY_SECTION: Partial<Record<string, View>> = {
   jtty: 'jtty',
 }
 /** The seven keep-alive cockpits, each memoised so that while hidden it sits out a snapshot poll that
- *  changed nothing it shows (`snapshotShare.ts`). On screen each renders exactly as before. */
+ *  changed nothing it shows (`keepAliveProps.ts`). On screen each renders exactly as before. */
 const OperateCockpit = memo(OperateCockpitView, keepAlivePropsEqual)
 const RttyCockpit = memo(RttyCockpitView, keepAlivePropsEqual)
 const PskCockpit = memo(PskCockpitView, keepAlivePropsEqual)
@@ -419,17 +419,7 @@ function App() {
   // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
   const { leftW, rightW, leftMax, rightMax, commitLeft, commitRight, resetLeft, resetRight, resetWidths } =
     usePaneWidths(scale)
-  const [snap, setSnapState] = useState<AppSnapshot | null>(null)
-  // Every snapshot App takes in (the poll, and each command that answers with one) is shared with the
-  // last: an unchanged part keeps its object, so a memo or effect keyed on a slice re-runs only when
-  // that slice changed. The root itself is always a new object, so App, and the screen on show,
-  // still render on every poll as they always have (render-time clocks ride that render).
-  const setSnap = useCallback((next: AppSnapshot | null) => {
-    setSnapState((prev) => {
-      const shared = shareSnapshot(prev, next)
-      return shared === prev && prev ? { ...prev } : shared
-    })
-  }, [])
+  const [snap, setSnap] = useState<AppSnapshot | null>(null)
   // Night (Settings ▸ Appearance ▸ Theme): App is its one writer. Auto goes by the sun at the
   // station's grid square, which arrives with the snapshot — until then Auto has no grid and stays off.
   const { night, setNight, gridKnown: nightGridKnown } = useNight(snap?.mygrid ?? '')
@@ -3039,7 +3029,7 @@ function App() {
     return { phone: report('phone'), cw: report('cw'), rtty: report('rtty'), psk: report('psk'), js8: report('js8') }
   }, [])
   // The handlers the keep-alive cockpits are given, made once rather than per render: a hidden
-  // cockpit keeps the props of its last render (`snapshotShare.ts`), so each must stay the one App
+  // cockpit keeps the props of its last render (`keepAliveProps.ts`), so each must stay the one App
   // would pass now. Each reads only state setters and stable callbacks.
   const clearOperateSelection = useCallback(() => handleMapSelect(null), [handleMapSelect])
   const popOutOperate = useCallback(() => void openPanelWindow('operate'), [])
