@@ -2270,8 +2270,8 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         let mon_engine = engine.clone();
         let mon_pool = pool.clone();
         let mon_pending = switch_pending.clone();
-        let bound = cfg.bound_radio;
-        std::thread::spawn(move || monitor_loop(mon_engine, mon_pool, mon_pending, bound));
+        let scope = MonitorScope::of(&cfg);
+        std::thread::spawn(move || monitor_loop(mon_engine, mon_pool, mon_pending, scope));
     }
     loop {
         state.apply_remote_selection(
@@ -2706,7 +2706,7 @@ fn monitor_loop(
     engine: Arc<Mutex<Engine>>,
     pool: MonitorPool,
     pending: Arc<std::sync::atomic::AtomicBool>,
-    bound: Option<u32>,
+    scope: MonitorScope,
 ) {
     loop {
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2715,7 +2715,7 @@ fn monitor_loop(
         // Desired monitor set (enabled, non-active, has a rig model), snapshot under a brief lock.
         let (active, want) = {
             let e = engine_lock(&engine);
-            monitor_want(e.settings(), e.cat_share_port(), bound)
+            scope.want(e.settings(), e.cat_share_port())
         };
         // A switch is mid-flight: stay off the pool entirely so the handoff's try_lock wins
         // on its next 20 ms tick (a monitor poll can hold the lock for whole read bursts).
@@ -2726,6 +2726,28 @@ fn monitor_loop(
         reconcile_pool(&pool, &want, active, &engine, now_unix_ms());
         poll_monitors(&pool, active, &engine, &pending);
         std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// Which radios this process's monitor may take, read from the process's own [`RadioConfig`]
+/// (its `bound_radio`). The monitor thread gets only this, never a bare radio id, so the spawn
+/// site in [`run_radio`] cannot hand it a scope other than the one the process was launched with:
+/// a monitor that lost its bound radio there would open every other window's radio again.
+#[derive(Clone, Copy)]
+struct MonitorScope {
+    bound: Option<u32>,
+}
+
+impl MonitorScope {
+    fn of(cfg: &RadioConfig) -> Self {
+        Self {
+            bound: cfg.bound_radio,
+        }
+    }
+
+    /// [`monitor_want`] for this process.
+    fn want(self, s: &Settings, serving: Option<u16>) -> (u32, Vec<(u32, Transport)>) {
+        monitor_want(s, serving, self.bound)
     }
 }
 

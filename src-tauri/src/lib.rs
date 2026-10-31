@@ -1868,6 +1868,13 @@ fn pskr_client_id(feed: &str, call: &str, bound: Option<u32>) -> String {
     }
 }
 
+/// [`pskr_client_id`] for THIS process: its feed starters take the id from here, never with a
+/// bound radio of their own choosing, so a radio window can never connect under the unbound id,
+/// which the other radio window would then share (the broker drops one session for the other).
+fn pskr_feed_client_id(feed: &str, call: &str) -> String {
+    pskr_client_id(feed, call, bound_radio_id())
+}
+
 /// Spawn the PSK Reporter MQTT firehose thread once per process (the [`PSKR_STARTED`]
 /// latch makes repeat calls a no-op). No-op unless `mycall` is a [`is_real_call`].
 /// Parsed live `PathSpot`s flow into `live_paths`, which `get_propagation` merges
@@ -1892,7 +1899,7 @@ fn start_pskr_feed(live_paths: &SharedLivePaths, mycall: &str, health: &SharedHe
         let topic_refs: Vec<&str> = topics.iter().map(|s| s.as_str()).collect();
         tempo_net::mqtt::subscribe(
             PSKR_MQTT_ADDR,
-            &pskr_client_id("", &call, bound_radio_id()),
+            &pskr_feed_client_id("", &call),
             &topic_refs,
             |topic, payload| {
                 if let Some(spot) = propagation::parse_pskr_mqtt_payload(topic, payload, now_unix())
@@ -2021,6 +2028,122 @@ mod pskr_client_id_tests {
     }
 }
 
+/// The hops from the process's `--profile r<id>` to the three places a radio window must carry
+/// its radio: the radio loop's config (its monitor then leaves the other radio's port and rigctld
+/// to that radio's window) and both PSK Reporter client ids. Each hop dropped alone brings back
+/// two windows fighting over one radio, or bumping each other off PSK Reporter.
+///
+/// The profile is read once per process from the arguments or `NEXUS_PROFILE`, so the bound half
+/// runs in a child: this same test binary, re-run for this one test with `NEXUS_PROFILE=r1`.
+#[cfg(test)]
+mod bound_radio_wiring_tests {
+    use super::{bound_radio_id, pskr_feed_client_id};
+
+    const CHILD: &str = "NEXUS_BOUND_WIRING_CHILD";
+
+    /// What this process carries: `(radio loop's bound radio, own-spots id, near-region id)`.
+    fn carried() -> (Option<u32>, String, String) {
+        #[cfg(feature = "radio")]
+        let bound = super::radio_config_for(
+            &tempo_app::settings::Settings::default(),
+            &tempo_app::engine::SpectrumFeed::default(),
+            &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+            &tempo_app::engine::MeterFeed::default(),
+        )
+        .bound_radio;
+        #[cfg(not(feature = "radio"))]
+        let bound = bound_radio_id();
+        (
+            bound,
+            pskr_feed_client_id("", "W9XYZ"),
+            pskr_feed_client_id("rgn-", "W9XYZ"),
+        )
+    }
+
+    #[test]
+    fn a_radio_window_carries_its_radio_into_the_radio_loop_and_both_feeds() {
+        if std::env::var(CHILD).is_ok() {
+            assert_eq!(
+                bound_radio_id(),
+                Some(1),
+                "control: the child is bound to r1"
+            );
+            assert_eq!(
+                carried(),
+                (
+                    Some(1),
+                    "nx-W9XYZ-r1".to_string(),
+                    "nx-rgn-W9XYZ-r1".to_string()
+                )
+            );
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "bound_radio_wiring_tests::a_radio_window_carries_its_radio_into_the_radio_loop_and_both_feeds",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("NEXUS_PROFILE", "r1")
+            .output()
+            .expect("re-run this test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "the bound child failed: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Control: the filter matched and ran the child half; "0 passed" would pass trivially.
+        assert!(
+            stdout.contains("1 passed"),
+            "the child ran nothing: {stdout}"
+        );
+
+        // The unbound half, in this process (no profile): the single window keeps every id it had.
+        if bound_radio_id().is_none() {
+            assert_eq!(
+                carried(),
+                (
+                    None,
+                    "nexus-W9XYZ".to_string(),
+                    "nexus-rgn-W9XYZ".to_string()
+                )
+            );
+        }
+    }
+
+    /// The call sites the test above cannot reach: each feed's client id is taken inside its own
+    /// thread, once per process, on a connection to the public broker, and `run` starts the
+    /// whole app. Source-scanned, because what is pinned is which function each one calls.
+    #[test]
+    fn the_feeds_and_the_launch_take_the_wired_values() {
+        fn body_of<'a>(src: &'a str, sig: &str) -> &'a str {
+            let rest = &src[src.find(&format!("\n{sig}")).expect(sig) + 1..];
+            &rest[..rest.find("\n}\n").expect("the end of the function")]
+        }
+        let src = include_str!("lib.rs");
+        for (feed, call) in [
+            ("fn start_pskr_feed(", "&pskr_feed_client_id(\"\", &call),"),
+            (
+                "fn start_pskr_region_feed(",
+                "&pskr_feed_client_id(\"rgn-\", &call),",
+            ),
+        ] {
+            let body = body_of(src, feed);
+            assert!(
+                body.contains(call) && !body.contains("pskr_client_id("),
+                "{feed} takes its id from pskr_feed_client_id"
+            );
+        }
+        let run = body_of(src, "pub fn run() {");
+        assert!(
+            run.contains("radio_config_for(&settings,") && !run.contains("RadioConfig {"),
+            "run builds the radio config through radio_config_for"
+        );
+    }
+}
+
 /// Spawn the near-region opening MQTT thread once per process (Phase 2). No-op
 /// unless `mycall` is real, `mygrid` resolves (nothing can be "near" otherwise),
 /// and the operator hasn't opted out. Subscribes to the per-band VHF/10 m global
@@ -2051,7 +2174,7 @@ fn start_pskr_region_feed(region_paths: &SharedRegionPaths, mycall: &str, mygrid
         let connected = std::sync::atomic::AtomicBool::new(false);
         tempo_net::mqtt::subscribe(
             PSKR_MQTT_ADDR,
-            &pskr_client_id("rgn-", &call, bound_radio_id()),
+            &pskr_feed_client_id("rgn-", &call),
             &topic_refs,
             |topic, payload| {
                 let now = now_unix();
@@ -2429,6 +2552,100 @@ fn config_dir() -> PathBuf {
 /// this reason; the per-radio config dirs do not. Also noted in CHANGELOG ▸ Known limitations.
 fn radio_profile_key(radio_id: u32) -> String {
     format!("r{radio_id}")
+}
+
+/// The radio loop's startup config, from the launch settings and the three shared feeds `run`
+/// builds. A function rather than a literal inside `run` so the one field `run` cannot take from
+/// settings, the radio this process is bound to, is reachable by a test.
+#[cfg(feature = "radio")]
+fn radio_config_for(
+    settings: &tempo_app::settings::Settings,
+    spectrum_feed: &tempo_app::engine::SpectrumFeed,
+    rx_tap: &std::sync::Arc<tempo_audio::rxtap::RxTap>,
+    meter_feed: &tempo_app::engine::MeterFeed,
+) -> tempo_audio::service::RadioConfig {
+    tempo_audio::service::RadioConfig {
+        on_active_profile_change: None,
+        // The SAME feed the UI reads (registered as managed state in `run`) and the tee the
+        // rx-dsp thread drains. The waterfall row is produced on that thread, not on the radio
+        // loop, so blocking CAT can no longer starve it — see tempo-audio/src/rxtap.rs.
+        spectrum_feed: spectrum_feed.clone(),
+        rx_tap: rx_tap.clone(),
+        capture_radio_id: Some(settings.active_radio),
+        meter_feed: meter_feed.clone(),
+        ptt_method: settings.ptt_method.clone(),
+        // The operator's D1/D2/D3 choice, from the ACTIVE radio's profile. Without this the
+        // picker is decorative: the setting saved, the UI moved, the CI-V command supported it,
+        // and nothing carried the value into the backend (found by issue triage, same day).
+        icom_data_mode: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| r.icom_data_mode)
+            .unwrap_or(settings.icom_data_mode),
+        // …and its transmit audio source for CAT PTT (#381), from the same profile, so the
+        // startup transport keys as the one every tick after it derives from settings.
+        tx_audio_source: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| r.tx_audio_source.clone())
+            .unwrap_or_else(|| settings.tx_audio_source.clone()),
+        rig_model: settings.rig_model,
+        // The operator's name for the active radio, so the STARTUP CAT line names it. Without
+        // this the first line of every log said "model 1042" while every later line said
+        // "Yeasu" — the same radio under two names, in the file we hand to a stranger.
+        radio_label: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| {
+                if r.name.trim().is_empty() {
+                    r.rig_model_name.clone()
+                } else if r.rig_model_name.trim().is_empty() {
+                    r.name.clone()
+                } else {
+                    format!("{} — {} (model {})", r.name, r.rig_model_name, r.rig_model)
+                }
+            })
+            .unwrap_or_default(),
+        // Seeded here rather than waiting for the first settings tick: the launch of rigctld is
+        // itself what keys an undeclared RTS-wired cable, so a tick later is too late (#44).
+        cat_rts_keys_ptt: settings.cat_rts_keys_ptt,
+        serial_port: settings.serial_port.clone(),
+        baud: settings.baud,
+        rig_conn: settings.rig_conn.clone(),
+        rig_addr: settings.rig_addr.clone(),
+        omnirig_slot: settings.omnirig_slot,
+        rigctld_port: settings.rigctld_port,
+        icom_native_cat: settings.icom_native_cat,
+        flex_native_cat: settings.flex_native_cat,
+        flex_radio_ip: settings.flex_radio_ip.clone(),
+        flex_native_unbenched: settings.flex_native_unbenched,
+        icom_lan_host: settings.icom_lan_host.clone(),
+        icom_lan_user: settings.icom_lan_user.clone(),
+        icom_lan_port: settings.icom_lan_port,
+        radio_id: settings.active_radio,
+        // One window per radio (simultaneous radios): this process's monitor leaves every other
+        // radio to its own window. `None` (the single band-following window) monitors them all.
+        bound_radio: bound_radio_id(),
+        broker_self_port: if settings.cat_broker {
+            Some(settings.cat_broker_port)
+        } else {
+            None
+        },
+        dial_hz: settings.dial_hz(),
+        mode: settings.rig_mode(), // DATA submode (PKTUSB/…) for FT8, not voice USB
+        wsjtx_udp: settings.wsjtx_udp,
+        wsjtx_addr: settings.wsjtx_udp_addr.clone(),
+        pskreporter: settings.pskreporter,
+        // The package's version, known once the app is built: `finish_launch` sets it.
+        app_version: String::new(),
+        audio_in: settings.audio_in.clone(),
+        audio_out: settings.audio_out.clone(),
+        tx_level: settings.tx_level,
+        rx_gain: settings.rx_gain,
+    }
 }
 
 /// The radio id THIS instance was launched to drive — `--profile r<id>`, as the launch picker
@@ -43730,88 +43947,7 @@ pub fn run() {
     let receive_audio = rx_tap.receive_audio();
 
     #[cfg(feature = "radio")]
-    let mut radio_cfg = tempo_audio::service::RadioConfig {
-        on_active_profile_change: None,
-        // The SAME feed the UI reads (registered as managed state below) and the tee the
-        // rx-dsp thread drains. The waterfall row is produced on that thread, not on the radio
-        // loop, so blocking CAT can no longer starve it — see tempo-audio/src/rxtap.rs.
-        spectrum_feed: spectrum_feed.clone(),
-        rx_tap: rx_tap.clone(),
-        capture_radio_id: Some(settings.active_radio),
-        meter_feed: meter_feed.clone(),
-        ptt_method: settings.ptt_method.clone(),
-        // The operator's D1/D2/D3 choice, from the ACTIVE radio's profile. Without this the
-        // picker is decorative: the setting saved, the UI moved, the CI-V command supported it,
-        // and nothing carried the value into the backend (found by issue triage, same day).
-        icom_data_mode: settings
-            .radios
-            .iter()
-            .find(|r| r.id == settings.active_radio)
-            .map(|r| r.icom_data_mode)
-            .unwrap_or(settings.icom_data_mode),
-        // …and its transmit audio source for CAT PTT (#381), from the same profile, so the
-        // startup transport keys as the one every tick after it derives from settings.
-        tx_audio_source: settings
-            .radios
-            .iter()
-            .find(|r| r.id == settings.active_radio)
-            .map(|r| r.tx_audio_source.clone())
-            .unwrap_or_else(|| settings.tx_audio_source.clone()),
-        rig_model: settings.rig_model,
-        // The operator's name for the active radio, so the STARTUP CAT line names it. Without
-        // this the first line of every log said "model 1042" while every later line said
-        // "Yeasu" — the same radio under two names, in the file we hand to a stranger.
-        radio_label: settings
-            .radios
-            .iter()
-            .find(|r| r.id == settings.active_radio)
-            .map(|r| {
-                if r.name.trim().is_empty() {
-                    r.rig_model_name.clone()
-                } else if r.rig_model_name.trim().is_empty() {
-                    r.name.clone()
-                } else {
-                    format!("{} — {} (model {})", r.name, r.rig_model_name, r.rig_model)
-                }
-            })
-            .unwrap_or_default(),
-        // Seeded here rather than waiting for the first settings tick: the launch of rigctld is
-        // itself what keys an undeclared RTS-wired cable, so a tick later is too late (#44).
-        cat_rts_keys_ptt: settings.cat_rts_keys_ptt,
-        serial_port: settings.serial_port.clone(),
-        baud: settings.baud,
-        rig_conn: settings.rig_conn.clone(),
-        rig_addr: settings.rig_addr.clone(),
-        omnirig_slot: settings.omnirig_slot,
-        rigctld_port: settings.rigctld_port,
-        icom_native_cat: settings.icom_native_cat,
-        flex_native_cat: settings.flex_native_cat,
-        flex_radio_ip: settings.flex_radio_ip.clone(),
-        flex_native_unbenched: settings.flex_native_unbenched,
-        icom_lan_host: settings.icom_lan_host.clone(),
-        icom_lan_user: settings.icom_lan_user.clone(),
-        icom_lan_port: settings.icom_lan_port,
-        radio_id: settings.active_radio,
-        // One window per radio (simultaneous radios): this process's monitor leaves every other
-        // radio to its own window. `None` (the single band-following window) monitors them all.
-        bound_radio: bound_radio_id(),
-        broker_self_port: if settings.cat_broker {
-            Some(settings.cat_broker_port)
-        } else {
-            None
-        },
-        dial_hz: settings.dial_hz(),
-        mode: settings.rig_mode(), // DATA submode (PKTUSB/…) for FT8, not voice USB
-        wsjtx_udp: settings.wsjtx_udp,
-        wsjtx_addr: settings.wsjtx_udp_addr.clone(),
-        pskreporter: settings.pskreporter,
-        // The package's version, known once the app is built: `finish_launch` sets it.
-        app_version: String::new(),
-        audio_in: settings.audio_in.clone(),
-        audio_out: settings.audio_out.clone(),
-        tx_level: settings.tx_level,
-        rx_gain: settings.rx_gain,
-    };
+    let mut radio_cfg = radio_config_for(&settings, &spectrum_feed, &rx_tap, &meter_feed);
 
     // The engine boots on the native source; restore a persisted Companion choice
     // below (best-effort — a failed UDP bind falls back to native).
