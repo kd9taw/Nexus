@@ -563,21 +563,23 @@ for (const operationVersion of [2, 3, 4]) test(`actual cloud and native operatio
   // wire tells them apart. The REPLAY below is deliberately not wrapped in this: a duplicate request must come
   // back from its receipt, and as of the fix in `operations.rs` that no longer needs the Engine at all.
   const allowed=async(first,again=first)=>{let sent=await first();if(['stationBusy','remoteBusy'].includes(sent.response.error)){console.log(`${sent.response.error}, retrying once:`,sent.request.type,sent.request.action?.action??'');await delay(300);sent=await again()}return sent}
+  // A request that must succeed fails with the station's own answer when it does not, not a TypeError a line later.
+  const value=sent=>{assert.ok('value' in sent.response,`${sent.request.type}: ${JSON.stringify(sent.response)}`);return sent.response.value}
 
   // The approval granted station control; Turn on restores it once the service lists
   // the browser. Then RESTRICT the browser with the switch at the shack: that is what must still
   // refuse it a lease, exactly as a browser without permission always was.
   for(let i=0;i<50;i++){const {status}=await probe.send({type:'status'});if(status.stationPermissions?.includes(device.deviceId))break;await delay(100)}
-  let state=(await allowed(()=>operation({type:'state'}))).response.value;assert.equal(state.phase,'available','the approval allowed this browser')
+  let state=value(await allowed(()=>operation({type:'state'})));assert.equal(state.phase,'available','the approval allowed this browser')
   const restricted=await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:false});assert.equal(restricted.ok,true,restricted.error)
-  state=(await allowed(()=>operation({type:'state'}))).response.value;assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
+  state=value(await allowed(()=>operation({type:'state'})));assert.equal(state.phase,'localPermissionRequired');assert.equal((await operation({type:'acquire',stationBootId:state.stationBootId})).response.error,'localPermissionRequired')
   await probe.send({type:'refresh'});const permission=await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true});assert.equal(permission.ok,true,permission.error);assert.deepEqual(permission.status.stationPermissions,[device.deviceId])
-  state=(await allowed(()=>operation({type:'acquire',stationBootId:state.stationBootId}))).response.value;assert.equal(state.phase,'controlling');assert.equal(state.txArmed,false)
+  state=value(await allowed(()=>operation({type:'acquire',stationBootId:state.stationBootId})));assert.equal(state.phase,'controlling');assert.equal(state.txArmed,false)
   const heartbeat=()=>allowed(()=>operation({type:'heartbeat',leaseId:state.leaseId}))
   const evidence=await probe.send({type:'loggingEvidence'});assert.deepEqual(evidence,{count:0,adif:'',txEnabled:false})
   if(operationVersion>=2){
    assert.equal((await probe.send({type:'stationPermission',deviceId:device.deviceId,allow:true})).ok,true)
-   const controls=(await allowed(()=>operation({type:'state'}))).response.value
+   const controls=value(await allowed(()=>operation({type:'state'})))
    assert.deepEqual(controls.controls.capabilities,operationVersion===4?['audioListen']:[])
    if (operationVersion === 4) {
      // Stop anything (operator decision 2026-09-14): station control alone holds the stop token, and a
@@ -593,7 +595,7 @@ for (const operationVersion of [2, 3, 4]) test(`actual cloud and native operatio
        assert.equal(keyed.keyed, true, `positive control: the local ${kind} transmission is live (${label})`)
        // A heartbeat, not a plain state read: this harness does not heartbeat on its own, and the waits
        // above outlast the 5 s lease otherwise (the browser client heartbeats every second).
-       const current = (await heartbeat()).response.value
+       const current = value(await heartbeat())
        assert.equal(current?.phase, 'controlling', `positive control: the lease is held (${label})`)
        assert.match(current.transmitEpoch, /^[0-9a-f]{16}$/, `station control holds the stop token (${label})`)
        const stopped = await operation({type:'stopTransmit',stationBootId:current.stationBootId,leaseId:current.leaseId,transmitEpoch:current.transmitEpoch})
@@ -612,20 +614,20 @@ for (const operationVersion of [2, 3, 4]) test(`actual cloud and native operatio
      // unconditionally, which contradicted the same object's assertion above.
      if (operationVersion >= 4) assert.match(controls.transmitEpoch, /^[0-9a-f]{16}$/)
      else assert.equal(controls.transmitEpoch, null)
-     const owner = (await allowed(()=>operation({type:'state'}))).response.value
+     const owner = value(await allowed(()=>operation({type:'state'})))
      assert.match(owner.transmitEpoch,/^[0-9a-f]{16}$/)
      const stop = {type:'stopTransmit',stationBootId:owner.stationBootId,leaseId:owner.leaseId,transmitEpoch:owner.transmitEpoch}
      assert.deepEqual((await operation(stop)).response.value,{stop:'accepted'})
      // Stop TX is never refused (operator ruling, 2026-10-03): the same Stop again, its token now
      // retired, is still a Stop. It was refused `staleContext` under the 2026-09-15 rule.
      assert.deepEqual((await operation(stop)).response.value,{stop:'accepted'})
-     const after = (await allowed(()=>operation({type:'state'}))).response.value
+     const after = value(await allowed(()=>operation({type:'state'})))
      assert.notEqual(after.transmitEpoch,owner.transmitEpoch)
      assert.equal(after.phase,'controlling')
      assert.deepEqual(await probe.send({type:'loggingEvidence'}),evidence)
    }
   }
-  const current=(await heartbeat()).response.value;assert.equal(current.phase,'controlling')
+  const current=value(await heartbeat());assert.equal(current.phase,'controlling')
   // End remote control (operator decision 2026-10-10) drops everyone and holds until Remote is turned on
   // again: the browser's socket is closed by the station going offline, and nothing reaches the log.
   assert.equal((await probe.send({type:'takeOverLogging'})).ok,true)
@@ -658,9 +660,9 @@ for (const operationVersion of [2, 3, 4]) test(`actual cloud and native operatio
    for(let i=0;i<30&&!(await roomStatus(room)).online;i++)await delay(100)
    const again=(await browser.post(`stations/${stationId}/ticket`)).value;socket=await browser.open(stationId,again.ticket);socket.ackObservations();observing(socket,session=(await socket.take(v=>v.type==='session')).sessionId)
    assert.equal((await probe.send({type:'seedFt',tier:'FT8'})).txEnabled,false)
-   const fresh=(await allowed(()=>operation({type:'state'}))).response.value
-   const leased=(await allowed(()=>operation({type:'acquire',stationBootId:fresh.stationBootId}))).response.value;assert.equal(leased.phase,'controlling')
-   const beat=(await allowed(()=>operation({type:'heartbeat',leaseId:leased.leaseId}))).response.value
+   const fresh=value(await allowed(()=>operation({type:'state'})))
+   const leased=value(await allowed(()=>operation({type:'acquire',stationBootId:fresh.stationBootId})));assert.equal(leased.phase,'controlling')
+   const beat=value(await allowed(()=>operation({type:'heartbeat',leaseId:leased.leaseId})))
    assert.deepEqual(beat.controls.capabilities,['audioListen'],'the restored grant is station control, and offers no FT8/FT4')
    assert.match(beat.transmitEpoch,/^[0-9a-f]{16}$/);assert.equal(beat.txArmed,false,'a restored grant and a fresh lease arm nothing')
    const armed=await probe.send({type:'ftEvidence'});assert.equal(armed.txEnabled,false);assert.equal(armed.owned,false)
