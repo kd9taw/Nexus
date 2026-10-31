@@ -6,7 +6,8 @@
 //! ## The served slice
 //! Our transmit slice; else our lowest-numbered slice, receive only (admission refuses to key a
 //! transmit slice that is not ours); else none, and the reads say so (`f` answers 0, which the
-//! radio loop never takes for a dial). Another client's slice is never served.
+//! radio loop never takes for a dial). Another client's slice is never served. While the shim
+//! holds a Rig split, the receive slice of its pair is served, though the flag is on the other.
 //!
 //! ## The verb map
 //!
@@ -18,13 +19,18 @@
 //! | `b <text>` | `TxStart::CwxSend` → `cwx send`, one word, with its keying time at the radio's speed | first, every character one Nexus can time; admission (refuses today: no readback); then the slice in CW, the radio's break-in on, Sync CWX off, XIT off; a refusal says why ([`super::FlexDaemon::key_refused_since`]) |
 //! | `\stop_morse` | `TxStop::CwxClear` → `cwx clear` | never gated |
 //! | `L KEYSPD <wpm>` | `Command::CwSpeed` → `cw wpm <5–100>` | keys nothing; the engine's WPM control decides the value |
-//! | `F <hz>` | `slice tune <n> <MHz>` | the slice must be ours |
+//! | `F <hz>` | `slice tune <n> <MHz>`; on another band than a held split slice, `S 0`'s take-down first | the slice must be ours; refused if that take-down cannot be done now |
 //! | `M <mode> <width>` | `slice set <n> mode=`, then `filt <n> <lo> <hi>` for a width | a mode the radio offers; a width placed on the mode's side |
 //! | `L RFPOWER <0..1>` | `transmit set rfpower=<0–100>` | the engine's per-mode ceiling decides the value |
 //! | `L AF <0..1>` | `slice set <n> audio_level=` | the slice must be ours |
 //! | `U NB/NR/ANF <0/1>` | `slice set <n> nb=/nr=/anf=` | the slice must be ours |
 //! | `f`, `m`, `t`, `v`, `s`, `l RFPOWER`, `l AF`, `l KEYSPD`, `u NB/NR/ANF` | read from the status model | — |
 //! | `u TUNER` | the radio's `atu` status: `1` once a cycle has matched (`TUNE_SUCCESSFUL`, `TUNE_OK`), else `0` | only while the client runs the radio's ATU (its switch) and the radio reports a tuner fitted; otherwise not answered, so no ATU button is offered |
+//! | `S 1 VFOB` | Rig split: `slice create` on the served slice's pan, frequency and mode, `slice set <new> audio_mute=1`, then `TxSlice` → `slice set <new> tx=1`; held, so a later `S 1` sends nothing while the flag is still there | the transmit slice's own admission (nothing of ours keyed, the interlock idle, the slice ours); a create or a move the radio refuses is `RPRT -1`, and a slice made for a split that did not happen is removed |
+//! | `S 0` | `TxSlice` → `slice set <receive> tx=1`, then `slice remove <split slice>` | the same admission; nothing to undo is `RPRT 0`; one that cannot finish now is owed, finished at the radio loop's next quiet point; a receive slice closed outside Nexus lets the split go, the split slice left as the dial with its audio on |
+//! | `I <hz>` | `slice tune <split slice> <MHz> autopan=0` | a split held; nothing of ours keyed and the interlock idle |
+//! | `X <mode> <width>` | `slice set <split slice> mode=`, then `filt` for a width (`M`'s rules) | as `I` |
+//! | `s`, `i`, `x` | the split flag and `VFOB` while the flag is on the pair's split slice (`TX` while an `S 0` is owed: Nexus's own leftover, never the operator's split); that slice's frequency and mode, else the served slice's | — |
 //! | `\dump_caps` | the authored capabilities ([`authored_caps`]) | — |
 //!
 //! Everything else answers as the shared encoder answers a backend that lacks it (`RPRT -11`),
@@ -84,17 +90,37 @@
 //! keyer may send it), so it could outlast its window and end in a false alarm. A word the client
 //! does not send says why on the CW line, in place of the rigctld answer, `RPRT -1`.
 //!
+//! ## Rig split is a slice pair
+//! FlexRadio's API has no split frequency: a slice is a receiver, and the slice whose `tx` flag is
+//! set is where the radio transmits (`TCPIP-slice`: `slice create`, the `tx` parameter of
+//! `slice set`, `slice remove`). So `S 1` makes a second slice of ours where the served one is,
+//! mutes its audio, and moves the flag to it; `I` and `X` tune and set that slice; `S 0` moves the
+//! flag back and removes it. The pair is held between overs: a later `S 1` finds the flag still on
+//! the split slice and sends nothing, so overs never open a slice each against the radio's few.
+//! Nothing moves the flag, tunes the split slice or changes its mode while anything of ours is
+//! keyed or the interlock is not idle: each verb waits for that within its own answer's time and
+//! is refused if it does not come, and the tune and mode of `I` and `X` are checked again where a
+//! key of ours is admitted ([`Connection::request_quiet`]). The flag is never taken from another
+//! client's slice. An `S 0` that cannot finish is owed, not forgotten: it is finished at the
+//! radio loop's next quiet point ([`settle_split`]), and until then nothing is keyed while the flag
+//! is on the split slice. A pair belongs to the session that made it, and a slice whose create
+//! went unanswered is removed when it appears.
+//!
 //! Nexus's own design, not a port.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, PoisonError, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use tempo_app::dto::{FlexAudioCause, FlexAudioRefusal};
-use tempo_net::flex::admission::{another_dax_feeder, Refusal};
-use tempo_net::flex::encode::{Command, CwxText, Mode, SliceFunction, StartKind, TxStart, TxStop};
+use tempo_net::flex::admission::{another_dax_feeder, transmitter_idle, Refusal};
+use tempo_net::flex::encode::{
+    Command, CwxText, Mode, SliceFunction, StartKind, TxSlice, TxStart, TxStop,
+};
 use tempo_net::flex::model::{owner_of, Owner, StatusModel};
-use tempo_net::flex::session::{ConnError, Connection, EndOutcome, Snapshot, StopOutcome};
+use tempo_net::flex::session::{
+    ConnError, Connection, EndOutcome, SendError, Snapshot, StopOutcome,
+};
 use tempo_net::flex::status::SliceDelta;
 use tempo_net::flex::wire::Reply;
 
@@ -139,6 +165,371 @@ pub(crate) fn served_slice(model: &StatusModel, ours: Option<u32>) -> Option<u8>
         }
     }
     model.slices.keys().copied().find(|i| owned(i))
+}
+
+/// A Rig split's slice pair: the receive slice the shim keeps serving as the dial, and the slice
+/// of ours it made for the split and moves the transmit flag to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SplitPair {
+    pub(crate) rx: u8,
+    pub(crate) tx: u8,
+}
+
+/// The Rig split the shim holds ([`ClientState::split`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SplitHold {
+    pub(crate) pair: SplitPair,
+    /// The client handle of the session that made the pair. Slice numbers mean nothing to another
+    /// session, so a hold is used by its own session only ([`split_hold`]).
+    pub(crate) handle: u32,
+    /// `S 0` asked for the split to go and it has not gone yet: the flag could not move back while
+    /// something transmitted, or the radio was slow. Finished at the radio loop's next quiet point
+    /// ([`settle_split`]); until then `s` names the transmit VFO `TX`, which says the split is
+    /// Nexus's own leftover and not the operator's, and nothing is keyed while the flag is still on
+    /// the split slice.
+    pub(crate) releasing: bool,
+}
+
+/// A split slice asked for whose answer never named it (no answer in time, or one that could not
+/// be read): the radio may still make it. The slices of ours before the ask are kept, so a new one
+/// can be told apart and removed ([`settle_split`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingCreate {
+    handle: u32,
+    known: Vec<u8>,
+    at: Instant,
+}
+
+/// The last `I` and `X` the radio answered OK for a split slice, for the session that sent them.
+/// The engine writes both before every over on a held split; one that would change nothing (this
+/// record matches AND the radio reports the slice so) is answered at once with nothing sent. Each
+/// write forgets its half before it goes out, so after a refusal, a timeout or another session
+/// the next one is always a real write.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SplitWritten {
+    handle: u32,
+    slice: u8,
+    /// `I`'s frequency.
+    freq_hz: Option<u64>,
+    /// `X`'s mode word (the Flex one) and width, as asked.
+    mode: Option<(String, i32)>,
+}
+
+/// The split slice and a copy of the record for it, while the radio reports the flag on that
+/// slice and nothing of ours is keyed: when an unchanged `I` or `X` may be answered at once.
+/// Reads only; waits for nothing.
+fn split_unchanged(conn: &Connection, state: &ClientState) -> Option<(Snapshot, u8, SplitWritten)> {
+    let (snap, tx, releasing) = split_on_air(conn, state)?;
+    if releasing || !quiet(&snap) {
+        return None;
+    }
+    let written = lock(&state.split_written).clone()?;
+    (Some(written.handle) == snap.handle && written.slice == tx).then_some((snap, tx, written))
+}
+
+/// Change the record for `slice` of this session's split by `f`, starting a fresh one when it is
+/// another's.
+fn note_written(
+    state: &ClientState,
+    snap: &Snapshot,
+    slice: u8,
+    f: impl FnOnce(&mut SplitWritten),
+) {
+    let Some(handle) = snap.handle else {
+        return;
+    };
+    let mut written = lock(&state.split_written);
+    let entry = written.get_or_insert_with(SplitWritten::default);
+    if entry.handle != handle || entry.slice != slice {
+        *entry = SplitWritten {
+            handle,
+            slice,
+            ..SplitWritten::default()
+        };
+    }
+    f(entry);
+}
+
+/// How long a slice asked for may still appear. A radio answers a create in milliseconds; past
+/// this the record is dropped rather than kept as a reason to remove a slice made later.
+const PENDING_CREATE_FOR: Duration = Duration::from_secs(10);
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// [`served_slice`] while the shim may hold a Rig split: the receive slice of the pair while it
+/// is still ours, else as with none.
+pub(crate) fn served_slice_split(
+    model: &StatusModel,
+    ours: Option<u32>,
+    split: Option<SplitPair>,
+) -> Option<u8> {
+    split
+        .map(|p| p.rx)
+        .filter(|rx| {
+            owner_of(model.slices.get(rx).and_then(|s| s.client_handle), ours) == Owner::Ours
+        })
+        .or_else(|| served_slice(model, ours))
+}
+
+/// The split this session holds. A hold another session made is dropped here and never used:
+/// its slice numbers may now be anyone's.
+pub(crate) fn split_hold(state: &ClientState, handle: Option<u32>) -> Option<SplitHold> {
+    let mut hold = lock(&state.split);
+    match *hold {
+        Some(h) if Some(h.handle) == handle => Some(h),
+        Some(h) => {
+            *hold = None;
+            tempo_core::applog::info(
+                "cat",
+                &format!(
+                    "Flex client: a Rig split made by an earlier session (0x{:08X}) is not used",
+                    h.handle
+                ),
+            );
+            None
+        }
+        None => None,
+    }
+}
+
+fn set_hold(state: &ClientState, hold: Option<SplitHold>) {
+    *lock(&state.split) = hold;
+}
+
+/// Whether `slice` is reported and ours.
+fn is_ours(snap: &Snapshot, slice: u8) -> bool {
+    owner_of(
+        snap.model.slices.get(&slice).and_then(|s| s.client_handle),
+        snap.handle,
+    ) == Owner::Ours
+}
+
+/// What is left of a verb's time until `deadline`.
+fn left(deadline: Instant) -> Duration {
+    deadline.saturating_duration_since(Instant::now())
+}
+
+/// Nothing of ours keyed and the interlock idle: when the transmit slice may be moved, tuned or
+/// re-moded.
+fn quiet(snap: &Snapshot) -> bool {
+    !snap.keyed && transmitter_idle(&snap.model).is_ok()
+}
+
+/// Why a split verb was refused, for the log: the rigctld answer carries none.
+fn refuse_split(why: &str) -> SetFault {
+    tempo_core::applog::info("cat", &format!("Flex client: Rig split refused: {why}"));
+    SetFault::Refused
+}
+
+/// Wait until `deadline` for [`quiet`]; whether it came.
+fn wait_quiet(conn: &Connection, deadline: Instant) -> bool {
+    conn.wait_until(left(deadline), quiet)
+}
+
+/// Move the transmit flag to `slice` and wait until the radio reports it there.
+fn move_flag(conn: &Connection, slice: u8, deadline: Instant) -> Result<(), SetFault> {
+    match conn.move_tx(TxSlice { slice }, left(deadline)) {
+        // Another station's transmitter is never taken: say so in plain words.
+        Err(ConnError::Refused(SendError::NotAdmitted(Refusal::TxSliceNotOurs {
+            slice: holder,
+            owner,
+        }))) => {
+            return Err(refuse_split(&match owner {
+                Owner::Foreign(h) => format!(
+                    "another client (0x{h:08X}) has the transmitter on its slice {holder}, and \
+                     Nexus does not take it away"
+                ),
+                _ => format!(
+                    "the transmitter is on slice {holder}, which the radio has not said is \
+                     Nexus's, and Nexus does not take it away"
+                ),
+            }))
+        }
+        reply => answered(reply)?,
+    }
+    if conn.wait_until(left(deadline), |s| s.model.tx_slices() == [slice]) {
+        Ok(())
+    } else {
+        Err(SetFault::NoAnswer)
+    }
+}
+
+/// Take a split down: the transmit flag back on the receive slice and the split slice removed.
+/// Marks the hold releasing first, so a take-down that cannot finish now stays owed (see
+/// [`SplitHold::releasing`]); clears it once nothing of the split is left. Nothing to take down is
+/// success.
+pub(crate) fn release_split(
+    conn: &Connection,
+    state: &ClientState,
+    deadline: Instant,
+) -> Result<(), SetFault> {
+    let snap = conn.snapshot();
+    let Some(hold) = split_hold(state, snap.handle) else {
+        return Ok(());
+    };
+    let pair = hold.pair;
+    set_hold(
+        state,
+        Some(SplitHold {
+            releasing: true,
+            ..hold
+        }),
+    );
+    let tx_slices = snap.model.tx_slices();
+    if is_ours(&snap, pair.tx) {
+        if tx_slices.contains(&pair.tx) {
+            if !is_ours(&snap, pair.rx) {
+                // The receive slice was closed outside Nexus: the flag has no slice of ours to go
+                // back to, so the split slice stays, as a plain slice with the flag, and is the
+                // dial from now on (as `S 1` drops a pair whose receive slice has gone). Its
+                // audio comes back, so the operator hears it.
+                if !wait_quiet(conn, deadline) {
+                    return Err(refuse_split("a transmission has not ended"));
+                }
+                let _ = conn.request(
+                    Command::SliceAudioMute {
+                        slice: pair.tx,
+                        mute: false,
+                    },
+                    left(deadline),
+                );
+                tempo_core::applog::warn(
+                    "cat",
+                    &format!(
+                        "Flex client: Rig split is off. Nexus's receive slice was closed outside \
+                         Nexus, so the transmitter stays on slice {}, which is now the dial",
+                        pair.tx
+                    ),
+                );
+                let mut current = lock(&state.split);
+                if current.is_some_and(|h| h.pair == pair && h.handle == hold.handle) {
+                    *current = None;
+                }
+                return Ok(());
+            }
+            if !wait_quiet(conn, deadline) {
+                return Err(refuse_split("a transmission has not ended"));
+            }
+            move_flag(conn, pair.rx, deadline)?;
+        }
+        answered(conn.request(Command::SliceRemove { slice: pair.tx }, left(deadline)))?;
+    } else if tx_slices.is_empty() && is_ours(&snap, pair.rx) && quiet(&snap) {
+        // The split slice was removed outside Nexus and took the flag with it: the flag goes back
+        // to the receive slice, as `S 0` would have put it. Best effort: with no transmit slice
+        // the next key is refused, and says so.
+        let _ = move_flag(conn, pair.rx, deadline);
+    }
+    let mut current = lock(&state.split);
+    if current.is_some_and(|h| h.pair == pair && h.handle == hold.handle) {
+        *current = None;
+    }
+    Ok(())
+}
+
+/// Remove a split slice the radio made after its create went unanswered or unread
+/// ([`PendingCreate`]): a slice of ours the shim did not know before the ask and that is not part
+/// of a pair held now. A slice that holds the transmit flag is left (the radio gives a new slice
+/// the flag only when it has none). Each removal waits for its answer until `deadline` at most.
+fn reconcile_create(conn: &Connection, state: &ClientState, deadline: Instant) {
+    let snap = conn.snapshot();
+    let pair = split_hold(state, snap.handle).map(|h| h.pair);
+    let strays: Vec<u8> = {
+        let mut pending = lock(&state.split_create);
+        let Some(p) = pending.as_ref() else {
+            return;
+        };
+        if Some(p.handle) != snap.handle || p.at.elapsed() >= PENDING_CREATE_FOR {
+            *pending = None;
+            return;
+        }
+        let tx = snap.model.tx_slices();
+        let strays: Vec<u8> = snap
+            .model
+            .slices
+            .keys()
+            .copied()
+            .filter(|i| {
+                is_ours(&snap, *i)
+                    && !p.known.contains(i)
+                    && !tx.contains(i)
+                    && pair.is_none_or(|pr| pr.rx != *i && pr.tx != *i)
+            })
+            .collect();
+        if strays.is_empty() {
+            return;
+        }
+        *pending = None;
+        strays
+    };
+    for slice in strays {
+        tempo_core::applog::info(
+            "cat",
+            &format!(
+                "Flex client: removing slice {slice}, made for a Rig split that did not happen"
+            ),
+        );
+        let _ = conn.request(Command::SliceRemove { slice }, left(deadline));
+    }
+}
+
+/// The Rig split's own quiet-point work, called by the radio loop where it carries out the
+/// transmit audio routing ([`super::FlexDaemon::sync_tx_routing`]): never with anything of ours
+/// keyed or about to be. Removes a split slice a lost create left behind, and finishes a
+/// take-down `S 0` could not, or one the radio's status calls for (the split slice removed in
+/// SmartSDR). Waits for nothing it cannot have at once, and only when there is something to do:
+/// all of it shares one [`REQUEST_TIMEOUT`], so the radio loop is held at most that long. What
+/// the time does not cover stays owed for the next quiet point.
+pub(crate) fn settle_split(conn: &Connection, state: &ClientState) {
+    let deadline = Instant::now() + REQUEST_TIMEOUT;
+    reconcile_create(conn, state, deadline);
+    let snap = conn.snapshot();
+    let Some(hold) = split_hold(state, snap.handle) else {
+        return;
+    };
+    // Owed: a take-down `S 0` asked for, or a slice of the pair the radio no longer reports as
+    // ours (removed in SmartSDR).
+    let owed = hold.releasing || !is_ours(&snap, hold.pair.tx) || !is_ours(&snap, hold.pair.rx);
+    if !owed || !quiet(&snap) {
+        return;
+    }
+    if release_split(conn, state, deadline).is_ok() {
+        tempo_core::applog::info(
+            "cat",
+            "Flex client: Rig split is off; the transmit flag is back on the receive slice",
+        );
+    }
+}
+
+/// The split slice while the radio reports the transmit flag on it, and whether that split is
+/// being let go ([`SplitHold::releasing`]).
+fn split_on_air(conn: &Connection, state: &ClientState) -> Option<(Snapshot, u8, bool)> {
+    let snap = conn.snapshot();
+    let hold = split_hold(state, snap.handle)?;
+    let pair = hold.pair;
+    (is_ours(&snap, pair.rx) && is_ours(&snap, pair.tx) && snap.model.tx_slices() == [pair.tx])
+        .then_some((snap, pair.tx, hold.releasing))
+}
+
+/// Why nothing may be keyed now, if the transmit flag is still on a split slice `S 0` asked to
+/// take down: an over there would go out at an old transmit frequency, after a band change on the
+/// old band.
+pub(crate) fn split_blocks_key(conn: &Connection, state: &ClientState) -> Option<String> {
+    let (snap, tx, releasing) = split_on_air(conn, state)?;
+    if !releasing {
+        return None;
+    }
+    let at = snap
+        .model
+        .slices
+        .get(&tx)
+        .and_then(|s| s.frequency_mhz)
+        .map_or(String::new(), |mhz| format!(" at {mhz:.6} MHz"));
+    Some(format!(
+        "the transmitter is still on Nexus's split slice{at}, and turning split off has not \
+         finished yet; Nexus finishes it as soon as the radio is idle"
+    ))
 }
 
 /// A rigctld mode word as a slice's: the data modes have Flex names of their own, the rest are
@@ -223,8 +614,9 @@ pub(crate) fn filter_for(
 
 /// A FlexRadio's capabilities, AUTHORED rather than read out of Hamlib (the spec's "authored
 /// `RigCaps`"):
-/// - **split by slice pair**: the transmit slice is the dial this shim serves, so there is no
-///   rigctld split to read, and the split answer is "cannot" — silence is never permission;
+/// - **split by slice pair**: Nexus's own Rig split is a slice pair the shim makes (`S`), and the
+///   split detect is still "cannot": the privilege gate never takes an operator's split from
+///   here — silence is never permission;
 /// - **RF power floor 0**: `transmit set rfpower=` runs 0–100, so a reading of zero is a real
 ///   zero;
 /// - **native VFO read**: the VFO this shim answers is the served slice itself, never a cache of
@@ -395,8 +787,197 @@ impl FlexShim {
     fn served(&self) -> Option<(Arc<Connection>, Snapshot, u8)> {
         let conn = self.conn.upgrade()?;
         let snap = conn.snapshot();
-        let slice = served_slice(&snap.model, snap.handle)?;
+        let pair = split_hold(&self.state, snap.handle).map(|h| h.pair);
+        let slice = served_slice_split(&snap.model, snap.handle, pair)?;
         Some((conn, snap, slice))
+    }
+
+    /// The split slice while the radio reports the transmit flag on it, and whether that split is
+    /// being let go: what `s`, `i` and `x` read.
+    fn split_tx(&self) -> Option<(Snapshot, u8, bool)> {
+        let conn = self.conn.upgrade()?;
+        split_on_air(&conn, &self.state)
+    }
+
+    /// `S 1 VFOB`: the transmit flag on a slice of ours beside the served one (module header).
+    fn split_on(&self) -> Result<(), SetFault> {
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let Some(conn) = self.conn.upgrade() else {
+            return Err(SetFault::Refused);
+        };
+        let snap = conn.snapshot();
+        let Some(handle) = snap.handle else {
+            return Err(refuse_split(
+                "the radio gave this connection no client handle",
+            ));
+        };
+        if let Some(hold) = split_hold(&self.state, snap.handle) {
+            let pair = hold.pair;
+            if is_ours(&snap, pair.rx) && is_ours(&snap, pair.tx) {
+                if hold.releasing {
+                    // Asked for again before it went: kept, and no longer owed a take-down.
+                    set_hold(
+                        &self.state,
+                        Some(SplitHold {
+                            releasing: false,
+                            ..hold
+                        }),
+                    );
+                }
+                if snap.model.tx_slices() == [pair.tx] {
+                    // Held from the last over: nothing to send.
+                    return Ok(());
+                }
+                if !wait_quiet(&conn, deadline) {
+                    return Err(refuse_split("a transmission has not ended"));
+                }
+                return move_flag(&conn, pair.tx, deadline);
+            }
+            // A pair whose receive slice has gone is not one: its split slice goes with it,
+            // unless it is transmitting.
+            set_hold(&self.state, None);
+            if is_ours(&snap, pair.tx) && snap.model.tx_slices() != [pair.tx] {
+                let _ = conn.request(Command::SliceRemove { slice: pair.tx }, left(deadline));
+            }
+        }
+        let snap = conn.snapshot();
+        // Another station's transmitter is never taken (the move's own admission refuses it too):
+        // no slice is made for a split that could not happen.
+        if let Some(holder) = snap
+            .model
+            .tx_slices()
+            .into_iter()
+            .find(|t| !is_ours(&snap, *t))
+        {
+            return Err(refuse_split(&format!(
+                "the transmitter is on slice {holder}, which is not Nexus's, and Nexus does not \
+                 take it away"
+            )));
+        }
+        let Some(rx) = served_slice(&snap.model, snap.handle) else {
+            return Err(refuse_split("no slice of ours"));
+        };
+        let Some(s) = snap.model.slices.get(&rx) else {
+            return Err(refuse_split("no slice of ours"));
+        };
+        let Some(freq_hz) = s
+            .frequency_mhz
+            .filter(|mhz| mhz.is_finite() && *mhz > 0.0)
+            .map(|mhz| (mhz * 1e6).round())
+        else {
+            return Err(refuse_split("the slice has reported no frequency"));
+        };
+        let create = Command::SliceCreate {
+            pan: s.pan,
+            freq_hz,
+            mode: s.mode.as_deref().and_then(Mode::new),
+        };
+        if !wait_quiet(&conn, deadline) {
+            return Err(refuse_split("a transmission has not ended"));
+        }
+        // A slice an earlier create left behind goes before another is asked for.
+        reconcile_create(&conn, &self.state, Instant::now() + REQUEST_TIMEOUT);
+        let snap = conn.snapshot();
+        let known: Vec<u8> = snap
+            .model
+            .slices
+            .keys()
+            .copied()
+            .filter(|i| is_ours(&snap, *i))
+            .collect();
+        // From here a slice the radio may have made without saying which is tracked, and removed
+        // when it appears ([`settle_split`]).
+        let lost = |fault: SetFault| {
+            *lock(&self.state.split_create) = Some(PendingCreate {
+                handle,
+                known: known.clone(),
+                at: Instant::now(),
+            });
+            fault
+        };
+        let reply = match conn.request(create, left(deadline)) {
+            Ok(r) if r.code == 0 => r,
+            Ok(r) => {
+                return Err(refuse_split(&format!(
+                    "the radio made no second slice (0x{:08X} {})",
+                    r.code, r.message
+                )))
+            }
+            Err(ConnError::Timeout) => {
+                return Err(lost(refuse_split(
+                    "the radio did not answer the slice create",
+                )))
+            }
+            other => return answered(other),
+        };
+        // The reply names the new slice: `2`, or `2|<debug text>`.
+        let Some(tx) = reply
+            .message
+            .split('|')
+            .next()
+            .and_then(|n| n.trim().parse::<u8>().ok())
+        else {
+            return Err(lost(refuse_split(&format!(
+                "the radio's answer named no slice ({:?})",
+                reply.message
+            ))));
+        };
+        if !conn.wait_until(left(deadline), |s| is_ours(s, tx)) {
+            return Err(lost(SetFault::NoAnswer));
+        }
+        let pair = SplitPair { rx, tx };
+        // A new split slice: nothing written to it yet.
+        *lock(&self.state.split_written) = None;
+        set_hold(
+            &self.state,
+            Some(SplitHold {
+                pair,
+                handle,
+                releasing: false,
+            }),
+        );
+        // Its receive audio is the served slice's again; the operator hears one.
+        let _ = conn.request(
+            Command::SliceAudioMute {
+                slice: tx,
+                mute: true,
+            },
+            left(deadline),
+        );
+        let moved = move_flag(&conn, tx, deadline);
+        if moved.is_err() && conn.snapshot().model.tx_slices() != [tx] {
+            // No split came of it: the slice made for one goes.
+            set_hold(&self.state, None);
+            let _ = conn.request(Command::SliceRemove { slice: tx }, left(deadline));
+        }
+        moved
+    }
+
+    /// `S 0`: the transmit flag back on the receive slice and the split slice removed. Nothing to
+    /// undo is success. One that cannot finish now is owed, and finished at the radio loop's next
+    /// quiet point ([`SplitHold::releasing`]).
+    fn split_off(&self) -> Result<(), SetFault> {
+        let Some(conn) = self.conn.upgrade() else {
+            return Err(SetFault::Refused);
+        };
+        release_split(&conn, &self.state, Instant::now() + REQUEST_TIMEOUT)
+    }
+
+    /// The split slice for `I` or `X`: held, the flag on it, and quiet within `deadline`. The
+    /// write itself goes through [`Connection::request_quiet`], which checks again where a key of
+    /// ours is admitted.
+    fn split_target(&self, deadline: Instant) -> Result<(Arc<Connection>, Snapshot, u8), SetFault> {
+        let Some(conn) = self.conn.upgrade() else {
+            return Err(SetFault::Refused);
+        };
+        let Some((_, tx, _)) = split_on_air(&conn, &self.state) else {
+            return Err(refuse_split("split is not on"));
+        };
+        if !wait_quiet(&conn, deadline) {
+            return Err(refuse_split("a transmission has not ended"));
+        }
+        let snap = conn.snapshot();
+        Ok((conn, snap, tx))
     }
 
     /// The served slice's status, for a read.
@@ -450,6 +1031,9 @@ impl FlexShim {
             .conn
             .upgrade()
             .ok_or("CW not sent: the connection to the radio is closed.")?;
+        if let Some(why) = split_blocks_key(&conn, &self.state) {
+            return Err(format!("CW not sent: {why}."));
+        }
         let wpm = word_wpm(&conn.snapshot().model, &self.state);
         let word_ms = tempo_core::cw::morse_duration_ms(text.as_str(), wpm).ceil() as u64;
         match conn.start_lasting(TxStart::CwxSend(text), Some(word_ms)) {
@@ -494,11 +1078,15 @@ impl FlexShim {
             .atu_refused
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = None;
-        let refused = match self
+        // Refused, as `T 1` is, while the flag is still on a split slice being taken down.
+        let started = self
             .conn
             .upgrade()
-            .map(|conn| conn.start(TxStart::AtuStart))
-        {
+            .map(|conn| match split_blocks_key(&conn, &self.state) {
+                Some(why) => Err(Some(Refusal::SplitTakeDown { why })),
+                None => conn.start(TxStart::AtuStart),
+            });
+        let refused = match started {
             Some(Ok(_)) => return true,
             Some(Err(refusal)) => super::atu_refusal_words(refusal.as_ref()),
             None => super::atu_refusal_words(None),
@@ -644,7 +1232,175 @@ impl RigBackend for FlexShim {
     }
 
     fn split(&self) -> bool {
-        false
+        self.split_tx().is_some()
+    }
+
+    /// `VFOB` for a split Nexus holds; `TX` while that split is being let go
+    /// ([`SplitHold::releasing`]): the split is on, but it is Nexus's own leftover, never the
+    /// operator's to put back. `S 1 TX` is refused, so a restore of it changes nothing.
+    fn split_vfo(&self) -> String {
+        match self.split_tx() {
+            Some((_, _, true)) => "TX",
+            Some(_) => "VFOB",
+            None => "VFOA",
+        }
+        .to_string()
+    }
+
+    /// Where the radio transmits: the split slice while split is on, else the served dial.
+    fn split_freq_hz(&self) -> Option<u64> {
+        match self.split_tx() {
+            Some((snap, tx, _)) => snap
+                .model
+                .slices
+                .get(&tx)
+                .and_then(|s| s.frequency_mhz)
+                .filter(|mhz| mhz.is_finite() && *mhz > 0.0)
+                .map(|mhz| (mhz * 1e6).round() as u64),
+            None => Some(self.freq_hz()),
+        }
+    }
+
+    fn split_mode(&self) -> Option<(String, u32)> {
+        match self.split_tx() {
+            Some((snap, tx, _)) => {
+                let s = snap.model.slices.get(&tx)?;
+                let width = match (s.filter_low, s.filter_high) {
+                    (Some(low), Some(high)) if high > low => u32::try_from(high - low).unwrap_or(0),
+                    _ => 0,
+                };
+                Some((rigctld_mode(s.mode.as_deref()?), width))
+            }
+            None => Some(self.mode()),
+        }
+    }
+
+    fn set_split(&self, on: bool, tx_vfo: &str) -> Option<bool> {
+        self.try_set_split(on, tx_vfo).map(|r| r.is_ok())
+    }
+
+    /// `S`: on only with the transmit VFO B (the split slice); off from any.
+    fn try_set_split(&self, on: bool, tx_vfo: &str) -> Option<Result<(), SetFault>> {
+        Some(match (on, tx_vfo) {
+            (true, "VFOB" | "Sub" | "SUB") => self.split_on(),
+            (true, other) => Err(refuse_split(&format!("transmit VFO {other}"))),
+            (false, _) => self.split_off(),
+        })
+    }
+
+    fn set_split_freq(&self, hz: u64) -> Option<bool> {
+        self.try_set_split_freq(hz).map(|r| r.is_ok())
+    }
+
+    /// `I`: tune the split slice, never while anything transmits. The frequency the slice is
+    /// already on, by the radio's report and by the last `I` it took, is answered at once with
+    /// nothing sent ([`SplitWritten`]).
+    fn try_set_split_freq(&self, hz: u64) -> Option<Result<(), SetFault>> {
+        if let Some(conn) = self.conn.upgrade() {
+            if let Some((snap, slice, written)) = split_unchanged(&conn, &self.state) {
+                let reported = snap
+                    .model
+                    .slices
+                    .get(&slice)
+                    .and_then(|s| s.frequency_mhz)
+                    .map(|mhz| (mhz * 1e6).round());
+                if written.freq_hz == Some(hz) && reported == Some(hz as f64) {
+                    return Some(Ok(()));
+                }
+            }
+        }
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        Some(self.split_target(deadline).and_then(|(conn, snap, slice)| {
+            note_written(&self.state, &snap, slice, |w| w.freq_hz = None);
+            answered(conn.request_quiet(
+                Command::SliceTune {
+                    slice,
+                    freq_hz: hz as f64,
+                    keep_pan: true,
+                },
+                left(deadline),
+            ))?;
+            note_written(&self.state, &snap, slice, |w| w.freq_hz = Some(hz));
+            Ok(())
+        }))
+    }
+
+    fn set_split_mode(&self, mode: &str, passband_hz: i32) -> Option<bool> {
+        self.try_set_split_mode(mode, passband_hz)
+            .map(|r| r.is_ok())
+    }
+
+    /// `X`: the split slice's mode, and a width as `M` places one (zero or less keeps the
+    /// filter), never while anything transmits.
+    /// The mode and width the slice already has, by the radio's report and by the last `X` it
+    /// took, are answered at once with nothing sent ([`SplitWritten`]).
+    fn try_set_split_mode(&self, mode: &str, passband_hz: i32) -> Option<Result<(), SetFault>> {
+        if let Some(conn) = self.conn.upgrade() {
+            if let Some((snap, slice, written)) = split_unchanged(&conn, &self.state) {
+                let unchanged = snap.model.slices.get(&slice).is_some_and(|s| {
+                    flex_mode_for(mode, s.mode_list.as_deref()).is_some_and(|word| {
+                        let filter_kept = match u32::try_from(passband_hz) {
+                            Ok(width) if width > 0 => {
+                                let current = s.filter_low.zip(s.filter_high);
+                                current.is_some()
+                                    && filter_for(&word, width, s.mode.as_deref(), current)
+                                        == current
+                            }
+                            _ => true,
+                        };
+                        s.mode.as_deref() == Some(word.as_str())
+                            && filter_kept
+                            && written.mode == Some((word, passband_hz))
+                    })
+                });
+                if unchanged {
+                    return Some(Ok(()));
+                }
+            }
+        }
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        Some(self.split_target(deadline).and_then(|(conn, snap, slice)| {
+            note_written(&self.state, &snap, slice, |w| w.mode = None);
+            let Some(s) = snap.model.slices.get(&slice) else {
+                return Err(SetFault::Refused);
+            };
+            let Some(word) = flex_mode_for(mode, s.mode_list.as_deref()) else {
+                return Err(SetFault::Refused);
+            };
+            let filter = match u32::try_from(passband_hz) {
+                Ok(width) if width > 0 => Some(
+                    filter_for(
+                        &word,
+                        width,
+                        s.mode.as_deref(),
+                        s.filter_low.zip(s.filter_high),
+                    )
+                    .ok_or(SetFault::Refused)?,
+                ),
+                _ => None,
+            };
+            let mode = Mode::new(&word).ok_or(SetFault::Refused)?;
+            let asked = (word.clone(), passband_hz);
+            answered(conn.request_quiet(Command::SliceMode { slice, mode }, left(deadline)))?;
+            // The over goes out in this mode from now, whether or not the radio has said so yet.
+            *self
+                .state
+                .commanded
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some((slice, word, Instant::now()));
+            if let Some((low_hz, high_hz)) = filter {
+                answered(conn.request_quiet(
+                    Command::SliceFilter {
+                        slice,
+                        low_hz,
+                        high_hz,
+                    },
+                    left(deadline),
+                ))?;
+            }
+            note_written(&self.state, &snap, slice, |w| w.mode = Some(asked));
+            Ok(())
+        }))
     }
 
     fn set_freq(&self, hz: u64) -> bool {
@@ -652,7 +1408,33 @@ impl RigBackend for FlexShim {
     }
 
     /// The dial write: a tune the radio does not answer is silence, not a refusal ([`answered`]).
+    /// A dial on another band than a split slice of ours takes the split down first, so the
+    /// transmitter never stays on the old band; refused, with the dial left, if that cannot be
+    /// done now (it stays owed: [`SplitHold::releasing`]).
     fn try_set_freq(&self, hz: u64) -> Result<(), SetFault> {
+        if let Some(conn) = self.conn.upgrade() {
+            let snap = conn.snapshot();
+            if let Some(hold) = split_hold(&self.state, snap.handle) {
+                let band = |mhz: f64| tempo_app::bandplan::band_for_dial(mhz);
+                let split_band = snap
+                    .model
+                    .slices
+                    .get(&hold.pair.tx)
+                    .and_then(|s| s.frequency_mhz)
+                    .and_then(band);
+                let dial_band = band(hz as f64 / 1e6);
+                if split_band.is_none() || split_band != dial_band {
+                    release_split(&conn, &self.state, Instant::now() + REQUEST_TIMEOUT)
+                        .inspect_err(|_| {
+                            tempo_core::applog::info(
+                                "cat",
+                                "Flex client: the dial was not moved to another band while \
+                                 Nexus's split slice still has the transmitter",
+                            );
+                        })?;
+                }
+            }
+        }
         self.try_write(|slice| {
             Some(Command::SliceTune {
                 slice,
@@ -717,6 +1499,16 @@ impl RigBackend for FlexShim {
 
     fn set_ptt(&self, on: bool) -> bool {
         if on {
+            if let Some(why) = self
+                .conn
+                .upgrade()
+                .and_then(|conn| split_blocks_key(&conn, &self.state))
+            {
+                let why = format!("not keying: {why}");
+                tempo_core::applog::warn("cat", &format!("Flex client: {why}"));
+                self.refuse(why, None);
+                return false;
+            }
             if let Some((why, cause)) = self.audio_refuses_key() {
                 tempo_core::applog::warn("cat", &format!("Flex client: {why}"));
                 self.refuse(why, Some(cause));

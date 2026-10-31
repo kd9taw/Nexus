@@ -220,7 +220,7 @@ fn the_shim_authors_its_caps_and_answers_the_rest_as_the_broker_does() {
     assert_eq!(caps.split_detect, crate::baud_ladder::SplitDetect::Absent);
     // Byte for byte the encoder's answers for a backend without the verb. A read between them.
     let mock = crate::rigctld_server::tests::MockRig::default();
-    for verb in ["l STRENGTH", "J 100", "Z 100", "I 14075000", "R +"] {
+    for verb in ["l STRENGTH", "J 100", "Z 100", "R +"] {
         let shared = match crate::rigctld_server::handle_command(verb, &mock) {
             crate::rigctld_server::Handled::Reply(r) => r,
             crate::rigctld_server::Handled::Close => unreachable!(),
@@ -498,6 +498,869 @@ fn another_clients_transmit_slice_is_never_keyed() {
         "nothing aimed at the other client's objects: {:?}",
         wire(&sim)
     );
+}
+
+// ── Rig split: a slice pair ─────────────────────────────────────────────────────────────────
+
+/// `rule` with a reply message.
+fn rule_with(command: &str, code: &str, message: &str, lines: &[&str]) -> (Pattern, Vec<Rule>) {
+    let (pattern, mut rules) = rule(command, code, lines);
+    rules[0].message = message.to_string();
+    (pattern, rules)
+}
+
+/// The split slice's create, as the shim sends it for the bundled slice A (14.074 DIGU on our pan).
+const SPLIT_CREATE: &str = "slice create pan=0x40000000 freq=14.074000 mode=DIGU";
+
+/// The bundled session where the radio makes slice 1 for a split and reports what each split
+/// command does: the new slice, the transmit flag moving, the tune, the mode, the removal.
+fn split_session(create: (Pattern, Vec<Rule>), move_to_1: (Pattern, Vec<Rule>)) -> SimSession {
+    with(
+        SimSession::v4_gui_client(),
+        vec![
+            create,
+            move_to_1,
+            rule(
+                "slice set 0 tx=1",
+                "0",
+                &["S{h}|slice 1 tx=0", "S{h}|slice 0 tx=1"],
+            ),
+            rule(
+                "slice tune 1 14.075000 autopan=0",
+                "0",
+                &["S{h}|slice 1 RF_frequency=14.075000"],
+            ),
+            rule("slice set 1 mode=DIGU", "0", &["S{h}|slice 1 mode=DIGU"]),
+            rule("slice remove 1", "0", &["S{h}|slice 1 in_use=0"]),
+        ],
+    )
+}
+
+fn creates_slice_1() -> (Pattern, Vec<Rule>) {
+    rule_with(
+        SPLIT_CREATE,
+        "0",
+        "1",
+        &[
+            "S{h}|slice 1 in_use=1 RF_frequency=14.074000 mode=DIGU filter_lo=0 filter_hi=3000 \
+           active=1 tx=0 client_handle=0x{h} pan=0x40000000 index_letter=B audio_mute=0",
+        ],
+    )
+}
+
+fn moves_to_1() -> (Pattern, Vec<Rule>) {
+    rule(
+        "slice set 1 tx=1",
+        "0",
+        &["S{h}|slice 0 tx=0", "S{h}|slice 1 tx=1"],
+    )
+}
+
+/// The split commands on the wire since `before`.
+fn split_wire(sim: &Simulator, before: usize) -> Vec<String> {
+    wire(sim)[before..]
+        .iter()
+        .filter(|c| c.starts_with("slice") || c.starts_with("filt") || c.starts_with("xmit"))
+        .cloned()
+        .collect()
+}
+
+/// ⭐ `S 1 VFOB` puts the transmitter on a second slice of ours where the dial is: the radio makes
+/// it, its audio is muted, and the transmit flag moves to it. `I` tunes THAT slice without moving
+/// the pan, `X` sets its mode; the dial (`f`) stays on the receive slice, and `s`, `i`, `x` read
+/// the split back.
+#[test]
+fn rig_split_puts_the_transmitter_on_a_second_slice_of_ours() {
+    let sim = simulator(split_session(creates_slice_1(), moves_to_1()), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("s", 2), "0\nVFOA\n");
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT 0\n");
+    assert_eq!(
+        split_wire(&sim, before),
+        [
+            SPLIT_CREATE,
+            "slice set 1 audio_mute=1",
+            "slice set 1 tx=1",
+            "slice tune 1 14.075000 autopan=0",
+            "slice set 1 mode=DIGU",
+        ]
+    );
+    assert_eq!(c.ask("s", 2), "1\nVFOB\n");
+    ask_until_answer(&mut c, "i", "14075000\n");
+    assert_eq!(c.ask("x", 2), "PKTUSB\n3000\n");
+    assert_eq!(
+        c.ask("f", 1),
+        "14074000\n",
+        "the dial stays on the receive slice"
+    );
+    assert_eq!(d.session().snapshot().model.tx_slices(), [1]);
+}
+
+/// ⭐ `S 0` moves the transmit flag back to the receive slice and removes the split slice; a
+/// second `S 0`, with nothing to undo, sends nothing.
+#[test]
+fn split_off_puts_the_transmitter_back_on_the_receive_slice() {
+    let sim = simulator(split_session(creates_slice_1(), moves_to_1()), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT 0\n");
+    assert_eq!(
+        split_wire(&sim, before),
+        ["slice set 0 tx=1", "slice remove 1"]
+    );
+    assert_eq!(c.ask("s", 2), "0\nVFOA\n");
+    assert_eq!(c.ask("f", 1), "14074000\n");
+    wait_session(&d, "the split slice gone", |s| {
+        s.model.tx_slices() == [0] && !s.model.slices.contains_key(&1)
+    });
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT 0\n");
+    assert!(split_wire(&sim, before).is_empty());
+}
+
+/// ⭐ A REFUSED SPLIT IS A REFUSAL, NEVER `RPRT 0`. The radio out of slices refuses the create:
+/// `S 1` is `RPRT -1` and the flag never moves. The radio refusing the move: `RPRT -1`, and the
+/// slice made for it is removed. And with no split, `I` and `X` are refused before anything is
+/// sent: the receive slice is never tuned in the split slice's place.
+#[test]
+fn a_refused_split_is_a_refusal_and_leaves_nothing_behind() {
+    // No slice to make.
+    let sim = simulator(
+        split_session(rule_with(SPLIT_CREATE, "50000001", "", &[]), moves_to_1()),
+        vec![],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT -1\n");
+    assert_eq!(c.ask("I 14075000", 1), "RPRT -1\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT -1\n");
+    assert_eq!(split_wire(&sim, before), [SPLIT_CREATE]);
+    assert_eq!(c.ask("s", 2), "0\nVFOA\n");
+    drop(c);
+    drop(d);
+
+    // The move refused.
+    let sim = simulator(
+        split_session(creates_slice_1(), rule("slice set 1 tx=1", "5000002D", &[])),
+        vec![],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT -1\n");
+    assert_eq!(
+        split_wire(&sim, before),
+        [
+            SPLIT_CREATE,
+            "slice set 1 audio_mute=1",
+            "slice set 1 tx=1",
+            "slice remove 1",
+        ]
+    );
+    assert_eq!(c.ask("s", 2), "0\nVFOA\n");
+    assert_eq!(d.session().snapshot().model.tx_slices(), [0]);
+
+    // Control: the transmit VFO must be B.
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("S 1 VFOA", 1), "RPRT -1\n");
+    assert!(split_wire(&sim, before).is_empty());
+}
+
+/// ⭐ THE SPLIT IS HELD BETWEEN OVERS: three overs as the engine sends them (`S 1`, `I`, `X`, key,
+/// unkey) open ONE slice, and each over keys on it. A 6600M has four slices; an over that opened
+/// one would run out on the fourth.
+#[test]
+fn three_overs_on_a_held_split_open_one_slice() {
+    let sim = simulator(split_session(creates_slice_1(), moves_to_1()), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    for over in 1..=3 {
+        assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n", "over {over}");
+        assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n", "over {over}");
+        assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT 0\n", "over {over}");
+        assert_eq!(c.ask("T 1", 1), "RPRT 0\n", "over {over}");
+        assert_eq!(wait_count(&sim, "xmit 1", over), over);
+        assert_eq!(d.session().snapshot().model.tx_slices(), [1], "over {over}");
+        assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+        wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    }
+    assert_eq!(count(&sim, SPLIT_CREATE), 1, "{:?}", wire(&sim));
+    assert_eq!(count(&sim, "slice set 1 tx=1"), 1, "the flag moved once");
+    assert_eq!(count(&sim, "slice remove 1"), 0);
+    assert_eq!(c.ask("s", 2), "1\nVFOB\n");
+}
+
+/// ⭐ A HELD SPLIT OVER ADDS NO ROUND TRIP. The engine writes `S 1`, `I` and `X` before every
+/// over; with the flag already on the split slice and the slice already on that frequency and
+/// mode (by the radio's report and by the last write it took), each is answered at once and
+/// nothing reaches the radio. A changed `I` still tunes; after a refused `I`, and on a new split
+/// slice, the next `I` is a real write even to the frequency the slice reports.
+#[test]
+fn an_unchanged_split_write_on_a_held_over_sends_nothing() {
+    let session = with(
+        split_session(creates_slice_1(), moves_to_1()),
+        vec![
+            rule(
+                "slice tune 1 14.076000 autopan=0",
+                "0",
+                &["S{h}|slice 1 RF_frequency=14.076000"],
+            ),
+            rule(
+                "slice tune 1 14.074000 autopan=0",
+                "0",
+                &["S{h}|slice 1 RF_frequency=14.074000"],
+            ),
+            rule("slice tune 1 14.077000 autopan=0", "50000015", &[]),
+        ],
+    );
+    let sim = simulator(session, vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT 0\n");
+    ask_until_answer(&mut c, "i", "14075000\n");
+    for over in 1..=3 {
+        let before = wire(&sim).len();
+        let started = Instant::now();
+        assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n", "over {over}");
+        assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n", "over {over}");
+        assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT 0\n", "over {over}");
+        let took = started.elapsed();
+        assert_eq!(
+            split_wire(&sim, before),
+            Vec::<String>::new(),
+            "over {over}"
+        );
+        assert!(took < Duration::from_millis(250), "over {over}: {took:?}");
+        assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+        assert_eq!(wait_count(&sim, "xmit 1", over), over);
+        assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+        wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    }
+    // A changed `I` tunes.
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14076000", 1), "RPRT 0\n");
+    assert_eq!(
+        split_wire(&sim, before),
+        ["slice tune 1 14.076000 autopan=0"]
+    );
+    ask_until_answer(&mut c, "i", "14076000\n");
+    // A refused `I` forgets the last one: the next is written although the slice reports it.
+    assert_eq!(c.ask("I 14077000", 1), "RPRT -1\n");
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14076000", 1), "RPRT 0\n");
+    assert_eq!(
+        split_wire(&sim, before),
+        ["slice tune 1 14.076000 autopan=0"]
+    );
+    // A new split slice: nothing it took is known.
+    assert_eq!(c.ask("I 14074000", 1), "RPRT 0\n");
+    ask_until_answer(&mut c, "i", "14074000\n");
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT 0\n");
+    wait_session(&d, "the split slice gone", |s| {
+        !s.model.slices.contains_key(&1)
+    });
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14074000", 1), "RPRT 0\n");
+    assert_eq!(
+        split_wire(&sim, before),
+        ["slice tune 1 14.074000 autopan=0"]
+    );
+}
+
+/// ⭐ NEVER RETUNE OR REASSIGN THE TRANSMITTER WHILE KEYED. With an over of ours on the air, `I`,
+/// `X` and `S 0` are refused and nothing reaches the wire; once the unkey is proven the same
+/// verbs go through (the control).
+#[test]
+fn the_split_slice_is_never_moved_tuned_or_re_moded_while_keyed() {
+    let sim = simulator(split_session(creates_slice_1(), moves_to_1()), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    wait_session(&d, "transmitting", |s| {
+        s.model
+            .interlock
+            .sample
+            .as_ref()
+            .is_some_and(|i| i.state == "TRANSMITTING")
+    });
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14075000", 1), "RPRT -1\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT -1\n");
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT -1\n");
+    assert!(
+        split_wire(&sim, before).is_empty(),
+        "{:?}",
+        split_wire(&sim, before)
+    );
+    // The refused `S 0` is owed: the split is still on, as Nexus's own leftover (`TX`), never as
+    // a split the operator set.
+    assert_eq!(c.ask("s", 2), "1\nTX\n");
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n");
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT 0\n");
+    assert_eq!(c.ask("s", 2), "0\nVFOA\n");
+}
+
+/// ⭐ AN UNCHANGED WRITE WHILE KEYED IS STILL REFUSED. With the split slice already on the
+/// frequency and mode the last `I` and `X` took, the same `I` and `X` sent while an over is on the
+/// air are refused, never answered OK by the shortcut, and nothing reaches the wire. The control is
+/// the same pair unkeyed, answered at once with nothing sent.
+#[test]
+fn an_unchanged_split_write_while_keyed_is_refused() {
+    let sim = simulator(split_session(creates_slice_1(), moves_to_1()), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT 0\n");
+    ask_until_answer(&mut c, "i", "14075000\n");
+    // The control: unkeyed, the same pair is answered with nothing sent.
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT 0\n");
+    assert_eq!(split_wire(&sim, before), Vec::<String>::new());
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    wait_session(&d, "transmitting", |s| {
+        s.model
+            .interlock
+            .sample
+            .as_ref()
+            .is_some_and(|i| i.state == "TRANSMITTING")
+    });
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("I 14075000", 1), "RPRT -1\n");
+    assert_eq!(c.ask("X PKTUSB -1", 1), "RPRT -1\n");
+    assert!(
+        split_wire(&sim, before).is_empty(),
+        "{:?}",
+        split_wire(&sim, before)
+    );
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// A rule for `command` that answers success and sends `lines`: a way to have the radio report
+/// something at a chosen moment, as another client acting between two verbs would.
+fn reports_on(command: &str, lines: &[&str]) -> (Pattern, Vec<Rule>) {
+    rule(command, "0", lines)
+}
+
+/// The command `L RFPOWER 0.25` sends; aimed at no slice, so it cannot touch the split.
+const POKE: &str = "transmit set rfpower=25";
+
+/// ⭐ ANOTHER STATION'S TRANSMITTER IS NEVER TAKEN FOR A SPLIT. On a multiFLEX radio another
+/// client's slice may hold the transmit flag: `S 1` is refused and the flag never moves, whether
+/// the split is new (nothing is even created) or held from an earlier over and the other client
+/// has taken the flag since. The control is the held `S 1` before they took it.
+#[test]
+fn another_clients_transmitter_is_never_taken_for_a_split() {
+    // A new split, with the other client holding the flag from the start.
+    let sim = simulator(
+        split_session(creates_slice_1(), moves_to_1()),
+        vec![Fault::ForeignClient(Foreign::default())],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT -1\n");
+    assert!(
+        split_wire(&sim, before).is_empty(),
+        "{:?}",
+        split_wire(&sim, before)
+    );
+    drop(c);
+    drop(d);
+
+    // A held split, and the other client takes the flag between overs.
+    let foreign = "S7A3C0001|slice 3 in_use=1 RF_frequency=14.200000 mode=USB tx=1 \
+                   client_handle=0x7A3C0001 pan=0x40000001";
+    let session = with(
+        split_session(creates_slice_1(), moves_to_1()),
+        vec![reports_on(POKE, &["S{h}|slice 1 tx=0", foreign])],
+    );
+    let sim = simulator(session, vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n", "the control: held");
+    assert_eq!(c.ask("L RFPOWER 0.25", 1), "RPRT 0\n");
+    wait_session(&d, "the other client's flag", |s| {
+        s.model.tx_slices() == [3]
+    });
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT -1\n");
+    assert_eq!(count(&sim, "slice set 1 tx=1"), 1, "{:?}", wire(&sim));
+    assert_eq!(d.session().snapshot().model.tx_slices(), [3]);
+    assert_eq!(c.ask("s", 2), "0\nVFOA\n");
+}
+
+/// ⭐ A FAILED `S 0` IS OWED, NEVER FORGOTTEN, AND NEVER READ AS THE OPERATOR'S SPLIT. The radio
+/// refuses the move back once: `S 0` answers `RPRT -1`, `s` says the split is on but names the
+/// transmit VFO `TX` (Nexus's own leftover), a restore of that (`S 1 TX`) is refused, and nothing
+/// is keyed while the flag is still on the split slice. The radio loop's next quiet point
+/// finishes it, after which the next over keys on the receive slice.
+#[test]
+fn a_failed_split_off_is_finished_at_the_next_quiet_point() {
+    let session = with(
+        split_session(creates_slice_1(), moves_to_1()),
+        vec![(
+            Pattern::Exact("slice set 0 tx=1".into()),
+            vec![
+                Rule {
+                    code: "5000002D".into(),
+                    message: String::new(),
+                    items: vec![],
+                },
+                Rule {
+                    code: "0".into(),
+                    message: String::new(),
+                    items: vec![
+                        Item::Send("S{h}|slice 1 tx=0".into()),
+                        Item::Send("S{h}|slice 0 tx=1".into()),
+                    ],
+                },
+            ],
+        )],
+    );
+    let sim = simulator(session, vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("I 14075000", 1), "RPRT 0\n");
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT -1\n");
+    assert_eq!(c.ask("s", 2), "1\nTX\n");
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("S 1 TX", 1), "RPRT -1\n");
+    assert_eq!(c.ask("T 1", 1), "RPRT -1\n");
+    assert!(
+        split_wire(&sim, before).is_empty(),
+        "nothing keyed or moved: {:?}",
+        split_wire(&sim, before)
+    );
+    let refused = d.key_refused_since(Instant::now() - WAIT);
+    assert!(
+        refused
+            .as_ref()
+            .is_some_and(|(why, _)| why.contains("turning split off has not finished")),
+        "{refused:?}"
+    );
+    // The quiet point.
+    let before = wire(&sim).len();
+    d.sync_tx_routing(false, false);
+    assert_eq!(
+        split_wire(&sim, before),
+        ["slice set 0 tx=1", "slice remove 1"]
+    );
+    wait_session(&d, "the split slice gone", |s| {
+        s.model.tx_slices() == [0] && !s.model.slices.contains_key(&1)
+    });
+    assert_eq!(c.ask("s", 2), "0\nVFOA\n");
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(wait_count(&sim, "xmit 1", 1), 1);
+    assert_eq!(d.session().snapshot().model.tx_slices(), [0]);
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// The other half: `S 0` refused while an over is on the air is owed too, and `S 1 VFOB` (a
+/// split asked for again) takes it back, keeping the same slice pair.
+#[test]
+fn a_split_off_refused_while_keyed_is_owed_and_a_new_split_on_keeps_the_pair() {
+    let sim = simulator(split_session(creates_slice_1(), moves_to_1()), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    wait_session(&d, "keyed", |s| s.keyed);
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT -1\n");
+    // Keyed: the quiet point does nothing, and never moves the flag under an over.
+    let before = wire(&sim).len();
+    d.sync_tx_routing(false, false);
+    assert!(split_wire(&sim, before)
+        .iter()
+        .all(|c| c.starts_with("xmit")));
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    assert_eq!(c.ask("s", 2), "1\nTX\n");
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("s", 2), "1\nVFOB\n");
+    let before = wire(&sim).len();
+    d.sync_tx_routing(false, false);
+    assert!(split_wire(&sim, before).is_empty(), "no longer owed");
+    assert_eq!(count(&sim, SPLIT_CREATE), 1);
+}
+
+/// ⭐ A DIAL ON ANOTHER BAND NEVER LEAVES THE TRANSMITTER ON THE OLD ONE. `F` to 40 m with the
+/// split slice on 20 m takes the split down first (the flag back, the slice removed), then tunes.
+/// The control: `F` within the band tunes the receive slice and keeps the pair.
+#[test]
+fn a_band_change_takes_the_split_down_before_the_dial_moves() {
+    let session = with(
+        split_session(creates_slice_1(), moves_to_1()),
+        vec![
+            rule(
+                "slice tune 0 14.076000",
+                "0",
+                &["S{h}|slice 0 RF_frequency=14.076000"],
+            ),
+            rule(
+                "slice tune 0 7.074000",
+                "0",
+                &["S{h}|slice 0 RF_frequency=7.074000"],
+            ),
+        ],
+    );
+    let sim = simulator(session, vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("F 14076000", 1), "RPRT 0\n");
+    assert_eq!(split_wire(&sim, before), ["slice tune 0 14.076000"]);
+    assert_eq!(
+        c.ask("s", 2),
+        "1\nVFOB\n",
+        "the control: same band, pair kept"
+    );
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("F 7074000", 1), "RPRT 0\n");
+    assert_eq!(
+        split_wire(&sim, before),
+        [
+            "slice set 0 tx=1",
+            "slice remove 1",
+            "slice tune 0 7.074000"
+        ]
+    );
+    assert_eq!(c.ask("s", 2), "0\nVFOA\n");
+}
+
+/// A band change that cannot take the split down now (an over on the air) is refused: the dial
+/// stays, and the take-down is owed.
+#[test]
+fn a_band_change_while_keyed_with_a_split_is_refused() {
+    let sim = simulator(split_session(creates_slice_1(), moves_to_1()), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    wait_session(&d, "keyed", |s| s.keyed);
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("F 7074000", 1), "RPRT -1\n");
+    assert!(
+        !split_wire(&sim, before)
+            .iter()
+            .any(|c| c.starts_with("slice")),
+        "{:?}",
+        split_wire(&sim, before)
+    );
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    assert_eq!(c.ask("s", 2), "1\nTX\n");
+}
+
+/// ⭐ A SLICE CREATE WHOSE ANSWER IS LOST LEAKS NOTHING. The radio answers the create with
+/// nothing that names a slice (and, separately, does not answer it at all), then reports a new
+/// slice of ours anyway: `S 1` is refused, and the new slice is removed at the quiet point. Slice
+/// A, which was ours before the ask, is never touched.
+#[test]
+fn a_split_create_answered_unreadably_or_not_at_all_leaks_no_slice() {
+    let late_slice = "S{h}|slice 1 in_use=1 RF_frequency=14.074000 mode=DIGU tx=0 \
+                      client_handle=0x{h} pan=0x40000000 index_letter=B audio_mute=0";
+    // Answered, but with no slice number.
+    let sim = simulator(
+        split_session(
+            rule_with(SPLIT_CREATE, "0", "", &[late_slice]),
+            moves_to_1(),
+        ),
+        vec![],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT -1\n");
+    wait_session(&d, "the slice the radio made", |s| {
+        s.model.slices.contains_key(&1)
+    });
+    let before = wire(&sim).len();
+    d.sync_tx_routing(false, false);
+    assert_eq!(split_wire(&sim, before), ["slice remove 1"]);
+    assert_eq!(count(&sim, "slice remove 0"), 0);
+    drop(c);
+    drop(d);
+
+    // Not answered at all; the radio reports the slice later.
+    let session = with(
+        split_session(creates_slice_1(), moves_to_1()),
+        vec![reports_on(POKE, &[late_slice])],
+    );
+    let sim = simulator(
+        session,
+        vec![Fault::Unanswered {
+            starting: SPLIT_CREATE.into(),
+            then_silent: false,
+        }],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT -1\n");
+    let before = wire(&sim).len();
+    d.sync_tx_routing(false, false);
+    assert!(split_wire(&sim, before).is_empty(), "nothing has appeared");
+    assert_eq!(c.ask("L RFPOWER 0.25", 1), "RPRT 0\n");
+    wait_session(&d, "the slice the radio made", |s| {
+        s.model.slices.contains_key(&1)
+    });
+    let before = wire(&sim).len();
+    d.sync_tx_routing(false, false);
+    assert_eq!(split_wire(&sim, before), ["slice remove 1"]);
+    assert_eq!(count(&sim, "slice remove 0"), 0);
+}
+
+/// THE QUIET POINT HOLDS THE RADIO LOOP AT MOST ONE REQUEST TIME, whatever it owes. The worst
+/// case: a stray slice from a lost create to remove AND an owed take-down, on a radio that answers
+/// neither. The removal and the take-down share one deadline, so the radio loop is held about
+/// [`shim::REQUEST_TIMEOUT`] (500 ms), never one per command; what is left stays owed, and keys
+/// stay refused meanwhile.
+#[test]
+fn the_quiet_point_holds_the_radio_loop_one_request_time_at_most() {
+    let slice_1 = "S{h}|slice 1 in_use=1 RF_frequency=14.074000 mode=DIGU tx=0 \
+                   client_handle=0x{h} pan=0x40000000 index_letter=B audio_mute=0";
+    let session = with(
+        split_session(creates_slice_1(), moves_to_1()),
+        vec![
+            (
+                Pattern::Exact(SPLIT_CREATE.into()),
+                vec![
+                    // The first create's answer names no slice; the slice appears later.
+                    Rule {
+                        code: "0".into(),
+                        message: String::new(),
+                        items: vec![],
+                    },
+                    Rule {
+                        code: "0".into(),
+                        message: "2".into(),
+                        items: vec![Item::Send(
+                            "S{h}|slice 2 in_use=1 RF_frequency=14.074000 mode=DIGU tx=0 \
+                             client_handle=0x{h} pan=0x40000000 index_letter=C audio_mute=0"
+                                .into(),
+                        )],
+                    },
+                ],
+            ),
+            rule(
+                "slice set 2 tx=1",
+                "0",
+                &["S{h}|slice 0 tx=0", "S{h}|slice 2 tx=1"],
+            ),
+            reports_on(POKE, &[slice_1]),
+        ],
+    );
+    let unanswered = |starting: &str| Fault::Unanswered {
+        starting: starting.into(),
+        then_silent: false,
+    };
+    let sim = simulator(
+        session,
+        vec![unanswered("slice set 0 tx=1"), unanswered("slice remove 1")],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT -1\n", "the lost create");
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("L RFPOWER 0.25", 1), "RPRT 0\n");
+    wait_session(&d, "the stray slice", |s| s.model.slices.contains_key(&1));
+    assert_ne!(c.ask("S 0 VFOA", 1), "RPRT 0\n", "the take-down is owed");
+    let before = wire(&sim).len();
+    let started = Instant::now();
+    d.sync_tx_routing(false, false);
+    let held = started.elapsed();
+    eprintln!(
+        "the quiet point held the radio loop {} ms",
+        held.as_millis()
+    );
+    assert_eq!(
+        split_wire(&sim, before).first().map(String::as_str),
+        Some("slice remove 1")
+    );
+    assert!(
+        held < shim::REQUEST_TIMEOUT + Duration::from_millis(200),
+        "held {held:?}"
+    );
+    assert_eq!(c.ask("s", 2), "1\nTX\n", "still owed");
+    assert_eq!(c.ask("T 1", 1), "RPRT -1\n", "and nothing keys meanwhile");
+}
+
+/// ⭐ A SPLIT BELONGS TO THE SESSION THAT MADE IT. A hold from another session (another client
+/// handle) is never used: `s` does not report it, `I` does not tune its slice, `S 0` sends nothing
+/// for it, and it is dropped. And a session that ends clears the hold.
+#[test]
+fn a_split_from_another_session_is_never_used_and_an_ended_session_clears_it() {
+    let sim = simulator(split_session(creates_slice_1(), moves_to_1()), vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(
+        c.ask("s", 2),
+        "1\nVFOB\n",
+        "the control: this session's own"
+    );
+    {
+        let mut hold = d.state.split.lock().unwrap();
+        let mine = hold.expect("held");
+        *hold = Some(shim::SplitHold {
+            handle: 0x5EED_0001,
+            ..mine
+        });
+    }
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("s", 2), "0\nVFOA\n");
+    assert_eq!(c.ask("I 14075000", 1), "RPRT -1\n");
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT 0\n");
+    assert!(
+        split_wire(&sim, before).is_empty(),
+        "{:?}",
+        split_wire(&sim, before)
+    );
+    assert_eq!(*d.state.split.lock().unwrap(), None);
+    drop(c);
+    drop(d);
+
+    // The session ends with a split held.
+    let sim = simulator(
+        split_session(creates_slice_1(), moves_to_1()),
+        vec![Fault::DisconnectMidOver {
+            after: Duration::from_millis(100),
+            radio_stays_keyed: false,
+        }],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert!(d.state.split.lock().unwrap().is_some());
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    wait_dead(&d);
+    let deadline = Instant::now() + WAIT;
+    while d.state.split.lock().unwrap().is_some() {
+        assert!(Instant::now() < deadline, "the hold outlived its session");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// [`moves_to_1`], after which the radio reports the receive slice closed (by the operator in
+/// SmartSDR, or by another client).
+fn moves_to_1_then_slice_0_closes() -> (Pattern, Vec<Rule>) {
+    rule(
+        "slice set 1 tx=1",
+        "0",
+        &[
+            "S{h}|slice 0 tx=0",
+            "S{h}|slice 1 tx=1",
+            "S{h}|slice 0 in_use=0",
+        ],
+    )
+}
+
+/// ⭐ A SPLIT WHOSE RECEIVE SLICE IS CLOSED OUTSIDE NEXUS NEVER WEDGES. Slice A is closed while
+/// the split is held: the transmit flag has no slice of ours to go back to, so `S 0` lets the
+/// split go and keeps the split slice as a plain slice with the flag, its audio back on. Nothing
+/// moves the flag or removes the slice, and from then on the dial is that slice: `F` to another
+/// band tunes it. (The control, a normal `S 0`, is
+/// `split_off_puts_the_transmitter_back_on_the_receive_slice`.)
+#[test]
+fn a_split_whose_receive_slice_is_closed_lets_go_and_the_band_changes() {
+    let session = with(
+        split_session(creates_slice_1(), moves_to_1_then_slice_0_closes()),
+        vec![rule(
+            "slice tune 1 7.074000",
+            "0",
+            &["S{h}|slice 1 RF_frequency=7.074000"],
+        )],
+    );
+    let sim = simulator(session, vec![]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    wait_session(&d, "slice A closed", |s| !s.model.slices.contains_key(&0));
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT 0\n");
+    assert_eq!(split_wire(&sim, before), ["slice set 1 audio_mute=0"]);
+    assert_eq!(*d.state.split.lock().unwrap(), None);
+    assert_eq!(c.ask("s", 2), "0\nVFOA\n");
+    let before = wire(&sim).len();
+    assert_eq!(c.ask("F 7074000", 1), "RPRT 0\n");
+    assert_eq!(split_wire(&sim, before), ["slice tune 1 7.074000"]);
+    ask_until_answer(&mut c, "f", "7074000\n");
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT 0\n");
+    assert_eq!(d.session().snapshot().model.tx_slices(), [1]);
+}
+
+/// The same with nothing asked of the shim: the radio loop's quiet point lets the split go, never
+/// under an over (keyed, it waits for the unkey), and an over after it keys on the slice left.
+#[test]
+fn a_split_whose_receive_slice_is_closed_is_let_go_at_the_quiet_point() {
+    let sim = simulator(
+        split_session(creates_slice_1(), moves_to_1_then_slice_0_closes()),
+        vec![],
+    );
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    wait_session(&d, "slice A closed", |s| !s.model.slices.contains_key(&0));
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    wait_session(&d, "keyed", |s| s.keyed);
+    let before = wire(&sim).len();
+    d.sync_tx_routing(false, false);
+    assert!(
+        split_wire(&sim, before)
+            .iter()
+            .all(|c| c.starts_with("xmit")),
+        "nothing under an over: {:?}",
+        split_wire(&sim, before)
+    );
+    assert!(d.state.split.lock().unwrap().is_some());
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+    wait_session(&d, "the unkey confirmed", |s| !s.keyed);
+    let before = wire(&sim).len();
+    d.sync_tx_routing(false, false);
+    assert_eq!(split_wire(&sim, before), ["slice set 1 audio_mute=0"]);
+    assert_eq!(*d.state.split.lock().unwrap(), None);
+    let before = wire(&sim).len();
+    d.sync_tx_routing(false, false);
+    assert!(split_wire(&sim, before).is_empty(), "nothing owed any more");
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+    assert_eq!(wait_count(&sim, "xmit 1", 2), 2);
+    assert_eq!(d.session().snapshot().model.tx_slices(), [1]);
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
 }
 
 // ── CW through the radio's keyer: switched on in tests only ─────────────────────────────────
@@ -916,6 +1779,80 @@ fn a_refused_atu_start_ends_quietly_and_the_atu_line_says_why() {
     );
     assert_eq!(atu_wire(&sim), ["atu start", "atu start"]);
     assert_eq!(d.alarm(), None);
+}
+
+/// [`split_session`] where the radio refuses the first move of the flag back to slice A (busy),
+/// so an `S 0` stays owed until the quiet point; the second move goes through.
+fn split_with_a_slow_take_down() -> SimSession {
+    with(
+        split_session(creates_slice_1(), moves_to_1()),
+        vec![(
+            Pattern::Exact("slice set 0 tx=1".into()),
+            vec![
+                Rule {
+                    code: "5000002D".into(),
+                    message: String::new(),
+                    items: vec![],
+                },
+                Rule {
+                    code: "0".into(),
+                    message: String::new(),
+                    items: vec![
+                        Item::Send("S{h}|slice 1 tx=0".into()),
+                        Item::Send("S{h}|slice 0 tx=1".into()),
+                    ],
+                },
+            ],
+        )],
+    )
+}
+
+/// ⭐ THE RADIO'S OWN TUNE CARRIER AND ATU NEVER KEY A SPLIT SLICE BEING TAKEN DOWN, as `T 1` and
+/// CW never do: while the flag is still on it, a native tune and an ATU press are refused before
+/// anything reaches the radio, with the reason on the PTT and ATU lines. Once the quiet point has
+/// put the flag back, both go out (the control).
+#[test]
+fn a_native_tune_or_atu_start_waits_for_the_split_take_down() {
+    let sim = simulator(split_with_a_slow_take_down(), vec![]);
+    let d = cw_daemon(&sim);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(c.ask("S 0 VFOA", 1), "RPRT -1\n");
+    assert_eq!(c.ask("s", 2), "1\nTX\n");
+    let refused = d.tune_on(3_000);
+    assert!(
+        matches!(&refused, Err(Some(Refusal::SplitTakeDown { why }))
+            if why.contains("turning split off has not finished")),
+        "{refused:?}"
+    );
+    assert!(super::tune_refusal_words(refused.unwrap_err().as_ref())
+        .starts_with("Tune not keyed: the transmitter is still on Nexus's split slice"));
+    assert_eq!(c.ask("U TUNER 2", 1), "RPRT -1\n");
+    assert!(d.state.atu_refused.lock().unwrap().as_deref().is_some_and(
+        |w| w.starts_with("ATU not started: the transmitter is still on Nexus's split slice")
+    ));
+    assert_eq!(atu_wire(&sim), Vec::<String>::new(), "nothing keyed");
+
+    // The quiet point finishes the take-down; then both start.
+    d.sync_tx_routing(false, false);
+    wait_session(&d, "the split slice gone", |s| {
+        s.model.tx_slices() == [0] && !s.model.slices.contains_key(&1)
+    });
+    assert_eq!(d.tune_on(3_000), Ok(()));
+    wait_session(&d, "the radio tuned", |s| {
+        s.model.transmit.tune == Some(true)
+    });
+    assert!(matches!(d.tune_off(), StopOutcome::Sent { .. }));
+    wait_session(&d, "the end proven", |s| !s.keyed);
+    assert_eq!(c.ask("U TUNER 2", 1), "RPRT 0\n");
+    wait_session(&d, "the cycle proven", |s| {
+        !s.keyed && s.model.atu.status.as_deref() == Some("TUNE_SUCCESSFUL")
+    });
+    assert_eq!(
+        atu_wire(&sim),
+        ["transmit tune 1", "transmit tune 0", "atu start"]
+    );
 }
 
 /// ⭐ An amplifier in line (the simulator's PGXL profile: the radio's PTT_REQUESTED carries
@@ -1669,6 +2606,39 @@ fn native_audio_streams_the_served_slice_on_the_one_session() {
         off.elapsed() >= Duration::from_millis(tempo_net::flex::streams::REMOVAL_GRACE_MS - 100),
         "removed after {:?}, inside the grace window",
         off.elapsed()
+    );
+}
+
+/// ⭐ RECEIVE AUDIO STAYS ON THE DIAL WHILE A RIG SPLIT HOLDS THE TRANSMIT FLAG ELSEWHERE. The
+/// served slice is the receive slice of the pair, so native audio keeps coming from it: the
+/// decoder never hears the split slice, which listens at the transmit frequency, nor goes deaf
+/// for as long as split is held.
+#[test]
+fn native_receive_audio_stays_on_the_receive_slice_during_a_rig_split() {
+    let sim = with_rx_tone(split_session(creates_slice_1(), moves_to_1()), vec![]);
+    let d = audio_daemon(&sim, memory());
+    d.set_native_audio(true);
+    let mut audio = Vec::new();
+    eventually("receive audio before the split", || {
+        audio.extend(d.take_audio());
+        (audio.len() >= 6_000).then_some(())
+    });
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    assert_eq!(c.ask("S 1 VFOB", 1), "RPRT 0\n");
+    assert_eq!(d.session().snapshot().model.tx_slices(), [1]);
+    // Past the audio loop's next look at the slices, the tone still arrives.
+    std::thread::sleep(Duration::from_millis(500));
+    let _ = d.take_audio();
+    let mut during = Vec::new();
+    eventually("receive audio during the split", || {
+        during.extend(d.take_audio());
+        (during.len() >= 6_000).then_some(())
+    });
+    assert!(
+        (peak(&during[1_000..]) - 0.5).abs() < 0.05,
+        "peak {}",
+        peak(&during[1_000..])
     );
 }
 

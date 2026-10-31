@@ -54,6 +54,19 @@ pub trait RigBackend: Send + Sync {
     fn split(&self) -> bool {
         false
     }
+    /// The TX VFO `s` names beside the split flag. The default is [`Self::vfo`], the answer every
+    /// backend has always given.
+    fn split_vfo(&self) -> String {
+        self.vfo()
+    }
+    /// The split TX frequency (`i`). The default `None` is not implemented (`RPRT -11`).
+    fn split_freq_hz(&self) -> Option<u64> {
+        None
+    }
+    /// The split TX mode and passband (`x`). The default `None` is not implemented (`RPRT -11`).
+    fn split_mode(&self) -> Option<(String, u32)> {
+        None
+    }
     /// Setters return true on success (→ `RPRT 0`), false → `RPRT -1`.
     fn set_freq(&self, hz: u64) -> bool;
     /// The dial write as `F` relays it: [`Self::set_freq`], for a backend that can tell a radio
@@ -655,7 +668,7 @@ fn canonical_line(line: &str) -> std::borrow::Cow<'_, str> {
 /// VFO (`v`/`V`), split (`s`), `\dump_state`, `\chk_vfo`, `\get_powerstat`, `q` —
 /// each in both its short and `\long_name` spelling ([`canonical_line`]) — plus the
 /// extended verbs Nexus's own `Rig` client sends (levels `l`/`L`, funcs
-/// `u`/`U`, morse `b`/`\stop_morse`, split `S`/`I`/`X`, RIT/XIT `J`/`Z`, FM
+/// `u`/`U`, morse `b`/`\stop_morse`, split `S`/`I`/`X` and their reads `i`/`x`, RIT/XIT `J`/`Z`, FM
 /// repeater `R`/`O`/`C`), which answer `RPRT -11` unless the backend implements them.
 /// The receiver a `Main` / `Sub` token names — Hamlib's own names for the two, in any case.
 fn receiver_named(token: &str) -> Option<crate::dualrx::ReceiverId> {
@@ -754,7 +767,15 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                         .map(|v| backend.set_ptt(v != 0))
                         .unwrap_or(false),
                 ),
-                Some("s") => format!("{}\n{}\n", backend.split() as u8, backend.vfo()),
+                Some("s") => format!("{}\n{}\n", backend.split() as u8, backend.split_vfo()),
+                Some("i") => match backend.split_freq_hz() {
+                    Some(hz) => format!("{hz}\n"),
+                    None => "RPRT -11\n".into(),
+                },
+                Some("x") => match backend.split_mode() {
+                    Some((mode, width)) => format!("{mode}\n{width}\n"),
+                    None => "RPRT -11\n".into(),
+                },
                 // ---- extended verbs (RPRT -11 when the backend doesn't implement them,
                 // exactly like the pre-extension broker) ----
                 Some("l") => match p.next().and_then(|n| backend.level(n)) {
@@ -1277,6 +1298,17 @@ pub(crate) mod tests {
             Handled::Reply(r) => r,
             Handled::Close => "\0CLOSE".into(),
         }
+    }
+
+    /// The split reads a backend does not implement answer `RPRT -11`, as every verb it lacks
+    /// does, in both spellings; `s` names the backend's own VFO unless it says otherwise.
+    #[test]
+    fn split_reads_a_backend_lacks_are_not_implemented() {
+        let b = MockRig::default();
+        for verb in ["i", "x", "\\get_split_freq", "\\get_split_mode"] {
+            assert_eq!(reply(verb, &b), "RPRT -11\n", "{verb}");
+        }
+        assert_eq!(reply("s", &b), "0\nVFOA\n");
     }
 
     /// #53 conformance: real rigctld accepts every verb in BOTH spellings — the short letter
