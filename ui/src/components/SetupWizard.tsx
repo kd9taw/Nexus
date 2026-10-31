@@ -23,7 +23,6 @@ import {
   getAudioDevices,
   getRigModels,
   getSettings,
-  importAdif,
   probeCatPorts,
   tciProbe,
   updateRadioProfile,
@@ -31,6 +30,10 @@ import {
 } from '../api'
 import { baudForRig, FREQ_BANDS, radioPatch } from './SettingsPanel'
 import { RadioSetupWizard } from './RadioSetupWizard'
+import { ImportPreview } from './ImportPreview'
+import { WizardServices } from './WizardServices'
+import { importTooLarge } from '../features/logImport'
+import { handsOffToRadioSetup, RADIO_COUNTS, showsServices, type RadioCount } from '../settings/journeys'
 import { KIT_FIELDS, type FinishPlan, type RadioKit } from '../settings/radioSetup'
 import { NO_CAT_PTT_MODELS, NO_CAT_PTT_TRANSCEIVERS } from '../rigFormChecks'
 import { ProveTxButton, SetupHealth } from './SetupHealth'
@@ -88,8 +91,9 @@ interface Props {
   }
   /** Apply goal profile(s) + modes + license + the station/rig draft, then navigate.
    * `license` is the class picked here, or null when it is the class the station already holds:
-   * like the draft, an untouched wizard writes no class. `experience` is the About-you answer given in THIS run, or null when none was given (the step
-   * was not asked, or was passed without a pick): App writes it only when it is set. */
+   * like the draft, an untouched wizard writes nothing. `experience` is the About-you answer given
+   * in THIS run, or null when none was given (the step was not asked, or was passed without a
+   * pick): App writes it only when it is set. */
   onApply: (
     ids: ProfileId[],
     landing: View,
@@ -117,6 +121,9 @@ interface Props {
   /** Open the first-contact walk-through once the wizard finishes, if the operator asked for it
    * on the last step. Omitted ⇒ no offer is shown. */
   onOpenWalk?: () => void
+  /** Open Settings ▸ Confirmations once the wizard finishes, if the operator asked for it beside
+   * the logbook services (the switching-apps journey). Omitted ⇒ no offer is shown. */
+  onOpenServices?: () => void
 }
 
 // License class → sets the transmit-privilege lockout + the licensed-segment band dropdown.
@@ -209,7 +216,7 @@ const gridOk = isValidGrid
  * Settings ▸ re-open path acts as an editor. Built on the Radix [`Dialog`].
  * See feature-modularity.md §4.6.
  */
-export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, onSkip, onOpenGuide, onOpenWalk, askExperience = false, rerun = false }: Props) {
+export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, onSkip, onOpenGuide, onOpenWalk, onOpenServices, askExperience = false, rerun = false }: Props) {
   const [step, setStep] = useState(0) // 0 station · 1 rig · 2 log · 3 goals
   // The About-you step sits BEFORE step 0 and only when asked, so the four steps keep their
   // numbers (and every gate written against them) whether or not it is shown.
@@ -217,25 +224,35 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   // The answer given in this run. Unanswered keeps whatever the station already holds.
   const [experience, setExperience] = useState<ExperienceLevel | null>(null)
   const level = experience ?? settings?.experienceLevel ?? null
+  // How many radios Nexus will run, asked beside it. Never stored: "two or more" only hands the rig
+  // step on to the radio setup once the second radio is saved (`settings/journeys.ts`).
+  const [radioCount, setRadioCount] = useState<RadioCount | null>(null)
   // Closed, the keyboard goes back to where the wizard was opened from (focusReturn.ts).
   const returnFocus = useFocusReturn(true)
 
-  // --- Step 3: optional ADIF log import (seeds worked-before / needs / awards) ---
+  // --- Step 3: optional log import (seeds worked-before / needs / awards) ---
+  // The file opens the Logbook's own import preview (`ImportPreview`) over this step: what the file
+  // holds, its dates, new against already in the log, its problems, and nothing written until the
+  // operator presses Import or Import new only there. Its counts come back here as the result line.
   const [importStats, setImportStats] = useState<ImportStats | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
-  const [importing, setImporting] = useState(false)
+  const [importFile, setImportFile] = useState<{ text: string; name: string } | null>(null)
+  const [reading, setReading] = useState(false)
   const logFileRef = useRef<HTMLInputElement>(null)
-  const onImportAdif = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onPickLog = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     e.target.value = '' // let the same file be re-picked
     if (!f) return
-    setImporting(true)
     setImportError(null)
-    setImportStats(null)
+    // Feedback is INLINE, not a toast: a toast paints dimmed behind this modal wizard.
+    const tooLarge = importTooLarge(f.size)
+    if (tooLarge) {
+      setImportError(tooLarge)
+      return
+    }
+    setReading(true)
     try {
-      // Feedback is INLINE (below), not a toast — a toast paints dimmed + undismissable behind
-      // this modal wizard. A 0/0 result (non-ADIF file) is surfaced as a warning, not a success.
-      setImportStats(await importAdif(await f.text()))
+      setImportFile({ text: await f.text(), name: f.name })
     } catch (err) {
       setImportError(
         t('setup.log.import.failed', {
@@ -243,9 +260,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         }),
       )
     } finally {
-      setImporting(false)
+      setReading(false)
     }
   }
+  // Open Settings ▸ Confirmations after Finish (offered beside the services, never ticked first).
+  const [wantServices, setWantServices] = useState(false)
 
   // --- Step 1: station identity ---
   const [mycall, setMycall] = useState(() => settings?.mycall ?? '')
@@ -469,6 +488,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       const generic = (name: string | null | undefined) =>
         !!name && !/\b(FT|IC|TS|TX)-?\d/i.test(name)
       setSwapOffer(generic(row?.suggestedAudio) && generic(audioIn))
+      // "Two or more radios" on the first step: the second one is saved, so the radio setup opens
+      // (which radio for which band and mode). Its Cancel writes nothing, as from the button.
+      if (handsOffToRadioSetup(radioCount)) openRadioSetup()
     } catch (e) {
       setSecond({
         id: -1,
@@ -652,6 +674,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     onApply(profileIds, view, modeIds, license === heldLicense ? null : license, draft(), experience)
     if (wantGuide) onOpenGuide?.()
     if (wantWalk) onOpenWalk?.()
+    if (wantServices && showsServices(level)) onOpenServices?.()
   }
   // The starting features follow the answer (this run's, else the one the station holds);
   // none = everything on, as every earlier build started.
@@ -906,6 +929,23 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               </button>
             ))}
           </div>
+          <h3 id="wizard-radios-title" className="wizard-modes-title">
+            {t('setup.about.radios.title')}
+          </h3>
+          <div className="wizard-modes" role="group" aria-labelledby="wizard-radios-title">
+            {RADIO_COUNTS.map((r) => (
+              <button
+                key={r.value}
+                type="button"
+                className={`wizard-mode${radioCount === r.value ? ' sel' : ''}`}
+                aria-pressed={radioCount === r.value}
+                onClick={() => setRadioCount(radioCount === r.value ? null : r.value)}
+              >
+                <span className="wizard-mode-label">{r.label}</span>
+                <span className="wizard-mode-blurb">{r.blurb}</span>
+              </button>
+            ))}
+          </div>
         </>
       )}
 
@@ -960,6 +1000,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         <>
           <h2 className="wizard-title">{t('setup.rig.title')}</h2>
           <p className="wizard-sub">{t('setup.rig.sub')}</p>
+          {handsOffToRadioSetup(radioCount) && (
+            <p className="wizard-license-sub wizard-several-hint">
+              {t('setup.rig.several.hint', { button: t('setup.rig.second.action') })}
+            </p>
+          )}
           <div className="wizard-detect">
             <button type="button" className="wizard-btn" disabled={detecting} onClick={runDetect}>
               {detecting ? t('setup.rig.detect.busy') : t('setup.rig.detect.action')}
@@ -1472,17 +1517,17 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             <input
               ref={logFileRef}
               type="file"
-              accept=".adi,.adif,.txt"
+              accept=".adi,.adif,.adx,.cbr,.log,.txt"
               style={{ display: 'none' }}
-              onChange={onImportAdif}
+              onChange={(e) => void onPickLog(e)}
             />
             <button
               type="button"
               className="wizard-go"
-              disabled={importing}
+              disabled={reading || importFile != null}
               onClick={() => logFileRef.current?.click()}
             >
-              {importing
+              {reading || importFile != null
                 ? t('setup.log.import.busy')
                 : importStats
                   ? t('setup.log.import.again')
@@ -1519,7 +1564,18 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 </p>
               ))}
             <p className="wizard-license-sub">{t('setup.log.sources')}</p>
+            {importFile && (
+              <ImportPreview
+                text={importFile.text}
+                fileName={importFile.name}
+                onClose={() => setImportFile(null)}
+                onImported={(stats) => setImportStats(stats)}
+              />
+            )}
           </div>
+          {showsServices(level) && (
+            <WizardServices openAfter={wantServices} onOpenAfter={onOpenServices ? setWantServices : undefined} />
+          )}
         </>
       )}
 

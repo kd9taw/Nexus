@@ -1499,8 +1499,10 @@ pub enum AudioErrorKind {
     /// No receive audio is arriving: a reopened card that has not delivered yet, or a capture
     /// that delivers nothing but digital zero.
     NoReceiveAudio,
-    /// The rig did not accept a PTT key (or did not answer it in time).
+    /// The rig did not accept a PTT key: it answered no.
     Ptt,
+    /// The rig did not answer a PTT key in time: not a refusal, but the key is not confirmed.
+    PttUnconfirmed,
     /// Flex native audio was selected and none arrived, so receive went back to the sound card.
     FlexAudio,
     /// The Flex native panadapter is switched on with no radio address to start it on.
@@ -1534,6 +1536,15 @@ pub struct SlotKeyRefused {
     /// nothing, so the UI says so in its own words. Absent for every other refusal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub tx_audio_failed: bool,
+    /// Set when Nexus kept the key off the air itself because the radio did not take Split
+    /// Operation's TX frequency (`why` is then the rig link's answer to that write): the PTT was
+    /// never asked for, so the UI says so in its own words. Absent for every other refusal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub split_failed: bool,
+    /// With `split_failed`: the over was refused because Nexus could not confirm the radio's SPLIT
+    /// is off after letting go of its own split. The UI says how to clear it. Absent otherwise.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub split_off_unconfirmed: bool,
 }
 
 /// What a FlexRadio reports about its own tune carrier, while Nexus's Flex client tunes with it
@@ -5694,6 +5705,7 @@ mod tests {
             SoundCard,
             NoReceiveAudio,
             Ptt,
+            PttUnconfirmed,
             FlexAudio,
             FlexAddress,
             Monitor,
@@ -5717,6 +5729,7 @@ mod tests {
                 "soundCard",
                 "noReceiveAudio",
                 "ptt",
+                "pttUnconfirmed",
                 "flexAudio",
                 "flexAddress",
                 "monitor",

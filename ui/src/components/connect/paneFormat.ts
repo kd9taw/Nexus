@@ -25,10 +25,10 @@ import {
   type Azimuth,
 } from '../../grid'
 import { fmtDistanceKm } from '../../units'
-import { dualStateLabel, kpImpact, sortInsights } from '../../propViz'
+import { bandWordState, dualStateLabel, kpImpact, sortInsights, wxUsable } from '../../propViz'
 import { buildChaseTargets, chaseSummaryLine } from '../../features/chase'
 import { buildChaseFeed, chaseFeedLine as feedSummary } from '../../features/chaseFeed'
-import { getoutSummary } from '../../features/getout'
+import { fmtSinceUtc, getoutSummary } from '../../features/getout'
 import type { PropagationSnapshot } from '../../types'
 import type { PaneContext } from './paneContext'
 
@@ -94,9 +94,12 @@ export function bandAdvisorLine(c: PaneContext): string {
   // Project through the SAME dual-state word the BandAdvisor shows (modeled-open beats a
   // silent observed tier), so Basic never reads "Quiet"/"Closed" while the advisor says
   // "Open" — the false-dead-band bug the A1 dual-state work fixed.
-  const isOpen = (x: (typeof bands)[number]) => dualStateLabel(x.modeled, x.tier).word !== 'Closed'
-  const b = bands.find(isOpen) ?? bands[0]
-  if (!b) return t('connect.basic.bandAdvisor.none')
+  // A band with no model word that nobody heard is unknown, never the open one: with no band
+  // known open and none known closed, the line says so rather than naming a band.
+  const state = (x: (typeof bands)[number]) => bandWordState(dualStateLabel(x.modeled, x.tier).word)
+  const b =
+    bands.find((x) => state(x) === 'open' || state(x) === 'marginal') ?? bands.find((x) => state(x) === 'closed')
+  if (!b) return bands.length ? t('connect.basic.bandAdvisor.unknown') : t('connect.basic.bandAdvisor.none')
   const word = dualStateLabel(b.modeled, b.tier).word
   // Two whole sentences: naming the region it is best TO is a different statement.
   return b.bestRegion
@@ -193,6 +196,10 @@ export function openingsLine(c: PaneContext): string {
 export function spaceWxLine(c: PaneContext): string {
   const w = c.prop?.spaceWx
   if (!w || c.prop?.source === 'offline') return t('connect.basic.spaceWx.unavailable')
+  // The line states SFI and Kp as readings and reads an impact off Kp, so both must be measured
+  // and fresh (propViz `wxUsable`): a partial snapshot's stand-ins are no line at all.
+  const now = Date.now()
+  if (!wxUsable(w, 'sfi', now) || !wxUsable(w, 'kp', now)) return t('connect.basic.spaceWx.unavailable')
   // Round (matches the gauges' toFixed(0)) and derive the geomag descriptor from the SAME
   // kpImpact bucketing the SpaceWx Kp gauge uses (no divergent threshold ladder). Append
   // the live SWPC R-scale (radio blackout) when active — it's the "so what" for HF.
@@ -206,22 +213,28 @@ export function spaceWxLine(c: PaneContext): string {
     xray: w.xrayClass,
     scale: c.scales?.r ?? 0,
   }
-  if (w.flare && blackout) return t('connect.basic.spaceWx.flareBlackout', vals)
-  if (w.flare) return t('connect.basic.spaceWx.flare', vals)
+  const flare = w.flare && wxUsable(w, 'xray', now)
+  if (flare && blackout) return t('connect.basic.spaceWx.flareBlackout', vals)
+  if (flare) return t('connect.basic.spaceWx.flare', vals)
   if (blackout) return t('connect.basic.spaceWx.blackout', vals)
   return t('connect.basic.spaceWx', vals)
 }
 
+/** A Start fresh time narrows the count, so the sentence names it whenever one is set. */
 export function getoutLine(c: PaneContext): string {
   const g = c.getout
-  if (!g || g.count === 0) return t('connect.getout.none')
+  const time = c.getoutSince != null ? fmtSinceUtc(c.getoutSince) : null
+  if (!g || g.count === 0)
+    return time != null ? t('connect.getout.none.since', { time }) : t('connect.getout.none')
   const dir = getoutSummary(g.reports, c.units)
+  const dist = fmtDistanceKm(g.maxKm, c.units)
+  if (time != null)
+    return dir
+      ? t('connect.basic.getout.dir.since', { count: g.count, time, dir })
+      : t('connect.basic.getout.furthest.since', { count: g.count, time, dist })
   return dir
     ? t('connect.basic.getout.dir', { count: g.count, dir })
-    : t('connect.basic.getout.furthest', {
-        count: g.count,
-        dist: fmtDistanceKm(g.maxKm, c.units),
-      })
+    : t('connect.basic.getout.furthest', { count: g.count, dist })
 }
 
 // ---- B2 Tier-1 pane projections ----
@@ -231,11 +244,10 @@ export function bestbandLine(c: PaneContext): string {
   if (c.prop.source === 'offline') return t('connect.basic.offline')
   const r = c.prop.bestToRegion?.[0]
   if (!r) return t('connect.basic.bestband.none')
-  return t('connect.basic.bestband', {
-    region: r.region,
-    band: r.band,
-    word: dualStateLabel(r.modeled, r.tier).word,
-  })
+  const word = dualStateLabel(r.modeled, r.tier).word
+  // No model word and nobody heard: the band is named, its state is not guessed.
+  if (bandWordState(word) === 'unknown') return t('connect.basic.bestband.noWord', { region: r.region, band: r.band })
+  return t('connect.basic.bestband', { region: r.region, band: r.band, word })
 }
 
 export function activityLine(c: PaneContext): string {

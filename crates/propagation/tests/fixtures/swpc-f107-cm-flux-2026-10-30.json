@@ -1,0 +1,56 @@
+[
+ {
+  "time_tag": "2026-10-29T22:00:00",
+  "frequency": 2800,
+  "flux": 90.0,
+  "reporting_schedule": "Afternoon",
+  "avg_begin_date": null,
+  "ninety_day_mean": null,
+  "rec_count": null
+ },
+ {
+  "time_tag": "2026-10-29T20:00:00",
+  "frequency": 2800,
+  "flux": 89.0,
+  "reporting_schedule": "Noon",
+  "avg_begin_date": "2026-08-01T20:00:00",
+  "ninety_day_mean": 111.0,
+  "rec_count": 90
+ },
+ {
+  "time_tag": "2026-10-29T17:00:00",
+  "frequency": 2800,
+  "flux": 89.0,
+  "reporting_schedule": "Morning",
+  "avg_begin_date": null,
+  "ninety_day_mean": null,
+  "rec_count": null
+ },
+ {
+  "time_tag": "2026-10-28T22:00:00",
+  "frequency": 2800,
+  "flux": 92.0,
+  "reporting_schedule": "Afternoon",
+  "avg_begin_date": null,
+  "ninety_day_mean": null,
+  "rec_count": null
+ },
+ {
+  "time_tag": "2026-10-28T20:00:00",
+  "frequency": 2800,
+  "flux": 93.0,
+  "reporting_schedule": "Noon",
+  "avg_begin_date": "2026-07-31T20:00:00",
+  "ninety_day_mean": 111.0,
+  "rec_count": 90
+ },
+ {
+  "time_tag": "2026-10-28T17:00:00",
+  "frequency": 2800,
+  "flux": 92.0,
+  "reporting_schedule": "Morning",
+  "avg_begin_date": null,
+  "ninety_day_mean": null,
+  "rec_count": null
+ }
+]

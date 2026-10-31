@@ -69,14 +69,22 @@ test('actual native: the old page\'s FT8/FT4 and held-contact actions are refuse
       socket.send(await key.prove({ type: 'operationRequest', operationVersion: 4, request }, { stationId, deviceId: device.deviceId, sessionId }))
       return { request, response: await socket.take(v => v.type === 'operationResponse' && v.requestId === request.requestId) }
     }
-    // stationBusy means the request was refused before anything changed: retry once.
+    // stationBusy and remoteBusy mean the station was busy a moment (its Engine, its authority's lock)
+    // and the request was refused before anything changed: retry once, as the page re-asks on its next
+    // heartbeat.
     const operation = async args => {
       let sent = await send(args)
-      if (sent.response.error === 'stationBusy') { await delay(300); sent = await send(args) }
+      if (['stationBusy', 'remoteBusy'].includes(sent.response.error)) { await delay(300); sent = await send(args) }
       return sent.response
     }
-    const initial = (await operation({ type: 'state' })).value
-    const owner = (await operation({ type: 'acquire', stationBootId: initial.stationBootId })).value
+    // A request that must succeed fails with the station's own answer when it does not.
+    const value = async args => {
+      const response = await operation(args)
+      assert.ok('value' in response, `${args.type}: ${JSON.stringify(response)}`)
+      return response.value
+    }
+    const initial = await value({ type: 'state' })
+    const owner = await value({ type: 'acquire', stationBootId: initial.stationBootId })
     assert.equal(owner.phase, 'controlling', 'premise: the browser holds the lease')
     assert.match(owner.transmitEpoch, /^[0-9a-f]{16}$/, 'premise: station control holds the stop token')
     assert.equal(owner.controls.capabilities.some(c => c.startsWith('ft') || c === 'qsoLogging'), false,
@@ -89,7 +97,7 @@ test('actual native: the old page\'s FT8/FT4 and held-contact actions are refuse
       { action: 'qso.logCurrent', expectedKey: '0123456789abcdef0123456789abcdef', expectedTier: 'FT8', expectedQso: qso },
       { action: 'qso.discard', expectedKey: '0123456789abcdef' },
     ]) {
-      const state = (await operation({ type: 'heartbeat', leaseId: owner.leaseId })).value
+      const state = await value({ type: 'heartbeat', leaseId: owner.leaseId })
       assert.equal(state.phase, 'controlling', `${action.action}: the lease is held`)
       const answer = await operation({ type: 'stationControl', stationBootId: state.stationBootId, leaseId: state.leaseId,
         expectedRevision: state.revision, commandWindowId: state.commandWindowId, clientSequence: state.nextSequence,
@@ -101,7 +109,7 @@ test('actual native: the old page\'s FT8/FT4 and held-contact actions are refuse
     assert.equal(evidence.txEnabled, false, 'nothing armed'); assert.equal(evidence.owned, false)
     assert.deepEqual(await probe.send({ type: 'loggingEvidence' }), { count: 0, adif: '', txEnabled: false }, 'nothing logged')
     // CONTROL: the same socket and lease still work, and Stop is still taken.
-    const after = (await operation({ type: 'heartbeat', leaseId: owner.leaseId })).value
+    const after = await value({ type: 'heartbeat', leaseId: owner.leaseId })
     assert.equal(after.phase, 'controlling', 'the refusals left the lease alone')
     const stop = await operation({ type: 'stopTransmit', stationBootId: after.stationBootId, leaseId: after.leaseId, transmitEpoch: after.transmitEpoch })
     assert.deepEqual(stop.value, { stop: 'accepted' }, JSON.stringify(stop))
@@ -345,7 +353,7 @@ test('actual native S1-M1/S3-M1: the station\'s key is recorded for its pages, a
         const sent = { ...message, request: { ...message.request, requestId: crypto.randomUUID() } }
         socket.send(unsigned ? sent : await by.prove(sent, ids))
         const answer = await socket.take(v => v.type === 'operationResponse' && v.requestId === sent.request.requestId)
-        if (answer.error !== 'stationBusy' || attempt) return answer
+        if (!['stationBusy', 'remoteBusy'].includes(answer.error) || attempt) return answer
       }
     }
     const request = request => ({ type: 'operationRequest', operationVersion: 4, request })
@@ -543,9 +551,10 @@ for (const operationVersion of [2, 3, 4]) test(`actual cloud and native operatio
   const operation=async args=>{await delay(270);const request={requestId:crypto.randomUUID(),...args};socket.send(await signed(envelope(request)));
     try{return {request,response:await socket.take(v=>v.type==='operationResponse'&&v.requestId===request.requestId)}}
     catch(error){throw new Error(`operation ${request.type}/${request.action?.action??''} v${operationVersion} timed out; socket closed=${socket.closed} code=${socket.closeCode} reason=${socket.closeReason}`,{cause:error})}}
-  // stationBusy means the request was refused before anything changed, so an operator clicks again. A request
-  // the device is allowed to make retries once; `again` re-reads state first when the request carries a command
-  // window. Any other refusal, or a second stationBusy, stands. Refusals this case expects
+  // stationBusy (or remoteBusy: the station's authority lock was held a moment) means the request was refused
+  // before anything changed, so an operator clicks again. A request the device is allowed to make retries once;
+  // `again` re-reads state first when the request carries a command window. Any other refusal, or a second
+  // busy answer, stands. Refusals this case expects
   // (localPermissionRequired, staleContext) are never asked with a state read afresh, which would answer
   // something else: the stale FT command is asked again exactly as it was.
   // ⚠️ It does NOT only mean "the native Engine was held", which this comment used to claim. TWO unrelated
@@ -553,7 +562,7 @@ for (const operationVersion of [2, 3, 4]) test(`actual cloud and native operatio
   // another operation is already in flight on this connection, which never touches the Engine. Nothing on the
   // wire tells them apart. The REPLAY below is deliberately not wrapped in this: a duplicate request must come
   // back from its receipt, and as of the fix in `operations.rs` that no longer needs the Engine at all.
-  const allowed=async(first,again=first)=>{let sent=await first();if(sent.response.error==='stationBusy'){console.log('stationBusy, retrying once:',sent.request.type,sent.request.action?.action??'');await delay(300);sent=await again()}return sent}
+  const allowed=async(first,again=first)=>{let sent=await first();if(['stationBusy','remoteBusy'].includes(sent.response.error)){console.log(`${sent.response.error}, retrying once:`,sent.request.type,sent.request.action?.action??'');await delay(300);sent=await again()}return sent}
 
   // The approval granted station control; Turn on restores it once the service lists
   // the browser. Then RESTRICT the browser with the switch at the shack: that is what must still

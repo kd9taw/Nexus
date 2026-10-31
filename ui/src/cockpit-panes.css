@@ -236,7 +236,7 @@
   gap: var(--space-3);
   /* The containing block of the column dividers (`.cockpit-colseam` below), and of a drag's marks
      while a pane is dragged (`.pane-drop-layer`, styles.css), and of nothing else: every pane frame
-     already contains its own positioned content (`.pane-frame` carries a backdrop-filter, which
+     already contains its own positioned content (`.pane-frame` is `position: relative`, which
      makes it the containing block of everything absolutely positioned inside it), and a column
      holds only frames. */
   position: relative;
@@ -682,11 +682,27 @@
    the column scrolled, down to its padding (22 px at 1024×768 in the operator's own example layout, a
    card answering "who is this" in one line). There the card keeps the stock bound above, `min(14em, 33%)`
    of its column, and never shrinks; the column is a scroller, so it scrolls instead. A second flat
-   class, added by the host only in the arranged branch (RecallPanel `kept`), so the stock screens and
-   the Phone and CW log panes are untouched. It changes the shrink and nothing else: the ceiling and the
+   class, added by the host only in the arranged branch and in the stock rail while it floors its feeds
+   (RecallPanel `kept`; `.op-rail-floor`, below), so the other stock screens and the Phone and CW log panes
+   are untouched. It changes the shrink and nothing else: the ceiling and the
    card's own scroll are `.cockpit-recall`'s, and it is never a floor. */
 .cockpit-recall-kept {
   flex: 0 0 auto;
+}
+
+/* FT'S STOCK RAIL WITH THE RECENT CONTACTS PANE AT ITS FOOT. Ticking the pane keeps FT's stock layout:
+   Classic's Rx/Tx column, its Tx1–Tx6 machine and the divider between them are exactly as unticked. The
+   pane is its own height (fit="content"), and the stock rail's feeds (Classic's Stations, Roster's Band
+   Activity and Rx Frequency) have no floor, so they gave it their height: 12 px each in Roster's rail at
+   1024×768, measured in Chrome. While the pane stands there, and only then, the host adds this class to
+   the rail (`.cockpit-side`), and each feed reads the knob through its own `min-height`: a feed floors at
+   the yielding 10em of FT's arranged columns (`.op-stack`, above) and the rail scrolls behind the floors,
+   the pane contract's second legal fate. The rail already scrolls (styles.css `.cockpit-side`); that is
+   restated here because the floor is legal only with a scroller behind it. The card keeps its size
+   (`.cockpit-recall-kept`, added by the host then too). No transmit control is in the rail. */
+.op-rail-floor {
+  overflow-y: auto;
+  --cockpit-fill-min: min(10em, 100%);
 }
 
 /* The hosted observer adds session chrome above the FT shell. At pinned zoom

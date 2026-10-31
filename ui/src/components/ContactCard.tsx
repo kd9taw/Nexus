@@ -40,6 +40,7 @@ import { emptyAnswer } from '../features/logAnswers'
 import { fmtUtc } from '../features/logQuery'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS } from '../features/utcLog'
 import { addedColumnText, columnName, logColumn, uploadMark, uploadOf, uploadWord } from '../features/logColumns'
+import { ContactPath } from './prop/ContactPath'
 import {
   PROGRAMS,
   cardDirty,
@@ -492,6 +493,13 @@ function CardBody({
             </label>
           </div>
         </section>
+
+        <ContactPath
+          q={q}
+          canPick={canSave}
+          picked={fields.find((f) => f.tag === 'ANT_PATH' && !f.removed)?.value ?? null}
+          onPick={(path) => setFields((fs) => [...fs, { tag: 'ANT_PATH', orig: null, value: path, removed: false }])}
+        />
 
         <details className="qso-detail-section contact-card-more">
           <summary className="qso-detail-heading">{t('contactCard.more')}</summary>

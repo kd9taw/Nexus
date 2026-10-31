@@ -3666,3 +3666,318 @@ fn with_the_beta_switch_off_cw_tune_and_the_atu_name_the_switch() {
          sit off the frequency Nexus checked. Turn XIT off."
     );
 }
+
+/// The session's transport, as a test can kill the session's driver through it: once tripped, the
+/// driver's next read panics, as a bug in the session would. Writes still go out.
+struct Tripwire {
+    tcp: TcpStream,
+    trip: Arc<AtomicBool>,
+}
+
+impl std::io::Read for Tripwire {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        assert!(
+            !self.trip.load(Ordering::Relaxed),
+            "the session's driver dies"
+        );
+        std::io::Read::read(&mut self.tcp, buf)
+    }
+}
+
+impl Write for Tripwire {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
+/// ⭐ A SESSION WHOSE DRIVER DIES ENDS ITS WATCHER, AND A DEATH MID-OVER IS AN ALARM. A driver that
+/// dies without reaching `Closed` drops the watcher's event channel, which then answers at once,
+/// with nothing: a watcher that took that for a quiet radio spun a whole core for the rest of the
+/// session. The watcher must end promptly, the session must read closed (so the radio loop sees
+/// the daemon gone), the transmitter must get the unkey on the way down, and an over that was on
+/// the air must be an alarm. The control: a driver that dies idle ends the watcher with no alarm
+/// and no unkey.
+#[test]
+fn a_session_whose_driver_dies_ends_its_watcher() {
+    for keyed in [false, true] {
+        let sim = simulator(SimSession::v4_gui_client(), vec![]);
+        let tcp = TcpStream::connect(sim.tcp_addr()).expect("connect");
+        tcp.set_read_timeout(Some(session::READ_POLL)).unwrap();
+        let trip = Arc::new(AtomicBool::new(false));
+        let io = Tripwire {
+            tcp,
+            trip: trip.clone(),
+        };
+        let conn = Arc::new(Connection::spawn(io, config(Vec::new())).expect("the session"));
+        assert!(conn.wait_until(WAIT, |s| s.phase == Phase::Ready));
+        if keyed {
+            let create = Command::SliceCreate {
+                pan: None,
+                freq_hz: 14_074_000.0,
+                mode: None,
+            };
+            assert!(conn.request(create, WAIT).expect("answered").is_success());
+            assert!(conn.wait_until(WAIT, |s| s.transmit_ready));
+            conn.start(TxStart::Key).expect("keyed");
+            assert!(sim.wait_for(WAIT, |log| log.iter().any(|l| matches!(
+                &l.event,
+                SimEvent::Command { text, .. } if text == "xmit 1"
+            ))));
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let alarm = Arc::new(Mutex::new(Alarm::default()));
+        let (ended_tx, ended) = std::sync::mpsc::channel();
+        let watcher = {
+            let weak = Arc::downgrade(&conn);
+            let (stop, alarm) = (stop.clone(), alarm.clone());
+            let state = Arc::new(ClientState::default());
+            let radio = sim.tcp_addr();
+            std::thread::spawn(move || {
+                watch(weak, radio, &stop, &alarm, &state);
+                let _ = ended_tx.send(());
+            })
+        };
+        trip.store(true, Ordering::Relaxed);
+        let watcher_ended = ended.recv_timeout(Duration::from_secs(5)).is_ok();
+        // A watcher still spinning is let go here, so the failure below is reported, not hung.
+        stop.store(true, Ordering::Relaxed);
+        watcher.join().unwrap();
+        assert!(watcher_ended, "keyed {keyed}: the watcher ended");
+        assert_eq!(conn.snapshot().phase, Phase::Closed, "keyed {keyed}");
+        let unkeys = || {
+            sim.commands()
+                .iter()
+                .filter(|c| c.as_str() == "xmit 0")
+                .count()
+        };
+        let alarm = lock(&alarm).text.clone();
+        if keyed {
+            assert!(
+                sim.wait_for(WAIT, |log| log.iter().any(|l| matches!(
+                    &l.event,
+                    SimEvent::Command { text, .. } if text == "xmit 0"
+                ))),
+                "the unkey went out as the driver died"
+            );
+            let alarm = alarm.expect("an alarm");
+            assert!(alarm.contains("may still be transmitting"), "{alarm}");
+        } else {
+            assert_eq!(alarm, None);
+            assert_eq!(unkeys(), 0);
+        }
+        assert_eq!(
+            sim.commands()
+                .iter()
+                .filter(|c| c.as_str() == "xmit 1")
+                .count(),
+            usize::from(keyed)
+        );
+    }
+}
+
+/// The session's transport, as a test can kill the session's driver in the middle of a step: the
+/// write that carries `on` goes out whole, then the driver panics on its way back, before the step
+/// publishes what it did. After that, every write fails if `later_fail` (the link went with the
+/// driver), and otherwise waits for `gate` to open, if there is one, then goes out.
+struct KeyTrap {
+    tcp: TcpStream,
+    on: &'static str,
+    later_fail: bool,
+    fired: bool,
+    /// Told once a write after the panic is waiting, then waited on (at most `WAIT`).
+    gate: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+}
+
+impl KeyTrap {
+    fn new(tcp: TcpStream, on: &'static str, later_fail: bool) -> KeyTrap {
+        KeyTrap {
+            tcp,
+            on,
+            later_fail,
+            fired: false,
+            gate: None,
+        }
+    }
+
+    fn after_the_panic(&mut self) -> std::io::Result<()> {
+        if !self.fired {
+            return Ok(());
+        }
+        if self.later_fail {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the link went with the driver",
+            ));
+        }
+        if let Some((waiting, open)) = self.gate.take() {
+            let _ = waiting.send(());
+            let _ = open.recv_timeout(WAIT);
+        }
+        Ok(())
+    }
+}
+
+impl std::io::Read for KeyTrap {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        std::io::Read::read(&mut self.tcp, buf)
+    }
+}
+
+impl Write for KeyTrap {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.after_the_panic()?;
+        let n = self.tcp.write(buf)?;
+        if !self.fired && String::from_utf8_lossy(&buf[..n]).contains(self.on) {
+            self.fired = true;
+            let _ = self.tcp.flush();
+            panic!(
+                "the session's driver dies right after writing {:?}",
+                self.on
+            );
+        }
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.after_the_panic()?;
+        self.tcp.flush()
+    }
+}
+
+/// A session over `io`, ready, with a transmit slice the readback can track.
+fn transmit_ready(io: KeyTrap) -> Arc<Connection> {
+    let conn = Arc::new(Connection::spawn(io, config(Vec::new())).expect("the session"));
+    assert!(conn.wait_until(WAIT, |s| s.phase == Phase::Ready));
+    let create = Command::SliceCreate {
+        pan: None,
+        freq_hz: 14_074_000.0,
+        mode: None,
+    };
+    assert!(conn.request(create, WAIT).expect("answered").is_success());
+    assert!(conn.wait_until(WAIT, |s| s.transmit_ready));
+    conn
+}
+
+fn trapped(sim: &Simulator, on: &'static str, later_fail: bool) -> KeyTrap {
+    let tcp = TcpStream::connect(sim.tcp_addr()).expect("connect");
+    tcp.set_read_timeout(Some(session::READ_POLL)).unwrap();
+    tcp.set_write_timeout(Some(session::WRITE_TIMEOUT)).unwrap();
+    KeyTrap::new(tcp, on, later_fail)
+}
+
+/// ⭐ A DRIVER THAT DIES BETWEEN ITS KEY AND ITS PUBLISH STILL BELIEVES IT KEYED. The key is written
+/// in a step that publishes only once it is done, so a driver that dies inside that step leaves the
+/// state from before the key published. The radio loop's dead-daemon path reads that belief to
+/// decide whether to unkey, and the watcher reads it to decide whether to raise the alarm: a dying
+/// driver must publish what its session believed, never less. Every window ends with the belief
+/// "may be on the air" and the "may still be transmitting" alarm:
+/// - the driver dies just after `xmit 1`, and its own unkey goes out;
+/// - the same, but the link went with it, so not even its unkey goes out (the radio stays keyed);
+/// - the driver dies just after our own `xmit 0`, which it sends again on the way down.
+///
+/// Nothing ever keys twice.
+#[test]
+fn a_driver_that_dies_between_its_key_and_its_publish_still_believes_it_keyed() {
+    for (on, later_fail, stop_first) in [
+        ("xmit 1", false, false),
+        ("xmit 1", true, false),
+        ("xmit 0", false, true),
+    ] {
+        let window = format!("panic after {on:?}, later writes fail {later_fail}");
+        let sim = simulator(SimSession::v4_gui_client(), vec![]);
+        let conn = transmit_ready(trapped(&sim, on, later_fail));
+        let stop = Arc::new(AtomicBool::new(false));
+        let alarm = Arc::new(Mutex::new(Alarm::default()));
+        let (ended_tx, ended) = std::sync::mpsc::channel();
+        let watcher = {
+            let weak = Arc::downgrade(&conn);
+            let (stop, alarm) = (stop.clone(), alarm.clone());
+            let state = Arc::new(ClientState::default());
+            let radio = sim.tcp_addr();
+            std::thread::spawn(move || {
+                watch(weak, radio, &stop, &alarm, &state);
+                let _ = ended_tx.send(());
+            })
+        };
+        let _ = conn.start(TxStart::Key);
+        if stop_first {
+            assert!(conn.wait_until(WAIT, |s| s.ours_on_air), "{window}");
+            let _ = conn.stop(TxStop::Unkey);
+        }
+        let watcher_ended = ended.recv_timeout(WAIT).is_ok();
+        stop.store(true, Ordering::Relaxed);
+        watcher.join().unwrap();
+        assert!(watcher_ended, "{window}: the watcher ended");
+        let s = conn.snapshot();
+        assert_eq!(s.phase, Phase::Closed, "{window}");
+        assert!(
+            s.ours_on_air,
+            "{window}: the published belief keeps the key"
+        );
+        assert!(s.keyed, "{window}: and the start it has not seen ended");
+        assert!(
+            conn.ours_on_air(),
+            "{window}: the daemon's keyed() keeps it"
+        );
+        let alarm = lock(&alarm).text.clone();
+        let alarm = alarm.unwrap_or_else(|| panic!("{window}: an alarm"));
+        assert!(
+            alarm.contains("may still be transmitting"),
+            "{window}: {alarm}"
+        );
+        if later_fail {
+            assert_eq!(
+                count(&sim, "xmit 0"),
+                0,
+                "{window}: nothing more reached it"
+            );
+        } else {
+            assert!(
+                wait_count(&sim, "xmit 0", 1 + usize::from(stop_first)) > usize::from(stop_first),
+                "{window}: the unkey went out as the driver died"
+            );
+        }
+        assert_eq!(count(&sim, "xmit 1"), 1, "{window}: keyed once");
+    }
+}
+
+/// A stop asked for while a dead driver is still sending its own stops is answered at once, as not
+/// connected, rather than after them: the dying driver no longer reads requests, and each of its
+/// writes may take up to `WRITE_TIMEOUT`. Its own unkey still goes out.
+#[test]
+fn a_stop_asked_for_while_the_driver_dies_is_answered_at_once() {
+    let sim = simulator(SimSession::v4_gui_client(), vec![]);
+    let mut io = trapped(&sim, "xmit 1", false);
+    let (waiting_tx, waiting) = std::sync::mpsc::channel();
+    let (open, open_rx) = std::sync::mpsc::channel();
+    io.gate = Some((waiting_tx, open_rx));
+    let conn = transmit_ready(io);
+    let _ = conn.start(TxStart::Key);
+    // The dying driver's unkey is now held in its write.
+    assert!(
+        waiting.recv_timeout(WAIT).is_ok(),
+        "the dying driver writes its unkey"
+    );
+    let (answered_tx, answered) = std::sync::mpsc::channel();
+    let asker = {
+        let conn = conn.clone();
+        std::thread::spawn(move || {
+            let _ = answered_tx.send(conn.stop(TxStop::Unkey));
+        })
+    };
+    let outcome = answered.recv_timeout(Duration::from_secs(1));
+    let _ = open.send(());
+    asker.join().unwrap();
+    assert_eq!(
+        outcome,
+        Ok(StopOutcome::NotConnected),
+        "answered while the dying driver's write was held"
+    );
+    assert!(conn.wait_until(WAIT, |s| s.phase == Phase::Closed));
+    assert_eq!(wait_count(&sim, "xmit 0", 1), 1, "the driver's own unkey");
+    assert!(conn.ours_on_air());
+}

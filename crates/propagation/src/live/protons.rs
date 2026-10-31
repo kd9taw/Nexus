@@ -26,6 +26,10 @@ pub struct ProtonFlux {
     pub j5: f64,
     /// J(≥10 MeV) — the NOAA S-scale driver (S1 = 10 pfu, S2 = 100, …).
     pub j10: f64,
+    /// The newest of the three channels' own sample times (Unix seconds, UTC), so a copy
+    /// served after a failed refetch, or a stalled feed, says how old it is. `None` when the
+    /// rows carried no time that parses.
+    pub at: Option<i64>,
 }
 
 /// Latest flux per channel from the SWPC array. Rows arrive oldest→newest, so a
@@ -34,19 +38,26 @@ pub struct ProtonFlux {
 pub fn parse_protons(v: &Value) -> Option<ProtonFlux> {
     let rows = v.as_array()?;
     let (mut j1, mut j5, mut j10) = (None, None, None);
+    let mut at: Option<i64> = None;
     for r in rows {
         let Some(flux) = r.get("flux").and_then(|f| f.as_f64()) else {
             continue;
         };
-        match r.get("energy").and_then(|e| e.as_str()) {
-            Some(">=1 MeV") => j1 = Some(flux),
-            Some(">=5 MeV") => j5 = Some(flux),
-            Some(">=10 MeV") => j10 = Some(flux),
-            _ => {}
-        }
+        let slot = match r.get("energy").and_then(|e| e.as_str()) {
+            Some(">=1 MeV") => &mut j1,
+            Some(">=5 MeV") => &mut j5,
+            Some(">=10 MeV") => &mut j10,
+            _ => continue,
+        };
+        *slot = Some(flux);
+        let t = r
+            .get("time_tag")
+            .and_then(|t| t.as_str())
+            .and_then(crate::kc2g::parse_naive_utc_unix);
+        at = at.max(t);
     }
     match (j1, j5, j10) {
-        (Some(j1), Some(j5), Some(j10)) => Some(ProtonFlux { j1, j5, j10 }),
+        (Some(j1), Some(j5), Some(j10)) => Some(ProtonFlux { j1, j5, j10, at }),
         _ => None,
     }
 }
@@ -90,6 +101,24 @@ mod tests {
         assert_eq!(p.j1, 900.0);
         assert_eq!(p.j5, 300.0);
         assert_eq!(p.j10, 120.0);
+        assert_eq!(
+            p.at,
+            crate::kc2g::parse_naive_utc_unix("2026-07-06T02:00:00Z")
+        );
+    }
+
+    /// The live product's own newest sample time rides with the flux.
+    #[test]
+    fn the_flux_carries_its_sample_time() {
+        let v: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/swpc-integral-protons-2026-10-30.json"
+        ))
+        .unwrap();
+        let p = parse_protons(&v).unwrap();
+        assert_eq!(
+            p.at,
+            crate::kc2g::parse_naive_utc_unix("2026-10-30T02:35:00Z")
+        );
     }
 
     #[test]

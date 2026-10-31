@@ -51,6 +51,7 @@ fn req(iwave: &[i16], partial: bool) -> DecodeRequest<'_> {
         frame_time_ms: 15_000,
         ap: true,
         ap_cq_only: false,
+        activity: false,
         partial,
     }
 }

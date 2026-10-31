@@ -81,7 +81,7 @@ import type {
   KpForecast,
   DailySolarIndices,
 } from './types'
-import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
+import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraOval, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
 import type { TxHold } from './types'
@@ -91,6 +91,7 @@ import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { LogColumnsSaved } from './features/logColumns'
 import type { SavedLogFilter } from './features/logFilter'
 import type { LogQuery } from './features/logQuery'
+import type { DecoderScreen } from './features/decoderScreens'
 import type { StreetPack } from './features/streetPack'
 import type {
   StreetArea,
@@ -274,20 +275,47 @@ export async function getPathOutlook(grid: string): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_path_outlook', { grid })
 }
 
+/** The path grade of each Logbook row: its own stamp when it carries one made for its current
+ * grid and band, else the display-only grade of the log, else null. */
+export async function logPathGrades(rows: import('./types').PathGradeAsk[]): Promise<(import('./types').PathGrade | null)[]> {
+  return invoke<(import('./types').PathGrade | null)[]>('log_path_grades', { rows })
+}
+
+/** One contact's path over the day it was made, for the contact card. Null when it has no grid
+ * square, no solar flux for its part of the cycle, or no long path to compare. */
+export async function contactPathDay(row: import('./types').PathGradeAsk): Promise<import('./types').ContactPathDay | null> {
+  return invoke<import('./types').ContactPathDay | null>('contact_path_day', { row })
+}
+
+/** How the display-only grading of the log is going, and the 30-day success measures. */
+export async function pathGradingStatus(): Promise<import('./types').PathGradingStatus> {
+  return invoke<import('./types').PathGradingStatus>('path_grading_status')
+}
+
+/** The ten DX regions' path over the day from the operator's grid (the region strips). The model
+ * part is kept six hours at the shack; each hour's Kp is current at every ask. */
+export async function getPathRegions(): Promise<import('./types').PathRegions> {
+  return invoke<import('./types').PathRegions>('get_path_regions')
+}
+
 /** The no-selection "Band outlook (modelled)": modeled per-band workability + MUF to
  *  a ring of representative long-haul DX directions. Needs only the operator's grid. */
 export async function getBandOutlook(): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_band_outlook')
 }
 
-/** "Am I getting out?" — who is hearing the operator now (observed). */
-export async function getGettingOut(): Promise<GettingOut> {
-  return invoke<GettingOut>('get_getting_out')
+/** "Am I getting out?" — who is hearing the operator now (observed). `since` (Unix seconds) is the
+ *  box's Start fresh time: reports before it are left out at the station. */
+export async function getGettingOut(since: number | null = null): Promise<GettingOut> {
+  return since == null ? invoke<GettingOut>('get_getting_out') : invoke<GettingOut>('get_getting_out', { since })
 }
 
-/** The current OVATION aurora oval for the map overlay. */
-export async function getAurora(): Promise<AuroraPoint[]> {
-  return invoke<AuroraPoint[]>('get_aurora')
+/** The current OVATION aurora oval for the map overlay, with the time it is a forecast for.
+ *  An older station answers with the bare point list and no stamps. */
+export async function getAurora(): Promise<AuroraOval> {
+  const v = await invoke<AuroraOval | AuroraPoint[] | null>('get_aurora')
+  if (Array.isArray(v)) return { points: v, observedAt: null, forecastAt: null }
+  return v ?? { points: [], observedAt: null, forecastAt: null }
 }
 
 export async function getKc2gMuf(): Promise<MufStation[]> {
@@ -425,13 +453,15 @@ export async function fetchLotwUsers(): Promise<LotwUsersStatus> {
   return invoke<LotwUsersStatus>('fetch_lotw_users')
 }
 
-/** The IOTA island-group list on the station: the operator's answer (`null`: never asked), how many
- *  groups are held, when it was downloaded (Unix seconds, 0: never), and why the last download was
- *  not kept, if it was not. The list is IOTA Ltd's; Nexus downloads it only after a yes. */
+/** The IOTA island-group list on the station: whether it is on, how many groups are in use, the
+ *  date of that copy (Unix seconds, 0: none), whether it is the copy that shipped with Nexus, and why
+ *  the last monthly check was not kept, if it was not. The list is IOTA Ltd's, shipped by its
+ *  permission. */
 export interface IotaListStatus {
-  consent: boolean | null
+  enabled: boolean
   count: number
   fetchedAt: number
+  bundled: boolean
   lastError: string | null
 }
 
@@ -439,10 +469,10 @@ export async function getIotaListStatus(): Promise<IotaListStatus> {
   return invoke<IotaListStatus>('get_iota_list_status')
 }
 
-/** The operator's answer to "download the IOTA island-group list?". Yes downloads it now (when one
- *  is due); no deletes the copy held. */
-export async function setIotaListConsent(consent: boolean): Promise<IotaListStatus> {
-  return invoke<IotaListStatus>('set_iota_list_consent', { consent })
+/** Settings ▸ Logbook ▸ IOTA island list. On uses the list and checks for a newer one when a
+ *  month old; off shows no names, stops the check and deletes any downloaded copy. */
+export async function setIotaListEnabled(enabled: boolean): Promise<IotaListStatus> {
+  return invoke<IotaListStatus>('set_iota_list_enabled', { enabled })
 }
 
 /** One island group of the list: its reference and IOTA Ltd's name for it. */
@@ -782,7 +812,24 @@ export async function callStation(
     snr: snr ?? null,
     // The decoded station's audio offset (Hz) — moves our RX/TX onto it (WSJT-X).
     freq: freq ?? null,
+  }).catch((err: unknown) => {
+    throw unresolvedRefusal(err) ?? err
   })
+}
+
+/** The engine's refusals of a click on a call shown as `<...>`, `Engine::UNRESOLVED_CQ` and
+ *  `Engine::UNRESOLVED_CALL`, word for word. The engine words them in English;
+ *  `unresolved-call-words.test.ts` holds these to its text. */
+export const ENGINE_UNRESOLVED_CQ =
+  "This CQ's call shows as <...>: Nexus has not decoded it in full yet. Click the station's next CQ once its call shows."
+export const ENGINE_UNRESOLVED_CALL =
+  "This call shows as <...>: Nexus has not decoded it in full yet. Click the station's next message once its call shows."
+
+/** One of those refusals in the operator's language; `undefined` for anything else. */
+function unresolvedRefusal(err: unknown): string | undefined {
+  if (err === ENGINE_UNRESOLVED_CQ) return t('shell.work.unresolvedCq')
+  if (err === ENGINE_UNRESOLVED_CALL) return t('shell.work.unresolvedCall')
+  return undefined
 }
 
 /** WSJT-X Tx-slot click: force `text` as the next transmission to `call`
@@ -2420,9 +2467,20 @@ export async function markLotwUploaded(): Promise<number> {
   return invoke<number>('mark_lotw_uploaded')
 }
 
-/** Store the eQSL password in the OS keychain (write-only; empty clears it). */
-export async function setEqslPassword(password: string): Promise<void> {
-  await invoke<void>('set_eqsl_password', { password })
+/** What saving the first login for an upload service would ask first: `null` when a login for it
+ *  is already stored (a save then asks nothing and changes nothing), else how many logged contacts
+ *  have not been sent there. Says only whether a login is stored, never anything of it. */
+export async function uploadBacklog(service: 'qrz' | 'clublog' | 'eqsl'): Promise<number | null> {
+  return invoke<number | null>('upload_backlog', { service })
+}
+
+/** Store the eQSL password in the OS keychain (write-only; empty clears it). `sendOld` answers
+ *  the first password's question (see `uploadBacklog`): `true` sends the contacts not yet sent
+ *  there, `false` starts eQSL's automatic uploads from now, and `undefined` (nothing was asked:
+ *  the count could not be read) saves as before. Required on purpose: a caller that skips the
+ *  question must say so, not silently send the whole log. */
+export async function setEqslPassword(password: string, sendOld: boolean | undefined): Promise<void> {
+  await invoke<void>('set_eqsl_password', { password, sendOld })
 }
 
 /** Remove the stored eQSL password from the OS keychain (idempotent). */
@@ -2489,9 +2547,10 @@ export async function callbookCacheClear(): Promise<void> {
   await invoke<void>('callbook_cache_clear')
 }
 
-/** Store the QRZ Logbook API key in the OS keychain (write-only; empty clears). */
-export async function setQrzLogbookKey(key: string): Promise<void> {
-  await invoke<void>('set_qrz_logbook_key', { key })
+/** Store the QRZ Logbook API key in the OS keychain (write-only; empty clears). `sendOld` as
+ *  `setEqslPassword`'s. */
+export async function setQrzLogbookKey(key: string, sendOld: boolean | undefined): Promise<void> {
+  await invoke<void>('set_qrz_logbook_key', { key, sendOld })
 }
 
 /** Remove the stored QRZ Logbook API key from the OS keychain (idempotent). */
@@ -2504,6 +2563,22 @@ export async function clearQrzLogbookKey(): Promise<void> {
  * with the failure reason. */
 export async function qrzTestConnection(): Promise<string> {
   return invoke<string>('qrz_test_connection', {})
+}
+
+/** Sign in to LoTW with the stored website login and read a report of no records (never an
+ * upload). Resolves to a summary or rejects with LoTW's own words / the network failure. */
+export async function lotwTestConnection(): Promise<string> {
+  return invoke<string>('lotw_test_connection', {})
+}
+
+/** Sign in to eQSL with the stored login and read an empty InBox query (never an upload). */
+export async function eqslTestConnection(): Promise<string> {
+  return invoke<string>('eqsl_test_connection', {})
+}
+
+/** Sign in to ClubLog with the upload's credentials and read its log matches (never an upload). */
+export async function clublogTestConnection(): Promise<string> {
+  return invoke<string>('clublog_test_connection', {})
 }
 
 /** Push one logged QSO to the operator's QRZ logbook. */
@@ -2545,9 +2620,9 @@ export async function qrzCorrectUndoMiss(): Promise<string> {
 }
 
 /** Store the ClubLog Application Password in the OS keychain (write-only; empty
- *  clears). */
-export async function setClublogPassword(password: string): Promise<void> {
-  await invoke<void>('set_clublog_password', { password })
+ *  clears). `sendOld` as `setEqslPassword`'s. */
+export async function setClublogPassword(password: string, sendOld: boolean | undefined): Promise<void> {
+  await invoke<void>('set_clublog_password', { password, sendOld })
 }
 
 /** Remove the stored ClubLog app-password from the OS keychain (idempotent). */
@@ -2874,6 +2949,19 @@ export async function revealSstvGallery(): Promise<void> {
  * cannot drift. Irreversible: the caller confirms first. */
 export async function sstvDeleteImage(path: string): Promise<void> {
   await invoke('sstv_delete_image', { path })
+}
+
+/** One picture a batch delete could not remove, and the station's reason. */
+export interface SstvDeleteFailure {
+  path: string
+  reason: string
+}
+
+/** Delete several received SSTV images at once ("Delete selected"): each goes through the same
+ * gallery-folder check as `sstvDeleteImage`, the gallery index is rewritten once, and the ones
+ * that could not be removed come back with their reasons. Irreversible: the caller confirms first. */
+export async function sstvDeleteImages(paths: string[]): Promise<SstvDeleteFailure[]> {
+  return invoke<SstvDeleteFailure[]>('sstv_delete_images', { paths })
 }
 
 /** Toggle Skip Tx1 — the station's session-only flag, resets each launch.
@@ -4716,6 +4804,14 @@ export async function sstvAutoDisarm(): Promise<SstvState> {
   return invoke<SstvState>('sstv_auto_disarm')
 }
 
+/** The operator left a receive screen for another section (`features/decoderScreens.ts`): stop
+ * the decoder that opening it started, unless something still needs it. RX only. Resolves true
+ * when the decoder is still running on the screen's arm — ask again at the next section change.
+ * A decoder the operator armed is never stopped here. */
+export async function leaveDecoderScreen(screen: DecoderScreen): Promise<boolean> {
+  return invoke<boolean>('leave_decoder_screen', { screen })
+}
+
 /** Live SSTV RX state: in-flight progress + preview + the saved-image gallery
  * (poll while the SSTV view is visible). */
 export async function getSstvState(): Promise<SstvState> {
@@ -5404,14 +5500,24 @@ export async function getScopeRow(
  * copies of a source that sweeps slower than it polls. Two answers come back whatever `lastSeq`
  * says, because neither means "nothing new": a source that went quiet answers its EMPTY frame, and
  * a row nobody numbered (the Companion path) comes back unsequenced (`seq` 0) on every poll.
+ *
+ * `rfView` is the absolute RF window the scope is drawing on a native panadapter row. It rides the
+ * poll as a standing request: an SDR's IQ panadapter (TCI, SDRconnect) computes its rows over that
+ * window at a finer resolution than its whole span allows. A radio's own scope ignores it.
  */
 export async function getScopeFrame(
   loHz: number,
   hiHz: number,
   window: ScopeAnalysis | undefined,
   lastSeq: number,
+  rfView?: { loHz: number; hiHz: number },
 ): Promise<SpectrumFrameWire | null> {
-  return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq })
+  return invoke<SpectrumFrameWire | null>(
+    'get_scope_frame',
+    rfView
+      ? { loHz, hiHz, window, lastSeq, rfLoHz: rfView.loHz, rfHiHz: rfView.hiHz }
+      : { loHz, hiHz, window, lastSeq },
+  )
 }
 
 /**

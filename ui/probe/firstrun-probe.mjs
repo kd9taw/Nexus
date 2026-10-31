@@ -59,7 +59,8 @@ const dialogNamed = (re) => `[...document.querySelectorAll('.ui-dialog')].find((
 const ABOUT = (control) => `(() => { ${HELPERS}
   const d = ${dialogNamed('/How much have you done\\?/')}
   if (!d) return null
-  const answers = [...d.querySelectorAll('.wizard-mode')]
+  // The experience question's answers: the first group (the radio count below it is the journeys probe's).
+  const answers = [...(d.querySelector('.wizard-modes')?.querySelectorAll('.wizard-mode') ?? [])]
   if (${control}) plant(answers[0]?.querySelector('.wizard-mode-blurb'))
   const r = d.getBoundingClientRect()
   return {

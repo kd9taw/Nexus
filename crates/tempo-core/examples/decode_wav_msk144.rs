@@ -92,6 +92,7 @@ fn decode_file(
             frame_time_ms,
             ap: true, // stock (FT8/FT4 AP controls; inert for MSK144)
             ap_cq_only: false,
+            activity: false,
             partial: false,
         };
         let mut decs = src.decode(&req);

@@ -10,7 +10,7 @@ use tempo_core::timing::now_unix_ms;
 
 use crate::backend::AudioBackend;
 use crate::frames::RxRing;
-use crate::rig::Rig;
+use crate::rig::{Rig, SplitConfirmed};
 
 /// PTT-hold tail after the transmitted audio plays out (ms) — covers ring
 /// drain + relay release so the start of RX isn't clipped by our own carrier.
@@ -281,6 +281,7 @@ pub(crate) fn play_keyed_over(
             secs += w.len() as f32 / tempo_fast::SAMPLE_RATE;
             backend.play(w);
         }
+        backend.mark_unit_end();
         return KeyedOver {
             tx_until_ms: tx_deadline_ms(keyed_ms, secs as f64 * 1000.0, period_ms),
             audio_until_ms: None,
@@ -319,6 +320,7 @@ pub(crate) fn play_keyed_over(
             backend.play(rest);
         }
     }
+    backend.mark_unit_end();
     on_the_window
 }
 
@@ -354,31 +356,100 @@ pub(crate) struct SplitApply {
     pub fake_it_restore: Option<u64>,
     pub fake_it_tx_dial: Option<u64>,
     pub rig_split_engaged: bool,
+    /// The radio did not take a TX-dial write (refused, or no answer by the CAT deadline), in the
+    /// rig link's words: the over must not key ([`Engine::halt_tx_for_refused_split`]). The
+    /// fields above still say what to put back, as after any over.
+    pub refused: Option<String>,
+    /// The refusal is an owed split release ([`Rig::split_release_pending`]): Nexus could not
+    /// confirm the radio's SPLIT is off, so the operator is told how to clear it, not to change
+    /// Split Operation, which keys nothing either until it is cleared.
+    pub split_off_unconfirmed: bool,
 }
 
 /// Apply the WSJT-X Split-Operation dial shift for the over about to key (must
 /// run BEFORE PTT): `Rig` = shifted TX dial on VFO B (rig split); `FakeIt` =
 /// retune the single VFO. Reports what engaged so the loop restores/tears down
-/// at over end. No-op when the engine left shift = 0.
+/// at over end. No-op when the engine left shift = 0 and no Rig split is held.
+///
+/// ⭐ RIG SPLIT IS TURNED ON ONCE AND HELD, AS WSJT-X HOLDS IT. WSJT-X sets split on the first
+/// time (`Transceiver/HamlibTransceiver.cpp:965-987`) and after that writes the TX frequency at
+/// every key (`TransceiverBase.cpp:160-171`, "or about to tx split"); `setXIT` keeps a TX
+/// frequency set while Split Operation is on, XIT 0 included (`widgets/mainwindow.cpp:12378-12387`),
+/// so nothing turns split off between overs. Split ON, though, goes out before every split over, last,
+/// after the TX dial and its mode (`HamlibTransceiver.cpp:1010-1015`: some rigs, Kenwood for one,
+/// leave split on a VFO switch, and the K3 refuses split with some VFO A/B mode combinations), so a
+/// radio that left split between overs (the front-panel key, a closed split slice) is in split again
+/// before the key, never keyed on VFO A with audio moved for VFO B. The TX dial and its mode go out
+/// before every key that changes them (below), and an over that needs no shift while split is held
+/// has the RX dial as its TX dial, as WSJT-X writes XIT 0's, never leaving VFO B on the last shifted
+/// dial. [`Rig::tx_split_held`] says the radio took Nexus's split; the radio loop lets go of it
+/// (`RadioLoop::let_go_of_rig_split`).
+///
+/// ⛔ A WRITE THE RADIO DOES NOT TAKE KEYS NOTHING ([`SplitApply::refused`]). The over's audio was
+/// already moved into 1500-2000 Hz for the shifted dial, so a dial that never moved sends the over
+/// 500 Hz or more from where the operator put it. WSJT-X's `error_check` throws on anything but
+/// `RIG_OK` (`HamlibTransceiver.cpp:277-284`; split writes `:1022`, `:1027`, `:1034`) before
+/// `do_ptt(true)`, and its rig-failure handler presses Halt Tx (`mainwindow.cpp:12556-12564`). An
+/// answer that never says `RPRT 0` (a refusal, an empty reply, no reply by the CAT deadline) is
+/// such a write; the writes after it are not sent. One exception, the TX VFO's mode (`X`) on a link
+/// that has no way to set it (`RPRT -11`): the TX dial was taken, so the over keys as it always did.
+///
+/// ⛔ THE WRITES SHARE ONE BUDGET, [`SPLIT_WRITES_BUDGET_MS`], measured from the first of them. Each
+/// keeps its own CAT deadline, but three slow ones in a row could hold the key for seconds and put
+/// the over's start late; a radio that has not confirmed them all inside the budget keys nothing,
+/// as a write it refused. On a held split a TX dial or mode the radio already confirmed for this
+/// dial ([`Rig::split_confirmed`]) is not written again, so a held over with nothing changed sends
+/// no split write at all; anything that may have moved VFO B forgets it, and so does every write
+/// that fails here.
 pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply {
     use tempo_app::settings::SplitMode;
     let none = SplitApply {
         fake_it_restore: None,
         fake_it_tx_dial: None,
         rig_split_engaged: false,
+        refused: None,
+        split_off_unconfirmed: false,
     };
     let shift = eng.take_tx_dial_shift();
-    if shift == 0 {
+    // ⛔ THE RADIO MAY STILL BE IN NEXUS'S SPLIT: its release was refused or not answered, so any
+    // over could go out of VFO B on the last TX dial, another band's included. Nothing keys until
+    // the radio loop's retry gets it taken, or a read of the radio's split says it is off
+    // (`RadioLoop::retry_rig_split_release`), or the operator disconnects the radio.
+    if rig.split_release_pending {
+        return SplitApply {
+            refused: Some("Nexus could not confirm the radio's SPLIT is off".to_string()),
+            split_off_unconfirmed: true,
+            ..none
+        };
+    }
+    // ⛔ NEXUS'S SPLIT IS STILL ON THE RADIO AND SPLIT OPERATION IS NO LONGER RIG: changed in the
+    // moment before this key, ahead of the loop's next quiet point, which lets go of it. Fake It
+    // would move VFO A and key VFO B on the last TX dial; None would key VFO B there. Nothing keys.
+    // A cluster SPLIT-on-Work owns VFO B when active, and the loop writes nothing for it.
+    if rig.tx_split_held
+        && eng.settings().split_mode != SplitMode::Rig
+        && !eng.cluster_split_active()
+    {
+        return SplitApply {
+            refused: Some(
+                "Split Operation was changed while the radio was still in Nexus's split"
+                    .to_string(),
+            ),
+            ..none
+        };
+    }
+    let held = rig.tx_split_held
+        && eng.settings().split_mode == SplitMode::Rig
+        && !eng.cluster_split_active();
+    if shift == 0 && !held {
         return none;
     }
     let dial = eng.settings().dial_hz();
     let tx_dial = (dial as i64 + shift).max(0) as u64;
     match eng.settings().split_mode {
         SplitMode::Rig => {
-            let _ = rig.set_split(true, "VFOB");
-            let _ = rig.set_split_freq(tx_dial);
-            // …AND THE TX VFO'S MODE. `M` only ever reaches the RX VFO, so without this VFO B
-            // transmits in whatever mode it was last left in — reported on an FTDX1200 and then
+            // …AND THE TX VFO'S MODE. `M` only ever reaches the RX VFO, so without the `X` below VFO
+            // B transmits in whatever mode it was last left in — reported on an FTDX1200 and then
             // again on an FTDX10, where FT8 went out of a VFO that was not in the data submode
             // and nothing on screen said so. WSJT-X does exactly this when split is on
             // (HamlibTransceiver.cpp:922 `rig_set_mode(rig, RIG_VFO_B, mode, RIG_PASSBAND_NOCHANGE)`
@@ -387,25 +458,119 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             // ⚠️ WIDTH IS NOCHANGE (-1), NOT `passband_for(md)`. WSJT-X passes NOCHANGE, and the
             // point here is the MODE — sending a width would reach across and reset the filter
             // the operator set on the TX VFO, which is the shape of the very bug #67 was about.
-            // AFTER the split enable above: `X` addresses the TX VFO, so it has to exist first.
+            //
+            // ⛔ SPLIT ON FIRST WHEN THIS CONNECTION DOES NOT HOLD IT, then the TX dial and mode,
+            // then split on last, WSJT-X's order (3.0.2 `Transceiver/HamlibTransceiver.cpp:960-987`
+            // turns split on ahead of the TX frequency, "otherwise rig_set_split_freq() will target
+            // the wrong VFO on some rigs"; `:1029-1034` turns it on again last). WSJT-X does the
+            // first once per session; here it is every time split is not held, because a TX VFO
+            // that exists only in split refuses `I` and `X` until `S 1` (Nexus's own Flex client
+            // makes its split slice there), so after a release the next over would never key.
             let md = eng.rig_mode_effective();
-            let _ = rig.set_split_mode(&md, -1);
+            // What the radio confirmed for this dial, only while this connection holds the split.
+            let mut confirmed = rig
+                .take_split_confirmed()
+                .filter(|c| rig.tx_split_held && c.rx_dial == dial)
+                .unwrap_or(SplitConfirmed {
+                    rx_dial: dial,
+                    tx_hz: None,
+                    tx_mode: None,
+                });
+            let budget = split_writes_budget_ms(rig);
+            let started = std::time::Instant::now();
+            let mut vfo_b_written = false;
+            let sent = (|| -> std::io::Result<()> {
+                // A refusal the radio gave this first `S 1` (not a missing answer, which may have
+                // been taken) does not stop the over by itself: the TX dial and mode go out and
+                // the last `S 1` decides. A K3 refuses split while VFO B is in a mode it will not
+                // pair with VFO A's, which WSJT-X 3.0.2 notes for this first call
+                // (`HamlibTransceiver.cpp:963-970`), and the `X` below is what fixes VFO B.
+                if !rig.tx_split_held {
+                    if let Err(e) = rig.hold_split_on("VFOB") {
+                        if rig.tx_split_held {
+                            return Err(e);
+                        }
+                    }
+                    within_split_budget(started, budget)?;
+                }
+                if confirmed.tx_hz != Some(tx_dial) {
+                    rig.set_split_freq(tx_dial)?;
+                    vfo_b_written = true;
+                    confirmed.tx_hz = Some(tx_dial);
+                    within_split_budget(started, budget)?;
+                }
+                if confirmed.tx_mode.as_deref() != Some(md.as_str()) {
+                    // A link that cannot set the TX VFO's mode at all (`RPRT -11`: Nexus's own TCI
+                    // client) keys as it always did, its TX dial taken, and is asked again next
+                    // over; any other refusal, or no answer, keys nothing.
+                    if rig.set_split_mode_where_available(&md, -1)? && !md.trim().is_empty() {
+                        confirmed.tx_mode = Some(md.clone());
+                    }
+                    within_split_budget(started, budget)?;
+                }
+                // Split on, last, before every over: never skipped as unchanged, and inside the
+                // budget like the rest.
+                rig.hold_split_on("VFOB")?;
+                within_split_budget(started, budget)?;
+                Ok(())
+            })();
+            if sent.is_ok() {
+                rig.split_confirmed = Some(confirmed);
+            }
             SplitApply {
-                fake_it_restore: None,
-                fake_it_tx_dial: None,
-                rig_split_engaged: true,
+                // Engaged once the radio took split on (or got it and never answered), or VFO B
+                // was written (the loop puts back the radio's own split and its VFO B). Only a
+                // split the radio took, or may have, is owed a release
+                // (`RadioLoop::let_go_of_rig_split`): a radio with no split control at all would
+                // otherwise owe it for ever.
+                rig_split_engaged: rig.tx_split_held || vfo_b_written,
+                refused: sent.err().map(|e| e.to_string()),
+                ..none
             }
         }
         SplitMode::FakeIt => {
-            let _ = rig.set_freq(tx_dial);
+            let budget = split_writes_budget_ms(rig);
+            let started = std::time::Instant::now();
+            let sent = rig
+                .set_freq(tx_dial)
+                .and_then(|()| within_split_budget(started, budget));
             SplitApply {
                 fake_it_restore: Some(dial),
                 fake_it_tx_dial: Some(tx_dial),
-                rig_split_engaged: false,
+                refused: sent.err().map(|e| e.to_string()),
+                ..none
             }
         }
         SplitMode::None => none, // shift can't be non-zero here, but stay total
     }
+}
+
+/// The total time (ms) Split Operation's writes before one over may take, from the first sent to
+/// the last confirmed, before the over is refused rather than keyed late ([`apply_tx_dial_shift`]).
+pub(crate) const SPLIT_WRITES_BUDGET_MS: u64 = 500;
+
+fn split_writes_budget_ms(_rig: &Rig) -> u64 {
+    #[cfg(test)]
+    if let Some(ms) = _rig.test_split_budget_ms {
+        return ms;
+    }
+    SPLIT_WRITES_BUDGET_MS
+}
+
+/// `Err` once the split writes begun at `started` have taken longer than `budget_ms`, in words for
+/// the refused over's line.
+fn within_split_budget(started: std::time::Instant, budget_ms: u64) -> std::io::Result<()> {
+    let took = started.elapsed().as_millis();
+    if took > u128::from(budget_ms) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "the radio took {took} ms to confirm the split writes, more than the \
+                 {budget_ms} ms Nexus allows before the key"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Check Remote authority on both sides of blocking PTT I/O. Native TX has
@@ -444,6 +609,10 @@ pub(crate) fn key_slot_transmitter(
         eng.halt_tx_for_tx_audio(&why);
         return false;
     }
+    // PTT is asserted here: a WSPR or FST4W beacon's alternation flips on the attempt, whatever
+    // the radio answers, as WSJT-X flips it on the tick that raises PTT
+    // (`widgets/mainwindow.cpp:7808`, `:7855`, `:7880`, `:15462`). Every return above keys nothing.
+    eng.note_slot_ptt_asserted();
     let key = rig.ptt(true);
     if eng.poll_remote_transmit(std::time::Instant::now()) {
         let _ = rig.ptt(false);
@@ -733,7 +902,12 @@ pub fn slot_tx_phase(
         // Split Operation: move the TX dial (if the engine reduced the audio)
         // BEFORE the carrier keys.
         let split = apply_tx_dial_shift(eng, rig);
-        if !key_slot_transmitter(eng, rig, backend, held) {
+        if let Some(why) = &split.refused {
+            // The radio did not take the TX dial: no key, TX halted, and the split put back as
+            // after any over (the native loop does it on its next idle tick).
+            eng.halt_tx_for_refused_split(why, split.split_off_unconfirmed);
+        }
+        if split.refused.is_some() || !key_slot_transmitter(eng, rig, backend, held) {
             // Preserve split cleanup even when permission disappears during
             // CAT preparation, or the radio refuses the key. The native loop restores it on its
             // next idle tick.
@@ -1792,6 +1966,33 @@ mod tests {
         }
     }
 
+    /// A slot over is one unit, marked where its audio ends, so the sound card running out at its
+    /// end is not counted as an underrun: FT8 and FT4 on the slot clock, keyed on time and late,
+    /// and a tier played whole from the key.
+    #[test]
+    fn a_keyed_slot_over_marks_its_end() {
+        for tier in [
+            tempo_app::dto::Tier::Ft8,
+            tempo_app::dto::Tier::Ft4,
+            tempo_app::dto::Tier::Q65,
+        ] {
+            let eng = armed_engine_on(tier);
+            let waves = vec![armed_engine_on(tier).poll_tx(0).remove(0)];
+            let slot_start = 1_000.0 * eng.active_slot_secs() * 1000.0;
+            for late_ms in [20.0, 1_000.0] {
+                let keyed = slot_start + late_ms;
+                let mut backend = MockBackend::new();
+                play_keyed_over(&eng, &mut backend, &waves, keyed, keyed);
+                assert!(!backend.played.is_empty(), "{tier:?}: premise: played");
+                assert_eq!(
+                    backend.unit_ends,
+                    vec![backend.played.len()],
+                    "{tier:?} keyed {late_ms} ms in"
+                );
+            }
+        }
+    }
+
     #[test]
     fn an_ft8_over_whose_carrier_came_after_its_last_tone_is_held_to_the_window() {
         // FT8's tones run past its latest key, so it finds none left only when more than 1.89 s pass
@@ -2199,6 +2400,10 @@ mod tests {
         let (addr, log) = slow_split_rigctld(split_ms, key_ms);
         let mut rig = Rig::rigctld(&addr);
         rig.set_slow_transport(true);
+        rig.test_reply_deadline_ms = Some(SLOW_SPLIT_DEADLINE_MS);
+        // These scenes delay the key through the split writes on purpose, to reach the guard after
+        // the key; the writes' own total budget would refuse them first.
+        rig.test_split_budget_ms = Some(SLOW_SPLIT_DEADLINE_MS * 3);
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
         // Steered last, so a scene decided near WSJT-X's latest key is decided there to within the
@@ -2261,7 +2466,7 @@ mod tests {
         /// after, the over ended on `window_ms` (`None`: it had nothing left, and ended at once).
         fn played_in_its_own_period(&mut self, key_ms: u64, window_ms: Option<f64>, what: &str) {
             assert_eq!(
-                self.sent()[3..],
+                self.sent()[4..],
                 ["T 1"],
                 "{what}: the split, the key, and no unkey"
             );
@@ -2333,13 +2538,13 @@ mod tests {
             );
             if held {
                 assert_eq!(
-                    self.sent()[3..],
+                    self.sent()[4..],
                     ["T 1"],
                     "{what}: the split and the key, and the operator's PTT left to them"
                 );
             } else {
                 assert_eq!(
-                    self.sent()[3..],
+                    self.sent()[4..],
                     ["T 1", "T 0"],
                     "{what}: the split, the key, then the unkey"
                 );
@@ -2405,7 +2610,7 @@ mod tests {
         /// window (`window_ms`, then PTT 200 ms later), TX on.
         fn held_silent_to_the_window(&self, window_ms: f64, what: &str) {
             assert_eq!(
-                self.sent()[3..],
+                self.sent()[4..],
                 ["T 1"],
                 "{what}: the split, the key, and no unkey"
             );
@@ -2431,18 +2636,27 @@ mod tests {
         }
     }
 
-    /// The split's three commands and the key answered late enough that the carrier comes 2 s, 6 s
-    /// and 8 s after the decision: each command after `split_ms` (3 s outlives its 2.5 s deadline,
-    /// so the link gives up on it then), the key after `key_ms`.
-    const SLOW_SPLITS: [(u64, u64); 3] = [(600, 200), (1_900, 300), (3_000, 500)];
+    /// The split's four commands (split on, the TX dial, its mode, split on) and the key answered
+    /// late enough that the carrier comes 2 s, 6 s and 9.5 s after the decision: each command after
+    /// `split_ms`, the key after `key_ms`. Every one is answered inside its deadline, the split's by
+    /// a long way: these scenes run the link on [`SLOW_SPLIT_DEADLINE_MS`], so a loaded machine
+    /// cannot push a 2.25 s answer past it. A split
+    /// write left unanswered past its deadline keys nothing at all
+    /// (`a_split_write_the_radio_does_not_answer_sends_nothing_and_halts_tx`,
+    /// `a_split_write_answered_past_its_deadline_keys_nothing`).
+    const SLOW_SPLITS: [(u64, u64); 3] = [(450, 200), (1_425, 300), (2_250, 500)];
+
+    /// The reply deadline of the slow-split scenes' link (ms): far past their slowest split write
+    /// (2.25 s), so the scene measures a late carrier and never a split write timing out.
+    const SLOW_SPLIT_DEADLINE_MS: u64 = 10_000;
 
     #[test]
     fn an_ft8_key_a_slow_split_takes_past_its_period_sends_nothing_and_is_unkeyed_at_once() {
         // ⭐ A boundary decided 10.0 s into this station's FT8 slot (under 11.25 s), its split and
-        // key taking 2 s, 6 s and 8 s. 2 s: the carrier at 12.0 s, the rest of the over from there
-        // on the slot clock, ended at 13.64 / 13.84 s. 6 s and 8 s: the carrier at 16.0 s and 18.0
-        // s, in the other station's period, where the over used to go out from their slot's 1.0 s
-        // and 3.0 s, its tones on their clock and PTT held to their 13.84 s; now nothing is played
+        // key taking 2 s, 6 s and 9.5 s. 2 s: the carrier at 12.0 s, the rest of the over from
+        // there on the slot clock, ended at 13.64 / 13.84 s. 6 s and 9.5 s: the carrier at 16.0 s and
+        // 19.5 s, in the other station's period, where the over used to go out from their slot's 1.0
+        // s and 4.5 s, its tones on their clock and PTT held to their 13.84 s; now nothing is played
         // and the radio is unkeyed at once. Only that over is dropped: TX stays on, and its own
         // lane says so.
         let mut scenes = std::thread::scope(|s| {
@@ -2456,15 +2670,15 @@ mod tests {
         });
         scenes[0].played_in_its_own_period(200, Some(13_640.0), "FT8, 2 s");
         scenes[1].dropped_at_once(300, 1, "FT8, 6 s");
-        scenes[2].dropped_at_once(500, 1, "FT8, 8 s");
+        scenes[2].dropped_at_once(500, 1, "FT8, 9.5 s");
     }
 
     #[test]
     fn an_ft4_key_a_slow_split_takes_past_its_period_sends_nothing_and_is_unkeyed_at_once() {
         // ⭐ A boundary decided 0.5 s into this station's FT4 slot, its split and key taking 2 s, 6
-        // s and 8 s. 2 s: the carrier at 2.5 s, the rest of the over on the slot clock, ended at
+        // s and 9.5 s. 2 s: the carrier at 2.5 s, the rest of the over on the slot clock, ended at
         // 6.04 / 6.24 s. 6 s: the carrier at 6.5 s, past its window but in its own period: nothing
-        // left to send, and PTT drops at once, as before. 8 s: the carrier at 8.5 s, in the other
+        // left to send, and PTT drops at once, as before. 9.5 s: the carrier at 10.0 s, in the other
         // station's period, and more than a period after the tick, where the post-key clock read is
         // laid on the tick's clock (`slot_clock_at`): the whole over used to go out from the tick's
         // 0.5 s, in the other station's period. Now nothing is played, the radio is unkeyed at
@@ -2480,7 +2694,7 @@ mod tests {
         });
         scenes[0].played_in_its_own_period(200, Some(6_040.0), "FT4, 2 s");
         scenes[1].played_in_its_own_period(300, None, "FT4, 6 s");
-        scenes[2].dropped_at_once(500, 1, "FT4, 8 s");
+        scenes[2].dropped_at_once(500, 1, "FT4, 9.5 s");
     }
 
     #[test]
@@ -2506,8 +2720,8 @@ mod tests {
     #[test]
     fn a_dropped_over_leaves_tx_on_and_the_next_own_slot_sends_a_full_over() {
         // ⭐ A Call CQ run in Split Operation Rig. Its FT8 boundary decided 10.0 s in, the split and
-        // the key taking 6 s (the carrier at 16.0 s), and its FT4 one decided 0.5 s in, taking 8 s
-        // (8.5 s): nothing is sent and the radio is unkeyed at once, as before, and TX stays on. At
+        // the key taking 6 s (the carrier at 16.0 s), and its FT4 one decided 0.5 s in, taking 9.5 s
+        // (10.0 s): nothing is sent and the radio is unkeyed at once, as before, and TX stays on. At
         // the next own boundary, the link answering at once again, the CQ goes out whole and on
         // time, ended on WSJT-X's window, and the lane goes. TX used to turn off at the first.
         fn scene(tier: tempo_app::dto::Tier, decided_ms: f64, link: (u64, u64), window_ms: f64) {
@@ -2541,8 +2755,8 @@ mod tests {
             );
         }
         std::thread::scope(|s| {
-            s.spawn(|| scene(tempo_app::dto::Tier::Ft8, 10_000.0, (1_900, 300), 13_640.0));
-            s.spawn(|| scene(tempo_app::dto::Tier::Ft4, 500.0, (3_000, 500), 6_040.0));
+            s.spawn(|| scene(tempo_app::dto::Tier::Ft8, 10_000.0, (1_425, 300), 13_640.0));
+            s.spawn(|| scene(tempo_app::dto::Tier::Ft4, 500.0, (2_250, 500), 6_040.0));
         });
     }
 
@@ -2566,12 +2780,14 @@ mod tests {
         let [mut ft8, mut ft8_slow, ft4, mut ft4_slow] = std::thread::scope(|s| {
             [
                 (Ft8, 11_200.0, (0, 0)),
-                (Ft8, 11_200.0, (1_200, 300)),
+                (Ft8, 11_200.0, (900, 300)),
                 (Ft4, 5_600.0, (0, 0)),
-                (Ft4, 5_600.0, (700, 200)),
+                (Ft4, 5_600.0, (525, 200)),
             ]
+            // Boxed: four scenes by value, each holding an `Engine`, left a debug build's frame
+            // this close to the test thread's 2 MiB stack.
             .map(|(tier, decided, (split, key))| {
-                s.spawn(move || slow_split_boundary(tier, decided, split, key))
+                s.spawn(move || Box::new(slow_split_boundary(tier, decided, split, key)))
             })
             .map(|h| h.join().unwrap())
         });
@@ -2596,7 +2812,7 @@ mod tests {
             wave,
             0,
             10_000.0,
-            (1_900, 300),
+            (1_425, 300),
             true,
         );
         let answered = held.sent_nothing_and_unkeyed_at_once(300, true, what);
@@ -2618,7 +2834,7 @@ mod tests {
         for (in_a_row, slot) in [(1, 0), (2, 2), (3, 4), (4, 6)] {
             let what = format!("FT4, drop {in_a_row}");
             let mut dropped =
-                slow_split_boundary_of(eng, wave.clone(), slot, 5_600.0, (700, 200), false);
+                slow_split_boundary_of(eng, wave.clone(), slot, 5_600.0, (525, 200), false);
             dropped.dropped_at_once(200, in_a_row, &what);
             eng = dropped.eng;
         }
@@ -2930,18 +3146,19 @@ mod tests {
             "the TX VFO must be put in the operating mode, with the width left alone \
              (WSJT-X passes RIG_PASSBAND_NOCHANGE). wanted `X {md} -1`, wire was: {sent:?}"
         );
-        // …and it must land AFTER split is on, or it addresses the wrong VFO.
+        // …and before split is turned on again, last, in WSJT-X's order (3.0.2
+        // `Transceiver/HamlibTransceiver.cpp:1029-1034`).
         let i_split = sent
             .iter()
-            .position(|l| l.starts_with("S 1"))
+            .rposition(|l| l.starts_with("S 1"))
             .expect("split on");
         let i_mode = sent
             .iter()
             .position(|l| l.starts_with('X'))
             .expect("split mode");
         assert!(
-            i_mode > i_split,
-            "mode must be set after split is enabled: {sent:?}"
+            i_mode < i_split,
+            "split must be enabled after the mode: {sent:?}"
         );
     }
 
@@ -2988,6 +3205,883 @@ mod tests {
             Some(eng.settings().dial_hz() - 1000),
             "the TX dial = the RX dial with the over's -1000 Hz shift"
         );
+    }
+
+    // ── A split or Fake It dial write the radio does not take: nothing sent, TX halted ─────────────
+    // WSJT-X writes the TX frequency before it asserts PTT (`Transceiver/TransceiverBase.cpp:160-180`,
+    // `do_tx_frequency` ahead of `do_ptt(true)`), every Hamlib call through `error_check`, which
+    // throws on anything but `RIG_OK` (`Transceiver/HamlibTransceiver.cpp:277-284`; the split writes
+    // at `:1022`, `:1027`, `:1034`; Fake It's dial write in `EmulateSplitTransceiver.cpp:26-41`). The
+    // throw skips `do_ptt(true)`, and the rig-failure handler presses Halt Tx
+    // (`widgets/mainwindow.cpp:12556-12564`). Nexus's audio was already moved into 1500-2000 Hz for
+    // the shifted dial, so keying on a dial that never moved puts the over 500 Hz or more away from
+    // where the operator put it.
+
+    /// A rigctld that answers each line with `answer(line)`: `Some(reply)` is written as it is, and
+    /// `None` is never answered (the client's deadline passes). Every line logged. Each connection on
+    /// a thread of its own, so a line left unanswered holds up nothing after the client reconnects.
+    fn scripted_rigctld(
+        answer: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let (addr, log, _) = scripted_rigctld_counted(answer);
+        (addr, log)
+    }
+
+    /// [`scripted_rigctld`], also counting the connections it accepted. An empty `Some("")` reply
+    /// closes the connection instead of answering.
+    fn scripted_rigctld_counted(
+        answer: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log_w = log.clone();
+        let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let connections_w = connections.clone();
+        let answer = std::sync::Arc::new(answer);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                connections_w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (log, answer) = (log_w.clone(), answer.clone());
+                std::thread::spawn(move || {
+                    let mut w = stream.try_clone().unwrap();
+                    for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                        let t = line.trim().to_string();
+                        if t.is_empty() {
+                            continue;
+                        }
+                        log.lock().unwrap().push(t.clone());
+                        match answer(&t) {
+                            Some(reply) if reply.is_empty() => return,
+                            Some(reply) => {
+                                if w.write_all(reply.as_bytes()).is_err() {
+                                    return;
+                                }
+                            }
+                            None => {}
+                        }
+                    }
+                });
+            }
+        });
+        (addr, log, connections)
+    }
+
+    /// An FT8 CQ in Split Operation `split` whose 750 Hz TX offset needs a -1000 Hz dial shift, its
+    /// clock on a slot start, keyed through the TX phase on a rigctld answering `answer`: the action,
+    /// what played, the engine and every line the rigctld got.
+    fn split_over_on(
+        split: tempo_app::settings::SplitMode,
+        answer: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> (SlotAction, MockBackend, Engine, Vec<String>) {
+        split_over_on_a_link(split, answer, None)
+    }
+
+    /// [`split_over_on`] on a link whose reply deadline is `deadline_ms` (`None`: the transport's).
+    fn split_over_on_a_link(
+        split: tempo_app::settings::SplitMode,
+        answer: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+        deadline_ms: Option<u64>,
+    ) -> (SlotAction, MockBackend, Engine, Vec<String>) {
+        let (addr, log) = scripted_rigctld(answer);
+        // The rig kept until the wire is read: dropping it keyed sends its teardown unkey.
+        let (act, backend, eng, _rig) = split_over_at(split_cq_engine(split), &addr, deadline_ms);
+        let sent = log.lock().unwrap().clone();
+        (act, backend, eng, sent)
+    }
+
+    /// An FT8 CQ in Split Operation `split` whose 750 Hz TX offset needs a -1000 Hz dial shift, its
+    /// clock on a slot start.
+    fn split_cq_engine(split: tempo_app::settings::SplitMode) -> Engine {
+        let mut eng = Engine::new("W9XYZ", "EN37", 0);
+        eng.set_tier(tempo_app::dto::Tier::Ft8);
+        let _ = eng.take_slot_tx_abort();
+        let mut st = eng.settings().clone();
+        st.split_mode = split;
+        eng.apply_settings(st);
+        eng.set_tx_enabled(true);
+        eng.set_tx_offset(750.0);
+        eng.broadcast("CQ TEST W9XYZ EN37");
+        align_to_slot_start(&mut eng, 0);
+        eng
+    }
+
+    /// The TX phase of `eng`'s over on the rigctld at `addr` (reply deadline `deadline_ms`), and the
+    /// rig it keyed through.
+    fn split_over_at(
+        mut eng: Engine,
+        addr: &str,
+        deadline_ms: Option<u64>,
+    ) -> (SlotAction, MockBackend, Engine, Rig) {
+        let mut rig = Rig::rigctld(addr);
+        rig.test_reply_deadline_ms = deadline_ms;
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
+        let now = steered_now_ms(&eng);
+        let act = slot_tx_phase(
+            &mut eng,
+            &mut rig,
+            &mut backend,
+            &mut rx,
+            0,
+            now,
+            false,
+            None,
+            None,
+            false,
+        );
+        (act, backend, eng, rig)
+    }
+
+    /// The split writes of one over, `verb` (`S`, `I`, `X` or `F`) answered `reply`, everything else
+    /// `RPRT 0`; `None` leaves `verb` unanswered.
+    fn one_split_write_answered(
+        verb: &'static str,
+        reply: Option<&'static str>,
+    ) -> impl Fn(&str) -> Option<String> + Send + Sync + 'static {
+        move |line: &str| {
+            if line.starts_with(verb) {
+                reply.map(str::to_string)
+            } else {
+                Some("RPRT 0\n".to_string())
+            }
+        }
+    }
+
+    /// What a split write the radio did not take must leave: the writes up to the one it did not
+    /// take (`wire`) and nothing after, no key, nothing played, nothing held, TX off as WSJT-X's Halt
+    /// Tx leaves it and the loop told to stop, and the reason on the refused key's line, as a split.
+    fn assert_split_sent_nothing(
+        what: &str,
+        act: &SlotAction,
+        backend: &MockBackend,
+        eng: &mut Engine,
+        sent: &[String],
+        wire: &[&str],
+    ) {
+        assert_eq!(sent, wire, "{what}: on the wire");
+        assert!(backend.played.is_empty(), "{what}: the over was played");
+        assert!(
+            !act.tx_this_slot && act.tx_until_ms.is_none(),
+            "{what}: the over was taken as sent"
+        );
+        assert!(!eng.tx_enabled(), "{what}: TX is still on");
+        assert!(
+            eng.take_slot_tx_abort(),
+            "{what}: the loop was not told to stop, as Stop TX tells it"
+        );
+        let refused = eng
+            .snapshot()
+            .radio
+            .slot_key_refused
+            .unwrap_or_else(|| panic!("{what}: nothing says why TX stopped"));
+        assert!(
+            serde_json::to_value(&refused).unwrap()["splitFailed"] == true,
+            "{what}: not told as a split the radio did not take: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_split_write_the_radio_refuses_sends_nothing_and_halts_tx_saying_why() {
+        use tempo_app::settings::SplitMode;
+        // Each of Rig split's three writes refused in turn (`S` and `I` with `RPRT -11`, Hamlib's
+        // "not available", what Nexus's own Flex client answers them with; `X` with `RPRT -1`), and
+        // Fake It's dial write refused (`RPRT -9`, an Icom's NG): the writes stop at the refusal,
+        // as WSJT-X's throw does. Split on goes first on a connection that does not hold it; a
+        // refusal of that first one alone does not stop the writes, and the last decides.
+        for (split, verb, reply, wire) in [
+            (
+                SplitMode::Rig,
+                "S ",
+                "RPRT -11\n",
+                &["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB"][..],
+            ),
+            (
+                SplitMode::Rig,
+                "I ",
+                "RPRT -11\n",
+                &["S 1 VFOB", "I 14073000"][..],
+            ),
+            (
+                SplitMode::Rig,
+                "X ",
+                "RPRT -1\n",
+                &["S 1 VFOB", "I 14073000", "X PKTUSB -1"][..],
+            ),
+            (SplitMode::FakeIt, "F ", "RPRT -9\n", &["F 14073000"][..]),
+        ] {
+            let what = format!("{split:?}, {verb:?} answered {reply:?}");
+            let (act, backend, mut eng, sent) =
+                split_over_on(split, one_split_write_answered(verb, Some(reply)));
+            assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, wire);
+            // The radio is put back as after any over: Rig split let go by the loop's teardown once
+            // the radio took split on or VFO B was written, Fake It's dial written back.
+            match split {
+                SplitMode::Rig => assert!(act.rig_split_engaged, "{what}: the split released"),
+                _ => assert_eq!(
+                    act.fake_it_restore,
+                    Some(eng.settings().dial_hz()),
+                    "{what}: the dial not written back"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn a_split_write_the_radio_does_not_answer_sends_nothing_and_halts_tx() {
+        use tempo_app::settings::SplitMode;
+        // No answer by the CAT deadline, and an empty reply (a bare newline, no `RPRT`), on each
+        // write: an answer that never says `RPRT 0` is not one the radio took.
+        for (split, verb, reply, wire) in [
+            (SplitMode::Rig, "S ", None, &["S 1 VFOB"][..]),
+            (SplitMode::Rig, "I ", None, &["S 1 VFOB", "I 14073000"][..]),
+            (
+                SplitMode::Rig,
+                "X ",
+                None,
+                &["S 1 VFOB", "I 14073000", "X PKTUSB -1"][..],
+            ),
+            (SplitMode::FakeIt, "F ", None, &["F 14073000"][..]),
+            (
+                SplitMode::Rig,
+                "I ",
+                Some("\n"),
+                &["S 1 VFOB", "I 14073000"][..],
+            ),
+            (SplitMode::FakeIt, "F ", Some("\n"), &["F 14073000"][..]),
+        ] {
+            let what = format!("{split:?}, {verb:?} answered {reply:?}");
+            let (act, backend, mut eng, sent) =
+                split_over_on(split, one_split_write_answered(verb, reply));
+            assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, wire);
+        }
+    }
+
+    #[test]
+    fn a_split_on_with_no_answer_may_have_been_taken_and_its_release_is_owed() {
+        use tempo_app::settings::SplitMode;
+        // Split on answered with nothing by the CAT deadline, an empty line, or Hamlib's "the rig
+        // did not answer" (`RPRT -5`): the radio may have taken it late, so the split is held and
+        // engaged, and its release is owed as for a split taken; the writes stop there. Nothing
+        // keys either way. The control: a refusal the radio gave (`RPRT -9`, `RPRT -1`) is not
+        // taken, so nothing is owed; the TX dial and mode go out and the last `S 1`, refused too,
+        // decides. VFO B was written, so the loop puts it back.
+        let refused = ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB"];
+        for (reply, taken) in [
+            (None, true),
+            (Some("\n"), true),
+            (Some("RPRT -5\n"), true),
+            (Some("RPRT -9\n"), false),
+            (Some("RPRT -1\n"), false),
+        ] {
+            let what = format!("S 1 answered {reply:?}");
+            let (addr, log) = scripted_rigctld(one_split_write_answered("S ", reply));
+            let (act, backend, mut eng, rig) =
+                split_over_at(split_cq_engine(SplitMode::Rig), &addr, None);
+            let sent = log.lock().unwrap().clone();
+            assert_eq!(rig.tx_split_held, taken, "{what}: held, the release owed");
+            assert!(act.rig_split_engaged, "{what}: engaged");
+            let wire: &[&str] = if taken { &["S 1 VFOB"] } else { &refused };
+            assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, wire);
+        }
+    }
+
+    /// A rig served by Nexus's own rigctld server (`rigctld_server::serve`, its trait defaults
+    /// answering an unimplemented split verb `RPRT -11`) with the split surface of Nexus's own TCI
+    /// client (split on/off and the split frequency, no split mode: `tci/shim.rs`) or of its
+    /// OmniRig client (split on/off only: `omnirig/mod.rs`). Records the TX dial it was given.
+    struct SplitSurface {
+        split_freq: bool,
+        tx_dial: std::sync::Mutex<Option<u64>>,
+        keyed: std::sync::Mutex<bool>,
+    }
+
+    impl crate::rigctld_server::RigBackend for SplitSurface {
+        fn freq_hz(&self) -> u64 {
+            14_074_000
+        }
+        fn mode(&self) -> (String, u32) {
+            ("PKTUSB".into(), 3000)
+        }
+        fn ptt(&self) -> bool {
+            *self.keyed.lock().unwrap()
+        }
+        fn set_freq(&self, _: u64) -> bool {
+            true
+        }
+        fn set_mode(&self, _: &str, _: u32) -> bool {
+            true
+        }
+        fn set_ptt(&self, on: bool) -> bool {
+            *self.keyed.lock().unwrap() = on;
+            true
+        }
+        fn set_split(&self, _on: bool, _tx_vfo: &str) -> Option<bool> {
+            Some(true)
+        }
+        fn set_split_freq(&self, hz: u64) -> Option<bool> {
+            self.split_freq.then(|| {
+                *self.tx_dial.lock().unwrap() = Some(hz);
+                true
+            })
+        }
+    }
+
+    #[test]
+    fn rig_split_keys_on_the_tci_clients_surface_and_refuses_on_omnirigs() {
+        // TCI: `S` and `I` taken, `X` not available (`RPRT -11` from the server's default): the TX
+        // dial lands and the over keys, as it did before. OmniRig: `I` not available, so the TX dial
+        // never lands: the over keys nothing, TX halts, and the split reason is on screen.
+        for (what, split_freq) in [("TCI", true), ("OmniRig", false)] {
+            let surface = std::sync::Arc::new(SplitSurface {
+                split_freq,
+                tx_dial: std::sync::Mutex::new(None),
+                keyed: std::sync::Mutex::new(false),
+            });
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap().to_string();
+            let served: std::sync::Arc<dyn crate::rigctld_server::RigBackend> = surface.clone();
+            std::thread::spawn(move || crate::rigctld_server::serve(listener, served));
+            let eng = split_cq_engine(tempo_app::settings::SplitMode::Rig);
+            let (act, backend, mut eng, _rig) = split_over_at(eng, &addr, None);
+            if split_freq {
+                assert_eq!(*surface.tx_dial.lock().unwrap(), Some(14_073_000), "{what}");
+                assert!(
+                    act.tx_this_slot
+                        && !backend.played.is_empty()
+                        && *surface.keyed.lock().unwrap(),
+                    "{what}: not keyed"
+                );
+                assert!(eng.tx_enabled(), "{what}: TX went off");
+                assert_eq!(eng.snapshot().radio.slot_key_refused, None, "{what}");
+            } else {
+                assert!(!*surface.keyed.lock().unwrap(), "{what}: keyed");
+                assert!(
+                    backend.played.is_empty() && !act.tx_this_slot,
+                    "{what}: sent"
+                );
+                assert!(!eng.tx_enabled(), "{what}: TX still on");
+                let refused = eng.snapshot().radio.slot_key_refused.expect("no reason");
+                assert!(refused.split_failed, "{what}: {refused:?}");
+                assert!(
+                    eng.take_slot_tx_abort(),
+                    "{what}: the loop not told to stop"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_split_write_answered_past_its_deadline_keys_nothing() {
+        use tempo_app::settings::SplitMode;
+        // The pair the slow-split scenes rest on, on one link with a 1 s reply deadline: `I`
+        // answered `RPRT 0` after 300 ms (inside it) keys; after 2 s (past it) keys nothing.
+        let late_i = |ms: u64| {
+            move |line: &str| {
+                if line.starts_with("I ") {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
+                Some("RPRT 0\n".to_string())
+            }
+        };
+        let (act, backend, eng, sent) =
+            split_over_on_a_link(SplitMode::Rig, late_i(300), Some(1_000));
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+            "inside"
+        );
+        assert!(
+            act.tx_this_slot && !backend.played.is_empty() && eng.tx_enabled(),
+            "inside"
+        );
+        let (act, backend, mut eng, sent) =
+            split_over_on_a_link(SplitMode::Rig, late_i(2_000), Some(1_000));
+        assert_split_sent_nothing(
+            "past",
+            &act,
+            &backend,
+            &mut eng,
+            &sent,
+            &["S 1 VFOB", "I 14073000"],
+        );
+    }
+
+    #[test]
+    fn a_split_the_radio_takes_keys_and_plays_its_over_as_before() {
+        use tempo_app::settings::SplitMode;
+        // The control: every write answered `RPRT 0`. The split, the key, the over played, TX on,
+        // nothing on the refused key's line. And a link that cannot set the TX VFO's mode at all
+        // (`X` answered `RPRT -11`, as Nexus's own TCI client answers it) with its TX dial taken.
+        let x_not_available = |line: &str| {
+            Some(
+                if line.starts_with("X ") {
+                    "RPRT -11\n"
+                } else {
+                    "RPRT 0\n"
+                }
+                .to_string(),
+            )
+        };
+        let (act, backend, eng, sent) = split_over_on(SplitMode::Rig, x_not_available);
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+            "X not available: on the wire"
+        );
+        assert!(
+            act.tx_this_slot && !backend.played.is_empty() && eng.tx_enabled(),
+            "X not available: not keyed and played"
+        );
+        for (split, wire) in [
+            (
+                SplitMode::Rig,
+                &["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"][..],
+            ),
+            (SplitMode::FakeIt, &["F 14073000", "T 1"][..]),
+        ] {
+            let what = format!("{split:?}");
+            let (act, backend, eng, sent) =
+                split_over_on(split, |_: &str| Some("RPRT 0\n".to_string()));
+            assert_eq!(sent, wire, "{what}: on the wire");
+            assert!(
+                act.tx_this_slot && !backend.played.is_empty(),
+                "{what}: not keyed and played"
+            );
+            assert!(eng.tx_enabled(), "{what}: TX went off");
+            assert_eq!(eng.snapshot().radio.slot_key_refused, None, "{what}");
+        }
+    }
+
+    // ── Split writes before the key: one total budget, and no round trip for a value already set ─────
+    // A held Rig split writes its TX dial and mode before every key. Each write has its own CAT
+    // deadline (2.5 s on a network link), so three slow ones could hold the key for seconds and put
+    // the carrier late into the over. The writes for one over share a total budget measured from the
+    // first; a radio that has not confirmed them all inside it keys nothing, as a refused write does.
+    // On a held split, a TX dial or mode the radio already confirmed is not written again.
+
+    /// A rigctld answering every line `RPRT 0` (and `f` with `dial`), each split write (`S`, `I`,
+    /// `X`) after `split_ms`; `refuse_i` makes it answer `I` with `RPRT -9` while set.
+    fn split_link(
+        split_ms: u64,
+        dial: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        refuse_i: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::sync::atomic::Ordering;
+        scripted_rigctld(move |line: &str| {
+            if line == "f" {
+                return Some(format!("{}\n", dial.load(Ordering::SeqCst)));
+            }
+            if ["S ", "I ", "X "].iter().any(|p| line.starts_with(p)) {
+                std::thread::sleep(std::time::Duration::from_millis(split_ms));
+            }
+            if line.starts_with("I ") && refuse_i.load(Ordering::SeqCst) {
+                return Some("RPRT -9\n".to_string());
+            }
+            Some("RPRT 0\n".to_string())
+        })
+    }
+
+    /// One over of `eng` keyed through `rig`, the lines the link got for it, and the radio unkeyed
+    /// after it, as the loop unkeys at the over's end.
+    fn over_through(
+        mut eng: Engine,
+        rig: &mut Rig,
+        log: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> (SlotAction, MockBackend, Engine, Vec<String>) {
+        let before = log.lock().unwrap().len();
+        let mut backend = MockBackend::new();
+        let mut rx = RxRing::new();
+        let now = steered_now_ms(&eng);
+        let act = slot_tx_phase(
+            &mut eng,
+            rig,
+            &mut backend,
+            &mut rx,
+            0,
+            now,
+            false,
+            None,
+            None,
+            false,
+        );
+        let sent = log.lock().unwrap()[before..].to_vec();
+        if rig.keyed {
+            let _ = rig.ptt(false);
+        }
+        (act, backend, eng, sent)
+    }
+
+    /// [`split_cq_engine`] in Rig split with its TX offset at `tx_hz`.
+    fn rig_split_cq_at(tx_hz: f32) -> Engine {
+        let mut eng = split_cq_engine(tempo_app::settings::SplitMode::Rig);
+        eng.set_tx_offset(tx_hz);
+        eng
+    }
+
+    fn keyed_as_before(what: &str, act: &SlotAction, backend: &MockBackend, eng: &Engine) {
+        assert!(
+            act.tx_this_slot && !backend.played.is_empty() && eng.tx_enabled(),
+            "{what}: not keyed and played"
+        );
+        assert_eq!(eng.snapshot().radio.slot_key_refused, None, "{what}");
+    }
+
+    #[test]
+    fn split_writes_the_radio_confirms_past_their_total_budget_key_nothing() {
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+        use std::sync::Arc;
+        // Each split write answered `RPRT 0` after 300 ms, well inside its own deadline. The first
+        // over: `S` at 300 ms, `I` at 600 ms, past the budget: `X` is not sent, nothing keys, TX
+        // halts with the split reason. A held over: `I` at 300 ms, `X` at 600 ms: the same.
+        let (addr, log) = split_link(
+            300,
+            Arc::new(AtomicU64::new(14_074_000)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_slow_transport(true);
+        let (act, backend, mut eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_split_sent_nothing(
+            "the first over, 300 ms a write",
+            &act,
+            &backend,
+            &mut eng,
+            &sent,
+            &["S 1 VFOB", "I 14073000"],
+        );
+        let why = eng.snapshot().radio.slot_key_refused.unwrap().why;
+        assert!(
+            why.contains("500 ms"),
+            "the reason does not say why: {why:?}"
+        );
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_slow_transport(true);
+        rig.tx_split_held = true;
+        let (act, backend, mut eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_split_sent_nothing(
+            "a held over, 300 ms a write",
+            &act,
+            &backend,
+            &mut eng,
+            &sent,
+            &["I 14073000", "X PKTUSB -1"],
+        );
+        // The control: 100 ms a write, all three inside the budget, keys as before.
+        let (addr, log) = split_link(
+            100,
+            Arc::new(AtomicU64::new(14_074_000)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_slow_transport(true);
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]
+        );
+        keyed_as_before("100 ms a write", &act, &backend, &eng);
+    }
+
+    #[test]
+    fn a_held_split_writes_only_what_changed_and_forgets_on_a_dial_change_or_refusal() {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::sync::Arc;
+        let dial = Arc::new(AtomicU64::new(14_074_000));
+        let refuse_i = Arc::new(AtomicBool::new(false));
+        let (addr, log) = split_link(0, dial.clone(), refuse_i.clone());
+        let mut rig = Rig::rigctld(&addr);
+        let over = |tx_hz: f32, rig: &mut Rig, want: &[&str], what: &str| {
+            let (act, backend, eng, sent) = over_through(rig_split_cq_at(tx_hz), rig, &log);
+            assert_eq!(sent, want, "{what}: on the wire");
+            keyed_as_before(what, &act, &backend, &eng);
+        };
+        let all = ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"];
+        over(750.0, &mut rig, &all, "the first over");
+        // Held, nothing changed: only split on, which goes out before every over.
+        let split_on = ["S 1 VFOB", "T 1"];
+        over(750.0, &mut rig, &split_on, "held, unchanged");
+        // The TX offset moved: the new TX dial goes out, the unchanged mode does not.
+        let new_dial = ["I 14074000", "S 1 VFOB", "T 1"];
+        over(1700.0, &mut rig, &new_dial, "a new TX offset");
+        let back = ["I 14073000", "S 1 VFOB", "T 1"];
+        over(750.0, &mut rig, &back, "back again");
+        // A dial write away and back between overs: both written again, split still held.
+        rig.set_freq(7_074_000).unwrap();
+        rig.set_freq(14_074_000).unwrap();
+        let both = ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"];
+        over(750.0, &mut rig, &both, "after a dial write");
+        // The radio's dial read somewhere else (the operator's knob): both written again.
+        dial.store(14_080_000, Ordering::SeqCst);
+        assert_eq!(rig.read_freq().unwrap(), 14_080_000);
+        dial.store(14_074_000, Ordering::SeqCst);
+        assert_eq!(rig.read_freq().unwrap(), 14_074_000);
+        over(750.0, &mut rig, &both, "after the dial read elsewhere");
+        over(750.0, &mut rig, &split_on, "held again, unchanged");
+        // A refused TX dial: nothing keys. The next over writes both again, though its TX dial is
+        // the one the radio confirmed before the refusal.
+        refuse_i.store(true, Ordering::SeqCst);
+        let (act, backend, mut eng, sent) = over_through(rig_split_cq_at(1700.0), &mut rig, &log);
+        assert_split_sent_nothing(
+            "a refused TX dial",
+            &act,
+            &backend,
+            &mut eng,
+            &sent,
+            &["I 14074000"],
+        );
+        refuse_i.store(false, Ordering::SeqCst);
+        over(750.0, &mut rig, &both, "after a refusal");
+        // A new connection (the old one dropped): both written again.
+        rig.reconnect_for_test();
+        over(750.0, &mut rig, &both, "after a reconnect");
+        // Split let go and taken again: split on first, both, and split on.
+        rig.set_split(false, "VFOA").unwrap();
+        rig.tx_split_held = false;
+        over(750.0, &mut rig, &all, "split taken again");
+    }
+
+    #[test]
+    fn split_on_is_put_back_last_before_every_held_over_and_a_refusal_keys_nothing() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        // WSJT-X turns split on last, after the TX dial and its mode, before every split over
+        // (`Transceiver/HamlibTransceiver.cpp:1010-1015`). A held over with nothing changed still
+        // sends it; a radio that does not take it keys nothing.
+        let refuse_s = Arc::new(AtomicBool::new(false));
+        let r = refuse_s.clone();
+        let (addr, log) = scripted_rigctld(move |line: &str| {
+            if line == "f" {
+                return Some("14074000\n".to_string());
+            }
+            Some(
+                if line.starts_with("S 1") && r.load(Ordering::SeqCst) {
+                    "RPRT -9\n"
+                } else {
+                    "RPRT 0\n"
+                }
+                .to_string(),
+            )
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]
+        );
+        keyed_as_before("the first over", &act, &backend, &eng);
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(sent, ["S 1 VFOB", "T 1"], "held, unchanged");
+        keyed_as_before("held, unchanged", &act, &backend, &eng);
+        refuse_s.store(true, Ordering::SeqCst);
+        let (act, backend, mut eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_split_sent_nothing(
+            "split on refused",
+            &act,
+            &backend,
+            &mut eng,
+            &sent,
+            &["S 1 VFOB"],
+        );
+    }
+
+    #[test]
+    fn a_held_split_with_split_operation_changed_before_the_key_keys_nothing() {
+        use tempo_app::settings::SplitMode;
+        // Nexus's split is still on the radio (the loop lets go of it at its next quiet point) and
+        // Split Operation has just been set to Fake It or None: Fake It would move VFO A and key VFO
+        // B on the last TX dial, None would key VFO B there. Nothing keys, TX halts.
+        for split in [SplitMode::FakeIt, SplitMode::None] {
+            let what = format!("{split:?}");
+            let (addr, log) = scripted_rigctld(|_: &str| Some("RPRT 0\n".to_string()));
+            let mut rig = Rig::rigctld(&addr);
+            rig.tx_split_held = true;
+            let (act, backend, mut eng, sent) =
+                over_through(split_cq_engine(split), &mut rig, &log);
+            assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, &[]);
+        }
+        // The control: Split Operation still Rig keys from the held split.
+        let (addr, log) = scripted_rigctld(|_: &str| Some("RPRT 0\n".to_string()));
+        let mut rig = Rig::rigctld(&addr);
+        rig.tx_split_held = true;
+        let (act, backend, eng, _) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        keyed_as_before("still Rig", &act, &backend, &eng);
+    }
+
+    // ── A held Rig split behind a late key line ─────────────────────────────────────────────────
+    // A key line (`T 1`, `T 0`) whose answer is late keeps its connection, its answer owed. The
+    // split writes before the next over are not key lines: each reads the owed answers first, within
+    // its own deadline, and goes out after them on the same connection, or is not sent at all and
+    // the over keys nothing. The connection is dropped when its owed answer is given up for lost or
+    // it closes while being read; what the radio confirmed through it goes with it, so the next held
+    // over writes its TX dial and mode again, as after any new connection.
+
+    /// A rigctld answering `T 1` (the first one only, once `lose` is set) never, `f` with the dial
+    /// and everything else `RPRT 0`.
+    fn a_link_that_loses_one_key_answer(
+        lose: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::Ordering;
+        scripted_rigctld_counted(move |line: &str| {
+            if line == "T 1" && lose.swap(false, Ordering::SeqCst) {
+                return None; // the radio keyed; its answer is lost
+            }
+            Some(
+                if line == "f" {
+                    "14074000\n"
+                } else {
+                    "RPRT 0\n"
+                }
+                .to_string(),
+            )
+        })
+    }
+
+    #[test]
+    fn a_held_split_writes_its_tx_dial_and_mode_again_after_a_lost_key_answer_is_given_up() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let lose = Arc::new(AtomicBool::new(false));
+        let (addr, log, connections) = a_link_that_loses_one_key_answer(lose.clone());
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_owed_bound_for_test(std::time::Duration::from_millis(1_500));
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]
+        );
+        keyed_as_before("the first over", &act, &backend, &eng);
+        // A key whose answer never comes, its release queued behind it, and the bound passed.
+        lose.store(true, Ordering::SeqCst);
+        assert!(rig.ptt(true).is_err(), "premise: the key's answer is late");
+        assert!(rig.ptt(false).is_err(), "premise: the release is behind it");
+        std::thread::sleep(std::time::Duration::from_millis(1_600));
+        assert_eq!(connections.load(Ordering::SeqCst), 1, "premise: one link");
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            2,
+            "premise: the late key's connection was given up"
+        );
+        assert_eq!(
+            sent,
+            ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+            "the new connection's over skipped its TX dial and mode as already confirmed"
+        );
+        keyed_as_before("on the new connection", &act, &backend, &eng);
+    }
+
+    #[test]
+    fn a_held_split_writes_its_tx_dial_and_mode_again_after_a_late_keys_connection_closes() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let close = Arc::new(AtomicBool::new(false));
+        let c = close.clone();
+        // The late key's connection closes, unanswered, while its answer is being read.
+        let (addr, log, connections) = scripted_rigctld_counted(move |line: &str| {
+            if line == "T 1" && c.swap(false, Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(1_500));
+                return Some(String::new());
+            }
+            Some(
+                if line == "f" {
+                    "14074000\n"
+                } else {
+                    "RPRT 0\n"
+                }
+                .to_string(),
+            )
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]
+        );
+        keyed_as_before("the first over", &act, &backend, &eng);
+        close.store(true, Ordering::SeqCst);
+        assert!(rig.ptt(true).is_err(), "premise: the key's answer is late");
+        assert!(
+            rig.read_freq().is_err(),
+            "premise: the connection closed while its owed answer was read"
+        );
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(connections.load(Ordering::SeqCst), 2, "premise: a new link");
+        assert_eq!(
+            sent,
+            ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+            "the new connection's over skipped its TX dial and mode as already confirmed"
+        );
+        keyed_as_before("on the new connection", &act, &backend, &eng);
+    }
+
+    #[test]
+    fn split_writes_behind_an_owed_key_line_go_out_after_it_on_its_connection_or_not_at_all() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+        // The owed line is a key (`T 1`) or a release (`T 0`), answered `late_ms` after it arrives:
+        // past its own deadline (it may read until about 1 s), and then inside or past the first
+        // split write's 700 ms.
+        for owed in ["T 1", "T 0"] {
+            for late_ms in [1_200, 3_000] {
+                let what = format!("{owed} answered at {late_ms} ms");
+                let late = Arc::new(AtomicU64::new(0));
+                let l = late.clone();
+                let (addr, log, connections) = scripted_rigctld_counted(move |line: &str| {
+                    if line == owed {
+                        let ms = l.swap(0, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                    }
+                    Some(
+                        if line == "f" {
+                            "14074000\n"
+                        } else {
+                            "RPRT 0\n"
+                        }
+                        .to_string(),
+                    )
+                });
+                let mut rig = Rig::rigctld(&addr);
+                let (act, backend, eng, _) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+                keyed_as_before(&what, &act, &backend, &eng);
+                late.store(late_ms, Ordering::SeqCst);
+                if owed == "T 0" {
+                    rig.ptt(true).unwrap();
+                }
+                assert!(rig.ptt(owed == "T 1").is_err(), "{what}: premise, owed");
+                let before = log.lock().unwrap().len();
+                // A new TX offset, so the over has a TX dial to write.
+                let (act, backend, mut eng, sent) =
+                    over_through(rig_split_cq_at(1700.0), &mut rig, &log);
+                assert_eq!(
+                    log.lock().unwrap()[before - 1],
+                    owed,
+                    "{what}: premise, the owed line is the last before the over"
+                );
+                if late_ms < 1_700 {
+                    // Answered inside the first write's own deadline: the writes follow it.
+                    assert_eq!(sent, ["I 14074000", "S 1 VFOB", "T 1"], "{what}");
+                    keyed_as_before(&what, &act, &backend, &eng);
+                } else {
+                    // Still owed past it: no write goes out ahead of the answer, nothing keys.
+                    assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, &[]);
+                }
+                assert_eq!(
+                    connections.load(Ordering::SeqCst),
+                    1,
+                    "{what}: everything on the owed line's connection"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3336,6 +4430,173 @@ mod tests {
         assert!(eng.tx_enabled(), "control: TX went off");
         assert!(!eng.take_slot_tx_abort(), "control: a cut was asked for");
         assert_eq!(eng.snapshot().radio.slot_key_refused, None, "control");
+    }
+
+    /// ⭐ A COMPOUND CALL'S BEACON FLIPS TYPE WHEN ITS PTT IS ASSERTED, AS WSJT-X DOES (`m_tx=1-m_tx`
+    /// in `WSPR_message`, `widgets/mainwindow.cpp:15462`, called on the tick that sets `g_iptt=1`
+    /// and asserts PTT, `:7808`, `:7855`, `:7880`), before the rig answers. A key the radio refuses
+    /// still flips it; an over whose key is never attempted (Remote revoked first) does not; an FT8
+    /// over never counts. Through the real plan, commit and key.
+    #[test]
+    fn a_beacon_over_flips_the_compound_call_alternation_at_its_ptt_assert() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let beacon = |eng: &mut Engine, slot: u64| -> (String, Vec<Vec<f32>>) {
+            let plan = eng.plan_tx(slot).expect("a beacon over");
+            let tempo_app::engine::TxWaveform::Native { text, .. } = &plan.waveform else {
+                panic!("not a beacon over");
+            };
+            let text = text.clone();
+            (text, eng.commit_tx(&plan, vec![0.25; 1_200], slot))
+        };
+        let phase = |eng: &mut Engine, rig: &mut Rig, slot: u64, waves: Vec<Vec<f32>>| {
+            let now = steered_now_ms(eng);
+            slot_tx_phase(
+                eng,
+                rig,
+                &mut MockBackend::new(),
+                &mut RxRing::new(),
+                slot,
+                now,
+                false,
+                None,
+                Some(waves),
+                false,
+            )
+            .tx_this_slot
+        };
+        let key = |eng: &mut Engine, answer: &str, slot: u64, waves: Vec<Vec<f32>>| {
+            let (addr, log, _) = keying_rigctld(answer, 0);
+            let keyed = phase(eng, &mut Rig::rigctld(&addr), slot, waves);
+            assert!(
+                log.lock().unwrap().iter().any(|l| l == "T 1"),
+                "{answer}: premise: the over asserted PTT"
+            );
+            keyed
+        };
+        let beaconing = |tier: tempo_app::dto::Tier| {
+            let mut eng = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+            eng.set_tier(tier);
+            let _ = eng.take_slot_tx_abort();
+            let mut s = eng.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            eng.apply_settings(s);
+            eng.set_tx_enabled(true);
+            eng
+        };
+        let two = "PJ4/K1ABC 37";
+        let is_three = |text: &str| text.starts_with("<PJ4/K1ABC> FK52UD");
+        for tier in [tempo_app::dto::Tier::Wspr, tempo_app::dto::Tier::Fst4w] {
+            let mut eng = beaconing(tier);
+            let (text, waves) = beacon(&mut eng, 10);
+            assert_eq!(text, two, "{tier:?}: premise: the first over is the type 2");
+            assert!(
+                !key(&mut eng, "RPRT -1", 10, waves),
+                "{tier:?}: premise: refused"
+            );
+            assert!(
+                !eng.tx_enabled(),
+                "{tier:?}: premise: a refused key halts TX"
+            );
+            let _ = eng.take_slot_tx_abort();
+            eng.set_tx_enabled(true);
+
+            let (text, waves) = beacon(&mut eng, 11);
+            assert!(
+                is_three(&text),
+                "{tier:?}: a refused key did not flip the alternation: {text}"
+            );
+            assert!(
+                key(&mut eng, "RPRT 0", 11, waves),
+                "{tier:?}: premise: keyed"
+            );
+            let (text, _) = beacon(&mut eng, 12);
+            assert_eq!(
+                text, two,
+                "{tier:?}: a keyed over did not flip the alternation"
+            );
+
+            // Remote revoked before the key, whether the tick or the key itself sees it first: PTT
+            // is never asserted, so nothing flips.
+            let mut eng = beaconing(tier);
+            let presence = |eng: &mut Engine| {
+                let authority = Arc::new(TransmitAuthority::default());
+                let now = Instant::now();
+                assert!(eng.hold_remote_presence(
+                    authority
+                        .permit(now + Duration::from_secs(24 * 60 * 60))
+                        .unwrap(),
+                    now,
+                ));
+                authority
+            };
+            let authority = presence(&mut eng);
+            let (text, waves) = beacon(&mut eng, 10);
+            assert_eq!(text, two, "{tier:?}: premise: Remote, the type 2");
+            authority.revoke();
+            let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+            assert!(
+                !phase(&mut eng, &mut Rig::rigctld(&addr), 10, waves),
+                "{tier:?}: premise: the tick saw the revoke"
+            );
+            assert!(
+                !log.lock().unwrap().iter().any(|l| l == "T 1"),
+                "{tier:?}: premise: no PTT asserted"
+            );
+            let _ = eng.take_slot_tx_abort();
+            eng.set_tx_enabled(true);
+            let authority = presence(&mut eng);
+            let (text, _) = beacon(&mut eng, 11);
+            assert_eq!(
+                text, two,
+                "{tier:?}: an over the tick stopped flipped the alternation"
+            );
+            authority.revoke();
+            let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+            assert!(
+                !key_slot_transmitter(
+                    &mut eng,
+                    &mut Rig::rigctld(&addr),
+                    &mut MockBackend::new(),
+                    false
+                ),
+                "{tier:?}: premise: the key saw the revoke"
+            );
+            assert!(
+                !log.lock().unwrap().iter().any(|l| l == "T 1"),
+                "{tier:?}: premise: no PTT asserted by the key"
+            );
+            let _ = eng.take_slot_tx_abort();
+            eng.set_tx_enabled(true);
+            let (text, _) = beacon(&mut eng, 12);
+            assert_eq!(
+                text, two,
+                "{tier:?}: a key stopped before PTT flipped the alternation"
+            );
+        }
+
+        // CONTROL: an FT8 over whose PTT is asserted is not a beacon over.
+        let mut eng = armed_engine();
+        let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+        let mut rig = Rig::rigctld(&addr);
+        let act = key_one_over(&mut eng, &mut rig, &mut MockBackend::new());
+        assert!(act.tx_this_slot, "premise: the FT8 over keyed");
+        assert!(log.lock().unwrap().iter().any(|l| l == "T 1"));
+        let mut s = eng.settings().clone();
+        s.mycall = "PJ4/K1ABC".into();
+        s.mygrid = "FK52UD".into();
+        eng.apply_settings(s);
+        eng.set_tier(tempo_app::dto::Tier::Wspr);
+        let _ = eng.take_slot_tx_abort();
+        let mut s = eng.settings().clone();
+        s.beacon_tx_percent = 100;
+        s.beacon_power_dbm = 37;
+        eng.apply_settings(s);
+        eng.set_tx_enabled(true);
+        let (text, _) = beacon(&mut eng, 10);
+        assert_eq!(text, two, "CONTROL: an FT8 key flipped the beacon");
     }
 
     #[test]
