@@ -3691,6 +3691,77 @@ fn a_refused_mic_write_is_not_in_flight_and_an_unanswered_one_stays_in_flight() 
     }
 }
 
+/// ⛔ The radio has its mic back after a voice-keyer message, and the audio control thread has not
+/// read it yet: its copy of the radio's DAX flag still says DAX. The radio loop asks then whether
+/// the radio has the mic, and it must still answer yes. Told no for that one tick, the engine lets
+/// an APRS beacon or an SSTV picture key with the radio on its own mic. The answer reads the
+/// radio's flag, Nexus's mic write and the keyer's DAX from one look at the session. CONTROL, the
+/// other way: when the radio switches to DAX for a digital mode while the copy still says mic, the
+/// radio keeps the mic until the copy has caught up too (it fails closed). With both on DAX for a
+/// digital mode, it does not.
+#[test]
+fn the_radio_keeps_its_mic_while_the_control_threads_copy_is_late() {
+    let sim = simulator(with_mode_echo(), vec![]);
+    let d = audio_daemon(&sim, memory());
+    dax_tx_ready(&sim, &d);
+    let mut c = Client::connect(&d);
+    wait_session(&d, "the readback idle", |s| s.transmit_ready);
+    eventually("the copy on DAX", || {
+        (d.radio_dax() == Some(true)).then_some(())
+    });
+    assert!(!d.radio_has_mic(), "CONTROL: a digital mode on DAX");
+
+    // Phone at the shack: the mic.
+    assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+    route_until(&d, &sim, false, "transmit set dax=0", 1);
+    eventually("the copy on the mic", || {
+        (d.radio_dax() == Some(false)).then_some(())
+    });
+    assert!(d.radio_has_mic(), "premise: Phone at the shack");
+
+    // A voice-keyer message: the keyer's DAX, read by the copy too.
+    eventually("the keyer's DAX", || {
+        d.sync_tx_routing(false, true);
+        (count(&sim, "transmit set dax=1") >= 2).then_some(())
+    });
+    eventually("the copy on the keyer's DAX", || {
+        (d.radio_dax() == Some(true)).then_some(())
+    });
+    assert!(d.radio_has_mic(), "through the keyer's DAX");
+
+    // The message over: the mic written back and reported, the copy held on DAX.
+    d.hold_radio_dax(true);
+    route_until(&d, &sim, false, "transmit set dax=0", 2);
+    eventually("the radio's mic", || {
+        (d.session().snapshot().model.transmit.dax == Some(false)).then_some(())
+    });
+    assert_eq!(d.radio_dax(), Some(true), "premise: the copy is late");
+    assert!(
+        d.radio_has_mic(),
+        "the radio reports its mic while the copy still says DAX"
+    );
+    d.hold_radio_dax(false);
+    eventually("the copy on the mic", || {
+        (d.radio_dax() == Some(false)).then_some(())
+    });
+    assert!(d.radio_has_mic(), "the copy agrees");
+
+    // CONTROL: a digital mode's DAX, the copy held on the mic: still the mic, until it agrees.
+    d.hold_radio_dax(true);
+    assert_eq!(c.ask("M PKTUSB 0", 1), "RPRT 0\n");
+    route_until(&d, &sim, false, "transmit set dax=1", 3);
+    eventually("the radio on DAX", || {
+        (d.session().snapshot().model.transmit.dax == Some(true)).then_some(())
+    });
+    assert_eq!(d.radio_dax(), Some(false), "premise: the copy is late");
+    assert!(d.radio_has_mic(), "fails closed while the copy says mic");
+    d.hold_radio_dax(false);
+    eventually("the copy on DAX", || {
+        (d.radio_dax() == Some(true)).then_some(())
+    });
+    assert!(!d.radio_has_mic(), "CONTROL: both on a digital mode's DAX");
+}
+
 /// The mode this shim just commanded counts before the radio reports it: right after `M PKTUSB`,
 /// with the radio still reporting USB and the mic as the source, `T 1` is refused.
 #[test]
