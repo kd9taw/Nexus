@@ -539,12 +539,12 @@ fn load_file(path: &Path, inputs: &str) -> Option<HashMap<String, Cell>> {
     )
 }
 
-/// Append graded cells (starting the file over, header first, when `fresh`). Best effort: a
-/// failed write only means a later pass grades those cells again.
-fn append_file(path: &Path, inputs: &str, fresh: bool, cells: &[(String, Cell)]) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+/// The file's lines for `cells`, the header first when `fresh`.
+fn file_text<'a>(
+    inputs: &str,
+    fresh: bool,
+    cells: impl IntoIterator<Item = (&'a String, &'a Cell)>,
+) -> String {
     let mut text = String::new();
     if fresh {
         let h = Header {
@@ -563,6 +563,16 @@ fn append_file(path: &Path, inputs: &str, fresh: bool, cells: &[(String, Cell)])
             text.push('\n');
         }
     }
+    text
+}
+
+/// Append graded cells (starting the file over, header first, when `fresh`). Best effort: a
+/// failed write only means a later pass grades those cells again.
+fn append_file(path: &Path, inputs: &str, fresh: bool, cells: &[(String, Cell)]) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let text = file_text(inputs, fresh, cells.iter().map(|(k, g)| (k, g)));
     let file = if fresh {
         std::fs::File::create(path)
     } else {
@@ -574,6 +584,21 @@ fn append_file(path: &Path, inputs: &str, fresh: bool, cells: &[(String, Cell)])
     if let Ok(mut f) = file {
         let _ = f.write_all(text.as_bytes());
     }
+}
+
+/// Write the file over with `cells` alone, through a temporary file renamed into place, so a
+/// kill or a failed write leaves the old file whole.
+fn rewrite_file(path: &Path, inputs: &str, cells: &HashMap<String, Cell>) -> std::io::Result<()> {
+    let tmp = path.with_extension("jsonl.tmp");
+    let written = std::fs::File::create(&tmp).and_then(|mut f| {
+        f.write_all(file_text(inputs, true, cells).as_bytes())?;
+        f.sync_all()
+    });
+    let done = written.and_then(|()| std::fs::rename(&tmp, path));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done
 }
 
 /// What a pass needs, taken under the Engine lock in one breath ([`capture`]). It holds the
@@ -645,6 +670,7 @@ pub(crate) fn run_pass(job: Job, path: &Path, stop: &AtomicBool) -> Result<Statu
         )
         .map_err(|e| e.to_string())?;
     let mut todo: Vec<CellAsk> = Vec::new();
+    // Every cell some contact in the log asks for.
     let mut seen: HashSet<String> = HashSet::new();
     let (mut graded, mut ungradable) = (0u32, 0u32);
     {
@@ -653,7 +679,7 @@ pub(crate) fn run_pass(job: Job, path: &Path, stop: &AtomicBool) -> Result<Statu
             match cell_ask(a, &job.my_grid, job.now, job.current_ssn) {
                 Some(c) => {
                     graded += 1;
-                    if !g.cells.contains_key(&c.key) && seen.insert(c.key.clone()) {
+                    if seen.insert(c.key.clone()) && !g.cells.contains_key(&c.key) {
                         todo.push(c);
                     }
                 }
@@ -698,6 +724,21 @@ pub(crate) fn run_pass(job: Job, path: &Path, stop: &AtomicBool) -> Result<Statu
         g.cells.extend(out);
         g.rev += 1;
         g.status.cells_done = done;
+    }
+    // Keep the file bounded. Cells no contact asks for pile up as the month's sunspot number moves
+    // (a recent contact's cell is keyed on it) and as contacts are edited or deleted. Once they
+    // outnumber the cells asked for, the file is written over with those alone, so it never holds
+    // more than twice the log's cells and each rewrite is paid for by as many appends. Not on the
+    // way out: a quit should not wait on it.
+    if !stop.load(Ordering::Relaxed) {
+        let mut g = lock(&GRADES);
+        let asked = g.cells.keys().filter(|k| seen.contains(*k)).count();
+        if g.cells.len() - asked > asked {
+            g.cells.retain(|k, _| seen.contains(k));
+            g.rev += 1;
+            // Best effort: a failed rewrite leaves the old file whole, still good to append to.
+            let _ = rewrite_file(path, &inputs, &g.cells);
+        }
     }
     // The success measures, over the last 30 days.
     let since = job.now - 30 * 86_400;

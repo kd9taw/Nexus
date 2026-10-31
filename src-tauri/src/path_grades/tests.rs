@@ -763,6 +763,56 @@ fn a_pass_of_many_chunks_keeps_every_chunk() {
     assert_eq!(held.len(), lock(&GRADES).cells.len());
 }
 
+/// The grades file stays bounded: once it holds more cells no contact in the log asks for than
+/// cells one does, a pass writes it over with the asked-for cells alone, and memory drops the
+/// rest too. Below that it is only appended to, and a cell the log still asks for is never
+/// graded again.
+#[test]
+fn the_grades_file_drops_cells_no_contact_asks_for() {
+    let _s = serial();
+    let (d1, d2, d3) = (
+        Dir::new("compact1"),
+        Dir::new("compact2"),
+        Dir::new("compact3"),
+    );
+    let path = d1.grades();
+    let lines = || std::fs::read_to_string(&path).unwrap().lines().count();
+    let pass = |engine: &SharedEngine| {
+        run_pass(
+            capture(engine, NOW, Some(80.0)),
+            &path,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+    };
+    // Four cells, then a log of five others: four left over against five asked for — kept.
+    assert_eq!(pass(&on_store(&d1, &log_records())).cells_done, 4);
+    let five: Vec<QsoRecord> = ["JO20", "EM12", "RE78", "KP20", "BL11"]
+        .iter()
+        .map(|g| qso("DX1AA", g, "20m", NOW - 3600, Some("150")))
+        .collect();
+    assert_eq!(pass(&on_store(&d2, &five)).cells_done, 5);
+    assert_eq!(lines(), 1 + 9, "control: under the bound, only appended");
+    // A log asking for one of those five: eight left over against one — written over.
+    let one = on_store(&d3, &five[..1]);
+    assert_eq!(
+        pass(&one).cells_total,
+        0,
+        "the asked-for cell is not graded again"
+    );
+    assert_eq!(lines(), 1 + 1, "a header and the one cell asked for");
+    let held = load_file(&path, "p533|None|0").expect("a readable file");
+    let want = cell_ask(&GradeAsk::of(&five[0]), "FN42", NOW, Some(80.0))
+        .unwrap()
+        .key;
+    assert_eq!(held.keys().collect::<Vec<_>>(), vec![&want]);
+    assert_eq!(lock(&GRADES).cells.len(), 1, "memory dropped them too");
+    assert!(view_for(&GradeAsk::of(&five[0]), "FN42", NOW, Some(80.0)).is_some());
+    // A restart reads the written-over file back whole.
+    forget_grades();
+    assert_eq!(pass(&one).cells_total, 0);
+}
+
 /// A card is kept for a contact's grade only when the space weather it was computed from was
 /// measured and current: from a cold cache, a stand-in flux, an old Kp or a stand-in Kp, the
 /// contact logged against it gets no grade. Positive control: measured, it is graded. And a kept
