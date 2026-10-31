@@ -1806,10 +1806,10 @@ button.nb-chip:hover {
   padding: 0 6px;
   font-size: var(--fs-label);
 }
-/* PCA (proton event) chip — the flare chip's violet sibling. */
-.pca-chip {
+/* PCA (proton event) chip — the flare chip's violet sibling, under it in the chip stack. Two
+   classes: `.flare-chip`'s border shorthand comes later in this sheet and would win at one. */
+.flare-chip.pca-chip {
   border-left-color: #a855f7;
-  top: calc(var(--space-3) + 34px); /* stack under the flare chip when both fire */
 }
 /* Per-mode workable-now chips on path/outlook band rows (P.533 only). */
 .cp-modes {
@@ -4757,12 +4757,33 @@ body.resizing-row {
   color: #ff8c3a;
   border-color: #ff8c3a;
 }
-/* Live solar-flare readout (D-RAP layer) — top-left, warm accent, only rendered
-   while a flare is actually degrading HF. */
-.flare-chip {
+/* THE SPACE-WEATHER CHIP STACK — the flare chip, the proton chip (and later overlays' chips) in one
+   column at the map's top-left, beside the Layers panel (the sibling rules below). The STACK is the
+   positioned box, so a chip that unfolds pushes the next one down instead of covering it. It lets
+   the pointer through except on the chips' own buttons. */
+.wx-chip-stack {
   position: absolute;
   left: var(--space-3);
   top: var(--space-3);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  /* A readable floor: on a map too narrow to hold it beside the Layers panel (Connect's map cell is
+     ~240 px at 1024×768) the stack slides left over the panel (the `left` clamps below) rather than
+     shrinking to a column of single words. Only a chip's head line takes the pointer, so the panel's
+     rows under the rest of it stay reachable. */
+  min-width: min(13rem, calc(100% - 16px));
+  max-width: min(330px, calc(100% - 2 * var(--space-3)));
+  max-height: calc(100% - 2 * var(--space-3));
+  overflow-y: auto;
+  pointer-events: none;
+}
+/* Live solar-flare readout (D-RAP layer) — warm accent, only rendered while a flare is actually
+   degrading HF. */
+.flare-chip {
+  max-width: 100%;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-left: 3px solid #ff8c3a;
@@ -4771,6 +4792,66 @@ body.resizing-row {
   font-size: calc(11px * var(--text-scale));
   color: var(--text);
   pointer-events: none;
+}
+/* The chip's first line folds and unfolds it (the details, the sparkline). */
+.flare-chip-head {
+  display: block;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.flare-chip-chev {
+  display: inline-block;
+  width: 1em;
+  color: var(--text-dim);
+}
+.flare-chip-line {
+  margin-top: 1px;
+  padding-left: 1em;
+}
+/* Where the picture comes from and when: NOAA's grid, or the GOES estimate (hover: which and why). */
+.flare-chip-src,
+.flare-chip-dim {
+  color: var(--text-dim);
+}
+.flare-chip-src {
+  pointer-events: auto;
+}
+.flare-chip-src[data-source='goes'] {
+  font-style: italic;
+}
+/* The six-hour X-ray sparkline, only in the unfolded chip (24 px). */
+.flare-spark {
+  display: block;
+  width: calc(100% - 1em);
+  height: 24px;
+  margin: 3px 0 1px 1em;
+}
+.flare-spark-line {
+  fill: none;
+  stroke: #ff8c3a;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.flare-spark-ref {
+  stroke: var(--text-dim);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+.flare-spark-mark {
+  stroke: var(--text-dim);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.flare-spark-mark.peak {
+  stroke: #ff8c3a;
 }
 .muf-legend-bar {
   height: 6px;
@@ -4839,18 +4920,25 @@ body.resizing-row {
   height: 8px;
   border-radius: 4px;
 }
-/* 2-D Layers rows carry an opacity slider, so the open panel has a width to give them. Placement,
-   fold and scroll are the shared overlay rule beside `.globe3d-layers`. */
-.map-layers {
+/* 2-D Layers rows carry an opacity slider, so the open panel has a width to give them; the globe's
+   panel declares the same one, so the chip stack beside either knows where it ends. Placement, fold
+   and scroll are the shared overlay rule beside `.globe3d-layers`. */
+.map-layers,
+.globe3d-layers {
   width: min(200px, calc(100% - 16px));
 }
-/* The flare/PCA chips share the map's top-left corner with the Layers panel (rendered before them
-   in MapView for this selector): they sit just right of it, open or folded, instead of under it. */
-.map-layers ~ .flare-chip {
-  left: calc(16px + min(200px, calc(100% - 16px)));
+/* The space-weather chip stack shares the map's top-left corner with the Layers panel (rendered
+   before it on both surfaces for this selector): it sits just right of it, open or folded, instead
+   of under it. */
+.map-layers ~ .wx-chip-stack,
+.globe3d-layers ~ .wx-chip-stack {
+  left: clamp(8px, calc(16px + min(200px, calc(100% - 16px))), calc(100% - 8px - min(13rem, calc(100% - 16px))));
+  max-width: min(330px, calc(100% - 24px - min(200px, calc(100% - 16px))));
 }
-.map-layers.collapsed ~ .flare-chip {
-  left: calc(16px + 2rem);
+.map-layers.collapsed ~ .wx-chip-stack,
+.globe3d-layers.collapsed ~ .wx-chip-stack {
+  left: clamp(8px, calc(16px + 2rem), calc(100% - 8px - min(13rem, calc(100% - 16px))));
+  max-width: min(330px, calc(100% - 24px - 2rem));
 }
 .map-layer {
   margin-bottom: var(--space-3);

@@ -255,6 +255,9 @@ const MIGRATED = [
   'components/prop/BeaconMonitor.tsx',
   'components/prop/BestBandTable.tsx',
   'components/prop/ChaseFeedPane.tsx',
+  // FlareChip.tsx — the flare chip, moved out of MapView when the 3-D globe gained it too; born
+  // catalogued, so its `map.flare.*` entries are read here and not taken for orphans.
+  'components/prop/FlareChip.tsx',
   'components/prop/ChasePane.tsx',
   'components/prop/ClockPane.tsx',
   'components/prop/KpOutlookPane.tsx',

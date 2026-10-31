@@ -80,7 +80,7 @@ import { heatBoost, sectorPulse } from '../features/pulse'
 import { txPaths, rxPaths, type MapPath } from '../features/mapPaths'
 import { ribbonFor } from '../features/pathRibbon'
 import type { RibbonInk } from '../features/pathRoute'
-import { openingModeColor } from '../bandColors'
+import { bandColor as bandInk, openingModeColor } from '../bandColors'
 import { relLuminance } from '../colormaps'
 import {
   APRS_HOME_ZOOM,
@@ -99,11 +99,8 @@ import {
   subsolarPoint,
   moonAt,
   inView,
-  flareHafMhz,
-  flareField,
   flareRScale,
   flareClass,
-  flareRecoveryMin,
   type Projection,
   type MapView3,
 } from '../mapGeo'
@@ -115,6 +112,9 @@ import { StateBlock } from './StateBlock'
 import { usePaletteKey } from '../usePaletteRoles'
 import { STANDARD_MAP, STANDARD_SKY, type MapToken, type SkyToken } from '../features/skins'
 import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
+import { bandRings, flareFootprint, sunWarmth, warmSunInk, XRAY_LIVE_SECS, type FlareNoaa } from '../flareNow'
+import { FlareChip } from './prop/FlareChip'
+import { useViewportClass } from '../useViewport'
 // The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
 // laid over the World view's land (Natural Earth's hillshade, public domain). See basemap.ts.
 import {
@@ -233,6 +233,9 @@ interface Props {
   /** GOES long-band X-ray flux (W/m²) — drives the D-RAP flare-blackout layer.
    * The host merges the 60 s fast lane with the prop snapshot (flareAlert.ts). */
   xrayLong?: number | null
+  /** What NOAA says beside that flux — the six-hour trace, the flare event and (during a flare)
+   *  the D-RAP grid the footprint is drawn from. Null for simulated flux (flareNow.ts). */
+  flareNoaa?: FlareNoaa | null
   /** Embedded detail globe (Satellites section): force a clean, locked GLOBE
    * showing just the basemap + the birds, centered on `focusSat`. Suppresses the
    * toolbar, layer panel, and every overlay rail/legend, and never touches the
@@ -893,6 +896,7 @@ export function MapView({
   scrubMs = null,
   muf,
   xrayLong = null,
+  flareNoaa = null,
   embedded,
   layersRev = 0,
 }: Props) {
@@ -1044,13 +1048,8 @@ export function MapView({
     return () => clearTimeout(id)
   }, [flarePreview])
   const xrayEff = flarePreview ? 2e-4 : xrayLong
-  // D-RAP flare state. The visualization gates at M1 (R1) — the SAME onset as
-  // the flare insight and toast, so the map never announces a "blackout" the
-  // rest of the app calls quiet. (C-class flux is routine background at solar
-  // max, adds little beyond normal daytime D-layer absorption, and would keep
-  // the pulse tick + fx canvas running near-continuously.)
-  const flareHafNow = flareHafMhz(xrayEff ?? 0)
-  const flareActive = flareRScale(xrayEff ?? 0) >= 1
+  // NOAA's picture of the flare (grid, event, trace) — never beside the simulated Preview flux.
+  const noaaNow = flarePreview ? null : flareNoaa
   // Interactive view: zoom (wheel), Globe rotation + flat-map pan (drag). Reset
   // when the projection changes (rotation/pan don't carry across projections).
   // The APRS map opens on the LOCAL picture — see APRS_HOME_ZOOM for why a whole
@@ -1137,6 +1136,20 @@ export function MapView({
   // The sky's time: now, or the hour the path-over-the-day strip is scrubbed to (terminator, sun,
   // moon and ribbon move together; live layers such as the flare stay at now).
   const skyMs = scrubMs ?? nowMs
+  // D-RAP flare state. The visualization gates at M1 (R1) — the SAME onset as
+  // the flare insight and toast, so the map never announces a "blackout" the
+  // rest of the app calls quiet. (C-class flux is routine background at solar
+  // max, adds little beyond normal daytime D-layer absorption, and would keep
+  // the pulse tick + fx canvas running near-continuously; below M1 only the
+  // sun disc warms.) The footprint is NOAA's D-RAP grid while it is current,
+  // else the analytic field from the GOES flux (flareNow.ts says which).
+  const flareFoot = useMemo(() => flareFootprint(nowMs, xrayEff, noaaNow?.drap), [nowMs, xrayEff, noaaNow])
+  const flareHafNow = flareFoot?.hafSub ?? 0
+  const flareActive = flareFoot != null
+  const flareRings = useMemo(() => (flareFoot ? bandRings(flareFoot, nowMs) : []), [flareFoot, nowMs])
+  // Ring labels only where there is room for them (md and up).
+  const viewport = useViewportClass()
+  const ringLabels = viewport === 'md' || viewport === 'lg' || viewport === 'xl'
   const scrubHour = scrubMs != null ? new Date(scrubMs).getUTCHours() : null
   // Amateur satellites — polled only while the layer is on (subpoints move
   // ~4°/min; 30 s keeps dots honest without hammering the 10-min view cache).
@@ -1208,7 +1221,11 @@ export function MapView({
   // 1 s tick is what makes the birds visibly MOVE between the 30 s polls.
   const heatPulsing = layers.heat.visible && hasOpening
   const openingsPulsing = layers.openings.visible && hasOpening
-  const flarePulsing = layers.flare.visible && flareActive
+  const flareShown = layers.flare.visible && flareActive
+  // A GOES sample older than XRAY_LIVE_SECS freezes the footprint: still drawn, no longer breathing,
+  // and the chip says how old it is.
+  const xrayLive = noaaNow == null || nowMs / 1000 - noaaNow.xrayAt < XRAY_LIVE_SECS
+  const flarePulsing = flareShown && xrayLive
   const satsMoving = layers.sats.visible && sats != null && sats.birds.length > 0
   useEffect(() => {
     if (!heatPulsing && !openingsPulsing && !flarePulsing && !satsMoving) return
@@ -1611,6 +1628,7 @@ export function MapView({
   const [nativePca, setPca] = useState<PcaView | null>(null)
   const pca=nativePca
   const pcaOn = layers.pca.visible
+  const pcaChip = pcaOn && pca != null && pca.points.length > 0
   useEffect(() => {
     if (!pcaOn) {
       setPca(null)
@@ -2511,7 +2529,7 @@ export function MapView({
     // breathes on the 1 s pulse tick (faster = stronger flare). The animated
     // sun + rays live on the separate fx canvas (below). Drawn over the night
     // shading, under spots/stations, so real activity stays legible.
-    if (layers.flare.visible && flareActive && xrayEff) {
+    if (flareShown && flareFoot && xrayEff) {
       const hw = Math.max(1, Math.floor(w / 3))
       const hh = Math.max(1, Math.floor(h / 3))
       const off =
@@ -2523,10 +2541,11 @@ export function MapView({
         fctx.clearRect(0, 0, hw, hh)
         fctx.globalCompositeOperation = 'lighter'
         const r = Math.max(1, flareRScale(xrayEff))
-        // Live time like the heat pulse — the 1 s pulseTick forces the redraws.
-        const pulse = 0.8 + 0.2 * Math.sin((Date.now() * 2 * Math.PI) / flarePulsePeriodMs(r))
+        // Live time like the heat pulse — the 1 s pulseTick forces the redraws. Frozen (an old GOES
+        // sample): no breath.
+        const pulse = flarePulsing ? 0.8 + 0.2 * Math.sin((Date.now() * 2 * Math.PI) / flarePulsePeriodMs(r)) : 1
         const splat = Math.max(8, Math.min(w, h) * 0.03) / 3
-        for (const s of flareField(nowMs, xrayEff)) {
+        for (const s of flareFoot.field) {
           const p = placePoint(kind, proj, { lat: s.lat, lon: s.lon }) // null on the far side
           if (!p) continue
           const [cr, cg, cb] = flareColor(s.haf)
@@ -2546,6 +2565,44 @@ export function MapView({
         ctx.drawImage(off, 0, 0, w, h)
         ctx.globalAlpha = 1
       }
+      // PER-BAND RINGS round the sub-solar point (flareNow `bandRings`): in each band's colour (the shared
+      // palette the globe paints its rings in; the spot table above has no 60 m), where
+      // it loses 1 dB (dashed — weakened) and 10 dB (solid — out). Drawn from NOAA's grid when that is
+      // the footprint, so the lines are NOAA's. Labelled at md and up, at each 1 dB ring's sunward-north
+      // point; never labelled where the map is small.
+      if (flareRings.length > 0) {
+        ctx.globalAlpha = Math.min(1, layers.flare.opacity + 0.2)
+        ctx.lineWidth = 1.4
+        for (const ring of flareRings) {
+          ctx.setLineDash(ring.db === 1 ? [5, 4] : [])
+          ctx.strokeStyle = bandInk(ring.band)
+          ctx.beginPath()
+          path({ type: 'LineString', coordinates: ring.ring } as unknown as GeoPermissibleObjects)
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
+        if (ringLabels) {
+          ctx.font = `600 ${Math.round(10 * ms)}px system-ui, sans-serif`
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.lineWidth = 3
+          ctx.strokeStyle = MARKER_HALO
+          // Highest band first (the innermost ring, the one most worth naming); a label that would
+          // land on one already placed is skipped — the wide low-band rings converge at the map's edge.
+          const placedLabels: [number, number][] = []
+          for (const ring of [...flareRings].reverse()) {
+            if (ring.db !== 1) continue
+            const [lon, lat] = ring.ring[0]
+            const p = placePoint(kind, proj, { lat, lon })
+            if (!p || placedLabels.some(([x, y]) => Math.abs(x - p[0]) < 28 * ms && Math.abs(y - p[1]) < 12 * ms)) continue
+            placedLabels.push(p)
+            ctx.fillStyle = bandInk(ring.band)
+            ctx.strokeText(ring.band, p[0], p[1])
+            ctx.fillText(ring.band, p[0], p[1])
+          }
+        }
+        ctx.globalAlpha = 1
+      }
     }
 
     // THE SUN AND THE MOON where each is overhead. Both move with the 60 s greyline clock and have no
@@ -2559,7 +2616,11 @@ export function MapView({
       // never drawn together.
       const ss = subsolarPoint(skyMs)
       const sp = !flarePulsing && inView(kind, proj, ss) ? project(proj, ss) : null
-      if (sp) drawSun(ctx, sp[0], sp[1], SUN_DISC * ms, skyInk('--map-sun'), MARKER_HALO)
+      // Below the flare gate a C-class flare warms the disc toward orange (flareNow `sunWarmth`); its
+      // class is on the disc's hover. A flare-layer visual: with that layer off the sun stays the
+      // theme's, as it does on a scrubbed sky (another hour's).
+      const sunInk = warmSunInk(skyInk('--map-sun'), layers.flare.visible && scrubMs == null ? sunWarmth(xrayEff) : 0)
+      if (sp) drawSun(ctx, sp[0], sp[1], SUN_DISC * ms, sunInk, MARKER_HALO)
       // The moon, in its phase, lit as it looks from the operator's hemisphere: a waxing moon is lit
       // on the right in the north and on the left in the south. A flare leaves it alone.
       const moon = moonAt(skyMs)
@@ -3140,7 +3201,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
+  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, flareFoot, flareRings, ringLabels, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -3373,6 +3434,7 @@ export function MapView({
       | { kind: 'aprs'; name: string }
       | { kind: 'ota'; sp: OtaMapSpot }
       | { kind: 'muf'; muf: number }
+      | { kind: 'sun' }
     )
   // Hit targets grow with the markers (`markerScale`): a 1.9x dot inside a fixed 10 px target
   // would be a marker you can see but not reliably click, which is the complaint backwards.
@@ -3448,6 +3510,17 @@ export function MapView({
       }
       if (best) return best
     }
+    // The sun disc: its hover carries the X-ray class it is warmed by (info only, like a sonde). Not
+    // on a scrubbed sky (another hour's sun) and not for the simulated Preview flux.
+    if (layers.sunMoon.visible && scrubMs == null && !flarePreview && size.w > 0) {
+      const proj = projectionFor(size.w, size.h)
+      const ss = subsolarPoint(nowMs)
+      const p = proj && inView(kind, proj, ss) ? project(proj, ss) : null
+      if (p) {
+        const d = Math.hypot(p[0] - mx, p[1] - my)
+        if (d < 1.4 * hitR) return { kind: 'sun', d, x: p[0], y: p[1] }
+      }
+    }
     return null
   }
   /** A DXpedition's announced modes → the work-routing mode: single-class CW →
@@ -3503,6 +3576,13 @@ export function MapView({
     }
     if (hit.kind === 'muf') {
       return t('map.hover.muf', { muf: hit.muf.toFixed(1) })
+    }
+    if (hit.kind === 'sun') {
+      // The class with the GOES sample's own time: the fast lane's, else the snapshot's.
+      const at = noaaNow?.xrayAt ?? prop?.spaceWx?.xrayAt ?? null
+      return xrayEff != null && at != null
+        ? t('map.hover.sun', { cls: flareClass(xrayEff), time: wxStampLabel(at) })
+        : t('map.hover.sun.none')
     }
     if (hit.kind === 'aprs') {
       const a = aprs?.find((x) => x.call === hit.name)
@@ -3591,7 +3671,7 @@ export function MapView({
     // instead of one per mousemove. Together those are what make the card hold still.
     setHover((prev) => {
       if (!hit) return null
-      const next = { x: hit.x, y: hit.y, text: hitText(hit), info: hit.kind === 'muf' }
+      const next = { x: hit.x, y: hit.y, text: hitText(hit), info: hit.kind === 'muf' || hit.kind === 'sun' }
       return prev && prev.x === next.x && prev.y === next.y && prev.text === next.text && prev.info === next.info
         ? prev
         : next
@@ -4026,8 +4106,8 @@ export function MapView({
               as on the 3-D globe (MapLayersPanel; why an overlay, not a column: `.map-layers` in
               styles.css). Gated on the embedded/standalone distinction only (the Expert gate went
               2026-07-26). Full screen is the third state: the panel is away, and the toolbar's
-              Layers button peeks it back (see `layersPeek`). Rendered BEFORE the flare/PCA chips: they
-              sit beside it via a sibling selector (`.map-layers ~ .flare-chip`). */}
+              Layers button peeks it back (see `layersPeek`). Rendered BEFORE the space-weather chip stack: it
+              sits beside it via a sibling selector (`.map-layers ~ .wx-chip-stack`). */}
           {!embedded && (!full || layersPeek) && (
             // Folded by default where it would cover the Conditions rail's band list (the 1024×768
             // floor), unless the operator has chosen (MapLayersPanel `narrow`).
@@ -4117,17 +4197,26 @@ export function MapView({
               ))}
             </MapLayersPanel>
           )}
-          {flarePulsing && xrayEff != null && (
-            <FlareChip
-              xrayLong={xrayEff}
-              hafMhz={flareHafNow}
-              trend={flarePreview ? null : (prop?.wxTrend?.xray.dir ?? null)}
-              preview={flarePreview}
-            />
-          )}
-          {layers.pca.visible && pca && pca.points.length > 0 && (
-            <div className="flare-chip pca-chip" role="status">
-              {t('map.pca.chip', { scale: sScaleOf(pca.j10), db: pca.a30Day.toFixed(1) })}
+          {((flareShown && flareFoot && xrayEff != null) || pcaChip) && (
+            // THE SPACE-WEATHER CHIP STACK — one column beside the Layers panel, so a chip can grow
+            // (the flare chip unfolds) without covering the next. Later overlays add their chip here.
+            <div className="wx-chip-stack">
+              {flareShown && flareFoot && xrayEff != null && (
+                <FlareChip
+                  xrayLong={xrayEff}
+                  foot={flareFoot}
+                  noaa={noaaNow}
+                  qth={myQth ?? me}
+                  nowMs={nowMs}
+                  snapAt={prop?.spaceWx?.xrayAt ?? null}
+                  preview={flarePreview}
+                />
+              )}
+              {pcaChip && pca && (
+                <div className="flare-chip pca-chip" role="status">
+                  {t('map.pca.chip', { scale: sScaleOf(pca.j10), db: pca.a30Day.toFixed(1) })}
+                </div>
+              )}
             </div>
           )}
           {prop && (
@@ -4145,9 +4234,6 @@ export function MapView({
 }
 
 
-/** The live flare readout, shown only while the D-RAP layer is actually drawing:
- * class, R-scale, the absorption ceiling, and where the event is heading (the
- * X-ray trend word + the D-RAP recovery estimate once it's falling). */
 /** NOAA S-scale from J(≥10 MeV): S1=10 pfu, S2=100, S3=1e3, S4=1e4, S5=1e5. */
 function sScaleOf(j10: number): number {
   if (j10 >= 1e5) return 5
@@ -4178,45 +4264,6 @@ export function AuroraForecastNote({ forecastAt, observedAt }: { forecastAt: num
     <span className="map-layer-note" data-stale={old ? '' : undefined} title={title}>
       {old ? t('map.layer.aurora.forecast.past', { time, ago: agoLabel(past) }) : t('map.layer.aurora.forecast', { time })}
     </span>
-  )
-}
-
-function FlareChip({
-  xrayLong,
-  hafMhz,
-  trend,
-  preview = false,
-}: {
-  xrayLong: number
-  hafMhz: number
-  trend: 'rising' | 'steady' | 'falling' | null
-  /** Simulated flux from the Layers-panel Preview button — labeled so simulated
-   * data can never be mistaken for a real event. */
-  preview?: boolean
-}) {
-  const rec = flareRecoveryMin(xrayLong)
-  // Each phase is its OWN appended statement, never a stem plus a tail — see the
-  // `map.flare.phase.*` note in the catalog.
-  const mins = rec ? Math.round(rec) : 0
-  const phase =
-    trend === 'rising'
-      ? t('map.flare.phase.rising')
-      : trend === 'falling'
-        ? rec
-          ? t('map.flare.phase.recoveringIn', { mins })
-          : t('map.flare.phase.recovering')
-        : rec
-          ? t('map.flare.phase.fade', { mins })
-          : ''
-  return (
-    <div className="flare-chip" role="status">
-      {t('map.flare.chip', {
-        cls: flareClass(xrayLong),
-        r: flareRScale(xrayLong),
-        haf: Math.round(hafMhz),
-      })}
-      {preview ? t('map.flare.phase.preview') : phase}
-    </div>
   )
 }
 

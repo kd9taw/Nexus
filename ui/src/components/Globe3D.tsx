@@ -55,11 +55,11 @@ import { placeHoverCard, MARKER_HALO } from './MapView'
 import { MOON_DISC, SUN_DISC, SUN_REACH, drawMoon, drawSun } from '../features/skyGlyphs'
 import { STANDARD_SKY, type SkyToken } from '../features/skins'
 import { bandColor, openingModeColor } from '../bandColors'
+import { bandRings, flareFootprint, sunWarmth, warmSunInk, type FlareNoaa } from '../flareNow'
+import { FlareChip } from './prop/FlareChip'
 import {
   subsolarPoint,
   moonAt,
-  flareField,
-  flareRScale,
   destinationPoint,
   rangeRing,
   sectorRing,
@@ -272,6 +272,7 @@ function syncLines(
     if (dashed) l.computeLineDistances()
     grp.add(l)
   }
+  grp.name = key
   store[key] = grp
   g.scene().add(grp)
 }
@@ -317,6 +318,8 @@ interface Props {
   muf?: MufStation[]
   /** GOES long-band X-ray flux (W/m²) — drives the flare D-RAP layer. */
   xrayLong?: number | null
+  /** What NOAA says beside that flux (trace, event, D-RAP grid); null for simulated flux. */
+  flareNoaa?: FlareNoaa | null
   /** The operator's own decoded stations (the 'My decodes' layer). */
   stations?: Station[]
   /** Draw US state borders (default on, matching the 2-D map). */
@@ -525,6 +528,7 @@ function Globe3DView({
   activeBand,
   muf,
   xrayLong,
+  flareNoaa = null,
   stations: stationsProp,
   showStates = true,
   layersRev = 0,
@@ -583,6 +587,10 @@ function Globe3DView({
   const [spin, setSpin] = useState(false) // idle auto-rotate; OFF by default (continuous 60fps
   // GPU load on weak/laptop iGPUs); operator-toggleable
   const [nowMs, setNowMs] = useState(() => Date.now())
+  // The flare footprint and its per-band rings (flareNow.ts): NOAA's D-RAP grid while it is current,
+  // else the analytic field — the same numbers the 2-D map draws, and null below M1.
+  const flareFoot = useMemo(() => flareFootprint(nowMs, xrayLong ?? null, flareNoaa?.drap), [nowMs, xrayLong, flareNoaa])
+  const flareRings = useMemo(() => (flareFoot ? bandRings(flareFoot, nowMs) : []), [flareFoot, nowMs])
   // Self-fetched space-weather feeds (aurora + PCA come from their own polls, like the 2-D map).
   const [nativeAuroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
   const auroraPts=nativeAuroraPts
@@ -1106,6 +1114,39 @@ function Globe3DView({
       skyRef.current = null
     }
   }, [ready])
+  // Below the flare gate a C-class flare warms the sun toward orange (the 2-D map's rule, flareNow
+  // `sunWarmth`), with the flare layer on: repainted only when the colour changes.
+  const sunInk = warmSunInk(skyInkNow('--map-sun'), show.flare ? sunWarmth(xrayLong) : 0)
+  useEffect(() => {
+    const sky = skyRef.current
+    if (!ready || !sky) return
+    paintSky(sky.sun, (ctx, size) => drawSun(ctx, size / 2, size / 2, sunDiscOn(size), sunInk, MARKER_HALO))
+    frameRef.current()
+  }, [ready, sunInk])
+
+  // PER-BAND FLARE RINGS — each band's 1 dB (dashed, weakened) and 10 dB (solid, out) line round the
+  // sub-solar point, in the band's colour, just above the flare cloud. One syncLines key per ring;
+  // a ring that is gone is cleared by the key it had.
+  const flareRingKeys = useRef<string[]>([])
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    const keys: string[] = []
+    if (show.flare && flareFoot) {
+      for (const r of flareRings) {
+        const key = `flareRing:${r.band}:${r.db}`
+        keys.push(key)
+        const line = r.ring.map(([lon, lat]) => [lat, lon] as [number, number])
+        syncLines(g, linesRef.current, key, [line], bandColor(r.band), 0.9, true, 0.007, r.db === 1)
+      }
+    }
+    for (const k of flareRingKeys.current) {
+      if (!keys.includes(k)) syncLines(g, linesRef.current, k, [], '#000', 0, false)
+    }
+    flareRingKeys.current = keys
+    frameRef.current()
+  }, [ready, show.flare, flareFoot, flareRings])
+
   // Moved on the 60 s clock above, the moon repainted in its phase (lit as it looks from the
   // operator's hemisphere, like the 2-D map's), and shown or hidden with the layer — all written
   // straight into the scene: the ONE-FRAME list below draws it, so a still globe stays asleep.
@@ -1187,16 +1228,14 @@ function Globe3DView({
     const g = globeRef.current
     if (!g || !ready) return
     const store = cloudsRef.current
-    // Solar flare D-RAP absorption on the sunlit hemisphere — only during an M/X flare.
-    const xrayEff = xrayLong ?? 0
-    const flareOn = show.flare && flareRScale(xrayEff) >= 1
+    // Solar flare D-RAP absorption on the sunlit hemisphere — only during an M/X flare: NOAA's grid
+    // while it is current, else the analytic field (`flareFoot`, flareNow.ts).
+    const flareOn = show.flare && flareFoot != null
     syncCloud(
       g,
       store,
       'flare',
-      flareOn
-        ? flareField(nowMs, xrayEff).map((s) => ({ lat: s.lat, lng: s.lon, rgb: flareRgb(s.haf), alt: 0.006 }))
-        : [],
+      flareOn ? flareFoot.field.map((s) => ({ lat: s.lat, lng: s.lon, rgb: flareRgb(s.haf), alt: 0.006 })) : [],
       5,
       flareOn,
     )
@@ -1265,7 +1304,7 @@ function Globe3DView({
         glowSprite(),
       )
     }
-  }, [ready, nowMs, xrayLong, show.flare, show.aurora, show.muf, show.pca, show.heat, auroraPts, muf, pca, spots])
+  }, [ready, nowMs, flareFoot, show.flare, show.aurora, show.muf, show.pca, show.heat, auroraPts, muf, pca, spots])
 
   // THE BREATH — the only per-second work: two material writes, no geometry,
   // no rebuild. The heat cloud dims/brightens and the opening wedges pulse,
@@ -2018,6 +2057,19 @@ function Globe3DView({
             </Fragment>
           ))}
         </MapLayersPanel>
+      )}
+      {show.flare && flareFoot && xrayLong != null && (
+        // The space-weather chip stack beside the Layers panel — the 2-D map's, the same chip.
+        <div className="wx-chip-stack">
+          <FlareChip
+            xrayLong={xrayLong}
+            foot={flareFoot}
+            noaa={flareNoaa}
+            qth={qth}
+            nowMs={nowMs}
+            snapAt={prop?.spaceWx?.xrayAt ?? null}
+          />
+        </div>
       )}
       {satAllHidden > 0 && (
         // The 2-D map renders this same hint word for word — one key, deliberately.
