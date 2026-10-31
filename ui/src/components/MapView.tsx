@@ -80,7 +80,7 @@ import { heatBoost, sectorPulse } from '../features/pulse'
 import { txPaths, rxPaths, type MapPath } from '../features/mapPaths'
 import { ribbonFor } from '../features/pathRibbon'
 import type { RibbonInk } from '../features/pathRoute'
-import { openingModeColor } from '../bandColors'
+import { bandColor as bandInk, openingModeColor } from '../bandColors'
 import { relLuminance } from '../colormaps'
 import {
   APRS_HOME_ZOOM,
@@ -2565,7 +2565,8 @@ export function MapView({
         ctx.drawImage(off, 0, 0, w, h)
         ctx.globalAlpha = 1
       }
-      // PER-BAND RINGS round the sub-solar point (flareNow `bandRings`): in each band's colour, where
+      // PER-BAND RINGS round the sub-solar point (flareNow `bandRings`): in each band's colour (the shared
+      // palette the globe paints its rings in; the spot table above has no 60 m), where
       // it loses 1 dB (dashed — weakened) and 10 dB (solid — out). Drawn from NOAA's grid when that is
       // the footprint, so the lines are NOAA's. Labelled at md and up, at each 1 dB ring's sunward-north
       // point; never labelled where the map is small.
@@ -2574,7 +2575,7 @@ export function MapView({
         ctx.lineWidth = 1.4
         for (const ring of flareRings) {
           ctx.setLineDash(ring.db === 1 ? [5, 4] : [])
-          ctx.strokeStyle = bandColor(ring.band)
+          ctx.strokeStyle = bandInk(ring.band)
           ctx.beginPath()
           path({ type: 'LineString', coordinates: ring.ring } as unknown as GeoPermissibleObjects)
           ctx.stroke()
@@ -2595,7 +2596,7 @@ export function MapView({
             const p = placePoint(kind, proj, { lat, lon })
             if (!p || placedLabels.some(([x, y]) => Math.abs(x - p[0]) < 28 * ms && Math.abs(y - p[1]) < 12 * ms)) continue
             placedLabels.push(p)
-            ctx.fillStyle = bandColor(ring.band)
+            ctx.fillStyle = bandInk(ring.band)
             ctx.strokeText(ring.band, p[0], p[1])
             ctx.fillText(ring.band, p[0], p[1])
           }
@@ -3200,7 +3201,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
+  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, flareFoot, flareRings, ringLabels, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -4208,6 +4209,7 @@ export function MapView({
                   trend={flarePreview ? null : (prop?.wxTrend?.xray.dir ?? null)}
                   qth={myQth ?? me}
                   nowMs={nowMs}
+                  snapAt={prop?.spaceWx?.xrayAt ?? null}
                   preview={flarePreview}
                 />
               )}

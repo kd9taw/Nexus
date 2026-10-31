@@ -23,6 +23,7 @@ import {
   type FlareNoaa,
 } from '../../flareNow'
 import { agoLabel } from './SpaceWxGauges'
+import { devXrayOverride } from '../../flareAlert'
 
 /** `HH:MMZ` — chip times are always today's or the last few hours'. */
 function hm(unix: number): string {
@@ -37,6 +38,7 @@ export function FlareChip({
   trend,
   qth,
   nowMs,
+  snapAt = null,
   preview = false,
 }: {
   xrayLong: number
@@ -46,6 +48,9 @@ export function FlareChip({
   trend: 'rising' | 'steady' | 'falling' | null
   qth: { lat: number; lon: number } | null
   nowMs: number
+  /** The prop snapshot's GOES sample time: the class comes from the snapshot when NOAA's fast lane
+   *  is absent or stale, and this is then its time. */
+  snapAt?: number | null
   /** Simulated flux from the Layers-panel Preview button — labelled so simulated data can never
    *  be mistaken for a real event. */
   preview?: boolean
@@ -58,13 +63,13 @@ export function FlareChip({
   })
   if (preview) {
     return (
-      <div className="flare-chip" role="status">
+      <div className="flare-chip" role="status" data-source={foot.source}>
         {head}
         {t('map.flare.phase.preview')}
       </div>
     )
   }
-  const phase = flarePhase(noaa?.event, trend, nowMs)
+  const phase = flarePhase(noaa?.event, trend, nowMs, xrayLong)
   const phaseLine = phase.noaa
     ? phase.kind === 'ended'
       ? t('map.flare.noaa.ended', { end: hm(phase.endAt!), begin: hm(phase.beginAt!) })
@@ -80,7 +85,9 @@ export function FlareChip({
         : null
   // No countdown while it is still rising: NOAA's fit is for the decay.
   const rec = phase.kind === 'rising' ? null : flareRecovery(foot.source === 'noaa' ? noaa?.drap : null, xrayLong, nowMs)
-  const xrayAt = noaa?.xrayAt ?? null
+  // The GOES sample the class came from: the fast lane's, else the snapshot's. The dev override's
+  // flux is simulated and has no sample time.
+  const xrayAt = noaa?.xrayAt ?? (devXrayOverride() == null ? snapAt : null)
   const xrayAge = xrayAt != null ? Math.max(0, nowMs / 1000 - xrayAt) : null
   const xtime = xrayAt == null ? null : xrayAge! >= XRAY_LIVE_SECS ? `${hm(xrayAt)}, ${agoLabel(xrayAge!)}` : hm(xrayAt)
   const src =

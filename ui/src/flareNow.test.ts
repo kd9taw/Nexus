@@ -6,6 +6,7 @@ import {
   DRAP_FRESH_SECS,
   flareFootprint,
   flareHere,
+  flareNoaaOf,
   flarePhase,
   flareRecovery,
   flareUnderSun,
@@ -192,14 +193,14 @@ describe('flarePhase', () => {
   })
 
   it("speaks NOAA's words with NOAA's times", () => {
-    expect(flarePhase(ev({}), 'falling', NOW)).toMatchObject({ kind: 'rising', noaa: true, beginAt: NOW_S - 1200 })
-    expect(flarePhase(ev({ maxAt: NOW_S - 600, maxClass: 'M4.2' }), 'rising', NOW)).toMatchObject({
+    expect(flarePhase(ev({}), 'falling', NOW, null)).toMatchObject({ kind: 'rising', noaa: true, beginAt: NOW_S - 1200 })
+    expect(flarePhase(ev({ maxAt: NOW_S - 600, maxClass: 'M4.2' }), 'rising', NOW, null)).toMatchObject({
       kind: 'peaked',
       noaa: true,
       peakAt: NOW_S - 600,
       peakClass: 'M4.2',
     })
-    expect(flarePhase(ev({ maxAt: NOW_S - 600, endAt: NOW_S - 120 }), null, NOW)).toMatchObject({
+    expect(flarePhase(ev({ maxAt: NOW_S - 600, endAt: NOW_S - 120 }), null, NOW, null)).toMatchObject({
       kind: 'ended',
       noaa: true,
       endAt: NOW_S - 120,
@@ -214,7 +215,7 @@ describe('flarePhase', () => {
       ev({ maxAt: NOW_S - 3 * 3600, endAt: NOW_S - 2 * 3600 }), // over for two hours
     ]
     for (const e of fallbacks) {
-      expect(flarePhase(e, 'falling', NOW)).toEqual({
+      expect(flarePhase(e, 'falling', NOW, null)).toEqual({
         kind: 'falling',
         noaa: false,
         beginAt: null,
@@ -222,8 +223,51 @@ describe('flarePhase', () => {
         peakClass: null,
         endAt: null,
       })
-      expect(flarePhase(e, 'steady', NOW).kind).toBeNull()
+      expect(flarePhase(e, 'steady', NOW, null).kind).toBeNull()
     }
+  })
+
+  // NOAA lists a flare only after several minutes of rise; an impulsive one crosses M1 sooner. Until
+  // NOAA lists it, the newest event on the list is the PREVIOUS flare, and its words are not this one's.
+  const C8_ENDED = ev({
+    beginAt: NOW_S - 90 * 60,
+    beginClass: 'C2.0',
+    maxAt: NOW_S - 60 * 60,
+    maxClass: 'C8.0',
+    maxFlux: 8e-6,
+    endAt: NOW_S - 30 * 60,
+    currentClass: 'C3.0',
+  })
+
+  it("never quotes the previous flare's words for a new one", () => {
+    // A C8 ended 30 min ago; an M2 is rising now and NOAA has not listed it yet.
+    expect(flarePhase(C8_ENDED, 'rising', NOW, 2e-5)).toMatchObject({ kind: 'rising', noaa: false, endAt: null })
+    // The flux is well above the event's peak, whatever the trend says.
+    expect(flarePhase(C8_ENDED, 'steady', NOW, 2e-5)).toMatchObject({ kind: null, noaa: false })
+    // Peaked (not ended) at C8, and the flux now an M2: not that event either.
+    const peaked = { ...C8_ENDED, endAt: null }
+    expect(flarePhase(peaked, 'falling', NOW, 2e-5)).toMatchObject({ kind: 'falling', noaa: false })
+    // Ended, and the flux is rising again: a new rise, even with no peak flux to compare.
+    expect(flarePhase({ ...C8_ENDED, maxFlux: null }, 'rising', NOW, 6e-6)).toMatchObject({ kind: 'rising', noaa: false })
+  })
+
+  it("POSITIVE CONTROL: the same event at its own flux keeps NOAA's words", () => {
+    expect(flarePhase(C8_ENDED, 'falling', NOW, 5e-6)).toMatchObject({ kind: 'ended', noaa: true, endAt: NOW_S - 1800 })
+    // Within 10 % of NOAA's peak is the same flare (the GOES sample and NOAA's peak differ a little).
+    expect(flarePhase({ ...C8_ENDED, endAt: null }, 'falling', NOW, 8.5e-6)).toMatchObject({ kind: 'peaked', noaa: true })
+    // A rising event is this flare's however high the flux goes.
+    expect(flarePhase(ev({}), 'rising', NOW, 2e-4)).toMatchObject({ kind: 'rising', noaa: true })
+  })
+})
+
+describe('flareNoaaOf: a simulation never carries NOAA', () => {
+  const lane = { asOf: NOW_S - 60, series: [[NOW_S - 60, 5e-5]] as [number, number][], event: null, drap: grid(NOW, X1) }
+  it("drops NOAA's grid, event and trace beside simulated flux", () => {
+    expect(flareNoaaOf(lane, true)).toBeNull()
+  })
+  it('POSITIVE CONTROL: the real lane carries them', () => {
+    expect(flareNoaaOf(lane, false)).toMatchObject({ xrayAt: NOW_S - 60, drap: lane.drap })
+    expect(flareNoaaOf(null, false)).toBeNull()
   })
 })
 

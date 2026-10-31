@@ -7,7 +7,7 @@
 // And the chip stack it lives in: the STACK is the positioned box, so the flare chip unfolding pushes the
 // proton chip down instead of covering it (resolved from the sheet with the shared cascade resolver, on the
 // elements the component actually renders — not a regex over the CSS).
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import { render, cleanup, fireEvent } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -18,6 +18,7 @@ import { t } from '../../i18n'
 import { chainOf, parseRules, winnerAt } from '../../cssCascade'
 import type { DrapGrid, FlareEvent } from '../../types'
 
+beforeEach(() => localStorage.clear())
 afterEach(cleanup)
 
 const NOW = Date.UTC(2026, 9, 30, 18, 0)
@@ -53,7 +54,10 @@ const noaa = (o: Partial<FlareNoaa> = {}): FlareNoaa => ({
   ...o,
 })
 
-function chip(n: FlareNoaa | null, extra: { preview?: boolean; trend?: 'rising' | 'falling' | null } = {}) {
+function chip(
+  n: FlareNoaa | null,
+  extra: { preview?: boolean; trend?: 'rising' | 'falling' | null; snapAt?: number | null } = {},
+) {
   const foot = flareFootprint(NOW, M5, n?.drap)!
   return render(
     <div className="wx-chip-stack">
@@ -64,6 +68,7 @@ function chip(n: FlareNoaa | null, extra: { preview?: boolean; trend?: 'rising' 
         trend={extra.trend ?? null}
         qth={{ lat: 41.9, lon: -87.6 }}
         nowMs={NOW}
+        snapAt={extra.snapAt}
         preview={extra.preview}
       />
       <div className="flare-chip pca-chip" role="status">
@@ -118,6 +123,40 @@ describe('FlareChip words', () => {
     expect(text).toContain(t('map.flare.phase.preview'))
     expect(text).not.toContain('NOAA')
     expect(container.querySelector('button')).toBeNull()
+  })
+})
+
+describe('FlareChip: no countdown while the flare is still rising', () => {
+  const open = (r: ReturnType<typeof chip>) => fireEvent.click(r.getByRole('button', { name: t('map.flare.toggle.aria') }))
+  const rising: FlareEvent = { ...event, maxAt: null, maxClass: null, maxFlux: null }
+
+  it("NOAA says it is still rising: no recovery time, NOAA's or the fit's", () => {
+    const r = chip(noaa({ event: rising, drap: grid(NOW_S + 30 * 60) }))
+    open(r)
+    const text = r.container.textContent ?? ''
+    expect(text, 'CONTROL: NOAA’s rising words are shown').toContain(t('map.flare.noaa.rising', { begin: '17:38Z' }))
+    expect(text).not.toContain(t('map.flare.recovery.noaa', { mins: 30 }))
+    expect(text).not.toContain(t('map.flare.recovery.fit', { mins: Math.round(flareRecoveryMin(M5)!) }))
+  })
+
+  it('POSITIVE CONTROL: once it has peaked the countdown is there', () => {
+    const r = chip(noaa({ drap: grid(NOW_S + 30 * 60) }))
+    open(r)
+    expect(r.container.textContent).toContain(t('map.flare.recovery.noaa', { mins: 30 }))
+  })
+})
+
+describe("FlareChip: the class's GOES time on the snapshot path", () => {
+  const src = (r: ReturnType<typeof chip>) => r.container.querySelector('.flare-chip-src')!.textContent
+  it("with no fast lane, quotes the snapshot's sample time", () => {
+    expect(src(chip(null, { snapAt: NOW_S - 120 }))).toBe(t('map.flare.src.goes', { xtime: '17:58Z' }))
+  })
+  it("the fast lane's own time wins when it is there", () => {
+    expect(src(chip(noaa({ drap: null }), { snapAt: NOW_S - 600 }))).toBe(t('map.flare.src.goes', { xtime: '17:59Z' }))
+  })
+  it("the dev override's simulated flux has no sample time", () => {
+    localStorage.setItem('nexus.dev.xray', String(M5))
+    expect(src(chip(null, { snapAt: NOW_S - 120 }))).toBe(t('map.flare.src.goesOnly'))
   })
 })
 

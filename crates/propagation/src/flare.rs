@@ -284,11 +284,17 @@ fn median(v: &mut [f32]) -> f32 {
     }
 }
 
-/// Whether NOAA's D-RAP grid is worth asking for at this long-band flux: from M1 (R1), the
-/// same onset where the map starts drawing the flare footprint. Below it nothing would draw
-/// the grid, so a quiet sun costs NOAA no requests.
-pub fn wants_drap(xray_long: f32) -> bool {
-    crate::model::r_scale(xray_long) >= 1
+/// How old a GOES sample may be and still be the flux now: the UI drops the whole fast lane
+/// (flux, event and grid) past this age (`WX_STALE_SECS.xray` in ui/src/propViz.ts).
+pub const XRAY_FRESH_SECS: i64 = 10 * 60;
+
+/// Whether NOAA's D-RAP grid is worth asking for, given the newest GOES long-band sample
+/// (`xray_long` taken at `sample_at`) at `now`: from M1 (R1), the same onset where the map
+/// starts drawing the flare footprint, and only while that sample is fresh. Below M1, or beside
+/// a sample the UI no longer uses (a GOES outage that began during a flare), nothing would draw
+/// the grid, so it costs NOAA no requests.
+pub fn wants_drap(xray_long: f32, sample_at: i64, now: i64) -> bool {
+    crate::model::r_scale(xray_long) >= 1 && now - sample_at < XRAY_FRESH_SECS
 }
 
 /// How often one product is asked: `period` seconds after an answer; after `n` failures in a
@@ -496,11 +502,12 @@ mod tests {
     fn a_running_flare_has_no_peak_or_end_until_noaa_calls_them() {
         let v = serde_json::json!([{
             "time_tag": "2026-10-30T12:44:00Z", "begin_time": "2026-10-30T12:38:00Z",
-            "begin_class": "C4.0", "max_time": "Unk", "max_class": null, "max_xrlong": null,
+            "begin_class": "C4.0", "max_time": "Unk", "max_class": "Unk", "max_xrlong": null,
             "end_time": "Unk", "current_class": "M2.1"
         }]);
         let e = parse_flare_latest(&v).unwrap();
         assert_eq!((e.max_at, e.end_at), (None, None));
+        // NOAA's "Unk" is no class: the chip must never print "peaked at Unk".
         assert_eq!(e.max_class, None);
         assert_eq!(e.current_class.as_deref(), Some("M2.1"));
         // No dated begin: not an event.
@@ -569,10 +576,21 @@ mod tests {
 
     #[test]
     fn the_grid_is_asked_for_only_at_a_flare() {
-        assert!(!wants_drap(9.9e-6), "C9.9: the map draws nothing");
-        assert!(wants_drap(1e-5), "M1: the footprint starts");
-        assert!(wants_drap(3e-4));
-        assert!(!wants_drap(0.0) && !wants_drap(f32::NAN));
+        let now = 1_800_000_000;
+        assert!(!wants_drap(9.9e-6, now, now), "C9.9: the map draws nothing");
+        assert!(wants_drap(1e-5, now, now), "M1: the footprint starts");
+        assert!(wants_drap(3e-4, now - 60, now));
+        assert!(!wants_drap(0.0, now, now) && !wants_drap(f32::NAN, now, now));
+    }
+
+    #[test]
+    fn the_grid_is_not_asked_for_beside_a_stale_goes_sample() {
+        let now = 1_800_000_000;
+        // A GOES outage that began during an M5: the UI has dropped the lane, so no grid.
+        assert!(!wants_drap(5e-5, now - XRAY_FRESH_SECS, now));
+        assert!(!wants_drap(5e-5, now - 3600, now));
+        // Control: the same flux, a sample just inside the window.
+        assert!(wants_drap(5e-5, now - XRAY_FRESH_SECS + 1, now));
     }
 
     const C: Cadence = Cadence {

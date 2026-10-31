@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { processFlare, effectiveXray, resetFlareAlerts } from './flareAlert'
 import { pushToast } from './toast'
 import { doubleBeep } from './alerts'
+import { flareFootprint } from './flareNow'
+import { flareHafAt, flareHafMhz, flareRecoveryMin } from './mapGeo'
+import { t } from './i18n'
+import type { DrapGrid } from './types'
 
 vi.mock('./toast', () => ({ pushToast: vi.fn() }))
 vi.mock('./alerts', () => ({ doubleBeep: vi.fn() }))
@@ -94,5 +98,54 @@ describe('effectiveXray (fast lane / snapshot merge)', () => {
     expect(effectiveXray(null, 1e-4)).toBe(1e-4)
     expect(effectiveXray(undefined, undefined)).toBeNull()
     expect(effectiveXray(0, 0)).toBeNull()
+  })
+})
+
+// ONE CEILING EVERYWHERE: the toast quotes the map's footprint — NOAA's D-RAP grid while it is
+// current, else the GOES estimate — and says which, so it never contradicts the flare chip.
+describe('the toast quotes the map’s ceiling, with its source', () => {
+  const M5 = 5e-5
+  /** A grid in NOAA's layout, 30 % hotter than the GOES estimate, valid `ageS` seconds ago. */
+  function hotGrid(nowMs: number, ageS: number): DrapGrid {
+    const lats = Array.from({ length: 90 }, (_, i) => 89 - 2 * i)
+    const lons = Array.from({ length: 90 }, (_, i) => -178 + 4 * i)
+    const haf: number[] = []
+    for (const la of lats) for (const lo of lons) haf.push(flareHafAt(la, lo, nowMs, M5) * 1.3)
+    return { validAt: nowMs / 1000 - ageS, recoveryAt: null, lats, lons, haf }
+  }
+
+  it("quotes NOAA's grid while it is current, and says so", () => {
+    const now = Date.now()
+    const drap = hotGrid(now, 60)
+    const foot = flareFootprint(now, M5, drap)!
+    expect(foot.source, 'CONTROL: the grid is the footprint').toBe('noaa')
+    expect(Math.round(foot.hafSub), 'CONTROL: NOAA differs from GOES').not.toBe(Math.round(flareHafMhz(M5)))
+    processFlare(M5, drap)
+    expect(toasts.mock.calls[0][0]).toBe(
+      t('prop.flareAlert.noaa.fade', {
+        cls: 'M5.0',
+        r: 2,
+        mhz: Math.round(foot.hafSub),
+        mins: Math.round(flareRecoveryMin(M5)!),
+      }),
+    )
+  })
+
+  it('says "estimated from GOES" beside a stale grid or none', () => {
+    const now = Date.now()
+    for (const drap of [hotGrid(now, 10 * 60), null]) {
+      resetFlareAlerts()
+      toasts.mockClear()
+      processFlare(M5, drap)
+      expect(toasts.mock.calls[0][0]).toBe(
+        t('prop.flareAlert.fade', {
+          cls: 'M5.0',
+          r: 2,
+          mhz: Math.round(flareHafMhz(M5)),
+          mins: Math.round(flareRecoveryMin(M5)!),
+        }),
+      )
+      expect(toasts.mock.calls[0][0]).not.toContain('NOAA D-RAP')
+    }
   })
 })

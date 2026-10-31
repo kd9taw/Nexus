@@ -153,7 +153,7 @@ pub fn generate_insights(
                 InsightLevel::Caution
             },
             plain: format!(
-                "Solar flare (R{r}) — dayside HF below ~{:.0} MHz degraded (night side unaffected)",
+                "Solar flare (R{r}) — dayside HF below ~{:.0} MHz degraded, estimated from GOES (night side unaffected)",
                 flare_haf_mhz(wx.xray_long)
             ),
             technical: format!(
@@ -532,6 +532,29 @@ mod tests {
             a_index: 8.0,
             xray_long: xray,
         }
+    }
+
+    /// The flare line's ceiling is the GOES formula, and it says so: the map's chip and the toast
+    /// quote NOAA's own D-RAP grid when it is current, so an unlabelled number here could
+    /// contradict them silently.
+    #[test]
+    fn the_flare_line_says_its_ceiling_is_estimated_from_goes() {
+        let flare = generate_insights(NOW, &wx(150.0, 2.0, 5e-5), None, &[], &[], None, None)
+            .into_iter()
+            .find(|i| i.kind == InsightKind::Flare)
+            .expect("an M5 raises the flare line");
+        assert!(
+            flare.plain.contains("estimated from GOES"),
+            "{}",
+            flare.plain
+        );
+        assert!(
+            flare
+                .plain
+                .contains(&format!("~{:.0} MHz", flare_haf_mhz(5e-5))),
+            "{}",
+            flare.plain
+        );
     }
 
     /// A cached snapshot (served at any age) carrying a Kp 6 and an X1 flux stamped two hours

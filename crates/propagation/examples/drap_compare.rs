@@ -31,8 +31,11 @@ fn main() {
             }
         };
         let a = agreement(&grid, x.now.value);
-        let verdict = if !wants_drap(x.now.value) {
-            "quiet sun (below M1): not a test"
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        let verdict = if !wants_drap(x.now.value, x.now.at, now) {
+            "quiet sun (below M1) or a stale GOES sample: not a test"
         } else if a.dayside_median <= 1.0 && a.taper_median <= 3.0 {
             "agrees"
         } else {

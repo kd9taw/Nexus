@@ -12,8 +12,9 @@
 // the analytic field, and traced through NOAA's grid (bearing by bearing) when the grid is the
 // footprint. Both hand back [lon, lat] rings, so the 2-D map and the globe draw the same lines.
 //
-// PHASES. NOAA's event list says began / peak / ended in NOAA's words. When it is silent or stale
-// the phase falls back to our X-ray trend word, marked estimated.
+// PHASES. NOAA's event list says began / peak / ended in NOAA's words. When it is silent or stale,
+// or its event is a previous flare (the flux is now above that event's peak, or rising again after
+// it ended), the phase falls back to our X-ray trend word, marked estimated.
 //
 // EXTENSION POINT. A later overlay (the proton cap, the aurora edge) adds its own footprint
 // function beside `flareFootprint` and hands its rings to the same `WxRing` drawing on both
@@ -251,14 +252,29 @@ export interface FlarePhase {
  *  last 6 hours, and has not been over for more than an hour. */
 export const EVENT_FRESH_SECS = 600
 
+/** A flux this far above an event's peak is a new flare, not that event (GOES's sample and NOAA's
+ *  peak differ a little for the same flare). */
+const NEW_FLARE_OVER_PEAK = 1.1
+
+/** `xray` is the flux now (null when unknown). An event that has peaked or ended is this flare's
+ *  only while the flux is not above its peak and, once ended, not rising again: NOAA lists a flare
+ *  only after minutes of rise, so until it does the newest event is the PREVIOUS flare, and its
+ *  words must not be quoted for this one. */
 export function flarePhase(
   event: FlareEvent | null | undefined,
   trend: 'rising' | 'steady' | 'falling' | null,
   nowMs: number,
+  xray: number | null,
 ): FlarePhase {
   const now = nowMs / 1000
+  const settled = event != null && (event.endAt != null || event.maxAt != null)
+  const newFlare =
+    settled &&
+    ((event.maxFlux != null && xray != null && xray > event.maxFlux * NEW_FLARE_OVER_PEAK) ||
+      (event.endAt != null && trend === 'rising'))
   const ours =
     event != null &&
+    !newFlare &&
     now - event.at <= EVENT_FRESH_SECS &&
     now - event.beginAt <= 6 * 3600 &&
     event.beginAt <= now + 60 &&

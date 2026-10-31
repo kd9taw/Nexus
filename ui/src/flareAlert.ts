@@ -12,7 +12,9 @@
 import { doubleBeep } from './alerts'
 import { pushToast } from './toast'
 import { t } from './i18n'
-import { flareClass, flareHafMhz, flareRScale, flareRecoveryMin } from './mapGeo'
+import { flareClass, flareRScale, flareRecoveryMin } from './mapGeo'
+import { flareFootprint } from './flareNow'
+import type { DrapGrid } from './types'
 
 const FLARE_BEEP_HZ = 660
 const RESET_BELOW = 5e-6 // C5 — the event is over (re-arm) once flux drops below
@@ -69,8 +71,12 @@ export function devXrayOverride(): number | null {
  * 60 s fast lane); it only toasts when an event first crosses a tier, or
  * escalates to a higher one. Ham-aware copy: class, R-scale, the D-RAP "HF
  * below ~N MHz" ceiling, and the empirical fade-recovery estimate.
+ *
+ * The ceiling is the map's: the flare footprint's sub-solar HAF (flareNow.ts),
+ * from NOAA's D-RAP grid while `drap` is current, else estimated from the GOES
+ * flux, and the toast says which. Pass `drap` null for simulated flux.
  */
-export function processFlare(flux: number | null): void {
+export function processFlare(flux: number | null, drap: DrapGrid | null = null): void {
   if (flux == null) return
   const tier = tierOf(flux)
   if (tier === 0) {
@@ -90,11 +96,18 @@ export function processFlare(flux: number | null): void {
   const rec = flareRecoveryMin(flux)
   const cls = flareClass(flux)
   const r = flareRScale(flux)
-  const mhz = Math.round(flareHafMhz(flux))
-  // Two whole sentences (with and without NOAA's fade estimate), like the storm toast's.
-  const msg = rec
-    ? t('prop.flareAlert.fade', { cls, r, mhz, mins: Math.round(rec) })
-    : t('prop.flareAlert.now', { cls, r, mhz })
+  // Tier ≥ 1 is M1+, where the footprint always exists.
+  const foot = flareFootprint(now, flux, drap)!
+  const mhz = Math.round(foot.hafSub)
+  // Whole sentences (with and without NOAA's fade estimate, per source), like the storm toast's.
+  const msg =
+    foot.source === 'noaa'
+      ? rec
+        ? t('prop.flareAlert.noaa.fade', { cls, r, mhz, mins: Math.round(rec) })
+        : t('prop.flareAlert.noaa.now', { cls, r, mhz })
+      : rec
+        ? t('prop.flareAlert.fade', { cls, r, mhz, mins: Math.round(rec) })
+        : t('prop.flareAlert.now', { cls, r, mhz })
   if (tier >= 2) {
     doubleBeep(FLARE_BEEP_HZ)
     pushToast(msg, 'error', 15000, { alert: true, prominent: true })

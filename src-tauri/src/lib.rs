@@ -14952,7 +14952,8 @@ async fn get_xray_now() -> Result<XrayNow, String> {
         .await
         .ok_or("xray: no GOES reading yet")?;
     let event = lane_ask(&FLARE_EVENT_LANE, swpc::fetch_flare_latest).await;
-    let drap = if propagation::flare::wants_drap(x.now.value) {
+    // Only during a flare, and only beside a GOES sample the UI still uses (flare.rs `wants_drap`).
+    let drap = if propagation::flare::wants_drap(x.now.value, x.now.at, now_unix()) {
         lane_ask(&DRAP_LANE, swpc::fetch_drap_grid).await
     } else {
         None

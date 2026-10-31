@@ -272,6 +272,7 @@ function syncLines(
     if (dashed) l.computeLineDistances()
     grp.add(l)
   }
+  grp.name = key
   store[key] = grp
   g.scene().add(grp)
 }
@@ -2023,6 +2024,7 @@ function Globe3DView({
             trend={prop?.wxTrend?.xray.dir ?? null}
             qth={qth}
             nowMs={nowMs}
+            snapAt={prop?.spaceWx?.xrayAt ?? null}
           />
         </div>
       )}
