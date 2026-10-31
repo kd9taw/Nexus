@@ -1,5 +1,5 @@
 // Appearance in the Backup (features/appearanceBackup.ts) — operator pick of 2026-09-26,
-// "Per computer + Backup": the appearance stays webview-local, and Settings ▸ Config ▸ Backup &
+// "Per computer + Backup": the appearance stays webview-local, and Settings ▸ App ▸ Backup &
 // reset carries it in the file and puts it back on a restore.
 //
 // What must hold, each against a bundle shaped exactly like the one the station writes

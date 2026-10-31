@@ -939,7 +939,7 @@ export const EN = {
   'gettingStarted.station.callout.body':
     'Four characters pins you to the middle of a ~100-mile square, and every distance and bearing you will ever read is measured from that point. <code>{{full}}</code> beats <code>{{short}}</code>. A malformed locator is refused outright — the wizard will not let you past it.',
   'gettingStarted.station.shot.caption':
-    'Setup wizard ▸ step 1 · re-run any time from Settings ▸ Appearance ▸ Features',
+    'Setup wizard ▸ step 1 · re-run any time from Settings ▸ App ▸ Features',
   'gettingStarted.station.shot.title': 'Who’s on the air?',
   'gettingStarted.station.shot.sub':
     'Your grid square is the anchor for everything location-based — satellite passes, propagation, the map, and DXpedition windows are all computed from it.',
@@ -1089,7 +1089,7 @@ export const EN = {
   // `<a>` is the labels THIS language's Settings shows (the Settings view, the tab, the section
   // legend), and the `<a>` span becomes a link that opens that section.
   'gettingStarted.wsjtx.body':
-    'Your muscle memory transfers — double-click semantics, <code>Esc</code> / <code>F4</code> / <code>F6</code> / <code>Alt+1–6</code>, Band Activity bottom-pinned, early decodes at 11.8\u00a0s, Fake-It split, Hound auto-move. So do your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working once you turn on <b>WSJT-X UDP API</b> (off by default) in Settings ▸ Logging & Connectors ▸ <a>Integrations & Feeds</a>. Its address already matches WSJT-X’s default, so nothing else needs setting, and they see Nexus as a WSJT-X.',
+    'Your muscle memory transfers — double-click semantics, <code>Esc</code> / <code>F4</code> / <code>F6</code> / <code>Alt+1–6</code>, Band Activity bottom-pinned, early decodes at 11.8\u00a0s, Fake-It split, Hound auto-move. So do your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working once you turn on <b>WSJT-X UDP API</b> (off by default) in Settings ▸ Services ▸ <a>Integrations & Feeds</a>. Its address already matches WSJT-X’s default, so nothing else needs setting, and they see Nexus as a WSJT-X.',
   // A whole extra sentence, not a tail glued onto the one above — a translator may place it
   // wherever their language wants it.
   'gettingStarted.wsjtx.mac':
@@ -5467,7 +5467,7 @@ export const EN = {
   'spotMe.cooling': 'Wait {{secs}} s',
   'spotMe.posted': 'Spotted to the DX cluster: {{line}}',
   'spotMe.refused.noCall': 'Not spotted: set your callsign in Settings first.',
-  'spotMe.refused.noCluster': 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Spot Sources.',
+  'spotMe.refused.noCluster': 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Services ▸ Integrations & Feeds ▸ Spot Sources.',
   'spotMe.refused.cooldown': 'Not spotted again yet: one spot a minute. {{secs}} s to go.',
   'spotMe.refused.offBand': 'Not spotted: the dial is outside the amateur bands.',
   'spotMe.refused.noContest': 'Not spotted: Contest mode is off.',
@@ -6368,13 +6368,13 @@ export const EN = {
     'Celestrak refused direct element fetches (HTTP 403/404) — direct attempts are stopped for 24 h. The hamradiotools.io mirror keeps retrying; elements may age until it lands.',
   'sat.lane.unusable.message': 'Sat: elements unusable',
   'sat.lane.unusable.detail':
-    'Every cached element set is over 30 days old — satellite surfaces refuse to point or tune on them. Refresh in Settings ▸ Radio ▸ Orbital elements, or import a fresh file.',
+    'Every cached element set is over 30 days old — satellite surfaces refuse to point or tune on them. Refresh in Settings ▸ Satellites ▸ Orbital elements, or import a fresh file.',
   'sat.lane.stale.message': 'Sat: elements {{days}} d old',
   'sat.lane.stale.detail':
-    'Orbital elements are past the 14-day stale line — pass times, pointing and Doppler drift with age. Refresh from the Satellites section or Settings ▸ Radio ▸ Orbital elements.',
+    'Orbital elements are past the 14-day stale line — pass times, pointing and Doppler drift with age. Refresh from the Satellites section or Settings ▸ Satellites ▸ Orbital elements.',
   'sat.lane.mostlyStale.message': 'Sat: {{label}}',
   'sat.lane.mostlyStale.detail':
-    "Most of the element sets you hold are past the 14-day stale line — {{label}}. The typical bird is still current, so the age reads calm; the rest of the catalog's pass times, pointing and Doppler are drifting. Refresh from the Satellites section or Settings ▸ Radio ▸ Orbital elements.",
+    "Most of the element sets you hold are past the 14-day stale line — {{label}}. The typical bird is still current, so the age reads calm; the rest of the catalog's pass times, pointing and Doppler are drifting. Refresh from the Satellites section or Settings ▸ Satellites ▸ Orbital elements.",
 
   // The satellite VFO-mapping enumeration (features/satVfo.ts) — LABELS ONLY. Every `value`
   // ('off', 'a-down-b-up', …) is a persisted token and stays in the code, and so do the VFO
@@ -6479,7 +6479,7 @@ export const EN = {
   'sat.head.quiet.title':
     'Orbital elements are {{days}} days old (the median of the {{sets}} sets in use). They refresh automatically every 6 h when the network allows; click to refresh now.',
   'sat.head.quiet.titleEmpty':
-    'No usable orbital elements are cached. Click to fetch them now; you can also import a file under Settings ▸ Radio ▸ Orbital elements.',
+    'No usable orbital elements are cached. Click to fetch them now; you can also import a file under Settings ▸ Satellites ▸ Orbital elements.',
   'sat.head.quiet.refreshing': '⟳ refreshing…',
   'sat.head.quiet.refresh': '⟳ refresh elements',
   'sat.head.popOut.title': 'Open in its own window',
@@ -6566,7 +6566,7 @@ export const EN = {
   // the operator would have to change.
   'sat.doppler.head': 'Doppler',
   'sat.doppler.none.off':
-    'Doppler is off — nothing is being tuned (Settings ▸ Radio ▸ Satellite Doppler).',
+    'Doppler is off — nothing is being tuned (Settings ▸ Satellites ▸ Satellite Doppler).',
   'sat.doppler.none.pickConfirm':
     'No transponder selected — pick one beside this; once your mapping is confirmed for this radio, Doppler tunes your uplink and the dial stays yours.',
   'sat.doppler.none.pickUplink':
@@ -6665,7 +6665,7 @@ export const EN = {
   'sat.rail.uplink.yours': 'The transmit VFO stays yours.',
   'sat.rail.doppler.turnOn': 'turn on',
   'sat.rail.doppler.turnOn.title':
-    'Turn Doppler correction back on (the same switch as Settings ▸ Radio ▸ Satellite Doppler)',
+    'Turn Doppler correction back on (the same switch as Settings ▸ Satellites ▸ Satellite Doppler)',
   'sat.rail.uplink.switch.label': 'switch mapping',
   'sat.rail.uplink.confirm.label': 'confirm uplink',
   'sat.rail.uplink.switch.title':
@@ -6860,7 +6860,7 @@ export const EN = {
   'sat.transponder.txMode.forecastCw':
     "TX mode: this bird runs {{up}} up / {{down}} down (SatNOGS). Once your uplink mapping is confirmed for the radio in use, a tracked pass sets the TX (split) VFO to CW when you work it from Phone or with the radio's own CW keyer; a soundcard CW keyer gets the data mode its keyed tone needs.",
   'sat.transponder.state.dopplerOff':
-    'Doppler correction is off, so nothing is being tuned. Turn it on in Settings ▸ Radio ▸ Satellite Doppler.',
+    'Doppler correction is off, so nothing is being tuned. Turn it on in Settings ▸ Satellites ▸ Satellite Doppler.',
   'sat.transponder.state.uplinkOnly.driving':
     'Your uplink-only mapping keeps the dial yours — only the transmit VFO is tuned.',
   'sat.transponder.state.uplinkOnly.unconfirmed':
@@ -7238,7 +7238,7 @@ export const EN = {
   'program.age.days': '{{days}}d ago',
   // `{{source}}` is the directory's own name and `{{band}}` a band name — both tokens.
   'program.coverageGap':
-    '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <link>Settings ▸ Logging & Connectors ▸ Confirmations</link> fills the gap.',
+    '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <link>Settings ▸ Services ▸ Confirmations</link> fills the gap.',
 
   // `{{states}}` is a list of 2-letter state codes — tokens, never translated.
   'program.missingStates':
@@ -7723,21 +7723,22 @@ export const EN = {
   // `SETTINGS_TABS` in `components/SettingsPanel.tsx` says so at the array.
   'settings.tabs.station': 'Station',
   'settings.tabs.radio': 'Radio',
+  'settings.tabs.satellites': 'Satellites',
   'settings.tabs.remote': 'Remote',
   'settings.tabs.spots': 'Spots & Alerts',
-  'settings.tabs.logging': 'Logging & Connectors',
+  'settings.tabs.services': 'Services',
   'settings.tabs.logbook': 'Logbook',
   'settings.tabs.contesting': 'Contesting',
   'settings.tabs.appearance': 'Appearance',
-  'settings.tabs.configurations': 'Config',
+  'settings.tabs.app': 'App',
 
-  // The Config tab. `<em>` marks the OLD location in the note — an operator who knew where these
+  // Backup & reset, on the App tab. `<em>` marks the OLD location in the note — an operator who knew where these
   // used to be needs to be told they moved, once, rather than left to hunt.
   'settings.configurations.legend': 'Backup & reset',
   'settings.configurations.note':
     'Your whole setup in one file — for a new computer, before a rebuild, or to get back to a known-good state. These used to live under <em>Radio → Transmit limits & sharing</em>, where nobody found them.',
 
-  // Reset sits beside Backup in the Config tab because its confirm points AT the backup: the
+  // Reset sits beside Backup on the App tab because its confirm points AT the backup: the
   // machinery that makes this reversible is one control away, so the wording names it rather
   // than just warning. Keyed under `configurations`, not `transmit` — a translator reads the key
   // for context, and this is not a transmit setting.
@@ -7745,7 +7746,7 @@ export const EN = {
   'settings.configurations.reset.action': 'Reset all settings…',
   'settings.configurations.reset.title': 'Erase all settings and return to factory defaults',
   'settings.configurations.reset.hint':
-    'Erases your radios, audio devices, callsign and preferences. Your <b>logbook is not touched</b>, and stored passwords stay in your keychain (clear those individually under Logging & Connectors). Back up first — this cannot be undone.',
+    'Erases your radios, audio devices, callsign and preferences. Your <b>logbook is not touched</b>, and stored passwords stay in your keychain (clear those individually under Services). Back up first — this cannot be undone.',
   // What Save says when the form is refused. The rig checks' own wording lives above, in
   // `settings.radio.check.*` — this is only the panel's fallback when one carries no message.
   'settings.save.callsignFirst': 'Enter your callsign on the Station tab before saving.',
@@ -8519,7 +8520,7 @@ export const EN = {
   'settings.scopeSource.rfSafety':
     "Feed the receiver from the rig's RX OUT, or from a splitter with transmit protection, never from a plain T-piece on the transmit line: an RSP takes at most 0 dBm, and 100 W is +50 dBm.",
 
-  // ── Settings ▸ Radio ▸ Satellite Doppler ────────────────────────────────────────────
+  // ── Settings ▸ Satellites ▸ Satellite Doppler ────────────────────────────────────────────
   // ⚠️ The MAPPING LABELS are not here — they live in `features/satVfo.ts` beside the wire
   // value each one stores, because the Satellites readiness rail shows the same list and two
   // copies of a list that decides WHERE THE RADIO TRANSMITS would be a wrong-uplink generator.
@@ -8535,7 +8536,7 @@ export const EN = {
   'settings.satelliteDoppler.vfoMap.label': 'VFO mapping',
   'settings.satelliteDoppler.vfoMap.aria': 'Satellite VFO mapping',
   'settings.satelliteDoppler.vfoMap.otherRadio':
-    'The uplink mapping is confirmed per radio, for the radio you are operating. Confirm it for this radio on the pass rail during a pass, or make it the active radio first.',
+    'You are editing {{name}}, not the radio you are operating. The uplink mapping is confirmed per radio, for the radio you are operating: confirm it for {{name}} on the pass rail during a pass, or make it the active radio first.',
   'settings.satelliteDoppler.vfoMap.hint':
     "Which VFO carries your uplink. Match this to how your radio is wired. <b>A wrong mapping transmits on your own downlink</b> — into the satellite's output passband, on top of everyone else working the bird. Picking one applies immediately and confirms it for the radio you are operating; a second radio gets its own confirmation on the pass rail. Every mapping except Uplink only keeps the downlink corrected.",
   'settings.satelliteDoppler.minShift.label': 'Minimum shift (Hz)',
@@ -8551,7 +8552,7 @@ export const EN = {
   'settings.satelliteDoppler.passSounds.hint':
     'A rising tone the moment an armed pass starts and a falling one when it ends, alongside the popup — hear AOS with your hands on the rotor. On by default; clearing this silences only the tones, never the popups.',
 
-  // ── Settings ▸ Radio ▸ Orbital elements ─────────────────────────────────────────────
+  // ── Settings ▸ Satellites ▸ Orbital elements ─────────────────────────────────────────────
   // ⚠️ TLE, Keplerian elements, SupGP, the epoch, CelesTrak, SatNOGS, AMSAT and the CC BY-SA
   // 4.0 licence name are all invariant — they name a data format, its sources and the terms
   // they ship under. So is `{{source}}`, which is the backend's own one-word provenance
@@ -8773,9 +8774,9 @@ export const EN = {
   'firstContact.close': 'Got it',
   'settings.station.experience.label': 'Your experience',
   'settings.station.experience.notSet': 'Not set',
-  'settings.station.experience.hint': 'Picks which screens are on and how much of Settings opens at first. Changing it replaces the set in Settings ▸ Appearance ▸ Features. Every setting stays reachable by search.',
+  'settings.station.experience.hint': 'Picks which screens are on and how much of Settings opens at first. Changing it replaces the set in Settings ▸ App ▸ Features. Every setting stays reachable by search.',
   'settings.station.experience.failed': 'Could not save your experience',
-  'settings.station.experience.confirm.body': 'These screens turn off: {{screens}}. You can turn any of them back on in Settings ▸ Appearance ▸ Features.',
+  'settings.station.experience.confirm.body': 'These screens turn off: {{screens}}. You can turn any of them back on in Settings ▸ App ▸ Features.',
   'settings.fold.note': 'Showing the settings you need first. The rest of this tab is folded to its headings.',
   'setup.nav.finishPlain': 'Finish',
   'settings.fold.showAll': 'Show all',
@@ -9213,6 +9214,7 @@ export const EN = {
   // ⚠️ `60\u00a0s` is a NON-BREAKING SPACE, written as an escape so it cannot be lost to a
   // careless edit: the period and its unit must not be split across a line. A translation
   // keeps it. A, B and C are the submode names both stations have to agree on.
+  'settings.weakSignal.legend': 'Weak-signal and beacons',
   'settings.jt65.legend': 'JT65 — classic EME',
   'settings.jt65.submode.label': 'Submode (tone spacing)',
   'settings.jt65.submode.a': 'A — HF standard, narrowest',
@@ -9891,7 +9893,7 @@ export const EN = {
   'settings.workingFrequencies.overrides.hint':
     'MHz is the dial (suppressed-carrier) frequency. Save to apply — band switches then use your value for that band + mode.',
 
-  // ── Settings ▸ Logging & Connectors ▸ Connections ───────────────────────────────────
+  // ── Settings ▸ Services ▸ Connections ───────────────────────────────────
   // The connector health grid and its event log. ⚠️ NOT here, and deliberately: the state
   // word beside each dot and the "failed 10m ago …" line come from `settings/connHealth.ts`,
   // the connector NAME and identity are data, and every event message in the log is written
@@ -9943,7 +9945,7 @@ export const EN = {
   'settings.b4.matchMode.hint':
     'Off (the default, and WSJT-X’s): working a station on 40m marks them B4-on-band for 40m in every mode, and the log strip’s Dupe badge counts any mode on the band. On: 40m FT8 and 40m phone are separate contacts — the solid B4 chip and the Dupe badge require the mode to match as well. The hollow B4 chip (worked anywhere) is unaffected either way.',
 
-  // ── Settings ▸ Logging & Connectors ▸ Integrations & Feeds ─────────────────────────
+  // ── Settings ▸ Services ▸ Integrations & Feeds ─────────────────────────
   // ⚠️ Everything this section names on the wire is invariant and stays in the panel: the
   // UDP addresses and ports it offers as field examples, the file names (ALL.TXT, .wav) and
   // the program names (WSJT-X, JTDX, JTAlert, GridTracker, HRD) inside these
@@ -10061,7 +10063,7 @@ export const EN = {
   'settings.antennaGain.hint':
     'Used by the P.533 link budget only. 0 = a simple wire/vertical (isotropic); a 3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or takeoff-angle modelling, and the fast heuristic ignores it.',
 
-  // ── Settings ▸ Logging & Connectors ▸ DXKeeper ─────────────────────────────────────
+  // ── Settings ▸ Services ▸ DXKeeper ─────────────────────────────────────
   // ⚠️ The legend (`DXKeeper (DXLab Suite)`) and the `DXLab Base Port` label are still in the
   // panel, and for two different reasons. The legend is nothing but product names. The label
   // NAMES A CONTROL IN ANOTHER APPLICATION'S ENGLISH INTERFACE — the hint below it sends the
@@ -10081,7 +10083,7 @@ export const EN = {
   'settings.dxkeeper.uploads.hint':
     'Off by default: Nexus already uploads to LoTW / eQSL / ClubLog / QRZ, so turning this on would upload every QSO twice. Note DXKeeper ignores this for Club Log and QRZ if <em>Auto upload</em> is ticked on its own QSL Configuration tab — untick it there.',
 
-  // ── Settings ▸ Logging & Connectors ▸ N3FJP ────────────────────────────────────────
+  // ── Settings ▸ Services ▸ N3FJP ────────────────────────────────────────
   // ⚠️ `N3FJP`, `ACLog`, `Field Day Contest Log` and `Network Status Display` are the club
   // logger's own names; `ENTER` is the key its scoring path is named after and `ADDDIRECT` is
   // the API command that replaces it. All of them are wire-level or product names and stay as
@@ -10110,7 +10112,7 @@ export const EN = {
   'settings.n3fjp.test.hint':
     'Run this at the club site before the event starts to confirm the API link works.',
 
-  // ── Settings ▸ Logging & Connectors ▸ N1MM+ ────────────────────────────────────────
+  // ── Settings ▸ Services ▸ N1MM+ ────────────────────────────────────────
   // ⚠️ The port number 12060 is the contest logger's own broadcast port and stays in the
   // sentence that names it. The address the toggle fills in for a blank field is a VALUE that
   // is written to settings, not an example, and never came near this file.
@@ -10205,7 +10207,7 @@ export const EN = {
   'settings.countryFile.hint':
     'The AD1C cty.dat country file maps callsigns to DXCC entities — the country on decode rows, the Needed board and the log. Checked weekly; a downloaded update applies at the next launch.',
 
-  // ── Settings ▸ Logging & Connectors ▸ Confirmations ────────────────────────────────
+  // ── Settings ▸ Services ▸ Confirmations ────────────────────────────────
   // The QSL services, one featgroup each. Everything below is a LABEL or a HINT: no key,
   // password, token or upload code is read, written or interpolated by any entry here, and the
   // Set/Forget buttons these words sit on call the same handlers they always did.
@@ -10313,7 +10315,7 @@ export const EN = {
   'settings.confirmations.qrz.password.label': 'QRZ password',
   'settings.confirmations.qrz.password.placeholder': 'QRZ.com account password',
   'settings.confirmations.qrz.password.hint':
-    'Your QRZ.com login password — <b>this is what powers callbook lookups</b> (name, QTH, grid), and it is separate from the QRZ Logbook API key under Logging & Connectors (that key only uploads QSOs). Stored in the OS keychain, never on disk. Grid & state need a QRZ XML subscription; free accounts return only name/address/country.',
+    'Your QRZ.com login password — <b>this is what powers callbook lookups</b> (name, QTH, grid), and it is separate from the QRZ Logbook API key under Services (that key only uploads QSOs). Stored in the OS keychain, never on disk. Grid & state need a QRZ XML subscription; free accounts return only name/address/country.',
   'settings.confirmations.qrz.apiKey.label': 'QRZ Logbook API key',
   'settings.confirmations.qrz.apiKey.placeholder': 'from your QRZ logbook settings page',
   'settings.confirmations.qrz.apiKey.forget.title':
@@ -10414,7 +10416,7 @@ export const EN = {
   'settings.confirmations.hrdlog.code.forget.title':
     'Remove the stored HRDLog.net code from the system keychain',
   'settings.confirmations.hrdlog.code.hint':
-    'The upload code from your HRDLog.net account (Options → your code). Uploads log under your station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate from the HRD Logbook UDP push under Logging.',
+    'The upload code from your HRDLog.net account (Options → your code). Uploads log under your station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate from the HRD Logbook UDP push in Settings ▸ Services ▸ Integrations & Feeds.',
   'settings.confirmations.hrdlog.upload.label': 'Auto-upload QSOs to HRDLog.net',
   'settings.confirmations.hrdlog.upload.hint':
     'Push each logged QSO to HRDLog.net (needs the upload code above). HRDLog.net is a live-logging and awards site — it is <b>not</b> an ARRL confirmation source, so an upload here never earns DXCC/WAS credit.',
@@ -10643,7 +10645,7 @@ export const EN = {
   'settings.workspace.panes.reset': 'Reset pane sizes',
   'settings.workspace.panes.hint': 'Restore the default left/right pane widths.',
 
-  // ── Settings ▸ Appearance ▸ Features ────────────────────────────────────────────────
+  // ── Settings ▸ App ▸ Features ────────────────────────────────────────────────
   // ⚠️ Each feature's NAME and one-line description, and the category headings they are
   // grouped under, come from `features/registry.ts` and are interpolated or rendered as
   // values — they are not in this file, and they move with that registry. What is here is
@@ -13966,9 +13968,9 @@ export const EN = {
   // paths name the tab and section as this language labels them ("Diagnostic log" is labelled
   // in English in every language today).
   'shell.logStore.network':
-    'Nexus did not open the logbook database because your data folder is on a network drive, where a database can be damaged by the way file locking works across a network. Nothing is lost: this session keeps your log in log.adi, as before. To use the database, move the data folder to a drive inside this computer in Settings ▸ Config ▸ Data & log folder.',
+    'Nexus did not open the logbook database because your data folder is on a network drive, where a database can be damaged by the way file locking works across a network. Nothing is lost: this session keeps your log in log.adi, as before. To use the database, move the data folder to a drive inside this computer in Settings ▸ App ▸ Data & log folder.',
   'shell.logStore.failed':
-    'Nexus could not open the logbook database. Reason: {{reason}}. Nothing is lost: this session keeps your log in log.adi, as before. The diagnostic log has the details, in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Diagnostic log.',
+    'Nexus could not open the logbook database. Reason: {{reason}}. Nothing is lost: this session keeps your log in log.adi, as before. The diagnostic log has the details, in Settings ▸ Services ▸ Integrations & Feeds ▸ Diagnostic log.',
   // A file Nexus could not read at launch and KEPT rather than save over (features/keptFiles.ts):
   // a torn journal, or one a newer Nexus wrote. `{{path}}` is the file's full path on the
   // operator's computer, a token. One sentence per store says what the file held; `other` is a

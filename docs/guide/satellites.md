@@ -8,7 +8,7 @@ have a rotator — can auto-track a bird across the sky through a pass.
 Satellites ships enabled — the wizard turns everything on — and the
 getting-started and 6m/VHF goal profiles both keep it. If you have trimmed
 sections, switch it back on in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features). It needs
+[Settings ▸ App ▸ Features](settings-reference.md#features). It needs
 your grid set in [Settings ▸ Station](settings-reference.md#station) to compute
 passes.
 

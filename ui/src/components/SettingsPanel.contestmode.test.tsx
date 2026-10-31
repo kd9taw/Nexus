@@ -133,13 +133,13 @@ describe('Settings ▸ Contesting: the switch is Contest mode, and names the pic
   })
 })
 
-describe('Settings ▸ Appearance ▸ Features: no Contest mode switch, and no Contesting group', () => {
+describe('Settings ▸ App ▸ Features: no Contest mode switch, and no Contesting group', () => {
   const groups = () => [...document.querySelectorAll('.settings-featgroup-title')].map((g) => g.textContent)
 
   it('the switch is on the Contesting tab and the Contest screen only', async () => {
     holding({ fdEvent: 'ilqp' })
     renderPanel()
-    await openTab('Appearance')
+    await openTab('App')
     expect(groups()).toContain('Core — always on')
     expect(screen.queryByRole('switch', { name: /Contest mode/ })).toBeNull()
     expect(groups()).not.toContain('Contesting')

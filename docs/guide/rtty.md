@@ -15,7 +15,7 @@ contest log exports to Cabrillo.
 
 RTTY ships enabled — the wizard turns everything on; there is no mode picker to
 miss it in. No goal profile enables it, though, so if you pick one in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features), switch RTTY
+[Settings ▸ App ▸ Features](settings-reference.md#features), switch RTTY
 back on there — or take **Everything (expert)**, which includes it.
 
 ![The RTTY cockpit filling an ultrawide window, so the waterfall runs far wider and shallower than in the other captures in this manual, and the Decoded Text pane below it is correspondingly tall. The header carries the RTTY 45.45 · 170 Hz badge, an AFSK pill, 7.0800 MHz on the 40 m channel, and ⊞ Panels, TX On, Stop TX and CAT on the right; the waterfall below shows band noise across the whole passband, with the green M and orange S cursors standing at the 2125 / 2295 Hz tone pair and no signal between them. The decoder is not armed — the pane head offers only RX, Arm RX, Auto and Clear, with no AFC pill and no Re-tune, above the empty-state line "Arm RX to decode RTTY from the receive audio" — while the macro row and compose bar stay pinned at the bottom, Esc / Stop greyed out.](../img/manual/rtty-cockpit.webp)

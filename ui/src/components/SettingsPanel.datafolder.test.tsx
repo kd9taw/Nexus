@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// #289 — Settings ▸ Config ▸ Data & log folder.
+// #289 — Settings ▸ App ▸ Data & log folder.
 //
 // The safety half is Rust (src-tauri: the pointer is written LAST, the copy is verified byte for
 // byte, nothing is ever moved or deleted, a folder that would open an empty logbook is refused).

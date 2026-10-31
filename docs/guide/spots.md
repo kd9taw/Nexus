@@ -11,7 +11,7 @@ Needed board has.
 Spots is on by default: the first-run Goals step keeps it on under **DX
 chasing & awards**, **Contesting** and **Everything (expert)** and leaves it off
 under the other three profiles, and
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) turns it on
+[Settings ▸ App ▸ Features](settings-reference.md#features) turns it on
 or off any time. It describes itself there as "Every cluster/RBN spot on the air
 — the raw firehose, filter by band/mode."
 
@@ -27,7 +27,7 @@ window of its own for a second monitor.
 **What feeds it.** Two RBN skimmer firehoses — CW and digital — plus the human
 DX-cluster nodes you are connected to — the two Nexus picks, or every node in your
 own list — set in
-[Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds),
+[Settings ▸ Services](settings-reference.md#integrations--feeds),
 unioned into one buffer. RBN carries CW and digital only, so phone rows come
 from the human nodes: with no node configured this board is nearly all CW and
 FT8. PSK Reporter does **not** feed it — that is the Needed board's evidence

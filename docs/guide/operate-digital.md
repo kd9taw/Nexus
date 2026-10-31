@@ -80,7 +80,7 @@ annotations stock WSJT-X never had:
 - **AP** / low-confidence markers,
 - **JTAlert highlight colors** (honored over UDP if JTAlert is feeding them),
 - a teal **L** mark on calls known to upload to LoTW (populate the users list in
-  [Settings ▸ Logging & Connectors](settings-reference.md#lotw-users-list)).
+  [Settings ▸ Logbook](settings-reference.md#lotw-users-list)).
 
 **The QSO strip** sits directly under the waterfall, above the decode panes,
 carrying your transmit controls — **TX On/Off**,
@@ -271,7 +271,7 @@ end) is not implemented.
 
 Nexus speaks WSJT-X's UDP protocol byte-for-byte, so **GridTracker, JTAlert, and
 your logger see Nexus as WSJT-X** once you turn on **WSJT-X UDP API** in
-[Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds).
+[Settings ▸ Services ▸ Integrations & Feeds](settings-reference.md#integrations--feeds).
 It is off by default; its address already matches WSJT-X's default, so nothing
 else needs setting. Outbound Heartbeat / Status / Decode /
 QsoLogged and inbound HaltTx / Clear / Replay / Location / HighlightCallsign all
@@ -289,9 +289,9 @@ size WSJT-X sends. JS8 spots by JS8Call's own rules ([JS8](js8.md)).
 If another app owns the rig, **Companion mode** rides an upstream WSJT-X/JTDX
 decode stream over UDP (default :2237) instead of decoding itself — point it at
 the source in
-[Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds).
+[Settings ▸ Services](settings-reference.md#integrations--feeds).
 
-![Settings ▸ Logging & Connectors: a WSJT-X UDP API toggle switched on above a UDP address field reading 127.0.0.1:2237, and at the far right a Companion UDP address field holding the same host and port.](../img/manual/operate-companion-udp.webp)
+![Settings ▸ Services: a WSJT-X UDP API toggle switched on above a UDP address field reading 127.0.0.1:2237, and at the far right a Companion UDP address field holding the same host and port.](../img/manual/operate-companion-udp.webp)
 
 *The two ends of the UDP link in Nexus 1.10.3, and they point opposite ways. The
 left pair is what Nexus **sends** — the feed GridTracker and JTAlert read. The

@@ -31,15 +31,16 @@ export type SettingsTabId =
   | 'station'
   | 'remote'
   | 'radio'
+  | 'satellites'
   | 'phone'
   | 'cw'
   | 'digital'
   | 'spots'
   | 'logbook'
-  | 'logging'
+  | 'services'
   | 'contesting'
   | 'appearance'
-  | 'configurations'
+  | 'app'
 
 export interface SettingsTabDef {
   id: SettingsTabId
@@ -56,6 +57,9 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
   // Appearance-tab Conditions-on-a-TV setting are a different concern and stay where they are.
   { id: 'remote', label: 'Remote' },
   { id: 'radio', label: 'Radio' },
+  // Satellite Doppler and the orbital elements (2026-10, the Settings regroup): where someone
+  // working a satellite looks, rather than among the rig's own sections.
+  { id: 'satellites', label: 'Satellites' },
   // The three mode tabs mirror the nav rail's own top-level shape (Phone · CW · Digital), which
   // is the taxonomy the operator already navigates. It is also the only axis that can house SSTV
   // and APRS: neither has an `OperatingMode` variant in the backend (SSTV rides Phone, APRS rides
@@ -67,13 +71,16 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
   { id: 'spots', label: 'Spots & Alerts' },
   // The logbook's own settings — its display, how long it keeps a deleted contact, the callbook
   // lookups and the reference data a contact is checked against — on one tab (operator,
-  // 2026-10-25). Logging & Connectors keeps the service sign-ins, the uploads and the programs
-  // that log through Nexus.
+  // 2026-10-25). Services keeps the service sign-ins, the uploads and the programs that log
+  // through Nexus (it was "Logging & Connectors" until the 2026-10 regroup; `logging` is an alias).
   { id: 'logbook', label: 'Logbook' },
-  { id: 'logging', label: 'Logging & Connectors' },
+  { id: 'services', label: 'Services' },
   { id: 'contesting', label: 'Contesting' },
   { id: 'appearance', label: 'Appearance' },
-  { id: 'configurations', label: 'Config' },
+  // The computer and the app rather than the look: Features, updates, starting at sign-in, this
+  // computer's audio, motion, the data folder and backup. Config merged into it (`configurations`
+  // and `config` are aliases).
+  { id: 'app', label: 'App' },
 ]
 
 export interface SettingsSectionDef {
@@ -243,19 +250,6 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'panadapter', 'rx out', 'external receiver', 'second receiver', 'waterfall source'],
   },
   {
-    id: 'satellite-doppler',
-    label: 'Satellite Doppler',
-    tab: 'radio',
-    keywords: ['satellite', 'sat', 'bird', 'doppler', 'vfo map', 'uplink', 'downlink',
-      'full duplex', 'linear', 'transponder'],
-  },
-  {
-    id: 'orbital-elements',
-    label: 'Orbital elements',
-    tab: 'radio',
-    keywords: ['tle', 'keps', 'keplerian', 'celestrak', 'satnogs', 'orbit', 'satellite'],
-  },
-  {
     id: 'rotator',
     label: 'Rotator',
     tab: 'radio',
@@ -299,6 +293,21 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'log4om', 'macloggerdx', 'rf2k', 'tci keyer', 'tci spots'],
   },
 
+  // ---- Satellites --------------------------------------------------------------
+  {
+    id: 'satellite-doppler',
+    label: 'Satellite Doppler',
+    tab: 'satellites',
+    keywords: ['satellite', 'sat', 'bird', 'doppler', 'vfo map', 'uplink', 'downlink',
+      'full duplex', 'linear', 'transponder'],
+  },
+  {
+    id: 'orbital-elements',
+    label: 'Orbital elements',
+    tab: 'satellites',
+    keywords: ['tle', 'keps', 'keplerian', 'celestrak', 'satnogs', 'orbit', 'satellite'],
+  },
+
   // ---- Modes -------------------------------------------------------------------
   {
     id: 'digital-ft8-ft4',
@@ -314,22 +323,36 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'tx period', 't/r period', 'disable tx after 73', 'tune power', 'low power tune',
       'atu power', 'loop antenna', 'db reports', 'comments', 'reports to comments'],
   },
+  // The weak-signal modes and the beacons, under one heading (2026-10, the Settings regroup):
+  // five sections an operator rarely needs, so the page scans as one row until they are wanted.
+  // Each keeps its own legend and id, nested in this one's fieldset.
+  {
+    id: 'weak-signal',
+    label: 'Weak-signal and beacons',
+    tab: 'digital',
+    // Never a mode's own name or a word its label carries: an exact keyword here would outrank
+    // that mode's own section in search.
+    keywords: ['weak signal', 'eme', 'moonbounce', 'propagation beacon', 'rare modes', 'lf', 'vhf'],
+  },
   {
     id: 'jt65',
     label: 'JT65 — classic EME',
     tab: 'digital',
+    parent: 'weak-signal',
     keywords: ['jt65', 'eme', 'moonbounce', 'submode'],
   },
   {
     id: 'msk144',
     label: 'MSK144 — meteor scatter',
     tab: 'digital',
+    parent: 'weak-signal',
     keywords: ['msk144', 'meteor', 'scatter', 'ping', 'six metres', '6m'],
   },
   {
     id: 'beacons-wspr-fst4w',
     label: 'Beacons — WSPR & FST4W',
     tab: 'digital',
+    parent: 'weak-signal',
     keywords: ['wspr', 'whisper', 'fst4w', 'beacon', 'propagation report', 'tx percent',
       'dbm', 'round robin'],
   },
@@ -337,12 +360,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'fst4',
     label: 'FST4 (QSO) / FST4W (beacon)',
     tab: 'digital',
+    parent: 'weak-signal',
     keywords: ['fst4', 'fst4w', 'lf', 'mf', '2200m', '630m', 'period'],
   },
   {
     id: 'q65',
     label: 'Q65 — EME / VHF+ scatter',
     tab: 'digital',
+    parent: 'weak-signal',
     keywords: ['q65', 'eme', 'moonbounce', 'aircraft scatter', 'submode', 'vhf', 'uhf'],
   },
   {
@@ -539,18 +564,19 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['iota', 'islands on the air', 'island', 'island group', 'island names', 'download'],
   },
 
-  // ---- Logging & Connectors ----------------------------------------------------
+  // ---- Services ----------------------------------------------------------------
   {
     id: 'connections',
     label: 'Connections',
-    tab: 'logging',
-    keywords: ['status', 'connector', 'health', 'log', 'connection log', 'test', 'upload',
+    tab: 'services',
+    // 'services' and 'logging & connectors': the tab's name, and the one it had before the regroup.
+    keywords: ['services', 'logging & connectors', 'status', 'connector', 'health', 'log', 'connection log', 'test', 'upload',
       'not uploading', 'last upload', 'failing', 'revoked', 'wrong password', 'green'],
   },
   {
     id: 'integrations-feeds',
     label: 'Integrations & Feeds',
-    tab: 'logging',
+    tab: 'services',
     keywords: ['wsjt-x', 'udp', 'gridtracker', 'jtalert', 'hrd', 'ham radio deluxe', 'psk',
       'pskreporter', 'cluster', 'rbn', 'reverse beacon', 'spot source', 'cluster node',
       'dxspider', 'cc cluster', 'all.txt', 'directed.txt', 'wav',
@@ -562,7 +588,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   {
     id: 'antenna-gain',
     label: 'Antenna gain (advanced)',
-    tab: 'logging',
+    tab: 'services',
     parent: 'integrations-feeds',
     advanced: true,
     keywords: ['antenna', 'gain', 'dbi', 'p.533', 'prediction'],
@@ -570,25 +596,25 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   {
     id: 'dxkeeper',
     label: 'DXKeeper (DXLab Suite)',
-    tab: 'logging',
+    tab: 'services',
     keywords: ['dxkeeper', 'dxlab', 'commander', 'logger'],
   },
   {
     id: 'n3fjp',
     label: 'N3FJP Integration (club master log)',
-    tab: 'logging',
+    tab: 'services',
     keywords: ['n3fjp', 'club log', 'field day', 'master log', 'amateur contact log'],
   },
   {
     id: 'n1mm',
     label: 'N1MM+ Integration',
-    tab: 'logging',
+    tab: 'services',
     keywords: ['n1mm', 'contest logger', 'broadcast', 'contactinfo'],
   },
   {
     id: 'confirmations',
     label: 'Confirmations',
-    tab: 'logging',
+    tab: 'services',
     neededInHourOne: true,
     keywords: ['lotw', 'eqsl', 'qrz', 'clublog', 'club log', 'hrdlog', 'cloudlog', 'wavelog',
       'hamqth', 'qsl', 'upload', 'auto-upload', 'password', 'api key', 'credential', 'login',
@@ -712,8 +738,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
 
   // ---- Appearance --------------------------------------------------------------
   // The DISPLAY SECTIONS (2026-09-26, the look-and-feel redesign): Workspace keeps the one-tap
-  // looks and the sizes; Theme, Waterfall & scopes, Map & globe and Performance each hold what
-  // their name says. The theme, contrast, Night and Field words moved to Theme with their rows.
+  // looks and the sizes; Theme, Waterfall & scopes and Map & globe each hold what their name
+  // says (Performance went to App in the 2026-10 regroup). The theme, contrast, Night and Field words moved to Theme with their rows.
   {
     id: 'workspace',
     label: 'Workspace',
@@ -775,14 +801,6 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'greyline', 'grayline'],
   },
   {
-    // Motion: animations and fades, and the switch for a slow computer.
-    id: 'performance',
-    label: 'Performance',
-    tab: 'appearance',
-    keywords: ['motion', 'reduce motion', 'reduced motion', 'animation', 'animations', 'fade',
-      'slow computer', 'raspberry pi', 'battery', 'cpu', 'smooth'],
-  },
-  {
     // The read-only LAN page. Filed under Appearance because it is a way of LOOKING at
     // Connect, not a station or contest setting — and the keywords carry the words an
     // operator would actually search for ("tv", "chromecast", "cast", "browser").
@@ -795,9 +813,21 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'phone', 'remote view', 'read only', 'shack tv'],
   },
   {
+    id: 'accessibility',
+    label: 'Accessibility & eyes-free',
+    tab: 'appearance',
+    keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
+      'eyes free', 'tick', 'turn cue', 'chirp'],
+  },
+
+  // ---- App ---------------------------------------------------------------------
+  // The app and this computer rather than the look (2026-10, the Settings regroup): Features, the
+  // update channel, starting at sign-in, this computer's audio and motion came from Appearance;
+  // the data folder and Backup & reset from the Config tab, which merged into this one.
+  {
     id: 'features',
     label: 'Features',
-    tab: 'appearance',
+    tab: 'app',
     // Not 'contest mode': the switch is on the Contesting tab (`field-day`) and the Contest
     // screen only, so a search for it lands there.
     keywords: ['sections', 'enable', 'disable', 'turn off', 'hide', 'profile', 'goal',
@@ -806,14 +836,14 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   {
     id: 'app-updates',
     label: 'App updates',
-    tab: 'appearance',
-    keywords: ['beta', 'update', 'pre-release', 'prerelease', 'channel', 'stable',
+    tab: 'app',
+    keywords: ['app settings', 'beta', 'update', 'pre-release', 'prerelease', 'channel', 'stable',
       'auto update', 'early access'],
   },
   {
     id: 'start-at-sign-in',
     label: 'Start at sign-in',
-    tab: 'appearance',
+    tab: 'app',
     keywords: ['autostart', 'auto start', 'launch at login', 'startup', 'start up', 'boot',
       'reboot', 'log in', 'login', 'sign in', 'run at startup', 'remote'],
   },
@@ -821,20 +851,19 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // Shown only while this computer drives a station over this network (client mode).
     id: 'this-computer',
     label: 'This computer',
-    tab: 'appearance',
+    tab: 'app',
     keywords: ['audio', 'headset', 'headphones', 'speakers', 'microphone', 'mic', 'sound card',
       'meter', 'test tone', 'volume', 'loudness', 'operate from this computer', 'remote audio',
       'client mode'],
   },
   {
-    id: 'accessibility',
-    label: 'Accessibility & eyes-free',
-    tab: 'appearance',
-    keywords: ['screen reader', 'announce', 'blind', 'earcon', 'sound', 'a11y', 'speech',
-      'eyes free', 'tick', 'turn cue', 'chirp'],
+    // Motion: animations and fades, and the switch for a slow computer.
+    id: 'performance',
+    label: 'Performance',
+    tab: 'app',
+    keywords: ['motion', 'reduce motion', 'reduced motion', 'animation', 'animations', 'fade',
+      'slow computer', 'raspberry pi', 'battery', 'cpu', 'smooth'],
   },
-
-  // ---- Config ------------------------------------------------------------------
   // Backup and Restore previously sat under Radio -> "Transmit limits & sharing", which is why
   // no one found them: backing up a whole station has nothing to do with transmit limits. The
   // keywords are deliberately wide because this is what an operator searches for in a panic.
@@ -844,7 +873,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // when they cannot find their log, or want it on a NAS the whole shack can reach.
     id: 'data-folder',
     label: 'Data & log folder',
-    tab: 'configurations',
+    tab: 'app',
     keywords: ['data folder', 'log folder', 'logbook location', 'log.adi', 'where is my log',
       'move my log', 'nas', 'network drive', 'dropbox', 'onedrive', 'google drive', 'synced folder',
       'shared log', 'two computers', 'storage', 'path', 'folder'],
@@ -852,7 +881,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   {
     id: 'configurations',
     label: 'Backup & reset',
-    tab: 'configurations',
+    tab: 'app',
     keywords: ['backup', 'back up', 'restore', 'reset', 'factory', 'defaults', 'start over',
       'export', 'import', 'export settings', 'new computer', 'migrate', 'move to a new laptop',
       'wipe', 'clean slate', 'start again', 'settings file'],
@@ -876,17 +905,25 @@ export const TAB_ALIASES: Record<string, SettingsTabId> = {
   // FT8/FT4 rows (`FREQ_MODES`), while its top-level name promised park, net and repeater
   // frequencies it does not have.
   frequencies: 'digital',
-  // 0.17 consolidation (fourteen → eight). "Logbook & QSL" stays on Logging & Connectors even
-  // though a Logbook tab exists again (2026-10-25): what that old tab held was the service
-  // accounts and uploads, which stayed there. A pointer that names a moved section ("Logbook &
-  // QSL ▸ HamQTH") lands on it by the section, never by this line.
-  'logbook & qsl': 'logging',
-  'logbook and qsl': 'logging',
-  integrations: 'logging',
-  'integrations & feeds': 'logging',
-  connections: 'logging',
-  qsl: 'logging',
-  features: 'appearance',
+  // 0.17 consolidation (fourteen → eight). "Logbook & QSL" goes to Services even though a
+  // Logbook tab exists again (2026-10-25): what that old tab held was the service accounts and
+  // uploads, which are there. A pointer that names a moved section ("Logbook & QSL ▸ HamQTH")
+  // lands on it by the section, never by this line.
+  'logbook & qsl': 'services',
+  'logbook and qsl': 'services',
+  integrations: 'services',
+  'integrations & feeds': 'services',
+  connections: 'services',
+  qsl: 'services',
+  // The 2026-10 regroup. Logging & Connectors became Services, under a name that says what it
+  // holds; Config merged into App. Both old ids and both old labels land on the new tab, so a
+  // stored deep link or a pointer written before the regroup never opens a blank panel.
+  logging: 'services',
+  'logging & connectors': 'services',
+  'logging and connectors': 'services',
+  configurations: 'app',
+  config: 'app',
+  features: 'app',
   rig: 'radio',
   'rig / cat': 'radio',
   'rig control': 'radio',
@@ -895,7 +932,6 @@ export const TAB_ALIASES: Record<string, SettingsTabId> = {
   alerts: 'spots',
   'watch list': 'spots',
   'spot sources': 'spots',
-  satellites: 'radio',
   'field day': 'contesting',
   workspace: 'appearance',
   appearance: 'appearance',

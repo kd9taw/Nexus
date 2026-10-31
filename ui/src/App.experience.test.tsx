@@ -208,7 +208,7 @@ describe('the first-run experience question in the app', () => {
     Element.prototype.scrollIntoView = () => {}
     Element.prototype.scrollTo = () => {}
     await mount('#settings')
-    fireEvent.click(await screen.findByRole('tab', { name: EN['settings.tabs.appearance'] }))
+    fireEvent.click(await screen.findByRole('tab', { name: EN['settings.tabs.app'] }))
     fireEvent.click(await screen.findByRole('button', { name: EN['settings.features.rerunWizard'] }))
     await screen.findByRole('heading', { name: EN['setup.station.title'] })
     expect(screen.queryByText(EN['setup.about.title'])).toBeNull()

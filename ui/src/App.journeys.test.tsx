@@ -182,12 +182,12 @@ async function mount(hash = '#operate'): Promise<void> {
 const next = () => fireEvent.click(screen.getByRole('button', { name: /^Next/ }))
 const settle = () => new Promise((r) => setTimeout(r, 100))
 
-/** Settings ▸ Appearance ▸ Run the setup again, from a station that has used Nexus. */
+/** Settings ▸ App ▸ Run the setup again, from a station that has used Nexus. */
 async function rerun() {
   localStorage.setItem('nexus.features.wizardSeen', '1')
   localStorage.setItem('nexus.features.v1', JSON.stringify({ profile: 'everything', enabled: {} }))
   await mount('#settings')
-  fireEvent.click(await screen.findByRole('tab', { name: EN['settings.tabs.appearance'] }))
+  fireEvent.click(await screen.findByRole('tab', { name: EN['settings.tabs.app'] }))
   fireEvent.click(await screen.findByRole('button', { name: EN['settings.features.rerunWizard'] }))
   await screen.findByRole('heading', { name: EN['setup.station.title'] })
 }

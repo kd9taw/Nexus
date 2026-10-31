@@ -198,13 +198,13 @@ serial port.
    [Logbook & QSL](logbook-qsl.md).
 3. **Point your existing tools at Nexus.** If you run JTAlert or GridTracker,
    turn on **WSJT-X UDP API** in
-   [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
+   [Settings ▸ Services ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
    — default `127.0.0.1:2237`, the address those tools already expect. For
    loggers that tail a decode file, turn on **Write ALL.TXT decode log**; it is
    written only while that is on, and the file first appears after the next
    decode.
 4. **Turn on your confirmation services** in
-   [Settings ▸ Logging & Connectors ▸ Confirmations](settings-reference.md#confirmations)
+   [Settings ▸ Services ▸ Confirmations](settings-reference.md#confirmations)
    — LoTW, QRZ, ClubLog, eQSL, HRDLog. Then pull your confirmations down once;
    the first pull covers your whole history.
 
@@ -276,11 +276,11 @@ Nexus is built so the station still works. What changes:
 | [Memories](memories.md) and [Repeaters](program.md) channel lists you already have | Repeater lookups for a new location |
 
 **Before you go:** refresh the orbital elements
-([Settings ▸ Radio ▸ Orbital elements](settings-reference.md#orbital-elements)),
+([Settings ▸ Satellites ▸ Orbital elements](settings-reference.md#orbital-elements)),
 the country file
-([Settings ▸ Logging & Connectors ▸ Country file (DXCC)](settings-reference.md#country-file-dxcc)),
+([Settings ▸ Logbook ▸ Country file (DXCC)](settings-reference.md#country-file-dxcc)),
 and the LoTW users list
-([Settings ▸ Logging & Connectors ▸ LoTW users list](settings-reference.md#lotw-users-list)).
+([Settings ▸ Logbook ▸ LoTW users list](settings-reference.md#lotw-users-list)).
 All three are local files once fetched.
 
 The Now-Bar's feed-health pills tell "connected but quiet" apart from "down", so

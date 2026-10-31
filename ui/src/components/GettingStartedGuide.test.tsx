@@ -137,7 +137,7 @@ describe('Coming from WSJT-X: the switch JTAlert and GridTracker need', () => {
    *  literal in every language, so every translation must carry it verbatim. */
   const SWITCH = 'WSJT-X UDP API'
   /** Where it lives, in the labels the English Settings actually shows. */
-  const PATH = `${EN['nav.settings.label']} ▸ ${EN['settings.tabs.logging']} ▸ ${EN['settings.integrations.legend']}`
+  const PATH = `${EN['nav.settings.label']} ▸ ${EN['settings.tabs.services']} ▸ ${EN['settings.integrations.legend']}`
   const note = () => document.querySelector<HTMLElement>('.gsg-wsjtx') as HTMLElement
 
   it('names the switch, and the path to it in the words Settings shows', () => {
@@ -160,7 +160,7 @@ describe('Coming from WSJT-X: the switch JTAlert and GridTracker need', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
     // …and the id is a live one. A pointer at a section that no longer resolves fails silently.
     expect(resolveTarget('integrations-feeds')).toEqual({
-      tab: 'logging',
+      tab: 'services',
       section: 'integrations-feeds',
     })
   })
@@ -180,7 +180,7 @@ describe('Coming from WSJT-X: the switch JTAlert and GridTracker need', () => {
     for (const [lang, cat] of Object.entries(catalogs)) {
       const body = String(cat['gettingStarted.wsjtx.body'])
       if (!body.includes(SWITCH)) problems.push(`${lang}: never names "${SWITCH}"`)
-      const path = `${cat['nav.settings.label']} ▸ ${cat['settings.tabs.logging']} ▸ <a>${cat['settings.integrations.legend']}</a>`
+      const path = `${cat['nav.settings.label']} ▸ ${cat['settings.tabs.services']} ▸ <a>${cat['settings.integrations.legend']}</a>`
       if (!body.includes(path)) problems.push(`${lang}: no "${path}" in "${body}"`)
     }
     expect(problems).toEqual([])

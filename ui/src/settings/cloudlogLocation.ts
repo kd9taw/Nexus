@@ -1,4 +1,4 @@
-/** Settings ▸ Logging & Connectors ▸ Cloudlog / Wavelog — does the station location the operator
+/** Settings ▸ Services ▸ Cloudlog / Wavelog — does the station location the operator
  * picked disagree with who and where Nexus logs as?
  *
  * Wavelog files every QSO it imports under the picked location's callsign and grid, and its

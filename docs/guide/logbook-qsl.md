@@ -92,7 +92,7 @@ carries:
   they first got it; once confirmed, a LoTW confirmation no longer replaces it.
 - **Space weather**, when **Log space weather on each contact** is on (it is for a new
   installation) in
-  [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
+  [Settings ▸ Services ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
   ▸ Propagation: the K index,
   A index and solar flux (K_INDEX, A_INDEX, SFI), and nothing when the latest reading is more
   than 3 hours old.
@@ -148,7 +148,7 @@ than saying "failed". Both replies are mocked for this capture: nothing was sign
 reached LoTW.*
 
 1. Set your **LoTW Station Location** (and optionally the TQSL path) in
-   [Settings ▸ Logging & Connectors](settings-reference.md#confirmations).
+   [Settings ▸ Services](settings-reference.md#confirmations).
    Nexus signs through *your installed TQSL* against that named Station Location
    — no certificate or password is stored by Nexus.
 2. Click **Upload to LoTW** in the logbook. The button shows the count of
@@ -158,8 +158,7 @@ reached LoTW.*
    a batch is ever refused, and it is unavailable while *Sign from ADIF location*
    is on — that mode signs everything from wherever you are now, so it needs you
    to pick the moment.
-3. Pull confirmations back with **Download confirmations** (Settings ▸ Logging &
-   Connectors ▸ LoTW). That button only goes one way, *down*; the upload is step 2
+3. Pull confirmations back with **Download confirmations** (Settings ▸ Services ▸ LoTW). That button only goes one way, *down*; the upload is step 2
    above. The first pull covers your whole history; later ones are incremental.
    Pulling also
    marks which of *your* uploads LoTW holds on file, so a pending contact reads
@@ -179,7 +178,7 @@ reached LoTW.*
 ### Push a single QSO to QRZ / ClubLog / HRDLog / WRL
 
 Auto-upload (configured per service in
-[Settings ▸ Logging & Connectors](settings-reference.md#confirmations)) pushes
+[Settings ▸ Services](settings-reference.md#confirmations)) pushes
 each QSO as you log it. When one fails — a service was down, a key was
 wrong — the logbook gives you a **per-row re-push** for **QRZ**, **ClubLog**,
 **HRDLog.net**, and **World Radio League** so you can retry that one contact
@@ -198,10 +197,10 @@ is floored to the width the whole run needs.
 
 ![The World Radio League block in Settings: an API KEY box showing the placeholder wrl_live_… with Set and Forget buttons, an AUTO-UPLOAD EACH QSO switch turned on, and an "Already have a log?" panel with an Export ADIF for WRL button.](../img/manual/settings-wrl.webp)
 
-*World Radio League in Settings ▸ Logging & Connectors, Nexus 1.10.3. The key
+*World Radio League in Settings ▸ Services, Nexus 1.10.3. The key
 box here is empty and showing its placeholder.*
 
-Paste your WRL API key in Settings ▸ Logging & Connectors and it is verified
+Paste your WRL API key in Settings ▸ Services and it is verified
 against your WRL account the moment you save it — your destination logbook is
 found automatically. From then on every contact flows to WRL as you log it (the
 auto-push switch is beside the key), and each logbook row carries a WRL button
@@ -295,7 +294,7 @@ upload, while the download uses your ordinary LoTW website login.
 
 ### How to tell it worked
 
-Nothing here asks you to trust it. **Settings ▸ Logging & Connectors ▸
+Nothing here asks you to trust it. **Settings ▸ Services ▸
 Connections** carries one row per configured connector, and the dot is painted
 from the **last round trip**, never from whether a credential exists — a
 revoked ClubLog app-password or a rotated QRZ key used to sit green forever

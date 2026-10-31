@@ -158,7 +158,7 @@ The Now-Bar shows two feed-liveness pills — **Cluster** and **PSKR** — with 
 
 "Connected but no data" is normal during a quiet band period — it is **not** a sign the feed is broken. A stuck **reconnecting** pill means the cluster host is unreachable:
 
-- Open **Settings › Logging & Connectors › Integrations & Feeds › Spot Sources**: each cluster node shows **In use**, **Standby** or **Not answering** with the reason (sends nothing, no login prompt, can't be reached, drops the login), and the Needed board's "Phone source" line says whether any node is up. With nodes chosen automatically, a node that stops answering is replaced by itself; on your own list, replace it there. Do not enter a `reversebeacon.net` host in your list — RBN CW/digital feeds are auto-wired separately and carry no SSB spots; the app migrates that value away.
+- Open **Settings › Services › Integrations & Feeds › Spot Sources**: each cluster node shows **In use**, **Standby** or **Not answering** with the reason (sends nothing, no login prompt, can't be reached, drops the login), and the Needed board's "Phone source" line says whether any node is up. With nodes chosen automatically, a node that stops answering is replaced by itself; on your own list, replace it there. Do not enter a `reversebeacon.net` host in your list — RBN CW/digital feeds are auto-wired separately and carry no SSB spots; the app migrates that value away.
 - Firewalls that block outbound TCP on port 23 (Telnet) are common on corporate or hotel Wi-Fi. Seven of the eight built-in nodes use port 7300 or 7373, so automatic node choice moves past a blocked port 23 by itself; on your own list, keep at least one node that is not on port 23.
 - PSK Reporter MQTT (`mqtt.pskreporter.info:1883`) is blocked by some ISPs. Without MQTT, the app falls back to HTTP queries (rate-limited to every 5 minutes minimum).
 - Your callsign must be set (3–10 characters, at least one letter and one digit) for the PSK Reporter MQTT subscription to start.
@@ -198,13 +198,13 @@ Grid and state are subscriber-only on QRZ's free XML tier. The app shows a toast
 
 ### ClubLog — uploads stopped after working
 
-A 403 response from ClubLog triggers a session-level suspend flag that stops further auto-upload to avoid an IP ban. The flag clears only when you save new credentials. Check your ClubLog Application Password (not your main password) in Settings → Logging & Connectors ▸ Connections.
+A 403 response from ClubLog triggers a session-level suspend flag that stops further auto-upload to avoid an IP ban. The flag clears only when you save new credentials. Check your ClubLog Application Password (not your main password) in Settings → Services ▸ Connections.
 
 ClubLog integration also requires a developer API key (`CLUBLOG_API_KEY`). Official installer builds bundle one; operators building from source must supply their own key — it is not in the public repo.
 
 ### eQSL InBox sync fails
 
-The InBox download is a two-step HTTP scrape that depends on the "Your ADIF log file has been built" marker on eQSL's DownloadInBox page. If eQSL changes their page structure, the extractor will fail. Check the **Connector log** (Settings → Logging & Connectors ▸ Connections, last 200 events) for the actual HTTP response to distinguish a credential problem from a site change.
+The InBox download is a two-step HTTP scrape that depends on the "Your ADIF log file has been built" marker on eQSL's DownloadInBox page. If eQSL changes their page structure, the extractor will fail. Check the **Connector log** (Settings → Services ▸ Connections, last 200 events) for the actual HTTP response to distinguish a credential problem from a site change.
 
 All fetched URLs are pinned to `*.eqsl.cc` and forced to HTTPS, so a redirect to a non-eQSL host will be rejected as a safety measure.
 
@@ -229,7 +229,7 @@ If downstream apps receive nothing:
 
 N3FJP TCP push (ADDDIRECT + CHECKLOG) requires:
 - N3FJP running with its TCP API enabled (Settings → Application Program Interface in N3FJP).
-- N3FJP host and port (`1100` default) configured in Nexus Settings → Logging & Connectors ▸ N3FJP Integration.
+- N3FJP host and port (`1100` default) configured in Nexus Settings → Services ▸ N3FJP Integration.
 - The host reachable on your LAN — firewall between the two machines will block it.
 
 Use the **Test N3FJP** button in Settings to send the `<CMD><PROGRAM></CMD>` handshake and confirm the connection before the event starts. Push failures are logged to stderr and the Connector log, not surfaced as a UI toast after the initial Test.
@@ -254,7 +254,7 @@ Use the **Test N3FJP** button in Settings to send the `<CMD><PROGRAM></CMD>` han
 ## Still stuck?
 
 - Re-check the setup pages: [Getting Started](Getting-Started.md), [Rig and Audio Setup](Rig-and-Audio-Setup.md).
-- Review the Connector log (Settings → Logging & Connectors ▸ Connections) for per-event detail on upload failures.
+- Review the Connector log (Settings → Services ▸ Connections) for per-event detail on upload failures.
 - File an issue with details (band, dial, mode, OS, rig model, what you saw vs. expected): <https://sourceforge.net/projects/nexus-ham-radio>.
 
 ---

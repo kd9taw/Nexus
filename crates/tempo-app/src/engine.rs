@@ -1887,7 +1887,7 @@ const AB_CROSS_BAND_REFUSAL: &str =
 /// switch. Two honest steps, neither of them a promise the station cannot keep.
 const AB_PICK_MAIN_SUB: &str =
     "Main = downlink / Sub = uplink is the layout Nexus can drive on this radio — pick it in \
-     Settings ▸ Radio ▸ Satellite Doppler, or from the mapping selector on the pass rail.";
+     Settings ▸ Satellites ▸ Satellite Doppler, or from the mapping selector on the pass rail.";
 
 /// …and the dead end on the other two (and on a network-wired IC-9700/IC-905):
 /// the ONE mapping that could carry this pass's uplink on a Main/Sub Icom is
@@ -71524,7 +71524,8 @@ mod tests {
                 "model {model}: the A/B refusal must name the layout that works: {msg}"
             );
             assert!(
-                msg.contains("Settings ▸ Radio ▸ Satellite Doppler") && msg.contains("pass rail"),
+                msg.contains("Settings ▸ Satellites ▸ Satellite Doppler")
+                    && msg.contains("pass rail"),
                 "model {model}: …and where to pick it: {msg}"
             );
 

@@ -176,8 +176,8 @@ beforeEach(() => {
 afterEach(cleanup)
 
 
-describe('Config tab: a findable home for backup and restore', () => {
-  const openTab = async () => fireEvent.click(await screen.findByRole('tab', { name: 'Config' }))
+describe('App tab (the old Config tab): a findable home for backup and restore', () => {
+  const openTab = async () => fireEvent.click(await screen.findByRole('tab', { name: 'App' }))
 
   // The RESET cases that used to live here are now SettingsPanel.reset.test.tsx, which drives
   // the real confirm dialog. They were written against `window.confirm` — inert in this webview
@@ -215,7 +215,7 @@ describe('Config tab: a findable home for backup and restore', () => {
 // so ALL.TXT and the recordings are saved to this computer instead. At the station, Reveal stays.
 describe('the station’s files: Reveal at the station, Save to this computer from afar', () => {
   const openTab = async () =>
-    fireEvent.click(await screen.findByRole('tab', { name: EN['settings.tabs.logging'] }))
+    fireEvent.click(await screen.findByRole('tab', { name: EN['settings.tabs.services'] }))
   // The Logging tab lists the connectors' credentials and their log, each an array.
   beforeEach(() => {
     api.get('getCredentialsStatus').mockImplementation(() => Promise.resolve([]))

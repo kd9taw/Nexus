@@ -128,7 +128,8 @@ pub fn fetch_state(token: &str, state_id: &str) -> Result<String, String> {
     }
     if status.as_u16() == 401 || status.as_u16() == 403 {
         return Err(
-            "RepeaterBook: token rejected — check the token in Settings ▸ Integrations".to_string(),
+            "RepeaterBook: token rejected — check the token in Settings ▸ Services ▸ Confirmations"
+                .to_string(),
         );
     }
     if !status.is_success() {

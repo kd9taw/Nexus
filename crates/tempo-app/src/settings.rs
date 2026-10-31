@@ -262,7 +262,7 @@ pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
 /// were down at once — ve7cc accepted TCP and never sent a login prompt, wa9pie refused — and
 /// every default-config install had no phone source at all; that is the whole reason the list
 /// grew. The migration recognises exactly that shipped pair and appends the rest; the operator
-/// edits the list in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Spot Sources.
+/// edits the list in Settings ▸ Services ▸ Integrations & Feeds ▸ Spot Sources.
 ///
 /// ⚠️ **"Accepts TCP" is not "is a working node", and this comment previously got that wrong.**
 /// It claimed ve7cc "was answering again by 2026-09-17" on the strength of a connect check,

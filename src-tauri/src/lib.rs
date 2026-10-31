@@ -2243,10 +2243,10 @@ fn sanitize_profile(s: &str) -> Option<String> {
 /// declined on 2026-09-07. The reasons, so the next reader does not add it on the strength of
 /// that reply:
 ///
-/// * The extra-detail tier already has a switch — Settings ▸ Logging & Connectors ▸ "Extra
-///   detail in the diagnostic log" — and it applies LIVE, with no restart. Whatever is being
-///   chased is usually happening right now, so a flag that only takes effect on the next launch
-///   is the worse instrument, not the better one.
+/// * The extra-detail tier already has a switch — Settings ▸ Services ▸ Integrations & Feeds ▸
+///   "Extra detail in the diagnostic log" — and it applies LIVE, with no restart. Whatever is
+///   being chased is usually happening right now, so a flag that only takes effect on the next
+///   launch is the worse instrument, not the better one.
 /// * The case a launch flag would uniquely cover — a fault that kills the app before Settings
 ///   is reachable — is already covered: the BASE diagnostic log runs from the first moments of
 ///   startup and cannot be turned off. The extra tier adds CAT traffic and per-period decode
@@ -26009,7 +26009,7 @@ fn qrz_access(engine: &SharedEngine) -> Result<QrzAccess, String> {
     let owncall = engine_lock(engine).settings().mycall.trim().to_string();
     let key = qrz_logbook_keychain()?.get_password().map_err(|_| {
         "No QRZ Logbook API key stored — this is the per-logbook key from logbook.qrz.com \
-         (Settings ▸ Logging & Connectors ▸ Confirmations ▸ QRZ), not your QRZ password."
+         (Settings ▸ Services ▸ Confirmations ▸ QRZ), not your QRZ password."
             .to_string()
     })?;
     Ok(QrzAccess {
@@ -28362,7 +28362,8 @@ fn hrdlog_stamp(result: &str) -> (bool, ConnDetail) {
         "authFail" => (
             false,
             conn_detail!(
-                "HRDLog would not accept the upload code — check it in Settings ▸ Connectors."
+                "HRDLog would not accept the upload code — check it in Settings ▸ Services ▸ \
+                 Confirmations ▸ HRDLog."
             ),
         ),
         "unknown" => (
@@ -28392,7 +28393,7 @@ fn wrl_stamp(result: &str) -> (bool, ConnDetail) {
             false,
             conn_detail!(
                 "World Radio League would not accept the API key — check it in Settings ▸ \
-                 Connectors."
+                 Services ▸ Confirmations ▸ World Radio League."
             ),
         ),
         "pending" => (
@@ -28472,7 +28473,8 @@ fn cloudlog_stamp(class: propagation::live::cloudlog::CloudlogFailure) -> ConnDe
         F::NotConfigured => conn_detail!(
             "nothing was sent — the Cloudlog instance URL, API key or station profile id is \
              missing, or the URL is not https:// (plain http:// is for an address on your own \
-             network only). Set them in Settings ▸ Connectors."
+             network only). Set them in Settings ▸ Services ▸ Confirmations ▸ \
+             Cloudlog / Wavelog."
         ),
         F::Unreachable => conn_detail!(
             "the upload never reached the instance — check the URL and the network, and \
@@ -28480,12 +28482,14 @@ fn cloudlog_stamp(class: propagation::live::cloudlog::CloudlogFailure) -> ConnDe
              connection log has the exact message."
         ),
         F::Credentials => conn_detail!(
-            "the instance rejected the API key — check it in Settings ▸ Connectors, and that \
+            "the instance rejected the API key — check it in Settings ▸ Services ▸ \
+             Confirmations ▸ Cloudlog / Wavelog, and that \
              it is not a read-only key."
         ),
         F::NotAnApi => conn_detail!(
             "the URL answered, but not as a Cloudlog/Wavelog QSO API — check the instance URL \
-             in Settings ▸ Connectors (Nexus appends /index.php/api/qso itself)."
+             in Settings ▸ Services ▸ Confirmations ▸ Cloudlog / Wavelog (Nexus appends \
+             /index.php/api/qso itself)."
         ),
         F::RecordRefused => conn_detail!(
             "the instance took the request and refused to file the QSO — usually a station \
@@ -30870,7 +30874,7 @@ use screen_reason::ScreenReason;
 /// No key stored. Not a service failure at all, and the remedy is a Settings field.
 const QRZ_SYNC_NO_KEY: ConnDetail = conn_detail!(
     "no QRZ Logbook API key is stored — this is the per-logbook key from logbook.qrz.com \
-     (Settings ▸ Logging & Connectors ▸ Confirmations ▸ QRZ), not the QRZ password."
+     (Settings ▸ Services ▸ Confirmations ▸ QRZ), not the QRZ password."
 );
 /// The sync never got an answer. D#181's lesson: a transport failure is not a credential
 /// failure, and sending the operator to check their key is exactly the wrong misdirection.
@@ -30891,8 +30895,8 @@ const QRZ_SYNC_NOT_SAVED: ConnDetail = conn_detail!(
 );
 /// QRZ answered and refused. The class; never QRZ's wording, which is the leak.
 const QRZ_SYNC_REFUSED: ConnDetail = conn_detail!(
-    "QRZ took the request and refused it — check the Logbook API key in Settings ▸ Logbook & \
-     QSL. This session's connection log has QRZ's own wording."
+    "QRZ took the request and refused it — check the Logbook API key in Settings ▸ Services ▸ \
+     Confirmations ▸ QRZ. This session's connection log has QRZ's own wording."
 );
 
 /// One stored secret a request to a logging service carried, and what stands in for it in the
@@ -31024,7 +31028,7 @@ fn sync_qrz_since(
             detail: QRZ_SYNC_NO_KEY,
             message: ScreenReason::new(
                 "No QRZ Logbook API key stored — this is the per-logbook key from \
-                 logbook.qrz.com (Settings ▸ Logging & Connectors ▸ Confirmations ▸ QRZ), NOT your \
+                 logbook.qrz.com (Settings ▸ Services ▸ Confirmations ▸ QRZ), NOT your \
                  QRZ password."
                     .to_string(),
             ),
@@ -32646,7 +32650,7 @@ static QRZ_CORRECT_MISS: std::sync::Mutex<Option<tempo_core::qrz::QrzMissRecover
 /// and to nothing else — never to `conn_log`, never into an error, never into a stamp.
 fn qrz_correct_key() -> Result<String, String> {
     qrz_logbook_keychain()?.get_password().map_err(|_| {
-        "No QRZ Logbook API key stored — set it in Settings ▸ Logging & Connectors ▸ \
+        "No QRZ Logbook API key stored — set it in Settings ▸ Services ▸ \
          Confirmations ▸ QRZ."
             .to_string()
     })
@@ -33907,9 +33911,9 @@ fn cloudlog_refusal_line(
         F::Refused => "the instance refused the upload",
     };
     Some(format!(
-        "not retrying the QSO with {call}: {why}. Fix it in Settings ▸ Logging & Connectors ▸ \
-         Cloudlog / Wavelog. This contact is not sent again on its own — to add it afterwards, \
-         use Logbook ▸ Export ADIF and import the file into Wavelog or Cloudlog"
+        "not retrying the QSO with {call}: {why}. Fix it in Settings ▸ Services ▸ \
+         Confirmations ▸ Cloudlog / Wavelog. This contact is not sent again on its own — to add \
+         it afterwards, use Logbook ▸ Export ADIF and import the file into Wavelog or Cloudlog"
     ))
 }
 
@@ -37322,8 +37326,10 @@ mod repeater_search_tests {
 
         let mut refused = Fixture::new(Ok(HEARHAM_EN52));
         refused.token = "rbuapp_refused".into();
-        refused.repeaterbook =
-            Err("RepeaterBook: token rejected — check the token in Settings ▸ Integrations".into());
+        refused.repeaterbook = Err(
+            "RepeaterBook: token rejected — check the token in Settings ▸ Services ▸ Confirmations"
+                .into(),
+        );
         let r = refused.search(EN52).expect("a refused token");
         assert_eq!(rows(&r), EN52_MACHINES);
         assert_eq!(lists(&r), [("hearham".to_string(), false)]);

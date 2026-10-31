@@ -122,7 +122,7 @@ function clickSave() {
 describe('the beta-channel switch writes through its own verb, not the settings form', () => {
   it('turning it on calls setBetaUpdates(true) and never setSettings', async () => {
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Appearance' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'App' }))
     fireEvent.click(await screen.findByRole('switch', { name: 'Turn on beta updates' }))
 
     await waitFor(() => expect(api.get('setBetaUpdates')).toHaveBeenCalled())
@@ -136,7 +136,7 @@ describe('the beta-channel switch writes through its own verb, not the settings 
     // with `false`, i.e. by making the opt-in impossible to leave.
     setUp(true)
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Appearance' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'App' }))
     fireEvent.click(await screen.findByRole('switch', { name: 'Turn off beta updates' }))
 
     await waitFor(() => expect(api.get('setBetaUpdates')).toHaveBeenCalled())

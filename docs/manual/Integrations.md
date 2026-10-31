@@ -21,7 +21,7 @@ Shack-interop reference for every external protocol and online service Nexus spe
 
 ## WSJT-X UDP Protocol
 
-Nexus implements the full WSJT-X UDP datagram protocol on port `2237`. It is both a producer and a consumer on the same socket — connect any downstream tool that expects a live WSJT-X source. Turn it on first: the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is **off by default**, and nothing is sent until it is on. Its address already defaults to `127.0.0.1:2237`, WSJT-X's own, so nothing else needs setting.
+Nexus implements the full WSJT-X UDP datagram protocol on port `2237`. It is both a producer and a consumer on the same socket — connect any downstream tool that expects a live WSJT-X source. Turn it on first: the **WSJT-X UDP API** switch in Settings → Services ▸ Integrations & Feeds is **off by default**, and nothing is sent until it is on. Its address already defaults to `127.0.0.1:2237`, WSJT-X's own, so nothing else needs setting.
 
 ### Outbound datagrams (Nexus → logger / overlay)
 
@@ -85,7 +85,7 @@ Commands served: frequency read/set (`f`/`F`), mode read/set (`m`/`M`), PTT read
 
 During a contest session, Nexus pushes each newly logged QSO to N3FJP over TCP using the documented N3FJP API: the ENTER sequence, which scores the contact, or ADDDIRECT + CHECKLOG with **Use ENTER for contest scoring** off. The ENTER sequence carries the exchange in the boxes N3FJP documents for the contest's program: Field Day and Winter Field Day, CQ WPX, CQ WW RTTY and the ARRL VHF contests. A QSO party, Sweepstakes or CQ WW CW/SSB contact goes without its exchange, because N3FJP does not document those programs' boxes. The push is fire-and-forget from a spawned thread so a slow or parked N3FJP host never stalls the decode loop.
 
-**Default port: 1100** (N3FJP's documented API default). Configure host and port in **Settings › Logging & Connectors › N3FJP Integration**.
+**Default port: 1100** (N3FJP's documented API default). Configure host and port in **Settings › Services › N3FJP Integration**.
 
 The **Test N3FJP** button in Settings sends the `<CMD><PROGRAM></CMD>` handshake and returns the program name and version string (e.g. `N3FJP Field Day Contest Log v6.6`). It is disabled when the host field is blank.
 
@@ -102,7 +102,7 @@ This path replaces the WSJT-X → JTAlert → N3FJP bridge entirely. No JTAlert 
 
 Each new Field Day QSO emits an N1MM-format `<contactinfo>` XML datagram. N1MM dashboards and GridTracker see Nexus as a first-class network station.
 
-**Default port: 12060.** Set the destination address in **Settings › Logging & Connectors › N1MM+ Integration**. If you specify a host with no port (e.g. `192.168.1.50`), Nexus appends `:12060` automatically.
+**Default port: 12060.** Set the destination address in **Settings › Services › N1MM+ Integration**. If you specify a host with no port (e.g. `192.168.1.50`), Nexus appends `:12060` automatically.
 
 The datagram carries: `mycall`, `call`, `band`, `mode`, `timestamp`, `section`, `points`, `contestname`, `rxfreq`/`txfreq` (in 10 Hz units), the sent exchange, and a 32-hex per-QSO dedup ID. Nexus sends only; it does not receive or aggregate inbound N1MM contactinfo from other stations.
 
@@ -112,7 +112,7 @@ The datagram carries: `mycall`, `call`, `band`, `mode`, `timestamp`, `section`, 
 
 Nexus connects to a human DX-cluster node via a standard telnet session; the RBN CW and digital skimmer feeds are wired in automatically alongside it.
 
-**Nodes are chosen for you by default.** Nexus keeps two human nodes connected, picked from eight checked nodes built into each release — CC Cluster and DXSpider nodes on ports 23, 7300 and 7373 — and spreads operators across them by callsign. A node that stops answering for five minutes while your other spot feeds keep working is skipped for a day, and another takes its place; a quiet band never counts against a node. To reach a private cluster or a regional node instead, choose **Use my list** in **Settings › Logging & Connectors › Integrations & Feeds › Spot Sources**: every node in your list is connected as written and never switched for you, and each row shows how its node is doing. The RBN CW/digital skimmer feeds (`reversebeacon.net:7000` / `:7001`) are auto-wired separately and should **not** be entered as a cluster node — the RBN skimmer network carries no human SSB/phone spots, so a list that points only at it empties the Phone rows of the Needed board.
+**Nodes are chosen for you by default.** Nexus keeps two human nodes connected, picked from eight checked nodes built into each release — CC Cluster and DXSpider nodes on ports 23, 7300 and 7373 — and spreads operators across them by callsign. A node that stops answering for five minutes while your other spot feeds keep working is skipped for a day, and another takes its place; a quiet band never counts against a node. To reach a private cluster or a regional node instead, choose **Use my list** in **Settings › Services › Integrations & Feeds › Spot Sources**: every node in your list is connected as written and never switched for you, and each row shows how its node is doing. The RBN CW/digital skimmer feeds (`reversebeacon.net:7000` / `:7001`) are auto-wired separately and should **not** be entered as a cluster node — the RBN skimmer network carries no human SSB/phone spots, so a list that points only at it empties the Phone rows of the Needed board.
 
 Spots admitted to the Needed board must be within 900 seconds old (15 minutes). The spot buffer holds 200 spots by default; high-activity periods can push older spots out faster than the admission window.
 
