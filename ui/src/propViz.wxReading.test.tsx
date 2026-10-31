@@ -99,6 +99,19 @@ describe('the scales chips', () => {
     expect(fresh.container.textContent).not.toContain(t('prop.scales.asOf', { ago: '' }).trim())
   })
 
+  it("tomorrow's G shows only when NOAA dated a block tomorrow and it is above G0", () => {
+    const tmrw = (gTomorrow: number | null) => {
+      const s: NoaaScalesView = { r: 0, s: 0, g: 0, gTomorrow, asOf: NOW - 300 }
+      const { container } = render(<ScalesAnnunciator scales={s} alerts={[]} />)
+      const text = container.textContent
+      cleanup()
+      return text
+    }
+    expect(tmrw(2)).toContain(t('prop.scales.tomorrow', { level: 2 }))
+    expect(tmrw(null)).not.toContain('↗')
+    expect(tmrw(0)).not.toContain('↗')
+  })
+
   it('an old copy keeps its letters but not their alarm colour; a fresh one is coloured', () => {
     const storm = (asOf: number): NoaaScalesView => ({ r: 3, s: 1, g: 4, gTomorrow: 0, asOf }) as NoaaScalesView
     const classes = (asOf: number) => {

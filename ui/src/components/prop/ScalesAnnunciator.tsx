@@ -44,7 +44,7 @@ export function ScalesAnnunciator({
           </span>
         ))}
         {stale && <span className="swsc-fc">{t('prop.scales.asOf', { ago: agoLabel(age) })}</span>}
-        {scales.gTomorrow > 0 && (
+        {scales.gTomorrow != null && scales.gTomorrow > 0 && (
           <span className="swsc-fc" title={t('prop.scales.tomorrow.title')}>
             {t('prop.scales.tomorrow', { level: scales.gTomorrow })}
           </span>
