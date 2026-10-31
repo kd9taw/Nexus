@@ -967,13 +967,16 @@ jobs:
       # successful link's output. What matters on an older Mac is what those objects call, so
       # every symbol they import from outside themselves must be on
       # scripts/macos-static-runtime-imports.txt, the names checked against the minimum macOS. A
-      # gcc update that calls something newer fails here and names it. Whether dyld on a real
-      # older Mac agrees is the oldest-macOS bench's question.
+      # gcc update that calls something newer fails here and names it. The app binary's own strong
+      # libSystem imports are held the same way to scripts/macos-system-imports.txt: Rust has no
+      # availability annotations, so a binding to a libSystem function newer than the minimum
+      # links strong and stops the app at launch on the older Mac. Whether dyld on a real older Mac
+      # agrees is the oldest-macOS bench's question.
       - name: Check every Mach-O against the minimum macOS before signing
         run: |
           set -euo pipefail
           node scripts/check-macho-bundle.mjs --floor "$MACOSX_DEPLOYMENT_TARGET" --arch ${{ matrix.arch }} \
-            src-tauri/target/${{ matrix.target }}/release/Nexus
+            --system-imports scripts/macos-system-imports.txt src-tauri/target/${{ matrix.target }}/release/Nexus
           node scripts/check-macho-bundle.mjs --floor "$MACOSX_DEPLOYMENT_TARGET" --arch ${{ matrix.arch }} \
             --require rigctld --require rigctl --require rotctld --require rotctl \
             --require libhamlib.4.dylib --require libusb-1.0.0.dylib src-tauri/resources/hamlib

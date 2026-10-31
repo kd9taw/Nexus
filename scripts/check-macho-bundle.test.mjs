@@ -58,8 +58,12 @@ function versionMin(minos) {
   return b;
 }
 
-/** A thin 64-bit little-endian Mach-O with the given load commands. */
-function macho({ arch = 'arm64', minos = '12.0', loads = [LIBSYSTEM, '@rpath/libhamlib.4.dylib'], rpaths = ['@loader_path'], id = null, weak = [], legacyMin = false, extra = [], dylibType = false } = {}) {
+/**
+ * A thin 64-bit little-endian Mach-O with the given load commands. `imports` gives it a symbol table
+ * of undefined symbols as a linker leaves them, [{ name, lib, weak }]: `lib` is one of the libraries
+ * it loads (its ordinal is written into n_desc), or null for a flat lookup.
+ */
+function macho({ arch = 'arm64', minos = '12.0', loads = [LIBSYSTEM, '@rpath/libhamlib.4.dylib'], rpaths = ['@loader_path'], id = null, weak = [], legacyMin = false, extra = [], dylibType = false, imports = null, twoLevel = true } = {}) {
   const cmds = [
     ...(id ? [dylib(id, 0x0d)] : []),
     ...(minos === null ? [] : [legacyMin ? versionMin(minos) : buildVersion(minos)]),
@@ -67,6 +71,7 @@ function macho({ arch = 'arm64', minos = '12.0', loads = [LIBSYSTEM, '@rpath/lib
     ...weak.map((l) => dylib(l, 0x80000018)),
     ...rpaths.map(rpath),
     ...extra,
+    ...(imports ? [Buffer.alloc(24)] : []),
   ];
   const body = Buffer.concat(cmds);
   const h = Buffer.alloc(32);
@@ -76,7 +81,28 @@ function macho({ arch = 'arm64', minos = '12.0', loads = [LIBSYSTEM, '@rpath/lib
   h.writeUInt32LE(dylibType ? 6 : 2, 12);
   h.writeUInt32LE(cmds.length, 16);
   h.writeUInt32LE(body.length, 20);
-  return Buffer.concat([h, body, Buffer.alloc(64)]);
+  h.writeUInt32LE(twoLevel ? 0x80 : 0, 24); // MH_TWOLEVEL, as every linked file today sets it
+  if (!imports) return Buffer.concat([h, body, Buffer.alloc(64)]);
+  const libs = [...loads, ...weak];
+  let strtab = Buffer.from(' \0');
+  const nlist = Buffer.alloc(16 * imports.length);
+  imports.forEach(({ name, lib, weak: w = false }, i) => {
+    const ordinal = lib === null ? 0xfe : libs.indexOf(lib) + 1;
+    assert.ok(ordinal > 0, `fixture: ${lib} is not loaded`);
+    nlist.writeUInt32LE(strtab.length, 16 * i);
+    nlist.writeUInt8(0x01, 16 * i + 4); // N_UNDF | N_EXT
+    nlist.writeUInt16LE((ordinal << 8) | (w ? 0x40 : 0), 16 * i + 6); // ordinal, N_WEAK_REF
+    strtab = Buffer.concat([strtab, Buffer.from(`${name}\0`)]);
+  });
+  const symoff = 32 + body.length;
+  const symtab = body.subarray(body.length - 24);
+  symtab.writeUInt32LE(0x02, 0); // LC_SYMTAB
+  symtab.writeUInt32LE(24, 4);
+  symtab.writeUInt32LE(symoff, 8);
+  symtab.writeUInt32LE(imports.length, 12);
+  symtab.writeUInt32LE(symoff + nlist.length, 16);
+  symtab.writeUInt32LE(strtab.length, 20);
+  return Buffer.concat([h, body, nlist, strtab]);
 }
 
 /** A universal file holding the given thin images. */
@@ -294,6 +320,97 @@ test('usage errors exit 2, never 0', () => {
   assert.equal(run(['--floor', '12.0', '--arch', 'ppc', a]).code, 2);
   assert.equal(run(['--floor', '12.0', '--arch', 'arm64']).code, 2);
   assert.equal(run(['--floor', '12.0', '--arch', 'arm64', '--bogus', a]).code, 2);
+});
+
+// ---- The app binary's own strong libSystem imports (--system-imports) ----
+
+const SYSTEM_LIST = path.join(path.dirname(SCRIPT), 'macos-system-imports.txt');
+const APPKIT = '/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit';
+/** The app binary, linked against libSystem and AppKit, importing `imports`. */
+const appBinary = (imports, over = {}) =>
+  macho({ loads: [LIBSYSTEM, APPKIT], rpaths: [], imports: [{ name: '_malloc', lib: LIBSYSTEM }, ...imports], ...over });
+function sysList(names) {
+  const f = path.join(scratchDir('macho-sys-'), 'list.txt');
+  fs.writeFileSync(f, `# test list\n${names.join('\n')}\n`);
+  return f;
+}
+const sysCheck = (file, list = sysList(['_malloc', '_getentropy']), arch = 'arm64') =>
+  run(['--floor', '12.0', '--arch', arch, '--system-imports', list, file]);
+function binFile(buf) {
+  const f = path.join(scratchDir('macho-bin-'), 'Nexus');
+  fs.writeFileSync(f, buf);
+  return f;
+}
+
+test('an app binary whose every strong libSystem import is on the list passes, and says so', () => {
+  const r = sysCheck(binFile(appBinary([{ name: '_getentropy', lib: LIBSYSTEM }])));
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /every strong libSystem import on the reviewed list/);
+});
+
+test('a strong libSystem import missing from the list fails, and names the symbol, the file and the list', () => {
+  const list = sysList(['_malloc']);
+  const r = sysCheck(binFile(appBinary([{ name: '_os_sync_wait_on_address', lib: LIBSYSTEM }])), list);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /Nexus: imports _os_sync_wait_on_address from libSystem, which is not on the reviewed list/);
+  assert.ok(r.out.includes(list), r.out);
+  // Control: without --system-imports the same file passes, as it always did.
+  assert.equal(run(['--floor', '12.0', '--arch', 'arm64', binFile(appBinary([{ name: '_os_sync_wait_on_address', lib: LIBSYSTEM }]))]).code, 0);
+});
+
+test('a weak libSystem import and an import from another library are not held to the list; a flat lookup is', () => {
+  const ok = sysCheck(binFile(appBinary([{ name: '_os_sync_wait_on_address', lib: LIBSYSTEM, weak: true }, { name: '_NSApp', lib: APPKIT }])));
+  assert.equal(ok.code, 0, ok.out);
+  const flat = sysCheck(binFile(appBinary([{ name: '_os_sync_wait_on_address', lib: null }])));
+  assert.equal(flat.code, 1, flat.out);
+  assert.match(flat.out, /imports _os_sync_wait_on_address by flat lookup/);
+});
+
+test('positive controls: no libSystem import read, no symbol table, or no two-level namespace each fail', () => {
+  const none = sysCheck(binFile(macho({ loads: [LIBSYSTEM, APPKIT], rpaths: [], imports: [{ name: '_NSApp', lib: APPKIT }] })));
+  assert.equal(none.code, 1);
+  assert.match(none.out, /imports nothing from \/usr\/lib\/libSystem\.B\.dylib/);
+  const bare = sysCheck(binFile(macho({ loads: [LIBSYSTEM], rpaths: [] })));
+  assert.equal(bare.code, 1);
+  assert.match(bare.out, /imports nothing from/);
+  const flat = sysCheck(binFile(appBinary([], { twoLevel: false })));
+  assert.equal(flat.code, 1);
+  assert.match(flat.out, /does not use the two-level namespace/);
+});
+
+test('every slice of a universal app binary is held to the list, and named', () => {
+  const x86 = appBinary([{ name: '_stat$INODE64', lib: LIBSYSTEM }], { arch: 'x86_64' });
+  const arm = appBinary([{ name: '_stat', lib: LIBSYSTEM }]);
+  const list = sysList(['_malloc', '_stat']);
+  const r = run(['--floor', '12.0', '--arch', 'arm64', '--arch', 'x86_64', '--system-imports', list, binFile(fat([arm, x86]))]);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /\[x86_64\] imports _stat\$INODE64 from libSystem/);
+  assert.doesNotMatch(r.out, /\[arm64\] imports/);
+});
+
+test('a symbol table that runs past the file fails instead of reading less', () => {
+  const buf = appBinary([{ name: '_getentropy', lib: LIBSYSTEM }]);
+  const r = sysCheck(binFile(buf.subarray(0, buf.length - 8)));
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /unreadable symbol table/);
+});
+
+test('--system-imports usage errors exit 2: a missing or empty list, or given with --archive', () => {
+  const f = binFile(appBinary([]));
+  assert.equal(run(['--floor', '12.0', '--arch', 'arm64', '--system-imports', path.join(scratchDir('macho-sys-'), 'nope.txt'), f]).code, 2);
+  assert.equal(run(['--floor', '12.0', '--arch', 'arm64', '--system-imports', sysList([]), f]).code, 2);
+  assert.equal(run(['--arch', 'arm64', '--system-imports', sysList(['_malloc']), '--imports', sysList(['_malloc']), '--archive', f]).code, 2);
+});
+
+test('the committed system-import list says what it is, and is one sorted, unique Mach-O symbol per line', () => {
+  const text = fs.readFileSync(SYSTEM_LIST, 'utf8');
+  assert.match(text, /^# .*reviewed against macOS 12 on 2026-10-31/m);
+  const names = text.split('\n').filter((l) => l.trim() && !l.startsWith('#'));
+  assert.ok(names.length > 300, `only ${names.length} names`);
+  for (const n of names) assert.match(n, /^[A-Za-z_][A-Za-z0-9_$.]*$/, `not a Mach-O symbol: ${JSON.stringify(n)}`);
+  assert.deepEqual(names, [...new Set(names)].sort(), 'sorted and unique');
+  // What the Rust standard library calls on both architectures, and the x86_64 spelling of stat.
+  for (const n of ['_getentropy', '_clock_gettime', '_pthread_create', '_stat', '_stat$INODE64']) assert.ok(names.includes(n), n);
 });
 
 // ---- The static runtimes: what libgfortran.a, libquadmath.a and libemutls_w.a import ----

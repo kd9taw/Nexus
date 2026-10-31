@@ -48,11 +48,26 @@
 //   8. POSITIVE CONTROLS: each archive holds at least one object, every member is a Mach-O
 //      object of the expected --arch (an index member such as __.SYMDEF aside), and the archives
 //      import something at all.
+//
+// THE LINKED BINARY'S OWN CALLS (--system-imports <list>, with the bundle checks). C and C++ code
+// built for the minimum macOS calls a newer libSystem function only through a weak reference
+// (clang reads the availability in the SDK's headers), which dyld leaves null on an older Mac. Rust
+// has no such annotations: an `extern` binding to a libSystem function newer than the minimum
+// links against the build machine's SDK as a STRONG reference and stops the app at launch on the
+// older Mac ("Symbol not found"). The linked file keeps every symbol it imports in its symbol
+// table, undefined, with the library it binds to as an ordinal in n_desc (two-level namespace).
+// So, for every slice of every Mach-O read:
+//   9. Every strong import bound to libSystem (or left to a flat lookup, which could land there) is
+//      on the list, a committed file of the names someone checked exist on the minimum macOS. A
+//      new one fails and names itself and the file that imports it. Weak references are not held
+//      to it: dyld binds a missing one to null, and the code that took one checks.
+//  10. POSITIVE CONTROLS: the slice uses the two-level namespace (otherwise an ordinal names no
+//      library and nothing could be attributed), and it imports something from libSystem at all.
 // Whether dyld on a real older Mac then agrees is still a bench question.
 //
 // Usage:
 //   node scripts/check-macho-bundle.mjs --floor 12.0 --arch arm64 [--plist <Info.plist>]
-//        [--require <path relative to the first path>]... <file-or-folder>...
+//        [--system-imports <list>] [--require <path relative to the first path>]... <file-or-folder>...
 //   node scripts/check-macho-bundle.mjs --arch arm64 --imports <list> --archive <lib.a>...
 // Exit 0 clean, 1 on any finding, 2 on a usage error.
 
@@ -133,7 +148,8 @@ export function readSlice(buf, off = 0, size = buf.length - off) {
   const hdr = wide ? 32 : 28;
   const end = off + hdr + sizeofcmds;
   if (end > off + size || end > buf.length) throw new Error('load commands run past the end of the file');
-  const out = { arch: CPU[cputype] ?? `cputype 0x${cputype.toString(16)}`, wide, le, loads: [], ids: [], rpaths: [], env: [], minos: null, platform: null, symtab: null };
+  const flags = u32(off + 24);
+  const out = { arch: CPU[cputype] ?? `cputype 0x${cputype.toString(16)}`, wide, le, offset: off, size, flags, loads: [], ids: [], rpaths: [], env: [], minos: null, platform: null, symtab: null };
   const str = (cmdOff, cmdSize) => {
     const at = u32(cmdOff + 8);
     if (at < 12 || at >= cmdSize) throw new Error('a load command names a string outside itself');
@@ -205,6 +221,54 @@ export function checkSlices(slices, { floor, arches }) {
   return [...new Set(v)];
 }
 
+const MH_TWOLEVEL = 0x80;
+const N_WEAK_REF = 0x40;
+const DYNAMIC_LOOKUP_ORDINAL = 0xfe;
+
+/**
+ * The symbols a linked slice (read by readSlice out of `buf`) imports, as [{ name, lib, weak }]:
+ * `lib` is the install name its ordinal names, or `null` for a flat lookup (any library) and for
+ * an ordinal naming no library it loads. Throws on a malformed symbol table.
+ */
+export function linkedImports(buf, s) {
+  if (!s.symtab) return [];
+  if (!s.wide || !s.le) throw new Error('not a 64-bit little-endian Mach-O');
+  const { symoff, nsyms, stroff, strsize } = s.symtab;
+  const base = s.offset;
+  if (symoff + 16 * nsyms > s.size) throw new Error('the symbol table runs past the end of the slice');
+  if (stroff + strsize > s.size) throw new Error('the string table runs past the end of the slice');
+  const out = [];
+  for (let i = 0; i < nsyms; i++) {
+    const at = base + symoff + 16 * i; // struct nlist_64: strx, type, sect, desc, value
+    const type = buf[at + 4];
+    if (type & N_STAB || !(type & N_EXT) || (type & N_TYPE) !== N_UNDF) continue;
+    const strx = buf.readUInt32LE(at);
+    if (strx >= strsize) throw new Error(`symbol ${i} names a string outside the string table`);
+    const from = base + stroff + strx;
+    const end = buf.indexOf(0, from);
+    const name = buf.toString('utf8', from, end < 0 || end > base + stroff + strsize ? base + stroff + strsize : end);
+    const desc = buf.readUInt16LE(at + 6);
+    const ordinal = desc >>> 8; // GET_LIBRARY_ORDINAL
+    const lib = ordinal === DYNAMIC_LOOKUP_ORDINAL ? null : (s.loads[ordinal - 1] ?? null);
+    out.push({ name, lib, weak: Boolean(desc & N_WEAK_REF) });
+  }
+  return out;
+}
+
+/** The findings for one slice's libSystem imports against the reviewed list (rules 9 and 10). */
+export function checkSystemImports(imports, s, { allowed, list, at = '' }) {
+  const v = [];
+  if (!(s.flags & MH_TWOLEVEL)) v.push(`${at}does not use the two-level namespace, so its imports name no library; nothing could be checked`);
+  const strong = imports.filter((x) => !x.weak && (x.lib === LIBSYSTEM || x.lib === null));
+  if (!strong.some((x) => x.lib === LIBSYSTEM)) v.push(`${at}imports nothing from ${LIBSYSTEM}; nothing was read from its symbol table`);
+  for (const x of strong) {
+    if (!allowed.has(x.name)) {
+      v.push(`${at}imports ${x.name} ${x.lib ? 'from libSystem' : 'by flat lookup'}, which is not on the reviewed list ${list}: check that the app's minimum macOS has it, then add it there`);
+    }
+  }
+  return v;
+}
+
 /** LSMinimumSystemVersion out of an XML Info.plist; throws on a binary one. */
 export function plistMinimum(text) {
   if (text.startsWith('bplist')) throw new Error('a binary plist; convert it with `plutil -convert xml1` first');
@@ -223,7 +287,7 @@ function* walk(p) {
 }
 
 /** Check paths; returns { findings, count, files }. */
-export function checkPaths(paths, { floor, arches, plist = null, require = [] }) {
+export function checkPaths(paths, { floor, arches, plist = null, require = [], systemImports = null }) {
   const findings = [];
   const files = [];
   for (const root of paths) {
@@ -233,10 +297,12 @@ export function checkPaths(paths, { floor, arches, plist = null, require = [] })
     }
     for (const f of walk(root)) {
       let slices;
+      let buf;
       try {
         // The header and load commands are at the front, but a universal file's slices are not;
         // the files here are tens of MB at most, so read each whole.
-        slices = readMachO(fs.readFileSync(f));
+        buf = fs.readFileSync(f);
+        slices = readMachO(buf);
       } catch (e) {
         findings.push(`${f}: unreadable Mach-O (${e.message})`);
         continue;
@@ -244,6 +310,18 @@ export function checkPaths(paths, { floor, arches, plist = null, require = [] })
       if (!slices) continue;
       files.push(f);
       for (const x of checkSlices(slices, { floor, arches })) findings.push(`${f}: ${x}`);
+      if (!systemImports) continue;
+      for (const s of slices) {
+        const at = slices.length > 1 ? `[${s.arch}] ` : '';
+        let imports;
+        try {
+          imports = linkedImports(buf, s);
+        } catch (e) {
+          findings.push(`${f}: ${at}unreadable symbol table (${e.message})`);
+          continue;
+        }
+        for (const x of checkSystemImports(imports, s, { ...systemImports, at })) findings.push(`${f}: ${x}`);
+      }
     }
   }
   if (!files.length) findings.push(`no Mach-O file found under ${paths.join(', ')}; nothing was checked`);
@@ -411,7 +489,7 @@ function mainArchives({ arches, list, archives }) {
 function main(argv) {
   const usage = (why) => {
     console.error(
-      `check-macho-bundle: ${why}\nusage: check-macho-bundle.mjs --floor <x.y> --arch <arm64|x86_64>... [--plist <Info.plist>] [--require <rel>]... <path>...\n` +
+      `check-macho-bundle: ${why}\nusage: check-macho-bundle.mjs --floor <x.y> --arch <arm64|x86_64>... [--plist <Info.plist>] [--system-imports <list>] [--require <rel>]... <path>...\n` +
         '       check-macho-bundle.mjs --arch <arm64|x86_64> --imports <list> --archive <lib.a>...',
     );
     return 2;
@@ -422,6 +500,7 @@ function main(argv) {
   const require = [];
   let plist = null;
   let list = null;
+  let systemList = null;
   const archives = [];
   const paths = [];
   for (let i = 0; i < argv.length; i++) {
@@ -438,6 +517,7 @@ function main(argv) {
       else if (a === '--plist') plist = val();
       else if (a === '--require') require.push(val());
       else if (a === '--imports') list = val();
+      else if (a === '--system-imports') systemList = val();
       else if (a === '--archive') archives.push(val());
       else if (a.startsWith('--')) return usage(`unknown option ${a}`);
       else paths.push(a);
@@ -447,7 +527,7 @@ function main(argv) {
   }
   if (archives.length || list !== null) {
     if (!archives.length) return usage('--imports needs at least one --archive');
-    if (floorGiven || plist || require.length || paths.length) return usage('--archive checks archives only: no --floor, --plist, --require or bundle path with it');
+    if (floorGiven || plist || require.length || paths.length || systemList !== null) return usage('--archive checks archives only: no --floor, --plist, --require, --system-imports or bundle path with it');
     if (arches.length !== 1 || !Object.values(CPU).includes(arches[0])) return usage('--archive needs exactly one known --arch');
     if (list === null) return usage('--archive needs --imports <the reviewed list>');
     if (!fs.existsSync(list) || !readImportList(fs.readFileSync(list, 'utf8')).size) return usage(`--imports ${list} is missing or names no symbol`);
@@ -457,13 +537,21 @@ function main(argv) {
   if (!arches.length) return usage('--arch is required');
   for (const a of arches) if (!Object.values(CPU).includes(a)) return usage(`unknown --arch ${a}`);
   if (!paths.length) return usage('no path to check');
-  const { findings, count } = checkPaths(paths, { floor, arches, plist, require });
+  let systemImports = null;
+  if (systemList !== null) {
+    if (!fs.existsSync(systemList) || !readImportList(fs.readFileSync(systemList, 'utf8')).size) return usage(`--system-imports ${systemList} is missing or names no symbol`);
+    systemImports = { allowed: readImportList(fs.readFileSync(systemList, 'utf8')), list: systemList };
+  }
+  const { findings, count } = checkPaths(paths, { floor, arches, plist, require, systemImports });
   if (findings.length) {
     console.error(`Mach-O check FAILED (${count} file(s) read, minimum macOS ${formatVersion(floor)}, ${arches.join('+')}):`);
     for (const f of findings) console.error(`  ${f}`);
     return 1;
   }
-  console.log(`Mach-O check passed: ${count} file(s), ${arches.join('+')}, minimum macOS ${formatVersion(floor)} or lower, every load bundled or system${plist ? ', LSMinimumSystemVersion matches' : ''}`);
+  console.log(
+    `Mach-O check passed: ${count} file(s), ${arches.join('+')}, minimum macOS ${formatVersion(floor)} or lower, every load bundled or system` +
+      `${plist ? ', LSMinimumSystemVersion matches' : ''}${systemImports ? `, every strong libSystem import on the reviewed list ${systemList}` : ''}`,
+  );
   return 0;
 }
 
