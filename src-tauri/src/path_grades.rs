@@ -157,11 +157,19 @@ pub(crate) fn keep_outlook(
     }
 }
 
-/// Whether a card computed at `now` from space weather stamped `stamps` may grade a contact: the
-/// flux and Kp measured and current ([`propagation::model::SpaceWxStamps::model_usable`]). A
-/// contact with no card logs with no grade; the display-only pass grades it from its logged SFI.
+/// Whether space weather stamped `stamps` may speak for `now` — the card's time when it is kept,
+/// the contact's start when it grades one: the flux and Kp both measured, and each read within its
+/// limit ([`propagation::model::WxKey::fresh_secs`]) of `now`, before it or after. After it too,
+/// so a contact entered by hand with a start well before the card's readings is not graded from
+/// them (the shared `usable` reads a future stamp as fresh). A contact with no card logs with no
+/// grade; the display-only pass grades it from its logged SFI.
 fn grade_card_measured(stamps: Option<&propagation::model::SpaceWxStamps>, now: i64) -> bool {
-    stamps.is_some_and(|s| s.model_usable(now))
+    use propagation::model::WxKey;
+    stamps.is_some_and(|s| {
+        [WxKey::Sfi, WxKey::Kp]
+            .into_iter()
+            .all(|k| s.at(k).is_some_and(|at| (now - at).abs() < k.fresh_secs()))
+    })
 }
 
 fn month_of(t: i64) -> (i64, u32) {

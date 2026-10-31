@@ -883,3 +883,49 @@ fn only_a_card_from_measured_space_weather_grades_a_new_contact() {
         "a stale card was kept"
     );
 }
+
+/// Fail closed both ways: a card grades a contact only when the flux and Kp it was gated on were
+/// read within their limits of the contact's start, before it or after. A contact entered by hand
+/// with a start hours before the card's Kp was read gets no grade from that card; one that started
+/// minutes before (a contact running as the card was opened) is graded.
+#[test]
+fn a_card_grades_no_contact_from_before_its_space_weather() {
+    let _s = serial();
+    let live = Mutex::new(propagation::LiveSpots::default());
+    let region = Mutex::new(propagation::LiveSpots::default());
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&measured()),
+    );
+    let at = |t: i64| {
+        at_log(
+            &qso("VK2AA", "QF56", "20m", t, None),
+            "",
+            &live,
+            &region,
+            &[],
+        )
+    };
+    // The Kp was read at NOW − 60 s and speaks for 15 minutes either side of that.
+    assert!(at(NOW).is_some(), "control: the card's own time");
+    assert!(at(NOW - 10 * 60).is_some(), "control: ten minutes before");
+    assert!(at(NOW - 60 - 15 * 60 + 1).is_some(), "control: just inside");
+    assert_eq!(at(NOW - 60 - 15 * 60), None, "the Kp's limit, before it");
+    assert_eq!(at(NOW - 5 * 3600), None, "back-dated five hours");
+    // The flux on its own side: a card whose flux was read after the contact by more than its
+    // two days grades nothing (the six-hour card window hides this through `at_log`).
+    let s = propagation::model::SpaceWxStamps {
+        sfi_at: Some(NOW + 48 * 3600),
+        kp_at: Some(NOW),
+        ..Default::default()
+    };
+    assert!(!grade_card_measured(Some(&s), NOW));
+    let s = propagation::model::SpaceWxStamps {
+        sfi_at: Some(NOW + 48 * 3600 - 1),
+        ..s
+    };
+    assert!(grade_card_measured(Some(&s), NOW), "control: flux inside");
+}
