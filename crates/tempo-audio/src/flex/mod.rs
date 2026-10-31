@@ -844,6 +844,14 @@ impl FlexDaemon {
         lock(&self.state.routing).leaves_dax(&view)
     }
 
+    /// Hold the DAX transmit route down, or let it come back ([`audio::DaxTx::hold_out`]).
+    #[cfg(test)]
+    pub(crate) fn hold_tx_route_out(&self, on: bool) {
+        if let Some(a) = self.audio.as_ref() {
+            a.tx().hold_out(on);
+        }
+    }
+
     /// Our receive streams and their channels.
     #[cfg(test)]
     pub(crate) fn rx_streams(&self) -> std::collections::BTreeMap<u32, u8> {

@@ -500,6 +500,9 @@ pub struct DaxTx {
     sent: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
     sent_when_closed: std::sync::OnceLock<usize>,
+    /// Keeps the route down whatever the control thread finds ([`DaxTx::hold_out`]).
+    #[cfg(test)]
+    held_out: AtomicBool,
 }
 
 struct TxQueue {
@@ -535,11 +538,15 @@ impl DaxTx {
             sent: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             sent_when_closed: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            held_out: AtomicBool::new(false),
         }
     }
 
     /// The stream Nexus may send on, or none. Losing it drops anything queued.
     fn set_route(&self, stream: Option<u32>) {
+        #[cfg(test)]
+        let stream = stream.filter(|_| !self.held_out.load(Ordering::Acquire));
         let id = stream.unwrap_or(0);
         if self.stream.swap(id, Ordering::AcqRel) != id && id == 0 {
             crate::backend::TxTee::flush(self);
@@ -592,6 +599,17 @@ impl DaxTx {
             .is_none_or(|c| c.snapshot().phase == Phase::Closed)
         {
             let _ = self.sent_when_closed.set(self.sent.load(Ordering::Relaxed));
+        }
+    }
+
+    /// Hold the route down, or let the control thread's next tick put it back: its lag behind
+    /// the session (a tick, plus that tick's blocking stream requests), made as long as a test
+    /// needs.
+    #[cfg(test)]
+    pub(crate) fn hold_out(&self, on: bool) {
+        self.held_out.store(on, Ordering::Release);
+        if on {
+            self.set_route(None);
         }
     }
 

@@ -18,6 +18,7 @@ use tempo_flexsim::{
 use tempo_net::flex::encode::Station;
 
 mod pc_mic;
+mod remote_mic;
 mod voice_keyer;
 
 /// An audio backend that notes when transmit audio starts and, as the sound card does, hands it

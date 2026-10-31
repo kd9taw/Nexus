@@ -1276,3 +1276,73 @@ fn with_a_mic_named_the_mics_ptt_during_a_message_ends_it_with_no_alarm() {
         unkey.saturating_duration_since(mic)
     );
 }
+
+/// ⛔ THE RADIO LEAVING NEXUS'S DAX MID-MESSAGE, AT THE SHACK. The message switched the radio to
+/// DAX and keyed on it; 500 ms in, the operator presses SmartSDR's own DAX button and the radio
+/// reports its mic. The mic would carry the rest of the over and put the room on the air: the
+/// message ends within a few ticks of the radio's report, and nothing keys again.
+#[test]
+fn the_radio_leaving_dax_mid_message_ends_it() {
+    let mut s = shack(super::remote_mic::leaves_dax_mid_over(500));
+    let since = Instant::now();
+    s.engine
+        .lock()
+        .unwrap()
+        .send_voice(message_of(3.0))
+        .unwrap();
+    run_until_seen(&mut s, since, "xmit 1");
+    let keyed = Instant::now();
+    run_until_seen(&mut s, keyed, "radio dax=0");
+    s.run(1_000);
+    let trace = voice_trace(&s, since);
+    let left = seen_at(&s, keyed, "radio dax=0").unwrap();
+    let unkey = seen_at(&s, since, "xmit 0").expect("the message was never unkeyed");
+    assert!(
+        unkey.duration_since(left) < Duration::from_millis(500),
+        "keyed {:?} after the radio left DAX: {trace:?}",
+        unkey.saturating_duration_since(left)
+    );
+    assert_eq!(keys(&s), 1, "re-keyed: {trace:?}");
+    assert!(!s.engine.lock().unwrap().snapshot().radio.voice_playing);
+}
+
+/// CONTROL: beside SmartSDR's DAX the route is not Nexus's to judge, so a keyed message is not cut
+/// for it: it plays to its end.
+#[test]
+fn beside_smartsdrs_dax_a_message_plays_to_its_end() {
+    let mut s = FlexScene::with_faults(
+        true,
+        reports(&["USB"]),
+        vec![tempo_flexsim::Fault::ForeignDaxTx(
+            tempo_flexsim::ForeignDax::default(),
+        )],
+        tempo_net::flex::session::Config::new(Station::new("Nexus").unwrap()),
+    );
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_operating_mode("phone", false); // arms TX
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    run_until(&mut s, "the client never saw the other program", |s| {
+        s.state
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::flex)
+            .is_some_and(FlexDaemon::other_dax_feeder)
+    });
+    s.run(500);
+    s.held.clear();
+    let since = Instant::now();
+    s.engine
+        .lock()
+        .unwrap()
+        .send_voice(message_of(3.0))
+        .unwrap();
+    run_until_seen(&mut s, since, "idle");
+    let over = held_over(&s);
+    assert!(
+        over >= 3_000.0,
+        "cut after {over} ms: {:?}",
+        voice_trace(&s, since)
+    );
+}

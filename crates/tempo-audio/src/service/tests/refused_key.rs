@@ -555,6 +555,42 @@ fn a_refused_remote_microphone_over_plays_nothing_and_ends() {
     }
 }
 
+/// ⭐ A REMOTE MICROPHONE KEY WITH NO ANSWER IN TIME IS NOT CONFIRMED, NOT REFUSED. Its over goes
+/// out, as the voice keyer's does, and the line says the key was not confirmed; only a refusal
+/// says the rig did not accept PTT.
+#[test]
+fn a_remote_microphone_key_with_no_answer_in_time_reads_not_confirmed() {
+    for (key, words, kind) in [
+        (Key::AnswersLate, UNCONFIRMED, "pttUnconfirmed"),
+        (Key::Answers(-5), UNCONFIRMED, "pttUnconfirmed"),
+        (Key::Refuses, REFUSED, "ptt"),
+    ] {
+        let (addr, log) = rigctld(key);
+        let mut s = MicScene::new();
+        s.rig = Rig::rigctld(&addr);
+        s.hold.hold(MIC_PRESS, s.mono(0.0));
+        s.step(0.0);
+        let mut t = 20.0;
+        while t <= 1_000.0 {
+            s.tick(t, true);
+            t += 20.0;
+        }
+        let snapshot = s.engine.lock().unwrap().snapshot();
+        let keys = log.lock().unwrap().iter().filter(|l| *l == "T 1").count();
+        assert!(keys >= 1, "premise: the first frame tried the key");
+        assert_eq!(snapshot.radio.audio_error.as_deref(), Some(words));
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap()["radio"]["audioErrorKind"],
+            kind
+        );
+        assert_eq!(
+            !s.backend.played.is_empty(),
+            key != Key::Refuses,
+            "whether the voice went out ({words})"
+        );
+    }
+}
+
 /// ⛔ A TUNE WHOSE KEY IS NOT CONFIRMED PLAYS NO CARRIER. Its key answered after the PTT deadline,
 /// and the tune used to put its carrier into the radio anyway. Behind a rigctld held up for
 /// seconds the key was still on its way: the tone went into a receiving radio and the key reached
