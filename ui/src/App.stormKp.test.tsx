@@ -7,7 +7,7 @@
 // estimate (labelled) is what reaches the toast.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/react'
-import type { AppSnapshot, DrapGrid, KpForecast, PropagationSnapshot, XrayNow } from './types'
+import type { AppSnapshot, KpForecast, PropagationSnapshot, XrayNow } from './types'
 
 const snapshot = {
   mycall: 'KD9TAW',
@@ -23,9 +23,7 @@ const snapshot = {
   recentDecodes: [], harqRescues: 0, logTick: 1, hunt: null,
 } as unknown as AppSnapshot
 
-// NOAA's grid, by identity: processFlare is a spy here, so its contents never matter.
-const GRID: DrapGrid = { validAt: 0, recoveryAt: null, lats: [0], lons: [0], haf: [10] }
-// The fast lane's answer: an M5, sampled a minute ago, with NOAA's grid.
+// The fast lane's answer (a quiet sun here; the X-ray toast is not this test's).
 let lane: XrayNow
 // The Kp outlook App watches for its storm toasts.
 let forecast: KpForecast
