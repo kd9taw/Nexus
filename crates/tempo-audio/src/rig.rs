@@ -704,6 +704,9 @@ pub struct Rig {
     owed_key_down: bool,
     /// [`OWED_ANSWER_BOUND`]; a field so a test can shorten it.
     owed_bound: Duration,
+    /// How many times the connection has been dropped ([`Self::drop_connection`]), so an over can
+    /// tell its split writes went out on the connection it took [`Self::split_confirmed`] from.
+    connection_drops: u64,
     /// The (verb, token) pairs never sent on this link, because the radio's Hamlib driver turns
     /// them into a different command than the radio's own manual defines — see
     /// [`crate::rigmodels::hamlib_never_send`]. Empty by default.
@@ -718,6 +721,10 @@ pub struct Rig {
     /// `slot::SPLIT_WRITES_BUDGET_MS`, for a scene that delays the key through them on purpose.
     #[cfg(test)]
     pub(crate) test_split_budget_ms: Option<u64>,
+    /// A test's way to land the [`OWED_ANSWER_BOUND`] in the moment between
+    /// [`Self::take_split_confirmed`]'s own look at it and the over's first split write.
+    #[cfg(test)]
+    pub(crate) test_debt_lapses_after_split_take: bool,
 }
 
 /// What [`Rig::split_confirmed`] holds: the RX dial the radio was on when it confirmed, and the
@@ -857,6 +864,7 @@ impl Rig {
             owed_since: None,
             owed_key_down: false,
             owed_bound: OWED_ANSWER_BOUND,
+            connection_drops: 0,
             never_send: &[],
             #[cfg(test)]
             before_remote_write: None,
@@ -864,6 +872,8 @@ impl Rig {
             test_reply_deadline_ms: None,
             #[cfg(test)]
             test_split_budget_ms: None,
+            #[cfg(test)]
+            test_debt_lapses_after_split_take: false,
         }
     }
 
@@ -979,7 +989,17 @@ impl Rig {
         self.stream = None;
         self.owed_replies = 0;
         self.owed_since = None;
+        // A key-down owed on this connection holds only this one ([`Self::give_up_a_stale_debt`]).
+        self.owed_key_down = false;
         self.split_confirmed = None;
+        self.connection_drops += 1;
+    }
+
+    /// How many times the connection has been dropped: unchanged across a run of commands, they
+    /// all went out on one connection (or, from a connection that was already gone, on the one
+    /// the first of them opened).
+    pub(crate) fn connection_drops(&self) -> u64 {
+        self.connection_drops
     }
 
     /// Send one command line and read its COMPLETE (newline-terminated) reply.
@@ -1174,7 +1194,14 @@ impl Rig {
     /// and mode on the new connection rather than skip them as already confirmed on the old one.
     pub(crate) fn take_split_confirmed(&mut self) -> Option<SplitConfirmed> {
         self.give_up_a_stale_debt();
-        self.split_confirmed.take()
+        let taken = self.split_confirmed.take();
+        #[cfg(test)]
+        if self.test_debt_lapses_after_split_take {
+            self.owed_since = self
+                .owed_since
+                .map(|_| std::time::Instant::now() - self.owed_bound);
+        }
+        taken
     }
 
     /// A command's reply deadline (ms) when it names none: the long window on a slow transport.
@@ -3731,6 +3758,138 @@ mod tests {
         assert!(
             log.iter().any(|(conn, _)| *conn > 0),
             "premise: a give-up happened: {log:?}"
+        );
+    }
+
+    /// A key-down whose answer was still owed when its connection broke says nothing about the
+    /// NEXT connection. There a stop whose answer is lost, with no key line after it, is given up
+    /// once the bound passes like any other lost answer; a key-down remembered from the dead
+    /// connection would hold it for good, every read failing as no answer in time.
+    #[test]
+    fn a_key_down_owed_on_a_broken_connection_does_not_hold_the_next_one() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let log = Arc::new(Mutex::new(Vec::<(usize, String)>::new()));
+        let log_w = log.clone();
+        let conns = Arc::new(AtomicUsize::new(0));
+        let conns_w = conns.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let conn = conns_w.fetch_add(1, Ordering::SeqCst);
+                let log_w = log_w.clone();
+                std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    let Ok(reader) = stream.try_clone() else {
+                        return;
+                    };
+                    for line in std::io::BufReader::new(reader).lines() {
+                        let Ok(line) = line else { return };
+                        log_w.lock().unwrap().push((conn, line.clone()));
+                        let reply = match (conn, line.as_str()) {
+                            // The key is taken and never answered, and the connection goes away.
+                            (0, _) => {
+                                std::thread::sleep(Duration::from_millis(1_500));
+                                return;
+                            }
+                            (_, "\\stop_morse") => continue, // its answer is lost
+                            (_, "f") => "14074000\n",
+                            _ => "RPRT 0\n",
+                        };
+                        if stream.write_all(reply.as_bytes()).is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        let mut rig = Rig::rigctld(&addr);
+        rig.owed_bound = Duration::from_millis(1_500);
+        assert!(
+            rig.ptt(true).is_err_and(|e| deadline_passed(&e)) && rig.owed_key_down,
+            "premise: the key's answer is owed"
+        );
+        std::thread::sleep(Duration::from_millis(1_000)); // its connection is gone by now
+        let mut tries = 0;
+        while rig.keyed && tries < 3 {
+            let _ = rig.ptt(false);
+            tries += 1;
+        }
+        assert!(!rig.keyed, "premise: a release on a new connection");
+        assert!(
+            rig.stop_morse().is_err(),
+            "premise: the stop's answer is lost"
+        );
+        std::thread::sleep(Duration::from_millis(1_600));
+        assert_eq!(
+            rig.read_freq().map_err(|e| e.to_string()),
+            Ok(14_074_000),
+            "the lost stop's connection was never given up"
+        );
+        assert_eq!(conns.load(Ordering::SeqCst), 3, "{:?}", log.lock().unwrap());
+    }
+
+    /// ⛔ THE GIVE-UP READS WHAT HAS ARRIVED BEFORE IT CLOSES. Closing a socket with unread bytes
+    /// in it is a reset, not an orderly close, and a reset may cost rigctld the lines still queued
+    /// on the connection (the release among them). Here both late answers are in when the bound
+    /// passes, unread; the peer must see the connection end, never reset.
+    #[test]
+    fn a_given_up_connection_is_closed_in_order_with_its_late_answers_read() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (ended_tx, ended_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for (conn, stream) in listener.incoming().enumerate() {
+                let Ok(mut stream) = stream else { break };
+                let ended_tx = ended_tx.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 64];
+                    let mut lines = 0;
+                    loop {
+                        let n = match stream.read(&mut buf) {
+                            Ok(n) => n,
+                            Err(e) => {
+                                let _ = ended_tx.send((conn, Err(e.kind())));
+                                return;
+                            }
+                        };
+                        if n == 0 {
+                            let _ = ended_tx.send((conn, Ok(())));
+                            return;
+                        }
+                        for line in String::from_utf8_lossy(&buf[..n]).lines() {
+                            lines += 1;
+                            let reply = match line {
+                                "f" => "14074000\n",
+                                _ => "RPRT 0\n",
+                            };
+                            if conn == 0 && lines == 1 {
+                                // The key is carried out late, past its deadline and the release's.
+                                std::thread::sleep(Duration::from_millis(2_000));
+                            }
+                            if stream.write_all(reply.as_bytes()).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        let mut rig = Rig::rigctld(&addr);
+        rig.owed_bound = Duration::from_millis(1_500);
+        assert!(rig.ptt(true).is_err(), "premise: the key's answer is late");
+        assert!(
+            rig.ptt(false).is_err(),
+            "premise: the release is owed behind it"
+        );
+        // Both answers arrive at about 2 s; the bound has passed by 2.2 s.
+        std::thread::sleep(Duration::from_millis(2_600));
+        assert_eq!(rig.read_freq().map_err(|e| e.to_string()), Ok(14_074_000));
+        assert_eq!(
+            ended_rx.recv_timeout(Duration::from_secs(5)),
+            Ok((0, Ok(()))),
+            "the given-up connection was reset, not closed"
         );
     }
 
