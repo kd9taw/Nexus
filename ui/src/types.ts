@@ -94,12 +94,14 @@ export interface MufStation {
 }
 
 /** NOAA SWPC R/S/G scales (0..5): radio blackout / solar radiation / geomagnetic, now,
- *  plus tomorrow's forecast G. */
+ *  plus a forecast G with the UTC day it is for — null when NOAA's file has no block dated
+ *  tomorrow (unknown; today's forecast never stands in). The date travels with the level
+ *  because a kept copy outlives midnight: it is "tomorrow" only while `date` is UTC today + 1. */
 export interface NoaaScalesView {
   r: number
   s: number
   g: number
-  gTomorrow: number
+  gTomorrow: { level: number; date: string } | null
   /** Stamped only on a real fetch — null/absent = never loaded (an all-zero
    * default must not render as a genuinely quiet sun). */
   asOf?: number | null

@@ -16,6 +16,11 @@ const RSG: { key: 'r' | 's' | 'g'; label: string; titleKey: MessageKey }[] = [
  *  three refetches that copy is drawn with its age, so an old R0 does not read as the sun now. */
 const SCALES_STALE_SECS = 45 * 60
 
+/** UTC today + 1 as NOAA writes a day ("YYYY-MM-DD"). */
+function utcTomorrow(nowMs: number): string {
+  return new Date(nowMs + 86_400_000).toISOString().slice(0, 10)
+}
+
 function sev(n: number): string {
   return n <= 0 ? 'quiet' : n <= 2 ? 'minor' : 'major'
 }
@@ -34,6 +39,11 @@ export function ScalesAnnunciator({
   const age = Math.max(0, Math.floor(Date.now() / 1000 - scales.asOf))
   // An old copy keeps its letters, dim, beside its age: an R3 from hours ago is no alarm now.
   const stale = age >= SCALES_STALE_SECS
+  // The forecast is "tomorrow" only while the day it was issued for is still UTC today + 1: a copy
+  // kept past midnight (the station's cache, its offline last-good copy) would otherwise call
+  // today's forecast tomorrow's. An older station sends a bare number here, which has no date.
+  const fc = scales.gTomorrow
+  const tomorrow = fc != null && fc.level > 0 && fc.date === utcTomorrow(Date.now()) ? fc.level : null
   return (
     <div className="swsc">
       <div className="swsc-scales">
@@ -44,9 +54,9 @@ export function ScalesAnnunciator({
           </span>
         ))}
         {stale && <span className="swsc-fc">{t('prop.scales.asOf', { ago: agoLabel(age) })}</span>}
-        {scales.gTomorrow > 0 && (
+        {tomorrow != null && (
           <span className="swsc-fc" title={t('prop.scales.tomorrow.title')}>
-            {t('prop.scales.tomorrow', { level: scales.gTomorrow })}
+            {t('prop.scales.tomorrow', { level: tomorrow })}
           </span>
         )}
       </div>
