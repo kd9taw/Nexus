@@ -905,6 +905,41 @@ mod tests {
     }
 
     #[test]
+    fn every_crossing_counts_once_at_the_ends_twice_between_and_times_its_secant() {
+        // NOAA's grid at 30 MHz everywhere: on Boston–London at 12Z (daylight end to end) every
+        // crossing has the same vertical loss, (30/14.074)^1.5 dB on 20 m.
+        let g = grid(30.0, MAY_12Z - 60, None);
+        let f = footprint(x(X1, MAY_12Z), Some(&g), MAY_12Z).unwrap();
+        let vertical = (30.0f64 / 14.074).powf(1.5);
+        let sec = |deg: f64| {
+            let sin_i = 6371.0 * deg.to_radians().cos() / (6371.0 + 110.0);
+            1.0 / (1.0 - sin_i * sin_i).sqrt()
+        };
+        for (hops, takeoff) in [(1u8, 5.0f32), (2, 12.0), (3, 30.0)] {
+            let b = [band("20m", Some((hops, takeoff)))];
+            let o = overlay(
+                BOSTON,
+                LONDON,
+                Route::Short,
+                &b,
+                Some(2.0),
+                MAY_12Z,
+                Some(&f),
+                None,
+            )
+            .unwrap();
+            let want = 2.0 * f64::from(hops) * vertical * sec(f64::from(takeoff));
+            let got = f64::from(o.bands[0].flare_db.unwrap());
+            assert!(
+                (got - want).abs() < 0.06,
+                "{hops} hops at {takeoff}°: {got} vs {want}"
+            );
+        }
+        // A grazing ray crosses more of the layer than a steep one, but never without bound.
+        assert!(sec(3.0) > 5.0 && sec(3.0) < 5.5 && sec(30.0) < 2.0);
+    }
+
+    #[test]
     fn a_proton_event_absorbs_a_polar_path_and_not_an_equatorial_one() {
         let s2 = storm(150.0, MAY_12Z - 300);
         let o = overlay(

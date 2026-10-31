@@ -7,6 +7,7 @@ import {
   nowClauses,
   nowDetail,
   nowHit,
+  nowHitKind,
   overlaySegments,
   spaceNowLines,
 } from './pathNow'
@@ -87,6 +88,24 @@ describe('pathNow — the flare and proton clauses on a path', () => {
     expect(c).toContain('~6 dB of polar-cap absorption on 20m')
     expect(c).toContain('S2 proton event')
     expect(c).toContain('GOES protons 11:55Z')
+  })
+
+  it('a proton figure needs NOAA’s S level and the sample’s time to speak', () => {
+    const noScale = overlay({ source: { protonsAt: NOW - 300 }, bands: S2.bands })
+    expect(nowClauses(noScale, '20m', NOW)).toEqual([])
+    const noTime = overlay({ source: { sScale: 2 }, bands: S2.bands })
+    expect(nowClauses(noTime, '20m', NOW)).toEqual([])
+    expect(nowClauses(S2, '20m', NOW)).toHaveLength(1)
+  })
+
+  it('the strip’s hatch is the proton event’s when only the proton figure speaks', () => {
+    const both = overlay({
+      source: { ...S2.source, xrayAt: NOW - 60, xrayLong: 1.2e-5, haf: 'goes' },
+      bands: [{ band: '20m', hops: 3, hopsModelled: true, flareDb: 0.4, pcaDb: 6.2 }],
+    })
+    expect(nowHitKind(both, '20m')).toBe('pca')
+    expect(nowHitKind(NOAA_FLARE, '20m')).toBe('flare')
+    expect(nowHitKind(NOAA_FLARE, '10m')).toBeNull()
   })
 
   it('the detail rows say how many crossings and whether the hops are the model’s', () => {
