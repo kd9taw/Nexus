@@ -1686,6 +1686,11 @@ pub struct RadioConfig {
     pub icom_lan_user: String,
     pub icom_lan_port: u16,
     pub radio_id: u32,
+    /// The radio this PROCESS was launched to drive (`--profile r<id>`: one window per radio
+    /// under simultaneous radios), `None` for the single band-following window. A bound
+    /// process's monitor never opens any other radio, because that radio's own window owns its
+    /// port and its rigctld — see [`monitor_want`].
+    pub bound_radio: Option<u32>,
     /// The port our OWN CAT broker serves on (if enabled), so auto-coexist never
     /// connects Nexus to itself. `None` = broker off.
     pub broker_self_port: Option<u16>,
@@ -1748,6 +1753,7 @@ impl Default for RadioConfig {
             icom_lan_user: String::new(),
             icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
             radio_id: 0,
+            bound_radio: None,
             broker_self_port: Some(4532),
             dial_hz: 14_090_500,
             mode: "USB".to_string(),
@@ -2264,7 +2270,8 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         let mon_engine = engine.clone();
         let mon_pool = pool.clone();
         let mon_pending = switch_pending.clone();
-        std::thread::spawn(move || monitor_loop(mon_engine, mon_pool, mon_pending));
+        let bound = cfg.bound_radio;
+        std::thread::spawn(move || monitor_loop(mon_engine, mon_pool, mon_pending, bound));
     }
     loop {
         state.apply_remote_selection(
@@ -2699,6 +2706,7 @@ fn monitor_loop(
     engine: Arc<Mutex<Engine>>,
     pool: MonitorPool,
     pending: Arc<std::sync::atomic::AtomicBool>,
+    bound: Option<u32>,
 ) {
     loop {
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2707,7 +2715,7 @@ fn monitor_loop(
         // Desired monitor set (enabled, non-active, has a rig model), snapshot under a brief lock.
         let (active, want) = {
             let e = engine_lock(&engine);
-            monitor_want(e.settings(), e.cat_share_port())
+            monitor_want(e.settings(), e.cat_share_port(), bound)
         };
         // A switch is mid-flight: stay off the pool entirely so the handoff's try_lock wins
         // on its next 20 ms tick (a monitor poll can hold the lock for whole read bursts).
@@ -2723,7 +2731,18 @@ fn monitor_loop(
 
 /// The monitor's desired set: the active radio, and `(id, transport)` for every enabled, non-active
 /// radio with a rig model.
-fn monitor_want(s: &Settings, serving: Option<u16>) -> (u32, Vec<(u32, Transport)>) {
+///
+/// ⚠️ A process BOUND to one radio (`bound`: one window per radio under simultaneous radios) wants
+/// none but its own. Every other radio is another Nexus process's: monitoring it here started a
+/// second rigctld for that radio's COM port and TCP port — the other window then adopted this
+/// window's daemon and lost it whenever this one recycled its monitor, while this one retried a
+/// COM port the other held, and the radio was polled by two processes at once. `None` (the single
+/// band-following window) keeps every other radio, as it always has.
+fn monitor_want(
+    s: &Settings,
+    serving: Option<u16>,
+    bound: Option<u32>,
+) -> (u32, Vec<(u32, Transport)>) {
     let active = s.active_radio;
     // The control-line states are a GLOBAL setting, and a monitor's rigctld opens a
     // real port on a real radio — so it has to honour them too. Without this, an
@@ -2744,6 +2763,7 @@ fn monitor_want(s: &Settings, serving: Option<u16>) -> (u32, Vec<(u32, Transport
         .radios
         .iter()
         .filter(|p| p.monitored_while(active))
+        .filter(|p| bound.is_none_or(|own| p.id == own))
         .map(|p| {
             let mut t = Transport::from_profile(p);
             t.control_lines = lines;
@@ -19095,6 +19115,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 
 #[cfg(test)]
 mod tests {
+    mod bound_monitor;
     mod civ_coverage;
     mod clock_repair_tests;
     mod contest_logged;
@@ -28552,7 +28573,7 @@ mod tests {
                 .success()
         };
         let pass = || {
-            let (active, want) = monitor_want(engine.lock().unwrap().settings(), None);
+            let (active, want) = monitor_want(engine.lock().unwrap().settings(), None, None);
             reconcile_pool_with_open(&pool, &want, active, &engine, 0.0, &open);
         };
 

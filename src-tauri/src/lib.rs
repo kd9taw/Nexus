@@ -1852,6 +1852,22 @@ fn start_human_cluster_feed(
     });
 }
 
+/// The PSK Reporter MQTT client id for one of this process's feeds: `feed` is `""` for the
+/// operator's own spots and `"rgn-"` for the near-region one, `bound` the radio this process
+/// drives ([`bound_radio_id`]).
+///
+/// The broker keeps ONE session per client id and drops the older on a duplicate, so two radio
+/// windows (simultaneous radios) under one callsign must not share an id, or each knocks the
+/// other off in turn and both feeds flap. A bound window adds its radio's profile key; the
+/// shorter `nx-` prefix keeps such an id inside the 23 bytes MQTT 3.1.1 guarantees a broker
+/// accepts for an ordinary callsign. A window bound to no radio keeps the id it always had.
+fn pskr_client_id(feed: &str, call: &str, bound: Option<u32>) -> String {
+    match bound {
+        None => format!("nexus-{feed}{call}"),
+        Some(id) => format!("nx-{feed}{call}-{}", radio_profile_key(id)),
+    }
+}
+
 /// Spawn the PSK Reporter MQTT firehose thread once per process (the [`PSKR_STARTED`]
 /// latch makes repeat calls a no-op). No-op unless `mycall` is a [`is_real_call`].
 /// Parsed live `PathSpot`s flow into `live_paths`, which `get_propagation` merges
@@ -1876,7 +1892,7 @@ fn start_pskr_feed(live_paths: &SharedLivePaths, mycall: &str, health: &SharedHe
         let topic_refs: Vec<&str> = topics.iter().map(|s| s.as_str()).collect();
         tempo_net::mqtt::subscribe(
             PSKR_MQTT_ADDR,
-            &format!("nexus-{call}"),
+            &pskr_client_id("", &call, bound_radio_id()),
             &topic_refs,
             |topic, payload| {
                 if let Some(spot) = propagation::parse_pskr_mqtt_payload(topic, payload, now_unix())
@@ -1963,6 +1979,48 @@ fn start_wspr_feed(live_paths: &SharedLivePaths, mycall: &str) {
     });
 }
 
+#[cfg(test)]
+mod pskr_client_id_tests {
+    use super::pskr_client_id;
+
+    /// A window bound to no radio keeps the ids every release has used.
+    #[test]
+    fn an_unbound_window_keeps_its_ids() {
+        assert_eq!(
+            (
+                pskr_client_id("", "W9XYZ", None),
+                pskr_client_id("rgn-", "W9XYZ", None)
+            ),
+            ("nexus-W9XYZ".to_string(), "nexus-rgn-W9XYZ".to_string())
+        );
+    }
+
+    /// Two radio windows under one callsign, and the single window beside them: six distinct
+    /// ids, each within the 23 bytes every MQTT 3.1.1 broker must accept.
+    #[test]
+    fn every_window_and_feed_has_its_own_id() {
+        let ids: Vec<String> = [None, Some(0), Some(1)]
+            .into_iter()
+            .flat_map(|b| ["", "rgn-"].map(|f| pskr_client_id(f, "W9XYZ", b)))
+            .collect();
+        let distinct: std::collections::BTreeSet<&String> = ids.iter().collect();
+        assert_eq!(distinct.len(), ids.len(), "{ids:?}");
+        assert!(ids.iter().all(|id| id.len() <= 23), "{ids:?}");
+    }
+
+    /// The bound ids name the radio's profile, so a window's id stays its own across launches.
+    #[test]
+    fn a_bound_window_names_its_radio() {
+        assert_eq!(
+            (
+                pskr_client_id("", "W9XYZ", Some(1)),
+                pskr_client_id("rgn-", "W9XYZ", Some(12))
+            ),
+            ("nx-W9XYZ-r1".to_string(), "nx-rgn-W9XYZ-r12".to_string())
+        );
+    }
+}
+
 /// Spawn the near-region opening MQTT thread once per process (Phase 2). No-op
 /// unless `mycall` is real, `mygrid` resolves (nothing can be "near" otherwise),
 /// and the operator hasn't opted out. Subscribes to the per-band VHF/10 m global
@@ -1993,7 +2051,7 @@ fn start_pskr_region_feed(region_paths: &SharedRegionPaths, mycall: &str, mygrid
         let connected = std::sync::atomic::AtomicBool::new(false);
         tempo_net::mqtt::subscribe(
             PSKR_MQTT_ADDR,
-            &format!("nexus-rgn-{call}"),
+            &pskr_client_id("rgn-", &call, bound_radio_id()),
             &topic_refs,
             |topic, payload| {
                 let now = now_unix();
@@ -40130,6 +40188,9 @@ pub fn run() {
         icom_lan_user: settings.icom_lan_user.clone(),
         icom_lan_port: settings.icom_lan_port,
         radio_id: settings.active_radio,
+        // One window per radio (simultaneous radios): this process's monitor leaves every other
+        // radio to its own window. `None` (the single band-following window) monitors them all.
+        bound_radio: bound_radio_id(),
         broker_self_port: if settings.cat_broker {
             Some(settings.cat_broker_port)
         } else {
