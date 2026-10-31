@@ -127,6 +127,7 @@ fn pass_counted(
         partial,
         true,
         false,
+        false,
         &mut |p| {
             match p {
                 Progress::Found(d) => {
@@ -161,6 +162,7 @@ fn raw_full(frame: &[i16]) -> (Vec<Decode>, Vec<Decode>) {
         true,
         false,
         true,
+        false,
         false,
         &mut |p| {
             if let Progress::Found(d) = p {
@@ -377,6 +379,7 @@ fn what_an_early_pass_leaves() {
         false,
         true,
         true,
+        false,
         false,
         &mut |_| false,
         &mut carry,

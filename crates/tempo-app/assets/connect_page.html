@@ -206,9 +206,10 @@
     put('call', b.call || '—');
     put('grid', b.grid || '');
     put('headline', b.headline || '');
-    put('sfi', Math.round(b.sfi));
-    put('kp', (b.kp ?? 0).toFixed(1));
-    put('a', Math.round(b.aIndex));
+    // An index the station could not vouch for now (a stand-in, or too old) comes as null: a dash.
+    put('sfi', b.sfi == null ? '–' : Math.round(b.sfi));
+    put('kp', b.kp == null ? '–' : b.kp.toFixed(1));
+    put('a', b.aIndex == null ? '–' : Math.round(b.aIndex));
     put('xray', b.xrayClass || '–');
 
     const src = document.getElementById('src');

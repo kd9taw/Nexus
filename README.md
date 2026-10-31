@@ -56,9 +56,9 @@ WSJT-X muscle memory works unchanged inside a UI built this decade.
   sources, tracking upstream **3.0.2**. On identical recorded audio, the decode floor measures
   **−21.3 dB against stock WSJT-X's −20.7**, with zero false decodes, and the suite includes
   false-alarm tests that feed the decoder pure noise and require it to produce nothing at all.
-  **Rovers keep decoding here**: upstream 3.0.2 discards any decode containing `/R` outside contest
-  mode, which is exactly the VHF traffic worth catching, and a test fails if anyone reintroduces
-  that filter.
+  **Rovers decode in Contest mode**: as in WSJT-X 3.0.2, FT8 drops rover (`/R`) and `TU;` decodes
+  outside a contest, where they are almost always false, and keeps them with Contest mode on or as
+  a Hound, so VHF contest rovers still come through. Tests fail if either half changes.
 - **🗺️ APRS that shows you the network and tells you the truth about your receiver.** Stations draw
   as their **actual APRS symbol** rather than identical dots: cars, trucks, bicycles and people,
   weather stations, digipeaters and iGates, campsites, balloons, boats and aircraft, with vehicles
@@ -493,6 +493,9 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
 - **[AD1C Country Files](https://www.country-files.com/)** (MIT) — **Jim Reisert AD1C**. `cty.dat`
   maps callsigns to DXCC entities and CQ/ITU zones for the awards, the map and the Needed board
   (see **[NOTICE](NOTICE)**).
+- **[IOTA](https://www.iota-world.org/)** — **RSGB and IOTA Ltd**. The island-group list ships in the
+  installer with IOTA Ltd's permission (it is not in this repository) and names the group beside an
+  IOTA reference; Nexus checks iota-world.org for a newer copy at most monthly (see **[NOTICE](NOTICE)**).
 - **Street maps** (optional download) — map data © **[OpenStreetMap](https://www.openstreetmap.org/copyright)**
   contributors (ODbL), from the **[Protomaps basemap](https://github.com/protomaps/basemaps)**;
   drawn with **[MapLibre GL JS](https://github.com/maplibre/maplibre-gl-js)** (BSD-3-Clause) and

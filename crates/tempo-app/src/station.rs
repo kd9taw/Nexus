@@ -198,15 +198,19 @@ impl DiagnosticsInputs {
 /// and `room` ([`StationCore::catch_up_room`]) under it, and queue what this picks with
 /// [`StationCore::requeue_catch_up`]. A contact another change removes between the two reads
 /// is simply not picked; the next sweep looks again.
+///
+/// A contact made before a service's start point ([`UploadStart`]) is not owed to it: the
+/// operator answered "Only contacts made from now on" when the login was first saved.
 pub fn catch_up_records(
     rows: &crate::logstore::LogRows,
     legs: u8,
     room: usize,
+    start: UploadStart,
 ) -> Result<Vec<(QsoRecord, u8)>, String> {
     use std::ops::ControlFlow;
     use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
     const STAMPS: Narrow = Narrow {
-        columns: &[],
+        columns: &["when_unix"],
         uploads: true,
     };
     if room == 0 {
@@ -214,7 +218,7 @@ pub fn catch_up_records(
     }
     let mut owed: Vec<(tempo_core::logbook::RecordId, u8)> = Vec::new();
     rows.each(STAMPS, Scope::All, Order::Log, &mut |r| {
-        match (unsent_legs(r, legs), r.id) {
+        match (unsent_legs(r, start.open_legs(legs, r.when_unix)), r.id) {
             (0, _) | (_, None) => {}
             (legs, Some(id)) => owed.push((id, legs)),
         }
@@ -235,6 +239,125 @@ pub fn catch_up_records(
             Some((r, legs))
         })
         .collect())
+}
+
+/// How many logged contacts have not been sent on `legs` ([`unsent_legs`]), whatever the start
+/// points say: the number the first login saved for a service asks about ("Send N contacts not
+/// yet sent to QRZ Logbook?"), whose answer sets or clears that service's start point. Read from
+/// the store, so never under the Engine lock (as [`catch_up_records`]).
+pub fn backlog_count(rows: &crate::logstore::LogRows, legs: u8) -> Result<usize, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Narrow, Order, Scope};
+    const STAMPS: Narrow = Narrow {
+        columns: &[],
+        uploads: true,
+    };
+    let mut n = 0usize;
+    rows.each(STAMPS, Scope::All, Order::Log, &mut |r| {
+        if unsent_legs(r, legs) != 0 {
+            n += 1;
+        }
+        ControlFlow::Continue(())
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
+/// Where each service's automatic uploads start, in Unix seconds: a contact made before a
+/// service's start point is never sent to it automatically. Kept beside the shared log
+/// ([`crate::upload_start`]), so every window sharing the log honours the same ones. `None` is no
+/// start point, every contact not yet sent is owed: what every station had before, and still has
+/// unless it answered "Only contacts made from now on" when it first saved a login.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UploadStart {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qrz: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clublog: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqsl: Option<u64>,
+}
+
+impl UploadStart {
+    /// The start points an earlier build of this change left in one window's settings file
+    /// ([`Settings::qrz_logbook_upload_from`](crate::settings::Settings::qrz_logbook_upload_from)),
+    /// to be moved beside the log.
+    pub fn left_in(s: &crate::settings::Settings) -> Self {
+        Self {
+            qrz: s.qrz_logbook_upload_from,
+            clublog: s.clublog_upload_from,
+            eqsl: s.eqsl_upload_from,
+        }
+    }
+
+    /// The start point of the one service on `leg`.
+    pub fn of_leg(&self, leg: u8) -> Option<u64> {
+        use crate::engine::upload_legs as l;
+        match leg {
+            l::QRZ => self.qrz,
+            l::CLUBLOG => self.clublog,
+            l::EQSL => self.eqsl,
+            _ => None,
+        }
+    }
+
+    /// The operator's answer to the first login's question for the service on `leg`: "Send them"
+    /// (`send_old`) clears its start point; "Only contacts made from now on" puts it at `now_unix`,
+    /// or keeps an earlier one already there (operator ruling "Keep the earlier point"), so a
+    /// contact made between two answers that never reached the service is still owed.
+    pub fn answer(&mut self, leg: u8, send_old: bool, now_unix: u64) {
+        use crate::engine::upload_legs as l;
+        let slot = match leg {
+            l::QRZ => &mut self.qrz,
+            l::CLUBLOG => &mut self.clublog,
+            l::EQSL => &mut self.eqsl,
+            _ => return,
+        };
+        *slot = if send_old {
+            None
+        } else {
+            Some(slot.map_or(now_unix, |held| held.min(now_unix)))
+        };
+    }
+
+    /// Each service's earlier start point of the two, or the one there is.
+    pub fn keep_earliest(self, other: Self) -> Self {
+        let early = |a: Option<u64>, b: Option<u64>| match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        Self {
+            qrz: early(self.qrz, other.qrz),
+            clublog: early(self.clublog, other.clublog),
+            eqsl: early(self.eqsl, other.eqsl),
+        }
+    }
+
+    /// `other`'s start point only for a service that has none here.
+    pub fn fill_from(self, other: Self) -> Self {
+        Self {
+            qrz: self.qrz.or(other.qrz),
+            clublog: self.clublog.or(other.clublog),
+            eqsl: self.eqsl.or(other.eqsl),
+        }
+    }
+
+    /// Which of `legs` a contact made at `when_unix` may still be sent on automatically: all of
+    /// them, less each service whose start point is after it.
+    pub fn open_legs(&self, legs: u8, when_unix: u64) -> u8 {
+        use crate::engine::upload_legs as l;
+        let mut open = legs;
+        for (leg, from) in [
+            (l::QRZ, self.qrz),
+            (l::CLUBLOG, self.clublog),
+            (l::EQSL, self.eqsl),
+        ] {
+            if from.is_some_and(|from| when_unix < from) {
+                open &= !leg;
+            }
+        }
+        open
+    }
 }
 
 /// Fill a contact's country and state from the station's resolvers where it carries none —
@@ -2276,6 +2399,25 @@ pub struct StationCore {
     #[allow(clippy::type_complexity)]
     pub(crate) state_resolve:
         Option<Box<dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync>>,
+    /// The log-time path grader, injected by the command layer (which holds the propagation
+    /// model and the path card it last computed): for a contact being logged, its graded route
+    /// ([`tempo_core::logbook::path_stamp`]). Same pattern as [`Self::set_state_resolver`], for
+    /// the same reason — tempo-app has no `propagation` dependency. It runs under the Engine
+    /// lock, so it only ever reads what the command layer already holds: no prediction, no
+    /// no disk. Its second input is the worked station's decode lateness
+    /// ([`crate::engine::Engine`]'s `late_dts_of`), for the grader's aggregate DT gate. `None` in
+    /// headless tests (a contact logs with no grade).
+    #[allow(clippy::type_complexity)]
+    pub(crate) path_at_log: Option<
+        Box<
+            dyn Fn(
+                    &tempo_core::logbook::QsoRecord,
+                    &[f32],
+                ) -> Option<tempo_core::logbook::path_stamp::PathStamp>
+                + Send
+                + Sync,
+        >,
+    >,
     /// Grid → rarity tier (0–3) resolver, injected by the command layer (which
     /// owns the geography table in the propagation crate) — same pattern as
     /// [`Self::set_dxcc_resolver`]. `None` in headless tests (gems stay off).
@@ -2331,6 +2473,9 @@ pub struct StationCore {
     /// persisted `gallery.json` at startup; the decode thread appends on each
     /// completed image. Capped at [`SSTV_GALLERY_CAP`].
     pub(crate) sstv_gallery: Vec<crate::dto::SstvGalleryEntry>,
+    /// Bumped by every change to [`Self::sstv_gallery`], so a gallery.json writer can tell an
+    /// older snapshot from a newer one ([`crate::sstv_gallery::write_gallery_json`]).
+    pub(crate) sstv_gallery_gen: u64,
 }
 
 /// A Parks/Summits On The Air activation as it runs ([`StationCore::activation`]), and as
@@ -2468,6 +2613,7 @@ impl StationCore {
             dxcc_country: None,
             country_dxcc: None,
             state_resolve: None,
+            path_at_log: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
             hunted_parks_import: HashSet::new(),
@@ -2481,6 +2627,7 @@ impl StationCore {
             activation_path: None,
             pota_exports: Default::default(),
             sstv_gallery: Vec::new(),
+            sstv_gallery_gen: 0,
         }
     }
 
@@ -3374,6 +3521,20 @@ impl StationCore {
         self.state_resolve = Some(Box::new(resolve));
     }
 
+    /// Inject the log-time path grader ([`Self::path_at_log`]).
+    pub fn set_path_grader(
+        &mut self,
+        grade: impl Fn(
+                &tempo_core::logbook::QsoRecord,
+                &[f32],
+            ) -> Option<tempo_core::logbook::path_stamp::PathStamp>
+            + Send
+            + Sync
+            + 'static,
+    ) {
+        self.path_at_log = Some(Box::new(grade));
+    }
+
     /// Inject the grid → rarity-tier (0–3) resolver (the command layer passes a
     /// `propagation::gridrarity::tier_u8`-backed closure). Purely presentational
     /// — decodes/roster gain their rarity gems from the next snapshot.
@@ -3810,6 +3971,19 @@ impl StationCore {
             retry_after_unix: due,
             corrected: false,
         });
+    }
+
+    /// Take `legs` off every queued upload of a contact made before `from_unix`, and drop the ones
+    /// left owing nothing: what was waiting to go when a service's start point was set
+    /// ([`UploadStart`]) — a contact logged while every upload was off is held here, and turning
+    /// one on would otherwise send it.
+    pub(crate) fn unqueue_before(&mut self, legs: u8, from_unix: u64) {
+        for p in self.pending_uploads.iter_mut() {
+            if p.rec.when_unix < from_unix {
+                p.legs &= !legs;
+            }
+        }
+        self.pending_uploads.retain(|p| p.legs != 0);
     }
 
     /// How many records the catch-up sweep may queue now: the connector queue's FREE room
@@ -5333,7 +5507,18 @@ impl StationCore {
 
     /// Append a completed SSTV image to the session gallery (newest last),
     /// capped at [`SSTV_GALLERY_CAP`]. Decode-thread only.
+    ///
+    /// A picture already listed under the same path is replaced, not listed twice. The decoder
+    /// saves the file before it takes the lock to push, so a gallery delete reading the folder in
+    /// between can adopt the file first as a bare entry; the decoder's record (frequency, lines)
+    /// then takes its place. Compared as strings: both build the path by joining the file name
+    /// onto the gallery folder, and no file lookup may run under the Engine lock.
     pub fn push_sstv_gallery(&mut self, entry: crate::dto::SstvGalleryEntry) {
+        self.sstv_gallery_gen += 1;
+        if let Some(listed) = self.sstv_gallery.iter_mut().find(|e| e.path == entry.path) {
+            *listed = entry;
+            return;
+        }
         self.sstv_gallery.push(entry);
         if self.sstv_gallery.len() > SSTV_GALLERY_CAP {
             let excess = self.sstv_gallery.len() - SSTV_GALLERY_CAP;
@@ -5353,12 +5538,17 @@ impl StationCore {
     pub fn remove_sstv_gallery(&mut self, path: &str) -> bool {
         let before = self.sstv_gallery.len();
         self.sstv_gallery.retain(|e| e.path != path);
-        self.sstv_gallery.len() != before
+        let removed = self.sstv_gallery.len() != before;
+        if removed {
+            self.sstv_gallery_gen += 1;
+        }
+        removed
     }
 
     pub fn set_sstv_gallery_fsk_id(&mut self, path: &str, fsk_id: String) {
         if let Some(entry) = self.sstv_gallery.iter_mut().rev().find(|e| e.path == path) {
             entry.fsk_id = Some(fsk_id);
+            self.sstv_gallery_gen += 1;
         }
     }
 
@@ -5369,11 +5559,18 @@ impl StationCore {
             entries.drain(0..excess);
         }
         self.sstv_gallery = entries;
+        self.sstv_gallery_gen += 1;
     }
 
     /// The session SSTV gallery, oldest first.
     pub fn sstv_gallery(&self) -> &[crate::dto::SstvGalleryEntry] {
         &self.sstv_gallery
+    }
+
+    /// The gallery and its generation, for a gallery.json write made after the Engine lock is
+    /// released ([`crate::sstv_gallery::write_gallery_json`]).
+    pub fn sstv_gallery_snapshot(&self) -> (u64, Vec<crate::dto::SstvGalleryEntry>) {
+        (self.sstv_gallery_gen, self.sstv_gallery.clone())
     }
 
     /// Adopt a corroborated NTP measurement (`tempo_net::sntp::measure`), sizing

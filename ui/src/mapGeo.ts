@@ -566,13 +566,15 @@ export function flareField(
   return out
 }
 
-/** D-RAP's empirical fade-recovery estimate (minutes) from the CURRENT flux:
- * 32.19·L² + 323.45·L + 837.2 for L = log10(flux). The published fit covers
- * M1–X5 (L −5…−3.3): ≈25 min at M1, ≈60 at X1, capped ≈120 above X5. Below M1
- * there is no published fit → null (the chip just omits the estimate). */
+/** D-RAP's empirical fade-recovery estimate (minutes) from the CURRENT flux, NOAA's piecewise
+ * fit for L = log10(flux): 32.19·L² + 323.45·L + 837.2 over M1–X5 (L −5…−3.3), ≈25 min at M1,
+ * ≈58 at X1, ≈120 at X5; above X5 NOAA continues it as 100·L + 450 (X10 → 150 min), so a
+ * bigger flare never reads as recovering sooner than an X5. Below M1 NOAA's fit is relative to
+ * the background flux, which this does not have → null (the chip just omits the estimate). */
 export function flareRecoveryMin(xrayLong: number): number | null {
   if (!(xrayLong >= 1e-5)) return null
-  const l = Math.min(-3.3, Math.log10(xrayLong))
+  const l = Math.log10(xrayLong)
+  if (l > -3.3) return 100 * l + 450
   return 32.19 * l * l + 323.45 * l + 837.2
 }
 

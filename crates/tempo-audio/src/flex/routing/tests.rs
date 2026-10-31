@@ -537,3 +537,43 @@ fn a_disconnect_mid_message_puts_the_mic_back() {
     );
     assert!(r.leaves_dax(&view(true, "USB")));
 }
+
+/// For keying, Nexus's write stays in flight until the radio reports it or refuses it, however late:
+/// the routing's confirm window decides again, but never lets a key through on the value the radio
+/// still reports. A report later than that window has the decision taken again on the real value.
+#[test]
+fn a_write_stays_in_flight_for_keys_until_the_radio_reports_or_refuses_it() {
+    let mut r = Routing::default();
+    assert_eq!(r.step(&view(true, "USB"), true, false, false, 0), MIC);
+    r.written(false, Why::FollowMode, 0);
+    r.sent(7);
+    assert!(r.write_in_flight(&view(true, "USB")));
+    assert!(r.mic_write_in_flight(&view(true, "USB")));
+    // A press asks for DAX after the confirm window: the stale flag already says DAX, so nothing is
+    // written, and the write of the mic is still in flight for keys.
+    assert_eq!(
+        r.step(&view(true, "USB"), true, false, true, CONFIRM_MS + 100),
+        None
+    );
+    assert!(r.write_in_flight(&view(true, "USB")), "past the window");
+    assert!(r.mic_write_in_flight(&view(true, "USB")));
+    // CONTROL: another command's refusal changes nothing.
+    r.refused(8);
+    assert!(r.write_in_flight(&view(true, "USB")));
+    // The late report lands: no longer in flight, and DAX is written for the press after all.
+    assert_eq!(
+        r.step(&view(false, "USB"), true, false, true, CONFIRM_MS + 600),
+        DAX
+    );
+    assert!(!r.write_in_flight(&view(false, "USB")));
+    // A write of DAX is in flight, but never counts as the radio having its mic.
+    r.written(true, Why::FollowMode, CONFIRM_MS + 600);
+    r.sent(9);
+    assert!(r.write_in_flight(&view(false, "USB")));
+    assert!(!r.mic_write_in_flight(&view(false, "USB")));
+    // The radio refuses it: the flag it reports stands.
+    r.refused(9);
+    assert!(!r.write_in_flight(&view(false, "USB")));
+    // A new connection starts with nothing in flight.
+    assert!(!Routing::new(Some(false)).write_in_flight(&view(true, "USB")));
+}

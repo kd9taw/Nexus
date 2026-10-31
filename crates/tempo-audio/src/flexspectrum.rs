@@ -445,12 +445,40 @@ fn engine_dial_hz(engine: &Arc<Mutex<Engine>>) -> u64 {
         .unwrap_or(0)
 }
 
-/// The operator's desired pan bandwidth (Hz) + reference (dBm, `None`=auto), from the engine.
-fn engine_flex_controls(engine: &Arc<Mutex<Engine>>) -> (f64, Option<i32>) {
+/// The operator's desired pan bandwidth (Hz) + reference (dBm, `None`=auto), from the engine, and
+/// whether the station is on the air (`Engine::on_air`). An unreadable engine reads as on the air,
+/// so a span change waits rather than going out unguarded.
+fn engine_flex_controls(engine: &Arc<Mutex<Engine>>) -> (f64, Option<i32>, bool) {
     engine_lock_result(engine)
         .ok()
-        .map(|e| (e.flex_pan_span_hz(), e.flex_pan_ref_dbm()))
-        .unwrap_or((SPAN_HZ, None))
+        .map(|e| (e.flex_pan_span_hz(), e.flex_pan_ref_dbm(), e.on_air()))
+        .unwrap_or((SPAN_HZ, None, true))
+}
+
+/// The pan bandwidth command due this pass: the operator's span when it differs from the one last
+/// sent, and NEVER WHILE ON THE AIR. A change asked during an over is held, not dropped, and goes out
+/// on the first pass after unkey, as the radio loop holds the Icom scope's span until unkey. A
+/// display command on the API channel does nothing to RF, but no scope command goes to a radio
+/// that is transmitting, and the cockpit's own guard reads a polled snapshot that can lag keying.
+fn pan_span_change(pan_id: u32, want_span: f64, last_span: f64, on_air: bool) -> Option<String> {
+    (!on_air && (want_span - last_span).abs() > 1.0).then(|| set_pan_bw_command(pan_id, want_span))
+}
+
+/// One pass of the worker's pan controls: the engine's wishes (`engine_flex_controls`) and the span
+/// command they make due (`pan_span_change`), held by the ENGINE'S OWN on-air state. Returns the
+/// command, the span it sets and the reference wanted. The worker's call, here so a test reaches it
+/// whole.
+fn pan_controls_due(
+    engine: &Arc<Mutex<Engine>>,
+    pan_id: u32,
+    last_span: f64,
+) -> (Option<String>, f64, Option<i32>) {
+    let (want_span, want_ref, on_air) = engine_flex_controls(engine);
+    (
+        pan_span_change(pan_id, want_span, last_span, on_air),
+        want_span,
+        want_ref,
+    )
 }
 
 /// Does this slice meter belong to the slice Nexus is operating?
@@ -611,7 +639,7 @@ impl FlexSpectrum {
         // live RF centre and span (driven by the dial and the operator's Flex span control, then by
         // the radio's own report), so the UDP thread can filter, read and label each frame and the
         // TCP thread can retune.
-        let (init_span, init_ref) = engine_flex_controls(&engine);
+        let (init_span, init_ref, _) = engine_flex_controls(&engine);
         let view = Arc::new(Mutex::new(PanView {
             pan: None,
             y_pixels: Y_PIXELS,
@@ -746,9 +774,10 @@ impl FlexSpectrum {
                                 last_center = want;
                             }
                             // Apply the operator's span + reference controls when they change.
-                            let (want_span, want_ref) = engine_flex_controls(&engine);
-                            if (want_span - last_span).abs() > 1.0 {
-                                let _ = flex.send(&set_pan_bw_command(pid, want_span));
+                            let (span_cmd, want_span, want_ref) =
+                                pan_controls_due(&engine, pid, last_span);
+                            if let Some(cmd) = span_cmd {
+                                let _ = flex.send(&cmd);
                                 view.lock().unwrap().span_hz = want_span;
                                 last_span = want_span;
                             }
@@ -1397,6 +1426,69 @@ mod tests {
         assert_eq!(
             created_panafall(0, "0x40000000,0x42000000"),
             Some((0x4000_0000, Some(0x4200_0000)))
+        );
+    }
+
+    /// (c2) THE SPAN WAITS OUT AN OVER. A bandwidth change asked while the station is on the air
+    /// is held, not dropped: nothing goes out while keyed, the same command goes out on the first
+    /// pass after unkey, and nothing once it has (the span last sent is the one asked).
+    #[test]
+    fn a_span_change_waits_for_unkey_and_then_goes_out_once() {
+        assert_eq!(
+            pan_span_change(0x4000_0000, 70_000.0, 200_000.0, true),
+            None,
+            "held while on the air"
+        );
+        assert_eq!(
+            pan_span_change(0x4000_0000, 70_000.0, 200_000.0, false).as_deref(),
+            Some("display pan set 0x40000000 bandwidth=0.070000"),
+            "sent after unkey"
+        );
+        assert_eq!(
+            pan_span_change(0x4000_0000, 70_000.0, 70_000.0, false),
+            None,
+            "not again once sent"
+        );
+    }
+
+    /// (c3) AN UNREADABLE ENGINE IS ON THE AIR. With the engine mutex poisoned the worker cannot
+    /// know whether the station is keyed, so a span change waits rather than going out unguarded.
+    #[test]
+    fn a_poisoned_engine_reads_as_on_the_air() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let e = Arc::clone(&engine);
+        let _ = std::thread::spawn(move || {
+            let _guard = e.lock().unwrap();
+            panic!("poison the engine mutex");
+        })
+        .join();
+        assert!(
+            engine.is_poisoned(),
+            "premise: the engine mutex is poisoned"
+        );
+        let (_, _, on_air) = engine_flex_controls(&engine);
+        assert!(on_air, "an unreadable engine is on the air");
+        let (cmd, _, _) = pan_controls_due(&engine, 0x4000_0000, 70_000.0);
+        assert_eq!(cmd, None, "no span command from an unreadable engine");
+    }
+
+    /// (c4) THE WORKER'S PASS IS HELD BY THE ENGINE'S OWN KEYING: the rig's PTT read back holds a
+    /// span change the operator asked for, and it goes out on the pass after unkey.
+    #[test]
+    fn the_workers_span_pass_waits_out_the_engines_over() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        engine.lock().unwrap().set_flex_pan_span(70_000.0);
+        engine.lock().unwrap().observe_rig_ptt(true);
+        assert_eq!(
+            pan_controls_due(&engine, 0x4000_0000, SPAN_HZ).0,
+            None,
+            "held while the rig is keyed"
+        );
+        engine.lock().unwrap().observe_rig_ptt(false);
+        assert_eq!(
+            pan_controls_due(&engine, 0x4000_0000, SPAN_HZ).0.as_deref(),
+            Some("display pan set 0x40000000 bandwidth=0.070000"),
+            "sent after unkey"
         );
     }
 

@@ -3595,13 +3595,15 @@ pub(crate) mod tests {
             upload_legs::ALL,
         ] {
             for room in [0, 1, 5, 256] {
-                let from_store = crate::station::catch_up_records(&store, legs, room).unwrap();
+                let from_store =
+                    crate::station::catch_up_records(&store, legs, room, Default::default())
+                        .unwrap();
                 assert_eq!(from_store, old(legs, room), "legs {legs:#b}, room {room}");
                 assert!(from_store.len() <= room);
             }
         }
         assert!(
-            !crate::station::catch_up_records(&store, upload_legs::QRZ, 256)
+            !crate::station::catch_up_records(&store, upload_legs::QRZ, 256, Default::default())
                 .unwrap()
                 .is_empty(),
             "premise: something is owed"

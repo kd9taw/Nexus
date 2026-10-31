@@ -90,11 +90,18 @@ carries:
   Logbook (both can upload it themselves), until you confirm it on the contact card or edit it.
   Confirming it later does not send it on to DXKeeper or HRD Logbook, which keep the contact as
   they first got it; once confirmed, a LoTW confirmation no longer replaces it.
-- **Space weather**, if you turn on **Log space weather on each contact** in
+- **Space weather**, when **Log space weather on each contact** is on (it is for a new
+  installation) in
   [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
   ▸ Propagation: the K index,
   A index and solar flux (K_INDEX, A_INDEX, SFI), and nothing when the latest reading is more
   than 3 hours old.
+- **The path it took**, when the Path card had worked out the path to that station within six
+  hours of the contact: whether the signal most likely went the short or the long way round,
+  how sure, and why. Nexus keeps this in your own log and its exports only; no service is sent
+  it. Nexus never fills in the antenna heading or antenna path (ANT_AZ, ANT_PATH) itself; set
+  ANT_PATH yourself on the contact card when you know it. A contact that did not go by the
+  ionosphere (a satellite, EME or repeater contact) is not graded.
 
 A field the contact already carries (from WSJT-X, an import or what you typed) is kept. A
 contact whose start is more than 3 hours before you log it gets no operator, rig, power, grid
@@ -182,7 +189,8 @@ answer, not an error.
 The buttons live at the right-hand end of the row and appear on hover, so an
 untouched table shows none of them. Left to right they are **📢** (spot this
 station), **QRZ** (push to QRZ), **QRZ✎** (correct a contact QRZ already holds),
-**CL**, **HL**, **WRL**, a **QSL▸** menu, **✎** to edit and **✕** to delete.
+**CL**, **HL**, **WRL**, **LoTW** (sign this one contact with TQSL and upload it,
+the way Upload to LoTW does), a **QSL▸** menu, **✎** to edit and **✕** to delete.
 They all stay on one line and stay clickable at every window size — that column
 is floored to the width the whole run needs.
 

@@ -1,13 +1,22 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { postSpot } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import { parseOperatorNumber } from '../numInput'
+import { useFocusReturn } from '../focusReturn'
+import { Dialog } from './ui/Dialog'
 
 // Compose + post a DX-cluster spot. The backend `post_spot` command validates the callsign,
 // checks a cluster is connected, and sanitizes the line — this is just the reviewable popup the
-// operator asked for: call + freq + comment, editable, one button to send. Reuses the shared
-// `.logconfirm` modal styling.
+// operator asked for: call + freq + comment, editable, one button to send. On ui/Dialog, drawn with
+// the shared `.logconfirm` modal styling inside it (`.spot-dialog`, styles.css).
+//
+// THE DIALOG HOLDS THE KEYBOARD while it is up: Tab and Shift+Tab go round its own controls, and Esc
+// closes it from any of them (ui/Dialog's trap). On a page of its own it let Tab walk out onto the
+// screen behind it, and heard Esc in its three boxes only. Closed — cancelled, escaped or posted —
+// the keyboard goes back to where the dialog was opened from (`useFocusReturn`): from a menu item,
+// that menu's button; if that control has gone meanwhile (a row scrolled or refreshed away), its
+// neighbour or its group, never the page itself.
 //
 // ⛔ FROM A BROWSER the same press rides the station's `spot` log change, which needs STATION
 // CONTROL — it posts publicly from the station's own cluster login, so it is not a logging-grant
@@ -36,22 +45,8 @@ export function SpotDialog({
   const [comment, setComment] = useState(defaultComment)
   const [busy, setBusy] = useState(false)
 
-  // THE KEYBOARD GOES BACK TO WHERE THE DIALOG WAS OPENED FROM when it closes — cancelled, escaped
-  // or posted. It was left on the page itself.
-  // The call box is focused here rather than by `autoFocus`, which would move the keyboard before
-  // the control that opened the dialog could be noted.
-  const callRef = useRef<HTMLInputElement>(null)
-  useLayoutEffect(() => {
-    if (!open) return
-    const active = document.activeElement
-    const opener = active instanceof HTMLElement && active !== document.body ? active : null
-    callRef.current?.focus()
-    return () => {
-      const now = document.activeElement
-      if (now && now !== document.body && now.isConnected) return // the keyboard is somewhere already
-      if (opener?.isConnected) opener.focus({ preventScroll: true })
-    }
-  }, [open])
+  // The call box is the dialog's first control, so the trap puts the keyboard there as it opens.
+  const returnFocus = useFocusReturn(open)
 
   // Re-seed from the current call/dial each time the dialog opens.
   useEffect(() => {
@@ -61,8 +56,6 @@ export function SpotDialog({
       setComment(defaultComment)
     }
   }, [open, initialCall, freqMhz, defaultComment])
-
-  if (!open) return null
 
   // `parseFloat('14,074')` is 14 — a comma-decimal operator (Greek-Windows report, 2026-08)
   // spotted the whole cluster onto 14 MHz, out of band, and the Spot button looked perfectly
@@ -94,25 +87,25 @@ export function SpotDialog({
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') void submit()
-    if (e.key === 'Escape') onClose()
   }
 
+  // The dialog's name stays the short one it always had; the visible heading is the longer title.
   return (
-    <div
-      className="logconfirm-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label={t('spots.post.aria')}
-      onClick={onClose}
+    <Dialog
+      open={open}
+      onOpenChange={(o) => !o && onClose()}
+      title={t('spots.post.aria')}
+      hideTitle
+      className="spot-dialog"
+      onCloseAutoFocus={returnFocus}
     >
-      <div className="logconfirm spot-dialog" onClick={(e) => e.stopPropagation()}>
+      <div className="logconfirm">
         <div className="logconfirm-head">
           <h2>{t('spots.post.title')}</h2>
         </div>
         <label className="settings-field">
           <span className="settings-label">{t('spots.post.call.label')}</span>
           <input
-            ref={callRef}
             className="settings-input"
             value={call}
             onChange={(e) => setCall(e.target.value)}
@@ -152,6 +145,6 @@ export function SpotDialog({
           </button>
         </div>
       </div>
-    </div>
+    </Dialog>
   )
 }

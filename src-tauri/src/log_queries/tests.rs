@@ -3429,3 +3429,81 @@ fn log_query_bench() {
         broken.join("\n  ")
     );
 }
+
+/// ★ The path filter is decided by the engine from each contact's grade: "long" keeps the contacts
+/// whose grade names the long path, "polar" those whose graded route crosses the polar cap. A
+/// contact with no grade passes neither. CONTROL: with no path filter every contact shows.
+#[test]
+fn the_path_filter_keeps_the_long_and_the_polar_paths() {
+    let rec = |call: &str, grid: &str, route: Option<&str>| {
+        let mut s = format!(
+            "<EOH><CALL:{}>{call}<QSO_DATE:8>20260507<TIME_ON:6>100000<BAND:3>20m<MODE:3>FT8\
+             <GRIDSQUARE:4>{grid}<MY_GRIDSQUARE:4>FN31",
+            call.len()
+        );
+        if let Some(r) = route {
+            let why = format!("WITHIN;{grid}/20m");
+            s += &format!("<APP_NEXUS_PATH:{}>{r}", r.len());
+            s += &format!("<APP_NEXUS_PATH_WHY:{}>{why}", why.len());
+        }
+        s += "<EOR>";
+        tempo_core::logbook::parse_adif(&s).remove(0)
+    };
+    let records = vec![
+        rec("VK2LP", "QF56", Some("L")),
+        rec("VK2SP", "QF56", Some("S")),
+        rec("JA1PO", "PM95", Some("S")),
+        rec("G4EU", "IO91", Some("S")),
+        rec("K1NONE", "IO91", None),
+        // Neither route named: never a long path.
+        rec("ZS6EI", "KG44", Some("EITHER")),
+        rec("PY2UN", "GG66", Some("UNKNOWN")),
+    ];
+    let d = Dir::new("filter-path");
+    let engine = on_store(&d, &records);
+    let q = LogQueries::default();
+    assert_eq!(
+        filtered_calls(&q, &engine, json!({"path": "long"})),
+        ["VK2LP"]
+    );
+    assert_eq!(
+        filtered_calls(&q, &engine, json!({"path": "polar"})),
+        ["JA1PO"]
+    );
+    assert_eq!(filtered_calls(&q, &engine, json!({"band": "20m"})).len(), 7);
+}
+
+/// ★ A path filter's order is built again as the log is graded: the grades' revision is part of
+/// its key, so a contact graded after the first ask is in the next one. Boston to Tokyo crosses
+/// the polar cap both ways round, so its grade is polar whichever route it names.
+#[test]
+fn the_path_filter_sees_contacts_graded_after_it_was_first_asked() {
+    use crate::path_grades::{capture, file_path_in, forget_grades, run_pass, TEST_SERIAL};
+    let _s = TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    forget_grades();
+    const NOW: i64 = 1_778_150_000;
+    let rec = tempo_core::logbook::parse_adif(
+        "<EOH><CALL:6>JA1AAA<QSO_DATE:8>20260507<TIME_ON:6>090000<BAND:3>20m<MODE:3>FT8\
+         <GRIDSQUARE:4>PM95<MY_GRIDSQUARE:4>FN42<SFI:3>150<EOR>",
+    )
+    .remove(0);
+    let d = Dir::new("filter-path-rev");
+    let engine = on_store(&d, &[rec]);
+    let q = LogQueries::default();
+    assert!(
+        filtered_calls(&q, &engine, json!({"path": "polar"})).is_empty(),
+        "nothing graded yet"
+    );
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    run_pass(
+        capture(&engine, NOW, Some(80.0)),
+        &file_path_in(&d.0),
+        &stop,
+    )
+    .expect("a pass");
+    assert_eq!(
+        filtered_calls(&q, &engine, json!({"path": "polar"})),
+        ["JA1AAA"]
+    );
+    forget_grades();
+}

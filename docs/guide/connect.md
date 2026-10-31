@@ -197,8 +197,9 @@ across the top of Conditions: your
 callsign and grid, a big UTC clock beside your local time, and the day's SFI, Kp,
 sunspot number, A, X-ray and solar-wind speed. Its four boxes keep the others one
 click away as tabs: Band Advisor, Bands by region, Activity Matrix and Best band
-behind Bands for you; Sporadic-E, Openings Log, Insights and 24h Band×Hour behind
-Openings; Chase Feed, Selection, Contests and Satellite Passes behind Chase; Space Wx,
+behind Bands for you; Sporadic-E, Openings Log, Insights, 24h Band×Hour and Paths to
+the regions behind Openings; Chase Feed, Selection, Path over the day, Contests and
+Satellite Passes behind Chase; Space Wx,
 Kp outlook, Measured MUF, NCDXF Beacons and Greyline behind Getting Out. The closed
 bottom row keeps Band Outlook and the Clock, Rotor and Amplifier, and Band Scope.
 Clicking a tab is not a change of layout. The bar stays while you change things
@@ -282,6 +283,8 @@ The panes you can assign:
 | Openings Log | every band opening Nexus has detected (6 m and 2 m tropo, sporadic-E, aurora), with its band, kind, start, length, longest path and the most stations heard, kept from one session to the next |
 | Space Wx | solar/geomagnetic gauges (the solar-wind speed among them), 30-day solar flux and sunspot-number lines from NOAA's daily indices, and the NOAA scales annunciator |
 | Kp outlook | NOAA's three-day planetary-K forecast as bars, the measured hours solid and the forecast hollow, with when a storm is expected to start or settle |
+| Path over the day | the selected station's path through the 24 UTC hours: per band, how well the model expects the short and long path to work and which way round it favours, the MUF ceiling, the grey line and the Kp ribbon; click an hour to move the 2-D map to it |
+| Paths to the regions | the same strip for ten DX regions, each on its best band (▸ for every band), the regions you need or have worked most first |
 | Getting Out | who is hearing you right now: a compass, and every station that heard you in the last half hour, with its direction and distance, band, SNR and how long ago |
 | Bands by region | the best band to reach each region |
 | Activity Matrix | a region × band grid of live activity |

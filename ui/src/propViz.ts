@@ -26,6 +26,7 @@ import type {
   SolarWind,
   SpaceWxView,
   TrendDir,
+  XrayNow,
 } from './types'
 
 /** Workability word → a semantic color token (`var(--…)`). */
@@ -222,6 +223,78 @@ export function solarWindAgeSecs(sw: SolarWind, nowMs: number): number | null {
   if (sw.timeUnix == null) return null
   return Math.max(0, Math.floor(nowMs / 1000 - sw.timeUnix))
 }
+// ───────────────── is this real, and how old is it ─────────────────
+//
+// THE SPACE-WEATHER HONESTY RULE, one place for every surface. The station stamps each number in
+// a SpaceWxView with NOAA's own sample time (`sfiAt`, `kpAt`, `xrayAt`, and `aDay` for the daily
+// A); a null stamp is the model's stand-in, which is never drawn as a reading. A reading older
+// than its product's cadence allows is drawn with its age. Either way it is dimmed, and it gives
+// no impact word, no band advice, no warning mark, no alert and no toast: every gauge, the
+// dashboard bar, the Basic line, the storm and flare watchers and the map read `wxReading` /
+// `wxUsable` below, so no two surfaces can disagree about whether a number is real.
+
+/** How long each reading speaks for "now", in seconds: the product's cadence plus the station's
+ *  poll. Kp is a 1-minute product behind a 5-minute snapshot; GOES X-ray is 1-minute behind a
+ *  60 s fast lane (or the snapshot); the SFI is one noon reading a day; the daily A is issued at
+ *  00:30 UT for the day before, and `aDay` is that day's 00:00. */
+export const WX_STALE_SECS = {
+  kp: 15 * 60,
+  xray: 10 * 60,
+  sfi: 48 * 3600,
+  a: 50 * 3600,
+} as const
+export type WxKey = keyof typeof WX_STALE_SECS
+
+export interface WxReading {
+  /** NOAA measured it. False = a stand-in: draw "no data", never the number. */
+  real: boolean
+  /** The sample time (Unix seconds), null for a stand-in or an older station's undated value. */
+  at: number | null
+  /** Whole seconds since the sample (never negative); null when undated. */
+  ageSecs: number | null
+  /** Real but older than WX_STALE_SECS: draw the age, dimmed, with no interpretation. */
+  stale: boolean
+}
+
+/** Whether `wx`'s `key` number is a reading, and how old it is at `nowMs`. An older station sends
+ *  no `fetched` and no stamps; its numbers read as they always did (real, undated), as the
+ *  solar-wind gauge treats its undated samples. */
+export function wxReading(wx: SpaceWxView, key: WxKey, nowMs: number): WxReading {
+  if (wx.fetched === undefined) return { real: true, at: null, ageSecs: null, stale: false }
+  const stamp = { sfi: wx.sfiAt, kp: wx.kpAt, xray: wx.xrayAt, a: wx.aDay }[key]
+  if (stamp == null) return { real: false, at: null, ageSecs: null, stale: false }
+  const ageSecs = Math.max(0, Math.floor(nowMs / 1000 - stamp))
+  return { real: true, at: stamp, ageSecs, stale: ageSecs >= WX_STALE_SECS[key] }
+}
+
+/** A number that may speak for now — measured and fresh. The gate for every impact word,
+ *  warning mark, alert and toast built on it. */
+export function wxUsable(wx: SpaceWxView, key: WxKey, nowMs: number): boolean {
+  const r = wxReading(wx, key, nowMs)
+  return r.real && !r.stale
+}
+
+/** The snapshot's X-ray flux when it may speak for now, else null (the flare watcher's and the
+ *  map's input: a stand-in or old flux is no flux). */
+export function snapXray(wx: SpaceWxView | null | undefined, nowMs: number): number | null {
+  return wx && wxUsable(wx, 'xray', nowMs) ? (wx.xrayLong ?? null) : null
+}
+
+/** The 60 s fast lane's flux when its GOES sample is fresh enough to be "now", else null. Its
+ *  `asOf` is the sample's own time, so a GOES gap ages here instead of reading as now. */
+export function xrayFastFresh(x: XrayNow | null | undefined, nowMs: number): number | null {
+  if (!x) return null
+  return nowMs / 1000 - x.asOf < WX_STALE_SECS.xray ? x.flux : null
+}
+
+/** A sample time as the hovers print it: "29 Oct 20:00Z" (the day in the reader's locale). */
+export function wxStampLabel(unix: number): string {
+  const d = new Date(unix * 1000)
+  const day = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' })
+  const hm = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
+  return `${day} ${hm}Z`
+}
+
 /** A-index (24 h average of geomagnetic activity — the day's character, where Kp is
  * the last 3 h). NOAA scale: <8 quiet · 8–15 unsettled · 16–29 active · 30+ storm. */
 export function aImpact(a: number): Impact {
@@ -315,9 +388,25 @@ export function mufCeilingBand(mufMhz: number): string {
   return label
 }
 
+/** The word a silent band reads when there is no model word for it: the station had no usable
+ *  solar flux and Kp to run the model on, or (an older station) sent none. Nobody heard the band
+ *  and nothing measured says it is open or closed, so it is unknown — never "Open". */
+export const NO_MODEL_WORD = '—'
+
+/** What a band's word claims: open, marginal or closed by evidence or the model, or unknown
+ *  (`NO_MODEL_WORD`). Every surface that colours, ranks or names a band by its word asks this,
+ *  never `word !== 'Closed'`, so an unknown band can never be counted as open. */
+export function bandWordState(word: string): 'open' | 'marginal' | 'closed' | 'unknown' {
+  if (word === 'Open') return 'open'
+  if (word === 'Marginal') return 'marginal'
+  if (word === 'Closed') return 'closed'
+  return 'unknown'
+}
+
 /** Combine MODELED openness + OBSERVED tier into the dual-state label that kills the
  * false "quiet = dead" reading: a band the model says is Open but with no spots reads
- * "Open · none heard", never "Quiet"/"dead". */
+ * "Open · none heard", never "Quiet"/"dead". A silent band with no model word reads
+ * `NO_MODEL_WORD` · none heard: unknown, never Open. */
 export function dualStateLabel(
   modeled: BandModeled | undefined,
   tier: ActivityTier,
@@ -330,10 +419,11 @@ export function dualStateLabel(
   if (tier === 'Active') return { word: 'Open', sub: t('prop.state.sub.active') }
   if (tier === 'Moderate') return { word: 'Open', sub: t('prop.state.sub.someActivity') }
   // Silent band: defer to the model. Open-but-unheard reads "Open · none heard" — the
-  // key fix so a quiet band never reads as dead.
-  const m: BandModeled = modeled ?? 'Open'
-  if (m === 'Closed') return { word: 'Closed', sub: '' }
-  return { word: m, sub: t('prop.state.sub.noneHeard') }
+  // key fix so a quiet band never reads as dead. No model word (no usable space weather, or an
+  // older station that sends none): nothing says the band is open, so it is unknown.
+  if (!modeled) return { word: NO_MODEL_WORD, sub: t('prop.state.sub.noneHeard') }
+  if (modeled === 'Closed') return { word: 'Closed', sub: '' }
+  return { word: modeled, sub: t('prop.state.sub.noneHeard') }
 }
 
 /** One band's condition cell — the word, its sub-note and its colour — exactly as the Band
@@ -343,8 +433,7 @@ export function dualStateLabel(
  *  THE COLOUR FOLLOWS THE WORD. A band heard now IS open, whatever the model says, so it is green:
  *  a summer Es opening on 10 m or 6 m, which the model calls closed, used to be painted as a grey
  *  "Open". A silent band wears the model's word and that word's colour. With no model and nobody
- *  heard (a report from an older station), the word defaults to Open, which is no evidence, so the
- *  colour stays the tier's neutral: unknown is never green. */
+ *  heard, the word is `NO_MODEL_WORD` and the colour the tier's neutral: unknown is never green. */
 export function bandConditionCell(b: BandReport): { word: string; sub: string; color: string } {
   const ds = dualStateLabel(b.modeled, b.tier)
   const heard = b.tier === 'Active' || b.tier === 'Moderate'

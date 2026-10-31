@@ -2152,6 +2152,24 @@ pub struct Settings {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// Feed THIS computer's microphone to the radio while the operator holds Phone's PTT: its audio
+    /// goes out by the radio's transmit audio route (the sound card's output, or the TCI connection
+    /// on a TCI radio) and the radio is keyed as for any audio Nexus plays. OFF by default, so a
+    /// station that talks into the radio's own microphone, or routes a microphone by the OS, sees
+    /// no change. Per radio: it is a property of how THAT radio is wired. Phone only; the digital
+    /// modes never take it (`engine/pc_mic.rs`).
+    /// Flat mirror of [`RadioProfile::pc_mic`].
+    #[serde(default)]
+    pub pc_mic: bool,
+    /// The input device the computer's microphone is captured from (flat mirror of
+    /// [`RadioProfile::pc_mic_device`]). Empty = none chosen: the microphone is never the system
+    /// default, which on a radio station is often the radio's own receive audio.
+    #[serde(default)]
+    pub pc_mic_device: String,
+    /// The computer microphone's gain in dB, -20 to +20, 0 = as captured (flat mirror of
+    /// [`RadioProfile::pc_mic_gain_db`]).
+    #[serde(default)]
+    pub pc_mic_gain_db: f32,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
     /// force their mode), so this opt-out is no longer consulted by
     /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
@@ -2907,7 +2925,11 @@ pub struct Settings {
     pub station_power_w: Option<f64>,
     /// Log the space weather on each contact (ADIF `K_INDEX`, `A_INDEX`, `SFI`): the latest
     /// planetary K and A index and 10.7 cm solar flux Nexus fetched, and only when that reading is
-    /// no more than three hours old. Off by default — a logger's propagation fields are opt-in.
+    /// no more than three hours old. ⭐ **On for a NEW install** (`Settings::default()`, no
+    /// settings file): the path a contact took is explained from the space weather at the time.
+    /// An existing station keeps what its file says, and a file without the key (from before
+    /// the default changed) or one that cannot be read reads off — the field's own serde
+    /// default — so an update turns nothing on.
     #[serde(default)]
     pub log_space_weather: bool,
     /// Display units for distances/temperature/speed (F4MQS): `"auto"` (from the OS
@@ -3696,6 +3718,18 @@ pub struct Settings {
     /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
     /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
     pub eqsl_upload: bool,
+    /// Where QRZ Logbook's automatic uploads start, as an earlier build of this change kept it
+    /// in one window's settings. Read only to be moved beside the shared log, where every window
+    /// reads it ([`crate::upload_start`]), and cleared once moved; nothing else reads or writes it.
+    /// `None`, the only value a released build's file has, writes no key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qrz_logbook_upload_from: Option<u64>,
+    /// ClubLog's, as [`Self::qrz_logbook_upload_from`]: read only to be moved beside the log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clublog_upload_from: Option<u64>,
+    /// eQSL's, as [`Self::qrz_logbook_upload_from`]: read only to be moved beside the log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqsl_upload_from: Option<u64>,
     /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has
     /// several QTH profiles ("if not logged in, if multiple accounts with same
     /// callsign" — their spec); such an account cannot authenticate at all without
@@ -4806,6 +4840,18 @@ pub struct RadioProfile {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// Feed THIS computer's microphone to the radio while the operator holds Phone's PTT: its audio
+    /// goes out by the radio's transmit audio route (the sound card's output, or the TCI connection
+    /// on a TCI radio) and the radio is keyed as for any audio Nexus plays. OFF by default, so a
+    /// station that talks into the radio's own microphone, or routes a microphone by the OS, sees
+    /// no change. Per radio: it is a property of how THAT radio is wired. Phone only; the digital
+    /// modes never take it (`engine/pc_mic.rs`).
+    pub pc_mic: bool,
+    /// The input device the computer's microphone is captured from. Empty = none chosen; never
+    /// the system default.
+    pub pc_mic_device: String,
+    /// The computer microphone's gain in dB, -20 to +20; 0 = as captured.
+    pub pc_mic_gain_db: f32,
     // --- audio (a rig's own RX codec) ---
     pub audio_in: String,
     pub audio_out: String,
@@ -4985,6 +5031,15 @@ pub struct RadioProfilePatch {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// See `RadioProfile::pc_mic` and the two fields after it. `Option`s, like the TCI fields:
+    /// `None` leaves the radio's stored value alone, so a form from before them neither fails its
+    /// Save nor turns the computer's microphone off.
+    #[serde(default)]
+    pub pc_mic: Option<bool>,
+    #[serde(default)]
+    pub pc_mic_device: Option<String>,
+    #[serde(default)]
+    pub pc_mic_gain_db: Option<f32>,
     pub audio_in: String,
     pub audio_out: String,
     pub tx_level: f32,
@@ -5105,6 +5160,15 @@ impl RadioProfilePatch {
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
         p.sstv_hold_data_submode = self.sstv_hold_data_submode;
         p.aprs_data_fm = self.aprs_data_fm;
+        if let Some(v) = self.pc_mic {
+            p.pc_mic = v;
+        }
+        if let Some(v) = self.pc_mic_device {
+            p.pc_mic_device = v;
+        }
+        if let Some(v) = self.pc_mic_gain_db {
+            p.pc_mic_gain_db = v;
+        }
         p.audio_in = self.audio_in;
         p.audio_out = self.audio_out;
         p.tx_level = self.tx_level;
@@ -5250,6 +5314,9 @@ impl Default for RadioProfile {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: false,
+            pc_mic_device: String::new(),
+            pc_mic_gain_db: 0.0,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -6191,6 +6258,9 @@ impl Default for Settings {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: false,
+            pc_mic_device: String::new(),
+            pc_mic_gain_db: 0.0,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             keyboard_modem: KeyboardModem::Psk,
@@ -6352,7 +6422,7 @@ impl Default for Settings {
             monitor_device: String::new(),
             monitor_level: 0.5,
             station_power_w: None,
-            log_space_weather: false,
+            log_space_weather: true,
             units: default_units(),
             swr_stop_enabled: false,
             swr_stop_threshold: 2.5,
@@ -6481,6 +6551,9 @@ impl Default for Settings {
             clublog_api_key: String::new(),
             clublog_upload: false,
             eqsl_upload: false,
+            qrz_logbook_upload_from: None,
+            clublog_upload_from: None,
+            eqsl_upload_from: None,
             eqsl_qth_nickname: String::new(),
             hrdlog_upload: false,
             wrl_upload: false, // the credential is the opt-in
@@ -6643,6 +6716,9 @@ impl Settings {
             data_modes_plain_ssb: self.data_modes_plain_ssb,
             sstv_hold_data_submode: self.sstv_hold_data_submode,
             aprs_data_fm: self.aprs_data_fm,
+            pc_mic: self.pc_mic,
+            pc_mic_device: self.pc_mic_device.clone(),
+            pc_mic_gain_db: self.pc_mic_gain_db,
             audio_in: self.audio_in.clone(),
             audio_out: self.audio_out.clone(),
             tx_level: self.tx_level,
@@ -7143,6 +7219,9 @@ impl Settings {
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.sstv_hold_data_submode = p.sstv_hold_data_submode;
         self.aprs_data_fm = p.aprs_data_fm;
+        self.pc_mic = p.pc_mic;
+        self.pc_mic_device = p.pc_mic_device;
+        self.pc_mic_gain_db = p.pc_mic_gain_db;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
         self.tx_level = p.tx_level;
@@ -7201,6 +7280,9 @@ impl Settings {
             data_modes_plain_ssb,
             sstv_hold_data_submode,
             aprs_data_fm,
+            pc_mic,
+            pc_mic_device,
+            pc_mic_gain_db,
             audio_in,
             audio_out,
             tx_level,
@@ -7247,6 +7329,9 @@ impl Settings {
             self.data_modes_plain_ssb,
             self.sstv_hold_data_submode,
             self.aprs_data_fm,
+            self.pc_mic,
+            self.pc_mic_device.clone(),
+            self.pc_mic_gain_db,
             self.audio_in.clone(),
             self.audio_out.clone(),
             self.tx_level,
@@ -7294,6 +7379,9 @@ impl Settings {
             p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.sstv_hold_data_submode = sstv_hold_data_submode;
             p.aprs_data_fm = aprs_data_fm;
+            p.pc_mic = pc_mic;
+            p.pc_mic_device = pc_mic_device;
+            p.pc_mic_gain_db = pc_mic_gain_db;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
             p.tx_level = tx_level;
@@ -7531,10 +7619,12 @@ impl Settings {
     }
 
     /// The defaults for a settings file that is present but could not be used: the station is not a
-    /// new install, so the first-run setup wizard is not shown ([`Self::setup_wizard_seen`]).
+    /// new install, so the first-run setup wizard is not shown ([`Self::setup_wizard_seen`]) and
+    /// space weather is not newly logged ([`Self::log_space_weather`]).
     fn not_a_new_install() -> Self {
         Settings {
             setup_wizard_seen: true,
+            log_space_weather: false,
             ..Settings::default()
         }
     }
@@ -8533,6 +8623,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **Space weather is logged with each contact from a NEW install on; an existing station
+    /// keeps the choice its file holds.** A first run (no file) starts on. A file that says either
+    /// way keeps it. A file without the key (every station from before the default changed) is
+    /// an existing station that never turned it on, so it stays off; so does a file that is
+    /// present but cannot be read. CONTROL: a new install's first save keeps it on, and turning
+    /// it off there stays off.
+    #[test]
+    fn space_weather_logging_starts_on_for_a_new_install_only() {
+        let dir = scratch_dir("log_space_weather");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let fresh = Settings::load_at(&path, KEPT_AT);
+        assert!(fresh.log_space_weather, "no file: a new install starts on");
+        fresh.save(&path).unwrap();
+        assert!(Settings::load_at(&path, KEPT_AT).log_space_weather);
+        let mut off = Settings::load_at(&path, KEPT_AT);
+        off.log_space_weather = false;
+        off.save(&path).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "turned off stays off"
+        );
+
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        assert!(
+            full.contains("\"logSpaceWeather\": false"),
+            "fixture holds the old default"
+        );
+        std::fs::write(&path, full).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "an existing file says off"
+        );
+        std::fs::write(
+            &path,
+            full.replace("\"logSpaceWeather\": false", "\"logSpaceWeather\": true"),
+        )
+        .unwrap();
+        assert!(
+            Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "an existing file says on"
+        );
+        let without: String = full
+            .lines()
+            .filter(|l| !l.contains("logSpaceWeather"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, without).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "a file from before the key is an existing station: off"
+        );
+        std::fs::write(&path, "{ not json").unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "a file that does not read is not a new install"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **The experience answer is asked of a new install only, and an existing file never grows
     /// one.** A first run and a file without the key both read "not asked" (`None`): the answer
     /// is the first-run wizard's to give, never a default. A full stored file (the UI's fixture
@@ -8746,6 +8897,9 @@ mod tests {
             data_modes_plain_ssb: true,
             sstv_hold_data_submode: true,
             aprs_data_fm: true,
+            pc_mic: Some(true),
+            pc_mic_device: Some("Desk Mic".into()),
+            pc_mic_gain_db: Some(6.0),
             audio_in: "USB Audio CODEC #2".into(),
             audio_out: "USB Audio CODEC #2 out".into(),
             tx_level: 0.42,
@@ -9103,6 +9257,9 @@ mod tests {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: None,
+            pc_mic_device: None,
+            pc_mic_gain_db: None,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -9267,6 +9424,9 @@ mod tests {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: None,
+            pc_mic_device: None,
+            pc_mic_gain_db: None,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -9604,6 +9764,9 @@ mod tests {
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
             aprs_data_fm: p.aprs_data_fm,
+            pc_mic: Some(p.pc_mic),
+            pc_mic_device: Some(p.pc_mic_device.clone()),
+            pc_mic_gain_db: Some(p.pc_mic_gain_db),
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,

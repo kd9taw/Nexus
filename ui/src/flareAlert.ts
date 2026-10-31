@@ -11,6 +11,7 @@
 
 import { doubleBeep } from './alerts'
 import { pushToast } from './toast'
+import { t } from './i18n'
 import { flareClass, flareHafMhz, flareRScale, flareRecoveryMin } from './mapGeo'
 
 const FLARE_BEEP_HZ = 660
@@ -63,27 +64,30 @@ export function effectiveXray(
  */
 export function processFlare(flux: number | null): void {
   if (flux == null) return
-  const t = tierOf(flux)
-  if (t === 0) {
+  const tier = tierOf(flux)
+  if (tier === 0) {
     if (flux < RESET_BELOW) alertedTier = 0 // event over → re-arm for the next one
     return
   }
-  if (t <= alertedTier) return // this event already alerted at/above this tier
+  if (tier <= alertedTier) return // this event already alerted at/above this tier
   const now = Date.now()
-  if (now - (lastFired.get(t) ?? 0) < COOLDOWN_MS) return // flap guard
+  if (now - (lastFired.get(tier) ?? 0) < COOLDOWN_MS) return // flap guard
   // Mark the edge consumed ONLY when actually firing (like the App.tsx opening
   // cooldown) — a cooldown-suppressed attempt stays armed and fires once the
   // cooldown lapses, so a second flare from the same active region within the
   // hour is delayed, never silently dropped.
-  alertedTier = t
-  lastFired.set(t, now)
+  alertedTier = tier
+  lastFired.set(tier, now)
 
   const rec = flareRecoveryMin(flux)
-  const msg =
-    `☀️ ${flareClass(flux)} solar flare (R${flareRScale(flux)}) — ` +
-    `dayside HF below ~${Math.round(flareHafMhz(flux))} MHz degraded` +
-    (rec ? ` · fade ~${Math.round(rec)} min` : '')
-  if (t >= 2) {
+  const cls = flareClass(flux)
+  const r = flareRScale(flux)
+  const mhz = Math.round(flareHafMhz(flux))
+  // Two whole sentences (with and without NOAA's fade estimate), like the storm toast's.
+  const msg = rec
+    ? t('prop.flareAlert.fade', { cls, r, mhz, mins: Math.round(rec) })
+    : t('prop.flareAlert.now', { cls, r, mhz })
+  if (tier >= 2) {
     doubleBeep(FLARE_BEEP_HZ)
     pushToast(msg, 'error', 15000, { alert: true, prominent: true })
   } else {

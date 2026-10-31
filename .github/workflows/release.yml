@@ -244,6 +244,13 @@ jobs:
         with:
           node-version: 24
 
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
+
       # AppImage's bundler (appimagetool) normally needs FUSE, which hosted runners lack.
       # APPIMAGE_EXTRACT_AND_RUN makes it self-extract instead — the standard CI workaround.
       #
@@ -497,6 +504,13 @@ jobs:
         with:
           node-version: 24
 
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
+
       # FFTW, and any other native library build-windows-cross.sh compiles from a downloaded
       # tarball, is built HERE, with no secret in the environment: third-party builds run
       # before any key is loaded (operator's ruling, 2026-09-29). The script caches each one
@@ -725,7 +739,7 @@ jobs:
   # Apple Developer enrollment 2026-08-16) and Intel (operator decision 2026-10-27).
   #
   # ONE JOB, TWO LEGS, EACH NATIVE: the modem is Fortran, and Homebrew's gfortran is
-  # single-arch, so each architecture is built on a runner of its own kind (macos-14 is Apple
+  # single-arch, so each architecture is built on a runner of its own kind (macos-15 is Apple
   # Silicon, macos-15-intel is Intel) rather than cross-compiled or made universal; a universal
   # binary would double every Apple Silicon download. The legs share every step, so the Intel
   # build signs, notarizes and is verified exactly as the Apple Silicon one, and holds each
@@ -739,7 +753,9 @@ jobs:
   # app, the libtempo modem, FFTW, libusb and Hamlib are all built for it (Homebrew's bottles are
   # built for the runner's own macOS, which is why FFTW and libusb are built from source now), and
   # scripts/check-macho-bundle.mjs holds every shipped Mach-O to it before signing and again on
-  # the finished app. 1.21.0 shipped Hamlib tools built for macOS 14 with nothing to notice.
+  # the finished app. 1.21.0 shipped Hamlib tools built for macOS 14 with nothing to notice. The
+  # one part not built at the minimum is gcc's static runtime (no Homebrew bottle is); the same
+  # script holds what it imports to a reviewed list instead.
   #
   # Signing: APPLE_CERTIFICATE (base64 .p12) + APPLE_CERTIFICATE_PASSWORD into an
   # ephemeral keychain; the identity is READ BACK from the keychain rather than stored
@@ -762,14 +778,20 @@ jobs:
       matrix:
         include:
           - label: Apple Silicon
-            runner: macos-14
+            runner: macos-15
             target: aarch64-apple-darwin
             arch: arm64        # the Mach-O name, for scripts/check-macho-bundle.mjs
+            # The gcc bottle for this runner's macOS that scripts/macos-static-runtime-imports.txt
+            # was reviewed against, by its ghcr blob digest (see "Install build dependencies").
+            gcc_bottle: arm64_sequoia
+            gcc_bottle_sha256: 8c57a4e5c65c93b90b280e3e761833f946b5a7d186f2067d239af44b71c5a577
             suffix: aarch64    # the file name: Nexus_<ver>_aarch64.dmg, as it always was
           - label: Intel
             runner: macos-15-intel
             target: x86_64-apple-darwin
             arch: x86_64
+            gcc_bottle: sequoia
+            gcc_bottle_sha256: d9c228e06901cfdc5c91b01f0119a56ea634ae3ed6504d15a3af03a65ae687f0
             suffix: x64        # Nexus_<ver>_x64.dmg, matching the Windows _x64-setup.exe
     steps:
       - uses: actions/checkout@v7
@@ -803,8 +825,65 @@ jobs:
 
       # No fftw and no libusb here: Homebrew builds them for the runner's macOS, so both are built
       # from source below, at the app's minimum.
+      #
+      # NOTHING HERE MAY BUILD FROM SOURCE. Homebrew has stopped publishing Intel bottles of gcc,
+      # boost, cmake, ninja, gmp, xz and icu4c, so the `brew install cmake ninja gcc boost` that was
+      # here would compile all of them on the Intel runner until the job's 6-hour limit. So:
+      # - gcc: the exact bottle scripts/macos-static-runtime-imports.txt was reviewed against, by its
+      #   digest (the matrix). Changing it means re-reviewing that list. `--force-bottle` pours it
+      #   and never builds; `--ignore-dependencies` leaves alone the libraries it loads (its
+      #   formula's depends_on: gmp isl libmpc mpfr zstd), which the image's preinstalled
+      #   gcc-13/14/15 already use. Homebrew pours a bottle from a file only for a developer (it
+      #   refuses package paths otherwise), hence HOMEBREW_DEVELOPER on that one command.
+      # - Boost: the modem uses only the header-only <boost/crc.hpp>, so its headers come from
+      #   Boost's own release tarball (the hash Homebrew's boost formula pins for it), and libtempo's
+      #   find_package(Boost) finds them through BOOST_ROOT.
+      # - cmake is the image's own. ninja is not needed: on macOS build.rs drives CMake's Makefiles.
+      # Anything missing fails here in seconds, by name, and the timeout bounds the rest.
       - name: Install build dependencies
-        run: brew install cmake ninja gcc boost
+        timeout-minutes: 30
+        env:
+          GCC_BOTTLE: ${{ matrix.gcc_bottle }}
+          GCC_BOTTLE_SHA256: ${{ matrix.gcc_bottle_sha256 }}
+          BOOST: boost-1.92.0
+          BOOST_SHA256: ea7b982002cc9dfbe59b0b217b206f470dc75f3de0bb2973d844118934d82411
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_UPGRADE: "1"
+        run: |
+          set -euo pipefail
+          die() { echo "::error::$*"; exit 1; }
+          command -v cmake >/dev/null || die "this runner image has no cmake, which the modem build needs"
+          # The pinned bottle has to be this runner's own (macOS 15 is sequoia; arm64 bottles say so).
+          os=$(sw_vers -productVersion | cut -d. -f1)
+          case "$os" in 14) tag=sonoma ;; 15) tag=sequoia ;; 26) tag=tahoe ;; *) tag="macos$os" ;; esac
+          if [ "$(uname -m)" = arm64 ]; then tag="arm64_$tag"; fi
+          [ "$tag" = "$GCC_BOTTLE" ] || die "the pinned gcc bottle is for $GCC_BOTTLE but this runner is $tag: pin its bottle and re-review scripts/macos-static-runtime-imports.txt"
+          for dep in gmp isl libmpc mpfr zstd; do
+            brew list --versions "$dep" >/dev/null || die "the gcc bottle needs $dep, which this runner image does not have; installing it may build from source"
+          done
+
+          dl="$RUNNER_TEMP/deps"
+          mkdir -p "$dl"
+          bottle="$dl/gcc--16.2.0.$GCC_BOTTLE.bottle.tar.gz"
+          token=$(curl -fsS "https://ghcr.io/token?scope=repository:homebrew/core/gcc:pull" | jq -r .token)
+          curl -fsSL --retry 3 -H "Authorization: Bearer $token" -o "$bottle" \
+            "https://ghcr.io/v2/homebrew/core/gcc/blobs/sha256:$GCC_BOTTLE_SHA256"
+          echo "$GCC_BOTTLE_SHA256  $bottle" | shasum -a 256 -c -
+          HOMEBREW_DEVELOPER=1 brew install --force-bottle --ignore-dependencies "$bottle"
+          # The gfortran the modem build will find (build.rs and the import gate default FC to it).
+          fc=$(command -v gfortran) || die "the gcc bottle installed no gfortran"
+          [ "$fc" = "$(brew --prefix)/bin/gfortran" ] || die "gfortran on PATH is $fc, not the pinned gcc's"
+          [ "$(gfortran -dumpfullversion)" = 16.2.0 ] || die "gfortran is $(gfortran -dumpfullversion), not the pinned 16.2.0"
+          printf 'print *, "gfortran ok"\nend\n' > "$dl/smoke.f90"
+          gfortran "$dl/smoke.f90" -o "$dl/smoke" || die "the pinned gfortran cannot build a program: a library it loads is missing or too old"
+          "$dl/smoke"
+
+          curl -fsSL --retry 3 -o "$dl/$BOOST.tar.xz" \
+            "https://github.com/boostorg/boost/releases/download/$BOOST/$BOOST-b2-nodocs.tar.xz"
+          echo "$BOOST_SHA256  $dl/$BOOST.tar.xz" | shasum -a 256 -c -
+          tar -xJf "$dl/$BOOST.tar.xz" -C "$dl" "$BOOST/boost"
+          [ -f "$dl/$BOOST/boost/crc.hpp" ] || die "the Boost tarball held no boost/crc.hpp"
+          echo "BOOST_ROOT=$dl/$BOOST" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master, 2026-09-12
         with:
@@ -822,6 +901,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
 
       - name: Build the web UI
         run: |
@@ -848,21 +934,41 @@ jobs:
       # macro, and the UI build) ran holding the notarization key and the updater key, with the
       # Developer ID identity unlocked in the keychain. The ClubLog key is here because it is
       # compiled in (see the Windows job).
-      #
-      # The log is kept for the next step: objects linked in from a static archive (Homebrew gcc's
-      # libgfortran.a above all) keep the macOS they were built for, and the linker only warns.
       - name: Compile the app
         env:
           CLUBLOG_API_KEY: ${{ secrets.CLUBLOG_API_KEY }}
         run: |
           set -euo pipefail
           ( cd src-tauri && cargo tauri build --target ${{ matrix.target }} \
-              --features radio,custom-protocol --no-bundle ) 2>&1 | tee "$RUNNER_TEMP/compile.log"
+              --features radio,custom-protocol --no-bundle )
+
+      # The modem's CMake used the pinned Boost headers: a Boost CMake package anywhere else on the
+      # runner would win over BOOST_ROOT, and the build would not say so.
+      - name: Check the modem was built with the pinned Boost headers
+        run: |
+          set -euo pipefail
+          n=0
+          for cache in src-tauri/target/${{ matrix.target }}/release/build/tempo-fast-sys-*/out/CMakeCache.txt; do
+            [ -f "$cache" ] || continue
+            grep -qx "Boost_INCLUDE_DIR:PATH=$BOOST_ROOT" "$cache" \
+              || { echo "::error::$cache: libtempo did not use the pinned Boost headers at $BOOST_ROOT"; grep '^Boost_' "$cache"; exit 1; }
+            n=$((n + 1))
+          done
+          [ "$n" -gt 0 ] || { echo "::error::no libtempo CMake cache under src-tauri/target/${{ matrix.target }}"; exit 1; }
 
       # BEFORE ANYTHING IS SIGNED: the app binary and the staged Hamlib, against the minimum and
-      # the paths an operator's Mac has. Failing here costs no notarization. The linker's "built
-      # for newer macOS" warnings are reported, not failed: the static gcc runtime has no build at
-      # the minimum to swap in, and whether it matters is the oldest-macOS bench's question.
+      # the paths an operator's Mac has. Failing here costs no notarization.
+      #
+      # Then the static gcc runtime the modem links (crates/tempo-fast-sys/build.rs: libgfortran.a
+      # and libquadmath.a beside the libgfortran.dylib gfortran reports, and libemutls_w.a where
+      # gfortran reports it; the same lookups, so these are the files the link used). Its objects
+      # are built for the runner's macOS, above the minimum, and the linked binary does not carry
+      # that over; the linker's warning about it never reaches this log, because rustc hides a
+      # successful link's output. What matters on an older Mac is what those objects call, so
+      # every symbol they import from outside themselves must be on
+      # scripts/macos-static-runtime-imports.txt, the names checked against the minimum macOS. A
+      # gcc update that calls something newer fails here and names it. Whether dyld on a real
+      # older Mac agrees is the oldest-macOS bench's question.
       - name: Check every Mach-O against the minimum macOS before signing
         run: |
           set -euo pipefail
@@ -871,13 +977,12 @@ jobs:
           node scripts/check-macho-bundle.mjs --floor "$MACOSX_DEPLOYMENT_TARGET" --arch ${{ matrix.arch }} \
             --require rigctld --require rigctl --require rotctld --require rotctl \
             --require libhamlib.4.dylib --require libusb-1.0.0.dylib src-tauri/resources/hamlib
-          newer=$(grep -c 'built for newer' "$RUNNER_TEMP/compile.log" || true)
-          if [ "${newer:-0}" -gt 0 ]; then
-            echo "::warning::the linker reported $newer object(s) built for a macOS newer than $MACOSX_DEPLOYMENT_TARGET"
-            grep 'built for newer' "$RUNNER_TEMP/compile.log" | sort -u | head -40
-          else
-            echo "the linker reported no object built for a macOS newer than $MACOSX_DEPLOYMENT_TARGET"
-          fi
+          fc="${FC:-gfortran}"
+          gcc_lib=$(dirname "$("$fc" -print-file-name=libgfortran.dylib)")
+          node scripts/check-macho-bundle.mjs --arch ${{ matrix.arch }} \
+            --imports scripts/macos-static-runtime-imports.txt \
+            --archive "$gcc_lib/libgfortran.a" --archive "$gcc_lib/libquadmath.a" \
+            --archive "$("$fc" -print-file-name=libemutls_w.a)"
 
       # Imported only now, after the last build. From here until the bundle step deletes the
       # keychain, anything this job runs can sign with the identity.
@@ -1093,7 +1198,7 @@ jobs:
       matrix:
         include:
           - label: Apple Silicon
-            runner: macos-14
+            runner: macos-15
             arch: arm64
             suffix: aarch64
           - label: Intel
@@ -1247,6 +1352,19 @@ jobs:
             --pattern 'model.onnx*' --dir src-tauri/resources/deepcw --clobber
           echo "$MODEL_SHA  src-tauri/resources/deepcw/model.onnx" | sha256sum -c -
           echo "$MODEL_JSON_SHA  src-tauri/resources/deepcw/model.onnx.json" | sha256sum -c -
+
+      # The runner image's own Node is whatever version the image carries; pin it as the other
+      # build jobs do, for the IOTA staging step below.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
+      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
+      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
+      # by shape until its first monthly download, so a feed outage must not stop a release.
+      - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota || echo "::warning::IOTA island list not staged; this installer ships without it"
 
       # The ClubLog key, compiled in as on every other platform (#388). It goes in as a BuildKit
       # secret, which Dockerfile.pi mounts for the one RUN that compiles Nexus; a build arg would

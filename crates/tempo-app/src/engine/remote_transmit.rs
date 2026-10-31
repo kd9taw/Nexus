@@ -25,6 +25,10 @@ pub struct RemoteTxHold {
     /// What is left of the device's transmit window, when the window alone holds it and the owner
     /// was notified: the hold then lifts by itself at its end. `None` otherwise. Display only.
     pub left: Option<Duration>,
+    /// Some remote device holds the station lease: a computer is attached and driving it, whether
+    /// or not it holds presence. Never decides a transmission; the receive decoders read it
+    /// (`Engine::leave_decoder_screen` stops nothing while one is attached).
+    pub lease_held: bool,
 }
 
 impl Engine {
@@ -58,6 +62,8 @@ impl Engine {
         // the gate never reads it back.
         if let Some(source) = self.remote_tx_hold_source.clone() {
             if let Some(hold) = source(now) {
+                // Receive only: whether a computer is attached, for the decoders' leave.
+                self.remote_lease_held = hold.lease_held;
                 self.set_remote_transmit_held(hold.held);
                 self.remote_tx_hold_shown = hold.held.then(|| crate::dto::TxHold {
                     owner_notified: hold.owner_notified,
