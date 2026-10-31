@@ -9,6 +9,12 @@
 // jsdom has no WebGL, so `getContext` is stubbed with just what the probes read: a renderer
 // string, a texture size, and the WEBGL_lose_context handle whose `loseContext` releases it.
 import { afterEach, describe, expect, it, vi } from 'vitest'
+// globe.gl is imported here, at collection, and never inside a test. Loading it pulls in all of
+// three.js: about 220 ms on an idle machine, which is 90% of the one case that builds a globe. With
+// the box loaded, that import alone took more than the 5 s test budget, so the case failed although
+// nothing it checks had changed. Module collection has no timeout, so the budget below covers only
+// what the case checks.
+import Globe from 'globe.gl'
 import { gpuCapableForGlobe, webgl2Available } from './gpu'
 
 const UNMASKED_RENDERER_WEBGL = 0x9246
@@ -139,7 +145,6 @@ describe('webgl2ForGlobe: the context three.js asks for, once a page', () => {
       return null
     }) as never)
     // Both globes build globe.gl with no rendererConfig of their own (react-globe.gl passes none either).
-    const { default: Globe } = await import('globe.gl')
     expect(() => new Globe(document.createElement('div'))).toThrow('Error creating WebGL context')
     const three = asked[0]
     expect(three[0]).toBe('webgl2')
