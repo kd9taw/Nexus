@@ -346,9 +346,9 @@ mod tests {
         let mut s = State::new();
         s.watch.ok(T0, Some(watch(T0 + 3 * 86_400)), WATCH_TTL);
         s.watch.fail(T0 + 3600, WATCH_TTL); // the next fetches fail; the copy is kept…
-        assert!(assemble(&s, T0 + WATCH_MAX_AGE_SECS).watch.is_some());
+        assert!(assemble(&s, T0 + 6 * 3600).watch.is_some());
         assert!(
-            assemble(&s, T0 + WATCH_MAX_AGE_SECS + 1).watch.is_none(),
+            assemble(&s, T0 + 6 * 3600 + 1).watch.is_none(),
             "…but past six hours it is not served"
         );
     }
@@ -368,12 +368,12 @@ mod tests {
     #[test]
     fn a_model_run_older_than_a_day_or_of_unknown_age_is_hidden() {
         let mut s = State::new();
-        model_with_run(&mut s, T0, Some(T0 - MODEL_RUN_MAX_AGE_SECS));
+        model_with_run(&mut s, T0, Some(T0 - 24 * 3600));
         assert!(
             assemble(&s, T0).model.is_some(),
             "a run exactly a day old is shown"
         );
-        model_with_run(&mut s, T0, Some(T0 - MODEL_RUN_MAX_AGE_SECS - 1));
+        model_with_run(&mut s, T0, Some(T0 - 24 * 3600 - 1));
         assert!(
             assemble(&s, T0).model.is_none(),
             "a run over a day old, fetched just now, was shown"
@@ -409,8 +409,8 @@ mod tests {
         let mut s = State::new();
         s.l1_ok(T0, (0..10).map(|i| l1(T0 - 540 + i * 60)).collect());
         let at = |t: i64| assemble(&s, t).l1.and_then(|v| v.latest).map(|x| x.at);
-        assert_eq!(at(T0 + L1_MAX_AGE_SECS), Some(T0));
-        assert_eq!(at(T0 + L1_MAX_AGE_SECS + 1), None);
+        assert_eq!(at(T0 + 30 * 60), Some(T0));
+        assert_eq!(at(T0 + 30 * 60 + 1), None);
     }
 
     /// A later jump replaces an earlier one.
