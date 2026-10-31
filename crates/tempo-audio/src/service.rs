@@ -36,7 +36,7 @@ use tempo_core::timing::{now_unix_ms, SlotClock};
 use crate::backend::AudioBackend;
 use crate::device::CpalBackend;
 use crate::frames::RxRing;
-use crate::rig::tuning::{passband_for, retune_passband, same_named_band};
+use crate::rig::tuning::{hamlib_mode_width, passband_for, retune_passband, same_named_band};
 use crate::rig::{FuncSet, PttMode, Rig, SerialLine};
 use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
@@ -6683,7 +6683,8 @@ impl RadioLoop {
         // transmitted. Same root cause as the two retune paths — see the long note there.
         let mode_changed = !md.trim().is_empty() && md != self.last_mode;
         if !md.trim().is_empty() {
-            match rig.set_mode(&md, passband_for(&md)) {
+            let width = hamlib_mode_width(&md, self.applied.rig_model, passband_for(&md));
+            match rig.set_mode(&md, width) {
                 Ok(()) => {
                     self.last_mode = md;
                     self.rig_asserted = true;
@@ -7089,7 +7090,8 @@ impl RadioLoop {
         crate::civ::diag::note(&format!(
             "band-stack override: rig reports {reported:?} after the band change, re-asserting {md:?}"
         ));
-        if rig.set_mode(md, passband_for(md)).is_ok() {
+        let width = hamlib_mode_width(md, self.applied.rig_model, passband_for(md));
+        if rig.set_mode(md, width).is_ok() {
             self.last_mode = md.to_string();
             // The corrective mode-set can shift a pitch-offset rig — re-push the dial so
             // the number stands in the DESTINATION mode's convention (same rule as the
@@ -9159,7 +9161,11 @@ impl RadioLoop {
                         // …and it is re-asserted WITHOUT re-commanding the width when neither the
                         // mode nor the band moved — see `retune_passband` for why that gate is not
                         // `mode_changed` alone (#67).
-                        let sent_pb = retune_passband(&md, mode_changed, self.last_dial, dial);
+                        let sent_pb = hamlib_mode_width(
+                            &md,
+                            self.applied.rig_model,
+                            retune_passband(&md, mode_changed, self.last_dial, dial),
+                        );
                         match rig.set_mode(&md, sent_pb) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
@@ -9237,7 +9243,11 @@ impl RadioLoop {
                     // Apply the section's mode. `last_mode` only ever holds a mode actually
                     // applied, so a give-up never masquerades as success.
                     if mode_changed && !link_down {
-                        let sent_pb = retry_passband(&md, self.mode_fail_count);
+                        let sent_pb = hamlib_mode_width(
+                            &md,
+                            self.applied.rig_model,
+                            retry_passband(&md, self.mode_fail_count),
+                        );
                         match rig.set_mode(&md, sent_pb) {
                             Ok(()) => {
                                 self.last_mode = md.clone();
@@ -11070,8 +11080,12 @@ impl RadioLoop {
                                                     // exactly like nobody answering, and the
                                                     // operator can fix it from the front panel in
                                                     // seconds once they know.
-                                                    let sent =
-                                                        rig.set_split_mode(md, passband_for(md));
+                                                    let width = hamlib_mode_width(
+                                                        md,
+                                                        self.applied.rig_model,
+                                                        passband_for(md),
+                                                    );
+                                                    let sent = rig.set_split_mode(md, width);
                                                     retune_note = Some(match &sent {
                                                         Ok(()) => format!(
                                                             "split ON — TX {tx_mhz:.4} MHz {md} ({vfo_name})"
@@ -18933,6 +18947,8 @@ fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
     // it must never send: a READ of the power that sets it (#381), the FTX-1's monitor switch
     // that is MOX and its tuner button that is a menu write (#385).
     rig.set_never_send(t.hamlib_never_send());
+    // …and which Hamlib model it drives, for the width a Remote mode write carries.
+    rig.set_hamlib_model(t.rig_model);
     match rig.read_freq() {
         Ok(hz) => CatProbe {
             ok: Some(true),
@@ -21114,6 +21130,41 @@ mod tests {
         // width and pop the rig's Width display.
         assert_eq!(retry_passband("USB", 0), -1);
         assert_eq!(retry_passband("CW", MODE_SET_MAX_TRIES), -1);
+    }
+
+    /// `PKTFM` to a Hamlib Icom goes out with width `0` from every path that chooses a width (the
+    /// first assert, a force retune including an in-band dial move, the retry ladder), because
+    /// Hamlib 4.6/4.7 drop the DATA byte on `-1`. Plain FM, the SSB data modes and AM keep their
+    /// widths on an Icom, and `PKTFM` keeps `-1` on the FT-991A and every other make.
+    #[test]
+    fn pktfm_to_a_hamlib_icom_carries_width_0_and_nothing_else_moves() {
+        const A: u64 = 144_390_000;
+        const B: u64 = 144_400_000; // 2 m, a dial move away
+        for model in [3070u32, 3073, 3078, 3081, 3085, 3090] {
+            for md in ["PKTFM", "pktfm"] {
+                assert_eq!(hamlib_mode_width(md, model, passband_for(md)), 0, "{model}");
+                for (changed, from, to) in [(false, A, B), (true, A, B), (false, 0, A)] {
+                    let pb = retune_passband(md, changed, from, to);
+                    assert_eq!(hamlib_mode_width(md, model, pb), 0, "{model}");
+                }
+                for tries in [0, MODE_SET_PASSBAND0_AFTER, MODE_SET_MAX_TRIES - 1] {
+                    let pb = retry_passband(md, tries);
+                    assert_eq!(hamlib_mode_width(md, model, pb), 0, "{model}");
+                }
+            }
+            for md in ["FM", "PKTUSB", "PKTLSB", "USB", "CW"] {
+                assert_eq!(
+                    hamlib_mode_width(md, model, passband_for(md)),
+                    -1,
+                    "{model} {md}"
+                );
+            }
+            assert_eq!(hamlib_mode_width("AM", model, passband_for("AM")), 6000);
+        }
+        // Not an Icom: the FT-991A, two Kenwood-backend models, no model.
+        for model in [1035u32, 2014, 2036, 0] {
+            assert_eq!(hamlib_mode_width("PKTFM", model, passband_for("PKTFM")), -1);
+        }
     }
 
     /// #67 at the decision itself, on the one mode that still carries a width (AM's 6 kHz), and
@@ -25114,6 +25165,39 @@ mod tests {
         );
         assert!(!t.take_owed(HeavyRead::Split, true), "paid");
         assert_eq!(t.pressing, 0, "and no longer pressing");
+    }
+
+    /// Every CAT connection is opened through [`probe_cat`], so that is where it learns its
+    /// radio's Hamlib model; a Remote FM-D then reaches a Hamlib Icom as `M PKTFM 0`, as the
+    /// shack's own mode writes do, and the FT-991A keeps `-1`.
+    #[test]
+    fn a_remote_fm_d_reaches_the_radio_the_connection_was_opened_for_with_its_width() {
+        use crate::rig::remote::{Position, Retune};
+        use crate::rig::remote_tests::{permission, retuning_peer};
+        use tempo_app::remote_control::Revocation;
+        for (model, want) in [(3081, "M PKTFM 0"), (1035, "M PKTFM -1")] {
+            let peer = retuning_peer(144_390_000, "FM", |_, _| None);
+            let mut s = test_settings();
+            s.rig_model = model;
+            let t = Transport::from_settings(&s);
+            let mut rig = Rig::with_control(Some(peer.address.clone()), PttMode::Vox);
+            let _ = probe_cat(&mut rig, &t);
+            let (permission, _) = permission(&Revocation::default(), &Revocation::default());
+            let retune = Retune::new(
+                Position::new(144_390_000, "FM").unwrap(),
+                Position::new(144_390_000, "PKTFM").unwrap(),
+            );
+            rig.remote_retune(retune, &permission).unwrap();
+            let modes: Vec<String> = peer
+                .lines
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.starts_with("M "))
+                .cloned()
+                .collect();
+            assert_eq!(modes, [want], "{model}");
+        }
     }
 
     /// ⭐ FAILING-FIRST, #381 (Kenwood TS-590S): "the software keeps changing my power output to
@@ -36407,6 +36491,12 @@ mod tests {
     #[test]
     fn an_sstv_image_on_an_fm_channel_commands_the_fm_data_word_before_it_keys() {
         let engine = sstv_fm_engine();
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.rig_model = 3081; // IC-9700 over Hamlib, the report's Icom
+            e.apply_settings(s);
+        }
         let (addr, log) = mock_rigctld_on(144_500_000, false);
         let mut rig = Rig::rigctld(&addr);
         let mut backend = MockBackend::new();
@@ -36472,6 +36562,13 @@ mod tests {
             mode_cmd < keyed,
             "the mode has to reach the rig BEFORE the key, not after: {lines:?}"
         );
+        // BY VALUE, WIDTH INCLUDED: Hamlib 4.6/4.7 send an Icom `PKTFM` with NOCHANGE (`-1`) as
+        // the bare `26 00 05`, which is FM with DATA OFF, so the image would go out of the wrong
+        // input. Width `0` is `26 00 05 01 01`: FM, DATA on, FIL1.
+        assert_eq!(
+            lines[mode_cmd], "M PKTFM 0",
+            "an Icom over Hamlib needs the width that carries the DATA byte: {lines:?}"
+        );
         assert!(
             !lines
                 .iter()
@@ -36485,6 +36582,155 @@ mod tests {
             state.last_fm.is_some(),
             "the FM repeater settings must still be tracked as current during an image"
         );
+    }
+
+    /// ⭐ APRS IN DATA-FM, ON THE WIRE, PER RADIO. With the switch on, a Hamlib Icom must be told
+    /// `M PKTFM 0`: Hamlib 4.6.5 and 4.7.1 turn `M PKTFM -1` into the bare `26 00 05` (FM, DATA
+    /// OFF), so the beacon would leave from the plain-FM input, and `0` into `26 00 05 01 01`
+    /// (FM, DATA on, FIL1). CONTROLS: the FT-991A keeps `M PKTFM -1` (its `MD0A;` lands either
+    /// way, and `0` would add an `NA00;` filter write), and with the switch off an Icom gets
+    /// plain FM with no width, as before.
+    #[test]
+    fn aprs_data_fm_reaches_a_hamlib_icom_with_the_width_that_carries_the_data_byte() {
+        for (model, data_fm, want, never) in [
+            (3081u32, true, "M PKTFM 0", "M PKTFM -1"), // IC-9700
+            (3070, true, "M PKTFM 0", "M PKTFM -1"),    // IC-7100
+            (3085, true, "M PKTFM 0", "M PKTFM -1"),    // IC-705
+            (3090, true, "M PKTFM 0", "M PKTFM -1"),    // IC-905
+            (1035, true, "M PKTFM -1", "M PKTFM 0"),    // FT-991A
+            (3081, false, "M FM -1", "M PKTFM"),
+        ] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.rig_model = model;
+                s.aprs_data_fm = data_fm;
+                e.apply_settings(s);
+                e.aprs_tune(144.390).unwrap();
+            }
+            let (addr, log) = mock_rigctld_on(144_390_000, false);
+            let mut rig = Rig::rigctld(&addr);
+            let (mut backend, mut state) = (MockBackend::new(), loop_state_for(&engine));
+            assert_eq!(
+                state.applied.rig_model, model,
+                "precondition: the loop's model"
+            );
+            let mut t = 1000.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1060.0);
+            let lines = log.lock().unwrap().clone();
+            let modes: Vec<&String> = lines.iter().filter(|l| l.starts_with("M ")).collect();
+            assert!(
+                modes.iter().any(|l| *l == want),
+                "model {model}, DATA-FM {data_fm}: want {want:?}, saw {modes:?}"
+            );
+            assert!(
+                !modes.iter().any(|l| l.starts_with(never)),
+                "model {model}, DATA-FM {data_fm}: never {never:?}, saw {modes:?}"
+            );
+        }
+    }
+
+    /// The FIRST ASSERT after a read-only launch carries the same width: `ensure_commanded` is
+    /// the mode write that goes out just before the key of the first beacon or SSTV image when
+    /// nothing has commanded the rig yet, so `M PKTFM -1` there would put that first over out
+    /// in plain FM, DATA OFF, on a Hamlib Icom. The retune-driven wire test above never reaches
+    /// this site (the retune asserts first and latches it), so it is called directly here, on
+    /// the loop built for each radio. CONTROL: the FT-991A keeps `-1` at the same site.
+    #[test]
+    fn the_first_assert_before_a_key_sends_a_hamlib_icom_the_fm_data_width() {
+        for (model, want) in [(3081u32, "M PKTFM 0"), (1035, "M PKTFM -1")] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.rig_model = model;
+                e.apply_settings(s);
+            }
+            let (addr, log) = mock_rigctld_on(144_390_000, false);
+            let mut rig = Rig::rigctld(&addr);
+            let mut state = loop_state_for(&engine);
+            assert_eq!(
+                state.applied.rig_model, model,
+                "precondition: the loop's model"
+            );
+            assert!(!state.rig_asserted, "precondition: nothing asserted yet");
+            state.cur_dial = 144_390_000;
+            state.cur_md = "PKTFM".to_string();
+            state.ensure_commanded(&mut rig);
+            let lines = log.lock().unwrap().clone();
+            let modes: Vec<&String> = lines.iter().filter(|l| l.starts_with("M ")).collect();
+            assert_eq!(
+                modes,
+                vec![want],
+                "model {model}: the one mode write before the key — {lines:?}"
+            );
+            assert!(state.rig_asserted, "control: the assert landed and latched");
+        }
+    }
+
+    /// The BAND-CROSS RE-ASSERT carries the same width. The operator sits on 70 cm in FM and
+    /// opens APRS: the tune's mode write lands on 70 cm, the dial write crosses to 2 m, and the
+    /// radio's band stack recalls plain FM there. Nexus reads that back and re-asserts the DATA
+    /// mode, and on a Hamlib Icom that re-assert must be `M PKTFM 0`, or the beacon leaves with
+    /// DATA OFF after all. CONTROL: the FT-991A's re-assert stays `M PKTFM -1`.
+    #[test]
+    fn a_band_cross_re_assert_sends_a_hamlib_icom_the_fm_data_width() {
+        for (model, want) in [(3081u32, "M PKTFM 0"), (1035, "M PKTFM -1")] {
+            let (addr, seen, live_mode) =
+                band_stacking_rigctld_stub(446_000_000, &[("2m", "FM"), ("70cm", "FM")]);
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.rig_model = model;
+                s.aprs_data_fm = true;
+                e.apply_settings(s);
+                e.set_frequency(446.000, "70cm", "FM");
+            }
+            let mut rig = Rig::rigctld(&addr);
+            let (mut backend, mut state) = (MockBackend::new(), loop_state_for(&engine));
+            assert_eq!(
+                state.applied.rig_model, model,
+                "precondition: the loop's model"
+            );
+            let mut t = 1000.0;
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1000.0);
+            assert!(
+                seen.lock().unwrap().iter().any(|l| l == "F 446000000"),
+                "precondition: settled on 70 cm — {:?}",
+                seen.lock().unwrap()
+            );
+            let mark = seen.lock().unwrap().len();
+
+            engine.lock().unwrap().aprs_tune(144.390).unwrap();
+            step_to(&engine, &mut state, &mut backend, &mut rig, &mut t, 1020.0);
+            let lines = seen.lock().unwrap()[mark..].to_vec();
+            let cross = lines
+                .iter()
+                .position(|l| l == "F 144390000")
+                .unwrap_or_else(|| panic!("control: the APRS tune must cross to 2 m — {lines:?}"));
+            assert!(
+                lines[..cross].iter().any(|l| l.starts_with("M PKTFM")),
+                "control: the tune's own mode write went out on 70 cm first — {lines:?}"
+            );
+            let after: Vec<&String> = lines[cross..]
+                .iter()
+                .filter(|l| l.starts_with("M "))
+                .collect();
+            assert_eq!(
+                after,
+                vec![want],
+                "model {model}: the re-assert after the band stack recalled FM — {lines:?}"
+            );
+            assert_eq!(
+                live_mode.lock().unwrap().as_str(),
+                "PKTFM",
+                "model {model}: the radio ends in the DATA mode"
+            );
+        }
     }
 
     /// A rigctld that REFUSES the verbs named in `refuse` (matched on the first token) with
@@ -41114,6 +41360,56 @@ mod tests {
                 && lines.iter().any(|l| l.trim().starts_with("M PKTUSB")),
             "…while the downlink is still received in PKTUSB: {lines:?}"
         );
+    }
+
+    /// ⭐ THE TX VFO'S FM-D WIDTH, PER RADIO. An FM bird worked with the receive leg in DATA-FM
+    /// (here the per-radio SSTV hold, with the receiver armed) gives the uplink `PKTFM` through
+    /// `sat_tx_mode`, and the split apply's `X` is the only write that reaches the TX VFO. A
+    /// Hamlib Icom must get `X PKTFM 0`: Hamlib turns a `-1` width into FM with DATA OFF, so the
+    /// uplink would leave from the plain-FM input. CONTROL: the FT-991A keeps `X PKTFM -1`.
+    #[test]
+    fn a_pktfm_uplink_reaches_the_tx_vfo_with_the_fm_data_width() {
+        let so50 = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_850_000,
+            downlink_centre_hz: 436_795_000,
+            invert: false,
+            half_width_hz: 0,
+        };
+        for (model, want) in [
+            (3070u32, "X PKTFM 0"), // IC-7100
+            (3085, "X PKTFM 0"),    // IC-705
+            (1035, "X PKTFM -1"),   // FT-991A
+        ] {
+            let (addr, seen) = recording_rigctld_stub();
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut eng = engine.lock().unwrap();
+                let mut s = eng.settings().clone();
+                s.rig_model = model;
+                s.sstv_hold_data_submode = true;
+                eng.apply_settings(s);
+                eng.set_sstv_armed(true);
+                eng.set_operating_mode("digital", false);
+                eng.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::ADownBUp));
+                eng.set_sat_transponder(Some(("bird|transponder".into(), 0, so50)));
+                eng.set_sat_single_channel_fm(false);
+                eng.set_sat_uplink_cw(false);
+                eng.sat_tune_nominal(FM_BIRD, 1_000_000);
+            }
+
+            step_with_watchdog(&engine, Rig::rigctld(&addr), None, Duration::from_secs(10));
+
+            assert_eq!(
+                split_verbs(&seen),
+                vec!["S 1 VFOB", "I 145850000", want],
+                "model {model}: the uplink rides VFO B in FM-D"
+            );
+            let lines = seen.lock().unwrap().clone();
+            assert!(
+                lines.iter().any(|l| l.trim().starts_with("M PKTFM")),
+                "model {model}: control — the downlink is received in FM-D: {lines:?}"
+            );
+        }
     }
 
     #[test]

@@ -445,11 +445,21 @@ pub fn rig_has_xit(rig_model: u32) -> bool {
 /// ⭐ #393 (FT-991A): APRS is soundcard audio, and the FT-991/991A takes it from the USB codec in
 /// DATA-FM when menu 077 FM PKT PORT SELECT is USB (its default is DATA, the rear jack), while
 /// plain FM takes 074 FM MIC SELECT. Hamlib's `PKTFM` is `MD0A;` (DATA-FM) on model 1035 — the
-/// FT-991 and FT-991A share it. Only the model with that evidence: the FT-891 (1036) has no 2 m,
-/// and the native Icom path keeps APRS in plain FM on purpose (`CivBackend::try_set_mode`).
+/// FT-991 and FT-991A share it. The FT-891 (1036) has no 2 m.
+///
+/// The Icoms with a 2 m FM-D, where the USB codec feeds the modulator through the radio's DATA
+/// MOD setting rather than plain FM's MOD input: the IC-7100 (3070), IC-9700 (3081), IC-705
+/// (3085) and IC-905 (3090). Hamlib (4.6.5 and the bundled 4.7.1, captured against a fake
+/// radio) sends `PKTFM` to each as `26 00 05 01 01` — FM, Data mode ON, FIL1 — the same frame
+/// it sends `PKTUSB` as with `01` for the mode. The native CI-V daemon sends `06 05` and
+/// `1A 06 01 01` (`CivBackend::try_set_mode`), the bytes each radio's CI-V reference defines
+/// (the IC-7100 is Hamlib-only). Left out, each on its evidence: the IC-9100 (3068), whose
+/// Hamlib caps list no FM-D and whose `1A 06` from Hamlib carries filter byte `05`, outside the
+/// `01`–`03` Icom defines; the ID-5100 (3071), whose backend refuses `PKTFM`; and the ID-4100
+/// (3082), whose backend sends it as plain `06 05`. Plain FM still turns DATA off everywhere.
 /// Mirrored in the UI as `APRS_DATA_FM_MODELS` (SettingsPanel).
 pub fn aprs_data_fm_available(rig_model: u32) -> bool {
-    rig_model == 1035
+    matches!(rig_model, 1035 | 3070 | 3081 | 3085 | 3090)
 }
 
 /// Full-duplex satellite rigs with no Main/Sub CAT path in this build: the

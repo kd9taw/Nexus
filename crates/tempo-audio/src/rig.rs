@@ -711,6 +711,9 @@ pub struct Rig {
     /// them into a different command than the radio's own manual defines — see
     /// [`crate::rigmodels::hamlib_never_send`]. Empty by default.
     never_send: &'static [(HamlibVerb, &'static str)],
+    /// The Hamlib model number of the radio on this link (`0` = none named), for a mode write's
+    /// width ([`tuning::hamlib_mode_width`]). Set where the link is opened.
+    hamlib_model: u32,
     #[cfg(test)]
     before_remote_write: Option<Box<dyn FnOnce() + Send>>,
     /// A test's own reply deadline (ms) in place of the transport's 700 ms / 2.5 s, for a scene
@@ -866,6 +869,7 @@ impl Rig {
             owed_bound: OWED_ANSWER_BOUND,
             connection_drops: 0,
             never_send: &[],
+            hamlib_model: 0,
             #[cfg(test)]
             before_remote_write: None,
             #[cfg(test)]
@@ -893,6 +897,11 @@ impl Rig {
     /// sent as before, so a power or a switch the radio's driver maps correctly still goes out.
     pub fn set_never_send(&mut self, refused: &'static [(HamlibVerb, &'static str)]) {
         self.never_send = refused;
+    }
+    /// Name the Hamlib model of the radio on this link, so a Remote mode write carries the width
+    /// that radio's driver needs ([`tuning::hamlib_mode_width`]).
+    pub fn set_hamlib_model(&mut self, model: u32) {
+        self.hamlib_model = model;
     }
     /// Why `line` must not be sent on this link, or `None` when it may. Asked where EVERY
     /// single-line command passes ([`Self::command_lines`]) — the heavy poll, the tune level,

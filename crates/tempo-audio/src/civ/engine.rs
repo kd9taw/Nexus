@@ -616,6 +616,14 @@ pub(crate) mod tests_support {
         pub drop_split_writes: u32,
         /// Fault injection — the next N split writes, the same frames, are answered NG (`FA`).
         pub nak_split_writes: u32,
+        /// Fault injection — the next N `26` READS are answered NG (`FA`). The IC-9700 answers
+        /// every `26` that way in satellite mode ("In the satellite mode, 'FA' (NG) is returned",
+        /// A7508-3EX-4, command 26).
+        pub nak_band_mode_reads: u32,
+        /// `26 00` reads the MAIN band's selected VFO whatever band is selected, as the IC-9700
+        /// guide marks `26` "(Only MAIN band)" (A7508-3EX-4). Off by default: the other radios
+        /// that read `26 00` have one band, and the existing scenes were written without it.
+        pub band_mode_main_only: bool,
         /// Fault injection — the radio is SWITCHED OFF (or its CI-V lead is out): every frame
         /// still goes out on the bus and is logged, and nothing answers any of them. Unlike
         /// [`FakeRadio::mute`] it can be thrown after the radio is handed to a daemon.
@@ -752,6 +760,11 @@ pub(crate) mod tests_support {
             r.nak_mode_writes -= 1;
             return Some((0xFA, Vec::new()));
         }
+        // See `Regs::nak_band_mode_reads`.
+        if cmd == 0x26 && data.len() == 1 && r.nak_band_mode_reads > 0 {
+            r.nak_band_mode_reads -= 1;
+            return Some((0xFA, Vec::new()));
+        }
         match (cmd, data.first().copied()) {
             (0x03, _) => {
                 let hz = if r.sel_sub { r.sub_hz } else { r.main_hz };
@@ -865,7 +878,11 @@ pub(crate) mod tests_support {
             // and the filter, `26 00 <mode> <data> <filter>` (IC-7300 Full Manual A7292-4EX-12
             // p. 19-11). The daemon reads it to learn whether a mode write would change anything.
             (0x26, Some(0x00)) if data.len() == 1 => {
-                let m = if r.sel_sub { r.sub_mode } else { r.main_mode };
+                let m = if r.sel_sub && !r.band_mode_main_only {
+                    r.sub_mode
+                } else {
+                    r.main_mode
+                };
                 Some((0x26, vec![0x00, m, u8::from(r.data_mode), r.fil]))
             }
             // The unselected VFO of the CURRENT band — write-only here.
@@ -1198,6 +1215,8 @@ pub(crate) mod tests_support {
                         nak_data_writes: 0,
                         drop_split_writes: 0,
                         nak_split_writes: 0,
+                        nak_band_mode_reads: 0,
+                        band_mode_main_only: false,
                         off: false,
                         filter_raw: 0x28,     // code 28: 2.4 kHz in SSB
                         sub_filter_raw: 0x15, // code 15: 1.1 kHz — another number, on purpose

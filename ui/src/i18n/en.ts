@@ -8349,6 +8349,8 @@ export const EN = {
   'settings.rigControl.aprsDataFm.label': 'APRS uses DATA-FM',
   'settings.rigControl.aprsDataFm.hint':
     "Set the radio's menu 077 FM PKT PORT SELECT to USB, or beacons go out silent. With this on, APRS puts this radio in DATA-FM instead of plain FM; repeater voice stays plain FM. Off, APRS uses plain FM, as it always has.",
+  'settings.rigControl.aprsDataFm.hintIcom':
+    "Set the radio's DATA MOD input to USB (SET ▸ Connectors ▸ MOD Input ▸ DATA MOD), or beacons go out silent. With this on, APRS puts this radio in FM-D (FM with DATA on) instead of plain FM; repeater voice stays plain FM. Off, APRS uses plain FM, as it always has.",
   'settings.rigControl.icomNative.label': 'Native Icom CI-V (early access)',
   'settings.rigControl.icomNative.hint':
     'Nexus drives this Icom\'s CI-V directly instead of launching rigctld — unlocking the rig\'s real spectrum scope in the waterfall ("CI-V RF") and instant dial tracking. The scope needs <b>115200 baud, set the same on BOTH the radio and Nexus</b>: (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" = <b>115200</b>; (2) on the rig, same menu, "CI-V USB Port" = "Unlink from [REMOTE]"; (3) the <b>Baud</b> field above = <b>115200</b> to match. Below that the rig refuses to stream the scope (CAT still works; the panadapter just stays off). Save to apply; turn off any time to return to the classic Hamlib path.',

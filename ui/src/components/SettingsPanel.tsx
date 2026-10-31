@@ -6880,7 +6880,12 @@ export function SettingsPanel({
                     <span className="toggle-knob" />
                   </button>
                   <span className="settings-hint">
-                    <T k="settings.rigControl.aprsDataFm.hint" tags={{ b: <strong /> }} />
+                    {/* The FT-991A's packet port menu, or an Icom's DATA MOD input. */}
+                    {form.rigModel === 1035 ? (
+                      <T k="settings.rigControl.aprsDataFm.hint" tags={{ b: <strong /> }} />
+                    ) : (
+                      <T k="settings.rigControl.aprsDataFm.hintIcom" tags={{ b: <strong /> }} />
+                    )}
                   </span>
                 </label>
               )}
