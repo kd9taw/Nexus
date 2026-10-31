@@ -298,6 +298,19 @@ describe('unseen, the 3-D globe draws nothing', () => {
     expect(fake.loop.maxDepth, 'no frame nested').toBe(1)
   })
 
+  it('a change still settling when the window hides is finished once it is shown', async () => {
+    const r = await asleep('EN52')
+    const more = { ...quiet, spots: [spot, { ...spot, call: 'JA1AA', lat: 35, lon: 139 }] } as unknown as PropagationSnapshot
+    await act(async () => void r.rerender(<Globe3D {...props('EN52', more)} />))
+    await act(async () => void vi.advanceTimersByTime(200))
+    expect(fake.loop.next, 'CONTROL: awake, settling the change').not.toBe(null)
+    await windowShown(false)
+    expect(fake.loop.next, 'hidden mid-settle, the loop stops').toBe(null)
+    const frames = fake.loop.frames
+    await windowShown(true)
+    expect(fake.loop.frames - frames, 'shown, the settle is finished').toBeGreaterThan(0)
+  })
+
   it('showing a window whose still globe changed nothing draws nothing', async () => {
     await asleep('EN52')
     await windowShown(false)
