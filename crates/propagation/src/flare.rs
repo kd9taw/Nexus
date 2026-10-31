@@ -277,7 +277,7 @@ fn median(v: &mut [f32]) -> f32 {
     }
     v.sort_by(f32::total_cmp);
     let m = v.len() / 2;
-    if v.len() % 2 == 0 {
+    if v.len().is_multiple_of(2) {
         (v[m - 1] + v[m]) / 2.0
     } else {
         v[m]
@@ -451,7 +451,8 @@ mod tests {
 
     #[test]
     fn the_grid_samples_bilinearly_and_wraps_the_dateline() {
-        let valid = utc("2026-10-30 18:00");
+        // 22:00 UT: the sun is near 150°W, so the dateline is sunlit and its two columns differ.
+        let valid = utc("2026-10-30 22:00");
         let g = parse_drap_grid(&synth_body(valid, 2e-4, 1.0, "No Estimate")).unwrap();
         let cell = |r: usize, c: usize| g.haf[r * 90 + c];
         // A cell centre reads its own value.
@@ -460,11 +461,18 @@ mod tests {
         let mid = g.at(30.0, -88.0);
         let mean = (cell(29, 22) + cell(29, 23) + cell(30, 22) + cell(30, 23)) / 4.0;
         assert!((mid - mean).abs() < 1e-3, "{mid} vs {mean}");
-        // Across the dateline: 180° sits halfway between the 178 and −178 columns.
-        let wrap = g.at(31.0, 180.0);
-        let pair = (cell(29, 89) + cell(29, 0)) / 2.0;
+        // Across the dateline, on the row nearest the sun's latitude (13°S, row 51): 180° sits
+        // halfway between the 178 and −178 columns.
+        assert!(
+            (cell(51, 89) - cell(51, 0)).abs() > 0.5,
+            "CONTROL: the two dateline columns must differ ({} vs {})",
+            cell(51, 89),
+            cell(51, 0)
+        );
+        let wrap = g.at(-13.0, 180.0);
+        let pair = (cell(51, 89) + cell(51, 0)) / 2.0;
         assert!((wrap - pair).abs() < 1e-3, "{wrap} vs {pair}");
-        assert!((g.at(31.0, -180.0) - wrap).abs() < 1e-4);
+        assert!((g.at(-13.0, -180.0) - wrap).abs() < 1e-4);
         // Beyond the outer rows: the outer row.
         assert!((g.at(90.0, -90.0) - cell(0, 22)).abs() < 1e-4);
         assert!((g.at(-90.0, -90.0) - cell(89, 22)).abs() < 1e-4);
