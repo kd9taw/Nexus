@@ -57,6 +57,8 @@ export const PANE_HELP: Partial<Record<PaneId, PaneHelp>> = {
   needed: GRID,
   operators: { chapter: 'contesting-pota', anchor: 'statistics-per-operator' },
   activation: { chapter: 'contesting-pota', anchor: 'the-activation-pane' },
+  pathDay: GRID,
+  pathRegions: GRID,
 }
 
 /** The manual page for a pane, or null when the manual does not describe it. */

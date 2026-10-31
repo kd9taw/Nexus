@@ -85,6 +85,7 @@ import {
   setLotwPassword,
   setQrzLogbookKey,
   setQrzPassword,
+  uploadBacklog,
   setRepeaterbookToken,
   setRxGain,
   setSettings,
@@ -106,6 +107,9 @@ import {
   tciProbe,
   tciServerDisconnect,
   qrzTestConnection,
+  lotwTestConnection,
+  eqslTestConnection,
+  clublogTestConnection,
   syncQrz,
   n3fjpTestConnection,
   callbookRefresh,
@@ -150,6 +154,16 @@ import {
   clubFirewallPressLine,
   clubFirewallRefusalLine,
 } from '../features/clubFirewall'
+
+// The Connections rows with a read-only Test (beside QRZ Logbook's own), by row id. Each signs in
+// with the stored credentials and reads; none uploads or changes anything on the service. Each verb
+// is read when its Test runs, not when this module loads (a test that mocks `../api` with a fixed
+// list of verbs would otherwise fail on import).
+const SERVICE_TESTS: Record<string, () => Promise<string>> = {
+  lotw: () => lotwTestConnection(),
+  eqsl: () => eqslTestConnection(),
+  clublog: () => clublogTestConnection(),
+}
 
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
@@ -926,6 +940,9 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // the patch blanks on the profile it touches.
     sstvHoldDataSubmode: s.sstvHoldDataSubmode ?? false,
     aprsDataFm: s.aprsDataFm ?? false,
+    pcMic: s.pcMic ?? false,
+    pcMicDevice: s.pcMicDevice ?? '',
+    pcMicGainDb: s.pcMicGainDb ?? 0,
     audioIn: s.audioIn ?? '',
     audioOut: s.audioOut ?? '',
     txLevel: s.txLevel ?? 1,
@@ -1540,6 +1557,19 @@ export function SettingsPanel({
     qrzTestConnection()
       .then((msg) => setQrzTest({ state: 'ok', msg }))
       .catch((e) => setQrzTest({ state: 'fail', msg: String(e) }))
+  }
+  // LoTW / eQSL / ClubLog Tests: each signs in and READS (never uploads), keyed by the
+  // Connections row id. Same idle | testing | result shape as the QRZ Test above.
+  const [svcTest, setSvcTest] = useState<
+    Record<string, { state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>
+  >({})
+  const runSvcTest = (id: string) => {
+    const test = SERVICE_TESTS[id]
+    if (!test) return
+    setSvcTest((p) => ({ ...p, [id]: { state: 'testing', msg: t('settings.connections.test.testing') } }))
+    test()
+      .then((msg) => setSvcTest((p) => ({ ...p, [id]: { state: 'ok', msg } })))
+      .catch((e) => setSvcTest((p) => ({ ...p, [id]: { state: 'fail', msg: String(e) } })))
   }
   const [n3fjpTest, setN3fjpTest] = useState<{ state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ state: 'idle', msg: '' })
   const runN3fjpTest = () => {
@@ -3514,10 +3544,40 @@ export function SettingsPanel({
     }
   }
 
+  // The FIRST login saved for QRZ Logbook, ClubLog or eQSL turns its upload on, and its catch-up
+  // would send every contact never sent there — an imported log included, since an import marks
+  // nothing as sent. So it asks first, and the default (the button that has the focus, and what
+  // Escape, a click outside or a dialog that cannot open all answer) is "Only contacts made from
+  // now on". `true` sends them, as a save did before. A login saved over a stored one, or one whose
+  // upload switch is already on, asks nothing (`undefined`: the backend changes nothing either).
+  // With nothing waiting there is nothing to ask, and the answer is "from now on", so a log
+  // imported later is not sent by the next save. A count that cannot be read is no answer, and no
+  // question asked: the backend then saves as it always did, with no start point.
+  const askSendOld = async (
+    service: 'qrz' | 'clublog' | 'eqsl',
+    name: string,
+  ): Promise<boolean | undefined> => {
+    let owed: number | null
+    try {
+      owed = await uploadBacklog(service)
+    } catch {
+      return undefined
+    }
+    if (owed == null) return undefined
+    if (owed === 0) return false
+    return confirmDialog({
+      title: t('settings.connections.backlog.title', { count: owed, service: name }),
+      body: t('settings.connections.backlog.body', { service: name }),
+      confirmLabel: t('settings.connections.backlog.send'),
+      cancelLabel: t('settings.connections.backlog.fromNow'),
+    })
+  }
+
   const onSaveEqslPassword = async () => {
     if (!eqslPw) return
+    const sendOld = await askSendOld('eqsl', 'eQSL')
     const ok = await withErrorToast(async () => {
-      await setEqslPassword(eqslPw)
+      await setEqslPassword(eqslPw, sendOld)
       return true
     }, t('settings.connections.eqsl.password.saveFailed'))
     if (ok) {
@@ -3647,8 +3707,9 @@ export function SettingsPanel({
 
   const onSaveQrzLogbookKey = async () => {
     if (!qrzKey) return
+    const sendOld = await askSendOld('qrz', 'QRZ Logbook')
     const ok = await withErrorToast(async () => {
-      await setQrzLogbookKey(qrzKey)
+      await setQrzLogbookKey(qrzKey, sendOld)
       return true
     }, t('settings.connections.qrz.key.saveFailed'))
     if (ok) {
@@ -3697,8 +3758,9 @@ export function SettingsPanel({
 
   const onSaveClublogPassword = async () => {
     if (!clublogPw) return
+    const sendOld = await askSendOld('clublog', 'ClubLog')
     const ok = await withErrorToast(async () => {
-      await setClublogPassword(clublogPw)
+      await setClublogPassword(clublogPw, sendOld)
       return true
     }, t('settings.connections.clublog.password.saveFailed'))
     if (ok) {
@@ -4137,6 +4199,10 @@ export function SettingsPanel({
   // saved selection visible even if it's since disappeared.
   const voiceMicOptions = form.voiceMicDevice && !audio.input.includes(form.voiceMicDevice)
     ? [form.voiceMicDevice, ...audio.input]
+    : audio.input
+  // The computer microphone's picker: the same INPUT list, keeping a saved choice visible.
+  const pcMicOptions = form.pcMicDevice && !audio.input.includes(form.pcMicDevice)
+    ? [form.pcMicDevice, ...audio.input]
     : audio.input
 
   // What one option READS. An enumerated device shows its human label; a stored value that is
@@ -7361,6 +7427,70 @@ export function SettingsPanel({
                   {editingOtherRadio ? otherRadioLevelHint : t('settings.audio.rxGain.hint')}
                 </span>
               </label>
+            </div>
+            {/* The computer's microphone for Phone: per radio, off by default. With it on, Phone's
+                PTT sends this computer's microphone to the radio by its transmit audio route
+                (crates/tempo-app/src/engine/pc_mic.rs); off, PTT keys the radio's own microphone. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.audio.pcMic.title')}</span>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.audio.pcMic.label')}</span>
+                <button disabled={locked('pcMic')} data-setting="pcMic"
+                  type="button"
+                  role="switch"
+                  aria-checked={form.pcMic ?? false}
+                  className={`toggle${form.pcMic ? ' on' : ''}`}
+                  onClick={() => updateBool('pcMic', !form.pcMic)}
+                  aria-label={t('settings.audio.pcMic.label')}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                {setAtStation('pcMic')}
+                <span className="settings-hint">{t('settings.audio.pcMic.hint')}</span>
+              </div>
+              {/* From a computer driving the station all three are the station's, shown read-only
+                  whatever the switch says. */}
+              {(form.pcMic || stationOnly('pcMic')) && (
+                <>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.audio.pcMic.device.label')}</span>
+                    <select disabled={locked('pcMicDevice')} data-setting="pcMicDevice"
+                      className="settings-input"
+                      value={form.pcMicDevice ?? ''}
+                      onChange={(e) => update('pcMicDevice', e.target.value)}
+                    >
+                      <option value="">{t('settings.audio.pcMic.device.none')}</option>
+                      {pcMicOptions.map((d) => (
+                        <option key={d} value={d}>
+                          {audioLabel(d, 'input')}
+                        </option>
+                      ))}
+                    </select>
+                    {setAtStation('pcMicDevice')}
+                    <span className="settings-hint">{t('settings.audio.pcMic.device.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">
+                      {t('settings.audio.pcMic.gain.label')}{' '}
+                      <span className="settings-value">
+                        {t('settings.audio.pcMic.gain.value', { db: Math.round(form.pcMicGainDb ?? 0) })}
+                      </span>
+                    </span>
+                    <input disabled={locked('pcMicGainDb')} data-setting="pcMicGainDb"
+                      className="settings-slider"
+                      type="range"
+                      min="-20"
+                      max="20"
+                      step="1"
+                      value={String(Math.round(form.pcMicGainDb ?? 0))}
+                      onChange={(e) => updateNum('pcMicGainDb', Number(e.target.value))}
+                      aria-label={t('settings.audio.pcMic.gain.label')}
+                    />
+                    {setAtStation('pcMicGainDb')}
+                    <span className="settings-hint">{t('settings.audio.pcMic.gain.hint')}</span>
+                  </label>
+                </>
+              )}
             </div>
           </fieldset>
 
@@ -12089,6 +12219,19 @@ export function SettingsPanel({
                         : t('settings.connections.qrz.test.action')}
                     </button>
                   )}
+                  {SERVICE_TESTS[c.id] && (
+                    <button
+                      type="button"
+                      className="settings-test-btn"
+                      onClick={() => runSvcTest(c.id)}
+                      disabled={svcTest[c.id]?.state === 'testing'}
+                      title={t('settings.connections.service.test.title', { service: c.connector })}
+                    >
+                      {svcTest[c.id]?.state === 'testing'
+                        ? t('settings.connections.test.busy')
+                        : t('settings.connections.service.test.action')}
+                    </button>
+                  )}
                 </div>
                 )
               })}
@@ -12106,6 +12249,17 @@ export function SettingsPanel({
                 )}
               </p>
             )}
+            {creds.map((c) => {
+              const r = svcTest[c.id]
+              if (!SERVICE_TESTS[c.id] || !r || r.state === 'idle' || r.state === 'testing') return null
+              return (
+                <p key={c.id} className={`conn-test-result ${r.state}`}>
+                  {r.state === 'ok'
+                    ? t('settings.connections.service.test.ok', { service: c.connector, detail: r.msg })
+                    : t('settings.connections.service.test.fail', { service: c.connector, detail: r.msg })}
+                </p>
+              )
+            })}
             <div className="conn-log">
               <div className="conn-log-head">
                 <span>{t('settings.connections.log.title')}</span>

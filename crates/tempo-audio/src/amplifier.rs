@@ -1604,6 +1604,17 @@ mod imp {
             // Each reads the one amplifier: a change made by one is what the other sees.
             let now = a.poll().unwrap();
             a.send_intent(AmpIntent::ToggleOperate, &now).unwrap();
+            // The SET and b's ask leave from two sockets, and nothing orders two senders'
+            // datagrams on the way in (WSL2's mirrored loopback swaps them about half the time),
+            // so b asks once the amplifier has the SET, as it would on its next poll.
+            let t0 = Instant::now();
+            while !fake.heard().iter().any(|c| c == "^OS1;") {
+                assert!(
+                    t0.elapsed() < Duration::from_secs(2),
+                    "the SET never arrived"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
             assert!(b.poll().unwrap().operate);
             assert!(a.poll().unwrap().operate);
         }

@@ -65,19 +65,17 @@ int main(void) {
         "KH6ABC 4X4AA R-08",
         "KD9TAW 8P9AA RR73",
         /* ROVERS. '/R' is the rover flag: one spare bit per callsign inside the
-         * ordinary type-1 message. WSJT-X 3.0.2 discards any decode containing
-         * '/R' when ncontest.eq.0, and ft8_cabi.f90 hard-codes ncontest = 0, so
-         * adopting that filter would silently drop every rover — after LDPC and
-         * CRC-14 had already passed it. Nexus deliberately does not take it
-         * (operator decision 2026-07-27; see the divergence note in ft8b.f90).
-         * These cases exist so that decision cannot be undone by accident: if a
-         * future vendor refresh reintroduces the filter, this test fails instead
-         * of rovers quietly going dark on 6 m and 2 m during a VHF contest. */
+         * ordinary type-1 message. As in WSJT-X 3.0.2 (ft8b.f90), a rover
+         * decodes in a Special Operating Activity (lactivity = 1, Contest mode)
+         * and is dropped without one; both halves are checked below, so rovers
+         * cannot go dark during a VHF contest without this test failing. */
         "W1AW/R KD9TAW EN52",
         "KD9TAW W1AW/R R FN42",
         "WA9XYZ/R KA1ABC/R R FN42",
     };
     const int NMSG = (int)(sizeof(msgs) / sizeof(msgs[0]));
+    /* The messages WSJT-X drops with no activity selected: '/R' in type 1. */
+#define IS_FILTERED(m) (strstr((m), "/R") != NULL)
 
     const float fs = 12000.0f;
     const int   noff = 6000;                 /* 0.5 s FT8 TX start @ 12 kHz */
@@ -126,11 +124,33 @@ int main(void) {
             iwave[i] = (int16_t)lrintf(v);
         }
 
+        /* No activity first: a rover must not come back, nor anything with
+         * '/R' in it; every other message must, so it ends the iteration there. */
+        if (IS_FILTERED(msgs[m])) {
+            ft8_a7_reset();
+            int n0 = ft8_decode_frame(iwave, 200, 2900, 3, "", "", 0, 0,
+                                      /*nftx*/0, /*nzhsym*/50,
+                                      /*nutc*/0, /*la7final*/1,
+                                      /*lft8apon*/1, /*lapcqonly*/0,
+                                      /*lactivity*/0, out, MAXOUT);
+            int leaked = 0;
+            for (int i = 0; i < n0 && i < MAXOUT; i++)
+                if (strstr(out[i].message, "/R")) leaked = 1;
+            if (n0 < 0 || leaked) {
+                printf("  FAIL '%s' — decoded with no activity (%d decode(s))\n",
+                       msgs[m], n0);
+                failed++;
+                continue;
+            }
+        }
+
         ft8_a7_reset();
         int ndec = ft8_decode_frame(iwave, 200, 2900, 3, "", "", 0, 0,
                                     /*nftx*/0, /*nzhsym*/50,
                                     /*nutc*/0, /*la7final*/1,
-                                    /*lft8apon*/1, /*lapcqonly*/0, out, MAXOUT);
+                                    /*lft8apon*/1, /*lapcqonly*/0,
+                                    /*lactivity*/IS_FILTERED(msgs[m]) ? 1 : 0,
+                                    out, MAXOUT);
         if (ndec < 0) {
             printf("  FAIL '%s' — decoder error %d\n", msgs[m], ndec);
             failed++;

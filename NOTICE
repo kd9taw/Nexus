@@ -660,6 +660,10 @@ entity its record or LoTW names. It ships in the same release zip as `cty.dat`, 
 same **MIT License** and the same notice. The DXCC entity numbers are those the ARRL
 assigns for its DXCC program.
 
+### IOTA island-group list — © RSGB and IOTA Ltd
+© RSGB and IOTA Ltd (as shown on <https://www.iota-world.org/>); included with IOTA Ltd's permission.
+The list ships in the installer as an app resource and is not in this repository.
+
 ### Deleted DXCC entities — ARRL, from TrustedQSL
 `crates/propagation/data/dxcc_deleted.csv` lists the 62 deleted DXCC entities: each one's
 entity number and name. It is transcribed from the DXCC entity table in the configuration
@@ -1373,7 +1377,7 @@ principal third-party components, not a substitute for that gate:
   model — see the DeepCW section at the end of this file for the model's own, different,
   AGPL-3.0-only terms) — MIT OR Apache-2.0.
 - **rustfft** (the FFT behind the SSTV receiver: VIS decode, sync, per-line demodulation and
-  SNR) — MIT OR Apache-2.0.
+  SNR; and the RF scope's zoomed SDR panadapter rows) — MIT OR Apache-2.0.
 - **microfft** (fixed-size in-place FFTs on the hot decode paths — the waterfall spectrum, the
   RTTY demodulator, and DeepCW's front end) — MIT.
 - **thiserror** (error types in `crates/tempo-sstv`) — MIT OR Apache-2.0.

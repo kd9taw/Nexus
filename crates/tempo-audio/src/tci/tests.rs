@@ -1574,3 +1574,77 @@ fn the_transmit_route_is_ready_only_once_the_sdr_program_takes_nexus_audio() {
     assert!(d.tx_route_ready(), "control: acknowledged and flowing");
     assert!(d.tx_tee().is_some());
 }
+
+/// Streams that kill the session's driver once tripped, as a bug in the session would: the next
+/// block handed to them panics.
+struct Tripwire(Arc<AtomicBool>);
+
+impl Tripwire {
+    fn check(&self) {
+        assert!(!self.0.load(Ordering::Relaxed), "the session's driver dies");
+    }
+}
+
+impl Streams for Tripwire {
+    fn receive(&mut self, _block: &tempo_net::tci::frame::Block<'_>) {
+        self.check();
+    }
+
+    fn transmit(&mut self, _rate: u32, _out: &mut [f32]) -> usize {
+        self.check();
+        0
+    }
+}
+
+/// ⭐ A SESSION WHOSE DRIVER DIES ENDS ITS WATCHER, AND A DEATH MID-OVER IS AN ALARM. A driver that
+/// dies without reaching `Closed` drops the watcher's event channel, which then answers at once,
+/// with nothing: a watcher that took that for a quiet server spun a whole core for the rest of the
+/// session. The session must read closed (so the radio loop sees the daemon gone), the watcher must
+/// end, the stops a close sends must still go out, and an over that was on the air must be an
+/// alarm. The control: a driver that dies idle raises no alarm, and nothing keys either way.
+#[test]
+fn a_session_whose_driver_dies_ends_its_watcher() {
+    for keyed in [false, true] {
+        let sim = esdr3([]);
+        registry::forget(key_of(&sim));
+        let trip = Arc::new(AtomicBool::new(false));
+        let d = TciDaemon::start_with(
+            &target(&sim),
+            Box::new(Tripwire(trip.clone())),
+            Options::default(),
+        )
+        .expect("the daemon starts");
+        d.set_tx_route(true);
+        let mut c = Client::connect(&d);
+        wait_audio(&d);
+        if keyed {
+            assert_eq!(c.ask("M PKTUSB 0", 1), "RPRT 0\n");
+            assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
+            wait_log(&sim, "the key", |log| keys(log).len() == 1);
+        }
+        let stops_before = count_in(&sim.log(), 0, "trx:0,false");
+        trip.store(true, Ordering::Relaxed);
+        wait_dead(&d);
+        let deadline = Instant::now() + WAIT;
+        while !d.watch_thread.as_ref().is_some_and(|t| t.is_finished()) {
+            assert!(
+                Instant::now() < deadline,
+                "keyed {keyed}: the watcher never ended"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        wait_log(&sim, "the stop", |log| {
+            count_in(log, 0, "trx:0,false") > stops_before
+        });
+        let alarm = d.alarm();
+        if keyed {
+            let alarm = alarm.expect("an alarm");
+            assert!(alarm.contains("may still be transmitting"), "{alarm}");
+        } else {
+            assert_eq!(alarm, None);
+        }
+        assert_eq!(keys(&sim.log()).len(), usize::from(keyed));
+        drop(c);
+        drop(d);
+    }
+}

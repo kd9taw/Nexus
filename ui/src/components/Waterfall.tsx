@@ -37,7 +37,7 @@ import { useWaterfallPalette } from '../waterfallPalette'
 import { ageLabel } from '../waterfallHistory'
 import { createSpectrumRenderer, type SpectrumRenderer, type SpectrumScene } from '../spectrum'
 import { autoRange } from '../spectrum/scaleRange'
-import { surfaceGet, surfaceSet } from '../features/windowScope'
+import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import { PalettePicker } from './PalettePicker'
 import { MOD_LABEL } from '../platform'
 import { t } from '../i18n'
@@ -59,8 +59,16 @@ const DBR = 'dBr'
 const GAIN_KEY = 'nexus.waterfall.gain'
 const ZERO_KEY = 'nexus.waterfall.zero'
 /** PER-SURFACE: a wide overview docked plus a zoomed-in torn-off waterfall is the reason
- *  to pop the waterfall out at all. */
+ *  to pop the waterfall out at all.
+ *
+ *  ⚠️ READ ONLY NOW. Every mode's waterfall kept its span here, so a 1 kHz pick in RTTY made FT8,
+ *  PSK and JS8 open on a 1 kHz window too. Each mode now keeps its span under its own key (the
+ *  `zoomKey` prop) and opens at Std until the operator picks one there. This key is still read
+ *  after the mode's own, so a span chosen before each mode had its own keeps opening as it did;
+ *  nothing writes it, so it can never again carry a pick from one mode into another. */
 const ZOOM_KEY = 'nexus.waterfall.zoom'
+/** PER-SURFACE: FT's span (the Operate cockpit and its torn-off copy), the `zoomKey` default. */
+const FT_ZOOM_KEY = 'nexus.waterfall.ft.zoom'
 /** PER-SURFACE: 2D scroll vs 3D stacked-spectrum (3DSS) view. A torn-off 3D display next to a
  *  docked 2D one is a legitimate multi-monitor setup, so this is per-surface like the zoom. */
 const THREED_KEY = 'nexus.waterfall.dss'
@@ -90,12 +98,17 @@ function loadKnob(key: string): number {
     return 0
   }
 }
-/** Load the persisted waterfall view; missing/blocked/out-of-range → 0 (the default
- * 0–3 kHz "Std" view). Only the picker's own option values are legitimate — "any finite
+/** Load the mode's persisted waterfall view; missing/blocked/out-of-range → 0 (the default
+ * 200–3000 Hz "Std" view). Only the picker's own option values are legitimate — "any finite
  * value is kept" (the old rule) let a stale/foreign span render a view the zoom select
- * cannot represent. */
-function loadZoom(): number {
-  const v = parseFloat(surfaceGet(ZOOM_KEY) ?? '')
+ * cannot represent.
+ *
+ * The mode's own key first, then the old shared one (see `ZOOM_KEY`). A value THIS window
+ * stored under either beats the main window's, so a torn-off waterfall keeps the span it was
+ * given before each mode had a key of its own. */
+function loadZoom(zoomKey: string): number {
+  const oldOnly = !surfaceHasOwn(zoomKey) && surfaceHasOwn(ZOOM_KEY)
+  const v = parseFloat((oldOnly ? surfaceGet(ZOOM_KEY) : (surfaceGet(zoomKey) ?? surfaceGet(ZOOM_KEY))) ?? '')
   return Number.isFinite(v) ? coerceZoomSpan(v) : 0
 }
 
@@ -257,6 +270,10 @@ interface Props {
    *  one of `WATERFALL_ZOOMS`: the buttons set and persist the same span the select does. Omitted ⇒
    *  the select. */
   spanChoices?: { value: number; label: string; widthHz: number }[]
+  /** Where this mode keeps its span (`nexus.waterfall.<mode>.zoom`): every mode opens at Std
+   *  until the operator picks a span in it, and a pick in one mode never moves another's.
+   *  Omitted ⇒ FT's. */
+  zoomKey?: string
   /** A contrast curve every value is drawn through, 0..1 → 0..1 (RTTY's `traceContrast`). It is
    *  baked into the palette, so the picture, the history it is redrawn from and the legend all
    *  carry it. Omitted ⇒ the linear map every other surface draws. Pass a stable function. */
@@ -362,6 +379,7 @@ export function Waterfall({
   onViewChange,
   headerExtra,
   spanChoices,
+  zoomKey = FT_ZOOM_KEY,
   contrastCurve,
   tags,
   onTag,
@@ -399,7 +417,7 @@ export function Waterfall({
   // when the operator moves it (a waterfall click, a decode double-click, `rtty_net`/`psk_net`
   // — RTTY/PSK AFC is reported separately and does NOT drag the netted center), so following
   // it costs one cold re-render per retune, not one per poll.
-  const [zoomSpan, setZoomSpan] = useState<number>(loadZoom)
+  const [zoomSpan, setZoomSpan] = useState<number>(() => loadZoom(zoomKey))
   // ⚠️ THE WINDOW HAS MEMORY, so this is not a pure re-derivation (#164). Re-centring on the
   // marker every render made the display PAN: a left-click moves the RX marker, so each click
   // slid the view by up to half a span. `zoomWindow` holds the slice still while the marker is
@@ -527,6 +545,9 @@ export function Waterfall({
   const rowTimeAtRef = useRef<((yCss: number) => number | null) | null>(null)
   /** Cold-path re-render hook, owned by the canvas effect (null until mounted). */
   const rebuildRef = useRef<(() => void) | null>(null)
+  /** Restarts the draw loop, which stops while the waterfall is hidden (`active` false); owned by
+   *  the canvas effect (null until mounted). A no-op while the loop runs. */
+  const wakeRef = useRef<(() => void) | null>(null)
 
   txRef.current = transmitting
   txBlanksRef.current = txBlanks
@@ -917,6 +938,32 @@ export function Waterfall({
       }
     }
 
+    /** The words the paused overlay prints: the chip, then the time tape's four ages top to
+     *  bottom ('' where no row is there yet). The overlay key is built from these same strings,
+     *  so it is drawn exactly when one of them changes — each age ticks over on its own row's
+     *  rounded second (`ageLabel`), not when the wall clock's second turns. Each tape age is read
+     *  off the SAME mapping the renderer paints with — newest end at the bottom by default, at
+     *  the top when the operator has flipped the scroll direction.
+     *  ⚠️ This used to be a plain `off + (devRows-1)·i/5`, i.e. ages increasing DOWNWARD, which
+     *  was upside down against the picture in the only direction that existed: it labelled the
+     *  top (oldest) rows as the most recent. Mirrored, not merely flipped. */
+    const pausedLabels = (wfH: number): string[] => {
+      const off = offsetRef.current
+      const at = Date.now()
+      // The chip is a STATE MESSAGE and comes from the catalog; the age beside it (and the
+      // time tape below, and the axis) are measurements drawn as tick labels.
+      const newest = renderer.rowAt(off)
+      const backLabel = newest ? ageLabel(at - newest.tMs) : t('waterfall.paused.now')
+      const labels = [off > 0 ? t('waterfall.paused.back', { age: backLabel }) : t('waterfall.paused')]
+      const devRows = Math.max(1, Math.round(wfH * scaleY))
+      for (let i = 1; i <= 4; i++) {
+        const yDev = Math.round(((devRows - 1) * i) / 5)
+        const fr = renderer.rowAt(off + (newestAtTopRef.current ? yDev : devRows - 1 - yDev))
+        labels.push(fr ? `−${ageLabel(at - fr.tMs)}` : '')
+      }
+      return labels
+    }
+
     const drawOverlay = () => {
       // The axis + Rx/Tx markers render on the SEPARATE overlay canvas (transparent, fully
       // cleared each time it is drawn). This is what keeps a moved marker from freezing into the
@@ -965,36 +1012,17 @@ export function Waterfall({
       // Paused: a chip + a right-edge time tape so scrollback has a scale. The tape maps
       // viewport rows → their stored timestamps (device rows ÷ scaleY = CSS rows).
       if (pausedRef.current) {
-        const off = offsetRef.current
+        const [chip, ...tape] = pausedLabels(wfH)
         octx.font = `600 ${10 * textScale}px system-ui, sans-serif`
         octx.fillStyle = 'rgba(255,200,80,0.95)'
-        // The chip is a STATE MESSAGE and comes from the catalog; the age beside it (and the
-        // time tape below, and the axis) are measurements drawn as tick labels.
-        const newest = renderer.rowAt(off)
-        const backLabel = newest ? ageLabel(Date.now() - newest.tMs) : t('waterfall.paused.now')
-        octx.fillText(
-          off > 0 ? t('waterfall.paused.back', { age: backLabel }) : t('waterfall.paused'),
-          6 * textScale,
-          20 * textScale,
-        )
-        // Time tape: 4 evenly spaced age labels down the right edge. Each label's age is
-        // read off the SAME mapping the renderer paints with — newest end at the bottom by
-        // default, at the top when the operator has flipped the scroll direction.
-        // ⚠️ This used to be a plain `off + (devRows-1)·i/5`, i.e. ages increasing DOWNWARD,
-        // which was upside down against the picture in the only direction that existed: it
-        // labelled the top (oldest) rows as the most recent. Mirrored, not merely flipped.
+        octx.fillText(chip, 6 * textScale, 20 * textScale)
+        // Time tape: 4 evenly spaced age labels down the right edge (see `pausedLabels`).
         octx.globalAlpha = 0.7
         octx.fillStyle = ink.scale
         octx.font = `${9 * textScale}px system-ui, sans-serif`
-        const devRows = Math.max(1, Math.round(wfH * scaleY))
-        for (let i = 1; i <= 4; i++) {
-          const yCss = (wfH * i) / 5
-          const yDev = Math.round(((devRows - 1) * i) / 5)
-          const age = off + (newestAtTopRef.current ? yDev : devRows - 1 - yDev)
-          const fr = renderer.rowAt(age)
-          if (!fr) continue
-          octx.fillText(`−${ageLabel(Date.now() - fr.tMs)}`, W - 34 * textScale, yCss)
-        }
+        tape.forEach((label, i) => {
+          if (label) octx.fillText(label, W - 34 * textScale, (wfH * (i + 1)) / 5)
+        })
         octx.globalAlpha = 1
       }
 
@@ -1104,28 +1132,32 @@ export function Waterfall({
     }
 
     /** Everything the overlay draws from, as one string: it is drawn again only when this moves
-     *  (or its inks were dropped, or while paused, when the time tape's ages move every frame). */
+     *  (or its inks were dropped). Paused, the chip and the time tape print ages, which move with
+     *  the clock — so the words they print are in the key (`pausedLabels`): an age ticking over,
+     *  a scrollback step or a flow flip redraws at once; a row committed while paused does not, as
+     *  the offset moves with it and every printed word holds still. Live, nothing paused is drawn,
+     *  so leaving pause moves the key too and the chip and tape are cleared. */
     const overlayKeyOf = () => {
       const c = cursorsRef.current
       const named = c ? c.map((k) => `${k.hz}/${k.color}/${k.label}`).join(',') : '-'
       const band = toneBandRef.current
       const shade = band ? `${band.loHz}/${band.hiHz}/${keyedRef.current}` : '-'
       const filter = shadeRef.current
-      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}|${shade}|${filter ? `${filter.loHz}-${filter.hiHz}` : '-'}`
+      const held = pausedRef.current ? pausedLabels(cssH - axisHFor(cssH)).join('\n') : '-'
+      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}|${shade}|${filter ? `${filter.loHz}-${filter.hiHz}` : '-'}|${held}`
     }
 
     const loop = (now: number) => {
       if (!running) return
-      // Paused while the cockpit is navigated away (kept mounted but hidden): skip
-      // the spectrum fetch + scroll + overlay entirely so no CPU is spent and the
-      // backing store is left untouched. Keep `last` current and `acc` at 0 so the
-      // scroll resumes cleanly (no time-debt burst) the moment we return, and draw
-      // the picture once then, whatever the canvas kept while it was away.
+      // Stopped while the cockpit is navigated away (kept mounted but hidden): no spectrum
+      // fetch, scroll or overlay, and no next frame asked for — a loop that re-armed itself to
+      // do nothing kept the browser's frame pipeline awake at the display rate, once per mounted
+      // waterfall. `wake` restarts it when `active` flips back, with `last` current and `acc` at
+      // 0 so the scroll resumes cleanly (no time-debt burst), and the picture is drawn once
+      // then, whatever the canvas kept while it was away.
       if (!activeRef.current) {
-        last = now
-        acc = 0
         dirty = true
-        rafRef.current = requestAnimationFrame(loop)
+        rafRef.current = null
         return
       }
       acc += now - last
@@ -1159,17 +1191,25 @@ export function Waterfall({
       // shows moved: clearing and redrawing a full-window overlay 60 times a second was most
       // of the waterfall's cost on a large screen.
       const key = overlayKeyOf()
-      if (key !== overlayKey || pausedRef.current || !inksRef.current) {
+      if (key !== overlayKey || !inksRef.current) {
         overlayKey = key
         drawOverlay()
       }
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
+    wakeRef.current = () => {
+      if (!running || rafRef.current !== null) return
+      last = performance.now()
+      acc = 0
+      rafRef.current = requestAnimationFrame(loop)
+    }
 
     return () => {
       running = false
+      wakeRef.current = null
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
       ro.disconnect()
       rowTimeAtRef.current = null
       release()
@@ -1177,6 +1217,12 @@ export function Waterfall({
     // intentionally run once; live props read via refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Shown again: restart the loop that stopped while hidden (after the canvas effect, so on the
+  // mount it finds the loop already running and does nothing).
+  useEffect(() => {
+    if (active) wakeRef.current?.()
+  }, [active])
 
   // Wide-graph gestures. LEFT = RX (green) is stock WSJT-X and JTDX alike, so it is the one
   // gesture that must never move — an operator's muscle memory for it is universal. On top of
@@ -1222,7 +1268,7 @@ export function Waterfall({
                 onClick={() => {
                   // The same two writes as the select below: the span is state, the window follows.
                   setZoomSpan(c.value)
-                  surfaceSet(ZOOM_KEY, String(c.value))
+                  surfaceSet(zoomKey, String(c.value))
                 }}
               >
                 {c.label}
@@ -1242,7 +1288,7 @@ export function Waterfall({
               // job — this handler deliberately touches neither the view refs nor the canvas.
               const span = Number(e.target.value)
               setZoomSpan(span)
-              surfaceSet(ZOOM_KEY, String(span))
+              surfaceSet(zoomKey, String(span))
             }}
           >
             {WATERFALL_ZOOMS.map((z) => (

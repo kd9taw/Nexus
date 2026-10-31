@@ -202,11 +202,22 @@ describe('mapGeo (D-RAP flare absorption)', () => {
     expect(flareClass(2.3e-6)).toBe('C2.3')
   })
 
-  it('estimates recovery ≈25 min at M1, ≈60 at X1, capped ~120, none below M1', () => {
+  it("estimates recovery ≈25 min at M1, ≈60 at X1, ≈120 at X5, none below M1", () => {
     expect(flareRecoveryMin(1e-5)!).toBeCloseTo(25, 0)
     expect(flareRecoveryMin(1e-4)!).toBeCloseTo(58, 0)
-    expect(flareRecoveryMin(1e-2)!).toBeCloseTo(120, 0) // clamped at the X5 end
+    expect(flareRecoveryMin(5e-4)!).toBeCloseTo(120, 0)
     expect(flareRecoveryMin(5e-6)).toBeNull()
+  })
+
+  // Above X5 NOAA's fit continues as 100·L + 450; it used to be capped at the X5 value, so an
+  // X10 or an X20 read as recovering as soon as an X5.
+  it('continues above X5 with NOAA\'s 100·L + 450, not a cap', () => {
+    expect(flareRecoveryMin(1e-3)!).toBeCloseTo(150, 5) // X10
+    expect(flareRecoveryMin(2e-3)!).toBeCloseTo(100 * Math.log10(2e-3) + 450, 5) // X20 ≈ 180
+    // The two pieces meet at X5 (L −3.3) within a minute: no jump in the countdown.
+    const l = -3.3
+    expect(Math.abs(32.19 * l * l + 323.45 * l + 837.2 - (100 * l + 450))).toBeLessThan(1)
+    expect(flareRecoveryMin(1e-3)!).toBeGreaterThan(flareRecoveryMin(5e-4)!)
   })
 
   it('flareField agrees with flareHafAt (the hoisted math is the same physics)', () => {

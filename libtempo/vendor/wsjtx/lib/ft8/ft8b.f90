@@ -1,7 +1,7 @@
 subroutine ft8b(dd0,newdat,nQSOProgress,nfqso,nftx,ndepth,nzhsym,lapon,     &
      lapcqonly,napwid,lsubtract,nagain,ncontest,iaptype,mycall12,hiscall12, &
      f1,xdt,xbase,apsym,aph10,nharderrors,dmin,nbadcrc,ipass,               &
-     msg37,xsnr,itone)
+     msg37,xsnr,itone,lactivity)
 
   use crc
   use timer_module, only: timer
@@ -35,6 +35,7 @@ subroutine ft8b(dd0,newdat,nQSOProgress,nfqso,nftx,ndepth,nzhsym,lapon,     &
   complex csymb(32)
   complex cs(0:7,NN)
   logical first,newdat,lsubtract,lapon,lapcqonly,nagain,unpk77_success
+  logical lactivity
   data icos7/3,1,4,0,6,5,2/  ! Flipped w.r.t. original FT8 sync array
   data     mcq/0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0/
   data   mcqru/0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,1,1,1,0,0,1,1,0,0/
@@ -439,35 +440,28 @@ subroutine ft8b(dd0,newdat,nQSOProgress,nfqso,nftx,ndepth,nzhsym,lapon,     &
      if(i3.gt.5 .or. (i3.eq.0.and.n3.gt.6)) cycle
      if(i3.eq.0 .and. n3.eq.2) cycle
      call unpack77(c77,1,msg37,unpk77_success)
-     if(.not.unpk77_success) cycle
-! DELIBERATE DIVERGENCE FROM WSJT-X 3.0.2 (KD9TAW, 2026-07-27) — DO NOT "RESTORE"
-! ON A VENDOR REFRESH. Upstream discards any decode whose text contains '/R' (and
-! any 'TU; ' form) for message types 1-3 when ncontest.eq.0:
+! MODIFIED FOR NEXUS. Upstream's rover and 'TU; ' filter, taken with upstream's
+! condition, except that its `ncontest.eq.0` is read from `lactivity` instead:
 !
 !     if(.not.unpk77_success .or. index(msg37,'/R').gt.0 .or.     &
 !          msg37(1:4).eq.'TU; ') then
 !        if(i3.ge.1 .and. i3.le.3 .and. ncontest.eq.0) cycle
 !     endif
+!     if(.not.unpk77_success) cycle
 !
-! '/R' is the ROVER flag: one spare bit per callsign inside the ordinary type-1
-! message (see packjt77.f90:506, `if(i.ge.4 .and. ipa.eq.1 .and. i3.eq.1)`).
-! Upstream's reasoning is that outside a contest a stray '/R' is more likely a
-! decode corrupt in exactly those two bits than a genuine rover.
-!
-! Nexus does not take it. ft8_cabi.f90:437 hard-codes ncontest = 0, so the filter
-! would be permanently armed and would silently discard EVERY rover — after the
-! message had already passed LDPC and CRC-14. Rovers activate rare grids during
-! the ARRL VHF contests on 6 m and 2 m, which is exactly the traffic this station
-! is built to catch. Operator decision, 2026-07-27: "We need to be able to work
-! rovers."
-!
-! The protection forgone is small: CRC-14 already leaves ~1 in 16384, and this
-! would only catch the slice of that landing on a rover bit. The false-alarm
-! gates measure 0/200 (FT8) and 0/300 (FT4) against noise with AP fully armed.
-!
-! If ncontest ever becomes runtime state rather than a constant, revisit: taking
-! upstream's version WITH its ncontest gate would then behave correctly, filtering
-! outside contests and passing rovers during them.
+! ncontest is 0 exactly when the operator has selected no Special Operating
+! Activity (decoder.f90:137 `ncontest=iand(params%nexp_decode,7)`, set from
+! int(m_specOp) at mainwindow.cpp:5492). Nexus keeps ncontest at the constant 0
+! (ft8_cabi.f90 says why: it also selects the AP masks), so the caller says
+! separately whether an activity is on: `lactivity` is .true. in Contest mode or
+! as a Hound. Outside one, a type 1-3 decode carrying the rover flag or the
+! RTTY Roundup 'TU; ' is almost always a corrupt decode that passed the CRC, and
+! upstream drops it before it is subtracted; in one, rovers and 'TU; ' decode.
+     if(.not.unpk77_success .or. index(msg37,'/R').gt.0 .or.     &
+          msg37(1:4).eq.'TU; ') then
+        if(i3.ge.1 .and. i3.le.3 .and. .not.lactivity) cycle
+     endif
+     if(.not.unpk77_success) cycle
      nbadcrc=0  ! If we get this far: valid codeword, valid (i3,n3), nonquirky message.
      call get_ft8_tones_from_77bits(message77,itone)
      if(lsubtract) then

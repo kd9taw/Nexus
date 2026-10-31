@@ -161,6 +161,41 @@ pub struct BandOutlook {
     /// (`mode_now` is a now-scalar exactly like `muf_now`).
     #[serde(skip)]
     pub mode_hourly: Vec<ModeHourly>,
+    /// Per-UTC-hour path detail (24 entries, hour 0..23, `None` for an hour no mode
+    /// carries this band): the layer, hop count and take-off angle of the mode the model
+    /// says carries the signal. Only the P.533 engine fills it (it computes them anyway);
+    /// the heuristic has no ray geometry and leaves it absent, so the key is omitted and
+    /// the existing JSON is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<Vec<Option<PathHour>>>,
+}
+
+/// The ionospheric layer a mode reflects from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PathLayer {
+    E,
+    F2,
+}
+
+/// How one hour's signal travels on a path, per the P.533 model (a monthly median —
+/// the typical day of the month, not a measurement of today).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathHour {
+    /// Layer of the mode that delivers the most power (beyond 7000 km the long model
+    /// assumes F2 hops).
+    pub layer: PathLayer,
+    /// Number of hops.
+    pub hops: u8,
+    /// Take-off (elevation) angle of that mode, degrees.
+    pub takeoff_deg: f32,
+    /// The hour's median signal-to-noise ratio, dB in the model's 1 Hz reference
+    /// bandwidth — only ever shown as a difference between two routes.
+    pub snr_db: f32,
+    /// Beyond 7000 km the hops and take-off angle are the geometry the long model ASSUMES
+    /// from distance alone (F2 hops at a fixed reflection height) — the same in every hour and
+    /// on every band, so an estimate rather than a modelled ray. False for a §6 dominant mode.
+    pub estimated: bool,
 }
 
 /// One mode's "workable right now" entry — see [`BandOutlook::mode_now`].
@@ -330,6 +365,7 @@ impl PathModel {
             reliability,
             mode_now: Vec::new(), // heuristic has no SNR statistics — stays empty
             mode_hourly: Vec::new(),
+            detail: None, // no ray geometry in the heuristic
         }
     }
 

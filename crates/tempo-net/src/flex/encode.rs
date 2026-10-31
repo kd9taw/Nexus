@@ -18,14 +18,19 @@
 //!   and changes what an over carries, so it reaches the wire only through [`render_tx_audio`],
 //!   which takes an [`AdmittedTxAudio`], and only `super::admission::admit_tx_audio` constructs
 //!   one: never while anything is keyed, never beside another program's DAX transmit stream.
+//! - [`TxSlice`]: which slice transmits (`slice set <n> tx=1`). It keys nothing, but it moves
+//!   every later transmission to that slice's frequency and mode, so it reaches the wire only
+//!   through [`render_tx_slice`], which takes an [`AdmittedTxSlice`], and only
+//!   `super::admission::admit_tx_slice` constructs one: never while anything is keyed, and only to
+//!   a slice of ours.
 //!
 //! Each [`Rendered`] command carries its [`Kind`] and the object it is aimed at
 //! ([`Rendered::target`]). The session uses the kind to tell the readback which write was the
 //! key and which the unkey, and the target to refuse a command aimed at an object that is not
 //! ours. Nothing anywhere classifies a command by matching its text.
 //!
-//! Not representable here, so nothing in Nexus can send them: `slice set <n> tx=1` (moving the
-//! transmit slice), every `transmit set` write but RF power and the DAX source, `dax audio set`,
+//! Not representable here, so nothing in Nexus can send them: `slice set <n> tx=0`, every
+//! `transmit set` write but RF power and the DAX source, `dax audio set`,
 //! `cw key`/`cw ptt`, every `cw` and `cwx` setting but the speed (break-in and its delay, QSK,
 //! pitch, CW-L, weight, the paddles: the operator's radio settings, several radio-wide), `dvk`,
 //! slice `play`, amplifier and tuner relays, waveform commands, `interlock` writes, TNF commands,
@@ -54,7 +59,7 @@
 
 use std::fmt;
 
-use super::admission::{Admitted, AdmittedTxAudio};
+use super::admission::{Admitted, AdmittedTxAudio, AdmittedTxSlice};
 use super::handshake::protocol_safe_station;
 
 /// A subscription topic (`sub <topic> all`).
@@ -379,6 +384,15 @@ pub enum TxAudio {
     DaxSource { dax: bool },
 }
 
+/// Which slice the transmitter uses: `slice set <n> tx=1` (FlexRadio's API documentation,
+/// `TCPIP-slice`, the `tx` parameter). Keys nothing, but every later transmission goes out on
+/// that slice's frequency and in its mode. Rendered only through [`render_tx_slice`], from an
+/// admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TxSlice {
+    pub slice: u8,
+}
+
 /// Which start a [`TxStart`] is, without its data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartKind {
@@ -410,6 +424,8 @@ pub enum Kind {
     Stop(TxStop),
     /// It decides where the transmitter's audio comes from.
     TxAudio(TxAudio),
+    /// It decides which slice transmits.
+    TxSlice(TxSlice),
 }
 
 /// The object a command acts on.
@@ -732,6 +748,16 @@ pub fn render_tx_audio(admitted: AdmittedTxAudio) -> Rendered {
         text,
         kind: Kind::TxAudio(audio),
         target: None,
+    }
+}
+
+/// Render an admitted move of the transmit flag. The only way its text comes to exist.
+pub fn render_tx_slice(admitted: AdmittedTxSlice) -> Rendered {
+    let tx = admitted.into_tx_slice();
+    Rendered {
+        text: format!("slice set {} tx=1", tx.slice),
+        kind: Kind::TxSlice(tx),
+        target: Some(Target::Slice(tx.slice)),
     }
 }
 
@@ -1241,6 +1267,21 @@ pub(super) mod tests {
             let r = render(&c).unwrap();
             assert!(!r.text().starts_with("transmit set dax"), "{c:?}");
             assert!(!r.text().starts_with("stream create type=dax_tx"), "{c:?}");
+        }
+    }
+
+    #[test]
+    fn the_transmit_slice_moves_only_from_an_admission() {
+        // The test-only door mints the value; production has one door, `admit_tx_slice`.
+        let tx = TxSlice { slice: 2 };
+        let r = render_tx_slice(AdmittedTxSlice::for_test(tx));
+        assert_eq!(r.text(), "slice set 2 tx=1");
+        assert_eq!(r.kind(), Kind::TxSlice(tx));
+        assert_eq!(r.target(), Some(Target::Slice(2)));
+        // No ordinary command can say it: `render` has no variant for the transmit flag.
+        for c in every_command() {
+            let r = render(&c).unwrap();
+            assert!(!r.text().contains(" tx="), "{c:?}");
         }
     }
 }

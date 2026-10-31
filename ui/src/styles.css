@@ -478,6 +478,39 @@ html {
   color: var(--text-faint);
   pointer-events: none;
 }
+/* A disabled item the keyboard still stops on (Menu's focusableWhenDisabled): a ring, not the
+   accent fill, so it still reads as disabled. */
+.ui-menu-item[data-disabled][data-highlighted] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+/* An item's state line under its label ("Uploaded, 2026-10-28 14:06", or why it cannot be chosen
+   now), a rule between groups, a submenu's arrow, and a destructive item. */
+.ui-menu-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ui-menu-hint {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.ui-menu-item[data-highlighted] .ui-menu-hint {
+  color: inherit;
+}
+.ui-menu-subarrow {
+  margin-left: auto;
+  padding-left: var(--space-2);
+}
+.ui-menu-sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border-soft);
+}
+.ui-menu-item.danger:not([data-highlighted]) {
+  color: var(--state-weak);
+}
 /* A Connect box's ⋯ menu (connect/BoxMenu): a heading line that reads the current value back, and
    the A− / A+ glyphs in a column of their own so the two words line up. */
 .box-menu-label {
@@ -708,7 +741,11 @@ button.nb-chip:hover {
 .status-chip.tier-critical {
   color: var(--alert-critical);
   border-color: var(--alert-critical);
-  animation: status-pulse 1.6s ease-in-out infinite;
+  /* Three pulses to catch the eye, then steady at full strength: the colour, rim and flag carry
+     the alarm from there. An endless pulse repainted the header every frame for as long as the
+     alarm was up — and a missing sound card keeps it up for the whole session. A new alarm is a
+     new chip (StatusLane keys it by its words), so it pulses again. */
+  animation: status-pulse 1.6s ease-in-out 3;
 }
 .status-chip.tier-warning {
   color: var(--alert-warning);
@@ -819,6 +856,10 @@ button.nb-chip:hover {
 .swx-impact {
   font-size: var(--fs-label);
   line-height: var(--lh-tight);
+}
+/* An old or missing reading's number takes the dim ink, as its caption does: never full ink. */
+.swx-v[data-dim] {
+  color: var(--text-dim);
 }
 /* A unit after a gauge's value (the solar wind's km/s): smaller, so the number stays short. */
 .swx-vu {
@@ -2323,16 +2364,22 @@ button.nb-chip:hover {
   display: block;
 }
 
-/* Slot wrapper — reuses the retired .connect-side glass so panes float over the globe. */
+/* Slot wrapper — the retired .connect-side glass, minus the blur. No frame sits over the map any
+   more (Connect's rails and strip have tracks of their own beside it; the cockpits never had a
+   map), so a backdrop blur behind an 82 %-opaque fill blurred only the plain page, and made every
+   pane its own blurred compositing surface, re-blurred on each frame the scope or waterfall drew.
+   The overlays that do sit over the map (.map-layers, .map-insights, .globe3d-*) keep theirs.
+   The blur also made each frame the containing block of its positioned content and a stacking
+   context; position + isolation keep both, so nothing inside a pane moves. */
 .pane-frame {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+  isolation: isolate;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--elev-2);
@@ -3244,8 +3291,272 @@ body.resizing-row {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
+/* The path "why" line: the sentence is the disclosure's summary, the numbers sit behind it. */
+.connect-path .cp-why {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+.connect-path .cp-why > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.connect-path .cp-why > summary::-webkit-details-marker {
+  display: none;
+}
+.connect-path .cp-why-more {
+  font-size: var(--fs-micro);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.connect-path .cp-why-detail {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.2em;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+/* Short path or long path: the polar chip, the heading hint, the long-path label (PathRoute). */
+.connect-path .cp-route {
+  display: block;
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+.route-polar-chip {
+  display: inline-block;
+  margin-right: var(--space-1);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--route-polar);
+  border-radius: var(--space-1);
+  color: var(--route-polar);
+  font-size: var(--fs-micro);
+  white-space: nowrap;
+}
+.route-lp-badge {
+  margin-left: var(--space-1);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  font-style: italic;
+}
 .cp-grayline {
   color: var(--accent);
+}
+/* Path over the day (PathDayStrip): one grid of 25 columns — the label, then 24 UTC hours that
+   shrink with the box (minmax(0, 1fr): nothing in a cell may floor its width). Rows are
+   `display: contents`, so every row's cells share the axis's columns. The box's body scrolls
+   the grid when its slot is shorter than the rows. */
+.path-day {
+  font-size: var(--fs-micro);
+}
+.pd-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-1);
+}
+.pd-summary {
+  flex: 1 1 12em;
+  min-width: 0;
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+.pd-modes {
+  display: inline-flex;
+  gap: 1px;
+}
+.pd-mode {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+.pd-mode.on {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.pd-mode:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.pd-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3.2em) repeat(24, minmax(0, 1fr));
+  gap: 1px;
+  align-items: center;
+}
+/* A region's name and band: as wide as they are, up to two-fifths of the strip (the rest is
+   ellipsised, the whole name is in the hover). */
+.pd-grid.regions {
+  grid-template-columns: fit-content(40%) repeat(24, minmax(0, 1fr));
+}
+.pd-row {
+  display: contents;
+}
+.pd-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pd-region {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.pd-region::before {
+  content: '▸ ';
+  color: var(--text-faint);
+}
+.pd-region[aria-expanded='true']::before {
+  content: '▾ ';
+}
+.pd-band {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.pd-hour {
+  height: 12px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: calc(9px * var(--text-scale));
+  line-height: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.pd-hour.major {
+  color: var(--text-dim);
+}
+.pd-hour:disabled {
+  cursor: default;
+}
+.pd-cell {
+  height: 14px;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 1px;
+  color: #fff;
+  text-shadow: 0 0 2px #000;
+  font-size: calc(8px * var(--text-scale));
+  line-height: 14px;
+  text-align: center;
+  cursor: pointer;
+}
+/* No figure in this mode (the long path where the engine models none): hatched, never black. */
+.pd-cell.none {
+  background: repeating-linear-gradient(45deg, var(--border) 0 2px, transparent 2px 4px);
+}
+.pd-cell.polar {
+  box-shadow: inset 0 -2px 0 var(--route-polar);
+}
+.pd-cell.ceil {
+  box-shadow: inset 0 2px 0 var(--text);
+}
+.pd-cell.ceil.polar {
+  box-shadow:
+    inset 0 2px 0 var(--text),
+    inset 0 -2px 0 var(--route-polar);
+}
+.pd-cell.now,
+.pd-hour.now {
+  outline: 1px solid var(--text);
+  outline-offset: -1px;
+}
+.pd-cell.scrub,
+.pd-hour.scrub,
+.pd-greycell.scrub,
+.pd-kpcell.scrub {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.pd-greycell {
+  height: 10px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent);
+  font-size: calc(8px * var(--text-scale));
+  line-height: 10px;
+  text-align: center;
+}
+/* The Kp ribbon: the Kp outlook box's convention — measured solid, forecast hollow — plus the
+   current value carried forward into hours no outlook sample covers, dashed and faint. */
+.pd-kpcell {
+  height: 6px;
+  min-width: 0;
+  border-radius: 1px;
+}
+.pd-kpcell.good {
+  --kp-tone: var(--state-good);
+}
+.pd-kpcell.warn {
+  --kp-tone: var(--state-warn);
+}
+.pd-kpcell.bad {
+  --kp-tone: var(--state-bad);
+}
+.pd-kpcell.measured {
+  background: var(--kp-tone);
+}
+.pd-kpcell.forecast {
+  border: 1px solid var(--kp-tone);
+}
+.pd-kpcell.current {
+  border: 1px dashed var(--kp-tone);
+  opacity: 0.6;
+}
+/* No space-weather data: an empty dotted slot in the neutral border ink, never a tone. */
+.pd-kpcell.unknown {
+  border: 1px dotted var(--border);
+}
+.pd-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  margin-top: var(--space-1);
+  color: var(--text-faint);
+  font-size: calc(9px * var(--text-scale));
+}
+.pd-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  vertical-align: middle;
+}
+.pd-swatch.polar {
+  background: var(--route-polar);
+}
+.pd-swatch.ceil {
+  background: var(--text);
+}
+.pd-modelled {
+  font-style: italic;
+}
+.pd-map-now {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
 }
 .connect-path-list {
   list-style: none;
@@ -3456,6 +3767,40 @@ body.resizing-row {
 .connect-getout h3 {
   margin: 0 0 var(--space-2);
   font-size: var(--fs-label);
+}
+/* The heading's line also carries one button, Start fresh or Show all: it wraps under the heading in
+   a narrow box rather than taking a line of the body. */
+.getout-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  row-gap: 2px;
+  margin: 0 0 var(--space-2);
+}
+.getout-head h3 {
+  margin: 0;
+  margin-right: auto;
+}
+/* "since HH:MM:SS UTC" at the end of the count's line. */
+.getout-since {
+  margin-left: var(--space-2);
+  font-family: var(--font-mono);
+}
+/* The word in the theme's ink, the accent as its mark (the pill's edge): accent lettering does not read
+   on the light themes' panes. */
+.getout-fresh {
+  font-size: var(--fs-micro);
+  background: none;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--text);
+  padding: 0 var(--space-2);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.getout-fresh:hover {
+  background: var(--border-soft);
 }
 .connect-getout .cp-none {
   margin: 0;
@@ -4271,6 +4616,10 @@ body.resizing-row {
   font-size: calc(10px * var(--text-scale));
   padding: 1px 6px;
 }
+/* The model favours the long path now: the LP button is ringed (advice; it moves nothing). */
+.map-path-toggle button.suggested {
+  box-shadow: inset 0 0 0 2px var(--band-open);
+}
 .map-legend {
   position: absolute;
   left: 50%;
@@ -4517,6 +4866,16 @@ body.resizing-row {
   width: 100%;
   margin-top: var(--space-1);
 }
+/* A layer row's second line — what the layer IS (the aurora oval: a forecast, and for when). A
+   forecast time long gone dims, the way the space-weather gauges dim an old reading. */
+.map-layer-note {
+  display: block;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+.map-layer-note[data-stale] {
+  color: var(--text-faint);
+}
 /* STREET SCALE (MapView, features/streetOverlay.ts): a world-scale field shows no detail at street
    zoom, so its row reads dimmed and its tooltip says why. It stays a working control; only the ink
    changes. */
@@ -4628,6 +4987,8 @@ body.resizing-row {
   --band-open: #69d98d;
   --band-marginal: #f1ca47;
   --band-closed: #747b81;
+  --route-polar: #c77dff; /* the map's aurora violet: a path stretch inside the polar cap */
+  --route-grey: rgba(255, 200, 110, 0.95); /* the terminator's gold: a path stretch on the grey line */
   --alert-critical: #ff6100;
   --alert-warning: #f7c243;
   --alert-info: #79c0f1;
@@ -4745,6 +5106,8 @@ body.resizing-row {
   --band-open: #007f35;
   --band-marginal: #a27000;
   --band-closed: #80878d;
+  --route-polar: #7c44c3;
+  --route-grey: #e08a00;
   --alert-critical: #9c0000;
   --alert-warning: #a76d00;
   --alert-info: #0070a6;
@@ -6900,26 +7263,6 @@ select {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-/* The Logbook's per-row QSL menu. THE SANCTIONED EXCEPTION to the arrow above, and the one
-   place in the sheet where a select draws none: its closed label is the token `QSL▸`, which
-   ends in an arrowhead of its own. The base rule's purpose — a select must not read as a text
-   input — is met by the label itself, and drawing the engine arrow as well printed a second
-   arrowhead ON TOP of the text (the box is 22px tall and was 22px wide; `background-position:
-   center` put the 5px arrow exactly where "QSL▸" already was). That overlap is part of what
-   was reported on 2026-09-16, so the arrow goes and the gutter it needed goes with it.
-
-   ⚠️ AND THE WIDTH IS PINNED, DELIBERATELY. A <select> is as wide as its WIDEST OPTION, not
-   its closed label, and these options are translated prose — "Card NOT received", "Karte
-   NICHT erhalten". Left to size itself the control measures 98px in English and 110px in
-   German (harness, 2026-09-16), so the row's action cluster — and the grid floor that has to
-   hold it — would become a property of the catalog, changing width when an operator changes
-   language. The closed label needs 34px here (harness `qslLabelW`), so 44 carries about 29%
-   for a wider face; the label is an invariant token, so it cannot grow behind this number. */
-select.log-rowbtn {
-  background-image: none !important;
-  padding-right: 0 !important;
-  width: 44px;
-}
 /* Native <select> POPUPS render on the OS's (usually light) background, so the app's dim
    text is nearly unreadable there. Force a dark popup + readable text for EVERY dropdown
    (band pickers on each mode, settings, sorts).
@@ -8296,6 +8639,41 @@ select optgroup {
 .station-heard {
   color: var(--text-faint);
 }
+/* The selected card's path "why" sentence: a full-width row under the card's own row (the card
+   wraps only for it — `flex-basis: 100%`), three lines at most so a narrow rail's card does not
+   grow a column of prose; the whole sentence and its numbers are in the hover. */
+.station-card:has(> .station-why),
+.station-card:has(> .station-route) {
+  flex-wrap: wrap;
+}
+/* The selected card's heading hint: the same full-width row, four lines at most — enough at the
+   narrowest card for the hint and the long-path label; the reasons are in the hover. */
+.station-route {
+  flex: 1 0 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-left: var(--space-5);
+  margin-bottom: 2px;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text);
+}
+.station-why {
+  flex: 1 0 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-left: var(--space-5); /* under the call, roughly past the presence dot and its gap */
+  margin-bottom: 2px;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
 
 .unread-badge {
   background: var(--accent);
@@ -8856,6 +9234,23 @@ select optgroup {
 }
 .park-review:focus {
   outline: none;
+}
+/* The Spot dialog (SpotDialog.tsx): a ui/Dialog whose BOX only centres what it holds, a `.logconfirm`
+   inside its zoomed content, so the card is drawn and sized as it was when it sat in the page —
+   capped to the window and scrolling itself (the `.logconfirm` rule). Centred both ways by the
+   inset + auto margins, which leave the box exactly the card's size. */
+.ui-dialog.spot-dialog {
+  inset: 0;
+  margin: auto;
+  transform: none;
+  width: fit-content;
+  height: fit-content;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
 }
 .park-review-intro,
 .park-review-note {
@@ -18155,8 +18550,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .log-rowactions {
   display: inline-flex;
-  gap: var(--space-1);
+  /* 8px between the row's buttons (6px at the narrow sizes' spacing scale), so a click aimed at
+     one does not land on its neighbour. */
+  gap: var(--space-2);
   justify-content: flex-end;
+  align-items: center;
 }
 .log-rowbtn {
   cursor: pointer;
@@ -18184,12 +18582,27 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   white-space: nowrap;
   line-height: 1;
   font-size: 0.8rem;
-  opacity: 0;
-  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition: color 0.12s ease, border-color 0.12s ease;
 }
-.logbook-row:hover .log-rowbtn,
-.logbook-row:focus-within .log-rowbtn {
-  opacity: 1;
+/* THE LOGBOOK ROW'S BUTTONS ARE MOUSE TARGETS, not glyph-sized marks (operator, 2026-10-30: each
+   entry was "very thin", its buttons "hard to click"). Every one is at least 32×32 px at the default
+   density — above the 24 px minimum target size of WCAG 2.5.8, for a mouse on a shack PC — and the
+   row grows with them (the row's own padding is unchanged). The HEIGHT follows Settings ▸ Density:
+   Comfortable is roomier still, and Compact (`dense`) brings the row back to about the old 43 px (26 px buttons)
+   for an operator who wants more contacts on screen. The width floor does not follow it, so the
+   one-glyph buttons stay wide enough to hit. Scoped to the Logbook's rows: the contact card reuses
+   the class for a small inline remove button beside a field. Measured in real Chrome by
+   `scripts/browser-probe --desktop logbook` (the row sweep).
+   ⛔ AND THEY ARE ALWAYS VISIBLE: two of them, ✎ and ⋯, quiet (dim glyph, soft border, no fill)
+   until pointed at. They were `opacity: 0` until the row was hovered, which hid them from the eye
+   and not from the pointer: a click, or a touchscreen tap where there is no hover, on the blank
+   right end of a row fired the button under it and uploaded the contact. Nothing in a row may be
+   clickable while it cannot be seen (Logbook.rowMenu.test.tsx resolves this cascade for a row the
+   pointer never visited). */
+.logbook-row .log-rowbtn {
+  min-width: 32px;
+  height: calc(32px * var(--density-scale));
+  background: transparent;
 }
 .log-rowbtn:hover {
   color: var(--text);
@@ -18198,6 +18611,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .log-rowbtn.danger:hover {
   color: var(--state-weak);
   border-color: var(--state-weak);
+}
+/* The row's ⋯ menu (Logbook.tsx, ui/Menu): a long satellite list scrolls inside the menu rather than
+   running off the window (Radix gives the room it has below or above the button), and each item is
+   a 32 px target like the row's buttons. */
+.log-rowmenu {
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-y: auto;
+}
+.log-rowmenu .ui-menu-item {
+  min-height: 32px;
 }
 .log-searchbar {
   display: flex;
@@ -18299,11 +18722,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
    counted against them by hand (it was one short from 2026-08-23, and the action cluster wrapped
    under the callsign). A table showing columns beyond the defaults keeps every one at every
    width and scrolls sideways, as "More columns" did. */
-/* keep edit/delete reachable on touch (no hover) */
-[data-viewport='sm'] .logbook-row .log-rowbtn,
-[data-viewport='xs'] .logbook-row .log-rowbtn {
-  opacity: 1;
-}
 /* The wide log: any column beyond the defaults shown (#239's "More columns" was the first).
    `.log-scroll` stays the ONE scroll owner and only gains the horizontal axis in this mode; the
    sticky search + header ride inside it, so header and rows scroll sideways together. The floor is
@@ -18360,6 +18778,33 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 .log-upload.failed {
   color: var(--state-weak);
+}
+/* The contact card's Path section (components/prop/ContactPath.tsx): the answer line, the reasons
+   one click away, the day's strip, and the operator's own antenna path. */
+.contact-card-path-line.modelled > .mono {
+  color: var(--text-faint);
+}
+.contact-card-path-line .route-lp-badge {
+  margin-left: var(--space-2);
+}
+.contact-card-path-why > ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-5);
+}
+/* Beside `.qso-detail-bare`, which zeroes its margins later in the sheet. */
+.contact-card-path > .contact-card-path-day {
+  margin-top: var(--space-2);
+}
+.contact-card-path-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+/* The Path column: a grade the model made afterwards reads dimmer than one stamped when logged. */
+.log-path.modelled {
+  color: var(--text-faint);
 }
 /* The column chooser: portaled (its box measures the real window), long, so it scrolls inside
    the room Radix says it has. */
@@ -22477,6 +22922,51 @@ button.cq-skiptx1.on {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* The search box, between the title and the ✕ (whose own auto margin keeps it at the right edge,
+   so this box carries none). It takes the title row's slack and gives it back:
+   `min-width: 0` lets it shrink to the room a 260px rail leaves beside the title, so it never
+   wraps the row or pushes the ✕ out of the clip. The shape is the Stations search's
+   (.station-search). */
+.od-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 6em;
+  min-width: 0;
+  max-width: 16em;
+}
+.od-search input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.75rem;
+  /* 26px right clears the ✕, as .station-search input does. */
+  padding: 2px 26px 2px var(--space-2);
+  width: 100%;
+  min-width: 0;
+  transition: var(--transition);
+}
+.od-search input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+.od-search input::placeholder {
+  color: var(--text-faint);
+}
+.od-search-clear {
+  position: absolute;
+  right: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.od-search-clear:hover {
+  color: var(--text);
+}
 .od-controls {
   display: flex;
   align-items: center;
@@ -22568,6 +23058,16 @@ button.cq-skiptx1.on {
    of spreading across the row once there is more than one of them. */
 .od-paused {
   margin-right: auto;
+}
+/* The search's "N of M match": the hidden-country chip's colour, since both say this pane is hiding
+   rows, but bare text rather than a bordered chip, so it costs the status row no height. A chip's
+   border and padding made the row 6px taller the moment the box got text, and on a short window
+   the list is already at its one-row floor. */
+.od-search-count {
+  flex: none;
+  color: var(--alert-warning);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* --- Country exclusion: the picker (portaled) + the "N countries hidden" chip ---
@@ -29982,6 +30482,35 @@ button.sat-chip:disabled {
 .sstv-thumb-del:focus-visible {
   opacity: 1;
 }
+/* Clearing out the gallery: the selection toolbar above the grid, and a tick box on each card.
+   The tick box is always shown, unlike ✕ and ✎ — the ticks are what the operator checks before
+   pressing Delete selected — and a ticked card carries an accent outline so it reads at a glance.
+   The toolbar wraps rather than clips in a narrow gallery, and a button wider than the pane wraps
+   its own label (the shared pop-out button style never wraps) instead of running past the edge. */
+.sstv-gallery-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+.sstv-gallery-tools .cockpit-popout {
+  margin-left: 0;
+  max-width: 100%;
+  white-space: normal;
+}
+.sstv-thumb-pick {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+.sstv-thumb.picked .sstv-thumb-img {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .sstv-thumb-caption {
   display: flex;
   flex-direction: column;
@@ -33158,6 +33687,11 @@ tr.sel .aprs-sym {
   text-decoration-thickness: 0.15em;
   text-underline-offset: 0.25em;
 }
+/* An old or missing reading's number takes the dim ink, as its Space Wx gauge's does (`.swx-v[data-dim]`):
+   never full ink. A dimmed index never carries the storm mark (DashboardBar drops it). */
+.dash-index[data-dim] .dash-index-v {
+  color: var(--text-dim);
+}
 /* The provenance chip (cached, partial, no live data): the warning on its EDGE, the word in the
    bar's ink. Not the panes' `.prop-prov`, which letters its warning in the warning colour: that
    measured 4.23:1 on this bar in the light theme, under the 4.5:1 floor. An edge is held to 3:1
@@ -34037,7 +34571,6 @@ td.aw-cc {
   color: var(--text-faint);
   font-size: calc(10px * var(--text-scale));
 }
-.iota-consent,
 .iota-offer,
 .iota-card-held {
   display: flex;
@@ -34046,10 +34579,6 @@ td.aw-cc {
   gap: var(--space-1) var(--space-2);
   font-size: calc(11px * var(--text-scale));
   color: var(--text-dim);
-}
-.iota-consent-line {
-  flex: 1 1 16em;
-  min-width: 0;
 }
 .iota-offer-from {
   color: var(--text-faint);

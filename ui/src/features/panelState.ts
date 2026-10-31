@@ -1062,8 +1062,13 @@ const STATS_PANEL_ID = 'stats'
  * first, each a click into the Logbook's editor. One id across every cockpit with a log entry form,
  * directly under that form INSIDE the log pane (Phone's, CW's and JS8's log pane, RTTY's and PSK's
  * log strip), so it takes only the room the form leaves; the Stats pane stands under the log pane. It
- * is no column member, so no ⊞ Arrange column lists it: it goes where the log pane goes. FT has no log
- * entry form (it logs through its confirm dialog), so it has no entry.
+ * is no column member there, so no ⊞ Arrange column lists it: it goes where the log pane goes.
+ * FT has no log entry form (it logs through its confirm dialog), and its side rail is FT's log column,
+ * so there the pane is a rail member of its own: at the foot of the rail (OPERATE_ARRANGE `log`), under
+ * the card, the Stats pane and the rail's feeds, at its content height. The top of the rail stays about
+ * the station in hand, and Classic's decode columns are not in the rail at all. Ticking it keeps FT's stock
+ * layout (Classic's Rx/Tx column and its divider as they were); while it stands in the stock rail the
+ * rail's feeds keep a floor and the rail scrolls, where without one they gave the pane their height.
  *
  * Every vocabulary ships it hidden (`defaultRemoved`), as the Stats pane does where it is short of
  * room, so nobody's screen changes; one tick in ⊞ Panels shows it. Under THE STOP LINE it is a plain
@@ -1097,6 +1102,8 @@ export const OPERATE_PANEL_IDS = [
   'recall',
   // The Stats pane (STATS_PANEL_ID, above), under the card; shipped hidden here.
   STATS_PANEL_ID,
+  // The Recent contacts pane (RECENT_PANEL_ID, above), at the foot of the side rail; shipped hidden here.
+  RECENT_PANEL_ID,
   // THE BOXES (BOX_IDS, above), shipped hidden like everywhere else.
   ...BOX_IDS,
 ] as const
@@ -1131,13 +1138,13 @@ export type OperateLayout = 'classic' | 'roster'
  */
 export const OPERATE_ARRANGE: Readonly<Record<OperateLayout, ArrangeSpec<OperatePanelId>>> = {
   classic: {
-    columns: { a: ['bandActivity', 'callRoster'], b: ['rxfreq', 'txmsgs'], log: ['recall', STATS_PANEL_ID, 'stations', ...BOX_IDS] },
+    columns: { a: ['bandActivity', 'callRoster'], b: ['rxfreq', 'txmsgs'], log: ['recall', STATS_PANEL_ID, 'stations', RECENT_PANEL_ID, ...BOX_IDS] },
     pinned: [],
     boxes: BOX_IDS,
     extra: ['callRoster'],
   },
   roster: {
-    columns: { a: ['callRoster'], b: [], log: ['recall', STATS_PANEL_ID, 'bandActivity', 'rxfreq', 'txmsgs', 'stations', ...BOX_IDS] },
+    columns: { a: ['callRoster'], b: [], log: ['recall', STATS_PANEL_ID, 'bandActivity', 'rxfreq', 'txmsgs', 'stations', RECENT_PANEL_ID, ...BOX_IDS] },
     pinned: [],
     boxes: BOX_IDS,
     cols: ['a', 'log'],
@@ -1148,7 +1155,7 @@ export const OPERATE_ARRANGE: Readonly<Record<OperateLayout, ArrangeSpec<Operate
 export const OPERATE_PANELS: PanelVocabulary<OperatePanelId> = {
   view: 'operate',
   panelIds: OPERATE_PANEL_IDS,
-  defaultRemoved: ['rfScope', STATS_PANEL_ID, ...BOX_IDS],
+  defaultRemoved: ['rfScope', RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS],
   arrangeBy: OPERATE_ARRANGE,
 }
 

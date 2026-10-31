@@ -82,6 +82,7 @@ fn decode_file(path: &str, kind: ModeKind) -> Result<usize, String> {
             frame_time_ms: (slot as i64) * (PERIOD_S as i64) * 1000,
             ap: true, // stock (FT8/FT4 AP controls; inert for JT65)
             ap_cq_only: false,
+            activity: false,
             partial: false,
         };
         let mut decs = src.decode(&req);

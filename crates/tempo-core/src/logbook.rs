@@ -1207,6 +1207,7 @@ pub mod offer;
 #[cfg(test)]
 mod one_row_tests;
 mod op;
+pub mod path_stamp;
 pub mod query;
 pub mod reader;
 mod records;
@@ -3802,11 +3803,14 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         // Which own-station fields Nexus filled itself is for its own LoTW upload, never a
         // service's business ([`SELF_FILLED_FIELD`]); nor is which fields a callbook filled
         // ([`callbook::CALLBOOK_FILLED_FIELD`], [`callbook::MAP_ONLY_GRID_FIELD`]).
+        // Nor the path Nexus graded for a new contact ([`path_stamp`]): the model's opinion,
+        // not the operator's antenna data, and no service's business.
         if audience == Audience::Outbound
             && (k == SELF_FILLED_FIELD
                 || k == callbook::CALLBOOK_FILLED_FIELD
                 || k == offer::OFFER_HELD_FIELD
-                || k == callbook::MAP_ONLY_GRID_FIELD)
+                || k == callbook::MAP_ONLY_GRID_FIELD
+                || path_stamp::is_path_field(k))
         {
             continue;
         }

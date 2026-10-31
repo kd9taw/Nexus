@@ -428,3 +428,25 @@ fn a_contact_being_released_is_not_released_again_before_it_is_done() {
     assert!(path.exists(), "K1ABC is not done yet");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A contact held during a contest is one made before a first login's answer: when the operator
+/// answers "Only contacts made from now on" for QRZ mid-contest, the contest's held contacts still
+/// go everywhere else when contest mode is turned off, and not to QRZ.
+#[test]
+fn a_held_contact_made_before_a_first_logins_answer_is_not_sent_to_that_service() {
+    let mut e = contest_on();
+    e.log_form_qso(cw("W1AW"), StateSource::Operator, Vec::new());
+    assert!(e.take_pending_uploads().is_empty(), "premise: held");
+    // 2027-01-15, after the contact's 2026-10-17.
+    e.drop_waiting_before(upload_legs::QRZ, 1_800_000_000);
+    contest_off(&mut e);
+    let sent: Vec<(String, u8)> = e
+        .take_pending_uploads()
+        .into_iter()
+        .map(|p| (p.rec.call, p.legs))
+        .collect();
+    assert_eq!(
+        sent,
+        [("W1AW".to_string(), upload_legs::ALL & !upload_legs::QRZ)]
+    );
+}

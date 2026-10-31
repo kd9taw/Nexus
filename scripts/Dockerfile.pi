@@ -94,6 +94,15 @@ COPY . .
 # the mount hands it to this RUN alone, never to a layer or the image's history. A build without
 # the secret (ci.yml's, or yours) skips the mount and makes a package with no key, like any
 # source build.
+#
+# The release link profile, as cargo's environment overrides of src-tauri's [profile.release]. The
+# defaults ARE that profile (fat LTO, one codegen unit), so a build that passes neither arg (the
+# release's, or yours) links exactly as the shipped package does. ci.yml's land/* and topic runs
+# pass cargo's ordinary release linking instead, to build in minutes rather than most of an hour;
+# its runs on main, a release/* branch or a tag pass these values. scripts/release-secrets.test.mjs
+# holds the defaults to the profile.
+ARG CARGO_PROFILE_RELEASE_LTO=true
+ARG CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
 RUN --mount=type=secret,id=clublog_api_key,env=CLUBLOG_API_KEY \
     sed -i 's/--bundles deb,appimage/--bundles deb/' scripts/build-linux.sh \
     && sed -i 's/"createUpdaterArtifacts": true/"createUpdaterArtifacts": false/' src-tauri/tauri.conf.json \

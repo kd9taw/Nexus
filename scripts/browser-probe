@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|logwaiting|topbar|header|rttyfit|firstrun|clublog|aprsmap|logbook
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|logwaiting|topbar|header|rttyfit|firstrun|journeys|clublog|aprsmap|logbook
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -168,6 +168,14 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         walk on screen, and Settings folded for a new operator with Show all
                         opening it, with a planted overflow in an answer and in the walk that
                         must be caught (ui/probe/firstrun-probe.mjs)
+  --desktop journeys    the first-run journeys in the real app, at 1024×768 and 1920×1080 in the
+                        dark and light themes: About you with both questions, "Two or more"
+                        opening the radio setup once the second radio is saved, "Experienced"
+                        showing where contacts go with QRZ's Test and the import preview with
+                        nothing imported before Import, Settings ▸ Confirmations after Finish,
+                        and no call that uploads or stores a login; with a planted overflow in
+                        the services and in the preview that must be caught
+                        (ui/probe/journeys-probe.mjs)
   --desktop clublog     the club log on a joined laptop (five positions with long names, the
                         newest 100 of 4,321 contacts) on the Contest screen and in the club
                         board pop-out at 1024×768 and 1920×1080, asserting it is under the club
@@ -184,8 +192,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         panel, nothing scrolls sideways at the page, the default table fits,
                         every column scrolls sideways inside the table with its header, and a
                         real drag of a header moves the column without sorting while a click
-                        still sorts, with the old centred measure as a control that must be
-                        caught (ui/probe/logbook-probe.mjs; it builds nothing)
+                        still sorts; then each row's ✎ and ⋯ buttons, call/date/time whole from
+                        1024 px up, nothing invisible clickable, and the ⋯ menu inside the window,
+                        from 1024 to 2560 at 100% and 150% in both themes (LOGBOOK_PROBE_SHOTS=<dir>
+                        saves screenshots); the old centred measure, 22 px buttons and a hidden
+                        row button are controls that must be caught (ui/probe/logbook-probe.mjs;
+                        it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -202,7 +214,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|logwaiting|topbar|header|rttyfit|firstrun|clublog|aprsmap|logbook) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, radiosetup, logwaiting, topbar, header, rttyfit, firstrun, clublog, aprsmap or logbook" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|logwaiting|topbar|header|rttyfit|firstrun|journeys|clublog|aprsmap|logbook) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, radiosetup, logwaiting, topbar, header, rttyfit, firstrun, journeys, clublog, aprsmap or logbook" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -233,6 +245,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = radioswitch ] && exec node "$ROOT/ui/probe/radioswitch-probe.mjs"
   [ "$DESKTOP" = radiosetup ] && exec node "$ROOT/ui/probe/radiosetup-probe.mjs"
   [ "$DESKTOP" = firstrun ] && exec node "$ROOT/ui/probe/firstrun-probe.mjs"
+  [ "$DESKTOP" = journeys ] && exec node "$ROOT/ui/probe/journeys-probe.mjs"
   [ "$DESKTOP" = topbar ] && exec node "$ROOT/ui/probe/topbar-probe.mjs"
   [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
@@ -254,6 +267,11 @@ if [ "$BUILD" = 1 ]; then
 fi
 
 LOG="$(mktemp -t browser-probe.XXXXXX.log)"
+# A red probe keeps its log and names it (below); a probe stopped by Ctrl-C, `timeout` or a closed
+# terminal removes it, as a green one does.
+trap 'rm -f "$LOG"; exit 130' INT
+trap 'rm -f "$LOG"; exit 143' TERM
+trap 'rm -f "$LOG"; exit 129' HUP
 if [ -n "$SHARD" ]; then
   echo "browser-probe: running CI SHARD $SHARD of 2 entire against $(google-chrome --version 2>/dev/null || echo Chrome)"
 else

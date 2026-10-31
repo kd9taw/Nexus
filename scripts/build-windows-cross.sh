@@ -243,6 +243,19 @@ if [ "$GUI" = 1 ]; then
     fi
   done
   ok "DeepCW engine staged (weights + metadata)"
+  # The IOTA island-group list ships in the installer by IOTA Ltd's permission but is never
+  # committed (src-tauri/resources/iota/README.md), so a checkout has none. Fetch it when it is
+  # not already staged (release.yml stages its own). Best-effort, unlike DeepCW: a build without
+  # it still works, checking island references by shape until the app's first monthly download.
+  if [ ! -s "$REPO/src-tauri/resources/iota/iota_groups.json" ]; then
+    if node "$REPO/scripts/gen-iota-groups.mjs" --download "$REPO/src-tauri/resources/iota"; then
+      ok "IOTA island list staged"
+    else
+      warn "IOTA island list NOT staged — this installer ships without it"
+    fi
+  else
+    ok "IOTA island list already staged"
+  fi
   # cargo tauri build enables asset embedding (custom-protocol — the fix for the
   # blank "page cannot be displayed" screen) and bundles the offline installer.
   # With no updater key in the environment it builds with --no-sign, because Tauri treats

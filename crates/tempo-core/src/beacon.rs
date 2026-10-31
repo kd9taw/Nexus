@@ -21,7 +21,7 @@
 ///
 /// Re-exported from the `wspr` crate so callers reach one definition: WSPR and
 /// FST4W carry the SAME payload shape, differing only in the code that carries it.
-pub use wspr::message;
+pub use wspr::{beacon_message, message};
 
 use crate::message::is_valid_grid;
 use modes::ModeKind;
