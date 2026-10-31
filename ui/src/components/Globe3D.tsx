@@ -946,19 +946,29 @@ function Globe3DView({
   // the 900 ms pass fly-to, and OrbitControls' damping after a release. `frame` draws ONE frame for
   // a change that is complete once written — above all the 1 s breath of an open band, which would
   // otherwise re-wake the loop every second and render continuously by another name.
+  //
+  // UNSEEN, NOTHING IS DRAWN: the window hidden (minimised, another tab) or the globe out of view. A
+  // hidden window keeps its timers on every engine, so the birds still asked for a frame each second,
+  // and WebKitGTK keeps animating a hidden window, so a spinning globe drew at full rate; on a software
+  // renderer each of those frames is a large share of a core. Unseen, `kick` and `frame` only note that
+  // the picture is `behind`, and an awake loop stops. Back in view, a picture that fell behind is drawn
+  // (with the settle, for a tween that was under way), and spin turns again.
   useEffect(() => {
     const g = globeRef.current
     if (!g || !ready) return
     const controls = g.controls() as unknown as THREE.EventDispatcher<Record<string, object>>
     let timer: number | undefined
     let interacting = false
+    let outOfView = false
+    let behind = false
+    const unseen = () => document.hidden || outOfView
     // WAKE ONCE. globe.gl's resumeAnimation() draws its first frame at once — controls.update(), then
     // the render — and records the loop as running only after it. When that update moves the camera
     // (spin just switched on, or the view jumped while asleep), OrbitControls fires 'change', which is
     // `kick`, which resumed again into a loop that still read as stopped; and OrbitControls records the
     // pose it compared against only after 'change' returns, so every nested update fired again, until
     // "Maximum call stack size exceeded". So the loop counts as awake from the moment it is woken.
-    // While the globe is up nothing else pauses it (useGlobeWebgl does only as the globe goes).
+    // While the globe is up and seen nothing else pauses it (useGlobeWebgl does only as the globe goes).
     let awake = false
     const wake = () => {
       if (awake) return
@@ -973,6 +983,10 @@ function Globe3DView({
       }
     }
     const kick = () => {
+      if (unseen()) {
+        behind = true
+        return
+      }
       wake()
       if (timer !== undefined) window.clearTimeout(timer)
       timer = window.setTimeout(sleep, IDLE_RENDER_MS)
@@ -989,12 +1003,40 @@ function Globe3DView({
     // globe.gl's resume draws a frame synchronously; pausing straight after cancels the next one —
     // unless that frame moved the camera, and `kick` now holds the loop awake.
     const frame = () => {
+      if (unseen()) {
+        behind = true
+        return
+      }
       if (timer !== undefined || interacting || spinRef.current) return
       wake()
       if (timer !== undefined) return
       awake = false
       g.pauseAnimation()
     }
+    const onSeenChange = () => {
+      if (unseen()) {
+        if (timer !== undefined) window.clearTimeout(timer)
+        timer = undefined
+        if (awake) {
+          awake = false
+          behind = true
+          g.pauseAnimation()
+        }
+      } else if (behind || spinRef.current) {
+        behind = false
+        kick()
+      }
+    }
+    // Without IntersectionObserver (an older webview) the window's visibility alone decides.
+    const view =
+      typeof IntersectionObserver === 'undefined'
+        ? null
+        : new IntersectionObserver((entries) => {
+            outOfView = !entries[entries.length - 1].isIntersecting
+            onSeenChange()
+          })
+    if (view && wrapRef.current) view.observe(wrapRef.current)
+    document.addEventListener('visibilitychange', onSeenChange)
     controls.addEventListener('start', onStart)
     controls.addEventListener('change', kick)
     controls.addEventListener('end', onEnd)
@@ -1002,6 +1044,8 @@ function Globe3DView({
     frameRef.current = frame
     kick()
     return () => {
+      view?.disconnect()
+      document.removeEventListener('visibilitychange', onSeenChange)
       controls.removeEventListener('start', onStart)
       controls.removeEventListener('change', kick)
       controls.removeEventListener('end', onEnd)
