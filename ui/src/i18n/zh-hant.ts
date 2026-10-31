@@ -1,16 +1,11 @@
-// CHINESE (TRADITIONAL, Taiwan wording) — GENERATED. Do not hand-edit; edit the translation CSV
-// and re-run the converter.
+// CHINESE (TRADITIONAL, Taiwan wording) — GENERATED. Do not hand-edit; edit the CSV and
+// re-run the converter.
 //
 //     python3 translations/zh/csv-to-catalog.py \
 //         translations/zh-hant/nexus-zh-hant-translation.csv -o ui/src/i18n/zh-hant.ts --variant hant
 //
-// Registered as `zh-hant`, and the id stays lower-case: the guards that read the shipped locale
-// list out of `main.tsx` match `[a-z-]+`, so `zh-Hant` would drop this catalog out of them
-// silently. `initLocale()` prefers it for a Traditional-script or Taiwan/Hong Kong/Macao system
-// and falls back to `zh` for everything else.
-//
-// PARTIAL BY DESIGN AT RUNTIME, like `zh.ts`: an absent key renders the English source string.
-// One string per plural key — `Intl.PluralRules('zh-hant')` selects `other` for every count.
+// Registered as `zh-hant`, lower-case for the same reason as `zh`. `initLocale()` prefers it
+// for a Traditional-script or TW/HK/MO system; fallback and plural rule are as in `zh.ts`.
 
 import type { PartialCatalog } from './index'
 

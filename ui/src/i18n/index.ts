@@ -151,8 +151,8 @@ export function setLocale(locale: string): void {
  * Called once before first paint. The OS default is deliberate — an operator running a German
  * Windows gets a German Nexus without being asked, which is the "works without being configured"
  * premise — and it is matched by LANGUAGE ONLY (`de-AT` → `de`): a region-specific catalog we do
- * not ship must not silently fall back to English when the language one exists. The one
- * exception is a language we ship in two scripts, where the language alone cannot pick one.
+ * not ship must not silently fall back to English when the language one exists. Exception: a language we
+ * ship in two scripts.
  */
 export function initLocale(): void {
   let stored: string | null = null
@@ -173,8 +173,7 @@ export function initLocale(): void {
   }
   const lang = os.split('-')[0]
   if (!lang) return
-  // ONE LANGUAGE, TWO SCRIPTS, and the script decides: a Traditional system reports zh-TW, and
-  // the language alone would hand it the Simplified catalog. Same rule as the splash page.
+  // A Traditional system reports zh-TW; the language alone would pick the Simplified catalog.
   if (catalogs.has(lang + '-hant') && (/hant/i.test(os) || /^zh-(tw|hk|mo)$/i.test(os))) {
     active = lang + '-hant'
     return

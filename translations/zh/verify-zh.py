@@ -31,14 +31,12 @@ COLUMNS = ['priority', 'key', 'english', 'chinese', 'do_not_translate', 'notes']
 
 # ── Terms the Russian kit keeps in Latin script, which Chinese says in Chinese ──────────────
 #
-# `do_not_translate` was curated by the Russian translator, and Russian keeps TX, RX, SWR and
-# the rest as Latin abbreviations on the air. Chinese does not: the operator reads 发射, 接收,
-# 驻波比 on the button, so a hint that still said "TX" would name a control the screen does
-# not show. These are the terms this kit translates deliberately — the check below stops
-# demanding them and starts demanding every other term on the list.
+# `do_not_translate` was curated for Russian, which keeps TX, RX, SWR as Latin text on the air.
+# Chinese does not: the operator reads 发射, 接收, 驻波比 on the button, so a hint still saying
+# "TX" would name a control the screen does not show. These terms are translated deliberately,
+# and the check below demands Chinese for them instead of the Latin form.
 #
-# 'DX' prefixes stay Latin inside the Chinese phrase (DX 远征), so 'DXped'/'DXpedition' are
-# here: the row reads 「DX 远征」, which is what the navigation item says.
+# 'DX' stays Latin inside the phrase (「DX 远征」), hence 'DXped'/'DXpedition' here.
 TRANSLATED = frozenset({
     '6m', 'AF', 'ATU', 'AUTO', 'AUTOREPLY', 'Baudot', 'DX', 'DXped', 'DXpedition',
     'DXpeditions', 'Digital', 'Field Day', 'Hound', 'Lock', 'Maidenhead', 'Nexus', 'PA',

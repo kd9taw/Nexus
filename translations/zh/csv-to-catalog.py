@@ -44,65 +44,41 @@ SPLASH_PREFIX = 'splashscreen.'
 PLURAL_FORMS = ('zero', 'one', 'two', 'few', 'many', 'other')
 
 HEADER = '''\
-// CHINESE (SIMPLIFIED) — GENERATED. Do not hand-edit; edit the translation CSV and re-run the
-// converter.
+// CHINESE (SIMPLIFIED) — GENERATED. Do not hand-edit; edit the CSV and re-run the converter.
 //
 //     python3 translations/zh/csv-to-catalog.py nexus-zh-translation.csv -o ui/src/i18n/zh.ts
 //
-// Registered as `zh`. The two guards that keep a shipped catalog honest read the locale list
-// straight out of `main.tsx` with `/installCatalog\\(\\s*'([a-z-]+)'/g` (`placeholders.test.ts`,
-// `locale-switch.test.ts`), and `initLocale()` matches OS language then region, so a `zh`
-// catalog serves a Simplified Chinese install (`zh-CN`, `zh-Hans`, `zh-SG`) alike. The id is
-// `zh`, not `zh-CN`: the guards' pattern only matches `[a-z-]+`, and an upper-case `C` would
-// drop this catalog out of both of them silently.
+// Registered as `zh`, lower-case: the guards read the locale list out of `main.tsx` with
+// `/installCatalog\\(\\s*'([a-z-]+)'/g`, so `zh-CN` would be skipped without a word.
 //
-// PARTIAL BY DESIGN AT RUNTIME. Every key absent here resolves to the English source string
-// (`rawMessage` falls through), so a missing translation is a Chinese screen with an English
-// sentence on it — never a blank and never a key.
+// An absent key renders the English source string, never a blank. An empty CSV cell is an
+// absent key, since `""` passes the completeness guard and still renders English.
 //
-// ⚠️ AN EMPTY CSV CELL BECOMES AN ABSENT KEY, NEVER AN EMPTY STRING. `""` would satisfy the
-// completeness guard (`placeholders.test.ts` tests key PRESENCE) and then render as English at
-// runtime anyway (`index.ts` treats a blank as missing).
+// Plurals are one string: `Intl.PluralRules('zh')` selects `other` for every count, so the
+// converter takes the `other` row and drops the other three.
 //
-// ⚠️ NO PLURAL OBJECTS, AND THAT IS NOT AN OMISSION. `Intl.PluralRules('zh')` selects `other`
-// for every count — Chinese does not inflect for number — so each plural key here is ONE string
-// that already reads correctly with any count ("{{count}} 条通联"). The CSV carries the usual
-// `::one/::few/::many/::other` rows because it is generated from the English kit; the converter
-// collapses them, taking `other`. The same shape ships in `ja.ts`.
+// Untranslated on purpose: frequencies and any number that is one, signal reports, callsigns,
+// grid squares, bands, modes, Q-codes, RST, POTA/SOTA refs, ADIF fields, CW macros, award and
+// product names. `placeholders.test.ts` fails a digit-comma-digit sequence.
 //
-// ⚠️ WHAT IS NOT TRANSLATED HERE, AND WHY IT MUST STAY THAT WAY: frequencies and every number
-// that is one, signal reports, callsigns, grid squares, band and mode names, Q-codes, RST,
-// POTA/SOTA references, ADIF field names, CW macro tokens, award names and product names. A
-// decimal comma reaching a dial, a log or a CAT command is an operating fault, not a matter of
-// taste — `placeholders.test.ts` fails this file if a digit-comma-digit sequence ever appears in
-// it, alongside the checks that every {{placeholder}} and <marker> matches English.
-//
-// Placeholders may MOVE (Chinese word order differs — that is why they exist); they may never be
-// renamed, dropped or added. Markers are names, never HTML: only a marker the call site passed
-// in `tags` becomes an element, so nothing here can introduce one.
+// Placeholders may move, never be renamed, dropped or added. Markers are names, not HTML.
 
 import type { PartialCatalog } from './index'
 
 export const ZH: PartialCatalog = {
 '''
 
-# The Traditional variant of the same kit. Same contract as `ZH` — one string per plural, no
-# plural object, absent key falls back to English — and the id is lower-case for the same reason
-# `zh` is: the guards' `/installCatalog\(\s*'([a-z-]+)'/` would miss `zh-Hant` entirely.
+# The Traditional variant of the same kit: one string per plural, absent key falls back to
+# English, and the id is lower-case for the same reason `zh` is.
 HEADER_HANT = '''\
-// CHINESE (TRADITIONAL, Taiwan wording) — GENERATED. Do not hand-edit; edit the translation CSV
-// and re-run the converter.
+// CHINESE (TRADITIONAL, Taiwan wording) — GENERATED. Do not hand-edit; edit the CSV and
+// re-run the converter.
 //
 //     python3 translations/zh/csv-to-catalog.py \\
 //         translations/zh-hant/nexus-zh-hant-translation.csv -o ui/src/i18n/zh-hant.ts --variant hant
 //
-// Registered as `zh-hant`, and the id stays lower-case: the guards that read the shipped locale
-// list out of `main.tsx` match `[a-z-]+`, so `zh-Hant` would drop this catalog out of them
-// silently. `initLocale()` prefers it for a Traditional-script or Taiwan/Hong Kong/Macao system
-// and falls back to `zh` for everything else.
-//
-// PARTIAL BY DESIGN AT RUNTIME, like `zh.ts`: an absent key renders the English source string.
-// One string per plural key — `Intl.PluralRules('zh-hant')` selects `other` for every count.
+// Registered as `zh-hant`, lower-case for the same reason as `zh`. `initLocale()` prefers it
+// for a Traditional-script or TW/HK/MO system; fallback and plural rule are as in `zh.ts`.
 
 import type { PartialCatalog } from './index'
 

@@ -195,8 +195,7 @@
           const os = navigator.language || ''
           if (STRINGS[os]) return os
           const lang = os.split('-')[0]
-          // Two Chinese catalogs cannot be told apart by the language alone: a Traditional
-          // system reports zh-TW, which would land on the Simplified catalog.
+          // zh-TW would land on the Simplified catalog; the script decides.
           if (STRINGS[lang + '-hant'] && (/hant/i.test(os) || /^zh-(tw|hk|mo)$/i.test(os))) {
             return lang + '-hant'
           }
