@@ -61,7 +61,7 @@ fn qrz_stamp(id: RecordId, when_unix: i64) -> LogOp {
 
 /// The paper card, as the operator marks it — the change the tests plan.
 fn card(id: RecordId) -> LogOp {
-    LogOp::MarkQslCard { id, received: true }
+    qsl_card(id, true)
 }
 
 /// The row `id` as the store holds it.

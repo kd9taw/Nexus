@@ -234,9 +234,8 @@ pub(crate) async fn qsl_card(
     target: RowRef,
     received: bool,
 ) -> Result<RowAnswer, String> {
-    change_row(engine, target, move |id| LogOp::MarkQslCard {
-        id,
-        received,
+    change_row(engine, target, move |id| {
+        tempo_app::logwrite::qsl_card(id, received)
     })
     .await
 }

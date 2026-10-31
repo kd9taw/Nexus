@@ -638,7 +638,15 @@ fn a_page_hands_out_the_edit_key_a_change_by_id_accepts() {
         let id: RecordId = keys[2].as_str().unwrap().parse().unwrap();
         let before = edit_keys[2].as_str().unwrap().to_string();
         assert!(
-            change(&engine, id, &[LogOp::MarkQslCard { id, received: true }]),
+            change(
+                &engine,
+                id,
+                &[LogOp::MarkQslCard {
+                    id,
+                    received: true,
+                    date_unix: 1_700_000_000,
+                }]
+            ),
             "premise: marked"
         );
         // Asked once the store holds the mark: straight after it, a question on a slow disk waits
@@ -2189,7 +2197,15 @@ fn every_answer_is_the_references_after_every_kind_of_change() {
                         }
                         4 if !held.is_empty() => {
                             let id = pick(&mut g);
-                            change(&engine, id, &[LogOp::MarkQslCard { id, received: true }]);
+                            change(
+                                &engine,
+                                id,
+                                &[LogOp::MarkQslCard {
+                                    id,
+                                    received: true,
+                                    date_unix: 1_700_000_000,
+                                }],
+                            );
                             "a paper card"
                         }
                         5 if !held.is_empty() => {

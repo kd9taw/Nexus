@@ -165,7 +165,11 @@ fn same_contact(a: &QsoRecord, b: &QsoRecord) -> bool {
         r.country = None;
         r.dxcc = None;
         r.extra.retain(|(k, _)| {
-            k != "CQZ" && k != crate::logbook::LOTW_DXCC_FIELD && k != crate::logbook::EQSL_AG_FIELD
+            k != "CQZ"
+                && k != crate::logbook::LOTW_DXCC_FIELD
+                && k != crate::logbook::EQSL_AG_FIELD
+                && k != "LOTW_QSLRDATE"
+                && k != "EQSL_QSLRDATE"
         });
         // ...plus the two that do not survive our own round-trip intact.
         r.mode.clear();
@@ -482,6 +486,22 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
         && !crate::logbook::record_eqsl_ag(rec)
     {
         crate::logbook::set_extra(rec, crate::logbook::EQSL_AG_FIELD, Some("Y".into()));
+    }
+    // And the day each service confirmed it, with its confirmation: LoTW's and eQSL's received
+    // dates, the Logbook's "LoTW received" and "eQSL received" columns. Monotonic too — a date the
+    // log holds is never replaced here. A paper card's (`QSLRDATE`) is the operator's
+    // (`qsl_card_marked`), never a report's.
+    for (confirms, tag) in [
+        (inc.qsl_rcvd.lotw, "LOTW_QSLRDATE"),
+        (inc.qsl_rcvd.eqsl, "EQSL_QSLRDATE"),
+    ] {
+        if let Some(date) =
+            crate::logbook::extra_field(inc, tag).filter(|d| confirms && !d.is_empty())
+        {
+            if crate::logbook::extra_field(rec, tag).is_none_or(str::is_empty) {
+                crate::logbook::set_extra(rec, tag, Some(date.to_string()));
+            }
+        }
     }
     // Outbound state — merged so a two-instance shared log doesn't lose an upload stamp or a
     // QSL-sent mark one instance wrote when the other rewrites the whole file. (A LoTW report

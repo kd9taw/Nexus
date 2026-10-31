@@ -452,6 +452,7 @@ fn bench(n: usize) -> Vec<String> {
             &[LogOp::MarkQslCard {
                 id: id(i),
                 received: true,
+                date_unix: 1_700_000_000,
             }],
             "card",
         );

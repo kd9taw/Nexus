@@ -17,6 +17,8 @@ import * as api from '../api'
 import { announce } from '../announce'
 import type { LogQuestion } from '../features/logAnswers'
 import type { LogColumnsSaved } from '../features/logColumns'
+import { chooseRowAction } from './Logbook.rowMenu.testkit'
+import { t } from '../i18n'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -417,5 +419,41 @@ describe('the editor shows the added fields and edits IOTA', () => {
     ]))
     // The two the form edits are boxes, not this line.
     expect(pairs.some((p) => p.startsWith('IOTA=') || p.startsWith('Their grid='))).toBe(false)
+  })
+})
+
+// The operator's report: cards marked received showed in the QSL column, and the Card received
+// column beside it stayed empty — the mark wrote no date. The engine now dates the card it marks
+// (ADIF `QSLRDATE`); the row the Logbook reloads after the mark shows that date.
+describe('a card marked received shows its date', () => {
+  it('in the Card received column, from the row the engine answers after the mark', async () => {
+    const unmarked = {
+      ...CONTACT,
+      qslRcvd: { card: false, lotw: false, eqsl: false, qrz: false },
+      confirmed: false, awardConfirmed: false,
+      extra: CONTACT.extra.filter(([k]) => !k.endsWith('QSLRDATE')),
+    }
+    const marked = {
+      ...unmarked,
+      qslRcvd: { ...unmarked.qslRcvd, card: true },
+      confirmed: true, awardConfirmed: true,
+      extra: [...unmarked.extra, ['QSLRDATE', '20261031']],
+    }
+    engineLog.mockResolvedValue([unmarked])
+    vi.mocked(api.markQslCardById).mockImplementationOnce(async () => {
+      engineLog.mockResolvedValue([marked])
+      return { kind: 'applied' } as Awaited<ReturnType<typeof api.markQslCardById>>
+    })
+    const columns: LogColumnsSaved = { shown: ['qslRcvdDate'], hidden: [], widths: {} }
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" columns={columns} />,
+    )
+    await waitFor(() => expect(row(container)).not.toBeNull())
+    const cell = () => [...row(container).querySelectorAll(':scope > .log-cell')][headers().indexOf('Card received')]
+    expect(cell().textContent).toBe('—')
+
+    await chooseRowAction('DL1ABC', 'QSL', t('logbook.row.qslRcvd.card'))
+    await waitFor(() => expect(api.markQslCardById).toHaveBeenCalledWith(expect.objectContaining({ id: 'id-DL1ABC' }), true))
+    await waitFor(() => expect(cell().textContent).toBe('2026-10-31'))
   })
 })

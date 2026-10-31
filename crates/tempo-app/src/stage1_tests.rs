@@ -198,7 +198,11 @@ impl Stage1 {
                 .apply(LogOp::MarkQslSent { id, via, date_unix });
         }
         if let Some(received) = card {
-            self.logbook.apply(LogOp::MarkQslCard { id, received });
+            self.logbook.apply(LogOp::MarkQslCard {
+                id,
+                received,
+                date_unix: crate::engine::now_unix_secs(),
+            });
         }
         Ok(Ok(()))
     }
@@ -213,9 +217,14 @@ impl Stage1 {
         self.change_row(LogOp::MarkQslSent { id, via, date_unix })
     }
 
-    /// `StationCore::mark_qsl_card`.
+    /// `StationCore::mark_qsl_card`, dated now as the station dates it: the card's received date
+    /// is a UTC day, which two clock reads a moment apart share.
     pub(crate) fn mark_qsl_card(&mut self, id: RecordId, received: bool) -> bool {
-        self.change_row(LogOp::MarkQslCard { id, received })
+        self.change_row(LogOp::MarkQslCard {
+            id,
+            received,
+            date_unix: crate::engine::now_unix_secs(),
+        })
     }
 
     /// `StationCore::set_sat_tag`.

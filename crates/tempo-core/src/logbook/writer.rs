@@ -2915,7 +2915,7 @@ mod tests {
                     }
                     7 if n > 0 => {
                         let on = g.below(2) == 0;
-                        log.mark_qsl_card(g.below(n), on);
+                        log.mark_qsl_card(g.below(n), on, 1_700_000_000);
                         "qsl card"
                     }
                     8 if n > 0 => {
@@ -2998,7 +2998,7 @@ mod tests {
             log.add((*rec("W1AW", n)).clone());
         }
         let before = log.records().to_vec();
-        log.mark_qsl_card(2, true);
+        log.mark_qsl_card(2, true, 1_700_000_000);
         let c = Change::between(&before, &log, |_| (None, None));
         assert_eq!(c.upsert.len(), 1, "the one changed row");
         assert_eq!(c.upsert[0].rec.id, log.records()[2].id);
