@@ -12,6 +12,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { createElement } from 'react'
 import {
   __resetConnectFeedsForTests,
+  PATH_OUTLOOK,
   peekFeed,
   refreshFeed,
   useFeed,
@@ -243,7 +244,7 @@ describe('a watcher that fails is its own problem', () => {
   })
 })
 
-describe('a keyed feed (the path outlook for a selection) is asked once per key, never polled', () => {
+describe('a keyed feed (the path outlook for a selection) is asked once per key, polled only at its own interval', () => {
   it('two consumers of one key share one fetch; another key has its own', async () => {
     const load = vi.fn(async (key: string) => ({ key }))
     const kf: KeyedFeed<{ key: string }> = { name: 'path', load }
@@ -267,6 +268,29 @@ describe('a keyed feed (the path outlook for a selection) is asked once per key,
     expect(load).toHaveBeenCalledTimes(2)
     expect(load).toHaveBeenLastCalledWith('JN58')
     expect(view.getAllByTestId('r').map((e) => e.textContent)).toEqual(['JN58', 'EN52'])
+  })
+
+  it('a keyed feed given an interval polls each shown key at it — the path outlook every minute', async () => {
+    expect(PATH_OUTLOOK.everyMs).toBe(60_000)
+    const load = vi.fn(async (key: string) => ({ key }))
+    const kf: KeyedFeed<{ key: string }> = { name: 'pathPolled', load, everyMs: 60_000 }
+    function Reader({ k }: { k: string }) {
+      useKeyedFeed(kf, k)
+      return null
+    }
+    const view = render(createElement(Reader, { k: 'QF56' }))
+    await settle()
+    expect(load).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(load).toHaveBeenLastCalledWith('QF56')
+    view.unmount()
+    await act(async () => {
+      vi.advanceTimersByTime(5 * 60_000)
+    })
+    expect(load, 'not polled once nothing shows it').toHaveBeenCalledTimes(2)
   })
 
   it('no key asks for nothing', async () => {

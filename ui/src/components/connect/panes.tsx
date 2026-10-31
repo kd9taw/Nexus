@@ -27,6 +27,9 @@ import { type PaneId, PANE_IDS } from '../../features/connectConfig'
 import type { PaneContext } from './paneContext'
 import type { BandOutlook } from '../../types'
 import { bandTiming } from '../../propViz'
+import { PathWhy } from '../prop/PathWhy'
+import { PathRoute } from '../prop/PathRoute'
+import { PathDayPane, PathRegionsPane } from '../prop/PathDayStrip'
 import { azimuthLabel, azimuthTitle } from '../../grid'
 import { SpaceWxGauges } from '../prop/SpaceWxGauges'
 import { BandAdvisor } from '../prop/BandAdvisor'
@@ -50,7 +53,8 @@ import { MiniSpectrum } from '../MiniSpectrum'
 import { ContestCalendarPane } from '../ContestCalendarPane'
 import { getContests } from '../../api'
 import { GetoutCompass } from '../prop/GetoutCompass'
-import { getoutSummary } from '../../features/getout'
+import { fmtSinceUtc, getoutSummary } from '../../features/getout'
+import { setGetoutSince, startGetoutFresh } from '../../features/getoutSince'
 import { fmtDistanceKm } from '../../units'
 import { GreylineWindow } from '../prop/GreylineWindow'
 import { ScalesAnnunciator } from '../prop/ScalesAnnunciator'
@@ -272,6 +276,8 @@ function renderPath(c: PaneContext): ReactNode {
           />
         </p>
       )}
+      <PathWhy pred={p} />
+      <PathRoute pred={p} focusBand={c.focusBand} className="cp-route" />
       {c.pathOpen.length === 0 ? (
         <p className="cp-none">{t('connect.path.none')}</p>
       ) : (
@@ -350,11 +356,40 @@ function renderOutlook(c: PaneContext): ReactNode {
 
 function renderGetout(c: PaneContext): ReactNode {
   const g = c.getout
+  const since = c.getoutSince ?? null
   return (
     <section className="connect-getout panel">
-      <h3>{t('connect.getout.heading')}</h3>
+      {/* START FRESH (features/getoutSince): count only what is heard from now on, for trying an
+          antenna. The station leaves the earlier reports out of everything below, and the map's
+          "hearing you" dots follow; Show all brings them back. Nothing is deleted. One button on the
+          heading's line, Start fresh or Show all, so the press never adds a line to the heading; the
+          "since" time is part of the count's line below. It ends by itself after 30 minutes. */}
+      <div className="getout-head">
+        <h3>{t('connect.getout.heading')}</h3>
+        {since == null ? (
+          <button
+            type="button"
+            className="getout-fresh"
+            onClick={() => startGetoutFresh()}
+            title={t('connect.getout.fresh.title')}
+          >
+            {t('connect.getout.fresh')}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="getout-fresh"
+            onClick={() => setGetoutSince(null)}
+            title={t('connect.getout.showAll.title')}
+          >
+            {t('connect.getout.showAll')}
+          </button>
+        )}
+      </div>
       {!g || g.count === 0 ? (
-        <p className="cp-none">{t('connect.getout.none')}</p>
+        <p className="cp-none">
+          {since == null ? t('connect.getout.none') : t('connect.getout.none.since', { time: fmtSinceUtc(since) })}
+        </p>
       ) : (
         <>
           <p className="getout-summary">
@@ -363,6 +398,9 @@ function renderGetout(c: PaneContext): ReactNode {
               vals={{ count: g.count, dist: fmtDistanceKm(g.maxKm, c.units) }}
               tags={{ b: <strong /> }}
             />
+            {since != null && (
+              <span className="getout-since">{t('connect.getout.since', { time: fmtSinceUtc(since) })}</span>
+            )}
           </p>
           <div className="getout-rose-wrap">
             <GetoutCompass reports={g.reports} maxKm={g.maxKm} units={c.units} />
@@ -800,6 +838,39 @@ export const PANES: PaneDef[] = [
     category: 'activity',
     basic: () => t('connect.pane.activation.basic'),
     expert: (c) => (c.activation ? <ActivationPane act={c.activation.act} logTick={c.activation.logTick} /> : null),
+  },
+  {
+    // PATH OVER THE DAY — the selected station's band × UTC-hour strip, both routes, the route the
+    // model favours each hour, the MUF ceiling and the Kp ribbon (PathDayStrip). Its hours scrub the
+    // map. No selection, or no day from the shack, and it draws its one line.
+    id: 'pathDay',
+    get title() {
+      return t('connect.pane.pathDay.title')
+    },
+    category: 'bands',
+    basic: () => t('connect.pane.pathDay.basic'),
+    expert: (c) => (
+      <PathDayPane pred={c.selectedCall ? c.pathPred : null} scrub={c.dayScrub?.hour ?? null} onScrub={c.onDayScrub} />
+    ),
+  },
+  {
+    // PATHS TO THE REGIONS — the same strip for ten fixed DX regions (self-fetching get_path_regions,
+    // which the shack keeps six hours), ordered by the operator's needs and contacts there.
+    id: 'pathRegions',
+    get title() {
+      return t('connect.pane.pathRegions.title')
+    },
+    category: 'bands',
+    basic: () => t('connect.pane.pathRegions.basic'),
+    expert: (c) => (
+      <PathRegionsPane
+        needs={c.needAlerts}
+        scrub={c.dayScrub?.hour ?? null}
+        onScrub={c.onDayScrub}
+        myGrid={c.myGrid}
+        engine={c.bandOutlook?.engine}
+      />
+    ),
   },
 ]
 

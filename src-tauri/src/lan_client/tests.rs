@@ -1329,9 +1329,11 @@ pub(crate) fn typed_file(label: &str) -> (std::path::PathBuf, std::path::PathBuf
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "nexus-lan-typed-{label}-{}-{nanos}",
-        std::process::id()
+        "nexus-lan-typed-{label}-{}-{nanos}-{}",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let file = dir.join("lan-typed.json");
     (dir, file)

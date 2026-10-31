@@ -74,6 +74,16 @@ pub use mqtt::subscribe as mqtt_subscribe;
 /// observe its stop flag — both use 2 s socket read timeouts. Restart orchestration
 /// sleeps `this + 1` so the coupling is explicit, not folklore.
 pub const FEED_STOP_OBSERVE_SECS: u64 = 2;
+
+/// Whether this thread is a transmit session's driver ([`flex::session`], [`tci::session`]). TX
+/// SAFETY: a panic there is caught, and the session's stops go out the moment the panic hook
+/// returns, so a hook must not hold this thread on anything slow, such as waiting for a log to
+/// reach the disk.
+pub fn on_a_transmit_driver() -> bool {
+    std::thread::current()
+        .name()
+        .is_some_and(|n| n == flex::session::DRIVER_THREAD || n == tci::session::DRIVER_THREAD)
+}
 pub use pskreporter::{PskReporter, Spot};
 pub use server::{WsjtxServer, APP_ID};
 pub use wsjtx::{Decode, Inbound, QsoLogged, Status};
@@ -143,7 +153,23 @@ pub fn band_for_interop(label: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::band_for_interop;
+    use super::{band_for_interop, on_a_transmit_driver};
+
+    #[test]
+    fn only_the_transmit_drivers_are_named_as_such() {
+        let on = |name: &str| {
+            std::thread::Builder::new()
+                .name(name.into())
+                .spawn(on_a_transmit_driver)
+                .unwrap()
+                .join()
+                .unwrap()
+        };
+        assert!(on(super::flex::session::DRIVER_THREAD));
+        assert!(on(super::tci::session::DRIVER_THREAD));
+        assert!(!on("radio-loop"));
+        assert!(!std::thread::spawn(on_a_transmit_driver).join().unwrap());
+    }
 
     #[test]
     fn band_labels_convert_to_meter_strings() {

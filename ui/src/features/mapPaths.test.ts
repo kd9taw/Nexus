@@ -13,6 +13,7 @@ const spot = (call: string, ageSecs: number, heardMe = true, grid = { lat: 48, l
   band: '20m',
   heardMe,
   ageSecs,
+  time: 0,
   approx: false,
 })
 

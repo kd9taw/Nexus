@@ -16,6 +16,8 @@ import { Logbook } from './Logbook'
 import * as api from '../api'
 import * as toast from '../toast'
 import type { LogQuestion } from '../features/logAnswers'
+import { t } from '../i18n'
+import { menuItem, openRowMenu } from './Logbook.rowMenu.testkit'
 
 // THE BUDGET (2026-10-09). The slowest case here, "renders its own button with its own accessible name", takes 0.26 s
 // and 0.54 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than one
@@ -96,10 +98,12 @@ beforeEach(() => {
 describe('the row offers a correction, distinctly from the ordinary push', () => {
   it('renders its own button with its own accessible name', async () => {
     await renderLog()
-    const correct = await screen.findByRole('button', { name: 'Correct W1AW at QRZ' })
-    // Positive control: the ordinary push is a DIFFERENT button on the same row, so the one
+    // In the row's ⋯ menu, as an item of its own.
+    const menu = await openRowMenu('W1AW')
+    const correct = menuItem(menu, t('logbook.row.menu.qrzCorrect'))
+    // Positive control: the ordinary push is a DIFFERENT item in the same menu, so the one
     // above is not simply the push found under a new name.
-    const push = screen.getByRole('button', { name: 'Push W1AW to QRZ' })
+    const push = menuItem(menu, t('logbook.row.menu.qrz'))
     expect(correct).not.toBe(push)
     expect(correct.textContent).toContain('QRZ')
   })
@@ -114,7 +118,7 @@ describe('nothing is sent until the operator has read what will change', () => {
         'Correct W1AW at QRZ — the contact of 2024-03-01 at 1432Z.\n\nThis will change:\n  SUBMODE: (not set) → USB\n',
     })
     await renderLog()
-    await click(await screen.findByRole('button', { name: 'Correct W1AW at QRZ' }))
+    await click(menuItem(await openRowMenu('W1AW'), t('logbook.row.menu.qrzCorrect')))
 
     await waitFor(() => expect(api.qrzCorrectPreview).toHaveBeenCalledTimes(1))
     // ONE contact, always — the count the backend refuses on is what the UI passes.
@@ -133,7 +137,7 @@ describe('nothing is sent until the operator has read what will change', () => {
       call: 'W1AW', date: '2024-03-01', confirmation: 'SUBMODE: (not set) → USB',
     })
     await renderLog()
-    await click(await screen.findByRole('button', { name: 'Correct W1AW at QRZ' }))
+    await click(menuItem(await openRowMenu('W1AW'), t('logbook.row.menu.qrzCorrect')))
     await screen.findByRole('dialog', { name: 'Correct a contact at QRZ' })
     await click(screen.getByRole('button', { name: 'Cancel' }))
 
@@ -143,7 +147,7 @@ describe('nothing is sent until the operator has read what will change', () => {
     )
     // Positive control: confirming DOES send — so the absence above is the cancel working.
     mock(api.qrzCorrectApply).mockResolvedValue({ ok: true, message: 'corrected', canRecover: false })
-    await click(screen.getByRole('button', { name: 'Correct W1AW at QRZ' }))
+    await click(menuItem(await openRowMenu('W1AW'), t('logbook.row.menu.qrzCorrect')))
     await screen.findByRole('dialog', { name: 'Correct a contact at QRZ' })
     await click(screen.getByRole('button', { name: 'Correct it at QRZ' }))
     await waitFor(() => expect(api.qrzCorrectApply).toHaveBeenCalledTimes(1))
@@ -154,7 +158,7 @@ describe('nothing is sent until the operator has read what will change', () => {
       'This contact has no time of day recorded. QRZ matches on a ±30-minute window…',
     )
     await renderLog()
-    await click(await screen.findByRole('button', { name: 'Correct W1AW at QRZ' }))
+    await click(menuItem(await openRowMenu('W1AW'), t('logbook.row.menu.qrzCorrect')))
 
     await waitFor(() => expect(toast.pushToast).toHaveBeenCalled())
     expect(mock(toast.pushToast).mock.calls[0][0]).toContain('no time of day')
@@ -177,7 +181,7 @@ describe('QRZ inserting a duplicate is shown as a failure, never a success', () 
       canRecover: true,
     })
     await renderLog()
-    await click(await screen.findByRole('button', { name: 'Correct W1AW at QRZ' }))
+    await click(menuItem(await openRowMenu('W1AW'), t('logbook.row.menu.qrzCorrect')))
     await screen.findByRole('dialog', { name: 'Correct a contact at QRZ' })
     await click(screen.getByRole('button', { name: 'Correct it at QRZ' }))
 
@@ -205,7 +209,7 @@ describe('QRZ inserting a duplicate is shown as a failure, never a success', () 
       canRecover: false,
     })
     await renderLog()
-    await click(await screen.findByRole('button', { name: 'Correct W1AW at QRZ' }))
+    await click(menuItem(await openRowMenu('W1AW'), t('logbook.row.menu.qrzCorrect')))
     await screen.findByRole('dialog', { name: 'Correct a contact at QRZ' })
     await click(screen.getByRole('button', { name: 'Correct it at QRZ' }))
 

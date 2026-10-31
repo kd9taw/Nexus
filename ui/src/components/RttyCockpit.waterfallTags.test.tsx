@@ -257,7 +257,7 @@ describe('span and speed are buttons, and both are kept', () => {
     expect(screen.queryByRole('combobox', { name: 'Waterfall zoom span' })).toBeNull()
     const span = screen.getByRole('group', { name: 'Waterfall span' })
     fireEvent.click(Array.from(span.querySelectorAll('button')).find((b) => b.textContent === '1k')!)
-    expect(localStorage.getItem('nexus.waterfall.zoom')).toBe('1000')
+    expect(localStorage.getItem('nexus.waterfall.rtty.zoom')).toBe('1000')
     expect(parseFloat(tag().style.left)).toBeCloseTo(50.3, 6)
   })
 })

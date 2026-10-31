@@ -89,6 +89,7 @@ mod tests;
 use std::collections::VecDeque;
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -973,21 +974,35 @@ fn watch_session(
         let Some(conn) = conn.upgrade() else { break };
         end_a_tune_past_its_hold(&conn, server, watch);
         end_an_over_the_server_stopped_pulling(&conn, server, watch);
-        let mut event = conn.next_event(WATCH_POLL);
+        let mut event = conn.recv_event(WATCH_POLL);
         // The session publishes a step's state before it sends that step's events, so one already
         // reading closed may not have sent its last ones yet: read it up to `Closed`. Once it has
         // sent them all its channel answers at once, with nothing: stop rather than spin.
-        let ended = event.is_none() && conn.read(|s| s.phase == Phase::Closed);
+        let ended = event.is_err() && conn.read(|s| s.phase == Phase::Closed);
         if ended {
-            event = conn.next_event(LAST_EVENTS);
+            event = conn.recv_event(LAST_EVENTS);
         }
         let timing = conn.read(|s| s.timing);
+        let on_air = conn.ours_on_air();
         drop(conn);
-        let Some(event) = event else {
-            if ended {
+        let event = match event {
+            Ok(event) => event,
+            Err(RecvTimeoutError::Timeout) if !ended => continue,
+            Err(RecvTimeoutError::Timeout) => break,
+            // The driver stopped without its last event (`Closed`): a session that died. Its
+            // channel answers at once from here on, so stop, whatever its phase reads, and say so
+            // if a key of ours may be on the air. The claim stays for the daemon's teardown, which
+            // hands that key on to the next session.
+            Err(RecvTimeoutError::Disconnected) => {
+                tempo_core::applog::warn(
+                    "cat",
+                    &format!("TCI ({server}): session ended without closing"),
+                );
+                if on_air {
+                    raise(&lost_alarm(&End::Closed));
+                }
                 break;
             }
-            continue;
         };
         match event {
             Event::Ready { .. } => {}

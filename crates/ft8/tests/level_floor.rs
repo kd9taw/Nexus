@@ -95,6 +95,7 @@ fn run(audio: &[i16], pass: Pass, nutc: i32) -> (Vec<Decode>, usize) {
         pass.partial,
         true,
         false,
+        false,
         &mut |p| {
             match p {
                 Progress::Candidate => candidates += 1,
@@ -209,10 +210,10 @@ fn the_floor_is_half_an_lsb_rms_over_the_whole_frame_on_every_pass() {
     }
     // The other two entries are held to the same floor.
     let (at, under) = (signal_at(REDECODE, 45_000), signal_at(REDECODE, 44_999));
-    let plain = |f: &[i16]| ft8::decode_frame(f, 200, 2900, 3, "", "", 0, 1500, true, false);
+    let plain = |f: &[i16]| ft8::decode_frame(f, 200, 2900, 3, "", "", 0, 1500, true, false, false);
     let a7 = |f: &[i16]| {
         ft8::decode_frame_a7(
-            f, 200, 2900, 3, "", "", 0, 1500, 1500, 0, false, false, true, false,
+            f, 200, 2900, 3, "", "", 0, 1500, 1500, 0, false, false, true, false, false,
         )
     };
     assert!(messages(&plain(&at)).contains(&MSG), "decode_frame at 0.5");

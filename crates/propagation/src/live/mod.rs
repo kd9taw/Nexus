@@ -41,7 +41,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::dxped::OperatorNeeds;
 use crate::engine::{PropagationEngine, PropagationSnapshot};
-use crate::model::PathSpot;
+use crate::model::{PathSpot, SpaceWx};
 
 fn now_unix() -> i64 {
     SystemTime::now()
@@ -90,7 +90,7 @@ pub fn snapshot_with_spots(
     // Each feed degrades on its own — one source being down must NOT blank the whole
     // nowcast (this was the bug behind "stays in demo": a single PSK Reporter 429
     // `?`-aborted the entire snapshot).
-    let wx_opt = swpc::fetch_space_wx().ok();
+    let reading = swpc::fetch_space_wx().ok();
     let xml_spots = pskreporter::fetch_paths(mycall, window_secs).ok();
     let xml_ok = xml_spots.is_some();
     let mut spots = xml_spots.unwrap_or_default();
@@ -99,23 +99,47 @@ pub fn snapshot_with_spots(
 
     // Nothing at all from any source → let the caller fall back to its cache or an
     // honest offline empty-state. Never fabricate.
-    if wx_opt.is_none() && spots.is_empty() {
+    if reading.is_none() && spots.is_empty() {
         return Err(
             "no live propagation data: space weather and spot feeds unreachable".to_string(),
         );
     }
 
-    // Absent space weather degrades to NEUTRAL mid-cycle values (flagged by
-    // source="partial"), not all-zero — zero SFI reads as a dead band and would
-    // wrongly close the high bands when real spots are present.
-    let wx = wx_opt.unwrap_or_default();
-    let mut snap =
-        PropagationEngine::new(mycall, mygrid).snapshot(now_unix(), &spots, &wx, &plans, needs);
-    // Whether the space weather is SWPC's, not the neutral stand-ins above: only a real reading
-    // may reach a logged contact.
-    snap.space_wx.fetched = wx_opt.is_some();
+    // Absent space weather degrades to NEUTRAL mid-cycle values, per quantity (a product that
+    // did not answer leaves its number a stand-in with no stamp), not all-zero — zero SFI reads
+    // as a dead band and would wrongly close the high bands when real spots are present.
+    let wx = reading.as_ref().map_or_else(SpaceWx::default, |r| r.wx);
+    let stamps = reading.as_ref().map(|r| r.stamps).unwrap_or_default();
+    let now = now_unix();
+    // The band advisor's modelled words need a usable solar flux and Kp: otherwise it reports
+    // only what was heard ([`PropAdvisor::without_model`]). The insights, banners and model run
+    // on only the Kp and X-ray that may speak for now (a GOES gap keeps its last flux, stamped
+    // with its own old time).
+    let mut snap = PropagationEngine::new(mycall, mygrid).snapshot_measured(
+        now,
+        &spots,
+        &wx.speaking_now(&stamps, now),
+        stamps.model_usable(now),
+        &plans,
+        needs,
+    );
+    // The gauges show each number as NOAA gave it, beside its stamp; the UI ages it.
+    snap.space_wx.kp = wx.kp;
+    snap.space_wx.xray_long = wx.xray_long;
+    snap.space_wx.xray_class = format!("{}-class", wx.xray_class());
+    snap.space_wx.flare = wx.flare_in_progress();
+    // Which numbers are SWPC's and when each was measured, not the neutral stand-ins above:
+    // only a real reading may be shown as one or reach a logged contact.
+    snap.space_wx.fetched = stamps.any();
+    snap.space_wx.stamps = stamps;
+    snap.space_wx.ap_now = reading.as_ref().and_then(|r| r.ap_now);
+    // Every published day's planetary A, for a logged contact's own date (never on the wire).
+    snap.space_wx.a_by_day = reading
+        .as_ref()
+        .map(|r| r.a_by_day.iter().map(|s| (s.at, s.value)).collect())
+        .unwrap_or_default();
     // "live" only when BOTH primary feeds answered; otherwise we served partial data.
-    snap.source = if wx_opt.is_some() && xml_ok {
+    snap.source = if reading.is_some() && xml_ok {
         "live"
     } else {
         "partial"

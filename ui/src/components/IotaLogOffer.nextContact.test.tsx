@@ -51,9 +51,10 @@ beforeEach(() => {
   vi.mocked(getIotaOffer).mockResolvedValue(OFFER as never)
   vi.mocked(logQso).mockImplementation(async (rec: unknown) => (rec ?? {}) as never)
   resetIotaGroupsForTest([{ reference: 'EU-028', name: 'Example Isles group' }], {
-    consent: true,
+    enabled: true,
     count: 1,
     fetchedAt: 0,
+    bundled: true,
     lastError: null,
   })
 })

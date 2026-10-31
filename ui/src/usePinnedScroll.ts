@@ -20,6 +20,15 @@
 // each row). It anchors on the ROW, never on the height change: the pane's render window trims
 // the oldest rows off the bottom in the same render, so at the cap the height delta is zero while
 // the row being read still moved. The bottom mode is untouched.
+//
+// THE CONTENT SIGNAL (CPU): with no second argument the pin runs after EVERY render, and every run
+// reads layout (scrollHeight, or the rows' rects) — a forced synchronous layout per render of the
+// feed's host, which for a pane re-rendered by every 4 Hz snapshot was a steady layout storm. A
+// caller that passes `content` (any value that changes whenever the drawn rows change — the
+// memoised row array is exact) gets the pin only when that value, the edge or the pin state
+// changes. The keep-alive recovery the every-render form gives (see the effect) then comes from a
+// ResizeObserver instead: a display:none host shown again changes the scroller's box from 0×0 to
+// its real size, and that — not an unrelated render — is the moment to re-snap.
 
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
@@ -90,7 +99,16 @@ function snapToBottom(el: HTMLElement) {
   }
 }
 
-export function usePinnedScroll<T extends HTMLElement>(edge: PinEdge = 'bottom'): PinnedScroll<T> {
+/**
+ * @param edge    which edge the newest content grows at.
+ * @param content optional content signal (see "THE CONTENT SIGNAL" above): when given, the pin
+ *                runs only when it changes (plus edge/pin changes and scroller resizes) instead of
+ *                after every render.
+ */
+export function usePinnedScroll<T extends HTMLElement>(
+  edge: PinEdge = 'bottom',
+  content?: unknown,
+): PinnedScroll<T> {
   const ref = useRef<T>(null)
   // Top edge only: the row the operator was reading, re-found after each render.
   const anchorRef = useRef<Anchor | null>(null)
@@ -110,15 +128,14 @@ export function usePinnedScroll<T extends HTMLElement>(edge: PinEdge = 'bottom')
   // does. It also cannot be keyed on content: the hook has no knowledge of the
   // caller's data shape. Adding a dep array reintroduces the "feed frozen
   // mid-list after a view switch" bug.
-  useLayoutEffect(() => {
+  //
+  // With a `content` signal the deps are [content, edge, pinned] and the keep-alive case is
+  // handled by the ResizeObserver below instead — see "THE CONTENT SIGNAL" at the top.
+  const keyed = content !== undefined
+  const follow = useCallback((edgeNow: PinEdge) => {
     const el = ref.current
-    if (edgeRef.current !== edge) {
-      // The feed flipped direction: an anchor measured in the other order means nothing.
-      edgeRef.current = edge
-      anchorRef.current = null
-    }
     if (!el) return
-    if (edge === 'bottom') {
+    if (edgeNow === 'bottom') {
       if (pinnedRef.current) snapToBottom(el)
       return
     }
@@ -128,7 +145,41 @@ export function usePinnedScroll<T extends HTMLElement>(edge: PinEdge = 'bottom')
     }
     if (anchorRef.current) restoreAnchor(el, anchorRef.current)
     anchorRef.current = captureAnchor(el)
-  })
+  }, [])
+  // The element the ResizeObserver watches, and the observer itself (keyed mode only).
+  const observed = useRef<{ el: T; ro: ResizeObserver } | null>(null)
+  useLayoutEffect(
+    () => {
+      if (edgeRef.current !== edge) {
+        // The feed flipped direction: an anchor measured in the other order means nothing.
+        edgeRef.current = edge
+        anchorRef.current = null
+      }
+      const el = ref.current
+      if (keyed && observed.current?.el !== el) {
+        observed.current?.ro.disconnect()
+        observed.current = null
+        if (el && typeof ResizeObserver !== 'undefined') {
+          // A resize — above all a hidden keep-alive host shown again — re-runs the pin. Its
+          // first delivery (the observe itself) is harmless: the pin is idempotent.
+          const ro = new ResizeObserver(() => follow(edgeRef.current))
+          ro.observe(el)
+          observed.current = { el, ro }
+        }
+      }
+      follow(edge)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- undefined = every render, on purpose
+    keyed ? [content, edge, pinned] : undefined,
+  )
+  // Drop the observer with the component.
+  useLayoutEffect(
+    () => () => {
+      observed.current?.ro.disconnect()
+      observed.current = null
+    },
+    [],
+  )
 
   const onScroll = () => {
     const el = ref.current

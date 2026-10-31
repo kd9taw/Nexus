@@ -2865,6 +2865,7 @@ dependencies = [
  "io-kit-sys",
  "png",
  "propagation",
+ "rustfft",
  "serde_json",
  "serialport",
  "tempo-app",

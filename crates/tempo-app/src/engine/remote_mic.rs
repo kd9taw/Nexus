@@ -183,6 +183,13 @@ impl Engine {
         }
     }
 
+    /// End the microphone over because the radio does not take the route its audio is played to:
+    /// Nexus's own Flex client refused its key while the radio was not on Nexus's DAX, or the radio
+    /// left that DAX under it. The page is told the station's audio changed, and to press again.
+    pub fn end_remote_mic_off_route(&mut self) {
+        self.drop_mic_latch_for(MicEnded::RouteChanged);
+    }
+
     /// [`Self::drop_mic_latch`], saying why for the page.
     pub(super) fn drop_mic_latch_for(&mut self, why: MicEnded) {
         self.mic_end = Some(why);

@@ -43,6 +43,12 @@
 .contact-card-field textarea {
   resize: vertical;
 }
+/* The remove / keep button beside a field reuses the Logbook's row-button class, whose base is a
+   22 px glyph square; here it is a 24 px target (the WCAG 2.5.8 minimum). */
+.contact-card-field .log-rowbtn {
+  min-width: 24px;
+  height: 24px;
+}
 .contact-card-more > summary {
   cursor: pointer;
 }

@@ -4,6 +4,11 @@
 //! array, each entry `[longitude(0..359), latitude(-90..90), probability(0..100)]`.
 //! We keep the oval (probability above a floor), downsample for a glanceable
 //! overlay, and normalize longitude to −180..180 for the map.
+//!
+//! The oval is a FORECAST: OVATION runs on the solar wind measured at L1 and propagated to
+//! Earth, so the file carries the time its inputs were observed (`Observation Time`) and the
+//! time the oval is a forecast FOR (`Forecast Time`, typically 30–90 min later). Both ride with
+//! the points ([`AuroraOval`]) so the map can say "expected at 04:04Z", never "now".
 
 use std::time::Duration;
 
@@ -56,8 +61,38 @@ pub fn parse_aurora(v: &Value, min_prob: f32, step: i64) -> Vec<AuroraPoint> {
     out
 }
 
+/// The OVATION oval and the two times that say what it is: when its solar-wind input was
+/// observed and the time it is a forecast for (Unix seconds, UTC; `None` if the file did not
+/// carry a stamp it parses).
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuroraOval {
+    pub points: Vec<AuroraPoint>,
+    pub observed_at: Option<i64>,
+    pub forecast_at: Option<i64>,
+    /// When Nexus fetched this copy (Unix seconds) — set by the command layer, so a copy
+    /// served after a failed refetch says how old it is.
+    #[serde(default)]
+    pub fetched_at: Option<i64>,
+}
+
+/// The oval plus its `Observation Time` / `Forecast Time` stamps. Pure.
+pub fn parse_oval(v: &Value, min_prob: f32, step: i64) -> AuroraOval {
+    let stamp = |k: &str| {
+        v.get(k)
+            .and_then(Value::as_str)
+            .and_then(crate::kc2g::parse_naive_utc_unix)
+    };
+    AuroraOval {
+        points: parse_aurora(v, min_prob, step),
+        observed_at: stamp("Observation Time"),
+        forecast_at: stamp("Forecast Time"),
+        fetched_at: None,
+    }
+}
+
 /// Fetch + parse the current OVATION aurora oval (prob ≥ 8 %, every 2°).
-pub fn fetch_aurora() -> Result<Vec<AuroraPoint>, String> {
+pub fn fetch_aurora() -> Result<AuroraOval, String> {
     let c = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
         .user_agent(UA)
@@ -71,7 +106,7 @@ pub fn fetch_aurora() -> Result<Vec<AuroraPoint>, String> {
         .map_err(|e| e.to_string())?
         .json::<Value>()
         .map_err(|e| e.to_string())?;
-    Ok(parse_aurora(&v, 8.0, 2))
+    Ok(parse_oval(&v, 8.0, 2))
 }
 
 #[cfg(test)]
@@ -101,6 +136,23 @@ mod tests {
             "lon should normalize to -160, got {}",
             west.lon
         );
+    }
+
+    /// The live file's two stamps reach the oval: what it is a forecast FOR, and when its input
+    /// was observed. A file without them carries `None`, never the fetch time.
+    #[test]
+    fn the_oval_carries_its_forecast_and_observation_times() {
+        let v: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/swpc-ovation-aurora-2026-10-30.json"
+        ))
+        .unwrap();
+        let oval = parse_oval(&v, 8.0, 1);
+        let utc = |s| crate::kc2g::parse_naive_utc_unix(s).unwrap();
+        assert_eq!(oval.forecast_at, Some(utc("2026-10-30T04:04:00Z")));
+        assert_eq!(oval.observed_at, Some(utc("2026-10-30T02:39:00Z")));
+        assert!(!oval.points.is_empty());
+        let bare = parse_oval(&json!({"coordinates": []}), 8.0, 2);
+        assert_eq!((bare.forecast_at, bare.observed_at), (None, None));
     }
 
     #[test]

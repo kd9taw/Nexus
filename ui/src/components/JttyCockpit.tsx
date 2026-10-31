@@ -947,6 +947,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             stripRef={wfRef}
             {...closeProps('scope')}
             paneTitle={jttyPanelLabels().scope}
+            zoomKey="nexus.waterfall.jtty.zoom"
             theme={theme}
             active={active}
             rowMs={50}

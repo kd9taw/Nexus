@@ -874,11 +874,15 @@ mod tests {
     /// A store-backed engine whose log holds `rows` (ADIF records, header added), on a folder of
     /// the test's own, with the station's country resolvers wired as the launch wires them.
     fn engine_with(tag: &str, rows: &str) -> (std::path::PathBuf, SharedEngine) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-dxcc-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-dxcc-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch");
         let adif = format!("{}{rows}", tempo_core::logbook::adif_header());
         std::fs::write(dir.join("log.adi"), adif).expect("log");

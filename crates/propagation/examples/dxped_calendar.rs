@@ -21,7 +21,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let wx = swpc::fetch_space_wx().unwrap_or_default();
+    let wx = swpc::fetch_space_wx().map(|r| r.wx).unwrap_or_default();
     println!("Space weather: SFI {:.0} | Kp {:.1}\n", wx.sfi, wx.kp);
 
     let now = now_unix();

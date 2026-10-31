@@ -335,8 +335,8 @@ const DIGITAL_HOLES: &[(f64, &str)] = &[
     (28.180, "FT4"),
     (50.260, "MSK144"), // 6m
     (50.313, "FT8"),
-    (50.318, "FT8"),
-    (50.323, "FT4"),
+    (50.318, "FT4"), // the 6 m FT4 dial `ft4_band_plan` tunes
+    (50.323, "FT8"),
     (144.150, "MSK144"), // 2m
     (144.170, "FT4"),
     (144.174, "FT8"),
@@ -347,10 +347,24 @@ const DIGITAL_HOLES: &[(f64, &str)] = &[
 /// The band plan is the only thing a comment-only cluster spot lets us believe, and on these
 /// frequencies it says more than "digital" — 14.074 is FT8, 14.080 is FT4. Everywhere else the
 /// class is genuinely all that is knowable, and the caller keeps using it.
+///
+/// Neighbouring windows overlap (FT4 3.575 sits inside FT8 3.573's), so of the holes whose window
+/// holds the frequency the one named is the HIGHEST DIAL AT OR BELOW it — a signal is reported at
+/// its dial plus its audio offset, never under its dial — and, when every one is above it, the
+/// nearest (the 1 kHz allowance for a spotter's rounding). Taking the first match in table order
+/// labelled 3.575, 18.104 and 24.919 FT8. On a Work click the UI opens the FT screen on the tier
+/// this names, so it is more than a label.
 pub fn digital_hole_mode(freq_mhz: f64) -> Option<&'static str> {
+    // A dial typed as the spot's own frequency counts as at or below it despite rounding.
+    let at_or_below = |h: f64| h <= freq_mhz + 1e-9;
     DIGITAL_HOLES
         .iter()
-        .find(|&&(h, _)| freq_mhz >= h - 0.001 && freq_mhz <= h + 0.004)
+        .filter(|&&(h, _)| freq_mhz >= h - 0.001 && freq_mhz <= h + 0.004)
+        .min_by(|&&(a, _), &&(b, _)| {
+            at_or_below(b)
+                .cmp(&at_or_below(a))
+                .then((freq_mhz - a).abs().total_cmp(&(freq_mhz - b).abs()))
+        })
         .map(|&(_, mode)| mode)
 }
 
@@ -649,6 +663,113 @@ impl SpaceWx {
     }
 }
 
+/// When each number in a [`SpaceWx`] was measured, as NOAA's own product stamps it (Unix
+/// seconds, UTC) — the "is this real, and how old is it" half of a space-weather reading.
+///
+/// `None` means Nexus has no reading of that quantity: the number beside it is a stand-in
+/// the model runs on ([`SpaceWx::default`]), and it is never shown as a reading, written into
+/// a logged contact, or turned into band advice, an alert or a toast. `Some` is the sample's
+/// own time, never the time Nexus fetched it, so a feed that stops updating ages honestly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceWxStamps {
+    /// The 10.7 cm solar flux reading (Penticton's local-noon reading, 20:00 UT).
+    #[serde(default)]
+    pub sfi_at: Option<i64>,
+    /// The 1-minute estimated planetary Kp.
+    #[serde(default)]
+    pub kp_at: Option<i64>,
+    /// The GOES long-band (0.1–0.8 nm) X-ray sample.
+    #[serde(default)]
+    pub xray_at: Option<i64>,
+    /// 00:00 UT of the day the daily planetary A belongs to (NOAA issues a day's A after it
+    /// ends, so this is normally yesterday).
+    #[serde(default)]
+    pub a_day: Option<i64>,
+}
+
+impl SpaceWxStamps {
+    /// Whether any of the four numbers is a reading NOAA answered.
+    pub fn any(&self) -> bool {
+        self.sfi_at.is_some()
+            || self.kp_at.is_some()
+            || self.xray_at.is_some()
+            || self.a_day.is_some()
+    }
+
+    /// The stamp of `key`'s number (`None` = a stand-in).
+    pub fn at(&self, key: WxKey) -> Option<i64> {
+        match key {
+            WxKey::Sfi => self.sfi_at,
+            WxKey::Kp => self.kp_at,
+            WxKey::Xray => self.xray_at,
+            WxKey::A => self.a_day,
+        }
+    }
+
+    /// Whether `key`'s number may speak for `now`: measured, and younger than
+    /// [`WxKey::fresh_secs`]. The server's copy of the UI's `wxUsable`, with the same limits, so
+    /// a line the station builds (an insight, a banner, a model word, the cap edge) cannot speak
+    /// from a reading the gauge beside it draws as old. A future stamp reads as fresh.
+    pub fn usable(&self, key: WxKey, now: i64) -> bool {
+        self.at(key).is_some_and(|at| now - at < key.fresh_secs())
+    }
+
+    /// Whether the propagation model may give a word: it rests on the solar flux and, for the
+    /// polar, auroral and VHF words, on the Kp, so both must be usable. Otherwise a band says
+    /// only what was heard ([`crate::PropAdvisor::without_model`]).
+    pub fn model_usable(&self, now: i64) -> bool {
+        self.usable(WxKey::Sfi, now) && self.usable(WxKey::Kp, now)
+    }
+}
+
+/// Which number of a [`SpaceWx`] a stamp belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WxKey {
+    Sfi,
+    Kp,
+    Xray,
+    A,
+}
+
+impl WxKey {
+    /// How long a reading speaks for "now", in seconds: the product's cadence plus the station's
+    /// poll — the UI's `WX_STALE_SECS`. Kp is a 1-minute product behind a 5-minute snapshot; GOES
+    /// X-ray is 1-minute; the SFI is one noon reading a day; the daily A is issued at 00:30 UT
+    /// for the day before, and its stamp is that day's 00:00.
+    pub const fn fresh_secs(self) -> i64 {
+        match self {
+            WxKey::Kp => 15 * 60,
+            WxKey::Xray => 10 * 60,
+            WxKey::Sfi => 48 * 3600,
+            WxKey::A => 50 * 3600,
+        }
+    }
+}
+
+impl SpaceWx {
+    /// This reading with every Kp and X-ray that may not speak for `now` replaced by the quiet
+    /// stand-in ([`SpaceWx::default`]): what the insights, banners, opening detector and model
+    /// run on, so an hours-old Kp 6 raises no storm line and a GOES gap's last flux no flare
+    /// line. The gauges still show the measured numbers, aged, from the snapshot's view.
+    pub fn speaking_now(&self, stamps: &SpaceWxStamps, now: i64) -> SpaceWx {
+        let quiet = SpaceWx::default();
+        SpaceWx {
+            kp: if stamps.usable(WxKey::Kp, now) {
+                self.kp
+            } else {
+                quiet.kp
+            },
+            xray_long: if stamps.usable(WxKey::Xray, now) {
+                self.xray_long
+            } else {
+                quiet.xray_long
+            },
+            ..*self
+        }
+    }
+}
+
 /// NOAA radio-blackout R-scale (0 = none) from the GOES long X-ray flux (W/m²):
 /// R1 ≥ M1 (1e-5), R2 ≥ M5 (5e-5), R3 ≥ X1 (1e-4), R4 ≥ X10 (1e-3), R5 ≥ X20 (2e-3).
 /// An M/X flare raises daytime D-layer absorption → sunlit-side HF blackout (low bands).
@@ -781,6 +902,79 @@ pub fn classify_vhf_mode(median_km: f64, max_km: f64, wx: &SpaceWx) -> PropMode 
 #[cfg(test)]
 mod tests {
 
+    /// The server's freshness rule is the UI's: usable strictly before the limit, a stand-in
+    /// never, a future stamp always.
+    #[test]
+    fn a_reading_speaks_for_now_only_inside_its_products_limit() {
+        use super::{SpaceWxStamps, WxKey};
+        const NOW: i64 = 1_761_800_000;
+        for key in [WxKey::Sfi, WxKey::Kp, WxKey::Xray, WxKey::A] {
+            let at = |t: i64| {
+                let mut s = SpaceWxStamps::default();
+                match key {
+                    WxKey::Sfi => s.sfi_at = Some(t),
+                    WxKey::Kp => s.kp_at = Some(t),
+                    WxKey::Xray => s.xray_at = Some(t),
+                    WxKey::A => s.a_day = Some(t),
+                }
+                s
+            };
+            let lim = key.fresh_secs();
+            assert!(at(NOW - lim + 1).usable(key, NOW), "{key:?} just inside");
+            assert!(!at(NOW - lim).usable(key, NOW), "{key:?} at the limit");
+            assert!(at(NOW + 60).usable(key, NOW), "{key:?} future-stamped");
+            assert!(
+                !SpaceWxStamps::default().usable(key, NOW),
+                "{key:?} stand-in"
+            );
+        }
+        assert_eq!(WxKey::Kp.fresh_secs(), 900);
+        assert_eq!(WxKey::Xray.fresh_secs(), 600);
+        assert_eq!(WxKey::Sfi.fresh_secs(), 48 * 3600);
+        assert_eq!(WxKey::A.fresh_secs(), 50 * 3600);
+    }
+
+    /// An hours-old storm Kp and a GOES gap's flare flux are replaced by the quiet stand-ins
+    /// for everything that interprets them; fresh ones pass through; the SFI is untouched.
+    #[test]
+    fn only_fresh_kp_and_xray_reach_the_lines_that_interpret_them() {
+        use super::{SpaceWx, SpaceWxStamps};
+        const NOW: i64 = 1_761_800_000;
+        let storm = SpaceWx {
+            sfi: 90.0,
+            ssn: None,
+            kp: 6.0,
+            a_index: 40.0,
+            xray_long: 2e-4,
+        };
+        let old = SpaceWxStamps {
+            sfi_at: Some(NOW - 3600),
+            kp_at: Some(NOW - 2 * 3600),
+            xray_at: Some(NOW - 2 * 3600),
+            a_day: None,
+        };
+        let q = storm.speaking_now(&old, NOW);
+        assert_eq!(q.kp, SpaceWx::default().kp);
+        assert_eq!(q.xray_long, SpaceWx::default().xray_long);
+        assert!(!q.flare_in_progress());
+        assert_eq!(q.sfi, 90.0);
+        let fresh = SpaceWxStamps {
+            kp_at: Some(NOW - 60),
+            xray_at: Some(NOW - 60),
+            ..old
+        };
+        let f = storm.speaking_now(&fresh, NOW);
+        assert_eq!((f.kp, f.xray_long), (6.0, 2e-4));
+        // The model needs both a usable flux and a usable Kp.
+        assert!(fresh.model_usable(NOW));
+        assert!(!old.model_usable(NOW), "stale Kp: no model word");
+        let no_sfi = SpaceWxStamps {
+            sfi_at: None,
+            ..fresh
+        };
+        assert!(!no_sfi.model_usable(NOW));
+    }
+
     /// Reported on 1.0.3: the Needed board showed "Digital" for some rows and "FT8" for others,
     /// on the same band — and the "Digital" ones were FT8 when clicked.
     ///
@@ -850,6 +1044,116 @@ mod tests {
             None,
             "60m channel 1 is not one either"
         );
+    }
+
+    /// Every dial names its own mode, even where a neighbour's window reaches it. The lookup used
+    /// to return the FIRST hole whose window held the frequency, and an FT4 dial 2–4 kHz above
+    /// an FT8 one sits inside the FT8 window: a cluster spot on 3.575, 18.104 or 24.919 came back
+    /// "FT8", and a Work click on it opened the FT screen on FT8 at an FT4 dial. 10.140 and
+    /// 144.174 were right only because `dial + 0.004` happened to round just below them.
+    ///
+    /// The list is the app's own FT8/FT4 plans (`tempo-app` `bandplan.rs`), typed out here, not
+    /// read back from `DIGITAL_HOLES`, so a wrong row in the table cannot agree with itself.
+    #[test]
+    fn every_dial_names_its_own_mode_even_beside_a_neighbour() {
+        let dials: &[(f64, &str)] = &[
+            (1.840, "FT8"),
+            (3.573, "FT8"),
+            (3.575, "FT4"),
+            (5.357, "FT8"),
+            (5.3715, "FT8"),
+            (7.074, "FT8"),
+            (7.0475, "FT4"),
+            (10.136, "FT8"),
+            (10.140, "FT4"),
+            (14.074, "FT8"),
+            (14.080, "FT4"),
+            (18.100, "FT8"),
+            (18.104, "FT4"),
+            (21.074, "FT8"),
+            (21.140, "FT4"),
+            (24.915, "FT8"),
+            (24.919, "FT4"),
+            (28.074, "FT8"),
+            (28.180, "FT4"),
+            (50.260, "MSK144"),
+            (50.313, "FT8"),
+            (50.318, "FT4"), // 6 m FT4, as `ft4_band_plan` tunes it
+            (50.323, "FT8"),
+            (144.150, "MSK144"),
+            (144.170, "FT4"),
+            (144.174, "FT8"),
+        ];
+        for &(dial, mode) in dials {
+            // The dial itself, a hair either side of it (the float-luck cases flip on a few Hz),
+            // and a signal 1.5 kHz up the passband — unless that reaches the next dial up.
+            for off in [0.0, -0.000_001, 0.000_001, 0.0015] {
+                let f = dial + off;
+                let passes_another = dials.iter().any(|&(d, _)| d > dial && d <= f + 1e-9);
+                if off > 0.0 && passes_another {
+                    continue;
+                }
+                // A hair under a dial with another dial within 4 kHz below it belongs to that
+                // lower dial (the rule is "the highest dial at or below"), so it is not this
+                // dial's case to assert.
+                if off < 0.0 && dials.iter().any(|&(d, _)| d < dial && d >= f - 0.004) {
+                    continue;
+                }
+                assert_eq!(digital_hole_mode(f), Some(mode), "{dial} + {off} MHz");
+            }
+        }
+        // Between two dials: the dial below wins, as the signal is reported above its own dial.
+        assert_eq!(
+            digital_hole_mode(3.574),
+            Some("FT8"),
+            "1 kHz up from FT8 3.573"
+        );
+        assert_eq!(
+            digital_hole_mode(3.576),
+            Some("FT4"),
+            "1 kHz up from FT4 3.575"
+        );
+        assert_eq!(
+            digital_hole_mode(18.1035),
+            Some("FT8"),
+            "3.5 kHz up from FT8 18.100"
+        );
+        assert_eq!(
+            digital_hole_mode(144.1735),
+            Some("FT4"),
+            "3.5 kHz up from FT4 144.170"
+        );
+        // Below every dial in reach: the nearest dial above (the 1 kHz rounding allowance).
+        assert_eq!(
+            digital_hole_mode(3.5725),
+            Some("FT8"),
+            "0.5 kHz under FT8 3.573"
+        );
+        assert_eq!(
+            digital_hole_mode(50.3175),
+            Some("FT4"),
+            "0.5 kHz under FT4 50.318, past the top of FT8 50.313's window"
+        );
+    }
+
+    /// The fix changes which hole NAMES a frequency, never whether it is one: the set of
+    /// frequencies inside some hole's window is what `classify_spot_mode` routes on, and it must
+    /// be exactly what it was. Swept in 10 Hz steps across every window and its surroundings.
+    #[test]
+    fn which_frequencies_are_holes_is_unchanged() {
+        let in_a_window = |f: f64| {
+            DIGITAL_HOLES
+                .iter()
+                .any(|&(h, _)| f >= h - 0.001 && f <= h + 0.004)
+        };
+        for &(dial, _) in DIGITAL_HOLES {
+            let mut step = -300;
+            while step <= 800 {
+                let f = dial + f64::from(step) * 0.000_01;
+                assert_eq!(digital_hole_mode(f).is_some(), in_a_window(f), "{f} MHz");
+                step += 1;
+            }
+        }
     }
 
     /// The classifier itself is untouched — it still answers with the class, so every existing

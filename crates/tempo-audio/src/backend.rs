@@ -51,6 +51,14 @@ pub trait AudioBackend {
     fn capture(&mut self) -> Vec<f32>;
     /// Queue 12 kHz mono samples for transmission.
     fn play(&mut self, samples: &[f32]);
+    /// The audio queued so far ends one complete unit — a slot over, a CW word, a message, a
+    /// voice-keyer recording, a frame, a picture — so the sound card running out right there is
+    /// the end of the transmission and not an underrun. Call it right after the unit's last
+    /// [`Self::play`]. Never after audio that is fed as it is made (Tune's carrier, streamed text, a
+    /// microphone): a gap there is the feed falling behind, and must count. Only the counter
+    /// reads it; what plays is unchanged. Default no-op: a backend with no output ring counts
+    /// nothing.
+    fn mark_unit_end(&mut self) {}
     /// Open the transmit audio route now, ahead of the over that will use it, and say whether an
     /// over handed to [`Self::play`] would reach the radio: `Ok`, or `Err` with the reason it would
     /// not, in the sound card's own words. The radio loop calls it when slot TX is armed and again
@@ -158,6 +166,22 @@ pub trait AudioBackend {
     fn voice_capture(&mut self) -> Vec<f32> {
         Vec::new()
     }
+    /// Open (`Some(name)`) or close (`None`) the computer's microphone for Phone
+    /// (`tempo_app::engine::pc_mic`): a second input stream on the named device, open only while
+    /// its over is armed or keyed, never the system default. Never touches the main capture/TX
+    /// streams. `Err` = it would not open. Default: a backend with no real device has no
+    /// microphone to open.
+    fn set_pc_mic(&mut self, device: Option<&str>) -> Result<(), String> {
+        match device {
+            Some(_) => Err("no microphone input on this audio route".to_string()),
+            None => Ok(()),
+        }
+    }
+    /// 12 kHz mono samples from the computer's microphone since the last call (empty when none is
+    /// open), or `Err` once the OS has killed its stream: the over it feeds must end now.
+    fn pc_mic_capture(&mut self) -> Result<Vec<f32>, String> {
+        Ok(Vec::new())
+    }
     /// Release the sound card NOW, in place, without dropping the backend value.
     ///
     /// ⚠️ Exists because **ALSA opens a card once**. The radio loop rebuilds audio by
@@ -206,6 +230,25 @@ pub struct MockBackend {
     pub voice_mic_open: bool,
     /// When true, `set_voice_mic(Some(_))` returns `Err` (simulates an open failure).
     pub voice_mic_fail: bool,
+    /// Scripted chunks the next `pc_mic_capture()` calls return while the microphone is open.
+    to_pc_mic: VecDeque<Vec<f32>>,
+    /// Every `set_pc_mic` argument, in order.
+    pub pc_mic_calls: Vec<Option<String>>,
+    /// Whether the mock computer microphone is open.
+    pub pc_mic_open: bool,
+    /// When true, `set_pc_mic(Some(_))` returns `Err` (it would not open).
+    pub pc_mic_fail: bool,
+    /// Scripted death: while set, `pc_mic_capture()` answers `Err` with it (the device went away).
+    pub pc_mic_lost: Option<String>,
+    /// The headphone monitor's TX mute, as the loop last set it.
+    pub monitor_tx_muted: bool,
+    /// The input the mock sound card "opened" for receive (`capture_input`): `None`, as a backend
+    /// with no real capture stream answers.
+    pub capture_input: Option<crate::receive_audio::CaptureInput>,
+    /// When set, `flush_output` and closing the computer microphone write `flush` and
+    /// `pc_mic close` here, in order: a test hands the same log to a mock radio to see which came
+    /// first, the unkey or the close.
+    pub events: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
     /// Models an ALSA card that can only be open once: while this is held, a mock
     /// `reopen_audio` refuses to open the same card. `release_device()` clears it, which
     /// is exactly what the real backend does by dropping its streams.
@@ -224,6 +267,8 @@ pub struct MockBackend {
     pub tx_unplayed: usize,
     /// How many times `retune_tx` replaced the rest of an over.
     pub retunes: usize,
+    /// `played.len()` at each [`AudioBackend::mark_unit_end`]: where each complete unit ended.
+    pub unit_ends: Vec<usize>,
 }
 
 impl MockBackend {
@@ -233,6 +278,15 @@ impl MockBackend {
     /// Queue a chunk that the next `capture()` will return.
     pub fn queue_capture(&mut self, samples: Vec<f32>) {
         self.to_capture.push_back(samples);
+    }
+    fn note_event(&self, what: &str) {
+        if let Some(log) = &self.events {
+            log.lock().unwrap().push(what.to_string());
+        }
+    }
+    /// Queue a chunk the computer microphone delivers to the next `pc_mic_capture()`.
+    pub fn queue_pc_mic(&mut self, samples: Vec<f32>) {
+        self.to_pc_mic.push_back(samples);
     }
     /// Queue a chunk that the next `voice_capture()` will return (voice-mic tests).
     pub fn queue_voice_capture(&mut self, samples: Vec<f32>) {
@@ -270,6 +324,9 @@ impl AudioBackend for MockBackend {
     fn play(&mut self, samples: &[f32]) {
         self.played.extend_from_slice(samples);
     }
+    fn mark_unit_end(&mut self) {
+        self.unit_ends.push(self.played.len());
+    }
     fn prepare_tx(&mut self) -> Result<(), String> {
         self.prepare_tx_calls += 1;
         match &self.tx_open_error {
@@ -279,6 +336,7 @@ impl AudioBackend for MockBackend {
     }
     fn flush_output(&mut self) -> usize {
         self.flush_calls += 1;
+        self.note_event("flush");
         0
     }
     fn retune_tx(&mut self, tail: &mut dyn FnMut(usize, usize) -> Vec<f32>) -> bool {
@@ -305,6 +363,37 @@ impl AudioBackend for MockBackend {
     }
     fn voice_capture(&mut self) -> Vec<f32> {
         self.to_voice_capture.pop_front().unwrap_or_default()
+    }
+    fn set_monitor_tx_mute(&mut self, muted: bool) {
+        self.monitor_tx_muted = muted;
+    }
+    fn set_pc_mic(&mut self, device: Option<&str>) -> Result<(), String> {
+        self.pc_mic_calls.push(device.map(str::to_string));
+        match device {
+            Some(_) if self.pc_mic_fail => Err("mock microphone failed to open".to_string()),
+            Some(_) => {
+                self.pc_mic_open = true;
+                Ok(())
+            }
+            None => {
+                self.note_event("pc_mic close");
+                self.pc_mic_open = false;
+                self.to_pc_mic.clear();
+                Ok(())
+            }
+        }
+    }
+    fn capture_input(&self) -> Option<crate::receive_audio::CaptureInput> {
+        self.capture_input.clone()
+    }
+    fn pc_mic_capture(&mut self) -> Result<Vec<f32>, String> {
+        if !self.pc_mic_open {
+            return Ok(Vec::new());
+        }
+        if let Some(why) = &self.pc_mic_lost {
+            return Err(why.clone());
+        }
+        Ok(self.to_pc_mic.pop_front().unwrap_or_default())
     }
 }
 

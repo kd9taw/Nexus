@@ -5,6 +5,8 @@ import { Logbook } from './Logbook'
 import * as api from '../api'
 import * as toast from '../toast'
 import type { LogQuestion } from '../features/logAnswers'
+import { t } from '../i18n'
+import { itemLabels, openRowSubmenu } from './Logbook.rowMenu.testkit'
 
 // react-virtual (virtual-core) measures the scroll element and rows via offsetHeight + a
 // ResizeObserver, neither of which jsdom implements — stub them so a non-trivial visible window is
@@ -335,8 +337,10 @@ describe('#152 — recording a QSL card does not depend on a filter, or on not h
   // test (2026-09-25), a document-wide query found the FIRST Logbook still mounted from an earlier
   // test — which is exactly how the second case below passed alone and failed in the file,
   // reading another test's row and reporting the opposite answer.
-  const qsl = (c: HTMLElement) => c.querySelector('select.log-rowbtn') as HTMLSelectElement | null
-  const opts = (c: HTMLElement) => Array.from(qsl(c)?.options ?? []).map((o) => o.value)
+  // The QSL entries of the row's ⋯ menu, by label.
+  const entries = async () => itemLabels(await openRowSubmenu(fakeLog(1)[0].call, 'QSL'))
+  const CARD = t('logbook.row.qslRcvd.card')
+  const BUREAU = t('logbook.row.qslSent.bureau')
 
   it('is reachable in the ORDINARY logbook, with no filter chip set', async () => {
     engineLog.mockResolvedValue(fakeLog(1))
@@ -344,8 +348,7 @@ describe('#152 — recording a QSL card does not depend on a filter, or on not h
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
     await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
-    expect(qsl(container), 'the QSL menu must be on an ordinary row').not.toBeNull()
-    expect(opts(container), 'and it offers the inbound card').toContain('R')
+    expect(await entries(), 'the QSL menu must be on an ordinary row, and it offers the inbound card').toContain(CARD)
   })
 
   it('still offers the arriving card AFTER one has been marked sent — the round trip', async () => {
@@ -355,10 +358,10 @@ describe('#152 — recording a QSL card does not depend on a filter, or on not h
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
     await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
-    expect(qsl(container), 'the menu must survive marking a card sent').not.toBeNull()
-    expect(opts(container), 'the inbound card is still recordable').toContain('R')
+    const after = await entries()
+    expect(after, 'the menu must survive marking a card sent: the inbound card is still recordable').toContain(CARD)
     // …and you still cannot send twice.
-    expect(opts(container), 'the send entries are gone once sent').not.toContain('B')
+    expect(after, 'the send entries are gone once sent').not.toContain(BUREAU)
   })
 })
 

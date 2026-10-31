@@ -9,8 +9,8 @@
 // its buttons) stays that control's. The row that has the stop is held by id, so a contact logged
 // above it does not move the operator's place.
 //
-// jsdom lays nothing out, so the geometry the list reads is given: rows 43 px, the list 400 px into
-// a 600 px scroller below an 80 px sticky block — twelve rows to a page.
+// jsdom lays nothing out, so the geometry the list reads is given: rows 53 px, the list 400 px into
+// a 600 px scroller below an 80 px sticky block — nine rows to a page.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -19,6 +19,7 @@ import { waitOutTheListsScrollTimer } from './Logbook.testkit'
 import { ConfirmHost } from '../confirm'
 import { deleteQsoById, type RowRef } from '../api'
 import { t } from '../i18n'
+import { chooseRowAction, rowMore } from './Logbook.rowMenu.testkit'
 import { setLogSource } from '../features/logSource'
 import { createAskingLogSource } from '../features/askingLogSource'
 import { answerFrom, type LogQuestion } from '../features/logAnswers'
@@ -45,7 +46,7 @@ vi.mock('../api', () => {
 })
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn((run: () => Promise<unknown>) => run()) }))
 
-const ROW_PX = 43
+const ROW_PX = 53
 const LIST_AT = 400
 const STICKY_PX = 80
 const N = 300
@@ -150,7 +151,7 @@ describe('the Logbook is a keyboard grid', () => {
   it('Page Down / Page Up move one visible page', async () => {
     await openAt(0)
     press('PageDown')
-    await waitFor(() => expect(focusedIndex()).toBe(12))
+    await waitFor(() => expect(focusedIndex()).toBe(9))
     press('PageUp')
     await waitFor(() => expect(focusedIndex()).toBe(0))
   })
@@ -206,21 +207,19 @@ describe('the Logbook is a keyboard grid', () => {
     expect(focusedIndex(), 'the same place in the list').toBe(3)
   })
 
-  it('the row’s ✕ answered yes: the keyboard goes to the ✕ of the contact that takes its place', async () => {
+  it('the row menu’s Delete answered yes: the keyboard goes to the ⋯ of the contact that takes its place', async () => {
     vi.mocked(deleteQsoById).mockImplementation(async (target: RowRef) => {
       engine.log = (engine.log as LoggedQso[]).filter((r) => r.id !== target.id)
       engine.revision += 1
       return { kind: 'deleted' }
     })
     await openAt(3)
-    const del = screen.getByRole('button', { name: t('logbook.row.delete', { call: callAt(3) }) })
-    act(() => del.focus())
-    fireEvent.click(del)
+    const more = rowMore(callAt(3))
+    act(() => more.focus())
+    await chooseRowAction(callAt(3), t('logbook.row.menu.delete'))
     fireEvent.click(await screen.findByRole('button', { name: t('logbook.delete.confirm') }))
-    await waitFor(() => expect(del.isConnected).toBe(false))
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole('button', { name: t('logbook.row.delete', { call: callAt(4) }) })),
-    )
+    await waitFor(() => expect(more.isConnected).toBe(false))
+    await waitFor(() => expect(document.activeElement).toBe(rowMore(callAt(4))))
   })
 
   it('a row opened in the detail view (double-click) has the keyboard again when the view closes', async () => {

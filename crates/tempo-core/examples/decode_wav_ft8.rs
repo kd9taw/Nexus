@@ -32,7 +32,10 @@
 //! Output (stdout), one line per decode:
 //!     <slot_utc_offset_s> <freq_hz> <snr_db> <dt_s> <message>
 //!
-//! Usage:  cargo run -q -p tempo-core --example decode_wav_ft8 -- [--frontend old|new] FILE.wav [...]
+//! `--activity` decodes as in Contest mode (a WSJT-X Special Operating Activity), which keeps the
+//! rover (`/R`) and `TU; ` decodes stock WSJT-X drops without one.
+//!
+//! Usage:  cargo run -q -p tempo-core --example decode_wav_ft8 -- [--frontend old|new] [--activity] FILE.wav [...]
 
 use modes::{DecodeRequest, ModeKind, NativeSource, SignalSource};
 use tempo_core::channel::capture_to_i16;
@@ -181,7 +184,7 @@ enum Frontend {
     New,
 }
 
-fn decode_file(path: &str, frontend: Frontend) -> std::io::Result<usize> {
+fn decode_file(path: &str, frontend: Frontend, activity: bool) -> std::io::Result<usize> {
     let (samples, sr) = read_wav_i16(path)?;
     // Soundcard capture delivers normalized f32 (i16 / 32768); the engine then
     // restores full-scale i16 via capture_to_i16. Mirror that exactly so the
@@ -223,6 +226,7 @@ fn decode_file(path: &str, frontend: Frontend) -> std::io::Result<usize> {
             frame_time_ms: (slot as i64) * 15_000,
             ap: true,          // stock: AP on (engine ap_decode default)
             ap_cq_only: false, // stock: all AP hypotheses
+            activity,          // stock off: no Special Operating Activity (`--activity` sets it)
             partial: false,    // full slot audio, not the early partial pass
         };
         let mut decs = src.decode_a7(&req, true); // authoritative boundary pass
@@ -252,6 +256,7 @@ fn main() {
     // historical live-capture path). Everything else is treated as a wav path.
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut frontend = Frontend::Old;
+    let mut activity = false;
     let mut files: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -264,12 +269,16 @@ fn main() {
                     std::process::exit(2);
                 }
             },
+            // Decode as in Contest mode: rover (`/R`) and `TU; ` decodes are kept.
+            "--activity" => activity = true,
             other if other.starts_with("--") => {} // ignore unknown flags, as before
             _ => files.push(a.clone()),
         }
     }
     if files.is_empty() {
-        eprintln!("usage: decode_wav_ft8 [--frontend old|new] FILE.wav [FILE2.wav ...]");
+        eprintln!(
+            "usage: decode_wav_ft8 [--frontend old|new] [--activity] FILE.wav [FILE2.wav ...]"
+        );
         std::process::exit(2);
     }
     eprintln!(
@@ -282,7 +291,7 @@ fn main() {
     );
     for path in &files {
         eprintln!("# file: {path}");
-        match decode_file(path, frontend) {
+        match decode_file(path, frontend, activity) {
             Ok(n) => eprintln!("# {path}: {n} decode(s)"),
             Err(e) => eprintln!("# {path}: ERROR {e}"),
         }
