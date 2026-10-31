@@ -14914,8 +14914,12 @@ struct XrayNow {
     /// The GOES sample's own time (Unix seconds, UTC) — never the fetch time, so a feed gap
     /// reads as an old sample and not as "now".
     as_of: i64,
-    /// The six-hour trace, `[unix, flux]` per five minutes (each bucket's peak), oldest first.
+    /// The six-hour trace, `[unix, flux]` per five minutes (each bucket's peak), oldest first:
+    /// the sparkline.
     series: Vec<(i64, f32)>,
+    /// The raw GOES minutes of the last 70 minutes, `[unix, flux]`, oldest first: the direction
+    /// word reads these, because bucket peaks hide the dip when a decay turns up again.
+    recent: Vec<(i64, f32)>,
     /// NOAA's newest flare event, when its list has answered.
     event: Option<propagation::flare::FlareEvent>,
     /// NOAA's D-RAP grid, only while the flux is at a flare (M1+, where the map draws it):
@@ -14958,13 +14962,52 @@ async fn get_xray_now() -> Result<XrayNow, String> {
     } else {
         None
     };
-    Ok(XrayNow {
+    Ok(xray_now(x, event, drap))
+}
+
+/// The fast lane's answer: the flux, its time, the sparkline and the raw minutes all from the
+/// one GOES fetch, so the word and the number the chip prints come from the same file.
+fn xray_now(
+    x: propagation::live::swpc::XrayTrace,
+    event: Option<propagation::flare::FlareEvent>,
+    drap: Option<propagation::flare::DrapGrid>,
+) -> XrayNow {
+    XrayNow {
         flux: x.now.value,
         as_of: x.now.at,
         series: x.series,
+        recent: x.recent,
         event,
         drap,
-    })
+    }
+}
+
+#[cfg(test)]
+mod xray_now_tests {
+    use super::*;
+
+    /// Every field of `get_xray_now` comes from the one GOES fetch, under the names the UI reads.
+    #[test]
+    fn the_lane_answer_carries_the_sample_the_peaks_and_the_raw_minutes() {
+        let x = propagation::live::swpc::XrayTrace {
+            now: propagation::live::swpc::Sample {
+                value: 2.6e-5,
+                at: 1_000_600,
+            },
+            series: vec![(1_000_200, 4e-5), (1_000_600, 2.6e-5)],
+            recent: vec![(1_000_480, 2e-5), (1_000_540, 2.3e-5), (1_000_600, 2.6e-5)],
+        };
+        let v = serde_json::to_value(xray_now(x, None, None)).unwrap();
+        assert_eq!(v["asOf"], 1_000_600);
+        assert!((v["flux"].as_f64().unwrap() - 2.6e-5).abs() < 1e-9);
+        assert_eq!(v["series"].as_array().unwrap().len(), 2);
+        // The raw minutes keep the dip the peaks lose, oldest first, and end at the sample shown.
+        let recent = v["recent"].as_array().unwrap();
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0][0], 1_000_480);
+        assert_eq!(recent[2][0], v["asOf"]);
+        assert!(v["event"].is_null() && v["drap"].is_null());
+    }
 }
 
 /// Fetch the NOAA R/S/G space-weather scales (today + tomorrow's G) plus the most

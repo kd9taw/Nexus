@@ -15,10 +15,11 @@
 // PHASES. NOAA's event list says began / peak / ended in NOAA's words. When it is silent or stale,
 // or its event is a previous flare (the flux is now above that event's peak, or GOES's own trace
 // has turned up again since it ended), the phase falls back to the direction of the fast lane's
-// GOES trace, marked estimated, and to no word at all without a current trace. That trace is one
-// point per five minutes, each bucket's PEAK, so its last point can be up to ~4 minutes old and
-// higher than the flux now: the GOES sample the chip shows is its newest point (`withNewest`).
-// Never the shack's 3-hour trend: that one compares now with the oldest sample in three hours, so
+// GOES trace, marked estimated, and to no word at all without a current trace. That trace is the
+// raw one-minute samples (`recent`), never the sparkline's 5-minute bucket PEAKS: peaks hide the
+// troughs, so read from them a re-rise in a decay says Falling while the flux climbs from the dip,
+// and a peak early in a bucket says Rising after the flux has fallen. The GOES sample the chip shows
+// is always the trace's newest point (`withNewest`). Never the shack's 3-hour trend: that one compares now with the oldest sample in three hours, so
 // it says "rising" all through an ordinary flare's decay.
 //
 // EXTENSION POINT. A later overlay (the proton cap, the aurora edge) adds its own footprint
@@ -276,12 +277,13 @@ function classFlux(cls: string | null): number | null {
   return m ? CLASS_BASE[m[1]] * Number(m[2]) : null
 }
 
-/** The lane's trace with the GOES sample the chip shows (`xray` at `xrayAt`) as its newest point.
- *  The trace is 5-minute bucket PEAKS (propagation `xray_series`), so its last point is the current
- *  bucket's high, not its newest sample: read as "now", a peak early in a bucket says Rising for up
- *  to ~4 minutes while the flux beside it falls. The sample joins only a current trace (its last
- *  point ≤ TRACE_LIVE_SECS old, the readers' own rule) and only when it is later than that point;
- *  otherwise the trace is unchanged, and an old one still gives no word. */
+/** The lane's raw minutes with the GOES sample the chip shows (`xray` at `xrayAt`) as their newest
+ *  point. From the same GOES file that sample is already their last, and this changes nothing; it
+ *  is the guarantee that the word reads the number printed when the two differ (GOES's newest row
+ *  with no flux above zero is not among the raw minutes, and the chip then prints the snapshot's).
+ *  The sample joins only a current trace (its last point ≤ TRACE_LIVE_SECS old, the readers' own
+ *  rule) and only when it is later than that point; otherwise the trace is unchanged, and an old
+ *  one still gives no word. */
 function withNewest(
   series: ReadonlyArray<[number, number]> | undefined,
   xray: number | null,
@@ -334,8 +336,8 @@ function traceDirection(series: ReadonlyArray<[number, number]> | undefined, now
 }
 
 /** `xray` is the flux now (null when unknown) and `xrayAt` its GOES sample time; `series` is the
- *  fast lane's GOES trace (5-minute bucket peaks), read with that sample as its newest point
- *  (`withNewest`), the same reading the chip shows. An event that has peaked or ended is this
+ *  fast lane's raw GOES minutes (`recent`, never the sparkline's bucket peaks), read with that
+ *  sample as its newest point (`withNewest`), the same reading the chip shows. An event that has peaked or ended is this
  *  flare's only while the flux is not above its peak and, once
  *  ended, the trace has not turned up again: NOAA lists a flare only after minutes of rise, so
  *  until it does the newest event is the PREVIOUS flare, and its words must not be quoted for this
@@ -400,23 +402,37 @@ export function flareRecovery(
 }
 
 /** What NOAA says beside the flux, for the map surfaces: the six-hour trace (5-minute bucket
- *  peaks, so its last point is not the flux now), the event list and the D-RAP grid, and the GOES
- *  sample's own time. Null for simulated flux (Preview, the dev override), which is drawn with the
- *  analytic field alone. */
+ *  peaks, for the sparkline only), the raw GOES minutes of the last 70 minutes (the direction
+ *  word; empty from an older station, which then gets no word), the event list and the D-RAP grid,
+ *  and the GOES sample's own time. Null for simulated flux (Preview, the dev override), which is
+ *  drawn with the analytic field alone. */
 export interface FlareNoaa {
   xrayAt: number
   series: [number, number][]
+  recent: [number, number][]
   event: FlareEvent | null
   drap: DrapGrid | null
 }
 
 /** The fast-lane answer as the map takes it; null when there is none or the flux is simulated. */
 export function flareNoaaOf(
-  lane: { asOf: number; series?: [number, number][]; event?: FlareEvent | null; drap?: DrapGrid | null } | null,
+  lane: {
+    asOf: number
+    series?: [number, number][]
+    recent?: [number, number][]
+    event?: FlareEvent | null
+    drap?: DrapGrid | null
+  } | null,
   simulated: boolean,
 ): FlareNoaa | null {
   if (!lane || simulated) return null
-  return { xrayAt: lane.asOf, series: lane.series ?? [], event: lane.event ?? null, drap: lane.drap ?? null }
+  return {
+    xrayAt: lane.asOf,
+    series: lane.series ?? [],
+    recent: lane.recent ?? [],
+    event: lane.event ?? null,
+    drap: lane.drap ?? null,
+  }
 }
 
 /** GOES samples older than this freeze the footprint (no breathing) and the chip says how old. */

@@ -188,13 +188,9 @@ pub fn parse_flare_latest(v: &Value) -> Option<FlareEvent> {
     })
 }
 
-/// The GOES long-band (0.1–0.8 nm) trace from `xrays-6-hour.json` for the flare chip's
-/// sparkline: one `(unix, flux)` per `bucket_secs`, the bucket's PEAK sample with its own time
-/// (a short spike must survive the thinning), oldest first. Rows without a flux or a time are
-/// skipped.
-pub fn xray_series(v: &Value, bucket_secs: i64) -> Vec<(i64, f32)> {
-    let bucket_secs = bucket_secs.max(1);
-    let mut out: Vec<(i64, f32)> = Vec::new();
+/// The GOES long-band (0.1–0.8 nm) samples in `xrays-6-hour.json`, one a minute, oldest first.
+/// Rows without a flux above zero or a time are skipped.
+fn long_band(v: &Value) -> Vec<(i64, f32)> {
     let rows = v.as_array().map(Vec::as_slice).unwrap_or_default();
     let mut samples: Vec<(i64, f32)> = rows
         .iter()
@@ -206,7 +202,17 @@ pub fn xray_series(v: &Value, bucket_secs: i64) -> Vec<(i64, f32)> {
         })
         .collect();
     samples.sort_by_key(|s| s.0);
-    for s in samples {
+    samples
+}
+
+/// The GOES long-band trace for the flare chip's sparkline: one `(unix, flux)` per
+/// `bucket_secs`, the bucket's PEAK sample with its own time (a short spike must survive the
+/// thinning), oldest first. Peaks hide the troughs, so the direction word never reads this
+/// (`xray_recent`).
+pub fn xray_series(v: &Value, bucket_secs: i64) -> Vec<(i64, f32)> {
+    let bucket_secs = bucket_secs.max(1);
+    let mut out: Vec<(i64, f32)> = Vec::new();
+    for s in long_band(v) {
         match out.last_mut() {
             Some(last) if last.0.div_euclid(bucket_secs) == s.0.div_euclid(bucket_secs) => {
                 if s.1 > last.1 {
@@ -217,6 +223,17 @@ pub fn xray_series(v: &Value, bucket_secs: i64) -> Vec<(i64, f32)> {
         }
     }
     out
+}
+
+/// The GOES long-band samples as measured (one a minute), from `secs` before the newest one to
+/// it, oldest first: what the flare chip's direction word reads. A dip between two rises is in
+/// these and not in the bucket peaks, so a decay that turns up again reads as rising from the
+/// dip and not from the peak after it.
+pub fn xray_recent(v: &Value, secs: i64) -> Vec<(i64, f32)> {
+    let mut samples = long_band(v);
+    let from = samples.last().map_or(0, |s| s.0 - secs.max(0));
+    samples.retain(|s| s.0 >= from);
+    samples
 }
 
 /// The analytic D-RAP HAF (MHz) at a point and instant for a long-band flux: NOAA's subsolar
@@ -516,6 +533,62 @@ mod tests {
         assert_eq!(parse_flare_latest(&undated), None);
         assert_eq!(parse_flare_latest(&serde_json::json!({})), None);
         assert_eq!(parse_flare_latest(&serde_json::json!([])), None);
+    }
+
+    #[test]
+    fn the_recent_samples_are_the_raw_minutes_of_the_window_before_the_newest() {
+        let t0 = utc("2026-10-30T12:00:00Z");
+        let tag = |t: i64| {
+            let s = chrono_like(t);
+            format!("{}T{}:00Z", &s[..10], &s[11..])
+        };
+        let mut rows = Vec::new();
+        // 90 minutes of a decay that bottoms out at minute 80 and climbs again; file order is
+        // not time order, and the short band sits beside each row.
+        for m in (0..90).rev() {
+            let flux = if m <= 80 {
+                6e-5 - m as f64 * 5e-7
+            } else {
+                2e-5 + (m - 80) as f64 * 2e-6
+            };
+            rows.push(serde_json::json!({"time_tag": tag(t0 + m * 60), "flux": flux, "energy": "0.1-0.8nm"}));
+            rows.push(serde_json::json!({"time_tag": tag(t0 + m * 60), "flux": 9e-4, "energy": "0.05-0.4nm"}));
+        }
+        // No flux, a zero flux and no time are not samples.
+        rows.push(
+            serde_json::json!({"time_tag": tag(t0 + 90 * 60), "flux": null, "energy": "0.1-0.8nm"}),
+        );
+        rows.push(
+            serde_json::json!({"time_tag": tag(t0 + 91 * 60), "flux": 0.0, "energy": "0.1-0.8nm"}),
+        );
+        rows.push(serde_json::json!({"flux": 9e-5, "energy": "0.1-0.8nm"}));
+        let v = Value::Array(rows);
+        let r = xray_recent(&v, 30 * 60);
+        // Minutes 59..=89: the newest dated sample and the 30 minutes before it, every one.
+        assert_eq!(r.len(), 31, "{r:?}");
+        assert_eq!(r.first().unwrap().0, t0 + 59 * 60);
+        assert_eq!(r.last().unwrap().0, t0 + 89 * 60);
+        assert!(
+            r.windows(2).all(|w| w[1].0 - w[0].0 == 60),
+            "oldest first, one a minute"
+        );
+        assert!(
+            r.iter().all(|p| p.1 > 0.0 && p.1 < 1e-4),
+            "long band only, flux above zero"
+        );
+        // The dip the bucket peaks hide is there, at its own minute.
+        let low = r
+            .iter()
+            .copied()
+            .fold((0, f32::MAX), |a, p| if p.1 < a.1 { p } else { a });
+        assert_eq!(low, (t0 + 80 * 60, 2e-5));
+        let peaks = xray_series(&v, 300);
+        assert!(
+            peaks.iter().all(|p| p.1 > 2e-5),
+            "CONTROL: the bucket peaks lose the dip"
+        );
+        // Nothing to read: nothing.
+        assert!(xray_recent(&serde_json::json!([]), 1800).is_empty());
     }
 
     #[test]

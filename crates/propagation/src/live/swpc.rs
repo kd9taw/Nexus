@@ -214,19 +214,28 @@ const DRAP_URL: &str = "https://services.swpc.noaa.gov/text/drap_global_frequenc
 pub struct XrayTrace {
     /// The newest dated sample.
     pub now: Sample,
-    /// Peak flux per five minutes over the file's six hours, oldest first.
+    /// Peak flux per five minutes over the file's six hours, oldest first (the sparkline).
     pub series: Vec<(i64, f32)>,
+    /// The raw minute samples of the last `XRAY_RECENT_SECS`, oldest first (the direction word).
+    pub recent: Vec<(i64, f32)>,
 }
+
+/// How far back the raw minutes go: the flare chip's longest look back (whether the flux has
+/// turned up since NOAA ended a flare, for an hour after the end) plus its 10-minute limit on
+/// the age of the newest sample.
+const XRAY_RECENT_SECS: i64 = 70 * 60;
 
 /// Standalone GOES X-ray fetch — the 60 s "fast lane" behind `get_xray_now`, so a flare's
 /// onset reaches the UI in ~1 min instead of the 5-min snapshot TTL. Carries the sample time,
-/// and the trace the flare chip's sparkline draws (the same file, no second request).
+/// the trace the flare chip's sparkline draws and the raw minutes its direction word reads (the
+/// same file, no second request).
 pub fn fetch_xray_trace() -> Result<XrayTrace, String> {
     let v = get_json(&client()?, XRAY_URL)?;
     let now = parse_xray(&v).ok_or_else(|| "xray: no dated long-band sample".to_string())?;
     Ok(XrayTrace {
         now,
         series: crate::flare::xray_series(&v, 300),
+        recent: crate::flare::xray_recent(&v, XRAY_RECENT_SECS),
     })
 }
 
@@ -294,6 +303,15 @@ pub fn fetch_daily_solar_indices() -> Result<crate::solar_indices::DailySolarInd
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The raw minutes reach as far back as the flare chip reads them: whether the flux turned up
+    /// since NOAA ended a flare, for an hour after the end, beside a newest sample up to 10
+    /// minutes old. A shorter window would take the low from a later, higher minute than the dip.
+    #[test]
+    fn the_raw_minutes_cover_the_chips_longest_look_back() {
+        let (hour_after_end, sample_age) = (3600, 600);
+        assert!(XRAY_RECENT_SECS >= hour_after_end + sample_age);
+    }
 
     // Live SWPC products captured 2026-10-30 ~02:46 UT, trimmed (public domain, see the URLs above).
     const F107: &str = include_str!("../../tests/fixtures/swpc-f107-cm-flux-2026-10-30.json");

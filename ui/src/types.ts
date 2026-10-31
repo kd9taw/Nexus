@@ -1034,9 +1034,12 @@ export interface XrayNow {
   /** The GOES sample's own time (Unix seconds, UTC), not the fetch time — a feed gap shows
    *  as an old sample (propViz `xrayFastFresh`). */
   asOf: number
-  /** The six-hour trace, `[unix, flux]` per five minutes (each bucket's peak), oldest first.
-   *  Absent from an older station. */
+  /** The six-hour trace, `[unix, flux]` per five minutes (each bucket's peak), oldest first: the
+   *  sparkline. Absent from an older station. */
   series?: [number, number][]
+  /** The raw GOES minutes of the last 70 minutes, `[unix, flux]`, oldest first: the direction word.
+   *  Absent from an older station, which then gets no direction word (never one from the peaks). */
+  recent?: [number, number][]
   /** NOAA's newest flare event, when its list answered. */
   event?: FlareEvent | null
   /** NOAA's D-RAP grid — sent only while the flux is M1 or above. */

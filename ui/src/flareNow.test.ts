@@ -540,6 +540,16 @@ describe('flareNoaaOf: a simulation never carries NOAA', () => {
     expect(flareNoaaOf(lane, false)).toMatchObject({ xrayAt: NOW_S - 60, drap: lane.drap })
     expect(flareNoaaOf(null, false)).toBeNull()
   })
+  it("carries the raw minutes for the direction word, and none from an older station that sends none", () => {
+    const recent: [number, number][] = [[NOW_S - 120, 4e-5], [NOW_S - 60, 5e-5]]
+    expect(flareNoaaOf({ ...lane, recent }, false)!.recent).toEqual(recent)
+    const older = flareNoaaOf(lane, false)!
+    expect(older.recent).toEqual([])
+    // With no raw minutes there is no word, even beside a sparkline that falls.
+    const falling: [number, number][] = [[NOW_S - 1500, 9e-5], [NOW_S - 900, 7e-5], [NOW_S - 300, 5.5e-5]]
+    expect(flarePhase(null, NOW, 5e-5, older.recent, older.xrayAt).kind).toBeNull()
+    expect(flarePhase(null, NOW, 5e-5, falling, older.xrayAt).kind).toBe('falling')
+  })
 })
 
 describe('flareRecovery', () => {

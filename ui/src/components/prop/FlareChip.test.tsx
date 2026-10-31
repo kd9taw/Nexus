@@ -12,7 +12,7 @@ import { render, cleanup, fireEvent } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { FlareChip } from './FlareChip'
-import { flareFootprint, type FlareNoaa } from '../../flareNow'
+import { flareFootprint, flareNoaaOf, type FlareNoaa } from '../../flareNow'
 import { flareHafAt, flareRecoveryMin } from '../../mapGeo'
 import { t } from '../../i18n'
 import { chainOf, parseRules, winnerAt } from '../../cssCascade'
@@ -42,13 +42,15 @@ const event: FlareEvent = {
   endAt: null,
   currentClass: 'M4.0',
 }
+const TRACE: [number, number][] = [
+  [NOW_S - 3600, 2e-7],
+  [NOW_S - 1800, 6e-5],
+  [NOW_S - 60, 5e-5],
+]
 const noaa = (o: Partial<FlareNoaa> = {}): FlareNoaa => ({
   xrayAt: NOW_S - 60,
-  series: [
-    [NOW_S - 3600, 2e-7],
-    [NOW_S - 1800, 6e-5],
-    [NOW_S - 60, 5e-5],
-  ],
+  series: TRACE,
+  recent: TRACE,
   event,
   drap: grid(),
   ...o,
@@ -83,13 +85,13 @@ describe('FlareChip words', () => {
   const ended: FlareEvent = { ...event, maxClass: 'M6.0', maxFlux: 6e-5, endAt: NOW_S - 300 }
   it("keeps NOAA's \"ended\" through the decay", () => {
     const decay: [number, number][] = [[NOW_S - 600, 6e-5], [NOW_S - 240, 5.5e-5], [NOW_S - 60, 5e-5]]
-    const text = chip(noaa({ event: ended, series: decay })).container.textContent ?? ''
+    const text = chip(noaa({ event: ended, recent: decay })).container.textContent ?? ''
     expect(text).toContain(t('map.flare.noaa.ended', { end: '17:55Z', begin: '17:38Z' }))
     expect(text).not.toContain(t('map.flare.est.rising'))
   })
   it('CONTROL: a trace that turns up again after the end reads Rising (estimated)', () => {
     const upAgain: [number, number][] = [[NOW_S - 600, 6e-5], [NOW_S - 240, 4e-5], [NOW_S - 60, 5e-5]]
-    const text = chip(noaa({ event: ended, series: upAgain })).container.textContent ?? ''
+    const text = chip(noaa({ event: ended, recent: upAgain })).container.textContent ?? ''
     expect(text).toContain(t('map.flare.est.rising'))
     expect(text).not.toContain('17:55Z')
   })
@@ -106,7 +108,7 @@ describe('FlareChip words', () => {
     maxFlux: 2e-4,
     endAt: NOW_S - 3 * 3600,
   }
-  const stale = (series: [number, number][]) => noaa({ event: old, series })
+  const stale = (recent: [number, number][]) => noaa({ event: old, recent })
   const est = (text: string) => ({
     rising: text.includes(t('map.flare.est.rising')),
     falling: text.includes(t('map.flare.est.falling')),
@@ -121,8 +123,8 @@ describe('FlareChip words', () => {
   })
   it('no trace, or an old one, gives no direction word', () => {
     const oldTrace: [number, number][] = [[NOW_S - 3000, 2e-5], [NOW_S - 2400, 5e-5], [NOW_S - 1800, 6e-5]]
-    for (const series of [[], oldTrace]) {
-      expect(est(chip(stale(series)).container.textContent ?? '')).toEqual({ rising: false, falling: false })
+    for (const recent of [[], oldTrace]) {
+      expect(est(chip(stale(recent)).container.textContent ?? '')).toEqual({ rising: false, falling: false })
     }
   })
 
@@ -239,5 +241,164 @@ describe('the chip stack in the cascade', () => {
     const pca = container.querySelector('.pca-chip')!
     const win = winnerAt(RULES, 'dark', chainOf(pca), 'border-left', 'border-left-color')
     expect(win?.value).toContain('#a855f7')
+  })
+})
+
+// The lane's `series` is 5-minute bucket PEAKS (for the sparkline), and peaks hide the troughs: when a
+// decay turns up again, the dip's bucket keeps its higher sample on the rising side, so a word read
+// from the peaks says "Falling" for minutes while the flux printed beside it climbs from the dip. The
+// direction word reads the lane's raw one-minute samples (`recent`). These tests build the lane as the
+// shack does (propagation `xray_series` / `xray_recent`, from the same GOES file) and read the word
+// off the rendered chip, with the clock slid through every minute of a bucket.
+describe('FlareChip: the direction word reads the raw GOES minutes, not the bucket peaks', () => {
+  type Pt = [number, number]
+  const BASE = Date.UTC(2026, 9, 31, 18, 0) / 1000 // a bucket boundary
+  /** The shack's `xray_series`: each 5-minute bucket's peak, with its own time. */
+  const bucket = (s: Pt[]): Pt[] => {
+    const out: Pt[] = []
+    for (const p of s) {
+      const l = out[out.length - 1]
+      if (l && Math.floor(l[0] / 300) === Math.floor(p[0] / 300)) {
+        if (p[1] > l[1]) out[out.length - 1] = p
+      } else out.push(p)
+    }
+    return out
+  }
+  /** The lane at `nowS` from GOES's minute samples: the newest one, the bucket peaks and the raw
+   *  minutes of the 70 minutes before it, as `get_xray_now` sends them. */
+  const laneAt = (samples: Pt[], nowS: number, event: FlareEvent | null) => {
+    const seen = samples.filter(([t]) => t <= nowS)
+    const [asOf, flux] = seen[seen.length - 1]
+    const recent = seen.filter(([t]) => t >= asOf - 70 * 60)
+    return { flux, noaa: flareNoaaOf({ asOf, series: bucket(seen), recent, event, drap: null }, false)! }
+  }
+  /** The chip's direction word for that lane, read off the rendered chip. */
+  const wordAt = (samples: Pt[], nowS: number, event: FlareEvent | null = null) => {
+    const { flux, noaa } = laneAt(samples, nowS, event)
+    const foot = flareFootprint(nowS * 1000, flux, null)
+    expect(foot, 'the chip shows only at M1+').not.toBeNull()
+    const { container, unmount } = render(
+      <FlareChip xrayLong={flux} foot={foot!} noaa={noaa} qth={null} nowMs={nowS * 1000} />,
+    )
+    const text = container.textContent ?? ''
+    unmount()
+    const rising = text.includes(t('map.flare.est.rising'))
+    const falling = text.includes(t('map.flare.est.falling'))
+    expect(rising && falling).toBe(false)
+    return rising ? 'rising' : falling ? 'falling' : null
+  }
+  /** NOAA's list still on a flare that began 22 minutes ago and was last updated 12 minutes ago:
+   *  too old to quote, so the chip falls back to the trace. */
+  const staleList = (nowS: number): FlareEvent => ({
+    at: nowS - 12 * 60,
+    beginAt: nowS - 22 * 60,
+    beginClass: 'C5.0',
+    maxAt: null,
+    maxClass: null,
+    maxFlux: null,
+    endAt: null,
+    currentClass: 'M2.0',
+  })
+
+  it('a decay that turns up again reads Rising once the flux is past the margin above the dip, never Falling', () => {
+    const misses: string[] = []
+    for (const pct of [2, 3, 5, 8, 12]) {
+      // The dip at every minute of a bucket.
+      for (let off = 0; off < 5; off++) {
+        const dip = BASE - 20 * 60 + off * 60
+        const f = (t: number) => {
+          const dm = (t - dip) / 60
+          return dm <= 0 ? 2e-5 * Math.pow(1.03, -dm) : 2e-5 * Math.pow(1 + pct / 100, dm)
+        }
+        const samples: Pt[] = []
+        for (let s = dip - 60 * 60; s <= dip + 18 * 60; s += 60) samples.push([s, f(s)])
+        for (let k = 1; k <= 18; k++) {
+          const nowS = dip + k * 60
+          const up = f(nowS) / f(dip)
+          const w = wordAt(samples, nowS)
+          // Past the margin above the dip it is Rising (the rule's own threshold, from the first
+          // minute it is crossed); at or below it, never Rising, and never Falling once it climbs.
+          if (up > 1.1 && w !== 'rising') misses.push(`${pct}%/min dip@${off} +${k}m up ${up.toFixed(3)}: ${w}`)
+          if (up <= 1.1 && w === 'rising') misses.push(`${pct}%/min dip@${off} +${k}m Rising within the margin`)
+        }
+      }
+    }
+    expect(misses).toEqual([])
+  })
+
+  it('CONTROL: a plain decay reads Falling at every minute', () => {
+    const samples: Pt[] = []
+    for (let s = BASE - 80 * 60; s <= BASE; s += 60) samples.push([s, 3e-4 * Math.pow(0.97, (s - BASE + 80 * 60) / 60)])
+    for (let k = 0; k < 10; k++) expect(wordAt(samples, BASE - k * 60)).toBe('falling')
+  })
+
+  // Every shape, the clock slid one minute at a time through two buckets, with no event and with a
+  // stale list. The word must not contradict the flux printed: Rising is wrong when the flux shown fell
+  // from the minute before and is more than the margin below the highest of the four minutes before
+  // it; Falling is wrong when it rose from the minute before and is more than the margin above their
+  // lowest. A minute below M1 has no chip.
+  const lin = (knots: Array<[number, number]>) => (m: number) => {
+    for (let k = 0; k < knots.length - 1; k++) {
+      const [m0, f0] = knots[k]
+      const [m1, f1] = knots[k + 1]
+      if (m <= m0 && m >= m1) return f0 + ((m0 - m) / (m0 - m1)) * (f1 - f0)
+    }
+    return knots[knots.length - 1][1]
+  }
+  const shapes: Record<string, (minsBefore: number) => number> = {
+    impulsive_peak_m5: (m) => (m > 10 ? 5e-6 : m >= 5 ? 5e-6 + ((10 - m) / 5) * 4.5e-5 : 5e-5 * Math.exp(-(5 - m) / 8)),
+    impulsive_peak_m8: (m) => (m > 13 ? 5e-6 : m >= 8 ? 5e-6 + ((13 - m) / 5) * 4.5e-5 : 5e-5 * Math.exp(-(8 - m) / 8)),
+    impulsive_peak_m3: (m) => (m > 8 ? 5e-6 : m >= 3 ? 5e-6 + ((8 - m) / 5) * 4.5e-5 : 5e-5 * Math.exp(-(3 - m) / 8)),
+    double_peak: lin([[40, 5e-6], [30, 5e-6], [24, 5e-5], [16, 2e-5], [9, 4e-5], [0, 2.6e-5]]),
+    triple_peak: lin([[40, 5e-6], [28, 5e-5], [23, 1.5e-5], [18, 4e-5], [13, 2e-5], [9, 3.5e-5], [0, 2.2e-5]]),
+    climb: lin([[40, 5e-6], [12, 5e-6], [0, 6e-5]]),
+    gradual_rise: (m) => 1e-5 * Math.exp((40 - m) / 30),
+    rise_noisy_2pct: (m) => 1e-5 * Math.exp((40 - m) / 30) * (m % 2 ? 1.02 : 0.98),
+    slow_decay: (m) => 4e-5 * Math.exp(-(40 - m) / 40),
+    decay_noisy_2pct: (m) => 4e-5 * Math.exp(-(40 - m) / 40) * (m % 2 ? 1.02 : 0.98),
+    flat: () => 1e-5,
+    rerise_in_decay: lin([[40, 6e-5], [10, 2e-5], [0, 3.5e-5]]),
+    decay_spike_15pct: (m) => 4e-5 * Math.exp(-(40 - m) / 40) * (m === 6 ? 1.15 : 1),
+    decay_dropout_15pct: (m) => 4e-5 * Math.exp(-(40 - m) / 40) * (m === 6 ? 0.85 : 1),
+  }
+  for (const [name, f] of Object.entries(shapes)) {
+    it(`sliding clock, ${name}: an honest word or none at every minute`, () => {
+      const samples: Pt[] = []
+      for (let m = 40; m >= 0; m--) samples.push([BASE - m * 60, f(m)])
+      const bad: string[] = []
+      for (let k = 0; k < 10; k++) {
+        const nowS = BASE - k * 60
+        const seen = samples.filter(([t]) => t <= nowS)
+        const [at, shown] = seen[seen.length - 1]
+        if (shown < 1e-5) continue
+        const prev = seen.filter(([t]) => t < at && t >= at - 240).map(([, x]) => x)
+        const step = shown - seen[seen.length - 2][1]
+        for (const ev of [null, staleList(nowS)]) {
+          const w = wordAt(samples, nowS, ev)
+          if (w === 'rising' && step < 0 && shown * 1.1 < Math.max(...prev)) bad.push(`-${k}m ${ev ? 'stale' : 'none'}: Rising`)
+          if (w === 'falling' && step > 0 && shown > Math.min(...prev) * 1.1) bad.push(`-${k}m ${ev ? 'stale' : 'none'}: Falling`)
+        }
+      }
+      expect(bad).toEqual([])
+    })
+  }
+
+  it('the rerise shape reads Rising from the first minute the flux is past the margin above its dip', () => {
+    // 10 minutes ago the decay bottomed out at 2e-5; it has climbed linearly to 3.5e-5 since.
+    const f = shapes.rerise_in_decay
+    const samples: Pt[] = []
+    for (let m = 40; m >= 0; m--) samples.push([BASE - m * 60, f(m)])
+    for (let k = 0; k < 10; k++) {
+      const up = f(k) / 2e-5
+      if (up > 1.1) expect(wordAt(samples, BASE - k * 60), `-${k}m`).toBe('rising')
+    }
+  })
+
+  it('a station that sends no raw minutes gives no direction word, never the bucket peaks\' word', () => {
+    const decay: [number, number][] = [[NOW_S - 1500, 9e-5], [NOW_S - 900, 7e-5], [NOW_S - 300, 5.5e-5]]
+    const old = flareNoaaOf({ asOf: NOW_S - 60, series: decay, event: null, drap: null }, false)!
+    const text = chip(old).container.textContent ?? ''
+    expect(text).not.toContain(t('map.flare.est.falling'))
+    expect(text).not.toContain(t('map.flare.est.rising'))
   })
 })

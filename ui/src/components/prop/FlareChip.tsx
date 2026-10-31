@@ -67,8 +67,9 @@ export function FlareChip({
       </div>
     )
   }
-  // The flux shown is the trace's newest point: the trace is 5-minute bucket peaks, up to ~4 min old.
-  const phase = flarePhase(noaa?.event, nowMs, xrayLong, noaa?.series, noaa?.xrayAt)
+  // The word reads the raw GOES minutes (never the sparkline's bucket peaks, which hide the dips),
+  // with the flux shown as their newest point.
+  const phase = flarePhase(noaa?.event, nowMs, xrayLong, noaa?.recent, noaa?.xrayAt)
   const phaseLine = phase.noaa
     ? phase.kind === 'ended'
       ? t('map.flare.noaa.ended', { end: hm(phase.endAt!), begin: hm(phase.beginAt!) })

@@ -133,7 +133,7 @@ const event: FlareEvent = {
   endAt: null,
   currentClass: 'X2.0',
 }
-const lane = (o: Partial<FlareNoaa> = {}): FlareNoaa => ({ xrayAt: NOW_S - 60, series: [], event: null, drap: null, ...o })
+const lane = (o: Partial<FlareNoaa> = {}): FlareNoaa => ({ xrayAt: NOW_S - 60, series: [], recent: [], event: null, drap: null, ...o })
 
 describe('the per-band rings on the 2-D map', () => {
   it('strokes each band’s 1 dB ring dashed and its 10 dB ring solid, in the band’s colour', async () => {
