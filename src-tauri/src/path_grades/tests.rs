@@ -967,3 +967,104 @@ fn a_card_grades_no_contact_from_before_its_space_weather() {
     };
     assert!(grade_card_measured(Some(&s), NOW), "control: flux inside");
 }
+
+/// A live contact keeps its grade however long it runs while its station's card is refreshed on
+/// fresh Kp: each refresh carries on the run of readings the card began on, so the start is spoken
+/// for by the run's first reading. A run with a hole in it (the station deselected half an hour),
+/// a card first opened well into the contact, and a contact entered by hand hours before the run
+/// are not graded from it.
+#[test]
+fn a_long_live_contact_is_graded_through_its_cards_refreshes() {
+    let _s = serial();
+    let live = Mutex::new(propagation::LiveSpots::default());
+    let region = Mutex::new(propagation::LiveSpots::default());
+    let card = sydney_card("FN42", NOW);
+    // A refresh at `t`, on a flux an hour old and a Kp a minute old, as the space-weather cache
+    // serves them.
+    let refresh = |t: i64| {
+        let stamps = propagation::model::SpaceWxStamps {
+            sfi_at: Some(t - 3600),
+            kp_at: Some(t - 60),
+            ..Default::default()
+        };
+        keep_outlook("FN42", "QF56", t, &card, Some(&stamps));
+    };
+    // Refreshes every `every` minutes over `[from, to]` minutes after `NOW`.
+    let run = |from: i64, to: i64, every: i64| {
+        let mut m = from;
+        while m <= to {
+            refresh(NOW + m * 60);
+            m += every;
+        }
+        refresh(NOW + to * 60);
+    };
+    let graded = |start: i64| {
+        at_log(
+            &qso("VK2AA", "QF56", "20m", start, None),
+            "",
+            &live,
+            &region,
+            &[],
+        )
+    };
+    for (mins, every) in [(18, 5), (30, 10), (60, 7)] {
+        lock(&OUTLOOKS).clear();
+        run(0, mins, every);
+        assert!(
+            graded(NOW).is_some(),
+            "a {mins}-minute contact, refreshed every {every}"
+        );
+    }
+    // A 30-minute hole: the run starts over after it, past the contact's start.
+    lock(&OUTLOOKS).clear();
+    run(0, 10, 5);
+    run(40, 45, 5);
+    assert_eq!(graded(NOW), None, "a broken run");
+    // Opened 20 minutes into the contact: no reading spoke for its start.
+    lock(&OUTLOOKS).clear();
+    run(20, 30, 5);
+    assert_eq!(graded(NOW), None, "first opened 20 minutes in");
+    assert!(
+        graded(NOW + 20 * 60).is_some(),
+        "control: a contact the run spoke for"
+    );
+    // Back-dated by hand, hours before a live run.
+    lock(&OUTLOOKS).clear();
+    run(0, 30, 5);
+    for h in [1, 2, 5] {
+        assert_eq!(graded(NOW - h * 3600), None, "back-dated {h} h");
+    }
+}
+
+/// The three things a kept card needs to speak for a contact's start, each at its edge: the flux
+/// read within two days of it either side, the newest Kp no more than 15 minutes before it, and the
+/// run's first Kp no more than 15 minutes after it.
+#[test]
+fn a_kept_card_speaks_for_a_start_only_inside_all_three_limits() {
+    let k = |sfi_at: i64, kp_at: i64, since: i64| KeptOutlook {
+        me4: "FN42".into(),
+        dx4: "QF56".into(),
+        at: NOW,
+        pred: Arc::new(sydney_card("FN42", NOW)),
+        stamps: propagation::model::SpaceWxStamps {
+            sfi_at: Some(sfi_at),
+            kp_at: Some(kp_at),
+            ..Default::default()
+        },
+        since,
+    };
+    let (d2, q) = (48 * 3600, 15 * 60);
+    let card = k(NOW - 3600, NOW - 60, NOW - 60);
+    assert!(card_speaks_for(&card, NOW), "control");
+    // The flux, either side.
+    assert!(card_speaks_for(&k(NOW + d2 - 1, NOW, NOW), NOW));
+    assert!(!card_speaks_for(&k(NOW + d2, NOW, NOW), NOW));
+    assert!(card_speaks_for(&k(NOW - d2 + 1, NOW, NOW), NOW));
+    assert!(!card_speaks_for(&k(NOW - d2, NOW, NOW), NOW));
+    // The newest Kp, before the start.
+    assert!(card_speaks_for(&k(NOW, NOW - q + 1, NOW - q + 1), NOW));
+    assert!(!card_speaks_for(&k(NOW, NOW - q, NOW - q), NOW));
+    // The run's first Kp, after the start; the newest may be long after it.
+    assert!(card_speaks_for(&k(NOW, NOW + 3600, NOW + q - 1), NOW));
+    assert!(!card_speaks_for(&k(NOW, NOW + 3600, NOW + q), NOW));
+}

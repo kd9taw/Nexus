@@ -118,6 +118,9 @@ struct KeptOutlook {
     /// The stamps of the space weather the card was computed from, checked again for each
     /// contact it would grade ([`outlook_for`]).
     stamps: propagation::model::SpaceWxStamps,
+    /// The Kp reading this pair's card has been kept on without a break since: the oldest of an
+    /// unbroken run of refreshes, each Kp read within its limit of the one before it.
+    since: i64,
 }
 
 static OUTLOOKS: Mutex<VecDeque<KeptOutlook>> = Mutex::new(VecDeque::new());
@@ -126,7 +129,9 @@ static OUTLOOKS: Mutex<VecDeque<KeptOutlook>> = Mutex::new(VecDeque::new());
 /// grade — only when `stamps`, the space weather it was computed from, say the solar flux and Kp
 /// were readings that may speak for `at` ([`grade_card_measured`]). A card from a cold cache
 /// (`None`), a stand-in flux or an old Kp is not kept, so it grades no contact. A kept card grades
-/// a contact only while those stamps still may speak for the contact's time ([`outlook_for`]).
+/// a contact only while those stamps still may speak for the contact's time ([`card_speaks_for`]).
+/// A refresh for the same pair replaces the card, and carries on its unbroken run of Kp readings
+/// (`since`) when its Kp was read within the Kp's limit of the replaced card's.
 pub(crate) fn keep_outlook(
     mygrid: &str,
     dxgrid: &str,
@@ -143,7 +148,21 @@ pub(crate) fn keep_outlook(
     if pred.long_path.is_none() {
         return;
     }
+    let Some(kp_at) = stamps.kp_at else {
+        return;
+    };
     let mut kept = lock(&OUTLOOKS);
+    // A refresh with no hole in its measured Kp carries on the card before it, so a contact that
+    // started while that one was current is still spoken for.
+    let since = kept
+        .iter()
+        .find(|k| k.me4 == me4 && k.dx4 == dx4)
+        .filter(|k| {
+            k.stamps.kp_at.is_some_and(|prev| {
+                (kp_at - prev).abs() < propagation::model::WxKey::Kp.fresh_secs()
+            })
+        })
+        .map_or(kp_at, |k| k.since.min(kp_at));
     kept.retain(|k| !(k.me4 == me4 && k.dx4 == dx4));
     kept.push_back(KeptOutlook {
         me4,
@@ -151,18 +170,19 @@ pub(crate) fn keep_outlook(
         at,
         pred: Arc::new(pred.clone()),
         stamps,
+        since,
     });
     while kept.len() > OUTLOOKS_KEPT {
         kept.pop_front();
     }
 }
 
-/// Whether space weather stamped `stamps` may speak for `now` — the card's time when it is kept,
-/// the contact's start when it grades one: the flux and Kp both measured, and each read within its
-/// limit ([`propagation::model::WxKey::fresh_secs`]) of `now`, before it or after. After it too,
-/// so a contact entered by hand with a start well before the card's readings is not graded from
-/// them (the shared `usable` reads a future stamp as fresh). A contact with no card logs with no
-/// grade; the display-only pass grades it from its logged SFI.
+/// Whether space weather stamped `stamps` may speak for `now`, the card's time when it is kept: the
+/// flux and Kp both measured, and each read within its limit
+/// ([`propagation::model::WxKey::fresh_secs`]) of `now`, before it or after (the shared `usable`
+/// reads a future stamp as fresh). A contact is held to the card's whole run of readings instead
+/// ([`card_speaks_for`]). A contact with no card logs with no grade; the display-only pass grades
+/// it from its logged SFI.
 fn grade_card_measured(stamps: Option<&propagation::model::SpaceWxStamps>, now: i64) -> bool {
     use propagation::model::WxKey;
     stamps.is_some_and(|s| {
@@ -172,14 +192,31 @@ fn grade_card_measured(stamps: Option<&propagation::model::SpaceWxStamps>, now: 
     })
 }
 
+/// Whether a kept card may grade a contact that started at `when`: the flux read within its
+/// limit of `when`, either side, and `when` within the Kp's limit of the card's unbroken run of
+/// readings — no earlier than that before its first (`since`), no later than that after its
+/// newest. A contact entered by hand with a start well before the run is not graded from it; a
+/// long contact the card was kept current through is.
+fn card_speaks_for(k: &KeptOutlook, when: i64) -> bool {
+    use propagation::model::WxKey;
+    let kp = WxKey::Kp.fresh_secs();
+    k.stamps
+        .at(WxKey::Sfi)
+        .is_some_and(|at| (when - at).abs() < WxKey::Sfi.fresh_secs())
+        && k.stamps
+            .kp_at
+            .is_some_and(|at| when - at < kp && k.since - when < kp)
+}
+
 fn month_of(t: i64) -> (i64, u32) {
     propagation::solar_cycle::year_month(t)
 }
 
 /// The card kept for this pair that may grade a contact made at `when`: computed within
-/// [`OUTLOOK_FRESH_SECS`] of it in the same UTC month, and from space weather that still may speak
-/// for `when` (fail closed: a card gated on a Kp that has since gone stale grades nothing, and the
-/// contact logs with no grade).
+/// [`OUTLOOK_FRESH_SECS`] of it in the same UTC month, and from space weather that speaks for
+/// `when` ([`card_speaks_for`]; fail closed: a card gated on a Kp that has since gone stale, or a
+/// run of readings that began well after the contact's start, grades nothing, and the contact logs
+/// with no grade).
 fn outlook_for(me4: &str, dx4: &str, when: i64) -> Option<Arc<PathPrediction>> {
     lock(&OUTLOOKS)
         .iter()
@@ -189,7 +226,7 @@ fn outlook_for(me4: &str, dx4: &str, when: i64) -> Option<Arc<PathPrediction>> {
                 && k.dx4 == dx4
                 && (k.at - when).abs() <= OUTLOOK_FRESH_SECS
                 && month_of(k.at) == month_of(when)
-                && grade_card_measured(Some(&k.stamps), when)
+                && card_speaks_for(k, when)
         })
         .map(|k| Arc::clone(&k.pred))
 }
