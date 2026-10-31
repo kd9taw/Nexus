@@ -414,4 +414,31 @@ describe('a snapshot poll renders only what it changed', () => {
     expect(esmOf('phone').on).toBe(true)
     expect(esmOf('rtty').on).toBe(true)
   })
+
+  // Read from the settings as loaded, by their real names, so a cockpit lent another cockpit's
+  // field cannot pass by reading back what it wrote.
+  for (const [field, owner] of [
+    ['contestEsmCw', 'cw'],
+    ['contestEsmRtty', 'rtty'],
+    ['contestEsmPhone', 'phone'],
+  ] as const) {
+    it(`a loaded ${field}: on shows on the ${owner} cockpit's switch, and only there`, async () => {
+      const { getSettings } = await import('./api')
+      vi.mocked(getSettings).mockImplementation(async () => ({ ...structuredClone(defaults), [field]: true }) as unknown as Settings)
+      try {
+        delete last.cw
+        delete last.phone
+        await mount('logbook')
+        const on: Record<string, boolean> = {}
+        await go('CW')
+        await waitFor(() => expect(last.cw).toBeTruthy())
+        await go('Phone')
+        await waitFor(() => expect(last.phone).toBeTruthy())
+        for (const c of ['cw', 'rtty', 'phone']) on[c] = (last[c].esmSetting as { on: boolean }).on
+        expect(on).toEqual({ cw: owner === 'cw', rtty: owner === 'rtty', phone: owner === 'phone' })
+      } finally {
+        vi.mocked(getSettings).mockImplementation(async () => structuredClone(defaults) as unknown as Settings)
+      }
+    })
+  }
 })

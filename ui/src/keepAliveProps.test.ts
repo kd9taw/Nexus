@@ -79,6 +79,39 @@ describe('keepAlivePropsEqual', () => {
   })
 })
 
+describe('the first poll after a cockpit is hidden', () => {
+  for (const [name, part] of [['snap', 'snap'], ['APRS, given only radio', 'radio']] as const) {
+    it(`${name}: renders that poll, keeps the flag through re-renders of App, then sits out again`, () => {
+      const at = (active: boolean, value: object) => ({ active, [part]: value })
+      const shown = snap()
+      const hide = at(false, shown) // the hide render reuses the last poll's snapshot
+      expect(keepAlivePropsEqual(at(true, shown), hide)).toBe(false)
+      // App rendering again for another reason, same snapshot: no poll, nothing to render, the
+      // flag stays for the poll still to come.
+      expect(keepAlivePropsEqual(hide, at(false, shown))).toBe(true)
+      // The first poll, unchanged in value: rendered, as every poll was.
+      const first = at(false, snap())
+      expect(keepAlivePropsEqual(hide, first)).toBe(false)
+      // The one after it is sat out.
+      expect(keepAlivePropsEqual(first, at(false, snap()))).toBe(true)
+      // A poll that lands in the hide render itself: it is the hidden one that counts.
+      const hideOnPoll = at(false, snap())
+      expect(keepAlivePropsEqual(at(true, snap()), hideOnPoll)).toBe(false)
+      expect(keepAlivePropsEqual(hideOnPoll, at(false, snap()))).toBe(false)
+    })
+  }
+
+  it('a cockpit that was never on screen, or stays on screen, gets no such render', () => {
+    const a = { active: false, snap: snap() }
+    expect(keepAlivePropsEqual(a, { active: false, snap: snap() })).toBe(true)
+    const on = { active: true, snap: snap() }
+    const stays = { active: true, snap: snap() }
+    expect(keepAlivePropsEqual(on, stays)).toBe(false)
+    // Hidden later with a snapshot it held on screen: only the hide render's snapshot is flagged.
+    expect(keepAlivePropsEqual({ active: false, snap: on.snap }, { active: false, snap: snap() })).toBe(true)
+  })
+})
+
 describe('operatePropsEqual (the FT cockpit)', () => {
   type Ticks = { clearTick?: number; rxFreqClearTick?: number }
   const ft = (ticks: Ticks = {}) => ({ active: false, snap: { ...snap(), ...ticks } })

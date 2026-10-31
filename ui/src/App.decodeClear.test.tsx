@@ -234,4 +234,43 @@ describe('a UDP Clear on the FT decode panes', () => {
     await waitFor(() => expect(shownIn('.cockpit-rxfreq', 'CQ K1ABC FN42')).toBe(true))
     expect(shownIn('.cockpit-rxfreq', 'CQ JA1XYZ PM95')).toBe(true)
   })
+
+  // Leaving FT within one poll of a wipe made ON SCREEN: the next poll, unchanged, arrives with FT
+  // already hidden, and it is that poll that refills the panes. Then the next period arrives before
+  // FT is opened again: the wiped period's rows must be back, as they were before the keep-alive work.
+  it("on screen, the pane's own Erase, then FT left before the next poll: the erased rows are back", async () => {
+    await mount('operate')
+    await waitFor(() => expect(shown()).toBe(true))
+    const erase = document.querySelector<HTMLButtonElement>('.operate-host .od-clear')
+    expect(erase).toBeTruthy()
+    await act(async () => {
+      fireEvent.click(erase!)
+    })
+    expect(shown()).toBe(false)
+    await go('Logbook')
+    await send(poll())
+    await send(poll(nextPeriod))
+    await send(poll(nextPeriod))
+    await go('FT')
+    await waitFor(() => expect(shownIn('.operate-host', 'CQ K1ABC FN42')).toBe(true))
+    expect(shown()).toBe(true)
+  })
+
+  it('on screen, a UDP Clear, then FT left before the next poll: the cleared rows are back', async () => {
+    await mount('operate')
+    await waitFor(() => expect(shown()).toBe(true))
+    await send(poll((s) => (s.clearTick = 1)))
+    expect(shown()).toBe(false)
+    await go('Logbook')
+    await send(poll((s) => (s.clearTick = 1)))
+    const later = (s: AppSnapshot) => {
+      s.clearTick = 1
+      nextPeriod(s)
+    }
+    await send(poll(later))
+    await send(poll(later))
+    await go('FT')
+    await waitFor(() => expect(shownIn('.operate-host', 'CQ K1ABC FN42')).toBe(true))
+    expect(shown()).toBe(true)
+  })
 })

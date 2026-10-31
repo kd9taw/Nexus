@@ -16,12 +16,13 @@
 //
 // WHAT A HIDDEN COCKPIT SKIPS. `keepAlivePropsEqual` is the `React.memo` comparator for those
 // seven hosts. On screen (or crossing on/off screen) it is React's own shallow compare, so the
-// visible cockpit renders exactly as before. Hidden on both sides, a render is skipped when every
-// prop is unchanged in VALUE (fresh-but-equal objects and elements included) apart from the
-// per-poll meter fields in `LIVE_FIELDS`. Nothing under the seven hosts reads those but the FT
-// cockpit's slot-countdown anchor, which only draws on screen and re-anchors when the cockpit is
-// shown (the `active` flip renders it). Functions compare by identity, never by value: a skipped
-// render keeps the cockpit's handlers, so a handler it holds must be the one App would pass now.
+// visible cockpit renders exactly as before, and so does the first poll after a cockpit is hidden.
+// Hidden on both sides after that, a render is skipped when every prop is unchanged in VALUE
+// (fresh-but-equal objects and elements included) apart from the per-poll meter fields in
+// `LIVE_FIELDS`. Nothing under the seven hosts reads those but the FT cockpit's slot-countdown
+// anchor, which only draws on screen and re-anchors when the cockpit is shown (the `active` flip
+// renders it). Functions compare by identity, never by value: a skipped render keeps the
+// cockpit's handlers, so a handler it holds must be the one App would pass now.
 
 import { isValidElement } from 'react'
 
@@ -68,19 +69,44 @@ function quietEqual(a: unknown, b: unknown, depth: number): boolean {
   return false
 }
 
+/** The polled snapshot as a host is handed it: `snap`, or `radio` for APRS, which is given only
+ *  that part. A new object here is a new poll; the same one is App rendering for another reason. */
+function polled(p: object): object | null {
+  const { snap, radio } = p as { snap?: unknown; radio?: unknown }
+  const v = snap ?? radio
+  return v !== null && typeof v === 'object' ? v : null
+}
+
+/** Snapshots a cockpit was hidden with (its hide render's). Held weakly, per snapshot object. */
+const hiddenWith = new WeakSet<object>()
+
 /**
  * The `React.memo` comparator for a keep-alive cockpit host (true = skip the render).
  *
  * - On screen before or after (`active`): React's default shallow compare, so the cockpit on
  *   screen renders on every poll exactly as it did, and showing or hiding one always renders it.
- * - Hidden before and after: skip unless some prop changed in value, `LIVE_FIELDS` aside.
+ * - The first poll after a cockpit is hidden: rendered, as every poll was. The hide itself reuses
+ *   the last poll's snapshot, so this is the first new one the hidden cockpit sees, and anything
+ *   it rebuilds from a new snapshot object rather than a changed value is rebuilt once more. That
+ *   matters for what the operator did on screen just before leaving: the FT pane's own Erase wipes
+ *   the rows locally, and it is this poll's new decode list that brings the period's rows back.
+ *   A hidden cockpit takes no operator input, and any change in value renders it anyway, so an
+ *   unchanged poll after this one has nothing left to rebuild.
+ * - Hidden before and after, otherwise: skip unless some prop changed in value, `LIVE_FIELDS` aside.
  */
 export function keepAlivePropsEqual<P extends { active?: boolean }>(prev: Readonly<P>, next: Readonly<P>): boolean {
   if (prev.active || next.active) {
+    if (prev.active && !next.active) {
+      const hiding = polled(next)
+      if (hiding) hiddenWith.add(hiding)
+    }
     const keys = Object.keys(prev) as (keyof P)[]
     if (keys.length !== Object.keys(next).length) return false
     return keys.every((k) => hasOwn(next, k as string) && Object.is(prev[k], next[k]))
   }
+  const before = polled(prev)
+  const now = polled(next)
+  if (before && now && before !== now && hiddenWith.has(before)) return false
   return quietEqual(prev, next, 0)
 }
 
