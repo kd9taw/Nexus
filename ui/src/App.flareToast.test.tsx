@@ -170,9 +170,15 @@ describe("App hands the flare toast NOAA's grid only beside NOAA's own fresh flu
 
   it("a stale lane sample hands over no grid from either caller", async () => {
     lane = { ...lane, asOf: Date.now() / 1000 - 3600 }
-    // Stale: the lane's flux is no flux, so only the override gives the callers one to pass.
-    localStorage.setItem('nexus.dev.xray', '5e-5')
-    const [fast, poll] = await gridsHanded()
+    // No override: staleness alone must withhold the grid. The stale flux is no flux, so this does
+    // not go through gridsHanded (it asserts a positive one); the spy still records each call.
+    window.location.hash = '#spots'
+    render(<App />)
+    const calls = () => vi.mocked(processFlare).mock.calls
+    await waitFor(() => expect(calls().length, 'the fast lane called processFlare').toBe(1), { timeout: 10_000 })
+    releaseProp(PROP)
+    await waitFor(() => expect(calls().length, 'the snapshot poll called processFlare').toBe(2), { timeout: 10_000 })
+    const [fast, poll] = [calls()[0][1], calls()[1][1]]
     expect(fast, 'fast lane').toBeNull()
     expect(poll, 'snapshot poll').toBeNull()
   }, BUDGET)

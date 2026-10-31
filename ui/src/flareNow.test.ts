@@ -375,6 +375,19 @@ describe('flarePhase', () => {
     const climbing = trace([[25, 5e-6], [15, 2e-5], [5, 4e-5], [1, 5e-5]])
     expect(flarePhase(null, NOW, 5e-5, climbing)).toMatchObject({ kind: 'rising', noaa: false })
   })
+  // A DOUBLE-PEAKED FLARE. The low since the half hour's highest sample is the dip between the peaks,
+  // so against it the second peak's decay would read "rising". Rising is read against the low since
+  // the flux was last above its current level.
+  it("a double-peaked flare's falling second peak reads Falling, never Rising", () => {
+    const staleList = ev({ at: NOW_S - 12 * 60, beginAt: NOW_S - 22 * 60 })
+    const secondFalling = trace([[30, 5e-6], [26, 5e-6], [20, 5e-5], [12, 2e-5], [5, 4e-5], [1, 3e-5]])
+    for (const e of [null, staleList]) {
+      expect(flarePhase(e, NOW, 3e-5, secondFalling)).toMatchObject({ kind: 'falling', noaa: false })
+    }
+    // CONTROL: the same flare while the second peak is still climbing reads Rising.
+    const secondClimbing = trace([[30, 5e-6], [26, 5e-6], [20, 5e-5], [12, 2e-5], [1, 4e-5]])
+    expect(flarePhase(null, NOW, 4e-5, secondClimbing)).toMatchObject({ kind: 'rising', noaa: false })
+  })
 
   it('no trace, an old one or one sample gives no direction word', () => {
     const old = trace([[40, 6e-5], [30, 4e-5], [15, 3e-5]])
