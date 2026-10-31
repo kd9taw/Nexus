@@ -1109,9 +1109,14 @@ test('every job that stages the IOTA list sets up Node first', () => {
 //  - no workflow but ci.yml, no build script and not Dockerfile.pi builds with another profile than
 //    release: a command that may run cargo (cut at `;`, `&`, `|`) passes no `--profile <name>` but
 //    `release`, quoted or not, and no `--debug` (the tauri CLI's), whichever side of tauri's `--` it
-//    is on; in a tauri CLI command (`cargo tauri build`, `npx tauri build`, not a `src-tauri` path)
-//    no short-flag cluster holds a `d` (`-d`, `-vd`, `-db deb`, `'-d'`). rustup's own `--profile
-//    minimal` names no cargo and passes;
+//    is on; in a tauri CLI command (`cargo tauri build`, `cargo-tauri bundle`, `npx tauri build`,
+//    `npx @tauri-apps/cli build`, global flags or a quote before the subcommand allowed; not a
+//    `src-tauri` path) no short-flag cluster sets `-d` (`-d`, `-vd`, `'-d'`, `-dfradio`, but not
+//    `-bdeb` or `-fradio`, whose rest is a value). rustup's own `--profile minimal` names no cargo
+//    and passes. This check catches an honest edit in our own files, not a hostile one: a tauri
+//    CLI reached through a variable (`"$TAURI" build -d`), `cargo tauri dev` and mobile builds
+//    (`cargo tauri android build`), which the release entry points never use, and any further
+//    spelling are out of its scope;
 //  - in ci.yml and Dockerfile.pi every mention of CARGO_PROFILE_RELEASE_* is one of the exact lines
 //    this design needs: the four step-env lines, whose fat value is the profile's on main,
 //    release/* and tags; the two bare `--build-arg NAME`s; and the two ARGs, whose defaults (what
@@ -1135,10 +1140,10 @@ const RUSTC_LINK_FLAG = /(?:-C|--codegen)["']?[\s,=]*["']?(?:codegen[-_]units|lt
 // inline JSON, refused whatever it holds.
 const CONFIG_ARG = /--config["']?(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S+))/g;
 const RUNS_CARGO = /cargo|\b(?:cross|tauri)\b/i;
-// The tauri CLI's short `-c`, also last in a cluster (`-vc`) or quoted, read only when its argument is
-// a config (a JSON or TOML file, or inline JSON), so `sh -c '…'` and `sha256sum -c -` are not taken
-// for one.
-const TAURI_SHORT_CONFIG = /(?:^|\s)["']?-[A-Za-z]*c["']?(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+// The tauri CLI's short `-c`, also after its no-value shorts in a cluster (`-vc`), quoted, or with the
+// value attached (`-cci/release.json`, `-c'{…}'`), read only when its argument is a config (a JSON or
+// TOML file, or inline JSON), so `sh -c '…'` and `sha256sum -c -` are not taken for one.
+const TAURI_SHORT_CONFIG = /(?:^|\s)["']?-[vd]*c(?:["']?(?:\s+|=))?(?:"([^"]*)"|'([^']*)'|(\S+))/g;
 const configFiles = (line) =>
   RUNS_CARGO.test(line)
     ? [
@@ -1148,13 +1153,17 @@ const configFiles = (line) =>
     : [];
 // A build with another profile than release: cargo's `--profile <name>` (any name but `release`,
 // either quoted or not), the tauri CLI's `--debug`, and in a tauri CLI command any short-flag cluster
-// holding its `d` (clap reads `-vd` and `-db deb` as `-d`). The tauri CLI is the word itself before a
-// subcommand, so a `src-tauri` path (`install -d "$REPO/src-tauri/x"`, `find … -delete`) is not one.
+// that sets `d`. In clap only the no-value `-v` can stand before it; after a value-taking short
+// (`-b -c -f -r -t`) the rest of the cluster is that flag's value, so `-dfradio` and
+// `-dtx86_64-unknown-linux-gnu` set `-d`, and `-bdeb` and `-fradio` do not. The tauri CLI is the word
+// itself (or `@tauri-apps/cli`) before a subcommand, with global flags (`-v`, `--`) or a quote
+// allowed between them, so a `src-tauri` path (`install -d "$REPO/src-tauri/x"`, `find … -delete`)
+// is not one.
 // Read per command, so `test -d x && cargo …` and rustup's `--profile minimal` beside a cargo command
 // are not taken for one.
 const OTHER_PROFILE = /["']?--profile["']?(?:\s+|=)(?!["']?release["']?(?:\s|$))\S|--debug\b/;
-const TAURI_CLI = /(?:^|[\s/"'])(?:cargo-)?tauri["']?\s+(?:build|bundle|dev)\b/i;
-const DEBUG_CLUSTER = /(?:^|\s)["']?-[A-Za-z]*d[A-Za-z]*["']?(?=\s|$)/;
+const TAURI_CLI = /(?:^|[\s/"'])(?:(?:cargo-)?tauri|@tauri-apps\/cli)["']?\s+(?:["']?-\S*\s+)*["']?(?:build|bundle|dev)\b/i;
+const DEBUG_CLUSTER = /(?:^|\s)["']?-v*d/;
 const otherProfile = (line) =>
   line.split(/[;&|]/).some((c) => RUNS_CARGO.test(c) && (OTHER_PROFILE.test(c) || (TAURI_CLI.test(c) && DEBUG_CLUSTER.test(c))));
 // rustc's flag on one line and its value on the next, as a multi-line TOML array writes them
@@ -1347,6 +1356,9 @@ test('only ci.yml land/topic runs leave the shipped link profile; release, main,
     ['cargo tauri build -c=ci/release.json', 'ci/release.json'],
     ["cargo tauri build '-c' ci/release.json", 'ci/release.json'],
     ["cargo build '--config' ci/thin.toml", 'ci/thin.toml'],
+    ['cargo tauri build -cci/release.json', 'ci/release.json'],
+    ['cargo tauri build -vcci/release.json', 'ci/release.json'],
+    [`cargo tauri build -c'{"build":{"runner":{"cmd":"cargo","args":["--profile","dev"]}}}'`, '{"build":{"runner":{"cmd":"cargo","args":["--profile","dev"]}}}'],
   ]) {
     has(linkProfileFindings(scripts('build-linux.sh', `${linux}\n${run}\n`)), `hands cargo a config file (${arg}), whose profile this check cannot read: ${run}`);
   }
@@ -1385,6 +1397,19 @@ test('only ci.yml land/topic runs leave the shipped link profile; release, main,
     'cargo build "--profile" dev',
     "cargo build --profile 'dev'",
     'npm run tauri build -- --debug',
+    'cargo tauri build -dtx86_64-unknown-linux-gnu',
+    'cargo tauri build -df=radio',
+    'cargo tauri build -dfradio,custom-protocol',
+    'cargo tauri build -vdbdeb,appimage',
+    'cargo tauri -v build -d',
+    'cargo tauri --verbose build -d',
+    'cargo tauri "build" -d',
+    'npx @tauri-apps/cli build -d',
+    'npm run tauri -- build -d',
+    'cargo tauri bundle -d',
+    'cargo-tauri build -d',
+    'node_modules/.bin/tauri build -d',
+    'cargo "tauri" build -d',
   ]) {
     has(linkProfileFindings(scripts('build-linux.sh', `${linux}\n${run}\n`)), `build-linux.sh: builds with another profile than release: ${run}`);
   }
@@ -1393,7 +1418,7 @@ test('only ci.yml land/topic runs leave the shipped link profile; release, main,
   // The release profile by name (quoted too), rustup's own profile, `-d` outside a tauri CLI command
   // (even one that names `.cargo`, a `src-tauri` path or a `tauri-…` directory), and ci.yml's
   // branch runs, which may build however they like.
-  assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', `${linux}\ncargo build --profile release\ncargo build --profile "release"\ncargo build --profile 'release'\ncargo tauri build -- --profile=release\ninstall -d "$REPO/src-tauri/resources/hamlib"\ninstall -d "$REPO/vendor/tauri-plugin-x/res"\ncp -d lib.so src-tauri/resources/\nfind "$REPO/src-tauri/target/release/bundle/appimage" -name '*.AppImage.sig' -delete 2>/dev/null || true\nfind "$REPO/src-tauri/x" -name '*.sig' -delete\nrustup toolchain install 1.93.1 --profile minimal && cargo tauri build\nunzip -d out x.zip; cargo tauri build\ninstall -d "$HOME/.cargo/bin"\n`)), []);
+  assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', `${linux}\ncargo build --profile release\ncargo tauri build -bdeb\ncargo tauri build -fradio\ncargo tauri build -b deb -t x86_64-unknown-linux-gnu\ncargo build --profile "release"\ncargo build --profile 'release'\ncargo tauri build -- --profile=release\ninstall -d "$REPO/src-tauri/resources/hamlib"\ninstall -d "$REPO/vendor/tauri-plugin-x/res"\ncp -d lib.so src-tauri/resources/\nfind "$REPO/src-tauri/target/release/bundle/appimage" -name '*.AppImage.sig' -delete 2>/dev/null || true\nfind "$REPO/src-tauri/x" -name '*.sig' -delete\nrustup toolchain install 1.93.1 --profile minimal && cargo tauri build\nunzip -d out x.zip; cargo tauri build\ninstall -d "$HOME/.cargo/bin"\n`)), []);
   assert.deepEqual(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, nai, `          cargo test --profile dev\n${nai}`) }), []);
   // A git `-C <dir>` whose name starts with a flag's word, a shell's `-c` and a checksum's `-c`, and a
   // multi-line list whose `-C` takes another value.
