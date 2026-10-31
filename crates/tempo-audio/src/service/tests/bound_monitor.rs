@@ -62,3 +62,24 @@ fn an_unbound_process_monitors_every_other_radio() {
     let (active, want) = monitor_want(&s, None, None);
     assert_eq!((active, ids(&want)), (0, vec![1, 2]));
 }
+
+/// The hop from the process's config to its monitor thread: a window launched for radio 0 hands
+/// its monitor a scope that takes no other radio. Without it the monitor fell back to every
+/// enabled radio and each window started a rigctld for the other window's radio again.
+#[test]
+fn the_monitor_takes_its_scope_from_the_process_config() {
+    let s = three_radios();
+    let bound = RadioConfig {
+        bound_radio: Some(0),
+        ..RadioConfig::default()
+    };
+    assert_eq!(
+        ids(&MonitorScope::of(&bound).want(&s, None).1),
+        Vec::<u32>::new()
+    );
+    // Control: the single band-following window still monitors every other radio.
+    assert_eq!(
+        ids(&MonitorScope::of(&RadioConfig::default()).want(&s, None).1),
+        vec![1, 2]
+    );
+}
