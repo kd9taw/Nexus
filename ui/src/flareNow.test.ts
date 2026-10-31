@@ -202,6 +202,14 @@ describe('flarePhase', () => {
       peakAt: NOW_S - 600,
       peakClass: 'M4.2',
     })
+    // A trace that rose more than 10 % since the peak, yet stays within 10 % of that peak, does not
+    // displace NOAA's "peaked": only an END can be followed by a new rise.
+    const upSincePeak = trace([[20, 3e-5], [10, 3.2e-5], [1, 4.4e-5]])
+    expect(flarePhase(ev({ maxAt: NOW_S - 600, maxClass: 'M4.2', maxFlux: 4.2e-5 }), NOW, 4.4e-5, upSincePeak)).toMatchObject({
+      kind: 'peaked',
+      noaa: true,
+      peakClass: 'M4.2',
+    })
     expect(flarePhase(ev({ maxAt: NOW_S - 600, endAt: NOW_S - 120 }), NOW, null)).toMatchObject({
       kind: 'ended',
       noaa: true,
@@ -292,6 +300,23 @@ describe('flarePhase', () => {
     expect(flarePhase(M5_ENDED, NOW, 2e-5, DECAY)).toMatchObject({ kind: 'ended', noaa: true, endAt: NOW_S - 600 })
   })
 
+  it("the after-the-end margin: a small uptick keeps NOAA's \"ended\"; only more than 10 % is a new rise", () => {
+    // NOAA ended the M5 10 min ago; since then the trace's low is 2e-5.
+    const after = (newest: number): [number, number][] => [
+      ...DECAY.slice(0, -3),
+      [NOW_S - 9 * 60, 2.2e-5],
+      [NOW_S - 5 * 60, 2e-5],
+      [NOW_S - 60, newest],
+    ]
+    // The decay's wobble: 5 % up from the low.
+    expect(flarePhase(M5_ENDED, NOW, 2.1e-5, after(2.1e-5))).toMatchObject({ kind: 'ended', noaa: true })
+    // Exactly 10 % up is still the margin.
+    expect(flarePhase(M5_ENDED, NOW, 2e-5 * 1.1, after(2e-5 * 1.1))).toMatchObject({ kind: 'ended', noaa: true })
+    // CONTROL: just above it is a new rise.
+    const over = 2e-5 * 1.1 * 1.001
+    expect(flarePhase(M5_ENDED, NOW, over, after(over))).toMatchObject({ kind: 'rising', noaa: false })
+  })
+
   it('POSITIVE CONTROL: a genuine new rise after the end reads Rising (estimated)', () => {
     const rise: [number, number][] = [...DECAY.slice(0, -2), [NOW_S - 5 * 60, 2.2e-5], [NOW_S - 60, 3e-5]]
     expect(flarePhase(M5_ENDED, NOW, 3e-5, rise)).toMatchObject({ kind: 'rising', noaa: false, endAt: null })
@@ -331,6 +356,26 @@ describe('flarePhase', () => {
     const dipUp = trace([[25, 6e-5], [15, 2e-5], [5, 1.8e-5], [1, 2.5e-5]])
     expect(flarePhase(ev2, NOW, 2.5e-5, dipUp)).toMatchObject({ kind: 'rising', noaa: false })
   })
+  // AN IMPULSIVE FLARE'S FALL. The half hour still holds the pre-flare background (C5) for 30 min after
+  // the rise, so "above the half hour's low" would call a flux that has fallen in every bucket since
+  // its peak "rising". Rising is read against the low SINCE the window's peak.
+  const IMPULSIVE = trace([[30, 5e-6], [25, 5e-6], [20, 2e-5], [15, 5e-5], [10, 3e-5], [5, 1.8e-5], [1, 1.2e-5]])
+  it('an impulsive flare falling since its peak reads Falling, never Rising', () => {
+    const staleList = ev({ at: NOW_S - 12 * 60, beginAt: NOW_S - 22 * 60 }) // stopped updating while rising
+    for (const e of [null, staleList, LONG_AGO]) {
+      expect(flarePhase(e, NOW, 1.2e-5, IMPULSIVE)).toMatchObject({ kind: 'falling', noaa: false })
+    }
+    // The newest sample straight after the peak, already well below it: falling, not rising.
+    const dropped = trace([[20, 5e-6], [5, 5e-5], [1, 2e-5]])
+    expect(flarePhase(null, NOW, 2e-5, dropped)).toMatchObject({ kind: 'falling', noaa: false })
+    // CONTROL: the same fall, then a re-rise above the low since the peak, is rising.
+    const reRise = trace([[25, 5e-6], [15, 5e-5], [10, 2e-5], [5, 1.8e-5], [1, 2.5e-5]])
+    expect(flarePhase(null, NOW, 2.5e-5, reRise)).toMatchObject({ kind: 'rising', noaa: false })
+    // CONTROL: still climbing to a new high in the window reads against the whole half hour.
+    const climbing = trace([[25, 5e-6], [15, 2e-5], [5, 4e-5], [1, 5e-5]])
+    expect(flarePhase(null, NOW, 5e-5, climbing)).toMatchObject({ kind: 'rising', noaa: false })
+  })
+
   it('no trace, an old one or one sample gives no direction word', () => {
     const old = trace([[40, 6e-5], [30, 4e-5], [15, 3e-5]])
     for (const series of [undefined, [], old, trace([[1, 2e-5]]), trace([[45, 6e-5], [1, 2e-5]])]) {
@@ -347,6 +392,8 @@ describe('flarePhase', () => {
     // The class is read as a flux: an M5 that decayed to M2 is still that M5; 9e-6 is over C8 + 10 %.
     expect(flarePhase({ ...M5_ENDED, maxFlux: null }, NOW, 2e-5)).toMatchObject({ kind: 'ended', noaa: true })
     expect(flarePhase({ ...C8_ENDED, maxFlux: null }, NOW, 9e-6)).toMatchObject({ noaa: false })
+    // The decimal counts: an M1.9 at 2e-5 is within 10 % of its peak.
+    expect(flarePhase({ ...M5_ENDED, maxFlux: null, maxClass: 'M1.9' }, NOW, 2e-5)).toMatchObject({ kind: 'ended', noaa: true })
     // Neither: a settled event is not this M1+ flare's (the chip only shows M1+).
     const blind = { ...C8_ENDED, maxFlux: null, maxClass: null }
     expect(flarePhase(blind, NOW, 1e-5)).toMatchObject({ kind: null, noaa: false })

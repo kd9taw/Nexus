@@ -287,9 +287,12 @@ function risenSince(series: ReadonlyArray<[number, number]> | undefined, since: 
 }
 
 /** The trace's direction now: its newest sample (≤ TRACE_LIVE_SECS old) against the samples of the
- *  half hour before it. Rising when more than the margin above their lowest (checked first: a
- *  re-rise during a decay is the news), falling when more than the margin below their highest,
- *  else none. No trace, too few samples or an old one is none: no measurement, no word. */
+ *  half hour before it. Rising when more than the margin above their lowest SINCE their highest
+ *  (checked first: a re-rise during a decay is the news); while the newest is itself the highest,
+ *  against the whole half hour's lowest. Falling when more than the margin below their highest,
+ *  else none. The low since the peak, not the half hour's: after an impulsive flare the half hour
+ *  still holds the pre-flare background, and a flux falling in every sample is not rising. No
+ *  trace, too few samples or an old one is none: no measurement, no word. */
 function traceDirection(series: ReadonlyArray<[number, number]> | undefined, now: number): 'rising' | 'falling' | null {
   const s = series ?? []
   if (s.length < 2) return null
@@ -298,8 +301,10 @@ function traceDirection(series: ReadonlyArray<[number, number]> | undefined, now
   const before = s.slice(0, -1).filter(([t]) => t >= lastAt - TRACE_WINDOW_SECS)
   if (before.length === 0) return null
   const fluxes = before.map(([, f]) => f)
-  if (last > Math.min(...fluxes) * NEW_FLARE_OVER_PEAK) return 'rising'
-  if (last * NEW_FLARE_OVER_PEAK < Math.max(...fluxes)) return 'falling'
+  const high = Math.max(...fluxes)
+  const sincePeak = last >= high ? fluxes : fluxes.slice(fluxes.lastIndexOf(high) + 1)
+  if (sincePeak.length > 0 && last > Math.min(...sincePeak) * NEW_FLARE_OVER_PEAK) return 'rising'
+  if (last * NEW_FLARE_OVER_PEAK < high) return 'falling'
   return null
 }
 
