@@ -4184,6 +4184,30 @@ export interface AprsHealth {
   /** Enabled radios explicitly covering the band in use. >1 means the activation had a choice, and
    * the operator cannot tell from the radio which way it went. */
   bandRadioCount: number
+  /** The ISS channel's Doppler correction; present only while that channel is selected. */
+  issDoppler?: AprsIssDoppler | null
+}
+
+/** The ISS channel's Doppler correction (the engine's `aprs_iss`). While `on`, the radio listens on
+ * `rxHz` between packets and sends each packet on `txHz`; otherwise it stays on 145.825 and
+ * `whyOff` says why. */
+export interface AprsIssDoppler {
+  on: boolean
+  whyOff:
+    | 'switchedOff'
+    | 'satTracker'
+    | 'noCat'
+    | 'starting'
+    | 'noGrid'
+    | 'noElements'
+    | 'staleElements'
+    | 'belowHorizon'
+    | 'tunedAway'
+    | 'radioRounds'
+    | 'stopped'
+    | null
+  rxHz: number | null
+  txHz: number | null
 }
 
 /** Poll the APRS decoder's health beside the heard list. */

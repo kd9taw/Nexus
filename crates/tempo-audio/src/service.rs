@@ -9640,13 +9640,19 @@ impl RadioLoop {
                                 );
                             }
                         }
-                        if !self.fake_it_transient(hz)
+                        let adopt = !self.fake_it_transient(hz)
                             && !self.read_outside_coverage(hz, engine)
-                            && hz != self.last_dial
-                        {
+                            && hz != self.last_dial;
+                        if adopt {
                             self.last_dial = hz;
-                            {
-                                let mut eng = engine_lock(engine);
+                        }
+                        // The read-back and the knob adoption under ONE lock: the ISS Doppler
+                        // tick must never see the first without the second (a rounded read
+                        // would look like the dial was tuned away and leave it off-channel).
+                        {
+                            let mut eng = engine_lock(engine);
+                            eng.rig_freq_read(hz);
+                            if adopt {
                                 eng.observe_rig_freq(hz);
                             }
                         }
@@ -10815,13 +10821,17 @@ impl RadioLoop {
                             eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
                         }
                     }
-                    if !self.fake_it_transient(hz)
+                    let adopt = !self.fake_it_transient(hz)
                         && !self.read_outside_coverage(hz, engine)
-                        && hz != self.last_dial
-                    {
+                        && hz != self.last_dial;
+                    if adopt {
                         self.last_dial = hz;
-                        {
-                            let mut eng = engine_lock(engine);
+                    }
+                    // One lock for both, as in the heavy poll.
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.rig_freq_read(hz);
+                        if adopt {
                             eng.observe_rig_freq(hz);
                         }
                     }

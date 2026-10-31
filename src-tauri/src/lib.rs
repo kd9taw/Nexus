@@ -36,6 +36,8 @@ mod account_sign_in;
 /// One alert, made in Rust where it is raised, with its id and a versioned shape: what every window
 /// and a computer driving the station hear.
 mod alert;
+/// The APRS cockpit's ISS channel: where the ISS is, once a second, for its Doppler correction.
+mod aprs_iss_doppler;
 /// Test builds only (the `bench-road-switch` feature): the switch on a computer driving a station
 /// that blocks its command link or its Stop road, one at a time, so each road can be tried alone.
 #[cfg(feature = "bench-road-switch")]
@@ -41956,6 +41958,8 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
             }
         });
     }
+    // The APRS cockpit's ISS channel: the ISS's position, for the engine's Doppler correction.
+    aprs_iss_doppler::spawn(d.engine.clone());
     // Nexus's needed spots for a TCI radio's own panadapter: read from the Needed board's list
     // while the radio in use has its "Spots on the SDR panadapter" on (`tci_spots`).
     #[cfg(feature = "radio")]

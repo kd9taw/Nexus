@@ -18,6 +18,8 @@
 /// ALL.TXT reads in the order things happened on the air.
 #[cfg(test)]
 mod all_txt_order_tests;
+/// Doppler correction on the APRS cockpit's ISS channel: receive between overs, transmit for each.
+pub mod aprs_iss;
 #[cfg(test)]
 mod broker_key_slot_tests;
 /// SPEC-2's C16: changes to one contact by its id.
@@ -2073,6 +2075,27 @@ const APRS_REFUSED_RADIO_HAS_MIC: &str = "APRS not sent: the radio has the mic (
      Nothing was keyed.";
 const APRS_REFUSED_KEY: &str = "APRS not sent: the radio did not accept the key, so the packet \
      did not go out. Send it again when you are ready.";
+/// …and on the ISS channel, when the radio never confirmed the Doppler-corrected transmit
+/// frequency ([`aprs_iss`]).
+const APRS_ISS_UPLINK_NOT_TAKEN: &str = "APRS not sent: the radio did not move to the ISS \
+     transmit frequency (Doppler-corrected), so what was queued was dropped, not held for later. \
+     Nothing was keyed. Send it again, or turn the ISS Doppler correction off.";
+/// …when CAT was down, so the move could not be made or confirmed.
+const APRS_ISS_NO_CAT: &str = "APRS not sent: the radio's CAT link is down, so Nexus could not \
+     put the radio on the ISS frequency and confirm it there. What was queued was dropped, not \
+     held for later. Nothing was keyed. Send it again once CAT is back.";
+/// …when the radio read back a different frequency than it was sent: it rounds to its own step.
+const APRS_ISS_RADIO_ROUNDS: &str = "APRS not sent: the radio did not hold the Doppler-corrected \
+     ISS frequency it was sent (it rounds to its own tuning step), so what was queued was dropped \
+     rather than sent off frequency. Nothing was keyed. The correction is off for this pass; send \
+     it again and it goes out on 145.825 MHz.";
+/// …when the radio was tuned off the ISS channel while something was queued for it.
+const APRS_ISS_TUNED_AWAY: &str = "APRS not sent: the radio was tuned away from the ISS channel, \
+     so what was queued for the ISS was dropped, not sent on the new frequency. Nothing was keyed.";
+/// …when the ISS Doppler correction itself stopped while a frame waited on it.
+const APRS_ISS_STOPPED: &str = "APRS not sent: the ISS Doppler correction stopped while the \
+     packet waited for the transmit frequency, so it was dropped, not held for later. Nothing was \
+     keyed. Send it again and it goes out on 145.825 MHz.";
 
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
@@ -5124,6 +5147,8 @@ pub struct Engine {
     /// `set_frequency` (a normal QSY) or `set_operating_mode` — i.e. the moment the operator leaves
     /// APRS — so FM never follows them onto another band/mode.
     aprs_fm: bool,
+    /// The ISS channel's Doppler state ([`aprs_iss`]); live only while `aprs_fm` holds.
+    aprs_iss: aprs_iss::AprsIss,
     /// The rig is parked on an FM CHANNEL — a repeater or FM simplex frequency (session-only, never
     /// persisted). Set by [`Engine::repeater_tune`], the SSTV strip's FM rows (`sstv_tune`) and an
     /// FM channel the app parks (`tune_channel`, the ISS downlink); makes `rig_mode_effective`
@@ -5503,6 +5528,9 @@ pub struct AprsHealth {
     /// real choice, so the operator needs told which way it went; `<= 1` means there was nothing to
     /// choose and saying so would just be noise.
     pub band_radio_count: u32,
+    /// The ISS channel's Doppler correction, present only while that channel is selected
+    /// ([`Engine::aprs_iss_doppler`]).
+    pub iss_doppler: Option<aprs_iss::AprsIssDoppler>,
 }
 
 /// Below this peak a recovered "frame" cannot be told from the deframer's flag-hunt locking onto
@@ -7294,6 +7322,7 @@ impl Engine {
             aprs_tx_notice: None,
             aprs_msg_seq: 0,
             aprs_fm: false,
+            aprs_iss: aprs_iss::AprsIss::default(),
             fm_channel: false,
             fm_channel_kept: false,
             fm_channel_simplex: false,
@@ -22117,6 +22146,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
             self.remote_actuation.revoke();
             self.sat_dial_owner = owner;
+            self.aprs_iss_forget_confirmation();
         }
     }
 
@@ -22833,12 +22863,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.sat_binding.as_ref()
     }
 
+    /// The radio loop read the radio's dial: what the radio itself says, on every successful read
+    /// (an unchanged dial included, which [`Self::observe_rig_freq`] never sees). The ISS
+    /// channel's Doppler correction confirms its writes by it ([`aprs_iss`]).
+    pub fn rig_freq_read(&mut self, hz: u64) {
+        self.aprs_iss_rig_read(hz);
+    }
+
     /// The radio loop pushed a dial and the rig ACKNOWLEDGED it — confirm a
     /// matching pending binding leg. Called on every accepted dial push (the
     /// loop cannot know which QSY was a transponder pick); a no-op unless the
     /// frequency is exactly the binding's pending downlink, so terrestrial
     /// QSYs and in-pass Doppler steps fall through untouched.
     pub fn rig_dial_applied(&mut self, hz: u64) {
+        self.aprs_iss_rig_applied(hz);
         if let Some(b) = self.sat_binding.as_mut() {
             if b.pending_downlink_mhz
                 .is_some_and(|m| (m * 1e6).round() as u64 == hz)
@@ -24497,6 +24535,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 .map(|p| p.name.clone())
                 .unwrap_or_default(),
             band_radio_count: self.settings.radios_covering(&self.settings.band),
+            iss_doppler: self.aprs_iss_doppler(),
             ..self.aprs_health.clone()
         }
     }
@@ -24888,6 +24927,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // move is IN-band (146.520 → 144.390 fires no band-change event).
         self.machinery_tune(dial_mhz, "2m", "FM");
         self.aprs_fm = true;
+        // The ISS channel (and only it) gets Doppler correction; any other pick ends it.
+        self.aprs_iss_select(self.settings.dial_hz());
         self.immediate_retune = true;
         Ok(())
     }
@@ -25161,9 +25202,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.tx_owner().is_some() {
             return None;
         }
+        // On the ISS channel the frame keys only once the radio has taken the transmit
+        // frequency: held while it moves there, so every gate above has judged that frequency
+        // on the pass that lets the frame go.
+        if !self.aprs_iss_ready_to_key() {
+            return None;
+        }
         self.aprs_tx_notice = None;
         let (audio, ack) = self.aprs_tx_queue.pop_front()?;
         self.aprs_keying_ack = ack;
+        self.aprs_iss_keying(audio.len());
         Some(audio)
     }
 

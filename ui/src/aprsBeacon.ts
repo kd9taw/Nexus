@@ -27,8 +27,15 @@ export const NEW_ZEALAND = 144.575
 export const JAPAN = 144.66
 export const ARGENTINA = 144.93
 export const BRAZIL = 145.57
+/** The ISS's APRS digipeater, worldwide, heard only during a pass. Never derived from a grid:
+ *  only an operator's pick reaches it. Its path is ARISS, and the pass's Doppler shift (a few
+ *  kHz either side) is not corrected here. */
+export const ISS = 145.825
+/** The path the ISS digipeater answers to. */
+export const ISS_PATH = 'ARISS'
 
-/** The seven channels the picker offers, in the order it offers them. */
+/** The channels the picker offers, in the order it offers them: the seven regional terrestrial
+ *  channels, then the ISS. */
 export const APRS_FREQS: [number, string][] = [
   [NORTH_AMERICA, 'N. America'],
   [EUROPE_AFRICA, 'Europe / Africa'],
@@ -37,6 +44,7 @@ export const APRS_FREQS: [number, string][] = [
   [JAPAN, 'Japan'],
   [ARGENTINA, 'Argentina'],
   [BRAZIL, 'Brazil'],
+  [ISS, 'ISS (space station)'],
 ]
 
 /**
