@@ -90,7 +90,7 @@ import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall, ownScreen, workTier, pskSubmode, workHintView, WORK_SECTION, spotNeed, type OwnScreen } from './features/needs'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, JTTY_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
-import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
+import { ARRIVAL_OUTLOOK, DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
 import { DASH_RAIL_FOLDS, DASH_SLOT_IDS, isDashRailSection, railOnScreen, useDashRailSections, type DashRailSection, type DashSlotId } from './features/dashRail'
 import { sharedPaneById, sharedPaneOf } from './features/sharedPanes'
 import type { PaneId } from './features/connectConfig'
@@ -192,6 +192,7 @@ import { sameCall } from './callsign'
 import { processFlare, effectiveXray, flareToastGrid } from './flareAlert'
 import { snapXray, wxUsable, xrayFastFresh } from './propViz'
 import { processStorm, processStormForecast } from './stormAlert'
+import { processArrivalWatch } from './arrivalAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
@@ -1220,6 +1221,9 @@ function App() {
   // be an alert. stormAlert.ts dedups by the predicted onset time, so this announces once per
   // forecast event however often it is asked.
   useEffect(() => watchFeed(KP_FORECAST, (f) => processStormForecast(f, kpNowRef.current)), [])
+  // NOAA storm WATCH heads-up, app-wide, once per watch serial (arrivalAlert.ts keeps the serials
+  // across restarts); the map's countdown chip reads the same feed.
+  useEffect(() => watchFeed(ARRIVAL_OUTLOOK, (o) => processArrivalWatch(o)), [])
   // X-ray fast lane (60 s): flare ONSET reaches the operator in ~1 min instead of
   // the 5-min prop-snapshot cadence. Best-effort — a failed fetch just leaves the
   // snapshot's slower value driving the watcher.

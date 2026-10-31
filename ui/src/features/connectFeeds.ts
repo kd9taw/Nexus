@@ -30,6 +30,7 @@
 // land in either order, and the older one must never overwrite the newer.
 import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import {
+  getArrivalOutlook,
   getBandOutlook,
   getDxpedWindows,
   getGettingOut,
@@ -44,6 +45,7 @@ import {
 } from '../api'
 import type {
   AlertView,
+  ArrivalOutlook,
   DailySolarIndices,
   DxpedWindow,
   GettingOut,
@@ -117,6 +119,10 @@ export const SOLAR_INDICES: Feed<DailySolarIndices> = { name: 'solarIndices', lo
 /** The 3-day Kp forecast: the server's 15-minute cache (SWPC republishes every 30). App's storm
  *  heads-up and the Kp outlook box. */
 export const KP_FORECAST: Feed<KpForecast> = { name: 'kpForecast', load: () => getKpForecast(), everyMs: 900_000 }
+/** "Coming" (NOAA's watch, the model run, the L1 wind): each product has its own server-side
+ *  cache and backoff, so five minutes asks only what is due. App's watch toast, the map's
+ *  countdown chip and the Kp outlook's rationale hover. */
+export const ARRIVAL_OUTLOOK: Feed<ArrivalOutlook> = { name: 'arrivalOutlook', load: () => getArrivalOutlook(), everyMs: 300_000 }
 /** The ten DX regions' path over the day: the shack keeps the model six hours, so this poll only
  *  picks up the hours' Kp as the outlook moves (SWPC republishes every 30 minutes). */
 export const PATH_REGIONS: Feed<PathRegions> = { name: 'pathRegions', load: () => getPathRegions(), everyMs: 900_000 }

@@ -1,0 +1,54 @@
+:Product: 3-Day Forecast
+:Issued: 2026 Oct 31 0030 UTC
+# Prepared by the U.S. Dept. of Commerce, NOAA, Space Weather Prediction Center
+#
+A. NOAA Geomagnetic Activity Observation and Forecast
+
+The greatest observed 3 hr Kp over the past 24 hours was 4 (below NOAA
+Scale levels).
+The greatest expected 3 hr Kp for Oct 31-Nov 02 2026 is 5.00 (NOAA Scale
+G1).
+
+NOAA Kp index breakdown Oct 31-Nov 02 2026
+
+             Oct 31       Nov 01       Nov 02
+00-03UT       5.00 (G1)    3.67         2.67         
+03-06UT       4.67 (G1)    4.67 (G1)    2.33         
+06-09UT       4.33         3.33         2.33         
+09-12UT       4.00         2.67         2.33         
+12-15UT       3.00         2.33         2.33         
+15-18UT       3.00         3.33         2.00         
+18-21UT       3.67         3.67         2.33         
+21-00UT       4.00         3.33         2.67         
+
+Rationale: The geomagnetic field is likely to reach G1 (Minor)
+geomagnetic storm levels on 31 Oct - 01 Nov due to influence from a
+positive polarity CH HSS. Unsettled conditions are likely on 02 Nov as
+CH HSS influence wanes.
+
+B. NOAA Solar Radiation Activity Observation and Forecast
+
+Solar radiation, as observed by NOAA GOES-18 over the past 24 hours, was
+below S-scale storm level thresholds.
+
+Solar Radiation Storm Forecast for Oct 31-Nov 02 2026
+
+              Oct 31  Nov 01  Nov 02
+S1 or greater    1%      1%      1%
+
+Rationale: No S1 (Minor) or greater solar radiation storms are expected.
+No significant active region activity favorable for radiation storm
+production is forecast.
+
+C. NOAA Radio Blackout Activity and Forecast
+
+No radio blackouts were observed over the past 24 hours.
+
+Radio Blackout Forecast for Oct 31-Nov 02 2026
+
+              Oct 31        Nov 01        Nov 02
+R1-R2            1%            1%            1%
+R3 or greater    1%            1%            1%
+
+Rationale: No R1 (Minor) or greater radio blackouts are expected. No
+significant active region flare activity is forecast.

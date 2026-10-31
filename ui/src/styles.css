@@ -4940,6 +4940,31 @@ body.resizing-row {
   left: clamp(8px, calc(16px + 2rem), calc(100% - 8px - min(13rem, calc(100% - 16px))));
   max-width: min(330px, calc(100% - 24px - 2rem));
 }
+/* The "coming" chip (ArrivalChip.tsx): NOAA's storm watch countdown, the model line and a measured
+   arrival at L1. It is the last chip in the space-weather chip stack (`.wx-chip-stack`), under the
+   flare and proton chips, with their left rule; the stack places it and keeps it clear of the Layers
+   panel. Several lines on a wide map; on a map too narrow for the Layers panel and the Conditions
+   rail side by side it draws its headline only (ArrivalChip `compact`). Hoverable: its title names
+   each line's source and issue time. */
+.arrival-chip {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--state-warn);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text);
+  /* A long word wraps rather than leaving the chip: it never overflows, whatever room it gets. */
+  overflow-wrap: anywhere;
+}
+/* As in the rest of the stack, only the head line takes the pointer (for the hover: the browser
+   shows the chip's own title), so the Layers rows under the rest of the chip stay reachable. */
+.arrival-chip-head {
+  pointer-events: auto;
+}
+.arrival-chip-line {
+  color: var(--text-dim);
+}
 .map-layer {
   margin-bottom: var(--space-3);
 }

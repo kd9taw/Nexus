@@ -17,6 +17,7 @@
 
 pub mod achievements;
 pub mod advisor;
+pub mod arrival;
 pub mod award_status;
 pub mod awards;
 pub mod awards_more;

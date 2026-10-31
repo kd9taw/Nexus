@@ -5,6 +5,7 @@
 //! Kept out of the default build so the intelligence stays dependency-light and
 //! unit-testable offline.
 
+pub mod arrival;
 pub mod aurora;
 mod body;
 pub mod callook;

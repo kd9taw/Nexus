@@ -74,6 +74,7 @@ import type { RibbonInk } from '../features/pathRoute'
 import { t, type MessageKey } from '../i18n'
 import { fmtDistanceKm, useUnits } from '../units'
 import { MapInsightRail } from './prop/MapInsightRail'
+import { ArrivalChip } from './prop/ArrivalChip'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import { MapLegend, MufLegend } from './MapLegend'
 import { GlobePaused, useGlobeWebgl } from './globeWebgl'
@@ -2058,9 +2059,12 @@ function Globe3DView({
           ))}
         </MapLayersPanel>
       )}
-      {show.flare && flareFoot && xrayLong != null && (
-        // The space-weather chip stack beside the Layers panel — the 2-D map's, the same chip.
-        <div className="wx-chip-stack">
+      {/* The space-weather chip stack beside the Layers panel — the 2-D map's, the same chips: the
+          flare chip, then NOAA's storm-watch countdown (a chip, not a 3-D object: nothing on the way
+          is drawn as if it were measured). Always rendered: the storm-watch chip decides for itself
+          whether it shows, and an empty stack lets the pointer through and takes no room. */}
+      <div className="wx-chip-stack">
+        {show.flare && flareFoot && xrayLong != null && (
           <FlareChip
             xrayLong={xrayLong}
             foot={flareFoot}
@@ -2069,8 +2073,9 @@ function Globe3DView({
             nowMs={nowMs}
             snapAt={prop?.spaceWx?.xrayAt ?? null}
           />
-        </div>
-      )}
+        )}
+        <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
+      </div>
       {satAllHidden > 0 && (
         // The 2-D map renders this same hint word for word — one key, deliberately.
         <div className="map-empty-hint sats">{t('map.sats.allHidden', { count: satAllHidden })}</div>

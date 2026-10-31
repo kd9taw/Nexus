@@ -41,6 +41,7 @@ import type {
   WorkableCard,
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
+import { ArrivalChip } from './prop/ArrivalChip'
 import { agoLabel } from './prop/SpaceWxGauges'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
@@ -4197,28 +4198,29 @@ export function MapView({
               ))}
             </MapLayersPanel>
           )}
-          {((flareShown && flareFoot && xrayEff != null) || pcaChip) && (
-            // THE SPACE-WEATHER CHIP STACK — one column beside the Layers panel, so a chip can grow
-            // (the flare chip unfolds) without covering the next. Later overlays add their chip here.
-            <div className="wx-chip-stack">
-              {flareShown && flareFoot && xrayEff != null && (
-                <FlareChip
-                  xrayLong={xrayEff}
-                  foot={flareFoot}
-                  noaa={noaaNow}
-                  qth={myQth ?? me}
-                  nowMs={nowMs}
-                  snapAt={prop?.spaceWx?.xrayAt ?? null}
-                  preview={flarePreview}
-                />
-              )}
-              {pcaChip && pca && (
-                <div className="flare-chip pca-chip" role="status">
-                  {t('map.pca.chip', { scale: sScaleOf(pca.j10), db: pca.a30Day.toFixed(1) })}
-                </div>
-              )}
-            </div>
-          )}
+          {/* THE SPACE-WEATHER CHIP STACK — one column beside the Layers panel, so a chip can grow
+              (the flare chip unfolds) without covering the next. Later overlays add their chip here.
+              Always rendered: the storm-watch chip decides for itself whether it shows, and an empty
+              stack lets the pointer through and takes no room. */}
+          <div className="wx-chip-stack">
+            {flareShown && flareFoot && xrayEff != null && (
+              <FlareChip
+                xrayLong={xrayEff}
+                foot={flareFoot}
+                noaa={noaaNow}
+                qth={myQth ?? me}
+                nowMs={nowMs}
+                snapAt={prop?.spaceWx?.xrayAt ?? null}
+                preview={flarePreview}
+              />
+            )}
+            {pcaChip && pca && (
+              <div className="flare-chip pca-chip" role="status">
+                {t('map.pca.chip', { scale: sScaleOf(pca.j10), db: pca.a30Day.toFixed(1) })}
+              </div>
+            )}
+            <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
+          </div>
           {prop && (
             <MapInsightRail
               prop={prop}
