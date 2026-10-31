@@ -1068,3 +1068,32 @@ fn a_kept_card_speaks_for_a_start_only_inside_all_three_limits() {
     assert!(card_speaks_for(&k(NOW, NOW + 3600, NOW + q - 1), NOW));
     assert!(!card_speaks_for(&k(NOW, NOW + 3600, NOW + q), NOW));
 }
+
+/// A refresh carries on the card's run of Kp readings only when its Kp was read less than the Kp's
+/// 15 minutes after the replaced card's: a minute short of that inherits the run's first reading,
+/// exactly 15 minutes starts a new run.
+#[test]
+fn a_refresh_carries_on_the_run_only_inside_the_kps_limit() {
+    let _s = serial();
+    let card = sydney_card("FN42", NOW);
+    let refresh = |kp_at: i64| {
+        let stamps = propagation::model::SpaceWxStamps {
+            sfi_at: Some(kp_at - 3600),
+            kp_at: Some(kp_at),
+            ..Default::default()
+        };
+        keep_outlook("FN42", "QF56", kp_at, &card, Some(&stamps));
+    };
+    let since = || {
+        lock(&OUTLOOKS)
+            .iter()
+            .find(|k| k.me4 == "FN42" && k.dx4 == "QF56")
+            .map(|k| k.since)
+    };
+    for (gap, want) in [(15 * 60 - 1, NOW), (15 * 60, NOW + 15 * 60)] {
+        lock(&OUTLOOKS).clear();
+        refresh(NOW);
+        refresh(NOW + gap);
+        assert_eq!(since(), Some(want), "a Kp read {gap} s after the last");
+    }
+}
