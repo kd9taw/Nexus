@@ -2886,7 +2886,7 @@ export const DE: PartialCatalog = {
   "pathGrade.measure.heading": "Eine mit der Verbindung geloggte Antennenrichtung (ANT_AZ) stimmt mit dem besseren Weg des Modells überein: {{pct}} % (beurteilte Verbindungen: {{n}}).",
   "pathGrade.measure.noHeading": "Noch keine Verbindung mit geloggter Antennenrichtung und klarem Modellabstand.",
   "pathGrade.measure.none": "Noch keine bewerteten Verbindungen in den letzten 30 Tagen.",
-  "pathGrade.measure.ungradable": "Nicht bewertet: {{n}} (kein Locator, ein UKW-Band oder kein Sonnenflux für ihren Teil des Zyklus).",
+  "pathGrade.measure.ungradable": "Nicht bewertet: {{n}} (kein Locator, ein UKW-Band, eine Satelliten-, EME- oder Relais-Verbindung oder kein Sonnenflux für ihren Teil des Zyklus).",
   "contactCard.path": "Weg",
   "contactCard.path.loading": "Weg wird ermittelt…",
   "contactCard.path.none": "Kein Weg für diese Verbindung: sie braucht beide Locatoren und, wenn sie älter als drei Monate ist, einen mitgeloggten Sonnenflux.",

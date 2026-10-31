@@ -457,7 +457,8 @@ fn cell_ask(a: &GradeAsk, my_grid: &str, now: i64, current_ssn: Option<f64>) -> 
 pub(crate) struct Status {
     pub(crate) running: bool,
     /// Contacts in the log at the last pass, those it could grade, and those it could not
-    /// (no grid, a band the model skips, or no sunspot number for their part of the cycle).
+    /// (no grid, a band the model skips, a contact not by the ionosphere, or no sunspot number for
+    /// their part of the cycle).
     pub(crate) contacts: u32,
     pub(crate) graded: u32,
     pub(crate) ungradable: u32,

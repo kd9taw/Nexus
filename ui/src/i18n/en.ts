@@ -1951,7 +1951,7 @@ export const EN = {
     'No contact yet with a logged beam heading and a clear model margin.',
   'pathGrade.measure.none': 'No graded contacts in the last 30 days yet.',
   'pathGrade.measure.ungradable':
-    'Not graded: {{n}} (no grid square, a VHF band, or no solar flux for their part of the cycle).',
+    'Not graded: {{n}} (no grid square, a VHF band, a satellite, EME or repeater contact, or no solar flux for their part of the cycle).',
   'contactCard.path': 'Path',
   'contactCard.path.loading': 'Working out the path…',
   'contactCard.path.none':

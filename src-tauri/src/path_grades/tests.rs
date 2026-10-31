@@ -630,6 +630,103 @@ fn a_contact_that_did_not_go_by_the_ionosphere_is_never_graded() {
     assert_eq!(view_for(&stamped, "FN42", NOW, Some(80.0)), None);
 }
 
+/// The worked station's decode lateness over many periods (the aggregate DT gate) is said on the
+/// grade made at log time, and it raises nothing: route and confidence are the plain grade's.
+#[test]
+fn a_station_late_over_many_decodes_is_said_and_raises_nothing() {
+    let _s = serial();
+    let live = Mutex::new(propagation::LiveSpots::default());
+    let region = Mutex::new(propagation::LiveSpots::default());
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&measured()),
+    );
+    let rec = qso("VK2AA", "QF56", "20m", NOW, None);
+    let plain = at_log(&rec, "", &live, &region, &[]).unwrap();
+    assert!(!plain.why.iter().any(|w| w.starts_with("LATEDT")));
+    let late = at_log(&rec, "", &live, &region, &[0.07; 10]).unwrap();
+    assert_eq!(late.why.last().map(String::as_str), Some("LATEDT:70/10"));
+    assert_eq!((late.route, late.conf), (plain.route, plain.conf));
+}
+
+/// Every surface that shows a grade refuses a contact that did not go by the ionosphere — the
+/// log-time grade, the Logbook's column, its path filter and the contact card's day — and
+/// grades one that did (no `PROP_MODE`, a blank one, `F2`, `ION` in any case).
+#[test]
+fn the_prop_mode_gate_holds_on_every_surface() {
+    let _s = serial();
+    let live = Mutex::new(propagation::LiveSpots::default());
+    let region = Mutex::new(propagation::LiveSpots::default());
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&measured()),
+    );
+    let base = qso("VK2AA", "QF56", "20m", NOW, Some("150"));
+    let modes: [(Option<&str>, bool); 9] = [
+        (None, true),
+        (Some(""), true),
+        (Some("  "), true),
+        (Some("F2"), true),
+        (Some("ion"), true),
+        (Some("SAT"), false),
+        (Some("eme"), false),
+        (Some("ES"), false),
+        (Some("RPT"), false),
+    ];
+    let mut recs = Vec::new();
+    for (i, (m, _)) in modes.iter().enumerate() {
+        let mut r = base.clone();
+        r.call = format!("VK2A{i}");
+        r.prop_mode = m.map(str::to_string);
+        // A stamp, so the filter has a logged grade to show for every one.
+        r.extra.push((path_stamp::PATH_FIELD.into(), "L".into()));
+        r.extra
+            .push((path_stamp::PATH_CONF_FIELD.into(), "POSSIBLE".into()));
+        r.extra
+            .push((path_stamp::PATH_WHY_FIELD.into(), "OPEN_L;QF56/20m".into()));
+        recs.push(r);
+    }
+    let d = Dir::new("pm-surfaces");
+    let engine = on_store(&d, &recs);
+    run_pass(
+        capture(&engine, NOW, Some(80.0)),
+        &d.grades(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    for (r, (m, want)) in recs.iter().zip(modes.iter()) {
+        let a = GradeAsk::of(r);
+        let mut fresh = r.clone();
+        fresh.extra.clear();
+        assert_eq!(
+            at_log(&fresh, "", &live, &region, &[]).is_some(),
+            *want,
+            "at_log {m:?}"
+        );
+        assert_eq!(
+            view_for(&a, "FN42", NOW, Some(80.0)).is_some(),
+            *want,
+            "view {m:?}"
+        );
+        assert_eq!(
+            filter_keeps(r, tempo_core::logbook::query::PathFilter::Long, "FN42"),
+            *want,
+            "filter {m:?}"
+        );
+        assert_eq!(
+            contact_day(&a, "FN42", None, 0.0, NOW, Some(80.0)).is_some(),
+            *want,
+            "day {m:?}"
+        );
+    }
+}
+
 /// More cells than one chunk: every chunk is kept in the file, header first, and a restart reads
 /// them all back.
 #[test]
