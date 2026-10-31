@@ -15,7 +15,8 @@ import type { NeedAlert, NeedTag, PropagationSnapshot, Station } from '../types'
 import type { AmpStatus, FieldDayStatus } from '../types'
 import type { ActivationBoard } from './ActivationPane'
 import type { Theme } from '../useTheme'
-import { effectiveXray } from '../flareAlert'
+import { devXrayOverride, effectiveXray } from '../flareAlert'
+import { flareNoaaOf } from '../flareNow'
 import { snapXray } from '../propViz'
 import { gpuCapableForGlobe, webgl2ForGlobe } from '../gpu'
 import { GlobeGuard } from './GlobeGuard'
@@ -548,7 +549,7 @@ export function ConnectView({
   // to now (the hour belonged to the last station's strip).
   const [dayScrub, setDayScrub] = useState<DayScrub | null>(null)
   useEffect(() => setDayScrub(null), [selectedCall])
-  const { ctx, xrayNow } = usePaneContext({
+  const { ctx, xrayNow, xrayLane } = usePaneContext({
     myGrid,
     theme,
     intent,
@@ -578,6 +579,8 @@ export function ConnectView({
   // The one flux value the map renders (dev-override > fast lane > snapshot).
   // A stand-in or old snapshot flux is no flux (propViz `snapXray`); the fast lane is fresh-gated.
   const xrayLong = effectiveXray(xrayNow, snapXray(prop?.spaceWx, Date.now()))
+  // NOAA's trace, flare event and D-RAP grid beside it — none of them beside a dev-override flux.
+  const flareNoaa = useMemo(() => flareNoaaOf(xrayLane, devXrayOverride() != null), [xrayLane])
   const chromeHidden = mapFull && !map3d
 
   // CLOSE + RESIZE (operator-approved 2026-09-13). Visibility is per SLOT, in the shared
@@ -921,6 +924,7 @@ export function ConnectView({
                     activeBand={focusBand}
                     muf={muf}
                     xrayLong={xrayLong}
+                    flareNoaa={flareNoaa}
                     stations={stations}
                     layersRev={mapLayersRev}
                   />
@@ -947,6 +951,7 @@ export function ConnectView({
               scrubMs={dayScrub?.ms ?? null}
               muf={muf}
               xrayLong={xrayLong}
+              flareNoaa={flareNoaa}
               onFullChange={setMapFull}
               layersRev={mapLayersRev}
             />

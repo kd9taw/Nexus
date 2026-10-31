@@ -3818,11 +3818,38 @@ export const EN = {
   // the `logbook.import.dupes` note — because where "recovering" belongs in the sentence is
   // a decision for each language. `{{cls}}` is the GOES class (M2.1) and `{{r}}` the R-scale.
   'map.flare.chip': '☀️ {{cls}} flare · R{{r}} · HF ≤{{haf}} MHz absorbed on dayside',
-  'map.flare.phase.rising': ' · rising',
-  'map.flare.phase.recovering': ' · recovering',
-  'map.flare.phase.recoveringIn': ' · recovering (~{{mins}} min)',
-  'map.flare.phase.fade': ' · fade (~{{mins}} min)',
   'map.flare.phase.preview': ' · PREVIEW',
+  // The flare chip's lines (components/prop/FlareChip.tsx). Each is a whole statement. NOAA's
+  // event words carry NOAA's own UTC times ({{begin}}, {{peak}}, {{end}} such as 12:38Z); the
+  // "estimated" lines are Nexus's trend word when NOAA's list is silent. {{out}} and {{weak}} are
+  // band names such as 40m: the highest band out (≥ 10 dB) and the highest weakened (≥ 1 dB).
+  'map.flare.noaa.rising': 'NOAA: began {{begin}}, still rising',
+  'map.flare.noaa.peaked': 'NOAA: began {{begin}}, peaked {{peak}}',
+  'map.flare.noaa.peakedClass': 'NOAA: began {{begin}}, peaked {{peak}} at {{cls}}',
+  'map.flare.noaa.ended': 'NOAA: ended {{end}} (began {{begin}})',
+  'map.flare.est.rising': 'Rising (estimated from the GOES trend)',
+  'map.flare.est.falling': 'Falling (estimated from the GOES trend)',
+  'map.flare.src.noaa': 'NOAA D-RAP {{time}} · GOES {{xtime}}',
+  'map.flare.src.goes': 'Estimated from GOES {{xtime}} (no current NOAA grid)',
+  'map.flare.src.goesOnly': 'Estimated from GOES (no current NOAA grid)',
+  'map.flare.src.noaa.title': "Footprint and rings: NOAA's D-RAP absorption grid, valid {{time}}.",
+  'map.flare.src.goes.title': "Footprint and rings: estimated from the GOES X-ray flux with NOAA's D-RAP formula. NOAA's own grid is not current.",
+  'map.flare.src.gap.title': "NOAA's grid differs from the GOES estimate by {{mhz}} MHz under the sun. The map draws NOAA's.",
+  'map.flare.lightspeed': "A flare's X-rays travel at the speed of light: a flare is here the moment it is seen, never on its way.",
+  'map.flare.toggle.aria': 'Flare details',
+  'map.flare.sun.out': 'Under the sun: {{out}} and below out, weakened up to {{weak}}',
+  'map.flare.sun.weak': 'Under the sun: weakened up to {{weak}}',
+  'map.flare.sun.none': 'Under the sun: no HF band affected',
+  'map.flare.here.night': 'Your QTH: night side, no flare effect',
+  'map.flare.here.out': 'Your QTH: {{out}} and below out, weakened up to {{weak}}',
+  'map.flare.here.weak': 'Your QTH: weakened up to {{weak}}',
+  'map.flare.here.none': 'Your QTH: no HF band affected',
+  'map.flare.recovery.noaa': 'HF recovery in ~{{mins}} min (NOAA estimate)',
+  'map.flare.recovery.fit': "HF recovery in ~{{mins}} min (NOAA's empirical estimate)",
+  'map.flare.rings.legend': 'Rings: dashed = band weakened (1 dB), solid = band out (10 dB)',
+  'map.flare.spark.aria': 'GOES X-ray flux {{from}}–{{to}}, with the M1 and X1 lines',
+  'map.hover.sun': 'Sun · GOES X-ray {{cls}} at {{time}}',
+  'map.hover.sun.none': 'Sun · no current X-ray reading',
   'map.flare.preview.title':
     'Simulate an X2 flare on the map for 60 s — visual preview only (no alerts). The layer otherwise draws nothing until a real M-class flare.',
   'map.flare.preview.stop': '■ stop',

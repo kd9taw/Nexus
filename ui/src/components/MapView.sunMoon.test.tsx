@@ -29,6 +29,7 @@ import { MapView } from './MapView'
 import { makeProjection, moonAt, project, subsolarPoint } from '../mapGeo'
 import { gridToLatLon } from '../grid'
 import { STANDARD_SKY } from '../features/skins'
+import { sunWarmth, warmSunInk } from '../flareNow'
 
 // THE BUDGET (2026-10-09). The slowest case here, "on a quiet sun it is drawn where it is overhead (world)", takes
 // 0.22 s and 0.28 s on one core (two runs); a loaded full suite on this box has run cases up to 20 times slower than
@@ -175,6 +176,26 @@ describe('the sun on the 2-D map', () => {
     const r = await mountAt(DUSK, { projection: 'world', xrayLong: 2e-4 }) // an X2
     expect(flareCanvas(r.container), 'CONTROL: an X2 mounts the flare layer’s own sun').not.toBeNull()
     expect(sunDiscs(mapCanvas(r.container)), 'the plain sun was drawn under the flare’s').toEqual([])
+  })
+
+  // Below the M1 flare gate the footprint, rings and animation stay off; only the sun disc warms
+  // toward orange, the further the flux is up the C class (flareNow `sunWarmth`).
+  it('a C-class flare warms the plain sun toward orange, and the flare layer off keeps it plain', async () => {
+    const C3 = 3e-6
+    const warm = warmSunInk(SUN, sunWarmth(C3))
+    expect(warm, 'CONTROL: a C3 is a different ink').not.toBe(SUN)
+    const r = await mountAt(DUSK, { projection: 'world', xrayLong: C3 })
+    expect(flareCanvas(r.container), 'below M1 the flare layer draws no sun of its own').toBeNull()
+    const inks = fillsOf(mapCanvas(r.container)).filter((f) => f.ink === warm || f.ink === SUN)
+    expect(inks.some((f) => f.ink === warm && f.arcs.length > 0), 'the sun was not warmed').toBe(true)
+    expect(sunDiscs(mapCanvas(r.container)), 'a plain sun was drawn as well').toEqual([])
+    cleanup()
+    localStorage.setItem(
+      'nexus.connect.intents',
+      JSON.stringify({ dx: { layers: { flare: { visible: false, opacity: 0.8 } } } }),
+    )
+    const off = await mountAt(DUSK, { projection: 'world', xrayLong: C3 })
+    expect(sunDiscs(mapCanvas(off.container)).length, 'flare layer off: the theme sun').toBeGreaterThan(0)
   })
 
   it('with the flare layer off, a flare leaves the plain sun where it is', async () => {
