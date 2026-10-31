@@ -1,8 +1,10 @@
 //! `get_arrival_outlook`: what NOAA expects to reach Earth, kept per product.
 //!
-//! Five NOAA SWPC products feed it ([`propagation::arrival`] says what each one means): the
-//! geomagnetic watch in force, the scales' forecast days, the WSA-Enlil model trace, the last
-//! hour of L1 wind propagated to Earth, and the 3-day forecast's rationale. Each has its own
+//! Four NOAA SWPC products feed it ([`propagation::arrival`] says what each one means): the
+//! geomagnetic watch in force, the WSA-Enlil model trace, the last hour of L1 wind propagated to
+//! Earth, and the 3-day forecast's rationale. (The scales' forecast days have a tested parser,
+//! [`propagation::arrival::parse_scale_outlook`], but nothing shows them yet, so they are not
+//! fetched here: the space-weather strip already asks for that file.) Each has its own
 //! slot here with its own refresh interval, because they change at very different rates (the L1
 //! wind every minute, the model twice a day), and its own backoff, so one product failing never
 //! re-asks the others and never costs a request per poll.
@@ -16,23 +18,28 @@
 //!
 //! # What is served
 //!
-//! Each part only while it can still be honest: the watch until its last stormy day ends, the
-//! model run while the copy is younger than [`MODEL_MAX_AGE_SECS`] (the fetch has been failing
-//! for six hours otherwise), the newest L1 minute while it is younger than
+//! Each part only while it can still be honest, and every one fails closed with age:
+//! - the watch until its last stormy day ends, and only while our last good bulletin list is
+//!   younger than [`WATCH_MAX_AGE_SECS`]: a copy that old may have missed a cancel, and "in force"
+//!   is a present-tense claim;
+//! - the model run while our copy is younger than [`MODEL_MAX_AGE_SECS`] (the fetch has been
+//!   failing for six hours otherwise) AND the run itself is younger than [`MODEL_RUN_MAX_AGE_SECS`]
+//!   by its own publication time: a stalled model pipeline keeps serving an old run, and we fetch
+//!   it successfully every hour. A run whose time we do not know is not served;
+//! - the newest L1 minute while it is younger than
 //! [`L1_MAX_AGE_SECS`] (the solar-wind gauge's own rule), and a measured jump at L1 for
 //! [`JUMP_KEEP_SECS`] after it (a dated event, so it stays true). Kept in memory only: a restart
-//! asks again, which is five small requests.
+//! asks again, which is four small requests.
 
 use std::sync::Mutex;
 
 use propagation::arrival::{
     detect_jump, model_arrival, model_peak, ArrivalOutlook, L1Jump, L1Sample, L1View, ModelPoint,
-    ModelView, Rationale, ScaleOutlook, Watch,
+    ModelView, Rationale, Watch,
 };
 
 /// Refresh intervals, seconds: SWPC's own cadence for each product, or slower.
 const WATCH_TTL: i64 = 900;
-const SCALES_TTL: i64 = 900;
 const MODEL_TTL: i64 = 3600;
 const L1_TTL: i64 = 300;
 const RATIONALE_TTL: i64 = 1800;
@@ -41,7 +48,11 @@ const RATIONALE_TTL: i64 = 1800;
 const IN_FLIGHT_SECS: i64 = 60;
 /// The first retry after a failure; doubled per failure up to the product's TTL.
 const FIRST_RETRY_SECS: i64 = 60;
+/// Our last good copy of the watch bulletins may be this old before the watch is withdrawn.
+pub(crate) const WATCH_MAX_AGE_SECS: i64 = 6 * 3600;
 pub(crate) const MODEL_MAX_AGE_SECS: i64 = 6 * 3600;
+/// A model run older than this, by its own publication time, is not shown.
+pub(crate) const MODEL_RUN_MAX_AGE_SECS: i64 = 24 * 3600;
 pub(crate) const L1_MAX_AGE_SECS: i64 = 30 * 60;
 pub(crate) const JUMP_KEEP_SECS: i64 = 6 * 3600;
 
@@ -95,7 +106,6 @@ impl<T> Slot<T> {
 /// Every product's slot, plus the newest measured jump at L1.
 pub(crate) struct State {
     watch: Slot<Option<Watch>>,
-    scales: Slot<ScaleOutlook>,
     model: Slot<ModelRun>,
     l1: Slot<Vec<L1Sample>>,
     jump: Option<L1Jump>,
@@ -106,7 +116,6 @@ impl State {
     pub(crate) const fn new() -> Self {
         Self {
             watch: Slot::new(),
-            scales: Slot::new(),
             model: Slot::new(),
             l1: Slot::new(),
             jump: None,
@@ -131,7 +140,6 @@ static STATE: Mutex<State> = Mutex::new(State::new());
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Due {
     watch: bool,
-    scales: bool,
     model: bool,
     l1: bool,
     rationale: bool,
@@ -140,7 +148,6 @@ pub(crate) struct Due {
 pub(crate) fn claim_due(s: &mut State, now: i64) -> Due {
     Due {
         watch: s.watch.claim(now),
-        scales: s.scales.claim(now),
         model: s.model.claim(now),
         l1: s.l1.claim(now),
         rationale: s.rationale.claim(now),
@@ -151,7 +158,6 @@ pub(crate) fn claim_due(s: &mut State, now: i64) -> Due {
 #[derive(Default)]
 pub(crate) struct Fetched {
     watch: Option<Result<Option<Watch>, String>>,
-    scales: Option<Result<ScaleOutlook, String>>,
     model: Option<Result<ModelRun, String>>,
     l1: Option<Result<Vec<L1Sample>, String>>,
     rationale: Option<Result<Rationale, String>>,
@@ -161,7 +167,6 @@ fn fetch(due: Due, now: i64) -> Fetched {
     use propagation::live::arrival as live;
     Fetched {
         watch: due.watch.then(|| live::fetch_watch(now)),
-        scales: due.scales.then(live::fetch_scale_outlook),
         model: due.model.then(live::fetch_model),
         l1: due.l1.then(live::fetch_l1),
         rationale: due.rationale.then(live::fetch_rationale),
@@ -178,7 +183,6 @@ fn apply<T>(slot: &mut Slot<T>, r: Option<Result<T, String>>, now: i64, ttl: i64
 
 pub(crate) fn store(s: &mut State, f: Fetched, now: i64) {
     apply(&mut s.watch, f.watch, now, WATCH_TTL);
-    apply(&mut s.scales, f.scales, now, SCALES_TTL);
     apply(&mut s.model, f.model, now, MODEL_TTL);
     match f.l1 {
         Some(Ok(v)) => s.l1_ok(now, v),
@@ -190,16 +194,17 @@ pub(crate) fn store(s: &mut State, f: Fetched, now: i64) {
 
 /// What may be shown at `now` (see the header's "What is served").
 pub(crate) fn assemble(s: &State, now: i64) -> ArrivalOutlook {
-    let watch = s
-        .watch
-        .value
-        .clone()
-        .flatten()
-        .filter(|w| w.window.is_some_and(|(_, end)| end > now));
+    let watch = match (&s.watch.value, s.watch.fetched_at) {
+        (Some(w), Some(at)) if now - at <= WATCH_MAX_AGE_SECS => w.clone(),
+        _ => None,
+    }
+    .filter(|w| w.window.is_some_and(|(_, end)| end > now));
     let model = match (&s.model.value, s.model.fetched_at) {
-        (Some((pts, run_at)), Some(fetched_at)) if now - fetched_at <= MODEL_MAX_AGE_SECS => {
+        (Some((pts, Some(run_at))), Some(fetched_at))
+            if now - fetched_at <= MODEL_MAX_AGE_SECS && now - run_at <= MODEL_RUN_MAX_AGE_SECS =>
+        {
             Some(ModelView {
-                run_at: *run_at,
+                run_at: Some(*run_at),
                 fetched_at,
                 peak: model_peak(pts, now),
                 arrival: model_arrival(pts, now),
@@ -216,14 +221,13 @@ pub(crate) fn assemble(s: &State, now: i64) -> ArrivalOutlook {
     let l1 = (latest.is_some() || jump.is_some()).then_some(L1View { latest, jump });
     ArrivalOutlook {
         watch,
-        scales: s.scales.value.clone(),
         model,
         l1,
         rationale: s.rationale.value.clone(),
     }
 }
 
-/// Everything "coming": NOAA's watch, its forecast days, the model run, the measured wind at L1
+/// Everything "coming": NOAA's watch, the model run, the measured wind at L1
 /// and the forecasters' rationale, each with its own time. See the module header.
 #[tauri::command]
 pub(crate) async fn get_arrival_outlook() -> Result<ArrivalOutlook, String> {
@@ -328,9 +332,57 @@ mod tests {
     #[test]
     fn a_watch_is_served_until_its_window_ends() {
         let mut s = State::new();
-        s.watch.ok(T0, Some(watch(T0 + 86_400)), WATCH_TTL);
+        // A copy fetched an hour before the window ends, so only the window decides here (the
+        // copy's own age limit is the next test).
+        s.watch.ok(T0 + 82_800, Some(watch(T0 + 86_400)), WATCH_TTL);
         assert!(assemble(&s, T0 + 86_399).watch.is_some());
         assert!(assemble(&s, T0 + 86_400).watch.is_none());
+    }
+
+    /// Fails closed with age: a bulletin list we last got more than six hours ago may have missed
+    /// a cancel, so its watch is no longer said to be in force (positive control at six hours).
+    #[test]
+    fn a_watch_from_a_copy_older_than_six_hours_is_withdrawn() {
+        let mut s = State::new();
+        s.watch.ok(T0, Some(watch(T0 + 3 * 86_400)), WATCH_TTL);
+        s.watch.fail(T0 + 3600, WATCH_TTL); // the next fetches fail; the copy is kept…
+        assert!(assemble(&s, T0 + WATCH_MAX_AGE_SECS).watch.is_some());
+        assert!(
+            assemble(&s, T0 + WATCH_MAX_AGE_SECS + 1).watch.is_none(),
+            "…but past six hours it is not served"
+        );
+    }
+
+    fn model_with_run(s: &mut State, fetched: i64, run_at: Option<i64>) {
+        let pts = vec![ModelPoint {
+            at: fetched + 7 * 3600,
+            speed: 500.0,
+            density: 3.0,
+            cloud: false,
+        }];
+        s.model.ok(fetched, (pts, run_at), MODEL_TTL);
+    }
+
+    /// The run's own age decides, not our download: a stalled model pipeline serves an old run
+    /// that we fetch "fresh" every hour.
+    #[test]
+    fn a_model_run_older_than_a_day_or_of_unknown_age_is_hidden() {
+        let mut s = State::new();
+        model_with_run(&mut s, T0, Some(T0 - MODEL_RUN_MAX_AGE_SECS));
+        assert!(
+            assemble(&s, T0).model.is_some(),
+            "a run exactly a day old is shown"
+        );
+        model_with_run(&mut s, T0, Some(T0 - MODEL_RUN_MAX_AGE_SECS - 1));
+        assert!(
+            assemble(&s, T0).model.is_none(),
+            "a run over a day old, fetched just now, was shown"
+        );
+        model_with_run(&mut s, T0, None);
+        assert!(
+            assemble(&s, T0).model.is_none(),
+            "a run of unknown age was shown"
+        );
     }
 
     #[test]
@@ -349,6 +401,37 @@ mod tests {
         assert_eq!((m.run_at, m.fetched_at), (Some(T0 - 600), T0));
         assert_eq!(m.peak.map(|p| p.speed), Some(500.0));
         assert!(assemble(&s, T0 + MODEL_MAX_AGE_SECS + 1).model.is_none());
+    }
+
+    /// The newest L1 minute is "now" for 30 minutes and not a second longer.
+    #[test]
+    fn the_newest_l1_minute_is_served_for_thirty_minutes() {
+        let mut s = State::new();
+        s.l1_ok(T0, (0..10).map(|i| l1(T0 - 540 + i * 60)).collect());
+        let at = |t: i64| assemble(&s, t).l1.and_then(|v| v.latest).map(|x| x.at);
+        assert_eq!(at(T0 + L1_MAX_AGE_SECS), Some(T0));
+        assert_eq!(at(T0 + L1_MAX_AGE_SECS + 1), None);
+    }
+
+    /// A later jump replaces an earlier one.
+    #[test]
+    fn a_newer_jump_replaces_an_older_one() {
+        let mut s = State::new();
+        let stepped = |start: i64| -> Vec<L1Sample> {
+            (0..20)
+                .map(|i| {
+                    let mut x = l1(start + i * 60);
+                    if i >= 12 {
+                        x.speed = Some(560.0);
+                    }
+                    x
+                })
+                .collect()
+        };
+        s.l1_ok(T0 + 1200, stepped(T0));
+        s.l1_ok(T0 + 9000, stepped(T0 + 7800));
+        let j = assemble(&s, T0 + 9000).l1.and_then(|v| v.jump);
+        assert_eq!(j.map(|j| j.at), Some(T0 + 7800 + 12 * 60));
     }
 
     /// The newest L1 minute goes quiet after 30 min; a measured jump stays for six hours.

@@ -21,7 +21,7 @@ const OCT31 = dayLabel(T0)
 const NOV1 = dayLabel(T0 + DAY)
 const at = (secs: number) => wxStampLabel(secs)
 
-const NONE: ArrivalOutlook = { watch: null, scales: null, model: null, l1: null, rationale: null }
+const NONE: ArrivalOutlook = { watch: null, model: null, l1: null, rationale: null }
 const WATCH = {
   serial: 1134,
   code: 'WATA20',
@@ -136,6 +136,7 @@ describe('ArrivalChip on a narrow map', () => {
     await act(async () => {})
     const chip = await screen.findByRole('status')
     expect(chip.children).toHaveLength(1)
+    expect(chip.classList.contains('compact'), 'the narrow-map rule keys on this class').toBe(true)
     expect(chip.textContent).toContain('G1 watch')
     expect(chip.getAttribute('title')).toContain('Model (WSA-Enlil): wind up to 517 km/s')
   })

@@ -112,7 +112,7 @@ export function ArrivalChip({ compact = false }: { compact?: boolean }) {
   const shown = compact ? text.lines.slice(0, 1) : text.lines
   const title = compact && text.lines.length > 1 ? `${text.lines.slice(1).join('\n')}\n${text.title}` : text.title
   return (
-    <div className="arrival-chip" role="status" title={title}>
+    <div className={compact ? 'arrival-chip compact' : 'arrival-chip'} role="status" title={title}>
       {shown.map((l, i) => (
         <div key={i} className={i === 0 ? 'arrival-chip-head' : 'arrival-chip-line'}>
           {l}

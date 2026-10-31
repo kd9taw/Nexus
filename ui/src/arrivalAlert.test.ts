@@ -19,7 +19,7 @@ const T0 = 1_793_404_800 // 2026-10-31 00:00 UTC
 
 function outlook(serial: number, window: [number, number] | null = [T0, T0 + 2 * DAY], maxG = 1): ArrivalOutlook {
   const watch: ArrivalWatch = { serial, code: 'WATA20', issued: T0 - 5 * 3600, days: [], comment: null, window, maxG }
-  return { watch, scales: null, model: null, l1: null, rationale: null }
+  return { watch, model: null, l1: null, rationale: null }
 }
 
 beforeEach(() => {
@@ -61,7 +61,7 @@ describe('the storm watch toast', () => {
 
   it('says nothing with no watch, a watch whose window is over, or no feed', () => {
     processArrivalWatch(null, T0)
-    processArrivalWatch({ watch: null, scales: null, model: null, l1: null, rationale: null }, T0)
+    processArrivalWatch({ watch: null, model: null, l1: null, rationale: null }, T0)
     processArrivalWatch(outlook(1134), T0 + 2 * DAY)
     processArrivalWatch(outlook(1136, null), T0)
     expect(toast.push).not.toHaveBeenCalled()

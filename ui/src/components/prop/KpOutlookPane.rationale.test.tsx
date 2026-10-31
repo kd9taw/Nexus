@@ -32,7 +32,7 @@ describe('the Kp outlook rationale hover', () => {
   it("carries NOAA's rationale with its issue time", async () => {
     api.getKpForecast.mockResolvedValueOnce(FC)
     api.getArrivalOutlook.mockResolvedValueOnce({
-      watch: null, scales: null, model: null, l1: null, rationale: { issued: ISSUED, text: TEXT },
+      watch: null, model: null, l1: null, rationale: { issued: ISSUED, text: TEXT },
     })
     const el = await lines()
     expect(el?.getAttribute('title')).toBe(`NOAA forecaster, issued ${wxStampLabel(ISSUED)}: ${TEXT}`)

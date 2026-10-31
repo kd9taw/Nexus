@@ -1245,13 +1245,6 @@ export interface ArrivalWatch {
   window: [number, number] | null
   maxG: number
 }
-export interface ArrivalScaleDay {
-  day: number
-  g: number
-  rMinorPct: number | null
-  rMajorPct: number | null
-  sPct: number | null
-}
 export interface ArrivalModelPoint {
   at: number
   speed: number
@@ -1284,7 +1277,6 @@ export interface ArrivalL1 {
 }
 export interface ArrivalOutlook {
   watch: ArrivalWatch | null
-  scales: { issued: number | null; days: ArrivalScaleDay[] } | null
   model: ArrivalModel | null
   l1: ArrivalL1 | null
   /** The 3-day forecast's geomagnetic rationale: NOAA's own words, untranslated. */

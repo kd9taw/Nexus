@@ -194,7 +194,6 @@ pub struct L1View {
 #[serde(rename_all = "camelCase")]
 pub struct ArrivalOutlook {
     pub watch: Option<Watch>,
-    pub scales: Option<ScaleOutlook>,
     pub model: Option<ModelView>,
     pub l1: Option<L1View>,
     pub rationale: Option<Rationale>,
@@ -518,9 +517,9 @@ fn mean(xs: impl Iterator<Item = Option<f32>>) -> Option<f32> {
     (!v.is_empty()).then(|| v.iter().sum::<f32>() / v.len() as f32)
 }
 
-/// The newest measured step in the hour: the split with the largest speed rise among those that
-/// pass [`JUMP_SPEED_KMS`], or failing that the largest field ratio that passes
-/// [`JUMP_BT_RATIO`]/[`JUMP_BT_MIN_NT`]. `None` on a steady wind, however fast.
+/// The largest measured step in the hour (not necessarily the newest): the split with the
+/// largest speed rise among those that pass [`JUMP_SPEED_KMS`], or failing that the largest field
+/// ratio that passes [`JUMP_BT_RATIO`]/[`JUMP_BT_MIN_NT`]. `None` on a steady wind, however fast.
 pub fn detect_jump(samples: &[L1Sample]) -> Option<L1Jump> {
     if samples.len() < 2 * JUMP_WINDOW {
         return None;
@@ -706,6 +705,26 @@ mod tests {
         assert!(active_watch(&json!([older, newer, cancel]), now).is_none());
     }
 
+    /// A cancel ends only the watch it names: one naming an older serial leaves the newest watch
+    /// in force.
+    #[test]
+    fn a_cancel_naming_another_serial_leaves_the_newest_watch() {
+        let older = watch_msg(7, "2026-10-01 10:00:00.000", "Oct 02:  G1 (Minor)");
+        let newer = watch_msg(8, "2026-10-01 18:00:00.000", "Oct 02:  G2 (Moderate)");
+        let cancel_older = json!({
+            "product_id": "A20C",
+            "issue_datetime": "2026-10-01 19:00:00.000",
+            "message": "Space Weather Message Code: WATA20\r\nSerial Number: 9\r\nIssue Time: x\r\n\r\n\
+                        CANCEL WATCH: Geomagnetic Storm Category G1 Predicted\r\nCancel Serial Number: 7\r\n"
+        });
+        let w = active_watch(
+            &json!([older, newer, cancel_older]),
+            at("2026-10-01 20:00:00"),
+        )
+        .expect("a cancel of serial 7 ended watch 8");
+        assert_eq!((w.serial, w.max_g), (8, 2));
+    }
+
     #[test]
     fn a_december_watch_naming_january_rolls_the_year() {
         let v = json!([watch_msg(
@@ -805,6 +824,25 @@ mod tests {
         );
         // An arrival already more than the bracket in the past is not "coming".
         assert!(model_arrival(&step, t0 + 20 * 3600).is_none());
+    }
+
+    /// The peak is the fastest wind still AHEAD: a faster sample already behind us is not named.
+    #[test]
+    fn the_model_peak_never_names_a_time_already_past() {
+        let t0 = at("2026-11-01 00:00:00");
+        let mk = |h: i64, v: f32| ModelPoint {
+            at: t0 + h * 3600,
+            speed: v,
+            density: 5.0,
+            cloud: false,
+        };
+        let pts = vec![mk(0, 600.0), mk(6, 450.0), mk(12, 480.0), mk(18, 400.0)];
+        let p = model_peak(&pts, t0 + 3 * 3600).unwrap();
+        assert_eq!((p.at, p.speed), (t0 + 12 * 3600, 480.0));
+        assert!(
+            model_peak(&pts, t0 + 19 * 3600).is_none(),
+            "nothing ahead, no peak"
+        );
     }
 
     #[test]

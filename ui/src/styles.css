@@ -4870,6 +4870,8 @@ body.resizing-row {
   padding: var(--space-1) var(--space-2);
   font-size: calc(11px * var(--text-scale));
   color: var(--text);
+  /* A long word wraps rather than leaving the chip: it never overflows, whatever room it gets. */
+  overflow-wrap: anywhere;
   /* With the Layers panel (4): over the Conditions rail (3) where a narrow map makes them meet. */
   z-index: 4;
 }
@@ -4891,6 +4893,16 @@ body.resizing-row {
 .globe3d-layers.collapsed ~ .arrival-chip {
   left: calc(16px + 2rem);
   max-width: min(340px, calc(100% - 32px - 2rem));
+}
+/* A narrow map with the Layers panel OPEN (the 1024 floor: a ~225 px cell, 170 px of it panel)
+   has no room beside the panel, and squeezing the chip there left one word per line. So it keeps
+   the map's own left edge and its full width and goes UNDER the panel (z 3 < 4), which the
+   operator opened on purpose; folding the panel shows it whole again. */
+.map-layers:not(.collapsed) ~ .arrival-chip.compact,
+.globe3d-layers:not(.collapsed) ~ .arrival-chip.compact {
+  left: var(--space-3);
+  max-width: calc(100% - 2 * var(--space-3));
+  z-index: 3;
 }
 .map-layer {
   margin-bottom: var(--space-3);
