@@ -9,6 +9,11 @@
 //!   dated the same day as "0", and tomorrow is "2". We read today's R/S/G from
 //!   "0" and tomorrow's G from the block DATED the day after "0", by its
 //!   `DateStamp`; no such block (or no parseable date) → no tomorrow value.
+//!   Tomorrow's G travels WITH the date it is for (`{level, date}`), because a
+//!   copy outlives the fetch (the command's 15-min cache, its offline last-good
+//!   copy): the UI shows it as "tomorrow" only while that date is still UTC
+//!   today + 1. It is an object, not a bare number, so an older UI that tested
+//!   `gTomorrow > 0` finds no number and shows no chip, never a stale one.
 //! - `products/alerts.json` — an ARRAY of issued SWPC alert/watch/warning
 //!   bulletins; we sort newest-first and keep the most recent `max`.
 //!
@@ -28,12 +33,20 @@ pub struct NoaaScalesView {
     pub r: u8,
     pub s: u8,
     pub g: u8,
-    pub g_tomorrow: Option<u8>,
+    pub g_tomorrow: Option<GForecast>,
     /// When these scales were actually FETCHED (unix). `None` on the cold-cache
     /// default — so the UI can tell "measured quiet (R0 S0 G0)" from "never
     /// loaded" instead of rendering an offline feed as calm chips.
     #[serde(default)]
     pub as_of: Option<i64>,
+}
+
+/// A forecast G level and the UTC day it is for ("YYYY-MM-DD"). The date is what
+/// lets a reader tell, at render time, whether "tomorrow" is still tomorrow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GForecast {
+    pub level: u8,
+    pub date: String,
 }
 
 /// One issued SWPC bulletin, distilled for a notifications strip.
@@ -78,10 +91,10 @@ fn block_scale(block: &Value, scale: &str) -> Option<u8> {
         .filter(|n| *n <= 5) // the documented 0..=5 domain (a stray "6"/"9" is no reading)
 }
 
-/// Tomorrow's G: the one block whose `DateStamp` is the UTC day after block "0"'s.
-/// `None` when "0" has no parseable date, when no block (or more than one) carries
-/// tomorrow's date, or when that block's G is not a 0..=5 digit.
-fn g_tomorrow(v: &Value) -> Option<u8> {
+/// Tomorrow's G and its date: the one block whose `DateStamp` is the UTC day after
+/// block "0"'s. `None` when "0" has no parseable date, when no block (or more than
+/// one) carries tomorrow's date, or when that block's G is not a 0..=5 digit.
+fn g_tomorrow(v: &Value) -> Option<GForecast> {
     let today = block_day(v.get("0")?)?;
     let mut dated_tomorrow = v
         .as_object()?
@@ -91,15 +104,27 @@ fn g_tomorrow(v: &Value) -> Option<u8> {
     if dated_tomorrow.next().is_some() {
         return None; // two blocks claim tomorrow: no honest single answer
     }
-    block_scale(block, "G")
+    let level = block_scale(block, "G")?;
+    let (y, m, d) = crate::geo::civil_from_days(today + 1);
+    Some(GForecast {
+        level,
+        date: format!("{y:04}-{m:02}-{d:02}"),
+    })
 }
 
 /// A block's `DateStamp` ("YYYY-MM-DD") as days since the Unix epoch; `None` when
-/// missing, malformed, or not a real calendar date (2026-02-30 is refused).
+/// missing, malformed, or not a real calendar date (2026-02-30 is refused). Only
+/// NOAA's own shape is read: four, two and two ASCII digits joined by '-'
+/// (`2026/11/01` and `2026-11-+1` are refused).
 fn block_day(block: &Value) -> Option<i64> {
     let s = block.get("DateStamp")?.as_str()?.trim();
     let b = s.as_bytes();
-    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+    let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
+    if b.len() != 10
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || !(digits(0..4) && digits(5..7) && digits(8..10))
+    {
         return None;
     }
     let y: i64 = s[0..4].parse().ok()?;
@@ -215,7 +240,7 @@ mod tests {
     }
 
     fn tmrw(s: &NoaaScalesView) -> Option<u8> {
-        s.g_tomorrow
+        s.g_tomorrow.as_ref().map(|f| f.level)
     }
 
     #[test]
@@ -282,6 +307,7 @@ mod tests {
             "2026-02-30",
             "",
             "2026-1-1",
+            "2026/10/31",
         ] {
             let mut v = fixture();
             v["0"]["DateStamp"] = json!(bad);
@@ -291,6 +317,13 @@ mod tests {
         let mut v = fixture();
         v["2"]["DateStamp"] = json!("tomorrow");
         assert_eq!(tmrw(&parse_noaa_scales(&v)), None);
+        // Tomorrow's block dated in another shape that still names 1 November: not
+        // NOAA's format, so not tomorrow.
+        for odd in ["2026/11/01", "2026-11-+1"] {
+            let mut v = fixture();
+            v["2"]["DateStamp"] = json!(odd);
+            assert_eq!(tmrw(&parse_noaa_scales(&v)), None, "tomorrow dated {odd:?}");
+        }
         // A date the calendar does not have is not tomorrow, even where it would roll
         // over onto tomorrow's day number (2026 has no 29 February).
         let v = json!({
@@ -335,6 +368,46 @@ mod tests {
             "2": day("2026-11-02", "3"),   // gap: no 11-01 block
         });
         assert_eq!(tmrw(&parse_noaa_scales(&v)), None);
+    }
+
+    #[test]
+    fn tomorrow_carries_the_date_it_is_for() {
+        // The UI shows the chip only while this date is still UTC today + 1, so a
+        // copy kept past midnight cannot call today "tomorrow".
+        let s = parse_noaa_scales(&fixture());
+        assert_eq!(
+            s.g_tomorrow,
+            Some(GForecast {
+                level: 1,
+                date: "2026-11-01".into()
+            })
+        );
+        let wire = serde_json::to_value(&s).unwrap();
+        assert_eq!(
+            wire["gTomorrow"],
+            json!({ "level": 1, "date": "2026-11-01" })
+        );
+        // Across a year boundary the date is tomorrow's, written in NOAA's shape.
+        let v = json!({
+            "0": { "DateStamp": "2026-12-31", "G": { "Scale": "0" } },
+            "2": { "DateStamp": "2027-01-01", "G": { "Scale": "2" } },
+        });
+        assert_eq!(parse_noaa_scales(&v).g_tomorrow.unwrap().date, "2027-01-01");
+        // Unknown tomorrow is null on the wire.
+        assert_eq!(
+            serde_json::to_value(parse_noaa_scales(&json!({}))).unwrap()["gTomorrow"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn g5_is_read_today_and_tomorrow() {
+        // The top of the scale is a reading, not out of range.
+        let mut v = fixture();
+        set_g(&mut v, "0", "5");
+        set_g(&mut v, "2", "5");
+        let s = parse_noaa_scales(&v);
+        assert_eq!((s.g, tmrw(&s)), (5, Some(5)));
     }
 
     #[test]

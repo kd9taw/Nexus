@@ -156,4 +156,4 @@ pub use solar_wind::SolarWind;
 pub use space_wx::{ScalarTrend, SpaceWxHistory, SpaceWxSample, TrendDir, WxTrend};
 pub use spot::Spot;
 pub use stats::{compute_log_stats, ContinentTally, LogStats, ZoneTally};
-pub use swpc_scales::{AlertView, NoaaScalesView};
+pub use swpc_scales::{AlertView, GForecast, NoaaScalesView};

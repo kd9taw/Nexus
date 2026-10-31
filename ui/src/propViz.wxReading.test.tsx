@@ -90,7 +90,7 @@ describe('the Connect Basic line', () => {
 })
 
 describe('the scales chips', () => {
-  const scales = (asOf: number): NoaaScalesView => ({ r: 0, s: 0, g: 0, gTomorrow: 0, asOf }) as NoaaScalesView
+  const scales = (asOf: number): NoaaScalesView => ({ r: 0, s: 0, g: 0, gTomorrow: null, asOf }) as NoaaScalesView
   it('an old copy says how old it is; a fresh one does not', () => {
     const old = render(<ScalesAnnunciator scales={scales(NOW - 3 * 3600)} alerts={[]} />)
     expect(old.container.textContent).toContain(t('prop.scales.asOf', { ago: t('prop.opening.ago.hours', { hours: 3 }) }))
@@ -99,21 +99,44 @@ describe('the scales chips', () => {
     expect(fresh.container.textContent).not.toContain(t('prop.scales.asOf', { ago: '' }).trim())
   })
 
+  // NOW is 2026-10-30 02:46Z, so tomorrow is 2026-10-31.
+  const tmrw = (gTomorrow: NoaaScalesView['gTomorrow'], asOf = NOW - 300) => {
+    const s: NoaaScalesView = { r: 0, s: 0, g: 0, gTomorrow, asOf }
+    const { container } = render(<ScalesAnnunciator scales={s} alerts={[]} />)
+    const text = container.textContent
+    cleanup()
+    return text
+  }
+
   it("tomorrow's G shows only when NOAA dated a block tomorrow and it is above G0", () => {
-    const tmrw = (gTomorrow: number | null) => {
-      const s: NoaaScalesView = { r: 0, s: 0, g: 0, gTomorrow, asOf: NOW - 300 }
-      const { container } = render(<ScalesAnnunciator scales={s} alerts={[]} />)
-      const text = container.textContent
-      cleanup()
-      return text
-    }
-    expect(tmrw(2)).toContain(t('prop.scales.tomorrow', { level: 2 }))
+    expect(tmrw({ level: 2, date: '2026-10-31' })).toContain(t('prop.scales.tomorrow', { level: 2 }))
     expect(tmrw(null)).not.toContain('↗')
-    expect(tmrw(0)).not.toContain('↗')
+    expect(tmrw({ level: 0, date: '2026-10-31' })).not.toContain('↗')
+  })
+
+  it("tomorrow's G stops at UTC midnight: a kept copy never calls today tomorrow", () => {
+    const g2 = { level: 2, date: '2026-11-01' }
+    // Fetched at 23:55Z on 31 Oct, a G2 forecast for 1 Nov.
+    const fetched = Date.UTC(2026, 9, 31, 23, 55, 0)
+    vi.setSystemTime(Date.UTC(2026, 9, 31, 23, 59, 0))
+    expect(tmrw(g2, fetched / 1000)).toContain(t('prop.scales.tomorrow', { level: 2 }))
+    // Two minutes later 1 Nov is today; the same fresh copy (6 min old, not dimmed) must not say "tmrw".
+    vi.setSystemTime(Date.UTC(2026, 10, 1, 0, 1, 0))
+    expect(tmrw(g2, fetched / 1000)).not.toContain('↗')
+    // Nor a day later, offline.
+    vi.setSystemTime(Date.UTC(2026, 10, 2, 0, 1, 0))
+    expect(tmrw(g2, fetched / 1000)).not.toContain('↗')
+    // A date two days on is not tomorrow either.
+    vi.setSystemTime(Date.UTC(2026, 9, 30, 23, 59, 0))
+    expect(tmrw(g2, fetched / 1000)).not.toContain('↗')
+  })
+
+  it("an older station's bare-number forecast, with no date, shows no chip", () => {
+    expect(tmrw(2 as unknown as NoaaScalesView['gTomorrow'])).not.toContain('↗')
   })
 
   it('an old copy keeps its letters but not their alarm colour; a fresh one is coloured', () => {
-    const storm = (asOf: number): NoaaScalesView => ({ r: 3, s: 1, g: 4, gTomorrow: 0, asOf }) as NoaaScalesView
+    const storm = (asOf: number): NoaaScalesView => ({ r: 3, s: 1, g: 4, gTomorrow: null, asOf }) as NoaaScalesView
     const classes = (asOf: number) => {
       const { container } = render(<ScalesAnnunciator scales={storm(asOf)} alerts={[]} />)
       const out = [...container.querySelectorAll('.swsc-chip')].map((c) => [c.textContent, c.className])
