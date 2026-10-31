@@ -229,9 +229,10 @@ fn receivers(
     out
 }
 
-/// Whether a contact went by the ionosphere, as far as its record says: no `PROP_MODE`, or one
-/// naming the ionosphere (`F2`, `ION`). A satellite, EME, repeater, internet-linked or any other
-/// contact is not a path the model describes, and is never graded.
+/// Whether a contact went the way the model describes, as far as its record says: no `PROP_MODE`,
+/// or `F2` or `ION`. Any other mode is never graded: a satellite, EME, repeater or internet-linked
+/// contact, and also sporadic E, TEP, aurora, scatter and the like, which the model's F2/E hops do
+/// not describe.
 pub(crate) fn ionospheric(prop_mode: Option<&str>) -> bool {
     match prop_mode.map(str::trim).filter(|m| !m.is_empty()) {
         None => true,
@@ -465,7 +466,8 @@ fn cell_ask(a: &GradeAsk, my_grid: &str, now: i64, current_ssn: Option<f64>) -> 
 pub(crate) struct Status {
     pub(crate) running: bool,
     /// Contacts in the log at the last pass, those it could grade, and those it could not
-    /// (no grid, a band the model skips, a contact not by the ionosphere, or no sunspot number for
+    /// (no grid, a band the model skips, a propagation mode logged other than F2 or ionoscatter —
+    /// satellite, EME, a repeater, sporadic E, TEP … ([`ionospheric`]) — or no sunspot number for
     /// their part of the cycle).
     pub(crate) contacts: u32,
     pub(crate) graded: u32,

@@ -630,6 +630,44 @@ fn a_contact_that_did_not_go_by_the_ionosphere_is_never_graded() {
     assert_eq!(view_for(&stamped, "FN42", NOW, Some(80.0)), None);
 }
 
+/// What the expert's "Not graded" line says of propagation modes holds for every mode ADIF names:
+/// a contact logged with any mode but F2 reflection or ionoscatter is not graded and is counted
+/// among those not graded — sporadic E and TEP as much as a satellite — and those two, like a
+/// contact with no mode logged, are graded.
+#[test]
+fn every_logged_prop_mode_but_f2_and_ionoscatter_counts_as_not_graded() {
+    let _s = serial();
+    // ADIF's PROP_MODE enumeration, whole.
+    const ADIF_PROP_MODES: [&str; 20] = [
+        "AS", "AUE", "AUR", "BS", "ECH", "EME", "ES", "F2", "FAI", "GWAVE", "INTERNET", "ION",
+        "IRL", "LOS", "MS", "RPT", "RS", "SAT", "TEP", "TR",
+    ];
+    let graded = ["F2", "ION"];
+    for m in ADIF_PROP_MODES {
+        assert_eq!(ionospheric(Some(m)), graded.contains(&m), "{m}");
+    }
+    let base = qso("VK2AA", "QF56", "20m", NOW - 3600, Some("150"));
+    let mut recs = vec![base.clone()];
+    for (i, m) in ADIF_PROP_MODES.iter().enumerate() {
+        let mut r = base.clone();
+        r.call = format!("VK2B{i}");
+        r.prop_mode = Some((*m).to_string());
+        recs.push(r);
+    }
+    let d = Dir::new("pm-counted");
+    let engine = on_store(&d, &recs);
+    let s = run_pass(
+        capture(&engine, NOW, Some(80.0)),
+        &d.grades(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(
+        (s.graded, s.ungradable),
+        (1 + 2, ADIF_PROP_MODES.len() as u32 - 2)
+    );
+}
+
 /// The worked station's decode lateness over many periods (the aggregate DT gate) is said on the
 /// grade made at log time, and it raises nothing: route and confidence are the plain grade's.
 #[test]

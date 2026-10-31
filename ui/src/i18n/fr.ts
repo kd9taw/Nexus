@@ -3328,7 +3328,7 @@ export const FR: PartialCatalog = {
   "pathGrade.measure.heading": "Une orientation d’antenne enregistrée avec le contact (ANT_AZ) concorde avec le meilleur trajet du modèle : {{pct}} % (contacts jugés : {{n}}).",
   "pathGrade.measure.noHeading": "Aucun contact encore avec une orientation d’antenne enregistrée et un écart net du modèle.",
   "pathGrade.measure.none": "Pas encore de contacts évalués sur les 30 derniers jours.",
-  "pathGrade.measure.ungradable": "Non évalués : {{n}} (pas de locator, une bande VHF, un contact par satellite, EME ou relais, ou pas de flux solaire pour leur partie du cycle).",
+  "pathGrade.measure.ungradable": "Non évalués : {{n}} (pas de locator, une bande VHF, une propagation notée autre que la réflexion F2 ou la diffusion ionosphérique — satellite, EME, relais, Sporadique E, TEP et autres — ou pas de flux solaire pour leur partie du cycle).",
   "contactCard.path": "Trajet",
   "contactCard.path.loading": "Calcul du trajet…",
   "contactCard.path.none": "Pas de trajet pour ce contact : il faut les deux locators et, s’il a plus de trois mois, le flux solaire enregistré avec lui.",
