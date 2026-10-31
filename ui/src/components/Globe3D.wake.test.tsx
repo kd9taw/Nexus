@@ -228,3 +228,103 @@ describe('waking the sleeping 3-D globe never re-enters its own first frame', ()
     expect(fake.loop.next, 'and then it sleeps').toBe(null)
   })
 })
+
+// UNSEEN, IT DRAWS NOTHING. A minimised window keeps its timers on every engine and its animation frames
+// on some (WebKitGTK), and a globe out of sight in its pane costs the same as one in front of you; on a
+// software renderer each frame is a large share of a core. So while the window is hidden or the globe is
+// out of view, a wake or a breath draws nothing and only remembers that the picture is behind; coming
+// back into view draws it once. The stub's timer loop stands in for an engine that keeps animating a
+// hidden window.
+class IO {
+  static all: IO[] = []
+  constructor(readonly cb: (e: Array<{ isIntersecting: boolean }>) => void) {
+    IO.all.push(this)
+  }
+  observe() {}
+  unobserve() {}
+  disconnect() {
+    IO.all = IO.all.filter((o) => o !== this)
+  }
+}
+const inView = async (seen: boolean) =>
+  act(async () => {
+    for (const o of IO.all) o.cb([{ isIntersecting: seen }])
+  })
+const windowShown = async (shown: boolean) => {
+  vi.spyOn(document, 'hidden', 'get').mockReturnValue(!shown)
+  await act(async () => void document.dispatchEvent(new Event('visibilitychange')))
+}
+
+describe('unseen, the 3-D globe draws nothing', () => {
+  beforeEach(() => {
+    IO.all = []
+    ;(globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = IO
+  })
+  afterEach(() => {
+    delete (globalThis as unknown as { IntersectionObserver?: unknown }).IntersectionObserver
+  })
+
+  it('a spinning globe stops drawing while the window is hidden, and turns again when shown', async () => {
+    const r = await asleep()
+    await act(async () => (r.container.querySelector('.globe3d-spin') as HTMLButtonElement).click())
+    let frames = fake.loop.frames
+    await act(async () => void vi.advanceTimersByTime(1_000))
+    expect(fake.loop.frames - frames, 'CONTROL: shown, it spins').toBeGreaterThan(10)
+    await windowShown(false)
+    frames = fake.loop.frames
+    await act(async () => void vi.advanceTimersByTime(5_000))
+    expect(fake.loop.frames - frames, 'frames drawn while hidden').toBe(0)
+    expect(fake.loop.next, 'the loop is stopped while hidden').toBe(null)
+    await windowShown(true)
+    frames = fake.loop.frames
+    await act(async () => void vi.advanceTimersByTime(1_000))
+    expect(fake.loop.frames - frames, 'shown again, it spins again').toBeGreaterThan(10)
+    expect(fake.loop.maxDepth, 'no frame nested').toBe(1)
+  })
+
+  it('a change while hidden is drawn once the window is shown, and then the globe sleeps', async () => {
+    const r = await asleep('EN52')
+    await windowShown(false)
+    const frames = fake.loop.frames
+    await act(async () => {
+      r.rerender(<Globe3D {...props('JN58', quiet)} />)
+    })
+    await act(async () => void vi.advanceTimersByTime(5_000))
+    expect(fake.loop.frames - frames, 'frames drawn while hidden').toBe(0)
+    await windowShown(true)
+    expect(fake.loop.frames - frames, 'shown, the change is drawn').toBeGreaterThan(0)
+    await act(async () => void vi.advanceTimersByTime(5_000))
+    expect(fake.loop.next, 'and it sleeps again').toBe(null)
+    expect(fake.loop.maxDepth, 'no frame nested').toBe(1)
+  })
+
+  it('showing a window whose still globe changed nothing draws nothing', async () => {
+    await asleep('EN52')
+    await windowShown(false)
+    await act(async () => void vi.advanceTimersByTime(2_000))
+    const frames = fake.loop.frames
+    await windowShown(true)
+    await act(async () => void vi.advanceTimersByTime(5_000))
+    expect(fake.loop.frames - frames, 'frames drawn for nothing').toBe(0)
+  })
+
+  it('a breathing globe out of view draws nothing, and breathes again back in view', async () => {
+    await asleep('EN52', breathing)
+    // One second per act, so each breath's render is flushed before the next.
+    const perSecond = async (n: number) => {
+      const per: number[] = []
+      for (let i = 0; i < n; i++) {
+        const frames = fake.loop.frames
+        await act(async () => void vi.advanceTimersByTime(1_000))
+        per.push(fake.loop.frames - frames)
+      }
+      return per
+    }
+    expect(await perSecond(3), 'CONTROL: in view, it breathes once a second').toEqual([1, 1, 1])
+    await inView(false)
+    expect(await perSecond(5), 'frames drawn out of view').toEqual([0, 0, 0, 0, 0])
+    await inView(true)
+    await act(async () => void vi.advanceTimersByTime(5_000))
+    expect(await perSecond(3), 'back in view, it breathes once a second again').toEqual([1, 1, 1])
+  })
+})
