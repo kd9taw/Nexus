@@ -38,7 +38,7 @@ The wizard is a four-step flow — **Station** (callsign + grid), **Rig**
 then **Finish** (license class, starter channel packs on a first run, and the
 walkthrough offer). Every step is skippable, and you can re-run the wizard any
 time from the **Re-run setup wizard…** link on the Settings ▸ Radio tab, or from
-Settings ▸ Appearance ▸ Features ▸ "Re-run setup…". Re-running edits in place:
+Settings ▸ App ▸ Features ▸ "Re-run setup…". Re-running edits in place:
 callsign, radio and log come with you.
 
 **Log** — **Import my ADIF log…** reads any standard ADIF export (WSJT-X, N1MM,
@@ -48,7 +48,7 @@ progress. The import is local and duplicates are skipped; you can import later
 from the Logbook instead.
 
 **There are no goal cards.** Every mode and every section starts on; trimming
-happens afterwards in Settings ▸ Appearance ▸ Features, which is where the goal
+happens afterwards in Settings ▸ App ▸ Features, which is where the goal
 profiles now live: Just getting started, DX chasing & awards, Contesting,
 POTA / SOTA, 6m / VHF & openings, and Everything (expert), with a seventh
 **Custom** chip shown once you hand-toggle.

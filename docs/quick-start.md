@@ -131,7 +131,7 @@ the app useful on day one.
 There is nothing to unlock: **every mode and every section starts on** —
 FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. If you would
 rather run a leaner app, sections come off one at a time afterwards in
-[Settings ▸ Appearance ▸ Features](guide/settings-reference.md#features), which is
+[Settings ▸ App ▸ Features](guide/settings-reference.md#features), which is
 also where the goal profiles — getting started, DX/awards, contesting, POTA/SOTA,
 6m/VHF, and **Everything (expert)**, which turns the whole console back on — set
 a batch of sensible defaults in one pick. Toggle features by hand and the profile

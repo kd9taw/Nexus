@@ -185,10 +185,11 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
 /// that let the station transmit with no press at it (a switch that transmits by itself, or one that
 /// lets a program at the shack or a browser start a transmission there) and the guards on a
 /// transmission (what stops or caps one by itself, the power ceilings, the licence privileges, and
-/// the lines that key the transmitter), the one setting that names a program for the shack to run
-/// (the TQSL path), JS8's sound files and their output, and the TCI server's settings. From afar a
-/// save keeps the shack's own value of each ([`keep_the_shacks_transmit_settings`],
-/// [`keep_the_shacks_radio_ptt`]): they are set at the shack only. So are the addresses Nexus sends a stored key or password to
+/// the lines that key the transmitter), the shack computer's microphone that Phone's PTT can send,
+/// the one setting that names a program for the shack to run (the TQSL path), JS8's sound files and
+/// their output, and the TCI server's settings. From afar a save keeps the shack's own value of
+/// each ([`keep_the_shacks_transmit_settings`], [`keep_the_shacks_radio_ptt`]): they are set at the
+/// shack only. So are the addresses Nexus sends a stored key or password to
 /// ([`keep_the_shacks_credential_addresses`], [`keep_the_shacks_radio_icom_address`]). (The presence
 /// beacon and JS8's automatic replies, relay and heartbeat acks each have one writer, their own
 /// switch, and no save moves them at all: `Engine::apply_settings`.)
@@ -272,6 +273,21 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     };
     save.ptt_method = method.clone();
     save.ptt_serial_port = port.clone();
+    // …and the radio's transmit audio source: Phone's PTT sending THIS (the shack's) computer's
+    // microphone, which one, and at what gain. Radio's own too, so kept as its PTT is. A client's
+    // form shows the client's devices and says "this computer", which is not the shack's.
+    match edited {
+        Some(radio) => {
+            save.pc_mic = radio.pc_mic;
+            save.pc_mic_device.clone_from(&radio.pc_mic_device);
+            save.pc_mic_gain_db = radio.pc_mic_gain_db;
+        }
+        None => {
+            save.pc_mic = shack.pc_mic;
+            save.pc_mic_device.clone_from(&shack.pc_mic_device);
+            save.pc_mic_gain_db = shack.pc_mic_gain_db;
+        }
+    }
     // …and the other lines that key it: CW's keyer, its keyline's port and line and the WinKeyer's
     // port (the radio loop opens a CW key port as soon as its keyer is chosen, the CAT port among
     // them), and how RTTY keys, with true FSK's port and line.
@@ -300,7 +316,8 @@ pub(crate) fn keep_the_shacks_transmit_settings(
 }
 
 /// What one radio's edit from afar may not change ([`SETTINGS_FROM_AFAR`]): its PTT method and
-/// port, and the Flex client's Beta for CW, Tune and the ATU, put back into `patch` as the shack has
+/// port, the Flex client's Beta for CW, Tune and the ATU, and the shack computer's microphone for
+/// Phone (the switch, the device and the gain), put back into `patch` as the shack has
 /// them for radio `id`. From the shack's own screen (`None`), or for a radio the shack does not
 /// have, the patch is taken as it came.
 pub(crate) fn keep_the_shacks_radio_ptt(
@@ -316,6 +333,10 @@ pub(crate) fn keep_the_shacks_radio_ptt(
         patch.ptt_method = radio.ptt_method.clone();
         patch.ptt_serial_port = radio.ptt_serial_port.clone();
         patch.flex_native_unbenched = radio.flex_native_unbenched;
+        // The radio's transmit audio source (the shack's own microphone for Phone).
+        patch.pc_mic = Some(radio.pc_mic);
+        patch.pc_mic_device = Some(radio.pc_mic_device.clone());
+        patch.pc_mic_gain_db = Some(radio.pc_mic_gain_db);
     }
 }
 
@@ -478,7 +499,7 @@ pub(crate) const PROFILE_CALL_SETTING: &str = "mycall";
 /// ([`keep_the_shacks_transmit_settings`]), then the addresses the shack sends a stored key or
 /// password to ([`keep_the_shacks_credential_addresses`]). A test changes each setting alone in a save from
 /// afar and holds this list to exactly the ones that come back.
-pub(crate) const STATION_ONLY_SETTINGS: [&str; 55] = [
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 58] = [
     "js8AprsRelay",
     "beaconTxPercent",
     "cqPauseSecs",
@@ -519,6 +540,9 @@ pub(crate) const STATION_ONLY_SETTINGS: [&str; 55] = [
     "catSerialHandshake",
     "pttMethod",
     "pttSerialPort",
+    "pcMic",
+    "pcMicDevice",
+    "pcMicGainDb",
     "cwKeyer",
     "cwKeyPort",
     "cwKeyLine",
@@ -562,8 +586,9 @@ pub(crate) fn station_only_settings(
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
 /// the held press and the Lock, which never run as commands, each section entry ([`ENTRIES`]), the work
 /// bound to presence ([`PRESENCE_BOUND`]), the settings save ([`SETTINGS_FROM_AFAR`]), the
-/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]) and the POTA Start and Stop
-/// ([`ACTIVATION_FROM_AFAR`]). A test holds this to the handlers that take it.
+/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]), the POTA Start and Stop
+/// ([`ACTIVATION_FROM_AFAR`]) and the settings backup, which leaves out the station's paths
+/// from afar. A test holds this to the handlers that take it.
 pub(crate) fn takes_afar(cmd: &str) -> bool {
     matches!(
         transmit_from_afar(cmd),
@@ -583,6 +608,7 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
         || SETTINGS_FROM_AFAR.contains(&cmd)
         || SECRETS_WITHHELD_FROM_AFAR.contains(&cmd)
         || ACTIVATION_FROM_AFAR.contains(&cmd)
+        || cmd == "export_settings_bundle"
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
@@ -813,7 +839,7 @@ impl Stores for ShackStores {
 /// ([`station_answer`]). A save from afar keeps the shack's own of both, as the settings themselves
 /// do, leaves the shack's list as it is when it carries none, and is refused where a list does not
 /// read here ([`merged_save`]).
-const PROFILES: &str = "nexus.profiles";
+pub(crate) const PROFILES: &str = "nexus.profiles";
 
 /// The saved profiles `text` with each stored key a profile carries put to `kept(profile, key)`.
 /// `None` when `text` does not read here as a list. The shack's screen reads more than this does,
@@ -873,6 +899,20 @@ fn profiles_with_station_settings(text: &str, shack: Option<&String>) -> Option<
     serde_json::to_string(&profiles).ok()
 }
 
+/// The saved profiles `text` without the shack's JS8 sound files: paths on the shack's disk, which
+/// never go to a computer driving it (it plays the built-in tones). A save from afar puts each back
+/// as the shack's profile of that name holds it ([`profiles_with_station_settings`]). `None` when
+/// `text` does not read here as a list.
+fn profiles_without_sound_files(text: &str) -> Option<String> {
+    let mut profiles: Vec<Value> = serde_json::from_str(text).ok()?;
+    for profile in &mut profiles {
+        if let Some(settings) = profile.get_mut("settings").and_then(Value::as_object_mut) {
+            settings.remove("js8SoundFiles");
+        }
+    }
+    serde_json::to_string(&profiles).ok()
+}
+
 /// Each stored key the shack's saved profiles hold, by profile name and key name.
 fn profile_secrets(text: Option<&String>) -> BTreeMap<(String, String), String> {
     let profiles: Vec<Value> = text
@@ -894,13 +934,16 @@ fn profile_secrets(text: Option<&String>) -> BTreeMap<(String, String), String> 
 }
 
 /// The station's part of a `ui_state_load` answer, which is all the shack sends; a malformed answer
-/// sends nothing. The saved profiles go without their stored keys, and a list that does not read
-/// here, whose keys cannot be blanked, does not go at all.
+/// sends nothing. The saved profiles go without their stored keys and the shack's sound files
+/// ([`profiles_without_sound_files`]), and a list that does not read here, whose keys cannot be
+/// blanked, does not go at all.
 fn station_answer(value: Value) -> Value {
     let map: BTreeMap<String, String> = serde_json::from_value(value).unwrap_or_default();
     let mut station = split_ui_state(map).0;
     if let Some(text) = station.remove(PROFILES) {
-        if let Some(blanked) = profiles_with_secrets(&text, |_, _| String::new()) {
+        if let Some(blanked) = profiles_with_secrets(&text, |_, _| String::new())
+            .and_then(|text| profiles_without_sound_files(&text))
+        {
             station.insert(PROFILES.into(), blanked);
         }
     }

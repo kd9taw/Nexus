@@ -9,6 +9,7 @@ import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
 import { isStreamInput } from './remote-native/stream-input'
 import { clientWords } from './features/clientWords'
+import { restoreRefusal } from './features/restoreWords'
 import { noteCallbookAnswer } from './features/callbookAnswers'
 import type { ActivationSpotReport } from './selfSpot'
 import type { ImportDone, ImportPreview } from './features/logImport'
@@ -82,7 +83,7 @@ import type {
   KpForecast,
   DailySolarIndices,
 } from './types'
-import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
+import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraOval, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
 import type { TxHold } from './types'
@@ -92,6 +93,7 @@ import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { LogColumnsSaved } from './features/logColumns'
 import type { SavedLogFilter } from './features/logFilter'
 import type { LogQuery } from './features/logQuery'
+import type { DecoderScreen } from './features/decoderScreens'
 import type { StreetPack } from './features/streetPack'
 import type {
   StreetArea,
@@ -275,20 +277,47 @@ export async function getPathOutlook(grid: string): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_path_outlook', { grid })
 }
 
+/** The path grade of each Logbook row: its own stamp when it carries one made for its current
+ * grid and band, else the display-only grade of the log, else null. */
+export async function logPathGrades(rows: import('./types').PathGradeAsk[]): Promise<(import('./types').PathGrade | null)[]> {
+  return invoke<(import('./types').PathGrade | null)[]>('log_path_grades', { rows })
+}
+
+/** One contact's path over the day it was made, for the contact card. Null when it has no grid
+ * square, no solar flux for its part of the cycle, or no long path to compare. */
+export async function contactPathDay(row: import('./types').PathGradeAsk): Promise<import('./types').ContactPathDay | null> {
+  return invoke<import('./types').ContactPathDay | null>('contact_path_day', { row })
+}
+
+/** How the display-only grading of the log is going, and the 30-day success measures. */
+export async function pathGradingStatus(): Promise<import('./types').PathGradingStatus> {
+  return invoke<import('./types').PathGradingStatus>('path_grading_status')
+}
+
+/** The ten DX regions' path over the day from the operator's grid (the region strips). The model
+ * part is kept six hours at the shack; each hour's Kp is current at every ask. */
+export async function getPathRegions(): Promise<import('./types').PathRegions> {
+  return invoke<import('./types').PathRegions>('get_path_regions')
+}
+
 /** The no-selection "Band outlook (modelled)": modeled per-band workability + MUF to
  *  a ring of representative long-haul DX directions. Needs only the operator's grid. */
 export async function getBandOutlook(): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_band_outlook')
 }
 
-/** "Am I getting out?" — who is hearing the operator now (observed). */
-export async function getGettingOut(): Promise<GettingOut> {
-  return invoke<GettingOut>('get_getting_out')
+/** "Am I getting out?" — who is hearing the operator now (observed). `since` (Unix seconds) is the
+ *  box's Start fresh time: reports before it are left out at the station. */
+export async function getGettingOut(since: number | null = null): Promise<GettingOut> {
+  return since == null ? invoke<GettingOut>('get_getting_out') : invoke<GettingOut>('get_getting_out', { since })
 }
 
-/** The current OVATION aurora oval for the map overlay. */
-export async function getAurora(): Promise<AuroraPoint[]> {
-  return invoke<AuroraPoint[]>('get_aurora')
+/** The current OVATION aurora oval for the map overlay, with the time it is a forecast for.
+ *  An older station answers with the bare point list and no stamps. */
+export async function getAurora(): Promise<AuroraOval> {
+  const v = await invoke<AuroraOval | AuroraPoint[] | null>('get_aurora')
+  if (Array.isArray(v)) return { points: v, observedAt: null, forecastAt: null }
+  return v ?? { points: [], observedAt: null, forecastAt: null }
 }
 
 export async function getKc2gMuf(): Promise<MufStation[]> {
@@ -426,13 +455,15 @@ export async function fetchLotwUsers(): Promise<LotwUsersStatus> {
   return invoke<LotwUsersStatus>('fetch_lotw_users')
 }
 
-/** The IOTA island-group list on the station: the operator's answer (`null`: never asked), how many
- *  groups are held, when it was downloaded (Unix seconds, 0: never), and why the last download was
- *  not kept, if it was not. The list is IOTA Ltd's; Nexus downloads it only after a yes. */
+/** The IOTA island-group list on the station: whether it is on, how many groups are in use, the
+ *  date of that copy (Unix seconds, 0: none), whether it is the copy that shipped with Nexus, and why
+ *  the last monthly check was not kept, if it was not. The list is IOTA Ltd's, shipped by its
+ *  permission. */
 export interface IotaListStatus {
-  consent: boolean | null
+  enabled: boolean
   count: number
   fetchedAt: number
+  bundled: boolean
   lastError: string | null
 }
 
@@ -440,10 +471,10 @@ export async function getIotaListStatus(): Promise<IotaListStatus> {
   return invoke<IotaListStatus>('get_iota_list_status')
 }
 
-/** The operator's answer to "download the IOTA island-group list?". Yes downloads it now (when one
- *  is due); no deletes the copy held. */
-export async function setIotaListConsent(consent: boolean): Promise<IotaListStatus> {
-  return invoke<IotaListStatus>('set_iota_list_consent', { consent })
+/** Settings ▸ Logbook ▸ IOTA island list. On uses the list and checks for a newer one when a
+ *  month old; off shows no names, stops the check and deletes any downloaded copy. */
+export async function setIotaListEnabled(enabled: boolean): Promise<IotaListStatus> {
+  return invoke<IotaListStatus>('set_iota_list_enabled', { enabled })
 }
 
 /** One island group of the list: its reference and IOTA Ltd's name for it. */
@@ -783,7 +814,24 @@ export async function callStation(
     snr: snr ?? null,
     // The decoded station's audio offset (Hz) — moves our RX/TX onto it (WSJT-X).
     freq: freq ?? null,
+  }).catch((err: unknown) => {
+    throw unresolvedRefusal(err) ?? err
   })
+}
+
+/** The engine's refusals of a click on a call shown as `<...>`, `Engine::UNRESOLVED_CQ` and
+ *  `Engine::UNRESOLVED_CALL`, word for word. The engine words them in English;
+ *  `unresolved-call-words.test.ts` holds these to its text. */
+export const ENGINE_UNRESOLVED_CQ =
+  "This CQ's call shows as <...>: Nexus has not decoded it in full yet. Click the station's next CQ once its call shows."
+export const ENGINE_UNRESOLVED_CALL =
+  "This call shows as <...>: Nexus has not decoded it in full yet. Click the station's next message once its call shows."
+
+/** One of those refusals in the operator's language; `undefined` for anything else. */
+function unresolvedRefusal(err: unknown): string | undefined {
+  if (err === ENGINE_UNRESOLVED_CQ) return t('shell.work.unresolvedCq')
+  if (err === ENGINE_UNRESOLVED_CALL) return t('shell.work.unresolvedCall')
+  return undefined
 }
 
 /** WSJT-X Tx-slot click: force `text` as the next transmission to `call`
@@ -2905,6 +2953,19 @@ export async function sstvDeleteImage(path: string): Promise<void> {
   await invoke('sstv_delete_image', { path })
 }
 
+/** One picture a batch delete could not remove, and the station's reason. */
+export interface SstvDeleteFailure {
+  path: string
+  reason: string
+}
+
+/** Delete several received SSTV images at once ("Delete selected"): each goes through the same
+ * gallery-folder check as `sstvDeleteImage`, the gallery index is rewritten once, and the ones
+ * that could not be removed come back with their reasons. Irreversible: the caller confirms first. */
+export async function sstvDeleteImages(paths: string[]): Promise<SstvDeleteFailure[]> {
+  return invoke<SstvDeleteFailure[]>('sstv_delete_images', { paths })
+}
+
 /** Toggle Skip Tx1 — the station's session-only flag, resets each launch.
  *  Returns the snapshot, whose `radio.skipTx1` the box draws. */
 export async function setSkipTx1(enabled: boolean): Promise<AppSnapshot> {
@@ -3676,6 +3737,11 @@ export interface RadioProfilePatch {
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). Rides the patch like its
    * neighbours — a per-radio field missing here is blanked on Save. */
   aprsDataFm: boolean
+  /** Phone's PTT feeds this computer's microphone to the radio, from `pcMicDevice` at `pcMicGainDb`.
+   * Per radio, so it rides the patch like its neighbours. */
+  pcMic: boolean
+  pcMicDevice: string
+  pcMicGainDb: number
   audioIn: string
   audioOut: string
   txLevel: number
@@ -4136,6 +4202,30 @@ export interface AprsHealth {
   /** Enabled radios explicitly covering the band in use. >1 means the activation had a choice, and
    * the operator cannot tell from the radio which way it went. */
   bandRadioCount: number
+  /** The ISS channel's Doppler correction; present only while that channel is selected. */
+  issDoppler?: AprsIssDoppler | null
+}
+
+/** The ISS channel's Doppler correction (the engine's `aprs_iss`). While `on`, the radio listens on
+ * `rxHz` between packets and sends each packet on `txHz`; otherwise it stays on 145.825 and
+ * `whyOff` says why. */
+export interface AprsIssDoppler {
+  on: boolean
+  whyOff:
+    | 'switchedOff'
+    | 'satTracker'
+    | 'noCat'
+    | 'starting'
+    | 'noGrid'
+    | 'noElements'
+    | 'staleElements'
+    | 'belowHorizon'
+    | 'tunedAway'
+    | 'radioRounds'
+    | 'stopped'
+    | null
+  rxHz: number | null
+  txHz: number | null
 }
 
 /** Poll the APRS decoder's health beside the heard list. */
@@ -4759,6 +4849,14 @@ export async function sstvAutoArm(): Promise<SstvState> {
  * start the receiver — the decoding bug again, one ISS pass later. */
 export async function sstvAutoDisarm(): Promise<SstvState> {
   return invoke<SstvState>('sstv_auto_disarm')
+}
+
+/** The operator left a receive screen for another section (`features/decoderScreens.ts`): stop
+ * the decoder that opening it started, unless something still needs it. RX only. Resolves true
+ * when the decoder is still running on the screen's arm — ask again at the next section change.
+ * A decoder the operator armed is never stopped here. */
+export async function leaveDecoderScreen(screen: DecoderScreen): Promise<boolean> {
+  return invoke<boolean>('leave_decoder_screen', { screen })
 }
 
 /** Live SSTV RX state: in-flight progress + preview + the saved-image gallery
@@ -5453,14 +5551,24 @@ export async function getScopeRow(
  * copies of a source that sweeps slower than it polls. Two answers come back whatever `lastSeq`
  * says, because neither means "nothing new": a source that went quiet answers its EMPTY frame, and
  * a row nobody numbered (the Companion path) comes back unsequenced (`seq` 0) on every poll.
+ *
+ * `rfView` is the absolute RF window the scope is drawing on a native panadapter row. It rides the
+ * poll as a standing request: an SDR's IQ panadapter (TCI, SDRconnect) computes its rows over that
+ * window at a finer resolution than its whole span allows. A radio's own scope ignores it.
  */
 export async function getScopeFrame(
   loHz: number,
   hiHz: number,
   window: ScopeAnalysis | undefined,
   lastSeq: number,
+  rfView?: { loHz: number; hiHz: number },
 ): Promise<SpectrumFrameWire | null> {
-  return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq })
+  return invoke<SpectrumFrameWire | null>(
+    'get_scope_frame',
+    rfView
+      ? { loHz, hiHz, window, lastSeq, rfLoHz: rfView.loHz, rfHiHz: rfView.hiHz }
+      : { loHz, hiHz, window, lastSeq },
+  )
 }
 
 /**
@@ -5741,6 +5849,32 @@ export async function clientStatus(): Promise<ClientStatus | null> {
   return invoke<ClientStatus | null>('client_status')
 }
 
+/** One saved key the station holds back until the operator confirms it for the address it would
+ *  go to (a settings restore set that address where the station had none): Cloudlog's
+ *  (`radioId` null) or a radio's Icom network password. Never the key, nor anything about it. */
+export interface KeyToConfirm {
+  radioId: number | null
+  /** The radio's name; empty for Cloudlog. */
+  radio: string
+  /** The Cloudlog URL, or the radio's network address. */
+  address: string
+  /** Kept only because removing it failed: it was saved for another address (or a radio no
+   *  longer on the roster), so it can only be removed. */
+  removalFailed: boolean
+}
+
+/** The saved keys that wait for the operator. Refused on a computer driving another station. */
+export async function keysToConfirm(): Promise<KeyToConfirm[]> {
+  return invoke<KeyToConfirm[]>('keys_to_confirm')
+}
+
+/** The operator's answer about a saved key that waits: Use (`useIt`) lets it go to `address`, the
+ *  one the notice showed (the station refuses it when the address has changed since); Remove
+ *  forgets it from the system keychain. */
+export async function answerSavedKey(radioId: number | null, useIt: boolean, address: string): Promise<void> {
+  return invoke<void>('answer_saved_key', { radioId, useIt, address })
+}
+
 /** Moves a test build's road switch: where it is now. Blocking one road while the other is
  *  blocked is refused (`oneRoadAtATime`); a shipped build has no such command. */
 export async function benchRoadSwitch(to: BenchPosition): Promise<BenchPosition> {
@@ -5836,5 +5970,7 @@ export async function resetSettings(): Promise<AppSnapshot> {
 /** Restore a bundle written by `exportSettingsBundle`. Refuses anything that is not one, by
  *  name and schema — a partial restore is worse than a refusal. */
 export async function importSettingsBundle(text: string): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('import_settings_bundle', { text })
+  return invoke<AppSnapshot>('import_settings_bundle', { text }).catch((e: unknown) => {
+    throw restoreRefusal(e)
+  })
 }

@@ -86,7 +86,7 @@ modes (FT8 and FT4 send its Field Day and NA VHF Contest messages, in ARRL Field
 VHF contests). **Q65, FST4, FST4W, MSK144, JT65 and WSPR have since shipped and transmit**, each
 keeping its own operating rhythm rather than inheriting FT8's — MSK144 waits twelve transmit
 periods before giving up where FT8 waits three, and WSPR and FST4W never touch the QSO
-sequencer at all. Per-QSO WAV save has shipped too — Settings ▸ Logging & Connectors ▸ Save
+sequencer at all. Per-QSO WAV save has shipped too — Settings ▸ Services ▸ Save
 received audio.
 
 ## The CW cockpit
@@ -275,7 +275,7 @@ through Nexus instead of fighting over the COM port.
 The **first-run wizard** is four steps — station, rig, log, finish — and it turns nothing off:
 every mode and section starts on, and the optional ADIF import on step 3 seeds worked-before
 flags, the Needed board and awards progress from your existing log. The goal profiles (getting
-started, DX/awards, contesting, POTA/SOTA, 6m/VHF, Everything) live in Settings ▸ Appearance ▸
+started, DX/awards, contesting, POTA/SOTA, 6m/VHF, Everything) live in Settings ▸ App ▸
 Features, where one pick shapes the feature set via a dependency-aware feature registry;
 everything stays toggleable later. Declaring a US license class (Technician /
 General / Extra) activates a real transmit lockout against the Part 97 sub-band table (including

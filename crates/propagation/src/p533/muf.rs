@@ -173,7 +173,25 @@ pub fn muf_path(
     ssn: f64,
     frequency: f64,
 ) -> MufPath {
-    let cps = geometry::control_points(tx, rx);
+    muf_path_on(tx, rx, false, month0, hour_slot, ssn, frequency)
+}
+
+/// [`muf_path`] along either arc: `long_path` places the control points on the long way
+/// round, and the rest of the chain follows them through `path.distance`.
+pub fn muf_path_on(
+    tx: Location,
+    rx: Location,
+    long_path: bool,
+    month0: usize,
+    hour_slot: i32,
+    ssn: f64,
+    frequency: f64,
+) -> MufPath {
+    let cps = if long_path {
+        geometry::control_points_at(tx, rx, geometry::long_path_distance(tx, rx))
+    } else {
+        geometry::control_points(tx, rx)
+    };
     let mk_cp = |loc: Location, dist: f64| {
         let mut c = ControlPt {
             lat: loc.lat,

@@ -200,7 +200,7 @@ When the FD workspace is open and a digital contact is in progress, the auto-seq
 
 Opening **Contest** in the left bar with Contest mode on, coming from another mode, starts the contest in **Search-and-Pounce**; it never starts calling CQ. If you are already in the contest, running or in S&P, it opens the screen and leaves you as you were: a run keeps calling CQ while you check the score, and a contact in progress carries on. With the mode off it opens the screen and nothing else. Switch to Running via the button pair in the Contest screen's header.
 
-While Contest mode is on, the WSJT-X UDP `Status` message carries the special operation WSJT-X reports for the contest that is running: `special_op = 3` (Field Day) in ARRL Field Day, 1 (NA VHF) in the ARRL VHF contests, and 0 in the others. Winter Field Day is 0, because WSJT-X has no Winter Field Day mode. Once the **WSJT-X UDP API** switch in Settings → Logging & Connectors ▸ Integrations & Feeds is on (it is off by default), JTAlert and GridTracker activate their FD-specific behavior during ARRL Field Day without any other configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
+While Contest mode is on, the WSJT-X UDP `Status` message carries the special operation WSJT-X reports for the contest that is running: `special_op = 3` (Field Day) in ARRL Field Day, 1 (NA VHF) in the ARRL VHF contests, and 0 in the others. Winter Field Day is 0, because WSJT-X has no Winter Field Day mode. Once the **WSJT-X UDP API** switch in Settings → Services ▸ Integrations & Feeds is on (it is off by default), JTAlert and GridTracker activate their FD-specific behavior during ARRL Field Day without any other configuration on your end. FD contacts are also emitted as `QsoLogged` UDP datagrams to the same sink.
 
 ### CW
 
@@ -341,7 +341,7 @@ N3FJP Field Day Contest Log is widely used by clubs as the master log. Nexus pus
 
 **In Nexus:**
 
-1. Open **Settings → Logging & Connectors ▸ N3FJP Integration**.
+1. Open **Settings → Services ▸ N3FJP Integration**.
 2. Enter the N3FJP host (e.g. `192.168.1.50` or `localhost` if co-located).
 3. Leave the port at **1100** unless you changed it in N3FJP.
 4. Press **Test**. A successful test returns the program name and version string (e.g. `N3FJP Field Day Contest Log v6.6`). The button is disabled when the host field is blank.
@@ -356,7 +356,7 @@ Nexus emits a `<contactinfo>` XML UDP datagram for each new FD QSO, compatible w
 
 **Setup:**
 
-1. In **Settings → Logging & Connectors ▸ N1MM+ Integration**, enter the broadcast target, e.g. `192.168.1.255` or `192.168.1.50`.
+1. In **Settings → Services ▸ N1MM+ Integration**, enter the broadcast target, e.g. `192.168.1.255` or `192.168.1.50`.
 2. If you omit the port, Nexus defaults to **port 12060** (the N1MM+ contactinfo default).
 3. Broadcast is disabled when the address field is empty.
 

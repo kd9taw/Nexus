@@ -13,7 +13,7 @@ hearham's listings only.
 Repeaters ships on: it is enabled under the **Just getting started**,
 **POTA / SOTA** and **6m / VHF** goal profiles and wherever no goal profile was
 chosen, and off only under DX chasing and contesting; it toggles either way in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+[Settings ▸ App ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the Repeaters section on a wide window: fetched results on the left showing FM rows plus one badged DMR row and one OFF-AIR row, a six-channel list built on the right, the whole delivery row visible under it -->
 

@@ -98,7 +98,7 @@ describe('Spot me', () => {
 
   it.each([
     ['spotNoCall', 'Not spotted: set your callsign in Settings first.'],
-    ['spotNoCluster', 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Spot Sources.'],
+    ['spotNoCluster', 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Services ▸ Integrations & Feeds ▸ Spot Sources.'],
     ['spotCooldown:42', 'Not spotted again yet: one spot a minute. 42 s to go.'],
     ['spotRfOnly', 'Not spotted: this contest allows spotting only over amateur radio while it runs.'],
     ['spotNotAllowed', "Not spotted: this contest's rules allow no spotting."],

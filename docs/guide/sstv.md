@@ -14,7 +14,7 @@ from this section.
 SSTV sits in the left rail's Digital group (FT · Tempo · RTTY · SSTV · APRS) and
 is on by default — the wizard turns everything on. It is a mode rather than a
 goal, so the five goal profiles in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) leave it out;
+[Settings ▸ App ▸ Features](settings-reference.md#features) leave it out;
 **Everything (expert)** keeps it on. If the rail has no SSTV button, switch it
 back on there.
 
@@ -371,6 +371,11 @@ measured at all. Both of those paths hand the identification back to you:
   **✎** loads it back into the composer so you can put your own text on it and
   send it back. The in-app list keeps the 200 newest; images past that stay on
   disk but drop off the screen.
+- **Clearing out several pictures at once.** Every card has a tick box (Tab to
+  it, Space to tick). Above the cards, **Select all** ticks everything and
+  **Clear selection** unticks it; **Delete selected (N)** asks once, naming how
+  many, and then deletes every ticked picture for good. If any could not be
+  deleted, a message says how many and why, and those stay ticked.
 - **Images are PNG, and lossless.** A received picture is the only copy of what
   somebody sent you, so it is stored exactly as it was decoded — nothing is
   smoothed or thrown away to make the file smaller. Each one also carries its own

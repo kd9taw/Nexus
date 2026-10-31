@@ -129,7 +129,7 @@ mod tests {
         assert!(!tones.is_empty(), "WSPR encode failed");
         let wave = mode.gen_wave(&tones, FS, 1450.0);
         let frame = to_i16_frame(&wave, mode.frame_samples(), 0, 8000.0);
-        let spots = mode.decode_frame(&frame, 0, 0, 3, "", "", 0, 0, 0, false, false);
+        let spots = mode.decode_frame(&frame, 0, 0, 3, "", "", 0, 0, 0, false, false, false);
         let spot = spots
             .iter()
             .find(|d| d.message == msg)
@@ -356,7 +356,9 @@ mod tests {
 
         let dt_of = |w: &[f32]| -> f32 {
             let frame = to_i16_frame(w, m.frame_samples(), 0, 8000.0);
-            let decs = m.decode_frame(&frame, 200, 2900, 3, "KD9TAW", "", 0, 1200, 0, true, false);
+            let decs = m.decode_frame(
+                &frame, 200, 2900, 3, "KD9TAW", "", 0, 1200, 0, true, false, false,
+            );
             decs.iter()
                 .find(|d| d.message == msg)
                 .unwrap_or_else(|| panic!("FT2 did not decode its own transmission: {decs:?}"))

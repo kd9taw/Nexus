@@ -19,7 +19,7 @@ vi.setConfig({ testTimeout: 15_000 })
 
 /** The groups, in order, and every box in each, in the registry's order. */
 const WANT: Array<[string, PaneId[]]> = [
-  ['Bands', ['advisory', 'bandAdvisor', 'bandTiles', 'outlook', 'openings', 'openingsLog', 'bestband', 'beacons', 'bandHours', 'esNowcast']],
+  ['Bands', ['advisory', 'bandAdvisor', 'bandTiles', 'outlook', 'openings', 'openingsLog', 'bestband', 'beacons', 'bandHours', 'esNowcast', 'pathDay', 'pathRegions']],
   ['Space weather', ['kpOutlook', 'spacewx', 'insights', 'greyline', 'measuredMuf']],
   ['Activity', ['selection', 'getout', 'activity', 'chase', 'chaseFeed', 'satPasses', 'contests', 'spots', 'pota', 'needed', 'operators', 'activation']],
   ['Station', ['rotor', 'amp', 'scope', 'clock']],

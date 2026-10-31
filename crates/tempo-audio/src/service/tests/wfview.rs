@@ -1343,7 +1343,7 @@ fn a_monitor_never_takes_nexuss_own_cat_broker_for_a_radio() {
     s.ensure_radio_profiles();
     s.radios
         .push(net_rigctl_profile(1, &broker.addr, free_port()));
-    let (_, want) = monitor_want(&s, None);
+    let (_, want) = monitor_want(&s, None, None);
     let t = &want.iter().find(|(id, _)| *id == 1).unwrap().1;
     let (mut rig, daemon, ok) = open_monitor(t);
     let seen = (
@@ -1403,7 +1403,7 @@ fn two_monitored_radios_never_cross_through_a_net_rigctl_address() {
         )
     };
     let monitor = |id: u32| {
-        let (_, want) = monitor_want(engine.lock().unwrap().settings(), None);
+        let (_, want) = monitor_want(engine.lock().unwrap().settings(), None, None);
         let t = match want.iter().find(|(i, _)| *i == id) {
             Some((_, t)) => t.clone(),
             // The operated radio is not in the monitor's set; open it as the monitor would.
@@ -1723,7 +1723,7 @@ fn a_clash_an_older_build_stored_is_never_read_by_a_monitor_or_a_remote_selectio
     let engine = Arc::new(Mutex::new(Engine::with_settings(stored.settings.clone())));
     // The pill: the monitor pool opens the IC-9700 as it always does, then polls it.
     let pool: MonitorPool = Arc::new(MonitorConnections::new(Vec::new()));
-    let (active, mut want) = monitor_want(engine.lock().unwrap().settings(), None);
+    let (active, mut want) = monitor_want(engine.lock().unwrap().settings(), None, None);
     want.retain(|(id, _)| *id == 0);
     reconcile_pool(&pool, &want, active, &engine, now_unix_ms());
     poll_monitors(
@@ -2222,7 +2222,7 @@ fn a_monitored_radio_follows_the_port_sharing_really_serves_on() {
     s.active_radio = s.radios.iter().find(|p| p.id != ft991a).unwrap().id;
     s.sync_flat_from_active();
     let refused = |serving: Option<u16>| {
-        let (_, want) = monitor_want(&s, serving);
+        let (_, want) = monitor_want(&s, serving, None);
         want.iter()
             .find(|(id, _)| *id == ft991a)
             .map(|(_, t)| t.address_refusal.0.is_some())

@@ -24,6 +24,10 @@ export const PANE_IDS = [
   'operators',
   // The activator's Activation box (2026-10-25), appended for the same reason.
   'activation',
+  // Path over the day: the selected station's strip and the ten DX regions' strips, appended for the
+  // same reason.
+  'pathDay',
+  'pathRegions',
 ] as const
 export type PaneId = (typeof PANE_IDS)[number]
 

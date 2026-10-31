@@ -9,6 +9,8 @@ import { memoriesStore, emptyBank, addMemory } from '../features/memories'
 
 vi.mock('../api', () => ({
   importAdif: vi.fn(),
+  previewImport: vi.fn(),
+  importLog: vi.fn(),
   detectRigs: vi.fn(() => Promise.resolve([])),
   discoverFlex: vi.fn(() => Promise.resolve([])),
   tciProbe: vi.fn(() => Promise.resolve({ host: '127.0.0.1', resolved: true, tried: [], found: null })),
@@ -22,6 +24,23 @@ vi.mock('../api', () => ({
 }))
 
 const importAdif = api.importAdif as ReturnType<typeof vi.fn>
+const previewImport = api.previewImport as ReturnType<typeof vi.fn>
+const importLog = api.importLog as ReturnType<typeof vi.fn>
+/** What the import preview reads off a file of `contacts` contacts, none in the log yet. */
+const preview = (contacts: number) => ({
+  format: 'adif', template: null, records: contacts, contacts, firstUnix: null, lastUnix: null,
+  new: contacts, duplicates: 0, updates: 0, notes: [], coverage: [], unmapped: [],
+})
+/** What the import answers: its counts, and a report that accounts for every field. */
+const done = (added: number, skipped: number) => ({
+  stats: { added, skipped, updated: 0, total: added + skipped, run: 'r1' },
+  report: { ...preview(added + skipped), added, duplicates: skipped, updated: 0, newOnly: false, fields: [], accounted: true },
+})
+/** Import, then Close, in the preview the picked file opened. */
+async function importInPreview() {
+  fireEvent.click(await screen.findByRole('button', { name: /^Import$/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /^Close$/ }))
+}
 
 /** `guide: true` supplies onOpenGuide, which is what makes the last step offer
  *  the Getting started walkthrough. Omitted, the offer must not appear at all.
@@ -71,25 +90,33 @@ function fireImport(content: string) {
 describe('SetupWizard ADIF import step', () => {
   // Braces are load-bearing: a concise arrow RETURNS the mock, and vitest calls a
   // hook's return value as its teardown — an unhandled rejection the moment it rejects.
-  beforeEach(() => { importAdif.mockReset() })
+  beforeEach(() => {
+    importAdif.mockReset()
+    previewImport.mockReset()
+    importLog.mockReset()
+  })
 
-  it('renders the optional log step and imports an ADIF file, reporting the count', async () => {
-    importAdif.mockResolvedValue({ added: 5, skipped: 1, total: 6 })
+  it('renders the optional log step and imports a log through the preview, reporting the count', async () => {
+    previewImport.mockResolvedValue(preview(6))
+    importLog.mockResolvedValue(done(5, 1))
     renderWizard()
     gotoLogStep()
     expect(screen.getByText(/Bring in your existing log/)).toBeTruthy()
     fireImport('<call:5>K1ABC<eor>')
-    await waitFor(() => expect(importAdif).toHaveBeenCalledTimes(1))
+    await importInPreview()
+    expect(importLog).toHaveBeenCalledTimes(1)
     const result = await screen.findByText(/Imported/)
     expect(result.textContent).toContain('5')
     expect(result.textContent).toMatch(/seeded/)
   })
 
   it('treats a 0-QSO import as a warning, not a false "seeded" success', async () => {
-    importAdif.mockResolvedValue({ added: 0, skipped: 0, total: 0 })
+    previewImport.mockResolvedValue(preview(1))
+    importLog.mockResolvedValue(done(0, 0))
     renderWizard()
     gotoLogStep()
     fireImport('this is not an ADIF file')
+    await importInPreview()
     expect(await screen.findByText(/No QSOs found/)).toBeTruthy()
     expect(screen.queryByText(/now seeded/)).toBeNull()
   })
@@ -100,6 +127,7 @@ describe('SetupWizard ADIF import step', () => {
     clickNext() // 2 log → 3 goals, no file chosen
     expect(screen.getByText(/You get everything/)).toBeTruthy()
     expect(importAdif).not.toHaveBeenCalled()
+    expect(importLog).not.toHaveBeenCalled()
   })
 })
 

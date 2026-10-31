@@ -85,7 +85,7 @@ tauri-plugin-updater = { version = "2", default-features = false, features = ["r
 # Windows Run key / macOS LaunchAgent / XDG autostart entry. Called from Rust
 # (set_launch_at_login), so no ACL capability entry.
 tauri-plugin-autostart = "2"
-# The OS folder picker behind Settings ▸ Config ▸ Data & log folder (#289) — the operator was
+# The OS folder picker behind Settings ▸ App ▸ Data & log folder (#289) — the operator was
 # otherwise typing a full filesystem path, and a typo there does not fail, it silently opens a
 # DIFFERENT folder. Tauri first-party, Apache-2.0 OR MIT; it pulls tauri-plugin-fs (Apache-2.0
 # OR MIT) and rfd (MIT) — all compatible with our GPL-3.0-only. OSS-integration checklist run

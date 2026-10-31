@@ -337,3 +337,59 @@ fn a_dial_note_while_test_cat_waits_is_not_its_result() {
         "Test CAT's result is the probe's own line, not the note on screen"
     );
 }
+
+/// The ISS channel's uplink is confirmed by the radio reading back the dial the loop just pushed,
+/// and that read is an UNCHANGED dial (the push already moved `last_dial`), so it is never a knob
+/// adoption. Every successful read must still reach the engine: fed only on adoption, no frame on
+/// the ISS would ever key, each dropped after its wait for the uplink. `heavy` picks the reader:
+/// the heavy poll, or the fast dial mirror alone.
+fn an_iss_frame_keys_on_the_read_back_of_the_uplink_the_loop_pushed(heavy: bool) {
+    let mut b = Bench::new(Some(vec![]));
+    {
+        let mut e = engine_lock(&b.engine);
+        e.set_license_class("technician");
+        e.aprs_tune(145.825).unwrap();
+    }
+    b.steps(4);
+    assert_eq!(
+        b.state.last_dial, 145_825_000,
+        "the premise: on the ISS channel"
+    );
+    let approaching = tempo_app::engine::aprs_iss::IssSky::Up {
+        range_rate_km_s: -6.0,
+    };
+    assert!(
+        engine_lock(&b.engine).aprs_iss_tick(approaching, std::time::Instant::now(), false),
+        "the premise: the correction is live and moves the dial"
+    );
+    b.run(4, heavy);
+    engine_lock(&b.engine)
+        .aprs_beacon(41.88, -87.63, '/', '>', "", &[])
+        .unwrap();
+    let keyed = (0..6).any(|_| {
+        b.run(1, heavy);
+        b.state.tx_until_ms.is_some()
+    });
+    let uplink = engine_lock(&b.engine)
+        .aprs_iss_doppler()
+        .and_then(|d| d.tx_hz)
+        .expect("the premise: the correction has an uplink");
+    assert!(
+        b.radio.writes.lock().unwrap().contains(&uplink),
+        "the premise: the loop pushed the uplink"
+    );
+    assert!(
+        keyed,
+        "the radio read back the uplink it was sent, and the frame never keyed"
+    );
+}
+
+#[test]
+fn an_iss_frame_keys_on_the_heavy_polls_read_back_of_the_uplink() {
+    an_iss_frame_keys_on_the_read_back_of_the_uplink_the_loop_pushed(true);
+}
+
+#[test]
+fn an_iss_frame_keys_on_the_fast_dial_mirrors_read_back_of_the_uplink() {
+    an_iss_frame_keys_on_the_read_back_of_the_uplink_the_loop_pushed(false);
+}

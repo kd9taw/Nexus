@@ -8,6 +8,10 @@
 //!   so Test can play it before Save; the Settings form holds it and Save writes it.
 //! - `play_js8_sound`: plays one event's sound HERE, in Rust. The window never gets a file's bytes.
 //!
+//! On a computer driving a station, client mode answers `play_js8_sound` itself: the event's
+//! built-in tone in that computer's headset ([`tone_at`]), never a file. The station's files never
+//! leave the station (a settings read from afar carries none).
+//!
 //! WHAT IS READ. Only a file the operator chose: the one Settings holds for that event, or one the
 //! picker returned in this run. Any other path the window names is refused unread
 //! ([`SoundRefusal::NotPicked`]). What is read is bounded and checked by `tempo_codec::sound_file`
@@ -185,6 +189,21 @@ fn tempo_audio_rate() -> u32 {
 }
 #[cfg(not(feature = "radio"))]
 fn tone_samples(_hz: f32, _double: bool) -> Vec<f32> {
+    Vec::new()
+}
+
+/// `event`'s built-in tone at `rate`: what a computer driving the station plays for a JS8 sound,
+/// into its own headset (`client_mode`). Never a file. Empty in a build without the radio.
+pub(crate) fn tone_at(event: Js8SoundEvent, rate: u32) -> Vec<f32> {
+    let (hz, double) = event.tone();
+    tone_samples_at(hz, double, rate)
+}
+#[cfg(feature = "radio")]
+fn tone_samples_at(hz: f32, double: bool, rate: u32) -> Vec<f32> {
+    tempo_audio::notify_sound::tone_at(hz, double, rate)
+}
+#[cfg(not(feature = "radio"))]
+fn tone_samples_at(_hz: f32, _double: bool, _rate: u32) -> Vec<f32> {
     Vec::new()
 }
 

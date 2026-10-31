@@ -2399,6 +2399,25 @@ pub struct StationCore {
     #[allow(clippy::type_complexity)]
     pub(crate) state_resolve:
         Option<Box<dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync>>,
+    /// The log-time path grader, injected by the command layer (which holds the propagation
+    /// model and the path card it last computed): for a contact being logged, its graded route
+    /// ([`tempo_core::logbook::path_stamp`]). Same pattern as [`Self::set_state_resolver`], for
+    /// the same reason — tempo-app has no `propagation` dependency. It runs under the Engine
+    /// lock, so it only ever reads what the command layer already holds: no prediction, no
+    /// no disk. Its second input is the worked station's decode lateness
+    /// ([`crate::engine::Engine`]'s `late_dts_of`), for the grader's aggregate DT gate. `None` in
+    /// headless tests (a contact logs with no grade).
+    #[allow(clippy::type_complexity)]
+    pub(crate) path_at_log: Option<
+        Box<
+            dyn Fn(
+                    &tempo_core::logbook::QsoRecord,
+                    &[f32],
+                ) -> Option<tempo_core::logbook::path_stamp::PathStamp>
+                + Send
+                + Sync,
+        >,
+    >,
     /// Grid → rarity tier (0–3) resolver, injected by the command layer (which
     /// owns the geography table in the propagation crate) — same pattern as
     /// [`Self::set_dxcc_resolver`]. `None` in headless tests (gems stay off).
@@ -2454,6 +2473,9 @@ pub struct StationCore {
     /// persisted `gallery.json` at startup; the decode thread appends on each
     /// completed image. Capped at [`SSTV_GALLERY_CAP`].
     pub(crate) sstv_gallery: Vec<crate::dto::SstvGalleryEntry>,
+    /// Bumped by every change to [`Self::sstv_gallery`], so a gallery.json writer can tell an
+    /// older snapshot from a newer one ([`crate::sstv_gallery::write_gallery_json`]).
+    pub(crate) sstv_gallery_gen: u64,
 }
 
 /// A Parks/Summits On The Air activation as it runs ([`StationCore::activation`]), and as
@@ -2596,6 +2618,7 @@ impl StationCore {
             dxcc_country: None,
             country_dxcc: None,
             state_resolve: None,
+            path_at_log: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
             hunted_parks_import: HashSet::new(),
@@ -2609,6 +2632,7 @@ impl StationCore {
             activation_path: None,
             pota_exports: Default::default(),
             sstv_gallery: Vec::new(),
+            sstv_gallery_gen: 0,
         }
     }
 
@@ -3502,6 +3526,20 @@ impl StationCore {
         self.state_resolve = Some(Box::new(resolve));
     }
 
+    /// Inject the log-time path grader ([`Self::path_at_log`]).
+    pub fn set_path_grader(
+        &mut self,
+        grade: impl Fn(
+                &tempo_core::logbook::QsoRecord,
+                &[f32],
+            ) -> Option<tempo_core::logbook::path_stamp::PathStamp>
+            + Send
+            + Sync
+            + 'static,
+    ) {
+        self.path_at_log = Some(Box::new(grade));
+    }
+
     /// Inject the grid → rarity-tier (0–3) resolver (the command layer passes a
     /// `propagation::gridrarity::tier_u8`-backed closure). Purely presentational
     /// — decodes/roster gain their rarity gems from the next snapshot.
@@ -4014,6 +4052,24 @@ impl StationCore {
         self.catchup_slot_unix = slot + crate::engine::CATCHUP_UPLOAD_SPACING_SECS;
         // Already stamped, so `requeue_upload_at` leaves the slot alone.
         self.requeue_upload_at(rec, legs, attempts, slot, origin);
+    }
+
+    /// Give each queued catch-up record that owes `legs` alone its slot in the catch-up's pacing
+    /// again, never before it is due nor in the past: once, when a leg held back on the queue is
+    /// let go. While held, those records keep a plain time of their own and take no slot, so
+    /// the other services' catch-up is not slowed by records that send nothing; this puts them
+    /// back in line so they go one at a time, not in a burst.
+    pub fn repace_catch_up(&mut self, legs: u8) {
+        let now = now_unix_secs() as i64;
+        for p in self
+            .pending_uploads
+            .iter_mut()
+            .filter(|p| p.origin == crate::engine::UploadOrigin::CatchUp && p.legs == legs)
+        {
+            let slot = self.catchup_slot_unix.max(p.retry_after_unix).max(now);
+            self.catchup_slot_unix = slot + crate::engine::CATCHUP_UPLOAD_SPACING_SECS;
+            p.retry_after_unix = slot;
+        }
     }
 
     /// Record a connector-upload outcome for the operator (toast text + level).
@@ -4875,7 +4931,11 @@ impl StationCore {
             });
         }
         if let Some(received) = card {
-            ops.push(LogOp::MarkQslCard { id, received });
+            ops.push(LogOp::MarkQslCard {
+                id,
+                received,
+                date_unix: now_unix_secs(),
+            });
         }
         Ok(Ok(ops))
     }
@@ -4984,7 +5044,15 @@ impl StationCore {
     /// Record whether a PAPER QSL card arrived for the contact `id` (#152) — an award-eligible
     /// confirmation, which the needs/awards model and the hot index both read.
     pub fn mark_qsl_card(&mut self, id: RecordId, received: bool) -> bool {
-        self.change_row(id, &[LogOp::MarkQslCard { id, received }], "mark_qsl_card")
+        self.change_row(
+            id,
+            &[LogOp::MarkQslCard {
+                id,
+                received,
+                date_unix: now_unix_secs(),
+            }],
+            "mark_qsl_card",
+        )
     }
 
     /// Set — or REMOVE — the satellite tag on the contact `id` (`PROP_MODE=SAT` + `SAT_NAME`).
@@ -5491,7 +5559,18 @@ impl StationCore {
 
     /// Append a completed SSTV image to the session gallery (newest last),
     /// capped at [`SSTV_GALLERY_CAP`]. Decode-thread only.
+    ///
+    /// A picture already listed under the same path is replaced, not listed twice. The decoder
+    /// saves the file before it takes the lock to push, so a gallery delete reading the folder in
+    /// between can adopt the file first as a bare entry; the decoder's record (frequency, lines)
+    /// then takes its place. Compared as strings: both build the path by joining the file name
+    /// onto the gallery folder, and no file lookup may run under the Engine lock.
     pub fn push_sstv_gallery(&mut self, entry: crate::dto::SstvGalleryEntry) {
+        self.sstv_gallery_gen += 1;
+        if let Some(listed) = self.sstv_gallery.iter_mut().find(|e| e.path == entry.path) {
+            *listed = entry;
+            return;
+        }
         self.sstv_gallery.push(entry);
         if self.sstv_gallery.len() > SSTV_GALLERY_CAP {
             let excess = self.sstv_gallery.len() - SSTV_GALLERY_CAP;
@@ -5511,12 +5590,17 @@ impl StationCore {
     pub fn remove_sstv_gallery(&mut self, path: &str) -> bool {
         let before = self.sstv_gallery.len();
         self.sstv_gallery.retain(|e| e.path != path);
-        self.sstv_gallery.len() != before
+        let removed = self.sstv_gallery.len() != before;
+        if removed {
+            self.sstv_gallery_gen += 1;
+        }
+        removed
     }
 
     pub fn set_sstv_gallery_fsk_id(&mut self, path: &str, fsk_id: String) {
         if let Some(entry) = self.sstv_gallery.iter_mut().rev().find(|e| e.path == path) {
             entry.fsk_id = Some(fsk_id);
+            self.sstv_gallery_gen += 1;
         }
     }
 
@@ -5527,11 +5611,18 @@ impl StationCore {
             entries.drain(0..excess);
         }
         self.sstv_gallery = entries;
+        self.sstv_gallery_gen += 1;
     }
 
     /// The session SSTV gallery, oldest first.
     pub fn sstv_gallery(&self) -> &[crate::dto::SstvGalleryEntry] {
         &self.sstv_gallery
+    }
+
+    /// The gallery and its generation, for a gallery.json write made after the Engine lock is
+    /// released ([`crate::sstv_gallery::write_gallery_json`]).
+    pub fn sstv_gallery_snapshot(&self) -> (u64, Vec<crate::dto::SstvGalleryEntry>) {
+        (self.sstv_gallery_gen, self.sstv_gallery.clone())
     }
 
     /// Adopt a corroborated NTP measurement (`tempo_net::sntp::measure`), sizing

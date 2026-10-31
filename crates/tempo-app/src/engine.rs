@@ -18,6 +18,8 @@
 /// ALL.TXT reads in the order things happened on the air.
 #[cfg(test)]
 mod all_txt_order_tests;
+/// Doppler correction on the APRS cockpit's ISS channel: receive between overs, transmit for each.
+pub mod aprs_iss;
 #[cfg(test)]
 mod broker_key_slot_tests;
 /// SPEC-2's C16: changes to one contact by its id.
@@ -106,6 +108,8 @@ mod cw_unassisted_tests;
 /// A CW message the radio's own keyer would not take is refused whole, before anything keys.
 #[cfg(test)]
 mod cw_whole_message_tests;
+/// The receive decoders a screen started, stopped when the operator leaves for another section.
+pub mod decoder_screens;
 mod field_day_display;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
 /// When an FT8/FT4 contact is logged by itself, offered in the confirm popup, or left for Log QSO.
@@ -146,6 +150,7 @@ mod mode_entry;
 #[cfg(test)]
 mod outside_key_passband_tests;
 pub mod parsec_presence;
+pub mod pc_mic;
 /// 60 m allows only USB phone: the picks the cockpit greys, and the lock naming the rule.
 #[cfg(test)]
 mod phone_usb_only_tests;
@@ -338,6 +343,9 @@ struct FeedRows {
     /// The one source the operator picked for the RF slot, when they picked one over the radio's
     /// own: see [`SpectrumFeed::claim_rf`].
     rf_owner: Option<&'static str>,
+    /// The RF windows the scopes on screen are drawing (absolute Hz), each with when it was last
+    /// asked for: see [`SpectrumFeed::request_rf_view`].
+    rf_views: Vec<(f64, f64, Instant)>,
 }
 
 impl FeedRows {
@@ -1000,6 +1008,65 @@ impl SpectrumFeed {
                 slice: None,
                 bins: Vec::new(),
             }),
+        }
+    }
+
+    /// How long one scope's RF window counts towards [`Self::rf_view`] after the poll that asked
+    /// for it: far longer than any scope's poll period (33 ms, 120 ms under reduced motion), and
+    /// short enough that a window left behind by tuning stops widening the union within a second.
+    const RF_VIEW_TTL: Duration = Duration::from_secs(1);
+    /// The most distinct windows held at once; the oldest goes first.
+    const RF_VIEWS_MAX: usize = 8;
+    /// The narrowest window worth asking for.
+    const RF_VIEW_MIN_SPAN_HZ: f64 = 100.0;
+
+    /// A scope is drawing `lo_hz..hi_hz` of absolute RF: the window an IQ panadapter (TCI, SDRconnect)
+    /// may compute its rows over, at a finer resolution than its whole span allows.
+    ///
+    /// THE REQUEST RIDES THE POLL, as the scope span's does ([`Self::scope_row`]): it lapses
+    /// [`Self::RF_VIEW_TTL`] after the scope stops asking, so a hidden scope leaves no zoom behind.
+    /// A window that is not finite, is reversed or is narrower than [`Self::RF_VIEW_MIN_SPAN_HZ`] is
+    /// ignored. Only the IQ panadapters read it: a radio's own scope sweeps what the radio is set to.
+    pub fn request_rf_view(&self, lo_hz: f64, hi_hz: f64) {
+        if !(lo_hz.is_finite() && hi_hz.is_finite() && hi_hz - lo_hz >= Self::RF_VIEW_MIN_SPAN_HZ) {
+            return;
+        }
+        if let Ok(mut g) = self.rows.lock() {
+            let now = Instant::now();
+            g.rf_views.retain(|&(lo, hi, at)| {
+                now.duration_since(at) < Self::RF_VIEW_TTL && (lo, hi) != (lo_hz, hi_hz)
+            });
+            g.rf_views.push((lo_hz, hi_hz, now));
+            if g.rf_views.len() > Self::RF_VIEWS_MAX {
+                g.rf_views.remove(0);
+            }
+        }
+    }
+
+    /// The RF window an IQ panadapter should cover: the UNION of the windows asked for within
+    /// [`Self::RF_VIEW_TTL`], or `None` when no scope is asking.
+    ///
+    /// A union, not the latest: two scopes drawing different windows at once (the shack's and a
+    /// Remote viewer's) would otherwise take turns, and each turn would start the panadapter's rows
+    /// over. The union covers both, so each draws its own window from the one row.
+    pub fn rf_view(&self) -> Option<(f64, f64)> {
+        let g = self.rows.lock().ok()?;
+        let now = Instant::now();
+        g.rf_views
+            .iter()
+            .filter(|(_, _, at)| now.duration_since(*at) < Self::RF_VIEW_TTL)
+            .fold(None, |acc: Option<(f64, f64)>, &(lo, hi, _)| {
+                Some(acc.map_or((lo, hi), |(a, b)| (a.min(lo), b.max(hi))))
+            })
+    }
+
+    /// Test-only: age every RF window request to simulate scopes that stopped polling.
+    #[cfg(test)]
+    pub fn backdate_rf_views_for_test(&self, by: Duration) {
+        if let Ok(mut g) = self.rows.lock() {
+            for v in g.rf_views.iter_mut() {
+                v.2 = Instant::now() - by;
+            }
         }
     }
 
@@ -1826,7 +1893,7 @@ const AB_CROSS_BAND_REFUSAL: &str =
 /// switch. Two honest steps, neither of them a promise the station cannot keep.
 const AB_PICK_MAIN_SUB: &str =
     "Main = downlink / Sub = uplink is the layout Nexus can drive on this radio — pick it in \
-     Settings ▸ Radio ▸ Satellite Doppler, or from the mapping selector on the pass rail.";
+     Settings ▸ Satellites ▸ Satellite Doppler, or from the mapping selector on the pass rail.";
 
 /// …and the dead end on the other two (and on a network-wired IC-9700/IC-905):
 /// the ONE mapping that could carry this pass's uplink on a Main/Sub Icom is
@@ -2012,6 +2079,27 @@ const APRS_REFUSED_RADIO_HAS_MIC: &str = "APRS not sent: the radio has the mic (
      Nothing was keyed.";
 const APRS_REFUSED_KEY: &str = "APRS not sent: the radio did not accept the key, so the packet \
      did not go out. Send it again when you are ready.";
+/// …and on the ISS channel, when the radio never confirmed the Doppler-corrected transmit
+/// frequency ([`aprs_iss`]).
+const APRS_ISS_UPLINK_NOT_TAKEN: &str = "APRS not sent: the radio did not move to the ISS \
+     transmit frequency (Doppler-corrected), so what was queued was dropped, not held for later. \
+     Nothing was keyed. Send it again, or turn the ISS Doppler correction off.";
+/// …when CAT was down, so the move could not be made or confirmed.
+const APRS_ISS_NO_CAT: &str = "APRS not sent: the radio's CAT link is down, so Nexus could not \
+     put the radio on the ISS frequency and confirm it there. What was queued was dropped, not \
+     held for later. Nothing was keyed. Send it again once CAT is back.";
+/// …when the radio read back a different frequency than it was sent: it rounds to its own step.
+const APRS_ISS_RADIO_ROUNDS: &str = "APRS not sent: the radio did not hold the Doppler-corrected \
+     ISS frequency it was sent (it rounds to its own tuning step), so what was queued was dropped \
+     rather than sent off frequency. Nothing was keyed. The correction is off for this pass; send \
+     it again and it goes out on 145.825 MHz.";
+/// …when the radio was tuned off the ISS channel while something was queued for it.
+const APRS_ISS_TUNED_AWAY: &str = "APRS not sent: the radio was tuned away from the ISS channel, \
+     so what was queued for the ISS was dropped, not sent on the new frequency. Nothing was keyed.";
+/// …when the ISS Doppler correction itself stopped while a frame waited on it.
+const APRS_ISS_STOPPED: &str = "APRS not sent: the ISS Doppler correction stopped while the \
+     packet waited for the transmit frequency, so it was dropped, not held for later. Nothing was \
+     keyed. Send it again and it goes out on 145.825 MHz.";
 
 /// Which decode pass a [`DecodeJob`] is — selects the a7 cross-cycle flag and how
 /// the result folds back in. Mirrors the three synchronous entry points exactly:
@@ -2098,6 +2186,10 @@ pub struct DecodeJob {
     /// CQ-only AP restriction (FT8 + FT4 lapcqonly). Native branch only.
     ap: bool,
     ap_cq_only: bool,
+    /// The operator is in a WSJT-X Special Operating Activity — Contest mode, or a Hound
+    /// ([`Engine::special_activity`]). Without one FT8 drops rover (`/R`) and `TU; ` decodes,
+    /// as WSJT-X does. Native branch only.
+    activity: bool,
     frame_time_ms: i64,
     /// Native branch: clear FT1 IR-HARQ buffers before decoding (HARQ disabled).
     harq_reset: bool,
@@ -2381,6 +2473,7 @@ pub fn run_js8_multi_job(job: Js8MultiJob) -> Vec<DecodeResult> {
                                     0,
                                     false,
                                     false,
+                                    false,
                                 )
                             }))
                             .unwrap_or_else(|_| {
@@ -2550,6 +2643,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         nftx,
         ap,
         ap_cq_only,
+        activity,
         frame_time_ms,
         harq_reset,
         pass,
@@ -2633,6 +2727,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
                 frame_time_ms,
                 ap,
                 ap_cq_only,
+                activity,
                 partial: pass.is_partial(),
             };
             src.decode_streaming(&req, pass.a7_final(), &mut sink)
@@ -3370,18 +3465,34 @@ pub enum VoiceMemCmd {
 }
 
 /// One space-weather reading as a logged contact carries it (ADIF `K_INDEX`, `A_INDEX`, `SFI`,
-/// each a whole number), and when Nexus fetched it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// each a whole number), and when Nexus fetched it. Each is `None` when NOAA gave no reading of
+/// it — the field is then left off the contact, never filled with the model's stand-in — and
+/// carries its own sample time, so each is judged against the contact's time when it is logged.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SpaceWeatherReading {
-    k_index: u32,
-    a_index: u32,
-    sfi: u32,
+    /// The planetary K and when its sample was taken.
+    k_index: Option<(u32, u64)>,
+    /// NOAA's daily planetary A for each UT day it has published (about the last 30), keyed by
+    /// 00:00 UT of the day it is for. A day still in progress is not in it.
+    a_index: Vec<(u32, u64)>,
+    /// The 10.7 cm solar flux and when it was measured.
+    sfi: Option<(u32, u64)>,
     at_unix: u64,
 }
 
 /// How old a space-weather reading may be and still go on a contact: three hours, the span of
 /// one planetary K index.
 const SPACE_WEATHER_MAX_AGE_SECS: u64 = 3 * 3600;
+
+/// How far the Kp's own sample may be from the contact's time and still be its K_INDEX: one
+/// planetary K period. Judged from the sample, not from when Nexus fetched it, so a feed that
+/// stopped updating has no K for the contact.
+const LOG_KP_MAX_AGE_SECS: u64 = 3 * 3600;
+
+/// How far the solar flux's own measurement may be from the contact's time and still be its
+/// SFI: the gauge's limit (one noon reading a day, with a missed day's slack). A feed that
+/// keeps serving an old day's flux has no SFI for the contact.
+const LOG_SFI_MAX_AGE_SECS: u64 = 48 * 3600;
 
 /// How long before now a contact may have started and still take the station's fields as they
 /// are now (grid, state, operator, rig, power): the space-weather span. One that started earlier
@@ -3846,9 +3957,9 @@ pub struct Engine {
     beacon_decided_slot: Option<u64>,
     /// The decision itself, held for the length of the interval.
     beacon_tx_this_slot: bool,
-    /// How many beacon intervals this session has decided to transmit in: WSJT-X's `m_tx`, which
-    /// flips once per beacon over, is this count's parity. It picks which of a compound call's
-    /// two messages an over sends ([`Self::beacon_message`]).
+    /// How many beacon overs this session has asserted PTT for ([`Self::note_slot_ptt_asserted`]):
+    /// WSJT-X's `m_tx`, which flips at each beacon over's PTT assert, is this count's parity. It picks which
+    /// of a compound call's two messages the next over sends ([`Self::beacon_message`]).
     beacon_overs: u64,
     /// Chat-native CQ run (Tempo): while on, an idle own-parity TX slot re-sends the
     /// structured CQ — the WSJT-X-style "keep calling until someone answers" loop the
@@ -4144,6 +4255,9 @@ pub struct Engine {
     /// Programs on Nexus's TCI server: their keys, and the over that carries their audio (see
     /// `engine/tci.rs`).
     tci: tci::TciState,
+    /// The station computer's own microphone, fed to the radio while Phone's PTT is held (see
+    /// `engine/pc_mic.rs`).
+    pc_mic: pc_mic::PcMicState,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -4846,6 +4960,11 @@ pub struct Engine {
     /// RTTY view must not quietly restart it behind them (the APRS/SSTV/PSK
     /// decline-memory doctrine). Session-only; a manual arm retires it.
     rtty_auto_arm_declined: bool,
+    /// The RTTY decoder is running because the operator OPENED its screen
+    /// ([`Engine::rtty_auto_arm`]), not because they pressed Arm. Only such an arm ends when they
+    /// leave for another section ([`Engine::leave_decoder_screen`]); an explicit Arm clears it, so
+    /// a decoder the operator started stays started. Session-only.
+    rtty_auto_armed: bool,
     /// Drain buffer for the RTTY decode thread: 12 kHz RX audio accumulates here
     /// while armed; the thread empties it via [`Engine::take_rtty_audio`]. Empty
     /// (zero cost) while disarmed.
@@ -4867,6 +4986,9 @@ pub struct Engine {
     rtty_afc_locked: bool,
     /// The tuning scope's newest frame, pushed by the decode thread beside the characters.
     rtty_scope: RttyScope,
+    /// When the UI last read the tuning scope ([`Engine::rtty_scope`]). The decode thread builds
+    /// frames only while someone is drawing them ([`Engine::rtty_scope_wanted`]).
+    rtty_scope_read_at: Option<Instant>,
     /// One-shot: drop + rebuild the RX demodulator (the AFC-reset command — a
     /// wrong-neighbor acquire-then-freeze recovers by re-acquiring from scratch).
     rtty_afc_reset: bool,
@@ -4950,6 +5072,9 @@ pub struct Engine {
     /// the PSK view must not quietly restart it behind them (the APRS/SSTV
     /// decline-memory doctrine). Session-only; a manual arm retires it.
     psk_auto_arm_declined: bool,
+    /// The PSK decoder is running because the operator opened its screen, not because they
+    /// pressed Arm — the `rtty_auto_armed` distinction.
+    psk_auto_armed: bool,
     /// Drain buffer for the PSK decode thread: 12 kHz RX audio accumulates here
     /// while armed; the thread empties it via [`Engine::take_psk_audio`]. Empty
     /// (zero cost) while disarmed.
@@ -5032,6 +5157,10 @@ pub struct Engine {
     /// The operator explicitly stopped the decoder this session, so entering the APRS view must
     /// not quietly start it again behind them. Session-only; a manual arm always still works.
     aprs_auto_arm_declined: bool,
+    /// The APRS decoder is running because the operator opened its screen
+    /// ([`Engine::aprs_auto_arm`]) — the `rtty_auto_armed` distinction. Not [`AprsArm::Auto`]:
+    /// that also covers a Remote receive-only start, which is an operator act.
+    aprs_auto_armed: bool,
     /// Drain buffer for the APRS decode thread (same pattern as `rtty_audio`). Empty while disarmed.
     aprs_audio: Vec<f32>,
     /// Recently-decoded APRS packets, newest last, capped at [`APRS_HEARD_CAP`]. Pushed by the
@@ -5076,6 +5205,8 @@ pub struct Engine {
     /// `set_frequency` (a normal QSY) or `set_operating_mode` — i.e. the moment the operator leaves
     /// APRS — so FM never follows them onto another band/mode.
     aprs_fm: bool,
+    /// The ISS channel's Doppler state ([`aprs_iss`]); live only while `aprs_fm` holds.
+    aprs_iss: aprs_iss::AprsIss,
     /// The rig is parked on an FM CHANNEL — a repeater or FM simplex frequency (session-only, never
     /// persisted). Set by [`Engine::repeater_tune`], the SSTV strip's FM rows (`sstv_tune`) and an
     /// FM channel the app parks (`tune_channel`, the ISS downlink); makes `rig_mode_effective`
@@ -5159,6 +5290,21 @@ pub struct Engine {
     /// the view must not restart it behind them. Same decision-memory as
     /// `aprs_auto_arm_declined`.
     sstv_auto_arm_declined: bool,
+    /// The SSTV picture viewer's window is open at the station
+    /// ([`Engine::set_sstv_viewer_open`]), which keeps the SSTV screen in its section.
+    sstv_viewer_open: bool,
+    /// Decoder screens left while a computer driving the station was attached, whose leave waits
+    /// for it to go ([`Engine::leave_decoder_screen`]). Opening the screen again cancels its leave.
+    decoder_leaves_held: Vec<decoder_screens::DecoderScreen>,
+    /// Some remote device holds the station lease (the authority poll's answer, refreshed every
+    /// `poll_remote_transmit` tick). Read only by the receive decoders' leave; decides no TX.
+    remote_lease_held: bool,
+    /// When no computer was last seen attached while leaves were held: the start of
+    /// [`decoder_screens::DETACH_GRACE`].
+    decoders_detached_since: Option<Instant>,
+    /// The SSTV receiver is running because the operator opened its screen, not because they
+    /// (or the ISS pass, an opt-in of theirs) armed it — the `rtty_auto_armed` distinction.
+    sstv_auto_armed: bool,
     /// What the SSTV decode thread is actually hearing — the evidence the view
     /// states instead of one hint that meant four different things.
     sstv_health: SstvHealth,
@@ -5242,6 +5388,9 @@ fn copy_names_call(copy: &str, call: &str) -> bool {
 const QSO_WAV_WINDOW: usize = 720_000;
 /// RTTY decoded-character ring cap: ~4000 chars ≈ tens of minutes of copy at 45.45 baud.
 const RTTY_TEXT_CAP: usize = 4000;
+/// How long after its last read the RTTY tuning scope still counts as on screen: several polls at
+/// the slowest cadence (5 Hz under reduced motion), so a slow frame never blanks it.
+pub const RTTY_SCOPE_WANTED_FOR: Duration = Duration::from_secs(1);
 /// PSK31 decoded-character ring cap — the RTTY sizing (PSK31 copies even slower,
 /// ~4 chars/s, so 4000 chars is comfortably tens of minutes of transcript).
 const PSK_TEXT_CAP: usize = 4000;
@@ -5440,6 +5589,9 @@ pub struct AprsHealth {
     /// real choice, so the operator needs told which way it went; `<= 1` means there was nothing to
     /// choose and saying so would just be noise.
     pub band_radio_count: u32,
+    /// The ISS channel's Doppler correction, present only while that channel is selected
+    /// ([`Engine::aprs_iss_doppler`]).
+    pub iss_doppler: Option<aprs_iss::AprsIssDoppler>,
 }
 
 /// Below this peak a recovered "frame" cannot be told from the deframer's flag-hunt locking onto
@@ -7151,6 +7303,7 @@ impl Engine {
             mic_rf_seen: false,
             mic_zero_seen: false,
             tci: tci::TciState::default(),
+            pc_mic: pc_mic::PcMicState::default(),
             sat_tune: None,
             sat_last_worked: None,
             sat_dial_owner: None,
@@ -7325,11 +7478,13 @@ impl Engine {
             qsy,
             rtty_armed: false,
             rtty_auto_arm_declined: false,
+            rtty_auto_armed: false,
             rtty_audio: Vec::new(),
             rtty_chars: VecDeque::new(),
             rtty_afc_hz: 0.0,
             rtty_afc_locked: false,
             rtty_scope: RttyScope::default(),
+            rtty_scope_read_at: None,
             rtty_afc_reset: false,
             rtty_center: None,
             rtty_queue: VecDeque::new(),
@@ -7345,6 +7500,7 @@ impl Engine {
             rtty_auto_over: false,
             psk_armed: false,
             psk_auto_arm_declined: false,
+            psk_auto_armed: false,
             psk_audio: Vec::new(),
             psk_chars: VecDeque::new(),
             psk_afc_hz: 0.0,
@@ -7369,6 +7525,7 @@ impl Engine {
             aprs_is_status: AprsIsStatus::default(),
             aprs_is_for_js8: (false, false),
             aprs_auto_arm_declined: false,
+            aprs_auto_armed: false,
             aprs_audio: Vec::new(),
             aprs_heard: Vec::new(),
             aprs_health: AprsHealth::default(),
@@ -7378,6 +7535,7 @@ impl Engine {
             aprs_tx_notice: None,
             aprs_msg_seq: 0,
             aprs_fm: false,
+            aprs_iss: aprs_iss::AprsIss::default(),
             fm_channel: false,
             fm_channel_kept: false,
             fm_channel_simplex: false,
@@ -7387,6 +7545,11 @@ impl Engine {
             sstv_armed: false,
             sstv_manual_rx: None,
             sstv_auto_arm_declined: false,
+            sstv_viewer_open: false,
+            decoder_leaves_held: Vec::new(),
+            remote_lease_held: false,
+            decoders_detached_since: None,
+            sstv_auto_armed: false,
             sstv_health: SstvHealth::default(),
             sstv_audio: Vec::new(),
             sstv_progress: None,
@@ -7570,6 +7733,30 @@ impl Engine {
         // ⛔ A bundle whose station profile id names no profile lands on one, with its call.
         s.repair_active_station_profile();
         self.apply_settings_inner(s, false);
+    }
+
+    /// Drop the Cloudlog key waiting to move to the keychain, which every apply keeps
+    /// (`apply_settings_inner`). Only for a restored backup that points Cloudlog at another
+    /// address: the key was typed for this station's server and must not go to that one.
+    pub fn forget_pending_cloudlog_key(&mut self) {
+        self.settings.cloudlog_key.clear();
+    }
+
+    /// The saved keys held back until the operator confirms them ([`Settings::keys_to_confirm`]).
+    pub fn keys_to_confirm(&self) -> &crate::settings::KeysToConfirm {
+        &self.settings.keys_to_confirm
+    }
+
+    /// Replace them: a restore's, the operator's answer, or a key typed again. A key that waits no
+    /// more loses its reason for waiting. When the Cloudlog key stops waiting, the catch-up
+    /// contacts held back for it take their slots in the catch-up's pacing once, now
+    /// ([`StationCore::repace_catch_up`]), so they go one at a time.
+    pub fn set_keys_to_confirm(&mut self, keys: crate::settings::KeysToConfirm) {
+        let cloudlog_let_go = self.settings.keys_to_confirm.cloudlog && !keys.cloudlog;
+        self.settings.keys_to_confirm = keys.only_of_keys_that_wait();
+        if cloudlog_let_go {
+            self.station.repace_catch_up(upload_legs::CLOUDLOG);
+        }
     }
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
@@ -7769,7 +7956,11 @@ impl Engine {
         // is the ONLY session-time wholesale replace of `self.settings`, so preserving it here closes
         // every save path — form Save, reset AND restore — at their one common point (round 10 Finding 1;
         // three earlier partial fixes each patched only the path their author was testing).
+        // A restore that moves the Cloudlog URL drops it afterwards (`forget_pending_cloudlog_key`).
         let live_cloudlog_key = std::mem::take(&mut self.settings.cloudlog_key);
+        // The saved keys held back until the operator confirms them: engine-owned, kept whatever
+        // the payload carries (`Settings::keys_to_confirm`). A restore sets its own afterwards.
+        let live_keys_to_confirm = std::mem::take(&mut self.settings.keys_to_confirm);
         // The forward-compatibility catch-all (`Settings::unknown`) — the keys a NEWER build
         // wrote into settings.json that this build has no field for. Same one-writer shape as
         // the Cloudlog key, and for the same reason: this is the only session-time wholesale
@@ -7813,6 +8004,7 @@ impl Engine {
         if self.settings.cloudlog_key.is_empty() {
             self.settings.cloudlog_key = live_cloudlog_key;
         }
+        self.settings.keys_to_confirm = live_keys_to_confirm;
         // Put back every preserved key the incoming payload did not carry (see the capture).
         for (key, value) in live_unknown {
             self.settings.unknown.entry(key).or_insert(value);
@@ -9003,6 +9195,8 @@ impl Engine {
     }
 
     /// Remove a radio from the roster (no-op on the active or last radio). Pure roster edit.
+    /// A wait on its password ([`Self::keys_to_confirm`]) stays: the shell lets it go only once
+    /// the keychain has removed the password.
     pub fn remove_radio(&mut self, id: u32) -> bool {
         self.remote_actuation.revoke();
         self.settings.remove_radio_profile(id)
@@ -9821,8 +10015,9 @@ impl Engine {
     ///
     /// Pushed by the radio loop on the transition, from what the radio reports, never from the
     /// `flex_native_audio` setting (the same reasoning as [`Self::observe_flex_dax_tx`]). Only
-    /// the voice keyer, APRS, SSTV and a TCI program's audio over (`engine/tci.rs`, refused as APRS
-    /// and SSTV are) read it; nothing else is refused on it.
+    /// the voice keyer, APRS, SSTV, a TCI program's audio over (`engine/tci.rs`, refused as APRS
+    /// and SSTV are) and the computer's microphone (`engine/pc_mic.rs`, which rides a DAX hold
+    /// through it) read it; nothing else is refused on it.
     pub fn observe_flex_radio_has_mic(&mut self, on: bool) {
         self.flex_radio_has_mic = on;
     }
@@ -11470,12 +11665,15 @@ impl Engine {
     /// SELECT = REAR). Which one works depends on how THAT radio's menus are set, so it is the
     /// operator's per-radio choice ([`crate::settings::RadioProfile::aprs_data_fm`]), off by
     /// default: plain FM stays what an APRS setup that already works gets. Hamlib's `PKTFM` is
-    /// `MD0A;` (DATA-FM) on that radio. Obeyed only on a model
+    /// `MD0A;` (DATA-FM) on that radio. The Icoms with a 2 m FM-D (IC-7100, IC-9700, IC-705,
+    /// IC-905) take the same switch: `PKTFM` is FM with Data mode ON there, over Hamlib and over
+    /// the native CI-V daemon alike. Obeyed only on a model
     /// [`crate::settings::aprs_data_fm_available`] names, so a switch left on in a profile whose
     /// model changed commands nothing new. The mic-jack opt-out
     /// ([`crate::settings::Settings::plain_ssb_if_configured`]) still turns it back into `FM`.
     ///
-    /// ⚠️ NEEDS-BENCH: an FT-991A beaconing and decoding APRS in DATA-FM with its USB codec.
+    /// ⚠️ NEEDS-BENCH: an FT-991A beaconing and decoding APRS in DATA-FM with its USB codec, and
+    /// each of those Icoms in FM-D (the radio's DATA MOD input set to USB).
     fn aprs_mode_word(&self) -> String {
         if self.settings.aprs_data_fm
             && crate::settings::aprs_data_fm_available(self.settings.rig_model)
@@ -12752,6 +12950,16 @@ impl Engine {
     /// Manually key (true) / unkey (false) the rig for live phone. Gated by Monitor:
     /// a key request is ignored while TX is disabled. The radio loop applies it.
     pub fn set_ptt(&mut self, on: bool) {
+        // The computer's microphone (this radio's setting, in Phone): the press ARMS its over
+        // instead of keying the radio's own microphone, and the release ends it at once
+        // (`engine/pc_mic.rs`). The release is never refused, and ends an over whatever the
+        // setting now says.
+        if !on {
+            self.release_pc_mic();
+        } else if self.pc_mic_wanted() && !self.manual_ptt {
+            self.arm_pc_mic();
+            return;
+        }
         // A clock repair holds transmit: a new key is refused, and one already held is never
         // dropped by it ([`Self::hold_tx_for_clock_repair`]).
         if on && !self.manual_ptt && self.clock_repair_holds_tx() {
@@ -14021,6 +14229,15 @@ impl Engine {
             );
             return Err(TxOwner::Tci.busy_reason());
         }
+        // So does the computer's microphone, armed or keyed (`engine/pc_mic.rs`): the operator is
+        // holding PTT and talking, on every rig.
+        if self.pc_mic_armed() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer over refused: the computer microphone is transmitting",
+            );
+            return Err(TxOwner::ManualPtt.busy_reason());
+        }
         if self.clock_repair_holds_tx() {
             tempo_core::applog::info(
                 "tx",
@@ -14124,6 +14341,11 @@ impl Engine {
             Some(why)
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
+        } else if self.pc_mic_armed() {
+            // The operator's PTT on the computer's microphone, pressed after the message was
+            // queued and before this tick (the press is refused while a message is pending, so
+            // this is the belt to that brace).
+            Some("the computer microphone is transmitting")
         } else if self.cw_sending() {
             // An F-key's CW (which asks no owner) queued after the message, before this tick.
             Some("CW is sending")
@@ -17307,25 +17529,37 @@ impl Engine {
         }
     }
 
-    /// The space weather Nexus just fetched — planetary K, A and the 10.7 cm solar flux — and
-    /// when (`at_unix`). Called by the shell's propagation poll, only for a reading SWPC actually
-    /// answered; kept for the opt-in K_INDEX / A_INDEX / SFI on each logged contact.
-    pub fn note_space_weather(&mut self, kp: f32, a_index: f32, sfi: f32, at_unix: u64) {
+    /// The space weather Nexus just fetched — planetary K with its sample time, NOAA's daily
+    /// planetary A for each UT day it has published (each with 00:00 UT of its day, Unix
+    /// seconds), and the 10.7 cm solar flux with its measurement time — and when (`at_unix`).
+    /// Called by the shell's propagation poll; each number is present only when SWPC answered
+    /// with a reading of it, and is kept for the opt-in K_INDEX / A_INDEX / SFI on each logged
+    /// contact. The A is the daily index, never an estimate from Kp.
+    pub fn note_space_weather(
+        &mut self,
+        kp: Option<(f32, u64)>,
+        a_daily: &[(f32, u64)],
+        sfi: Option<(f32, u64)>,
+        at_unix: u64,
+    ) {
         let whole = |v: f32| (v.is_finite() && v >= 0.0).then(|| v.round() as u32);
-        if let (Some(k_index), Some(a_index), Some(sfi)) = (whole(kp), whole(a_index), whole(sfi)) {
-            self.space_weather = Some(SpaceWeatherReading {
-                k_index,
-                a_index,
-                sfi,
-                at_unix,
-            });
+        let stamped = |&(v, at): &(f32, u64)| whole(v).map(|v| (v, at));
+        let reading = SpaceWeatherReading {
+            k_index: kp.as_ref().and_then(stamped),
+            a_index: a_daily.iter().filter_map(stamped).collect(),
+            sfi: sfi.as_ref().and_then(stamped),
+            at_unix,
+        };
+        if reading.k_index.is_some() || !reading.a_index.is_empty() || reading.sfi.is_some() {
+            self.space_weather = Some(reading);
         }
     }
 
     /// The latest space weather if it describes a contact made at `when`: fetched no more than
     /// [`SPACE_WEATHER_MAX_AGE_SECS`] either side of it.
-    fn space_weather_at(&self, when: u64) -> Option<SpaceWeatherReading> {
+    fn space_weather_at(&self, when: u64) -> Option<&SpaceWeatherReading> {
         self.space_weather
+            .as_ref()
             .filter(|wx| when.abs_diff(wx.at_unix) <= SPACE_WEATHER_MAX_AGE_SECS)
     }
 
@@ -17982,19 +18216,47 @@ impl Engine {
             tempo_core::logbook::fill_extra(&mut rec, "DISTANCE", km.to_string());
         }
         // THE SPACE WEATHER (ADIF `K_INDEX`, `A_INDEX`, `SFI`), only when the operator asked for
-        // it ([`Settings::log_space_weather`]) and only from a reading Nexus actually fetched
-        // within three hours of the contact's start ([`Self::space_weather_at`]) — never the
-        // propagation model's stand-in values, and never today's numbers on a contact typed in
-        // from yesterday.
+        // it ([`Settings::log_space_weather`]), and each field only when it is a reading — never
+        // the propagation model's stand-in values. The K and the SFI are NOW's numbers: only from
+        // a reading Nexus fetched within three hours of the contact's start
+        // ([`Self::space_weather_at`]), so a contact typed in from yesterday gets neither, and each
+        // judged by its own sample time against the contact's (the K within
+        // [`LOG_KP_MAX_AGE_SECS`], the SFI within [`LOG_SFI_MAX_AGE_SECS`]). The A is NOAA's daily
+        // planetary A for the contact's OWN UT day, looked up in the per-day table from the latest
+        // fetch, and never another day's as a substitute. NOAA issues a day's A after the day
+        // ends, so a live contact usually has none yet and A_INDEX is left off; a contact typed in
+        // for an earlier day gets that day's A while NOAA's file still holds it.
         if self.settings.log_space_weather {
-            if let Some(wx) = self.space_weather_at(rec.when_unix) {
-                for (tag, value) in [
-                    ("K_INDEX", wx.k_index),
-                    ("A_INDEX", wx.a_index),
-                    ("SFI", wx.sfi),
-                ] {
+            let when = rec.when_unix;
+            let contact_day = when / 86_400 * 86_400;
+            let near = |max: u64| move |&(_, at): &(u32, u64)| when.abs_diff(at) <= max;
+            let live = self.space_weather_at(when);
+            let k_index = live.and_then(|wx| wx.k_index.filter(near(LOG_KP_MAX_AGE_SECS)));
+            let sfi = live.and_then(|wx| wx.sfi.filter(near(LOG_SFI_MAX_AGE_SECS)));
+            let a_index = self.space_weather.as_ref().and_then(|wx| {
+                wx.a_index
+                    .iter()
+                    .copied()
+                    .find(|&(_, day)| day == contact_day)
+            });
+            for (tag, value) in [
+                ("K_INDEX", k_index.map(|(k, _)| k)),
+                ("A_INDEX", a_index.map(|(a, _)| a)),
+                ("SFI", sfi.map(|(f, _)| f)),
+            ] {
+                if let Some(value) = value {
                     tempo_core::logbook::fill_extra(&mut rec, tag, value.to_string());
                 }
+            }
+        }
+        // THE PATH THIS CONTACT TOOK (`APP_NEXUS_PATH*`): the command layer's grader answers from
+        // what it already holds — the path card it computed for this station — and the record
+        // gains new fields only (`path_stamp::stamp_path`), never `ANT_AZ` or `ANT_PATH`. After
+        // the grid and the band are final, which the grade is made for.
+        if let Some(grade) = &self.station.path_at_log {
+            let late = self.late_dts_of(&rec.call);
+            if let Some(found) = grade(&rec, &late) {
+                tempo_core::logbook::path_stamp::stamp_path(&mut rec, &found);
             }
         }
         // THE APPEND (SPEC-2 v3 C19): the station mints the row's id, the hot index takes the
@@ -19563,6 +19825,41 @@ Pick the one you operate from on the Contesting tab in Settings.",
             .map(|(_, m, snr, slot)| (m, snr, slot))
     }
 
+    /// For each decode FROM `call` in the decode history, its DT minus the median DT of every
+    /// decode in the same period (periods with fewer than three decodes are skipped: no median
+    /// worth the name) — what the path grader's aggregate DT gate reads. ⚠️ Read only, and never
+    /// evidence on its own: one decode's DT says nothing about the route (clock error is larger
+    /// than the long path's extra delay); the gate needs many (`contact_path::late_dt_ms`).
+    fn late_dts_of(&self, call: &str) -> Vec<f32> {
+        let mut by_slot: std::collections::BTreeMap<u64, Vec<f32>> = Default::default();
+        for (slot, d) in &self.decode_history {
+            by_slot.entry(*slot).or_default().push(d.dt);
+        }
+        let medians: std::collections::HashMap<u64, f32> = by_slot
+            .into_iter()
+            .filter(|(_, v)| v.len() >= 3)
+            .map(|(slot, mut v)| {
+                v.sort_by(f32::total_cmp);
+                let m = v.len() / 2;
+                let med = if v.len().is_multiple_of(2) {
+                    (v[m - 1] + v[m]) / 2.0
+                } else {
+                    v[m]
+                };
+                (slot, med)
+            })
+            .collect();
+        self.decode_history
+            .iter()
+            .filter(|(_, d)| {
+                Msg::parse(&d.message)
+                    .sender()
+                    .is_some_and(|s| same_call(s, call))
+            })
+            .filter_map(|(slot, d)| medians.get(slot).map(|m| d.dt - m))
+            .collect()
+    }
+
     /// The station's latest transmission, for a click naming no message: among the decodes FROM
     /// `dxcall` in the newest slot it was heard in, a message to us first (the furthest-progressed:
     /// grid < report < R-report < RRR/RR73), else whatever it sent (a CQ, a call to someone else),
@@ -20914,6 +21211,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.drop_mic_latch();
         // …and every TCI program's key, over and tune, the same way: Stop in Nexus always wins.
         self.drop_tci_all();
+        // …and the computer's microphone over, the same way.
+        self.drop_pc_mic();
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;
@@ -21450,6 +21749,50 @@ Pick the one you operate from on the Contesting tab in Settings.",
             why: why.to_string(),
             flex_audio: None,
             tx_audio_failed: false,
+            split_failed: false,
+            split_off_unconfirmed: false,
+        });
+    }
+
+    /// Halt TX because the radio did not take Split Operation's TX dial for a slot over (Rig
+    /// split's `S`, `I` or `X`, or Fake It's dial write: refused, or not answered by the CAT
+    /// deadline): nothing was keyed, since the over's audio was already moved for a dial that never
+    /// moved and would have gone out 500 Hz or more from where the operator put it. The reason
+    /// (`why`, the rig link's own answer) stays on the refused key's line until the operator turns
+    /// TX on again ([`Self::set_tx_enabled`]).
+    ///
+    /// WSJT-X 3.0.2 writes the TX frequency before PTT (`Transceiver/TransceiverBase.cpp:160-180`)
+    /// through `error_check`, which throws on anything but `RIG_OK`
+    /// (`Transceiver/HamlibTransceiver.cpp:277-284`; the split writes at `:1022`, `:1027`,
+    /// `:1034`), so PTT is never asserted, and the rig-failure handler presses Halt Tx
+    /// (`widgets/mainwindow.cpp:12556-12564`). [`Self::halt_tx`] is that Halt Tx here, as for a
+    /// refused key ([`Self::halt_tx_for_refused_key`]): one event, one line in the log, no stop for
+    /// a voice memory.
+    ///
+    /// `split_off_unconfirmed`: the over was refused because Nexus could not confirm the radio's
+    /// SPLIT is off after letting go of its own split, and the operator is told how to clear it.
+    pub fn halt_tx_for_refused_split(&mut self, why: &str, split_off_unconfirmed: bool) {
+        let voice_mem_halt = self.voice_mem_halt;
+        self.quiet_tx_log = true;
+        self.halt_tx();
+        self.quiet_tx_log = false;
+        self.voice_mem_halt = voice_mem_halt;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} not keyed: the radio did not take the split TX frequency ({why}, Split \
+                 Operation {:?}); transmit halted",
+                self.tier().label(),
+                self.settings.split_mode,
+            ),
+        );
+        self.slot_key_refused = Some(crate::dto::SlotKeyRefused {
+            at: now_unix_secs(),
+            why: why.to_string(),
+            flex_audio: None,
+            tx_audio_failed: false,
+            split_failed: true,
+            split_off_unconfirmed,
         });
     }
 
@@ -21505,6 +21848,31 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.slot_over_dropped = None;
     }
 
+    /// The radio loop asserted PTT for the slot over [`Self::commit_tx`] handed it, whatever the
+    /// radio then answers. A WSPR or FST4W over counts toward a compound call's alternation
+    /// ([`Self::beacon_overs`]) here, as WSJT-X flips `m_tx` on the tick that raises PTT
+    /// (`widgets/mainwindow.cpp:7808`, `:7855`, `:7880`, `:15462`), before the rig answers, so a
+    /// key the radio refuses still flips it. An interval that never reaches a key (no power set, a
+    /// plan dropped, TX off, Remote revoked first) leaves the next over on the message that was due.
+    pub fn note_slot_ptt_asserted(&mut self) {
+        if self.tier_is_beacon(self.app.tier()) {
+            self.beacon_overs += 1;
+        }
+    }
+
+    /// The radio loop asserted PTT for a Tune, whatever the radio then answers. In WSPR it counts
+    /// toward a compound call's alternation ([`Self::beacon_overs`]) as a beacon over's assert
+    /// does, once per Tune: WSJT-X's Tune raises PTT through the same block (`or m_tune`,
+    /// `widgets/mainwindow.cpp:7805`), whose WSPR branch calls `WSPR_message` (`:7886`) on the
+    /// tick PTT rises (`:7880`) and flips `m_tx` (`:15462`); PTT then stays up for the whole Tune.
+    /// FST4W's call (`:8006`) is in the branch a Tune skips (`:7916`), so a Tune there does not
+    /// count, and neither does one in any other mode.
+    pub fn note_tune_ptt_asserted(&mut self) {
+        if self.app.tier() == Tier::Wspr {
+            self.beacon_overs += 1;
+        }
+    }
+
     /// Halt TX because the sound card's transmit audio output would not open for slot TX (FT8,
     /// FT4, JS8 and the other timed-slot modes): nothing is keyed, since a radio keyed with no
     /// audio puts a dead carrier on the air for the whole over, and every over after it while the
@@ -21535,6 +21903,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             why: why.to_string(),
             flex_audio: None,
             tx_audio_failed: true,
+            split_failed: false,
+            split_off_unconfirmed: false,
         });
     }
 
@@ -21911,6 +22281,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.drop_mic_latch();
             // So do TCI programs' keys, overs and tunes: TX Off is a stop for each.
             self.drop_tci_all();
+            // …and the computer's microphone over: TX Off ends it in flight.
+            self.drop_pc_mic();
             // Same for SSTV: a disarm aborts the image in flight and drops the job.
             self.sstv_tx = None;
             self.sstv_abort = true;
@@ -22149,6 +22521,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
             self.remote_actuation.revoke();
             self.sat_dial_owner = owner;
+            self.aprs_iss_forget_confirmation();
         }
     }
 
@@ -22865,12 +23238,20 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.sat_binding.as_ref()
     }
 
+    /// The radio loop read the radio's dial: what the radio itself says, on every successful read
+    /// (an unchanged dial included, which [`Self::observe_rig_freq`] never sees). The ISS
+    /// channel's Doppler correction confirms its writes by it ([`aprs_iss`]).
+    pub fn rig_freq_read(&mut self, hz: u64) {
+        self.aprs_iss_rig_read(hz);
+    }
+
     /// The radio loop pushed a dial and the rig ACKNOWLEDGED it — confirm a
     /// matching pending binding leg. Called on every accepted dial push (the
     /// loop cannot know which QSY was a transponder pick); a no-op unless the
     /// frequency is exactly the binding's pending downlink, so terrestrial
     /// QSYs and in-pass Doppler steps fall through untouched.
     pub fn rig_dial_applied(&mut self, hz: u64) {
+        self.aprs_iss_rig_applied(hz);
         if let Some(b) = self.sat_binding.as_mut() {
             if b.pending_downlink_mhz
                 .is_some_and(|m| (m * 1e6).round() as u64 == hz)
@@ -24359,6 +24740,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // the rest of the session.
             self.rtty_auto_arm_declined = true;
         }
+        // Either way it is now the operator's decision, not the screen's.
+        self.rtty_auto_armed = false;
         self.rtty_armed = on;
     }
 
@@ -24377,13 +24760,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// so it survives a remount and is testable without a webview. RX ONLY — arming the
     /// decoder cannot key anything; every RTTY TX path is separate and gated elsewhere.
     pub fn rtty_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Rtty);
         if self.rtty_armed || self.rtty_auto_arm_declined || !self.settings.rtty_rx_auto_arm {
             return false;
         }
-        self.rtty_chars.clear();
+        // The transcript is KEPT: the screen stops this decoder when the operator leaves for
+        // another section ([`Engine::leave_decoder_screen`]), and coming back must find what it
+        // had decoded, as it did while the decoder ran on behind them.
         self.rtty_afc_hz = 0.0;
         self.rtty_afc_locked = false;
         self.rtty_armed = true;
+        self.rtty_auto_armed = true;
         true
     }
 
@@ -24418,6 +24805,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             arm,
             ..Default::default()
         };
+        self.aprs_auto_armed = false;
         self.aprs_arm = arm;
     }
 
@@ -24436,6 +24824,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             };
             self.aprs_arm = AprsArm::Auto;
         }
+        // A Remote start is the operator's, so leaving the screen does not stop it.
+        self.aprs_auto_armed = false;
     }
 
     /// Arm the decoder because the operator ENTERED the APRS view — receive-only, never
@@ -24445,6 +24835,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// and it refuses outright once the operator has explicitly stopped the decoder this session.
     /// The policy lives here rather than in the UI so it survives a remount and is testable.
     pub fn aprs_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Aprs);
         if self.aprs_arm != AprsArm::Off || self.aprs_auto_arm_declined {
             return false;
         }
@@ -24453,6 +24844,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             ..Default::default()
         };
         self.aprs_arm = AprsArm::Auto;
+        self.aprs_auto_armed = true;
         true
     }
 
@@ -24518,6 +24910,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 .map(|p| p.name.clone())
                 .unwrap_or_default(),
             band_radio_count: self.settings.radios_covering(&self.settings.band),
+            iss_doppler: self.aprs_iss_doppler(),
             ..self.aprs_health.clone()
         }
     }
@@ -24910,6 +25303,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // move is IN-band (146.520 → 144.390 fires no band-change event).
         self.machinery_tune(dial_mhz, "2m", "FM");
         self.aprs_fm = true;
+        // The ISS channel (and only it) gets Doppler correction; any other pick ends it.
+        self.aprs_iss_select(self.settings.dial_hz());
         self.immediate_retune = true;
         Ok(())
     }
@@ -25198,9 +25593,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.tx_owner().is_some() {
             return None;
         }
+        // On the ISS channel the frame keys only once the radio has taken the transmit
+        // frequency: held while it moves there, so every gate above has judged that frequency
+        // on the pass that lets the frame go.
+        if !self.aprs_iss_ready_to_key() {
+            return None;
+        }
         self.aprs_tx_notice = None;
         let (audio, ack) = self.aprs_tx_queue.pop_front()?;
         self.aprs_keying_ack = ack;
+        self.aprs_iss_keying(audio.len());
         Some(audio)
     }
 
@@ -25268,7 +25670,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(TxOwner::Slot)
         } else if self.tuning {
             Some(TxOwner::Tune)
-        } else if self.manual_ptt || self.broker_ptt {
+        } else if self.manual_ptt || self.broker_ptt || self.pc_mic.over.active() {
+            // The computer's microphone is the operator's own held PTT, armed or keyed.
             Some(TxOwner::ManualPtt)
         } else if self.mic.active() {
             // From the arm, before any audio: an armed over owns the transmitter the way a
@@ -25341,13 +25744,24 @@ Pick the one you operate from on the Contesting tab in Settings.",
         };
     }
 
-    /// The tuning scope the UI polls (`get_rtty_scope`). Not live while disarmed.
-    pub fn rtty_scope(&self) -> RttyScope {
+    /// The tuning scope the UI polls (`get_rtty_scope`). Not live while disarmed. The read is
+    /// what tells the decode thread the scope is wanted ([`Self::rtty_scope_wanted`]).
+    pub fn rtty_scope(&mut self) -> RttyScope {
+        self.rtty_scope_read_at = Some(Instant::now());
         if self.rtty_armed {
             self.rtty_scope.clone()
         } else {
             RttyScope::default()
         }
+    }
+
+    /// Whether anything is drawing the tuning scope: it was read within
+    /// [`RTTY_SCOPE_WANTED_FOR`] of `now`. The scope polls at 5–20 Hz only while its pane is
+    /// shown, the RTTY screen is in front and the window is visible, so a silent poll means
+    /// nobody is looking, and the decode thread skips building frames nobody reads.
+    pub fn rtty_scope_wanted(&self, now: Instant) -> bool {
+        self.rtty_scope_read_at
+            .is_some_and(|at| now.saturating_duration_since(at) < RTTY_SCOPE_WANTED_FOR)
     }
 
     /// The compact RTTY state the UI polls (`get_rtty_state`).
@@ -25512,6 +25926,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // it for the rest of the session.
             self.psk_auto_arm_declined = true;
         }
+        // Either way it is now the operator's decision, not the screen's.
+        self.psk_auto_armed = false;
         self.psk_armed = on;
     }
 
@@ -25527,13 +25943,15 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// testable without a webview. RX ONLY — arming the decoder cannot key
     /// anything (TX starts only from an explicit send behind `psk_tx_gate`).
     pub fn psk_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Psk);
         if self.psk_armed || self.psk_auto_arm_declined || !self.settings.psk_rx_auto_arm {
             return false;
         }
-        self.psk_chars.clear();
+        // The transcript is kept across a leave and a return, as RTTY's is (`rtty_auto_arm`).
         self.psk_afc_hz = 0.0;
         self.psk_signal = false;
         self.psk_armed = true;
+        self.psk_auto_armed = true;
         true
     }
 
@@ -26744,6 +27162,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let mut seq = seq;
             seq.cfg = self.settings.rtty_seq_config();
             self.rtty_seq = Some(seq);
+            // The sequencer decides from what the decoder hears, so Auto takes the decoder: it is
+            // the operator's from here (a screen leave no longer stops it), and one that a leave
+            // stopped (another window left RTTY while this one stayed) starts again. Never one
+            // the operator stopped. RX only: nothing here keys or changes what Auto sends.
+            self.rtty_auto_armed = false;
+            if !self.rtty_armed && !self.rtty_auto_arm_declined {
+                self.rtty_afc_hz = 0.0;
+                self.rtty_afc_locked = false;
+                self.rtty_armed = true;
+            }
         } else {
             if let Some(seq) = self.rtty_seq.as_mut() {
                 seq.abort();
@@ -27276,6 +27704,8 @@ contact yourself."
             armed: on,
             ..Default::default()
         };
+        // Either way it is now the operator's decision (or their ISS opt-in's), not the screen's.
+        self.sstv_auto_armed = false;
         self.sstv_armed = on;
     }
 
@@ -27293,6 +27723,7 @@ contact yourself."
         self.sstv_progress = None;
         self.sstv_manual_rx = None;
         self.sstv_health = SstvHealth::default();
+        self.sstv_auto_armed = false;
         self.sstv_armed = false;
     }
 
@@ -27317,6 +27748,7 @@ contact yourself."
     /// entry path: the Arm button and the ISS pass arm both call
     /// [`Engine::set_sstv_armed`], an explicit operator act, and are unaffected.
     pub fn sstv_auto_arm(&mut self) -> bool {
+        self.decoder_screen_entered(decoder_screens::DecoderScreen::Sstv);
         if self.sstv_armed || self.sstv_auto_arm_declined || !self.settings.sstv_rx_auto_arm {
             return false;
         }
@@ -27325,6 +27757,7 @@ contact yourself."
             ..Default::default()
         };
         self.sstv_armed = true;
+        self.sstv_auto_armed = true;
         true
     }
 
@@ -27346,6 +27779,8 @@ contact yourself."
         if !self.sstv_armed {
             self.set_sstv_armed(true);
         }
+        // A receiver the screen started becomes the operator's with their manual start.
+        self.sstv_auto_armed = false;
         self.sstv_manual_rx = Some(mode_slug);
     }
 
@@ -29298,6 +29733,10 @@ contact yourself."
     /// Inactive (raw offset, shift 0) when split is off, the tier isn't
     /// FT8/FT4, the offset is already in-window, or a cluster SPLIT-on-Work
     /// already owns the TX dial.
+    ///
+    /// In-window is 1500..=1999 Hz, WSJT-X's own arithmetic (3.0.2 `MainWindow::setXIT`,
+    /// widgets/mainwindow.cpp:12375, `m_XIT=(n/500)*500 - 1500`): 2000 Hz is a +500 Hz shift with
+    /// the audio at 1500 Hz, as there.
     fn split_reduce(&self, tx_hz: f32) -> (f32, i64) {
         use crate::settings::SplitMode;
         let t = tx_hz.round() as i64;
@@ -29310,7 +29749,7 @@ contact yourself."
         if self.settings.split_mode == SplitMode::None
             || self.split_tx_mhz.is_some()
             || !applies
-            || (1500..=2000).contains(&t)
+            || (1500..2000).contains(&t)
         {
             return (tx_hz, 0);
         }
@@ -29798,6 +30237,7 @@ contact yourself."
         // a failed unkey's halt, the TX watchdog).
         s.radio.slot_over_dropped = self.slot_over_dropped.clone().filter(|_| self.tx_enabled);
         s.radio.ptt_refused = self.ptt_refused.clone();
+        s.radio.pc_mic_ended = self.pc_mic.ended.clone();
         s.radio.voice_dropped = self.voice_dropped.clone();
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
@@ -30502,13 +30942,15 @@ contact yourself."
             );
         }
         // WSJT-X sends a compound call's type 2 on its first over and its type 3 on the next
-        // (`m_tx=1-m_tx`, then `if(m_tx==0) msg2=msg0`).
+        // (`m_tx=1-m_tx`, then `if(m_tx==0) msg2=msg0`). It flips as PTT rises, before it builds
+        // the over; this over is built before its key, so it is the flip the key will make: the
+        // over after an odd number of PTT asserts is the type 3.
         Ok(tempo_core::beacon::beacon_message(
             call,
             grid,
             self.settings.beacon_power_dbm,
             self.app.tier() == Tier::Fst4w,
-            self.beacon_overs.is_multiple_of(2),
+            !self.beacon_overs.is_multiple_of(2),
         ))
     }
 
@@ -30558,9 +31000,6 @@ contact yourself."
             } else {
                 self.beacon_sched.next_is_tx()
             };
-            if self.beacon_tx_this_slot {
-                self.beacon_overs += 1;
-            }
         }
         if !self.beacon_tx_this_slot {
             self.app.set_transmitting(false);
@@ -31679,6 +32118,18 @@ contact yourself."
         }
     }
 
+    /// Whether the operator is in what WSJT-X calls a Special Operating Activity, the decoder's
+    /// `ncontest /= 0` (`decoder.f90:137`, from `int(m_specOp)` at `mainwindow.cpp:5492`): any
+    /// contest it runs, or a Hound. Here that is Contest mode on, whichever contest is picked, or
+    /// a Hound. Without one, FT8 drops rover (`/R`) and `TU; ` decodes (`ft8b.f90:452-455`).
+    fn special_activity(&self) -> bool {
+        self.settings.fd_active
+            || matches!(
+                self.settings.special_op,
+                crate::settings::SpecialOp::Hound | crate::settings::SpecialOp::SuperHound
+            )
+    }
+
     pub fn build_decode_job(&self, frame: Vec<f32>, slot: u64, pass: DecodePass) -> DecodeJob {
         let source = self.source.clone();
         let next_source = self.next_source.clone();
@@ -31714,6 +32165,7 @@ contact yourself."
                 nftx: 0,
                 ap: true, // ignored: companion decodes arrive pre-made over UDP
                 ap_cq_only: false,
+                activity: false,
                 frame_time_ms: 0,
                 harq_reset: false,
                 pass,
@@ -31743,6 +32195,7 @@ contact yourself."
                 nftx: 0,
                 ap: true, // ignored: DX1's robust path has no WSJT-X AP machinery
                 ap_cq_only: false,
+                activity: false,
                 frame_time_ms: 0,
                 harq_reset: false,
                 pass,
@@ -31871,6 +32324,7 @@ contact yourself."
             // the operator deviate deliberately.
             ap: self.settings.ap_decode,
             ap_cq_only: self.settings.ap_cq_only,
+            activity: self.special_activity(),
             frame_time_ms,
             harq_reset,
             pass,
@@ -34179,6 +34633,20 @@ contact yourself."
         self.station.set_state_resolver(resolve)
     }
 
+    /// See [`StationCore::set_path_grader`].
+    pub fn set_path_grader(
+        &mut self,
+        grade: impl Fn(
+                &tempo_core::logbook::QsoRecord,
+                &[f32],
+            ) -> Option<tempo_core::logbook::path_stamp::PathStamp>
+            + Send
+            + Sync
+            + 'static,
+    ) {
+        self.station.set_path_grader(grade)
+    }
+
     /// See [`StationCore::set_grid_rarity_resolver`].
     pub fn set_grid_rarity_resolver(
         &mut self,
@@ -34920,6 +35388,11 @@ contact yourself."
         self.station.sstv_gallery()
     }
 
+    /// See [`StationCore::sstv_gallery_snapshot`].
+    pub fn sstv_gallery_snapshot(&self) -> (u64, Vec<crate::dto::SstvGalleryEntry>) {
+        self.station.sstv_gallery_snapshot()
+    }
+
     /// See [`StationCore::set_clock_offset_ms`].
     pub fn set_clock_offset_ms(&mut self, ms: Option<i64>) {
         self.station.set_clock_offset_ms(ms)
@@ -35238,7 +35711,8 @@ pub fn act_opening_session<T>(
 /// the session's rows first and builds its dupe sweep from them in the same hold as the restore.
 /// `then` runs in that hold too, after the restore — the shell persists there. When the logbook
 /// is too busy to read the rows, the restore is refused whole with [`SESSION_BUSY`], the Save's
-/// own words: neither it nor `then` runs.
+/// own words, and while the radio is keyed or TX is armed between overs
+/// ([`Engine::transmit_needs_the_lock`]) with [`RESTORE_ON_AIR`]: neither it nor `then` runs.
 pub fn restore_with_session_rows<T>(
     engine: &std::sync::Mutex<Engine>,
     restored: Settings,
@@ -35254,6 +35728,12 @@ pub fn restore_with_session_rows<T>(
             if let Some(why) = eng.station_profile_restore_refusal(&restored) {
                 return Err(why.to_string());
             }
+            // Never while the radio is keyed, nor while TX is armed to key at the next slot: the
+            // restore's hold can wait on the system keychain, and the radio loop needs this lock
+            // to end the over, and to key the next one on time. Nothing has changed yet.
+            if eng.transmit_needs_the_lock() {
+                return Err(RESTORE_ON_AIR.to_string());
+            }
             eng.apply_restored_settings(restored);
             if let Some(rows) = rows {
                 eng.open_session_from(rows);
@@ -35262,6 +35742,10 @@ pub fn restore_with_session_rows<T>(
         },
     )?
 }
+
+/// What a settings restore answers while the radio is keyed, or TX is armed between overs
+/// ([`restore_with_session_rows`]): nothing was restored.
+pub const RESTORE_ON_AIR: &str = "Finish or stop the transmission first, then restore.";
 
 /// [`with_session_rows`]' loop: `tries` reads at most, each waiting up to `wait` for the store.
 /// `Err` when none could be used, and then `then` has not run.
@@ -38982,6 +39466,26 @@ mod tests {
     }
 
     #[test]
+    fn the_rtty_scope_is_wanted_only_while_something_reads_it() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let now = Instant::now();
+        assert!(
+            !e.rtty_scope_wanted(now),
+            "never read: nobody is drawing it"
+        );
+        e.rtty_scope();
+        let read = Instant::now();
+        assert!(
+            e.rtty_scope_wanted(read),
+            "just read: the scope is on screen"
+        );
+        assert!(
+            !e.rtty_scope_wanted(read + RTTY_SCOPE_WANTED_FOR),
+            "the polls stopped: the pane closed or the screen was left"
+        );
+    }
+
+    #[test]
     fn rtty_scope_is_live_only_while_armed_and_not_transmitting() {
         use tempo_core::rtty::scope::ScopeFrame;
         let mut e = Engine::new("W9XYZ", "EN61", 0);
@@ -39275,6 +39779,56 @@ mod tests {
         // Startup seed replaces the session list (and caps defensively).
         e.load_sstv_gallery(vec![crate::dto::SstvGalleryEntry::default()]);
         assert_eq!(e.sstv_gallery().len(), 1);
+    }
+
+    /// The decoder saves a picture's file before it takes the lock to list it, so a gallery
+    /// delete reading the folder in between can adopt the file first. The decoder's own record
+    /// must then replace that bare entry, not sit beside it: one picture, listed once, with the
+    /// frequency and line count only the decoder knows.
+    #[test]
+    fn a_picture_already_adopted_from_the_folder_is_listed_once_when_the_decoder_records_it() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        let older = crate::dto::SstvGalleryEntry {
+            path: "/tmp/sstv/20261030T100000Z_scottie1.png".into(),
+            mode: "Scottie 1".into(),
+            finished_utc: "2026-10-30T10:00:00Z".into(),
+            freq_mhz: 14.230,
+            lines: 256,
+            fsk_id: None,
+        };
+        let adopted = crate::dto::SstvGalleryEntry {
+            path: "/tmp/sstv/20261030T100500Z_pd120.png".into(),
+            mode: "pd120".into(),
+            finished_utc: "2026-10-30T10:05:00Z".into(),
+            ..Default::default()
+        };
+        e.load_sstv_gallery(vec![older.clone(), adopted.clone()]);
+        let (gen_before, _) = e.sstv_gallery_snapshot();
+
+        let decoded = crate::dto::SstvGalleryEntry {
+            mode: "PD 120".into(),
+            freq_mhz: 14.233,
+            lines: 496,
+            ..adopted.clone()
+        };
+        e.push_sstv_gallery(decoded.clone());
+        assert_eq!(
+            e.sstv_gallery(),
+            &[older.clone(), decoded.clone()][..],
+            "the decoder's record replaces the adopted entry"
+        );
+        assert!(
+            e.sstv_gallery_snapshot().0 > gen_before,
+            "a replacement is still a change for gallery.json"
+        );
+
+        // A different picture still appends.
+        let newer = crate::dto::SstvGalleryEntry {
+            path: "/tmp/sstv/20261030T101000Z_robot36.png".into(),
+            ..decoded.clone()
+        };
+        e.push_sstv_gallery(newer.clone());
+        assert_eq!(e.sstv_gallery(), &[older, decoded, newer][..]);
     }
 
     /// #202 — a manual receive start is a one-shot request the decode thread collects,
@@ -48715,16 +49269,46 @@ mod tests {
         e.broadcast("CQ W9XYZ EN37");
         assert!(!e.poll_tx(8).is_empty());
         assert_eq!(e.take_tx_dial_shift(), 1000, "2900 -> f0 1900, dial +1000");
-        e.set_tx_offset(2000.0); // window edge is INCLUSIVE — no spurious hop
+        e.set_tx_offset(2000.0); // WSJT-X: (2000/500)*500-1500 = +500, audio 1500
         e.broadcast("CQ W9XYZ EN37");
         assert!(!e.poll_tx(10).is_empty());
-        assert_eq!(e.take_tx_dial_shift(), 0, "2000 Hz is in-window");
+        assert_eq!(
+            e.take_tx_dial_shift(),
+            500,
+            "2000 Hz shifts +500, as WSJT-X"
+        );
         // Split off (stock default): raw offset, no shift.
         e.settings.split_mode = crate::settings::SplitMode::None;
         e.set_tx_offset(750.0);
         e.broadcast("CQ W9XYZ EN37");
         assert!(!e.poll_tx(12).is_empty());
         assert_eq!(e.take_tx_dial_shift(), 0, "None = stock raw-offset TX");
+    }
+
+    #[test]
+    fn split_operation_shifts_an_offset_of_exactly_2000_hz_as_wsjtx_does() {
+        // WSJT-X 3.0.2 `MainWindow::setXIT` (widgets/mainwindow.cpp:12375):
+        // `m_XIT=(n/500)*500 - 1500`, integer division, and the audio goes out at `n - m_XIT`.
+        // Only 1500..=1999 Hz has an XIT of 0; 2000 Hz is (4*500)-1500 = +500, audio 1500 Hz.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.split_mode = crate::settings::SplitMode::Rig;
+        e.set_tx_enabled(true);
+        for (slot, tx, shift) in [
+            (0, 2000.0, 500),
+            (2, 1999.0, 0),
+            (4, 1500.0, 0),
+            (6, 1499.0, -500),
+            (8, 2001.0, 500),
+            (10, 2500.0, 1000),
+        ] {
+            e.set_tx_offset(tx);
+            e.broadcast("CQ W9XYZ EN37");
+            assert!(!e.poll_tx(slot).is_empty(), "{tx} Hz: premise, an over");
+            let n = tx as i64;
+            assert_eq!(shift, (n / 500) * 500 - 1500, "{tx} Hz: WSJT-X's own XIT");
+            assert_eq!(e.take_tx_dial_shift(), shift, "{tx} Hz");
+        }
     }
 
     #[test]
@@ -50121,6 +50705,129 @@ mod tests {
         );
     }
 
+    /// A contact being logged takes the command layer's grade as NEW fields only, and never an
+    /// antenna field: the record gains the three grade fields and nothing else, and an antenna
+    /// heading or path the record already carries is kept as it was. Without a grader nothing is
+    /// added. The grader sees the record as it will be written (grid and band final).
+    #[test]
+    fn a_new_contact_takes_the_graders_path_as_new_fields_only() {
+        use tempo_core::logbook::path_stamp::{read_path, PathStamp, StampConf, StampRoute};
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let bare = e.qso_record("JA1NONE".into(), Some("PM95".into()), None);
+        e.log_qso(bare);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let saw = std::sync::Arc::clone(&seen);
+        e.set_path_grader(move |r, _| {
+            saw.lock()
+                .unwrap()
+                .push((r.call.clone(), r.grid.clone().unwrap_or_default()));
+            Some(PathStamp {
+                route: StampRoute::Short,
+                conf: Some(StampConf::Likely),
+                why: vec!["MARGIN_S".into()],
+                key: "PM95/20m".into(),
+            })
+        });
+        let graded = e.qso_record("JA1ABC".into(), Some("PM95".into()), None);
+        e.log_qso(graded);
+        let mut typed = e.qso_record("JA1TYP".into(), Some("PM95".into()), None);
+        typed.extra = vec![
+            ("ANT_AZ".into(), "45".into()),
+            ("ANT_PATH".into(), "L".into()),
+        ];
+        e.log_qso(typed);
+        let log = e.stored_log();
+        let at = |call: &str| log.iter().find(|r| r.call == call).unwrap();
+        let tag =
+            |call: &str, t: &str| tempo_core::logbook::extra_field(at(call), t).map(str::to_string);
+        assert_eq!(read_path(at("JA1NONE")), None, "no grader, no grade");
+        let g = read_path(at("JA1ABC")).unwrap();
+        assert_eq!(
+            (g.route, g.conf),
+            (StampRoute::Short, Some(StampConf::Likely))
+        );
+        // Nexus fills no antenna field, whatever the grade.
+        assert_eq!(tag("JA1ABC", "ANT_AZ"), None);
+        assert_eq!(tag("JA1ABC", "ANT_PATH"), None);
+        // Beside the ungraded contact's fields, exactly the three grade fields.
+        let keys = |call: &str| -> std::collections::BTreeSet<String> {
+            at(call).extra.iter().map(|(k, _)| k.clone()).collect()
+        };
+        let added: Vec<String> = keys("JA1ABC")
+            .difference(&keys("JA1NONE"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            added,
+            [
+                "APP_NEXUS_PATH",
+                "APP_NEXUS_PATH_CONF",
+                "APP_NEXUS_PATH_WHY"
+            ]
+        );
+        // The operator's own values stand; the grade beside them is still added.
+        assert_eq!(tag("JA1TYP", "ANT_AZ").as_deref(), Some("45"));
+        assert_eq!(tag("JA1TYP", "ANT_PATH").as_deref(), Some("L"));
+        assert!(read_path(at("JA1TYP")).is_some());
+        assert_eq!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .map(|(c, _)| c.as_str())
+                .collect::<Vec<_>>(),
+            ["JA1ABC", "JA1TYP"]
+        );
+        // What the services are sent is the contact without its grade.
+        let out = tempo_core::logbook::adif_record(at("JA1ABC"));
+        assert!(
+            !out.contains("APP_NEXUS_PATH") && !out.contains("ANT_"),
+            "{out}"
+        );
+    }
+
+    /// The path grader is handed the worked station's decode lateness: each of its decodes' DT
+    /// minus the median DT of its period, from the decode history — a period too thin for a
+    /// median (fewer than three decodes) gives nothing, and other stations give nothing.
+    #[test]
+    fn the_grader_is_handed_the_stations_decode_lateness() {
+        let d = |message: &str, dt: f32| modes::Decode {
+            message: message.into(),
+            sync: 1.0,
+            snr: -10,
+            dt,
+            freq: 1500.0,
+            nap: 0,
+            qual: 1.0,
+            rv: None,
+            raw: None,
+            mode: None,
+        };
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        for slot in 10..13u64 {
+            e.ingest_decodes_for_test(
+                &[
+                    d("CQ JA1ABC PM95", 0.30),
+                    d("CQ W1AW FN31", 0.10),
+                    d("CQ G4XYZ IO91", 0.20),
+                ],
+                slot,
+            );
+        }
+        // A thin period: the station alone, no median.
+        e.ingest_decodes_for_test(&[d("CQ JA1ABC PM95", 0.9)], 13);
+        let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::<f32>::new()));
+        let put = std::sync::Arc::clone(&got);
+        e.set_path_grader(move |_, late| {
+            *put.lock().unwrap() = late.to_vec();
+            None
+        });
+        let rec = e.qso_record("JA1ABC".into(), Some("PM95".into()), None);
+        e.log_qso(rec);
+        let late = got.lock().unwrap().clone();
+        assert_eq!(late.len(), 3, "{late:?}");
+        assert!(late.iter().all(|x| (x - 0.10).abs() < 1e-5), "{late:?}");
+    }
+
     /// K_INDEX, A_INDEX and SFI go on a contact only when the operator turned the setting
     /// on, and only from a reading Nexus fetched no more than three hours earlier — never the
     /// propagation model's stand-ins, never a stale number.
@@ -50128,7 +50835,14 @@ mod tests {
     fn space_weather_is_logged_only_when_asked_and_only_while_fresh() {
         let mut e = Engine::new("K2DEF", "FN31", 0);
         let now = now_unix_secs();
-        e.note_space_weather(2.67, 7.0, 148.6, now - 60);
+        let today = now / 86_400 * 86_400;
+        e.note_space_weather(
+            Some((2.67, now - 120)),
+            &[(7.0, today)],
+            Some((148.6, now - 3600)),
+            now - 60,
+        );
+        e.settings.log_space_weather = false;
         let off = e.qso_record("K1OFF".into(), None, None);
         e.log_qso(off);
         e.settings.log_space_weather = true;
@@ -50138,7 +50852,13 @@ mod tests {
         let mut earlier = e.qso_record("K1YDA".into(), None, None);
         earlier.when_unix = now - 86_400;
         e.log_qso(earlier);
-        e.note_space_weather(4.0, 20.0, 160.0, now - SPACE_WEATHER_MAX_AGE_SECS - 60);
+        let then = now - SPACE_WEATHER_MAX_AGE_SECS - 60;
+        e.note_space_weather(
+            Some((4.0, then)),
+            &[(20.0, today - 86_400)], // yesterday's: not this contact's day
+            Some((160.0, then)),
+            then,
+        );
         let stale = e.qso_record("K1OLD".into(), None, None);
         e.log_qso(stale);
         let log = e.stored_log();
@@ -50147,7 +50867,7 @@ mod tests {
             ["K_INDEX", "A_INDEX", "SFI"]
                 .map(|t| tempo_core::logbook::extra_field(r, t).map(str::to_string))
         };
-        assert_eq!(wx("K1OFF"), [None, None, None], "off by default");
+        assert_eq!(wx("K1OFF"), [None, None, None], "off when turned off");
         assert_eq!(
             wx("K1ON"),
             [Some("3".into()), Some("7".into()), Some("149".into())]
@@ -50160,6 +50880,169 @@ mod tests {
         assert_eq!(tempo_core::logbook::extra_field(back, "SFI"), Some("149"));
         assert_eq!(tempo_core::logbook::extra_field(back, "K_INDEX"), Some("3"));
         assert_eq!(tempo_core::logbook::extra_field(back, "A_INDEX"), Some("7"));
+    }
+
+    /// A number NOAA did not give is left off the contact, never stamped with the model's
+    /// stand-in: no Kp → no K_INDEX, no daily A → no A_INDEX, with the real fields still written.
+    /// The A is NOAA's daily planetary A for the contact's own UT day only; any other day's A is
+    /// not this contact's and is omitted.
+    #[test]
+    fn a_missing_or_stale_index_is_omitted_never_a_stand_in() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.log_space_weather = true;
+        let now = now_unix_secs();
+        let today = now / 86_400 * 86_400;
+        let wx_of = |e: &Engine, call: &str| {
+            let log = e.stored_log();
+            let r = log.iter().find(|r| r.call == call).unwrap();
+            ["K_INDEX", "A_INDEX", "SFI"]
+                .map(|t| tempo_core::logbook::extra_field(r, t).map(str::to_string))
+        };
+        // SFI and the daily A answered, Kp did not. The A is yesterday's, the newest NOAA issues
+        // during a day: not this contact's day, so no A_INDEX.
+        e.note_space_weather(
+            None,
+            &[(4.0, today - 86_400)],
+            Some((89.0, now - 60)),
+            now - 60,
+        );
+        let c = e.qso_record("K1NOK".into(), None, None);
+        e.log_qso(c);
+        assert_eq!(wx_of(&e, "K1NOK"), [None, None, Some("89".into())]);
+        // Kp answered, the A is three days old: no A_INDEX.
+        e.note_space_weather(
+            Some((1.0, now - 60)),
+            &[(9.0, today - 3 * 86_400)],
+            None,
+            now - 60,
+        );
+        let c = e.qso_record("K1OLDA".into(), None, None);
+        e.log_qso(c);
+        assert_eq!(wx_of(&e, "K1OLDA"), [Some("1".into()), None, None]);
+        // Today's own A (once NOAA has it) is the contact's day: kept.
+        e.note_space_weather(None, &[(12.0, today)], None, now - 60);
+        let c = e.qso_record("K1TDA".into(), None, None);
+        e.log_qso(c);
+        assert_eq!(wx_of(&e, "K1TDA"), [None, Some("12".into()), None]);
+        // Nothing answered: the last reading stands, nothing is invented.
+        e.note_space_weather(None, &[], None, now - 30);
+        let c = e.qso_record("K1NONE".into(), None, None);
+        e.log_qso(c);
+        assert_eq!(wx_of(&e, "K1NONE"), [None, Some("12".into()), None]);
+    }
+
+    /// Each number is judged by its OWN sample time against the contact's, not by when Nexus
+    /// fetched it: a Kp sample more than three hours from the contact is not its K (a fresh
+    /// fetch of a frozen feed, which could otherwise give a K about six hours old), a flux
+    /// measured more than 48 hours from it is not its SFI, and the A is the contact's own UT day
+    /// only — so a contact at 23:59 UTC takes that day's A, and one at 00:01 does not take the
+    /// day that just ended.
+    #[test]
+    fn each_space_weather_number_is_bounded_from_the_contacts_own_time() {
+        const DAY: u64 = 1_761_782_400; // 2026-10-30 00:00 UTC
+        const H: u64 = 3600;
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.log_space_weather = true;
+        let mut n = 0;
+        let mut log_at = |e: &mut Engine,
+                          when: u64,
+                          kp: Option<(f32, u64)>,
+                          a: &[(f32, u64)],
+                          sfi: Option<(f32, u64)>| {
+            // The fetch itself is always fresh: only the samples' own times differ.
+            e.note_space_weather(kp, a, sfi, when - 60);
+            n += 1;
+            let call = format!("K{n}AB");
+            let mut c = e.qso_record(call.clone(), None, None);
+            c.when_unix = when;
+            e.log_qso(c);
+            let log = e.stored_log();
+            let r = log.iter().find(|r| r.call == call).unwrap();
+            ["K_INDEX", "A_INDEX", "SFI"]
+                .map(|t| tempo_core::logbook::extra_field(r, t).map(str::to_string))
+        };
+        let s = |v: &str| Some(v.to_string());
+        let when = DAY + 12 * H;
+        // Kp: inside three hours of the contact, either side, it is its K; past it, it is not.
+        let mut kp = |at| log_at(&mut e, when, Some((3.0, at)), &[], None)[0].clone();
+        assert_eq!(kp(when - 3 * H), s("3"));
+        assert_eq!(kp(when + 3 * H), s("3"));
+        assert_eq!(kp(when - 3 * H - 1), None, "a sample over three hours old");
+        assert_eq!(kp(when - 6 * H + 60), None, "about six hours old");
+        // SFI: inside 48 hours of the contact; past it, none.
+        let mut sfi = |at| log_at(&mut e, when, None, &[], Some((142.0, at)))[2].clone();
+        assert_eq!(sfi(when - 48 * H), s("142"));
+        assert_eq!(sfi(when - 48 * H - 1), None, "an old day's flux");
+        // A: the contact's own UT day only.
+        let mut a =
+            |e: &mut Engine, when, day| log_at(e, when, None, &[(6.0, day)], None)[1].clone();
+        let late = DAY + 24 * H - 60; // 23:59 UTC
+        let early = DAY + 24 * H + 60; // 00:01 UTC the next day
+        assert_eq!(a(&mut e, late, DAY), s("6"), "23:59 takes its own day's A");
+        assert_eq!(
+            a(&mut e, late, DAY - 24 * H),
+            None,
+            "23:59 never the day before"
+        );
+        assert_eq!(
+            a(&mut e, early, DAY),
+            None,
+            "00:01 never the day that just ended"
+        );
+        assert_eq!(
+            a(&mut e, early, DAY + 24 * H),
+            s("6"),
+            "00:01 takes its own day's A"
+        );
+    }
+
+    /// A_INDEX is NOAA's daily planetary A for the contact's OWN UT date, looked up in the
+    /// per-day table the station keeps from DGD.txt — never the day before as a substitute:
+    /// (i) only yesterday's A published and a contact today: no A_INDEX (the live case);
+    /// (ii) today's own A published: stamped; (iii) a contact typed in for an earlier day the
+    /// table holds: that day's A, not the newest day's; (iv) that day absent: omitted. A typed-in
+    /// contact still takes no K or SFI (those are now's numbers), only its own day's A.
+    #[test]
+    fn the_a_index_is_the_contacts_own_ut_date_from_the_daily_table() {
+        const DAY: u64 = 1_761_782_400; // 2026-10-30 00:00 UTC
+        const D: u64 = 86_400;
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.log_space_weather = true;
+        let mut n = 0;
+        let mut log_at = |e: &mut Engine, when: u64, table: &[(f32, u64)]| {
+            // Fetched just now, with a fresh Kp and flux beside the table.
+            e.note_space_weather(
+                Some((2.0, DAY + 12 * 3600)),
+                table,
+                Some((90.0, DAY)),
+                DAY + 12 * 3600,
+            );
+            n += 1;
+            let call = format!("K{n}DA");
+            let mut c = e.qso_record(call.clone(), None, None);
+            c.when_unix = when;
+            e.log_qso(c);
+            let log = e.stored_log();
+            let r = log.iter().find(|r| r.call == call).unwrap();
+            ["K_INDEX", "A_INDEX", "SFI"]
+                .map(|t| tempo_core::logbook::extra_field(r, t).map(str::to_string))
+        };
+        let table = [(9.0, DAY - 5 * D), (7.0, DAY - 2 * D), (4.0, DAY - D)];
+        let now = DAY + 12 * 3600 + 60;
+        // (i) yesterday's A is the newest NOAA has published: a contact today gets none.
+        assert_eq!(
+            log_at(&mut e, now, &table)[1],
+            None,
+            "yesterday's A on today's contact"
+        );
+        // (ii) today's own A, once published: stamped.
+        let with_today = [table[0], table[1], table[2], (5.0, DAY)];
+        assert_eq!(log_at(&mut e, now, &with_today)[1].as_deref(), Some("5"));
+        // (iii) typed in for five days ago: that day's A, not the newest; no K, no SFI.
+        let back = log_at(&mut e, DAY - 5 * D + 15 * 3600, &table);
+        assert_eq!(back, [None, Some("9".to_string()), None]);
+        // (iv) a day the table does not hold: omitted.
+        assert_eq!(log_at(&mut e, DAY - 4 * D + 15 * 3600, &table)[1], None);
     }
 
     /// A contact logged now for a time more than three hours ago — typed in afterwards — is
@@ -62783,6 +63666,82 @@ mod tests {
         assert!(job.ap_cq_only, "ap_cq_only = true must reach the job");
     }
 
+    /// WSJT-X's rover and `TU; ` filter is on with no Special Operating Activity and off in one:
+    /// Contest mode, or a Hound, reaches the decode job as `activity`.
+    #[test]
+    fn contest_mode_and_hound_reach_the_decode_job_as_an_activity() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let frame = vec![0.0f32; 1024];
+        let job = |e: &Engine| e.build_decode_job(frame.clone(), 1, DecodePass::Boundary);
+
+        assert!(!job(&e).activity, "no contest, no Hound: no activity");
+
+        e.settings.fd_active = true;
+        assert!(job(&e).activity, "Contest mode is an activity");
+        e.settings.fd_active = false;
+        assert!(!job(&e).activity, "Contest mode off again: no activity");
+
+        for hound in [
+            crate::settings::SpecialOp::Hound,
+            crate::settings::SpecialOp::SuperHound,
+        ] {
+            e.settings.special_op = hound;
+            assert!(job(&e).activity, "{hound:?} is an activity");
+        }
+        e.settings.special_op = crate::settings::SpecialOp::None;
+        assert!(!job(&e).activity, "Hound off again: no activity");
+    }
+
+    /// The decoder is CALLED with the activity: the worker's hop from [`DecodeJob`] to
+    /// `modes::DecodeRequest`, through `ingest` and `ingest_early`. A hop that dropped it would
+    /// silently filter every rover in Contest mode; one that forced it on would let them through
+    /// with no contest.
+    #[test]
+    fn the_activity_reaches_the_decoder_through_ingest() {
+        struct ActivityRecorder(std::sync::Arc<std::sync::Mutex<Vec<bool>>>);
+        impl SignalSource for ActivityRecorder {
+            fn label(&self) -> String {
+                "activity-recorder".into()
+            }
+            fn mode_kind(&self) -> Option<modes::ModeKind> {
+                Some(modes::ModeKind::Ft8)
+            }
+            fn decode(&mut self, _req: &modes::DecodeRequest) -> Vec<modes::Decode> {
+                Vec::new()
+            }
+            fn decode_a7(
+                &mut self,
+                req: &modes::DecodeRequest,
+                _a7_final: bool,
+            ) -> Vec<modes::Decode> {
+                self.0.lock().unwrap().push(req.activity);
+                Vec::new()
+            }
+        }
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        e.install_source(Box::new(ActivityRecorder(seen.clone())));
+        let frame = vec![0.0f32; 1024];
+
+        e.ingest(&frame, 1); // no contest, no Hound
+        e.settings.fd_active = true;
+        e.ingest_early(&frame, 2); // Contest mode, early pass
+        e.ingest(&frame, 2); // Contest mode, boundary
+        e.settings.fd_active = false;
+        e.settings.special_op = crate::settings::SpecialOp::Hound;
+        e.ingest(&frame, 3); // Hound
+        e.settings.special_op = crate::settings::SpecialOp::None;
+        e.ingest(&frame, 4); // off again
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![false, true, true, true, false],
+            "the decoder must see: none=false, Contest early=true, Contest=true, Hound=true, \
+             off=false"
+        );
+    }
+
     /// Single decode narrows the search band the decoder is CALLED with to the
     /// RX offset ± 25 Hz (WSJT-X's own "decode this one station" window, from
     /// its double-click redecode path) — and NEVER produces an empty band: with
@@ -64198,6 +65157,42 @@ mod tests {
         assert!(feed.rf_wanted(), "and the next read renews it");
     }
 
+    /// THE RF WINDOW A SCOPE DRAWS IS A STANDING REQUEST: the union of the windows asked for in the
+    /// last second, none once every scope stops asking, and nothing taken from a window that is not one.
+    #[test]
+    fn the_rf_view_is_the_union_of_the_windows_asked_for_and_lapses() {
+        let feed = SpectrumFeed::default();
+        assert_eq!(feed.rf_view(), None, "nobody asked");
+        // 30 m with its margin, then a +-25 kHz window round a dial at 10.120 MHz.
+        feed.request_rf_view(10_095_000.0, 10_155_000.0);
+        assert_eq!(feed.rf_view(), Some((10_095_000.0, 10_155_000.0)));
+        feed.request_rf_view(10_095_000.0, 10_145_000.0);
+        assert_eq!(
+            feed.rf_view(),
+            Some((10_095_000.0, 10_155_000.0)),
+            "a second scope's window inside the first leaves the union as it was"
+        );
+        feed.request_rf_view(10_050_000.0, 10_100_000.0);
+        assert_eq!(feed.rf_view(), Some((10_050_000.0, 10_155_000.0)));
+        // Not windows: reversed, too narrow, not finite. None of them moves the union.
+        feed.request_rf_view(10_200_000.0, 10_100_000.0);
+        feed.request_rf_view(10_100_000.0, 10_100_050.0);
+        feed.request_rf_view(f64::NEG_INFINITY, 10_100_000.0);
+        feed.request_rf_view(f64::NAN, 10_100_000.0);
+        assert_eq!(feed.rf_view(), Some((10_050_000.0, 10_155_000.0)));
+        feed.backdate_rf_views_for_test(Duration::from_millis(900));
+        assert!(feed.rf_view().is_some(), "still standing inside the TTL");
+        feed.backdate_rf_views_for_test(Duration::from_millis(1100));
+        assert_eq!(
+            feed.rf_view(),
+            None,
+            "scopes that stopped asking leave no zoom behind"
+        );
+        // Only the newest window counts once the others lapse.
+        feed.request_rf_view(14_000_000.0, 14_350_000.0);
+        assert_eq!(feed.rf_view(), Some((14_000_000.0, 14_350_000.0)));
+    }
+
     /// A radio that stopped sweeping reads as no scope — but an over does not: the CI-V stream is
     /// paused while keyed, and under a young transmit hold the last sweep stays the picture.
     #[test]
@@ -64740,14 +65735,26 @@ mod tests {
 
         // CONTROL, one radio at a time so routing cannot pick: with the switch ON, only a radio
         // that has the mode takes it; a switch left on in a profile whose model changed commands
-        // nothing new. The same scene on a 991A is the positive.
+        // nothing new. The FT-991A and the four Icoms with a 2 m FM-D are the positives, each
+        // with its switch-off control beside it. The IC-9100 (Hamlib does not list FM-D for it),
+        // the ID-5100 (Hamlib refuses the word) and the ID-4100 (Hamlib sends plain FM for it)
+        // stay in plain FM with the switch on.
         for (model, on, want) in [
-            (3081u32, true, "FM"),
-            (3085, true, "FM"),
-            (1051, true, "FM"),
+            (1051u32, true, "FM"),
             (1036, true, "FM"),
+            (3068, true, "FM"),
+            (3071, true, "FM"),
+            (3082, true, "FM"),
             (1035, false, "FM"),
             (1035, true, "PKTFM"),
+            (3070, false, "FM"),
+            (3070, true, "PKTFM"),
+            (3081, false, "FM"),
+            (3081, true, "PKTFM"),
+            (3085, false, "FM"),
+            (3085, true, "PKTFM"),
+            (3090, false, "FM"),
+            (3090, true, "PKTFM"),
         ] {
             let mut one = Engine::new("KD9TAW", "EN52", 0);
             one.settings.ensure_radio_profiles();
@@ -65579,6 +66586,9 @@ mod tests {
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
             aprs_data_fm: p.aprs_data_fm,
+            pc_mic: None,
+            pc_mic_device: None,
+            pc_mic_gain_db: None,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,
@@ -71337,7 +72347,8 @@ mod tests {
                 "model {model}: the A/B refusal must name the layout that works: {msg}"
             );
             assert!(
-                msg.contains("Settings ▸ Radio ▸ Satellite Doppler") && msg.contains("pass rail"),
+                msg.contains("Settings ▸ Satellites ▸ Satellite Doppler")
+                    && msg.contains("pass rail"),
                 "model {model}: …and where to pick it: {msg}"
             );
 
@@ -75703,6 +76714,8 @@ mod tests {
                     };
                     let first = text(&mut e);
                     assert_eq!(text(&mut e), first, "{call}: one text per interval");
+                    // Each over keys: the alternation flips at its PTT assert (see the next test).
+                    e.note_slot_ptt_asserted();
                     first
                 })
                 .collect()
@@ -75729,6 +76742,122 @@ mod tests {
                 "CONTROL {tier:?}"
             );
         }
+    }
+
+    /// ⭐ A COMPOUND CALL'S BEACON ALTERNATES ON EACH PTT ASSERT, NOT ON THE INTERVALS DECIDED.
+    /// WSJT-X flips `m_tx` inside `WSPR_message` (`widgets/mainwindow.cpp:15462`), which it calls
+    /// only on the tick that raises PTT (`if((g_iptt==1 && m_iptt0==0) || m_restart)`, `:7880`, for
+    /// WSPR, and `:8006` for FST4W in the same block). An interval that never reaches a key (no
+    /// power set, a plan the radio loop drops) leaves the next over on the message that was due.
+    /// Nexus flipped when it decided to transmit, so the over after such an interval was the type 3
+    /// where WSJT-X sends the type 2. A key the radio refuses does flip: see the radio loop's
+    /// `a_beacon_over_flips_the_compound_call_alternation_at_its_ptt_assert`.
+    #[test]
+    fn a_compound_call_beacon_alternates_on_each_ptt_assert_not_intervals_decided() {
+        let text = |e: &mut Engine, slot: u64| match e.plan_tx(slot).map(|p| p.waveform) {
+            Some(TxWaveform::Native { text, .. }) => Some(text),
+            None => None,
+            Some(_) => panic!("slot {slot}: not a beacon over"),
+        };
+        for (tier, three) in [
+            (Tier::Wspr, "<PJ4/K1ABC> FK52UD 37"),
+            (Tier::Fst4w, "<PJ4/K1ABC> FK52UD"),
+        ] {
+            let two = "PJ4/K1ABC 37";
+            let mut e = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+            e.set_tier(tier);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 0;
+            e.apply_settings(s.clone());
+            e.set_tx_enabled(true);
+            // Decided to transmit, but no power set: nothing goes out.
+            assert_eq!(
+                text(&mut e, 10),
+                None,
+                "{tier:?}: premise: no power, no over"
+            );
+            s.beacon_power_dbm = 37;
+            e.apply_settings(s);
+            // Planned, but PTT never asserted (the radio loop dropped it).
+            assert_eq!(
+                text(&mut e, 11).as_deref(),
+                Some(two),
+                "{tier:?}: after no over"
+            );
+            assert_eq!(
+                text(&mut e, 12).as_deref(),
+                Some(two),
+                "{tier:?}: after no key"
+            );
+            e.note_slot_ptt_asserted();
+            assert_eq!(
+                text(&mut e, 13).as_deref(),
+                Some(three),
+                "{tier:?}: after a key"
+            );
+            e.note_slot_ptt_asserted();
+            assert_eq!(
+                text(&mut e, 14).as_deref(),
+                Some(two),
+                "{tier:?}: after two keys"
+            );
+        }
+
+        // CONTROL: an over keyed in another mode is not a beacon over, as WSJT-X flips `m_tx`
+        // only where it builds a WSPR or FST4W message.
+        let mut e = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+        e.note_slot_ptt_asserted();
+        e.set_tier(Tier::Wspr);
+        let mut s = e.settings().clone();
+        s.beacon_tx_percent = 100;
+        s.beacon_power_dbm = 37;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        assert_eq!(
+            text(&mut e, 10).as_deref(),
+            Some("PJ4/K1ABC 37"),
+            "CONTROL: an FT8 key flipped the beacon"
+        );
+    }
+
+    /// ⭐ A TUNE IN WSPR FLIPS A COMPOUND CALL'S ALTERNATION; IN FST4W AND EVERY OTHER MODE IT DOES
+    /// NOT. WSJT-X's Tune raises PTT through the block whose WSPR branch calls `WSPR_message`
+    /// (`widgets/mainwindow.cpp:7805`, `:7880`, `:7886`); FST4W builds its message only in the
+    /// branch a Tune skips (`:7916`, `:8006`). The radio loop's side, one count per Tune whatever
+    /// the radio answers, is `a_tune_in_wspr_flips_the_compound_call_alternation_once`.
+    #[test]
+    fn a_tune_flips_the_beacon_alternation_in_wspr_only() {
+        let after_a_tune = |tune_tier: Tier, beacon_tier: Tier| -> String {
+            let mut e = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+            e.set_tier(tune_tier);
+            e.note_tune_ptt_asserted();
+            e.set_tier(beacon_tier);
+            let mut s = e.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            match e.plan_tx(10).map(|p| p.waveform) {
+                Some(TxWaveform::Native { text, .. }) => text,
+                _ => panic!("{tune_tier:?}: a beacon over"),
+            }
+        };
+        assert_eq!(
+            after_a_tune(Tier::Wspr, Tier::Wspr),
+            "<PJ4/K1ABC> FK52UD 37",
+            "a WSPR Tune did not flip the alternation"
+        );
+        assert_eq!(
+            after_a_tune(Tier::Fst4w, Tier::Fst4w),
+            "PJ4/K1ABC 37",
+            "an FST4W Tune flipped the alternation"
+        );
+        assert_eq!(
+            after_a_tune(Tier::Ft8, Tier::Wspr),
+            "PJ4/K1ABC 37",
+            "CONTROL: an FT8 Tune flipped the beacon"
+        );
     }
 
     #[test]
@@ -79524,6 +80653,73 @@ mod logged_frequency_tests {
             "Cabrillo moved with the on-air frequency"
         );
         assert_eq!(cabrillo_qso_lines(&low).len(), 1, "one QSO line each");
+    }
+
+    /// A station with the path grader on writes exactly the Cabrillo entry (and the contest's own
+    /// ADIF) a station without it does: the grade is the general log's fields, and
+    /// the contest's files are written from the contest's own rows. CONTROL: on the graded
+    /// station the grader is live — a general-log contact takes its grade.
+    #[test]
+    fn a_graded_contact_writes_the_same_cabrillo() {
+        use tempo_core::logbook::path_stamp::{PathStamp, StampConf, StampRoute};
+        let c = Case {
+            name: "FT8 at 14.074",
+            section: "digital",
+            setup: no_setup,
+            dial: 14.074,
+            band: "20m",
+            sideband: "USB",
+            class: "DIG",
+            submode: None,
+            word: "PKTUSB",
+            on_air_hz: 0,
+        };
+        let station = |graded: bool| {
+            let mut e = fd_station(&c);
+            if graded {
+                e.set_path_grader(|_, _| {
+                    Some(PathStamp {
+                        route: StampRoute::Short,
+                        conf: Some(StampConf::Likely),
+                        why: vec!["MARGIN_S".into()],
+                        key: "FN31/20m".into(),
+                    })
+                });
+            }
+            log_one(&mut e, &c);
+            e
+        };
+        let (plain, graded) = (station(false), station(true));
+        let whole = |e: &Engine| {
+            e.export_log("cabrillo")
+                .expect("a Cabrillo entry")
+                .lines()
+                .filter(|l| !l.starts_with("CREATED-BY") && !l.starts_with("X-"))
+                .map(|l| {
+                    if l.starts_with("QSO:") {
+                        l.split_whitespace()
+                            .enumerate()
+                            .map(|(i, f)| if i == 3 || i == 4 { "-" } else { f })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(whole(&plain), whole(&graded));
+        assert_eq!(cabrillo_qso_lines(&graded).len(), 1);
+        assert_eq!(plain.export_log("adif"), graded.export_log("adif"));
+        let mut graded = graded;
+        let rec = graded.qso_record("K1ABC".into(), Some("FN31".into()), None);
+        graded.log_qso(rec);
+        let log = crate::test_util::StoredLog::stored_log(&graded);
+        assert!(
+            log.iter()
+                .any(|r| tempo_core::logbook::path_stamp::read_path(r).is_some()),
+            "control: the graded station's general-log contact carries its grade"
+        );
     }
 
     /// ⭐ AN AUTO-SEQUENCED RTTY CONTACT — the general-log record `rtty_qso_record` builds —

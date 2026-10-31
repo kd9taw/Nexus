@@ -295,7 +295,7 @@ their FD behavior too. Winter Field Day reports none, since WSJT-X has no mode
 for it.
 
 Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
-[N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Logging & Connectors.
+[N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Services.
 
 ### When the contest is over
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Settings ▸ Radio ▸ Orbital elements — the manual refresh speaks OPERATOR.
+// Settings ▸ Satellites ▸ Orbital elements — the manual refresh speaks OPERATOR.
 //
 // What is pinned here (the honest-manual-refresh rework):
 //
@@ -125,7 +125,7 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-const openRadio = async () => fireEvent.click(await screen.findByRole('tab', { name: 'Radio' }))
+const openRadio = async () => fireEvent.click(await screen.findByRole('tab', { name: 'Satellites' }))
 
 describe('the Last refresh line', () => {
   it('speaks operator for the pre-launch 404 mirror, raw error demoted to the tooltip', async () => {

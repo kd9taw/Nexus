@@ -41,6 +41,7 @@ pub mod privileges;
 pub mod remote_control;
 pub mod remote_monitor;
 pub mod scp;
+pub mod sstv_gallery;
 #[cfg(test)]
 mod stage1_tests;
 pub mod station;
@@ -365,6 +366,7 @@ impl AppState {
                 slot_audio_lost: None,
                 slot_over_dropped: None,
                 ptt_refused: None,
+                pc_mic_ended: None,
                 voice_dropped: None,
                 decode_depth: 3,
                 qso_recording: false,

@@ -2,6 +2,7 @@
 // data (desktop-only); degrades to a plain "no live scales" line when the feed is absent.
 import type { NoaaScalesView, AlertView } from '../../types'
 import { t, type MessageKey } from '../../i18n'
+import { agoLabel } from './SpaceWxGauges'
 
 // R, S and G are the NOAA scales' own letters — technical tokens, not prose. Only what
 // each one MEANS is a catalog entry, and it is looked up when the chip renders.
@@ -10,6 +11,15 @@ const RSG: { key: 'r' | 's' | 'g'; label: string; titleKey: MessageKey }[] = [
   { key: 's', label: 'S', titleKey: 'prop.scales.s.title' },
   { key: 'g', label: 'G', titleKey: 'prop.scales.g.title' },
 ]
+
+/** The station refetches the scales every 15 min and keeps its last copy through a failure; past
+ *  three refetches that copy is drawn with its age, so an old R0 does not read as the sun now. */
+const SCALES_STALE_SECS = 45 * 60
+
+/** UTC today + 1 as NOAA writes a day ("YYYY-MM-DD"). */
+function utcTomorrow(nowMs: number): string {
+  return new Date(nowMs + 86_400_000).toISOString().slice(0, 10)
+}
 
 function sev(n: number): string {
   return n <= 0 ? 'quiet' : n <= 2 ? 'minor' : 'major'
@@ -26,18 +36,27 @@ export function ScalesAnnunciator({
   // offline feed must read as "no data", never as a genuinely quiet sun.
   if (!scales || !scales.asOf) return <p className="pane-basic">{t('prop.scales.none')}</p>
   const top = alerts[0]
+  const age = Math.max(0, Math.floor(Date.now() / 1000 - scales.asOf))
+  // An old copy keeps its letters, dim, beside its age: an R3 from hours ago is no alarm now.
+  const stale = age >= SCALES_STALE_SECS
+  // The forecast is "tomorrow" only while the day it was issued for is still UTC today + 1: a copy
+  // kept past midnight (the station's cache, its offline last-good copy) would otherwise call
+  // today's forecast tomorrow's. An older station sends a bare number here, which has no date.
+  const fc = scales.gTomorrow
+  const tomorrow = fc != null && fc.level > 0 && fc.date === utcTomorrow(Date.now()) ? fc.level : null
   return (
     <div className="swsc">
       <div className="swsc-scales">
         {RSG.map((x) => (
-          <span key={x.key} className={`swsc-chip swsc-${sev(scales[x.key])}`} title={t(x.titleKey)}>
+          <span key={x.key} className={`swsc-chip swsc-${stale ? 'quiet' : sev(scales[x.key])}`} title={t(x.titleKey)}>
             {x.label}
             {scales[x.key]}
           </span>
         ))}
-        {scales.gTomorrow > 0 && (
+        {stale && <span className="swsc-fc">{t('prop.scales.asOf', { ago: agoLabel(age) })}</span>}
+        {tomorrow != null && (
           <span className="swsc-fc" title={t('prop.scales.tomorrow.title')}>
-            {t('prop.scales.tomorrow', { level: scales.gTomorrow })}
+            {t('prop.scales.tomorrow', { level: tomorrow })}
           </span>
         )}
       </div>

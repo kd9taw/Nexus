@@ -119,7 +119,7 @@ const COMPILED_IN = new Set(['CLUBLOG_API_KEY']);
 // third runner holding these keys is a change to this file, not only to the workflow.
 const SIGNS_IN_BUNDLER = new Set(['macos']);
 const MACOS_LEGS = [
-  { runner: 'macos-14', target: 'aarch64-apple-darwin' },
+  { runner: 'macos-15', target: 'aarch64-apple-darwin' },
   { runner: 'macos-15-intel', target: 'x86_64-apple-darwin' },
 ];
 
@@ -516,6 +516,100 @@ test('the macOS job that holds the Apple keys runs on exactly the two approved l
       '          - label: Other\n            runner: self-hosted\n            target: x86_64-apple-darwin\n',
   );
   assert.equal(matrixLegs(readWorkflow(planted), 'macos').length, 3);
+});
+
+// The macOS app links Homebrew gcc's static runtime, whose objects are built for the runner's macOS,
+// not the app's minimum. The one check on it is what those objects import, held to the reviewed list
+// by scripts/check-macho-bundle.mjs --archive, before signing. A report that greps the build log for
+// the linker's "built for newer" warning can never fire (rustc hides a successful link's output) and
+// printed a false all-clear, so it must not come back. Returns what is wrong; empty when it holds.
+const PRESIGN_CHECK = 'Check every Mach-O against the minimum macOS before signing';
+const STATIC_RUNTIMES = ['libgfortran.a', 'libquadmath.a', 'libemutls_w.a'];
+const IMPORT_LIST = 'scripts/macos-static-runtime-imports.txt';
+function staticRuntimeGate(wf) {
+  const bad = [];
+  const steps = wf.jobs.get('macos')?.steps ?? [];
+  const at = steps.findIndex((s) => s?.name === PRESIGN_CHECK);
+  const code = (steps[at]?.run ?? '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  if (at < 0) bad.push(`no step "${PRESIGN_CHECK}" in job macos`);
+  if (!code.includes(`--imports ${IMPORT_LIST}`)) bad.push(`"${PRESIGN_CHECK}" does not hold the archives to ${IMPORT_LIST}`);
+  for (const a of STATIC_RUNTIMES) {
+    // `--archive "<dir>/lib.a"`, or `--archive "$("$fc" -print-file-name=lib.a)"`.
+    const arg = new RegExp(`--archive "(?:[^"\\n]*|\\$\\("\\$fc" -print-file-name=)${a.replace('.', '\\.')}`);
+    if (!arg.test(code)) bad.push(`"${PRESIGN_CHECK}" does not check ${a}`);
+  }
+  const imp = steps.findIndex((s) => s?.name === IMPORT);
+  if (at >= 0 && !(imp > at)) bad.push(`"${PRESIGN_CHECK}" does not run before "${IMPORT}"`);
+  if (!fs.existsSync(path.join(ROOT, IMPORT_LIST))) bad.push(`${IMPORT_LIST} is missing`);
+  for (const j of wf.jobs.values()) {
+    for (const s of j.steps) if (/built for newer/.test(s?.run ?? '')) bad.push(`job ${j.id}, step "${s.label}" reads the linker's "built for newer" warning, which rustc never shows`);
+  }
+  return bad;
+}
+
+test('the macOS job holds the static gcc runtime to the reviewed import list before signing', () => {
+  assert.deepEqual(staticRuntimeGate(WF), []);
+  // Positive controls: one archive dropped, the list swapped, and the dead log report put back.
+  const dropped = plant(TEXT, ' --archive "$gcc_lib/libquadmath.a"', '');
+  assert.deepEqual(staticRuntimeGate(readWorkflow(dropped)), [`"${PRESIGN_CHECK}" does not check libquadmath.a`]);
+  const unlisted = plant(TEXT, `--imports ${IMPORT_LIST}`, '--imports /dev/null');
+  assert.deepEqual(staticRuntimeGate(readWorkflow(unlisted)), [`"${PRESIGN_CHECK}" does not hold the archives to ${IMPORT_LIST}`]);
+  const dead = plant(
+    TEXT,
+    '            --archive "$("$fc" -print-file-name=libemutls_w.a)"\n',
+    '            --archive "$("$fc" -print-file-name=libemutls_w.a)"\n' +
+      '          grep -c \'built for newer\' "$RUNNER_TEMP/compile.log" || true\n',
+  );
+  assert.deepEqual(staticRuntimeGate(readWorkflow(dead)), [
+    `job macos, step "${PRESIGN_CHECK}" reads the linker's "built for newer" warning, which rustc never shows`,
+  ]);
+});
+
+// Homebrew has stopped publishing Intel bottles of gcc and much of what it pulls in, so a plain
+// `brew install gcc` on the Intel runner compiles GCC until the job's 6-hour limit. The macOS job
+// installs gcc only as the bottle the import list above was reviewed against, by digest, poured
+// with flags that cannot build from source, in a step with a short timeout. Returns what is wrong.
+const DEPS = 'Install build dependencies';
+const GCC_BOTTLES = [
+  { arch: 'arm64', gcc_bottle: 'arm64_sequoia', gcc_bottle_sha256: '8c57a4e5c65c93b90b280e3e761833f946b5a7d186f2067d239af44b71c5a577' },
+  { arch: 'x86_64', gcc_bottle: 'sequoia', gcc_bottle_sha256: 'd9c228e06901cfdc5c91b01f0119a56ea634ae3ed6504d15a3af03a65ae687f0' },
+];
+function pinnedToolchain(wf) {
+  const bad = [];
+  const legs = matrixLegs(wf, 'macos').map(({ arch, gcc_bottle, gcc_bottle_sha256 }) => ({ arch, gcc_bottle, gcc_bottle_sha256 }));
+  if (JSON.stringify(legs) !== JSON.stringify(GCC_BOTTLES)) bad.push(`the macOS legs pin gcc bottles ${JSON.stringify(legs)}, not the reviewed ones`);
+  const steps = wf.jobs.get('macos')?.steps ?? [];
+  const deps = steps.find((s) => s?.name === DEPS);
+  if (!deps) return [...bad, `no step "${DEPS}" in job macos`];
+  const timeout = deps.entries.find((e) => e.path.length === 5 && e.path[4] === 'timeout-minutes')?.value;
+  if (!(Number(timeout) > 0 && Number(timeout) <= 30)) bad.push(`"${DEPS}" has timeout-minutes ${timeout ?? '(none)'}, not 30 or less`);
+  const code = (deps.run ?? '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  if (!code.includes('/blobs/sha256:$GCC_BOTTLE_SHA256"') || !code.includes('echo "$GCC_BOTTLE_SHA256  $bottle" | shasum -a 256 -c -')) {
+    bad.push(`"${DEPS}" does not fetch and check the gcc bottle by its pinned digest`);
+  }
+  for (const s of steps) {
+    const run = (s?.run ?? '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    for (const m of run.matchAll(/\bbrew\s+install\b[^\n]*/g)) {
+      const pinned = s === deps && /--force-bottle\b/.test(m[0]) && /--ignore-dependencies\b/.test(m[0]) && /\s"\$bottle"$/.test(m[0]);
+      if (!pinned) bad.push(`job macos, step "${s.label}": \`${m[0].trim()}\` can build from source`);
+    }
+  }
+  return bad;
+}
+
+test('the macOS job installs gcc only as the reviewed bottle, and cannot spend hours building it', () => {
+  assert.deepEqual(pinnedToolchain(WF), []);
+  // Positive controls: another digest, no timeout, a formula installed by name, a pour that may build.
+  const moved = plant(TEXT, 'gcc_bottle_sha256: d9c228e0', 'gcc_bottle_sha256: 3f961040');
+  assert.match(pinnedToolchain(readWorkflow(moved)).join('\n'), /^the macOS legs pin gcc bottles .*"3f961040.*not the reviewed ones$/);
+  const unbounded = plant(TEXT, `      - name: ${DEPS}\n        timeout-minutes: 30\n`, `      - name: ${DEPS}\n`);
+  assert.deepEqual(pinnedToolchain(readWorkflow(unbounded)), [`"${DEPS}" has timeout-minutes (none), not 30 or less`]);
+  const byName = plant(TEXT, '          set -euo pipefail\n          die() {', '          set -euo pipefail\n          brew install cmake ninja gcc boost\n          die() {');
+  assert.deepEqual(pinnedToolchain(readWorkflow(byName)), [`job macos, step "${DEPS}": \`brew install cmake ninja gcc boost\` can build from source`]);
+  const mayBuild = plant(TEXT, 'brew install --force-bottle --ignore-dependencies', 'brew install --ignore-dependencies');
+  assert.deepEqual(pinnedToolchain(readWorkflow(mayBuild)), [
+    `job macos, step "${DEPS}": \`brew install --ignore-dependencies "$bottle"\` can build from source`,
+  ]);
 });
 
 test('release.yml: no step or job that builds or runs third-party code can see a secret', () => {
@@ -947,4 +1041,433 @@ test('the Pi container build hands the ClubLog key to the RUN that compiles it i
   const compile = dockerInstructions(DOCKERFILE, 'Dockerfile.pi').filter((d) => d.op === 'RUN' && /\.\/scripts\/build-linux\.sh\b/.test(d.args));
   assert.equal(compile.length, 1, 'expected one RUN in Dockerfile.pi to run build-linux.sh');
   assert.match(compile[0].args, /^(?:--\S+\s+)*--mount=type=secret,id=clublog_api_key,env=CLUBLOG_API_KEY\s/, 'the RUN that compiles Nexus does not mount the ClubLog key');
+});
+
+// The IOTA island list is staged by a Node script, best-effort: a failure is a warning and the
+// installer ships without the list. So a staging step that runs before the job has Node fails on
+// every release with nothing but a yellow annotation (the linux-x86 container has no Node until
+// actions/setup-node). Every job that stages the list has to set up Node before it.
+const IOTA_STAGE = /^Stage the IOTA island list\b/;
+function iotaStagedWithoutNode(wf) {
+  const bad = [];
+  for (const j of wf.jobs.values()) {
+    const stage = j.steps.findIndex((s) => IOTA_STAGE.test(s?.name ?? ''));
+    if (stage < 0) continue;
+    const node = j.steps.findIndex((s) => /^actions\/setup-node@/.test(s?.uses ?? ''));
+    if (node < 0 || node > stage) bad.push(j.id);
+  }
+  return bad;
+}
+
+test('every job that stages the IOTA list sets up Node first', () => {
+  const staging = [...WF.jobs.values()].filter((j) => j.steps.some((s) => IOTA_STAGE.test(s?.name ?? ''))).map((j) => j.id);
+  assert.deepEqual(staging, ['linux-x86', 'windows', 'macos', 'pi'], 'the IOTA list is staged in a different set of jobs than expected');
+  assert.deepEqual(iotaStagedWithoutNode(WF), []);
+  // Positive control: the Pi job's setup-node removed is reported.
+  const planted = plant(
+    TEXT,
+    "      # The runner image's own Node is whatever version the image carries; pin it as the other\n" +
+      '      # build jobs do, for the IOTA staging step below.\n' +
+      '      - uses: actions/setup-node@v7\n        with:\n          node-version: 24\n',
+    '',
+  );
+  assert.deepEqual(iotaStagedWithoutNode(readWorkflow(planted)), ['pi']);
+});
+
+// The shipped link. src-tauri's [profile.release] links with fat LTO and one codegen unit. ci.yml's
+// land/* and topic runs build the Windows and Pi checks with cargo's ordinary release linking
+// instead, through cargo's CARGO_PROFILE_RELEASE_LTO / _CODEGEN_UNITS overrides; its runs on main, a
+// release/* branch and a tag keep the profile, and scripts/require-green-ci accepts a release only on
+// one of those. A release must never take the branch values, and nothing may move the profile
+// behind the manifest's back. The check is per line, with a backslash-newline joined first (shell
+// and Dockerfile join one even inside a word), and full-line `#` comments are not read: a comment
+// changes no build. It is defence in depth against an edit that moves the profile, not a boundary
+// against someone set on hiding one: a name built by indirection (`CARGO_${p}_RELEASE_LTO`) is out
+// of its reach. It fails closed on prose, too: a step name, an echo or a trailing comment that names
+// an override, a profile table or a rustc link flag is refused; reword it.
+//  - no workflow but ci.yml, and neither release build entry point (build-linux.sh,
+//    build-windows-cross.sh), has a line that names ANY CARGO_PROFILE_RELEASE_* variable, however
+//    it would set it (`env:`, `export`, a `$GITHUB_ENV` line, a prefix on a command);
+//  - no workflow, build script, ci.yml or Dockerfile.pi names a profile table to cargo, in any of
+//    its spellings (`--config profile.release.lto=…`, `--config "profile.release={…}"`,
+//    `[profile.release]`, `[profile]` with `release.lto`, quoted key parts, the inline table
+//    `profile = { release = { … } }`);
+//  - no line there hands cargo a config FILE (`cargo … --config <path>`): its tables are never
+//    read here, so only the `key=value` form is allowed. Cargo is matched in any spelling that
+//    names it (`"$CARGO"`, `${CARGO_BIN}`, `~/.cargo/bin/cargo`), and `cross` and the tauri CLI
+//    count too; a cargo reached under another name (a shell function, an alias, tauri's
+//    `--runner <script>`), arguments built in a variable or a bash array (`cargo build "${ARGS[@]}"`),
+//    and tauri-action's `with: args:` (no release path uses it) are indirection, out of reach.
+//    The tauri CLI's own `--config`/`-c` (a JSON or TOML file, or inline JSON) is refused as well:
+//    its `build.runner.args` go straight onto cargo's command line (`--config ci/thin.toml`,
+//    `--profile dev`), from a file this check never reads; inline JSON is refused even with a `=`
+//    in it, since cargo's `key=value` never starts with `{`;
+//  - no line there, nor a .cargo/config*, passes rustc a codegen-units or LTO flag
+//    (`-Ccodegen-units=16` in RUSTFLAGS, `rustflags`, also as two list items `"-C", "lto"`, on one
+//    line or on two consecutive ones as a multi-line array writes them, `cargo rustc -- -C lto=off`):
+//    rustc takes those over the profile's;
+//  - no tauri config in src-tauri (tauri.conf.json, a tauri.<platform>.conf.json the CLI merges over
+//    it, or their json5/Tauri.toml forms) carries a `runner` key: its `args` go onto cargo's command
+//    line on every `cargo tauri build|bundle` (`{"cmd":"cargo","args":["--profile","dev"]}`), the
+//    same route as an inline `--config` that is refused above. A TOML dotted key counts
+//    (`runner.args = …` under `[build]`, `build.runner.args = …` at the root); a quoted key part
+//    (`[build."runner"]`) or a key split across lines is out of its scope;
+//  - no .cargo/config* (repository root or src-tauri) carries any profile table, which cargo
+//    would apply over the manifest;
+//  - no workflow but ci.yml, no build script and not Dockerfile.pi builds with another profile than
+//    release: a command that may run cargo (cut at `;`, `&`, `|`) passes no `--profile <name>` but
+//    `release`, quoted or not, and no `--debug` (the tauri CLI's), whichever side of tauri's `--` it
+//    is on; in a tauri CLI command (`cargo tauri build`, `cargo-tauri bundle`, `npx tauri build`,
+//    `npx @tauri-apps/cli build`, global flags or a quote before the subcommand allowed; not a
+//    `src-tauri` path) no short-flag cluster sets `-d` (`-d`, `-vd`, `'-d'`, `-dfradio`, but not
+//    `-bdeb` or `-fradio`, whose rest is a value). rustup's own `--profile minimal` names no cargo
+//    and passes. This check catches an honest edit in our own files, not a hostile one: a tauri
+//    CLI reached through a variable (`"$TAURI" build -d`), `cargo tauri dev` and mobile builds
+//    (`cargo tauri android build`), which the release entry points never use, and any further
+//    spelling are out of its scope. A plain `cargo build` without `--release` is not refused: it
+//    builds dev into target/debug, and every shipped artifact comes from target/…/release/bundle;
+//  - in ci.yml and Dockerfile.pi every mention of CARGO_PROFILE_RELEASE_* is one of the exact lines
+//    this design needs: the four step-env lines, whose fat value is the profile's on main,
+//    release/* and tags; the two bare `--build-arg NAME`s; and the two ARGs, whose defaults (what
+//    release.yml builds with, passing neither) are the profile's. So an ENV or a RUN prefix in the
+//    Dockerfile, a `$GITHUB_ENV` line or a literal build-arg value in ci.yml, or any other profile
+//    key is refused there too.
+const CARGO_TAURI = process.env.CARGO_TAURI || path.join(ROOT, 'src-tauri', 'Cargo.toml');
+const ANY_OVERRIDE = /CARGO_PROFILE_RELEASE_/;
+// TOML allows a key part to be quoted (`["profile".release]`, `'"profile".release.lto=false'`), with
+// spaces around the dots.
+// And as an inline table (`profile = { release = { lto = false } }`, `--config 'profile={…}'`).
+const PROFILE_TABLE = /["']?profile["']?\s*\.\s*["']?release|\[\s*["']?profile["']?\s*[\].]|["']?profile["']?\s*=\s*\{/;
+// rustc's own codegen-units and LTO switches, short (`-Ccodegen-units`, `-C lto`) or long
+// (`--codegen=lto`), the value also as the next item of a list (`["-C", "lto=off"]`); rustc reads
+// `_` as `-` in them. The name must end there, so `git -C lto-src` (a directory) is not one.
+const RUSTC_LINK_FLAG = /(?:-C|--codegen)["']?[\s,=]*["']?(?:codegen[-_]units|lto)(?![\w./-])/;
+// The argument of each `--config` on a line that may run cargo: `key=value`, or else a file path.
+// Cargo in any case or spelling (`cargo`, `"$CARGO"`, `${CARGO_BIN}`, `~/.cargo/bin/cargo`), `cross`,
+// or the tauri CLI, which hands cargo whatever follows its `--`, and whose own `--config` can hand
+// cargo arguments through `build.runner.args`. A `key=value` never starts with `{`: that is tauri's
+// inline JSON, refused whatever it holds.
+const CONFIG_ARG = /--config["']?(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+const RUNS_CARGO = /cargo|\b(?:cross|tauri)\b/i;
+// The tauri CLI's short `-c`, also after its no-value shorts in a cluster (`-vc`), quoted, or with the
+// value attached (`-cci/release.json`, `-c'{…}'`), read only when its argument is a config (a JSON or
+// TOML file, or inline JSON), so `sh -c '…'` and `sha256sum -c -` are not taken for one.
+const TAURI_SHORT_CONFIG = /(?:^|\s)["']?-[vd]*c(?:["']?(?:\s+|=))?(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+const configFiles = (line) =>
+  RUNS_CARGO.test(line)
+    ? [
+        ...[...line.matchAll(CONFIG_ARG)].map((m) => m[1] ?? m[2] ?? m[3]).filter((a) => !a.includes('=') || /^\s*\{/.test(a)),
+        ...[...line.matchAll(TAURI_SHORT_CONFIG)].map((m) => m[1] ?? m[2] ?? m[3]).filter((a) => /\.(?:json5?|toml)$|^\s*\{/.test(a)),
+      ]
+    : [];
+// A build with another profile than release: cargo's `--profile <name>` (any name but `release`,
+// either quoted or not), the tauri CLI's `--debug`, and in a tauri CLI command any short-flag cluster
+// that sets `d`. In clap only the no-value `-v` can stand before it; after a value-taking short
+// (`-b -c -f -r -t`) the rest of the cluster is that flag's value, so `-dfradio` and
+// `-dtx86_64-unknown-linux-gnu` set `-d`, and `-bdeb` and `-fradio` do not. The tauri CLI is the word
+// itself (or `@tauri-apps/cli`) before a subcommand, with global flags (`-v`, `--`) or a quote
+// allowed between them, so a `src-tauri` path (`install -d "$REPO/src-tauri/x"`, `find … -delete`)
+// is not one.
+// Read per command, so `test -d x && cargo …` and rustup's `--profile minimal` beside a cargo command
+// are not taken for one.
+const OTHER_PROFILE = /["']?--profile["']?(?:\s+|=)(?!["']?release["']?(?:\s|$))\S|--debug\b/;
+const TAURI_CLI = /(?:^|[\s/"'])(?:(?:cargo-)?tauri|@tauri-apps\/cli)["']?\s+(?:["']?-\S*\s+)*["']?(?:build|bundle|dev)\b/i;
+const DEBUG_CLUSTER = /(?:^|\s)["']?-v*d/;
+const otherProfile = (line) =>
+  line.split(/[;&|]/).some((c) => RUNS_CARGO.test(c) && (OTHER_PROFILE.test(c) || (TAURI_CLI.test(c) && DEBUG_CLUSTER.test(c))));
+// rustc's flag on one line and its value on the next, as a multi-line TOML array writes them
+// (`"-C",` then `"lto=off",`); a trailing comment on the first line is dropped before joining.
+const splitLinkFlag = (lines, i) =>
+  i + 1 < lines.length &&
+  !RUSTC_LINK_FLAG.test(lines[i]) &&
+  !RUSTC_LINK_FLAG.test(lines[i + 1]) &&
+  RUSTC_LINK_FLAG.test(`${lines[i].replace(/\s#.*$/, '')} ${lines[i + 1]}`);
+// Every format read here (YAML, bash, Dockerfile, TOML) comments with `#` only; `//usr/bin/env` is a
+// command in bash, so `//` is not skipped. A line ending in `\` continues on the next, whose indent
+// is dropped, so `CARGO_PROFILE_\` + `  RELEASE_LTO=false` reads as the one name it is. A comment
+// never continues (bash ends it at the newline), so the line after one is read on its own.
+function codeLines(text) {
+  const lines = [];
+  let open = '';
+  for (const raw of text.split('\n')) {
+    const l = open + raw.trim();
+    open = '';
+    if (!l || l.startsWith('#')) continue;
+    if (l.endsWith('\\')) open = l.slice(0, -1);
+    else lines.push(l);
+  }
+  if (open) lines.push(open);
+  return lines;
+}
+function releaseProfile(cargoToml) {
+  const section = cargoToml.split(/^\[profile\.release\]\s*$/m)[1]?.split(/^\[/m)[0] ?? '';
+  const lto = section.match(/^lto\s*=\s*"?([\w]+)"?\s*$/m)?.[1];
+  const cgu = section.match(/^codegen-units\s*=\s*(\d+)\s*$/m)?.[1];
+  assert.ok(lto && cgu, 'src-tauri/Cargo.toml [profile.release] no longer states lto and codegen-units');
+  return { LTO: lto, CODEGEN_UNITS: cgu };
+}
+const FAT_REFS = "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/'))";
+// A tauri config's `runner`, as a JSON key or a TOML key or table (`runner = …`, `[build.runner]`).
+// A `.` counts only when a key part follows it, so prose like "runner." is not one.
+const TAURI_RUNNER = /["']?\brunner["']?\s*(?:[:=]|\.\s*["']?\w)|\[\s*build\s*\.\s*runner\b/;
+function linkProfileFindings({ workflows, buildScripts, cargoConfigs, tauriConfigs, ci, docker, cargo }) {
+  const shipped = releaseProfile(cargo);
+  const branch = { LTO: 'false', CODEGEN_UNITS: '16' };
+  const bad = [];
+  for (const [file, text] of [...workflows, ...buildScripts]) {
+    for (const l of codeLines(text)) if (ANY_OVERRIDE.test(l)) bad.push(`${file}: names a link-profile override; only ci.yml's branch runs may: ${l}`);
+  }
+  for (const [file, text] of [...workflows, ...buildScripts, ['Dockerfile.pi', docker]]) {
+    for (const l of codeLines(text)) if (otherProfile(l)) bad.push(`${file}: builds with another profile than release: ${l}`);
+  }
+  for (const [file, text] of [...workflows, ...buildScripts, ['ci.yml', ci], ['Dockerfile.pi', docker]]) {
+    const lines = codeLines(text);
+    lines.forEach((l, i) => {
+      if (PROFILE_TABLE.test(l)) bad.push(`${file}: overrides a cargo profile table: ${l}`);
+      for (const f of configFiles(l)) bad.push(`${file}: hands cargo a config file (${f}), whose profile this check cannot read: ${l}`);
+      if (RUSTC_LINK_FLAG.test(l)) bad.push(`${file}: passes rustc a link flag over the profile's: ${l}`);
+      if (splitLinkFlag(lines, i)) bad.push(`${file}: passes rustc a link flag over the profile's: ${l} ${lines[i + 1]}`);
+    });
+  }
+  for (const [file, text] of tauriConfigs) {
+    for (const l of codeLines(text)) if (TAURI_RUNNER.test(l)) bad.push(`${file}: sets a tauri runner, whose args reach cargo on every release build: ${l}`);
+  }
+  for (const [file, text] of cargoConfigs) {
+    const lines = codeLines(text);
+    lines.forEach((l, i) => {
+      if (PROFILE_TABLE.test(l)) bad.push(`${file}: sets a cargo profile, which cargo applies over the manifest: ${l}`);
+      if (RUSTC_LINK_FLAG.test(l)) bad.push(`${file}: passes rustc a link flag over the profile's: ${l}`);
+      if (splitLinkFlag(lines, i)) bad.push(`${file}: passes rustc a link flag over the profile's: ${l} ${lines[i + 1]}`);
+    });
+  }
+  const allowedCi = new Set();
+  const allowedDocker = new Set();
+  for (const key of ['LTO', 'CODEGEN_UNITS']) {
+    const want = `\${{ ${FAT_REFS} && '${shipped[key]}' || '${branch[key]}' }}`;
+    allowedCi.add(`CARGO_PROFILE_RELEASE_${key}: ${want}`);
+    allowedCi.add(`--build-arg CARGO_PROFILE_RELEASE_${key}`);
+    allowedDocker.add(`ARG CARGO_PROFILE_RELEASE_${key}=${shipped[key]}`);
+    const set = codeLines(ci).filter((l) => l.startsWith(`CARGO_PROFILE_RELEASE_${key}:`));
+    if (!set.length) bad.push(`ci.yml: sets no CARGO_PROFILE_RELEASE_${key}`);
+    if (!codeLines(docker).includes(`ARG CARGO_PROFILE_RELEASE_${key}=${shipped[key]}`)) {
+      const arg = docker.match(new RegExp(`^ARG\\s+CARGO_PROFILE_RELEASE_${key}=(\\S+)\\s*$`, 'm'))?.[1];
+      bad.push(`Dockerfile.pi: ARG CARGO_PROFILE_RELEASE_${key} defaults to ${arg ?? '(nothing)'}, not the profile's ${shipped[key]}`);
+    }
+  }
+  for (const l of codeLines(ci)) {
+    if (ANY_OVERRIDE.test(l) && !allowedCi.has(l)) bad.push(`ci.yml: a link-profile mention that is not one of the expected lines: ${l}`);
+  }
+  for (const l of codeLines(docker)) {
+    if (ANY_OVERRIDE.test(l) && !allowedDocker.has(l)) bad.push(`Dockerfile.pi: a link-profile mention that is not one of the two ARG defaults: ${l}`);
+  }
+  return bad;
+}
+const OTHER_WORKFLOWS = fs
+  .readdirSync(path.dirname(WORKFLOW))
+  .filter((f) => /\.ya?ml$/.test(f) && f !== path.basename(CI_WORKFLOW) && f !== path.basename(WORKFLOW))
+  .map((f) => [f, fs.readFileSync(path.join(path.dirname(WORKFLOW), f), 'utf8')]);
+const BUILD_WINDOWS_CROSS = process.env.BUILD_WINDOWS_CROSS || path.join(ROOT, 'scripts', 'build-windows-cross.sh');
+const CARGO_CONFIGS = ['.cargo', path.join('src-tauri', '.cargo')].flatMap((dir) =>
+  ['config', 'config.toml']
+    .map((f) => path.join(dir, f))
+    .filter((f) => fs.existsSync(path.join(ROOT, f)))
+    .map((f) => [f, fs.readFileSync(path.join(ROOT, f), 'utf8')]),
+);
+// Every tauri config the CLI reads from src-tauri: tauri.conf.json, the platform files it merges over
+// it, and their json5 / Tauri.toml spellings.
+const TAURI_CONFIG_NAME = /^tauri(?:\.\w+)?\.conf\.json5?$|^Tauri(?:\.\w+)?\.toml$/;
+const TAURI_CONFIGS = fs
+  .readdirSync(path.join(ROOT, 'src-tauri'))
+  .filter((f) => TAURI_CONFIG_NAME.test(f))
+  .map((f) => [path.join('src-tauri', f), fs.readFileSync(path.join(ROOT, 'src-tauri', f), 'utf8')]);
+const LINK = {
+  workflows: [[path.basename(WORKFLOW), TEXT], ...OTHER_WORKFLOWS],
+  buildScripts: [
+    ['build-linux.sh', fs.readFileSync(BUILD_LINUX, 'utf8')],
+    ['build-windows-cross.sh', fs.readFileSync(BUILD_WINDOWS_CROSS, 'utf8')],
+  ],
+  cargoConfigs: CARGO_CONFIGS,
+  tauriConfigs: TAURI_CONFIGS,
+  ci: CI_TEXT,
+  docker: DOCKERFILE,
+  cargo: fs.readFileSync(CARGO_TAURI, 'utf8'),
+};
+
+test('only ci.yml land/topic runs leave the shipped link profile; release, main, release/* and tags keep it', () => {
+  assert.deepEqual(linkProfileFindings(LINK), []);
+  const has = (findings, needle) =>
+    assert.ok(findings.some((x) => x.includes(needle)), `not reported: ${needle}\ngot:\n  ${findings.join('\n  ') || '(nothing)'}`);
+  // Positive controls, one per shape: each planted violation is reported.
+  const release = plant(TEXT, '      - name: Build .deb in a debian:${{ matrix.base }} container\n        env:\n',
+    '      - name: Build .deb in a debian:${{ matrix.base }} container\n        env:\n          CARGO_PROFILE_RELEASE_LTO: "false"\n');
+  has(linkProfileFindings({ ...LINK, workflows: [[path.basename(WORKFLOW), release]] }), 'release.yml: names a link-profile override');
+  const [, linux] = LINK.buildScripts[0];
+  const [, cross] = LINK.buildScripts[1];
+  const scripts = (name, text) => ({ ...LINK, buildScripts: [[name, text]] });
+  has(linkProfileFindings(scripts('build-windows-cross.sh', `export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16\n${cross}`)), 'build-windows-cross.sh: names a link-profile override');
+  // Any profile key, not only the two this design uses.
+  has(linkProfileFindings(scripts('build-windows-cross.sh', `export CARGO_PROFILE_RELEASE_OPT_LEVEL=0\n${cross}`)), 'CARGO_PROFILE_RELEASE_OPT_LEVEL');
+  has(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', 'cargo tauri build --config profile.release.lto=false --features'))), 'build-linux.sh: overrides a cargo profile table');
+  // The inline-table spelling.
+  has(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', `cargo tauri build --config "profile.release={lto=false}" --features`))), 'profile.release={lto=false}');
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '[profile.release]\nlto = false\n']] }), 'sets a cargo profile');
+  // The dotted-key spelling: [profile] with release.lto under it.
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['src-tauri/.cargo/config.toml', '[profile]\nrelease.lto = false\n']] }), '[profile]');
+  const anchor = `out of release.yml and the build scripts.\n          CARGO_PROFILE_RELEASE_LTO: \${{ ${FAT_REFS} && 'true'`;
+  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, anchor, anchor.replace(/'true'$/, "'false'")) }), 'ci.yml: a link-profile mention that is not one of the expected lines');
+  // The release/* clause itself: without it a release branch's run, the one require-green-ci
+  // accepts for a tag, would link thin.
+  has(linkProfileFindings({ ...LINK, ci: CI_TEXT.replaceAll(" || startsWith(github.ref, 'refs/heads/release/')", '') }), 'CARGO_PROFILE_RELEASE_CODEGEN_UNITS: ${{');
+  // An override written to $GITHUB_ENV inside ci.yml would make main and release/* link thin too.
+  const nai = '          python3 scripts/check-no-input-injection.py --self-test\n';
+  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, nai, `          echo "CARGO_PROFILE_RELEASE_LTO=false" >> "$GITHUB_ENV"\n${nai}`) }), '>> "$GITHUB_ENV"');
+  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, '--build-arg CARGO_PROFILE_RELEASE_LTO\n', '--build-arg CARGO_PROFILE_RELEASE_LTO=false\n') }), '--build-arg CARGO_PROFILE_RELEASE_LTO=false');
+  has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, 'ARG CARGO_PROFILE_RELEASE_LTO=true', 'ARG CARGO_PROFILE_RELEASE_LTO=false') }), 'defaults to false');
+  // `//` is no comment in bash: this line runs, and the export with it.
+  has(linkProfileFindings(scripts('build-windows-cross.sh', `${cross}\n//usr/bin/env true; export CARGO_PROFILE_RELEASE_LTO=false\n`)), '//usr/bin/env true; export CARGO_PROFILE_RELEASE_LTO=false');
+  // Quoted TOML key parts, in a config file and on the command line.
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '["profile".release]\nlto = false\n']] }), '["profile".release]');
+  has(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', `cargo tauri build --config '"profile".release.lto=false' --features`))), `'"profile".release.lto=false'`);
+  // Dockerfile.pi is release.yml's Pi build: an ENV after the ARGs, or a prefix inside the RUN.
+  const args = 'ARG CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1\n';
+  has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, args, `${args}ENV CARGO_PROFILE_RELEASE_LTO=false\n`) }), 'ENV CARGO_PROFILE_RELEASE_LTO=false');
+  has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, '    && ./scripts/build-linux.sh', '    && CARGO_PROFILE_RELEASE_LTO=off ./scripts/build-linux.sh') }), 'CARGO_PROFILE_RELEASE_LTO=off ./scripts/build-linux.sh');
+  // The TOML inline table, in a config file and on the command line.
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', 'profile = { release = { lto = false } }\n']] }), 'profile = { release = { lto = false } }');
+  has(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', `cargo tauri build --config 'profile={release={lto=false}}' --features`))), `'profile={release={lto=false}}'`);
+  // A name split by a backslash-newline: shell joins it even mid-word, and so does a Dockerfile.
+  has(linkProfileFindings(scripts('build-linux.sh', `${linux}\nexport CARGO_PROFILE_\\\nRELEASE_LTO=false\n`)), 'export CARGO_PROFILE_RELEASE_LTO=false');
+  has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, args, `${args}ENV CARGO_PROFILE_\\\n    RELEASE_LTO=false\n`) }), 'ENV CARGO_PROFILE_RELEASE_LTO=false');
+  // A comment ends at its newline: the line after `# … \` is a command, and is read.
+  has(linkProfileFindings(scripts('build-windows-cross.sh', `${cross}\n# a note \\\nexport CARGO_PROFILE_RELEASE_LTO=false\n`)), 'build-windows-cross.sh: names a link-profile override');
+  // A config FILE handed to cargo, in either spelling.
+  has(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', 'cargo tauri build --config "$REPO/scripts/thin.toml" --features'))), 'hands cargo a config file ($REPO/scripts/thin.toml)');
+  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, nai, `          cargo build --release --config=ci/thin.toml\n${nai}`) }), 'hands cargo a config file (ci/thin.toml)');
+  // Cargo run through a variable, a path, `cross` or the tauri CLI's pass-through after `--`; a
+  // `--config` before `tauri` is cargo's own; and a second command on the line is its own. Cargo
+  // reads a `.json` path as TOML, so the tauri cases plant one.
+  for (const run of [
+    '"$CARGO" build --release --config ci/thin.toml',
+    '${CARGO} build --release --config ci/thin.toml',
+    '$CARGO build --release --config ci/thin.toml',
+    '"$CARGO_BIN" build --release --config ci/thin.toml',
+    '~/.cargo/bin/cargo build --release --config ci/thin.toml',
+    'cross build --release --config ci/thin.toml',
+    'npx tauri build -- --config ci/thin.json',
+    'cargo tauri build --config src-tauri/tauri.linux.conf.json -- --config ci/thin.json',
+    'cargo --config ci/thin.json tauri build',
+    'cargo tauri build --features radio; cargo build --release --config ci/thin.json',
+    'cargo tauri build --features radio && cargo build --release --config ci/thin.json',
+    'cargo build --features tauri --config ci/thin.json',
+  ]) {
+    const file = [...run.matchAll(/--config (\S+)/g)].at(-1)[1];
+    has(linkProfileFindings(scripts('build-linux.sh', `${linux}\n${run}\n`)), `hands cargo a config file (${file}), whose profile this check cannot read: ${run}`);
+  }
+  // The tauri CLI's own config is refused too: its `build.runner.args` reach cargo's command line,
+  // inline or from a file this check never reads, in the long and the short spelling.
+  for (const [run, arg] of [
+    [`cargo tauri build --config '{"build":{"runner":{"cmd":"cargo","args":["--config","ci/thin.toml"]}}}'`, '{"build":{"runner":{"cmd":"cargo","args":["--config","ci/thin.toml"]}}}'],
+    [`cargo tauri build --config '{"build":{"runner":{"cmd":"cargo","args":["--profile","dev"]}}}'`, '{"build":{"runner":{"cmd":"cargo","args":["--profile","dev"]}}}'],
+    [`cargo tauri build --config '{"build":{"runner":{"cmd":"cargo","args":["--config=ci/thin.toml"]}}}'`, '{"build":{"runner":{"cmd":"cargo","args":["--config=ci/thin.toml"]}}}'],
+    ['cargo tauri build --config ci/release.json', 'ci/release.json'],
+    ['cargo tauri build --config src-tauri/tauri.linux.conf.json --features radio', 'src-tauri/tauri.linux.conf.json'],
+    ['"$CARGO" tauri build --config=tauri.ci.json', 'tauri.ci.json'],
+    ['npx tauri build -c ci/release.json', 'ci/release.json'],
+    ['cargo tauri build -c ci/release.toml', 'ci/release.toml'],
+    [`cargo-tauri build -c '{"build":{"runner":{"cmd":"cargo","args":["--profile","dev"]}}}'`, '{"build":{"runner":{"cmd":"cargo","args":["--profile","dev"]}}}'],
+    [`cargo tauri build -vc '{"build":{"runner":{"cmd":"cargo","args":["--profile","dev"]}}}'`, '{"build":{"runner":{"cmd":"cargo","args":["--profile","dev"]}}}'],
+    ['cargo tauri build -c=ci/release.json', 'ci/release.json'],
+    ["cargo tauri build '-c' ci/release.json", 'ci/release.json'],
+    ["cargo build '--config' ci/thin.toml", 'ci/thin.toml'],
+    ['cargo tauri build -cci/release.json', 'ci/release.json'],
+    ['cargo tauri build -vcci/release.json', 'ci/release.json'],
+    [`cargo tauri build -c'{"build":{"runner":{"cmd":"cargo","args":["--profile","dev"]}}}'`, '{"build":{"runner":{"cmd":"cargo","args":["--profile","dev"]}}}'],
+  ]) {
+    has(linkProfileFindings(scripts('build-linux.sh', `${linux}\n${run}\n`)), `hands cargo a config file (${arg}), whose profile this check cannot read: ${run}`);
+  }
+  // rustc's own codegen-units / LTO switches, wherever they ride: RUSTFLAGS, `cargo rustc --`, a
+  // cargo config's rustflags.
+  const rustflags = 'export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$HOME=~"';
+  has(linkProfileFindings(scripts('build-linux.sh', plant(linux, rustflags, `${rustflags}\nexport RUSTFLAGS="$RUSTFLAGS -Ccodegen-units=16"`))), '-Ccodegen-units=16');
+  has(linkProfileFindings(scripts('build-windows-cross.sh', plant(cross, rustflags, `${rustflags}\nexport RUSTFLAGS="$RUSTFLAGS -C codegen_units=16"`))), '-C codegen_units=16');
+  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, nai, `          cargo rustc --release -- --codegen=lto=off\n${nai}`) }), '--codegen=lto=off');
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '[build]\nrustflags = ["-Clto=off"]\n']] }), 'passes rustc a link flag');
+  // The flag and its value as two items of the list, on one line or on two (a trailing comment and a
+  // comment line between them change nothing), in a cargo config or a heredoc that writes one.
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '[build]\nrustflags = ["-C", "codegen-units=16"]\n']] }), 'passes rustc a link flag');
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '[build]\nrustflags = [\n  "-C",\n  "lto=off",\n]\n']] }), 'passes rustc a link flag over the profile\'s: "-C", "lto=off",');
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['src-tauri/.cargo/config.toml', "[build]\nrustflags = [\n  '-C', # rustc\n  # thin\n  'codegen-units=16',\n]\n"]] }), "'codegen-units=16',");
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '[build]\nrustflags = [\n  "--codegen",\n  "lto=off",\n]\n']] }), '"--codegen", "lto=off",');
+  has(linkProfileFindings(scripts('build-linux.sh', `${linux}\ncat > .cargo/config.toml <<'EOF'\n[build]\nrustflags = [\n  "-C",\n  "lto=off",\n]\nEOF\n`)), 'build-linux.sh: passes rustc a link flag');
+  has(linkProfileFindings(scripts('build-linux.sh', `${linux}\nexport RUSTFLAGS="-C lto"\n`)), 'RUSTFLAGS="-C lto"');
+  // Negative controls: a comment that names each shape, and a key=value `--config` with no profile
+  // in it, are not reported.
+  assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', `${linux}\n# never: -Ccodegen-units=16, profile = { release = {} }, --config thin.toml\n`)), []);
+  assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', "cargo tauri build --config 'net.git-fetch-with-cli=true' --features"))), []);
+  // Another profile than release, on either side of tauri's `--`, and tauri's debug build.
+  for (const run of [
+    'cargo tauri build --debug',
+    'npx tauri build -d --features radio',
+    'cargo tauri build -- --profile dev',
+    'cargo tauri build -- --profile=release-thin',
+    '"$CARGO" build --profile "dev"',
+    'cross build --profile ci',
+    'test -d target && cargo tauri build --debug',
+    'cargo tauri build -vd',
+    'cargo tauri build -dv',
+    'cargo tauri build -db deb',
+    "cargo tauri build '-d'",
+    'cargo build "--profile" dev',
+    "cargo build --profile 'dev'",
+    'npm run tauri build -- --debug',
+    'cargo tauri build -dtx86_64-unknown-linux-gnu',
+    'cargo tauri build -df=radio',
+    'cargo tauri build -dfradio,custom-protocol',
+    'cargo tauri build -vdbdeb,appimage',
+    'cargo tauri -v build -d',
+    'cargo tauri --verbose build -d',
+    'cargo tauri "build" -d',
+    'npx @tauri-apps/cli build -d',
+    'npm run tauri -- build -d',
+    'cargo tauri bundle -d',
+    'cargo-tauri build -d',
+    'node_modules/.bin/tauri build -d',
+    'cargo "tauri" build -d',
+  ]) {
+    has(linkProfileFindings(scripts('build-linux.sh', `${linux}\n${run}\n`)), `build-linux.sh: builds with another profile than release: ${run}`);
+  }
+  has(linkProfileFindings({ ...LINK, workflows: [[path.basename(WORKFLOW), plant(TEXT, '/tmp/rustup-init -y', 'cargo tauri build --debug\n          /tmp/rustup-init -y')]] }), 'release.yml: builds with another profile than release');
+  has(linkProfileFindings({ ...LINK, docker: `${DOCKERFILE}\nRUN cargo build --profile dev\n` }), 'Dockerfile.pi: builds with another profile than release');
+  // A Dockerfile.pi edit that rewrites the build script into a debug build.
+  has(linkProfileFindings({ ...LINK, docker: `${DOCKERFILE}\nRUN sed -i 's/tauri build/tauri build -d/' scripts/build-linux.sh\n` }), "Dockerfile.pi: builds with another profile than release: RUN sed -i 's/tauri build/tauri build -d/'");
+  // A tauri runner in any tauri config the CLI reads: the object form in a platform file, the string
+  // form in tauri.conf.json, and Tauri.toml's key and table.
+  assert.ok(LINK.tauriConfigs.some(([f]) => f === path.join('src-tauri', 'tauri.conf.json')), 'src-tauri/tauri.conf.json is not read');
+  for (const f of ['tauri.conf.json', 'tauri.linux.conf.json', 'tauri.windows.conf.json5', 'Tauri.toml', 'Tauri.macos.toml']) {
+    assert.ok(TAURI_CONFIG_NAME.test(f), `a tauri config the CLI reads is not read: ${f}`);
+  }
+  for (const f of ['tauri.conf.json.bak', 'my-tauri.conf.json', 'Cargo.toml']) assert.ok(!TAURI_CONFIG_NAME.test(f), `not a tauri config: ${f}`);
+  const [, tauriConf] = LINK.tauriConfigs.find(([f]) => f === path.join('src-tauri', 'tauri.conf.json'));
+  for (const [file, text] of [
+    ['src-tauri/tauri.linux.conf.json', '{\n  "build": {\n    "runner": { "cmd": "cargo", "args": ["--profile", "dev"] }\n  }\n}\n'],
+    ['src-tauri/tauri.conf.json', tauriConf.replace(/"build"\s*:\s*\{/, '"build": {\n    "runner": "ci/thin-cargo",')],
+    ['src-tauri/Tauri.toml', '[build]\nrunner = { cmd = "cargo", args = ["--profile", "dev"] }\n'],
+    ['src-tauri/Tauri.toml', '[build.runner]\ncmd = "cargo"\nargs = ["--profile", "dev"]\n'],
+    ['src-tauri/Tauri.toml', '[build]\nrunner.args = ["--profile", "dev"]\n'],
+    ['src-tauri/Tauri.toml', 'build.runner.args = ["--profile", "dev"]\n'],
+  ]) {
+    has(linkProfileFindings({ ...LINK, tauriConfigs: [...LINK.tauriConfigs, [file, text]] }), `${file}: sets a tauri runner`);
+  }
+  // A key that only holds the word, and the word as a value or in prose, are not a runner.
+  assert.deepEqual(linkProfileFindings({ ...LINK, tauriConfigs: [...LINK.tauriConfigs, ['src-tauri/tauri.linux.conf.json', '{\n  "testRunner": "x",\n  "testrunner": "x",\n  "runnerArgs": "x",\n  "kind": "runner",\n  "note": "the runner."\n}\n']] }), []);
+  // The release profile by name (quoted too), rustup's own profile, `-d` outside a tauri CLI command
+  // (even one that names `.cargo`, a `src-tauri` path or a `tauri-…` directory), and ci.yml's
+  // branch runs, which may build however they like.
+  assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', `${linux}\ncargo build --profile release\ncargo tauri build -bdeb\ncargo tauri build -fradio\ncargo tauri build -b deb -t x86_64-unknown-linux-gnu\ncargo build --profile "release"\ncargo build --profile 'release'\ncargo tauri build -- --profile=release\ninstall -d "$REPO/src-tauri/resources/hamlib"\ninstall -d "$REPO/vendor/tauri-plugin-x/res"\ncp -d lib.so src-tauri/resources/\nfind "$REPO/src-tauri/target/release/bundle/appimage" -name '*.AppImage.sig' -delete 2>/dev/null || true\nfind "$REPO/src-tauri/x" -name '*.sig' -delete\nrustup toolchain install 1.93.1 --profile minimal && cargo tauri build\nunzip -d out x.zip; cargo tauri build\ninstall -d "$HOME/.cargo/bin"\n`)), []);
+  assert.deepEqual(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, nai, `          cargo test --profile dev\n${nai}`) }), []);
+  // A git `-C <dir>` whose name starts with a flag's word, a shell's `-c` and a checksum's `-c`, and a
+  // multi-line list whose `-C` takes another value.
+  assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', `${linux}\ngit -C lto-src status\ngit -C codegen-units.d log\n`)), []);
+  assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', `${linux}\nsh -c 'cargo tauri build --features radio'\necho "$sha  cargo.tgz" | sha256sum -c -\n`)), []);
+  assert.deepEqual(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '[build]\nrustflags = [\n  "-C",\n  "target-cpu=native",\n]\n']] }), []);
 });

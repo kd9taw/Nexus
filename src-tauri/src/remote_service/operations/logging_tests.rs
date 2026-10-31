@@ -36,7 +36,13 @@ fn the_shacks_commands_find_their_row_off_the_lock_and_check_it_under_it() {
         let row = e.stored_log().into_iter().find(|r| r.call == call);
         crate::logged_qso(&row.unwrap())
     };
-    let card = |id| vec![tempo_core::logbook::LogOp::MarkQslCard { id, received: true }];
+    let card = |id| {
+        vec![tempo_core::logbook::LogOp::MarkQslCard {
+            id,
+            received: true,
+            date_unix: 1_700_000_000,
+        }]
+    };
     let comment = |text: &str| {
         let mut e = f.engine.lock().unwrap();
         let mut r = e

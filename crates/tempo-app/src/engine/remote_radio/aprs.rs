@@ -1,14 +1,15 @@
 //! Remote APRS tune: the desktop's [`Engine::aprs_tune`] (the APRS cockpit's channel pick — 2 m FM
 //! simplex on a regional APRS channel) through the existing readback transaction.
 //!
-//! A browser may name only one of the regional APRS channels; this is the APRS pick, never a
+//! A browser may name only one of the cockpit's APRS channels; this is the APRS pick, never a
 //! general 2 m tune. The tune commits only after the owning CAT worker reads back the dial, FM and
 //! the simplex, toneless configuration APRS needs. Nothing here arms, keys or queues an APRS
 //! transmission, and the cockpit's entry auto-tune never reaches this path.
 use super::*;
 
-/// The regional 2 m APRS channels in Hz: the same seven the cockpit's channel picker offers.
-pub(super) const APRS_CHANNELS_HZ: [u64; 7] = [
+/// The 2 m APRS channels in Hz: the same eight the cockpit's channel picker offers, the seven
+/// regional terrestrial channels and the ISS digipeater.
+pub(super) const APRS_CHANNELS_HZ: [u64; 8] = [
     144_390_000,
     144_800_000,
     145_175_000,
@@ -16,6 +17,7 @@ pub(super) const APRS_CHANNELS_HZ: [u64; 7] = [
     144_660_000,
     144_930_000,
     145_570_000,
+    145_825_000,
 ];
 
 impl Engine {

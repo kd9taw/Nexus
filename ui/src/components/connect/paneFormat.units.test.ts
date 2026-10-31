@@ -63,6 +63,25 @@ describe('the Getting Out Basic line', () => {
     expect(getoutLine(ctx('imperial', { getout: furthestOnly }))).toBe('2 hearing you — furthest 600 mi.')
     expect(getoutLine(ctx('metric', { getout: furthestOnly }))).toBe('2 hearing you — furthest 965 km.')
   })
+
+  // A Start fresh time narrows the count, so the sentence says from when — with a count as well as
+  // with none.
+  it('names the Start fresh time whenever the count is narrowed', () => {
+    const getoutSince = Date.UTC(2026, 9, 30, 14, 5, 30) / 1000
+    expect(getoutLine(ctx('metric', { getout, getoutSince }))).toBe(
+      '2 hearing you since 14:05:30 UTC — strongest toward NE (~965 km); little/nothing to the N/SE/S/SW/W/NW.',
+    )
+    const furthestOnly: GettingOut = { count: 2, maxKm: 965, reports: [] }
+    expect(getoutLine(ctx('metric', { getout: furthestOnly, getoutSince }))).toBe(
+      '2 hearing you since 14:05:30 UTC — furthest 965 km.',
+    )
+    expect(getoutLine(ctx('metric', { getout: { count: 0, maxKm: 0, reports: [] }, getoutSince }))).toBe(
+      'No reception reports since 14:05:30 UTC yet — call CQ, then watch who hears you.',
+    )
+    expect(getoutLine(ctx('metric', { getout: furthestOnly, getoutSince: null })), 'control: no start').toBe(
+      '2 hearing you — furthest 965 km.',
+    )
+  })
 })
 
 describe('the opening Basic lines', () => {

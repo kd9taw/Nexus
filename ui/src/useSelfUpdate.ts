@@ -79,6 +79,14 @@ interface UpdaterHandle {
   downloadAndInstall?: (cb?: (ev: { event: string; data?: { contentLength?: number; chunkLength?: number } }) => void) => Promise<void>
   download?: (cb?: (ev: { event: string; data?: { contentLength?: number; chunkLength?: number } }) => void) => Promise<void>
   install?: () => Promise<void>
+  close?: () => Promise<void>
+}
+
+/** Free an `Update` the plugin holds. Each `check()` makes one, and a downloaded installer stays
+ * in the plugin's memory until its `Update` is closed. Best-effort: there is nothing to do about
+ * a close that fails. */
+function release(up: UpdaterHandle | null | undefined) {
+  void up?.close?.().catch(() => {})
 }
 
 function updaterApi(): { check: () => Promise<UpdaterHandle | null> } | null {
@@ -109,6 +117,18 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
   const [error, setError] = useState<string | null>(null)
   const [held, setHeld] = useState<SelfUpdate['held']>(null)
   const handle = useRef<UpdaterHandle | null>(null)
+  /// The version `handle` holds while its download is on its way or done (null when it failed),
+  /// so the hourly re-check neither downloads it again nor drops a download waiting for Install.
+  const fetched = useRef<string | null>(null)
+  /// Updates whose download is still running. Closing one frees nothing: the plugin's download
+  /// goes on in Rust and its bytes land in memory when it ends, so its own run closes it then.
+  const downloading = useRef(new Set<UpdaterHandle>())
+  const free = (up: UpdaterHandle | null) => {
+    if (up && !downloading.current.has(up)) release(up)
+  }
+  /// Install was pressed and has not failed: a re-check stands aside, so the press installs the
+  /// `Update` it was made on and not a newer one found meanwhile that has not downloaded yet.
+  const pressed = useRef(false)
   // Which channel produced the pending update — so `install` uses the matching install path. The
   // beta path (Rust `check_beta_update`/`install_beta_update`) points the updater at a
   // pre-release manifest; the stable path (the plugin's own JS `handle`) is left exactly as it
@@ -188,18 +208,34 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
       }
       isBeta.current = false
       let found = false
+      let up: UpdaterHandle | null = null
       try {
-        const up = await api.check()
-        if (!alive) return 'cancelled'
+        up = await api.check()
+        if (!alive) {
+          release(up)
+          return 'cancelled'
+        }
         if (!up?.available) {
           told?.({ kind: 'upToDate' })
           return 'answered'
         }
         // Honour a dismissal for THIS version — the hourly tick must not resurrect a banner
         // the operator just closed. A NEWER version than the dismissed one still lands.
-        if (dismissed.current != null && (up.version ?? '') === dismissed.current) return 'answered'
+        if (dismissed.current != null && (up.version ?? '') === dismissed.current) {
+          release(up)
+          return 'answered'
+        }
+        // The version already downloaded, or on its way: this check's `Update` would be a second
+        // copy of the whole installer. Keep the first, and leave the banner as it is.
+        // Install pressed: what it installs is decided.
+        if (pressed.current || (handle.current && fetched.current === (up.version ?? ''))) {
+          release(up)
+          return 'answered'
+        }
         found = true
+        free(handle.current) // a newer version replaces the one waiting: free its download
         handle.current = up
+        fetched.current = up.version ?? ''
         setVersion(up.version ?? null)
         setPhase('available')
         // Download IMMEDIATELY and silently. Downloading changes nothing on disk that matters
@@ -218,14 +254,22 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
         told?.({ kind: 'downloading', version: up.version ?? null })
         let total = 0
         let done = 0
-        await dl((ev) => {
-          if (ev.event === 'Started') total = ev.data?.contentLength ?? 0
-          if (ev.event === 'Progress') {
-            done += ev.data?.chunkLength ?? 0
-            setProgress({ done, total })
-          }
-        })
+        downloading.current.add(up)
+        try {
+          await dl((ev) => {
+            if (ev.event === 'Started') total = ev.data?.contentLength ?? 0
+            if (ev.event === 'Progress') {
+              done += ev.data?.chunkLength ?? 0
+              setProgress({ done, total })
+            }
+          })
+        } finally {
+          downloading.current.delete(up)
+          // Replaced, put away or unmounted while it ran: its bytes exist only now, so free them now.
+          if (handle.current !== up) release(up)
+        }
         if (!alive) return 'cancelled'
+        if (handle.current !== up) return 'answered' // replaced or put away meanwhile
         setPhase('ready')
         retireDownloadPrompt()
         return 'answered'
@@ -240,6 +284,11 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
         if (!alive) return 'cancelled'
         // eslint-disable-next-line no-console
         console.warn('nexus: update check failed (silent):', e)
+        if (found && handle.current !== up) return 'answered' // replaced or put away meanwhile
+        if (found) fetched.current = null // the next check downloads it again
+        // A check that failed (offline) leaves an update already downloaded, or on its way, as it
+        // is: the download is still good, and Install still works.
+        else if (fetched.current != null) return 'answered'
         if (found && (told || asked.current)) {
           setError(String(e))
           setPhase('error')
@@ -276,6 +325,15 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
     // Re-run when the channel changes: flipping the beta toggle switches which feed is checked.
   }, [betaEnabled, launch, routeOnce])
 
+  // Unmounting frees a download still held, as a replaced or dismissed one is freed.
+  useEffect(
+    () => () => {
+      free(handle.current)
+      handle.current = null
+    },
+    [],
+  )
+
   // Keep the refusal reason current while an update is waiting, so the button explains itself
   // the moment the radio goes idle rather than after the next click.
   useEffect(() => {
@@ -303,16 +361,19 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
 
   const go = useCallback((confirmed: boolean) => {
     if (phase !== 'ready') return
+    pressed.current = true
     // Re-ask at the instant of the press. The polled value is for DISPLAY; this is the decision,
     // because the radio can go busy between the last poll and the click.
     void Promise.all([updateInstallBlock(), confirmed ? null : clientStatus().catch(() => null)])
       .then(async ([why, client]) => {
         if (why) {
+          pressed.current = false
           setBlockReason(why)
           return
         }
         const hold = holdFor(client, version)
         if (hold) {
+          pressed.current = false
           setHeld(hold)
           return
         }
@@ -346,11 +407,14 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
           // process mid-install(), so this line is never reached there.
           await restartApp()
         } catch (e) {
+          pressed.current = false
+          fetched.current = null // a failed install is downloaded afresh by the next check
           setError(String(e))
           setPhase('error')
         }
       })
       .catch((e) => {
+        pressed.current = false
         // The operator pressed Install — a failure here IS theirs to know about.
         setError(String(e))
         setPhase('error')
@@ -361,6 +425,10 @@ export function useSelfUpdate(betaEnabled: boolean): SelfUpdate {
 
   const dismiss = useCallback(() => {
     dismissed.current = version
+    // The download is not kept for a version put away: "Check for updates" fetches it again.
+    free(handle.current)
+    handle.current = null
+    fetched.current = null
     setPhase('idle')
   }, [version])
 

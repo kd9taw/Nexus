@@ -200,7 +200,7 @@ password and no encryption, which is why it stays on this computer.
   **Audio** did not open. Check Nexus's audio settings, or untick **Use TCI
   Audio** and give WSJT-X the radio's own audio device, as you would without
   Nexus.
-- **Settings ▸ Logging & Connectors ▸ Connections** keeps a Connection log;
+- **Settings ▸ Services ▸ Connections** keeps a Connection log;
   the server's own lines there say which programs connected and what Nexus
   refused them.
 

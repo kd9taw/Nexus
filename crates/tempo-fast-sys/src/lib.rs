@@ -831,6 +831,10 @@ extern "C" {
         la7final: c_int, // 1 = authoritative pass (a7 save + replay); 0 = early pass
         lft8apon: c_int, // nonzero = AP on (WSJT-X "Enable AP"); 0 also skips the a7 replay
         lapcqonly: c_int, // nonzero = AP restricted to the CQ hypothesis (iaptype 1)
+        // nonzero = a Special Operating Activity is on (Contest mode, or a Hound): rover (`/R`)
+        // and `TU; ` decodes are kept. 0 drops them, as WSJT-X does with no activity
+        // (`ft8b.f90:452-455`).
+        lactivity: c_int,
         out: *mut Ft8DecodeT,
         max_out: c_int,
     ) -> c_int;
@@ -853,6 +857,7 @@ extern "C" {
         la7final: c_int,
         lft8apon: c_int,
         lapcqonly: c_int,
+        lactivity: c_int,
         out: *mut Ft8DecodeT,
         max_out: c_int,
         cb: Option<DecodeCallback>,
@@ -882,6 +887,7 @@ extern "C" {
         la7final: c_int,
         lft8apon: c_int,
         lapcqonly: c_int,
+        lactivity: c_int,
         out: *mut Ft8DecodeT,
         max_out: c_int,
         cb: Option<DecodeCallback>,

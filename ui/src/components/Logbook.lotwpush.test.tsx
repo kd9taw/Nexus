@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
-import { render, waitFor, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, waitFor, cleanup, fireEvent } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import type { LogQuestion } from '../features/logAnswers'
 import { uploadLotwReportByIds } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
+import { menuItem, openRowMenu } from './Logbook.rowMenu.testkit'
 
 // Same jsdom shims the sibling Logbook suites need: react-virtual measures the scroll
 // element and rows via offsetHeight + a ResizeObserver, neither of which jsdom implements.
@@ -71,10 +72,11 @@ async function lotwButton(over: Record<string, unknown> = {}) {
   engineLog.mockResolvedValue(oneContact(over))
   const { container } = render(<Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />)
   await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
-  // Positive control: the sibling ClubLog push renders on the same row, so a missing LoTW
-  // button below is a real absence, not a row that failed to render.
-  expect(screen.getByRole('button', { name: 'Push K0ABC to ClubLog' }).textContent).toBe('CL')
-  return screen.findByRole('button', { name: t('logbook.row.pushLotw.aria', { call: 'K0ABC' }) })
+  const menu = await openRowMenu('K0ABC')
+  // Positive control: the sibling Club Log upload is in the same menu, so a missing LoTW item
+  // below is a real absence, not a menu that failed to render.
+  expect(menuItem(menu, t('logbook.row.menu.clublog'))).toBeTruthy()
+  return menuItem(menu, t('logbook.row.menu.lotw'))
 }
 
 /** The key the row asked by: the id the Logbook's page answer handed it for this contact. */
@@ -88,9 +90,9 @@ describe('Logbook row — upload one contact to LoTW', () => {
   it('sits with the other services, labelled LoTW, and uploads that contact by its id', async () => {
     vi.mocked(uploadLotwReportByIds).mockResolvedValue({ dispatched: 1, outcome: 'pending' })
     const btn = await lotwButton()
-    expect(btn.textContent).toBe('LoTW')
-    // Beside the other uploads in the cluster: right after WRL.
-    expect(btn.previousElementSibling?.textContent).toBe('WRL')
+    expect(btn.textContent).toContain('LoTW')
+    // Beside the other uploads in the menu: right after World Radio League.
+    expect(btn.previousElementSibling?.textContent).toBe(t('logbook.row.menu.wrl'))
     fireEvent.click(btn)
     await waitFor(() => expect(uploadLotwReportByIds).toHaveBeenCalledTimes(1))
     const sent = vi.mocked(uploadLotwReportByIds).mock.calls[0][0]

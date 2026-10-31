@@ -256,6 +256,47 @@ fn a_stop_on_an_ft710_or_an_ftx1_unkeys_in_time_behind_its_playback_stops() {
     }
 }
 
+/// ⛔ A STOP TX WHILE A LATE KEY'S ANSWER IS OWED STILL SENDS EVERY STOP. When rigctld holds a key
+/// past its deadline, the connection is kept and its answer owed (`Rig::command_lines`). The CAT
+/// CW stop and an FT-710's playback stops then waited out that answer and were not sent at all;
+/// they go out at once behind the key, as the unkey does, and all of them reach the radio after it.
+#[test]
+fn a_stop_while_a_late_keys_answer_is_owed_still_sends_every_stop() {
+    let engine = cw_engine(1049, "cat", |_| {});
+    let (addr, log) = logging_rigctld(|l| {
+        if l == "T 1" {
+            std::thread::sleep(Duration::from_millis(3_000)); // rigctld holding the key
+            None
+        } else if l.starts_with("W KY") {
+            Some("\0".to_string())
+        } else {
+            None
+        }
+    });
+    let mut rig = Rig::rigctld(&addr);
+    let mut backend = MockBackend::new();
+    let mut state = loop_state_for(&engine);
+    step(&mut state, &engine, &mut backend, &mut rig, 100.0);
+    let from = log.lock().unwrap().len();
+    assert!(rig.ptt(true).is_err(), "premise: the key's answer is late");
+    state.tx_until_ms = Some(60_000.0);
+    engine.lock().unwrap().halt_tx();
+    step(&mut state, &engine, &mut backend, &mut rig, 140.0);
+    let until = std::time::Instant::now() + Duration::from_secs(5);
+    let mut after = lines_since(&log, from);
+    while after.len() < 5 && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+        after = lines_since(&log, from);
+    }
+    for stop in ["\\stop_morse", "W KY00; 0", "W KY10; 0", "T 0"] {
+        let at = after.iter().position(|l| l == stop);
+        assert!(
+            at.is_some_and(|at| at > 0) && after[0] == "T 1",
+            "{stop} must reach the radio, after the key: {after:?}"
+        );
+    }
+}
+
 /// ⭐ THE WINKEYER IS CLEARED BEFORE THE RADIO IS ASKED TO STOP ITS CW. K1EL's Clear Buffer
 /// (`0A`) "will cancel any Morse character in progress immediately ending it in midstream" (WK3
 /// datasheet, p. 10). It is one byte on a serial port Nexus owns. It used to wait behind the CAT

@@ -13,6 +13,7 @@ import { Logbook } from './Logbook'
 import { ConfirmHost } from '../confirm'
 import * as api from '../api'
 import { t } from '../i18n'
+import { chooseRowAction } from './Logbook.rowMenu.testkit'
 import { questionKey, type LogQuestion } from '../features/logAnswers'
 
 // THE BUDGET (2026-10-09). The slowest case here, "reloads when logTick moves, once per burst, and not for…", takes
@@ -84,7 +85,8 @@ afterEach(() => {
 describe('the shack addresses a contact by the id of the row it saw, never its position', () => {
   it('deletes the row the operator confirmed', async () => {
     const { container, findByRole } = await renderLog(three())
-    fireEvent.click(container.querySelector('button[aria-label="Delete K1ABC"]') as HTMLButtonElement)
+    expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull()
+    await chooseRowAction('K1ABC', t('logbook.row.menu.delete'))
     fireEvent.click(await findByRole('button', { name: t('logbook.delete.confirm') }))
     await waitFor(() => expect(api.deleteQsoById).toHaveBeenCalled())
     expect(api.deleteQsoById).toHaveBeenCalledWith(expect.objectContaining({ id: 'id-K1ABC' }))

@@ -52,11 +52,11 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('the coverage-gap note points at the RepeaterBook token (#358)', () => {
-  it('names Settings ▸ Logging & Connectors ▸ Confirmations in every language, never Integrations', () => {
+  it('names Settings ▸ Services ▸ Confirmations in every language, never Integrations', () => {
     for (const [lang, cat] of [['en', EN], ['de', DE], ['es', ES], ['fr', FR], ['ja', JA]] as const) {
       const c = cat as Record<string, string>
       const note = c['program.coverageGap']
-      expect(note, lang).toContain(`${c['settings.tabs.logging']} ▸ ${c['settings.confirmations.legend']}`)
+      expect(note, lang).toContain(`${c['settings.tabs.services']} ▸ ${c['settings.confirmations.legend']}`)
     }
     expect(EN['program.coverageGap']).not.toMatch(/Settings ▸ Integrations</)
   })
@@ -66,11 +66,11 @@ describe('the coverage-gap note points at the RepeaterBook token (#358)', () => 
     const note = await showGap(open)
     const link = note.querySelector('button')
     expect(link, 'the place is a button').toBeTruthy()
-    expect(link!.textContent).toBe('Settings ▸ Logging & Connectors ▸ Confirmations')
+    expect(link!.textContent).toBe('Settings ▸ Services ▸ Confirmations')
     fireEvent.click(link!)
     expect(open).toHaveBeenCalledWith('confirmations')
     expect(resolveTarget('confirmations'), 'the target resolves to the Confirmations section').toEqual({
-      tab: 'logging',
+      tab: 'services',
       section: 'confirmations',
     })
   })

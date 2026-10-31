@@ -1626,7 +1626,7 @@ mod tests {
                 log.mark_qsl_sent(i % n, Some(QslVia::Bureau), 1);
             }
             Step::QslCard(i) if n > 0 => {
-                log.mark_qsl_card(i % n, true);
+                log.mark_qsl_card(i % n, true, 1_700_000_000);
             }
             Step::SatTag(i, on) if n > 0 => {
                 log.set_sat_tag(i % n, on.then_some("SO-50"));

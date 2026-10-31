@@ -73,27 +73,10 @@
 <pre id="out"></pre>
 <script>
 // ── THE REAL LABELS (Logbook.tsx). Keep in step with the constants there. ───────────────
-const QRZ_LABEL = 'QRZ', QRZ_CORRECT_LABEL = 'QRZ✎', CLUBLOG_LABEL = 'CL';
-const HRDLOG_LABEL = 'HL', WRL_LABEL = 'WRL', LOTW_LABEL = 'LoTW', QSL_MENU_LABEL = 'QSL▸';
-const SAT_MENU_LABEL = 'SAT▸';
-// The buttons in render order. `control` true, which is the widest case and the one the
-// operator runs: the seven push buttons, then the QSL menu, then edit and delete.
-const BTNS = ['📢', QRZ_LABEL, QRZ_CORRECT_LABEL, CLUBLOG_LABEL, HRDLOG_LABEL, WRL_LABEL, LOTW_LABEL];
-const TAIL = ['✎', '✕'];
-// Every option the menu can carry at once, in the widest catalog we ship. The en strings
-// are what an operator sees by default; de is the widest of the four.
-const OPTS = {
-  en: [QSL_MENU_LABEL, 'Bureau', 'Direct', 'Electronic', 'QSL NOT sent', 'Card received', 'Card NOT received'],
-  de: [QSL_MENU_LABEL, 'Büro', 'Direkt', 'Elektronisch', 'QSL NICHT gesendet', 'Karte erhalten', 'Karte NICHT erhalten'],
-};
-// The SATELLITE tag menu beside it. Its options are LoTW's own satellite names, which are
-// invariant tokens, plus the one prose entry that removes the tag — the widest option, and
-// the only one a catalog can grow.
-const SAT_OPTS = {
-  en: [SAT_MENU_LABEL, 'AO-10', 'AO-91', 'AO-123', 'ARISS', 'SO-50', 'TEV2-1', 'Not via satellite'],
-  de: [SAT_MENU_LABEL, 'AO-10', 'AO-91', 'AO-123', 'ARISS', 'SO-50', 'TEV2-1', 'Nicht über Satellit'],
-};
-
+// The row's two buttons, in render order: ✎ Edit and the ⋯ menu. Everything else the row can do
+// is an item in that menu, which is portaled out of the row and takes no width in it.
+const BTNS = ['✎', '⋯'];
+const OPTS = { en: [], de: [] };
 // The twelve default columns that precede the actions cell, with representative content —
 // the track sizing is `fr`-based, so what is IN the other cells does not move the actions
 // track, but the row has to be real for the grid to resolve at all. (Date and Time are two
@@ -111,8 +94,8 @@ const CELLS = [
 // strings). The sheet takes the row's tracks from `--log-cols`, which the Logbook sets from the
 // columns it renders, so this page sets it the same way. Narrow (`sm`/`xs`) the Logbook renders
 // only Call, Country, Band, QSL and Notes before the actions — by index into CELLS here.
-const COMPACT = '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(436px, 0.8fr)';
-const NARROW = '1fr 1.3fr 0.7fr 0.7fr 1fr minmax(436px, 0.8fr)';
+const COMPACT = 'minmax(96px, 1fr) 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr minmax(84px, 1fr) minmax(64px, 0.6fr) 0.9fr 0.7fr 1.4fr minmax(80px, 80px)';
+const NARROW = 'minmax(96px, 1fr) 1.3fr 0.7fr 0.7fr 1fr minmax(80px, 80px)';
 const NARROW_CELLS = [0, 1, 2, 10, 11];
 
 function buildRow(row, lang, narrow = false) {
@@ -131,24 +114,7 @@ function buildRow(row, lang, narrow = false) {
   act.className = 'log-cell log-rowactions';
   for (const label of BTNS) {
     const b = document.createElement('button');
-    b.type = 'button'; b.className = 'log-rowbtn'; b.textContent = label;
-    act.appendChild(b);
-  }
-  const sel = document.createElement('select');
-  sel.className = 'log-rowbtn'; sel.style.fontSize = '0.85em';
-  for (const o of OPTS[lang]) {
-    const op = document.createElement('option'); op.textContent = o; sel.appendChild(op);
-  }
-  act.appendChild(sel);
-  const satSel = document.createElement('select');
-  satSel.className = 'log-rowbtn'; satSel.style.fontSize = '0.85em';
-  for (const o of SAT_OPTS[lang]) {
-    const op = document.createElement('option'); op.textContent = o; satSel.appendChild(op);
-  }
-  act.appendChild(satSel);
-  for (const label of TAIL) {
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'log-rowbtn' + (label === '✕' ? ' danger' : '');
+    b.type = 'button'; b.className = 'log-rowbtn';
     b.textContent = label;
     act.appendChild(b);
   }
@@ -350,9 +316,6 @@ function run() {
   for (const w of [1024, 1366, 1920]) {
     rows.push(measure({ width: w, zoom: 1.0, viewport: classify(w), theme: 'dark', lang: 'en', resized: Math.floor(w / 2) }));
   }
-  // The widest catalog, at the floor — the QSL menu's options are translated prose.
-  rows.push(measure({ width: 1024, zoom: 1.0, viewport: classify(1024), theme: 'dark', lang: 'de' }));
-  rows.push(measure({ width: 1920, zoom: 1.0, viewport: classify(1920), theme: 'dark', lang: 'de' }));
   // THE FLOOR IS A FONT METRIC. Every sans face this box has, at the widest viewport scale
   // (--space-scale 1, i.e. md and up), so the floor can be set from the widest of them
   // rather than from whichever one fontconfig happened to serve.
@@ -361,12 +324,12 @@ function run() {
   }
   // CONTROL: a label four characters longer than any we ship. If `requiredW` does not move,
   // the measurement is not seeing the labels and nothing above is evidence.
-  BTNS[5] = 'WRLXXXX';
+  BTNS[1] = '⋯XXXX';
   const control = measure({ width: 1920, zoom: 1.0, viewport: 'md', theme: 'dark', lang: 'en' });
   // Name it, or the one deliberately-failing row reads as a real case that does not fit.
   control.case = 'CONTROL (label +4 chars, must NOT fit): ' + control.case;
   rows.push(control);
-  BTNS[5] = WRL_LABEL;
+  BTNS[1] = '⋯';
   document.getElementById('out').textContent = JSON.stringify(rows, null, 1);
   return rows;
 }

@@ -2,7 +2,8 @@
 //
 // "APRS uses DATA-FM" (#393, operator ruling): a PER-RADIO switch, off by default so nobody's
 // working APRS changes, offered only for a radio with a DATA-FM mode the engine knows (the
-// FT-991/991A, Hamlib 1035), with the hint that names the radio menu that makes it work. The
+// FT-991/991A, and the IC-7100, IC-9700, IC-705 and IC-905), with the hint that names the radio
+// menu that makes it work. The
 // engine side (only that model obeys it, repeater voice stays plain FM) is pinned in engine.rs.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
@@ -190,8 +191,20 @@ describe('APRS uses DATA-FM', () => {
     expect(sw.getAttribute('aria-checked')).toBe('true')
   })
 
+  it('is offered for an Icom with FM-D, off by default, with the DATA MOD hint', async () => {
+    activeIs(IC9700)
+    renderPanel()
+    await openAdvanced()
+    const sw = await screen.findByRole('switch', { name: /^APRS uses DATA-FM/ })
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    const text = sw.closest('.settings-field')!.textContent
+    expect(text).toContain('DATA MOD')
+    expect(text).not.toContain('077 FM PKT PORT SELECT')
+  })
+
   it('CONTROL: not offered on radios without a DATA-FM mode Nexus drives', async () => {
-    for (const radio of [FTDX10, IC9700]) {
+    const IC9100 = { ...IC9700, rigModel: 3068, rigModelName: 'Icom IC-9100' }
+    for (const radio of [FTDX10, IC9100]) {
       activeIs(radio)
       renderPanel()
       await openAdvanced()

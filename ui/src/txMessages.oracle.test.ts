@@ -147,7 +147,7 @@ describe('txMessages predicates vs the real WSJT-X regexes', () => {
     // The refused set is exactly the /P and /R rovers — if it empties, the two predicates have
     // collapsed into one and the narrowing has stopped meaning anything.
     expect(refused).toBeGreaterThan(100)
-    expect(packsBesideHash('F4CYH/P')).toBe(false)
-    expect(isStdCall('F4CYH/P')).toBe(true)
+    expect(packsBesideHash('K1ABC/P')).toBe(false)
+    expect(isStdCall('K1ABC/P')).toBe(true)
   })
 })

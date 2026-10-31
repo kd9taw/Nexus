@@ -633,10 +633,10 @@ describe('panes a vocabulary ships HIDDEN (#345: Phone Spots and Needed)', () =>
     for (const v of [RTTY_PANELS, panelState.PSK_PANELS]) {
       expect([...(v.defaultRemoved ?? [])], v.view).toEqual(['rfScope', 'recent', 'stats'])
     }
-    // JS8 is a grid cockpit, and FT arranges its columns (2026-10-07): the Stats pane and the six boxes of
-    // each ship hidden beside its RF scope pane.
+    // JS8 is a grid cockpit, and FT arranges its columns (2026-10-07): the Recent contacts pane, the Stats
+    // pane and the six boxes of each ship hidden beside its RF scope pane.
     expect([...(panelState.JS8_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', 'recent', 'stats', ...BOX_IDS])
-    expect([...(OPERATE_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', 'stats', ...BOX_IDS])
+    expect([...(OPERATE_PANELS.defaultRemoved ?? [])]).toEqual(['rfScope', 'recent', 'stats', ...BOX_IDS])
     for (const v of ALL_PANEL_VOCABULARIES) {
       for (const id of v.defaultRemoved ?? []) {
         expect(v.panelIds, `"${v.view}" hides "${id}", which is not in its vocabulary`).toContain(id)
@@ -833,17 +833,36 @@ describe('the Stats pane (2026-10-14): one id in every cockpit with a log entry,
 
 describe('the Recent contacts pane (2026-10-18): one id in every cockpit with a log entry form', () => {
   const WITH_FORM = [PHONE_PANELS, CW_PANELS, panelState.JS8_PANELS, RTTY_PANELS, panelState.PSK_PANELS]
+  // FT logs through a confirm dialog, not a form, and lists it too: at the foot of its side rail.
+  const WITH_RECENT = [...WITH_FORM, OPERATE_PANELS]
 
-  it('every cockpit with a log entry form lists it; FT (a confirm dialog) and SSTV do not', () => {
-    for (const v of WITH_FORM) expect(v.panelIds, v.view).toContain('recent')
-    expect(OPERATE_PANELS.panelIds).not.toContain('recent')
+  it('every cockpit with a log entry form lists it, and FT; SSTV does not', () => {
+    for (const v of WITH_RECENT) expect(v.panelIds, v.view).toContain('recent')
     expect(SSTV_PANELS.panelIds).not.toContain('recent')
   })
 
   it('every vocabulary ships it hidden, and a stored tick wins', () => {
     const empty = { v: 1 as const, state: {}, share: {} }
-    for (const v of WITH_FORM) expect(panelStateIn(v, empty, 'recent'), v.view).toBe('removed')
-    for (const v of WITH_FORM) expect(panelStateIn(v, { ...empty, state: { recent: 'docked' } }, 'recent'), v.view).toBe('docked')
+    for (const v of WITH_RECENT) expect(panelStateIn(v, empty, 'recent'), v.view).toBe('removed')
+    for (const v of WITH_RECENT) expect(panelStateIn(v, { ...empty, state: { recent: 'docked' } }, 'recent'), v.view).toBe('docked')
+  })
+
+  it('a stored FT record from before it keeps every other pane as it was', () => {
+    const stored = { v: 1 as const, state: { stations: 'removed' as const, rxfreq: 'docked' as const }, share: {} }
+    expect(panelStateIn(OPERATE_PANELS, stored, 'recent')).toBe('removed')
+    expect(panelStateIn(OPERATE_PANELS, stored, 'stations')).toBe('removed')
+    expect(panelStateIn(OPERATE_PANELS, stored, 'rxfreq')).toBe('docked')
+  })
+
+  it('in FT it stands at the foot of the side rail in both layouts, after its panes and before the boxes', () => {
+    for (const layout of ['classic', 'roster'] as const) {
+      const log = panelState.OPERATE_ARRANGE[layout].columns.log
+      const panes = log.filter((id) => !(BOX_IDS as readonly string[]).includes(id))
+      expect(panes[panes.length - 1], layout).toBe('recent')
+      expect(log.indexOf('recent'), layout).toBe(log.indexOf(BOX_IDS[0]) - 1)
+      const { a, b } = panelState.OPERATE_ARRANGE[layout].columns
+      expect([...a, ...b], layout).not.toContain('recent')
+    }
   })
 
   it('rides inside the log pane under the form, so ⊞ Arrange gives it no place of its own', () => {

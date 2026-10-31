@@ -152,7 +152,7 @@ afterEach(cleanup)
  *  there rather than somewhere they have to go and find. */
 async function resetButton() {
   renderPanel()
-  fireEvent.click(await screen.findByRole('tab', { name: 'Config' }))
+  fireEvent.click(await screen.findByRole('tab', { name: 'App' }))
   return await screen.findByRole('button', { name: 'Reset all settings…' })
 }
 
@@ -175,12 +175,13 @@ describe('Reset to factory defaults asks first, and the answer decides', () => {
   it('renders a real ampersand in the hint, not the literal characters &amp;', async () => {
     // React escapes text children itself, so an HTML entity stored in the CATALOG comes out as
     // the five literal characters. `en.ts` documents this at the onboarding nudge; the hint here
-    // names "Logging & Connectors" and would have shipped it as "Logging &amp; Connectors".
+    // named "Logging & Connectors" and would have shipped it as "Logging &amp; Connectors". It
+    // names the tab by its new name, Services, now.
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Config' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'App' }))
     const btn = await screen.findByRole('button', { name: 'Reset all settings…' })
     const hint = btn.closest('.settings-field')!.querySelector('.settings-hint')!.textContent ?? ''
-    expect(hint).toContain('Logging & Connectors')
+    expect(hint).toContain('individually under Services')
     expect(hint).not.toContain('&amp;')
   })
 

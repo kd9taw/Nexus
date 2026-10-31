@@ -20,7 +20,7 @@
 // fix measures a new list afresh while a row is open.
 //
 // jsdom lays nothing out, so this reads what the list itself decides: each drawn row's place (its
-// `translateY`) against the height the row really has. Rows are 43 px; a row whose note is open is
+// `translateY`) against the height the row really has. Rows are 53 px; a row whose note is open is
 // 120. The list learns heights the way it does in a browser — from its ResizeObserver, which this
 // test drives (a row mounting, or opening, is observed and measured). "As first drawn" is the list
 // before that report: what a browser paints in the frame the change lands in.
@@ -56,7 +56,7 @@ vi.mock('../api', () => {
 })
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn((run: () => Promise<unknown>) => run()) }))
 
-const ROW_PX = 43
+const ROW_PX = 53
 const OPEN_PX = 120
 
 /** The list's ResizeObservers (it keeps one on the scroller and one on the rows), driven by the
@@ -90,7 +90,7 @@ beforeAll(() => {
       this.o.els.clear()
     }
   } as unknown as typeof ResizeObserver
-  // A row is 43 px; a row whose note (or comment) is open is 120. The scroller is 600 px tall.
+  // A row is 53 px; a row whose note (or comment) is open is 120. The scroller is 600 px tall.
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
     configurable: true,
     get() {

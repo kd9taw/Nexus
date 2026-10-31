@@ -452,7 +452,7 @@ const CTX: PaneContext = {
     warning: '',
   } as unknown as PaneContext['amp'],
   rigBand: '20m',
-  scales: { r: 1, s: 0, g: 2, gTomorrow: 1, asOf: fx.NOW - 300 },
+  scales: { r: 1, s: 0, g: 2, gTomorrow: { level: 1, date: new Date((fx.NOW + 86400) * 1000).toISOString().slice(0, 10) }, asOf: fx.NOW - 300 },
   alerts: [{ productId: 'K05W', issued: fx.NOW - 3600, kind: 'warning', message: 'Geomagnetic K-index of 5 expected' }],
   muf: [
     { lat: 40, lon: -105, mufMhz: 21.4, fof2Mhz: 6.1, ageSecs: 600, confidence: 0.8 },

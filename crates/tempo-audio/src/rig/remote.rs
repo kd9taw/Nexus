@@ -10,7 +10,7 @@
 //! the station state before completing the operation. No caller may retry an
 //! uncertain transaction. Radio capability is not advertised by this module.
 
-use super::tuning::{passband_for, retune_passband, same_named_band};
+use super::tuning::{hamlib_mode_width, passband_for, retune_passband, same_named_band};
 use super::Rig;
 use std::time::Instant;
 use tempo_app::engine::remote_radio::{AgcSpeed, ReceiverDsp};
@@ -279,12 +279,11 @@ impl Rig {
         }
         let target = retune.target;
         let mode_changed = target.mode != before.mode;
-        self.remote_set_mode(
-            &target.mode,
-            retune_passband(&target.mode, mode_changed, before.dial_hz, target.dial_hz),
-            permission,
-        )
-        .map_err(|_| Reason::HardwareUnconfirmed)?;
+        // Each mode write carries the width this radio's Hamlib driver needs, as the shack's do.
+        let width = retune_passband(&target.mode, mode_changed, before.dial_hz, target.dial_hz);
+        let width = hamlib_mode_width(&target.mode, self.hamlib_model, width);
+        self.remote_set_mode(&target.mode, width, permission)
+            .map_err(|_| Reason::HardwareUnconfirmed)?;
         // A mode acknowledgement alone does not establish the convention in
         // which the following dial would be interpreted (CW pitch-offset rigs).
         if self.remote_reported_mode(permission)? != target.mode {
@@ -301,7 +300,9 @@ impl Rig {
                     return Err(Reason::HardwareUnconfirmed);
                 }
                 self.remote_require_idle(permission)?;
-                self.remote_set_mode(&target.mode, passband_for(&target.mode), permission)
+                let width =
+                    hamlib_mode_width(&target.mode, self.hamlib_model, passband_for(&target.mode));
+                self.remote_set_mode(&target.mode, width, permission)
                     .map_err(|_| Reason::HardwareUnconfirmed)?;
                 if self.remote_reported_mode(permission)? != target.mode {
                     return Err(Reason::HardwareUnconfirmed);

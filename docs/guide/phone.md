@@ -9,7 +9,7 @@ logbook and license privileges wired in.
 
 Phone ships enabled — the wizard turns everything on; there is no mode picker to
 miss it in. No goal profile enables it, though, so if you pick one in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features), switch Phone
+[Settings ▸ App ▸ Features](settings-reference.md#features), switch Phone
 back on there — or take **Everything (expert)**, which includes it.
 
 ![The Phone cockpit on 15 m: the dial reads 21.2000 MHz, the mode chips show AUTO-FM selected next to USB, LSB and FM, and a rig: USB badge beside them flags that the radio itself is still on USB. The bandscope fills the upper half — a panadapter trace over a scrolling waterfall, with the Full / Voice / Low / High span chips above it — while Band Activity and the six-slot voice keyer, F1 CQ through F6 Again, stack in the left column and the LOG pane runs down the right. PUSH TO TALK and its Lock tick sit in the dock across the bottom; Panels, the Power slider, Tune and Stop TX ride in the header above the scope.](../img/manual/phone-cockpit.webp)
@@ -274,7 +274,7 @@ QSO recording streams the rig's RX audio straight to a timestamped WAV on disk,
 with crash-safe headers and a 2-hour auto-stop, so a long ragchew or a dropped
 session never leaves you with a corrupt file.
 
-![Settings ▸ Logging & Connectors: a Save a WAV per logged QSO toggle, a sentence naming the folder the files land in, an Open recordings folder link, and beside them a Save received audio (.wav per period) dropdown reading None (default).](../img/manual/phone-qso-recording.webp)
+![Settings ▸ Services: a Save a WAV per logged QSO toggle, a sentence naming the folder the files land in, an Open recordings folder link, and beside them a Save received audio (.wav per period) dropdown reading None (default).](../img/manual/phone-qso-recording.webp)
 
 *Where the recordings go, in Nexus 1.10.3 — the path shown is this station's, and
 **Open recordings folder** opens yours. The per-period setting next to it is a
