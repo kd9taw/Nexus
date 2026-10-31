@@ -1109,7 +1109,9 @@ test('every job that stages the IOTA list sets up Node first', () => {
 //  - no tauri config in src-tauri (tauri.conf.json, a tauri.<platform>.conf.json the CLI merges over
 //    it, or their json5/Tauri.toml forms) carries a `runner` key: its `args` go onto cargo's command
 //    line on every `cargo tauri build|bundle` (`{"cmd":"cargo","args":["--profile","dev"]}`), the
-//    same route as an inline `--config` that is refused above;
+//    same route as an inline `--config` that is refused above. A TOML dotted key counts
+//    (`runner.args = …` under `[build]`, `build.runner.args = …` at the root); a quoted key part
+//    (`[build."runner"]`) or a key split across lines is out of its scope;
 //  - no .cargo/config* (repository root or src-tauri) carries any profile table, which cargo
 //    would apply over the manifest;
 //  - no workflow but ci.yml, no build script and not Dockerfile.pi builds with another profile than
@@ -1206,7 +1208,8 @@ function releaseProfile(cargoToml) {
 }
 const FAT_REFS = "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/'))";
 // A tauri config's `runner`, as a JSON key or a TOML key or table (`runner = …`, `[build.runner]`).
-const TAURI_RUNNER = /["']?\brunner["']?\s*[:=]|\[\s*build\s*\.\s*runner\b/;
+// A `.` counts only when a key part follows it, so prose like "runner." is not one.
+const TAURI_RUNNER = /["']?\brunner["']?\s*(?:[:=]|\.\s*["']?\w)|\[\s*build\s*\.\s*runner\b/;
 function linkProfileFindings({ workflows, buildScripts, cargoConfigs, tauriConfigs, ci, docker, cargo }) {
   const shipped = releaseProfile(cargo);
   const branch = { LTO: 'false', CODEGEN_UNITS: '16' };
@@ -1450,9 +1453,13 @@ test('only ci.yml land/topic runs leave the shipped link profile; release, main,
     ['src-tauri/tauri.conf.json', tauriConf.replace(/"build"\s*:\s*\{/, '"build": {\n    "runner": "ci/thin-cargo",')],
     ['src-tauri/Tauri.toml', '[build]\nrunner = { cmd = "cargo", args = ["--profile", "dev"] }\n'],
     ['src-tauri/Tauri.toml', '[build.runner]\ncmd = "cargo"\nargs = ["--profile", "dev"]\n'],
+    ['src-tauri/Tauri.toml', '[build]\nrunner.args = ["--profile", "dev"]\n'],
+    ['src-tauri/Tauri.toml', 'build.runner.args = ["--profile", "dev"]\n'],
   ]) {
     has(linkProfileFindings({ ...LINK, tauriConfigs: [...LINK.tauriConfigs, [file, text]] }), `${file}: sets a tauri runner`);
   }
+  // A key that only holds the word, and the word as a value or in prose, are not a runner.
+  assert.deepEqual(linkProfileFindings({ ...LINK, tauriConfigs: [...LINK.tauriConfigs, ['src-tauri/tauri.linux.conf.json', '{\n  "testRunner": "x",\n  "testrunner": "x",\n  "runnerArgs": "x",\n  "kind": "runner",\n  "note": "the runner."\n}\n']] }), []);
   // The release profile by name (quoted too), rustup's own profile, `-d` outside a tauri CLI command
   // (even one that names `.cargo`, a `src-tauri` path or a `tauri-…` directory), and ci.yml's
   // branch runs, which may build however they like.
