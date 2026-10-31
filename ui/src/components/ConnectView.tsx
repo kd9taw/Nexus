@@ -365,6 +365,10 @@ function persisted<T extends string>(key: string, allow: readonly T[], fallback:
 
 interface Props {
   myGrid: string
+  /** Settings' station power and antenna gain (PaneContext `stationPowerW` / `antGainDbi`); the hosts
+   *  with no settings to lend leave them out. */
+  stationPowerW?: number | null
+  antGainDbi?: number
   /** The station as the dashboard bar a layout puts over the view shows it — the main window's snapshot's
    *  call and grid, as the dashboard window's bar shows them. The Remote page reads the station's own;
    *  the hosts that draw their own bar need not pass it. */
@@ -423,6 +427,8 @@ interface Props {
 
 export function ConnectView({
   myGrid: nativeMyGrid,
+  stationPowerW,
+  antGainDbi,
   station: nativeStation,
   theme,
   stations,
@@ -550,6 +556,8 @@ export function ConnectView({
   useEffect(() => setDayScrub(null), [selectedCall])
   const { ctx, xrayNow } = usePaneContext({
     myGrid,
+    stationPowerW,
+    antGainDbi,
     theme,
     intent,
     prop,

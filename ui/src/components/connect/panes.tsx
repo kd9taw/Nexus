@@ -869,6 +869,8 @@ export const PANES: PaneDef[] = [
         onScrub={c.onDayScrub}
         myGrid={c.myGrid}
         engine={c.bandOutlook?.engine}
+        stationPowerW={c.stationPowerW}
+        antGainDbi={c.antGainDbi}
       />
     ),
   },

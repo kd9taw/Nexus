@@ -361,25 +361,36 @@ export function PathRegionsPane({
   onScrub,
   myGrid,
   engine,
+  stationPowerW,
+  antGainDbi,
 }: {
   needs: readonly NeedAlert[]
   scrub: number | null
   onScrub?: (s: DayScrub | null) => void
-  /** The operator's grid and the prediction engine: a change asks the shack for the sweep again,
-   * rather than showing the old one until the next 15-minute poll. */
+  /** The operator's grid, the prediction engine, the station power and the antenna gain (transmit
+   * plus receive) — what the sweep is computed from: a change asks the shack for it again, rather
+   * than showing the old one until the next 15-minute poll. */
   myGrid?: string
   engine?: string
+  stationPowerW?: number | null
+  antGainDbi?: number
 }) {
   const data = useFeed(PATH_REGIONS).value ?? null
   // The sweep is polled every 15 minutes; its "now" column follows the clock instead, checked
   // every minute, so it moves on at the hour as the station strip does.
   const nowHour = useUtcHour()
-  const settings = useRef({ myGrid, engine })
+  const settings = useRef({ myGrid, engine, stationPowerW, antGainDbi })
   useEffect(() => {
     const was = settings.current
-    settings.current = { myGrid, engine }
-    if (was.myGrid !== myGrid || was.engine !== engine) void refreshFeed(PATH_REGIONS)
-  }, [myGrid, engine])
+    settings.current = { myGrid, engine, stationPowerW, antGainDbi }
+    if (
+      was.myGrid !== myGrid ||
+      was.engine !== engine ||
+      was.stationPowerW !== stationPowerW ||
+      was.antGainDbi !== antGainDbi
+    )
+      void refreshFeed(PATH_REGIONS)
+  }, [myGrid, engine, stationPowerW, antGainDbi])
   const [mode, setMode] = useState<DayMode>('best')
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
   // The log's contacts per CQ zone, asked once (the shack keeps the fold); none on a surface that

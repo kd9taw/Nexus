@@ -244,6 +244,24 @@ describe('the region strips', () => {
     await waitFor(() => expect(asked()).toBe(before + 2))
   })
 
+  it('asks the shack again when the station power or the antenna gain changes', async () => {
+    const pane = (power: number | null, gain: number) => (
+      <PathRegionsPane needs={[]} scrub={null} myGrid="FN42" engine="p533" stationPowerW={power} antGainDbi={gain} />
+    )
+    const { container, rerender } = render(pane(100, 0))
+    await waitFor(() => expect(names(container).length).toBe(3))
+    const asked = () => vi.mocked(getPathRegions).mock.calls.length
+    const before = asked()
+    rerender(pane(100, 0))
+    expect(asked(), 'control: the same settings ask nothing').toBe(before)
+    rerender(pane(5, 0))
+    await waitFor(() => expect(asked()).toBe(before + 1))
+    rerender(pane(5, 6))
+    await waitFor(() => expect(asked()).toBe(before + 2))
+    rerender(pane(null, 6))
+    await waitFor(() => expect(asked()).toBe(before + 3))
+  })
+
   it('leaves out a region it has no name for', async () => {
     fx.regions = { engine: 'p533', computedUnix: T0, regions: [region('atlantis', [1]), region('eu', [14])] }
     const { container } = render(<PathRegionsPane needs={[]} scrub={null} />)
