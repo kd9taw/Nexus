@@ -15,14 +15,14 @@ use super::*;
 
 /// Phone at the shack on `session`, settled: the transmit slice in USB with native audio on, so the
 /// radio takes its transmit audio from its own mic, and nothing of ours keyed.
-fn shack(session: SimSession) -> FlexScene {
+pub(super) fn shack(session: SimSession) -> FlexScene {
     let mut s = FlexScene::with_session(true, session);
     shack_on(&mut s);
     s
 }
 
 /// Put `s` in Phone at the shack and wait until it has settled there.
-fn shack_on(s: &mut FlexScene) {
+pub(super) fn shack_on(s: &mut FlexScene) {
     {
         let mut e = s.engine.lock().unwrap();
         e.set_operating_mode("phone", false); // arms TX
@@ -33,12 +33,12 @@ fn shack_on(s: &mut FlexScene) {
 }
 
 /// Phone at the shack on the bundled radio, which reports the slice's mode back.
-fn phone() -> FlexScene {
+pub(super) fn phone() -> FlexScene {
     shack(reports(&["USB"]))
 }
 
 /// `session` with `command` answered with success and then `items`, in place of its own rule.
-fn with_rule(mut session: SimSession, command: &str, items: Vec<Item>) -> SimSession {
+pub(super) fn with_rule(mut session: SimSession, command: &str, items: Vec<Item>) -> SimSession {
     let rule = (
         Pattern::Exact(command.to_string()),
         vec![Rule {
@@ -52,12 +52,12 @@ fn with_rule(mut session: SimSession, command: &str, items: Vec<Item>) -> SimSes
     session
 }
 
-fn send(line: &str) -> Item {
+pub(super) fn send(line: &str) -> Item {
     Item::Send(line.to_string())
 }
 
 /// The interlock line for `state`, keyed by `source` under `handle` (`{h}`: our own).
-fn interlock(handle: &str, state: &str, source: &str) -> String {
+pub(super) fn interlock(handle: &str, state: &str, source: &str) -> String {
     format!(
         "S0|interlock tx_client_handle=0x{handle} state={state} reason= source={source} \
          tx_allowed=1 amplifier="
@@ -65,15 +65,25 @@ fn interlock(handle: &str, state: &str, source: &str) -> String {
 }
 
 /// The radio letting go of the transmitter: READY naming no client.
-const IDLE: &str =
+pub(super) const IDLE: &str =
     "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=";
 
 /// The bundled radio reporting its DAX source `ms` after Nexus writes it, instead of at once.
-fn slow_dax(ms: u64) -> SimSession {
+pub(super) fn slow_dax(ms: u64) -> SimSession {
     with_rule(
         reports(&["USB"]),
         "transmit set dax=1",
         vec![Item::Wait(ms), send("S0|transmit dax=1")],
+    )
+}
+
+/// The bundled radio reporting its DAX source back to the mic `ms` after Nexus writes it, instead
+/// of at once: the window after an over in which Nexus's own write of the mic is still in flight.
+pub(super) fn slow_mic_back(ms: u64) -> SimSession {
+    with_rule(
+        reports(&["USB"]),
+        "transmit set dax=0",
+        vec![Item::Wait(ms), send("S0|transmit dax=0")],
     )
 }
 
@@ -85,7 +95,7 @@ fn dax_word(line: &str) -> Option<&str> {
 /// What the radio saw from `since` on, over TCP and so in one order: Nexus's DAX transmit stream,
 /// the DAX source written and the radio's report of it, the keying commands, and the interlock's
 /// `idle` (READY naming no client).
-fn voice_trace(s: &FlexScene, since: Instant) -> Vec<String> {
+pub(super) fn voice_trace(s: &FlexScene, since: Instant) -> Vec<String> {
     s.log()
         .into_iter()
         .filter(|(at, _)| *at >= since)
@@ -108,7 +118,7 @@ fn voice_trace(s: &FlexScene, since: Instant) -> Vec<String> {
 
 /// When the radio first saw `want` (a command, or `radio dax=…` / `idle` as [`voice_trace`] names
 /// them) at or after `since`.
-fn seen_at(s: &FlexScene, since: Instant, want: &str) -> Option<Instant> {
+pub(super) fn seen_at(s: &FlexScene, since: Instant, want: &str) -> Option<Instant> {
     s.log()
         .into_iter()
         .filter(|(at, _)| *at >= since)
@@ -128,7 +138,7 @@ fn seen_at(s: &FlexScene, since: Instant, want: &str) -> Option<Instant> {
 /// the simulator listens on an ephemeral port, and a datagram another process on the machine still
 /// aims at that port lands in its log as well (seen once under load, with no VITA class, which
 /// every packet Nexus sends carries).
-fn dax_in(s: &FlexScene, since: Instant) -> Vec<(Instant, usize)> {
+pub(super) fn dax_in(s: &FlexScene, since: Instant) -> Vec<(Instant, usize)> {
     let log = s.log();
     let nexus: Vec<u16> = log
         .iter()
@@ -170,7 +180,7 @@ fn ptt_refused(s: &FlexScene) -> serde_json::Value {
 
 /// Run the loop until the radio has seen `want` after `since`, watching what the engine is told
 /// each tick: whether the radio has the mic, and whether the Phone screen shows the mic off.
-fn run_until_seen(
+pub(super) fn run_until_seen(
     s: &mut FlexScene,
     since: Instant,
     want: &str,
@@ -189,6 +199,21 @@ fn run_until_seen(
         std::thread::sleep(Duration::from_millis(20));
     }
     told
+}
+
+/// Run the loop until the radio has seen `want` (as [`voice_trace`] names it) `n` times after
+/// `since`.
+pub(super) fn run_until_count(s: &mut FlexScene, since: Instant, want: &str, n: usize) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while voice_trace(s, since).iter().filter(|t| *t == want).count() < n {
+        assert!(
+            Instant::now() < deadline,
+            "never saw {want} {n} times: {:?}",
+            voice_trace(s, since)
+        );
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// A message of `secs` at the keyer's 12 kHz.
@@ -926,6 +951,47 @@ fn a_ptt_held_through_a_message_never_holds_the_keyers_dax() {
     );
 }
 
+/// ⛔ A MESSAGE STARTED WHILE THE MIC IS COMING BACK. After a message, Nexus writes the radio's
+/// mic back; until the radio reports it, the radio still says DAX. A message sent in that window
+/// must not key on that stale DAX: the radio would get `xmit 1` after `transmit set dax=0` and, if
+/// it applies them in order, transmit its own mic (the room). It keys only once the radio has
+/// reported the mic and then DAX again. CONTROL: a message sent once the mic is reported back keys
+/// the same way.
+#[test]
+fn a_message_while_the_mic_is_coming_back_keys_only_on_dax_again() {
+    for quick in [true, false] {
+        let mut s = shack(slow_mic_back(400));
+        let since = Instant::now();
+        s.engine.lock().unwrap().send_voice(message()).unwrap();
+        if quick {
+            run_until_seen(&mut s, since, "transmit set dax=0");
+            assert!(
+                seen_at(&s, since, "radio dax=0").is_none(),
+                "premise: the mic's write is in flight"
+            );
+        } else {
+            run_until_seen(&mut s, since, "radio dax=0");
+            s.run(200);
+        }
+        s.engine.lock().unwrap().send_voice(message()).unwrap();
+        run_until_count(&mut s, since, "radio dax=0", 2);
+        s.run(200);
+        assert_eq!(
+            format!(
+                "dropped={} keys={} wire={:?}",
+                dropped(&s),
+                keys(&s),
+                voice_trace(&s, since)
+            ),
+            "dropped=null keys=2 wire=[\"stream create type=dax_tx\", \"transmit set dax=1\", \
+             \"radio dax=1\", \"xmit 1\", \"xmit 0\", \"idle\", \"transmit set dax=0\", \
+             \"radio dax=0\", \"transmit set dax=1\", \"radio dax=1\", \"xmit 1\", \"xmit 0\", \
+             \"idle\", \"transmit set dax=0\", \"radio dax=0\"]",
+            "quick={quick}"
+        );
+    }
+}
+
 /// ⭐ SSTV AND APRS STAY REFUSED WHILE A MESSAGE PLAYS (operator ruling, 2026-10-12, "Stay
 /// refused"): the radio takes DAX only for the message, so the Phone screen is still told the radio
 /// has the mic, and a picture or a beacon is refused with the reason, nothing queued.
@@ -997,7 +1063,7 @@ fn beside_smartsdrs_dax_a_message_writes_no_dax_source() {
 }
 
 /// The bundled radio as [`holder_kept`] has it, reporting the slice's USB back.
-fn holder_kept_in_usb() -> SimSession {
+pub(super) fn holder_kept_in_usb() -> SimSession {
     with_rule(
         holder_kept(),
         "slice set 0 mode=USB",

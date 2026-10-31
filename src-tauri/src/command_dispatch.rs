@@ -185,10 +185,11 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
 /// that let the station transmit with no press at it (a switch that transmits by itself, or one that
 /// lets a program at the shack or a browser start a transmission there) and the guards on a
 /// transmission (what stops or caps one by itself, the power ceilings, the licence privileges, and
-/// the lines that key the transmitter), the one setting that names a program for the shack to run
-/// (the TQSL path), JS8's sound files and their output, and the TCI server's settings. From afar a
-/// save keeps the shack's own value of each ([`keep_the_shacks_transmit_settings`],
-/// [`keep_the_shacks_radio_ptt`]): they are set at the shack only. So are the addresses Nexus sends a stored key or password to
+/// the lines that key the transmitter), the shack computer's microphone that Phone's PTT can send,
+/// the one setting that names a program for the shack to run (the TQSL path), JS8's sound files and
+/// their output, and the TCI server's settings. From afar a save keeps the shack's own value of
+/// each ([`keep_the_shacks_transmit_settings`], [`keep_the_shacks_radio_ptt`]): they are set at the
+/// shack only. So are the addresses Nexus sends a stored key or password to
 /// ([`keep_the_shacks_credential_addresses`], [`keep_the_shacks_radio_icom_address`]). (The presence
 /// beacon and JS8's automatic replies, relay and heartbeat acks each have one writer, their own
 /// switch, and no save moves them at all: `Engine::apply_settings`.)
@@ -266,6 +267,21 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     };
     save.ptt_method = method.clone();
     save.ptt_serial_port = port.clone();
+    // …and the radio's transmit audio source: Phone's PTT sending THIS (the shack's) computer's
+    // microphone, which one, and at what gain. Radio's own too, so kept as its PTT is. A client's
+    // form shows the client's devices and says "this computer", which is not the shack's.
+    match edited {
+        Some(radio) => {
+            save.pc_mic = radio.pc_mic;
+            save.pc_mic_device.clone_from(&radio.pc_mic_device);
+            save.pc_mic_gain_db = radio.pc_mic_gain_db;
+        }
+        None => {
+            save.pc_mic = shack.pc_mic;
+            save.pc_mic_device.clone_from(&shack.pc_mic_device);
+            save.pc_mic_gain_db = shack.pc_mic_gain_db;
+        }
+    }
     // …and the other lines that key it: CW's keyer, its keyline's port and line and the WinKeyer's
     // port (the radio loop opens a CW key port as soon as its keyer is chosen, the CAT port among
     // them), and how RTTY keys, with true FSK's port and line.
@@ -294,7 +310,8 @@ pub(crate) fn keep_the_shacks_transmit_settings(
 }
 
 /// What one radio's edit from afar may not change ([`SETTINGS_FROM_AFAR`]): its PTT method and
-/// port, and the Flex client's Beta for CW, Tune and the ATU, put back into `patch` as the shack has
+/// port, the Flex client's Beta for CW, Tune and the ATU, and the shack computer's microphone for
+/// Phone (the switch, the device and the gain), put back into `patch` as the shack has
 /// them for radio `id`. From the shack's own screen (`None`), or for a radio the shack does not
 /// have, the patch is taken as it came.
 pub(crate) fn keep_the_shacks_radio_ptt(
@@ -310,6 +327,10 @@ pub(crate) fn keep_the_shacks_radio_ptt(
         patch.ptt_method = radio.ptt_method.clone();
         patch.ptt_serial_port = radio.ptt_serial_port.clone();
         patch.flex_native_unbenched = radio.flex_native_unbenched;
+        // The radio's transmit audio source (the shack's own microphone for Phone).
+        patch.pc_mic = Some(radio.pc_mic);
+        patch.pc_mic_device = Some(radio.pc_mic_device.clone());
+        patch.pc_mic_gain_db = Some(radio.pc_mic_gain_db);
     }
 }
 
@@ -452,7 +473,7 @@ pub(crate) fn keep_the_shacks_settings(
 /// ([`keep_the_shacks_transmit_settings`]), then the addresses the shack sends a stored key or
 /// password to ([`keep_the_shacks_credential_addresses`]). A test changes each setting alone in a save from
 /// afar and holds this list to exactly the ones that come back.
-pub(crate) const STATION_ONLY_SETTINGS: [&str; 55] = [
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 58] = [
     "js8AprsRelay",
     "beaconTxPercent",
     "cqPauseSecs",
@@ -493,6 +514,9 @@ pub(crate) const STATION_ONLY_SETTINGS: [&str; 55] = [
     "catSerialHandshake",
     "pttMethod",
     "pttSerialPort",
+    "pcMic",
+    "pcMicDevice",
+    "pcMicGainDb",
     "cwKeyer",
     "cwKeyPort",
     "cwKeyLine",

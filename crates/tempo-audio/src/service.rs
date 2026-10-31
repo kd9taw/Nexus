@@ -28,7 +28,7 @@ use tempo_app::engine::{
     SatCatBackend, StreamedDecode,
 };
 use tempo_app::keyboard;
-use tempo_app::mic::{MicTick, MIC, TCI_OVER};
+use tempo_app::mic::{MicTick, MIC, PC_MIC, TCI_OVER};
 use tempo_app::remote_monitor::provenance::{Connection as RemoteConnection, Read as RemoteRead};
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
@@ -4029,6 +4029,12 @@ struct RadioLoop {
     /// When that over's audio already queued runs out (loop ms): its look-ahead's measure, as
     /// `mic_busy_until` is the microphone's.
     program_over_busy_until: f64,
+    /// The computer's microphone over (`tempo_app::engine::pc_mic`) has keyed PTT through this loop.
+    pc_mic_keyed: bool,
+    /// When that over's audio already queued runs out (loop ms).
+    pc_mic_busy_until: f64,
+    /// The microphone device this loop holds open for it, and the over it was opened for.
+    pc_mic_open: Option<(String, u64)>,
     /// The transmit route's generation, the microphone's G7: it moves whenever the route transmit
     /// audio leaves by is replaced (the sound card released or reopened, the Flex DAX tee
     /// installed or removed), so an over cannot carry on across the change.
@@ -4773,6 +4779,9 @@ impl RadioLoop {
             mic_keyed: false,
             mic_busy_until: 0.0,
             program_over_keyed: false,
+            pc_mic_keyed: false,
+            pc_mic_busy_until: 0.0,
+            pc_mic_open: None,
             program_over_busy_until: 0.0,
             tx_route_gen: 0,
             mono_origin: None,
@@ -6096,7 +6105,9 @@ impl RadioLoop {
     ///
     /// - nothing keyed or held: no over, tune, manual PTT, microphone over, TCI program's over or
     ///   rig PTT, and no immediate over, armed microphone over or armed program's over waiting for
-    ///   its key;
+    ///   its key. The one armed over that is no bar is the computer microphone's on the Flex
+    ///   client's DAX hold, not yet keyed ([`Engine::pc_mic_dax_hold`]): it is what the write is
+    ///   for, and it keys only once the radio reports the DAX the write asked for;
     /// - with slot transmission armed (the Digital section, TX enabled): the current slot's TX
     ///   decision has been made (`boundary_keyed` names this slot, so neither the boundary nor the
     ///   deferred decode path can still key in it), and the nearest boundary, either side, is
@@ -6109,9 +6120,11 @@ impl RadioLoop {
             || self.manual_ptt_applied
             || self.mic_keyed
             || self.program_over_keyed
+            || self.pc_mic_keyed
             || eng.peek_immediate_tx()
             || eng.mic_armed()
             || eng.tci_over_armed()
+            || (eng.pc_mic_armed() && (eng.pc_mic_keyed() || eng.pc_mic_dax_hold().is_none()))
         {
             return false;
         }
@@ -6147,7 +6160,9 @@ impl RadioLoop {
             }
             (
                 eng.remote_presence_live(self.mono_now(now_end)),
-                eng.voice_waits_for_dax().is_some(),
+                // The voice keyer's switch to DAX around a message, and the computer microphone's
+                // hold for as long as PTT is held: the same switch, the mic back after either.
+                eng.voice_waits_for_dax().is_some() || eng.pc_mic_dax_hold().is_some(),
             )
         };
         let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) else {
@@ -6155,6 +6170,14 @@ impl RadioLoop {
         };
         if let Some(done) = d.sync_tx_routing(browser_voice, voice_keyer) {
             crate::civ::diag::note(&format!("Flex client: {done}"));
+            // A write of the mic has the radio "having the mic" from now, before it reports it: the
+            // engine is told at once, so a press before the next tick takes the switch to DAX around
+            // it rather than going the plain way on the DAX the radio still reports.
+            let radio_has_mic = d.radio_has_mic();
+            if self.flex_radio_has_mic_pushed != Some(radio_has_mic) {
+                self.flex_radio_has_mic_pushed = Some(radio_has_mic);
+                engine_lock(engine).observe_flex_radio_has_mic(radio_has_mic);
+            }
         }
     }
 
@@ -6351,6 +6374,7 @@ impl RadioLoop {
             || self.tuning_keyed
             || self.mic_keyed
             || self.program_over_keyed
+            || self.pc_mic_keyed
             || rig.keyed
             || flex.is_some_and(crate::flex::FlexDaemon::keyed_by_another);
         if keyed_first {
@@ -7727,6 +7751,7 @@ impl RadioLoop {
             || self.manual_ptt_applied
             || self.mic_keyed
             || self.program_over_keyed
+            || self.pc_mic_keyed
             || self.tci_keyed();
         if let Some(rx) = self.tci_rx.as_mut() {
             if transmitting {
@@ -8742,8 +8767,15 @@ impl RadioLoop {
             // and are NOT covered here; nobody is talking through those, and widening this to
             // every transmission means finding a signal that covers them all, which is a larger
             // change than the problem needs today.
+            //
+            // The computer's microphone (`tempo_app::engine::pc_mic`) is a Phone over too, armed
+            // or keyed: the operator is talking into a microphone beside the headphones, so the
+            // monitor is muted for it as well and nothing on the air comes back into that room.
             {
-                let keyed = engine_lock(engine).manual_ptt();
+                let keyed = {
+                    let eng = engine_lock(engine);
+                    eng.manual_ptt() || eng.pc_mic_armed()
+                };
                 if keyed != self.monitor_tx_muted {
                     self.monitor_tx_muted = keyed;
                     backend.set_monitor_tx_mute(keyed);
@@ -9475,6 +9507,13 @@ impl RadioLoop {
                 // one answers `Held` to a keyed rig's uplink now, on every
                 // transponder shape (`Engine::sat_note_keyed_leg`).
                 && !self.rig_keyed
+                // ⚠️ AND NOT WHILE THE COMPUTER MICROPHONE IS OPEN: the operator is holding PTT
+                // for it, as for `manual_ptt_applied` above, and its over may key on this very
+                // tick. A slow read here (past its budget on a link that answers slowly) delayed
+                // that key behind the read: the microphone's audio then reached the over as one
+                // late burst, measured from the tick's start, and the over ended on the gap at
+                // once. Keyed, `tx_until_ms` already stands this poll down.
+                && self.pc_mic_open.is_none()
                 // A TRIPPED breaker skips the poll — but only until its re-probe is due. It exists
                 // to stop the loop blocking on a dead read every cycle, which is rate-limiting;
                 // implemented as a permanent latch it left a recovered link dead for the session.
@@ -13051,6 +13090,188 @@ impl RadioLoop {
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                     }
                     MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
+                }
+            }
+        }
+
+        // The computer's microphone (`tempo_app::engine::pc_mic`): the operator's voice from this
+        // computer while Phone's PTT is held, on a radio set to take it. The ENGINE decides
+        // everything on every tick (`Engine::poll_pc_mic`: every gate, the ceiling, the watchdog,
+        // the route, the gap, and what audio is due); this block holds the microphone open exactly
+        // while an over is armed or keyed, hands it what the microphone delivered (a microphone the
+        // OS killed ends the over on this tick), keys what it is told to with Nexus's own key
+        // (`key_over`: the audio Nexus plays, so a Rear/Data radio takes it from USB and a TCI radio
+        // from the TCI connection), plays it through the same `play()` as every over, and holds PTT
+        // to `tx_until_ms` from where the queued audio ends.
+        //
+        // ⛔ UNKEY FIRST, THEN TOUCH THE DEVICE. Closing (or opening) the microphone takes the audio
+        // host lock, which a device enumeration on another thread can hold for a long while, and
+        // drops a cpal stream, which on a device that has just gone away can be slow. So on every
+        // stop the queued audio is flushed and PTT drops BEFORE the microphone is closed, and the
+        // microphone is opened only at the END of a tick, after anything this tick had to unkey.
+        {
+            let mono = self.mono_now(now);
+            let may_key = self.may_key();
+            if !may_key {
+                // `rig` is not the operator's radio this tick: a keyed transmitter cannot wait.
+                engine_lock(engine).pc_mic_interrupted();
+            }
+            // ⛔ THE FLEX CLIENT'S DAX HOLD (`engine/pc_mic.rs`): an over pressed while the radio had
+            // its own mic keys only once the radio reports DAX on Nexus's own stream with the DAX
+            // tee in and nothing keyed, and while keyed is on the air only while the radio still
+            // takes that DAX. The press ends with nothing keyed when the radio is keyed by anything
+            // else first, or has not switched in the routing's own confirm window.
+            let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+            let hold = engine_lock(engine).pc_mic_dax_hold();
+            let on_dax = hold.is_some_and(|since| {
+                let tee = self.dax_tee_id.is_some();
+                if self.pc_mic_keyed {
+                    return tee && flex.is_some_and(crate::flex::FlexDaemon::on_nexus_dax);
+                }
+                if flex.is_some_and(crate::flex::FlexDaemon::keyed_by_another) {
+                    engine_lock(engine).pc_mic_interrupted();
+                    return false;
+                }
+                let ready = tee && flex.is_some_and(crate::flex::FlexDaemon::takes_voice_dax);
+                if !ready
+                    && since.elapsed() >= Duration::from_millis(crate::flex::routing::CONFIRM_MS)
+                {
+                    engine_lock(engine).pc_mic_no_dax();
+                }
+                ready
+            });
+            let want = engine_lock(engine).pc_mic_source();
+            // Read only the capture opened for THIS over: a new over (a quick re-press) gets a
+            // fresh one at the end of the tick, so nothing captured before its press reaches it.
+            let current = want
+                .as_ref()
+                .is_some_and(|w| self.pc_mic_open.as_ref() == Some(&(w.device.clone(), w.gen)));
+            let captured = current.then(|| backend.pc_mic_capture());
+            let (abort, tick) = {
+                let mut eng = engine_lock(engine);
+                eng.observe_pc_mic_dax(on_dax);
+                match &captured {
+                    Some(Ok(samples)) => eng.push_pc_mic(samples, mono),
+                    // The microphone went away: the over ends on THIS tick, not at the gap.
+                    Some(Err(_)) => eng.pc_mic_device_failed(true),
+                    None => {}
+                }
+                let queued = (self.pc_mic_busy_until - now).max(0.0);
+                let tick =
+                    eng.poll_pc_mic(mono, PC_MIC.ahead_ms as f64 - queued, self.tx_route_gen);
+                // AFTER the poll, so an abort IT armed is consumed on this same tick.
+                (eng.take_pc_mic_abort(), tick)
+            };
+            // Something else unkeyed the rig under a keyed over: it does not come back.
+            let unkeyed_under = self.pc_mic_keyed && (self.tx_until_ms.is_none() || !rig.keyed);
+            // The engine is keying an over this loop never keyed (the loop was rebuilt under it).
+            let never_keyed =
+                !self.pc_mic_keyed && matches!(tick, MicTick::Ahead | MicTick::Samples(_));
+            if unkeyed_under || never_keyed {
+                engine_lock(engine).pc_mic_interrupted();
+            }
+            if (abort || unkeyed_under) && self.pc_mic_keyed {
+                // The feed is already closed (the engine's kill path); here the queued audio goes
+                // (the only thing that stops a VOX rig) and PTT drops, before anything else.
+                let dropped = backend.flush_output();
+                let _ = rig.ptt(false);
+                self.tx_until_ms = None;
+                crate::civ::diag::note(&format!(
+                    "computer microphone over ended: unkey, {dropped} queued samples dropped"
+                ));
+            }
+            if abort || unkeyed_under || never_keyed {
+                self.pc_mic_keyed = false;
+                self.pc_mic_busy_until = 0.0;
+            } else {
+                match tick {
+                    MicTick::Key => {
+                        self.ensure_commanded(rig); // read-only launch: assert before key
+                        self.publish_tx_intent_now(); // before keying — the fail-safe must know
+
+                        // On the DAX hold the one key is marked as carrying Nexus's audio, which
+                        // the client keys only while the radio takes Nexus's DAX: the operator
+                        // flipping the radio back to its mic between the look above and the key
+                        // must not put the room on the air.
+                        let marked = hold.and(self.rigctld_proc.as_ref().and_then(CatDaemon::flex));
+                        if let Some(d) = marked {
+                            d.set_voice_key(true);
+                        }
+                        let key = self.key_over(rig, false);
+                        if let Some(d) = marked {
+                            d.set_voice_key(false);
+                        }
+                        self.report_key(engine, &key);
+                        if let KeyUp::Refused(why) = &key {
+                            // The rig did not key, so none of the microphone may be played.
+                            note_refused_key("computer microphone over not keyed", why);
+                            let mut eng = engine_lock(engine);
+                            eng.pc_mic_key_refused();
+                            let _ = eng.take_pc_mic_abort();
+                        } else {
+                            self.pc_mic_keyed = true;
+                            self.pc_mic_busy_until = now;
+                            let until = now
+                                + (PC_MIC.lead_in_ms + PC_MIC.ahead_ms) as f64
+                                + crate::slot::TX_TAIL_MS;
+                            self.tx_until_ms =
+                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        }
+                    }
+                    MicTick::Samples(buf) => {
+                        backend.play(&buf);
+                        // Contiguous in audio time: the deadline advances from where the queued
+                        // audio ends.
+                        self.pc_mic_busy_until = self.pc_mic_busy_until.max(now)
+                            + buf.len() as f64 * 1000.0 / f64::from(PC_MIC.rate_hz);
+                        let until = self.pc_mic_busy_until + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                    MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
+                }
+            }
+            // Only now, with anything this tick stopped already unkeyed, the device: closed when no
+            // over wants it (or it died, or a new over replaced the one it was opened for), and
+            // opened for an armed over, which keys on nothing until a later tick's audio.
+            let want = engine_lock(engine)
+                .pc_mic_source()
+                .map(|w| (w.device, w.gen));
+            let died = matches!(captured, Some(Err(_)));
+            // ⛔ Never while this loop still holds the rig keyed for an over. A stop that landed
+            // DURING this tick (the release or Stop TX while `key_over` waited on the radio's
+            // answer) armed an abort this tick has not taken: the next tick unkeys and flushes
+            // FIRST and only then gets here. A quick re-press in that window likewise opens its
+            // own capture only after the old over is unkeyed, then keys on its own audio.
+            // (`died` ended the over on this tick, so `pc_mic_keyed` is already false with it.)
+            let keyed_here = self.pc_mic_keyed && !died;
+            if !keyed_here && self.pc_mic_open.is_some() && (died || want != self.pc_mic_open) {
+                let _ = backend.set_pc_mic(None);
+                self.pc_mic_open = None;
+            }
+            if let Some((device, gen)) = want.filter(|_| !keyed_here && self.pc_mic_open.is_none())
+            {
+                // ⛔ No input that may carry the band is ever the microphone: every receive input
+                // the settings name, the system default input and the one the sound card actually
+                // opened for receive, judged by THE device guard the notification sounds use.
+                let opened_receive = backend.capture_input().map(|rx| rx.device);
+                let refused = engine_lock(engine).pc_mic_receive_refusal(
+                    &device,
+                    opened_receive.as_deref(),
+                    &crate::notify_sound::same_input,
+                );
+                if let Some(cause) = refused {
+                    engine_lock(engine).pc_mic_refused(cause);
+                } else {
+                    match backend.set_pc_mic(Some(&device)) {
+                        Ok(()) => self.pc_mic_open = Some((device, gen)),
+                        Err(e) => {
+                            tempo_core::applog::warn(
+                                "audio",
+                                &format!("computer microphone {device:?} would not open: {e}"),
+                            );
+                            engine_lock(engine).pc_mic_device_failed(false);
+                        }
+                    }
                 }
             }
         }
@@ -18760,6 +18981,7 @@ mod tests {
     mod jtty_status;
     mod jtty_transmit;
     mod omnirig_coverage;
+    mod pc_mic;
     mod readback_coverage;
     mod receive_source;
     mod refused_key;
@@ -36873,6 +37095,18 @@ mod tests {
         meters_answer: bool,
         ptt: &'static str,
     ) -> (String, Arc<Mutex<Vec<String>>>) {
+        mock_rigctld_hooked(dial_hz, meters_answer, ptt, |_| {})
+    }
+
+    /// [`mock_rigctld_ptt`] that runs `on_line` with every command it is sent, after logging it
+    /// and BEFORE it answers: whatever the hook does lands while the loop waits on the radio
+    /// (inside a tick, e.g. during the key's round trip).
+    fn mock_rigctld_hooked(
+        dial_hz: u64,
+        meters_answer: bool,
+        ptt: &'static str,
+        on_line: impl Fn(&str) + Send + 'static,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -36894,6 +37128,7 @@ mod tests {
                     }
                     let l = line.trim().to_string();
                     log2.lock().unwrap().push(l.clone());
+                    on_line(&l);
                     let dial = format!("{dial_hz}\n");
                     let reply = if l == "f" {
                         dial.as_str()

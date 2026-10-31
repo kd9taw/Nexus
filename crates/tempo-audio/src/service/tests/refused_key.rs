@@ -31,7 +31,7 @@ use super::*;
 
 /// What the rigctld answers to the key.
 #[derive(Clone, Copy, PartialEq)]
-enum Key {
+pub(super) enum Key {
     /// `RPRT 0`, always.
     Accepts,
     /// `RPRT -1`, always.
@@ -56,7 +56,7 @@ const LATE: Duration = Duration::from_millis(1_500);
 
 /// A rigctld answering the key as `key`, `f` with a 20 m dial and everything else `RPRT 0`,
 /// logging every line it was sent.
-fn rigctld(key: Key) -> (String, Arc<Mutex<Vec<String>>>) {
+pub(super) fn rigctld(key: Key) -> (String, Arc<Mutex<Vec<String>>>) {
     rigctld_on(key, 14_250_000)
 }
 
@@ -185,10 +185,10 @@ impl Scene {
 }
 
 /// The voice keyer's words for a refused key.
-const REFUSED: &str = "The rig didn't accept PTT — check your PTT method and CAT/port.";
+pub(super) const REFUSED: &str = "The rig didn't accept PTT — check your PTT method and CAT/port.";
 
 /// The words for a key the radio did not answer in time.
-const UNCONFIRMED: &str =
+pub(super) const UNCONFIRMED: &str =
     "The rig did not answer the PTT key in time — check the CAT link to the radio.";
 
 fn phone(e: &mut Engine) {

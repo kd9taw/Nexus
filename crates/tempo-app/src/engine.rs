@@ -148,6 +148,7 @@ mod mode_entry;
 #[cfg(test)]
 mod outside_key_passband_tests;
 pub mod parsec_presence;
+pub mod pc_mic;
 /// 60 m allows only USB phone: the picks the cockpit greys, and the lock naming the rule.
 #[cfg(test)]
 mod phone_usb_only_tests;
@@ -4186,6 +4187,9 @@ pub struct Engine {
     /// Programs on Nexus's TCI server: their keys, and the over that carries their audio (see
     /// `engine/tci.rs`).
     tci: tci::TciState,
+    /// The station computer's own microphone, fed to the radio while Phone's PTT is held (see
+    /// `engine/pc_mic.rs`).
+    pc_mic: pc_mic::PcMicState,
     /// The transponder the operator selected for the tracked bird, plus their
     /// position inside its passband and what was last written to the radio.
     /// `None` = no satellite tuning in force, which is every terrestrial path.
@@ -7062,6 +7066,7 @@ impl Engine {
             mic_rf_seen: false,
             mic_zero_seen: false,
             tci: tci::TciState::default(),
+            pc_mic: pc_mic::PcMicState::default(),
             sat_tune: None,
             sat_last_worked: None,
             sat_dial_owner: None,
@@ -9672,8 +9677,9 @@ impl Engine {
     ///
     /// Pushed by the radio loop on the transition, from what the radio reports, never from the
     /// `flex_native_audio` setting (the same reasoning as [`Self::observe_flex_dax_tx`]). Only
-    /// the voice keyer, APRS, SSTV and a TCI program's audio over (`engine/tci.rs`, refused as APRS
-    /// and SSTV are) read it; nothing else is refused on it.
+    /// the voice keyer, APRS, SSTV, a TCI program's audio over (`engine/tci.rs`, refused as APRS
+    /// and SSTV are) and the computer's microphone (`engine/pc_mic.rs`, which rides a DAX hold
+    /// through it) read it; nothing else is refused on it.
     pub fn observe_flex_radio_has_mic(&mut self, on: bool) {
         self.flex_radio_has_mic = on;
     }
@@ -12597,6 +12603,16 @@ impl Engine {
     /// Manually key (true) / unkey (false) the rig for live phone. Gated by Monitor:
     /// a key request is ignored while TX is disabled. The radio loop applies it.
     pub fn set_ptt(&mut self, on: bool) {
+        // The computer's microphone (this radio's setting, in Phone): the press ARMS its over
+        // instead of keying the radio's own microphone, and the release ends it at once
+        // (`engine/pc_mic.rs`). The release is never refused, and ends an over whatever the
+        // setting now says.
+        if !on {
+            self.release_pc_mic();
+        } else if self.pc_mic_wanted() && !self.manual_ptt {
+            self.arm_pc_mic();
+            return;
+        }
         // A clock repair holds transmit: a new key is refused, and one already held is never
         // dropped by it ([`Self::hold_tx_for_clock_repair`]).
         if on && !self.manual_ptt && self.clock_repair_holds_tx() {
@@ -13866,6 +13882,15 @@ impl Engine {
             );
             return Err(TxOwner::Tci.busy_reason());
         }
+        // So does the computer's microphone, armed or keyed (`engine/pc_mic.rs`): the operator is
+        // holding PTT and talking, on every rig.
+        if self.pc_mic_armed() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer over refused: the computer microphone is transmitting",
+            );
+            return Err(TxOwner::ManualPtt.busy_reason());
+        }
         if self.clock_repair_holds_tx() {
             tempo_core::applog::info(
                 "tx",
@@ -13969,6 +13994,11 @@ impl Engine {
             Some(why)
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
+        } else if self.pc_mic_armed() {
+            // The operator's PTT on the computer's microphone, pressed after the message was
+            // queued and before this tick (the press is refused while a message is pending, so
+            // this is the belt to that brace).
+            Some("the computer microphone is transmitting")
         } else if self.cw_sending() {
             // An F-key's CW (which asks no owner) queued after the message, before this tick.
             Some("CW is sending")
@@ -20792,6 +20822,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.drop_mic_latch();
         // …and every TCI program's key, over and tune, the same way: Stop in Nexus always wins.
         self.drop_tci_all();
+        // …and the computer's microphone over, the same way.
+        self.drop_pc_mic();
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;
@@ -21842,6 +21874,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.drop_mic_latch();
             // So do TCI programs' keys, overs and tunes: TX Off is a stop for each.
             self.drop_tci_all();
+            // …and the computer's microphone over: TX Off ends it in flight.
+            self.drop_pc_mic();
             // Same for SSTV: a disarm aborts the image in flight and drops the job.
             self.sstv_tx = None;
             self.sstv_abort = true;
@@ -25194,7 +25228,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(TxOwner::Slot)
         } else if self.tuning {
             Some(TxOwner::Tune)
-        } else if self.manual_ptt || self.broker_ptt {
+        } else if self.manual_ptt || self.broker_ptt || self.pc_mic.over.active() {
+            // The computer's microphone is the operator's own held PTT, armed or keyed.
             Some(TxOwner::ManualPtt)
         } else if self.mic.active() {
             // From the arm, before any audio: an armed over owns the transmitter the way a
@@ -29614,6 +29649,7 @@ contact yourself."
         // a failed unkey's halt, the TX watchdog).
         s.radio.slot_over_dropped = self.slot_over_dropped.clone().filter(|_| self.tx_enabled);
         s.radio.ptt_refused = self.ptt_refused.clone();
+        s.radio.pc_mic_ended = self.pc_mic.ended.clone();
         s.radio.voice_dropped = self.voice_dropped.clone();
         s.radio.decode_depth = self.settings.decode_depth.clamp(1, 3);
         s.radio.rig_confirmed = self.rig_confirmed;
@@ -65727,6 +65763,9 @@ mod tests {
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
             aprs_data_fm: p.aprs_data_fm,
+            pc_mic: None,
+            pc_mic_device: None,
+            pc_mic_gain_db: None,
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,

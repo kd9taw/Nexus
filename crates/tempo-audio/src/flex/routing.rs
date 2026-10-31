@@ -18,7 +18,9 @@
 //! **The voice keyer** (operator ruling, 2026-10-12, "Change it now", for the length of a message
 //! only): in Phone at the shack, DAX also while a voice-keyer message waits to go out, and the mic
 //! again once it has gone, the radio loop keying the message only after the radio reports DAX and
-//! this write of the mic going out only after the radio has proved the unkey.
+//! this write of the mic going out only after the radio has proved the unkey. The computer's
+//! microphone takes the same switch for as long as its PTT is held (its DAX hold): the radio loop
+//! passes either as `voice_keyer`, and nothing here tells them apart.
 //!
 //! ## How each part holds
 //! - **Follow the mode.** [`wanted_source`] maps the TX slice's mode to the source: the digital
@@ -36,7 +38,9 @@
 //! - **On a change only.** [`Routing`] decides when its inputs change (the TX slice, its mode,
 //!   the browser voice, native audio on or off) and writes once per decision, so a flag the
 //!   operator flips by hand is not fought. A write the radio never reports back within
-//!   [`CONFIRM_MS`] (refused, or lost) is the same decision unfinished, and is tried again.
+//!   [`CONFIRM_MS`] (refused, or lost) is the same decision unfinished, and is tried again. For
+//!   keying, though, a write stays in flight until the radio reports it or refuses it, however
+//!   late ([`Routing::write_in_flight`]): nothing keys on the value the radio still reports.
 //! - **Never in the keying path.** Nothing here writes: [`Routing::step`] returns what to write,
 //!   and the radio loop asks for it only at the end of a tick in which nothing is keyed or about
 //!   to be (`crate::service`, the quiet point). The protocol core's admission refuses the write
@@ -190,6 +194,10 @@ pub struct Routing {
     wrote: Option<bool>,
     /// A write not yet reported back by the radio, and when it went.
     unconfirmed: Option<(bool, u64)>,
+    /// Nexus's last write of the flag until the radio reports it or refuses it, with its command's
+    /// sequence number once known: what keys wait on ([`Routing::write_in_flight`]). Unlike
+    /// `unconfirmed`, no deadline ends it: a report later than [`CONFIRM_MS`] still lands.
+    in_flight: Option<(bool, Option<u32>)>,
     /// Nexus's last DAX write was for a voice-keyer message alone, and since then nothing else
     /// has wanted DAX and the radio has not reported its mic ([`Routing::dax_for_keyer`]).
     keyer_dax: bool,
@@ -227,6 +235,14 @@ impl Routing {
             return None;
         }
         let radio = view.radio?;
+        // The radio reported Nexus's write. Later than the confirm window below, a decision since
+        // was taken against the stale value it still reported then: taken again.
+        if self.in_flight.is_some_and(|(dax, _)| dax == radio) {
+            self.in_flight = None;
+            if self.unconfirmed.is_none() {
+                self.applied = false;
+            }
+        }
         if let Some(back) = self.restore {
             if radio == back {
                 self.restore = None;
@@ -317,6 +333,7 @@ impl Routing {
     pub fn written(&mut self, dax: bool, why: Why, now_ms: u64) -> Option<bool> {
         self.wrote = Some(dax);
         self.unconfirmed = Some((dax, now_ms));
+        self.in_flight = Some((dax, None));
         if dax {
             self.keyer_dax = why == Why::FollowMode
                 && self
@@ -333,6 +350,22 @@ impl Routing {
                 self.applied = true;
                 self.operator.filter(|op| *op != dax)
             }
+        }
+    }
+
+    /// The write just reported to [`Self::written`] went as the command numbered `seq`: the number
+    /// the radio's refusal of it carries ([`Self::refused`]).
+    pub fn sent(&mut self, seq: u32) {
+        if let Some((_, at)) = self.in_flight.as_mut() {
+            *at = Some(seq);
+        }
+    }
+
+    /// The radio refused the command numbered `seq`. If that was Nexus's write still in flight, the
+    /// flag it reports stands: nothing is about to change it. Its retry is the confirm window's.
+    pub fn refused(&mut self, seq: u32) {
+        if self.in_flight.is_some_and(|(_, at)| at == Some(seq)) {
+            self.in_flight = None;
         }
     }
 
@@ -385,6 +418,23 @@ impl Routing {
     pub fn leaves_voice_on_dax(&self, view: &View, native_audio: bool) -> bool {
         let browser_voice = self.decided.as_ref().is_some_and(|i| i.browser_voice);
         self.leaves_dax(view) && !(native_audio && browser_voice)
+    }
+
+    /// Whether Nexus's own write of the flag is still in flight: written, and neither reported back
+    /// nor refused by the radio, however long that takes. Until then the flag the radio reports is
+    /// about to change, so nothing keys on it: right after an over, the radio still reports DAX
+    /// after Nexus wrote its mic back, and a key sent then would follow that write and put the
+    /// radio's mic on the air. A write never answered at all holds it until the next write or the
+    /// next connection; a key waiting on it ends in its own refusal.
+    pub fn write_in_flight(&self, view: &View) -> bool {
+        self.in_flight
+            .is_some_and(|(dax, _)| view.radio != Some(dax))
+    }
+
+    /// Whether Nexus's own write of the radio's mic is in flight ([`Self::write_in_flight`]): the
+    /// radio is about to take its mic, whatever it still reports.
+    pub fn mic_write_in_flight(&self, view: &View) -> bool {
+        self.in_flight.is_some_and(|(dax, _)| !dax) && self.write_in_flight(view)
     }
 
     /// Whether the radio takes its transmit audio from DAX only for a voice-keyer message: Nexus

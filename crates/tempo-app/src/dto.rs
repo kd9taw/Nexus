@@ -1621,6 +1621,60 @@ pub struct PttRefused {
     pub mode: String,
 }
 
+/// A computer-microphone over that ended, or never keyed, for a reason the operator did not choose
+/// ([`RadioStatus::pc_mic_ended`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PcMicEnded {
+    /// When, in Unix seconds.
+    pub at: u64,
+    pub cause: PcMicCause,
+}
+
+/// Why a computer-microphone over ended or never keyed ([`PcMicEnded`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PcMicCause {
+    /// No microphone is chosen for this radio.
+    NoDevice,
+    /// The chosen microphone is the radio's own receive input: its audio would be the band.
+    SameAsReceive,
+    /// The microphone would not open.
+    OpenFailed,
+    /// The microphone went away (or the system stopped it) during the over.
+    DeviceLost,
+    /// No audio came from the microphone for longer than the over's gap.
+    NoAudio,
+    /// The over reached its 10-minute ceiling.
+    Ceiling,
+    /// The TX watchdog tripped.
+    Watchdog,
+    /// Something else held the transmitter at the press (a voice-keyer message, among others).
+    Busy,
+    /// Nexus's own Flex client had given the radio its own mic, which audio Nexus plays does not
+    /// reach, and the radio did not switch to DAX for the over within the client's confirm window:
+    /// nothing was keyed.
+    FlexMic,
+    /// The chosen microphone carries another radio's receive audio (its receive input, or a Flex
+    /// DAX receive channel).
+    RadioReceive,
+    /// The chosen microphone is a loopback or a virtual cable: what this computer plays, Nexus's
+    /// transmit audio among it, would come back in.
+    Loopback,
+    /// A transmit condition went down during the over (TX off, the licence, a tune, leaving Phone,
+    /// the switch, the radio, the microphone or the transmit audio route).
+    GateDown,
+    /// The radio was unkeyed under the over, or was not Nexus's to key (a handoff, a CAT hold, a
+    /// radio switch).
+    Interrupted,
+    /// The radio did not accept the key.
+    KeyRefused,
+    /// The chosen microphone cannot be told apart from an input that may carry the band (a sound
+    /// server's default input, receive on the system default, an input routed by a sound
+    /// configuration file, or a card by a number this computer cannot resolve).
+    Unsure,
+}
+
 /// A voice-keyer message Nexus's own Flex client dropped without keying the radio
 /// ([`RadioStatus::voice_dropped`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2062,6 +2116,13 @@ pub struct RadioStatus {
     /// every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ptt_refused: Option<PttRefused>,
+    /// The last computer-microphone over (Phone, with this radio set to take the computer's
+    /// microphone) that ended or never keyed for a reason the operator did not choose: no
+    /// microphone set, it would not open, it went away mid-over, no audio came from it, or the
+    /// ceiling or the watchdog. Cleared by the next over that keys. ABSENT until it happens, so
+    /// every snapshot before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pc_mic_ended: Option<PcMicEnded>,
     /// The last voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone
     /// at the shack with native audio on, where a message waits for the radio to take DAX): the
     /// radio did not take DAX within 2 seconds, or something else keyed it first. Cleared by the

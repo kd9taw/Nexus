@@ -1873,6 +1873,9 @@ export interface RadioStatus {
    *  its mic, so Nexus's own Flex client kept the key off the air. Cleared by the next press that
    *  keys or fails for another reason; absent otherwise, and from a station older than it. */
   pttRefused?: PttRefused | null
+  /** The last computer-microphone over that ended, or never keyed, for a reason the operator did not
+   *  choose (crates/tempo-app/src/engine/pc_mic.rs). Absent until it happens. */
+  pcMicEnded?: PcMicEnded | null
   /** The last voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone
    *  at the shack with native audio on, where a message waits for the radio to take DAX). Cleared by
    *  the next message the keyer accepts; absent otherwise, and from a station older than it. */
@@ -5214,6 +5217,15 @@ export interface Settings {
   /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). */
   aprsDataFm: boolean
+  /** Phone's PTT feeds THIS computer's microphone to the radio (its transmit audio route), instead
+   * of keying the radio's own microphone. Per radio (flat mirror of the active radio), off by
+   * default; Phone only. */
+  pcMic?: boolean
+  /** The input device the computer's microphone is captured from; empty = none chosen (never the
+   * system default). Per radio. */
+  pcMicDevice?: string
+  /** The computer microphone's gain in dB, -20 to +20. Per radio. */
+  pcMicGainDb?: number
   /** Antenna rotator: rotctld daemon `host:port` (empty = no rotator). */
   /** Integrated rotator: Hamlib rotator model # (0 = none) + serial port +
    * baud — Nexus launches the bundled rotctld itself, like the rig. */
@@ -6071,6 +6083,10 @@ export interface RadioProfile {
   /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). */
   aprsDataFm: boolean
+  /** Phone's PTT feeds this computer's microphone to this radio. Off by default. */
+  pcMic: boolean
+  pcMicDevice: string
+  pcMicGainDb: number
   audioIn: string
   audioOut: string
   txLevel: number
@@ -6712,4 +6728,29 @@ export interface RadioProgProject {
   origin: ProgOrigin
   radiusKm: number
   channels: ProgChannel[]
+}
+
+/** Why a computer-microphone over ended or never keyed (`PcMicCause`, crates/tempo-app/src/dto.rs).
+ *  The operator's words are in features/pcMic.ts. */
+export type PcMicCause =
+  | 'noDevice'
+  | 'sameAsReceive'
+  | 'openFailed'
+  | 'deviceLost'
+  | 'noAudio'
+  | 'ceiling'
+  | 'watchdog'
+  | 'busy'
+  | 'flexMic'
+  | 'radioReceive'
+  | 'loopback'
+  | 'gateDown'
+  | 'interrupted'
+  | 'keyRefused'
+  | 'unsure'
+
+export interface PcMicEnded {
+  /** When, in Unix seconds. */
+  at: number
+  cause: PcMicCause
 }

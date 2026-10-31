@@ -17,6 +17,7 @@ use tempo_flexsim::{
 };
 use tempo_net::flex::encode::Station;
 
+mod pc_mic;
 mod voice_keyer;
 
 /// An audio backend that notes when transmit audio starts and, as the sound card does, hands it
@@ -33,6 +34,20 @@ struct TeeBackend {
     mon_tx_mute: Arc<std::sync::atomic::AtomicBool>,
     /// The monitor's way in for audio other than the card's own, at the card's 48 kHz.
     monitor: crate::monitor::MonitorFeed,
+    /// The computer's microphone (`tempo_app::engine::pc_mic`), as a sound card's capture.
+    pc_mic: Arc<Mutex<PcMicDevice>>,
+}
+
+/// The computer's microphone behind [`TeeBackend`]: while open, each read hands over the audio
+/// captured since the last one, at a steady level, as a sound card does on the real clock.
+#[derive(Default)]
+struct PcMicDevice {
+    open: bool,
+    last: Option<Instant>,
+    /// What it delivers.
+    level: f32,
+    /// Every open (`Some(device)`) and close (`None`) the loop asked for, in order.
+    calls: Vec<Option<String>>,
 }
 
 impl Default for TeeBackend {
@@ -50,6 +65,10 @@ impl Default for TeeBackend {
             ),
             mon_enabled,
             mon_tx_mute,
+            pc_mic: Arc::new(Mutex::new(PcMicDevice {
+                level: 0.2,
+                ..PcMicDevice::default()
+            })),
         }
     }
 }
@@ -93,6 +112,23 @@ impl AudioBackend for TeeBackend {
     }
     fn monitor_feed(&self) -> Option<crate::monitor::MonitorFeed> {
         Some(self.monitor.clone())
+    }
+    fn set_pc_mic(&mut self, device: Option<&str>) -> Result<(), String> {
+        let mut mic = self.pc_mic.lock().unwrap();
+        mic.calls.push(device.map(str::to_string));
+        mic.open = device.is_some();
+        mic.last = mic.open.then(Instant::now);
+        Ok(())
+    }
+    fn pc_mic_capture(&mut self) -> Result<Vec<f32>, String> {
+        let mut mic = self.pc_mic.lock().unwrap();
+        let (Some(last), true) = (mic.last, mic.open) else {
+            return Ok(Vec::new());
+        };
+        let now = Instant::now();
+        let n = (now.duration_since(last).as_secs_f64() * 12_000.0) as usize;
+        mic.last = Some(last + Duration::from_secs_f64(n as f64 / 12_000.0));
+        Ok(vec![mic.level; n])
     }
 }
 

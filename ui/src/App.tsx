@@ -205,6 +205,7 @@ import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
 import { slotAudioLostLane } from './features/slotAudioLost'
 import { slotOverDroppedLane } from './features/slotOverDropped'
 import { pttRefusedLane } from './features/pttRefused'
+import { pcMicLane } from './features/pcMic'
 import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { heldLine, txOnHeldLane } from './features/txOnHeld'
@@ -865,6 +866,12 @@ function App() {
   useEffect(() => {
     setStatus('pttRefused', pttRefusedLane(snap?.radio.pttRefused))
   }, [snap?.radio.pttRefused?.at, snap?.radio.pttRefused?.mode])
+
+  // A computer-microphone over (Phone, the radio set to take this computer's microphone) that ended
+  // or never keyed for a reason the operator did not choose: the lane says why, until an over keys.
+  useEffect(() => {
+    setStatus('pcMic', pcMicLane(snap?.radio.pcMicEnded))
+  }, [snap?.radio.pcMicEnded?.at, snap?.radio.pcMicEnded?.cause])
 
   // A voice-keyer message Nexus's own Flex client dropped before the radio took DAX for it (Phone at
   // the shack, native audio on): the lane says why, since the keyer's toast answered the press
