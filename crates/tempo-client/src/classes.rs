@@ -191,6 +191,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_aprs_is_status",             RunsAtShack, "The shack's APRS-IS feed."),
     ("get_aprs_stations",              RunsAtShack, "The shack's APRS stations."),
     ("get_aprs_tx_notice",             RunsAtShack, "Why the shack last dropped an APRS frame."),
+    ("get_arrival_outlook",            RunsAtShack, "The shack's propagation feeds."),
     ("get_assistance_journal",         RunsAtShack, "The shack's assistance journal."),
     ("get_audio_devices",              RunsAtShack, "The shack's sound cards, for its rig audio."),
     ("get_aurora",                     RunsAtShack, "The shack's propagation feeds."),

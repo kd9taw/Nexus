@@ -41,6 +41,7 @@ import type {
   WorkableCard,
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
+import { ArrivalChip } from './prop/ArrivalChip'
 import { agoLabel } from './prop/SpaceWxGauges'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
@@ -4130,6 +4131,7 @@ export function MapView({
               {t('map.pca.chip', { scale: sScaleOf(pca.j10), db: pca.a30Day.toFixed(1) })}
             </div>
           )}
+          <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
           {prop && (
             <MapInsightRail
               prop={prop}

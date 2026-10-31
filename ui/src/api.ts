@@ -5197,6 +5197,12 @@ export async function getKpForecast(): Promise<KpForecast> {
   return invoke<KpForecast>('get_kp_forecast')
 }
 
+/** "Coming": NOAA's geomagnetic watch, its forecast days, the WSA-Enlil run and the L1 wind,
+ *  each kept and backed off on its own server-side (see src-tauri arrival_outlook.rs). */
+export async function getArrivalOutlook(): Promise<import('./types').ArrivalOutlook> {
+  return invoke<import('./types').ArrivalOutlook>('get_arrival_outlook')
+}
+
 /** NOAA's daily solar indices: the last thirty days of SFI and sunspot number. Cached an hour
  *  server-side, and the last good copy is served when a fetch fails — every row carries its own
  *  date, so the caller can say how old the newest day is. EMPTY = never had the file. */

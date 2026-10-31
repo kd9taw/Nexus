@@ -4852,6 +4852,46 @@ body.resizing-row {
 .map-layers.collapsed ~ .flare-chip {
   left: calc(16px + 2rem);
 }
+/* The "coming" chip (ArrivalChip.tsx): NOAA's storm watch countdown, the model line and a measured
+   arrival at L1. It shares the flare/PCA chips' corner and their left rule, and stacks under
+   whichever of them is drawn (flare at the top, PCA one row down), so it never overprints one or
+   leaves a gap. Several lines on a wide map; on a map too narrow for the Layers panel and the
+   Conditions rail side by side it draws its headline only (ArrivalChip `compact`). Hoverable: its
+   title names each line's source and issue time. */
+.arrival-chip {
+  position: absolute;
+  left: var(--space-3);
+  top: var(--space-3);
+  max-width: min(340px, calc(100% - 2 * var(--space-3)));
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--state-warn);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text);
+  /* With the Layers panel (4): over the Conditions rail (3) where a narrow map makes them meet. */
+  z-index: 4;
+}
+.arrival-chip-line {
+  color: var(--text-dim);
+}
+.flare-chip ~ .arrival-chip {
+  top: calc(var(--space-3) + 34px);
+}
+.pca-chip ~ .arrival-chip {
+  top: calc(var(--space-3) + 68px);
+}
+.map-layers ~ .arrival-chip,
+.globe3d-layers ~ .arrival-chip {
+  left: calc(16px + min(200px, calc(100% - 16px)));
+  max-width: min(340px, calc(100% - 32px - min(200px, calc(100% - 16px))));
+}
+.map-layers.collapsed ~ .arrival-chip,
+.globe3d-layers.collapsed ~ .arrival-chip {
+  left: calc(16px + 2rem);
+  max-width: min(340px, calc(100% - 32px - 2rem));
+}
 .map-layer {
   margin-bottom: var(--space-3);
 }

@@ -74,6 +74,7 @@ import type { RibbonInk } from '../features/pathRoute'
 import { t, type MessageKey } from '../i18n'
 import { fmtDistanceKm, useUnits } from '../units'
 import { MapInsightRail } from './prop/MapInsightRail'
+import { ArrivalChip } from './prop/ArrivalChip'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import { MapLegend, MufLegend } from './MapLegend'
 import { GlobePaused, useGlobeWebgl } from './globeWebgl'
@@ -1975,6 +1976,9 @@ function Globe3DView({
           ))}
         </MapLayersPanel>
       )}
+      {/* NOAA's storm-watch countdown, beside the Layers panel as on the 2-D map. A chip, not a 3-D
+          object: nothing on the way is drawn as if it were measured. */}
+      <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
       {satAllHidden > 0 && (
         // The 2-D map renders this same hint word for word — one key, deliberately.
         <div className="map-empty-hint sats">{t('map.sats.allHidden', { count: satAllHidden })}</div>

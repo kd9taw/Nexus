@@ -1231,6 +1231,66 @@ export interface KpForecast {
   fetchedAt?: number | null
 }
 
+/** "Coming" (`get_arrival_outlook`): what NOAA expects to reach Earth, three ways of knowing
+ *  kept apart — the watch (NOAA's call), the model run (WSA-Enlil) and the measurement at L1 —
+ *  each with its own time. Every part is absent when it is not known; nothing is filled in.
+ *  Times are Unix seconds UTC. */
+export interface ArrivalWatch {
+  serial: number
+  code: string
+  issued: number
+  days: { day: number; g: number }[]
+  comment: string | null
+  /** First G1+ day's 00Z … the last one's end. */
+  window: [number, number] | null
+  maxG: number
+}
+export interface ArrivalScaleDay {
+  day: number
+  g: number
+  rMinorPct: number | null
+  rMajorPct: number | null
+  sPct: number | null
+}
+export interface ArrivalModelPoint {
+  at: number
+  speed: number
+  density: number
+  cloud: boolean
+}
+export interface ArrivalModel {
+  /** The model file's own publication time, when the server sent one. */
+  runAt: number | null
+  fetchedAt: number
+  peak: ArrivalModelPoint | null
+  arrival: { riseAt: number; start: number; end: number; speedFrom: number; speedTo: number; cloud: boolean } | null
+}
+export interface ArrivalL1Sample {
+  at: number
+  arrives: number
+  speed: number | null
+  bt: number | null
+}
+export interface ArrivalL1 {
+  latest: ArrivalL1Sample | null
+  jump: {
+    at: number
+    arrives: number
+    speedBefore: number | null
+    speedAfter: number | null
+    btBefore: number | null
+    btAfter: number | null
+  } | null
+}
+export interface ArrivalOutlook {
+  watch: ArrivalWatch | null
+  scales: { issued: number | null; days: ArrivalScaleDay[] } | null
+  model: ArrivalModel | null
+  l1: ArrivalL1 | null
+  /** The 3-day forecast's geomagnetic rationale: NOAA's own words, untranslated. */
+  rationale: { issued: number; text: string } | null
+}
+
 /** One day of NOAA SWPC's daily solar indices. `null` = SWPC published no value for that day —
  *  never a zero. A sunspot number of 0 is a real reading (a spotless Sun). */
 export interface DailySolarIndex {

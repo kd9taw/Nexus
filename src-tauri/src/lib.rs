@@ -36,6 +36,9 @@ mod account_sign_in;
 /// One alert, made in Rust where it is raised, with its id and a versioned shape: what every window
 /// and a computer driving the station hear.
 mod alert;
+/// `get_arrival_outlook`: NOAA's watch, forecast days, model run and L1 wind, each kept and
+/// backed off on its own.
+mod arrival_outlook;
 /// Test builds only (the `bench-road-switch` feature): the switch on a computer driving a station
 /// that blocks its command link or its Stop road, one at a time, so each road can be tried alone.
 #[cfg(feature = "bench-road-switch")]
@@ -42648,6 +42651,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_ota_spots,
         get_ota_map_spots,
         get_kp_forecast,
+        arrival_outlook::get_arrival_outlook,
         get_solar_indices,
         connect_web_status,
         search_parks,

@@ -3814,6 +3814,31 @@ export const EN = {
   'map.pca.chip':
     '☢ Proton event · S{{scale}} · polar caps absorbing ~{{db}} dB @30 MHz (day) — high-lat paths degraded',
 
+  // ---- The "coming" chip (map): NOAA's geomagnetic watch, the WSA-Enlil model run and the solar
+  // wind measured at L1, three sources kept apart — only the L1 line may say "arrived". {{g}} is
+  // the NOAA G level digit; {{days}} a UT day or day range ("31 Oct–1 Nov"); {{in}} one of the
+  // `map.arrival.in.*` countdowns; times are "31 Oct 04:13Z". WSA-Enlil and L1 are names, kept.
+  'map.arrival.watch.ahead': '🧲 G{{g}} watch · NOAA expects {{days}} ({{in}})',
+  'map.arrival.watch.now': '🧲 G{{g}} watch in force · NOAA expects it through {{last}}',
+  'map.arrival.in.mins': 'in {{n}} min',
+  'map.arrival.in.hours': 'in {{n}} h',
+  'map.arrival.in.days': 'in {{d}} d {{h}} h',
+  'map.arrival.model.peak': 'Model (WSA-Enlil): wind up to {{speed}} km/s around {{when}}',
+  'map.arrival.model.arrival': 'Model (WSA-Enlil): arrival between {{from}} and {{to}}, {{speed}} km/s',
+  'map.arrival.l1.jump': 'Arrived at L1 {{at}} · reaching Earth ~{{earth}} (measured)',
+  'map.arrival.title.watch': 'NOAA geomagnetic storm watch {{code}}, serial {{serial}}, issued {{issued}} — a forecast, by the UT day.',
+  // {{comment}} is NOAA's own English text, shown as NOAA wrote it.
+  'map.arrival.title.comment': 'NOAA comment: {{comment}}',
+  'map.arrival.title.model':
+    'Model line: the WSA-Enlil run published {{run}} — a model, not a measurement; its arrival times are typically off by up to 6 hours.',
+  'map.arrival.title.modelNoRun':
+    'Model line: the latest WSA-Enlil run — a model, not a measurement; its arrival times are typically off by up to 6 hours.',
+  'map.arrival.title.l1':
+    'Arrived: a jump in the solar wind measured at L1, 1.5 million km sunward, with NOAA\'s time for it to reach Earth.',
+  'map.arrival.title.l1Now': 'Solar wind at L1 now {{speed}} km/s (measured {{at}}, reaches Earth ~{{earth}}).',
+  'map.arrival.title.why':
+    'Solar wind takes one to three days from the sun. A flare is never "coming": its X-rays arrive at light speed, so it is here the instant it is seen.',
+
   // The flare chip and its tail. Each phase is its OWN statement appended to the chip — see
   // the `logbook.import.dupes` note — because where "recovering" belongs in the sentence is
   // a decision for each language. `{{cls}}` is the GOES class (M2.1) and `{{r}}` the R-scale.
@@ -4225,6 +4250,8 @@ export const EN = {
     '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded · fade ~{{mins}} min',
   'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} (Kp {{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
   'prop.stormAlert.forecast': '🧲 NOAA expects G{{g}} (Kp {{kp}}) from {{when}} — HF likely degraded then',
+  // The watch heads-up, once per NOAA watch. {{days}} is a UT day or range ("31 Oct–1 Nov").
+  'prop.arrivalAlert.watch': '🧲 NOAA storm watch: G{{g}} expected {{days}} — HF likely degraded then',
   'prop.openingAlert.thin':
     '📻 {{band}} possible {{mode}} — thin evidence: {{stations}} stns to ~{{dist}} {{octant}}; may not be audible by ear',
 
@@ -10813,6 +10840,8 @@ export const EN = {
   'connect.kp.peak': 'Worst ahead: Kp {{kp}} at {{when}}',
   'connect.kp.onset': 'Storm level (Kp {{kp}}) expected from {{when}}',
   'connect.kp.relief': 'Settling below storm level around {{when}}',
+  // The pane's hover: the 3-day forecast's geomagnetic rationale. {{text}} is NOAA's own English.
+  'connect.kp.rationale.title': 'NOAA forecaster, issued {{issued}}: {{text}}',
   'connect.kp.chart.aria': 'Planetary K index, measured hours then forecast',
   'connect.kp.bar.title': '{{when}} · Kp {{kp}} · {{kind}}{{scale}}',
   'connect.kp.kind.observed': 'measured',

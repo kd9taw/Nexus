@@ -232,6 +232,8 @@ const MIGRATED = [
   'stormAlert.ts',
   // The flare heads-up toast, its copy in the catalog like the storm toast's.
   'flareAlert.ts',
+  // The NOAA storm-watch heads-up toast (once per watch serial).
+  'arrivalAlert.ts',
   'tv/ConnectTv.tsx',
   // The dashboard bar over the Connect pop-out and the TV page: the index names, `UTC` and the
   // clock digits are tokens; its prose (the Stay behind toggle, the hover words) is the catalog's.
@@ -254,6 +256,8 @@ const MIGRATED = [
   'components/prop/ChasePane.tsx',
   'components/prop/ClockPane.tsx',
   'components/prop/KpOutlookPane.tsx',
+  // The "coming" chip on the map and globe: NOAA's watch, the model line, a measured arrival.
+  'components/prop/ArrivalChip.tsx',
   'components/prop/DxpedCalendar.tsx',
   'components/prop/DxpedDigest.tsx',
   'components/prop/DxpedMonth.tsx',
