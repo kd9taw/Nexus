@@ -4550,6 +4550,10 @@ fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
 /// no QSO: it neither confirms a contact nor names one the log lacks, so it is dropped. Nexus's
 /// InBox request does not filter listeners out (eQSL's `HamOnly`).
 ///
+/// Every other row is a card sent to the operator, so it confirms its contact by eQSL with or
+/// without `EQSL_QSL_RCVD`: the spec sends that field (and `EQSL_QSLRDATE`) only "if we have
+/// stored the date this record was added", so an older card carries neither.
+///
 /// Keyed on the FETCH SOURCE, as [`lotw_channel_fixup`] is, for the same reason: the same fields
 /// in another program's ADIF are that program's own, and [`crate::reconcile`]'s sent-mark merge is
 /// what a shared log's recovery from disk needs, so neither the parse nor the merge can do this.
@@ -4564,6 +4568,10 @@ fn eqsl_inbox_fixup(text: &str, incoming: &mut Vec<QsoRecord>) {
     });
     for r in incoming.iter_mut() {
         r.qsl_sent = QslSent::default();
+        // eQSL is no award channel, so `award_confirmed` is unchanged; an Authenticity-Guaranteed
+        // mark stays the card's own field.
+        r.qsl_rcvd.eqsl = true;
+        r.confirmed = r.qsl_rcvd.any();
     }
 }
 
@@ -11401,6 +11409,84 @@ mod tests {
             (s.matched, s.newly_confirmed_any, s.orphans.len()),
             (1, 1, 1)
         );
+    }
+
+    /// ★ An older eQSL card confirms its contact. eQSL's DownloadInBox spec sends `EQSL_QSL_RCVD`
+    /// and `EQSL_QSLRDATE` only for a record whose upload date eQSL stored, so an older card
+    /// carries neither. Read by field name it was no confirmation: it confirmed nothing, and with
+    /// no contact to match it was not even reported as a QSO the log lacks. A card in the InBox
+    /// is one sent to the operator, so the InBox itself is the confirmation.
+    #[test]
+    fn an_older_eqsl_card_without_its_received_fields_still_confirms() {
+        let old = |call: &str, more: &str| {
+            let row = without_field(&inbox_card(call, more), "EQSL_QSL_RCVD");
+            without_field(&row, "EQSL_QSLRDATE")
+        };
+        let inbox = eqsl_inbox(&[
+            old("W1AW", ""),
+            old("K1ABC", "<APP_EQSL_AG:1>Y"),
+            old("N0NE", ""),
+        ]);
+        assert!(
+            !inbox.contains("EQSL_QSL_RCVD") && !inbox.contains("EQSL_QSLRDATE"),
+            "premise: {inbox}"
+        );
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        lb.add(rec("K1ABC", "20m", 1_700_000_000));
+        let s = lb.merge_report(&inbox);
+        assert_eq!(
+            (s.matched, s.newly_confirmed_any, s.orphans.len()),
+            (2, 2, 1),
+            "{s:?}"
+        );
+        assert!(s.orphans[0].reason.contains("N0NE"), "{s:?}");
+        let by_call = |call: &str| {
+            lb.records()
+                .iter()
+                .find(|r| r.call == call)
+                .map(|r| QsoRecord::clone(r))
+                .expect("logged")
+        };
+        let (w1aw, k1abc) = (by_call("W1AW"), by_call("K1ABC"));
+        assert!(w1aw.qsl_rcvd.eqsl && w1aw.confirmed);
+        assert_eq!(
+            extra_field(&w1aw, "EQSL_QSLRDATE"),
+            None,
+            "no date stands in for the one eQSL did not send"
+        );
+        // An eQSL card is no award confirmation, and only an AG member's card is marked AG.
+        assert!(!w1aw.award_confirmed && !k1abc.award_confirmed);
+        assert_eq!(
+            (record_eqsl_ag(&w1aw), record_eqsl_ag(&k1abc)),
+            (false, true)
+        );
+        assert!(
+            report_rows(&inbox).iter().all(|r| r.qsl_rcvd.eqsl),
+            "Check confirmations reads the rows the merge reads"
+        );
+
+        // Controls. An older listener's report is still no QSO.
+        let listened = eqsl_inbox(&[
+            old("W1AW", "<APP_EQSL_SWL:1>Y"),
+            old("ONL4567", "<APP_EQSL_SWL:1>Y"),
+        ]);
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = lb.merge_report(&listened);
+        assert_eq!(
+            (s.matched, s.newly_confirmed_any, s.orphans.len()),
+            (0, 0, 0),
+            "{s:?}"
+        );
+        assert!(!lb.records()[0].confirmed);
+        // The same row in a file that is not eQSL's InBox states no confirmation.
+        let third_party = format!("<EOH>\n{}", old("W1AW", ""));
+        let mut other = Logbook::new();
+        other.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = other.merge_report(&third_party);
+        assert_eq!((s.newly_confirmed_any, s.orphans.len()), (0, 0), "{s:?}");
+        assert!(!other.records()[0].confirmed);
     }
 
     #[test]
