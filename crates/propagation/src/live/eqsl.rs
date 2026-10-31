@@ -38,8 +38,11 @@ pub fn fetch_inbox(inbox_url: &str) -> Result<String, String> {
     // Step 1 — the built-page HTML.
     let html = get_text(&client, inbox_url)?;
     if !eqsl::is_built_page(&html) {
-        // Bad creds / no data. The HTML body carries no secret, but stay generic.
-        return Err("eQSL: login failed or no data — check your username/password".to_string());
+        // An empty range is the InBox with no cards; a refused login or a page that is neither
+        // is Nexus's own words for each, never the page's.
+        return eqsl::not_built_answer(&html)
+            .map(str::to_string)
+            .map_err(str::to_string);
     }
     let href = eqsl::extract_adi_href(&html)
         .ok_or_else(|| "eQSL: no download link found in the response".to_string())?;
@@ -50,6 +53,22 @@ pub fn fetch_inbox(inbox_url: &str) -> Result<String, String> {
 
     // Step 2 — the .adi file.
     get_text(&client, &adi_url)
+}
+
+/// GET step 1 of the InBox download alone and return its page — the Settings Test of the eQSL
+/// login (`inbox_url` from [`tempo_core::eqsl::build_login_test_url`]). The `.adi` the page may
+/// link to is never fetched; the caller reads the page with
+/// [`tempo_core::eqsl::classify_login_test`]. Same client as [`fetch_inbox`]: cookieless, HTTPS
+/// only, no redirects, redacted errors.
+pub fn fetch_login_page(inbox_url: &str) -> Result<String, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .user_agent(UA)
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "eQSL: HTTP client initialization failed".to_string())?;
+    get_text(&client, inbox_url)
 }
 
 /// POST a `name=value` form body — the eQSL `ImportADIF` upload. Same HTTPS +
@@ -117,6 +136,16 @@ mod tests {
         let err = fetch_inbox(secret).unwrap_err();
         assert!(!err.contains("Sup3rSecret"), "password leaked: {err}");
         assert!(!err.contains("Password"), "param name leaked: {err}");
+        assert!(!err.contains("eqsl.example"), "host/URL leaked: {err}");
+        assert!(err.starts_with("eQSL: "), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn the_login_test_rejects_http_without_leaking_it() {
+        let secret =
+            "http://eqsl.example/qslcard/DownloadInBox.cfm?UserName=AB1CD&Password=Sup3rSecret";
+        let err = fetch_login_page(secret).unwrap_err();
+        assert!(!err.contains("Sup3rSecret"), "password leaked: {err}");
         assert!(!err.contains("eqsl.example"), "host/URL leaked: {err}");
         assert!(err.starts_with("eQSL: "), "unexpected message: {err}");
     }

@@ -757,7 +757,7 @@ fn the_rust_waveform_decodes_with_the_vendored_decoder() {
         for (s, &x) in frame.iter_mut().zip(&wave) {
             *s = (x * 1_000.0) as i16;
         }
-        let decoded = ft8::decode_frame(&frame, 200, 3_000, 3, "", "", 0, 0, false, false);
+        let decoded = ft8::decode_frame(&frame, 200, 3_000, 3, "", "", 0, 0, false, false, false);
         assert!(
             decoded.iter().any(|d| d.message.trim() == msg),
             "FT8 {msg:?} decoded as {:?}",

@@ -35,6 +35,25 @@ pub struct PathPrediction {
     /// Per-UTC-hour MUF (24 values, hour 0..23) for the day containing the scan —
     /// the ceiling line drawn above the band×hour outlook heatmap.
     pub muf_hourly: Vec<f32>,
+    /// Model-free path geometry (polar cap, auroral oval, grey line, Kp per hour) for a
+    /// per-path request. The engines never fill it — the caller attaches it with the live
+    /// space weather it holds ([`crate::path_geometry`]); absent, the key is omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<crate::pathgeo::PathGeometry>,
+    /// The same request predicted along the long path (the other way round the great
+    /// circle), with its own geometry. Like `geometry`, attached by the per-path caller and
+    /// only when the engine can model the long route (P.533); absent, the key is omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub long_path: Option<Box<PathPrediction>>,
+    /// Per band, which route the model favours at the request's hour and why
+    /// ([`crate::route::compare_routes`]). Present only beside `long_path`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routes: Option<Vec<crate::route::RouteCall>>,
+    /// The request's day as a band × UTC-hour grid of both routes, with the route the model
+    /// favours each hour and the hour's Kp ([`crate::pathday::path_day`]) — what the
+    /// path-over-the-day strip draws. Attached by the per-path caller; absent, the key is omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub day: Option<crate::pathday::PathDay>,
 }
 
 impl PathPrediction {
@@ -96,6 +115,22 @@ pub trait PathPredictor: Send + Sync {
     /// Predict the path to `dx` (lat, lon) over the 24 h from `from_unix` under
     /// space weather `wx`. For "now", pass the current time.
     fn predict(&self, dx: (f64, f64), from_unix: i64, wx: &SpaceWx) -> PathPrediction;
+
+    /// [`Self::predict`] along a chosen route. The default models the short path only and
+    /// returns `None` for the long one, so an engine with no long-path method says so instead
+    /// of answering with the short path's numbers.
+    fn predict_route(
+        &self,
+        dx: (f64, f64),
+        route: crate::route::Route,
+        from_unix: i64,
+        wx: &SpaceWx,
+    ) -> Option<PathPrediction> {
+        match route {
+            crate::route::Route::Short => Some(self.predict(dx, from_unix, wx)),
+            crate::route::Route::Long => None,
+        }
+    }
 }
 
 /// Default offline engine — the physics-lite [`PathModel`]. Always available, no
@@ -141,6 +176,10 @@ impl PathPredictor for HeuristicEngine {
             bands,
             muf_now,
             muf_hourly,
+            geometry: None,
+            long_path: None,
+            routes: None,
+            day: None,
         }
     }
 }
@@ -248,7 +287,10 @@ pub fn band_outlook_ring(
                 *slot = slot.max(m);
             }
         }
-        for bo in p.bands {
+        for mut bo in p.bands {
+            // The ring's bands answer "which band, any direction": one azimuth's hop
+            // geometry would be read as THE path's, so it is not carried.
+            bo.detail = None;
             best.entry(bo.band.clone())
                 .and_modify(|e| {
                     if bo.score > e.score {
@@ -269,6 +311,10 @@ pub fn band_outlook_ring(
         bands,
         muf_now,
         muf_hourly,
+        geometry: None,
+        long_path: None,
+        routes: None,
+        day: None,
     }
 }
 
@@ -454,6 +500,7 @@ mod tests {
             reliability: 0.0,
             mode_now: Vec::new(),
             mode_hourly: Vec::new(),
+            detail: None,
         }
     }
 

@@ -145,8 +145,8 @@ function isNonstandardCall(call: string): boolean {
  * whole frame says what that bit MEANS, and either call can force it
  * (`packjt77.f90:1223` — `if (i1psuffix.ge.4.or.i2psuffix.ge.4) i3=2`). So `/P`+`/P`,
  * `/R`+`/R`, `/P`+plain and `/R`+plain all pack, but one `/P` anywhere makes the frame
- * Type 2 and the partner's `/R` comes back off the air as `/P` — `F4CYH/P KD9TAW/R
- * EN52` decodes as `F4CYH/P KD9TAW/P EN52`, a well-formed message naming a station
+ * Type 2 and the partner's `/R` comes back off the air as `/P` — `K1ABC/P W9XYZ/R
+ * EN52` decodes as `K1ABC/P W9XYZ/P EN52`, a well-formed message naming a station
  * that does not exist. The pair must fall back to the hashed forms, which carry both
  * calls verbatim.
  *

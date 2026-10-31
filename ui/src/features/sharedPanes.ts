@@ -89,6 +89,12 @@ export const SHARED_PANES: readonly SharedPane[] = [
   // grows. Not on the hosted page: its contacts are a question to the station's logbook, which a
   // browser does not ask.
   { id: 'activation', pane: 'activation', role: 'fill', weight: 1, remote: false },
+  // The selected station's path over the day: a band × hour strip of fixed rows, from the same path
+  // outlook the Band Outlook box reads (which the hosted page has).
+  { id: 'pathDay', pane: 'pathDay', role: 'content', remote: true },
+  // The ten regions' strips, which grow when a region is opened and scroll in their box. Not on the
+  // hosted page until its region sweep is checked there.
+  { id: 'pathRegions', pane: 'pathRegions', role: 'fill', weight: 1, remote: false },
 ]
 
 const BY_ID = new Map<string, SharedPane>(SHARED_PANES.map((e) => [e.id, e]))

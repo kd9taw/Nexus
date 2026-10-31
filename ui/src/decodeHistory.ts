@@ -61,6 +61,14 @@ export const RX_TOL_HZ = 50
 /** Fallback own-TX cycle key width (ms) when a mine row carries no txAt. */
 const SLOT_MS = 15_000
 
+/** Same fields, same values. Every DecodeEntry field is a primitive except `heard`, which only
+ *  late rows carry and which {@link DecodeHistory.ingest} never builds. */
+function sameEntry(a: DecodeEntry, b: DecodeEntry): boolean {
+  const ka = Object.keys(a) as (keyof DecodeEntry)[]
+  if (ka.length !== Object.keys(b).length) return false
+  return ka.every((k) => a[k] === b[k])
+}
+
 /** T/R period per tier (s) — mirrors the engine's modes::slot_secs. The slot
  * index is floor(epoch_ms / period_ms), so slot × period = the period's UTC start. */
 export const TIER_PERIOD_SECS: Record<Tier, number> = {
@@ -97,6 +105,27 @@ export const TIER_PERIOD_SECS: Record<Tier, number> = {
  *  the live T/R period (`link.periodSecs`) where the caller has it; the table's is the default. */
 export function periodStartMs(slot: number, tier: Tier, periodSecs: number = TIER_PERIOD_SECS[tier]): number {
   return slot * periodSecs * 1000
+}
+
+/** The station's slot clock as the pane knows it: the live T/R period, and the offset (ms, positive =
+ *  the computer runs fast) the station steers its slots by (`radio.clockOffsetMs`). */
+export interface SlotClock {
+  periodMs: number
+  offsetMs: number
+}
+
+/**
+ * The slot an own over was sent in, from its transmit stamp — numbered as the engine numbers slots
+ * (`floor(slot-clock ms / period)`), so an over sent in s sorts with the decodes ingested at s.
+ *
+ * `txAt` is the COMPUTER's clock truncated to the second, so the over went out somewhere in
+ * [txAt, txAt + 1 s) of it; the slot clock is that minus the steering offset. An over keys at or
+ * after its period's start, and a boundary over a few hundred ms into it, so the period is read from
+ * the LATEST moment the stamp allows: the start of the second would put a boundary over (and every
+ * FT4 boundary, which falls on the half second) in the period before.
+ */
+export function ownTxSlot(txAtSec: number, clock: SlotClock): number {
+  return Math.floor((txAtSec * 1000 + 999 - clock.offsetMs) / clock.periodMs)
 }
 
 /**
@@ -152,7 +181,13 @@ export function passesFilter(d: DecodeRow, filter: DecodeFilter, rxOffsetHz: num
 }
 
 /** Sort for display. 'time' is WSJT-X chronological: OLDEST first, newest at
- * the bottom (slot order, then first-heard order within a slot). */
+ * the bottom (slot order, then first-heard order within a slot).
+ *
+ * ⚠️ WITHIN A SLOT, RECEIVED ROWS COME BEFORE OWN OVERS. A decode ingested at slot s was heard in
+ * s-1; an over in slot s was sent during s, so it always answers or follows those decodes. Their
+ * two `at` clocks cannot order them: a decode's is when it reached the pane (a later pass lands
+ * seconds into s), an over's is its whole transmit second (often s+0). Compared directly, the 73
+ * sent in reply to a station's RR73 drew ABOVE that RR73. */
 export function orderEntries(list: DecodeEntry[], sort: DecodeSort): DecodeEntry[] {
   const out = [...list]
   out.sort((a, b) => {
@@ -164,7 +199,7 @@ export function orderEntries(list: DecodeEntry[], sort: DecodeSort): DecodeEntry
       case 'dt':
         return a.dtSec - b.dtSec
       default:
-        return a.slot - b.slot || a.at - b.at
+        return a.slot - b.slot || Number(!!a.mine) - Number(!!b.mine) || a.at - b.at
     }
   })
   return out
@@ -199,6 +234,19 @@ export class DecodeHistory {
   private erasedThroughSec: number | null = null
   /** The last NAMED band this pane was bound to — what an off-band dial keeps pointing at. */
   private lastBand = ''
+  /**
+   * Bumped by every change to what {@link entries} returns, and only then.
+   *
+   * The snapshot re-offers the same decode list at 4 Hz for a whole period, so most polls change
+   * nothing; the pane keys its filter/sort pipeline and its re-render on this counter, so a poll
+   * that changed nothing costs neither (two panes × 3,000 rows × every poll was a CPU report).
+   */
+  private ver = 0
+
+  /** The change counter (see `ver`): equal values mean equal {@link entries}. */
+  get version(): number {
+    return this.ver
+  }
 
   /**
    * Bind the history to a band+tier; a change WIPES it. Returns true if reset.
@@ -220,6 +268,7 @@ export class DecodeHistory {
     if (this.scope === key) return false
     this.scope = key
     this.map.clear()
+    this.ver++
     // A scope change is a fresh pane, not an erase: the new band's own-TX rows are all still
     // to come, and carrying a watermark across would silently hide the first overs on it.
     this.erasedThroughSec = null
@@ -230,11 +279,18 @@ export class DecodeHistory {
   reset(): void {
     this.map.clear()
     this.erasedThroughSec = null
+    this.ver++
   }
 
-  /** Ingest one snapshot poll's decode list for the given slot. */
-  ingest(decodes: DecodeRow[], slot: number, now: number = Date.now()): void {
+  /**
+   * Ingest one snapshot poll's decode list for the given slot. Returns whether the history
+   * changed. A re-polled row that changed nothing keeps its existing entry OBJECT, so a row the
+   * pane already drew is the same value next poll; a row whose flags moved (worked, needs) is a
+   * new one.
+   */
+  ingest(decodes: DecodeRow[], slot: number, now: number = Date.now(), clock?: SlotClock): boolean {
     const m = this.map
+    let changed = false
     for (const d of decodes) {
       // Skip an own-TX row the operator has already erased — the engine re-offers its whole
       // ring every poll (see `erasedThroughSec`). Only `mine` rows carry `txAt`, and a row
@@ -245,8 +301,11 @@ export class DecodeHistory {
       // transmission re-emitted across poll boundaries stays ONE row and each
       // new cycle is a new row. Received decodes key per (slot, message, ~freq):
       // re-polls dedupe, re-transmissions next period append (WSJT-X flow).
+      // The message is part of an own row's key because txAt is whole seconds: a mid-over
+      // switch (the report on the air, then the 73 the RR73 calls for) records two overs in
+      // the same second, and keyed on txAt alone the second replaced the first.
       const id = d.mine
-        ? `mine|${d.txAt ?? Math.floor(now / SLOT_MS)}`
+        ? `mine|${d.txAt ?? Math.floor(now / SLOT_MS)}|${d.message}`
         : `${slot}|${d.message}|${Math.round(d.freqHz / 5)}`
       const prev = m.get(id)
       // Keep the first-heard timestamp (chronological position is stable);
@@ -260,35 +319,62 @@ export class DecodeHistory {
       // the timeline"). Pin it to the period its own transmit time names.
       // (SLOT_MS is the FT8 period; on FT4 the estimate lands an older period —
       // never the live one, which is the failure that matters.)
+      // With the pane's slot clock the transmit time names the period exactly
+      // ({@link ownTxSlot}) — and must: the ingest `slot` is the last DECODED one, two
+      // periods back for an over keyed at a boundary before that period's decodes fold.
       const slotFor =
         prev?.slot ??
         (d.mine && d.txAt != null
-          ? slot - Math.max(0, Math.round((now - d.txAt * 1000) / SLOT_MS))
+          ? clock
+            ? ownTxSlot(d.txAt, clock)
+            : slot - Math.max(0, Math.round((now - d.txAt * 1000) / SLOT_MS))
           : slot)
-      m.set(id, { ...d, slot: slotFor, at, id })
+      const next: DecodeEntry = { ...d, slot: slotFor, at, id }
+      if (prev && sameEntry(prev, next)) continue
+      m.set(id, next)
+      changed = true
     }
     if (m.size > MAX_HISTORY) {
       const drop = m.size - MAX_HISTORY
       const it = m.keys()
       for (let i = 0; i < drop; i++) m.delete(it.next().value as string)
     }
+    if (changed) this.ver++
+    return changed
   }
 
   /**
    * Ingest the period a band or mode change caught while it was decoding (the snapshot's
    * `lateDecodes`), as WSJT-X shows it: after the wipe the change made, under its own slot, with
-   * the band, mode, dial and period it was heard on kept on every row.
+   * the band, mode, dial and period it was heard on kept on every row. Returns whether the
+   * history changed; an unchanged re-poll keeps each entry object, as {@link ingest} does.
    */
-  ingestLate(late: LateDecodes, now: number = Date.now()): void {
+  ingestLate(late: LateDecodes, now: number = Date.now()): boolean {
     const heard = { band: late.band, dialMhz: late.dialMhz, tier: late.tier, periodStartMs: late.periodStartMs }
+    let changed = false
     for (const d of late.rows) {
       const id = `late|${late.slot}|${d.message}|${Math.round(d.freqHz / 5)}`
-      this.map.set(id, { ...d, slot: late.slot, at: this.map.get(id)?.at ?? now, id, heard })
+      const prev = this.map.get(id)
+      const next: DecodeEntry = { ...d, slot: late.slot, at: prev?.at ?? now, id, heard }
+      // `heard` is a fresh object per call: compare it by its fields, then the rest by value.
+      if (
+        prev?.heard &&
+        prev.heard.band === heard.band &&
+        prev.heard.dialMhz === heard.dialMhz &&
+        prev.heard.tier === heard.tier &&
+        prev.heard.periodStartMs === heard.periodStartMs &&
+        sameEntry(prev, { ...next, heard: prev.heard })
+      )
+        continue
+      this.map.set(id, next)
+      changed = true
     }
     if (this.map.size > MAX_HISTORY) {
       const it = this.map.keys()
       for (let i = this.map.size - MAX_HISTORY; i > 0; i--) this.map.delete(it.next().value as string)
     }
+    if (changed) this.ver++
+    return changed
   }
 
   /**
@@ -299,6 +385,7 @@ export class DecodeHistory {
    */
   erase(nowSec: number = Math.floor(Date.now() / 1000)): void {
     this.map.clear()
+    this.ver++
     this.erasedThroughSec =
       this.erasedThroughSec == null ? nowSec : Math.max(this.erasedThroughSec, nowSec)
   }

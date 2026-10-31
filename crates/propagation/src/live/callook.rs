@@ -25,6 +25,10 @@ pub fn fetch(url: &str) -> Result<String, String> {
         .get(url)
         .send()
         .map_err(|e| neterr::redact("callook.info", &e))?;
+    read_body(resp)
+}
+
+fn read_body(resp: reqwest::blocking::Response) -> Result<String, String> {
     let status = resp.status();
     if !status.is_success() {
         return Err(format!(
@@ -32,13 +36,32 @@ pub fn fetch(url: &str) -> Result<String, String> {
             status.as_u16()
         ));
     }
-    resp.text()
-        .map_err(|_| "callook.info: could not read the response body".to_string())
+    super::body::read_capped(resp, super::body::CALLBOOK_REPLY_BYTES, "callook.info")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An answer of a normal size is read whole; one past the callbook limit is refused, not
+    /// read to the end.
+    #[test]
+    fn a_callbook_answer_past_the_limit_is_refused() {
+        let normal = r#"{"status":"VALID","type":"PERSON","current":{"callsign":"W1AW","operClass":""},"name":"ARRL HQ OPERATORS CLUB"}"#;
+        let huge = vec![b' '; super::super::body::CALLBOOK_REPLY_BYTES as usize + 1];
+        let port = super::super::body::serve(vec![
+            super::super::body::ok_reply(normal.as_bytes()),
+            super::super::body::ok_reply(&huge),
+        ]);
+        let get =
+            || reqwest::blocking::get(format!("http://127.0.0.1:{port}/")).expect("loopback reply");
+        assert_eq!(read_body(get()).as_deref(), Ok(normal));
+        let err = read_body(get()).unwrap_err();
+        assert!(
+            err.starts_with("callook.info: ") && err.contains("larger than"),
+            "{err}"
+        );
+    }
 
     #[test]
     fn non_https_url_is_rejected_without_naming_the_url() {

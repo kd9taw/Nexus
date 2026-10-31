@@ -62,6 +62,10 @@ pub struct KpPoint {
 pub struct KpForecast {
     /// Every sample the feed carried, oldest first.
     pub points: Vec<KpPoint>,
+    /// When Nexus fetched this copy (Unix seconds) — set by the command layer, so a copy
+    /// served after a failed refetch says how old it is. `None` from the parser.
+    #[serde(default)]
+    pub fetched_at: Option<i64>,
 }
 
 impl KpForecast {
@@ -127,7 +131,10 @@ pub fn parse_kp_forecast(json: &str) -> KpForecast {
         })
         .collect();
     points.sort_by_key(|p| p.time_unix);
-    KpForecast { points }
+    KpForecast {
+        points,
+        fetched_at: None,
+    }
 }
 
 #[cfg(test)]

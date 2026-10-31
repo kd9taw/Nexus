@@ -25,3 +25,12 @@ export function lotwBacklog(log: LoggedQso[]): { unsent: number; timeless: numbe
   }
   return { unsent, timeless }
 }
+
+/** Why the row's own LoTW button sends nothing for this contact — the backlog's reasons, one
+ *  contact at a time — or null when it is owed and goes to TQSL. */
+export function lotwOneRefusal(q: LoggedQso): 'confirmed' | 'sent' | 'timeless' | null {
+  if (q.awardConfirmed) return 'confirmed'
+  if (!lotwEligible(q)) return 'sent'
+  if (q.timeKnown === false) return 'timeless'
+  return null
+}

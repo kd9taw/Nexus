@@ -12,7 +12,7 @@ Yes. Nexus is **GPLv3** open-source software. Source lives at [kd9taw/nexus](htt
 
 ### What operating systems does Nexus run on?
 
-**Windows, macOS, Linux and Raspberry Pi** all ship, built from the same tree every release: an NSIS installer, a signed and notarized Apple Silicon `.dmg` (since 1.5.0), an AppImage, a PC `.deb`, and a `.deb` per live Raspberry Pi OS base. Intel Macs are source-build only, and no mobile or web client exists — see [Roadmap](Roadmap.md).
+**Windows, macOS, Linux and Raspberry Pi** all ship, built from the same tree every release: an NSIS installer, signed and notarized `.dmg`s for Apple Silicon (since 1.5.0) and Intel Macs (from the release after 1.21.0), both for macOS 12 or later, an AppImage, a PC `.deb`, and a `.deb` per live Raspberry Pi OS base. No mobile or web client exists — see [Roadmap](Roadmap.md).
 
 ---
 
@@ -115,7 +115,7 @@ Yes — a live single-signal decoder follows the station at your marker pitch an
 
 ### Does Nexus run on Linux or macOS?
 
-The desktop shell is packaged for **Windows, macOS (Apple Silicon), Linux and Raspberry Pi**, all from the same tree. The macOS build ships since 1.5.0 as a signed, notarized `.dmg` and self-updates; Intel Macs build from source. You can also build any platform from source — see [Building from Source](Building-from-Source.md).
+The desktop shell is packaged for **Windows, macOS (Apple Silicon and Intel, macOS 12 or later), Linux and Raspberry Pi**, all from the same tree. The macOS build ships since 1.5.0 as a signed, notarized `.dmg` and self-updates; the Intel `.dmg` joins it from the release after 1.21.0. You can also build any platform from source — see [Building from Source](Building-from-Source.md).
 
 ---
 

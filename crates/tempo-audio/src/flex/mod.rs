@@ -109,6 +109,7 @@ mod tests;
 
 use std::net::{SocketAddr, TcpListener, ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -1250,21 +1251,37 @@ fn watch(
     };
     while !stop.load(Ordering::Relaxed) {
         let Some(conn) = conn.upgrade() else { break };
-        let mut event = conn.next_event(Duration::from_millis(200));
+        let mut event = conn.recv_event(Duration::from_millis(200));
         // The session publishes a step's state before it sends that step's events, so one already
         // reading closed may not have sent its last ones yet, the unkey alarm among them: a closed
         // session is read up to its last event (`Closed`), waiting at most `SETUP_TIMEOUT`. Once
         // it has sent them all, its channel answers at once, with nothing: stop rather than spin.
-        let ended = event.is_none() && conn.snapshot().phase == Phase::Closed;
+        let ended = event.is_err() && conn.snapshot().phase == Phase::Closed;
         if ended {
-            event = conn.next_event(SETUP_TIMEOUT);
+            event = conn.recv_event(SETUP_TIMEOUT);
         }
+        let on_air = conn.ours_on_air();
         drop(conn);
-        let Some(event) = event else {
-            if ended {
+        let event = match event {
+            Ok(event) => event,
+            Err(RecvTimeoutError::Timeout) if !ended => continue,
+            Err(RecvTimeoutError::Timeout) => break,
+            // The driver stopped without its last event (`Closed`): a session that died. Its
+            // channel answers at once from here on, so stop, whatever its phase reads, and say
+            // so if something of ours may be on the air, as a session lost mid-over does.
+            Err(RecvTimeoutError::Disconnected) => {
+                tempo_core::applog::warn(
+                    "cat",
+                    &format!("Flex client ({radio}): session ended without closing"),
+                );
+                if on_air {
+                    raise(
+                        "the session with the radio ended during a transmission — it may still \
+                         be transmitting. Check the radio now.",
+                    );
+                }
                 break;
             }
-            continue;
         };
         match event {
             Event::Handle(handle) => remember_handle(radio, handle),

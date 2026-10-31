@@ -26,6 +26,12 @@
 // storm. The sheet letters a mark in the gauges' warning colour, amber and never the transmit red, and
 // in the light themes keeps the ink and underlines it instead (styles.css `.dash-index[data-warn]`).
 //
+// STAND-IN HONESTY, per number (propViz `wxReading`): a partial snapshot's numbers are the model's
+// stand-ins wherever NOAA did not answer, with no sample time — each is a dash. A reading past its
+// product's cadence keeps its number, loses its warning mark, and says how old it is on hover. Both
+// are dimmed (`data-dim`), as their gauges are, so a stale Kp 6 is never read across the room as
+// the field now. The A is NOAA's daily planetary A, dated like the SSN.
+//
 // OFFLINE HONESTY, Connect's rule (connect/panes.tsx): an offline snapshot is non-null and
 // carries MODELLED values (SFI 120 …), so the bar draws a dash for every index then and says NO
 // LIVE DATA. A cached or partial one keeps its last real numbers and says so, in the panes' words
@@ -33,9 +39,20 @@
 // colour that reads under 4.5:1 on this bar in the light theme).
 import { useEffect, useState, type ReactNode } from 'react'
 import type { DailySolarIndices, PropagationSnapshot, SpaceWxView } from '../types'
-import { aImpact, kpImpact, sfiImpact, windSpeedImpact, windSpeedKms, xrayImpact } from '../propViz'
+import {
+  aImpact,
+  kpImpact,
+  sfiImpact,
+  windSpeedImpact,
+  windSpeedKms,
+  wxReading,
+  xrayImpact,
+  type Impact,
+  type WxKey,
+} from '../propViz'
 import { provLabel } from './connect/paneFormat'
 import { dayLabel, newest, trendsCaption, useSolarIndices } from './prop/SolarTrends'
+import { agoLabel } from './prop/SpaceWxGauges'
 import { getWindowBehind, setWindowBehind, type WindowBehind } from '../api'
 import { withErrorToast } from '../toast'
 import { t } from '../i18n'
@@ -55,6 +72,8 @@ export interface BarIndex {
   title: string
   /** Its Space Wx gauge is at the warning level (Kp, X-ray and the solar wind only). */
   warn?: boolean
+  /** A stand-in or a reading past its cadence: dimmed, as its Space Wx gauge dims it. */
+  dim?: boolean
 }
 
 /**
@@ -66,16 +85,27 @@ export interface BarIndex {
  * hovered with the Space Wx box's own caption for the file; a dash while there is none.
  */
 export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null): BarIndex[] {
+  const now = Date.now()
   const ssn = daily && daily.days.length > 0 ? newest(daily.days, (d) => d.ssn) : null
-  const windKms = windSpeedKms(wx, Date.now())
+  const windKms = windSpeedKms(wx, now)
+  /** One snapshot index under the honesty rule (the gauges' own, see propViz `wxReading`).
+   *  `marks`: the index can carry the storm mark (Kp and X-ray), only while fresh. */
+  const index = (key: string, k: WxKey, value: string, impact: Impact, marks: boolean, day?: string): BarIndex => {
+    const r = wxReading(wx, k, now)
+    if (!r.real) return { key, value: DASH, title: t('prop.spaceWx.none'), dim: true }
+    const stale = r.stale && r.ageSecs != null
+    const title = stale ? t('prop.spaceWx.stale', { ago: agoLabel(r.ageSecs ?? 0) }) : impact.text
+    const i: BarIndex = { key, value, ...(day ? { day } : {}), title, ...(r.stale ? { dim: true } : {}) }
+    return marks ? { ...i, warn: !stale && impact.sev === 'warn' } : i
+  }
   return [
-    { key: NAME.sfi, value: wx.sfi.toFixed(0), title: sfiImpact(wx.sfi).text },
-    { key: NAME.kp, value: wx.kp.toFixed(0), title: kpImpact(wx.kp).text, warn: kpImpact(wx.kp).sev === 'warn' },
+    index(NAME.sfi, 'sfi', wx.sfi.toFixed(0), sfiImpact(wx.sfi), false),
+    index(NAME.kp, 'kp', wx.kp.toFixed(0), kpImpact(wx.kp), true),
     daily && ssn
       ? { key: NAME.ssn, value: ssn.value.toFixed(0), day: dayLabel(ssn.dayUnix), title: trendsCaption(daily.days).text }
       : { key: NAME.ssn, value: DASH, title: '' },
-    { key: NAME.a, value: wx.aIndex.toFixed(0), title: aImpact(wx.aIndex).text },
-    { key: NAME.xray, value: wx.xrayClass.replace('-class', ''), title: xrayImpact(wx.xrayClass).text, warn: xrayImpact(wx.xrayClass).sev === 'warn' },
+    index(NAME.a, 'a', wx.aIndex.toFixed(0), aImpact(wx.aIndex), false, wx.aDay != null ? dayLabel(wx.aDay) : undefined),
+    index(NAME.xray, 'xray', wx.xrayClass.replace('-class', ''), xrayImpact(wx.xrayClass), true),
     {
       key: NAME.sw,
       value: windKms != null ? windKms.toFixed(0) : DASH,
@@ -146,7 +176,7 @@ export function DashboardBar({ call, grid, prop, clock, children }: Props) {
       {clock ?? <DashClock />}
       <ul className="dash-indices" aria-label={t('prop.spaceWx.aria')}>
         {indices.map((i) => (
-          <li key={i.key} className="dash-index" data-warn={i.warn ? '' : undefined} title={i.title || undefined}>
+          <li key={i.key} className="dash-index" data-warn={i.warn ? '' : undefined} data-dim={i.dim ? '' : undefined} title={i.title || undefined}>
             <span className="dash-index-k">{i.key}</span>
             <span className="dash-index-v">{i.value}</span>
             {i.day && <span className="dash-index-d">{i.day}</span>}

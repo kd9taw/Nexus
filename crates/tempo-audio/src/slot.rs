@@ -281,6 +281,7 @@ pub(crate) fn play_keyed_over(
             secs += w.len() as f32 / tempo_fast::SAMPLE_RATE;
             backend.play(w);
         }
+        backend.mark_unit_end();
         return KeyedOver {
             tx_until_ms: tx_deadline_ms(keyed_ms, secs as f64 * 1000.0, period_ms),
             audio_until_ms: None,
@@ -319,6 +320,7 @@ pub(crate) fn play_keyed_over(
             backend.play(rest);
         }
     }
+    backend.mark_unit_end();
     on_the_window
 }
 
@@ -444,6 +446,10 @@ pub(crate) fn key_slot_transmitter(
         eng.halt_tx_for_tx_audio(&why);
         return false;
     }
+    // PTT is asserted here: a WSPR or FST4W beacon's alternation flips on the attempt, whatever
+    // the radio answers, as WSJT-X flips it on the tick that raises PTT
+    // (`widgets/mainwindow.cpp:7808`, `:7855`, `:7880`, `:15462`). Every return above keys nothing.
+    eng.note_slot_ptt_asserted();
     let key = rig.ptt(true);
     if eng.poll_remote_transmit(std::time::Instant::now()) {
         let _ = rig.ptt(false);
@@ -1789,6 +1795,33 @@ mod tests {
                 span.map_or(0, |(a, b)| b - a + 1),
                 "{tier:?}: not one run"
             );
+        }
+    }
+
+    /// A slot over is one unit, marked where its audio ends, so the sound card running out at its
+    /// end is not counted as an underrun: FT8 and FT4 on the slot clock, keyed on time and late,
+    /// and a tier played whole from the key.
+    #[test]
+    fn a_keyed_slot_over_marks_its_end() {
+        for tier in [
+            tempo_app::dto::Tier::Ft8,
+            tempo_app::dto::Tier::Ft4,
+            tempo_app::dto::Tier::Q65,
+        ] {
+            let eng = armed_engine_on(tier);
+            let waves = vec![armed_engine_on(tier).poll_tx(0).remove(0)];
+            let slot_start = 1_000.0 * eng.active_slot_secs() * 1000.0;
+            for late_ms in [20.0, 1_000.0] {
+                let keyed = slot_start + late_ms;
+                let mut backend = MockBackend::new();
+                play_keyed_over(&eng, &mut backend, &waves, keyed, keyed);
+                assert!(!backend.played.is_empty(), "{tier:?}: premise: played");
+                assert_eq!(
+                    backend.unit_ends,
+                    vec![backend.played.len()],
+                    "{tier:?} keyed {late_ms} ms in"
+                );
+            }
         }
     }
 
@@ -3336,6 +3369,173 @@ mod tests {
         assert!(eng.tx_enabled(), "control: TX went off");
         assert!(!eng.take_slot_tx_abort(), "control: a cut was asked for");
         assert_eq!(eng.snapshot().radio.slot_key_refused, None, "control");
+    }
+
+    /// ⭐ A COMPOUND CALL'S BEACON FLIPS TYPE WHEN ITS PTT IS ASSERTED, AS WSJT-X DOES (`m_tx=1-m_tx`
+    /// in `WSPR_message`, `widgets/mainwindow.cpp:15462`, called on the tick that sets `g_iptt=1`
+    /// and asserts PTT, `:7808`, `:7855`, `:7880`), before the rig answers. A key the radio refuses
+    /// still flips it; an over whose key is never attempted (Remote revoked first) does not; an FT8
+    /// over never counts. Through the real plan, commit and key.
+    #[test]
+    fn a_beacon_over_flips_the_compound_call_alternation_at_its_ptt_assert() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let beacon = |eng: &mut Engine, slot: u64| -> (String, Vec<Vec<f32>>) {
+            let plan = eng.plan_tx(slot).expect("a beacon over");
+            let tempo_app::engine::TxWaveform::Native { text, .. } = &plan.waveform else {
+                panic!("not a beacon over");
+            };
+            let text = text.clone();
+            (text, eng.commit_tx(&plan, vec![0.25; 1_200], slot))
+        };
+        let phase = |eng: &mut Engine, rig: &mut Rig, slot: u64, waves: Vec<Vec<f32>>| {
+            let now = steered_now_ms(eng);
+            slot_tx_phase(
+                eng,
+                rig,
+                &mut MockBackend::new(),
+                &mut RxRing::new(),
+                slot,
+                now,
+                false,
+                None,
+                Some(waves),
+                false,
+            )
+            .tx_this_slot
+        };
+        let key = |eng: &mut Engine, answer: &str, slot: u64, waves: Vec<Vec<f32>>| {
+            let (addr, log, _) = keying_rigctld(answer, 0);
+            let keyed = phase(eng, &mut Rig::rigctld(&addr), slot, waves);
+            assert!(
+                log.lock().unwrap().iter().any(|l| l == "T 1"),
+                "{answer}: premise: the over asserted PTT"
+            );
+            keyed
+        };
+        let beaconing = |tier: tempo_app::dto::Tier| {
+            let mut eng = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+            eng.set_tier(tier);
+            let _ = eng.take_slot_tx_abort();
+            let mut s = eng.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            eng.apply_settings(s);
+            eng.set_tx_enabled(true);
+            eng
+        };
+        let two = "PJ4/K1ABC 37";
+        let is_three = |text: &str| text.starts_with("<PJ4/K1ABC> FK52UD");
+        for tier in [tempo_app::dto::Tier::Wspr, tempo_app::dto::Tier::Fst4w] {
+            let mut eng = beaconing(tier);
+            let (text, waves) = beacon(&mut eng, 10);
+            assert_eq!(text, two, "{tier:?}: premise: the first over is the type 2");
+            assert!(
+                !key(&mut eng, "RPRT -1", 10, waves),
+                "{tier:?}: premise: refused"
+            );
+            assert!(
+                !eng.tx_enabled(),
+                "{tier:?}: premise: a refused key halts TX"
+            );
+            let _ = eng.take_slot_tx_abort();
+            eng.set_tx_enabled(true);
+
+            let (text, waves) = beacon(&mut eng, 11);
+            assert!(
+                is_three(&text),
+                "{tier:?}: a refused key did not flip the alternation: {text}"
+            );
+            assert!(
+                key(&mut eng, "RPRT 0", 11, waves),
+                "{tier:?}: premise: keyed"
+            );
+            let (text, _) = beacon(&mut eng, 12);
+            assert_eq!(
+                text, two,
+                "{tier:?}: a keyed over did not flip the alternation"
+            );
+
+            // Remote revoked before the key, whether the tick or the key itself sees it first: PTT
+            // is never asserted, so nothing flips.
+            let mut eng = beaconing(tier);
+            let presence = |eng: &mut Engine| {
+                let authority = Arc::new(TransmitAuthority::default());
+                let now = Instant::now();
+                assert!(eng.hold_remote_presence(
+                    authority
+                        .permit(now + Duration::from_secs(24 * 60 * 60))
+                        .unwrap(),
+                    now,
+                ));
+                authority
+            };
+            let authority = presence(&mut eng);
+            let (text, waves) = beacon(&mut eng, 10);
+            assert_eq!(text, two, "{tier:?}: premise: Remote, the type 2");
+            authority.revoke();
+            let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+            assert!(
+                !phase(&mut eng, &mut Rig::rigctld(&addr), 10, waves),
+                "{tier:?}: premise: the tick saw the revoke"
+            );
+            assert!(
+                !log.lock().unwrap().iter().any(|l| l == "T 1"),
+                "{tier:?}: premise: no PTT asserted"
+            );
+            let _ = eng.take_slot_tx_abort();
+            eng.set_tx_enabled(true);
+            let authority = presence(&mut eng);
+            let (text, _) = beacon(&mut eng, 11);
+            assert_eq!(
+                text, two,
+                "{tier:?}: an over the tick stopped flipped the alternation"
+            );
+            authority.revoke();
+            let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+            assert!(
+                !key_slot_transmitter(
+                    &mut eng,
+                    &mut Rig::rigctld(&addr),
+                    &mut MockBackend::new(),
+                    false
+                ),
+                "{tier:?}: premise: the key saw the revoke"
+            );
+            assert!(
+                !log.lock().unwrap().iter().any(|l| l == "T 1"),
+                "{tier:?}: premise: no PTT asserted by the key"
+            );
+            let _ = eng.take_slot_tx_abort();
+            eng.set_tx_enabled(true);
+            let (text, _) = beacon(&mut eng, 12);
+            assert_eq!(
+                text, two,
+                "{tier:?}: a key stopped before PTT flipped the alternation"
+            );
+        }
+
+        // CONTROL: an FT8 over whose PTT is asserted is not a beacon over.
+        let mut eng = armed_engine();
+        let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+        let mut rig = Rig::rigctld(&addr);
+        let act = key_one_over(&mut eng, &mut rig, &mut MockBackend::new());
+        assert!(act.tx_this_slot, "premise: the FT8 over keyed");
+        assert!(log.lock().unwrap().iter().any(|l| l == "T 1"));
+        let mut s = eng.settings().clone();
+        s.mycall = "PJ4/K1ABC".into();
+        s.mygrid = "FK52UD".into();
+        eng.apply_settings(s);
+        eng.set_tier(tempo_app::dto::Tier::Wspr);
+        let _ = eng.take_slot_tx_abort();
+        let mut s = eng.settings().clone();
+        s.beacon_tx_percent = 100;
+        s.beacon_power_dbm = 37;
+        eng.apply_settings(s);
+        eng.set_tx_enabled(true);
+        let (text, _) = beacon(&mut eng, 10);
+        assert_eq!(text, two, "CONTROL: an FT8 key flipped the beacon");
     }
 
     #[test]

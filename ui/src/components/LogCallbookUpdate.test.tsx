@@ -271,15 +271,29 @@ describe('update from callbook', () => {
     await screen.findByRole('button', { name: 'Update 2 contacts' })
   })
 
-  it('the over-cap warning counts a stroked call twice and gives QRZ’s own count', async () => {
+  it('the over-cap warning counts a stroked call twice', async () => {
     api.callbookUpdatePreview.mockResolvedValue({
-      ...preview, toLookUp: 5, lookupsNeeded: 7, spent: 245, cap: 250, qrzCount: 245,
+      ...preview, toLookUp: 5, lookupsNeeded: 7, spent: 245, cap: 250,
     })
     open(['x', 'y', 'z'])
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
     await screen.findByText(/Today’s limit stops it after 5 lookups\./)
     screen.getByText(/A call with a stroke is asked again for its base call: up to 7 lookups in all\./)
-    screen.getByText(/QRZ counted 245 lookups on your account in the last day\./)
+  })
+
+  // A user report: QRZ counted 16,191 lookups on the account — another program's —
+  // against a cap of 6,000, and every run stopped before its first. QRZ's count is information:
+  // said beside today's tally, never as the reason a run stops.
+  it('QRZ’s own count is said as information and never warns of the cap', async () => {
+    api.callbookUpdatePreview.mockResolvedValue({
+      ...preview, toLookUp: 5, lookupsNeeded: 5, spent: 4, cap: 6000, qrzCount: 16191,
+    })
+    open(['x', 'y', 'z'])
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }))
+    await screen.findByText(/Lookups today: 4 of 6000/)
+    screen.getByText(/QRZ counted 16191 lookups on your account in the last day\./)
+    screen.getByText(/only Nexus’s own lookups count toward the limit above\./)
+    expect(screen.queryByText(/Today’s limit stops it/)).toBeNull()
   })
 
   it('a stroked call alone can pass the cap: warned though the calls fit', async () => {

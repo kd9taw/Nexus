@@ -1115,6 +1115,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           rowMs={RTTY_WATERFALL_SPEEDS.find((x) => x.id === wfSpeed)?.rowMs ?? 50}
           keepRowRemainder
           spanChoices={RTTY_WATERFALL_SPANS}
+          zoomKey="nexus.waterfall.rtty.zoom"
           contrastCurve={traceContrast}
           tags={wfTags}
           // A tag nets exactly as a click on the picture does, refused while keyed.

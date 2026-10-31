@@ -36,6 +36,12 @@ const alerts = vi.hoisted(() => [
     call: 'W9XYZ', entity: 'United States', band: '20m', zone: 4, tags: ['NewBand'],
     priority: 50, headline: 'New band slot', mode: 'Digital', freqMhz: 14.076, park: null,
   },
+  // A cluster spot on an FT4 dial: the backend names the mode from the dial (`digital_hole_mode`),
+  // and that name is what picks the FT screen's tier when the row is worked.
+  {
+    call: 'K4FTF', entity: 'United States', band: '80m', zone: 5, tags: ['NewBand'],
+    priority: 50, headline: 'New band slot', mode: 'FT4', freqMhz: 3.575, park: null,
+  },
   // A park row the rig cannot be sent to: no frequency of its own, Digital (so no mode
   // default) and — with the empty band plan these tests mount — no channel either. `workTarget`
   // is null for exactly this shape, and `handleQsy` reads the same missing channel.
@@ -196,5 +202,25 @@ describe('the Needed board tags a park when a park row is worked', () => {
     await waitFor(() => expect(toasted).toHaveBeenCalledWith(expect.anything(), 'error', 3000))
     expect(setHuntTarget).not.toHaveBeenCalled()
     expect(workSpot).not.toHaveBeenCalled()
+  })
+})
+
+// A ROW FROM AN FT4 DIAL OPENS THE FT SCREEN ON FT4. The tier rides the same atomic `workSpot` call
+// as the QSY; a row the backend labelled FT8 here opened the screen decoding FT8 on an FT4 dial.
+describe('working a row names its FT tier', () => {
+  it('an FT4 row works the spot on the FT4 tier', async () => {
+    await board()
+    fireEvent.click(row('K4FTF'))
+    await waitFor(() =>
+      expect(workSpot).toHaveBeenCalledWith(expect.anything(), 3.575, '80m', 'K4FTF', 'FT4'),
+    )
+  })
+
+  // CONTROL — a handler that sent FT4 for every row would pass the test above.
+  it('a row that names only the class changes no tier', async () => {
+    await board()
+    fireEvent.click(row('W9XYZ'))
+    await waitFor(() => expect(workSpot).toHaveBeenCalled())
+    expect(vi.mocked(workSpot).mock.calls[0][4]).toBeUndefined()
   })
 })
