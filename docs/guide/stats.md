@@ -9,7 +9,7 @@ on the page counts your **whole** logbook unless this page says otherwise.
 
 Stats is on out of the box: a fresh install has it whether you finish the
 first-run wizard or skip it — the wizard turns everything on.
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features) turns it on
+[Settings ▸ App ▸ Features](settings-reference.md#features) turns it on
 or off any time. If Stats is off when you log your first QSO, Nexus offers it
 once as a nudge — it never switches itself on.
 

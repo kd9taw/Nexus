@@ -27,7 +27,7 @@ fn decode_reply(text: &str) -> Vec<String> {
     for (s, &x) in frame.iter_mut().zip(&wave) {
         *s = (x * 1_000.0) as i16;
     }
-    ft8::decode_frame(&frame, 200, 3_000, 3, "", "", 0, 0, false, false)
+    ft8::decode_frame(&frame, 200, 3_000, 3, "", "", 0, 0, false, false, false)
         .into_iter()
         .map(|d| d.message.trim().to_string())
         .collect()

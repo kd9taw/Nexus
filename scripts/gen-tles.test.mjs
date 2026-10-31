@@ -10,9 +10,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, mkdtempSync, writeFileSync, existsSync, cpSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, cpSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -25,6 +24,7 @@ import {
   GateError,
   parse3le,
 } from './gen-tles.mjs'
+import { scratchDir } from './scratch-dir.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FIX = join(HERE, 'fixtures', 'tles')
@@ -726,15 +726,15 @@ test('the script publishes from fixtures, and publishes nothing when they degrad
       stdio: 'pipe',
     })
 
-  const good = mkdtempSync(join(tmpdir(), 'tles-ok-'))
+  const good = scratchDir('tles-ok-')
   run(FIX, good)
   const manifest = JSON.parse(readFileSync(join(good, 'tles.json'), 'utf8'))
   assert.equal(manifest.count, 12)
   assert.equal(manifest.catalog.length, 19)
   assert.ok(existsSync(join(good, 'tles.txt')), 'the 3LE import path keeps its file')
 
-  const bad = mkdtempSync(join(tmpdir(), 'tles-bad-'))
-  const badFix = mkdtempSync(join(tmpdir(), 'tles-fix-'))
+  const bad = scratchDir('tles-bad-')
+  const badFix = scratchDir('tles-fix-')
   cpSync(FIX, badFix, { recursive: true })
   writeFileSync(join(badFix, 'satnogs-transmitters.json'), '[]')
   assert.throws(() => run(badFix, bad), /Command failed|status 1/)

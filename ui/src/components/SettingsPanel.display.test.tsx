@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 //
 // Settings ▸ Appearance, regrouped into DISPLAY SECTIONS (the look-and-feel redesign, piece 7):
-// Workspace (the one-tap looks and the sizes) · Theme · Colours · Waterfall & scopes · Map & globe
-// · Performance, then the tab's other sections as before. The registry holds the order
+// Workspace (the one-tap looks and the sizes) · Theme · Colours · Waterfall & scopes · Map & globe,
+// then the tab's other sections as before. Performance moved to the App tab in the Settings regroup. The registry holds the order
 // (registry.test.ts compares it with the source); asserted here is what renders, where:
 //   · Theme holds the theme cards, then High contrast, Night and Field mode, in that order;
 //   · Waterfall & scopes holds the two palette pickers the cockpit headers also carry, writing the
@@ -58,11 +58,12 @@ function renderPanel(
     onThemeChange?: (t: 'light' | 'dark' | 'system') => void
     skin?: SkinId | null
     onSkinChange?: (id: SkinId | null) => void
+    target?: string
   } = {},
 ) {
   return render(
     <SettingsPanel
-      target="appearance"
+      target={props.target ?? 'appearance'}
       activeRadioId={0}
       scale={100 as never}
       scaleMode={'auto' as never}
@@ -123,18 +124,19 @@ const rowLabels = (s: HTMLElement) =>
   Array.from(s.querySelectorAll('.settings-label')).map((n) => n.textContent)
 
 describe('Settings ▸ Appearance: the Display sections', () => {
-  it('lists Workspace, Theme, Colours, Waterfall & scopes, Map & globe and Performance first, in that order', async () => {
+  it('lists Workspace, Theme, Colours, Waterfall & scopes and Map & globe first, in that order', async () => {
     renderPanel()
-    await sectionNamed('settings.performance.legend')
+    await sectionNamed('settings.mapGlobe.legend')
     const legends = Array.from(document.querySelectorAll('fieldset.settings-section > legend')).map((l) => l.textContent)
-    expect(legends.slice(0, 6)).toEqual([
+    expect(legends.slice(0, 5)).toEqual([
       EN['settings.workspace.legend'],
       EN['settings.theme.legend'],
       EN['settings.colours.legend'],
       EN['settings.waterfallScopes.legend'],
       EN['settings.mapGlobe.legend'],
-      EN['settings.performance.legend'],
     ])
+    // Performance is on the App tab now, not here.
+    expect(legends).not.toContain(EN['settings.performance.legend'])
   })
 
   it('Theme holds the theme cards, then High contrast, Night and Field mode', async () => {
@@ -223,7 +225,7 @@ describe('Settings ▸ Appearance: the Display sections', () => {
   it('Performance holds Motion: Follow the computer or Reduce, the current one pressed, a tap reported', async () => {
     const changed = vi.fn()
     for (const m of ['system', 'reduce'] as const) {
-      const { unmount } = renderPanel({ motion: m, onMotionChange: changed })
+      const { unmount } = renderPanel({ motion: m, onMotionChange: changed, target: 'performance' })
       const s = await sectionNamed('settings.performance.legend')
       expect(s.id).toBe('settings-performance')
       const g = within(s).getByRole('group', { name: EN['settings.performance.motion.label'] })
@@ -234,16 +236,16 @@ describe('Settings ▸ Appearance: the Display sections', () => {
       expect(pressed).toEqual([EN[`settings.performance.motion.${m}`]])
       unmount()
     }
-    renderPanel({ motion: 'system', onMotionChange: changed })
+    renderPanel({ motion: 'system', onMotionChange: changed, target: 'performance' })
     const s = await sectionNamed('settings.performance.legend')
     fireEvent.click(within(s).getByRole('button', { name: EN['settings.performance.motion.reduce'] }))
     expect(changed).toHaveBeenLastCalledWith('reduce')
   })
 
   it('offers no Performance section to a host that does not wire Motion', async () => {
-    renderPanel({ onMotionChange: undefined })
+    renderPanel({ onMotionChange: undefined, target: 'app' })
     // The tab rendered (positive control), just without this section.
-    await sectionNamed('settings.mapGlobe.legend')
+    await sectionNamed('settings.betaUpdates.legend')
     expect(screen.queryByText(EN['settings.performance.legend'], { selector: 'legend' })).toBeNull()
   })
 })

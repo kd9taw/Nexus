@@ -12,7 +12,7 @@
 //
 // jsdom lays nothing out, so this reads what the list itself decides, as
 // Logbook.openRowHeights.test.tsx does: each drawn row's place against the height the row really
-// has. Rows are 43 px; a row whose note is open is 120.
+// has. Rows are 53 px; a row whose note is open is 120.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
@@ -43,7 +43,7 @@ vi.mock('../api', () => {
 })
 vi.mock('../toast', () => ({ pushToast: vi.fn(), withErrorToast: vi.fn((run: () => Promise<unknown>) => run()) }))
 
-const ROW_PX = 43
+const ROW_PX = 53
 const OPEN_PX = 120
 
 /** The list's ResizeObservers, driven by the test: `fire()` delivers what a browser would — a size

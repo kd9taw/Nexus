@@ -103,7 +103,7 @@ afterEach(() => {
 describe('the start-at-sign-in switch', () => {
   it('is off by default, and turning it on calls setLaunchAtLogin(true), never setSettings', async () => {
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Appearance' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'App' }))
     const off = await screen.findByRole('switch', { name: 'Turn on start at sign-in' })
     expect(off.getAttribute('aria-checked')).toBe('false')
     fireEvent.click(off)
@@ -118,7 +118,7 @@ describe('the start-at-sign-in switch', () => {
   it('turning it off calls setLaunchAtLogin(false) — the switch stays two-way', async () => {
     setUp(true)
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Appearance' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'App' }))
     fireEvent.click(await screen.findByRole('switch', { name: 'Turn off start at sign-in' }))
 
     await waitFor(() => expect(api.get('setLaunchAtLogin')).toHaveBeenCalled())
@@ -128,7 +128,7 @@ describe('the start-at-sign-in switch', () => {
   it('says so, and leaves the switch off, when the computer refuses', async () => {
     api.get('setLaunchAtLogin').mockImplementation(() => Promise.reject('launchAtLoginUnsupported'))
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Appearance' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'App' }))
     fireEvent.click(await screen.findByRole('switch', { name: 'Turn on start at sign-in' }))
 
     expect(await screen.findByText(/did not let Nexus change whether it starts at sign-in/)).toBeTruthy()

@@ -102,7 +102,7 @@ describe('Cloudlog/Wavelog station profile id (#226)', () => {
   it('notes, under the field, that a callsign is not the location number', async () => {
     mockSettings('DG3ET')
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
     // Positive control: the station profile id field (the one numeric input carrying the value)
     // is on screen with what the reporter typed.
     const field = (await screen.findAllByDisplayValue('DG3ET')).find(
@@ -116,7 +116,7 @@ describe('Cloudlog/Wavelog station profile id (#226)', () => {
   it('says nothing for a location number', async () => {
     mockSettings('3')
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
     const field = (await screen.findAllByDisplayValue('3')).find(
       (el) => el.getAttribute('inputmode') === 'numeric',
     )
@@ -127,7 +127,7 @@ describe('Cloudlog/Wavelog station profile id (#226)', () => {
   it('says what the number is in the hint itself', async () => {
     mockSettings('')
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
     expect(await screen.findByText(/station location number/i)).toBeTruthy()
   })
 })

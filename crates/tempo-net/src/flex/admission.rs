@@ -50,11 +50,17 @@
 //! connected, never write the flag"). The DAX source is also refused unless the transmit slice is
 //! ours. When to write it is the caller's: the ruling keeps it out of the keying path.
 //!
+//! **Which slice transmits** (`slice set <n> tx=1`, the slice pair a split is made of) has its own
+//! admission too, [`admit_tx_slice`], and its own value, [`AdmittedTxSlice`]: it keys nothing, but
+//! it moves every later transmission to another frequency, so it is refused while anything of
+//! ours is keyed or the interlock is not idle, by the same checks as the audio source, and unless
+//! the slice it names is ours.
+//!
 //! Nexus's own design, not a port.
 
 use std::fmt;
 
-use super::encode::{StartKind, TxAudio, TxStart};
+use super::encode::{StartKind, TxAudio, TxSlice, TxStart};
 use super::model::{owner_of, Owner, StatusModel};
 use super::ptt_evidence;
 use super::status::SliceDelta;
@@ -121,6 +127,24 @@ impl AdmittedTxAudio {
     #[cfg(test)]
     pub(super) fn for_test(audio: TxAudio) -> AdmittedTxAudio {
         AdmittedTxAudio(audio)
+    }
+}
+
+/// A move of the transmit flag that passed admission. Constructed only by [`admit_tx_slice`];
+/// neither `Clone` nor `Copy`.
+#[derive(Debug)]
+pub struct AdmittedTxSlice(TxSlice);
+
+impl AdmittedTxSlice {
+    /// The move, for the encoder. Consumes the admission.
+    pub(super) fn into_tx_slice(self) -> TxSlice {
+        self.0
+    }
+
+    /// Mint an admission without the checks, for unit tests of the encoder only.
+    #[cfg(test)]
+    pub(super) fn for_test(tx: TxSlice) -> AdmittedTxSlice {
+        AdmittedTxSlice(tx)
     }
 }
 
@@ -217,6 +241,12 @@ pub enum Refusal {
         stream: u32,
         owner: Owner,
     },
+    /// The client's own Rig split is still being taken down: the transmit flag is on the split
+    /// slice turning split off has not removed yet, so a start would go out at that slice's old
+    /// frequency. Refused by the client above this module, which holds the split; its words.
+    SplitTakeDown {
+        why: String,
+    },
 }
 
 impl fmt::Display for Refusal {
@@ -263,6 +293,7 @@ impl fmt::Display for Refusal {
                 "another program feeds the radio's DAX transmit audio (stream 0x{stream:08X}, \
                  {owner:?})"
             ),
+            Refusal::SplitTakeDown { why } => f.write_str(why),
         }
     }
 }
@@ -465,6 +496,30 @@ pub fn admit_tx_audio(
     if let Some((stream, owner)) = another_dax_feeder(model, facts.handle, facts.dax_tx_stream) {
         return Err(Refusal::AnotherDaxFeeder { stream, owner });
     }
+    transmitter_idle(model)?;
+    if let TxAudio::DaxSource { .. } = audio {
+        // Radio-wide: written only while the transmit slice is ours.
+        match model.tx_slices().as_slice() {
+            [] => return Err(Refusal::NoTxSlice),
+            [slice] => {
+                let reported = model.slices.get(slice).and_then(|s| s.client_handle);
+                let owner = owner_of(reported, Some(ours));
+                if owner != Owner::Ours {
+                    return Err(Refusal::TxSliceNotOurs {
+                        slice: *slice,
+                        owner,
+                    });
+                }
+            }
+            several => return Err(Refusal::SeveralTxSlices(several.to_vec())),
+        }
+    }
+    Ok(AdmittedTxAudio(audio))
+}
+
+/// The interlock idle: a whole sample naming no transmitting client (ours neither), no keying
+/// source, and a receive-side state.
+pub fn transmitter_idle(model: &StatusModel) -> Result<(), Refusal> {
     let sample = model
         .interlock
         .sample
@@ -495,24 +550,51 @@ pub fn admit_tx_audio(
             state: sample.state.clone(),
         });
     }
-    if let TxAudio::DaxSource { .. } = audio {
-        // Radio-wide: written only while the transmit slice is ours.
-        match model.tx_slices().as_slice() {
-            [] => return Err(Refusal::NoTxSlice),
-            [slice] => {
-                let reported = model.slices.get(slice).and_then(|s| s.client_handle);
-                let owner = owner_of(reported, Some(ours));
-                if owner != Owner::Ours {
-                    return Err(Refusal::TxSliceNotOurs {
-                        slice: *slice,
-                        owner,
-                    });
-                }
-            }
-            several => return Err(Refusal::SeveralTxSlices(several.to_vec())),
+    Ok(())
+}
+
+/// Run the checks for a move of the transmit flag to `tx.slice`. Pure, like [`admit`]: the
+/// session registered on a version reviewed for transmit, nothing of ours keyed, the interlock
+/// idle ([`admit_tx_audio`]'s checks), and the slice ours.
+pub fn admit_tx_slice(
+    model: &StatusModel,
+    facts: &Facts,
+    tx: TxSlice,
+) -> Result<AdmittedTxSlice, Refusal> {
+    if !facts.ready {
+        return Err(Refusal::NotReady);
+    }
+    if !facts.transmit_protocol {
+        return Err(Refusal::ProtocolUnsupported);
+    }
+    let ours = facts.handle.ok_or(Refusal::NoHandle)?;
+    if facts.keyed {
+        return Err(Refusal::AlreadyKeyed);
+    }
+    transmitter_idle(model)?;
+    // The flag is taken from nobody: wherever it is now must be ours, or nowhere. On a multiFLEX
+    // radio another station's slice may hold it, and moving it would take their transmitter.
+    for holder in model.tx_slices() {
+        let owner = owner_of(
+            model.slices.get(&holder).and_then(|s| s.client_handle),
+            Some(ours),
+        );
+        if owner != Owner::Ours {
+            return Err(Refusal::TxSliceNotOurs {
+                slice: holder,
+                owner,
+            });
         }
     }
-    Ok(AdmittedTxAudio(audio))
+    let reported = model.slices.get(&tx.slice).and_then(|s| s.client_handle);
+    let owner = owner_of(reported, Some(ours));
+    if owner != Owner::Ours {
+        return Err(Refusal::TxSliceNotOurs {
+            slice: tx.slice,
+            owner,
+        });
+    }
+    Ok(AdmittedTxSlice(tx))
 }
 
 #[cfg(test)]
@@ -1257,6 +1339,158 @@ mod tests {
             }
         }
         assert_eq!(pairs, cases.len() * cases.len());
+    }
+
+    // ── Which slice transmits ──
+
+    /// Our receive slice beside our transmit slice: the pair a split is made of.
+    const OUR_RX_SLICE: &str = "S2B6E1F40|slice 1 in_use=1 tx=0 client_handle=0x2B6E1F40";
+
+    fn slice_refused(m: &StatusModel, f: &Facts, slice: u8) -> Refusal {
+        admit_tx_slice(m, f, TxSlice { slice }).expect_err("refused")
+    }
+
+    #[test]
+    fn the_transmit_flag_moves_to_a_slice_of_ours_with_an_idle_transmitter() {
+        // The positive control: either slice of ours, the one transmitting now included.
+        let m = model(&[OUR_TX_SLICE, OUR_RX_SLICE, IDLE]);
+        for slice in [0, 1] {
+            let a = admit_tx_slice(&m, &facts(), TxSlice { slice }).expect("admitted");
+            assert_eq!(a.into_tx_slice(), TxSlice { slice });
+        }
+    }
+
+    #[test]
+    fn the_transmit_flag_never_moves_while_anything_is_keyed_or_keying() {
+        let m = model(&[OUR_TX_SLICE, OUR_RX_SLICE, IDLE]);
+        let keyed = Facts {
+            keyed: true,
+            ..facts()
+        };
+        assert_eq!(slice_refused(&m, &keyed, 1), Refusal::AlreadyKeyed);
+        for (line, want) in [
+            (
+                "S0|interlock tx_client_handle=0x2B6E1F40 state=TRANSMITTING reason= source=SW tx_allowed=1",
+                Refusal::TransmitterHeld { by: OURS },
+            ),
+            (
+                "S0|interlock tx_client_handle=0x00000000 state=PTT_REQUESTED reason= source= tx_allowed=1",
+                Refusal::InterlockNotReady {
+                    state: "PTT_REQUESTED".into(),
+                },
+            ),
+            (
+                "S0|interlock tx_client_handle=0x00000000 state=UNKEY_REQUESTED reason= source= tx_allowed=1",
+                Refusal::InterlockNotReady {
+                    state: "UNKEY_REQUESTED".into(),
+                },
+            ),
+            (
+                "S0|interlock tx_client_handle=0x00000000 state=READY reason= source=MIC tx_allowed=1",
+                Refusal::HardwarePtt {
+                    source: "MIC".into(),
+                },
+            ),
+        ] {
+            let m = model(&[OUR_TX_SLICE, OUR_RX_SLICE, line]);
+            assert_eq!(slice_refused(&m, &facts(), 1), want, "{line}");
+        }
+        let m = model(&[
+            OUR_TX_SLICE,
+            OUR_RX_SLICE,
+            IDLE,
+            "S0|interlock tx_allowed=1",
+        ]);
+        assert_eq!(slice_refused(&m, &facts(), 1), Refusal::InterlockUnknown);
+    }
+
+    #[test]
+    fn the_transmit_flag_never_moves_to_a_slice_not_ours() {
+        let foreign = "S7A3C0001|slice 2 in_use=1 tx=0 client_handle=0x7A3C0001";
+        let m = model(&[OUR_TX_SLICE, foreign, "S0|slice 3 in_use=1 tx=0", IDLE]);
+        assert_eq!(
+            slice_refused(&m, &facts(), 2),
+            Refusal::TxSliceNotOurs {
+                slice: 2,
+                owner: Owner::Foreign(0x7A3C_0001)
+            }
+        );
+        assert_eq!(
+            slice_refused(&m, &facts(), 3),
+            Refusal::TxSliceNotOurs {
+                slice: 3,
+                owner: Owner::Unknown
+            }
+        );
+        // A slice the radio has not reported at all is not known to be ours either.
+        assert!(matches!(
+            slice_refused(&m, &facts(), 5),
+            Refusal::TxSliceNotOurs { slice: 5, .. }
+        ));
+        for (f, want) in [
+            (
+                Facts {
+                    ready: false,
+                    ..facts()
+                },
+                Refusal::NotReady,
+            ),
+            (
+                Facts {
+                    transmit_protocol: false,
+                    ..facts()
+                },
+                Refusal::ProtocolUnsupported,
+            ),
+            (
+                Facts {
+                    handle: None,
+                    ..facts()
+                },
+                Refusal::NoHandle,
+            ),
+        ] {
+            assert_eq!(slice_refused(&m, &f, 0), want);
+        }
+    }
+
+    /// ⭐ THE FLAG IS NEVER TAKEN FROM ANOTHER CLIENT. On a multiFLEX radio another station's slice
+    /// may hold the transmit flag; moving it to a slice of ours would take their transmitter. Only
+    /// a flag that is ours, or on no slice at all, moves.
+    #[test]
+    fn the_transmit_flag_is_never_taken_off_another_clients_slice() {
+        let foreign_tx = "S7A3C0001|slice 2 in_use=1 tx=1 client_handle=0x7A3C0001";
+        let m = model(&[OUR_RX_SLICE, foreign_tx, IDLE]);
+        assert_eq!(
+            slice_refused(&m, &facts(), 1),
+            Refusal::TxSliceNotOurs {
+                slice: 2,
+                owner: Owner::Foreign(0x7A3C_0001)
+            }
+        );
+        // A holder whose owner the radio has not said is not known to be ours either.
+        let m = model(&[OUR_RX_SLICE, "S0|slice 3 in_use=1 tx=1", IDLE]);
+        assert_eq!(
+            slice_refused(&m, &facts(), 1),
+            Refusal::TxSliceNotOurs {
+                slice: 3,
+                owner: Owner::Unknown
+            }
+        );
+        // Ours and a foreign holder at once: the foreign one is named.
+        let m = model(&[OUR_TX_SLICE, OUR_RX_SLICE, foreign_tx, IDLE]);
+        assert_eq!(
+            slice_refused(&m, &facts(), 1),
+            Refusal::TxSliceNotOurs {
+                slice: 2,
+                owner: Owner::Foreign(0x7A3C_0001)
+            }
+        );
+        // Controls: our own flag moves, and so does a flag on no slice at all.
+        let m = model(&[OUR_TX_SLICE, OUR_RX_SLICE, IDLE]);
+        assert!(admit_tx_slice(&m, &facts(), TxSlice { slice: 1 }).is_ok());
+        let m = model(&[OUR_RX_SLICE, IDLE]);
+        assert!(admit_tx_slice(&m, &facts(), TxSlice { slice: 1 }).is_ok());
     }
 
     // ── The transmitter's audio source ──

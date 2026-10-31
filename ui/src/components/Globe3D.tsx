@@ -69,6 +69,8 @@ import { logSource } from '../features/logSource'
 import cqzonesUrl from '../data/cqzones.geojson?url'
 import { spotTooltip } from '../propViz'
 import { txPaths, rxPaths } from '../features/mapPaths'
+import { ribbonFor } from '../features/pathRibbon'
+import type { RibbonInk } from '../features/pathRoute'
 import { t, type MessageKey } from '../i18n'
 import { fmtDistanceKm, useUnits } from '../units'
 import { MapInsightRail } from './prop/MapInsightRail'
@@ -239,22 +241,36 @@ function syncLines(
   opacity: number,
   visible: boolean,
   alt = 0.002,
+  dashed = false,
 ) {
   const prev = store[key]
   if (prev) {
     g.scene().remove(prev)
-    prev.traverse((o) => (o as THREE.Line).geometry?.dispose?.())
+    // The group's lines share one material: dispose each geometry, and the material once.
+    let mat: THREE.Material | null = null
+    prev.traverse((o) => {
+      const l = o as THREE.Line
+      l.geometry?.dispose?.()
+      if (l.material) mat = l.material as THREE.Material
+    })
+    ;(mat as THREE.Material | null)?.dispose()
     delete store[key]
   }
   if (!visible || polylines.length === 0) return
   const grp = new THREE.Group()
-  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity })
+  // Dash lengths in world units (the globe's radius is 100).
+  const mat = dashed
+    ? new THREE.LineDashedMaterial({ color, transparent: true, opacity, dashSize: 1.6, gapSize: 1.1 })
+    : new THREE.LineBasicMaterial({ color, transparent: true, opacity })
   for (const line of polylines) {
     const pts = line.map(([la, lo]) => {
       const c = g.getCoords(la, lo, alt)
       return new THREE.Vector3(c.x, c.y, c.z)
     })
-    if (pts.length > 1) grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat))
+    if (pts.length < 2) continue
+    const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat)
+    if (dashed) l.computeLineDistances()
+    grp.add(l)
   }
   store[key] = grp
   g.scene().add(grp)
@@ -334,6 +350,24 @@ function glowSprite(): THREE.CanvasTexture {
   glowTex = new THREE.CanvasTexture(c)
   return glowTex
 }
+
+/** The path ribbon's reliability inks. The globe is a dark night sphere in either UI theme, so
+ * these are the dark theme's inks whatever the theme (the light theme's darker ones lose their
+ * contrast on it); closed is a lighter grey than the 2-D map's, so a label reads over the grey
+ * state and province lines. */
+function ribbonInk(i: RibbonInk | null): string {
+  if (i === 'open') return '#69d98d'
+  if (i === 'marginal') return '#f1ca47'
+  if (i === 'closed') return '#aab1b7'
+  return '#a9d4ff'
+}
+/** The polar stretch on the globe: the dark theme's aurora violet, for the same reason. */
+const GLOBE_ROUTE_POLAR = '#c77dff'
+/** A ribbon label's size (world units; the globe's radius is 100): larger than the opening
+ * labels, so a heading is found at a glance. */
+const RIBBON_LABEL_SCALE: [number, number] = [30, 5.6]
+/** The ribbon sits just above the other line overlays (greyline 0.004). */
+const PATH_ALT = 0.005
 
 /** Canvas-text sprite for the opening-sector labels ("6m Sporadic-E") — the 2-D map
  * labels its sectors; the globe must too (2D↔3D parity). */
@@ -688,13 +722,12 @@ function Globe3DView({
       color,
     })
     const out: Array<ReturnType<typeof leg>> = []
-    // Kept out of the TX fan and drawn in the selection colour, exactly as before — one arc
-    // per station, never a blue and a green stroke over the same geometry.
+    // The selected station is kept out of the TX fan: its path is the ribbon (below), both
+    // routes, never a TX arc over the same geometry.
     const sel = spots.find((s) => s.call === selectedCall)
     const tx = show.arcs ? txPaths(spots).filter((p) => p.call !== sel?.call) : []
     if (show.arcs) {
       for (const p of tx) out.push(leg(p.ll.lat, p.ll.lon, GETTING_OUT))
-      if (sel) out.push(leg(sel.lat, sel.lon, '#a9d4ff'))
     }
     if (show.rxarcs) {
       for (const p of rxPaths(stations ?? [], tx)) out.push(leg(p.ll.lat, p.ll.lon, PATH_RX))
@@ -913,19 +946,29 @@ function Globe3DView({
   // the 900 ms pass fly-to, and OrbitControls' damping after a release. `frame` draws ONE frame for
   // a change that is complete once written — above all the 1 s breath of an open band, which would
   // otherwise re-wake the loop every second and render continuously by another name.
+  //
+  // UNSEEN, NOTHING IS DRAWN: the window hidden (minimised, another tab) or the globe out of view. A
+  // hidden window keeps its timers on every engine, so the birds still asked for a frame each second,
+  // and WebKitGTK keeps animating a hidden window, so a spinning globe drew at full rate; on a software
+  // renderer each of those frames is a large share of a core. Unseen, `kick` and `frame` only note that
+  // the picture is `behind`, and an awake loop stops. Back in view, a picture that fell behind is drawn
+  // (with the settle, for a tween that was under way), and spin turns again.
   useEffect(() => {
     const g = globeRef.current
     if (!g || !ready) return
     const controls = g.controls() as unknown as THREE.EventDispatcher<Record<string, object>>
     let timer: number | undefined
     let interacting = false
+    let outOfView = false
+    let behind = false
+    const unseen = () => document.hidden || outOfView
     // WAKE ONCE. globe.gl's resumeAnimation() draws its first frame at once — controls.update(), then
     // the render — and records the loop as running only after it. When that update moves the camera
     // (spin just switched on, or the view jumped while asleep), OrbitControls fires 'change', which is
     // `kick`, which resumed again into a loop that still read as stopped; and OrbitControls records the
     // pose it compared against only after 'change' returns, so every nested update fired again, until
     // "Maximum call stack size exceeded". So the loop counts as awake from the moment it is woken.
-    // While the globe is up nothing else pauses it (useGlobeWebgl does only as the globe goes).
+    // While the globe is up and seen nothing else pauses it (useGlobeWebgl does only as the globe goes).
     let awake = false
     const wake = () => {
       if (awake) return
@@ -940,6 +983,10 @@ function Globe3DView({
       }
     }
     const kick = () => {
+      if (unseen()) {
+        behind = true
+        return
+      }
       wake()
       if (timer !== undefined) window.clearTimeout(timer)
       timer = window.setTimeout(sleep, IDLE_RENDER_MS)
@@ -956,12 +1003,40 @@ function Globe3DView({
     // globe.gl's resume draws a frame synchronously; pausing straight after cancels the next one —
     // unless that frame moved the camera, and `kick` now holds the loop awake.
     const frame = () => {
+      if (unseen()) {
+        behind = true
+        return
+      }
       if (timer !== undefined || interacting || spinRef.current) return
       wake()
       if (timer !== undefined) return
       awake = false
       g.pauseAnimation()
     }
+    const onSeenChange = () => {
+      if (unseen()) {
+        if (timer !== undefined) window.clearTimeout(timer)
+        timer = undefined
+        if (awake) {
+          awake = false
+          behind = true
+          g.pauseAnimation()
+        }
+      } else if (behind || spinRef.current) {
+        behind = false
+        kick()
+      }
+    }
+    // Without IntersectionObserver (an older webview) the window's visibility alone decides.
+    const view =
+      typeof IntersectionObserver === 'undefined'
+        ? null
+        : new IntersectionObserver((entries) => {
+            outOfView = !entries[entries.length - 1].isIntersecting
+            onSeenChange()
+          })
+    if (view && wrapRef.current) view.observe(wrapRef.current)
+    document.addEventListener('visibilitychange', onSeenChange)
     controls.addEventListener('start', onStart)
     controls.addEventListener('change', kick)
     controls.addEventListener('end', onEnd)
@@ -969,6 +1044,8 @@ function Globe3DView({
     frameRef.current = frame
     kick()
     return () => {
+      view?.disconnect()
+      document.removeEventListener('visibilitychange', onSeenChange)
       controls.removeEventListener('start', onStart)
       controls.removeEventListener('change', kick)
       controls.removeEventListener('end', onEnd)
@@ -1076,7 +1153,7 @@ function Globe3DView({
     let live = true
     const poll = () =>
       getAurora()
-        .then((a) => live && setAuroraPts(a ?? []))
+        .then((a) => live && setAuroraPts(a?.points ?? []))
         .catch(() => {})
     poll()
     const id = setInterval(poll, 600_000)
@@ -1713,6 +1790,62 @@ function Globe3DView({
       show.coverage,
     )
   }, [ready, nowMs, qth, show.rings, show.cqzones, show.coverage, show.greyline, show.openings, cqzones, workedGrids, prop])
+
+  // The selected station's path ribbon (features/pathRibbon — the 2-D map draws the same lines):
+  // the short path solid and the long path dashed, in their modelled reliability inks on the band
+  // in focus, the polar-cap and grey-line stretches over them, and a bearing label for each at the
+  // QTH end. On whenever a station is selected. Keyed by the selection's coordinates, not the
+  // 300 ms snapshot's arrays; the cleanup removes and disposes every line, material and label it
+  // added, before the next build and before the globe lets go of its context.
+  const selLL = useMemo(() => {
+    if (!selectedCall) return null
+    const sp = spots.find((s) => s.call === selectedCall)
+    if (sp) return { lat: sp.lat, lon: sp.lon }
+    const st = stations?.find((s) => s.call === selectedCall)
+    return st?.grid ? gridToLatLon(st.grid) : null
+  }, [spots, stations, selectedCall])
+  const selLat = selLL?.lat ?? null
+  const selLon = selLL?.lon ?? null
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready || !qth || selLat == null || selLon == null) return
+    const rib = ribbonFor(qth, { lat: selLat, lon: selLon }, outlook, activeBand)
+    const asLatLng = (pts: { lat: number; lon: number }[]) =>
+      pts.map((p) => [p.lat, p.lon] as [number, number])
+    const keys: string[] = []
+    for (const l of rib.lines) {
+      const key = l.route === 'short' ? 'path-sp' : 'path-lp'
+      const dashed = l.route === 'long'
+      keys.push(key)
+      syncLines(g, linesRef.current, key, [asLatLng(l.points)], ribbonInk(l.ink), 0.95, true, PATH_ALT, dashed)
+      for (const kind of ['polar', 'grey'] as const) {
+        const parts = l.stretches.filter((st) => st.kind === kind).map((st) => asLatLng(st.points))
+        const k = `${key}-${kind}`
+        keys.push(k)
+        const ink = kind === 'polar' ? GLOBE_ROUTE_POLAR : '#ffc86e'
+        syncLines(g, linesRef.current, k, parts, ink, 1, parts.length > 0, PATH_ALT + 0.001, dashed)
+      }
+    }
+    const scene = g.scene()
+    const labels = rib.lines.map((l) => {
+      const pos = g.getCoords(l.labelAt.lat, l.labelAt.lon, 0.03)
+      const sp = textSprite(l.label, ribbonInk(l.ink))
+      sp.scale.set(...RIBBON_LABEL_SCALE, 1)
+      sp.position.set(pos.x, pos.y, pos.z)
+      scene.add(sp)
+      return sp
+    })
+    frameRef.current()
+    return () => {
+      for (const k of keys) syncLines(g, linesRef.current, k, [], '#000', 0, false)
+      for (const sp of labels) {
+        scene.remove(sp)
+        sp.material.map?.dispose()
+        sp.material.dispose()
+      }
+      frameRef.current()
+    }
+  }, [ready, qth, selLat, selLon, outlook, activeBand])
 
   // My decodes + DXpeditions as distinct point clouds.
   useEffect(() => {

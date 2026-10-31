@@ -568,6 +568,40 @@ describe('settings-reference.md matches SETTINGS_TABS', () => {
     }
     expect(broken).toEqual([])
   })
+
+  it('every anchor the page had before the 2026-10 regroup still lands, or is knowingly gone', () => {
+    // Outside links (a forum post, a bookmark) point at these, and no grep of this repository can
+    // see them. A section anchor never encodes its tab, so moving a section keeps its anchor; only
+    // a renamed tab loses one, and an old link then opens at the top of the page.
+    const BEFORE = [
+      'station', 'operator--radio', 'remote', 'remote-access', 'radio', 'setup-health', 'radios',
+      'how-a-qsy-picks-a-radio', 'profiles', 'rig--cat', 'audio', 'receive-audio-on-this-computer',
+      'scope-source', 'satellite-doppler', 'orbital-elements', 'rotator', 'amplifier',
+      'transmit-limits--sharing', 'phone', 'phone-ssb--fm', 'cw', 'digital', 'digital-ft8ft4',
+      'jt65--classic-eme', 'msk144--meteor-scatter', 'beacons--wspr--fst4w', 'fst4-qso--fst4w-beacon',
+      'q65--eme--vhf-scatter', 'quick-reply-macros', 'rtty', 'psk', 'js8', 'sstv', 'aprs',
+      'working-frequencies', 'spots--alerts', 'pounce--new-one-alert', 'alerts', 'logbook',
+      'logbook-display', 'deleted-contacts', 'callbook-lookups', 'worked-before-b4--dupes',
+      'lotw-users-list', 'callsign--state-database', 'country-file-dxcc', 'iota-island-list',
+      'logging--connectors', 'connections', 'integrations--feeds', 'dxkeeper-dxlab-suite',
+      'n3fjp-integration-club-master-log', 'n1mm-integration', 'confirmations', 'contesting', 'contest',
+      'your-station-data', 'your-entry', 'super-check-partial-and-call-history', 'enter-sends-message',
+      'field-day', 'whos-who-at-this-event', 'field-day-club-sync', 'appearance', 'workspace', 'theme',
+      'colours', 'waterfall--scopes', 'map--globe', 'performance', 'conditions-on-a-tv', 'features',
+      'app-updates', 'start-at-sign-in', 'this-computer', 'accessibility--eyes-free', 'config',
+      'data--log-folder', 'backup--reset', 'related-guides',
+    ]
+    // The two renamed tabs, and the tab their sections went to.
+    const GONE: Record<string, string> = { 'logging--connectors': 'services', config: 'app' }
+    const anchors = new Set(headings(md).map((h) => slug(h.text)))
+    const lost = BEFORE.filter((a) => !anchors.has(a) && !(a in GONE))
+    expect(lost, `old anchors that no longer land: ${lost.join(', ')}`).toEqual([])
+    for (const [old, now] of Object.entries(GONE)) {
+      // Keeps the list honest: a name back on the page is not gone, and the successor exists.
+      expect(anchors.has(old), `#${old} is on the page again`).toBe(false)
+      expect(anchors.has(now), `#${now}`).toBe(true)
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------

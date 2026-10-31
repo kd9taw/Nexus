@@ -146,6 +146,12 @@ import {
   getTleStatus,
   sstvArm,
   sstvAutoDisarm,
+  leaveDecoderScreen,
+  rttyAutoArm,
+  pskAutoArm,
+  jttyAutoArm,
+  sstvAutoArm,
+  aprsAutoArm,
   setSettings as apiSetSettings,
   setContestEsm,
   setCwSpeedMatch,
@@ -183,6 +189,7 @@ import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { processFlare, effectiveXray } from './flareAlert'
+import { snapXray, wxUsable, xrayFastFresh } from './propViz'
 import { processStorm, processStormForecast } from './stormAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
@@ -190,6 +197,7 @@ import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { tickSatPassAlert } from './features/satPassAlert'
 import type { EsmSetting } from './features/esmHost'
 import { tickIssAutoArm } from './features/issAutoArm'
+import { enterView, isDecoderScreen, type DecoderScreen } from './features/decoderScreens'
 import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
 import { slotKeyRefusedLane } from './features/slotKeyRefused'
@@ -197,6 +205,7 @@ import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
 import { slotAudioLostLane } from './features/slotAudioLost'
 import { slotOverDroppedLane } from './features/slotOverDropped'
 import { pttRefusedLane } from './features/pttRefused'
+import { pcMicLane } from './features/pcMic'
 import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { heldLine, txOnHeldLane } from './features/txOnHeld'
@@ -325,6 +334,14 @@ const SCREEN_BY_SECTION: Partial<Record<string, View>> = {
   rtty: 'rtty',
   keyboard: 'psk',
   jtty: 'jtty',
+}
+/** Each decoder screen's entry arm — what its cockpit calls on the rising edge of `active`. */
+const ENTRY_ARM: Record<DecoderScreen, () => Promise<unknown>> = {
+  rtty: rttyAutoArm,
+  psk: pskAutoArm,
+  jtty: jttyAutoArm,
+  sstv: sstvAutoArm,
+  aprs: aprsAutoArm,
 }
 function App() {
   const [theme, setTheme, themeChoice] = useTheme()
@@ -572,6 +589,31 @@ function App() {
         afarEntryRef.current = from
         setView(from)
       })
+  }, [view])
+  // The receive decoders a screen started stop when the operator enters ANOTHER SECTION — by any
+  // path that changes the view, so the Remote picture and a computer driving this station too
+  // (`features/decoderScreens.ts`). The engine stops only a decoder its screen started and nothing
+  // else needs; one it keeps comes back onto the list, to be asked about at the next section.
+  //
+  // A leave and the return's entry arm are separate calls: on a quick way back (or a slow link) the
+  // leave can land AFTER the entry arm, which then found the decoder still running and did nothing,
+  // and stop the decoder under the screen the operator is on. So a leave that lands with its screen
+  // in front again asks for that screen's entry arm once more (only ever an upgrade from off, and
+  // refused after the operator's own Stop, as on entry).
+  const decoderScreensRef = useRef<DecoderScreen[]>(isDecoderScreen(view) ? [view] : [])
+  useEffect(() => {
+    const { left, held } = enterView(decoderScreensRef.current, view)
+    decoderScreensRef.current = held
+    for (const screen of left) {
+      void leaveDecoderScreen(screen)
+        .then((kept) => {
+          if (kept === true && !decoderScreensRef.current.includes(screen)) {
+            decoderScreensRef.current = [...decoderScreensRef.current, screen]
+          }
+          if (kept !== true && viewRef.current === screen) return ENTRY_ARM[screen]()
+        })
+        .catch(() => {})
+    }
   }, [view])
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
   // DXpeditions ON THE AIR NOW that announced SuperFox — a format this version of Nexus has no
@@ -826,6 +868,12 @@ function App() {
     setStatus('pttRefused', pttRefusedLane(snap?.radio.pttRefused))
   }, [snap?.radio.pttRefused?.at, snap?.radio.pttRefused?.mode])
 
+  // A computer-microphone over (Phone, the radio set to take this computer's microphone) that ended
+  // or never keyed for a reason the operator did not choose: the lane says why, until an over keys.
+  useEffect(() => {
+    setStatus('pcMic', pcMicLane(snap?.radio.pcMicEnded))
+  }, [snap?.radio.pcMicEnded?.at, snap?.radio.pcMicEnded?.cause])
+
   // A voice-keyer message Nexus's own Flex client dropped before the radio took DAX for it (Phone at
   // the shack, native audio on): the lane says why, since the keyer's toast answered the press
   // before the drop, until the next message the keyer accepts; not on the Remote page either.
@@ -952,14 +1000,18 @@ function App() {
           setProp(p)
           // The band dropdowns' opening dots read this same snapshot (bandConditions.ts).
           publishBandConditions(p)
-          // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup).
-          processFlare(effectiveXray(xrayFastRef.current, p.spaceWx.xrayLong))
+          // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup). Only a
+          // measured, fresh flux may alert: a stand-in or an old sample is no flux (propViz).
+          const nowMs = Date.now()
+          processFlare(effectiveXray(xrayFastRef.current, snapXray(p.spaceWx, nowMs)))
           // Geomagnetic storm heads-up, same edge-triggered shape over the MEASURED
           // Kp already in this snapshot — no extra fetch. Until this existed a storm
           // reached the operator only if they had the Space Weather pane in front of
-          // them, which is backwards: a flare is minutes, a storm is days.
-          processStorm(p.spaceWx.kp)
-          kpNowRef.current = p.spaceWx.kp
+          // them, which is backwards: a flare is minutes, a storm is days. A stand-in Kp
+          // or one past its cadence raises nothing and is not "the Kp now".
+          const kpNow = wxUsable(p.spaceWx, 'kp', nowMs) ? p.spaceWx.kp : null
+          processStorm(kpNow)
+          kpNowRef.current = kpNow
           // Chased-expedition window alerts (dxpedChase.ts owns the dedup).
           processDxpedAlerts(
             p.dxpeditions.workableNow,
@@ -1151,8 +1203,9 @@ function App() {
   useEffect(
     () =>
       watchFeed(XRAY_NOW, (x) => {
-        xrayFastRef.current = x.flux
-        processFlare(effectiveXray(x.flux, null))
+        // The GOES sample's own time gates it: a feed gap is an old sample, not a flare now.
+        xrayFastRef.current = xrayFastFresh(x, Date.now())
+        processFlare(effectiveXray(xrayFastRef.current, null))
       }),
     [],
   )
@@ -2847,7 +2900,7 @@ function App() {
       ids: ProfileId[],
       landing: View,
       modes: FeatureId[],
-      license: string,
+      license: string | null,
       draft: WizardDraft,
       experience: ExperienceLevel | null,
     ) => {
@@ -2855,10 +2908,16 @@ function App() {
       // (licenseClass included), so a concurrent set_license_class would be
       // reverted by the stale class riding in the merge (review catch — the
       // wizard's own TX-lockout promise silently undone). Draft first, class
-      // second; failures surface instead of a false-success close.
+      // second; failures surface instead of a false-success close. The class only when the wizard
+      // changed it (null = the class the station holds), and App's copy follows it so the next
+      // run opens on it, as the experience answer's does.
       void applyWizardDraft(draft)
-        .then(() => setLicenseClass(license))
-        .then((s) => s && setSnap(s))
+        .then(() => (license ? setLicenseClass(license) : null))
+        .then((s) => {
+          if (!s || !license) return
+          setSnap(s)
+          setSettings((prev) => (prev ? { ...prev, licenseClass: license } : prev))
+        })
         // The experience answer has its own writer; a later form save keeps it. Only an answer
         // given in this run is written: none leaves the station's (absent = never asked).
         .then(() => (experience ? apiSetExperienceLevel(experience) : null))
@@ -2880,7 +2939,9 @@ function App() {
       if (wizardAsks) features.applyProfiles(ids, modes)
       setView(landing)
       markWizardSeen()
-      recordWizardSeen()
+      // The first run is recorded as done in the settings file; a re-run from Settings already is,
+      // and writes nothing it did not change.
+      if (wizardAsks) recordWizardSeen()
       setShowWizard(false)
       setWizardGen((g) => g + 1)
     },
@@ -2889,10 +2950,10 @@ function App() {
 
   const handleWizardSkip = useCallback(() => {
     markWizardSeen()
-    recordWizardSeen()
+    if (wizardAsks) recordWizardSeen()
     setShowWizard(false)
     setWizardGen((g) => g + 1)
-  }, [recordWizardSeen])
+  }, [recordWizardSeen, wizardAsks])
 
   // NOTE: everything from here down to the `!snap` early return is snap-INDEPENDENT
   // and — critically for the hooks below — must run on EVERY render (rules of hooks:
@@ -3152,6 +3213,7 @@ function App() {
         band={snap.radio.band}
         tier={snap.link.tier}
         periodSecs={snap.link.periodSecs}
+        clockOffsetMs={snap.radio.clockOffsetMs}
         harqRescues={snap.harqRescues}
         onCall={handleCall}
         needAlertsByCall={needAlertsByCall}
@@ -3176,6 +3238,7 @@ function App() {
       {header && <div className="grid-header">{header}</div>}
       <Waterfall
         stripRef={tempoWfRef}
+        zoomKey="nexus.waterfall.tempo.zoom"
         transmitting={snap.radio.transmitting}
         rxOffsetHz={snap.radio.rxOffsetHz}
         txOffsetHz={snap.radio.txOffsetHz}
@@ -3280,8 +3343,12 @@ function App() {
   // polls, as on Connect; the Spots, POTA/SOTA and Needed boxes are the boards themselves, lent as they
   // are to Connect. Neither the rail nor a box stands on the hosted Remote page (the desktop first), so
   // this wiring is always the native one.
+  // What the shack's modelled sweeps are computed from beside the grid: a change asks for them again.
+  const antGainDbi = (settings?.antTxGainDbi ?? 0) + (settings?.antRxGainDbi ?? 0)
   const boxSource: BoxSource = {
     myGrid: settings?.mygrid ?? '',
+    stationPowerW: settings?.stationPowerW ?? null,
+    antGainDbi,
     theme,
     stations: snap.stations ?? [],
     prop,
@@ -3746,6 +3813,8 @@ function App() {
       workspace = (
         <ConnectView
           myGrid={settings?.mygrid ?? ''}
+          stationPowerW={settings?.stationPowerW ?? null}
+          antGainDbi={antGainDbi}
           theme={theme}
           stations={snap?.stations ?? []}
           prop={prop}
@@ -4450,6 +4519,7 @@ function App() {
           onSkip={handleWizardSkip}
           onOpenGuide={() => setShowGuide(true)}
           onOpenWalk={() => setShowWalk(true)}
+          onOpenServices={() => openSettingsAt('confirmations')}
           askExperience={wizardAsks}
           rerun={!wizardAsks}
         />

@@ -1,4 +1,4 @@
-// APPEARANCE IN THE BACKUP — Settings ▸ Config ▸ Backup & reset. Operator pick of 2026-09-26,
+// APPEARANCE IN THE BACKUP — Settings ▸ App ▸ Backup & reset. Operator pick of 2026-09-26,
 // "Per computer + Backup": how Nexus looks stays webview-local (per computer, preseeded before
 // first paint, never a settings.json key), and the backup FILE carries it too, so a new computer
 // or a rebuild gets the operator's look back with everything else.

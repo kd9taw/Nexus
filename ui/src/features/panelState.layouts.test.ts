@@ -43,10 +43,11 @@ const last = <T,>(xs: readonly T[]): T | undefined => xs[xs.length - 1]
 
 describe('FT is arranged per layout, over every FT pane', () => {
   it('the stock arrangements are the columns FT has always drawn, with the other layout’s panes listed but not drawn', () => {
-    // The boxes and the Stats pane (2026-10-14) are listed in the rail and ship hidden: what each layout draws is the rest.
+    // The boxes, the Stats pane (2026-10-14) and the Recent contacts pane are listed in the rail and ship hidden:
+    // what each layout draws is the rest.
     const own = (c: Record<string, OperatePanelId[]>, extra: readonly OperatePanelId[] = []) =>
       Object.fromEntries(
-        Object.entries(c).map(([k, ids]) => [k, ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats' && !extra.includes(id))]),
+        Object.entries(c).map(([k, ids]) => [k, ids.filter((id) => !(BOX_IDS as readonly string[]).includes(id) && id !== 'stats' && id !== 'recent' && !extra.includes(id))]),
       )
     // What each layout draws until the operator adds a pane: today's columns.
     expect(own(placedColumns(CLASSIC, undefined), CLASSIC.extra)).toEqual({ a: ['bandActivity'], b: ['rxfreq', 'txmsgs'], log: ['recall', 'stations'] })

@@ -134,7 +134,9 @@ fn only_aprs_channels_on_a_radio_that_can_receive_them_are_admitted() {
             "{dial}"
         );
     }
-    for dial in [144.39, 144.8, 145.175, 144.575, 144.66, 144.93, 145.57] {
+    for dial in [
+        144.39, 144.8, 145.175, 144.575, 144.66, 144.93, 145.57, 145.825,
+    ] {
         assert!(queue(&mut s, dial).is_ok(), "{dial}");
         s.engine.take_remote_radio().unwrap();
     }
@@ -231,4 +233,69 @@ fn an_aprs_hold_the_browser_set_does_not_strand_it_but_a_local_one_still_refuses
         Err(Reason::StationBusy)
     ));
     assert!(local.engine.take_remote_radio().is_none());
+}
+
+/// The ISS digipeater (145.825 MHz) is one of the closed list, with every rule of the terrestrial
+/// channels: readback must confirm FM simplex before it commits, and 2 m frequencies beside it that
+/// are not an APRS channel are still refused.
+#[test]
+fn the_iss_channel_is_admitted_and_commits_only_on_its_readback() {
+    let mut s = station(OperatingMode::Phone, 145.5, "2m");
+    for dial in [145.82, 145.83, 145.8, 146.0] {
+        assert!(
+            matches!(queue(&mut s, dial), Err(Reason::InvalidAction)),
+            "{dial}"
+        );
+    }
+    let receipt = queue(&mut s, 145.825).unwrap();
+    let request = s.engine.take_remote_radio().unwrap();
+    let mut native = station(OperatingMode::Phone, 145.5, "2m");
+    native.engine.aprs_tune(145.825).unwrap();
+    assert_eq!(
+        request.target(),
+        (
+            native.engine.settings.dial_hz(),
+            native.engine.rig_mode_effective().as_str()
+        )
+    );
+    request.permission().begin_write(Instant::now()).unwrap();
+    s.sample(145_825_000, "FM");
+    let power = request.power_limit();
+    assert!(request.commit_tuning_readback(&mut s.engine, power, Some(("simplex", 0, 0.0))));
+    assert!(matches!(
+        receipt.outcome(),
+        Outcome::Applied {
+            evidence: Evidence::RadioReadback
+        }
+    ));
+    assert!(s.engine.aprs_fm);
+    assert!(!s.engine.tx_enabled(), "an APRS tune never arms");
+    assert!(s.engine.aprs_tx_queue.is_empty());
+}
+
+/// The licence gate judges the ISS channel as it judges any 2 m APRS channel: the same answer as
+/// 144.390 for every class, and a refusal still lands where the class has no privilege.
+#[test]
+fn the_licence_gate_judges_the_iss_channel_like_any_2m_channel() {
+    for class in ["novice", "technician", "general", "advanced", "extra"] {
+        let at = |dial: f64| {
+            let mut e = Engine::new("W9XYZ", "EN61", 0);
+            assert!(e.set_license_class(class), "{class}");
+            e.set_operating_mode("phone", false);
+            e.aprs_tune(dial).unwrap();
+            e.tx_allowed()
+        };
+        assert_eq!(at(145.825), at(144.39), "{class}");
+        // Positive control: the gate is live on this engine, not trivially open.
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        assert!(e.set_license_class(class));
+        e.set_operating_mode("phone", false);
+        e.set_frequency(144.05, "2m", "FM");
+        assert!(!e.tx_allowed(), "{class}: 144.050 is CW only");
+    }
+    let mut tech = Engine::new("W9XYZ", "EN61", 0);
+    assert!(tech.set_license_class("technician"));
+    tech.set_operating_mode("phone", false);
+    tech.aprs_tune(145.825).unwrap();
+    assert!(tech.tx_allowed(), "a Technician may beacon through the ISS");
 }

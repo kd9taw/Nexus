@@ -80,10 +80,12 @@ pub struct ConnectBoardData {
     pub banners: Vec<String>,
     pub bands: Vec<ConnectBand>,
     pub openings: Vec<ConnectOpening>,
-    pub sfi: f32,
-    pub kp: f32,
-    pub a_index: f32,
-    pub xray_class: String,
+    /// Each index only while it may speak for now; `None` (a dash) for a stand-in NOAA did not
+    /// give, or a reading past its product's cadence.
+    pub sfi: Option<f32>,
+    pub kp: Option<f32>,
+    pub a_index: Option<f32>,
+    pub xray_class: Option<String>,
     /// Plain-language insight lines, already ranked.
     pub insights: Vec<String>,
     /// Worst planetary K still forecast, and when — `None` when NOAA has published
@@ -209,6 +211,7 @@ pub const RPC_ALLOWLIST: &[&str] = &[
     "get_solar_indices",   // NOAA daily SFI + sunspot number (Space Wx pane's trends)
     "get_band_outlook",    // per-band outlook pane
     "get_path_outlook",    // outlook for a clicked spot
+    "get_path_regions",    // path over the day to the ten DX regions
     "get_getting_out",     // the getting-out pane
     "get_dxped_windows",   // DXpedition windows pane
     "get_openings_log",    // the openings history pane

@@ -2,9 +2,9 @@
 //!
 //! The `sstvrx` decode thread calls these to persist each completed image to
 //! the operator-browsable local data dir (`<local-appdata>/Nexus/sstv-gallery/`,
-//! the ALL.TXT location pattern) and to keep `gallery.json` — the small metadata
-//! sidecar living BESIDE the images (atomic tmp+rename, the `openings_log.json`
-//! pattern) — in step with the engine's session gallery list.
+//! the ALL.TXT location pattern) and to read `gallery.json` — the small metadata
+//! sidecar living BESIDE the images. Its one writer is
+//! `tempo_app::sstv_gallery::write_gallery_json`, which the shell's gallery delete shares.
 //!
 //! Images are written as PNG (operator decision, 2026-08-15). It is LOSSLESS, so a received
 //! picture — the only copy of what somebody sent you — is stored exactly as decoded; every
@@ -23,8 +23,7 @@ use std::path::Path;
 
 use tempo_app::dto::SstvGalleryEntry;
 
-/// The gallery metadata sidecar's filename, inside the gallery directory.
-pub const GALLERY_JSON: &str = "gallery.json";
+pub use tempo_app::sstv_gallery::GALLERY_JSON;
 
 /// Encode `width × height` RGB pixels (row-major, top-down) as a 24-bit
 /// uncompressed BMP (BITMAPINFOHEADER, bottom-up rows, BGR byte order, rows
@@ -144,19 +143,6 @@ pub fn load_gallery(dir: &Path) -> Vec<SstvGalleryEntry> {
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
-}
-
-/// Persist the gallery metadata to `dir`/`gallery.json` (atomic tmp+rename,
-/// best-effort — a failed write never disturbs the decode thread).
-pub fn save_gallery(dir: &Path, entries: &[SstvGalleryEntry]) {
-    let _ = std::fs::create_dir_all(dir);
-    if let Ok(text) = serde_json::to_string(entries) {
-        let path = dir.join(GALLERY_JSON);
-        let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
-        }
-    }
 }
 
 /// Filename-safe UTC stamp, e.g. `20260717T153000Z`.
@@ -303,7 +289,7 @@ mod tests {
             lines: 2,
             fsk_id: None,
         };
-        save_gallery(&dir, std::slice::from_ref(&entry));
+        tempo_app::sstv_gallery::write_gallery_json(&dir, 1, std::slice::from_ref(&entry));
         let loaded = load_gallery(&dir);
         assert_eq!(loaded, vec![entry]);
         let _ = std::fs::remove_dir_all(&dir);

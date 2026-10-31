@@ -68,6 +68,7 @@ import {
   sstvManualRx,
   sstvAutoArm,
   sstvDeleteImage,
+  sstvDeleteImages,
   sstvSend,
   sstvStop,
 } from '../api'
@@ -888,6 +889,43 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       await sstvDeleteImage(g.path)
       setSstv(await getSstvState())
     }, t('sstv.gallery.delete.failed'))
+  }
+
+  // CLEARING OUT THE GALLERY: tick several pictures and delete them together. The ticks are kept
+  // by path, and only those still in the gallery count, so a picture that went away some other way
+  // never inflates the number the question names.
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set())
+  const pickedNow = gallery.filter((g) => picked.has(g.path))
+  const togglePicked = (path: string) =>
+    setPicked((cur) => {
+      const next = new Set(cur)
+      if (!next.delete(path)) next.add(path)
+      return next
+    })
+  // One question for the whole batch, naming how many. The pictures that could not be removed stay
+  // ticked, and the toast says how many and why.
+  const deleteSelected = async () => {
+    const targets = pickedNow.map((g) => g.path)
+    if (targets.length === 0) return
+    const count = targets.length
+    if (
+      !(await confirmDialog({
+        title: t('sstv.gallery.deleteSelected.confirm.title', { count }),
+        body: t('sstv.gallery.deleteSelected.confirm.body'),
+        confirmLabel: t('sstv.gallery.deleteSelected.confirm.label', { count }),
+        danger: true,
+      }))
+    )
+      return
+    await withErrorToast(async () => {
+      const failed = await sstvDeleteImages(targets)
+      setPicked(new Set(failed.map((f) => f.path)))
+      setSstv(await getSstvState())
+      if (failed.length > 0) {
+        const reasons = [...new Set(failed.map((f) => f.reason))].join('; ')
+        pushToast(t('sstv.gallery.deleteSelected.partial', { count: failed.length, reasons }), 'error')
+      }
+    }, t('sstv.gallery.deleteSelected.failed'))
   }
 
   /** Gallery → composer: fetch the received file over the asset protocol (the bridge
@@ -1869,6 +1907,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             <Waterfall
               {...closeProps('scope')}
               paneTitle={sstvPanelLabels().scope}
+              zoomKey="nexus.waterfall.sstv.zoom"
               theme={theme}
               active={active}
               rowMs={50} // live band instrument — rig-scope cadence, not the FT slot default
@@ -2309,13 +2348,39 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
             )
           }
         >
+          {gallery.length > 0 && (
+            <div className="sstv-gallery-tools" role="toolbar" aria-label={t('sstv.gallery.select.toolbar')}>
+              <button type="button" className="cockpit-popout" onClick={() => setPicked(new Set(gallery.map((g) => g.path)))}>
+                {t('sstv.gallery.select.all')}
+              </button>
+              {pickedNow.length > 0 && (
+                <>
+                  <button type="button" className="cockpit-popout" onClick={() => setPicked(new Set())}>
+                    {t('sstv.gallery.select.clear')}
+                  </button>
+                  <button type="button" className="cockpit-popout sstv-gallery-delete-selected" onClick={() => void deleteSelected()}>
+                    {t('sstv.gallery.deleteSelected.label', { count: pickedNow.length })}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
           <div className="sstv-gallery-grid">
             {gallery.length === 0 ? (
               <div className="sstv-gallery-empty">{t('sstv.gallery.empty')}</div>
             ) : (
               gallery.map((g) => (
-                <figure key={g.path} className="sstv-thumb" title={g.path}>
+                <figure key={g.path} className={picked.has(g.path) ? 'sstv-thumb picked' : 'sstv-thumb'} title={g.path}>
                   <ReceivedThumb entry={g} />
+                  {/* Always shown, unlike ✕ and ✎: the ticks are what the operator checks before
+                      pressing Delete selected. A real checkbox, so Tab and Space reach it. */}
+                  <input
+                    type="checkbox"
+                    className="sstv-thumb-pick"
+                    checked={picked.has(g.path)}
+                    onChange={() => togglePicked(g.path)}
+                    aria-label={t('sstv.gallery.select.one.aria', { mode: g.mode, when: fmtUtc(g.finishedUtc) })}
+                  />
                   {/* Irreversible — a received picture is the only copy of something somebody
                       sent you, and there is no re-download. Confirmed before it happens, but a
                       plain confirm rather than the Logbook's type-the-word dialog: one image is

@@ -9,7 +9,7 @@ on the air.
 DXpeditions ships enabled — the wizard turns everything on — and the DX/awards
 and 6m/VHF goal profiles both keep it. If you have trimmed sections, switch it
 back on in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features). It never
+[Settings ▸ App ▸ Features](settings-reference.md#features). It never
 touches the rig on its own: nothing here retunes until you press **▶ Work** on a card, and the
 QSO itself still happens in a cockpit. It tears off to a second monitor with **⧉ Pop out**.
 
@@ -83,7 +83,7 @@ that operation.
 not on the air — the model still runs, the expedition just is not there. Hover a chip for that
 day's best band and window, or "no modelled path" when there isn't one. This is your own
 station's forecast, not a generic one: it uses the propagation engine you picked in
-[Settings ▸ Logging & Connectors](settings-reference.md#integrations--feeds), and each entry
+[Settings ▸ Services](settings-reference.md#integrations--feeds), and each entry
 says which engine produced its number.
 
 To plan a chase:

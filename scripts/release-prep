@@ -163,6 +163,15 @@ else
   echo "warn: the bundled TLE seed is stale or unreadable${SEED_OUT:+ ($SEED_OUT)} — re-run scripts/gen-tles.mjs before publishing." >&2
 fi
 
+# 4b. The IOTA island-group list — src-tauri/resources/iota/, shipped in the installer by IOTA
+# Ltd's permission but never committed (gitignored; see NOTICE and that folder's README). This
+# stages it for a local build; release.yml fetches its own in each installer job. Best-effort: the
+# script needs iota-world.org and refuses a short or changed file, and a build without the list
+# still works (shape check until the app's first monthly download).
+if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
+  echo "warn: IOTA list NOT staged — a local build ships without it unless a copy is already in src-tauri/resources/iota." >&2
+fi
+
 # 5. Verify alignment or die.
 A=$(grep -om1 'version = "[^"]*"' src-tauri/Cargo.toml | grep -o '[0-9][^"]*')
 B=$(grep -om1 '"version": *"[^"]*"' src-tauri/tauri.conf.json | grep -o '[0-9][^"]*')

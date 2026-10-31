@@ -208,7 +208,7 @@ describe('the section always has a way to refresh elements', () => {
   // The amber chip WAS the section's manual refresh. Under median semantics
   // it correctly disappears in normal operation — which took the only
   // in-section refresh with it (what was left: the per-bird arm-confirm, the
-  // armed rail past 14 d, and Settings ▸ Radio ▸ Orbital elements). A control
+  // armed rail past 14 d, and Settings ▸ Satellites ▸ Orbital elements). A control
   // that exists only while something is wrong is not a control.
   it('a current catalog keeps a quiet refresh control, and no warning chip', async () => {
     const { container } = render(<SatellitesView />)

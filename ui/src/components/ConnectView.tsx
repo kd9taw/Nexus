@@ -16,10 +16,12 @@ import type { AmpStatus, FieldDayStatus } from '../types'
 import type { ActivationBoard } from './ActivationPane'
 import type { Theme } from '../useTheme'
 import { effectiveXray } from '../flareAlert'
+import { snapXray } from '../propViz'
 import { gpuCapableForGlobe, webgl2ForGlobe } from '../gpu'
 import { GlobeGuard } from './GlobeGuard'
 import { gridToLatLon, type LatLon } from '../grid'
 import { packFor, useStreetMaps } from '../features/streetMaps'
+import { heardMeSince } from '../features/getout'
 import { StreetDownloadSheet } from './StreetDownloadSheet'
 import { MapView, setIntentMapLayer, type MapIntent } from './MapView'
 import { setGlobeLayer } from '../features/globeLayers'
@@ -36,6 +38,8 @@ import { PanelsMenu } from './PanelsMenu'
 import { PaneSeam } from './PaneSeam'
 import { CONNECT_STRIP_MAX_SHARE, CONNECT_STRIP_SPLIT_MAX, CONNECT_STRIP_SPLIT_MIN } from '../features/paneSeam'
 import type { NeededBoard, OtaBoard, SpotsFeed } from './connect/paneContext'
+import type { DayScrub } from './prop/PathDayStrip'
+import { fmtZ } from '../propViz'
 import {
   SLOT_IDS,
   addableTo,
@@ -361,6 +365,10 @@ function persisted<T extends string>(key: string, allow: readonly T[], fallback:
 
 interface Props {
   myGrid: string
+  /** Settings' station power and antenna gain (PaneContext `stationPowerW` / `antGainDbi`); the hosts
+   *  with no settings to lend leave them out. */
+  stationPowerW?: number | null
+  antGainDbi?: number
   /** The station as the dashboard bar a layout puts over the view shows it — the main window's snapshot's
    *  call and grid, as the dashboard window's bar shows them. The Remote page reads the station's own;
    *  the hosts that draw their own bar need not pass it. */
@@ -419,6 +427,8 @@ interface Props {
 
 export function ConnectView({
   myGrid: nativeMyGrid,
+  stationPowerW,
+  antGainDbi,
   station: nativeStation,
   theme,
   stations,
@@ -539,8 +549,15 @@ export function ConnectView({
   // selection — built by the code the dashboard rail beside the cockpits uses too
   // (connect/usePaneContext), so a box reads the same in both places and nothing is polled twice.
   const selection = useMemo(() => resolveSelection(selectedCall, stations, prop), [selectedCall, stations, prop])
+  // PATH OVER THE DAY: the hour a strip is scrubbed to. The 2-D map draws its terminator, sun, moon
+  // and the selected station's ribbon at it, and says so above the map; a new selection goes back
+  // to now (the hour belonged to the last station's strip).
+  const [dayScrub, setDayScrub] = useState<DayScrub | null>(null)
+  useEffect(() => setDayScrub(null), [selectedCall])
   const { ctx, xrayNow } = usePaneContext({
     myGrid,
+    stationPowerW,
+    antGainDbi,
     theme,
     intent,
     prop,
@@ -560,10 +577,15 @@ export function ConnectView({
     neededBoard,
     fieldDay,
     activation,
+    dayScrub,
+    onDayScrub: setDayScrub,
   })
   const { pathPred, bandOutlook, muf } = ctx
+  // The map's "hearing you" dots count from the Getting Out box's Start fresh time, as the box does.
+  const mapProp = useMemo(() => heardMeSince(prop, ctx.getoutSince ?? null), [prop, ctx.getoutSince])
   // The one flux value the map renders (dev-override > fast lane > snapshot).
-  const xrayLong = effectiveXray(xrayNow, prop?.spaceWx.xrayLong)
+  // A stand-in or old snapshot flux is no flux (propViz `snapXray`); the fast lane is fresh-gated.
+  const xrayLong = effectiveXray(xrayNow, snapXray(prop?.spaceWx, Date.now()))
   const chromeHidden = mapFull && !map3d
 
   // CLOSE + RESIZE (operator-approved 2026-09-13). Visibility is per SLOT, in the shared
@@ -867,6 +889,15 @@ export function ConnectView({
                     : undefined
                 }
               />
+              {/* The 3-D globe draws now only, so the note (and the scrubbed map) is the 2-D map's. */}
+              {dayScrub && !map3d && (
+                <span className="connect-map-note pd-map-note" role="status">
+                  {t('pathDay.scrub.map', { time: fmtZ(dayScrub.hour) })}{' '}
+                  <button type="button" className="pd-map-now" onClick={() => setDayScrub(null)}>
+                    {t('pathDay.scrub.back')}
+                  </button>
+                </span>
+              )}
               {streetWhy && (
                 <span className="connect-map-note" role="status">
                   {streetWhy}
@@ -890,7 +921,7 @@ export function ConnectView({
                 >
                   <Globe3D
                     myGrid={myGrid}
-                    prop={prop}
+                    prop={mapProp}
                     selectedCall={selectedCall}
                     onSelectCall={onSelectCall}
                     outlook={selectedCall ? pathPred : bandOutlook}
@@ -908,7 +939,7 @@ export function ConnectView({
               myGrid={myGrid}
               theme={theme}
               stations={stations}
-              prop={prop}
+              prop={mapProp}
               selectedCall={selectedCall}
               onSelectCall={onSelectCall}
               needByCall={needByCall}
@@ -921,6 +952,7 @@ export function ConnectView({
               focusBand={focusBand}
               onFocusBand={toggleFocusBand}
               outlook={selectedCall ? pathPred : bandOutlook}
+              scrubMs={dayScrub?.ms ?? null}
               muf={muf}
               xrayLong={xrayLong}
               onFullChange={setMapFull}

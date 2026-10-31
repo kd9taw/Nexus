@@ -10,7 +10,7 @@ positions/messages, send a beacon."*
 
 APRS ships enabled — the wizard turns everything on; there is no goal or mode
 picker to miss it in. If you have trimmed sections, switch APRS back on in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+[Settings ▸ App ▸ Features](settings-reference.md#features).
 
 <!-- TODO: capture screenshot — the APRS cockpit at 1024×768 or wider: the left rail (beacon form, message compose, station table with mixed RF/net rows) beside the map at its default local zoom with a dozen symbols plotted, header showing "144.390 · N. America", "● Monitoring (auto)" and a green "N decoded" chip -->
 

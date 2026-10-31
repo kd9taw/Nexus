@@ -1715,6 +1715,7 @@ export function Js8Cockpit({
           stripRef={wfRef}
           {...closeProps('scope')}
           paneTitle={js8PanelLabels().scope}
+          zoomKey="nexus.waterfall.js8.zoom"
           theme={theme}
           active={active}
           transmitting={snap?.radio.transmitting ?? false}

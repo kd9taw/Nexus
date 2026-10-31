@@ -94,7 +94,7 @@ Produces `Nexus.app` and the `.dmg`. The full guide is [`MACOS.md`](../../MACOS.
    cd src-tauri && cargo tauri build --features radio,custom-protocol --bundles app,dmg
    ```
 
-**Apple Silicon only, and there is no universal binary:** a universal build means building the Fortran/FFTW modem twice and `lipo`-ing it, and Homebrew's `gfortran` is single-arch. Intel is a source build that works but ships no binaries. The modem's Fortran runtimes (gfortran, quadmath, fftw3f, plus GCC's `libemutls_w.a`) are linked **statically** — a dynamically-linked `.app` runs on the machine that built it and dies at load on any Mac without your Homebrew tree. And a build you sign yourself is not notarized, so Gatekeeper blocks it on a double-click: right-click ▸ **Open** once. `MACOS.md` covers all three.
+**One architecture per build, and there is no universal binary:** a universal build means building the Fortran/FFTW modem twice and `lipo`-ing it, and Homebrew's `gfortran` is single-arch. The release builds Apple Silicon and Intel separately, each on its own kind of Mac, both for macOS 12 or later. The modem's Fortran runtimes (gfortran, quadmath, fftw3f, plus GCC's `libemutls_w.a`) are linked **statically** — a dynamically-linked `.app` runs on the machine that built it and dies at load on any Mac without your Homebrew tree. And a build you sign yourself is not notarized, so Gatekeeper blocks it on a double-click: right-click ▸ **Open** once. `MACOS.md` covers all three.
 
 ---
 

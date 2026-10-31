@@ -1,5 +1,5 @@
 /**
- * Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Spot Sources: which human DX-cluster
+ * Settings ▸ Services ▸ Integrations & Feeds ▸ Spot Sources: which human DX-cluster
  * nodes Nexus connects to for SSB/phone spots, and how each one is doing.
  *
  * Two choices, and the second is never switched for the operator:

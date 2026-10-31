@@ -106,7 +106,7 @@ afterEach(() => {
 
 async function openLogging() {
   renderPanel()
-  fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+  fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
 }
 
 describe('Cloudlog/Wavelog station location picker (#226)', () => {

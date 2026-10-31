@@ -26,6 +26,11 @@ import { SCALE_KEYS } from './spectrum/scaleSettings'
  *  below — the list and the code cannot drift apart. */
 export const PER_SURFACE = [
   'neededFilters',
+  // The RF panadapter's chosen span (Band, Full, ±kHz) in the CW and Phone cockpits
+  // (spectrum/rfSpan.ts): per window, like the audio scope's span chips, so a torn-off cockpit keeps
+  // its own. The main window's spelling is the bare key an earlier build kept for the whole station.
+  'nexus.cw.rfSpan',
+  'nexus.phone.rfSpan',
   'nexus-ui-scale-mode',
   // APRS's body (layout L7): the station list column's width and the side the map stands on —
   // statements about THIS window's shape, like Connect's rail widths and Operate's rail side.
@@ -43,6 +48,9 @@ export const PER_SURFACE = [
   // picks a layout of its own, like the placement it is read back with.
   'nexus.connect.bar',
   'nexus.connect.config',
+  // The Getting Out box's Start fresh time (features/getoutSince): an antenna test in THIS window. A
+  // pop-out starts on the main window's and diverges at its first press; a restart keeps it.
+  'nexus.connect.getout.since',
   'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',
   'nexus.connect.intent',
@@ -79,6 +87,9 @@ export const PER_SURFACE = [
   // main window's Contest screen: how large THIS window's entry and last contacts read, for the person
   // at its monitor. Each window writes its own; a logger window never sized starts from the main's.
   'nexus.contestLogger.textScale',
+  // The CW audio scope's span chips (Filter / Std / Full): a statement about THIS window's scope,
+  // like the waterfall's span (a torn-off copy may run wide beside a narrow docked one).
+  'nexus.cw.scope.span',
   // The dashboard rail beside the cockpits (features/dashRail): which box is in each slot, whether it
   // shows beside each section, and its width — statements about THIS window, like Connect's.
   'nexus.dashrail.config',
@@ -119,6 +130,8 @@ export const PER_SURFACE = [
   'nexus.ota.program',
   'nexus.ota.sortAsc',
   'nexus.ota.sortKey',
+  // The Phone audio scope's span chips, for the same reason as CW's.
+  'nexus.phone.scope.span',
   'nexus.phonescope.dss',
   'nexus.phonescope.flow',
   // The rig scope's slow-scope look (smooth scroll or a row per sweep): like 3D and flow, a look of
@@ -157,7 +170,16 @@ export const PER_SURFACE = [
   'nexus.view',
   'nexus.waterfall.dss',
   'nexus.waterfall.flow',
+  // The waterfall's span, one key per mode (Waterfall's `zoomKey`): a pick in one mode never moves
+  // another's. The old shared key is still read, so a span chosen before keeps opening as it did.
   'nexus.waterfall.zoom',
+  'nexus.waterfall.ft.zoom',
+  'nexus.waterfall.tempo.zoom',
+  'nexus.waterfall.rtty.zoom',
+  'nexus.waterfall.psk.zoom',
+  'nexus.waterfall.sstv.zoom',
+  'nexus.waterfall.js8.zoom',
+  'nexus.waterfall.jtty.zoom',
   'tempo-left-rail-w',
   // Which Tempo rail the operator set last — the one that keeps its width when the pair must give
   // (usePaneWidths.fitRails). A statement about THIS window's two widths, like them.
@@ -490,6 +512,16 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.contest.recent',
     'nexus.split.tempo.waterfall',
   ],
+  // The waterfall's span: FT's when the host passes no `zoomKey`, else the mode's own.
+  'components/Waterfall.tsx:zoomKey': [
+    'nexus.waterfall.ft.zoom',
+    'nexus.waterfall.tempo.zoom',
+    'nexus.waterfall.rtty.zoom',
+    'nexus.waterfall.psk.zoom',
+    'nexus.waterfall.sstv.zoom',
+    'nexus.waterfall.js8.zoom',
+    'nexus.waterfall.jtty.zoom',
+  ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
   // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345, and the
   // Conditions and rail box's, connect/NeededBox).
@@ -670,6 +702,28 @@ describe('call sites agree with the classification', () => {
     expect(found.size, 'the scan found no divider key at all — it is reading nothing').toBeGreaterThanOrEqual(3)
     expect([...found].sort()).toEqual([...INDIRECT['components/PaneSeam.tsx:storageKey']].sort())
     for (const k of found) expect(PER_SURFACE, `${k} is not classified`).toContain(k)
+  })
+
+  it('gives every waterfall host a span key of its own — a JSX `zoomKey` literal no call-site scan can see', () => {
+    // Two hosts sharing one key is the defect the key exists to end: a span picked in one mode
+    // opened every other mode on it. So each literal is found in the source, claimed by the seam,
+    // classified per surface, and passed by exactly one file.
+    const found = new Map<string, string[]>()
+    for (const file of sources(SRC)) {
+      for (const m of readFileSync(file, 'utf8').matchAll(/zoomKey="([^"]+)"/g)) {
+        found.set(m[1], [...(found.get(m[1]) ?? []), relative(SRC, file)])
+      }
+    }
+    expect(found.size, 'the scan found no waterfall key at all — it is reading nothing').toBeGreaterThanOrEqual(5)
+    expect([...found.keys(), 'nexus.waterfall.ft.zoom'].sort()).toEqual([...INDIRECT['components/Waterfall.tsx:zoomKey']].sort())
+    for (const [k, files] of found) {
+      expect(PER_SURFACE, `${k} is not classified`).toContain(k)
+      expect(files, `${k} is passed by more than one host`).toHaveLength(1)
+    }
+    const wf = readFileSync(join(SRC, 'components/Waterfall.tsx'), 'utf8')
+    expect(wf).toContain("const FT_ZOOM_KEY = 'nexus.waterfall.ft.zoom'")
+    expect(wf).toContain('zoomKey = FT_ZOOM_KEY,')
+    expect(found.has('nexus.waterfall.ft.zoom'), 'FT is the default; no host passes it').toBe(false)
   })
 
   it('checks the pass-through seams really carry the keys they claim', () => {

@@ -145,6 +145,9 @@ export interface DashRailProps {
   /** The section beside it: a crashed box is retried when the operator moves to another. */
   section: string
   myGrid: string
+  /** Settings' station power and antenna gain (PaneContext `stationPowerW` / `antGainDbi`). */
+  stationPowerW?: number | null
+  antGainDbi?: number
   theme: Theme
   stations: Station[]
   prop: PropagationSnapshot | null
@@ -292,6 +295,8 @@ function DashRailBody(p: DashRailProps) {
   const neededBoard = p.neededBoard && { ...p.neededBoard, selectedCall, onSelect: setSelectedCall }
   const { ctx } = usePaneContext({
     myGrid: p.myGrid,
+    stationPowerW: p.stationPowerW,
+    antGainDbi: p.antGainDbi,
     theme: p.theme,
     intent,
     prop: p.prop,

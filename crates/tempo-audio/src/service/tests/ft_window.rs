@@ -1091,6 +1091,9 @@ fn a_timed_rigctld(s: &mut Over, split_ms: u64, key_ms: u64) -> Lines {
     });
     s.rig = Rig::rigctld(&s.peer.address);
     s.rig.set_slow_transport(true);
+    // The split writes delay the key on purpose here, to reach the guard after the key; their own
+    // total budget would refuse the over first.
+    s.rig.test_split_budget_ms = Some(60_000);
     lines
 }
 

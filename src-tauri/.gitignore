@@ -12,3 +12,8 @@
 # committed — see resources/deepcw/README.md for provenance + how to fetch it.
 /resources/deepcw/*.onnx
 /resources/deepcw/*.onnx.json
+
+# IOTA Ltd's island-group list (© RSGB and IOTA Ltd) ships in the installer by IOTA Ltd's
+# permission but is NOT committed: scripts/gen-iota-groups.mjs fetches it here at build time —
+# see resources/iota/README.md.
+/resources/iota/*.json

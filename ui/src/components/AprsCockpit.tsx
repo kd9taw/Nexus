@@ -29,6 +29,7 @@ import {
   setSettings,
   getSettings,
   type AprsHealth,
+  type AprsIssDoppler,
   type AprsHeard,
   type AprsIsStatus,
   type AprsSource,
@@ -40,7 +41,7 @@ import { bearingDeg, gridToLatLon, haversineKm, type LatLon } from '../grid'
 import { fmtDistanceKm, useUnits } from '../units'
 // The channel list, the grid→channel derivation and the beaconable symbols — shared with the
 // Settings panel so the two surfaces cannot offer different channels or derive different ones.
-import { APRS_FREQS, BEACON_SYMBOLS, resolveAprsChannel } from '../aprsBeacon'
+import { APRS_FREQS, BEACON_SYMBOLS, ISS, ISS_PATH, resolveAprsChannel } from '../aprsBeacon'
 import { parseOperatorNumber } from '../numInput'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -628,6 +629,56 @@ export function aprsDecodeStatus(
   }
 }
 
+/** The ISS channel's Doppler correction in plain words: where the radio listens and sends while it
+ *  steers, or why the radio stays on the channel. Empty when there is nothing to say (no state). */
+export function issDopplerLine(d: AprsIssDoppler | null | undefined): string {
+  if (!d) return ''
+  if (d.on && d.rxHz != null && d.txHz != null) {
+    return t('aprs.iss.doppler.on', {
+      rx: (d.rxHz / 1e6).toFixed(4),
+      tx: (d.txHz / 1e6).toFixed(4),
+    })
+  }
+  const freq = ISS.toFixed(3)
+  switch (d.whyOff) {
+    case 'switchedOff':
+      return t('aprs.iss.doppler.off.switchedOff', { freq })
+    case 'belowHorizon':
+      return t('aprs.iss.doppler.off.belowHorizon', { freq })
+    case 'noElements':
+      return t('aprs.iss.doppler.off.noElements', { freq })
+    case 'staleElements':
+      return t('aprs.iss.doppler.off.staleElements', { freq })
+    case 'noGrid':
+      return t('aprs.iss.doppler.off.noGrid', { freq })
+    case 'noCat':
+      return t('aprs.iss.doppler.off.noCat', { freq })
+    case 'satTracker':
+      return t('aprs.iss.doppler.off.satTracker')
+    case 'starting':
+      return t('aprs.iss.doppler.off.starting')
+    case 'tunedAway':
+      return t('aprs.iss.doppler.off.tunedAway')
+    case 'radioRounds':
+      return t('aprs.iss.doppler.off.radioRounds', { freq })
+    case 'stopped':
+      return t('aprs.iss.doppler.off.stopped', { freq })
+    default:
+      return ''
+  }
+}
+
+/** The Path box's text as the hops it saves: comma-separated, trimmed, upper-cased, blanks dropped. */
+const pathHops = (text: string) =>
+  text
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean)
+
+/** The beacon path quick-picks after Direct. A pick only fills the Path box, which stays the
+ *  source of truth and saves exactly as typed text does. */
+const PATH_PICKS = ['WIDE1-1', 'WIDE2-1', 'WIDE1-1,WIDE2-1', ISS_PATH]
+
 /**
  * APRS cockpit — monitor decoded packets and send a position beacon. RX-first: arming starts the
  * AFSK-1200 decoder; a beacon is an explicit, gated one-shot send (never automatic).
@@ -1016,6 +1067,15 @@ export function AprsCockpit({
       .catch((e) => setStatus(String(e)))
   }
 
+  /** Fill the Path box from a quick-pick (or Use ARISS) and save it as a typed path is saved. */
+  const setPathText = (text: string) => {
+    setPath(text)
+    writeSettings({ aprsPath: pathHops(text) })
+  }
+  const hops = pathHops(path)
+  const pathPick = hops.length === 0 ? 'direct' : PATH_PICKS.includes(hops.join(',')) ? hops.join(',') : ''
+  const issWantsAriss = freq === ISS && !hops.includes(ISS_PATH)
+
   const sendBeacon = () => {
     // THE RADIO HAS THE MIC (operator ruling, 2026-10-04, "Refuse like the voice keyer"). With
     // Nexus's own Flex client and native audio on, FM takes the radio's own mic while a packet
@@ -1183,11 +1243,11 @@ export function AprsCockpit({
                 // it, so the pick still moves the radio even on the round trip that cannot save.
                 writeSettings({ aprsChannelMhz: f })
               }}
-              title={t('aprs.channel.title')}
+              title={freq === ISS ? t('aprs.channel.title.iss') : t('aprs.channel.title')}
             >
               {APRS_FREQS.map(([f, region]) => (
                 <option key={f} value={f}>
-                  {f.toFixed(3)} · {region}
+                  {f.toFixed(3)} · {f === ISS ? t('aprs.channel.iss') : region}
                 </option>
               ))}
             </select>
@@ -1462,17 +1522,56 @@ export function AprsCockpit({
           <input
             value={path}
             onChange={(e) => setPath(e.target.value)}
-            onBlur={() =>
-              writeSettings({
-                aprsPath: path
-                  .split(',')
-                  .map((s) => s.trim().toUpperCase())
-                  .filter(Boolean),
-              })
-            }
+            onBlur={() => writeSettings({ aprsPath: pathHops(path) })}
             size={14}
           />
         </label>
+        <select
+          aria-label={t('aprs.beacon.path.pick.label')}
+          title={t('aprs.beacon.path.pick.label')}
+          value={pathPick}
+          onChange={(e) => setPathText(e.target.value === 'direct' ? '' : e.target.value.split(',').join(', '))}
+        >
+          <option value="" disabled>
+            {t('aprs.beacon.path.pick.own')}
+          </option>
+          <option value="direct">{t('aprs.beacon.path.pick.direct')}</option>
+          {PATH_PICKS.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+        {/* The ISS digipeater answers to the ARISS path. Offered, never applied by itself: the
+            path is the operator's. */}
+        {issWantsAriss && (
+          <p className="aprs-beacon-note">
+            {t('aprs.iss.hint', { path: ISS_PATH })}{' '}
+            <button type="button" className="settings-linkbtn" onClick={() => setPathText(ISS_PATH)}>
+              {t('aprs.iss.useAriss', { path: ISS_PATH })}
+            </button>
+          </p>
+        )}
+        {/* The ISS channel's Doppler correction: its switch (on by default) and what it is doing.
+            The engine owns the behaviour; this only saves the switch and says the state. */}
+        {freq === ISS && (
+          <>
+            <label title={t('aprs.iss.doppler.title', { freq: ISS.toFixed(3) })}>
+              <input
+                type="checkbox"
+                checked={settings?.aprsIssDoppler ?? true}
+                disabled={!settings}
+                onChange={(e) => writeSettings({ aprsIssDoppler: e.target.checked })}
+              />
+              {t('aprs.iss.doppler.label')}
+            </label>
+            {issDopplerLine(health?.issDoppler) && (
+              <p className="aprs-beacon-note aprs-iss-doppler">
+                {issDopplerLine(health?.issDoppler)}
+              </p>
+            )}
+          </>
+        )}
         <button type="button" className="np-chip aprs-beacon-send" onClick={sendBeacon}>
           {t('aprs.beacon.send')}
         </button>

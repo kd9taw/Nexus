@@ -112,6 +112,12 @@ pub fn gen_wave(itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
 /// `ap_cq_only` restricts AP to the CQ hypothesis (`lapcqonly`, iaptype 1);
 /// ignored while `ap` is `false`. `(true, false)` is stock WSJT-X behaviour.
 ///
+/// `activity` is whether the operator is in a WSJT-X Special Operating Activity: Contest mode, or
+/// a Hound. With none (`false`, stock WSJT-X's default) a decode of message type 1-3 holding
+/// `/R` (a rover) or starting `TU; ` is dropped before it is subtracted, as WSJT-X 3.0.2 does
+/// (`ft8b.f90:452-455`): outside a contest those are almost always corrupt decodes. `true`
+/// keeps them.
+///
 /// A frame under 0.5 LSB rms decodes nothing and leaves the modem untouched, as in WSJT-X
 /// (`decoder.f90:92-93`); every entry below shares that floor.
 ///
@@ -150,6 +156,7 @@ pub fn decode_frame(
     nfqso: i32,
     ap: bool,
     ap_cq_only: bool,
+    activity: bool,
 ) -> Vec<Decode> {
     decode_frame_a7(
         iwave,
@@ -166,6 +173,7 @@ pub fn decode_frame(
         false, // full frame, not the early partial pass
         ap,
         ap_cq_only,
+        activity,
     )
 }
 
@@ -204,7 +212,8 @@ pub fn decode_frame(
 /// its AP passes — a regression in the one path the operator invokes
 /// deliberately to dig harder.
 ///
-/// `ap` / `ap_cq_only` are the operator AP controls — see [`decode_frame`].
+/// `ap` / `ap_cq_only` are the operator AP controls and `activity` the rover and `TU; ` filter's
+/// switch — see [`decode_frame`].
 /// `ap = false` also disables the a7 replay (a7 is an a-priori technique;
 /// ft8b's `lft8apon` gates both in the C-ABI wrapper), while the a7 slot
 /// BOOKKEEPING still runs so re-enabling AP next slot has a live table.
@@ -229,6 +238,7 @@ pub fn decode_frame_a7(
     partial: bool,
     ap: bool,
     ap_cq_only: bool,
+    activity: bool,
 ) -> Vec<Decode> {
     decode_frame_impl(
         iwave,
@@ -245,6 +255,7 @@ pub fn decode_frame_a7(
         partial,
         ap,
         ap_cq_only,
+        activity,
         None,
     )
 }
@@ -292,6 +303,7 @@ pub fn decode_frame_a7_streaming(
     partial: bool,
     ap: bool,
     ap_cq_only: bool,
+    activity: bool,
     progress: &mut dyn FnMut(Progress<'_>) -> bool,
 ) -> Vec<Decode> {
     decode_frame_impl(
@@ -309,6 +321,7 @@ pub fn decode_frame_a7_streaming(
         partial,
         ap,
         ap_cq_only,
+        activity,
         Some(progress),
     )
 }
@@ -365,6 +378,7 @@ fn decode_frame_impl(
     partial: bool,
     ap: bool,
     ap_cq_only: bool,
+    activity: bool,
     progress: Option<&mut dyn FnMut(Progress<'_>) -> bool>,
 ) -> Vec<Decode> {
     decode_records(
@@ -382,6 +396,7 @@ fn decode_frame_impl(
         partial,
         ap,
         ap_cq_only,
+        activity,
         progress,
         Carried::None,
         false,
@@ -423,6 +438,7 @@ fn decode_records(
     partial: bool,
     ap: bool,
     ap_cq_only: bool,
+    activity: bool,
     progress: Option<&mut dyn FnMut(Progress<'_>) -> bool>,
     carried: Carried<'_>,
     want_subs: bool,
@@ -505,6 +521,7 @@ fn decode_records(
                 la7final,
                 ap as i32,
                 ap_cq_only as i32,
+                activity as i32,
                 out.as_mut_ptr(),
                 out.len() as i32,
                 cb,
@@ -651,6 +668,7 @@ pub fn decode_frame_carry(
     partial: bool,
     ap: bool,
     ap_cq_only: bool,
+    activity: bool,
     progress: &mut dyn FnMut(Progress<'_>) -> bool,
     carry: &mut Carry,
 ) -> Vec<Decode> {
@@ -671,6 +689,7 @@ pub fn decode_frame_carry(
             partial,
             ap,
             ap_cq_only,
+            activity,
             Some(progress),
             Carried::None,
             true,
@@ -715,6 +734,7 @@ pub fn decode_frame_carry(
         partial,
         ap,
         ap_cq_only,
+        activity,
         Some(&mut |p: Progress<'_>| {
             let candidate = matches!(p, Progress::Candidate);
             let stop = progress(p);
@@ -744,6 +764,7 @@ pub fn decode_frame_carry(
         partial,
         ap,
         ap_cq_only,
+        activity,
         Some(&mut |p: Progress<'_>| match p {
             Progress::Candidate => progress(Progress::Rescue),
             p => progress(p),
@@ -969,7 +990,7 @@ mod tests {
             }
         }
 
-        let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false);
+        let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false, false);
         assert!(
             decs.iter().any(|d| d.message == msg),
             "FT8 must decode its own clean signal; got {decs:?}"
@@ -1014,7 +1035,7 @@ mod tests {
         let msg_a = "KD9TAW W1AW FN31";
         let fa = frame_with_floor(msg_a, 1500.0, 0x2452_1057);
         let decs_a = decode_frame_a7(
-            &fa, 200, 2900, 3, "", "", 0, 0, 0, 15, true, false, true, false,
+            &fa, 200, 2900, 3, "", "", 0, 0, 0, 15, true, false, true, false, false,
         );
         assert!(
             decs_a.iter().any(|d| d.message == msg_a),
@@ -1027,7 +1048,7 @@ mod tests {
         let msg_b = "KD9TAW W1AW R-10";
         let fb = frame_with_floor(msg_b, 1500.0, 0x0BAD_5EED);
         let decs_b = decode_frame_a7(
-            &fb, 2000, 2900, 3, "", "", 0, 0, 0, 45, true, false, true, false,
+            &fb, 2000, 2900, 3, "", "", 0, 0, 0, 45, true, false, true, false, false,
         );
         let a7 = decs_b.iter().find(|d| d.message == msg_b);
         assert!(
@@ -1046,7 +1067,7 @@ mod tests {
         // at the next odd slot must NOT decode (nothing left to replay).
         a7_reset();
         let decs_c = decode_frame_a7(
-            &fb, 2000, 2900, 3, "", "", 0, 0, 0, 75, true, false, true, false,
+            &fb, 2000, 2900, 3, "", "", 0, 0, 0, 75, true, false, true, false, false,
         );
         assert!(
             !decs_c.iter().any(|d| d.message == msg_b),
@@ -1061,14 +1082,14 @@ mod tests {
         // the a7 table is process-global state and a sibling test would
         // interleave with it.)
         let decs_d = decode_frame_a7(
-            &fa, 200, 2900, 3, "", "", 0, 0, 0, 105, true, false, true, false,
+            &fa, 200, 2900, 3, "", "", 0, 0, 0, 105, true, false, true, false, false,
         );
         assert!(
             decs_d.iter().any(|d| d.message == msg_a),
             "re-seed slot must direct-decode; got {decs_d:?}"
         );
         let decs_e = decode_frame_a7(
-            &fb, 2000, 2900, 3, "", "", 0, 0, 0, 135, true, false, false, false,
+            &fb, 2000, 2900, 3, "", "", 0, 0, 0, 135, true, false, false, false, false,
         );
         assert!(
             !decs_e.iter().any(|d| d.message == msg_b),
@@ -1114,7 +1135,7 @@ mod tests {
         let iwave = frame_of(&BAND);
         // nutc 0 and no a7 save: the a7 table a sibling test drives is left alone.
         let plain = decode_frame_a7(
-            &iwave, 200, 2900, 3, "W9XYZ", "", 0, 1500, 1500, 0, false, false, true, false,
+            &iwave, 200, 2900, 3, "W9XYZ", "", 0, 1500, 1500, 0, false, false, true, false, false,
         );
         let mut found = Vec::new();
         let mut candidates = 0;
@@ -1132,6 +1153,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             &mut |p| {
                 match p {
@@ -1180,6 +1202,7 @@ mod tests {
             false,
             true,
             false,
+            false,
             &mut |p| {
                 if let (Progress::Found(d), None) = (p, &first) {
                     first = Some(d.message.clone());
@@ -1215,6 +1238,7 @@ mod tests {
             false,
             true,
             true,
+            false,
             false,
             &mut |p| match p {
                 Progress::Found(d) => {
@@ -1255,6 +1279,7 @@ mod tests {
             true,
             true,
             false,
+            false,
             &mut |_| false,
         );
         assert_eq!(all.len(), 4, "control: the whole pass: {all:?}");
@@ -1281,6 +1306,7 @@ mod tests {
                 false,
                 true,
                 false,
+                false,
                 &mut |p| match p {
                     Progress::Found(_) => panic!("the caller's bug"),
                     Progress::Candidate | Progress::Rescue => false,
@@ -1288,7 +1314,7 @@ mod tests {
             )
         });
         assert!(caught.is_err(), "the panic reached the caller");
-        let after = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 1500, true, false);
+        let after = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 1500, true, false, false);
         assert_eq!(after.len(), 4, "the modem decodes on: {after:?}");
     }
 
@@ -1321,7 +1347,7 @@ mod tests {
                     iwave[noff + i] = (s * 1000.0).clamp(-32768.0, 32767.0) as i16;
                 }
             }
-            let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false);
+            let decs = decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false, false);
             assert!(
                 decs.iter().any(|d| d.message == msg),
                 "{msg} must round-trip intact (no prefix strip / bracket loss); got {decs:?}"

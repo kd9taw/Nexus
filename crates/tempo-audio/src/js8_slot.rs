@@ -95,6 +95,7 @@ pub(crate) fn play_frame(
             handed += rest.len();
         }
     }
+    backend.mark_unit_end();
     let audio_ms = handed as f64 * 1000.0 / f64::from(tempo_fast::SAMPLE_RATE);
     KeyedOver {
         tx_until_ms: (keyed_ms + audio_ms + TX_TAIL_MS)
@@ -222,6 +223,30 @@ mod tests {
                 "key at {key_s} s: PTT held to the frame's end and the tail"
             );
             assert_eq!(over.audio_until_ms, None);
+        }
+    }
+
+    /// A JS8 frame is one unit, its TX-delay silence and all, marked where it ends.
+    #[test]
+    fn a_frame_marks_its_end() {
+        let e = js8_engine(Js8Speed::Normal);
+        let slot = 1_000_000;
+        let start = frame_start_ms(&e, slot);
+        for key_ms in [-200.0, 600.0] {
+            let mut backend = MockBackend::new();
+            play_frame(
+                &e,
+                &mut backend,
+                &[stand_in(Js8Speed::Normal)],
+                start + key_ms,
+                slot,
+            );
+            assert!(!backend.played.is_empty(), "premise: played");
+            assert_eq!(
+                backend.unit_ends,
+                vec![backend.played.len()],
+                "key at {key_ms} ms"
+            );
         }
     }
 

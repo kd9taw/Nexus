@@ -201,9 +201,9 @@ export const CONTROL_TIERS = [
   'TempoFast', 'TempoDeep'
 ] as const
 const BANDS = ['2190m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '33cm', '23cm', '13cm', '9cm', '6cm', '3cm', '1.25cm', '6mm', '4mm', '2.5mm', '2mm', '1mm']
-// The regional 2 m APRS channels in Hz, channel for channel the cockpit picker's list (aprsBeacon.ts).
+// The 2 m APRS channels in Hz (the regional ones and the ISS), channel for channel the cockpit picker's list (aprsBeacon.ts).
 // Literal here: this grammar is compiled into the relay, which must not pull in the grid code.
-const APRS_CHANNELS_HZ = [144390000, 144800000, 145175000, 144575000, 144660000, 144930000, 145570000]
+const APRS_CHANNELS_HZ = [144390000, 144800000, 145175000, 144575000, 144660000, 144930000, 145570000, 145825000]
 const invalid = (): never => { throw Error('invalidOperation') }
 function object(raw: unknown, keys: string[]): Record<string, unknown> {
   try { return displayObject(raw, keys) } catch { return invalid() }

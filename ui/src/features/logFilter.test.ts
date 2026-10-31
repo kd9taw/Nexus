@@ -46,6 +46,14 @@ describe('cleanFilter', () => {
     expect(cleanFilter({ continent: 'XX' })).toEqual({})
   })
 
+  it('keeps a path filter the engine knows, and drops one it does not', () => {
+    expect(cleanFilter({ path: 'long' })).toEqual({ path: 'long' })
+    expect(cleanFilter({ path: 'polar', band: '20m' })).toEqual({ path: 'polar', band: '20m' })
+    expect(cleanFilter({ path: 'sideways' })).toEqual({})
+    expect(cleanFilter({ path: 1 })).toEqual({})
+    expect(activeFilterCount({ path: 'long' })).toBe(1)
+  })
+
   it('names the same filter the same way whatever order its fields came in', () => {
     const a = filterKey({ band: '20m', call: 'K1', qsl: { lotw: 'sent', card: 'confirmed' } })
     const b = filterKey({ qsl: { card: 'confirmed', lotw: 'sent' }, call: 'K1', band: '20m', mode: '' })
