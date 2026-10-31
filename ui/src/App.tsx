@@ -112,19 +112,20 @@ import { markerWidthHz } from './waterfall'
 import { LinkPill } from './components/LinkPill'
 import { ModeNav, type View, type DigitalMode } from './components/ModeNav'
 import { contestName } from './fdEvent'
-import { OperateCockpit } from './components/OperateCockpit'
+import { OperateCockpit as OperateCockpitView } from './components/OperateCockpit'
 import { NowBar } from './components/NowBar'
 import { AwardsJourney } from './components/AwardsJourney'
 import { CwCockpit } from './components/CwCockpit'
 import { PhoneCockpit } from './components/PhoneCockpit'
-import { RttyCockpit } from './components/RttyCockpit'
-import { PskCockpit } from './components/PskCockpit'
-import { Js8Cockpit, type Js8ListSettings } from './components/Js8Cockpit'
-import { JttyCockpit } from './components/JttyCockpit'
+import { RttyCockpit as RttyCockpitView } from './components/RttyCockpit'
+import { PskCockpit as PskCockpitView } from './components/PskCockpit'
+import { Js8Cockpit as Js8CockpitView, type Js8ListSettings } from './components/Js8Cockpit'
+import { JttyCockpit as JttyCockpitView } from './components/JttyCockpit'
 import { Js8SoundPlayer } from './components/Js8SoundPlayer'
 import { js8ComposeConfig } from './js8Compose'
-import { SstvView } from './components/SstvView'
-import { AprsCockpit } from './components/AprsCockpit'
+import { SstvView as SstvViewScreen } from './components/SstvView'
+import { AprsCockpit as AprsCockpitView } from './components/AprsCockpit'
+import { keepAlivePropsEqual, operatePropsEqual } from './keepAliveProps'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
 import { StatsView } from './components/StatsView'
 import { DxpeditionsView } from './components/DxpeditionsView'
@@ -334,6 +335,22 @@ const SCREEN_BY_SECTION: Partial<Record<string, View>> = {
   keyboard: 'psk',
   jtty: 'jtty',
 }
+/** The seven keep-alive cockpits, each memoised so that while hidden it sits out a snapshot poll that
+ *  changed nothing it shows (`keepAliveProps.ts`). On screen each renders exactly as before. FT also
+ *  renders, hidden, on the poll after a decode-pane Clear: that poll refills the panes. */
+const OperateCockpit = memo(OperateCockpitView, operatePropsEqual)
+const RttyCockpit = memo(RttyCockpitView, keepAlivePropsEqual)
+const PskCockpit = memo(PskCockpitView, keepAlivePropsEqual)
+const JttyCockpit = memo(JttyCockpitView, keepAlivePropsEqual)
+const SstvView = memo(SstvViewScreen, keepAlivePropsEqual)
+const AprsCockpit = memo(AprsCockpitView, keepAlivePropsEqual)
+const Js8Cockpit = memo(Js8CockpitView, keepAlivePropsEqual)
+/** The block list before settings load: one array, so the FT cockpit's `blockedCalls` (and the decode
+ *  panes' ignore set built from it) keeps its identity from one render to the next. */
+const NO_CALLS: string[] = []
+/** Each cockpit's ENTER SENDS MESSAGE setting: the one map both the switch's save and its reading use. */
+const ESM_FIELD = { cw: 'contestEsmCw', rtty: 'contestEsmRtty', phone: 'contestEsmPhone' } as const
+
 /** Each decoder screen's entry arm — what its cockpit calls on the rising edge of `active`. */
 const ENTRY_ARM: Record<DecoderScreen, () => Promise<unknown>> = {
   rtty: rttyAutoArm,
@@ -1918,7 +1935,7 @@ function App() {
   // THE JS8 LISTS' SETTINGS (Settings ▸ JS8) for the cockpit, and its call list's three writes: each
   // one field through its own verb, never the settings form, and the mirror patched with what was
   // saved. The hosted page writes neither.
-  const js8Lists: Js8ListSettings | undefined = settings
+  const js8Lists: Js8ListSettings | undefined = useMemo(() => settings
     ? {
         rxBlocklist: settings.js8RxBlocklist ?? [],
         highlightPrimary: settings.js8HighlightPrimary ?? [],
@@ -1941,7 +1958,7 @@ function App() {
           if (saved !== null) setSettings((prev) => (prev ? { ...prev, js8AvoidAllcall: saved } : prev))
         },
       }
-    : undefined
+    : undefined, [settings])
 
   const handleSstvTune = useCallback(
     (dialMhz: number, band: string, mode: string) => {
@@ -2974,12 +2991,11 @@ function App() {
   // navigation that would go nowhere. Every cockpit that mounts a recall card gets it. Given a
   // contact's id (a recall row, a recent contact, an Awards row) the Logbook also opens its editor on
   // that contact: the one editor, and the one write path.
-  const openLogbookFor = isViewEnabled('logbook')
-    ? (call: string, id?: string | null) => {
-        setLogFocus({ call, ts: Date.now(), editId: id ?? null })
-        setView('logbook')
-      }
-    : undefined
+  const openLogbook = useCallback((call: string, id?: string | null) => {
+    setLogFocus({ call, ts: Date.now(), editId: id ?? null })
+    setView('logbook')
+  }, [])
+  const openLogbookFor = isViewEnabled('logbook') ? openLogbook : undefined
 
   // Defense in depth: if the current view's feature got disabled (e.g. toggled
   // off in Settings while viewing it), fall back to the profile's landing view.
@@ -3021,6 +3037,38 @@ function App() {
     const report = (section: DashRailSection) => (call: string) =>
       setEntryCalls((m) => (m[section] === call ? m : { ...m, [section]: call }))
     return { phone: report('phone'), cw: report('cw'), rtty: report('rtty'), psk: report('psk'), js8: report('js8') }
+  }, [])
+  // The handlers the keep-alive cockpits are given, made once rather than per render: a hidden
+  // cockpit keeps the props of its last render (`keepAliveProps.ts`), so each must stay the one App
+  // would pass now. Each reads only state setters and stable callbacks.
+  const clearOperateSelection = useCallback(() => handleMapSelect(null), [handleMapSelect])
+  const popOutOperate = useCallback(() => void openPanelWindow('operate'), [])
+  const saveMacrosMirror = useCallback(
+    (macros: Settings['macros']) => setSettings((prev) => (prev ? { ...prev, macros } : prev)),
+    [],
+  )
+  const saveJs8MessagesMirror = useCallback(
+    (js8SavedMessages: string[]) => setSettings((prev) => (prev ? { ...prev, js8SavedMessages } : prev)),
+    [],
+  )
+  const removeOperateStations = useCallback(
+    () => operatePanels.setPanelState('stations', 'removed'),
+    [operatePanels.setPanelState],
+  )
+  const selectBand = useCallback(() => handleSelect('*'), [handleSelect])
+  const qsyToNeed = useCallback((a: NeedAlert) => handleQsy(a.band, a.freqMhz ?? undefined), [handleQsy])
+  const showAllSpots = useCallback(() => setView('spots'), [])
+  // ENTER SENDS MESSAGE's switch save, one per cockpit (`esmSettingFor` below lends it).
+  const esmSwitch = useMemo(() => {
+    const make = (cockpit: 'cw' | 'rtty' | 'phone') => (on: boolean) => {
+      const field = ESM_FIELD[cockpit]
+      setSettings((prev) => (prev ? { ...prev, [field]: on } : prev))
+      setContestEsm(cockpit, on).catch(() => {
+        setSettings((prev) => (prev ? { ...prev, [field]: !on } : prev))
+        pushToast(t('contest.esm.switch.failed'), 'error')
+      })
+    }
+    return { cw: make('cw'), rtty: make('rtty'), phone: make('phone') }
   }, [])
 
   // ── Eyes-free operating (a11y Phase A) — hooks BEFORE the `!snap` return ──
@@ -3166,7 +3214,7 @@ function App() {
       // entry's tick — the same setPanelState, the same record. The node is built here
       // rather than in the cockpit (it is passed down as `roster`), so the wiring is here
       // too; nothing else renders a StationList with a ⊞ entry, so nothing else passes it.
-      onRemove={() => operatePanels.setPanelState('stations', 'removed')}
+      onRemove={removeOperateStations}
       paneTitle={t('operate.panel.stations')}
       // Its head is the grip FT's ⊞ Arrange drags it by (panes/PaneDrag).
       grip="stations"
@@ -3185,7 +3233,7 @@ function App() {
       onArchive={handleArchive}
       bandActive={activePeer === '*'}
       bandUnread={bandUnread}
-      onSelectBand={() => handleSelect('*')}
+      onSelectBand={selectBand}
       dropAfterCycles={3}
       filter={operateStationsFilter}
       onFilter={setOperateStationsFilter}
@@ -3313,7 +3361,7 @@ function App() {
     bandPlan,
     selectedCall: activePeer,
     myGrid: snap.mygrid,
-    onQsy: (a: NeedAlert) => handleQsy(a.band, a.freqMhz ?? undefined),
+    onQsy: qsyToNeed,
     onSelect: handleSelect,
     onWork: handleWorkNeeded,
     onPoint:
@@ -3332,7 +3380,7 @@ function App() {
     // board offers one click to the un-gated Spots view. `fieldDay.running` is the one
     // contest-active signal (the same one the contest spot marks and ESM plate read).
     contestActive: snap.fieldDay?.running ?? false,
-    onShowAllSpots: () => setView('spots'),
+    onShowAllSpots: showAllSpots,
   }
   // WHAT THE BOXES ARE LENT, once: the dashboard rail beside the cockpits, and the boxes inside FT,
   // Phone, CW and JS8 (any pane in any area, 2026-10-07), get this one object, so a box can never be wired
@@ -3436,18 +3484,12 @@ function App() {
    *  save: that one field (`set_contest_esm`), never a settings-form save, which would clear the
    *  transmit queues mid-contest. Shown at once and put back if the save fails. */
   const esmSettingFor = (cockpit: 'cw' | 'rtty' | 'phone'): EsmSetting | undefined => {
-    const field = cockpit === 'cw' ? 'contestEsmCw' : cockpit === 'rtty' ? 'contestEsmRtty' : 'contestEsmPhone'
+    const field = ESM_FIELD[cockpit]
     return {
       on: settings?.[field] === true,
       callOnce: settings?.contestEsmCallOnce === true,
       voiceRoles: cockpit === 'phone' ? settings?.voiceEsmRoles : undefined,
-      onSwitch: (on) => {
-        setSettings((prev) => (prev ? { ...prev, [field]: on } : prev))
-        setContestEsm(cockpit, on).catch(() => {
-          setSettings((prev) => (prev ? { ...prev, [field]: !on } : prev))
-          pushToast(t('contest.esm.switch.failed'), 'error')
-        })
-      },
+      onSwitch: esmSwitch[cockpit],
     }
   }
   // CW speed match's switch in the CW contest strip: saved alone, as ESM's is.
@@ -4247,7 +4289,7 @@ function App() {
               fdActive={settings?.fdActive ?? false}
               fdRuleset={fdRuleset}
               superFoxCalls={superFoxCalls}
-              blockedCalls={settings?.blockedCalls ?? []}
+              blockedCalls={settings?.blockedCalls ?? NO_CALLS}
               onToggleBlocked={handleToggleBlocked}
               snap={snap}
               theme={theme}
@@ -4286,11 +4328,11 @@ function App() {
               // #204: F4 / Clear has to reach the callsign card, and half of what the card
               // reads is BACKEND state. `handleMapSelect` already round-trips a null through
               // `select_peer` — reuse it rather than adding a second deselect path.
-              onClearSelection={() => handleMapSelect(null)}
+              onClearSelection={clearOperateSelection}
               layoutMode={operateLayout}
               onLayoutMode={handleOperateLayout}
               panels={operatePanels}
-              onPopOut={() => void openPanelWindow('operate')}
+              onPopOut={popOutOperate}
               active={effectiveView === 'operate'}
               boxes={boxesFor('operate')}
             />
@@ -4315,7 +4357,7 @@ function App() {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
                 macros={settings?.macros}
-                onMacrosSaved={(macros) => setSettings((prev) => (prev ? { ...prev, macros } : prev))}
+                onMacrosSaved={saveMacrosMirror}
                 onOpenSettings={openSettingsAt}
               />
             </div>
@@ -4334,7 +4376,7 @@ function App() {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={pskPanels}
                 macros={settings?.macros}
-                onMacrosSaved={(macros) => setSettings((prev) => (prev ? { ...prev, macros } : prev))}
+                onMacrosSaved={saveMacrosMirror}
                 onOpenSettings={openSettingsAt}
               />
             </div>
@@ -4429,7 +4471,7 @@ function App() {
                 onOpenSettings={openSettingsAt}
                 boxes={boxesFor('js8')}
                 compose={js8ComposeConfig(settings)}
-                onSavedMessages={(js8SavedMessages) => setSettings((prev) => (prev ? { ...prev, js8SavedMessages } : prev))}
+                onSavedMessages={saveJs8MessagesMirror}
                 lists={js8Lists}
                 paneStyle={settings?.js8PaneStyle}
                 inboxRequest={js8InboxAsk}
