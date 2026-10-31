@@ -2182,14 +2182,68 @@ static LAST_SOLAR_WIND: Mutex<Option<propagation::SolarWind>> = Mutex::new(None)
 /// Last-good 12-month smoothed sunspot number (R12) from SWPC's predicted
 /// solar cycle — the p533 engine's proper solar input (daily SFI is the wrong
 /// quantity for monthly-median CCIR maps; without this the engine falls back
-/// to a Covington inversion of SFI). Refreshed on the space-wx fetch cadence.
-static LAST_SSN: Mutex<Option<f32>> = Mutex::new(None);
+/// to a Covington inversion of SFI). Refreshed on the space-wx fetch cadence. Held with the UTC
+/// (year, month) it is the prediction for; read it through [`held_ssn`].
+static LAST_SSN: Mutex<Option<(f32, (i64, u32))>> = Mutex::new(None);
 
-/// The smoothed sunspot number the solar-cycle feed last gave, if it has given one. Only a value
-/// NOAA's feed answered is ever stored (`LAST_SSN` is written on a successful fetch alone), so it
-/// is never the model's stand-in; the grades take it only for a recent contact.
+/// The held R12, while it may speak for `now` ([`ssn_for_month`]).
+fn held_ssn(now: i64) -> Option<f32> {
+    ssn_for_month(LAST_SSN.lock().ok().and_then(|g| *g), now)
+}
+
+/// A held R12 speaks for `now` only within the UTC month it is the prediction for. That is its
+/// age limit, and it is a month rather than a span of hours because of what the number is.
+///
+/// SWPC predicts one R12 per calendar month, and P.533's maps are monthly medians indexed by
+/// month. So within its month the held value is the number a fresh fetch would give, however
+/// long the feed has been down. From the next month on, it is another month's number.
+///
+/// A month-boundary fetch failure therefore leaves no R12. The engine falls back to the number it
+/// derives from the SFI, as on a cold start, until the first successful fetch of the new month.
+/// The feed is asked again on every space-weather fetch.
+fn ssn_for_month(held: Option<(f32, (i64, u32))>, now: i64) -> Option<f32> {
+    held.filter(|&(_, month)| month == propagation::solar_cycle::year_month(now))
+        .map(|(ssn, _)| ssn)
+}
+
+/// The smoothed sunspot number the solar-cycle feed gave for this month, if it has given one.
+/// Only a value NOAA's feed answered is ever stored (`LAST_SSN` is written on a successful fetch
+/// alone), so it is never the model's stand-in; the grades take it only for a recent contact.
 fn current_ssn() -> Option<f64> {
-    LAST_SSN.lock().ok().and_then(|g| *g).map(f64::from)
+    held_ssn(now_unix()).map(f64::from)
+}
+
+#[cfg(test)]
+mod held_ssn_tests {
+    use super::ssn_for_month;
+
+    /// 2026-05-31 23:59:59Z and the second after it.
+    const MAY_END: i64 = 1_780_271_999;
+
+    #[test]
+    fn a_held_sunspot_number_speaks_only_for_its_own_month() {
+        assert_eq!(propagation::solar_cycle::year_month(MAY_END), (2026, 5));
+        assert_eq!(propagation::solar_cycle::year_month(MAY_END + 1), (2026, 6));
+        let may = Some((112.0, (2026, 5)));
+        assert_eq!(ssn_for_month(may, MAY_END), Some(112.0), "its own month");
+        assert_eq!(
+            ssn_for_month(may, MAY_END - 30 * 86_400),
+            Some(112.0),
+            "its month's first day"
+        );
+        assert_eq!(ssn_for_month(may, MAY_END + 1), None, "the next month");
+        assert_eq!(
+            ssn_for_month(may, MAY_END + 400 * 86_400),
+            None,
+            "a year on"
+        );
+        assert_eq!(
+            ssn_for_month(Some((112.0, (2025, 5))), MAY_END),
+            None,
+            "the same month a year before"
+        );
+        assert_eq!(ssn_for_month(None, MAY_END), None);
+    }
 }
 
 /// The X-ray "fast lane" cache: (fetched-at, flux W/m², the GOES sample's unix time). A
@@ -8167,7 +8221,7 @@ async fn get_propagation(
         .await
         {
             if let Ok(mut g) = LAST_SSN.lock() {
-                *g = Some(ssn);
+                *g = Some((ssn, (yy, mm)));
             }
         }
     }
@@ -8242,7 +8296,7 @@ async fn get_path_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         let view = guard.as_ref().map(|(_, s)| &s.space_wx);
         let wx = view
-            .map(|v| outlook_wx(v, LAST_SSN.lock().ok().and_then(|g| *g), now_unix()))
+            .map(|v| outlook_wx(v, held_ssn(now_unix()), now_unix()))
             .unwrap_or_default();
         (wx, view.map(|v| v.stamps))
     };
@@ -8420,10 +8474,7 @@ async fn get_path_regions(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| {
-                let ssn = LAST_SSN.lock().ok().and_then(|g| *g);
-                outlook_wx(&s.space_wx, ssn, t)
-            })
+            .map(|(_, s)| outlook_wx(&s.space_wx, held_ssn(t), t))
             .unwrap_or_default()
     };
     let forecast = kp_cache
@@ -8881,11 +8932,7 @@ async fn get_band_outlook(
             .map(|(_, s)| {
                 // R12 only matters to p533; withholding it from the heuristic keeps
                 // that path byte-identical to its pre-engine-seam behavior.
-                let ssn = if p533 {
-                    LAST_SSN.lock().ok().and_then(|g| *g)
-                } else {
-                    None
-                };
+                let ssn = if p533 { held_ssn(now_unix()) } else { None };
                 outlook_wx(&s.space_wx, ssn, now_unix())
             })
             .unwrap_or_default()
@@ -9023,7 +9070,8 @@ type DxpedWindowsCache = Mutex<Vec<(std::time::Instant, String, Vec<DxpedWindow>
 static DXPED_WINDOWS: DxpedWindowsCache = Mutex::new(Vec::new());
 const DXPED_WINDOWS_TTL_SECS: u64 = 6 * 3600;
 
-/// Identical cache identity for the native producer and passive Remote reader.
+/// Identical cache identity for the native producer and passive Remote reader. The sunspot
+/// number is the one the engine runs on ([`ssn_key`]), as the ring and path caches key it.
 #[allow(clippy::too_many_arguments)]
 fn dxped_windows_key(
     day: i64,
@@ -9032,16 +9080,38 @@ fn dxped_windows_key(
     prop_engine: &str,
     station_power_w: Option<f64>,
     ant_gain_dbi: f64,
-    ssn: Option<f32>,
+    wx: &propagation::SpaceWx,
     mut calls: Vec<&str>,
 ) -> String {
     calls.sort_unstable();
     format!(
-        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{:?}|{}",
+        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{}|{}",
         station_power_w,
-        ssn.map(|v| v.round() as i32),
+        ssn_key(wx),
         calls.join(",")
     )
+}
+
+#[cfg(test)]
+mod dxped_windows_key_tests {
+    use super::dxped_windows_key;
+    use propagation::SpaceWx;
+
+    /// The DXpedition windows key on the sunspot number the engine runs on, as the ring and path
+    /// caches do: with no R12 held, a changed SFI is another key; with one held, it is not.
+    #[test]
+    fn with_no_sunspot_number_held_an_sfi_change_is_another_dxped_key() {
+        let at = |sfi: f32, ssn: Option<f32>| {
+            let wx = SpaceWx {
+                sfi,
+                ssn,
+                ..SpaceWx::default()
+            };
+            dxped_windows_key(0, 7, "FN42", "p533", None, 0.0, &wx, vec!["VP8A"])
+        };
+        assert_ne!(at(70.0, None), at(200.0, None));
+        assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+    }
 }
 
 /// Modelled best-contact windows for every active + upcoming DXpedition, from
@@ -9112,11 +9182,7 @@ async fn get_dxped_windows(
                 ));
             }
         }
-        let wx = outlook_wx(
-            &s.space_wx,
-            LAST_SSN.lock().ok().and_then(|g| *g),
-            now_unix(),
-        );
+        let wx = outlook_wx(&s.space_wx, held_ssn(now_unix()), now_unix());
         (targets, wx)
     };
     if targets.is_empty() {
@@ -9130,7 +9196,7 @@ async fn get_dxped_windows(
         &prop_engine,
         station_power_w,
         ant_gain_dbi,
-        wx.ssn,
+        &wx,
         targets.iter().map(|(c, ..)| c.as_str()).collect(),
     );
     if let Ok(g) = DXPED_WINDOWS.lock() {

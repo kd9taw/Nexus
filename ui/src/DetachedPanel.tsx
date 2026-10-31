@@ -823,6 +823,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
         </DashboardBar>
         <ConnectView
           myGrid={snap?.mygrid ?? ''}
+          stationPowerW={settings?.stationPowerW ?? null}
+          antGainDbi={(settings?.antTxGainDbi ?? 0) + (settings?.antRxGainDbi ?? 0)}
           theme={theme}
           stations={snap?.stations ?? []}
           prop={prop}

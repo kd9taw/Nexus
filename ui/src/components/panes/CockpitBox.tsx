@@ -59,6 +59,8 @@ export interface RailLink {
 export type BoxSource = Pick<
   DashRailProps,
   | 'myGrid'
+  | 'stationPowerW'
+  | 'antGainDbi'
   | 'theme'
   | 'stations'
   | 'prop'

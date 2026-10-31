@@ -117,6 +117,9 @@ export function useConnectFeeds(enabled = true): ConnectFeedValues {
 
 export interface PaneContextInput {
   myGrid: string
+  /** Settings' station power and antenna gain (PaneContext `stationPowerW` / `antGainDbi`). */
+  stationPowerW?: number | null
+  antGainDbi?: number
   theme: Theme
   intent: MapIntent
   prop: PropagationSnapshot | null
@@ -159,6 +162,8 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
   const { selStation, selSpot, selDxped, selGrid } = i.selection
   const ctx: PaneContext = {
     myGrid: i.myGrid,
+    stationPowerW: i.stationPowerW,
+    antGainDbi: i.antGainDbi,
     entityCentroids,
     units,
     theme: i.theme,

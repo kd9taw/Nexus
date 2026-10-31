@@ -3328,7 +3328,7 @@ export const ES: PartialCatalog = {
   "pathGrade.measure.heading": "Un rumbo de antena registrado con el contacto (ANT_AZ) coincide con el mejor trayecto del modelo: {{pct}}% (contactos evaluados: {{n}}).",
   "pathGrade.measure.noHeading": "Aún ningún contacto con rumbo de antena registrado y un margen claro del modelo.",
   "pathGrade.measure.none": "Aún no hay contactos evaluados en los últimos 30 días.",
-  "pathGrade.measure.ungradable": "Sin evaluar: {{n}} (sin locator, una banda de VHF o sin flujo solar para su parte del ciclo).",
+  "pathGrade.measure.ungradable": "Sin evaluar: {{n}} (sin locator, una banda de VHF, una propagación registrada distinta de la reflexión F2 o la dispersión ionosférica —satélite, EME, repetidor, Esporádica E, TEP y similares— o sin flujo solar para su parte del ciclo).",
   "contactCard.path": "Trayecto",
   "contactCard.path.loading": "Calculando el trayecto…",
   "contactCard.path.none": "Sin trayecto para este contacto: necesita ambos locators y, si tiene más de tres meses, el flujo solar registrado con él.",

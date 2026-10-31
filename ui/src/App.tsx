@@ -3340,8 +3340,12 @@ function App() {
   // polls, as on Connect; the Spots, POTA/SOTA and Needed boxes are the boards themselves, lent as they
   // are to Connect. Neither the rail nor a box stands on the hosted Remote page (the desktop first), so
   // this wiring is always the native one.
+  // What the shack's modelled sweeps are computed from beside the grid: a change asks for them again.
+  const antGainDbi = (settings?.antTxGainDbi ?? 0) + (settings?.antRxGainDbi ?? 0)
   const boxSource: BoxSource = {
     myGrid: settings?.mygrid ?? '',
+    stationPowerW: settings?.stationPowerW ?? null,
+    antGainDbi,
     theme,
     stations: snap.stations ?? [],
     prop,
@@ -3806,6 +3810,8 @@ function App() {
       workspace = (
         <ConnectView
           myGrid={settings?.mygrid ?? ''}
+          stationPowerW={settings?.stationPowerW ?? null}
+          antGainDbi={antGainDbi}
           theme={theme}
           stations={snap?.stations ?? []}
           prop={prop}

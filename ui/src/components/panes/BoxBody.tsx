@@ -31,6 +31,8 @@ export function BoxBody({ pane, source, selection }: { pane: PaneId; source: Box
   const neededBoard = source.neededBoard && { ...source.neededBoard, selectedCall, onSelect: onSelectCall }
   const { ctx } = usePaneContext({
     myGrid: source.myGrid,
+    stationPowerW: source.stationPowerW,
+    antGainDbi: source.antGainDbi,
     theme: source.theme,
     intent: selection.intent,
     prop: source.prop,

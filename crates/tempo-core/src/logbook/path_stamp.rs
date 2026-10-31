@@ -99,7 +99,7 @@ pub struct PathStamp {
     pub route: StampRoute,
     /// `Short`/`Long` only.
     pub conf: Option<StampConf>,
-    /// The reasons, as tokens the grader wrote (`MARGIN_S`, `HEADING_S` …).
+    /// The reasons, as tokens the grader wrote (`MARGIN_S`, `HEARD_S:2` …).
     pub why: Vec<String>,
     /// What the grade was made for: the far station's 4-character grid square and the band,
     /// `FN31/20m`.

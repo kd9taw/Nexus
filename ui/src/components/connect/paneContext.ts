@@ -51,6 +51,10 @@ export interface OtaBoard {
 export interface PaneContext {
   // environment (B2/B3-ready; B1 panes mostly read prop/selection)
   myGrid: string
+  /** Settings' station power (W) and antenna gain (transmit plus receive, dBi), which the shack's
+   * modelled sweeps are computed from; absent where the window has no settings to lend. */
+  stationPowerW?: number | null
+  antGainDbi?: number
   /** DXCC entity → representative location, for the beam heading a pane prints beside
    * an entity name. Lives on the context because several panes render through plain
    * functions (`renderSelection`), which cannot call the hook themselves. Null until

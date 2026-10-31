@@ -1306,7 +1306,7 @@ export const JA: PartialCatalog = {
   "pathGrade.measure.heading": "交信に記録されたアンテナの向き（ANT_AZ）とモデルの良い方の経路の一致率：{{pct}}%（判定対象の交信：{{n}}）。",
   "pathGrade.measure.noHeading": "アンテナの向きが記録され、モデルの差が明確な交信はまだありません。",
   "pathGrade.measure.none": "過去30日に判定済みの交信はまだありません。",
-  "pathGrade.measure.ungradable": "未判定：{{n}}（グリッドなし、VHFバンド、またはその時期の太陽フラックスなし）。",
+  "pathGrade.measure.ungradable": "未判定：{{n}}（グリッドなし、VHFバンド、F2層反射・電離層散乱以外の伝搬モードが記録された交信——衛星、EME、レピータ、スポラディックE、TEPなど——、またはその時期の太陽フラックスなし）。",
   "contactCard.path": "伝搬経路",
   "contactCard.path.loading": "経路を計算中…",
   "contactCard.path.none": "この交信の経路はありません：両方のグリッドと、3か月より前の交信では一緒に記録された太陽フラックスが必要です。",

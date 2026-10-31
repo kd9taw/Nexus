@@ -118,6 +118,9 @@ struct KeptOutlook {
     /// The stamps of the space weather the card was computed from, checked again for each
     /// contact it would grade ([`outlook_for`]).
     stamps: propagation::model::SpaceWxStamps,
+    /// The Kp reading this pair's card has been kept on without a break since: the oldest of an
+    /// unbroken run of refreshes, each Kp read within its limit of the one before it.
+    since: i64,
 }
 
 static OUTLOOKS: Mutex<VecDeque<KeptOutlook>> = Mutex::new(VecDeque::new());
@@ -126,7 +129,9 @@ static OUTLOOKS: Mutex<VecDeque<KeptOutlook>> = Mutex::new(VecDeque::new());
 /// grade — only when `stamps`, the space weather it was computed from, say the solar flux and Kp
 /// were readings that may speak for `at` ([`grade_card_measured`]). A card from a cold cache
 /// (`None`), a stand-in flux or an old Kp is not kept, so it grades no contact. A kept card grades
-/// a contact only while those stamps still may speak for the contact's time ([`outlook_for`]).
+/// a contact only while those stamps still may speak for the contact's time ([`card_speaks_for`]).
+/// A refresh for the same pair replaces the card, and carries on its unbroken run of Kp readings
+/// (`since`) when its Kp was read within the Kp's limit of the replaced card's.
 pub(crate) fn keep_outlook(
     mygrid: &str,
     dxgrid: &str,
@@ -143,7 +148,21 @@ pub(crate) fn keep_outlook(
     if pred.long_path.is_none() {
         return;
     }
+    let Some(kp_at) = stamps.kp_at else {
+        return;
+    };
     let mut kept = lock(&OUTLOOKS);
+    // A refresh with no hole in its measured Kp carries on the card before it, so a contact that
+    // started while that one was current is still spoken for.
+    let since = kept
+        .iter()
+        .find(|k| k.me4 == me4 && k.dx4 == dx4)
+        .filter(|k| {
+            k.stamps.kp_at.is_some_and(|prev| {
+                (kp_at - prev).abs() < propagation::model::WxKey::Kp.fresh_secs()
+            })
+        })
+        .map_or(kp_at, |k| k.since.min(kp_at));
     kept.retain(|k| !(k.me4 == me4 && k.dx4 == dx4));
     kept.push_back(KeptOutlook {
         me4,
@@ -151,17 +170,42 @@ pub(crate) fn keep_outlook(
         at,
         pred: Arc::new(pred.clone()),
         stamps,
+        since,
     });
     while kept.len() > OUTLOOKS_KEPT {
         kept.pop_front();
     }
 }
 
-/// Whether a card computed at `now` from space weather stamped `stamps` may grade a contact: the
-/// flux and Kp measured and current ([`propagation::model::SpaceWxStamps::model_usable`]). A
-/// contact with no card logs with no grade; the display-only pass grades it from its logged SFI.
+/// Whether space weather stamped `stamps` may speak for `now`, the card's time when it is kept: the
+/// flux and Kp both measured, and each read within its limit
+/// ([`propagation::model::WxKey::fresh_secs`]) of `now`, before it or after (the shared `usable`
+/// reads a future stamp as fresh). A contact is held to the card's whole run of readings instead
+/// ([`card_speaks_for`]). A contact with no card logs with no grade; the display-only pass grades
+/// it from its logged SFI.
 fn grade_card_measured(stamps: Option<&propagation::model::SpaceWxStamps>, now: i64) -> bool {
-    stamps.is_some_and(|s| s.model_usable(now))
+    use propagation::model::WxKey;
+    stamps.is_some_and(|s| {
+        [WxKey::Sfi, WxKey::Kp]
+            .into_iter()
+            .all(|k| s.at(k).is_some_and(|at| (now - at).abs() < k.fresh_secs()))
+    })
+}
+
+/// Whether a kept card may grade a contact that started at `when`: the flux read within its
+/// limit of `when`, either side, and `when` within the Kp's limit of the card's unbroken run of
+/// readings — no earlier than that before its first (`since`), no later than that after its
+/// newest. A contact entered by hand with a start well before the run is not graded from it; a
+/// long contact the card was kept current through is.
+fn card_speaks_for(k: &KeptOutlook, when: i64) -> bool {
+    use propagation::model::WxKey;
+    let kp = WxKey::Kp.fresh_secs();
+    k.stamps
+        .at(WxKey::Sfi)
+        .is_some_and(|at| (when - at).abs() < WxKey::Sfi.fresh_secs())
+        && k.stamps
+            .kp_at
+            .is_some_and(|at| when - at < kp && k.since - when < kp)
 }
 
 fn month_of(t: i64) -> (i64, u32) {
@@ -169,9 +213,10 @@ fn month_of(t: i64) -> (i64, u32) {
 }
 
 /// The card kept for this pair that may grade a contact made at `when`: computed within
-/// [`OUTLOOK_FRESH_SECS`] of it in the same UTC month, and from space weather that still may speak
-/// for `when` (fail closed: a card gated on a Kp that has since gone stale grades nothing, and the
-/// contact logs with no grade).
+/// [`OUTLOOK_FRESH_SECS`] of it in the same UTC month, and from space weather that speaks for
+/// `when` ([`card_speaks_for`]; fail closed: a card gated on a Kp that has since gone stale, or a
+/// run of readings that began well after the contact's start, grades nothing, and the contact logs
+/// with no grade).
 fn outlook_for(me4: &str, dx4: &str, when: i64) -> Option<Arc<PathPrediction>> {
     lock(&OUTLOOKS)
         .iter()
@@ -181,7 +226,7 @@ fn outlook_for(me4: &str, dx4: &str, when: i64) -> Option<Arc<PathPrediction>> {
                 && k.dx4 == dx4
                 && (k.at - when).abs() <= OUTLOOK_FRESH_SECS
                 && month_of(k.at) == month_of(when)
-                && grade_card_measured(Some(&k.stamps), when)
+                && card_speaks_for(k, when)
         })
         .map(|k| Arc::clone(&k.pred))
 }
@@ -221,9 +266,10 @@ fn receivers(
     out
 }
 
-/// Whether a contact went by the ionosphere, as far as its record says: no `PROP_MODE`, or one
-/// naming the ionosphere (`F2`, `ION`). A satellite, EME, repeater, internet-linked or any other
-/// contact is not a path the model describes, and is never graded.
+/// Whether a contact went the way the model describes, as far as its record says: no `PROP_MODE`,
+/// or `F2` or `ION`. Any other mode is never graded: a satellite, EME, repeater or internet-linked
+/// contact, and also sporadic E, TEP, aurora, scatter and the like, which the model's F2/E hops do
+/// not describe.
 pub(crate) fn ionospheric(prop_mode: Option<&str>) -> bool {
     match prop_mode.map(str::trim).filter(|m| !m.is_empty()) {
         None => true,
@@ -457,7 +503,9 @@ fn cell_ask(a: &GradeAsk, my_grid: &str, now: i64, current_ssn: Option<f64>) -> 
 pub(crate) struct Status {
     pub(crate) running: bool,
     /// Contacts in the log at the last pass, those it could grade, and those it could not
-    /// (no grid, a band the model skips, or no sunspot number for their part of the cycle).
+    /// (no grid, a band the model skips, a propagation mode logged other than F2 or ionoscatter —
+    /// satellite, EME, a repeater, sporadic E, TEP … ([`ionospheric`]) — or no sunspot number for
+    /// their part of the cycle).
     pub(crate) contacts: u32,
     pub(crate) graded: u32,
     pub(crate) ungradable: u32,
@@ -538,12 +586,12 @@ fn load_file(path: &Path, inputs: &str) -> Option<HashMap<String, Cell>> {
     )
 }
 
-/// Append graded cells (starting the file over, header first, when `fresh`). Best effort: a
-/// failed write only means a later pass grades those cells again.
-fn append_file(path: &Path, inputs: &str, fresh: bool, cells: &[(String, Cell)]) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+/// The file's lines for `cells`, the header first when `fresh`.
+fn file_text<'a>(
+    inputs: &str,
+    fresh: bool,
+    cells: impl IntoIterator<Item = (&'a String, &'a Cell)>,
+) -> String {
     let mut text = String::new();
     if fresh {
         let h = Header {
@@ -562,6 +610,16 @@ fn append_file(path: &Path, inputs: &str, fresh: bool, cells: &[(String, Cell)])
             text.push('\n');
         }
     }
+    text
+}
+
+/// Append graded cells (starting the file over, header first, when `fresh`). Best effort: a
+/// failed write only means a later pass grades those cells again.
+fn append_file(path: &Path, inputs: &str, fresh: bool, cells: &[(String, Cell)]) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let text = file_text(inputs, fresh, cells.iter().map(|(k, g)| (k, g)));
     let file = if fresh {
         std::fs::File::create(path)
     } else {
@@ -573,6 +631,21 @@ fn append_file(path: &Path, inputs: &str, fresh: bool, cells: &[(String, Cell)])
     if let Ok(mut f) = file {
         let _ = f.write_all(text.as_bytes());
     }
+}
+
+/// Write the file over with `cells` alone, through a temporary file renamed into place, so a
+/// kill or a failed write leaves the old file whole.
+fn rewrite_file(path: &Path, inputs: &str, cells: &HashMap<String, Cell>) -> std::io::Result<()> {
+    let tmp = path.with_extension("jsonl.tmp");
+    let written = std::fs::File::create(&tmp).and_then(|mut f| {
+        f.write_all(file_text(inputs, true, cells).as_bytes())?;
+        f.sync_all()
+    });
+    let done = written.and_then(|()| std::fs::rename(&tmp, path));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done
 }
 
 /// What a pass needs, taken under the Engine lock in one breath ([`capture`]). It holds the
@@ -644,6 +717,7 @@ pub(crate) fn run_pass(job: Job, path: &Path, stop: &AtomicBool) -> Result<Statu
         )
         .map_err(|e| e.to_string())?;
     let mut todo: Vec<CellAsk> = Vec::new();
+    // Every cell some contact in the log asks for.
     let mut seen: HashSet<String> = HashSet::new();
     let (mut graded, mut ungradable) = (0u32, 0u32);
     {
@@ -652,7 +726,7 @@ pub(crate) fn run_pass(job: Job, path: &Path, stop: &AtomicBool) -> Result<Statu
             match cell_ask(a, &job.my_grid, job.now, job.current_ssn) {
                 Some(c) => {
                     graded += 1;
-                    if !g.cells.contains_key(&c.key) && seen.insert(c.key.clone()) {
+                    if seen.insert(c.key.clone()) && !g.cells.contains_key(&c.key) {
                         todo.push(c);
                     }
                 }
@@ -697,6 +771,21 @@ pub(crate) fn run_pass(job: Job, path: &Path, stop: &AtomicBool) -> Result<Statu
         g.cells.extend(out);
         g.rev += 1;
         g.status.cells_done = done;
+    }
+    // Keep the file bounded. Cells no contact asks for pile up as the month's sunspot number moves
+    // (a recent contact's cell is keyed on it) and as contacts are edited or deleted. Once they
+    // outnumber the cells asked for, the file is written over with those alone, so it never holds
+    // more than twice the log's cells and each rewrite is paid for by as many appends. Not on the
+    // way out: a quit should not wait on it.
+    if !stop.load(Ordering::Relaxed) {
+        let mut g = lock(&GRADES);
+        let asked = g.cells.keys().filter(|k| seen.contains(*k)).count();
+        if g.cells.len() - asked > asked {
+            g.cells.retain(|k, _| seen.contains(k));
+            g.rev += 1;
+            // Best effort: a failed rewrite leaves the old file whole, still good to append to.
+            let _ = rewrite_file(path, &inputs, &g.cells);
+        }
     }
     // The success measures, over the last 30 days.
     let since = job.now - 30 * 86_400;

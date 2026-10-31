@@ -350,7 +350,7 @@ export interface PathGradeAsk {
   extra: [string, string][]
 }
 /** A logged contact's path grade as the Logbook shows it. `why` holds reason tokens
- * (`MARGIN_S`, `HEADING_S`, `HEARD_L:3`, `LATEDT:60/12` …), put into words by features/pathGrade. */
+ * (`MARGIN_S`, `HEARD_L:3`, `LATEDT:60/12` …), put into words by features/pathGrade. */
 export interface PathGrade {
   verdict: 'short' | 'long' | 'either' | 'unknown'
   confidence?: 'likely' | 'possible'

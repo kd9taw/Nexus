@@ -630,6 +630,141 @@ fn a_contact_that_did_not_go_by_the_ionosphere_is_never_graded() {
     assert_eq!(view_for(&stamped, "FN42", NOW, Some(80.0)), None);
 }
 
+/// What the expert's "Not graded" line says of propagation modes holds for every mode ADIF names:
+/// a contact logged with any mode but F2 reflection or ionoscatter is not graded and is counted
+/// among those not graded — sporadic E and TEP as much as a satellite — and those two, like a
+/// contact with no mode logged, are graded.
+#[test]
+fn every_logged_prop_mode_but_f2_and_ionoscatter_counts_as_not_graded() {
+    let _s = serial();
+    // ADIF's PROP_MODE enumeration, whole.
+    const ADIF_PROP_MODES: [&str; 20] = [
+        "AS", "AUE", "AUR", "BS", "ECH", "EME", "ES", "F2", "FAI", "GWAVE", "INTERNET", "ION",
+        "IRL", "LOS", "MS", "RPT", "RS", "SAT", "TEP", "TR",
+    ];
+    let graded = ["F2", "ION"];
+    for m in ADIF_PROP_MODES {
+        assert_eq!(ionospheric(Some(m)), graded.contains(&m), "{m}");
+    }
+    let base = qso("VK2AA", "QF56", "20m", NOW - 3600, Some("150"));
+    let mut recs = vec![base.clone()];
+    for (i, m) in ADIF_PROP_MODES.iter().enumerate() {
+        let mut r = base.clone();
+        r.call = format!("VK2B{i}");
+        r.prop_mode = Some((*m).to_string());
+        recs.push(r);
+    }
+    let d = Dir::new("pm-counted");
+    let engine = on_store(&d, &recs);
+    let s = run_pass(
+        capture(&engine, NOW, Some(80.0)),
+        &d.grades(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    assert_eq!(
+        (s.graded, s.ungradable),
+        (1 + 2, ADIF_PROP_MODES.len() as u32 - 2)
+    );
+}
+
+/// The worked station's decode lateness over many periods (the aggregate DT gate) is said on the
+/// grade made at log time, and it raises nothing: route and confidence are the plain grade's.
+#[test]
+fn a_station_late_over_many_decodes_is_said_and_raises_nothing() {
+    let _s = serial();
+    let live = Mutex::new(propagation::LiveSpots::default());
+    let region = Mutex::new(propagation::LiveSpots::default());
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&measured()),
+    );
+    let rec = qso("VK2AA", "QF56", "20m", NOW, None);
+    let plain = at_log(&rec, "", &live, &region, &[]).unwrap();
+    assert!(!plain.why.iter().any(|w| w.starts_with("LATEDT")));
+    let late = at_log(&rec, "", &live, &region, &[0.07; 10]).unwrap();
+    assert_eq!(late.why.last().map(String::as_str), Some("LATEDT:70/10"));
+    assert_eq!((late.route, late.conf), (plain.route, plain.conf));
+}
+
+/// Every surface that shows a grade refuses a contact that did not go by the ionosphere — the
+/// log-time grade, the Logbook's column, its path filter and the contact card's day — and
+/// grades one that did (no `PROP_MODE`, a blank one, `F2`, `ION` in any case).
+#[test]
+fn the_prop_mode_gate_holds_on_every_surface() {
+    let _s = serial();
+    let live = Mutex::new(propagation::LiveSpots::default());
+    let region = Mutex::new(propagation::LiveSpots::default());
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&measured()),
+    );
+    let base = qso("VK2AA", "QF56", "20m", NOW, Some("150"));
+    let modes: [(Option<&str>, bool); 9] = [
+        (None, true),
+        (Some(""), true),
+        (Some("  "), true),
+        (Some("F2"), true),
+        (Some("ion"), true),
+        (Some("SAT"), false),
+        (Some("eme"), false),
+        (Some("ES"), false),
+        (Some("RPT"), false),
+    ];
+    let mut recs = Vec::new();
+    for (i, (m, _)) in modes.iter().enumerate() {
+        let mut r = base.clone();
+        r.call = format!("VK2A{i}");
+        r.prop_mode = m.map(str::to_string);
+        // A stamp, so the filter has a logged grade to show for every one.
+        r.extra.push((path_stamp::PATH_FIELD.into(), "L".into()));
+        r.extra
+            .push((path_stamp::PATH_CONF_FIELD.into(), "POSSIBLE".into()));
+        r.extra
+            .push((path_stamp::PATH_WHY_FIELD.into(), "OPEN_L;QF56/20m".into()));
+        recs.push(r);
+    }
+    let d = Dir::new("pm-surfaces");
+    let engine = on_store(&d, &recs);
+    run_pass(
+        capture(&engine, NOW, Some(80.0)),
+        &d.grades(),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    for (r, (m, want)) in recs.iter().zip(modes.iter()) {
+        let a = GradeAsk::of(r);
+        let mut fresh = r.clone();
+        fresh.extra.clear();
+        assert_eq!(
+            at_log(&fresh, "", &live, &region, &[]).is_some(),
+            *want,
+            "at_log {m:?}"
+        );
+        assert_eq!(
+            view_for(&a, "FN42", NOW, Some(80.0)).is_some(),
+            *want,
+            "view {m:?}"
+        );
+        assert_eq!(
+            filter_keeps(r, tempo_core::logbook::query::PathFilter::Long, "FN42"),
+            *want,
+            "filter {m:?}"
+        );
+        assert_eq!(
+            contact_day(&a, "FN42", None, 0.0, NOW, Some(80.0)).is_some(),
+            *want,
+            "day {m:?}"
+        );
+    }
+}
+
 /// More cells than one chunk: every chunk is kept in the file, header first, and a restart reads
 /// them all back.
 #[test]
@@ -664,6 +799,56 @@ fn a_pass_of_many_chunks_keeps_every_chunk() {
         "every chunk in the file"
     );
     assert_eq!(held.len(), lock(&GRADES).cells.len());
+}
+
+/// The grades file stays bounded: once it holds more cells no contact in the log asks for than
+/// cells one does, a pass writes it over with the asked-for cells alone, and memory drops the
+/// rest too. Below that it is only appended to, and a cell the log still asks for is never
+/// graded again.
+#[test]
+fn the_grades_file_drops_cells_no_contact_asks_for() {
+    let _s = serial();
+    let (d1, d2, d3) = (
+        Dir::new("compact1"),
+        Dir::new("compact2"),
+        Dir::new("compact3"),
+    );
+    let path = d1.grades();
+    let lines = || std::fs::read_to_string(&path).unwrap().lines().count();
+    let pass = |engine: &SharedEngine| {
+        run_pass(
+            capture(engine, NOW, Some(80.0)),
+            &path,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+    };
+    // Four cells, then a log of five others: four left over against five asked for — kept.
+    assert_eq!(pass(&on_store(&d1, &log_records())).cells_done, 4);
+    let five: Vec<QsoRecord> = ["JO20", "EM12", "RE78", "KP20", "BL11"]
+        .iter()
+        .map(|g| qso("DX1AA", g, "20m", NOW - 3600, Some("150")))
+        .collect();
+    assert_eq!(pass(&on_store(&d2, &five)).cells_done, 5);
+    assert_eq!(lines(), 1 + 9, "control: under the bound, only appended");
+    // A log asking for one of those five: eight left over against one — written over.
+    let one = on_store(&d3, &five[..1]);
+    assert_eq!(
+        pass(&one).cells_total,
+        0,
+        "the asked-for cell is not graded again"
+    );
+    assert_eq!(lines(), 1 + 1, "a header and the one cell asked for");
+    let held = load_file(&path, "p533|None|0").expect("a readable file");
+    let want = cell_ask(&GradeAsk::of(&five[0]), "FN42", NOW, Some(80.0))
+        .unwrap()
+        .key;
+    assert_eq!(held.keys().collect::<Vec<_>>(), vec![&want]);
+    assert_eq!(lock(&GRADES).cells.len(), 1, "memory dropped them too");
+    assert!(view_for(&GradeAsk::of(&five[0]), "FN42", NOW, Some(80.0)).is_some());
+    // A restart reads the written-over file back whole.
+    forget_grades();
+    assert_eq!(pass(&one).cells_total, 0);
 }
 
 /// A card is kept for a contact's grade only when the space weather it was computed from was
@@ -735,4 +920,180 @@ fn only_a_card_from_measured_space_weather_grades_a_new_contact() {
         None,
         "a stale card was kept"
     );
+}
+
+/// Fail closed both ways: a card grades a contact only when the flux and Kp it was gated on were
+/// read within their limits of the contact's start, before it or after. A contact entered by hand
+/// with a start hours before the card's Kp was read gets no grade from that card; one that started
+/// minutes before (a contact running as the card was opened) is graded.
+#[test]
+fn a_card_grades_no_contact_from_before_its_space_weather() {
+    let _s = serial();
+    let live = Mutex::new(propagation::LiveSpots::default());
+    let region = Mutex::new(propagation::LiveSpots::default());
+    keep_outlook(
+        "FN42",
+        "QF56",
+        NOW,
+        &sydney_card("FN42", NOW),
+        Some(&measured()),
+    );
+    let at = |t: i64| {
+        at_log(
+            &qso("VK2AA", "QF56", "20m", t, None),
+            "",
+            &live,
+            &region,
+            &[],
+        )
+    };
+    // The Kp was read at NOW − 60 s and speaks for 15 minutes either side of that.
+    assert!(at(NOW).is_some(), "control: the card's own time");
+    assert!(at(NOW - 10 * 60).is_some(), "control: ten minutes before");
+    assert!(at(NOW - 60 - 15 * 60 + 1).is_some(), "control: just inside");
+    assert_eq!(at(NOW - 60 - 15 * 60), None, "the Kp's limit, before it");
+    assert_eq!(at(NOW - 5 * 3600), None, "back-dated five hours");
+    // The flux on its own side: a card whose flux was read after the contact by more than its
+    // two days grades nothing (the six-hour card window hides this through `at_log`).
+    let s = propagation::model::SpaceWxStamps {
+        sfi_at: Some(NOW + 48 * 3600),
+        kp_at: Some(NOW),
+        ..Default::default()
+    };
+    assert!(!grade_card_measured(Some(&s), NOW));
+    let s = propagation::model::SpaceWxStamps {
+        sfi_at: Some(NOW + 48 * 3600 - 1),
+        ..s
+    };
+    assert!(grade_card_measured(Some(&s), NOW), "control: flux inside");
+}
+
+/// A live contact keeps its grade however long it runs while its station's card is refreshed on
+/// fresh Kp: each refresh carries on the run of readings the card began on, so the start is spoken
+/// for by the run's first reading. A run with a hole in it (the station deselected half an hour),
+/// a card first opened well into the contact, and a contact entered by hand hours before the run
+/// are not graded from it.
+#[test]
+fn a_long_live_contact_is_graded_through_its_cards_refreshes() {
+    let _s = serial();
+    let live = Mutex::new(propagation::LiveSpots::default());
+    let region = Mutex::new(propagation::LiveSpots::default());
+    let card = sydney_card("FN42", NOW);
+    // A refresh at `t`, on a flux an hour old and a Kp a minute old, as the space-weather cache
+    // serves them.
+    let refresh = |t: i64| {
+        let stamps = propagation::model::SpaceWxStamps {
+            sfi_at: Some(t - 3600),
+            kp_at: Some(t - 60),
+            ..Default::default()
+        };
+        keep_outlook("FN42", "QF56", t, &card, Some(&stamps));
+    };
+    // Refreshes every `every` minutes over `[from, to]` minutes after `NOW`.
+    let run = |from: i64, to: i64, every: i64| {
+        let mut m = from;
+        while m <= to {
+            refresh(NOW + m * 60);
+            m += every;
+        }
+        refresh(NOW + to * 60);
+    };
+    let graded = |start: i64| {
+        at_log(
+            &qso("VK2AA", "QF56", "20m", start, None),
+            "",
+            &live,
+            &region,
+            &[],
+        )
+    };
+    for (mins, every) in [(18, 5), (30, 10), (60, 7)] {
+        lock(&OUTLOOKS).clear();
+        run(0, mins, every);
+        assert!(
+            graded(NOW).is_some(),
+            "a {mins}-minute contact, refreshed every {every}"
+        );
+    }
+    // A 30-minute hole: the run starts over after it, past the contact's start.
+    lock(&OUTLOOKS).clear();
+    run(0, 10, 5);
+    run(40, 45, 5);
+    assert_eq!(graded(NOW), None, "a broken run");
+    // Opened 20 minutes into the contact: no reading spoke for its start.
+    lock(&OUTLOOKS).clear();
+    run(20, 30, 5);
+    assert_eq!(graded(NOW), None, "first opened 20 minutes in");
+    assert!(
+        graded(NOW + 20 * 60).is_some(),
+        "control: a contact the run spoke for"
+    );
+    // Back-dated by hand, hours before a live run.
+    lock(&OUTLOOKS).clear();
+    run(0, 30, 5);
+    for h in [1, 2, 5] {
+        assert_eq!(graded(NOW - h * 3600), None, "back-dated {h} h");
+    }
+}
+
+/// The three things a kept card needs to speak for a contact's start, each at its edge: the flux
+/// read within two days of it either side, the newest Kp no more than 15 minutes before it, and the
+/// run's first Kp no more than 15 minutes after it.
+#[test]
+fn a_kept_card_speaks_for_a_start_only_inside_all_three_limits() {
+    let k = |sfi_at: i64, kp_at: i64, since: i64| KeptOutlook {
+        me4: "FN42".into(),
+        dx4: "QF56".into(),
+        at: NOW,
+        pred: Arc::new(sydney_card("FN42", NOW)),
+        stamps: propagation::model::SpaceWxStamps {
+            sfi_at: Some(sfi_at),
+            kp_at: Some(kp_at),
+            ..Default::default()
+        },
+        since,
+    };
+    let (d2, q) = (48 * 3600, 15 * 60);
+    let card = k(NOW - 3600, NOW - 60, NOW - 60);
+    assert!(card_speaks_for(&card, NOW), "control");
+    // The flux, either side.
+    assert!(card_speaks_for(&k(NOW + d2 - 1, NOW, NOW), NOW));
+    assert!(!card_speaks_for(&k(NOW + d2, NOW, NOW), NOW));
+    assert!(card_speaks_for(&k(NOW - d2 + 1, NOW, NOW), NOW));
+    assert!(!card_speaks_for(&k(NOW - d2, NOW, NOW), NOW));
+    // The newest Kp, before the start.
+    assert!(card_speaks_for(&k(NOW, NOW - q + 1, NOW - q + 1), NOW));
+    assert!(!card_speaks_for(&k(NOW, NOW - q, NOW - q), NOW));
+    // The run's first Kp, after the start; the newest may be long after it.
+    assert!(card_speaks_for(&k(NOW, NOW + 3600, NOW + q - 1), NOW));
+    assert!(!card_speaks_for(&k(NOW, NOW + 3600, NOW + q), NOW));
+}
+
+/// A refresh carries on the card's run of Kp readings only when its Kp was read less than the Kp's
+/// 15 minutes after the replaced card's: a minute short of that inherits the run's first reading,
+/// exactly 15 minutes starts a new run.
+#[test]
+fn a_refresh_carries_on_the_run_only_inside_the_kps_limit() {
+    let _s = serial();
+    let card = sydney_card("FN42", NOW);
+    let refresh = |kp_at: i64| {
+        let stamps = propagation::model::SpaceWxStamps {
+            sfi_at: Some(kp_at - 3600),
+            kp_at: Some(kp_at),
+            ..Default::default()
+        };
+        keep_outlook("FN42", "QF56", kp_at, &card, Some(&stamps));
+    };
+    let since = || {
+        lock(&OUTLOOKS)
+            .iter()
+            .find(|k| k.me4 == "FN42" && k.dx4 == "QF56")
+            .map(|k| k.since)
+    };
+    for (gap, want) in [(15 * 60 - 1, NOW), (15 * 60, NOW + 15 * 60)] {
+        lock(&OUTLOOKS).clear();
+        refresh(NOW);
+        refresh(NOW + gap);
+        assert_eq!(since(), Some(want), "a Kp read {gap} s after the last");
+    }
 }
