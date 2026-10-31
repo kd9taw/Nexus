@@ -11344,6 +11344,33 @@ mod tests {
         );
     }
 
+    /// An InBox row without `EQSL_QSLRDATE` (eQSL sends it only when it stored the day the record
+    /// arrived) leaves the contact without an eQSL date: the QSO date is no stand-in for it.
+    #[test]
+    fn an_eqsl_card_without_a_date_leaves_the_date_empty() {
+        let undated = without_field(&inbox_card("W1AW", ""), "EQSL_QSLRDATE");
+        assert!(!undated.contains("EQSL_QSLRDATE"), "premise: {undated}");
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = lb.merge_report(&eqsl_inbox(&[undated]));
+        assert_eq!(s.newly_confirmed_any, 1, "premise: the card still confirms");
+        assert!(lb.records()[0].qsl_rcvd.eqsl);
+        assert_eq!(extra_field(&lb.records()[0], "EQSL_QSLRDATE"), None);
+    }
+
+    /// `row` without its `<TAG:n>value` field.
+    fn without_field(row: &str, tag: &str) -> String {
+        let open = format!("<{tag}:");
+        let Some(at) = row.find(&open) else {
+            return row.to_string();
+        };
+        let rest = &row[at + open.len()..];
+        let close = rest.find('>').expect("a tag closes");
+        let len: usize = rest[..close].parse().expect("a length");
+        let end = at + open.len() + close + 1 + len;
+        format!("{}{}", &row[..at], &row[end..])
+    }
+
     /// ★ A listener's report in eQSL's InBox (`APP_EQSL_SWL`) is no QSO: it neither confirms a
     /// contact nor names one the log lacks. Nexus's InBox request does not filter them out, and
     /// they read as cards: one confirmed a contact with the same call, and one from a listener's

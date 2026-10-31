@@ -490,7 +490,9 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
     // And the day each service confirmed it, with its confirmation: LoTW's and eQSL's received
     // dates, the Logbook's "LoTW received" and "eQSL received" columns. Monotonic too — a date the
     // log holds is never replaced here. A paper card's (`QSLRDATE`) is the operator's
-    // (`qsl_card_marked`), never a report's.
+    // (`qsl_card_marked`), never a report's. eQSL's DownloadInBox spec: `EQSL_QSLRDATE` is the day
+    // the record was added to eQSL's database, sent only "if we have stored the date"; a row
+    // without it leaves the contact's date empty, never filled from the QSO date.
     for (confirms, tag) in [
         (inc.qsl_rcvd.lotw, "LOTW_QSLRDATE"),
         (inc.qsl_rcvd.eqsl, "EQSL_QSLRDATE"),
