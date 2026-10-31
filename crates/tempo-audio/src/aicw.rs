@@ -11,9 +11,6 @@
 //!   (the engine's ring stays empty too). `ai_cw_active` is the operator's
 //!   `ai_cw_enabled` MINUS the Unassisted-mode override, so declaring an unassisted
 //!   contest entry runs no inference at all — read it, never the raw setting.
-//! - Gated on the audio too ([`Gate`]): the model runs only while its window holds CW (or
-//!   another carrier) and new audio has arrived since the last pass. A quiet band, a muted
-//!   input or a stopped device cost a cheap detector instead of back-to-back inference.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,7 +18,7 @@ use std::time::{Duration, Instant};
 use tempo_app::engine::{engine_lock, Engine};
 use tempo_app::settings::OperatingMode;
 
-use crate::aicw_stitch::{pass_gap, Gate, Stitcher, Turn};
+use crate::aicw_stitch::{pass_gap, Stitcher};
 use crate::service::SHUTDOWN;
 
 /// How often the loop re-checks the enable/mode gates while idle. While decoding, passes
@@ -64,8 +61,6 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
     let mut logged_pass_time = false;
     // The transcript cursor (see `aicw_stitch`).
     let mut stitch = Stitcher::default();
-    // Whether this turn's window is worth a pass (see `aicw_stitch::Gate`).
-    let mut gate = Gate::default();
     loop {
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
             return;
@@ -80,7 +75,6 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
         };
         if !on {
             stitch.reset(); // ring + stream clock reset when the feature is off
-            gate.reset();
             continue;
         }
         // Lazy model load, with a retry backoff and an honest status.
@@ -115,19 +109,6 @@ fn run(engine: Arc<Mutex<Engine>>, model_dir: std::path::PathBuf) {
         };
         let win_secs = window.len() as f64 / 12_000.0;
         let end_abs = fed as f64 / 12_000.0;
-        match gate.turn(epoch, &window, fed) {
-            Turn::Wait => continue,
-            Turn::Quiet { heard_until } => {
-                // What a pass over noise gives: no letters, an empty provisional tail, and the
-                // decoder's clock moved on, so the CW turn cue still reads the silence.
-                let mut e = engine_lock(&engine);
-                e.set_ai_cw_status("");
-                e.push_ai_cw_pass(epoch, "", "");
-                e.push_ai_cw_times(epoch, heard_until as f64 / 12_000.0, &[], &[]);
-                continue;
-            }
-            Turn::Decode => {}
-        }
         let ai = model.as_ref().unwrap();
         let audio_3200 = deepcw::resample_linear(&window, 12_000, ai.meta.sample_rate);
         let pass_t0 = Instant::now();
