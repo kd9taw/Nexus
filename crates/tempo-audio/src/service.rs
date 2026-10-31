@@ -25167,20 +25167,6 @@ mod tests {
         assert_eq!(t.pressing, 0, "and no longer pressing");
     }
 
-    /// ⭐ FAILING-FIRST, #381 (Kenwood TS-590S): "the software keeps changing my power output to
-    /// 5 watts … Does the same on RTTY."
-    ///
-    /// Nothing in Nexus sets 5 W. The write is Hamlib's, inside a READ: 4.7.1's
-    /// `kenwood_get_level(RIG_LEVEL_RFPOWER)` calls `kenwood_get_power_minmax(…, restore = 0)`
-    /// on the first read after a connect and after every mode change, which sends
-    /// `PC;PC000;PC;PC255;PC;PC000;` and never puts the power back. Kenwood's manual says an
-    /// out-of-range `PC` is entered as the minimum or the maximum, so the radio goes to full
-    /// power for an instant and is left at 5 W, while Hamlib hands back the level it read
-    /// first. Executed against a fake TS-590S that clamps as the manual says: 80 W before one
-    /// `l RFPOWER`, 5 W after, and `0.8` returned.
-    ///
-    /// Every CAT connection is opened through [`probe_cat`] before its first read, so that is
-    /// where it must learn that it may never ask this.
     /// Every CAT connection is opened through [`probe_cat`], so that is where it learns its
     /// radio's Hamlib model; a Remote FM-D then reaches a Hamlib Icom as `M PKTFM 0`, as the
     /// shack's own mode writes do, and the FT-991A keeps `-1`.
@@ -25214,6 +25200,20 @@ mod tests {
         }
     }
 
+    /// ⭐ FAILING-FIRST, #381 (Kenwood TS-590S): "the software keeps changing my power output to
+    /// 5 watts … Does the same on RTTY."
+    ///
+    /// Nothing in Nexus sets 5 W. The write is Hamlib's, inside a READ: 4.7.1's
+    /// `kenwood_get_level(RIG_LEVEL_RFPOWER)` calls `kenwood_get_power_minmax(…, restore = 0)`
+    /// on the first read after a connect and after every mode change, which sends
+    /// `PC;PC000;PC;PC255;PC;PC000;` and never puts the power back. Kenwood's manual says an
+    /// out-of-range `PC` is entered as the minimum or the maximum, so the radio goes to full
+    /// power for an instant and is left at 5 W, while Hamlib hands back the level it read
+    /// first. Executed against a fake TS-590S that clamps as the manual says: 80 W before one
+    /// `l RFPOWER`, 5 W after, and `0.8` returned.
+    ///
+    /// Every CAT connection is opened through [`probe_cat`] before its first read, so that is
+    /// where it must learn that it may never ask this.
     #[test]
     fn a_ts590s_connection_never_asks_hamlib_for_its_rf_power() {
         let (addr, log) = mock_slow_rigctld(0);
@@ -41360,6 +41360,56 @@ mod tests {
                 && lines.iter().any(|l| l.trim().starts_with("M PKTUSB")),
             "…while the downlink is still received in PKTUSB: {lines:?}"
         );
+    }
+
+    /// ⭐ THE TX VFO'S FM-D WIDTH, PER RADIO. An FM bird worked with the receive leg in DATA-FM
+    /// (here the per-radio SSTV hold, with the receiver armed) gives the uplink `PKTFM` through
+    /// `sat_tx_mode`, and the split apply's `X` is the only write that reaches the TX VFO. A
+    /// Hamlib Icom must get `X PKTFM 0`: Hamlib turns a `-1` width into FM with DATA OFF, so the
+    /// uplink would leave from the plain-FM input. CONTROL: the FT-991A keeps `X PKTFM -1`.
+    #[test]
+    fn a_pktfm_uplink_reaches_the_tx_vfo_with_the_fm_data_width() {
+        let so50 = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_850_000,
+            downlink_centre_hz: 436_795_000,
+            invert: false,
+            half_width_hz: 0,
+        };
+        for (model, want) in [
+            (3070u32, "X PKTFM 0"), // IC-7100
+            (3085, "X PKTFM 0"),    // IC-705
+            (1035, "X PKTFM -1"),   // FT-991A
+        ] {
+            let (addr, seen) = recording_rigctld_stub();
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut eng = engine.lock().unwrap();
+                let mut s = eng.settings().clone();
+                s.rig_model = model;
+                s.sstv_hold_data_submode = true;
+                eng.apply_settings(s);
+                eng.set_sstv_armed(true);
+                eng.set_operating_mode("digital", false);
+                eng.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::ADownBUp));
+                eng.set_sat_transponder(Some(("bird|transponder".into(), 0, so50)));
+                eng.set_sat_single_channel_fm(false);
+                eng.set_sat_uplink_cw(false);
+                eng.sat_tune_nominal(FM_BIRD, 1_000_000);
+            }
+
+            step_with_watchdog(&engine, Rig::rigctld(&addr), None, Duration::from_secs(10));
+
+            assert_eq!(
+                split_verbs(&seen),
+                vec!["S 1 VFOB", "I 145850000", want],
+                "model {model}: the uplink rides VFO B in FM-D"
+            );
+            let lines = seen.lock().unwrap().clone();
+            assert!(
+                lines.iter().any(|l| l.trim().starts_with("M PKTFM")),
+                "model {model}: control — the downlink is received in FM-D: {lines:?}"
+            );
+        }
     }
 
     #[test]
