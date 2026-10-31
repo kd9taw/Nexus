@@ -79,6 +79,22 @@ function chip(
 }
 
 describe('FlareChip words', () => {
+  // After NOAA ends a flare the shack's 3-hour trend still says "rising" through the decay; the
+  // chip reads "rising again" from the lane's own GOES trace instead.
+  const ended: FlareEvent = { ...event, maxClass: 'M6.0', maxFlux: 6e-5, endAt: NOW_S - 300 }
+  it("keeps NOAA's \"ended\" through the decay, though the 3-hour trend says rising", () => {
+    const decay: [number, number][] = [[NOW_S - 600, 6e-5], [NOW_S - 240, 5.5e-5], [NOW_S - 60, 5e-5]]
+    const text = chip(noaa({ event: ended, series: decay }), { trend: 'rising' }).container.textContent ?? ''
+    expect(text).toContain(t('map.flare.noaa.ended', { end: '17:55Z', begin: '17:38Z' }))
+    expect(text).not.toContain(t('map.flare.est.rising'))
+  })
+  it('CONTROL: a trace that turns up again after the end reads Rising (estimated)', () => {
+    const upAgain: [number, number][] = [[NOW_S - 600, 6e-5], [NOW_S - 240, 4e-5], [NOW_S - 60, 5e-5]]
+    const text = chip(noaa({ event: ended, series: upAgain })).container.textContent ?? ''
+    expect(text).toContain(t('map.flare.est.rising'))
+    expect(text).not.toContain('17:55Z')
+  })
+
   it("names NOAA's grid and its valid time, and NOAA's event times", () => {
     const { container } = chip(noaa())
     const text = container.textContent ?? ''

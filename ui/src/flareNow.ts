@@ -13,8 +13,11 @@
 // footprint. Both hand back [lon, lat] rings, so the 2-D map and the globe draw the same lines.
 //
 // PHASES. NOAA's event list says began / peak / ended in NOAA's words. When it is silent or stale,
-// or its event is a previous flare (the flux is now above that event's peak, or rising again after
-// it ended), the phase falls back to our X-ray trend word, marked estimated.
+// or its event is a previous flare (the flux is now above that event's peak, or GOES's own trace
+// has turned up again since it ended), the phase falls back to our X-ray trend word, marked
+// estimated. "Turned up again" is read from the fast lane's trace, never from the shack's 3-hour
+// trend: that one compares now with the oldest sample in three hours, so it says "rising" all
+// through an ordinary flare's decay.
 //
 // EXTENSION POINT. A later overlay (the proton cap, the aurora edge) adds its own footprint
 // function beside `flareFootprint` and hands its rings to the same `WxRing` drawing on both
@@ -253,25 +256,54 @@ export interface FlarePhase {
 export const EVENT_FRESH_SECS = 600
 
 /** A flux this far above an event's peak is a new flare, not that event (GOES's sample and NOAA's
- *  peak differ a little for the same flare). */
+ *  peak differ a little for the same flare). The same margin over the trace's low since NOAA's end
+ *  is a new rise, not the decay's wobble. */
 const NEW_FLARE_OVER_PEAK = 1.1
+/** The trace speaks for now only while its newest sample is this recent (the UI's X-ray age). */
+const TRACE_LIVE_SECS = 600
+/** The flare layer's onset (M1). */
+const M1 = 1e-5
 
-/** `xray` is the flux now (null when unknown). An event that has peaked or ended is this flare's
- *  only while the flux is not above its peak and, once ended, not rising again: NOAA lists a flare
- *  only after minutes of rise, so until it does the newest event is the PREVIOUS flare, and its
- *  words must not be quoted for this one. */
+const CLASS_BASE: Record<string, number> = { A: 1e-8, B: 1e-7, C: 1e-6, M: 1e-5, X: 1e-4 }
+
+/** The flux a class names ("M5.2" → 5.2e-5); null for anything else. */
+function classFlux(cls: string | null): number | null {
+  const m = /^([ABCMX])(\d+(?:\.\d+)?)$/.exec(cls?.trim() ?? '')
+  return m ? CLASS_BASE[m[1]] * Number(m[2]) : null
+}
+
+/** Whether GOES's trace has turned up again since `since`: its newest sample is recent and more
+ *  than the margin above the lowest earlier sample since then. No trace, too few samples or an
+ *  old one is "no": without a measurement nothing says it rose. */
+function risenSince(series: ReadonlyArray<[number, number]> | undefined, since: number, now: number): boolean {
+  const after = (series ?? []).filter(([t]) => t >= since)
+  if (after.length < 2) return false
+  const [lastAt, last] = after[after.length - 1]
+  if (now - lastAt > TRACE_LIVE_SECS) return false
+  const low = Math.min(...after.slice(0, -1).map(([, f]) => f))
+  return last > low * NEW_FLARE_OVER_PEAK
+}
+
+/** `xray` is the flux now (null when unknown); `series` is the fast lane's GOES trace. An event
+ *  that has peaked or ended is this flare's only while the flux is not above its peak and, once
+ *  ended, the trace has not turned up again: NOAA lists a flare only after minutes of rise, so
+ *  until it does the newest event is the PREVIOUS flare, and its words must not be quoted for this
+ *  one. Fails closed: with no peak flux (NOAA's `maxFlux`, else its peak class) a settled event is
+ *  not an M1+ flare's. Without a current trace NOAA's "ended" stands — no measurement says the
+ *  flux rose, and NOAA's word about its own event is true. */
 export function flarePhase(
   event: FlareEvent | null | undefined,
   trend: 'rising' | 'steady' | 'falling' | null,
   nowMs: number,
   xray: number | null,
+  series?: ReadonlyArray<[number, number]>,
 ): FlarePhase {
   const now = nowMs / 1000
   const settled = event != null && (event.endAt != null || event.maxAt != null)
-  const newFlare =
-    settled &&
-    ((event.maxFlux != null && xray != null && xray > event.maxFlux * NEW_FLARE_OVER_PEAK) ||
-      (event.endAt != null && trend === 'rising'))
+  const peak = event ? (event.maxFlux ?? classFlux(event.maxClass)) : null
+  const abovePeak = xray != null && (peak != null ? xray > peak * NEW_FLARE_OVER_PEAK : xray >= M1)
+  const risen = event?.endAt != null && risenSince(series, event.endAt, now)
+  const newFlare = settled && (abovePeak || risen)
   const ours =
     event != null &&
     !newFlare &&
@@ -290,7 +322,8 @@ export function flarePhase(
     }
   }
   return {
-    kind: trend === 'rising' ? 'rising' : trend === 'falling' ? 'falling' : null,
+    // The trace's own rise is a measurement; otherwise the trend word.
+    kind: risen || trend === 'rising' ? 'rising' : trend === 'falling' ? 'falling' : null,
     noaa: false,
     beginAt: null,
     peakAt: null,

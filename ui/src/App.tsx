@@ -188,7 +188,7 @@ import {
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
-import { processFlare, effectiveXray, devXrayOverride } from './flareAlert'
+import { processFlare, effectiveXray, flareToastGrid } from './flareAlert'
 import { snapXray, wxUsable, xrayFastFresh } from './propViz'
 import { processStorm, processStormForecast } from './stormAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
@@ -214,7 +214,7 @@ import { askAgainWhileSaving } from './features/notAnswered'
 import { useTciSpots } from './features/tciSpots'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
-import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt, DrapGrid } from './types'
+import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt, XrayNow } from './types'
 import { pointedTo } from './components/rotorPointAt'
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
@@ -974,9 +974,9 @@ function App() {
   // Freshest fast-lane X-ray reading (60 s poller below) — merged with each prop
   // snapshot so the flare heads-up fires app-wide, whatever view is open.
   const xrayFastRef = useRef<number | null>(null)
-  // That reading's D-RAP grid (the flare toast quotes the map's ceiling); null beside a stale reading
-  // or the dev override's simulated flux.
-  const xrayDrapRef = useRef<DrapGrid | null>(null)
+  // The fast lane's last answer: its D-RAP grid gives the flare toast the map's ceiling, through
+  // flareToastGrid (none beside a stale sample or the dev override's simulated flux).
+  const xrayLaneRef = useRef<XrayNow | null>(null)
   // Chased-DXpedition alert inputs: the latest windows sweep (10-min poller
   // below), the current QSO partner (kept fresh by the decode-alert effect),
   // and the work action (assigned once handleWorkMapSpot exists).
@@ -998,7 +998,10 @@ function App() {
           // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup). Only a
           // measured, fresh flux may alert: a stand-in or an old sample is no flux (propViz).
           const nowMs = Date.now()
-          processFlare(effectiveXray(xrayFastRef.current, snapXray(p.spaceWx, nowMs)), xrayDrapRef.current)
+          processFlare(
+            effectiveXray(xrayFastRef.current, snapXray(p.spaceWx, nowMs)),
+            flareToastGrid(xrayLaneRef.current, nowMs),
+          )
           // Geomagnetic storm heads-up, same edge-triggered shape over the MEASURED
           // Kp already in this snapshot — no extra fetch. Until this existed a storm
           // reached the operator only if they had the Space Weather pane in front of
@@ -1199,9 +1202,10 @@ function App() {
     () =>
       watchFeed(XRAY_NOW, (x) => {
         // The GOES sample's own time gates it: a feed gap is an old sample, not a flare now.
-        xrayFastRef.current = xrayFastFresh(x, Date.now())
-        xrayDrapRef.current = xrayFastRef.current != null && devXrayOverride() == null ? (x.drap ?? null) : null
-        processFlare(effectiveXray(xrayFastRef.current, null), xrayDrapRef.current)
+        const nowMs = Date.now()
+        xrayFastRef.current = xrayFastFresh(x, nowMs)
+        xrayLaneRef.current = x
+        processFlare(effectiveXray(xrayFastRef.current, null), flareToastGrid(x, nowMs))
       }),
     [],
   )

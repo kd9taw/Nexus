@@ -69,7 +69,7 @@ export function FlareChip({
       </div>
     )
   }
-  const phase = flarePhase(noaa?.event, trend, nowMs, xrayLong)
+  const phase = flarePhase(noaa?.event, trend, nowMs, xrayLong, noaa?.series)
   const phaseLine = phase.noaa
     ? phase.kind === 'ended'
       ? t('map.flare.noaa.ended', { end: hm(phase.endAt!), begin: hm(phase.beginAt!) })

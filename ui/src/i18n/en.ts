@@ -4246,16 +4246,16 @@ export const EN = {
   // HF, unlike a flare's minutes — the copy says what it means for operating, and the
   // forecast line is explicitly a forecast.
   // The flare heads-up toast. {{cls}} is the flare class ("M2.0"), {{r}} the NOAA R level digit,
-  // {{mhz}} and {{mins}} whole numbers (the D-RAP ceiling and NOAA's empirical fade estimate). The
-  // ceiling says where it comes from, as the map's flare chip does: NOAA's D-RAP grid while it is
-  // current, else estimated from the GOES X-ray flux.
-  'prop.flareAlert.now':
-    '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (estimated from GOES)',
+  // {{mhz}} and {{mins}} whole numbers (the D-RAP ceiling and how long until HF recovers). Each
+  // figure says where it comes from, as the map's flare chip does: the ceiling from NOAA's D-RAP
+  // grid while it is current, else estimated from the GOES X-ray flux; the fade from NOAA's own
+  // recovery time on that grid, else NOAA's rule of thumb from the X-ray level.
   'prop.flareAlert.fade':
-    '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (estimated from GOES) · fade ~{{mins}} min',
-  'prop.flareAlert.noaa.now': '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP)',
+    "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (estimated from GOES) · fade ~{{mins}} min (NOAA's rule of thumb from the X-ray level)",
   'prop.flareAlert.noaa.fade':
-    '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min',
+    "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min (NOAA's rule of thumb from the X-ray level)",
+  'prop.flareAlert.noaa.fadeOwn':
+    "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min (NOAA's own estimate)",
   'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} (Kp {{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
   'prop.stormAlert.forecast': '🧲 NOAA expects G{{g}} (Kp {{kp}}) from {{when}} — HF likely degraded then',
   'prop.openingAlert.thin':

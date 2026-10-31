@@ -589,8 +589,11 @@ mod tests {
         // A GOES outage that began during an M5: the UI has dropped the lane, so no grid.
         assert!(!wants_drap(5e-5, now - XRAY_FRESH_SECS, now));
         assert!(!wants_drap(5e-5, now - 3600, now));
+        // The window is the UI's ten minutes, written out so a changed constant cannot pass.
+        assert!(!wants_drap(5e-5, now - 11 * 60, now));
         // Control: the same flux, a sample just inside the window.
         assert!(wants_drap(5e-5, now - XRAY_FRESH_SECS + 1, now));
+        assert!(wants_drap(5e-5, now - 9 * 60, now));
     }
 
     const C: Cadence = Cadence {
