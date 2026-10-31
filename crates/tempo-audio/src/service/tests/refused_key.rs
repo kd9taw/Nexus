@@ -31,7 +31,7 @@ use super::*;
 
 /// What the rigctld answers to the key.
 #[derive(Clone, Copy, PartialEq)]
-enum Key {
+pub(super) enum Key {
     /// `RPRT 0`, always.
     Accepts,
     /// `RPRT -1`, always.
@@ -56,7 +56,7 @@ const LATE: Duration = Duration::from_millis(1_500);
 
 /// A rigctld answering the key as `key`, `f` with a 20 m dial and everything else `RPRT 0`,
 /// logging every line it was sent.
-fn rigctld(key: Key) -> (String, Arc<Mutex<Vec<String>>>) {
+pub(super) fn rigctld(key: Key) -> (String, Arc<Mutex<Vec<String>>>) {
     rigctld_on(key, 14_250_000)
 }
 
@@ -185,10 +185,10 @@ impl Scene {
 }
 
 /// The voice keyer's words for a refused key.
-const REFUSED: &str = "The rig didn't accept PTT — check your PTT method and CAT/port.";
+pub(super) const REFUSED: &str = "The rig didn't accept PTT — check your PTT method and CAT/port.";
 
 /// The words for a key the radio did not answer in time.
-const UNCONFIRMED: &str =
+pub(super) const UNCONFIRMED: &str =
     "The rig did not answer the PTT key in time — check the CAT link to the radio.";
 
 fn phone(e: &mut Engine) {
@@ -552,6 +552,42 @@ fn a_refused_remote_microphone_over_plays_nothing_and_ends() {
             assert!(!s.backend.played.is_empty(), "control: no voice");
             assert_eq!(banner, None);
         }
+    }
+}
+
+/// ⭐ A REMOTE MICROPHONE KEY WITH NO ANSWER IN TIME IS NOT CONFIRMED, NOT REFUSED. Its over goes
+/// out, as the voice keyer's does, and the line says the key was not confirmed; only a refusal
+/// says the rig did not accept PTT.
+#[test]
+fn a_remote_microphone_key_with_no_answer_in_time_reads_not_confirmed() {
+    for (key, words, kind) in [
+        (Key::AnswersLate, UNCONFIRMED, "pttUnconfirmed"),
+        (Key::Answers(-5), UNCONFIRMED, "pttUnconfirmed"),
+        (Key::Refuses, REFUSED, "ptt"),
+    ] {
+        let (addr, log) = rigctld(key);
+        let mut s = MicScene::new();
+        s.rig = Rig::rigctld(&addr);
+        s.hold.hold(MIC_PRESS, s.mono(0.0));
+        s.step(0.0);
+        let mut t = 20.0;
+        while t <= 1_000.0 {
+            s.tick(t, true);
+            t += 20.0;
+        }
+        let snapshot = s.engine.lock().unwrap().snapshot();
+        let keys = log.lock().unwrap().iter().filter(|l| *l == "T 1").count();
+        assert!(keys >= 1, "premise: the first frame tried the key");
+        assert_eq!(snapshot.radio.audio_error.as_deref(), Some(words));
+        assert_eq!(
+            serde_json::to_value(snapshot).unwrap()["radio"]["audioErrorKind"],
+            kind
+        );
+        assert_eq!(
+            !s.backend.played.is_empty(),
+            key != Key::Refuses,
+            "whether the voice went out ({words})"
+        );
     }
 }
 

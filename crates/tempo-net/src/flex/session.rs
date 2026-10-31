@@ -105,7 +105,8 @@ use std::time::{Duration, Instant};
 
 use super::admission::{self, Admitted, Facts, Refusal};
 use super::encode::{
-    self, ClientId, Command, Kind, Rendered, StartKind, Station, Target, TxAudio, TxStart, TxStop,
+    self, ClientId, Command, Kind, Rendered, StartKind, Station, Target, TxAudio, TxSlice, TxStart,
+    TxStop,
 };
 use super::handshake::{self, ConnectConfig, Registration, NOT_SUPPORTED};
 use super::keepalive::{Keepalive, Tick};
@@ -417,6 +418,8 @@ pub enum SendError {
         target: Target,
         owner: Owner,
     },
+    /// Its admission refused it ([`Session::move_tx`], [`Session::send_quiet`]).
+    NotAdmitted(Refusal),
 }
 
 /// What ending everything of ours did ([`Session::end_ours`]).
@@ -795,7 +798,7 @@ impl Session {
         match kind {
             // Admission refuses an audio-source change while anything is keyed, so it cannot
             // reach here; if it did, it is not a keying write.
-            Kind::Ordinary | Kind::TxAudio(_) => {}
+            Kind::Ordinary | Kind::TxAudio(_) | Kind::TxSlice(_) => {}
             // The readback checks the sequence number: a second start that is not its own fails.
             Kind::Start(k) if k == keyed.kind => {
                 let stamp = self.stamp();
@@ -859,6 +862,23 @@ impl Session {
         self.pending.insert(seq, Pending::Caller);
         self.write(out, seq, &rendered, now);
         Ok(seq)
+    }
+
+    /// [`Self::send`], only while nothing of ours is keyed and the interlock is idle: checked here,
+    /// on the session's own thread, where a start of ours is admitted, so no key of ours can come
+    /// between the check and the write. For a write aimed at the slice that transmits (a split
+    /// slice's tune or mode), which must never change under an over.
+    pub fn send_quiet(
+        &mut self,
+        out: &mut dyn Write,
+        command: &Command,
+        now: u64,
+    ) -> Result<u32, SendError> {
+        if self.keyed.is_some() {
+            return Err(SendError::NotAdmitted(Refusal::AlreadyKeyed));
+        }
+        admission::transmitter_idle(&self.model).map_err(SendError::NotAdmitted)?;
+        self.send(out, command, now)
     }
 
     // ── Transmit ─────────────────────────────────────────────────────────────────────────────
@@ -1071,6 +1091,17 @@ impl Session {
         let seq = self.take_seq();
         self.pending.insert(seq, Pending::TxAudio(audio));
         self.write(out, seq, &encode::render_tx_audio(admitted), now);
+        Ok(seq)
+    }
+
+    /// Move the transmit flag to a slice of ours, if its admission allows it (never while anything
+    /// is keyed or the interlock is not idle). Answered once written; the radio's reply follows as
+    /// an [`Event::Reply`].
+    pub fn move_tx(&mut self, out: &mut dyn Write, tx: TxSlice, now: u64) -> Result<u32, Refusal> {
+        let admitted = admission::admit_tx_slice(&self.model, &self.facts(), tx)?;
+        let seq = self.take_seq();
+        self.pending.insert(seq, Pending::Caller);
+        self.write(out, seq, &encode::render_tx_slice(admitted), now);
         Ok(seq)
     }
 
@@ -1733,10 +1764,12 @@ pub enum ConnError {
 
 enum Request {
     Send(Command, Sender<Result<Reply, ConnError>>),
+    SendQuiet(Command, Sender<Result<Reply, ConnError>>),
     Start(TxStart, Option<u64>, Sender<Result<u32, Refusal>>),
     Stop(TxStop, Sender<StopOutcome>),
     EndOurs(Sender<EndOutcome>),
     Route(TxAudio, Sender<Result<u32, Refusal>>),
+    MoveTx(TxSlice, Sender<Result<Reply, ConnError>>),
     Close,
 }
 
@@ -1882,6 +1915,20 @@ impl Connection {
         }
     }
 
+    /// [`Self::request`] through [`Session::send_quiet`]: refused, with nothing sent, while
+    /// anything of ours is keyed or the interlock is not idle.
+    pub fn request_quiet(&self, command: Command, timeout: Duration) -> Result<Reply, ConnError> {
+        let (tx, rx) = mpsc::channel();
+        self.requests
+            .send(Request::SendQuiet(command, tx))
+            .map_err(|_| ConnError::Closed)?;
+        match rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(ConnError::Timeout),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(ConnError::Closed),
+        }
+    }
+
     /// Start a transmission (admission decides). `Err(None)` when the session is gone.
     pub fn start(&self, start: TxStart) -> Result<u32, Option<Refusal>> {
         self.start_lasting(start, None)
@@ -1908,6 +1955,20 @@ impl Connection {
             .send(Request::Route(audio, tx))
             .map_err(|_| None)?;
         rx.recv().map_err(|_| None)?.map_err(Some)
+    }
+
+    /// Move the transmit flag (its admission decides) and wait for the radio's reply. A refusal by
+    /// admission is [`ConnError::Refused`] with [`SendError::NotAdmitted`]: nothing was sent.
+    pub fn move_tx(&self, tx: TxSlice, timeout: Duration) -> Result<Reply, ConnError> {
+        let (reply, rx) = mpsc::channel();
+        self.requests
+            .send(Request::MoveTx(tx, reply))
+            .map_err(|_| ConnError::Closed)?;
+        match rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(ConnError::Timeout),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(ConnError::Closed),
+        }
     }
 
     /// Whether an over of ours (`xmit 1`) is unconfirmed, on a session that has not closed, and
@@ -2046,6 +2107,14 @@ fn drive<S: Read + Write>(
                     }
                     Err(e) => answer(session, shared, reply, Err(ConnError::Refused(e))),
                 },
+                Ok(Request::SendQuiet(command, reply)) => {
+                    match session.send_quiet(&mut io, &command, now()) {
+                        Ok(seq) => {
+                            waiters.insert(seq, reply);
+                        }
+                        Err(e) => answer(session, shared, reply, Err(ConnError::Refused(e))),
+                    }
+                }
                 Ok(Request::Start(start, lasting_ms, reply)) => {
                     let started = session.start_lasting(&mut io, start, lasting_ms, now());
                     answer(session, shared, reply, started);
@@ -2062,6 +2131,17 @@ fn drive<S: Read + Write>(
                     let routed = session.route(&mut io, audio, now());
                     answer(session, shared, reply, routed);
                 }
+                Ok(Request::MoveTx(tx, reply)) => match session.move_tx(&mut io, tx, now()) {
+                    Ok(seq) => {
+                        waiters.insert(seq, reply);
+                    }
+                    Err(refusal) => answer(
+                        session,
+                        shared,
+                        reply,
+                        Err(ConnError::Refused(SendError::NotAdmitted(refusal))),
+                    ),
+                },
                 Ok(Request::Close) | Err(TryRecvError::Disconnected) => {
                     session.close(&mut io, now());
                     break;

@@ -3719,6 +3719,11 @@ export interface RadioProfilePatch {
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). Rides the patch like its
    * neighbours — a per-radio field missing here is blanked on Save. */
   aprsDataFm: boolean
+  /** Phone's PTT feeds this computer's microphone to the radio, from `pcMicDevice` at `pcMicGainDb`.
+   * Per radio, so it rides the patch like its neighbours. */
+  pcMic: boolean
+  pcMicDevice: string
+  pcMicGainDb: number
   audioIn: string
   audioOut: string
   txLevel: number

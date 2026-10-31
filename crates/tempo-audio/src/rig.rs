@@ -667,6 +667,23 @@ pub struct Rig {
     serial: Option<Box<dyn serialport::SerialPort>>,
     /// Last PTT state we commanded (also lets callers/tests observe keying).
     pub keyed: bool,
+    /// Split Operation (Rig) turned split on through this connection (or sent it and got no answer,
+    /// so the radio may have) and nobody has turned it off since: the next over writes only its TX
+    /// dial and mode, as WSJT-X holds split between overs. Set by [`Self::hold_split_on`], cleared
+    /// by the radio loop when it lets go of the split.
+    pub(crate) tx_split_held: bool,
+    /// Nexus let go of its Rig split through this connection and the radio did not take it (the
+    /// `S 0`, or the write putting the radio's own split back, refused or unanswered): the radio
+    /// may still transmit from VFO B on Nexus's last TX dial. While set no slot over keys
+    /// (`slot::apply_tx_dial_shift`), the radio loop sends the release again at quiet points, and
+    /// the radio's split is never read as the operator's own.
+    pub(crate) split_release_pending: bool,
+    /// The TX dial and TX mode the radio last confirmed (`RPRT 0`) for Nexus's held Rig split on this
+    /// connection, so an over whose split writes change nothing sends none of them. Forgotten by
+    /// anything that may have moved VFO B or the dial: a new or dropped connection
+    /// ([`Self::drop_connection`]), any dial, mode or control write, a raw write, a dial read that
+    /// differs, and every refused or late split write.
+    pub(crate) split_confirmed: Option<SplitConfirmed>,
     /// True when the CAT link is a NETWORK transport (rigctld → SmartSDR / remote radio), where a
     /// reply can legitimately take seconds. Serial rigs answer in milliseconds, so a serial link
     /// uses a much shorter per-command deadline — a stalled serial read then can't hold the radio
@@ -693,6 +710,23 @@ pub struct Rig {
     never_send: &'static [(HamlibVerb, &'static str)],
     #[cfg(test)]
     before_remote_write: Option<Box<dyn FnOnce() + Send>>,
+    /// A test's own reply deadline (ms) in place of the transport's 700 ms / 2.5 s, for a scene
+    /// whose commands must take seconds and still be answered inside it. PTT keeps its own.
+    #[cfg(test)]
+    pub(crate) test_reply_deadline_ms: Option<u64>,
+    /// A test's own total budget (ms) for the split writes before a key, in place of
+    /// `slot::SPLIT_WRITES_BUDGET_MS`, for a scene that delays the key through them on purpose.
+    #[cfg(test)]
+    pub(crate) test_split_budget_ms: Option<u64>,
+}
+
+/// What [`Rig::split_confirmed`] holds: the RX dial the radio was on when it confirmed, and the
+/// TX dial (`I`) and TX mode (`X`) it confirmed there; `None` for one not confirmed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SplitConfirmed {
+    pub rx_dial: u64,
+    pub tx_hz: Option<u64>,
+    pub tx_mode: Option<String>,
 }
 
 /// What a rigctld line asks: read or write a LEVEL, read or write a FUNC. The short and long
@@ -814,6 +848,9 @@ impl Rig {
             #[cfg(feature = "serial")]
             serial: None,
             keyed: false,
+            tx_split_held: false,
+            split_release_pending: false,
+            split_confirmed: None,
             slow_transport: false,
             network_chain: false,
             owed_replies: 0,
@@ -823,6 +860,10 @@ impl Rig {
             never_send: &[],
             #[cfg(test)]
             before_remote_write: None,
+            #[cfg(test)]
+            test_reply_deadline_ms: None,
+            #[cfg(test)]
+            test_split_budget_ms: None,
         }
     }
 
@@ -911,11 +952,34 @@ impl Rig {
                 s.set_read_timeout(Some(Duration::from_millis(500)))?;
                 s.set_write_timeout(Some(Duration::from_millis(500)))?;
                 self.stream = Some(s);
+                // A new connection may be to a radio (or a daemon) that holds nothing we confirmed.
+                self.split_confirmed = None;
             }
         }
         self.stream
             .as_mut()
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotConnected, "no rig stream"))
+    }
+    /// [`OWED_ANSWER_BOUND`] shortened for a test.
+    #[cfg(test)]
+    pub(crate) fn set_owed_bound_for_test(&mut self, bound: Duration) {
+        self.owed_bound = bound;
+    }
+    /// Drop the connection, as a failed command does: the next command opens a new one.
+    #[cfg(test)]
+    pub(crate) fn reconnect_for_test(&mut self) {
+        self.drop_connection();
+    }
+
+    /// ⛔ EVERY DROP OF THE CONNECTION GOES THROUGH HERE, so none can forget a piece of it. What
+    /// the connection owed goes with it, and so does what the radio confirmed through it
+    /// ([`Self::split_confirmed`]): the next connection may be to a radio (or a daemon) that holds
+    /// nothing that was confirmed, so the next held split over writes its TX dial and mode again.
+    fn drop_connection(&mut self) {
+        self.stream = None;
+        self.owed_replies = 0;
+        self.owed_since = None;
+        self.split_confirmed = None;
     }
 
     /// Send one command line and read its COMPLETE (newline-terminated) reply.
@@ -1070,9 +1134,7 @@ impl Rig {
                         self.keyed
                     ));
                 }
-                self.stream = None; // force a clean reconnect on the next call
-                self.owed_replies = 0;
-                self.owed_since = None;
+                self.drop_connection(); // force a clean reconnect on the next call
                 Err(e)
             }
         }
@@ -1103,9 +1165,16 @@ impl Rig {
                 while matches!(stream.read(&mut scratch), Ok(n) if n > 0) {}
             }
         }
-        self.stream = None;
-        self.owed_replies = 0;
-        self.owed_since = None;
+        self.drop_connection();
+    }
+
+    /// [`Self::split_confirmed`], taken for an over's split writes. A connection whose owed answers
+    /// are given up for lost ([`Self::give_up_a_stale_debt`]) is given up first, as the over's
+    /// first write would give it up: what it confirmed goes with it, so the over writes its TX dial
+    /// and mode on the new connection rather than skip them as already confirmed on the old one.
+    pub(crate) fn take_split_confirmed(&mut self) -> Option<SplitConfirmed> {
+        self.give_up_a_stale_debt();
+        self.split_confirmed.take()
     }
 
     /// A command's reply deadline (ms) when it names none: the long window on a slow transport.
@@ -1165,9 +1234,7 @@ impl Rig {
                 Err(e) if read_should_retry(e.kind()) => continue,
                 Err(e) => e,
             };
-            self.stream = None;
-            self.owed_replies = 0;
-            self.owed_since = None;
+            self.drop_connection();
             return Err(failed);
         }
         Ok(())
@@ -1189,6 +1256,8 @@ impl Rig {
         }
         // Read the transport class before the mutable stream borrow below (they'd otherwise alias).
         let fallback_deadline_ms = self.transport_deadline_ms();
+        #[cfg(test)]
+        let deadline_override = deadline_override.or(self.test_reply_deadline_ms);
         #[cfg(test)]
         let before_write = if permission.is_some() {
             self.before_remote_write.take()
@@ -1341,7 +1410,7 @@ impl Rig {
         // NOT KEYED. So take the `Ok` path's reply and the `Err` path's cleanup — one reconnect,
         // on a reply that was already anomalous. See
         // `a_straggler_past_the_tail_window_never_answers_the_next_command`.
-        self.stream = None;
+        self.drop_connection();
         Ok(partial)
     }
 
@@ -1358,7 +1427,7 @@ impl Rig {
         match self.command_multiline_inner(line) {
             Ok(reply) => Ok(reply),
             Err(e) => {
-                self.stream = None; // force a clean reconnect on the next call
+                self.drop_connection(); // force a clean reconnect on the next call
                 Err(e)
             }
         }
@@ -1408,7 +1477,7 @@ impl Rig {
         // socket and becomes the next command's answer — the desync `command`'s header calls a
         // TX-safety invariant. Keep what we parsed, drop the connection.
         if still_talking {
-            self.stream = None;
+            self.drop_connection();
         }
         Ok(String::from_utf8_lossy(&out).to_string())
     }
@@ -1603,6 +1672,7 @@ impl Rig {
                 Ok(())
             };
         }
+        self.split_confirmed = None;
         let reply = self.command_permitted(&freq_line(hz), None, permission)?;
         if reply_ok(&reply) || (permission.is_none() && reply.is_empty()) {
             Ok(())
@@ -1693,6 +1763,7 @@ impl Rig {
                 Ok(())
             };
         }
+        self.split_confirmed = None;
         let reply = self.command_permitted(&mode_line(mode, passband_hz), None, permission)?;
         if reply_ok(&reply) || (permission.is_none() && reply.is_empty()) {
             Ok(())
@@ -1873,20 +1944,26 @@ impl Rig {
             return Err(std::io::Error::other("not a CAT rig"));
         }
         let reply = self.command("f\n")?;
-        reply
-            .lines()
-            .find_map(hz_in_line)
-            .filter(|hz| *hz > 0)
-            .ok_or_else(|| match rprt_code(&reply) {
-                Some(code) if rprt_is_link_fault(code) => std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    format!("the rig did not answer the frequency read (Hamlib RPRT {code})"),
-                ),
-                _ => std::io::Error::other(format!(
-                    "rig did not return a frequency (reply {reply:?}) — check the serial port, \
+        let hz = reply.lines().find_map(hz_in_line).filter(|hz| *hz > 0);
+        // A dial somewhere else than where the split writes were confirmed (the operator's knob, a
+        // band change at the radio): what VFO B holds is no longer known.
+        if hz.is_none_or(|hz| {
+            self.split_confirmed
+                .as_ref()
+                .is_some_and(|c| c.rx_dial != hz)
+        }) {
+            self.split_confirmed = None;
+        }
+        hz.ok_or_else(|| match rprt_code(&reply) {
+            Some(code) if rprt_is_link_fault(code) => std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("the rig did not answer the frequency read (Hamlib RPRT {code})"),
+            ),
+            _ => std::io::Error::other(format!(
+                "rig did not return a frequency (reply {reply:?}) — check the serial port, \
                      baud rate, and that CAT/CI-V is enabled on the rig"
-                )),
-            })
+            )),
+        })
     }
 
     /// Read the rig's current mode (e.g. "USB"/"CW"). `None` if not a CAT rig or the
@@ -1959,6 +2036,7 @@ impl Rig {
         if self.control.is_none() {
             return false;
         }
+        self.split_confirmed = None;
         self.command_lines(
             &format!("W {raw} 0\n"),
             Some(PTT_DEADLINE_MS),
@@ -2001,6 +2079,51 @@ impl Rig {
     /// Set split on/off and which VFO transmits (DX pileups). `tx_vfo` e.g. "VFOB".
     pub fn set_split(&mut self, on: bool, tx_vfo: &str) -> std::io::Result<()> {
         self.cat(&split_line(on, tx_vfo))
+    }
+    /// Split on for Split Operation's over, through [`Self::set_split`], noting in
+    /// [`Self::tx_split_held`] that the radio has Nexus's split. An answer that is not `RPRT 0` is an
+    /// `Err` as there, but only a refusal the radio gave (an `RPRT` code that is not a link fault)
+    /// or a line never sent leaves the split not held. No answer by the deadline, an empty or
+    /// unreadable reply, or Hamlib's "the rig did not answer" may have been taken late, so it is
+    /// held, and its release is owed as for a split taken.
+    pub(crate) fn hold_split_on(&mut self, tx_vfo: &str) -> std::io::Result<()> {
+        if self.control.is_none() {
+            self.tx_split_held = true;
+            return Ok(());
+        }
+        let line = split_line(true, tx_vfo);
+        self.split_confirmed = None;
+        let (sent, refused) = match self.command(&line) {
+            Ok(reply) => (
+                Self::cat_reply(&line, &reply),
+                rprt_code(&reply).is_some_and(|code| !rprt_is_link_fault(code)),
+            ),
+            Err(e) => {
+                let never_sent = e.kind() == std::io::ErrorKind::Unsupported;
+                (Err(e), never_sent)
+            }
+        };
+        if sent.is_ok() || !refused {
+            self.tx_split_held = true;
+        }
+        sent
+    }
+    /// [`Self::set_split`], with `Ok(false)` where the link says split cannot be controlled at all
+    /// (`RPRT -11`, Hamlib's `RIG_ENAVAIL`, or `RPRT -4`, `RIG_ENIMPL`) rather than an error. Any
+    /// other answer that is not `RPRT 0`, or none by the deadline, is an `Err`. WSJT-X takes those two
+    /// as done when it leaves split (`Transceiver/HamlibTransceiver.cpp:1022-1033`), so fake split
+    /// and no split keep working on a rig that has no split.
+    pub fn set_split_where_available(&mut self, on: bool, tx_vfo: &str) -> std::io::Result<bool> {
+        if self.control.is_none() {
+            return Ok(true);
+        }
+        let line = split_line(on, tx_vfo);
+        self.split_confirmed = None;
+        let reply = self.command(&line)?;
+        if matches!(rprt_code(&reply), Some(-11 | -4)) {
+            return Ok(false);
+        }
+        Self::cat_reply(&line, &reply).map(|()| true)
     }
     /// Set the split (TX) frequency in Hz.
     pub fn set_split_freq(&mut self, hz: u64) -> std::io::Result<()> {
@@ -2048,6 +2171,25 @@ impl Rig {
             return Ok(());
         }
         self.cat(&split_mode_line(mode, passband_hz))
+    }
+    /// [`Self::set_split_mode`], with `Ok(false)` where the link says it cannot set the TX VFO's
+    /// mode at all (`RPRT -11`, Hamlib's `RIG_ENAVAIL`: Nexus's own TCI client answers `X` so) rather
+    /// than an error. Any other answer that is not `RPRT 0`, or none by the deadline, is an `Err`.
+    pub fn set_split_mode_where_available(
+        &mut self,
+        mode: &str,
+        passband_hz: i32,
+    ) -> std::io::Result<bool> {
+        if mode.trim().is_empty() || self.control.is_none() {
+            return self.set_split_mode(mode, passband_hz).map(|()| true);
+        }
+        let line = split_mode_line(mode, passband_hz);
+        self.split_confirmed = None;
+        let reply = self.command(&line)?;
+        if rprt_code(&reply) == Some(-11) {
+            return Ok(false);
+        }
+        Self::cat_reply(&line, &reply).map(|()| true)
     }
     /// Select the active VFO (e.g. "VFOA"/"VFOB").
     pub fn set_vfo(&mut self, vfo: &str) -> std::io::Result<()> {
@@ -2271,6 +2413,7 @@ impl Rig {
         if self.control.is_none() {
             return Ok(());
         }
+        self.split_confirmed = None;
         let reply = self.command(line)?;
         Self::cat_reply(line, &reply)
     }
@@ -3589,6 +3732,39 @@ mod tests {
             log.iter().any(|(conn, _)| *conn > 0),
             "premise: a give-up happened: {log:?}"
         );
+    }
+
+    /// Letting go of Nexus's split (`S 0`) behind an owed key is not a key line: it reads the key's
+    /// answer first, within its own deadline, and goes out after it on the key's connection, or,
+    /// still owed then, is not sent at all and fails as no answer in time (the release is then owed
+    /// and retried). It is never written ahead of the key, and never on a new connection.
+    #[test]
+    fn a_split_release_behind_an_owed_key_goes_out_after_it_or_not_at_all() {
+        for (late_ms, sent) in [(1_200, true), (3_000, false)] {
+            let (addr, log) = mock_rigctld_paced(move |line| {
+                Some(match line {
+                    "T 1" => (Duration::from_millis(late_ms), "RPRT 0\n".to_string()),
+                    _ => (Duration::ZERO, "RPRT 0\n".to_string()),
+                })
+            });
+            let mut rig = Rig::rigctld(&addr);
+            assert!(rig.ptt(true).is_err(), "premise: the key's answer is late");
+            let release = rig.set_split_where_available(false, "VFOA");
+            if sent {
+                assert_eq!(release.map_err(|e| e.to_string()), Ok(true), "{late_ms} ms");
+                assert_eq!(
+                    wait_for_lines(&log, 2),
+                    vec![(0, "T 1".to_string()), (0, "S 0 VFOA".to_string())]
+                );
+            } else {
+                assert!(
+                    release.as_ref().is_err_and(no_answer_in_time),
+                    "{late_ms} ms: {release:?}"
+                );
+                std::thread::sleep(Duration::from_millis(late_ms - 1_500));
+                assert_eq!(log.lock().unwrap().clone(), vec![(0, "T 1".to_string())]);
+            }
+        }
     }
 
     /// A release behind an owed key is judged on its OWN answer: the key's late `RPRT 0` is set

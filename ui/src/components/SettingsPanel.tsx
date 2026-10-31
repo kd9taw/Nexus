@@ -940,6 +940,9 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // the patch blanks on the profile it touches.
     sstvHoldDataSubmode: s.sstvHoldDataSubmode ?? false,
     aprsDataFm: s.aprsDataFm ?? false,
+    pcMic: s.pcMic ?? false,
+    pcMicDevice: s.pcMicDevice ?? '',
+    pcMicGainDb: s.pcMicGainDb ?? 0,
     audioIn: s.audioIn ?? '',
     audioOut: s.audioOut ?? '',
     txLevel: s.txLevel ?? 1,
@@ -4197,6 +4200,10 @@ export function SettingsPanel({
   const voiceMicOptions = form.voiceMicDevice && !audio.input.includes(form.voiceMicDevice)
     ? [form.voiceMicDevice, ...audio.input]
     : audio.input
+  // The computer microphone's picker: the same INPUT list, keeping a saved choice visible.
+  const pcMicOptions = form.pcMicDevice && !audio.input.includes(form.pcMicDevice)
+    ? [form.pcMicDevice, ...audio.input]
+    : audio.input
 
   // What one option READS. An enumerated device shows its human label; a stored value that is
   // not one of the entries we offer says so — a saved routing can go stale (rig off, USB port
@@ -7415,6 +7422,70 @@ export function SettingsPanel({
                   {editingOtherRadio ? otherRadioLevelHint : t('settings.audio.rxGain.hint')}
                 </span>
               </label>
+            </div>
+            {/* The computer's microphone for Phone: per radio, off by default. With it on, Phone's
+                PTT sends this computer's microphone to the radio by its transmit audio route
+                (crates/tempo-app/src/engine/pc_mic.rs); off, PTT keys the radio's own microphone. */}
+            <div className="settings-featgroup">
+              <span className="settings-featgroup-title">{t('settings.audio.pcMic.title')}</span>
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.audio.pcMic.label')}</span>
+                <button disabled={locked('pcMic')} data-setting="pcMic"
+                  type="button"
+                  role="switch"
+                  aria-checked={form.pcMic ?? false}
+                  className={`toggle${form.pcMic ? ' on' : ''}`}
+                  onClick={() => updateBool('pcMic', !form.pcMic)}
+                  aria-label={t('settings.audio.pcMic.label')}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                {setAtStation('pcMic')}
+                <span className="settings-hint">{t('settings.audio.pcMic.hint')}</span>
+              </div>
+              {/* From a computer driving the station all three are the station's, shown read-only
+                  whatever the switch says. */}
+              {(form.pcMic || stationOnly('pcMic')) && (
+                <>
+                  <label className="settings-field">
+                    <span className="settings-label">{t('settings.audio.pcMic.device.label')}</span>
+                    <select disabled={locked('pcMicDevice')} data-setting="pcMicDevice"
+                      className="settings-input"
+                      value={form.pcMicDevice ?? ''}
+                      onChange={(e) => update('pcMicDevice', e.target.value)}
+                    >
+                      <option value="">{t('settings.audio.pcMic.device.none')}</option>
+                      {pcMicOptions.map((d) => (
+                        <option key={d} value={d}>
+                          {audioLabel(d, 'input')}
+                        </option>
+                      ))}
+                    </select>
+                    {setAtStation('pcMicDevice')}
+                    <span className="settings-hint">{t('settings.audio.pcMic.device.hint')}</span>
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-label">
+                      {t('settings.audio.pcMic.gain.label')}{' '}
+                      <span className="settings-value">
+                        {t('settings.audio.pcMic.gain.value', { db: Math.round(form.pcMicGainDb ?? 0) })}
+                      </span>
+                    </span>
+                    <input disabled={locked('pcMicGainDb')} data-setting="pcMicGainDb"
+                      className="settings-slider"
+                      type="range"
+                      min="-20"
+                      max="20"
+                      step="1"
+                      value={String(Math.round(form.pcMicGainDb ?? 0))}
+                      onChange={(e) => updateNum('pcMicGainDb', Number(e.target.value))}
+                      aria-label={t('settings.audio.pcMic.gain.label')}
+                    />
+                    {setAtStation('pcMicGainDb')}
+                    <span className="settings-hint">{t('settings.audio.pcMic.gain.hint')}</span>
+                  </label>
+                </>
+              )}
             </div>
           </fieldset>
 

@@ -696,6 +696,7 @@ const MIGRATED = [
   'features/slotOverDropped.ts',
   // …and of a PTT press the station kept off the air for the radio's DAX — migrated from birth.
   'features/pttRefused.ts',
+  'features/pcMic.ts',
   // …and of a voice-keyer message the station dropped before the radio took DAX — migrated from
   // birth.
   'features/voiceDropped.ts',

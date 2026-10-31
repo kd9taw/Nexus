@@ -28,7 +28,7 @@ use tempo_app::engine::{
     SatCatBackend, StreamedDecode,
 };
 use tempo_app::keyboard;
-use tempo_app::mic::{MicTick, MIC, TCI_OVER};
+use tempo_app::mic::{MicTick, MIC, PC_MIC, TCI_OVER};
 use tempo_app::remote_monitor::provenance::{Connection as RemoteConnection, Read as RemoteRead};
 use tempo_core::tempo_fast;
 use tempo_core::timing::{now_unix_ms, SlotClock};
@@ -988,6 +988,8 @@ const TX_HOLD_RETELL_MS: f64 = 100.0;
 /// How often to run the FULL rig read-back over CAT — RF power, S-meter, mode mirror, DSP funcs.
 /// Each is a blocking TCP round-trip, so the heavy set is throttled well below the loop rate.
 const RIG_POLL_MS: f64 = 750.0;
+/// How long an owed split release the radio did not take waits before it is sent again (ms).
+const RIG_SPLIT_RELEASE_RETRY_MS: f64 = 2_000.0;
 
 /// How long after a tune-up the radio took to read its tuner state again (#344). Not at once: while
 /// it tunes a Yaesu answers `AC002` and Hamlib reads that as "off" (`u TUNER` → `0`, captured from
@@ -2294,8 +2296,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         // the process exits. Without this, quitting while keyed (a TX slot or a
         // tune carrier) leaves the radio transmitting until its own timeout.
         if SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed) {
-            backend.flush_output();
-            let _ = rig.ptt(false);
+            state.stop_for_shutdown(&engine, &mut backend, &mut rig);
             // Drop any in-flight SSTV image feed too (the flush_output above already
             // dumped its queued audio and ptt(false) unkeyed the carrier — this is
             // symmetry with the CW/RTTY cuts below).
@@ -3164,6 +3165,9 @@ fn handoff_if_switched(
             // too, so neither can show the outgoing radio's strength.
             e.clear_rig_smeter();
         }
+        // The outgoing radio lets go of a Rig split Nexus held on it (it is not keyed: above).
+        let cluster_active = engine_lock(engine).cluster_split_active();
+        state.let_go_of_rig_split(rig, cluster_active);
         p.push(state.install_handoff_connection(rig, conn, &want_active, *last_active));
         // The incoming radio's port is the loop's now and the outgoing radio's connection is the
         // pool's: the claims follow them, under the same pool lock.
@@ -4025,6 +4029,12 @@ struct RadioLoop {
     /// When that over's audio already queued runs out (loop ms): its look-ahead's measure, as
     /// `mic_busy_until` is the microphone's.
     program_over_busy_until: f64,
+    /// The computer's microphone over (`tempo_app::engine::pc_mic`) has keyed PTT through this loop.
+    pc_mic_keyed: bool,
+    /// When that over's audio already queued runs out (loop ms).
+    pc_mic_busy_until: f64,
+    /// The microphone device this loop holds open for it, and the over it was opened for.
+    pc_mic_open: Option<(String, u64)>,
     /// The transmit route's generation, the microphone's G7: it moves whenever the route transmit
     /// audio leaves by is replaced (the sound card released or reopened, the Flex DAX tee
     /// installed or removed), so an over cannot carry on across the change.
@@ -4279,9 +4289,14 @@ struct RadioLoop {
     fake_it_restore_at: Option<f64>,
     /// Write-backs the radio has not taken, against [`DIAL_SET_MAX_TRIES`].
     fake_it_restore_tries: u32,
-    /// An audio Rig-mode split engaged VFO B for an over — tear the rig split
-    /// down once no over is pending (unless the cluster split owns VFO B).
+    /// Split Operation (Rig) engaged VFO B for an over and Nexus holds it between overs, as WSJT-X
+    /// does, until `rig_split_hold_ends` (then `let_go_of_rig_split`).
     audio_rig_split: bool,
+    /// The RX dial (Hz) when Rig split was turned on: a band change lets go of it.
+    rig_split_dial: u64,
+    /// When an owed split release ([`Rig::split_release_pending`]) may be sent again (loop ms);
+    /// `None` until the first quiet tick after it was refused.
+    rig_split_release_at: Option<f64>,
     /// The rig's OWN split state, observed while Nexus was not holding split, as
     /// `(split_on, tx_vfo, tx_freq_hz)` — what the teardown RESTORES.
     ///
@@ -4764,6 +4779,9 @@ impl RadioLoop {
             mic_keyed: false,
             mic_busy_until: 0.0,
             program_over_keyed: false,
+            pc_mic_keyed: false,
+            pc_mic_busy_until: 0.0,
+            pc_mic_open: None,
             program_over_busy_until: 0.0,
             tx_route_gen: 0,
             mono_origin: None,
@@ -4818,6 +4836,8 @@ impl RadioLoop {
             fake_it_restore_at: None,
             fake_it_restore_tries: 0,
             audio_rig_split: false,
+            rig_split_dial: 0,
+            rig_split_release_at: None,
             rig_split_restore: None,
             split_detect: None,
             rfpower_floor: None,
@@ -6085,7 +6105,9 @@ impl RadioLoop {
     ///
     /// - nothing keyed or held: no over, tune, manual PTT, microphone over, TCI program's over or
     ///   rig PTT, and no immediate over, armed microphone over or armed program's over waiting for
-    ///   its key;
+    ///   its key. The one armed over that is no bar is the computer microphone's on the Flex
+    ///   client's DAX hold, not yet keyed ([`Engine::pc_mic_dax_hold`]): it is what the write is
+    ///   for, and it keys only once the radio reports the DAX the write asked for;
     /// - with slot transmission armed (the Digital section, TX enabled): the current slot's TX
     ///   decision has been made (`boundary_keyed` names this slot, so neither the boundary nor the
     ///   deferred decode path can still key in it), and the nearest boundary, either side, is
@@ -6098,9 +6120,11 @@ impl RadioLoop {
             || self.manual_ptt_applied
             || self.mic_keyed
             || self.program_over_keyed
+            || self.pc_mic_keyed
             || eng.peek_immediate_tx()
             || eng.mic_armed()
             || eng.tci_over_armed()
+            || (eng.pc_mic_armed() && (eng.pc_mic_keyed() || eng.pc_mic_dax_hold().is_none()))
         {
             return false;
         }
@@ -6136,7 +6160,9 @@ impl RadioLoop {
             }
             (
                 eng.remote_presence_live(self.mono_now(now_end)),
-                eng.voice_waits_for_dax().is_some(),
+                // The voice keyer's switch to DAX around a message, and the computer microphone's
+                // hold for as long as PTT is held: the same switch, the mic back after either.
+                eng.voice_waits_for_dax().is_some() || eng.pc_mic_dax_hold().is_some(),
             )
         };
         let Some(d) = self.rigctld_proc.as_ref().and_then(CatDaemon::flex) else {
@@ -6144,6 +6170,14 @@ impl RadioLoop {
         };
         if let Some(done) = d.sync_tx_routing(browser_voice, voice_keyer) {
             crate::civ::diag::note(&format!("Flex client: {done}"));
+            // A write of the mic has the radio "having the mic" from now, before it reports it: the
+            // engine is told at once, so a press before the next tick takes the switch to DAX around
+            // it rather than going the plain way on the DAX the radio still reports.
+            let radio_has_mic = d.radio_has_mic();
+            if self.flex_radio_has_mic_pushed != Some(radio_has_mic) {
+                self.flex_radio_has_mic_pushed = Some(radio_has_mic);
+                engine_lock(engine).observe_flex_radio_has_mic(radio_has_mic);
+            }
         }
     }
 
@@ -6340,6 +6374,7 @@ impl RadioLoop {
             || self.tuning_keyed
             || self.mic_keyed
             || self.program_over_keyed
+            || self.pc_mic_keyed
             || rig.keyed
             || flex.is_some_and(crate::flex::FlexDaemon::keyed_by_another);
         if keyed_first {
@@ -6791,6 +6826,170 @@ impl RadioLoop {
             Some(origin) => origin + Duration::from_secs_f64(now.max(0.0) / 1000.0),
             None => Instant::now(),
         }
+    }
+
+    /// Whether a Rig split held between overs must be let go now: Split Operation is no longer
+    /// Rig, a cluster SPLIT-on-Work owns VFO B, TX is off, the band has changed since split was
+    /// turned on, or the station left the digital screens (a phone or CW transmission must never
+    /// go out of VFO B on the last FT TX dial). WSJT-X holds split between overs
+    /// (`Transceiver/TransceiverBase.cpp:160-171`, `widgets/mainwindow.cpp:12378-12387`); these are
+    /// the points where Nexus lets go of it. The radio changing and Nexus stopping let go where
+    /// they happen.
+    fn rig_split_hold_ends(&self, eng: &Engine) -> bool {
+        use tempo_app::settings::{OperatingMode, SplitMode};
+        let s = eng.settings();
+        s.split_mode != SplitMode::Rig
+            || eng.cluster_split_active()
+            || !eng.tx_enabled()
+            || s.operating_mode != OperatingMode::Digital
+            || !same_named_band(self.rig_split_dial, s.dial_hz())
+    }
+
+    /// Note that an over engaged Rig split, on `dial`: the band it was turned on for.
+    fn hold_rig_split(&mut self, dial: u64) {
+        if !self.audio_rig_split {
+            self.rig_split_dial = dial;
+        }
+        self.audio_rig_split = true;
+    }
+
+    /// Let go of the Rig split Nexus holds: put back the radio's own split if one was read before
+    /// Nexus turned it on, else turn split off. The cluster SPLIT-on-Work owns VFO B when active
+    /// (`cluster_active`): then nothing is written.
+    ///
+    /// ⛔ A RELEASE THE RADIO DOES NOT TAKE IS STILL OWED ([`Rig::split_release_pending`]). The
+    /// answer used to be ignored, so a refused or unanswered `S 0` left the radio in Nexus's split,
+    /// and the receive-time split read then took that for the operator's own split and put it
+    /// back at the next teardown. Now the radio loop sends the release again at quiet points
+    /// ([`Self::retry_rig_split_release`]), no slot over keys meanwhile, and the split read is not
+    /// taken while it is owed.
+    fn let_go_of_rig_split(&mut self, rig: &mut Rig, cluster_active: bool) {
+        if !self.audio_rig_split {
+            return;
+        }
+        self.audio_rig_split = false;
+        // Owed only if the radio took Nexus's `S 1`, or may have (no answer): a split it never
+        // turned on is nothing to let go of, and a radio with no split control at all would
+        // otherwise owe it for ever.
+        let took_split = std::mem::replace(&mut rig.tx_split_held, false);
+        if cluster_active {
+            return;
+        }
+        match self.send_rig_split_release(rig) {
+            Err(e) if took_split => {
+                rig.split_release_pending = true;
+                self.rig_split_release_at = None; // the retry's wait starts at the next quiet tick
+                tempo_core::applog::info(
+                    "tx",
+                    &format!(
+                        "Split Operation: the radio did not take the split release ({e}); retrying"
+                    ),
+                );
+            }
+            Err(_) | Ok(()) => {}
+        }
+    }
+
+    /// The release itself.
+    ///
+    /// ⚠️ RESTORE WHAT WAS THERE, don't write an absolute OFF (2026-08-17 Flex audit, wave-2 #22).
+    /// This wrote `S 0 VFOA` unconditionally, so an over ended by cancelling a split Nexus never
+    /// engaged — the operator's own front-panel split, or on a multi-client Flex the split a second
+    /// client set. And `apply_tx_dial_shift` had already overwritten the TX VFO's FREQUENCY with no
+    /// snapshot, so the flag was only half of it. Restoring both mirrors the slice-DAX-binding
+    /// restore the native lane got in the same audit: leave the radio as we found it.
+    ///
+    /// No snapshot (the rig never answered `s`) → the absolute OFF, which is the conservative
+    /// answer when there is nothing to put back: our own split must not be left latched for a
+    /// later transmission to go out on.
+    fn send_rig_split_release(&self, rig: &mut Rig) -> std::io::Result<()> {
+        match self.rig_split_restore.clone() {
+            Some((true, vfo, tx_hz)) => {
+                rig.set_split(true, &vfo)?;
+                if let Some(hz) = tx_hz {
+                    rig.set_split_freq(hz)?;
+                }
+                Ok(())
+            }
+            // A link that cannot control split at all (`RPRT -11` / `-4`) has nothing to release.
+            Some((false, _, _)) | None => rig.set_split_where_available(false, "VFOA").map(|_| ()),
+        }
+    }
+
+    /// Whether an owed split release ([`Self::let_go_of_rig_split`]) is due to be sent again: at a
+    /// quiet point only (the caller asks with no over, tune or PTT of the loop's on the air), never
+    /// while the radio may be keyed, and [`RIG_SPLIT_RELEASE_RETRY_MS`] after the try before, so a
+    /// radio that has stopped answering does not hold up every tick for a CAT deadline.
+    ///
+    /// Never on a rig with no control channel (Test CAT's hold puts one in while it has the port):
+    /// a release "taken" there reached no radio, and the release stays owed for the link after it.
+    fn rig_split_release_due(&mut self, rig: &Rig, now: f64) -> bool {
+        if !rig.split_release_pending || rig.keyed || !rig.has_control() {
+            return false;
+        }
+        match self.rig_split_release_at {
+            None => {
+                self.rig_split_release_at = Some(now + RIG_SPLIT_RELEASE_RETRY_MS);
+                false
+            }
+            Some(at) => now >= at,
+        }
+    }
+
+    /// Send a due owed split release again ([`Self::rig_split_release_due`]). One the radio does
+    /// not take is done all the same when a read of the radio's split says it is off
+    /// ([`Self::radio_reads_split_off`]): that is the radio's own word on what the release was for,
+    /// and it frees a radio that ignores the split write but answers the read.
+    fn retry_rig_split_release(&mut self, rig: &mut Rig, now: f64) {
+        let done = match self.send_rig_split_release(rig) {
+            Ok(()) => Some("the radio took the split release"),
+            Err(_) if self.radio_reads_split_off(rig) => {
+                Some("the radio did not take the split release, but reads its split as off")
+            }
+            Err(_) => None,
+        };
+        match done {
+            Some(how) => {
+                rig.split_release_pending = false;
+                self.rig_split_release_at = None;
+                tempo_core::applog::info("tx", &format!("Split Operation: {how}"));
+            }
+            None => self.rig_split_release_at = Some(now + RIG_SPLIT_RELEASE_RETRY_MS),
+        }
+    }
+
+    /// Whether the radio itself says its split is off: a definite "off" from a rig whose split can
+    /// be read natively ([`crate::baud_ladder::SplitDetect::Native`]), never a missing or
+    /// unreadable answer.
+    ///
+    /// ⛔ ONLY A NATIVE READ. A backend that emulates the read moves the radio to answer it, and a
+    /// cache-stub one answers from Hamlib's own memory of split writes, which says "off" for a
+    /// radio that never confirmed the `S 1` it may have taken. A capability Nexus could not ask
+    /// is not cached, so a link that comes back is asked again.
+    fn radio_reads_split_off(&mut self, rig: &mut Rig) -> bool {
+        use crate::baud_ladder::SplitDetect;
+        let detect = match self.split_detect {
+            Some(detect) => detect,
+            None => match rig.read_split_capability() {
+                Some(detect) => *self.split_detect.insert(detect),
+                None => SplitDetect::Absent,
+            },
+        };
+        detect == SplitDetect::Native && matches!(rig.read_split(), Some((false, _)))
+    }
+
+    /// Nexus stopping: flush the queued audio, unkey through the still-alive rig, then let go of a
+    /// Rig split held between overs, after the unkey (WSJT-X's `TransceiverBase::shutdown` order).
+    fn stop_for_shutdown<B: AudioBackend>(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        backend: &mut B,
+        rig: &mut Rig,
+    ) {
+        backend.flush_output();
+        let _ = rig.ptt(false);
+        let cluster_active = engine_lock(engine).cluster_split_active();
+        self.let_go_of_rig_split(rig, cluster_active);
     }
 
     /// Unkey before the loop lets go of `rig`: flush the queued audio, key up through the
@@ -7338,6 +7537,7 @@ impl RadioLoop {
         self.tuner_reprobe_at = None;
         self.atu_tune_started_at = None;
         self.vfo_read_native = None; // the new rig answers `v` or not on its own account
+        self.split_detect = None; // …and its split read is native or not on its own account
         self.level_supported = [None; N_LEVELS];
         self.level_misses = [0; N_LEVELS];
         self.tx_meter_supported = [None; N_TX_METERS];
@@ -7551,6 +7751,7 @@ impl RadioLoop {
             || self.manual_ptt_applied
             || self.mic_keyed
             || self.program_over_keyed
+            || self.pc_mic_keyed
             || self.tci_keyed();
         if let Some(rx) = self.tci_rx.as_mut() {
             if transmitting {
@@ -7982,11 +8183,18 @@ impl RadioLoop {
                         eng.halt_tx_for_context_change("CAT probe hold");
                         eng.remote_close_radio();
                     }
+                    // …and let go of a Rig split held on it, through the still-alive link, as a
+                    // rebuild does. A release the radio does not take stays owed across the hold:
+                    // the Vox rig cannot send it, and the link rebuilt after the probe owes it.
+                    let cluster_active = engine_lock(engine).cluster_split_active();
+                    self.let_go_of_rig_split(rig, cluster_active);
+                    let release_owed = rig.split_release_pending;
                     let radio = self.remote_radio_id.unwrap_or(remote_want_radio);
                     raise_client_alarm(self.rigctld_proc.as_ref(), radio, engine);
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
                     self.let_go_of_flex_monitor();
                     *rig = Rig::vox();
+                    rig.split_release_pending = release_owed;
                     self.rig_asserted = false;
                     self.cat_hold_active = true;
                     let mut eng = engine_lock(engine);
@@ -8039,7 +8247,18 @@ impl RadioLoop {
                         "rig_differs: transport changed → teardown+rebuild daemon (unkey first)",
                         "CAT daemon rebuild",
                     );
+                    // …and let go of a Rig split held on it, through the still-alive old link.
+                    let cluster_active = engine_lock(engine).cluster_split_active();
+                    self.let_go_of_rig_split(rig, cluster_active);
                 }
+                // ⛔ A RELEASE STILL OWED GOES WITH THE RADIO, NOT THE LINK. A rebuild to the same
+                // radio model (a port, baud or daemon change, a dead daemon) is the same radio, which
+                // may still be in Nexus's split: the new link owes the release and keys nothing until
+                // the radio takes it. Another model is another radio, with nothing of Nexus's on it.
+                // Rig Model None is another model too: the operator disconnecting the radio, an act
+                // that confirms its SPLIT is off, so the radio chosen again after it owes nothing.
+                let release_owed =
+                    rig.split_release_pending && want.rig_model == self.applied.rig_model;
                 // Whether `reopen_rig` may auto-coexist onto a rigctld ALREADY listening on the new
                 // port (see `allow_coexist_on_swap`). We must NOT coexist onto our OWN daemon that
                 // we're about to kill — its corpse would keep commanding the OLD radio (the dual-radio
@@ -8106,6 +8325,10 @@ impl RadioLoop {
                 // it when it succeeds; when it fails, the self-heal keeps retrying — restoring the
                 // 1.10.1 self-recovery a 1.10.2 rebuild destroyed. #stuck-tx-1.10.2.
                 rig.keyed = was_keyed;
+                rig.split_release_pending = release_owed;
+                // A new link asks again whether the radio's split read is native: the last radio's
+                // answer would let a cache stub's "off" free a release owed on this one.
+                self.split_detect = None;
                 self.rigctld_proc = proc;
                 // Do NOT claim last_dial/last_mode here: open_cat's set_freq/set_mode are best-effort
                 // (`let _ =`), so a failed open-time tune must be retried. Leaving these at the OLD
@@ -8544,8 +8767,15 @@ impl RadioLoop {
             // and are NOT covered here; nobody is talking through those, and widening this to
             // every transmission means finding a signal that covers them all, which is a larger
             // change than the problem needs today.
+            //
+            // The computer's microphone (`tempo_app::engine::pc_mic`) is a Phone over too, armed
+            // or keyed: the operator is talking into a microphone beside the headphones, so the
+            // monitor is muted for it as well and nothing on the air comes back into that room.
             {
-                let keyed = engine_lock(engine).manual_ptt();
+                let keyed = {
+                    let eng = engine_lock(engine);
+                    eng.manual_ptt() || eng.pc_mic_armed()
+                };
                 if keyed != self.monitor_tx_muted {
                     self.monitor_tx_muted = keyed;
                     backend.set_monitor_tx_mute(keyed);
@@ -9224,6 +9454,7 @@ impl RadioLoop {
                     self.func_state = [None; N_FUNCS];
                     self.tuner_probed = false;
                     self.vfo_read_native = None;
+                    self.split_detect = None;
                     self.level_supported = [None; N_LEVELS];
                     self.level_misses = [0; N_LEVELS];
                     self.tx_meter_supported = [None; N_TX_METERS];
@@ -9276,6 +9507,13 @@ impl RadioLoop {
                 // one answers `Held` to a keyed rig's uplink now, on every
                 // transponder shape (`Engine::sat_note_keyed_leg`).
                 && !self.rig_keyed
+                // ⚠️ AND NOT WHILE THE COMPUTER MICROPHONE IS OPEN: the operator is holding PTT
+                // for it, as for `manual_ptt_applied` above, and its over may key on this very
+                // tick. A slow read here (past its budget on a link that answers slowly) delayed
+                // that key behind the read: the microphone's audio then reached the over as one
+                // late burst, measured from the tick's start, and the over ended on the gap at
+                // once. Keyed, `tx_until_ms` already stands this poll down.
+                && self.pc_mic_open.is_none()
                 // A TRIPPED breaker skips the poll — but only until its re-probe is due. It exists
                 // to stop the loop blocking on a dead read every cycle, which is rate-limiting;
                 // implemented as a permanent latch it left a recovered link dead for the session.
@@ -9370,6 +9608,7 @@ impl RadioLoop {
                             self.func_state = [None; N_FUNCS];
                             self.tuner_probed = false;
                             self.vfo_read_native = None;
+                            self.split_detect = None;
                             self.level_supported = [None; N_LEVELS];
                             self.level_misses = [0; N_LEVELS];
                             self.tx_meter_supported = [None; N_TX_METERS];
@@ -10021,21 +10260,28 @@ impl RadioLoop {
                         // which is how it regressed the teardown restore.
                         let want_detect = engine_lock(engine).settings().split_detect_enabled;
                         let can_ask = want_detect && {
-                            let detect = *self.split_detect.get_or_insert_with(|| {
+                            // Could not ask → not native this time, and asked again later.
+                            // Silence is not permission.
+                            let detect = self.split_detect.or_else(|| {
                                 rig.read_split_capability()
-                                    // Could not ask → Absent. Silence is not permission.
-                                    .unwrap_or(crate::baud_ladder::SplitDetect::Absent)
+                                    .inspect(|&detect| self.split_detect = Some(detect))
                             });
-                            detect == crate::baud_ladder::SplitDetect::Native
+                            detect == Some(crate::baud_ladder::SplitDetect::Native)
                         };
                         if self.rig_poll_ticks.is_multiple_of(4) {
                             self.read_turns.owe(HeavyRead::Split);
                         }
                         if (wants_rig_split || can_ask)
                             && !self.audio_rig_split
+                            // An owed release: the split the radio reports is Nexus's own.
+                            && !rig.split_release_pending
                             && self.read_turns.take_owed(HeavyRead::Split, have_budget())
                         {
-                            if let Some((on, vfo)) = rig.read_split() {
+                            // `TX` is the transmit VFO Nexus's own Flex client names for the split
+                            // it is still taking down: never the operator's.
+                            if let Some((on, vfo)) =
+                                rig.read_split().filter(|(on, vfo)| !(*on && vfo == "TX"))
+                            {
                                 // The TX frequency only matters when split is actually on — and
                                 // only when the rig can be asked for it without being disturbed.
                                 // ⚠️ THE TWO CONSUMERS HAVE DIFFERENT NEEDS AND DIFFERENT RISK
@@ -12347,12 +12593,39 @@ impl RadioLoop {
                 .as_ref()
                 .and_then(CatDaemon::flex)
                 .is_some_and(crate::flex::FlexDaemon::take_operator_mic);
+            // ⛔ THE RADIO LEFT NEXUS'S DAX UNDER A KEYED MESSAGE (native audio on; SmartSDR's own
+            // switch): the message is played to the client's DAX and nowhere else, so the radio's
+            // mic would carry the rest of the over and put the shack's room on the air. It ends
+            // here, this tick, as the keyer's own Stop ends it, as a Remote over does (below).
+            // Only a message whose audio went to the client's DAX tee at its key (the rule follows
+            // the route the message took: one on the sound card is the radio's to take as it is),
+            // tail included. Beside another program's DAX the route is not Nexus's to judge, as at
+            // the client's `T 1`; native audio going off is the tee sync's to end.
+            let voice_left_dax = self
+                .voice_tee_until_ms
+                .is_some_and(|t| self.tx_until_ms == Some(t) && now < t)
+                && self.flex_client_audio
+                && self
+                    .rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::flex)
+                    .is_some_and(|d| {
+                        let on_dax = self.dax_tee_id.is_some() && d.on_nexus_dax();
+                        !(on_dax || d.other_dax_feeder())
+                    });
+            if voice_left_dax {
+                tempo_core::applog::info(
+                    "tx",
+                    "voice-keyer message ended: the radio no longer takes its transmit audio from \
+                     Nexus's DAX",
+                );
+            }
             let (abort, samples, qso_rec, qso_path) = {
                 let mut eng = engine_lock(engine);
                 if eng.is_recording() {
                     eng.push_record_samples(rec_samples);
                 }
-                if mic_took_over {
+                if mic_took_over || voice_left_dax {
                     eng.stop_voice();
                 }
                 // The keyer's Stop, taken before the report, so the message reads as ended in the
@@ -12384,21 +12657,44 @@ impl RadioLoop {
                 self.tx_until_ms = None;
             }
             if let Some((buf, dax)) = samples {
-                if !buf.is_empty() {
+                // ⛔ NO MESSAGE WITHOUT THE CLIENT'S DAX TEE (native audio on). The message's audio
+                // reaches the radio only through the tee, and the tee trails the session (the audio
+                // control thread's tick, after its blocking stream requests): a message keyed
+                // before it is in would go to the sound card, the radio would send a silent over on
+                // DAX, and the leave-DAX watch above, which follows the tee, would never apply, so
+                // SmartSDR's switch to the mic would put the room on the air. It is the keyer's
+                // drop for DAX, nothing keyed. Beside another program's DAX the route is not
+                // Nexus's to judge, and the message goes out as before.
+                let no_tee = !buf.is_empty()
+                    && self.flex_client_audio
+                    && self.dax_tee_id.is_none()
+                    && self
+                        .rigctld_proc
+                        .as_ref()
+                        .and_then(CatDaemon::flex)
+                        .is_some_and(|d| !d.other_dax_feeder());
+                if no_tee {
+                    engine_lock(engine).drop_flex_voice(tempo_app::dto::VoiceDropCause::NoDax);
+                }
+                if !buf.is_empty() && !no_tee {
                     let secs = buf.len() as f32 / tempo_fast::SAMPLE_RATE;
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                                                   // A NAK here used to play the message into a receiving rig: it is not played
                                                   // (`key_over`), and the line says why instead of silent dead air.
 
-                    // A message on the Flex client's switch to DAX: its one key is marked as
-                    // carrying Nexus's audio, which the client keys only while the radio takes
-                    // DAX. Refused that way (the radio left DAX between the look and the key),
+                    // With the Flex client's native audio on the message is played to its DAX, so
+                    // its one key is marked as carrying Nexus's audio, which the client keys only
+                    // while the radio takes Nexus's DAX: on the switch to DAX around it, and as
+                    // much when the radio was already on DAX (a digital slice, a Remote operator's
+                    // voice). Refused that way (the radio left DAX between the look and the key),
                     // it is the keyer's drop, and its lane says so in place of the PTT advice.
                     let (key, not_on_dax) = {
-                        let flex = dax
-                            .then(|| self.rigctld_proc.as_ref().and_then(CatDaemon::flex))
-                            .flatten();
+                        let flex = self
+                            .rigctld_proc
+                            .as_ref()
+                            .and_then(CatDaemon::flex)
+                            .filter(|_| self.flex_client_audio);
                         let asked = Instant::now();
                         if let Some(d) = flex {
                             d.set_voice_key(true);
@@ -12665,10 +12961,38 @@ impl RadioLoop {
         // keyer's seams, which are proven on the air: the same PTT, the same `play()` (the Flex DAX
         // tee when one is installed, the sound card otherwise), and `tx_until_ms`, the deadline
         // that unkeys the rig if this loop dies.
+        //
+        // ⛔ THE FLEX CLIENT'S DAX (native audio on): the operator's voice is played to the client's
+        // DAX and nowhere else, so the radio must take that DAX for the whole over. A radio on its
+        // own mic would put the shack's room on the air in their place. The key is marked as the
+        // voice keyer's is (below), so the client keys it only on Nexus's DAX, and a keyed over ends
+        // the moment the radio no longer takes it (SmartSDR's own switch). Beside another program's
+        // DAX the route is not Nexus's to judge, as at the client's `T 1`.
         {
             let mono = self.mono_now(now);
+            let left_dax = self.mic_keyed
+                && self.flex_client_audio
+                && self
+                    .rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::flex)
+                    .is_some_and(|d| {
+                        let on_dax = self.dax_tee_id.is_some() && d.on_nexus_dax();
+                        !(on_dax || d.other_dax_feeder())
+                    });
+            if left_dax {
+                tempo_core::applog::info(
+                    "tx",
+                    "remote microphone over ended: the radio no longer takes its transmit audio \
+                     from Nexus's DAX",
+                );
+            }
             let (abort, tick) = {
                 let mut eng = engine_lock(engine);
+                if left_dax {
+                    // Arms the abort (the over is keyed): unkeyed and flushed below, this tick.
+                    eng.end_remote_mic_off_route();
+                }
                 let tick = if self.may_key() {
                     // M3: what the ring can take without reaching more than the look-ahead past
                     // now. The engine clamps it to the per-push cap as well.
@@ -12712,13 +13036,47 @@ impl RadioLoop {
                     MicTick::Key => {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying — the fail-safe must know
+
+                        // On the Flex client's DAX the one key is marked as carrying Nexus's
+                        // audio: the client keys it only while the radio takes Nexus's DAX, with
+                        // no write of its own to that flag in flight. Refused that way, the client
+                        // says why, and the page is told the station's audio is not ready.
+                        let marked = self
+                            .rigctld_proc
+                            .as_ref()
+                            .and_then(CatDaemon::flex)
+                            .filter(|_| self.flex_client_audio);
+                        let asked = Instant::now();
+                        if let Some(d) = marked {
+                            d.set_voice_key(true);
+                        }
                         let key = self.key_over(rig, false);
-                        self.report_key(engine, &key);
+                        if let Some(d) = marked {
+                            d.set_voice_key(false);
+                        }
+                        let not_on_dax = matches!(key, KeyUp::Refused(_))
+                            .then(|| marked.and_then(|d| d.key_refused_since(asked)))
+                            .flatten()
+                            .filter(|(_, cause)| cause.is_some())
+                            .map(|(why, _)| why);
+                        if not_on_dax.is_some() {
+                            self.report_ptt(engine, false);
+                        } else {
+                            self.report_key(engine, &key);
+                        }
                         if let KeyUp::Refused(why) = &key {
                             // The rig did not key, so none of the operator's voice may be played
                             // (`key_over`): the over ends here, through its one kill path.
-                            note_refused_key("Remote microphone over not keyed", why);
-                            engine_lock(engine).drop_mic_latch();
+                            note_refused_key(
+                                "Remote microphone over not keyed",
+                                not_on_dax.as_deref().unwrap_or(why),
+                            );
+                            let mut eng = engine_lock(engine);
+                            if not_on_dax.is_some() {
+                                eng.end_remote_mic_off_route();
+                            } else {
+                                eng.drop_mic_latch();
+                            }
                         } else {
                             self.mic_keyed = true;
                             self.mic_busy_until = now;
@@ -12844,6 +13202,188 @@ impl RadioLoop {
                         self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
                     }
                     MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
+                }
+            }
+        }
+
+        // The computer's microphone (`tempo_app::engine::pc_mic`): the operator's voice from this
+        // computer while Phone's PTT is held, on a radio set to take it. The ENGINE decides
+        // everything on every tick (`Engine::poll_pc_mic`: every gate, the ceiling, the watchdog,
+        // the route, the gap, and what audio is due); this block holds the microphone open exactly
+        // while an over is armed or keyed, hands it what the microphone delivered (a microphone the
+        // OS killed ends the over on this tick), keys what it is told to with Nexus's own key
+        // (`key_over`: the audio Nexus plays, so a Rear/Data radio takes it from USB and a TCI radio
+        // from the TCI connection), plays it through the same `play()` as every over, and holds PTT
+        // to `tx_until_ms` from where the queued audio ends.
+        //
+        // ⛔ UNKEY FIRST, THEN TOUCH THE DEVICE. Closing (or opening) the microphone takes the audio
+        // host lock, which a device enumeration on another thread can hold for a long while, and
+        // drops a cpal stream, which on a device that has just gone away can be slow. So on every
+        // stop the queued audio is flushed and PTT drops BEFORE the microphone is closed, and the
+        // microphone is opened only at the END of a tick, after anything this tick had to unkey.
+        {
+            let mono = self.mono_now(now);
+            let may_key = self.may_key();
+            if !may_key {
+                // `rig` is not the operator's radio this tick: a keyed transmitter cannot wait.
+                engine_lock(engine).pc_mic_interrupted();
+            }
+            // ⛔ THE FLEX CLIENT'S DAX HOLD (`engine/pc_mic.rs`): an over pressed while the radio had
+            // its own mic keys only once the radio reports DAX on Nexus's own stream with the DAX
+            // tee in and nothing keyed, and while keyed is on the air only while the radio still
+            // takes that DAX. The press ends with nothing keyed when the radio is keyed by anything
+            // else first, or has not switched in the routing's own confirm window.
+            let flex = self.rigctld_proc.as_ref().and_then(CatDaemon::flex);
+            let hold = engine_lock(engine).pc_mic_dax_hold();
+            let on_dax = hold.is_some_and(|since| {
+                let tee = self.dax_tee_id.is_some();
+                if self.pc_mic_keyed {
+                    return tee && flex.is_some_and(crate::flex::FlexDaemon::on_nexus_dax);
+                }
+                if flex.is_some_and(crate::flex::FlexDaemon::keyed_by_another) {
+                    engine_lock(engine).pc_mic_interrupted();
+                    return false;
+                }
+                let ready = tee && flex.is_some_and(crate::flex::FlexDaemon::takes_voice_dax);
+                if !ready
+                    && since.elapsed() >= Duration::from_millis(crate::flex::routing::CONFIRM_MS)
+                {
+                    engine_lock(engine).pc_mic_no_dax();
+                }
+                ready
+            });
+            let want = engine_lock(engine).pc_mic_source();
+            // Read only the capture opened for THIS over: a new over (a quick re-press) gets a
+            // fresh one at the end of the tick, so nothing captured before its press reaches it.
+            let current = want
+                .as_ref()
+                .is_some_and(|w| self.pc_mic_open.as_ref() == Some(&(w.device.clone(), w.gen)));
+            let captured = current.then(|| backend.pc_mic_capture());
+            let (abort, tick) = {
+                let mut eng = engine_lock(engine);
+                eng.observe_pc_mic_dax(on_dax);
+                match &captured {
+                    Some(Ok(samples)) => eng.push_pc_mic(samples, mono),
+                    // The microphone went away: the over ends on THIS tick, not at the gap.
+                    Some(Err(_)) => eng.pc_mic_device_failed(true),
+                    None => {}
+                }
+                let queued = (self.pc_mic_busy_until - now).max(0.0);
+                let tick =
+                    eng.poll_pc_mic(mono, PC_MIC.ahead_ms as f64 - queued, self.tx_route_gen);
+                // AFTER the poll, so an abort IT armed is consumed on this same tick.
+                (eng.take_pc_mic_abort(), tick)
+            };
+            // Something else unkeyed the rig under a keyed over: it does not come back.
+            let unkeyed_under = self.pc_mic_keyed && (self.tx_until_ms.is_none() || !rig.keyed);
+            // The engine is keying an over this loop never keyed (the loop was rebuilt under it).
+            let never_keyed =
+                !self.pc_mic_keyed && matches!(tick, MicTick::Ahead | MicTick::Samples(_));
+            if unkeyed_under || never_keyed {
+                engine_lock(engine).pc_mic_interrupted();
+            }
+            if (abort || unkeyed_under) && self.pc_mic_keyed {
+                // The feed is already closed (the engine's kill path); here the queued audio goes
+                // (the only thing that stops a VOX rig) and PTT drops, before anything else.
+                let dropped = backend.flush_output();
+                let _ = rig.ptt(false);
+                self.tx_until_ms = None;
+                crate::civ::diag::note(&format!(
+                    "computer microphone over ended: unkey, {dropped} queued samples dropped"
+                ));
+            }
+            if abort || unkeyed_under || never_keyed {
+                self.pc_mic_keyed = false;
+                self.pc_mic_busy_until = 0.0;
+            } else {
+                match tick {
+                    MicTick::Key => {
+                        self.ensure_commanded(rig); // read-only launch: assert before key
+                        self.publish_tx_intent_now(); // before keying — the fail-safe must know
+
+                        // On the DAX hold the one key is marked as carrying Nexus's audio, which
+                        // the client keys only while the radio takes Nexus's DAX: the operator
+                        // flipping the radio back to its mic between the look above and the key
+                        // must not put the room on the air.
+                        let marked = hold.and(self.rigctld_proc.as_ref().and_then(CatDaemon::flex));
+                        if let Some(d) = marked {
+                            d.set_voice_key(true);
+                        }
+                        let key = self.key_over(rig, false);
+                        if let Some(d) = marked {
+                            d.set_voice_key(false);
+                        }
+                        self.report_key(engine, &key);
+                        if let KeyUp::Refused(why) = &key {
+                            // The rig did not key, so none of the microphone may be played.
+                            note_refused_key("computer microphone over not keyed", why);
+                            let mut eng = engine_lock(engine);
+                            eng.pc_mic_key_refused();
+                            let _ = eng.take_pc_mic_abort();
+                        } else {
+                            self.pc_mic_keyed = true;
+                            self.pc_mic_busy_until = now;
+                            let until = now
+                                + (PC_MIC.lead_in_ms + PC_MIC.ahead_ms) as f64
+                                + crate::slot::TX_TAIL_MS;
+                            self.tx_until_ms =
+                                Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                        }
+                    }
+                    MicTick::Samples(buf) => {
+                        backend.play(&buf);
+                        // Contiguous in audio time: the deadline advances from where the queued
+                        // audio ends.
+                        self.pc_mic_busy_until = self.pc_mic_busy_until.max(now)
+                            + buf.len() as f64 * 1000.0 / f64::from(PC_MIC.rate_hz);
+                        let until = self.pc_mic_busy_until + crate::slot::TX_TAIL_MS;
+                        self.tx_until_ms = Some(self.tx_until_ms.map_or(until, |t| t.max(until)));
+                    }
+                    MicTick::Idle | MicTick::Armed | MicTick::Ahead => {}
+                }
+            }
+            // Only now, with anything this tick stopped already unkeyed, the device: closed when no
+            // over wants it (or it died, or a new over replaced the one it was opened for), and
+            // opened for an armed over, which keys on nothing until a later tick's audio.
+            let want = engine_lock(engine)
+                .pc_mic_source()
+                .map(|w| (w.device, w.gen));
+            let died = matches!(captured, Some(Err(_)));
+            // ⛔ Never while this loop still holds the rig keyed for an over. A stop that landed
+            // DURING this tick (the release or Stop TX while `key_over` waited on the radio's
+            // answer) armed an abort this tick has not taken: the next tick unkeys and flushes
+            // FIRST and only then gets here. A quick re-press in that window likewise opens its
+            // own capture only after the old over is unkeyed, then keys on its own audio.
+            // (`died` ended the over on this tick, so `pc_mic_keyed` is already false with it.)
+            let keyed_here = self.pc_mic_keyed && !died;
+            if !keyed_here && self.pc_mic_open.is_some() && (died || want != self.pc_mic_open) {
+                let _ = backend.set_pc_mic(None);
+                self.pc_mic_open = None;
+            }
+            if let Some((device, gen)) = want.filter(|_| !keyed_here && self.pc_mic_open.is_none())
+            {
+                // ⛔ No input that may carry the band is ever the microphone: every receive input
+                // the settings name, the system default input and the one the sound card actually
+                // opened for receive, judged by THE device guard the notification sounds use.
+                let opened_receive = backend.capture_input().map(|rx| rx.device);
+                let refused = engine_lock(engine).pc_mic_receive_refusal(
+                    &device,
+                    opened_receive.as_deref(),
+                    &crate::notify_sound::same_input,
+                );
+                if let Some(cause) = refused {
+                    engine_lock(engine).pc_mic_refused(cause);
+                } else {
+                    match backend.set_pc_mic(Some(&device)) {
+                        Ok(()) => self.pc_mic_open = Some((device, gen)),
+                        Err(e) => {
+                            tempo_core::applog::warn(
+                                "audio",
+                                &format!("computer microphone {device:?} would not open: {e}"),
+                            );
+                            engine_lock(engine).pc_mic_device_failed(false);
+                        }
+                    }
                 }
             }
         }
@@ -13673,34 +14213,20 @@ impl RadioLoop {
                     }
                 }
             }
-            if self.audio_rig_split {
-                self.audio_rig_split = false;
-                // The cluster SPLIT-on-Work owns VFO B when active — leave it.
-                if !eng.cluster_split_active() {
-                    // ⚠️ RESTORE WHAT WAS THERE, don't write an absolute OFF (2026-08-17 Flex
-                    // audit, wave-2 #22). This wrote `S 0 VFOA` unconditionally, so an over
-                    // ended by cancelling a split Nexus never engaged — the operator's own
-                    // front-panel split, or on a multi-client Flex the split a second client
-                    // set. And `apply_tx_dial_shift` had already overwritten the TX VFO's
-                    // FREQUENCY with no snapshot, so the flag was only half of it. Restoring
-                    // both mirrors the slice-DAX-binding restore the native lane got in the
-                    // same audit: leave the radio as we found it.
-                    //
-                    // No snapshot (the rig never answered `s`) → today's absolute OFF, which is
-                    // the conservative answer when there is nothing to put back: our own split
-                    // must not be left latched for a later in-window over to transmit on.
-                    match self.rig_split_restore.clone() {
-                        Some((true, vfo, tx_hz)) => {
-                            let _ = rig.set_split(true, &vfo);
-                            if let Some(hz) = tx_hz {
-                                let _ = rig.set_split_freq(hz);
-                            }
-                        }
-                        Some((false, _, _)) | None => {
-                            let _ = rig.set_split(false, "VFOA");
-                        }
-                    }
-                }
+            // ⭐ RIG SPLIT IS HELD BETWEEN OVERS, AS WSJT-X HOLDS IT, and let go only when what it
+            // was turned on for has gone (`Self::rig_split_hold_ends`).
+            if self.audio_rig_split && self.rig_split_hold_ends(&eng) {
+                let cluster_active = eng.cluster_split_active();
+                self.let_go_of_rig_split(rig, cluster_active);
+            }
+            if self.rig_split_release_due(rig, now) {
+                // ⚠️ OUTSIDE THE ENGINE LOCK: on a link that is up but no longer answering, each try
+                // costs a CAT deadline (700 ms, 2.5 s on a network link), and it comes back every
+                // few seconds while the release is owed. Nothing here reads the engine; the code
+                // after this takes it again and reads it as it is then.
+                drop(eng);
+                self.retry_rig_split_release(rig, now);
+                eng = engine_lock(engine);
             }
         } else if self.fake_it_restore.is_some() {
             // A carrier is up: a held write-back's wait starts again when it ends, so it always
@@ -14399,16 +14925,22 @@ impl RadioLoop {
                         let split = crate::slot::apply_tx_dial_shift(&mut eng, rig);
                         self.hold_fake_it_restore(split.fake_it_restore, split.fake_it_tx_dial);
                         if split.rig_split_engaged {
-                            self.audio_rig_split = true;
+                            self.hold_rig_split(dial_hz);
                         }
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying
                         let held = self.holds_tx();
                         let asked = Instant::now();
+                        // A TX dial the radio did not take keys nothing and halts TX, as at the
+                        // boundary (`slot::apply_tx_dial_shift`).
+                        if let Some(why) = &split.refused {
+                            eng.halt_tx_for_refused_split(why, split.split_off_unconfirmed);
+                        }
                         // A key the radio refuses plays nothing here and halts TX, as at the
                         // boundary (`slot::slot_key_failure`). Nexus's own audio, as there.
                         self.mark_tci_nexus_key(true);
-                        let keyed = crate::slot::key_slot_transmitter(&mut eng, rig, backend, held);
+                        let keyed = split.refused.is_none()
+                            && crate::slot::key_slot_transmitter(&mut eng, rig, backend, held);
                         self.mark_tci_nexus_key(false);
                         // ⭐ AN FT8/FT4 KEY THE RADIO ANSWERED PAST THE END OF ITS SLOT IS NOT
                         // PLAYED, as at the boundary (`slot::unkey_a_key_past_its_period`): Fake It's
@@ -15400,7 +15932,7 @@ impl RadioLoop {
         }
         self.hold_fake_it_restore(action.fake_it_restore, action.fake_it_tx_dial);
         if action.rig_split_engaged {
-            self.audio_rig_split = true;
+            self.hold_rig_split(eng.settings().dial_hz());
         }
         // Remember whether THIS slot was a transmit slot so the next boundary
         // knows not to decode our own carrier (and to decode it otherwise).
@@ -18561,6 +19093,7 @@ mod tests {
     mod jtty_status;
     mod jtty_transmit;
     mod omnirig_coverage;
+    mod pc_mic;
     mod readback_coverage;
     mod receive_source;
     mod refused_key;
@@ -36674,6 +37207,18 @@ mod tests {
         meters_answer: bool,
         ptt: &'static str,
     ) -> (String, Arc<Mutex<Vec<String>>>) {
+        mock_rigctld_hooked(dial_hz, meters_answer, ptt, |_| {})
+    }
+
+    /// [`mock_rigctld_ptt`] that runs `on_line` with every command it is sent, after logging it
+    /// and BEFORE it answers: whatever the hook does lands while the loop waits on the radio
+    /// (inside a tick, e.g. during the key's round trip).
+    fn mock_rigctld_hooked(
+        dial_hz: u64,
+        meters_answer: bool,
+        ptt: &'static str,
+        on_line: impl Fn(&str) + Send + 'static,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -36695,6 +37240,7 @@ mod tests {
                     }
                     let l = line.trim().to_string();
                     log2.lock().unwrap().push(l.clone());
+                    on_line(&l);
                     let dial = format!("{dial_hz}\n");
                     let reply = if l == "f" {
                         dial.as_str()
