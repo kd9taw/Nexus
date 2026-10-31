@@ -9,7 +9,7 @@
 // moment anything it is given changes. The cockpit on screen renders on every poll as it always did.
 // The cockpits here are counting stubs, so what is counted is exactly what App hands them.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, waitFor, act } from '@testing-library/react'
+import { render, cleanup, waitFor, act, fireEvent } from '@testing-library/react'
 import type { AppSnapshot, Settings } from './types'
 import defaults from './components/__fixtures__/defaultSettings.json'
 
@@ -57,6 +57,9 @@ function poll(edit: (s: AppSnapshot) => void = () => {}): AppSnapshot {
 }
 
 let deliver: ((s: AppSnapshot) => void) | null = null
+/** The station's state as the backend would answer it now: the last poll sent. A command that answers
+ *  with a snapshot (the mode switch a screen change makes) answers with this one. */
+let latest: AppSnapshot = poll()
 
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
@@ -70,7 +73,7 @@ vi.mock('./api', async (importOriginal) => {
     askLog: vi.fn(async () => {
       throw new Error('no log in this test')
     }),
-    getSnapshot: vi.fn(async () => poll()),
+    getSnapshot: vi.fn(async () => structuredClone(latest)),
     subscribeSnapshot: vi.fn((fn: (s: AppSnapshot) => void) => {
       deliver = fn
       return () => {
@@ -99,9 +102,10 @@ vi.mock('./api', async (importOriginal) => {
     getIssPass: vi.fn(async () => null),
     getTleStatus: vi.fn(async () => null),
     getKpForecast: vi.fn(async () => null),
-    setOperatingMode: vi.fn(async () => poll()),
-    setArea: vi.fn(async () => poll()),
-    haltTx: vi.fn(async () => poll()),
+    setOperatingMode: vi.fn(async () => structuredClone(latest)),
+    setArea: vi.fn(async () => structuredClone(latest)),
+    haltTx: vi.fn(async () => structuredClone(latest)),
+    setTier: vi.fn(async () => structuredClone(latest)),
     appVersion: vi.fn(async () => '0.0.0-test'),
     openPanelWindow: vi.fn(async () => {}),
     setContestEsm: vi.fn(async () => {}),
@@ -169,6 +173,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   deliver = null
+  latest = poll()
 })
 
 /** Mount App on `view`, wait for settings and the first snapshot to reach every cockpit, settle. */
@@ -189,11 +194,22 @@ const zero = () => {
   for (const c of COCKPITS) renders[c] = 0
 }
 const send = async (s: AppSnapshot) => {
+  latest = s
   await act(async () => {
     deliver!(s)
   })
 }
 const snapOf = (c: string) => last[c].snap as AppSnapshot
+/** Press a section's button in the side nav, by its label. */
+const go = async (label: string) => {
+  const btn = [...document.querySelectorAll<HTMLButtonElement>('.mode-nav .mode-btn')].find(
+    (b) => b.querySelector('.mode-label')?.textContent === label,
+  )
+  expect(btn, label).toBeTruthy()
+  await act(async () => {
+    fireEvent.click(btn!)
+  })
+}
 
 describe('a snapshot poll renders only what it changed', () => {
   it('on Operate: hidden cockpits sit out unchanged and meter-only polls; Operate renders each one', async () => {
@@ -315,6 +331,43 @@ describe('a snapshot poll renders only what it changed', () => {
     zero()
     await send(poll())
     for (const c of COCKPITS) expect(renders[c], c).toBe(0)
+  })
+
+  it('a cockpit shown again renders at once with everything it sat out, and hides again', async () => {
+    await mount('logbook')
+    zero()
+    // Hidden: the meter fields move and the cockpit sits it out, so it still holds the old values.
+    await send(poll((s) => ((s.radio.nextSlotMs = 4321), (s.radio.rxLevel = 0.7), (s.radio.clockAgeSecs = 30))))
+    expect(renders.operate).toBe(0)
+    expect(snapOf('operate').radio.nextSlotMs).toBe(9000)
+
+    // Shown: it renders on the switch itself, before any further poll, with the newest snapshot.
+    await go('FT')
+    await waitFor(() => expect(last.operate.active).toBe(true))
+    expect(renders.operate).toBeGreaterThan(0)
+    expect(snapOf('operate').radio.nextSlotMs).toBe(4321)
+    expect(snapOf('operate').radio.rxLevel).toBe(0.7)
+    expect(snapOf('operate').radio.clockAgeSecs).toBe(30)
+    // On screen it follows every poll, meter fields included.
+    zero()
+    await send(poll((s) => (s.radio.nextSlotMs = 1111)))
+    expect(renders.operate).toBe(1)
+    expect(snapOf('operate').radio.nextSlotMs).toBe(1111)
+
+    // Another cockpit's screen: FT is told it is hidden (that render is delivered) …
+    await go('RTTY')
+    await waitFor(() => expect(last.operate.active).toBe(false))
+    expect(last.rtty.active).toBe(true)
+    // … then sits out meter-only polls again, while RTTY, now on screen, renders each one.
+    zero()
+    await send(poll((s) => (s.radio.nextSlotMs = 2222)))
+    expect(renders.operate).toBe(0)
+    expect(renders.rtty).toBe(1)
+    expect(snapOf('rtty').radio.nextSlotMs).toBe(2222)
+    // … and still renders for anything else that changes while it is hidden.
+    await send(poll((s) => ((s.radio.nextSlotMs = 2222), (s.radio.rxOffsetHz = 900))))
+    expect(renders.operate).toBe(1)
+    expect(snapOf('operate').radio.rxOffsetHz).toBe(900)
   })
 
   it('the handlers a hidden cockpit holds are the ones App passes now', async () => {
