@@ -29,6 +29,7 @@ import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects, type GeoProjection } from 'd3-geo'
 import { Crosshair, Layers as LayersIcon, Maximize2, Minimize2, RotateCcw } from 'lucide-react'
 import type {
+  AuroraOval,
   AuroraPoint,
   PcaView,
   SatView,
@@ -115,6 +116,9 @@ import { STANDARD_MAP, STANDARD_SKY, type MapToken, type SkyToken } from '../fea
 import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, XRAY_LIVE_SECS, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
+import { AuroraChip, PcaChip } from './prop/CapsChips'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpLabel, kpNow } from '../capsNow'
+import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../features/connectFeeds'
 import { useViewportClass } from '../useViewport'
 // The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
 // laid over the World view's land (Natural Earth's hillshade, public domain). See basemap.ts.
@@ -702,6 +706,11 @@ const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
  *  than the standard basemap's --map-ocean-deep so it separates even from the globe's own limb.
  *  Exported for the 3-D globe's sun and moon, which are the same glyphs (features/skyGlyphs). */
 export const MARKER_HALO = 'rgba(2, 7, 12, 0.9)'
+/** The aurora oval's equatorward edge: the aurora layer's high-probability green, so the line
+ *  reads as the oval's own. */
+const AURORA_EDGE_INK = 'rgb(120, 230, 140)'
+/** The polar cap's edge: the cap shading's violet. */
+const CAP_EDGE_INK = 'rgb(200, 110, 240)'
 
 /** ⭐ A LABEL'S HALO FOLLOWS ITS INK. MARKER_HALO under a label is the contrast step that lifts a
  *  LIGHT ink off the map (the dark theme's --text, a band colour). The light theme letters its labels
@@ -1599,11 +1608,28 @@ export function MapView({
   const auroraPts=nativeAuroraPts
   // OVATION is a FORECAST: the time it is for (and when its input was observed) label the layer row.
   const [auroraTimes, setAuroraTimes] = useState<{ forecastAt: number | null; observedAt: number | null } | null>(null)
-  const auroraOn = layers.aurora.visible
+  const [auroraOval, setAuroraOval] = useState<AuroraOval | null>(null)
+  // THE STORM TURNS THE AURORA LAYER ON (capsNow `auroraStorm`: Kp ≥ 5 now, or a NOAA G watch in
+  // force) and off again after. Never saved: the operator's own choice is `layers.aurora`, and an
+  // explicit off during the storm sticks until it is over. Both feeds are ones this window already
+  // polls (App's storm and watch toasts; the arrival chip).
+  const kpFc = useFeed(KP_FORECAST).value ?? null
+  const arrival = useFeed(ARRIVAL_OUTLOOK).value ?? null
+  const kn = useMemo(() => kpNow(prop?.spaceWx, kpFc, nowMs), [prop, kpFc, nowMs])
+  const storm = auroraStorm(kn, arrival)
+  const [auroraDismissed, setAuroraDismissed] = useState(false)
+  useEffect(() => {
+    if (!storm) setAuroraDismissed(false)
+  }, [storm])
+  const auroraAuto = storm && !auroraDismissed && !layers.aurora.visible
+  const auroraOn = layers.aurora.visible || auroraAuto
+  // What is drawn: OVATION while current, else the Kp-fit edge, else nothing (capsNow `auroraPicture`).
+  const auroraPic = useMemo(() => (auroraOn ? auroraPicture(auroraOval, nowMs) : null), [auroraOn, auroraOval, nowMs])
   useEffect(() => {
     if (!auroraOn) {
       setAuroraPts([])
       setAuroraTimes(null)
+      setAuroraOval(null)
       return
     }
     let live = true
@@ -1613,6 +1639,7 @@ export function MapView({
           if (!live) return
           setAuroraPts(o?.points ?? [])
           setAuroraTimes(o ? { forecastAt: o.forecastAt, observedAt: o.observedAt } : null)
+          setAuroraOval(o ?? null)
         })
         .catch(() => {})
     load()
@@ -1629,7 +1656,13 @@ export function MapView({
   const [nativePca, setPca] = useState<PcaView | null>(null)
   const pca=nativePca
   const pcaOn = layers.pca.visible
-  const pcaChip = pcaOn && pca != null && pca.points.length > 0
+  // NOAA's D-RAP grid is the cap while it is current, else the model (capsNow `capPicture`); never
+  // beside the simulated Preview flux (`noaaNow` is null then).
+  const capPic = useMemo(
+    () => (pcaOn ? capPicture(pca, noaaNow?.drap, noaaNow ? xrayLong ?? null : null, nowMs) : null),
+    [pcaOn, pca, noaaNow, xrayLong, nowMs],
+  )
+  const pcaChip = pcaOn && capShown(pca, capPic)
   useEffect(() => {
     if (!pcaOn) {
       setPca(null)
@@ -1808,6 +1841,30 @@ export function MapView({
         mid && Number.isFinite(mid[0]) && Number.isFinite(mid[1]) ? { lat: mid[1], lon: mid[0] } : (myQth ?? me)
     }
     const path = geoPath(proj, ctx)
+    /** One label for an edge line (the aurora edge, the cap edge): at its point nearest the equator
+     *  that is on screen, in the line's ink. */
+    const edgeLabel = (lines: [number, number][][], text: string, ink: string) => {
+      let best: [number, number] | null = null
+      let bestLat = Infinity
+      for (const line of lines) {
+        for (const [lon, lat] of line) {
+          if (Math.abs(lat) >= bestLat) continue
+          const p = placePoint(kind, proj, { lat, lon })
+          if (!p || p[0] < 40 || p[0] > w - 40 || p[1] < 12 || p[1] > h - 12) continue
+          best = p
+          bestLat = Math.abs(lat)
+        }
+      }
+      if (!best) return
+      ctx.font = `600 ${Math.round(10 * ms)}px system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.lineWidth = 3
+      ctx.strokeStyle = MARKER_HALO
+      ctx.fillStyle = ink
+      ctx.strokeText(text, best[0], best[1] - 8 * ms)
+      ctx.fillText(text, best[0], best[1] - 8 * ms)
+    }
     const c = showQth && !streetScale ? placePoint(kind, proj, myQth ?? me) : null
     /** STREET SCALE (features/streetOverlay): a position known only by its grid square is drawn as
      *  that square, never as a pin on a street it does not know. Its name sits at the centre, where
@@ -2666,8 +2723,9 @@ export function MapView({
     // red (high) by probability.
     // High aurora = degraded high-lat/polar HF paths, so it's both pretty and
     // operationally meaningful. Drawn over the field layers, under spots.
-    if (layers.aurora.visible) {
-      for (const a of auroraPts) {
+    if (auroraOn && auroraPic) {
+      // The dots only while OVATION is the picture: a stale oval draws only the Kp-fit edge.
+      for (const a of auroraPic.mode === 'ovation' ? auroraPts : []) {
         const p = placePoint(kind, proj, { lat: a.lat, lon: a.lon })
         if (!p) continue
         const t = Math.max(0, Math.min(1, (a.prob - 8) / (90 - 8)))
@@ -2680,14 +2738,32 @@ export function MapView({
         ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
         ctx.fill()
       }
+      // THE EQUATORWARD EDGE: OVATION's own 10 % line (solid), or the Kp-fit edge (dashed, "modelled
+      // from Kp"). Labelled at md and up.
+      const lines = auroraPic.mode === 'ovation' ? auroraPic.edge : auroraPic.mode === 'kpfit' ? auroraPic.rings : []
+      if (lines.length > 0) {
+        ctx.globalAlpha = Math.min(1, layers.aurora.opacity + 0.15)
+        ctx.lineWidth = 1.6
+        ctx.strokeStyle = AURORA_EDGE_INK
+        ctx.setLineDash(auroraPic.mode === 'kpfit' ? [6, 4] : [])
+        for (const line of lines) {
+          ctx.beginPath()
+          path({ type: 'LineString', coordinates: line } as unknown as GeoPermissibleObjects)
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
+        if (ringLabels) {
+          edgeLabel(lines, auroraPic.mode === 'kpfit' ? t('map.aurora.fit.label') : t('map.aurora.edge.label'), AURORA_EDGE_INK)
+        }
+      }
       ctx.globalAlpha = 1
     }
 
     // Proton polar-cap absorption (PCA, D-RAP2) — violet shading over the polar
     // caps during a solar proton event; opacity tracks the 30 MHz absorption
     // (0.5 dB faint → 10 dB+ solid). Quiet sun = zero points = nothing drawn.
-    if (layers.pca.visible && pca && pca.points.length > 0) {
-      for (const s of pca.points) {
+    if (layers.pca.visible && capPic && capPic.points.length > 0) {
+      for (const s of capPic.points) {
         const p = placePoint(kind, proj, { lat: s.lat, lon: s.lon })
         if (!p) continue
         const t = Math.max(0, Math.min(1, s.db30 / 10))
@@ -2697,6 +2773,22 @@ export function MapView({
         ctx.fillStyle = `rgb(${Math.round(150 + 60 * t)}, 80, ${Math.round(220 - 30 * t)})`
         ctx.fill()
       }
+      ctx.globalAlpha = 1
+    }
+    // THE CAP'S EDGE — the model's 66° − 1.2·Kp line, dashed violet, "cap edge (approx.)"; only beside
+    // the model's own shading and at a measured Kp (capsNow `capPicture`).
+    if (layers.pca.visible && capPic?.edge && capPic.points.length > 0) {
+      ctx.globalAlpha = Math.min(1, layers.pca.opacity + 0.15)
+      ctx.lineWidth = 1.4
+      ctx.strokeStyle = CAP_EDGE_INK
+      ctx.setLineDash([4, 4])
+      for (const ring of capPic.edge) {
+        ctx.beginPath()
+        path({ type: 'LineString', coordinates: ring } as unknown as GeoPermissibleObjects)
+        ctx.stroke()
+      }
+      ctx.setLineDash([])
+      if (ringLabels) edgeLabel(capPic.edge, t('map.pca.edge.label'), CAP_EDGE_INK)
       ctx.globalAlpha = 1
     }
 
@@ -3202,7 +3294,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, flareFoot, flareRings, ringLabels, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
+  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, auroraOn, auroraPic, pca, capPic, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, flareFoot, flareRings, ringLabels, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -4128,13 +4220,28 @@ export function MapView({
                   <label>
                     <input
                       type="checkbox"
-                      checked={layers[k].visible}
-                      onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))}
+                      checked={k === 'aurora' ? auroraOn : layers[k].visible}
+                      onChange={(e) =>
+                        // Unticking the aurora while the storm has it on is the operator's off: it
+                        // sticks until the storm is over, and their own choice stays as it was.
+                        k === 'aurora' && auroraAuto && !e.target.checked
+                          ? setAuroraDismissed(true)
+                          : setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))
+                      }
                     />
                     {layerLabel(k)}
                   </label>
-                  {k === 'aurora' && auroraTimes?.forecastAt != null && (
+                  {k === 'aurora' && auroraAuto && <span className="map-layer-note">{t('map.layer.aurora.auto')}</span>}
+                  {k === 'aurora' && auroraPic?.mode === 'ovation' && auroraTimes?.forecastAt != null && (
                     <AuroraForecastNote forecastAt={auroraTimes.forecastAt} observedAt={auroraTimes.observedAt} />
+                  )}
+                  {k === 'aurora' && auroraPic?.mode === 'kpfit' && (
+                    <span className="map-layer-note" data-stale="" title={t('map.aurora.fit.title')}>
+                      {t('map.layer.aurora.fit', { kp: kpLabel({ kp: auroraPic.kp, source: 'estimated', at: auroraPic.kpAt }) })}
+                    </span>
+                  )}
+                  {k === 'aurora' && auroraPic?.mode === 'none' && auroraOval != null && (
+                    <span className="map-layer-note" data-stale="">{t('map.layer.aurora.none')}</span>
                   )}
                   {k === 'flare' && (
                     // The layer is event-driven (nothing draws below an M1 flare), so
@@ -4214,10 +4321,9 @@ export function MapView({
                 preview={flarePreview}
               />
             )}
-            {pcaChip && pca && (
-              <div className="flare-chip pca-chip" role="status">
-                {t('map.pca.chip', { scale: sScaleOf(pca.j10), db: pca.a30Day.toFixed(1) })}
-              </div>
+            {pcaChip && pca && capPic && <PcaChip pca={pca} pic={capPic} nowMs={nowMs} />}
+            {auroraPic && auroraOval != null && (storm || auroraPic.mode !== 'ovation') && (
+              <AuroraChip pic={auroraPic} stormWhy={storm ? auroraStormWhy(kn, arrival) : null} />
             )}
             <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
           </div>
@@ -4235,16 +4341,6 @@ export function MapView({
   )
 }
 
-
-/** NOAA S-scale from J(≥10 MeV): S1=10 pfu, S2=100, S3=1e3, S4=1e4, S5=1e5. */
-function sScaleOf(j10: number): number {
-  if (j10 >= 1e5) return 5
-  if (j10 >= 1e4) return 4
-  if (j10 >= 1e3) return 3
-  if (j10 >= 100) return 2
-  if (j10 >= 10) return 1
-  return 0
-}
 
 /** How long past its forecast time an OVATION oval may be before the row says how old it is: the
  *  oval is normally a forecast for 30–90 min ahead, refreshed every few minutes, so a forecast

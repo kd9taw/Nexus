@@ -18,6 +18,7 @@ import { doubleBeep } from './alerts'
 import { pushToast } from './toast'
 import { t } from './i18n'
 import type { KpForecast } from './types'
+import { kpLabel, type KpNow } from './capsNow'
 
 const STORM_BEEP_HZ = 440
 /** Kp 5 is the G1 boundary. Below it the sky is unsettled, not stormy. */
@@ -46,12 +47,16 @@ export function resetStormAlerts(): void {
 }
 
 /**
- * Edge-triggered storm alert over the MEASURED planetary K. Call on every
- * propagation snapshot; it toasts only when a storm first reaches a G level or
- * escalates to a higher one.
+ * Edge-triggered storm alert over the planetary K now (capsNow `kpNow`: NOAA's measured 3-hour Kp
+ * while recent, else the usable 1-minute estimate). Call on every propagation snapshot; it toasts
+ * only when a storm first reaches a G level or escalates to a higher one. The toast says which Kp
+ * it is and when ("Kp 6.0 est. 22:36Z" / "Kp 6.0 measured 21–00Z"); a bare number is taken as the
+ * undated estimate it always was.
  */
-export function processStorm(kp: number | null | undefined): void {
-  if (kp == null || !Number.isFinite(kp)) return
+export function processStorm(reading: KpNow | number | null | undefined): void {
+  const k: KpNow | null = typeof reading === 'number' ? { kp: reading, source: 'estimated', at: null } : (reading ?? null)
+  const kp = k?.kp
+  if (k == null || kp == null || !Number.isFinite(kp)) return
   const g = gScale(kp)
   if (g === 0) {
     if (kp < RESET_BELOW) alertedG = 0 // storm over → re-arm for the next one
@@ -65,7 +70,7 @@ export function processStorm(kp: number | null | undefined): void {
   alertedG = g
   lastFired.set(g, now)
 
-  const msg = t('prop.stormAlert.now', { g, kp: kp.toFixed(1) })
+  const msg = t('prop.stormAlert.now', { g, kp: kpLabel(k) })
   if (g >= 2) {
     doubleBeep(STORM_BEEP_HZ)
     pushToast(msg, 'error', 15000, { alert: true, prominent: true })

@@ -1811,6 +1811,19 @@ button.nb-chip:hover {
 .flare-chip.pca-chip {
   border-left-color: #a855f7;
 }
+/* The aurora chip (CapsChips.tsx) — the aurora layer's green, the same two-class weight. */
+.flare-chip.aurora-chip {
+  border-left-color: #34d399;
+}
+/* The cap and aurora chips' head line takes the pointer (for their hover), as the flare chip's does;
+   the rest of the chip lets it through to the Layers rows under the stack. */
+.caps-chip-head {
+  pointer-events: auto;
+}
+/* A proton sample past its cadence: the chip says how old and dims, as the gauges dim an old reading. */
+.flare-chip[data-stale] .caps-chip-head {
+  color: var(--text-dim);
+}
 /* Per-mode workable-now chips on path/outlook band rows (P.533 only). */
 .cp-modes {
   display: inline-flex;
