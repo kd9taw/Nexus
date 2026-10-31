@@ -1,10 +1,10 @@
 # Nexus 简体中文（Chinese, Simplified）本地化套件
 
-Nexus 是业余无线电的「一个窗口搞定全部」程序：CAT 控制电台，收发 FT8、CW、SSB、RTTY、PSK、SSTV 与 APRS，带硬件日志簿、通联地图、spot 列表和卫星跟踪。
+Nexus 是业余无线电的“一个窗口搞定全部”程序：CAT 控制电台，收发 FT8、CW、SSB、RTTY、PSK、SSTV 与 APRS，带硬件日志簿、通联地图、spot 列表和卫星跟踪。
 
 程序目前支持英语、德语、西班牙语、法语、日语和俄语。加上简体中文，中文操作员就能用母语上机。
 
-**状态：已完成。** `nexus-zh-translation.csv` 的 **10,368 行全部译完（100%）**，对应 **9,709 条**界面文案 + 5 条启动页文字，`verify-zh.py` 报 0 问题。
+**状态：已完成。** `nexus-zh-translation.csv` 的 **10,515 行全部译完（100%）**，对应 **9,856 条**界面文案 + 5 条启动页文字，`verify-zh.py` 报 0 问题。
 
 ---
 
@@ -72,7 +72,7 @@ logbook.import.imported::other,Imported {{count}} QSOs     → 已导入 {{count
 
 | 级别 | 行数 | 内容 |
 |---:|---:|---|
-| **1** | **953** | 主框架：顶栏、连接状态、错误提示、频率/波段控制、QSO 表单、台站设置。 |
+| **1** | **1,100** | 主框架：顶栏、连接状态、错误提示、频率/波段控制、QSO 表单、台站设置。 |
 | 2 | 361 | 首次启动：向导、入门指引、启动页。 |
 | 3 | 1,907 | 操作面：FT8/FT4 界面、日志簿、spot 列表、Needed 面板、瀑布图。 |
 | 4 | 567 | 设置：音频、电台、连接、通知、备份。 |
@@ -92,7 +92,7 @@ python3 verify-zh.py nexus-zh-translation.csv
 
 它只查**机械层面**的东西：行数是否齐全、`english` 与 `do_not_translate` 两列是否被改动、占位符/标记/CW 宏有没有被改名或丢掉、技术数字有没有冒出逗号、复数的四行是否填满。它**不评价**中文好不好——那是人的事，程序看不出来。
 
-脚本顶部钉死了这套文件的指纹（行数、三列 SHA-256、各级条数），所以「不小心排序了」「筛选没关掉就保存」「少了一行」都会被立刻发现。
+脚本顶部钉死了这套文件的指纹（行数、三列 SHA-256、各级条数），所以“不小心排序了”“筛选没关掉就保存”“少了一行”都会被立刻发现。
 
 ---
 
@@ -118,7 +118,7 @@ python3 csv-to-catalog.py nexus-zh-translation.csv -o ../../ui/src/i18n/zh.ts --
 
 1. `ui/src/i18n/zh.ts` —— 本目录生成
 2. `ui/src/main.tsx` —— `import { ZH }`，并在 `initLocale()` 之前 `installCatalog('zh', ZH)`
-3. `ui/src/lan/main.tsx` —— 「本网络上的台站」是**第二个 Vite 入口**，同样逐条 `installCatalog`。上游 `docs/i18n.md` 的加语言清单没有写它，照文档做的话这个窗口对中文用户仍是英文
+3. `ui/src/lan/main.tsx` —— “本网络上的台站”是**第二个 Vite 入口**，同样逐条 `installCatalog`。上游 `docs/i18n.md` 的加语言清单没有写它，照文档做的话这个窗口对中文用户仍是英文
 4. `ui/src/i18n/useLocale.ts` —— `LOCALE_NATIVE_NAME` 加 `zh: '简体中文'`
 5. `ui/src/i18n/placeholders.test.ts` —— `OTHER` 列表加 `['zh', ZH]`，否则三道路由检查看不到中文
 6. `ui/public/splashscreen.html` —— `splash-strings` 加 `"zh"` 块
