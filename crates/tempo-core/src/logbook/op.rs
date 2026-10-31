@@ -98,8 +98,13 @@ pub enum LogOp {
         date_unix: u64,
     },
     /// The operator says a paper card arrived (or did not) — a confirmation an awards fold
-    /// reads, which is why it is not a [`Stamp`](LogOp::Stamp).
-    MarkQslCard { id: RecordId, received: bool },
+    /// reads, which is why it is not a [`Stamp`](LogOp::Stamp). `date_unix` is when they said
+    /// so: the card's received date (`QSLRDATE`) where the contact holds none.
+    MarkQslCard {
+        id: RecordId,
+        received: bool,
+        date_unix: u64,
+    },
     /// The operator says this contact was — or was NOT — worked through a satellite
     /// (`PROP_MODE=SAT` + `SAT_NAME`). `Some(name)` tags it, `None` removes the tag.
     ///
@@ -194,7 +199,11 @@ impl LogOp {
             LogOp::MarkQslSent { via, date_unix, .. } => {
                 super::qsl_sent_marked(&mut now, *via, *date_unix)
             }
-            LogOp::MarkQslCard { received, .. } => super::qsl_card_marked(&mut now, *received),
+            LogOp::MarkQslCard {
+                received,
+                date_unix,
+                ..
+            } => super::qsl_card_marked(&mut now, *received, *date_unix),
             LogOp::SetSatTag { sat_name, .. } => {
                 if !super::sat_tagged(&mut now, sat_name.as_deref()) {
                     return RowAfter::Unchanged;
@@ -412,6 +421,7 @@ mod tests {
             LogOp::MarkQslCard {
                 id: gone,
                 received: true,
+                date_unix: 1_700_000_000,
             },
             LogOp::MarkQslSent {
                 id: gone,
@@ -492,6 +502,7 @@ mod tests {
                 |ids| LogOp::MarkQslCard {
                     id: ids[1],
                     received: true,
+                    date_unix: 1_700_000_000,
                 },
                 OpClass::Upgrade,
             ),

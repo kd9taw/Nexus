@@ -3460,7 +3460,11 @@ mod durable_command_tests {
         by_command(
             engine,
             id,
-            tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+            tempo_core::logbook::LogOp::MarkQslCard {
+                id,
+                received: true,
+                date_unix: 1_700_000_000,
+            },
         )
         .0
     }
@@ -3500,7 +3504,11 @@ mod durable_command_tests {
                 let (made, durability) = by_command(
                     &engine,
                     id,
-                    tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+                    tempo_core::logbook::LogOp::MarkQslCard {
+                        id,
+                        received: true,
+                        date_unix: 1_700_000_000,
+                    },
                 );
                 (Ok::<bool, String>(made), durability)
             };
@@ -3574,7 +3582,11 @@ mod durable_command_tests {
                 let (made, durability) = by_command(
                     &eng,
                     id,
-                    tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+                    tempo_core::logbook::LogOp::MarkQslCard {
+                        id,
+                        received: true,
+                        date_unix: 1_700_000_000,
+                    },
                 );
                 (Ok::<bool, String>(made), durability)
             }))
@@ -4135,7 +4147,11 @@ mod logbook_startup_tests {
             super::durable_command_tests::by_command(
                 &engine,
                 id,
-                tempo_core::logbook::LogOp::MarkQslCard { id, received: true }
+                tempo_core::logbook::LogOp::MarkQslCard {
+                    id,
+                    received: true,
+                    date_unix: 1_700_000_000,
+                }
             )
             .0,
             "not waited for"
@@ -4186,7 +4202,11 @@ mod logbook_startup_tests {
         let (made, landed) = by_command(
             &engine,
             id,
-            tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+            tempo_core::logbook::LogOp::MarkQslCard {
+                id,
+                received: true,
+                date_unix: 1_700_000_000,
+            },
         );
         assert!(made);
         let beside = dir.with_extension("beside");
@@ -24571,7 +24591,7 @@ async fn mark_qsl_card(
         };
         let (after, durability) = tempo_app::logwrite::until_written(|| {
             change_found(&engine, &found, "mark_qsl_card", |id| {
-                vec![tempo_core::logbook::LogOp::MarkQslCard { id, received }]
+                vec![tempo_app::logwrite::qsl_card(id, received)]
             })
         });
         (changed_row(after), durability)

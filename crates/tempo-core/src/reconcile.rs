@@ -165,7 +165,11 @@ fn same_contact(a: &QsoRecord, b: &QsoRecord) -> bool {
         r.country = None;
         r.dxcc = None;
         r.extra.retain(|(k, _)| {
-            k != "CQZ" && k != crate::logbook::LOTW_DXCC_FIELD && k != crate::logbook::EQSL_AG_FIELD
+            k != "CQZ"
+                && k != crate::logbook::LOTW_DXCC_FIELD
+                && k != crate::logbook::EQSL_AG_FIELD
+                && k != "LOTW_QSLRDATE"
+                && k != "EQSL_QSLRDATE"
         });
         // ...plus the two that do not survive our own round-trip intact.
         r.mode.clear();
@@ -482,6 +486,24 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
         && !crate::logbook::record_eqsl_ag(rec)
     {
         crate::logbook::set_extra(rec, crate::logbook::EQSL_AG_FIELD, Some("Y".into()));
+    }
+    // And the day each service confirmed it, with its confirmation: LoTW's and eQSL's received
+    // dates, the Logbook's "LoTW received" and "eQSL received" columns. Monotonic too — a date the
+    // log holds is never replaced here. A paper card's (`QSLRDATE`) is the operator's
+    // (`qsl_card_marked`), never a report's. eQSL's DownloadInBox spec: `EQSL_QSLRDATE` is the day
+    // the record was added to eQSL's database, sent only "if we have stored the date"; a row
+    // without it leaves the contact's date empty, never filled from the QSO date.
+    for (confirms, tag) in [
+        (inc.qsl_rcvd.lotw, "LOTW_QSLRDATE"),
+        (inc.qsl_rcvd.eqsl, "EQSL_QSLRDATE"),
+    ] {
+        if let Some(date) =
+            crate::logbook::extra_field(inc, tag).filter(|d| confirms && !d.is_empty())
+        {
+            if crate::logbook::extra_field(rec, tag).is_none_or(str::is_empty) {
+                crate::logbook::set_extra(rec, tag, Some(date.to_string()));
+            }
+        }
     }
     // Outbound state — merged so a two-instance shared log doesn't lose an upload stamp or a
     // QSL-sent mark one instance wrote when the other rewrites the whole file. (A LoTW report
@@ -1847,6 +1869,47 @@ mod tests {
         let ag = |r: &QsoRecord| r.extra.iter().any(|(k, v)| k == "APP_EQSL_AG" && v == "Y");
         assert_eq!((ag(&mem[0]), mem[0].qsl_rcvd.eqsl), (true, true));
         assert!(!ag(&mem[1]), "and nothing landed on its twin");
+    }
+
+    /// Own-disk copy of the `-05` contact that a sync confirmed (`confirm`) and dated in
+    /// `date_tag`, merged against `-05` and its date-only `-12` twin. `same_contact` must
+    /// blank the date tag (`apply_match` writes it), or the copy reads as a new contact.
+    fn merge_own_disk_pairs_a_copy_a_sync_dated(date_tag: &str, confirm: fn(&mut QsoRecord)) {
+        let day = 20_000;
+        let a = date_only("JA1XYZ", "20m", "FT8", day, Some("-05"));
+        let b = date_only("JA1XYZ", "20m", "FT8", day, Some("-12"));
+        let mut dated = a.clone();
+        confirm(&mut dated);
+        dated.confirmed = true;
+        crate::logbook::set_extra(&mut dated, date_tag, Some("20240101".into()));
+
+        let mut mem = vec![a, b];
+        let (added, sum) = merge_own_disk(&mut mem, vec![dated]);
+        assert!(
+            added.is_empty(),
+            "{date_tag}: a copy of our own -05 contact, not a new one: {added:?}"
+        );
+        assert_eq!((mem.len(), sum.matched), (2, 1), "{date_tag}");
+        assert_eq!(
+            crate::logbook::extra_field(&mem[0], date_tag),
+            Some("20240101"),
+            "{date_tag}: the date came across"
+        );
+        assert_eq!(
+            crate::logbook::extra_field(&mem[1], date_tag),
+            None,
+            "{date_tag}: and nothing landed on its twin"
+        );
+    }
+
+    #[test]
+    fn merge_own_disk_pairs_a_copy_a_lotw_sync_dated() {
+        merge_own_disk_pairs_a_copy_a_sync_dated("LOTW_QSLRDATE", |r| r.qsl_rcvd.lotw = true);
+    }
+
+    #[test]
+    fn merge_own_disk_pairs_a_copy_an_eqsl_sync_dated() {
+        merge_own_disk_pairs_a_copy_a_sync_dated("EQSL_QSLRDATE", |r| r.qsl_rcvd.eqsl = true);
     }
 
     #[test]

@@ -4891,7 +4891,11 @@ impl StationCore {
             });
         }
         if let Some(received) = card {
-            ops.push(LogOp::MarkQslCard { id, received });
+            ops.push(LogOp::MarkQslCard {
+                id,
+                received,
+                date_unix: now_unix_secs(),
+            });
         }
         Ok(Ok(ops))
     }
@@ -5000,7 +5004,15 @@ impl StationCore {
     /// Record whether a PAPER QSL card arrived for the contact `id` (#152) — an award-eligible
     /// confirmation, which the needs/awards model and the hot index both read.
     pub fn mark_qsl_card(&mut self, id: RecordId, received: bool) -> bool {
-        self.change_row(id, &[LogOp::MarkQslCard { id, received }], "mark_qsl_card")
+        self.change_row(
+            id,
+            &[LogOp::MarkQslCard {
+                id,
+                received,
+                date_unix: now_unix_secs(),
+            }],
+            "mark_qsl_card",
+        )
     }
 
     /// Set — or REMOVE — the satellite tag on the contact `id` (`PROP_MODE=SAT` + `SAT_NAME`).
