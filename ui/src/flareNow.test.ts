@@ -389,6 +389,107 @@ describe('flarePhase', () => {
     expect(flarePhase(null, NOW, 4e-5, secondClimbing)).toMatchObject({ kind: 'rising', noaa: false })
   })
 
+  // THE LANE'S REAL TRACE IS 5-MINUTE BUCKET PEAKS (propagation `xray_series`: each 300 s bucket's
+  // highest sample, at its own time). Its last point is the current bucket's high, up to ~4 minutes
+  // old, so a flare peaking early in a bucket left that peak as the "newest" sample and read Rising
+  // while the GOES flux the chip shows was falling. The chip's sample is the trace's newest point.
+  describe('on the bucket-peak trace, with the GOES sample the chip shows', () => {
+    /** One sample per minute from `from` minutes ago to 1 minute ago. */
+    const minutes = (from: number, f: (m: number) => number): [number, number][] => {
+      const out: [number, number][] = []
+      for (let m = from; m >= 1; m--) out.push([NOW_S - m * 60, f(m)])
+      return out
+    }
+    /** The lane's shape: each 5-minute bucket's peak sample, with its own time. */
+    const bucketPeaks = (raw: [number, number][]): [number, number][] => {
+      const out: [number, number][] = []
+      for (const p of raw) {
+        const l = out[out.length - 1]
+        if (l && Math.floor(l[0] / 300) === Math.floor(p[0] / 300)) {
+          if (p[1] > l[1]) out[out.length - 1] = p
+        } else out.push(p)
+      }
+      return out
+    }
+    /** Piecewise-linear through `[minutes ago, flux]` knots. */
+    const lin = (knots: Array<[number, number]>) => (m: number) => {
+      for (let k = 0; k < knots.length - 1; k++) {
+        const [m0, f0] = knots[k]
+        const [m1, f1] = knots[k + 1]
+        if (m <= m0 && m >= m1) return f0 + ((m0 - m) / (m0 - m1)) * (f1 - f0)
+      }
+      return knots[knots.length - 1][1]
+    }
+    /** flarePhase as the chip calls it: the bucketed trace, and the newest raw sample with its time. */
+    const asChip = (raw: [number, number][], e: FlareEvent | null = null, fresh = raw[raw.length - 1]) =>
+      flarePhase(e, NOW, fresh[1], bucketPeaks(raw), fresh[0])
+    const staleList = ev({ at: NOW_S - 12 * 60, beginAt: NOW_S - 22 * 60 })
+    // Impulsive: C5 background, up to M5 at 17:55 (the current bucket's first minute), falling since.
+    const impulsive = minutes(30, (m) =>
+      m > 10 ? 5e-6 : m >= 5 ? 5e-6 + ((10 - m) / 5) * 4.5e-5 : 5e-5 * Math.exp(-(5 - m) / 8),
+    )
+    const doublePeak = minutes(30, lin([[30, 5e-6], [26, 5e-6], [20, 5e-5], [12, 2e-5], [5, 4e-5], [1, 3e-5]]))
+
+    it('the shape is real: the trace ends on the bucket peak, above the fresh flux', () => {
+      const b = bucketPeaks(impulsive)
+      expect(b[b.length - 1]).toEqual([NOW_S - 300, 5e-5])
+      expect(impulsive[impulsive.length - 1][1]).toBeLessThan(5e-5 / 1.1)
+    })
+    it('an impulsive flare peaking at the start of the bucket reads Falling for the 4 minutes after', () => {
+      for (const e of [null, staleList]) expect(asChip(impulsive, e)).toMatchObject({ kind: 'falling', noaa: false })
+    })
+    it("a double-peaked flare's second peak at the start of the bucket reads Falling", () => {
+      for (const e of [null, staleList]) expect(asChip(doublePeak, e)).toMatchObject({ kind: 'falling', noaa: false })
+    })
+    it('three peaks, the third at the start of the bucket and falling, read Falling; so does a peak buckets ago', () => {
+      const three = minutes(30, lin([[30, 5e-6], [24, 5e-5], [19, 1.5e-5], [14, 4e-5], [9, 2e-5], [5, 3.5e-5], [1, 2.6e-5]]))
+      expect(asChip(three)).toMatchObject({ kind: 'falling', noaa: false })
+      const early = minutes(30, (m) =>
+        m > 20 ? 5e-6 : m >= 15 ? 5e-6 + ((20 - m) / 5) * 4.5e-5 : 5e-5 * Math.exp(-(15 - m) / 10),
+      )
+      expect(asChip(early)).toMatchObject({ kind: 'falling', noaa: false })
+    })
+    it('CONTROL: still climbing reads Rising (an impulsive rise 2 minutes in; a third peak climbing)', () => {
+      const rising = minutes(30, (m) => (m > 6 ? 5e-6 : 5e-6 + ((6 - m) / 5) * 4.5e-5))
+      expect(asChip(rising)).toMatchObject({ kind: 'rising', noaa: false })
+      const climb = minutes(30, lin([[30, 5e-6], [24, 5e-5], [19, 1.5e-5], [14, 4e-5], [9, 2e-5], [1, 3.5e-5]]))
+      expect(asChip(climb)).toMatchObject({ kind: 'rising', noaa: false })
+    })
+    it('no sample time, no flux or an old trace leaves the trace as it was', () => {
+      const b = bucketPeaks(impulsive)
+      // The bucket peak is still the newest point: the old word (pinned so a change is seen).
+      expect(flarePhase(null, NOW, 3e-5, b)).toMatchObject({ kind: 'rising', noaa: false })
+      expect(flarePhase(null, NOW, 3e-5, b, null)).toMatchObject({ kind: 'rising', noaa: false })
+      // The sample joins only a current trace: its last point (the bucket peak at 17:55) at most 10
+      // minutes old. One second older, the trace is old and gives no word, whatever the sample says.
+      expect(flarePhase(null, NOW + 5 * 60_000, 3e-5, b, NOW_S - 60)).toMatchObject({ kind: 'falling' })
+      expect(flarePhase(null, NOW + 5 * 60_000 + 1000, 3e-5, b, NOW_S - 60)).toMatchObject({ kind: null })
+      // An old trace with a fresh sample after it: still no word (the trace stopped half an hour ago).
+      const old = trace([[50, 2e-5], [40, 5e-5], [30, 6e-5]])
+      expect(flarePhase(null, NOW, 5e-5, old, NOW_S - 60)).toMatchObject({ kind: null })
+      // No flux: nothing to append.
+      expect(flarePhase(null, NOW, null, b, NOW_S - 60)).toMatchObject({ kind: 'rising' })
+    })
+    it("a sample no later than the trace's last point is not added again", () => {
+      // A sample at the trace's last point's own time is that point (the bucket's newest sample was its
+      // peak): the trace's point stands, and the word is the trace's own.
+      const climbing = trace([[25, 5e-6], [15, 2e-5], [5, 4e-5], [1, 5e-5]])
+      expect(flarePhase(null, NOW, 5e-5, climbing, NOW_S - 60)).toMatchObject({ kind: 'rising' })
+      expect(flarePhase(null, NOW, 2e-5, climbing, NOW_S - 60)).toMatchObject({ kind: 'rising' })
+      // An older sample than the trace's last point never becomes its newest.
+      expect(flarePhase(null, NOW, 1e-5, climbing, NOW_S - 120)).toMatchObject({ kind: 'rising' })
+    })
+    it('"rising again" after NOAA\'s end reads the same newest sample: a bump that has fallen back keeps "ended"', () => {
+      // M5 ended 10 min ago at 2e-5; a bump to 2.6e-5 peaked at 17:55, and the flux is back at 2e-5.
+      const decay = (m: number) => 2.4e-5 - (30 - m) * 2e-7
+      const raw = minutes(30, (m) => (m > 5 ? decay(m) : 2.6e-5 - (5 - m) * 1.5e-6))
+      expect(asChip(raw, M5_ENDED)).toMatchObject({ kind: 'ended', noaa: true })
+      // CONTROL: the same bump, still climbing now, is a new rise.
+      const up = minutes(30, (m) => (m > 5 ? decay(m) : 2.6e-5 + (5 - m) * 1e-6))
+      expect(asChip(up, M5_ENDED)).toMatchObject({ kind: 'rising', noaa: false })
+    })
+  })
+
   it('no trace, an old one or one sample gives no direction word', () => {
     const old = trace([[40, 6e-5], [30, 4e-5], [15, 3e-5]])
     for (const series of [undefined, [], old, trace([[1, 2e-5]]), trace([[45, 6e-5], [1, 2e-5]])]) {

@@ -126,6 +126,17 @@ describe('FlareChip words', () => {
     }
   })
 
+  // The lane's trace is 5-minute bucket PEAKS: its last point is the current bucket's high, up to ~4
+  // minutes old. The flux the chip shows (M5 at 17:59) is the trace's newest point, so a peak at 17:55
+  // that has fallen since does not read Rising beside it.
+  it('reads the direction from the flux it shows, not the bucket peak before it', () => {
+    const buckets: [number, number][] = [[NOW_S - 1800, 5e-6], [NOW_S - 900, 5e-6], [NOW_S - 600, 2e-5], [NOW_S - 300, 8.5e-5]]
+    expect(est(chip(stale(buckets)).container.textContent ?? '')).toEqual({ rising: false, falling: true })
+    // CONTROL: the bucket peak below the flux shown (still climbing) reads Rising.
+    const climbing: [number, number][] = [[NOW_S - 1800, 5e-6], [NOW_S - 900, 5e-6], [NOW_S - 600, 2e-5], [NOW_S - 300, 4e-5]]
+    expect(est(chip(stale(climbing)).container.textContent ?? '')).toEqual({ rising: true, falling: false })
+  })
+
   it("names NOAA's grid and its valid time, and NOAA's event times", () => {
     const { container } = chip(noaa())
     const text = container.textContent ?? ''

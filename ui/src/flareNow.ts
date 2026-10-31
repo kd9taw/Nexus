@@ -15,9 +15,11 @@
 // PHASES. NOAA's event list says began / peak / ended in NOAA's words. When it is silent or stale,
 // or its event is a previous flare (the flux is now above that event's peak, or GOES's own trace
 // has turned up again since it ended), the phase falls back to the direction of the fast lane's
-// GOES trace, marked estimated, and to no word at all without a current trace. Never the shack's
-// 3-hour trend: that one compares now with the oldest sample in three hours, so it says "rising"
-// all through an ordinary flare's decay.
+// GOES trace, marked estimated, and to no word at all without a current trace. That trace is one
+// point per five minutes, each bucket's PEAK, so its last point can be up to ~4 minutes old and
+// higher than the flux now: the GOES sample the chip shows is its newest point (`withNewest`).
+// Never the shack's 3-hour trend: that one compares now with the oldest sample in three hours, so
+// it says "rising" all through an ordinary flare's decay.
 //
 // EXTENSION POINT. A later overlay (the proton cap, the aurora edge) adds its own footprint
 // function beside `flareFootprint` and hands its rings to the same `WxRing` drawing on both
@@ -274,6 +276,25 @@ function classFlux(cls: string | null): number | null {
   return m ? CLASS_BASE[m[1]] * Number(m[2]) : null
 }
 
+/** The lane's trace with the GOES sample the chip shows (`xray` at `xrayAt`) as its newest point.
+ *  The trace is 5-minute bucket PEAKS (propagation `xray_series`), so its last point is the current
+ *  bucket's high, not its newest sample: read as "now", a peak early in a bucket says Rising for up
+ *  to ~4 minutes while the flux beside it falls. The sample joins only a current trace (its last
+ *  point ≤ TRACE_LIVE_SECS old, the readers' own rule) and only when it is later than that point;
+ *  otherwise the trace is unchanged, and an old one still gives no word. */
+function withNewest(
+  series: ReadonlyArray<[number, number]> | undefined,
+  xray: number | null,
+  xrayAt: number | null | undefined,
+  now: number,
+): ReadonlyArray<[number, number]> {
+  const s = series ?? []
+  if (xray == null || xrayAt == null || s.length === 0) return s
+  const lastAt = s[s.length - 1][0]
+  if (now - lastAt > TRACE_LIVE_SECS || xrayAt <= lastAt) return s
+  return [...s, [xrayAt, xray]]
+}
+
 /** Whether GOES's trace has turned up again since `since`: its newest sample is recent and more
  *  than the margin above the lowest earlier sample since then. No trace, too few samples or an
  *  old one is "no": without a measurement nothing says it rose. */
@@ -312,8 +333,10 @@ function traceDirection(series: ReadonlyArray<[number, number]> | undefined, now
   return null
 }
 
-/** `xray` is the flux now (null when unknown); `series` is the fast lane's GOES trace. An event
- *  that has peaked or ended is this flare's only while the flux is not above its peak and, once
+/** `xray` is the flux now (null when unknown) and `xrayAt` its GOES sample time; `series` is the
+ *  fast lane's GOES trace (5-minute bucket peaks), read with that sample as its newest point
+ *  (`withNewest`), the same reading the chip shows. An event that has peaked or ended is this
+ *  flare's only while the flux is not above its peak and, once
  *  ended, the trace has not turned up again: NOAA lists a flare only after minutes of rise, so
  *  until it does the newest event is the PREVIOUS flare, and its words must not be quoted for this
  *  one. Fails closed: with no peak flux (NOAA's `maxFlux`, else its peak class) a settled event is
@@ -324,12 +347,14 @@ export function flarePhase(
   nowMs: number,
   xray: number | null,
   series?: ReadonlyArray<[number, number]>,
+  xrayAt?: number | null,
 ): FlarePhase {
   const now = nowMs / 1000
+  const trace = withNewest(series, xray, xrayAt, now)
   const settled = event != null && (event.endAt != null || event.maxAt != null)
   const peak = event ? (event.maxFlux ?? classFlux(event.maxClass)) : null
   const abovePeak = xray != null && (peak != null ? xray > peak * NEW_FLARE_OVER_PEAK : xray >= M1)
-  const risen = event?.endAt != null && risenSince(series, event.endAt, now)
+  const risen = event?.endAt != null && risenSince(trace, event.endAt, now)
   const newFlare = settled && (abovePeak || risen)
   const ours =
     event != null &&
@@ -350,7 +375,7 @@ export function flarePhase(
   }
   return {
     // Measured from the trace's last half hour, or nothing.
-    kind: traceDirection(series, now),
+    kind: traceDirection(trace, now),
     noaa: false,
     beginAt: null,
     peakAt: null,
@@ -374,9 +399,10 @@ export function flareRecovery(
   return fit == null ? null : { mins: Math.round(fit), noaa: false }
 }
 
-/** What NOAA says beside the flux, for the map surfaces: the six-hour trace, the event list and
- *  the D-RAP grid, and the GOES sample's own time. Null for simulated flux (Preview, the dev
- *  override), which is drawn with the analytic field alone. */
+/** What NOAA says beside the flux, for the map surfaces: the six-hour trace (5-minute bucket
+ *  peaks, so its last point is not the flux now), the event list and the D-RAP grid, and the GOES
+ *  sample's own time. Null for simulated flux (Preview, the dev override), which is drawn with the
+ *  analytic field alone. */
 export interface FlareNoaa {
   xrayAt: number
   series: [number, number][]
