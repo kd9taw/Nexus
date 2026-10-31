@@ -1871,6 +1871,47 @@ mod tests {
         assert!(!ag(&mem[1]), "and nothing landed on its twin");
     }
 
+    /// Own-disk copy of the `-05` contact that a sync confirmed (`confirm`) and dated in
+    /// `date_tag`, merged against `-05` and its date-only `-12` twin. `same_contact` must
+    /// blank the date tag (`apply_match` writes it), or the copy reads as a new contact.
+    fn merge_own_disk_pairs_a_copy_a_sync_dated(date_tag: &str, confirm: fn(&mut QsoRecord)) {
+        let day = 20_000;
+        let a = date_only("JA1XYZ", "20m", "FT8", day, Some("-05"));
+        let b = date_only("JA1XYZ", "20m", "FT8", day, Some("-12"));
+        let mut dated = a.clone();
+        confirm(&mut dated);
+        dated.confirmed = true;
+        crate::logbook::set_extra(&mut dated, date_tag, Some("20240101".into()));
+
+        let mut mem = vec![a, b];
+        let (added, sum) = merge_own_disk(&mut mem, vec![dated]);
+        assert!(
+            added.is_empty(),
+            "{date_tag}: a copy of our own -05 contact, not a new one: {added:?}"
+        );
+        assert_eq!((mem.len(), sum.matched), (2, 1), "{date_tag}");
+        assert_eq!(
+            crate::logbook::extra_field(&mem[0], date_tag),
+            Some("20240101"),
+            "{date_tag}: the date came across"
+        );
+        assert_eq!(
+            crate::logbook::extra_field(&mem[1], date_tag),
+            None,
+            "{date_tag}: and nothing landed on its twin"
+        );
+    }
+
+    #[test]
+    fn merge_own_disk_pairs_a_copy_a_lotw_sync_dated() {
+        merge_own_disk_pairs_a_copy_a_sync_dated("LOTW_QSLRDATE", |r| r.qsl_rcvd.lotw = true);
+    }
+
+    #[test]
+    fn merge_own_disk_pairs_a_copy_an_eqsl_sync_dated() {
+        merge_own_disk_pairs_a_copy_a_sync_dated("EQSL_QSLRDATE", |r| r.qsl_rcvd.eqsl = true);
+    }
+
     #[test]
     fn merge_own_disk_keeps_two_records_that_share_a_second() {
         // Date-only imports park at midnight, so two rows CAN share an exact key. They are
