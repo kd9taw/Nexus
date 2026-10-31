@@ -3865,8 +3865,9 @@ mod tests {
                                 _ => "RPRT 0\n",
                             };
                             if conn == 0 && lines == 1 {
-                                // The key is carried out late, past its deadline and the release's.
-                                std::thread::sleep(Duration::from_millis(2_000));
+                                // The key is carried out late, past its deadline and the release's
+                                // (which ends with its second read window, at about 2 s).
+                                std::thread::sleep(Duration::from_millis(2_500));
                             }
                             if stream.write_all(reply.as_bytes()).is_err() {
                                 return;
@@ -3883,7 +3884,7 @@ mod tests {
             rig.ptt(false).is_err(),
             "premise: the release is owed behind it"
         );
-        // Both answers arrive at about 2 s; the bound has passed by 2.2 s.
+        // Both answers arrive at about 2.5 s; the bound (owed since about 1 s) passes then too.
         std::thread::sleep(Duration::from_millis(2_600));
         assert_eq!(rig.read_freq().map_err(|e| e.to_string()), Ok(14_074_000));
         assert_eq!(

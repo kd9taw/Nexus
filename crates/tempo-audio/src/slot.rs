@@ -4032,6 +4032,58 @@ mod tests {
         keyed_as_before("the next over", &act, &backend, &eng);
     }
 
+    /// The same give-up landing on the over's TX dial write, its TX offset moved and its mode still
+    /// confirmed: the `X` is skipped as confirmed on the old connection, and keying would send the
+    /// over from VFO B in whatever mode the new connection's radio left it. That over keys nothing;
+    /// the next writes the mode on the new connection.
+    #[test]
+    fn a_held_split_over_given_up_at_its_tx_dial_write_with_the_mode_skipped_keys_nothing() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let lose = Arc::new(AtomicBool::new(false));
+        let (addr, log, connections) = a_link_that_loses_one_key_answer(lose.clone());
+        let mut rig = Rig::rigctld(&addr);
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]
+        );
+        keyed_as_before("the first over", &act, &backend, &eng);
+        lose.store(true, Ordering::SeqCst);
+        assert!(rig.ptt(true).is_err(), "premise: the key's answer is late");
+        assert!(rig.ptt(false).is_err(), "premise: the release is behind it");
+        rig.test_debt_lapses_after_split_take = true;
+        let (act, backend, mut eng, sent) = over_through(rig_split_cq_at(2900.0), &mut rig, &log);
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            2,
+            "premise: the connection was given up at the first split write: {sent:?}"
+        );
+        assert!(
+            sent[0].starts_with("I ") && sent[0] != "I 14073000",
+            "premise: the moved TX dial is the first write: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|l| l.starts_with("X ")),
+            "premise: the mode is skipped as confirmed: {sent:?}"
+        );
+        assert_split_sent_nothing(
+            "given up at the TX dial write",
+            &act,
+            &backend,
+            &mut eng,
+            &sent,
+            &[sent[0].as_str(), "S 1 VFOB"],
+        );
+        rig.test_debt_lapses_after_split_take = false;
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(2900.0), &mut rig, &log);
+        assert!(
+            sent.iter().any(|l| l.starts_with("X ")),
+            "the next over did not write the mode: {sent:?}"
+        );
+        keyed_as_before("the next over", &act, &backend, &eng);
+    }
+
     #[test]
     fn a_held_split_writes_its_tx_dial_and_mode_again_after_a_late_keys_connection_closes() {
         use std::sync::atomic::{AtomicBool, Ordering};
