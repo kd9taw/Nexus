@@ -7518,6 +7518,30 @@ impl Engine {
         self.apply_settings_inner(s, false);
     }
 
+    /// Drop the Cloudlog key waiting to move to the keychain, which every apply keeps
+    /// (`apply_settings_inner`). Only for a restored backup that points Cloudlog at another
+    /// address: the key was typed for this station's server and must not go to that one.
+    pub fn forget_pending_cloudlog_key(&mut self) {
+        self.settings.cloudlog_key.clear();
+    }
+
+    /// The saved keys held back until the operator confirms them ([`Settings::keys_to_confirm`]).
+    pub fn keys_to_confirm(&self) -> &crate::settings::KeysToConfirm {
+        &self.settings.keys_to_confirm
+    }
+
+    /// Replace them: a restore's, the operator's answer, or a key typed again. A key that waits no
+    /// more loses its reason for waiting. When the Cloudlog key stops waiting, the catch-up
+    /// contacts held back for it take their slots in the catch-up's pacing once, now
+    /// ([`StationCore::repace_catch_up`]), so they go one at a time.
+    pub fn set_keys_to_confirm(&mut self, keys: crate::settings::KeysToConfirm) {
+        let cloudlog_let_go = self.settings.keys_to_confirm.cloudlog && !keys.cloudlog;
+        self.settings.keys_to_confirm = keys.only_of_keys_that_wait();
+        if cloudlog_let_go {
+            self.station.repace_catch_up(upload_legs::CLOUDLOG);
+        }
+    }
+
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         self.remote_readings.invalidate();
         // The address the club link line is about, before the save: a save that moves it
@@ -7703,7 +7727,11 @@ impl Engine {
         // is the ONLY session-time wholesale replace of `self.settings`, so preserving it here closes
         // every save path — form Save, reset AND restore — at their one common point (round 10 Finding 1;
         // three earlier partial fixes each patched only the path their author was testing).
+        // A restore that moves the Cloudlog URL drops it afterwards (`forget_pending_cloudlog_key`).
         let live_cloudlog_key = std::mem::take(&mut self.settings.cloudlog_key);
+        // The saved keys held back until the operator confirms them: engine-owned, kept whatever
+        // the payload carries (`Settings::keys_to_confirm`). A restore sets its own afterwards.
+        let live_keys_to_confirm = std::mem::take(&mut self.settings.keys_to_confirm);
         // The forward-compatibility catch-all (`Settings::unknown`) — the keys a NEWER build
         // wrote into settings.json that this build has no field for. Same one-writer shape as
         // the Cloudlog key, and for the same reason: this is the only session-time wholesale
@@ -7747,6 +7775,7 @@ impl Engine {
         if self.settings.cloudlog_key.is_empty() {
             self.settings.cloudlog_key = live_cloudlog_key;
         }
+        self.settings.keys_to_confirm = live_keys_to_confirm;
         // Put back every preserved key the incoming payload did not carry (see the capture).
         for (key, value) in live_unknown {
             self.settings.unknown.entry(key).or_insert(value);
@@ -8888,6 +8917,8 @@ impl Engine {
     }
 
     /// Remove a radio from the roster (no-op on the active or last radio). Pure roster edit.
+    /// A wait on its password ([`Self::keys_to_confirm`]) stays: the shell lets it go only once
+    /// the keychain has removed the password.
     pub fn remove_radio(&mut self, id: u32) -> bool {
         self.remote_actuation.revoke();
         self.settings.remove_radio_profile(id)
@@ -34967,7 +34998,8 @@ pub fn act_opening_session<T>(
 /// the session's rows first and builds its dupe sweep from them in the same hold as the restore.
 /// `then` runs in that hold too, after the restore — the shell persists there. When the logbook
 /// is too busy to read the rows, the restore is refused whole with [`SESSION_BUSY`], the Save's
-/// own words: neither it nor `then` runs.
+/// own words, and while the radio is keyed or TX is armed between overs
+/// ([`Engine::transmit_needs_the_lock`]) with [`RESTORE_ON_AIR`]: neither it nor `then` runs.
 pub fn restore_with_session_rows<T>(
     engine: &std::sync::Mutex<Engine>,
     restored: Settings,
@@ -34978,14 +35010,24 @@ pub fn restore_with_session_rows<T>(
         engine,
         |eng| eng.save_opens_session(&asked),
         |eng, rows| {
+            // Never while the radio is keyed, nor while TX is armed to key at the next slot: the
+            // restore's hold can wait on the system keychain, and the radio loop needs this lock
+            // to end the over, and to key the next one on time. Nothing has changed yet.
+            if eng.transmit_needs_the_lock() {
+                return Err(RESTORE_ON_AIR.to_string());
+            }
             eng.apply_restored_settings(restored);
             if let Some(rows) = rows {
                 eng.open_session_from(rows);
             }
-            then(eng)
+            Ok(then(eng))
         },
-    )
+    )?
 }
+
+/// What a settings restore answers while the radio is keyed, or TX is armed between overs
+/// ([`restore_with_session_rows`]): nothing was restored.
+pub const RESTORE_ON_AIR: &str = "Finish or stop the transmission first, then restore.";
 
 /// [`with_session_rows`]' loop: `tries` reads at most, each waiting up to `wait` for the store.
 /// `Err` when none could be used, and then `then` has not run.

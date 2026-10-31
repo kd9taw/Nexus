@@ -45,8 +45,8 @@ pub enum PlayRefusal {
     /// The device that would open is one the station transmits from.
     TxDevice,
     /// A TX audio device is set to "the system default output" (the station's, or a radio
-    /// profile's that has none, as a radio whose audio is not on this computer has), and the sound
-    /// would open that default, or a default nobody can name.
+    /// profile's that has none and transmits from a sound card), and the sound would open that
+    /// default, or a default nobody can name.
     TxDefault,
     /// The two cannot be proven different by name, so the sound is refused (Linux): the sound
     /// server's default sink (`default`, `pulse`, `pipewire`…) or a PCM routed by a config file
@@ -61,10 +61,37 @@ pub enum PlayRefusal {
 }
 
 /// Every TX audio device the station has configured: the flat `audio_out` and each radio
-/// profile's. An empty name is "the system default output".
+/// profile's. An empty name is "the system default output", except on a radio whose transmit audio
+/// does not leave through this computer's sound card at all (the Icom network connection, TCI with
+/// its audio on, Nexus's own Flex client with native audio on:
+/// [`tempo_app::settings::tx_audio_on_sound_card`]). There an empty name is no device, and is left
+/// out. A device such a radio names is kept, and the TX output the radio in use holds open is
+/// guarded on its own ([`guarded_tx_devices`]).
 pub fn tx_audio_devices(settings: &Settings) -> Vec<String> {
-    std::iter::once(settings.audio_out.clone())
-        .chain(settings.radios.iter().map(|r| r.audio_out.clone()))
+    tx_audio_device_owners(settings)
+        .into_iter()
+        .map(|(device, _)| device)
+        .collect()
+}
+
+/// [`tx_audio_devices`], each with the radio whose TX audio it is: a profile's name, or `None` for
+/// the flat setting (the radio in use, or the station's own before it had profiles).
+pub fn tx_audio_device_owners(settings: &Settings) -> Vec<(String, Option<String>)> {
+    use tempo_app::settings::tx_audio_on_sound_card;
+    let counts = |device: &str, on_card: bool| on_card || !device.trim().is_empty();
+    let flat = counts(
+        &settings.audio_out,
+        tx_audio_on_sound_card(&settings.tx_audio_route()),
+    )
+    .then(|| (settings.audio_out.clone(), None));
+    flat.into_iter()
+        .chain(
+            settings
+                .radios
+                .iter()
+                .filter(|r| counts(&r.audio_out, tx_audio_on_sound_card(&r.tx_audio_route())))
+                .map(|r| (r.audio_out.clone(), Some(r.name.clone()))),
+        )
         .collect()
 }
 
@@ -112,9 +139,9 @@ pub fn open_tx_outputs() -> Vec<String> {
 }
 
 /// The TX devices a sound is refused against: the settings' (`tx_devices`) and every TX output
-/// the radio holds open now ([`open_tx_outputs`]).
-#[cfg_attr(not(feature = "device"), allow(dead_code))]
-fn guarded_tx_devices(tx_devices: &[String]) -> Vec<String> {
+/// the radio holds open now ([`open_tx_outputs`]). The headphone monitor's guard is refused
+/// against the same list ([`crate::monitor::monitor_would_transmit`]).
+pub(crate) fn guarded_tx_devices(tx_devices: &[String]) -> Vec<String> {
     let mut all = tx_devices.to_vec();
     all.extend(open_tx_outputs());
     all
@@ -163,7 +190,7 @@ const CARD_PLUGINS: [&str; 13] = [
 
 /// How this computer's audio host names an output device, and so how two names are compared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Naming {
+pub(crate) enum Naming {
     /// Linux: ALSA PCM names, whose routing may live in a config file.
     Alsa,
     /// Windows / macOS: one name per endpoint.
@@ -171,7 +198,7 @@ enum Naming {
 }
 
 /// This computer's naming (cpal's ALSA host on Linux, WASAPI / CoreAudio elsewhere).
-const HOST_NAMING: Naming = if cfg!(target_os = "linux") {
+pub(crate) const HOST_NAMING: Naming = if cfg!(target_os = "linux") {
     Naming::Alsa
 } else {
     Naming::Endpoint
@@ -310,7 +337,7 @@ fn collide(a: &Route, b: &Route) -> Option<Collision> {
 }
 
 /// An ALSA card's id from its number, as the kernel lists it (`/proc/asound/card<N>/id`).
-fn system_card_id(n: u32) -> Option<String> {
+pub(crate) fn system_card_id(n: u32) -> Option<String> {
     if cfg!(target_os = "linux") {
         std::fs::read_to_string(format!("/proc/asound/card{n}/id"))
             .ok()
@@ -324,7 +351,7 @@ fn system_card_id(n: u32) -> Option<String> {
 /// THE GUARD for one name: why playing on `device` might play into one of `tx_devices`, where an
 /// empty TX name is the system default output, `default_output` (`None` when the host cannot name
 /// one). The strongest reason wins: a named TX device over an unprovable one over a default one.
-fn device_verdict(
+pub(crate) fn device_verdict(
     device: &str,
     tx_devices: &[String],
     default_output: Option<&str>,
@@ -476,9 +503,14 @@ fn input_collision(
 
 /// A built-in tone: a short sine at `hz` with the alerts' envelope (10 ms up to 0.18, down to
 /// silence at 220 ms), twice for `double`, the second a fifth higher 130 ms later — what the
-/// window's own alert beeps sound like.
+/// window's own alert beeps sound like. At [`TONE_RATE`].
 pub fn tone(hz: f32, double: bool) -> Vec<f32> {
-    let rate = TONE_RATE as f32;
+    tone_at(hz, double, TONE_RATE)
+}
+
+/// [`tone`], made at `rate` samples a second (an output that plays at its own rate).
+pub fn tone_at(hz: f32, double: bool, rate: u32) -> Vec<f32> {
+    let rate = rate.max(1) as f32;
     let beep = |f: f32| -> Vec<f32> {
         let n = (0.24 * rate) as usize;
         (0..n)
@@ -1196,7 +1228,9 @@ mod tests {
     #[test]
     fn the_tx_output_the_radio_holds_open_is_refused_whatever_settings_say() {
         let tx = s(&[""]);
-        let codec = "Nexus Test Held CODEC";
+        // A card's name, so on Linux it is told apart from the other tests' cards while it is held:
+        // the hold is process-wide, and the headphone monitor's guard reads it too.
+        let codec = "plughw:CARD=NexusHeldTest,DEV=0";
         assert_eq!(
             ep_refuse(codec, codec, &guarded_tx_devices(&tx), Some("Headphones")),
             Ok(()),

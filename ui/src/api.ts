@@ -9,6 +9,7 @@ import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
 import { isStreamInput } from './remote-native/stream-input'
 import { clientWords } from './features/clientWords'
+import { restoreRefusal } from './features/restoreWords'
 import { noteCallbookAnswer } from './features/callbookAnswers'
 import type { ActivationSpotReport } from './selfSpot'
 import type { ImportDone, ImportPreview } from './features/logImport'
@@ -5827,6 +5828,32 @@ export async function clientStatus(): Promise<ClientStatus | null> {
   return invoke<ClientStatus | null>('client_status')
 }
 
+/** One saved key the station holds back until the operator confirms it for the address it would
+ *  go to (a settings restore set that address where the station had none): Cloudlog's
+ *  (`radioId` null) or a radio's Icom network password. Never the key, nor anything about it. */
+export interface KeyToConfirm {
+  radioId: number | null
+  /** The radio's name; empty for Cloudlog. */
+  radio: string
+  /** The Cloudlog URL, or the radio's network address. */
+  address: string
+  /** Kept only because removing it failed: it was saved for another address (or a radio no
+   *  longer on the roster), so it can only be removed. */
+  removalFailed: boolean
+}
+
+/** The saved keys that wait for the operator. Refused on a computer driving another station. */
+export async function keysToConfirm(): Promise<KeyToConfirm[]> {
+  return invoke<KeyToConfirm[]>('keys_to_confirm')
+}
+
+/** The operator's answer about a saved key that waits: Use (`useIt`) lets it go to `address`, the
+ *  one the notice showed (the station refuses it when the address has changed since); Remove
+ *  forgets it from the system keychain. */
+export async function answerSavedKey(radioId: number | null, useIt: boolean, address: string): Promise<void> {
+  return invoke<void>('answer_saved_key', { radioId, useIt, address })
+}
+
 /** Moves a test build's road switch: where it is now. Blocking one road while the other is
  *  blocked is refused (`oneRoadAtATime`); a shipped build has no such command. */
 export async function benchRoadSwitch(to: BenchPosition): Promise<BenchPosition> {
@@ -5922,5 +5949,7 @@ export async function resetSettings(): Promise<AppSnapshot> {
 /** Restore a bundle written by `exportSettingsBundle`. Refuses anything that is not one, by
  *  name and schema — a partial restore is worse than a refusal. */
 export async function importSettingsBundle(text: string): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('import_settings_bundle', { text })
+  return invoke<AppSnapshot>('import_settings_bundle', { text }).catch((e: unknown) => {
+    throw restoreRefusal(e)
+  })
 }

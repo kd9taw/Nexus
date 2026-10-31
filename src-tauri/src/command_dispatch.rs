@@ -554,8 +554,9 @@ pub(crate) fn station_only_settings(afar: Option<&Afar>) -> Option<Vec<&'static 
 
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
 /// the held press and the Lock, which never run as commands, each section entry ([`ENTRIES`]), the work
-/// bound to presence ([`PRESENCE_BOUND`]), the settings save ([`SETTINGS_FROM_AFAR`]) and the
-/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]). A test holds this to the handlers that take it.
+/// bound to presence ([`PRESENCE_BOUND`]), the settings save ([`SETTINGS_FROM_AFAR`]), the
+/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]) and the settings backup, which leaves out the
+/// station's paths from afar. A test holds this to the handlers that take it.
 pub(crate) fn takes_afar(cmd: &str) -> bool {
     matches!(
         transmit_from_afar(cmd),
@@ -574,6 +575,7 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
         || PRESENCE_BOUND.contains(&cmd)
         || SETTINGS_FROM_AFAR.contains(&cmd)
         || SECRETS_WITHHELD_FROM_AFAR.contains(&cmd)
+        || cmd == "export_settings_bundle"
 }
 
 /// ⛔ STOP WINS OVER A START THAT WAS IN FLIGHT. A start from afar runs only while the transmit
@@ -804,7 +806,7 @@ impl Stores for ShackStores {
 /// ([`station_answer`]). A save from afar keeps the shack's own of both, as the settings themselves
 /// do, leaves the shack's list as it is when it carries none, and is refused where a list does not
 /// read here ([`merged_save`]).
-const PROFILES: &str = "nexus.profiles";
+pub(crate) const PROFILES: &str = "nexus.profiles";
 
 /// The saved profiles `text` with each stored key a profile carries put to `kept(profile, key)`.
 /// `None` when `text` does not read here as a list. The shack's screen reads more than this does,
@@ -864,6 +866,20 @@ fn profiles_with_station_settings(text: &str, shack: Option<&String>) -> Option<
     serde_json::to_string(&profiles).ok()
 }
 
+/// The saved profiles `text` without the shack's JS8 sound files: paths on the shack's disk, which
+/// never go to a computer driving it (it plays the built-in tones). A save from afar puts each back
+/// as the shack's profile of that name holds it ([`profiles_with_station_settings`]). `None` when
+/// `text` does not read here as a list.
+fn profiles_without_sound_files(text: &str) -> Option<String> {
+    let mut profiles: Vec<Value> = serde_json::from_str(text).ok()?;
+    for profile in &mut profiles {
+        if let Some(settings) = profile.get_mut("settings").and_then(Value::as_object_mut) {
+            settings.remove("js8SoundFiles");
+        }
+    }
+    serde_json::to_string(&profiles).ok()
+}
+
 /// Each stored key the shack's saved profiles hold, by profile name and key name.
 fn profile_secrets(text: Option<&String>) -> BTreeMap<(String, String), String> {
     let profiles: Vec<Value> = text
@@ -885,13 +901,16 @@ fn profile_secrets(text: Option<&String>) -> BTreeMap<(String, String), String> 
 }
 
 /// The station's part of a `ui_state_load` answer, which is all the shack sends; a malformed answer
-/// sends nothing. The saved profiles go without their stored keys, and a list that does not read
-/// here, whose keys cannot be blanked, does not go at all.
+/// sends nothing. The saved profiles go without their stored keys and the shack's sound files
+/// ([`profiles_without_sound_files`]), and a list that does not read here, whose keys cannot be
+/// blanked, does not go at all.
 fn station_answer(value: Value) -> Value {
     let map: BTreeMap<String, String> = serde_json::from_value(value).unwrap_or_default();
     let mut station = split_ui_state(map).0;
     if let Some(text) = station.remove(PROFILES) {
-        if let Some(blanked) = profiles_with_secrets(&text, |_, _| String::new()) {
+        if let Some(blanked) = profiles_with_secrets(&text, |_, _| String::new())
+            .and_then(|text| profiles_without_sound_files(&text))
+        {
             station.insert(PROFILES.into(), blanked);
         }
     }

@@ -144,6 +144,29 @@ describe('the JS8 lists, marks and sounds in Settings', () => {
     expect(api.playJs8SoundHere).toHaveBeenLastCalledWith('hb', null)
   })
 
+  it('says once, from a computer driving the station, that the sounds play their built-in tones there', () => {
+    const props = {
+      form: { js8Sounds: ['cq'] } as unknown as Settings,
+      setList: vi.fn(),
+      setMark: vi.fn(),
+      setSounds: vi.fn(),
+      setReset: vi.fn(),
+      pickSoundFile: vi.fn(),
+      setSoundFile: vi.fn(),
+      outputs: ['Speakers'],
+      setSoundDevice: vi.fn(),
+    }
+    const said = () => [...document.querySelectorAll('[data-js8-sounds-here]')].map((e) => e.textContent)
+    const { unmount } = render(<Js8ListsSettings {...props} />)
+    expect(said(), 'at the station: its own files and output').toEqual([])
+    unmount()
+    render(<Js8ListsSettings {...props} locked={(k) => k === 'js8SoundFiles' || k === 'js8SoundDevice'} />)
+    expect(said()).toEqual([
+      'On this computer the sounds play their built-in tones, where you hear the station; a file chosen at the station is not used here.',
+    ])
+    expect(screen.queryByRole('button', { name: 'Choose a WAV file for A CQ' }), 'no file is chosen here').toBeNull()
+  })
+
   it('picks the sounds’ output: the system default first, the radio’s TX audio devices shown but not choosable', () => {
     const setSoundDevice = vi.fn()
     render(

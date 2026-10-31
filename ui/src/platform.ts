@@ -18,6 +18,10 @@ export const IS_MAC = navigator.userAgent.includes('Mac')
  * Linux it cannot, exactly as on a Mac. */
 export const IS_WINDOWS = navigator.userAgent.includes('Windows')
 
+/** True on Linux — Tauri's WebKitGTK reports "X11; Linux" in the user agent. A positive test, as
+ * IS_WINDOWS is; Android's "Linux; Android" is not it. */
+export const IS_LINUX = navigator.userAgent.includes('Linux') && !navigator.userAgent.includes('Android')
+
 /** A digit/letter chord label in the platform's own vocabulary: `modChord('1')` is
  * "⌘1" on a Mac and "Ctrl+1" elsewhere. */
 export function modChord(key: string | number): string {

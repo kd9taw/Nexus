@@ -754,6 +754,17 @@ export const EN = {
   "client.bench.normal": "Normal",
   "client.bench.blockLink": "Block the command link",
   "client.bench.blockStopRoad": "Block the Stop road",
+  "keyConfirm.label": "Saved keys to confirm",
+  "keyConfirm.cloudlog": "Use your saved Cloudlog key with {{address}}?",
+  "keyConfirm.icomLan": "Use your saved password for {{radio}} with {{address}}?",
+  "keyConfirm.why": "A settings restore set this address, and the saved key may be for another. Nothing is sent with it until you choose.",
+  "keyConfirm.use": "Use",
+  "keyConfirm.remove": "Remove",
+  "keyConfirm.notRemoved.cloudlog": "Nexus could not remove your saved Cloudlog key. It is never sent. Try Remove again.",
+  "keyConfirm.notRemoved.icomLan": "Nexus could not remove the saved password for {{radio}}. It is never sent. Try Remove again.",
+  "keyConfirm.refused.addressChanged": "That address changed since the notice asked, so nothing was let go. Check the notice again, then choose.",
+  "keyConfirm.refused.noRadio": "That radio is no longer on the roster, so its saved network password can only be removed: choose Remove.",
+  "keyConfirm.refused.notRemoved": "Removing this saved key failed, and it was saved for another address, so it can only be removed: choose Remove.",
   "client.bench.blocked.link": "Test build: this computer is blocking its command link to the station.",
   "client.bench.blocked.stopRoad": "Test build: this computer is blocking its Stop road to the station.",
   "settings.thisComputer.legend": "This computer",
@@ -7774,6 +7785,7 @@ export const EN = {
   'settings.backup.restore.confirm.action': 'Restore',
   'settings.backup.restore.done': 'Settings restored — check your radio and Test CAT',
   'settings.backup.restore.failed': 'Restore failed',
+  'settings.backup.restore.onAir': 'Finish or stop the transmission first, then restore.',
   // Reset's dialog says what SURVIVES as well as what goes: "reset" reads as total, and the two
   // things operators fear for — the log and their stored passwords — are exactly the two this
   // does not touch. Saying so in the dialog is what makes the confirm answerable.
@@ -8483,6 +8495,8 @@ export const EN = {
   'settings.headphoneMonitor.device.label': 'Headphones or speakers',
   'settings.headphoneMonitor.device.hint':
     "Your headphones or speakers — must NOT be the rig's TX output device.",
+  'settings.headphoneMonitor.device.linuxHint':
+    'On Linux, pick it by its card name (hw: or plughw:): receive audio does not play on the system default, pulse or pipewire, which may be the radio’s card.',
   'settings.headphoneMonitor.level.label': 'Listening level',
   'settings.headphoneMonitor.level.aria': 'Receive listening level',
   'settings.headphoneMonitor.level.hint':
@@ -9710,6 +9724,8 @@ export const EN = {
   'settings.js8.sounds.title': 'Sounds',
   'settings.js8.sounds.hint':
     'A sound when one of these is heard, whichever screen is showing: its own tone, or a WAV file you choose. All off by default, as JS8Call’s notifications are. Test plays it once.',
+  'settings.js8.sounds.thisComputer':
+    'On this computer the sounds play their built-in tones, where you hear the station; a file chosen at the station is not used here.',
   'settings.js8.sound.cq': 'A CQ',
   'settings.js8.sound.hb': 'A heartbeat',
   'settings.js8.sound.ack': 'An ACK for you',

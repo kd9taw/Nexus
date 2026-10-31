@@ -31565,6 +31565,49 @@ tr.sel .aprs-sym {
    Deliberately QUIET, and deliberately unlike .pounce-banner. A new build is not urgent, so it
    sits at the bottom, does not steal focus, and can be dismissed. Pounce is loud and top-of-
    screen because a rare DX spot genuinely is a race; these two must not read as the same thing. */
+/* The saved keys held back until the operator confirms them (KeyConfirmBanner.tsx): an in-flow
+   strip at the top of `.app`, as the client banner is, so it covers nothing. Amber, because a key
+   is being held back. Each key's question and its two answers wrap inside the strip at narrow
+   widths rather than push past its edge. */
+.key-confirm-banner {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  background: var(--bg-elev);
+  border-bottom: 2px solid var(--state-warn);
+  font-size: var(--fs-body);
+}
+.key-confirm-why {
+  flex: 1 1 100%;
+  min-width: 0;
+  color: var(--text-dim);
+}
+.key-confirm-row {
+  flex: 1 1 28em;
+  min-width: 0;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.key-confirm-question {
+  flex: 1 1 16em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.key-confirm-row > button {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+}
 /* The banner of a computer driving another station (client mode): an in-flow strip at the top of
    `.app`, its own height taken from the shell below, so it covers nothing — no cockpit control,
    Stop included, is ever under it. Amber while the link is not live, control is elsewhere, or the

@@ -15380,6 +15380,11 @@ fn settings_read(
     // From afar the stored keys stay at the shack: blanked, with whether each is saved.
     let saved_at_the_station =
         command_dispatch::withhold_the_shacks_secret_settings(&mut s, afar, watched);
+    // From afar no path on the shack's disk goes: the computer driving it plays JS8's built-in
+    // tones (`client_mode`), and the save from afar keeps the shack's own files.
+    if afar.is_some() {
+        s.js8_sound_files.clear();
+    }
     // The Cloudlog key is write-only and never sent to the frontend. It now serializes while
     // a legacy plaintext key is pending keychain migration (so a save cannot drop it — round
     // 8 F1), so clear it from THIS clone before it leaves the shell; the engine's own copy is
@@ -15915,10 +15920,16 @@ mod contest_session_tests {
         })
         .to_string();
         let mut ui_saved = None;
-        let restored = restore_settings_bundle(&engine, text, |ui| {
-            ui_saved = Some(ui);
-            true
-        });
+        let restored = restore_settings_bundle(
+            &engine,
+            text,
+            Default::default,
+            |ui| {
+                ui_saved = Some(ui);
+                true
+            },
+            no_key_change,
+        );
         assert_eq!(
             restored.map(|_| ()),
             Err(tempo_app::engine::SESSION_BUSY.to_string()),
@@ -15933,6 +15944,2493 @@ mod contest_session_tests {
         drop(eng);
         assert_eq!(ui_saved, None, "nor the UI state the backup carries");
         drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A bundle exported from afar whose saved profiles are `profiles`, and a station whose saved
+    /// profiles are `station`, after [`keep_the_stations_paths`]: the bundle's profiles by name.
+    fn profiles_kept(
+        profiles: serde_json::Value,
+        station: serde_json::Value,
+    ) -> std::collections::BTreeMap<String, serde_json::Value> {
+        let mut bundle = serde_json::json!({
+            (STATION_PATHS_LEFT_OUT): true,
+            "settings": {},
+            "uiState": { (crate::command_dispatch::PROFILES): profiles.to_string() },
+        });
+        let station_ui: std::collections::BTreeMap<String, String> = [(
+            crate::command_dispatch::PROFILES.to_string(),
+            station.to_string(),
+        )]
+        .into_iter()
+        .collect();
+        keep_the_stations_paths(&mut bundle, &serde_json::json!({}), || station_ui);
+        let kept: Vec<serde_json::Value> = serde_json::from_str(
+            bundle["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        kept.into_iter()
+            .map(|p| {
+                (
+                    p["name"].as_str().unwrap().to_string(),
+                    p["settings"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// ★ RESTORING A BACKUP MADE FROM AFAR KEEPS EVERY PROFILE'S VOICE SLOTS: a profile this station
+    /// has no profile of the same name for (a fresh install, a profile deleted), and one whose
+    /// station profile has no voice slots, keep the backup's slots, labels and all, with the
+    /// recording blank. CONTROL: a station profile with the slot gives it its recording.
+    #[test]
+    fn restoring_from_afar_keeps_the_voice_slots_the_station_has_no_recording_for() {
+        let slots = |label: &str| {
+            serde_json::json!([
+                { "slot": 1, "label": label, "file": "", "repeat": true },
+                { "slot": 2, "label": format!("{label} 2"), "file": "" },
+            ])
+        };
+        let kept = profiles_kept(
+            serde_json::json!([
+                { "name": "Portable", "settings": { "voiceMessages": slots("CQ POTA") } },
+                { "name": "Home", "settings": { "voiceMessages": slots("CQ DX") } },
+                { "name": "Field", "settings": { "voiceMessages": slots("CQ FD") } },
+            ]),
+            serde_json::json!([
+                { "name": "Home", "settings": { "mycall": "W9SHK" } },
+                { "name": "Field", "settings": { "voiceMessages": [
+                    { "slot": 2, "label": "x", "file": "C:\\Shack\\fd2.wav" }
+                ] } },
+            ]),
+        );
+        assert_eq!(
+            kept["Portable"]["voiceMessages"],
+            slots("CQ POTA"),
+            "no such profile here"
+        );
+        assert_eq!(
+            kept["Home"]["voiceMessages"],
+            slots("CQ DX"),
+            "no voice slots here"
+        );
+        assert_eq!(
+            kept["Field"]["voiceMessages"],
+            serde_json::json!([
+                { "slot": 1, "label": "CQ FD", "file": "", "repeat": true },
+                { "slot": 2, "label": "CQ FD 2", "file": "C:\\Shack\\fd2.wav" },
+            ]),
+            "CONTROL: the station's recording for its slot"
+        );
+    }
+
+    /// ★ TWO PROFILES, TWO STATIONS' WORTH OF PATHS: each profile in a backup made from afar gets
+    /// the paths of this station's profile of ITS name, never the other's, whatever the order.
+    #[test]
+    fn restoring_from_afar_gives_each_profile_its_own_paths() {
+        let stripped = |name: &str| {
+            serde_json::json!({ "name": name, "settings": {
+                "mycall": "W9SHK",
+                "voiceMessages": [{ "slot": 1, "label": name, "file": "" }],
+            } })
+        };
+        let station = |name: &str, root: &str| {
+            serde_json::json!({ "name": name, "settings": {
+                "tqslPath": format!("{root}\\tqsl.exe"),
+                "js8SoundFiles": { "cq": format!("{root}\\cq.wav") },
+                "voiceMessages": [{ "slot": 1, "label": "?", "file": format!("{root}\\v1.wav") }],
+            } })
+        };
+        let kept = profiles_kept(
+            serde_json::json!([stripped("Alpha"), stripped("Bravo")]),
+            serde_json::json!([station("Bravo", "D:\\B"), station("Alpha", "C:\\A")]),
+        );
+        let paths = |s: &serde_json::Value| {
+            (
+                s["tqslPath"].clone(),
+                s["js8SoundFiles"]["cq"].clone(),
+                s["voiceMessages"][0]["file"].clone(),
+                s["voiceMessages"][0]["label"].clone(),
+            )
+        };
+        assert_eq!(
+            paths(&kept["Alpha"]),
+            (
+                serde_json::json!("C:\\A\\tqsl.exe"),
+                serde_json::json!("C:\\A\\cq.wav"),
+                serde_json::json!("C:\\A\\v1.wav"),
+                serde_json::json!("Alpha"),
+            )
+        );
+        assert_eq!(
+            paths(&kept["Bravo"]),
+            (
+                serde_json::json!("D:\\B\\tqsl.exe"),
+                serde_json::json!("D:\\B\\cq.wav"),
+                serde_json::json!("D:\\B\\v1.wav"),
+                serde_json::json!("Bravo"),
+            )
+        );
+    }
+
+    /// The station's paths, set on `engine`: the TQSL program, a JS8 sound file and F1's
+    /// recording, each under `root`. With the UI state holding a saved profile "Home" that carries
+    /// the same three.
+    fn with_station_paths_set(
+        engine: &SharedEngine,
+        root: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut s = engine_lock(engine).settings().clone();
+        s.mycall = "W9SHK".into();
+        s.tqsl_path = format!("{root}\\TrustedQSL\\tqsl.exe");
+        s.js8_sound_files
+            .insert("cq".into(), format!("{root}\\Sounds\\cq.wav"));
+        s.voice_messages[0].file = format!("{root}\\voice\\slot1.wav");
+        engine_lock(engine).apply_restored_settings(s);
+        let profiles = serde_json::json!([{
+            "name": "Home",
+            "settings": {
+                "mycall": "W9SHK",
+                "tqslPath": format!("{root}\\TrustedQSL\\tqsl.exe"),
+                "js8SoundFiles": { "cq": format!("{root}\\Sounds\\cq.wav") },
+                "voiceMessages": [{ "slot": 1, "label": "CQ", "file": format!("{root}\\voice\\slot1.wav") }],
+            },
+        }]);
+        [(
+            crate::command_dispatch::PROFILES.to_string(),
+            profiles.to_string(),
+        )]
+        .into_iter()
+        .collect()
+    }
+
+    const FROM_AFAR: crate::command_dispatch::Afar = crate::command_dispatch::Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    };
+
+    /// ★ A BACKUP MADE FROM A COMPUTER DRIVING THE STATION CARRIES NO PATH ON THE STATION'S DISK:
+    /// not the TQSL program, not a JS8 sound file, not a voice-keyer recording, in its settings or
+    /// in a saved profile, and it says it left them out. Each voice slot keeps its label. CONTROL: a
+    /// backup made at the station carries each, by value, and says nothing.
+    #[test]
+    fn a_backup_made_from_afar_leaves_out_the_stations_paths() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-paths", 0);
+        let ui = with_station_paths_set(&engine, "C:\\Shack");
+        let text = settings_bundle(&engine, ui.clone(), Some(&FROM_AFAR)).unwrap();
+        assert!(!text.contains("Shack"), "no station path from afar: {text}");
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v[STATION_PATHS_LEFT_OUT], serde_json::json!(true));
+        let profiles: serde_json::Value = serde_json::from_str(
+            v["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        for (whose, s) in [
+            ("settings", &v["settings"]),
+            ("profile", &profiles[0]["settings"]),
+        ] {
+            assert_eq!(
+                s["mycall"],
+                serde_json::json!("W9SHK"),
+                "{whose}: the rest goes"
+            );
+            assert_eq!(s.get("tqslPath"), None, "{whose}");
+            assert_eq!(s.get("js8SoundFiles"), None, "{whose}");
+            assert_eq!(
+                s["voiceMessages"][0]["file"],
+                serde_json::json!(""),
+                "{whose}"
+            );
+            assert_eq!(
+                s["voiceMessages"][0]["label"],
+                serde_json::json!("CQ"),
+                "{whose}"
+            );
+        }
+
+        let text = settings_bundle(&engine, ui, None).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            v.get(STATION_PATHS_LEFT_OUT),
+            None,
+            "CONTROL: at the station"
+        );
+        let profiles: serde_json::Value = serde_json::from_str(
+            v["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        for (whose, s) in [
+            ("settings", &v["settings"]),
+            ("profile", &profiles[0]["settings"]),
+        ] {
+            assert_eq!(
+                (
+                    &s["tqslPath"],
+                    &s["js8SoundFiles"],
+                    &s["voiceMessages"][0]["file"]
+                ),
+                (
+                    &serde_json::json!("C:\\Shack\\TrustedQSL\\tqsl.exe"),
+                    &serde_json::json!({ "cq": "C:\\Shack\\Sounds\\cq.wav" }),
+                    &serde_json::json!("C:\\Shack\\voice\\slot1.wav"),
+                ),
+                "CONTROL: at the station, {whose}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ RESTORING A BACKUP MADE FROM AFAR KEEPS THE STATION'S PATHS, as the station has them at
+    /// the restore (moved since the backup), in its settings and in its saved profile of the same
+    /// name, while the rest of the backup lands. CONTROL: a backup made at the station restores the
+    /// paths it carries.
+    #[test]
+    fn restoring_a_backup_made_from_afar_keeps_the_stations_paths() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-paths", 0);
+        let ui = with_station_paths_set(&engine, "C:\\Old");
+        let restore = |text: String, station_ui: std::collections::BTreeMap<String, String>| {
+            let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            v["settings"]["mycall"] = serde_json::json!("W9NEW");
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || station_ui,
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+                no_key_change,
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let profiles: serde_json::Value =
+                serde_json::from_str(&saved.unwrap()[crate::command_dispatch::PROFILES]).unwrap();
+            let p = profiles[0]["settings"].clone();
+            (
+                s.mycall,
+                (
+                    s.tqsl_path,
+                    s.js8_sound_files.get("cq").cloned(),
+                    s.voice_messages[0].file.clone(),
+                ),
+                (
+                    p["tqslPath"].clone(),
+                    p["js8SoundFiles"]["cq"].clone(),
+                    p["voiceMessages"][0]["file"].clone(),
+                ),
+            )
+        };
+        let afar = settings_bundle(&engine, ui.clone(), Some(&FROM_AFAR)).unwrap();
+        let local = settings_bundle(&engine, ui, None).unwrap();
+        let now = with_station_paths_set(&engine, "D:\\Now");
+        assert_eq!(
+            restore(afar, now.clone()),
+            (
+                "W9NEW".to_string(),
+                (
+                    "D:\\Now\\TrustedQSL\\tqsl.exe".to_string(),
+                    Some("D:\\Now\\Sounds\\cq.wav".to_string()),
+                    "D:\\Now\\voice\\slot1.wav".to_string()
+                ),
+                (
+                    serde_json::json!("D:\\Now\\TrustedQSL\\tqsl.exe"),
+                    serde_json::json!("D:\\Now\\Sounds\\cq.wav"),
+                    serde_json::json!("D:\\Now\\voice\\slot1.wav")
+                ),
+            ),
+            "the station's own, as it has them now"
+        );
+        with_station_paths_set(&engine, "D:\\Now");
+        assert_eq!(
+            restore(local, now),
+            (
+                "W9NEW".to_string(),
+                (
+                    "C:\\Old\\TrustedQSL\\tqsl.exe".to_string(),
+                    Some("C:\\Old\\Sounds\\cq.wav".to_string()),
+                    "C:\\Old\\voice\\slot1.wav".to_string()
+                ),
+                (
+                    serde_json::json!("C:\\Old\\TrustedQSL\\tqsl.exe"),
+                    serde_json::json!("C:\\Old\\Sounds\\cq.wav"),
+                    serde_json::json!("C:\\Old\\voice\\slot1.wav")
+                ),
+            ),
+            "CONTROL: a backup made at the station restores its own"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The station's stored keys, planted (fake): its own Club Log and Cloudlog keys in its
+    /// settings, and each of two saved profiles' own, every one a distinct string under `tag`.
+    /// With the UI state holding a station key (the watch list) and this computer's own (the UI
+    /// scale's cap).
+    fn with_station_keys_set(
+        engine: &SharedEngine,
+        tag: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut s = engine_lock(engine).settings().clone();
+        s.mycall = "W9SHK".into();
+        s.clublog_api_key = format!("{tag}-TOP-CLUBLOG");
+        s.cloudlog_key = format!("{tag}-TOP-CLOUDLOG");
+        engine_lock(engine).apply_restored_settings(s);
+        let profile = |name: &str| {
+            serde_json::json!({ "name": name, "settings": {
+                "mycall": format!("W9{name}"),
+                "clublogApiKey": format!("{tag}-{name}-CLUBLOG"),
+                "cloudlogKey": format!("{tag}-{name}-CLOUDLOG"),
+            } })
+        };
+        [
+            (
+                crate::command_dispatch::PROFILES.to_string(),
+                serde_json::json!([profile("ALPHA"), profile("BRAVO")]).to_string(),
+            ),
+            ("nexus.watchlist".to_string(), "[\"K1ABC\"]".to_string()),
+            ("nexus-ui-scale-cap".to_string(), "1.5".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    /// The saved profiles a bundle (or a saved UI state) carries, by name, as their settings.
+    fn bundle_profiles(
+        ui: &serde_json::Value,
+    ) -> std::collections::BTreeMap<String, serde_json::Value> {
+        let list: Vec<serde_json::Value> =
+            serde_json::from_str(ui[crate::command_dispatch::PROFILES].as_str().unwrap()).unwrap();
+        list.into_iter()
+            .map(|p| {
+                (
+                    p["name"].as_str().unwrap().to_string(),
+                    p["settings"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// ★ NO SETTINGS BACKUP CARRIES A STORED KEY, made at the station or from afar: not the
+    /// station's own Club Log or Cloudlog key, and not one a saved profile holds, anywhere in the
+    /// file. CONTROL: the planted keys are in what the backup is made from, and the rest of each
+    /// profile goes.
+    #[test]
+    fn no_settings_backup_carries_a_stored_key() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-keys", 0);
+        let ui = with_station_keys_set(&engine, "PLANTED");
+        let source = format!(
+            "{} {}",
+            serde_json::to_string(engine_lock(&engine).settings()).unwrap(),
+            ui[crate::command_dispatch::PROFILES]
+        );
+        assert_eq!(
+            source.matches("PLANTED").count(),
+            6,
+            "CONTROL: planted: {source}"
+        );
+        for afar in [None, Some(&FROM_AFAR)] {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            assert!(
+                !text.contains("PLANTED"),
+                "a stored key in a backup (afar {}): {text}",
+                afar.is_some()
+            );
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let profiles = bundle_profiles(&v["uiState"]);
+            assert_eq!(
+                (
+                    &profiles["ALPHA"]["mycall"],
+                    &profiles["BRAVO"]["mycall"],
+                    &v["settings"]["mycall"]
+                ),
+                (
+                    &serde_json::json!("W9ALPHA"),
+                    &serde_json::json!("W9BRAVO"),
+                    &serde_json::json!("W9SHK")
+                ),
+                "CONTROL: the rest goes (afar {})",
+                afar.is_some()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A SAVED PROFILE LIST THAT DOES NOT READ IS IN NO BACKUP: its keys cannot be taken out of
+    /// it, so it does not go, made at the station or from afar. CONTROL: the watch list goes.
+    #[test]
+    fn a_profile_list_that_does_not_read_is_in_no_backup() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-unread", 0);
+        let mut ui = with_station_keys_set(&engine, "PLANTED");
+        ui.insert(
+            crate::command_dispatch::PROFILES.into(),
+            "{ \"clublogApiKey\": \"PLANTED-UNREAD\", ".into(),
+        );
+        for afar in [None, Some(&FROM_AFAR)] {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            assert!(!text.contains("PLANTED"), "afar {}: {text}", afar.is_some());
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                (
+                    v["uiState"].get(crate::command_dispatch::PROFILES),
+                    &v["uiState"]["nexus.watchlist"]
+                ),
+                (None, &serde_json::json!("[\"K1ABC\"]")),
+                "afar {}: {text}",
+                afar.is_some()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A BACKUP MADE FROM AFAR CARRIES ONLY THE STATION'S HALF OF THE UI STATE: this computer's
+    /// own (the UI scale's cap) is not the station's to back up. CONTROL: made at the station, it
+    /// carries both.
+    #[test]
+    fn a_backup_made_from_afar_carries_only_the_stations_ui_state() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-half", 0);
+        let ui = with_station_keys_set(&engine, "PLANTED");
+        let carried = |afar| {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            (
+                v["uiState"].get("nexus.watchlist").cloned(),
+                v["uiState"].get("nexus-ui-scale-cap").cloned(),
+            )
+        };
+        assert_eq!(
+            carried(Some(&FROM_AFAR)),
+            (Some(serde_json::json!("[\"K1ABC\"]")), None)
+        );
+        assert_eq!(
+            carried(None),
+            (
+                Some(serde_json::json!("[\"K1ABC\"]")),
+                Some(serde_json::json!("1.5"))
+            ),
+            "CONTROL: at the station"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ RESTORING A BACKUP KEEPS THE STATION'S OWN STORED KEYS: its Club Log and Cloudlog keys,
+    /// and each saved profile's of the same name, whether the backup's profile has them blank or
+    /// leaves them out, made at the station or from afar, while the rest of the backup lands. A
+    /// backup made from afar keeps this computer's own half of the UI state too. CONTROL: a key a
+    /// backup does carry (an older one, written before keys were left out) restores as it is, and a
+    /// profile the station has no namesake for keeps its blank.
+    #[test]
+    fn restoring_a_backup_keeps_the_stations_stored_keys() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-keys", 0);
+        let ui = with_station_keys_set(&engine, "OLD");
+        let afar = settings_bundle(&engine, ui.clone(), Some(&FROM_AFAR)).unwrap();
+        let local = settings_bundle(&engine, ui, None).unwrap();
+        let restore = |text: &str, edit: &dyn Fn(&mut serde_json::Value)| {
+            let station_ui = with_station_keys_set(&engine, "STATION");
+            let mut v: serde_json::Value = serde_json::from_str(text).unwrap();
+            v["settings"]["mycall"] = serde_json::json!("W9NEW");
+            edit(&mut v);
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || station_ui,
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+                no_key_change,
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let ui = serde_json::to_value(saved.unwrap()).unwrap();
+            (s, ui)
+        };
+        let keys = |p: &serde_json::Value| {
+            (
+                p.get("clublogApiKey").cloned(),
+                p.get("cloudlogKey").cloned(),
+            )
+        };
+        let station = |name: &str| {
+            (
+                Some(serde_json::json!(format!("STATION-{name}-CLUBLOG"))),
+                Some(serde_json::json!(format!("STATION-{name}-CLOUDLOG"))),
+            )
+        };
+        for (whose, text) in [("afar", &afar), ("local", &local)] {
+            // As exported: the profile keys left out. And blanked, as an older build's read
+            // from afar wrote them.
+            let blank = |v: &mut serde_json::Value| {
+                let mut list: Vec<serde_json::Value> = serde_json::from_str(
+                    v["uiState"][crate::command_dispatch::PROFILES]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                list[1]["settings"]["clublogApiKey"] = serde_json::json!("");
+                list[1]["settings"]["cloudlogKey"] = serde_json::json!(" ");
+                v["uiState"][crate::command_dispatch::PROFILES] =
+                    serde_json::json!(serde_json::to_string(&list).unwrap());
+                v["settings"]["clublogApiKey"] = serde_json::json!("");
+            };
+            let as_exported = |_: &mut serde_json::Value| {};
+            let edits: [&dyn Fn(&mut serde_json::Value); 2] = [&as_exported, &blank];
+            for edit in edits {
+                let (s, ui) = restore(text, edit);
+                let profiles = bundle_profiles(&ui);
+                assert_eq!(
+                    (
+                        s.mycall.as_str(),
+                        s.clublog_api_key.as_str(),
+                        s.cloudlog_key.as_str()
+                    ),
+                    ("W9NEW", "STATION-TOP-CLUBLOG", "STATION-TOP-CLOUDLOG"),
+                    "{whose}: the station's own keys"
+                );
+                assert_eq!(keys(&profiles["ALPHA"]), station("ALPHA"), "{whose}");
+                assert_eq!(keys(&profiles["BRAVO"]), station("BRAVO"), "{whose}");
+                assert_eq!(
+                    ui["nexus-ui-scale-cap"],
+                    serde_json::json!("1.5"),
+                    "{whose}: this computer's own half"
+                );
+            }
+        }
+
+        // CONTROL: a backup that carries keys restores them; a profile with no namesake here
+        // keeps its blank.
+        let (s, ui) = restore(&local, &|v| {
+            let list = serde_json::json!([
+                { "name": "ALPHA", "settings": { "clublogApiKey": "FILE-ALPHA-CLUBLOG" } },
+                { "name": "CHARLIE", "settings": { "clublogApiKey": "", "cloudlogKey": "" } },
+            ]);
+            v["uiState"][crate::command_dispatch::PROFILES] = serde_json::json!(list.to_string());
+            v["settings"]["clublogApiKey"] = serde_json::json!("FILE-TOP-CLUBLOG");
+        });
+        let profiles = bundle_profiles(&ui);
+        assert_eq!(s.clublog_api_key, "FILE-TOP-CLUBLOG", "CONTROL: carried");
+        assert_eq!(
+            keys(&profiles["ALPHA"]),
+            (
+                Some(serde_json::json!("FILE-ALPHA-CLUBLOG")),
+                station("ALPHA").1
+            ),
+            "CONTROL: carried, the one left out kept"
+        );
+        assert_eq!(
+            keys(&profiles["CHARLIE"]),
+            (Some(serde_json::json!("")), Some(serde_json::json!(""))),
+            "CONTROL: no namesake"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A made-up keychain for a restore's `keychain`: the entries it holds, the accounts a
+    /// restore removed and stored to, in order, and whether it refuses a store (a keychain that
+    /// cannot save). Nothing here reaches the OS keychain.
+    struct FakeKeychain {
+        held: std::collections::BTreeMap<String, String>,
+        forgot: Vec<String>,
+        stored: Vec<String>,
+        refuse_store: bool,
+        refuse_forget: bool,
+    }
+
+    impl FakeKeychain {
+        fn holding(accounts: &[&str]) -> Self {
+            FakeKeychain {
+                held: accounts
+                    .iter()
+                    .map(|a| (a.to_string(), format!("PLANTED-{a}")))
+                    .collect(),
+                forgot: Vec::new(),
+                stored: Vec::new(),
+                refuse_store: false,
+                refuse_forget: false,
+            }
+        }
+        fn change(&mut self, change: KeychainChange) -> Result<bool, String> {
+            match change {
+                KeychainChange::Forget(account) => {
+                    self.forgot.push(account.to_string());
+                    if self.refuse_forget {
+                        return Err("the keychain is locked".into());
+                    }
+                    Ok(self.held.remove(account).is_some())
+                }
+                KeychainChange::Store { account, key } => {
+                    self.stored.push(account.to_string());
+                    if self.refuse_store {
+                        return Err("no keychain here".into());
+                    }
+                    self.held.insert(account.to_string(), key.to_string());
+                    Ok(true)
+                }
+                KeychainChange::Holds(account) => Ok(self.held.contains_key(account)),
+            }
+        }
+    }
+
+    /// Whether the Connections log holds `message` from `connector`.
+    fn connection_log_says(connector: &str, message: &str) -> bool {
+        get_connection_log()
+            .iter()
+            .any(|e| e.connector == connector && e.message == message)
+    }
+
+    /// ★ A RESTORED BACKUP THAT POINTS CLOUDLOG AT ANOTHER ADDRESS REMOVES THE KEY KEPT FOR THE
+    /// STATION'S: the keychain entry goes, the key left in the settings waiting for the keychain
+    /// goes (the engine does not put it back), a saved profile that moves its URL keeps no key,
+    /// and the Connections log says once to enter it again. The scheme, the host, the port and
+    /// the path each move it. CONTROL: the same URL, or the same written another way (case of
+    /// the scheme and host, the scheme's own port, a trailing `/`), removes nothing; the Club Log
+    /// key, sent to one fixed host, is kept either way.
+    #[test]
+    fn a_restored_backup_that_moves_cloudlog_removes_its_key() {
+        const STATION_LOG: &str = "https://log.station.example/cloudlog";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-cloudlog", 0);
+        let profiles_key = crate::command_dispatch::PROFILES;
+        // The station: its URL, its key waiting for the keychain ("STATION-TOP-CLOUDLOG") and its
+        // profiles' URLs, ALPHA's and BRAVO's own.
+        let station_ui = || {
+            let mut ui = with_station_keys_set(&engine, "STATION");
+            let mut s = engine_lock(&engine).settings().clone();
+            s.cloudlog_url = STATION_LOG.into();
+            engine_lock(&engine).apply_restored_settings(s);
+            let mut list: Vec<serde_json::Value> = serde_json::from_str(&ui[profiles_key]).unwrap();
+            for p in &mut list {
+                let url = format!("{STATION_LOG}/{}", p["name"].as_str().unwrap());
+                p["settings"]["cloudlogUrl"] = serde_json::json!(url);
+            }
+            ui.insert(profiles_key.into(), serde_json::to_string(&list).unwrap());
+            ui
+        };
+        // A backup of the station, its URL and ALPHA's set to `top` and `alpha`.
+        let restore = |top: &str, alpha: &str| {
+            let ui = station_ui();
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, ui.clone(), None).unwrap()).unwrap();
+            v["settings"]["cloudlogUrl"] = serde_json::json!(top);
+            let mut list: Vec<serde_json::Value> =
+                serde_json::from_str(v["uiState"][profiles_key].as_str().unwrap()).unwrap();
+            for p in &mut list {
+                if p["name"] == "ALPHA" {
+                    p["settings"]["cloudlogUrl"] = serde_json::json!(alpha);
+                }
+            }
+            v["uiState"][profiles_key] = serde_json::json!(serde_json::to_string(&list).unwrap());
+            let mut keychain =
+                FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER, CLUBLOG_KEYCHAIN_USER]);
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || ui,
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let profiles = bundle_profiles(&serde_json::to_value(saved.unwrap()).unwrap());
+            (s, profiles, keychain)
+        };
+        let keys = |p: &serde_json::Value| {
+            (
+                p.get("cloudlogKey").cloned(),
+                p.get("clublogApiKey").cloned(),
+            )
+        };
+        let kept = |name: &str| {
+            (
+                Some(serde_json::json!(format!("STATION-{name}-CLOUDLOG"))),
+                Some(serde_json::json!(format!("STATION-{name}-CLUBLOG"))),
+            )
+        };
+        let station_keychain =
+            FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER, CLUBLOG_KEYCHAIN_USER]);
+
+        // CONTROL: the same URLs, as the station writes them and written another way.
+        for (top, alpha) in [
+            (STATION_LOG.to_string(), format!("{STATION_LOG}/ALPHA")),
+            (
+                "  HTTPS://Log.Station.EXAMPLE:443/cloudlog/".to_string(),
+                "https://LOG.station.example/cloudlog/ALPHA//".to_string(),
+            ),
+        ] {
+            let (s, profiles, keychain) = restore(&top, &alpha);
+            assert_eq!(
+                keychain.forgot,
+                Vec::<String>::new(),
+                "CONTROL {top}: nothing removed"
+            );
+            assert_eq!(keychain.held, station_keychain.held, "CONTROL {top}");
+            assert_eq!(
+                (
+                    s.cloudlog_url.as_str(),
+                    s.cloudlog_key.as_str(),
+                    s.clublog_api_key.as_str()
+                ),
+                (top.as_str(), "STATION-TOP-CLOUDLOG", "STATION-TOP-CLUBLOG"),
+                "CONTROL {top}: the keys kept"
+            );
+            assert_eq!(keys(&profiles["ALPHA"]), kept("ALPHA"), "CONTROL {top}");
+            assert_eq!(keys(&profiles["BRAVO"]), kept("BRAVO"), "CONTROL {top}");
+        }
+
+        // Another host, scheme, port or path: the key goes, everywhere it was kept for the station.
+        for top in [
+            "https://log.other.example/cloudlog",
+            "http://log.station.example/cloudlog",
+            "https://log.station.example:8443/cloudlog",
+            "https://log.station.example/wavelog",
+        ] {
+            let alpha = format!("{top}/ALPHA");
+            let (s, profiles, keychain) = restore(top, &alpha);
+            assert_eq!(
+                keychain.forgot,
+                vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+                "{top}: the Cloudlog entry alone removed"
+            );
+            assert_eq!(
+                keychain.held.keys().collect::<Vec<_>>(),
+                vec![CLUBLOG_KEYCHAIN_USER],
+                "{top}: the Club Log entry kept"
+            );
+            assert_eq!(
+                (
+                    s.cloudlog_url.as_str(),
+                    s.cloudlog_key.as_str(),
+                    s.clublog_api_key.as_str()
+                ),
+                (top, "", "STATION-TOP-CLUBLOG"),
+                "{top}: the URL restored, the waiting key gone, the Club Log key kept"
+            );
+            assert_eq!(
+                keys(&profiles["ALPHA"]),
+                (None, kept("ALPHA").1),
+                "{top}: the profile that moved keeps no Cloudlog key"
+            );
+            assert_eq!(
+                keys(&profiles["BRAVO"]),
+                kept("BRAVO"),
+                "{top}: BRAVO did not move"
+            );
+            assert!(
+                connection_log_says("Cloudlog", CLOUDLOG_KEY_FORGOTTEN),
+                "{top}: the operator is told"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORED BACKUP THAT POINTS AN ICOM NETWORK RADIO AT ANOTHER ADDRESS REMOVES THAT
+    /// RADIO'S SAVED PASSWORD, and no other radio's: by the radio's id, its host or its port
+    /// moved, or a radio the station does not have. The Connections log names the radio.
+    /// CONTROL: the same addresses, a host written in another case among them, remove nothing.
+    #[test]
+    fn a_restored_backup_that_moves_an_icom_radio_removes_its_password() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-icom", 0);
+        let radio = |id: u32, name: &str, host: &str| tempo_app::settings::RadioProfile {
+            id,
+            name: name.into(),
+            icom_lan_host: host.into(),
+            icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
+            ..Default::default()
+        };
+        let mut station = engine_lock(&engine).settings().clone();
+        station.radios = vec![
+            radio(0, "Restore Test IC-705", "192.168.1.20"),
+            radio(1, "Restore Test IC-9700", "Radio-B.local"),
+            // The active radio, so the flat mirror a restore folds into it is none of the two.
+            radio(2, "Restore Test FTDX10", ""),
+        ];
+        station.active_radio = 2;
+        station.sync_flat_from_active();
+        let accounts = [
+            icom_lan_account(0),
+            icom_lan_account(1),
+            icom_lan_account(7),
+        ];
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = |edit: &dyn Fn(&mut Vec<serde_json::Value>)| {
+            engine_lock(&engine).apply_restored_settings(station.clone());
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            let mut radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            edit(&mut radios);
+            v["settings"]["radios"] = serde_json::json!(radios);
+            let mut keychain = FakeKeychain::holding(&all);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            keychain.forgot
+        };
+
+        // CONTROL: as the station has them, and radio 1's host in another case.
+        assert_eq!(
+            restore(&|_| {}),
+            Vec::<String>::new(),
+            "CONTROL: as they are"
+        );
+        assert_eq!(
+            restore(&|r| r[1]["icomLanHost"] = serde_json::json!(" radio-b.LOCAL ")),
+            Vec::<String>::new(),
+            "CONTROL: the host in another case"
+        );
+
+        assert_eq!(
+            restore(&|r| r[0]["icomLanHost"] = serde_json::json!("192.168.1.99")),
+            vec![icom_lan_account(0)],
+            "radio 0's host moved: its password alone"
+        );
+        assert!(connection_log_says(
+            "Icom network",
+            &icom_password_forgotten("Restore Test IC-705")
+        ));
+        assert_eq!(
+            restore(&|r| r[1]["icomLanPort"] = serde_json::json!(50002)),
+            vec![icom_lan_account(1)],
+            "radio 1's port moved"
+        );
+        assert_eq!(
+            restore(&|r| {
+                let mut new = r[1].clone();
+                new["id"] = serde_json::json!(7);
+                new["name"] = serde_json::json!("Restore Test IC-7610");
+                r.push(new);
+            }),
+            Vec::<String>::new(),
+            "a radio the station does not have has no address here to move from: kept"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The station's radios for the restore tests below: an IC-705 (id 0) and an IC-9700 (id 1)
+    /// on the network, the operating FTDX10 (id 2, so the flat mirror a restore folds in is none
+    /// of the Icoms) and a serial IC-7300 (id 3) with no network host.
+    fn restore_test_roster() -> Vec<tempo_app::settings::RadioProfile> {
+        let radio = |id: u32, name: &str, host: &str| tempo_app::settings::RadioProfile {
+            id,
+            name: name.into(),
+            icom_lan_host: host.into(),
+            icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
+            ..Default::default()
+        };
+        vec![
+            radio(0, "Restore Test IC-705", "192.168.1.20"),
+            radio(1, "Restore Test IC-9700", "radio-b.local"),
+            radio(2, "Restore Test FTDX10", ""),
+            radio(3, "Restore Test IC-7300", ""),
+        ]
+    }
+
+    /// `engine`'s settings with `roster` (the operating radio id 2) and Cloudlog at `cloudlog`.
+    fn station_with(
+        engine: &SharedEngine,
+        roster: Vec<tempo_app::settings::RadioProfile>,
+        cloudlog: &str,
+    ) -> tempo_app::settings::Settings {
+        let mut s = engine_lock(engine).settings().clone();
+        s.radios = roster;
+        s.active_radio = if s.radios.iter().any(|r| r.id == 2) {
+            2
+        } else {
+            0
+        };
+        s.cloudlog_url = cloudlog.into();
+        s.sync_flat_from_active();
+        s
+    }
+
+    /// The keychain accounts the restore tests plant: Cloudlog's and every test radio's.
+    fn restore_test_accounts() -> Vec<String> {
+        let mut all = vec![CLOUDLOG_KEYCHAIN_USER.to_string()];
+        all.extend((0..4).map(icom_lan_account));
+        all
+    }
+
+    /// ★ A RESTORED BACKUP THAT DROPS A NETWORK RADIO FROM THE ROSTER REMOVES ITS SAVED PASSWORD,
+    /// as removing the radio does: a radio added later takes the next free id, which can be the
+    /// dropped one's, and must not send the old password to its own host. The
+    /// Connections log names the radio. CONTROL: the same roster removes nothing, and a dropped
+    /// radio with no network host removes nothing.
+    #[test]
+    fn a_restored_backup_that_drops_an_icom_radio_removes_its_password() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-drop", 0);
+        let station = station_with(&engine, restore_test_roster(), "");
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = |keep: &dyn Fn(u64) -> bool| {
+            engine_lock(&engine).apply_restored_settings(station.clone());
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            let radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            v["settings"]["radios"] = serde_json::json!(radios
+                .into_iter()
+                .filter(|r| keep(r["id"].as_u64().unwrap()))
+                .collect::<Vec<_>>());
+            let mut keychain = FakeKeychain::holding(&all);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let ids: Vec<u32> = engine_lock(&engine)
+                .settings()
+                .radios
+                .iter()
+                .map(|r| r.id)
+                .collect();
+            (ids, keychain.forgot)
+        };
+
+        assert_eq!(
+            restore(&|_| true),
+            (vec![0, 1, 2, 3], Vec::<String>::new()),
+            "CONTROL: the same roster"
+        );
+        assert_eq!(
+            restore(&|id| id != 3),
+            (vec![0, 1, 2], vec![icom_lan_account(3)]),
+            "a dropped radio with no network host: its password too, as removing it does"
+        );
+        assert_eq!(
+            restore(&|id| id != 1),
+            (vec![0, 2, 3], vec![icom_lan_account(1)]),
+            "the IC-9700 dropped: its password alone"
+        );
+        assert!(
+            connection_log_says(
+                "Icom network",
+                &icom_password_dropped("Restore Test IC-9700")
+            ),
+            "the operator is told"
+        );
+        assert_eq!(
+            restore(&|id| id == 2),
+            (
+                vec![2],
+                vec![
+                    icom_lan_account(0),
+                    icom_lan_account(1),
+                    icom_lan_account(3)
+                ]
+            ),
+            "every radio dropped, network or not"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE REMOVES THE KEYS IT MOVES IN THE SAME HOLD AS IT LANDS THE SETTINGS: no radio
+    /// loop can read the old Icom password for the new host between the two, nor an upload the
+    /// old Cloudlog key for the new URL. Each removal happens while the engine is
+    /// held. CONTROL: a restore refused for a busy logbook removes nothing, though it moves
+    /// Cloudlog, moves a radio's host and drops another.
+    #[test]
+    fn a_restore_removes_the_keys_it_moves_in_the_hold_that_lands_it() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-hold", 3);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let waiting = tempo_app::settings::KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![0, 1],
+            ..Default::default()
+        };
+        let restore = |contest: bool| {
+            engine_lock(&engine).apply_restored_settings(station.clone());
+            engine_lock(&engine).set_keys_to_confirm(waiting.clone());
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+            let mut radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            radios[0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+            radios.retain(|r| r["id"] != 1);
+            v["settings"]["radios"] = serde_json::json!(radios);
+            if contest {
+                v["settings"]["fdActive"] = serde_json::json!(true);
+                v["settings"]["fdClass"] = serde_json::json!("1D");
+                v["settings"]["fdSection"] = serde_json::json!("EMA");
+            }
+            let mut keychain = FakeKeychain::holding(&all);
+            let mut in_the_hold = Vec::new();
+            let restored = restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| {
+                    in_the_hold.push(matches!(
+                        engine.try_lock(),
+                        Err(std::sync::TryLockError::WouldBlock)
+                    ));
+                    keychain.change(change)
+                },
+            )
+            .map(|_| ());
+            let now = engine_lock(&engine).keys_to_confirm().clone();
+            (restored, keychain.forgot, in_the_hold, now)
+        };
+
+        let hold = held_up(&engine, &dir);
+        assert_eq!(
+            restore(true),
+            (
+                Err(tempo_app::engine::SESSION_BUSY.to_string()),
+                Vec::new(),
+                Vec::new(),
+                waiting.clone()
+            ),
+            "CONTROL: refused for the logbook, every key kept, and what waited still waits"
+        );
+        drop(hold);
+
+        assert_eq!(
+            restore(false),
+            (
+                Ok(()),
+                vec![
+                    CLOUDLOG_KEYCHAIN_USER.to_string(),
+                    icom_lan_account(0),
+                    icom_lan_account(1)
+                ],
+                vec![true, true, true],
+                tempo_app::settings::KeysToConfirm::default()
+            ),
+            "Cloudlog moved, radio 0 moved, radio 1 dropped: each removed while the engine is \
+             held, and nothing waits for a key that is gone"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE SAYS A KEY WAS REMOVED ONLY WHEN ONE WAS SAVED: a moved radio and a dropped
+    /// radio with no password in the keychain bring no "was removed" line to the Connections log.
+    /// CONTROL: the same restore with both passwords saved says so for each radio.
+    #[test]
+    fn a_restore_says_a_key_was_removed_only_when_one_was_saved() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-said", 0);
+        let restore = |prefix: &str, holding: &[&str]| {
+            let mut roster = restore_test_roster();
+            for r in &mut roster {
+                r.name = format!("{prefix} {}", r.name);
+            }
+            let station = station_with(&engine, roster, "");
+            engine_lock(&engine).apply_restored_settings(station);
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            let mut radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            radios[0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+            radios.retain(|r| r["id"] != 1);
+            v["settings"]["radios"] = serde_json::json!(radios);
+            let mut keychain = FakeKeychain::holding(holding);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            assert_eq!(
+                keychain.forgot,
+                vec![icom_lan_account(0), icom_lan_account(1)],
+                "{prefix}: premise: both removals asked for"
+            );
+            (
+                connection_log_says(
+                    "Icom network",
+                    &icom_password_forgotten(&format!("{prefix} Restore Test IC-705")),
+                ),
+                connection_log_says(
+                    "Icom network",
+                    &icom_password_dropped(&format!("{prefix} Restore Test IC-9700")),
+                ),
+            )
+        };
+        assert_eq!(
+            restore("Unsaved", &[]),
+            (false, false),
+            "nothing was saved: nothing said"
+        );
+        let saved = [icom_lan_account(0), icom_lan_account(1)];
+        let saved: Vec<&str> = saved.iter().map(String::as_str).collect();
+        assert_eq!(
+            restore("Saved", &saved),
+            (true, true),
+            "CONTROL: both saved, both said"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ AN OLD BACKUP THAT CARRIES ITS OWN CLOUDLOG KEY, RESTORED WITH ANOTHER URL, PUTS THAT KEY
+    /// IN USE AT ONCE: it goes into the keychain in place of the station's key, which was typed
+    /// for the station's URL, and nothing is left waiting for the next launch. CONTROL: a keychain
+    /// that cannot save removes the station's key and leaves the backup's waiting, as a launch
+    /// does; the same URL keeps the station's key and leaves the backup's waiting, as before.
+    #[test]
+    fn an_old_backup_with_its_own_cloudlog_key_puts_it_in_use_at_once() {
+        const BACKUP_KEY: &str = "PLANTED-BACKUP-OWN-KEY";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-own-key", 0);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        let restore = |url: &str, refuse_store: bool| {
+            engine_lock(&engine).apply_restored_settings(station.clone());
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            v["settings"]["cloudlogUrl"] = serde_json::json!(url);
+            v["settings"]["cloudlogKey"] = serde_json::json!(BACKUP_KEY);
+            let mut keychain = FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER]);
+            keychain.refuse_store = refuse_store;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let waiting = engine_lock(&engine).settings().cloudlog_key == BACKUP_KEY;
+            let in_use = keychain
+                .held
+                .get(CLOUDLOG_KEYCHAIN_USER)
+                .map(|k| k == BACKUP_KEY);
+            (keychain.forgot, keychain.stored, in_use, waiting)
+        };
+        let cloudlog = || vec![CLOUDLOG_KEYCHAIN_USER.to_string()];
+
+        assert_eq!(
+            restore("https://log.other.example/cloudlog", false),
+            (Vec::new(), cloudlog(), Some(true), false),
+            "moved: the backup's own key in the keychain at once, nothing left waiting"
+        );
+        assert_eq!(
+            restore("https://log.other.example/cloudlog", true),
+            (cloudlog(), cloudlog(), None, true),
+            "CONTROL: a keychain that cannot save: the station's key removed, the backup's waiting"
+        );
+        assert_eq!(
+            restore("https://log.station.example/cloudlog", false),
+            (Vec::new(), Vec::new(), Some(false), true),
+            "CONTROL: the same URL: the station's key kept, the backup's waiting"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE STATION'S OWN PENDING CLOUDLOG KEY IS NEVER TAKEN FOR THE BACKUP'S: a station with no
+    /// Cloudlog URL that still holds a key waiting to move to the keychain, restored from a backup
+    /// that brings a URL and no key, keeps that key held back for the operator. It was typed for
+    /// an address nobody can name, so it is not stored as the backup's key and let go to the
+    /// backup's URL. CONTROL: a backup that does carry its own key puts that key in use at once.
+    #[test]
+    fn a_stations_own_pending_key_is_not_taken_for_the_backups() {
+        use tempo_app::settings::KeysToConfirm;
+        const PENDING: &str = "PLANTED-STATION-PENDING";
+        const BACKUP_KEY: &str = "PLANTED-BACKUP-OWN-KEY";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-pending", 0);
+        let mut station = station_with(&engine, restore_test_roster(), "");
+        station.cloudlog_key = PENDING.into();
+        let restore = |backup_key: &str| {
+            let mut v: serde_json::Value = {
+                let mut eng = engine_lock(&engine);
+                eng.apply_restored_settings(station.clone());
+                eng.set_keys_to_confirm(KeysToConfirm::default());
+                assert_eq!(
+                    (
+                        eng.settings().cloudlog_key.as_str(),
+                        eng.settings().cloudlog_url.as_str()
+                    ),
+                    (PENDING, ""),
+                    "premise: the station holds the pending key and has no URL"
+                );
+                drop(eng);
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap()
+            };
+            assert_eq!(
+                v["settings"].get("cloudlogKey").and_then(|k| k.as_str()),
+                None,
+                "premise: the backup carries no key of its own"
+            );
+            v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.backup.example/cloudlog");
+            if !backup_key.is_empty() {
+                v["settings"]["cloudlogKey"] = serde_json::json!(backup_key);
+            }
+            let mut keychain = FakeKeychain::holding(&[]);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let held = engine_lock(&engine).keys_to_confirm().cloudlog;
+            (keychain.stored, held)
+        };
+
+        assert_eq!(
+            restore(""),
+            (Vec::<String>::new(), true),
+            "the station's pending key is not stored as the backup's, and it waits"
+        );
+        assert_eq!(
+            restore(BACKUP_KEY),
+            (vec![CLOUDLOG_KEYCHAIN_USER.to_string()], false),
+            "CONTROL: the backup's own key goes in at once, and nothing waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE WHILE THE RADIO IS KEYED IS REFUSED, AND CHANGES NOTHING: the restore's hold
+    /// can wait on the system keychain, and the radio loop needs the engine lock to end the over.
+    /// An FT over on the air and the rig keyed at its own mic each refuse it, with the reason; no
+    /// key is removed or stored, the settings and the UI state stay as they were. CONTROL: the
+    /// same restore with nothing keyed goes through and removes the moved key.
+    #[test]
+    fn a_restore_while_the_radio_is_keyed_is_refused_and_changes_nothing() {
+        const STATION_LOG: &str = "https://log.station.example/cloudlog";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-keyed", 0);
+        let station = station_with(&engine, restore_test_roster(), STATION_LOG);
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = || {
+            let mut keychain = FakeKeychain::holding(&all);
+            let mut saved_ui = false;
+            let out = restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| {
+                    saved_ui = true;
+                    true
+                },
+                |change| keychain.change(change),
+            )
+            .map(|_| ());
+            let url = engine_lock(&engine).settings().cloudlog_url.clone();
+            (out, keychain.forgot, keychain.stored, saved_ui, url)
+        };
+        let refused = || {
+            (
+                Err(tempo_app::engine::RESTORE_ON_AIR.to_string()),
+                Vec::<String>::new(),
+                Vec::<String>::new(),
+                false,
+                STATION_LOG.to_string(),
+            )
+        };
+
+        engine_lock(&engine).app.set_transmitting(true);
+        assert_eq!(
+            restore(),
+            refused(),
+            "an FT over on the air: refused, nothing changed"
+        );
+        engine_lock(&engine).app.set_transmitting(false);
+        engine_lock(&engine).observe_rig_ptt(true);
+        assert_eq!(
+            restore(),
+            refused(),
+            "the rig keyed at its mic: refused, nothing changed"
+        );
+        engine_lock(&engine).observe_rig_ptt(false);
+        let (out, forgot, _, saved_ui, url) = restore();
+        assert_eq!(
+            (out, forgot, saved_ui, url.as_str()),
+            (
+                Ok(()),
+                vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+                true,
+                "https://log.other.example/cloudlog"
+            ),
+            "CONTROL: nothing keyed: restored, the moved key removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE ASKS THE KEYCHAIN WHAT IT HOLDS WITHOUT HOLDING THE ENGINE LOCK: a read that
+    /// waits (an unlock prompt) never keeps the radio loop from ending an over. Each read here
+    /// waits for another thread to take the engine lock, and gets it. The removals stay in the
+    /// hold that lands the restore, before the restored settings go live. CONTROL: what waits for
+    /// the operator is what the reads said.
+    #[test]
+    fn a_restores_keychain_reads_never_hold_the_engine_lock() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-reads", 0);
+        let backup = {
+            let station = station_with(
+                &engine,
+                restore_test_roster(),
+                "https://log.station.example/cloudlog",
+            );
+            engine_lock(&engine).apply_restored_settings(station);
+            settings_bundle(&engine, Default::default(), None).unwrap()
+        };
+        // Fresh settings, with a network radio (id 7) the backup does not have, so the restore
+        // both reads (the addresses this station has none for) and removes (the dropped radio).
+        let mut fresh = station_with(
+            &engine,
+            vec![
+                tempo_app::settings::RadioProfile {
+                    id: 0,
+                    name: "Radio 1".into(),
+                    ..Default::default()
+                },
+                tempo_app::settings::RadioProfile {
+                    id: 7,
+                    name: "Restore Test Dropped".into(),
+                    icom_lan_host: "192.168.1.77".into(),
+                    ..Default::default()
+                },
+            ],
+            "",
+        );
+        fresh.active_radio = 0;
+        fresh.sync_flat_from_active();
+        {
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(fresh);
+            eng.set_keys_to_confirm(KeysToConfirm::default());
+        }
+        let mut accounts = restore_test_accounts();
+        accounts.push(icom_lan_account(7));
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let mut keychain = FakeKeychain::holding(&all);
+        let (mut reads_free, mut removals_held) = (Vec::new(), Vec::new());
+        restore_settings_bundle(
+            &engine,
+            backup,
+            Default::default,
+            |_| true,
+            |change| {
+                match change {
+                    KeychainChange::Holds(_) => {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        let other = engine.clone();
+                        std::thread::spawn(move || {
+                            drop(engine_lock(&other));
+                            let _ = tx.send(());
+                        });
+                        reads_free.push(rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok());
+                    }
+                    KeychainChange::Forget(_) => removals_held.push(engine.try_lock().is_err()),
+                    KeychainChange::Store { .. } => {}
+                }
+                keychain.change(change)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (reads_free, removals_held),
+            (vec![true; 3], vec![true]),
+            "every read made with the engine lock free; the removal in the hold"
+        );
+        assert_eq!(
+            engine_lock(&engine).keys_to_confirm(),
+            &KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![0, 1],
+                ..Default::default()
+            },
+            "CONTROL: each key the reads found waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE ONTO SETTINGS WITH NO ADDRESS FOR A SERVICE KEEPS ITS KEY, AND HOLDS IT BACK:
+    /// after a reinstall or a reset the station has no Cloudlog URL and its one radio has no
+    /// network host, while the keychain still holds keys it cannot say were typed for the
+    /// addresses the backup brings. Every key stays, and each one saved is held back until the
+    /// operator confirms it, for a radio the station has and one it does not. A radio with no
+    /// network host, and a key that is not saved, wait for nothing. CONTROL: restored again over
+    /// the addresses it now has, a backup that moves them removes the keys, and nothing waits.
+    #[test]
+    fn a_restore_onto_fresh_settings_keeps_every_key_and_holds_it_back() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-fresh", 0);
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        // The operator's backup, made before the reset.
+        let before = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        engine_lock(&engine).apply_restored_settings(before);
+        let backup: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        let restore = |v: &serde_json::Value, holding: &[&str]| {
+            let mut keychain = FakeKeychain::holding(holding);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let waiting = engine_lock(&engine).keys_to_confirm().clone();
+            (keychain.forgot, waiting)
+        };
+        // Fresh: no Cloudlog URL, one radio (id 0, no network host).
+        let fresh = || {
+            let fresh = station_with(
+                &engine,
+                vec![tempo_app::settings::RadioProfile {
+                    id: 0,
+                    name: "Radio 1".into(),
+                    ..Default::default()
+                }],
+                "",
+            );
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(fresh);
+            eng.set_keys_to_confirm(KeysToConfirm::default());
+        };
+
+        fresh();
+        assert_eq!(
+            restore(&backup, &[]),
+            (Vec::<String>::new(), KeysToConfirm::default()),
+            "CONTROL: nothing saved, nothing waits"
+        );
+        fresh();
+        assert_eq!(
+            restore(&backup, &all),
+            (
+                Vec::<String>::new(),
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![0, 1],
+                    ..Default::default()
+                }
+            ),
+            "onto fresh settings: every key kept, each saved one held back"
+        );
+        let s = engine_lock(&engine).settings().clone();
+        assert_eq!(
+            (
+                s.cloudlog_url.as_str(),
+                s.radios.iter().map(|r| r.id).collect::<Vec<_>>()
+            ),
+            ("https://log.station.example/cloudlog", vec![0, 1, 2, 3]),
+            "premise: the backup landed"
+        );
+
+        // CONTROL: now the station has the addresses, a backup that moves them removes the keys.
+        let mut moved = backup.clone();
+        moved["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        moved["settings"]["radios"][0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+        moved["settings"]["radios"][1]["icomLanHost"] = serde_json::json!("radio-c.local");
+        assert_eq!(
+            restore(&moved, &all),
+            (
+                vec![
+                    CLOUDLOG_KEYCHAIN_USER.to_string(),
+                    icom_lan_account(0),
+                    icom_lan_account(1)
+                ],
+                KeysToConfirm::default()
+            ),
+            "CONTROL: moved from the station's addresses, removed, and nothing waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A KEY WHOSE REMOVAL FAILS IS HELD BACK, NOT LET GO: a restore that moves Cloudlog and a
+    /// radio's address and drops another radio, on a keychain that refuses every removal, leaves
+    /// each of those keys in the keychain, so each waits for the operator in the same notice, and
+    /// none reaches the network or a sign-in. CONTROL: the same restore on a keychain that
+    /// removes them leaves nothing waiting.
+    #[test]
+    fn a_key_whose_removal_fails_stays_held_and_never_reaches_the_network() {
+        use std::sync::atomic::Ordering;
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("forget-fails", 0);
+        let (url, connections, stop) = counting_listener();
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = |refuse_forget: bool| {
+            {
+                let mut eng = engine_lock(&engine);
+                eng.apply_restored_settings(station.clone());
+                eng.set_keys_to_confirm(KeysToConfirm::default());
+            }
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            v["settings"]["cloudlogUrl"] = serde_json::json!(url);
+            v["settings"]["cloudlogStationId"] = serde_json::json!("1");
+            let mut radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            radios[0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+            radios.retain(|r| r["id"] != 1);
+            v["settings"]["radios"] = serde_json::json!(radios);
+            let mut keychain = FakeKeychain::holding(&all);
+            keychain.refuse_forget = refuse_forget;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let waiting = engine_lock(&engine).keys_to_confirm().clone();
+            (keychain.forgot, waiting)
+        };
+        let tried = vec![
+            CLOUDLOG_KEYCHAIN_USER.to_string(),
+            icom_lan_account(0),
+            icom_lan_account(1),
+        ];
+
+        assert_eq!(
+            restore(false),
+            (tried.clone(), KeysToConfirm::default()),
+            "CONTROL: removed, so nothing waits"
+        );
+        assert_eq!(
+            restore(true),
+            (
+                tried,
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![0, 1],
+                    cloudlog_not_removed: true,
+                    icom_lan_not_removed: vec![0, 1],
+                }
+            ),
+            "each removal refused: each key held back, as one whose removal failed"
+        );
+        assert_eq!(
+            keys_to_confirm_in(engine_lock(&engine).settings())
+                .iter()
+                .map(|k| k.radio_id)
+                .collect::<Vec<_>>(),
+            vec![None, Some(0), Some(1)],
+            "the notice asks about each"
+        );
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        let upload = cloudlog_push_qso_impl(&dto, &engine, || {
+            panic!("the Cloudlog key was read while it waits")
+        });
+        let vault = super::icom_lan_password_tests::MapVault::default();
+        vault.set(0, "PLANTED-PASSWORD").unwrap();
+        stop.store(true, Ordering::SeqCst);
+        assert_eq!(
+            (
+                upload.map_err(|e| e.message),
+                icom_lan_password_for_login(&engine, &vault, 0),
+                connections.load(Ordering::SeqCst)
+            ),
+            (
+                Err(CLOUDLOG_KEY_WAITS.to_string()),
+                Err(ICOM_PASSWORD_WAITS.to_string()),
+                0
+            ),
+            "no upload, no sign-in, nothing reached the network"
+        );
+        assert_eq!(
+            answer_key_to_confirm(&engine, Some(1), true, None, no_key_change),
+            Err(ICOM_PASSWORD_OF_NO_RADIO.to_string()),
+            "the dropped radio's password cannot be let go to a later radio of its id"
+        );
+        assert!(
+            engine_lock(&engine).keys_to_confirm().icom_lan_waits(1),
+            "so it still waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A contact for the upload tests: an FT8 QSO with K9NEW at `time` (HHMMSS).
+    fn upload_test_record(time: &str) -> tempo_core::logbook::QsoRecord {
+        let mut log = tempo_core::logbook::Logbook::new();
+        log.import_adif(&format!(
+            "<CALL:5>K9NEW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260925<TIME_ON:6>{time}<EOR>"
+        ));
+        let mut rec = tempo_core::logbook::QsoRecord::clone(&log.records()[0]);
+        rec.id = None;
+        rec
+    }
+
+    /// A listener on this computer that counts the connections made to it, closing each at once;
+    /// `stop` ends it, and its count is read after.
+    fn counting_listener() -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let count = std::sync::Arc::new(AtomicUsize::new(0));
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let (c, st) = (count.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !st.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((conn, _)) => {
+                        c.fetch_add(1, Ordering::SeqCst);
+                        drop(conn);
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                }
+            }
+        });
+        (url, count, stop)
+    }
+
+    /// ★ A SAVED KEY THAT WAITS FOR THE OPERATOR NEVER REACHES THE NETWORK: a Cloudlog upload
+    /// reads no key and connects nowhere, saying why; the Icom network sign-in reads no password
+    /// and says why. CONTROL: after the operator's Use the same upload connects to the
+    /// instance with the key, and the sign-in gets its password.
+    #[test]
+    fn a_key_that_waits_never_reaches_the_network_until_use() {
+        use std::sync::atomic::Ordering;
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-waits", 0);
+        let (url, connections, stop) = counting_listener();
+        {
+            let mut s = station_with(&engine, restore_test_roster(), "");
+            s.cloudlog_url = url;
+            s.cloudlog_station_id = "1".into();
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(s);
+            eng.set_keys_to_confirm(KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+                ..Default::default()
+            });
+        }
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        let vault = super::icom_lan_password_tests::MapVault::default();
+        vault.set(1, "PLANTED-PASSWORD").unwrap();
+
+        let waiting = cloudlog_push_qso_impl(&dto, &engine, || {
+            panic!("the Cloudlog key was read while it waits")
+        });
+        assert_eq!(
+            waiting.map_err(|e| e.message),
+            Err(CLOUDLOG_KEY_WAITS.to_string()),
+            "the upload says why"
+        );
+        assert_eq!(
+            icom_lan_password_for_login(&engine, &vault, 1),
+            Err(ICOM_PASSWORD_WAITS.to_string()),
+            "the radio does not sign in, and says why"
+        );
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            0,
+            "nothing reached the instance"
+        );
+
+        let shown = keys_to_confirm_in(engine_lock(&engine).settings());
+        answer_key_to_confirm(&engine, None, true, Some(&shown[0].address), no_key_change).unwrap();
+        answer_key_to_confirm(&engine, Some(1), true, Some("radio-b.local"), no_key_change)
+            .unwrap();
+        assert_eq!(
+            engine_lock(&engine).keys_to_confirm(),
+            &KeysToConfirm::default(),
+            "Use: nothing waits"
+        );
+        let mut read = false;
+        let _ = cloudlog_push_qso_impl(&dto, &engine, || {
+            read = true;
+            Ok("PLANTED-KEY".into())
+        });
+        stop.store(true, Ordering::SeqCst);
+        assert!(
+            read && connections.load(Ordering::SeqCst) > 0,
+            "CONTROL: after Use the key is read and the upload reaches the instance"
+        );
+        assert_eq!(
+            icom_lan_password_for_login(&engine, &vault, 1),
+            Ok(Some("PLANTED-PASSWORD".to_string())),
+            "CONTROL: after Use the sign-in gets its password"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE THAT LANDS WHILE A CLOUDLOG UPLOAD READS ITS KEY STOPS THAT UPLOAD: the key read
+    /// then may be the one kept for the restored address, so it never goes to the address read
+    /// before. Nothing reaches the old address, and the refusal says why. CONTROL: with nothing
+    /// changing meanwhile, the same upload reaches it.
+    #[test]
+    fn a_restore_landing_mid_upload_never_pairs_the_old_address_with_the_new_key() {
+        use std::sync::atomic::Ordering;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-mid-send", 0);
+        let (url, connections, stop) = counting_listener();
+        let station = {
+            let mut s = station_with(&engine, restore_test_roster(), "");
+            s.cloudlog_url = url;
+            s.cloudlog_station_id = "1".into();
+            s
+        };
+        engine_lock(&engine).apply_restored_settings(station.clone());
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        let landed = cloudlog_push_qso_impl(&dto, &engine, || {
+            let mut moved = station.clone();
+            moved.cloudlog_url = "https://log.restored.example/cloudlog".into();
+            engine_lock(&engine).apply_restored_settings(moved);
+            Ok("PLANTED-RESTORED-KEY".into())
+        });
+        assert_eq!(
+            (
+                landed.map_err(|e| e.message),
+                connections.load(Ordering::SeqCst)
+            ),
+            (Err(CLOUDLOG_CHANGED_MID_SEND.to_string()), 0),
+            "a restore landed during the read: nothing sent to the old address"
+        );
+
+        engine_lock(&engine).apply_restored_settings(station.clone());
+        let _ = cloudlog_push_qso_impl(&dto, &engine, || Ok("PLANTED-KEY".into()));
+        stop.store(true, Ordering::SeqCst);
+        assert!(
+            connections.load(Ordering::SeqCst) > 0,
+            "CONTROL: nothing changed meanwhile: the upload reaches the instance"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ REMOVE FORGETS A KEY THAT WAITS, and nothing waits for it any more; each answer touches
+    /// its own key alone. CONTROL: a keychain that cannot remove it leaves it waiting (never
+    /// sent), and an answer about a key that does not wait changes nothing.
+    #[test]
+    fn remove_forgets_a_key_that_waits() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-remove", 0);
+        let waiting = KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![1, 2],
+            ..Default::default()
+        };
+        engine_lock(&engine).set_keys_to_confirm(waiting.clone());
+        let now = || engine_lock(&engine).keys_to_confirm().clone();
+
+        assert_eq!(
+            answer_key_to_confirm(&engine, Some(1), false, None, |_| Err("locked".into())),
+            Err("locked".to_string()),
+            "CONTROL: the keychain refused"
+        );
+        assert_eq!(now(), waiting, "CONTROL: so it still waits");
+        answer_key_to_confirm(&engine, Some(5), false, None, no_key_change).unwrap();
+        assert_eq!(now(), waiting, "CONTROL: radio 5's did not wait");
+
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let mut keychain = FakeKeychain::holding(&all);
+        answer_key_to_confirm(&engine, Some(1), false, None, |c| keychain.change(c)).unwrap();
+        assert_eq!(
+            (keychain.forgot.clone(), now()),
+            (
+                vec![icom_lan_account(1)],
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![2],
+                    ..Default::default()
+                }
+            ),
+            "radio 1's removed, and it waits no more"
+        );
+        answer_key_to_confirm(&engine, None, false, None, |c| keychain.change(c)).unwrap();
+        assert_eq!(
+            (keychain.forgot.clone(), now()),
+            (
+                vec![icom_lan_account(1), CLOUDLOG_KEYCHAIN_USER.to_string()],
+                KeysToConfirm {
+                    cloudlog: false,
+                    icom_lan: vec![2],
+                    ..Default::default()
+                }
+            ),
+            "Cloudlog's removed too"
+        );
+        assert!(
+            keychain.held.contains_key(&icom_lan_account(2)),
+            "radio 2's kept"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ USE CONFIRMS THE ADDRESS THE NOTICE SHOWED, AND NO OTHER: when a restore or a Save moves
+    /// the Cloudlog URL or a radio's network address after the notice asked, Use is refused, the
+    /// key still waits, and the notice asks again about the new address. CONTROL: Use with the
+    /// address shown lets it go.
+    #[test]
+    fn use_confirms_only_the_address_the_notice_showed() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-shown", 0);
+        {
+            let station = station_with(
+                &engine,
+                restore_test_roster(),
+                "https://log.shown.example/cloudlog",
+            );
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(station);
+            eng.set_keys_to_confirm(KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+                ..Default::default()
+            });
+        }
+        let shown = keys_to_confirm_in(engine_lock(&engine).settings());
+        assert_eq!(
+            shown.iter().map(|k| k.address.as_str()).collect::<Vec<_>>(),
+            vec!["https://log.shown.example/cloudlog", "radio-b.local"],
+            "premise: the notice shows each address"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.cloudlog_url = "https://log.moved.example/cloudlog".into();
+            s.radios[1].icom_lan_host = "radio-moved.local".into();
+            eng.apply_restored_settings(s);
+        }
+        let waiting = || engine_lock(&engine).keys_to_confirm().clone();
+        assert_eq!(
+            (
+                answer_key_to_confirm(&engine, None, true, Some(&shown[0].address), no_key_change),
+                answer_key_to_confirm(
+                    &engine,
+                    Some(1),
+                    true,
+                    Some(&shown[1].address),
+                    no_key_change
+                ),
+                waiting()
+            ),
+            (
+                Err(KEY_ADDRESS_CHANGED.to_string()),
+                Err(KEY_ADDRESS_CHANGED.to_string()),
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![1],
+                    ..Default::default()
+                }
+            ),
+            "moved since the notice asked: refused, and both still wait"
+        );
+        let now = keys_to_confirm_in(engine_lock(&engine).settings());
+        answer_key_to_confirm(&engine, None, true, Some(&now[0].address), no_key_change).unwrap();
+        answer_key_to_confirm(&engine, Some(1), true, Some(&now[1].address), no_key_change)
+            .unwrap();
+        assert_eq!(
+            waiting(),
+            KeysToConfirm::default(),
+            "CONTROL: Use with the address shown lets each go"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A CONTACT'S CLOUDLOG UPLOAD WAITS ON THE QUEUE WHILE THE KEY DOES: the leg goes back as it
+    /// was, no attempt spent, due again later, and the contact's other services go now. CONTROL:
+    /// with nothing waiting every leg goes now and nothing is put back.
+    #[test]
+    fn a_contacts_cloudlog_upload_waits_on_the_queue_while_the_key_does() {
+        use tempo_app::engine::upload_legs as legs;
+        use tempo_app::settings::KeysToConfirm;
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let queued = |time: &str| {
+            let mut eng = engine_lock(&engine);
+            eng.log_qso(upload_test_record(time));
+            let mut p = eng.take_pending_uploads().pop().expect("queued");
+            p.attempts = 2;
+            p
+        };
+        let now = 1_000_000;
+
+        let p = queued("120000");
+        assert_eq!(
+            hold_a_waiting_cloudlog_leg(&engine, &p, now),
+            p.legs,
+            "CONTROL: nothing waits, every leg goes"
+        );
+        assert!(
+            engine_lock(&engine).take_pending_uploads().is_empty(),
+            "CONTROL: nothing put back"
+        );
+
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![],
+            ..Default::default()
+        });
+        let p = queued("121500");
+        assert_ne!(p.legs & legs::CLOUDLOG, 0, "premise: it owes Cloudlog");
+        assert_eq!(
+            hold_a_waiting_cloudlog_leg(&engine, &p, now),
+            p.legs & !legs::CLOUDLOG,
+            "the other services go now"
+        );
+        let back: Vec<_> = engine_lock(&engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|b| (b.rec.call, b.legs, b.attempts, b.retry_after_unix > now))
+            .collect();
+        assert_eq!(
+            back,
+            vec![("K9NEW".to_string(), legs::CLOUDLOG, 2, true)],
+            "Cloudlog's leg waits on the queue, unspent, due later"
+        );
+    }
+
+    /// ★ HELD CATCH-UP CONTACTS SAY NOTHING AND STAY QUEUED: a catch-up contact whose only leg
+    /// left is a Cloudlog upload held back writes no "catch-up: sending" line and still counts
+    /// as queued, put back to come round later. (Their pacing after Use:
+    /// `held_cloudlog_catch_ups_take_no_pacing_slots_and_line_up_after_use`.) CONTROL: with
+    /// nothing waiting, it goes, says so, and counts as sent.
+    #[test]
+    fn held_catch_up_contacts_say_nothing_and_stay_queued() {
+        use tempo_app::engine::{upload_legs as legs, PendingUpload, UploadOrigin};
+        use tempo_app::settings::KeysToConfirm;
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let catch_up = |call: &str| {
+            let mut rec = upload_test_record("120000");
+            rec.call = call.into();
+            PendingUpload {
+                rec,
+                origin: UploadOrigin::CatchUp,
+                legs: legs::CLOUDLOG,
+                attempts: 0,
+                retry_after_unix: 0,
+                corrected: false,
+            }
+        };
+        let said = |call: &str| {
+            get_connection_log().iter().any(|e| {
+                e.message
+                    .starts_with(&format!("catch-up: sending an older QSO with {call} "))
+            })
+        };
+        let now = 1_000_000;
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![],
+            ..Default::default()
+        });
+        let mut left = 3;
+        let sent = [
+            legs_to_send_now(&engine, &catch_up("K9HLDA"), now, &mut left),
+            legs_to_send_now(&engine, &catch_up("K9HLDB"), now, &mut left),
+        ];
+        assert_eq!(
+            (sent, left, said("K9HLDA"), said("K9HLDB")),
+            ([0, 0], 3, false, false),
+            "held: nothing sent, nothing said, both still queued"
+        );
+        let mut due: Vec<i64> = engine_lock(&engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|b| b.retry_after_unix)
+            .collect();
+        due.sort_unstable();
+        assert!(
+            due.len() == 2 && due[0] > now,
+            "put back, both later: {due:?}"
+        );
+
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm::default());
+        assert_eq!(
+            (
+                legs_to_send_now(&engine, &catch_up("K9GOES"), now, &mut left),
+                left,
+                said("K9GOES")
+            ),
+            (legs::CLOUDLOG, 2, true),
+            "CONTROL: nothing waits: it goes, says so, and counts as sent"
+        );
+    }
+
+    /// The notice's list: Cloudlog's key with its URL, and each radio's password with its name and
+    /// address, the port named only when it is not the usual one.
+    #[test]
+    fn the_notice_lists_each_key_that_waits_with_its_address() {
+        use tempo_app::settings::KeysToConfirm;
+        let mut s = tempo_app::settings::Settings {
+            cloudlog_url: " https://log.example/ ".into(),
+            radios: restore_test_roster(),
+            ..Default::default()
+        };
+        s.radios[1].icom_lan_port = 50011;
+        s.keys_to_confirm = KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![0, 1],
+            ..Default::default()
+        };
+        let key = |radio_id, radio: &str, address: &str| KeyToConfirm {
+            radio_id,
+            radio: radio.into(),
+            address: address.into(),
+            removal_failed: false,
+        };
+        assert_eq!(
+            keys_to_confirm_in(&s),
+            vec![
+                key(None, "", "https://log.example/"),
+                key(Some(0), "Restore Test IC-705", "192.168.1.20"),
+                key(Some(1), "Restore Test IC-9700", "radio-b.local:50011"),
+            ]
+        );
+        s.keys_to_confirm = KeysToConfirm::default();
+        assert_eq!(keys_to_confirm_in(&s), Vec::new(), "CONTROL: none waits");
+    }
+
+    /// ★ THE NOTICE ASKS ABOUT A RADIO'S PASSWORD ONLY ONCE THE RADIO HAS A NETWORK ADDRESS: a
+    /// radio on the roster with no Icom network host cannot sign in, so its password's wait is
+    /// kept but not shown (a radio just added on a computer whose keychain cannot remove
+    /// anything). A radio no longer on the roster is still shown, so it can be removed. CONTROL:
+    /// given a host, the radio is shown, as one whose removal failed.
+    #[test]
+    fn the_notice_shows_a_radios_password_only_once_it_has_a_network_host() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("notice-no-host", 0);
+        let station = station_with(&engine, restore_test_roster(), "");
+        engine_lock(&engine).apply_restored_settings(station);
+        let vault = super::icom_lan_password_tests::LockedVault::default();
+        add_radio_without_a_password(&engine, &vault).unwrap();
+        let shown = || {
+            keys_to_confirm_in(engine_lock(&engine).settings())
+                .into_iter()
+                .map(|k| (k.radio_id, k.address, k.removal_failed))
+                .collect::<Vec<_>>()
+        };
+        let waits = |id| engine_lock(&engine).keys_to_confirm().icom_lan_waits(id);
+        assert_eq!(
+            (waits(4), shown()),
+            (true, vec![]),
+            "the new radio 4 with no host: held back, not shown"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut keys = eng.keys_to_confirm().clone();
+            keys.icom_lan.push(9);
+            eng.set_keys_to_confirm(keys);
+        }
+        assert_eq!(
+            shown(),
+            vec![(Some(9), String::new(), false)],
+            "a radio no longer on the roster is shown, to be removed"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.radios
+                .iter_mut()
+                .find(|r| r.id == 4)
+                .unwrap()
+                .icom_lan_host = "192.168.1.44".into();
+            eng.apply_restored_settings(s);
+        }
+        assert_eq!(
+            shown(),
+            vec![
+                (Some(4), "192.168.1.44".to_string(), true),
+                (Some(9), String::new(), false)
+            ],
+            "CONTROL: with a host, radio 4 is shown, as one whose removal failed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A KEY KEPT ONLY BECAUSE REMOVING IT FAILED IS NEVER OFFERED FOR USE: a restore that
+    /// moves Cloudlog and a radio's address on a keychain that refuses to remove their keys
+    /// leaves both in the notice as removal failures, and Use with the backup's address is
+    /// refused, so the station's own key never goes there. Remove still works, and the mark goes
+    /// with the wait. CONTROL: a key held back for an address the station had none for (a
+    /// fresh install) is no removal failure, and Use lets it go.
+    #[test]
+    fn a_key_whose_removal_failed_is_never_offered_for_use() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("not-removed-use", 0);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.backup.example/cloudlog");
+        v["settings"]["radios"][0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let mut keychain = FakeKeychain::holding(&all);
+        keychain.refuse_forget = true;
+        restore_settings_bundle(
+            &engine,
+            v.to_string(),
+            Default::default,
+            |_| true,
+            |change| keychain.change(change),
+        )
+        .unwrap();
+        let shown = keys_to_confirm_in(engine_lock(&engine).settings());
+        assert_eq!(
+            shown
+                .iter()
+                .map(|k| (k.radio_id, k.address.as_str(), k.removal_failed))
+                .collect::<Vec<_>>(),
+            vec![
+                (None, "https://log.backup.example/cloudlog", true),
+                (Some(0), "192.168.1.99", true)
+            ],
+            "both shown as removal failures, with the backup's addresses"
+        );
+        let waiting = || engine_lock(&engine).keys_to_confirm().clone();
+        let before = waiting();
+        assert_eq!(
+            (
+                answer_key_to_confirm(&engine, None, true, Some(&shown[0].address), no_key_change),
+                answer_key_to_confirm(
+                    &engine,
+                    Some(0),
+                    true,
+                    Some(&shown[1].address),
+                    no_key_change
+                ),
+                waiting() == before
+            ),
+            (
+                Err(KEY_NOT_REMOVED.to_string()),
+                Err(KEY_NOT_REMOVED.to_string()),
+                true
+            ),
+            "Use refused for each, and nothing let go"
+        );
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        assert_eq!(
+            cloudlog_push_qso_impl(&dto, &engine, || panic!("the key was read"))
+                .map_err(|e| e.message),
+            Err(CLOUDLOG_KEY_WAITS.to_string()),
+            "and no upload reads the key"
+        );
+        keychain.refuse_forget = false;
+        answer_key_to_confirm(&engine, None, false, Some(&shown[0].address), |c| {
+            keychain.change(c)
+        })
+        .unwrap();
+        assert_eq!(
+            waiting(),
+            KeysToConfirm {
+                icom_lan: vec![0],
+                icom_lan_not_removed: vec![0],
+                ..Default::default()
+            },
+            "Remove works, and the Cloudlog mark goes with its wait"
+        );
+
+        {
+            let mut eng = engine_lock(&engine);
+            eng.set_keys_to_confirm(KeysToConfirm::default());
+            let mut s = eng.settings().clone();
+            s.cloudlog_url.clear();
+            eng.apply_restored_settings(s);
+        }
+        let mut fresh = FakeKeychain::holding(&all);
+        restore_settings_bundle(
+            &engine,
+            v.to_string(),
+            Default::default,
+            |_| true,
+            |change| fresh.change(change),
+        )
+        .unwrap();
+        let shown = keys_to_confirm_in(engine_lock(&engine).settings());
+        assert_eq!(
+            (shown[0].radio_id, shown[0].removal_failed),
+            (None, false),
+            "CONTROL: held for an address the station had none for: no removal failure"
+        );
+        answer_key_to_confirm(&engine, None, true, Some(&shown[0].address), no_key_change).unwrap();
+        assert!(
+            !engine_lock(&engine).keys_to_confirm().cloudlog,
+            "CONTROL: and Use lets it go"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE NOTICE'S REMOVE NEVER HOLDS THE ENGINE LOCK WHILE THE KEYCHAIN DELETES: during a
+    /// keyed over, a delete that waits (an unlock prompt) never keeps the radio loop from ending
+    /// the over. The delete here waits for another thread to take the engine lock, and gets it;
+    /// the key still waits while the delete runs. A delete that fails leaves it waiting.
+    /// CONTROL: a delete that succeeds lets it go.
+    #[test]
+    fn the_notices_remove_never_holds_the_engine_lock() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("remove-unlocked", 0);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(station);
+            eng.set_keys_to_confirm(KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+                ..Default::default()
+            });
+            eng.app.set_transmitting(true);
+            assert!(eng.on_air(), "premise: keyed");
+        }
+        let waiting = || engine_lock(&engine).keys_to_confirm().clone();
+        let mut seen = Vec::new();
+        let mut remove = |radio_id: Option<u32>, refuse: bool| {
+            answer_key_to_confirm(&engine, radio_id, false, Some(""), |change| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let other = engine.clone();
+                std::thread::spawn(move || {
+                    let still = engine_lock(&other).keys_to_confirm().clone();
+                    let _ = tx.send(still);
+                });
+                let got = rx.recv_timeout(std::time::Duration::from_secs(2)).ok();
+                seen.push(got.map(|k| (k.cloudlog, k.icom_lan)));
+                if refuse {
+                    return Err("the keychain is locked".into());
+                }
+                no_keychain_change(change)
+            })
+        };
+        assert_eq!(
+            remove(None, true),
+            Err("the keychain is locked".to_string())
+        );
+        remove(Some(1), false).unwrap();
+        assert_eq!(
+            seen,
+            vec![Some((true, vec![1])), Some((true, vec![1]))],
+            "each delete made with the engine lock free, the key still waiting"
+        );
+        assert_eq!(
+            waiting(),
+            KeysToConfirm {
+                cloudlog: true,
+                ..Default::default()
+            },
+            "the refused delete left Cloudlog's waiting; CONTROL: the radio's delete let it go"
+        );
+        engine_lock(&engine).app.set_transmitting(false);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE WHILE TX IS ARMED BETWEEN OVERS, OR WHILE THE RADIO LOOP STILL PLAYS A
+    /// VOICE-KEYER MESSAGE OR APRS FRAME ON ITS OWN, IS REFUSED, AND CHANGES NOTHING: the radio
+    /// loop needs the engine lock to key the next over on time, and to end the loop's own
+    /// transmission, and nothing reports either as keyed. CONTROL: disarmed with no loop
+    /// transmission, the same restore goes through.
+    #[test]
+    fn a_restore_while_tx_is_armed_or_the_loop_transmits_is_refused() {
+        const STATION_LOG: &str = "https://log.station.example/cloudlog";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-armed", 0);
+        let station = station_with(&engine, restore_test_roster(), STATION_LOG);
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = || {
+            let mut keychain = FakeKeychain::holding(&all);
+            let out = restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .map(|_| ());
+            let url = engine_lock(&engine).settings().cloudlog_url.clone();
+            (out, keychain.forgot, url)
+        };
+        let refused = || {
+            (
+                Err(tempo_app::engine::RESTORE_ON_AIR.to_string()),
+                Vec::<String>::new(),
+                STATION_LOG.to_string(),
+            )
+        };
+
+        engine_lock(&engine).observe_loop_tx_hold(Some(5000.0));
+        assert!(
+            !engine_lock(&engine).on_air(),
+            "premise: nothing reads as keyed"
+        );
+        assert_eq!(
+            restore(),
+            refused(),
+            "the loop's own transmission: refused, nothing changed"
+        );
+        engine_lock(&engine).observe_loop_tx_hold(None);
+        {
+            let mut eng = engine_lock(&engine);
+            assert_eq!(
+                eng.settings().operating_mode,
+                tempo_app::settings::OperatingMode::Digital,
+                "premise: Digital"
+            );
+            eng.set_tx_enabled(true);
+            assert!(
+                eng.tx_enabled() && !eng.on_air(),
+                "premise: armed, not keyed"
+            );
+        }
+        assert_eq!(
+            restore(),
+            refused(),
+            "TX armed between overs: refused, nothing changed"
+        );
+        engine_lock(&engine).set_tx_enabled(false);
+        assert_eq!(
+            restore(),
+            (
+                Ok(()),
+                vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+                "https://log.other.example/cloudlog".to_string()
+            ),
+            "CONTROL: disarmed, nothing on the air: restored, the moved key removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ HELD CLOUDLOG CATCH-UPS TAKE NO SLOT FROM THE OTHER SERVICES' CATCH-UP: while the key
+    /// waits, held catch-up contacts come round again on a time of their own, and a ClubLog
+    /// catch-up queued meanwhile is due at once, not behind them. When Use lets the key go, the
+    /// held ones take their slots in the catch-up's pacing once, after the ClubLog one, one
+    /// spacing apart. CONTROL: the same with nothing waiting sends at once.
+    #[test]
+    fn held_cloudlog_catch_ups_take_no_pacing_slots_and_line_up_after_use() {
+        use tempo_app::engine::{upload_legs as legs, PendingUpload, UploadOrigin};
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("held-lane", 0);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.shown.example/cloudlog",
+        );
+        engine_lock(&engine).apply_restored_settings(station);
+        let catch_up = |call: &str, leg: u8| {
+            let mut rec = upload_test_record("120000");
+            rec.call = call.into();
+            PendingUpload {
+                rec,
+                origin: UploadOrigin::CatchUp,
+                legs: leg,
+                attempts: 0,
+                retry_after_unix: 0,
+                corrected: false,
+            }
+        };
+        let now = now_unix();
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            ..Default::default()
+        });
+        let mut left = 3;
+        for call in ["K9HLDA", "K9HLDB"] {
+            assert_eq!(
+                legs_to_send_now(&engine, &catch_up(call, legs::CLOUDLOG), now, &mut left),
+                0,
+                "premise: held"
+            );
+        }
+        let clublog = catch_up("K9CLUB", legs::CLUBLOG);
+        engine_lock(&engine).requeue_catch_up(vec![(clublog.rec, legs::CLUBLOG)]);
+        let due = |legs_of: u8| {
+            let mut eng = engine_lock(&engine);
+            let all = eng.take_pending_uploads();
+            let mut times: Vec<i64> = all
+                .iter()
+                .filter(|p| p.legs == legs_of)
+                .map(|p| p.retry_after_unix)
+                .collect();
+            times.sort_unstable();
+            for p in all {
+                eng.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
+            }
+            times
+        };
+        let clublog_due = due(legs::CLUBLOG)[0];
+        assert!(
+            clublog_due <= now + 2,
+            "the ClubLog catch-up is due at once, not behind the held ones: {clublog_due} vs {now}"
+        );
+        assert!(
+            due(legs::CLOUDLOG).iter().all(|&t| t > now),
+            "held ones come round later"
+        );
+
+        answer_key_to_confirm(
+            &engine,
+            None,
+            true,
+            Some("https://log.shown.example/cloudlog"),
+            no_key_change,
+        )
+        .unwrap();
+        let held = due(legs::CLOUDLOG);
+        assert!(
+            held.len() == 2
+                && held[0] - clublog_due >= tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS
+                && held[1] - held[0] >= tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
+            "after Use, in line behind the ClubLog one, a spacing apart: {held:?} after {clublog_due}"
+        );
+        let _ = engine_lock(&engine).take_pending_uploads();
+        assert_eq!(
+            legs_to_send_now(&engine, &catch_up("K9GOES", legs::CLOUDLOG), now, &mut left),
+            legs::CLOUDLOG,
+            "CONTROL: nothing waits: it goes"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -16246,8 +18744,11 @@ async fn export_selected_log(
 /// a key that becomes public. A backup that silently carried it would revoke the operator's ClubLog
 /// access the first time they shared the file for help.
 ///
-/// A restore therefore does not put it back, and the operator re-enters it. That is the correct
-/// trade: re-typing one key beats a key that stops working for reasons nobody can see.
+/// A restore therefore does not put it back: the station keeps the key it has saved, and a new
+/// computer has the operator re-enter it. That is the correct trade: re-typing one key beats a key
+/// that stops working for reasons nobody can see. Each saved profile's stored keys are left out the
+/// same way ([`redact_profile_for_backup`]), and kept the same way on a restore
+/// ([`keep_the_stations_profile_keys`]).
 ///
 /// The fields are `command_dispatch::SECRET_SETTINGS`, the one list a read from afar blanks and a
 /// save from afar keeps too, so the three cannot drift apart.
@@ -16258,6 +18759,16 @@ fn redact_for_backup(mut settings: serde_json::Value) -> serde_json::Value {
         }
     }
     settings
+}
+
+/// One saved profile's settings without its stored keys (`command_dispatch::SECRET_SETTINGS`), as
+/// [`redact_for_backup`] leaves them out of the station's own. Left out rather than blanked: a
+/// profile loaded with a key left out keeps the key the station has (`mergeProfile`), where a blank
+/// one would clear it.
+fn redact_profile_for_backup(settings: &mut serde_json::Map<String, serde_json::Value>) {
+    for (key, _) in command_dispatch::SECRET_SETTINGS {
+        settings.remove(key);
+    }
 }
 
 /// Drop every key carried by `Settings::unknown` from a serialised Settings object — the keys a
@@ -16306,10 +18817,125 @@ fn strip_unknown_for_backup(
 /// The QSO log is NOT here. It is a separate, much larger file with its own ADIF export, and
 /// silently folding it into a "settings" backup would produce a file operators would hand around
 /// without realising it held every contact they had made.
+///
+/// From afar (a computer driving the station over Remote), the bundle leaves out the paths on the
+/// station's own disk ([`without_station_paths`]), in its settings and in each saved profile, and
+/// says so ([`STATION_PATHS_LEFT_OUT`]): a restore of it at the station keeps the station's own.
+/// It also carries only the station's half of the UI state (`split_ui_state`), and a restore of it
+/// keeps the station's other half. Made at the station, it carries the paths and the whole UI
+/// state as they are. Either way a saved profile list that does not read here is left out: its
+/// stored keys could not be taken out of it.
 #[tauri::command(async)]
-fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, String> {
+fn export_settings_bundle(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<String, String> {
+    let ui_state = ui_state_read(&ui_state_path(), false).unwrap_or_default();
+    settings_bundle(&state, ui_state, afar.as_ref())
+}
+
+/// The settings that hold a path on the station's own disk: the TQSL program and JS8's sound
+/// files. Each voice-keyer slot's recording (`voiceMessages[].file`) is one too, and goes with
+/// them ([`without_station_paths`]).
+const STATION_PATHS: [&str; 2] = ["tqslPath", "js8SoundFiles"];
+
+/// The name a bundle exported from afar carries, `true`, beside its settings: the station's paths
+/// were left out of it ([`without_station_paths`]), so a restore keeps the station's own
+/// ([`keep_the_stations_paths`]).
+const STATION_PATHS_LEFT_OUT: &str = "stationPathsLeftOut";
+
+/// One settings object (the bundle's own, or a saved profile's) without the station's paths: each
+/// of [`STATION_PATHS`] left out, which a restore and a profile load read as "keep this station's",
+/// and each voice-keyer slot's recording blanked, as a slot is before one is recorded.
+fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Value>) {
+    for key in STATION_PATHS {
+        settings.remove(key);
+    }
+    if let Some(slots) = settings
+        .get_mut("voiceMessages")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for slot in slots
+            .iter_mut()
+            .filter_map(serde_json::Value::as_object_mut)
+        {
+            slot.insert("file".into(), serde_json::Value::String(String::new()));
+        }
+    }
+}
+
+/// One settings object from a bundle exported from afar with the station's paths put back as
+/// `station` holds them (this station's settings, or its saved profile of the same name): each of
+/// [`STATION_PATHS`], and each voice-keyer slot's recording by slot number. What `station` does not
+/// hold is left out, so loading that profile keeps this station's own. The backup's voice slots are
+/// always kept, labels and all: a slot the station holds no recording for (no profile of that
+/// name here, or one with no voice slots) keeps its recording blank, as a slot is before one is
+/// recorded.
+fn with_station_paths(
+    settings: &mut serde_json::Map<String, serde_json::Value>,
+    station: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    for key in STATION_PATHS {
+        match station.and_then(|s| s.get(key)) {
+            Some(held) => settings.insert(key.into(), held.clone()),
+            None => settings.remove(key),
+        };
+    }
+    let held = station
+        .and_then(|s| s.get("voiceMessages"))
+        .and_then(serde_json::Value::as_array);
+    if let Some(slots) = settings
+        .get_mut("voiceMessages")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for slot in slots
+            .iter_mut()
+            .filter_map(serde_json::Value::as_object_mut)
+        {
+            let file = held
+                .into_iter()
+                .flatten()
+                .find(|h| h.get("slot").is_some() && h.get("slot") == slot.get("slot"))
+                .and_then(|h| h.get("file"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::Value::String(String::new()));
+            slot.insert("file".into(), file);
+        }
+    }
+}
+
+/// The saved profiles `text` with `each(profile name, its settings)` done to every profile. `None`
+/// when `text` does not read as a list.
+fn each_profile(
+    text: &str,
+    mut each: impl FnMut(&str, &mut serde_json::Map<String, serde_json::Value>),
+) -> Option<String> {
+    let mut profiles: Vec<serde_json::Value> = serde_json::from_str(text).ok()?;
+    for profile in &mut profiles {
+        let name = profile
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if let Some(settings) = profile
+            .get_mut("settings")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            each(&name, settings);
+        }
+    }
+    serde_json::to_string(&profiles).ok()
+}
+
+/// [`export_settings_bundle`] of `engine`'s settings and the UI state `ui_state`, as asked from
+/// afar or at the station (`afar`).
+fn settings_bundle(
+    engine: &SharedEngine,
+    mut ui_state: std::collections::BTreeMap<String, String>,
+    afar: Option<&command_dispatch::Afar>,
+) -> Result<String, String> {
     let (settings, unknown) = {
-        let eng = engine_lock(&state);
+        let eng = engine_lock(engine);
         (
             // As the settings file stores it, so an older build restores Novice and Advanced as
             // a class it knows rather than refusing the backup (`LicenseClass`).
@@ -16317,10 +18943,29 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
             eng.settings().unknown.clone(),
         )
     };
-    let settings = strip_unknown_for_backup(redact_for_backup(settings), &unknown);
-    let ui_state = serde_json::to_value(ui_state_read(&ui_state_path(), false).unwrap_or_default())
-        .map_err(|e| e.to_string())?;
-    let bundle = serde_json::json!({
+    let mut settings = strip_unknown_for_backup(redact_for_backup(settings), &unknown);
+    if afar.is_some() {
+        if let Some(fields) = settings.as_object_mut() {
+            without_station_paths(fields);
+        }
+        // This computer's own half (its UI scale, rail order, pane layout) is not the station's.
+        ui_state = command_dispatch::split_ui_state(ui_state).0;
+    }
+    // Each saved profile goes without its stored keys, and from afar without the station's paths.
+    // A list that does not read here cannot have either left out, so it does not go.
+    if let Some(text) = ui_state.remove(command_dispatch::PROFILES) {
+        let stripped = each_profile(&text, |_, s| {
+            redact_profile_for_backup(s);
+            if afar.is_some() {
+                without_station_paths(s);
+            }
+        });
+        if let Some(stripped) = stripped {
+            ui_state.insert(command_dispatch::PROFILES.into(), stripped);
+        }
+    }
+    let ui_state = serde_json::to_value(ui_state).map_err(|e| e.to_string())?;
+    let mut bundle = serde_json::json!({
         "kind": "nexus-settings-backup",
         // Versioned from the start: a restore that cannot tell which shape it is holding is a
         // restore that will one day quietly write the wrong thing.
@@ -16329,6 +18974,9 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
         "settings": settings,
         "uiState": ui_state,
     });
+    if afar.is_some() {
+        bundle[STATION_PATHS_LEFT_OUT] = serde_json::Value::Bool(true);
+    }
     serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())
 }
 
@@ -16383,17 +19031,118 @@ fn import_settings_bundle(
     text: String,
     state: State<'_, SharedEngine>,
 ) -> Result<AppSnapshot, String> {
-    restore_settings_bundle(&state, text, ui_state_save)
+    restore_settings_bundle(
+        &state,
+        text,
+        || ui_state_read(&ui_state_path(), false).unwrap_or_default(),
+        ui_state_save,
+        change_keychain,
+    )
+}
+
+/// A bundle exported from afar ([`STATION_PATHS_LEFT_OUT`]) with the station's own paths put back
+/// ([`with_station_paths`]): in its settings as `station` (this station's settings) holds them, and
+/// in each saved profile as this station's profile of the same name in `station_ui` holds them. A
+/// bundle made at the station is left as it is.
+fn keep_the_stations_paths(
+    bundle: &mut serde_json::Value,
+    station: &serde_json::Value,
+    station_ui: impl FnOnce() -> std::collections::BTreeMap<String, String>,
+) {
+    if bundle.get(STATION_PATHS_LEFT_OUT) != Some(&serde_json::Value::Bool(true)) {
+        return;
+    }
+    if let Some(fields) = bundle
+        .get_mut("settings")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        with_station_paths(fields, station.as_object());
+    }
+    let Some(text) = bundle
+        .get("uiState")
+        .and_then(|ui| ui.get(command_dispatch::PROFILES))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let mut held = std::collections::BTreeMap::new();
+    if let Some(own) = station_ui().get(command_dispatch::PROFILES) {
+        each_profile(own, |name, s| {
+            held.insert(name.to_string(), s.clone());
+        });
+    }
+    if let Some(kept) = each_profile(&text, |name, s| with_station_paths(s, held.get(name))) {
+        bundle["uiState"][command_dispatch::PROFILES] = serde_json::Value::String(kept);
+    }
+}
+
+/// A bundle's saved profiles with each stored key (`command_dispatch::SECRET_SETTINGS`) a profile
+/// has blank or leaves out put back as this station's saved profile of the same name in
+/// `station_ui` holds it: a backup carries none ([`redact_profile_for_backup`]), and restoring one
+/// never clears a key saved here, unless the bundle's profile points Cloudlog at another address
+/// than the station's profile ([`address_moved`]): then its Cloudlog key stays blank, to be typed
+/// again. A key the bundle does carry (one written before keys were left out) restores as it is.
+/// A list that does not read is left as it is.
+fn keep_the_stations_profile_keys(
+    bundle: &mut serde_json::Value,
+    station_ui: &std::collections::BTreeMap<String, String>,
+) {
+    let Some(text) = bundle
+        .get("uiState")
+        .and_then(|ui| ui.get(command_dispatch::PROFILES))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let mut held = std::collections::BTreeMap::new();
+    if let Some(own) = station_ui.get(command_dispatch::PROFILES) {
+        each_profile(own, |name, s| {
+            held.insert(name.to_string(), s.clone());
+        });
+    }
+    let kept = each_profile(&text, |name, s| {
+        for (key, _) in command_dispatch::SECRET_SETTINGS {
+            let blank = s
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|k| k.trim().is_empty());
+            let own = held.get(name).and_then(|h| h.get(key));
+            let url = |s: Option<&serde_json::Map<String, serde_json::Value>>| {
+                s.and_then(|s| s.get("cloudlogUrl"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let moved =
+                key == "cloudlogKey" && address_moved(&url(Some(&*s)), &url(held.get(name)));
+            if let (true, Some(own), false) = (blank, own, moved) {
+                s.insert(key.into(), own.clone());
+            }
+        }
+    });
+    if let Some(kept) = kept {
+        bundle["uiState"][command_dispatch::PROFILES] = serde_json::Value::String(kept);
+    }
 }
 
 /// [`import_settings_bundle`] on `engine`, the UI state the bundle carries handed to `save_ui`
-/// ([`ui_state_save`]) once the restore goes through.
+/// ([`ui_state_save`]) once the restore goes through. `station_ui` reads this station's own UI
+/// state, for a bundle exported from afar ([`keep_the_stations_paths`]). `keychain` makes one
+/// change to the keychain ([`change_keychain`]): a restore that points Cloudlog or an
+/// Icom network radio at another address than the station's, or drops an Icom network radio,
+/// removes the key kept for it, in the hold that lands the restore ([`forget_moved_keys`]);
+/// whether it holds a key is asked before that hold. A restore while the radio is keyed is
+/// refused ([`tempo_app::engine::RESTORE_ON_AIR`]), and nothing changes.
 fn restore_settings_bundle(
     engine: &SharedEngine,
     text: String,
+    station_ui: impl FnOnce() -> std::collections::BTreeMap<String, String>,
     save_ui: impl FnOnce(std::collections::BTreeMap<String, String>) -> bool,
+    keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
 ) -> Result<AppSnapshot, String> {
-    let v: serde_json::Value =
+    let mut v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
     if v.get("kind").and_then(|k| k.as_str()) != Some("nexus-settings-backup") {
         return Err("That file is not a Nexus settings backup.".to_string());
@@ -16408,6 +19157,12 @@ fn restore_settings_bundle(
         }
         None => return Err("That backup is missing its format version.".to_string()),
     }
+    let mut own = engine_lock(engine).settings().clone();
+    let station = serde_json::to_value(own.for_storage()).map_err(|e| e.to_string())?;
+    let station_ui = station_ui();
+    let from_afar = v.get(STATION_PATHS_LEFT_OUT) == Some(&serde_json::Value::Bool(true));
+    keep_the_stations_paths(&mut v, &station, || station_ui.clone());
+    keep_the_stations_profile_keys(&mut v, &station_ui);
     let mut settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
     // Where uploads start is kept beside the log, never in the settings, so a restore leaves it as
     // it is. A backup an earlier build of that change wrote may carry one in its settings: it
@@ -16416,18 +19171,129 @@ fn restore_settings_bundle(
     settings.qrz_logbook_upload_from = None;
     settings.clublog_upload_from = None;
     settings.eqsl_upload_from = None;
+    // The backup's own Cloudlog key (an old backup's), read before the station's is kept in
+    // below: the station's own key, kept, is never taken for the backup's.
+    let backup_key = settings.cloudlog_key.trim().to_string();
+    // A backup carries no stored key (`redact_for_backup`): one it has blank or leaves out stays
+    // as this station has it, except a Cloudlog key when the backup points Cloudlog at another
+    // address: the station's key never goes to a server the backup names.
+    let cloudlog_moved = address_moved(&settings.cloudlog_url, &own.cloudlog_url);
+    for (key, field) in command_dispatch::SECRET_SETTINGS {
+        let moved = key == "cloudlogKey" && cloudlog_moved;
+        if field(&mut settings).trim().is_empty() && !moved {
+            field(&mut settings).clone_from(field(&mut own));
+        }
+    }
+    // ...nor does the one the engine holds waiting to move to the keychain, which every apply
+    // keeps. A key the backup does carry (an old one) is the backup's own, and stays.
+    let forget_pending_cloudlog_key = cloudlog_moved && settings.cloudlog_key.trim().is_empty();
+    // A backup that brings a Cloudlog address where this station had none: whatever key the
+    // keychain holds was typed for an address it cannot name, so it waits for the operator.
+    let cloudlog_unknown =
+        !settings.cloudlog_url.trim().is_empty() && own.cloudlog_url.trim().is_empty();
+    // An old backup's own key, for the address it moves Cloudlog to (or brings it to): it goes
+    // into the keychain in the hold, in place of the station's, rather than waiting for the next
+    // launch. It was the key for that address, so it waits for nothing.
+    let backup_cloudlog_key =
+        Some(backup_key).filter(|key| (cloudlog_moved || cloudlog_unknown) && !key.is_empty());
+    // The station's own key still waiting to move to the keychain: in the unknown case it was
+    // typed for an address nobody can name, as the keychain's is, so it waits too.
+    let station_key_pending = !own.cloudlog_key.trim().is_empty();
+    // Whether the keychain holds a saved key for each address this station had none for, asked
+    // before the hold: a keychain can wait on an unlock prompt, and the radio loop needs the
+    // engine lock to end an over. A keychain that cannot say is taken to hold it: it waits, and
+    // is not sent. The answers only add waits, so a station that changes meanwhile loses none.
+    let mut keychain = keychain;
+    let mut holds = |account: &str| !matches!(keychain(KeychainChange::Holds(account)), Ok(false));
+    let cloudlog_unknown_waits =
+        cloudlog_unknown && (station_key_pending || holds(CLOUDLOG_KEYCHAIN_USER));
+    // The radios the restore brings a network address where this station had none, with a
+    // password saved for them.
+    let unknown_held: Vec<u32> = settings
+        .radios
+        .iter()
+        .filter(|r| icom_address_unknown(r, own.radios.iter().find(|p| p.id == r.id)))
+        .map(|r| r.id)
+        .filter(|&id| holds(&icom_lan_account(id)))
+        .collect();
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
     // which is right for a form and wrong for a restore. A bundle that opens a contest session
     // opens it as a Save does, its rows read first, and a logbook too busy to read them refuses
     // the restore whole: nothing below runs, the UI state included.
     tempo_app::engine::restore_with_session_rows(engine, settings, |eng| {
+        if forget_pending_cloudlog_key {
+            eng.forget_pending_cloudlog_key();
+        }
+        // The keys kept for an address the restore moved away from, and the passwords of the
+        // network radios it dropped, go in this hold, before the restored settings go live: the
+        // radio loop never reads an old password for a new address. A refused restore never gets
+        // here, and keeps every key.
+        let landed = &eng.settings().radios;
+        let moved: Vec<(u32, String)> = landed
+            .iter()
+            .filter(|r| icom_address_moved(r, own.radios.iter().find(|p| p.id == r.id)))
+            .map(|r| (r.id, r.name.clone()))
+            .collect();
+        // A radio the restore dropped is removed as `remove_radio` removes one, whatever its
+        // connection: a radio added later takes the next free id, which can be this one's.
+        let dropped: Vec<(u32, String)> = own
+            .radios
+            .iter()
+            .filter(|p| landed.iter().all(|r| r.id != p.id))
+            .map(|p| (p.id, p.name.clone()))
+            .collect();
+        let cloudlog_key = backup_cloudlog_key.as_deref();
+        let (stored, failed) = forget_moved_keys(
+            cloudlog_moved,
+            cloudlog_key,
+            &moved,
+            &dropped,
+            &mut keychain,
+        );
+        if stored {
+            // In the keychain now: nothing left waiting to move there.
+            eng.forget_pending_cloudlog_key();
+        }
+        // What waits for the operator now: what waited before, less every key removed or
+        // replaced here, and each saved key for an address this station had none for (asked
+        // before the hold, above).
+        // ⛔ A removal that failed left its key in the keychain: that key waits too (fail closed),
+        // never let go because its removal was asked for.
+        // ⛔ ...and it was saved for the station's old address (or a radio dropped), so it can
+        // only be removed, never confirmed for the backup's.
+        let mut keys = eng.keys_to_confirm().clone();
+        let still_held = |account: &str| failed.iter().any(|f| f == account);
+        keys.cloudlog = !(cloudlog_moved || stored) && (keys.cloudlog || cloudlog_unknown_waits);
+        if still_held(CLOUDLOG_KEYCHAIN_USER) {
+            keys.hold_not_removed(None);
+        }
+        keys.icom_lan.retain(|&id| {
+            still_held(&icom_lan_account(id))
+                || !moved.iter().chain(&dropped).any(|(gone, _)| *gone == id)
+        });
+        for (id, _) in moved.iter().chain(&dropped) {
+            if still_held(&icom_lan_account(*id)) {
+                keys.hold_not_removed(Some(*id));
+            }
+        }
+        for id in unknown_held {
+            if !keys.icom_lan_waits(id) {
+                keys.icom_lan.push(id);
+            }
+        }
+        eng.set_keys_to_confirm(keys);
         // UI state is best-effort: a bundle whose settings are good but whose ui-state is not
         // should still restore the radios. The half that failed is named rather than swallowed.
         if let Some(ui) = v.get("uiState").cloned() {
-            if let Ok(map) =
+            if let Ok(mut map) =
                 serde_json::from_value::<std::collections::BTreeMap<String, String>>(ui)
             {
+                // A backup made from afar carries the station's half alone: this station keeps
+                // its own other half.
+                if from_afar {
+                    map = command_dispatch::join_ui_state(map, station_ui);
+                }
                 save_ui(map);
             }
         }
@@ -16458,6 +19324,521 @@ fn restore_settings_bundle(
     }
     let snap = { engine_lock(engine).snapshot() };
     Ok(snap)
+}
+
+/// A service's address as a restore compares it ([`address_moved`]): the spaces around it, any
+/// trailing `/`, the case of the scheme and the host, and the scheme's own port (`:80` for http,
+/// `:443` for https) make no difference. The path keeps its case, as a server may.
+fn service_address(url: &str) -> (String, String, String) {
+    let url = url.trim().trim_end_matches('/');
+    let (scheme, rest) = url
+        .split_once("://")
+        .map_or((String::new(), url), |(s, r)| (s.to_ascii_lowercase(), r));
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let mut host = host.to_ascii_lowercase();
+    let own_port = match scheme.as_str() {
+        "http" => Some(":80"),
+        "https" => Some(":443"),
+        _ => None,
+    };
+    if let Some(bare) = own_port.and_then(|p| host.strip_suffix(p)) {
+        host = bare.to_string();
+    }
+    (scheme, host, path.to_string())
+}
+
+/// Whether a restored backup points a service at another address than the station's
+/// ([`service_address`]), so the key kept here for the station's must not go there. A backup with
+/// no address for it moves nothing: then it is sent nowhere. Nor does a station with no address
+/// for it (a fresh install, or reset settings): the key the keychain still holds is kept, but it
+/// cannot say which address it was typed for, so it waits for the operator
+/// ([`tempo_app::settings::Settings::keys_to_confirm`]).
+fn address_moved(restored: &str, station: &str) -> bool {
+    !restored.trim().is_empty()
+        && !station.trim().is_empty()
+        && service_address(restored) != service_address(station)
+}
+
+/// Whether a restore brings a radio a network address where this station had none for it: no such
+/// radio, or one with no network host (a fresh install or reset settings). The password the
+/// keychain holds for its id cannot say which address it was typed for.
+fn icom_address_unknown(
+    restored: &tempo_app::settings::RadioProfile,
+    station: Option<&tempo_app::settings::RadioProfile>,
+) -> bool {
+    !restored.icom_lan_host.trim().is_empty()
+        && station.is_none_or(|s| s.icom_lan_host.trim().is_empty())
+}
+
+/// Whether a restored radio's Icom network address (host, any case, and port) is another than the
+/// station's radio of the same id has. A radio with no network host moves nothing, nor does one
+/// the station has no network host for or no such radio at all: that one's saved password waits
+/// for the operator instead ([`icom_address_unknown`]).
+fn icom_address_moved(
+    restored: &tempo_app::settings::RadioProfile,
+    station: Option<&tempo_app::settings::RadioProfile>,
+) -> bool {
+    let host = restored.icom_lan_host.trim();
+    !host.is_empty()
+        && station.is_some_and(|s| {
+            let own = s.icom_lan_host.trim();
+            !own.is_empty()
+                && (!own.eq_ignore_ascii_case(host) || s.icom_lan_port != restored.icom_lan_port)
+        })
+}
+
+/// In a restore's hold: remove the Cloudlog key (`cloudlog_moved`), each radio's Icom network
+/// password (`radios`, id and name) kept for the station's address, and the password of each radio
+/// the restore dropped (`dropped`), through `keychain`, and say once in the Connections log what
+/// to enter again, for a key that was saved. A removal that fails says so instead. A backup's own
+/// Cloudlog key (`cloudlog_key`, an old backup's) takes the station's place in the keychain
+/// instead of being removed. What came of it: whether that key went in, and each account whose
+/// removal failed (its key is still in the keychain, so the caller holds it back).
+fn forget_moved_keys(
+    cloudlog_moved: bool,
+    cloudlog_key: Option<&str>,
+    radios: &[(u32, String)],
+    dropped: &[(u32, String)],
+    mut keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
+) -> (bool, Vec<String>) {
+    let mut failed = Vec::new();
+    let account = CLOUDLOG_KEYCHAIN_USER;
+    let stored =
+        cloudlog_key.is_some_and(
+            |key| match keychain(KeychainChange::Store { account, key }) {
+                Ok(_) => {
+                    conn_log("Cloudlog", "info", CLOUDLOG_KEY_FROM_BACKUP);
+                    true
+                }
+                Err(e) => {
+                    conn_log(
+                        "Cloudlog",
+                        "error",
+                        format!(
+                            "The restored backup carries its own Cloudlog/Wavelog API key, but it \
+                         could not be saved to the system keychain ({e}). Nexus tries again at \
+                         the next launch."
+                        ),
+                    );
+                    false
+                }
+            },
+        );
+    if cloudlog_moved && !stored {
+        match keychain(KeychainChange::Forget(account)) {
+            Ok(true) => conn_log("Cloudlog", "info", CLOUDLOG_KEY_FORGOTTEN),
+            Ok(false) => {}
+            Err(e) => {
+                failed.push(account.to_string());
+                conn_log(
+                    "Cloudlog",
+                    "error",
+                    format!(
+                        "The restored backup points Cloudlog/Wavelog at a different address, but \
+                         the API key saved here could not be removed ({e}). It is not sent: \
+                         choose Remove in the notice at the top of the window."
+                    ),
+                );
+            }
+        }
+    }
+    for (id, name) in radios {
+        let account = icom_lan_account(*id);
+        match keychain(KeychainChange::Forget(&account)) {
+            Ok(true) => conn_log("Icom network", "info", icom_password_forgotten(name)),
+            Ok(false) => {}
+            Err(e) => {
+                failed.push(account);
+                conn_log(
+                    "Icom network",
+                    "error",
+                    format!(
+                        "The restored backup points {name} at a different network address, but \
+                         its saved network password could not be removed ({e}). It is not \
+                         used: choose Remove in the notice at the top of the window."
+                    ),
+                );
+            }
+        }
+    }
+    for (id, name) in dropped {
+        let account = icom_lan_account(*id);
+        match keychain(KeychainChange::Forget(&account)) {
+            Ok(true) => conn_log("Icom network", "info", icom_password_dropped(name)),
+            Ok(false) => {}
+            Err(e) => {
+                failed.push(account);
+                conn_log(
+                    "Icom network",
+                    "error",
+                    format!(
+                        "The restored backup has no radio {name}, but its saved network \
+                         password could not be removed ({e}). It is not used: choose Remove in \
+                         the notice at the top of the window."
+                    ),
+                );
+            }
+        }
+    }
+    (stored, failed)
+}
+
+/// What the Connections log says after a restore removed the Cloudlog key ([`forget_moved_keys`]).
+const CLOUDLOG_KEY_FORGOTTEN: &str = "The restored backup points Cloudlog/Wavelog at a different \
+     address, so the API key saved here was removed. Enter the key for that address in Settings.";
+
+/// What the Connections log says after a restore put an old backup's own Cloudlog key in the
+/// keychain ([`forget_moved_keys`]).
+const CLOUDLOG_KEY_FROM_BACKUP: &str =
+    "The restored backup points Cloudlog/Wavelog at a different \
+     address and carries its own API key, so that key is now the one saved here.";
+
+/// What the Connections log says after a restore removed radio `name`'s Icom network password.
+fn icom_password_forgotten(name: &str) -> String {
+    format!(
+        "The restored backup points {name} at a different network address, so its saved network \
+         password was removed. Enter it again in Settings."
+    )
+}
+
+/// What the Connections log says after a restore dropped radio `name` from the roster and removed
+/// its Icom network password.
+fn icom_password_dropped(name: &str) -> String {
+    format!(
+        "The restored backup has no radio {name}, so its saved network password was removed. \
+         Enter it again in Settings if you add the radio back."
+    )
+}
+
+/// One change a restore makes to the keychain ([`change_keychain`]).
+enum KeychainChange<'a> {
+    /// Remove the entry under this account.
+    Forget(&'a str),
+    /// Keep `key` under `account`, in place of what is there.
+    Store { account: &'a str, key: &'a str },
+    /// Whether an entry is there (the answer says nothing about it).
+    Holds(&'a str),
+}
+
+/// A restore's `keychain` in a test whose backup moves no address: it is never called.
+#[cfg(test)]
+fn no_key_change(change: KeychainChange) -> Result<bool, String> {
+    let (KeychainChange::Forget(account)
+    | KeychainChange::Store { account, .. }
+    | KeychainChange::Holds(account)) = change;
+    panic!("a restore that moves no address changed the keychain entry {account}")
+}
+
+/// Make `change` to the OS keychain (service "tempo"), as the Settings buttons do. Whether an
+/// entry was there to remove; a stored key is always `true`.
+fn change_keychain(change: KeychainChange) -> Result<bool, String> {
+    let (KeychainChange::Forget(account)
+    | KeychainChange::Store { account, .. }
+    | KeychainChange::Holds(account)) = change;
+    let entry = keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, account)
+        .map_err(|e| format!("couldn't open the system keychain: {e}"))?;
+    match change {
+        KeychainChange::Forget(_) => match entry.delete_credential() {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(format!("couldn't clear the system keychain: {e}")),
+        },
+        KeychainChange::Store { key, .. } => entry
+            .set_password(key)
+            .map(|()| true)
+            .map_err(|e| format!("couldn't save to the system keychain: {e}")),
+        // Read and dropped at once: only whether it is there leaves this arm.
+        KeychainChange::Holds(_) => match entry.get_password() {
+            Ok(_) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(format!("couldn't read the system keychain: {e}")),
+        },
+    }
+}
+
+/// What the Connections log and a refused upload say while the Cloudlog key waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]).
+const CLOUDLOG_KEY_WAITS: &str = "Cloudlog/Wavelog uploads wait: a settings restore set this \
+     address, and the API key saved here may be for another. Choose Use or Remove in the notice \
+     at the top of the window.";
+
+/// Why Use is refused for the saved password of a radio no longer on the roster.
+const ICOM_PASSWORD_OF_NO_RADIO: &str = "That radio is no longer on the roster, so its saved \
+     network password can only be removed: choose Remove.";
+
+/// What an Icom network radio says when it does not sign in because its password waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]).
+const ICOM_PASSWORD_WAITS: &str = "Not signed in: a settings restore set this radio's address, \
+     and the network password saved here may be for another. Choose Use or Remove in the notice \
+     at the top of the window.";
+
+/// Why a Cloudlog request was not sent when the settings it was built from changed while its key
+/// was being read (a restore that landed then).
+const CLOUDLOG_CHANGED_MID_SEND: &str = "The Cloudlog/Wavelog settings changed while this was \
+     being sent, so nothing was sent. It goes with the new settings next time.";
+
+/// Where a Cloudlog request goes and the key it carries: the URL and the station profile id
+/// (trimmed), read with the wait in one hold, then the key through `read`, unless it waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]): then nothing is read, and the
+/// refusal says why. The keychain is read with the engine lock released, so the address and the
+/// wait are read again after it, in one hold: a restore that landed in between refuses the
+/// request, and an old address is never paired with a key now kept for another. Every read of
+/// the Cloudlog key that is sent goes through here.
+fn cloudlog_key_to_send(
+    engine: &SharedEngine,
+    read: impl FnOnce() -> Result<String, String>,
+) -> Result<(String, String, String), String> {
+    let target = || {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        (
+            s.cloudlog_url.trim().to_string(),
+            s.cloudlog_station_id.trim().to_string(),
+            s.keys_to_confirm.cloudlog,
+        )
+    };
+    let (url, station_id, waits) = target();
+    if waits {
+        return Err(CLOUDLOG_KEY_WAITS.to_string());
+    }
+    let key = read()?;
+    match target() {
+        (_, _, true) => Err(CLOUDLOG_KEY_WAITS.to_string()),
+        (u, id, false) if u != url || id != station_id => {
+            Err(CLOUDLOG_CHANGED_MID_SEND.to_string())
+        }
+        _ => Ok((url, station_id, key)),
+    }
+}
+
+/// The Cloudlog key in the system keychain; empty when none is saved.
+fn cloudlog_key_from_keychain() -> Result<String, String> {
+    Ok(cloudlog_keychain()?.get_password().unwrap_or_default())
+}
+
+/// Radio `radio_id`'s Icom network password for its sign-in, from `vault`, unless it waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]): then nothing is read, and the
+/// radio says why. The reason a sign-in gets none never carries the password.
+///
+/// It takes the engine lock: the radio loop opens a radio with that lock released, the open
+/// blocking for seconds, so asking here cannot wait on itself.
+fn icom_lan_password_for_login(
+    engine: &SharedEngine,
+    vault: &dyn IcomLanVault,
+    radio_id: u32,
+) -> Result<Option<String>, String> {
+    if engine_lock(engine)
+        .keys_to_confirm()
+        .icom_lan_waits(radio_id)
+    {
+        return Err(ICOM_PASSWORD_WAITS.to_string());
+    }
+    vault.get(radio_id).map_err(|why| {
+        format!("Nexus could not read this radio's password from the system keychain ({why})")
+    })
+}
+
+/// One saved key that waits for the operator, as the notice shows it: Cloudlog's
+/// (`radio_id: None`) or radio `radio_id`'s Icom network password, with the radio's name and the
+/// address it would go to, and whether it waits only because removing it failed
+/// (`removal_failed`: it can only be removed). Never the key, and nothing about it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyToConfirm {
+    radio_id: Option<u32>,
+    radio: String,
+    address: String,
+    removal_failed: bool,
+}
+
+/// The saved keys that wait for the operator in `s`, for the notice. A radio on the roster with
+/// no Icom network host is left out: nothing can sign in with its password until it has one, so
+/// its wait is kept but there is nothing to ask yet. A radio no longer on the roster is listed,
+/// so its password can be removed.
+fn keys_to_confirm_in(s: &Settings) -> Vec<KeyToConfirm> {
+    let keys = &s.keys_to_confirm;
+    let cloudlog = keys.cloudlog.then(|| KeyToConfirm {
+        radio_id: None,
+        radio: String::new(),
+        address: s.cloudlog_url.trim().to_string(),
+        removal_failed: keys.not_removed(None),
+    });
+    let radios = keys.icom_lan.iter().filter_map(|&id| {
+        let radio = s.radios.iter().find(|r| r.id == id);
+        let port = radio.map_or(0, |r| r.icom_lan_port);
+        let host = radio.map_or("", |r| r.icom_lan_host.trim());
+        if radio.is_some() && host.is_empty() {
+            return None;
+        }
+        Some(KeyToConfirm {
+            radio_id: Some(id),
+            radio: radio.map_or_else(|| format!("Radio {id}"), |r| r.name.clone()),
+            address: if port == 0 || port == tempo_app::settings::ICOM_LAN_DEFAULT_PORT {
+                host.to_string()
+            } else {
+                format!("{host}:{port}")
+            },
+            removal_failed: keys.not_removed(Some(id)),
+        })
+    });
+    cloudlog.into_iter().chain(radios).collect()
+}
+
+/// Why Use is refused when the address a key waits for is no longer the one the notice showed.
+const KEY_ADDRESS_CHANGED: &str = "That address changed since the notice asked, so nothing was \
+     let go. Check the notice again, then choose.";
+
+/// Why Use is refused for a key kept only because removing it failed: it was typed for another
+/// address, or for a radio no longer on the roster.
+const KEY_NOT_REMOVED: &str = "Removing this saved key failed, and it was saved for another \
+     address, so it can only be removed: choose Remove.";
+
+/// The operator's answer about a saved key that waits ([`keys_to_confirm_in`]): Use
+/// (`use_it`) lets it go to the address it waits for, which must be `shown`, the address the
+/// notice asked about (a restore or a Save may have moved it since; `None` for a key typed again,
+/// which is the key for whatever address is set); Remove forgets it from the
+/// keychain, through `keychain`. Either way it waits no more, and that is saved. A Remove the
+/// keychain refuses leaves it waiting, so it is still never sent. A key that does not wait is left
+/// alone. A key kept only because its removal failed can only be removed from the notice.
+///
+/// ⛔ The keychain is asked with the engine lock RELEASED: a delete can wait on an unlock prompt,
+/// and the radio loop needs that lock to end an over. The key waits throughout, so nothing is let
+/// go meanwhile; the wait is dropped only once the delete has succeeded.
+fn answer_key_to_confirm(
+    engine: &SharedEngine,
+    radio_id: Option<u32>,
+    use_it: bool,
+    shown: Option<&str>,
+    mut keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
+) -> Result<(), String> {
+    {
+        let mut eng = engine_lock(engine);
+        let keys = eng.keys_to_confirm();
+        let waits = radio_id.map_or(keys.cloudlog, |id| keys.icom_lan_waits(id));
+        if !waits {
+            return Ok(());
+        }
+        // A radio no longer on the roster has no address to confirm a password for, and a radio
+        // added later takes the next free id, which can be its: its password can only be removed.
+        if let (true, Some(id)) = (use_it, radio_id) {
+            if eng.settings().radios.iter().all(|r| r.id != id) {
+                return Err(ICOM_PASSWORD_OF_NO_RADIO.to_string());
+            }
+        }
+        if let (true, Some(shown)) = (use_it, shown) {
+            // A key whose removal failed was saved for another address: never confirmed for this
+            // one. (Typed again, it is the new key, and `shown` is `None`.)
+            if keys.not_removed(radio_id) {
+                return Err(KEY_NOT_REMOVED.to_string());
+            }
+            // Use confirms the address the operator was shown, and no other.
+            if !keys_to_confirm_in(eng.settings())
+                .iter()
+                .any(|k| k.radio_id == radio_id && k.address == shown)
+            {
+                return Err(KEY_ADDRESS_CHANGED.to_string());
+            }
+        }
+        if use_it {
+            stop_waiting(&mut eng, radio_id);
+            return Ok(());
+        }
+    }
+    let account = radio_id.map_or_else(|| CLOUDLOG_KEYCHAIN_USER.to_string(), icom_lan_account);
+    keychain(KeychainChange::Forget(&account))?;
+    stop_waiting(&mut engine_lock(engine), radio_id);
+    Ok(())
+}
+
+/// [`answer_key_to_confirm`]'s last step, in one hold: this key waits no more, and that is saved.
+fn stop_waiting(eng: &mut Engine, radio_id: Option<u32>) {
+    let mut keys = eng.keys_to_confirm().clone();
+    match radio_id {
+        None => keys.cloudlog = false,
+        Some(id) => keys.icom_lan.retain(|&r| r != id),
+    }
+    eng.set_keys_to_confirm(keys);
+    if radio_id.is_none() {
+        CLOUDLOG_WAIT_SAID.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: saving the answer about a saved key failed: {e}")
+    });
+}
+
+/// Whether the Connections log has said, since the Cloudlog key last stopped waiting, that the
+/// uploads wait ([`hold_a_waiting_cloudlog_leg`]): once, not once per contact.
+static CLOUDLOG_WAIT_SAID: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// How long a contact's Cloudlog upload waits on the queue before it is looked at again, while the
+/// key waits for the operator.
+const CLOUDLOG_WAIT_RECHECK_SECS: i64 = 60;
+
+/// A queued contact's Cloudlog leg, held back while the Cloudlog key waits for the operator: put
+/// back on the queue as it is, no attempt spent, and not sent, to be looked at again in a minute.
+/// A catch-up contact takes no slot in the catch-up's pacing while it waits, so the other
+/// services' catch-up goes on at its pace; when the key stops waiting, the held ones are put back
+/// in line once ([`tempo_app::engine::Engine::set_keys_to_confirm`]), so they still go one at a
+/// time. The legs left to send now.
+fn hold_a_waiting_cloudlog_leg(
+    engine: &SharedEngine,
+    p: &tempo_app::engine::PendingUpload,
+    now_unix: i64,
+) -> u8 {
+    use tempo_app::engine::upload_legs::CLOUDLOG;
+    let mut eng = engine_lock(engine);
+    if p.legs & CLOUDLOG == 0 || !eng.keys_to_confirm().cloudlog {
+        return p.legs;
+    }
+    eng.requeue_upload_at(
+        p.rec.clone(),
+        CLOUDLOG,
+        p.attempts,
+        now_unix + CLOUDLOG_WAIT_RECHECK_SECS,
+        p.origin,
+    );
+    if !CLOUDLOG_WAIT_SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        conn_log("Cloudlog", "info", CLOUDLOG_KEY_WAITS);
+    }
+    p.legs & !CLOUDLOG
+}
+
+/// A due record's legs for the upload worker to send now: a Cloudlog leg whose key waits held back
+/// first ([`hold_a_waiting_cloudlog_leg`]); then, for a catch-up record with a leg left to send,
+/// one Connections log line per leg saying it goes, `catchup_left` counting the record as sent. A
+/// record held back whole sends nothing, says nothing and is still queued.
+fn legs_to_send_now(
+    engine: &SharedEngine,
+    p: &tempo_app::engine::PendingUpload,
+    now_unix: i64,
+    catchup_left: &mut usize,
+) -> u8 {
+    let legs = hold_a_waiting_cloudlog_leg(engine, p, now_unix);
+    if legs != 0 && p.origin == tempo_app::engine::UploadOrigin::CatchUp {
+        *catchup_left = catchup_left.saturating_sub(1);
+        // #290: filed under the service the record is actually owed to. This
+        // said "ClubLog" outright, which was the only sweep there was — an eQSL
+        // catch-up would have reported its whole run under ClubLog's name.
+        // `catchup_left` counts RECORDS, so a record owing two legs says the
+        // same remaining count on both lines, which is what is left to send.
+        for (_, service) in UPLOAD_LEG_SERVICES
+            .iter()
+            .filter(|(leg, _)| legs & leg != 0)
+        {
+            conn_log(
+                service,
+                "info",
+                format!(
+                    "catch-up: sending an older QSO with {} — {catchup_left} still \
+                     queued, one every {}s so {service} isn't flooded",
+                    p.rec.call,
+                    tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
+                ),
+            );
+        }
+    }
+    legs
 }
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what
@@ -21250,14 +24631,57 @@ fn write_peg_lock(state: &SharedEngine, on: bool) -> tempo_app::settings::writer
 /// snapshot — the switcher then shows the new radio.
 #[tauri::command(async)]
 fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    eng.add_radio();
+    add_radio_without_a_password(&state, &OsKeychain)
+}
+
+/// [`add_radio`] with the radio's Icom network passwords in `vault`. A new radio never has a
+/// password, so one `vault` still holds under its id (a removal that failed before such a
+/// password was held back) is removed. Until it is, it waits for the operator as a held-back key
+/// does ([`tempo_app::settings::Settings::keys_to_confirm`]), and a removal that fails leaves it
+/// waiting: the new radio never signs in with it. The keychain is asked with the engine lock
+/// released, since it can wait on an unlock prompt.
+fn add_radio_without_a_password(
+    engine: &SharedEngine,
+    vault: &dyn IcomLanVault,
+) -> Result<AppSnapshot, String> {
+    let id = {
+        let mut eng = engine_lock(engine);
+        let id = eng.add_radio();
+        let mut keys = eng.keys_to_confirm().clone();
+        keys.icom_lan.push(id);
+        eng.set_keys_to_confirm(keys);
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: add_radio save failed: {e}")
+        });
+        // Mirror the new radio into the base config, or a THIRD radio added from a per-radio
+        // window is invisible to the launch picker forever — see `persist_roster_to_base`.
+        persist_roster_to_base(&eng.settings().radios);
+        id
+    };
+    let cleared = vault.clear(id);
+    let mut eng = engine_lock(engine);
+    let mut keys = eng.keys_to_confirm().clone();
+    match cleared {
+        Ok(()) => keys.icom_lan.retain(|&r| r != id),
+        // A password left under a new radio's id was saved for a radio removed before: it can
+        // only be removed.
+        Err(e) => {
+            keys.hold_not_removed(Some(id));
+            conn_log(
+                "Icom network",
+                "error",
+                format!(
+                    "couldn't check that the new radio {id} has no saved network password \
+                     ({e}). None is used: once the radio has a network address, choose Remove \
+                     in the notice at the top of the window."
+                ),
+            );
+        }
+    }
+    eng.set_keys_to_confirm(keys);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: add_radio save failed: {e}")
     });
-    // Mirror the new radio into the base config, or a THIRD radio added from a per-radio window is
-    // invisible to the launch picker forever — see `persist_roster_to_base`.
-    persist_roster_to_base(&eng.settings().radios);
     Ok(eng.snapshot())
 }
 
@@ -21270,22 +24694,63 @@ fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// card, but auto band-routing can change the active radio behind an open panel.
 #[tauri::command(async)]
 fn remove_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    if !eng.remove_radio(id) {
-        return Err(
-            "Can't remove this radio: it's your operating radio (make another one active \
-             first) or the only radio on the roster."
-                .into(),
-        );
+    remove_radio_and_its_password(&state, id, &OsKeychain)
+}
+
+/// [`remove_radio`] with the radios' Icom network passwords in `vault`: the radio's password goes
+/// with it. Until `vault` has removed it, it waits for the operator as a held-back key does
+/// ([`tempo_app::settings::Settings::keys_to_confirm`]), so a radio added meanwhile never takes
+/// its id; a removal that fails leaves it waiting, so it is never let go. The keychain is asked
+/// with the engine lock released, since it can wait on an unlock prompt. A failure is reported,
+/// never the password.
+fn remove_radio_and_its_password(
+    engine: &SharedEngine,
+    id: u32,
+    vault: &dyn IcomLanVault,
+) -> Result<AppSnapshot, String> {
+    {
+        let mut eng = engine_lock(engine);
+        if !eng.remove_radio(id) {
+            return Err(
+                "Can't remove this radio: it's your operating radio (make another one active \
+                 first) or the only radio on the roster."
+                    .into(),
+            );
+        }
+        let mut keys = eng.keys_to_confirm().clone();
+        if !keys.icom_lan_waits(id) {
+            keys.icom_lan.push(id);
+            eng.set_keys_to_confirm(keys);
+        }
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: remove_radio save failed: {e}")
+        });
+        // …and out of the base config too, else the picker keeps offering a radio that no longer
+        // exists.
+        persist_roster_to_base(&eng.settings().radios);
+        persist_routing_to_base(eng.settings());
     }
+    let removed = vault.clear(id);
+    let mut eng = engine_lock(engine);
+    let mut keys = eng.keys_to_confirm().clone();
+    match removed {
+        Ok(()) => keys.icom_lan.retain(|&r| r != id),
+        Err(e) => {
+            keys.hold_not_removed(Some(id));
+            conn_log(
+                "Icom network",
+                "error",
+                format!(
+                    "couldn't remove radio {id}'s network password ({e}). It is not used: \
+                     choose Remove in the notice at the top of the window."
+                ),
+            );
+        }
+    }
+    eng.set_keys_to_confirm(keys);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: remove_radio save failed: {e}")
     });
-    // …and out of the base config too, else the picker keeps offering a radio that no longer exists.
-    persist_roster_to_base(&eng.settings().radios);
-    persist_routing_to_base(eng.settings());
-    // …and its Icom network password out of the keychain.
-    icom_lan_forget_removed(&OsKeychain, id);
     Ok(eng.snapshot())
 }
 
@@ -29189,29 +32654,37 @@ fn icom_lan_set_password(
     vault.set(radio_id, &password)
 }
 
-/// After a radio profile is removed, its Icom network password goes with it. A failure is
-/// reported, never the password.
-fn icom_lan_forget_removed(vault: &dyn IcomLanVault, radio_id: u32) {
-    if let Err(e) = vault.clear(radio_id) {
-        conn_log(
-            "Icom network",
-            "err",
-            format!("couldn't remove radio {radio_id}'s network password: {e}"),
-        );
-    }
-}
-
 /// Store (or, with an empty string, clear) a radio profile's Icom network password in the OS
 /// keychain. Write-only: it is never read back to the UI.
-#[tauri::command]
-fn set_icom_lan_password(radio_id: u32, password: String) -> Result<(), String> {
-    icom_lan_set_password(&OsKeychain, radio_id, password)
+#[tauri::command(async)]
+fn set_icom_lan_password(
+    state: State<'_, SharedEngine>,
+    radio_id: u32,
+    password: String,
+) -> Result<(), String> {
+    icom_lan_set_password(&OsKeychain, radio_id, password)?;
+    key_typed_again(&state, Some(radio_id));
+    Ok(())
 }
 
 /// Remove a radio profile's Icom network password from the OS keychain (idempotent).
-#[tauri::command]
-fn clear_icom_lan_password(radio_id: u32) -> Result<(), String> {
-    OsKeychain.clear(radio_id)
+#[tauri::command(async)]
+fn clear_icom_lan_password(state: State<'_, SharedEngine>, radio_id: u32) -> Result<(), String> {
+    OsKeychain.clear(radio_id)?;
+    key_typed_again(&state, Some(radio_id));
+    Ok(())
+}
+
+/// A key the operator typed or cleared in Settings answers whether the saved one may go to the
+/// address it waits for ([`tempo_app::settings::Settings::keys_to_confirm`]): Cloudlog's
+/// (`None`) or radio `radio_id`'s. Nothing changes for a key that did not wait.
+fn key_typed_again(engine: &SharedEngine, radio_id: Option<u32>) {
+    let _ = answer_key_to_confirm(engine, radio_id, true, None, no_keychain_change);
+}
+
+/// An answer that touches no keychain entry ([`key_typed_again`]): asked for none.
+fn no_keychain_change(_: KeychainChange) -> Result<bool, String> {
+    Ok(false)
 }
 
 /// Whether a radio profile has an Icom network password saved. Says only yes or no.
@@ -29236,7 +32709,7 @@ mod icom_lan_password_tests {
     const PASSWORD: &str = "not-a-password";
 
     #[derive(Default)]
-    struct MapVault(Mutex<BTreeMap<u32, String>>);
+    pub(super) struct MapVault(Mutex<BTreeMap<u32, String>>);
 
     impl IcomLanVault for MapVault {
         fn get(&self, radio_id: u32) -> Result<Option<String>, String> {
@@ -29323,32 +32796,129 @@ mod icom_lan_password_tests {
         assert_eq!(vault.get(1).unwrap(), None, "an empty password clears it");
     }
 
-    /// ⭐ DELETING THE PROFILE CLEARS ITS ENTRY, and only its own. The command does it on every
-    /// successful removal.
+    /// A vault that cannot remove anything (a locked keychain): it reads and stores as
+    /// [`MapVault`] does.
+    #[derive(Default)]
+    pub(super) struct LockedVault(MapVault);
+
+    impl IcomLanVault for LockedVault {
+        fn get(&self, radio_id: u32) -> Result<Option<String>, String> {
+            self.0.get(radio_id)
+        }
+        fn set(&self, radio_id: u32, password: &str) -> Result<(), String> {
+            self.0.set(radio_id, password)
+        }
+        fn clear(&self, _radio_id: u32) -> Result<(), String> {
+            Err("the keychain is locked".into())
+        }
+    }
+
+    /// An engine whose roster is radios 0, 1 and 2, operating radio 0, with nothing waiting.
+    fn roster_engine(tag: &str) -> (std::path::PathBuf, SharedEngine) {
+        let (dir, engine) = super::durable_command_tests::engine_on_store(tag, 0);
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.radios = (0..3)
+                .map(|id| tempo_app::settings::RadioProfile {
+                    id,
+                    name: format!("Roster Test {id}"),
+                    ..Default::default()
+                })
+                .collect();
+            s.active_radio = 0;
+            s.sync_flat_from_active();
+            eng.apply_restored_settings(s);
+            eng.set_keys_to_confirm(Default::default());
+        }
+        (dir, engine)
+    }
+
+    /// ⭐ REMOVING A RADIO REMOVES ITS PASSWORD, and only its own, and only a removal that
+    /// happened does. ★ A KEYCHAIN THAT CANNOT REMOVE IT LEAVES IT HELD BACK: the password waits
+    /// in the notice and is never used, and a radio added later never takes its id. CONTROL: a
+    /// keychain that removes it leaves nothing waiting.
     #[test]
-    fn removing_a_radio_profile_forgets_its_password() {
+    fn removing_a_radio_forgets_its_password_or_holds_it_back() {
+        let (dir, engine) = roster_engine("remove-radio-vault");
+        let waiting = || engine_lock(&engine).keys_to_confirm().icom_lan.clone();
         let vault = MapVault::default();
         vault.set(1, PASSWORD).unwrap();
         vault.set(2, "another-fake").unwrap();
-        icom_lan_forget_removed(&vault, 1);
-        assert_eq!(vault.get(1).unwrap(), None);
-        assert_eq!(
-            vault.get(2).unwrap().as_deref(),
-            Some("another-fake"),
-            "the other radio's stays"
-        );
-        // The command: a removal that went ahead forgets the password, after it persisted.
-        let src = include_str!("lib.rs");
-        let body = &src[src.find("fn remove_radio(").expect("the command")..];
-        let body = &body[..body.find("\n}\n").expect("its end")];
-        let refused = body.find("return Err(").expect("the refusal");
-        let forget = body
-            .find("icom_lan_forget_removed(&OsKeychain, id)")
-            .expect("the forget");
         assert!(
-            refused < forget,
-            "only a removal that happened forgets the password"
+            remove_radio_and_its_password(&engine, 0, &vault).is_err(),
+            "premise: the operating radio is refused"
         );
+        assert_eq!(
+            waiting(),
+            Vec::<u32>::new(),
+            "a refused removal holds nothing"
+        );
+
+        remove_radio_and_its_password(&engine, 1, &vault).unwrap();
+        assert_eq!(
+            (
+                vault.get(1).unwrap(),
+                vault.get(2).unwrap().as_deref(),
+                waiting()
+            ),
+            (None, Some("another-fake"), vec![]),
+            "CONTROL: its password removed, the other radio's kept, nothing waits"
+        );
+
+        let locked = LockedVault::default();
+        locked.set(2, "another-fake").unwrap();
+        remove_radio_and_its_password(&engine, 2, &locked).unwrap();
+        assert_eq!(
+            waiting(),
+            vec![2],
+            "the keychain refused: the password stays held back"
+        );
+        assert_eq!(
+            icom_lan_password_for_login(&engine, &locked, 2),
+            Err(ICOM_PASSWORD_WAITS.to_string()),
+            "and is never used"
+        );
+        add_radio_without_a_password(&engine, &vault).unwrap();
+        let ids: Vec<u32> = engine_lock(&engine)
+            .settings()
+            .radios
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(
+            (ids, waiting()),
+            (vec![0, 3], vec![2]),
+            "a radio added then takes a fresh id, and inherits no wait"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A NEW RADIO NEVER HAS A PASSWORD: one the keychain still holds under its id (an old
+    /// removal that failed) is removed when the radio is added, and while the keychain cannot
+    /// remove it, it waits and is never used. CONTROL: removed, nothing waits.
+    #[test]
+    fn a_new_radio_never_inherits_a_password() {
+        let (dir, engine) = roster_engine("add-radio-vault");
+        let waiting = || engine_lock(&engine).keys_to_confirm().icom_lan.clone();
+        let vault = MapVault::default();
+        vault.set(3, "PLANTED-ORPHAN").unwrap();
+        add_radio_without_a_password(&engine, &vault).unwrap();
+        assert_eq!(
+            (vault.get(3).unwrap(), waiting()),
+            (None, vec![]),
+            "CONTROL: the new radio 3's leftover password removed, nothing waits"
+        );
+
+        let locked = LockedVault::default();
+        locked.set(4, "PLANTED-ORPHAN").unwrap();
+        add_radio_without_a_password(&engine, &locked).unwrap();
+        assert_eq!(
+            (waiting(), icom_lan_password_for_login(&engine, &locked, 4)),
+            (vec![4], Err(ICOM_PASSWORD_WAITS.to_string())),
+            "the keychain refused: radio 4's leftover password waits and is never used"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -29934,27 +33504,47 @@ fn clear_qrz_logbook_key(state: State<'_, SharedEngine>) -> Result<(), String> {
 /// keychain — write-only, kept out of settings.json at rest like every other
 /// credential. Unlike QRZ, saving does NOT flip the upload toggle: Cloudlog also
 /// needs a URL + station-profile id, so the operator enables it explicitly.
-#[tauri::command]
-fn set_cloudlog_key(key: String) -> Result<(), String> {
+#[tauri::command(async)]
+fn set_cloudlog_key(state: State<'_, SharedEngine>, key: String) -> Result<(), String> {
     let entry = cloudlog_keychain()?;
     if key.trim().is_empty() {
         clear_keychain_entry(&entry)?;
         conn_log("Cloudlog", "info", "API key cleared from the OS keychain");
+        key_typed_again(&state, None);
         return Ok(());
     }
     entry
         .set_password(key.trim())
         .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
     conn_log("Cloudlog", "ok", "API key saved to the OS keychain");
+    key_typed_again(&state, None);
     Ok(())
 }
 
+/// The saved keys that wait for the operator ([`keys_to_confirm_in`]), for the notice.
+#[tauri::command(async)]
+fn keys_to_confirm(state: State<'_, SharedEngine>) -> Vec<KeyToConfirm> {
+    keys_to_confirm_in(engine_lock(&state).settings())
+}
+
+/// The operator's Use or Remove on a saved key that waits ([`answer_key_to_confirm`]).
+#[tauri::command(async)]
+fn answer_saved_key(
+    state: State<'_, SharedEngine>,
+    radio_id: Option<u32>,
+    use_it: bool,
+    address: String,
+) -> Result<(), String> {
+    answer_key_to_confirm(&state, radio_id, use_it, Some(&address), change_keychain)
+}
+
 /// Remove the stored Cloudlog/Wavelog API key from the OS keychain (idempotent).
-#[tauri::command]
-fn clear_cloudlog_key() -> Result<(), String> {
+#[tauri::command(async)]
+fn clear_cloudlog_key(state: State<'_, SharedEngine>) -> Result<(), String> {
     let r = clear_keychain_entry(&cloudlog_keychain()?);
     if r.is_ok() {
         conn_log("Cloudlog", "info", "API key cleared from the OS keychain");
+        key_typed_again(&state, None);
     }
     r
 }
@@ -33855,16 +37445,19 @@ struct CloudlogStationDto {
 async fn cloudlog_station_info(
     state: State<'_, SharedEngine>,
 ) -> Result<Vec<CloudlogStationDto>, String> {
-    let url = {
-        let eng = engine_lock(&state);
-        eng.settings().cloudlog_url.trim().to_string()
-    };
-    if url.is_empty() {
+    if engine_lock(&state)
+        .settings()
+        .cloudlog_url
+        .trim()
+        .is_empty()
+    {
         return Err("Set your Cloudlog/Wavelog URL in Settings first.".to_string());
     }
-    let key = cloudlog_keychain()?
-        .get_password()
-        .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())?;
+    let (url, _, key) = cloudlog_key_to_send(&state, || {
+        cloudlog_keychain()?
+            .get_password()
+            .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())
+    })?;
     // Blocking HTTP off the async executor (the push impls' rule), and the destination check
     // with it: for a plain-http name it is a lookup. The key moves in and dies with the closure.
     let found = tauri::async_runtime::spawn_blocking(move || {
@@ -33903,26 +37496,16 @@ async fn cloudlog_station_info(
 fn cloudlog_push_qso_impl(
     dto: &LoggedQso,
     engine: &SharedEngine,
+    read_key: impl FnOnce() -> Result<String, String>,
 ) -> Result<String, propagation::live::cloudlog::CloudlogError> {
     use propagation::live::cloudlog::{CloudlogError, CloudlogFailure};
-    let (url, station_id) = {
-        let eng = engine_lock(engine);
-        let s = eng.settings();
-        (
-            s.cloudlog_url.trim().to_string(),
-            s.cloudlog_station_id.trim().to_string(),
-        )
-    };
-    let key = cloudlog_keychain()
-        .map_err(|e| CloudlogError {
+    let (url, station_id, key) =
+        cloudlog_key_to_send(engine, read_key).map_err(|message| CloudlogError {
             class: CloudlogFailure::NotConfigured,
-            message: e,
+            message,
             status: None,
-        })?
-        .get_password()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+        })?;
+    let key = key.trim().to_string();
     if url.is_empty() {
         return Err(CloudlogError {
             class: CloudlogFailure::NotConfigured,
@@ -34414,36 +37997,37 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         }
     }
     if cloudlog_on && owed & legs::CLOUDLOG != 0 {
-        let (part, ok, detail, transient) = match cloudlog_push_qso_impl(&dto, engine) {
-            Ok(_) => {
-                conn_log("Cloudlog", "ok", format!("auto-forward {call}"));
-                ("Cloudlog ✓".to_string(), true, conn_detail!(""), false)
-            }
-            Err(e) => {
-                conn_log(
-                    "Cloudlog",
-                    "error",
-                    format!("auto-forward {call} — {}", e.message),
-                );
-                // The class and the status only — `e.message` is the instance's, and stays on
-                // screen.
-                diag_upload_failure("Cloudlog", cloudlog_class_name(e.class), e.status, &dto);
-                // #226: only a failure that can clear on its own is retried. A refusal (a
-                // callsign where the location number goes, a bad key, a URL that is not the
-                // API) was retried up to the budget and failed the same way every time; it is
-                // said once, with the way back, and dropped.
-                let refusal = cloudlog_refusal_line(e.class, &call);
-                if let Some(line) = &refusal {
-                    conn_log("Cloudlog", "error", line.clone());
+        let (part, ok, detail, transient) =
+            match cloudlog_push_qso_impl(&dto, engine, cloudlog_key_from_keychain) {
+                Ok(_) => {
+                    conn_log("Cloudlog", "ok", format!("auto-forward {call}"));
+                    ("Cloudlog ✓".to_string(), true, conn_detail!(""), false)
                 }
-                (
-                    format!("Cloudlog ✗ {}", e.message),
-                    false,
-                    cloudlog_stamp(e.class),
-                    refusal.is_none(),
-                )
-            }
-        };
+                Err(e) => {
+                    conn_log(
+                        "Cloudlog",
+                        "error",
+                        format!("auto-forward {call} — {}", e.message),
+                    );
+                    // The class and the status only — `e.message` is the instance's, and stays on
+                    // screen.
+                    diag_upload_failure("Cloudlog", cloudlog_class_name(e.class), e.status, &dto);
+                    // #226: only a failure that can clear on its own is retried. A refusal (a
+                    // callsign where the location number goes, a bad key, a URL that is not the
+                    // API) was retried up to the budget and failed the same way every time; it is
+                    // said once, with the way back, and dropped.
+                    let refusal = cloudlog_refusal_line(e.class, &call);
+                    if let Some(line) = &refusal {
+                        conn_log("Cloudlog", "error", line.clone());
+                    }
+                    (
+                        format!("Cloudlog ✗ {}", e.message),
+                        false,
+                        cloudlog_stamp(e.class),
+                        refusal.is_none(),
+                    )
+                }
+            };
         // Same as HRDLog above: no per-QSO stamp, so this is the only health signal.
         //
         // ⛔ The persisted detail is Nexus's own sentence, never the instance's. Cloudlog is
@@ -41187,28 +44771,13 @@ fn start_on_the_logbook(
                     eng.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
                     continue;
                 }
-                if p.origin == tempo_app::engine::UploadOrigin::CatchUp {
-                    catchup_left = catchup_left.saturating_sub(1);
-                    // #290: filed under the service the record is actually owed to. This
-                    // said "ClubLog" outright, which was the only sweep there was — an eQSL
-                    // catch-up would have reported its whole run under ClubLog's name.
-                    // `catchup_left` counts RECORDS, so a record owing two legs says the
-                    // same remaining count on both lines, which is what is left to send.
-                    for (_, service) in UPLOAD_LEG_SERVICES
-                        .iter()
-                        .filter(|(leg, _)| p.legs & leg != 0)
-                    {
-                        conn_log(
-                            service,
-                            "info",
-                            format!(
-                                "catch-up: sending an older QSO with {} — {catchup_left} still \
-                                 queued, one every {}s so {service} isn't flooded",
-                                p.rec.call,
-                                tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
-                            ),
-                        );
-                    }
+                // A Cloudlog key the operator has yet to confirm for this address: that leg
+                // waits on the queue, unspent, and the rest go now.
+                let legs = legs_to_send_now(&push_engine, &p, now_unix, &mut catchup_left);
+                if legs == 0 {
+                    // Nothing else owed: nothing goes anywhere, DXKeeper included, which saw
+                    // this contact the first time it came round.
+                    continue;
                 }
                 let rec = p.rec.clone();
                 // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
@@ -41240,7 +44809,7 @@ fn start_on_the_logbook(
                         n3fjp_on,
                         cloudlog_on,
                     },
-                    p.legs,
+                    legs,
                 );
                 let capped = cap_hrdlog_retries(failed, p.attempts);
                 if capped != failed {
@@ -41258,7 +44827,7 @@ fn start_on_the_logbook(
                 // good. A contact contest mode held stays in its file until it owes nothing, so
                 // a quit part-way through the paced release sends the rest at the next launch.
                 // `failed` before the HRDLog cap: a leg that cap gives up on is retried then.
-                let done = p.legs & !failed;
+                let done = legs & !failed;
                 if done != 0 {
                     engine_lock_result(&push_engine)
                         .unwrap_or_else(|e| e.into_inner())
@@ -41347,8 +44916,9 @@ fn start_on_the_logbook(
         tempo_audio::rigctld_proc::init_orphan_ledger(config_dir_for(None).join("daemon-pids"));
         // The Icom network client reads a radio's password from the keychain at the moment it
         // logs in, through this source; nothing else hands it the password.
-        tempo_audio::icomlan::set_credential_source(std::sync::Arc::new(|radio_id| {
-            OsKeychain.get(radio_id)
+        let login_engine = engine.clone();
+        tempo_audio::icomlan::set_credential_source(std::sync::Arc::new(move |radio_id| {
+            icom_lan_password_for_login(&login_engine, &OsKeychain, radio_id)
         }));
         let radio_engine = engine.clone();
         std::thread::spawn(move || {
@@ -42798,6 +46368,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         upload_backlog,
         clear_qrz_logbook_key,
         set_cloudlog_key,
+        keys_to_confirm,
+        answer_saved_key,
         clear_cloudlog_key,
         qrz_push_qso,
         qrz_correct_preview,
@@ -61894,6 +65466,36 @@ mod secrets_toward_remote_tests {
         );
     }
 
+    /// ⛔ No path on the station's disk crosses to a computer driving it: a read from afar carries
+    /// none of the station's JS8 sound files (that computer plays the built-in tones), and the save
+    /// from afar keeps them as the shack has them. CONTROL: the shack's own read carries them.
+    #[test]
+    fn a_settings_read_from_afar_carries_no_station_sound_file() {
+        let afar = command_dispatch::Afar {
+            stand_down: 1,
+            starts_voided: 0,
+        };
+        let mut shack = station();
+        shack
+            .js8_sound_files
+            .insert("cq".into(), "C:\\Shack\\Sounds\\cq.wav".into());
+        let read = serde_json::to_value(settings_read(&shack, Some(&afar), false)).unwrap();
+        assert_eq!(read["js8SoundFiles"], serde_json::json!({}), "from afar");
+        assert!(!read.to_string().contains("cq.wav"), "from afar: {read}");
+        let own = serde_json::to_value(settings_read(&shack, None, false)).unwrap();
+        assert_eq!(
+            own["js8SoundFiles"],
+            serde_json::json!({ "cq": "C:\\Shack\\Sounds\\cq.wav" }),
+            "CONTROL: at the shack"
+        );
+        let mut save = settings_read(&shack, Some(&afar), false).settings;
+        command_dispatch::keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+        assert_eq!(
+            save.js8_sound_files, shack.js8_sound_files,
+            "a save from afar keeps the station's"
+        );
+    }
+
     /// ⛔ While a stream watches the station's screen, the settings read that screen makes (the real
     /// `get_settings`, with no `afar`, run as the command lane runs it) carries no stored key in any
     /// form, and says by value which the station has saved. CONTROL: before the stream opens and
@@ -62478,7 +66080,14 @@ mod upload_backlog_tests {
             "settings": older,
         })
         .to_string();
-        super::restore_settings_bundle(&engine, text, |_| true).expect("restored");
+        super::restore_settings_bundle(
+            &engine,
+            text,
+            Default::default,
+            |_| true,
+            super::no_key_change,
+        )
+        .expect("restored");
         assert!(
             !super::engine_lock(&engine).settings().qrz_logbook_upload,
             "premise: the backup's switch is off"
@@ -62726,7 +66335,14 @@ mod upload_backlog_tests {
             "settings": carried,
         })
         .to_string();
-        super::restore_settings_bundle(&engine, text, |_| true).expect("restored");
+        super::restore_settings_bundle(
+            &engine,
+            text,
+            Default::default,
+            |_| true,
+            super::no_key_change,
+        )
+        .expect("restored");
         assert_eq!(
             kept(),
             tempo_app::station::UploadStart {

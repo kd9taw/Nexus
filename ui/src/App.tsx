@@ -241,6 +241,7 @@ import { OnboardingBanner } from './components/OnboardingBanner'
 import { PounceBanner } from './components/PounceBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { ClientBanner } from './components/ClientBanner'
+import { KeyConfirmBanner } from './components/KeyConfirmBanner'
 import { useSelfUpdate } from './useSelfUpdate'
 import { usePounce, type PounceAlert } from './usePounce'
 import { useStationAlerts } from './useStationAlerts'
@@ -3144,6 +3145,8 @@ function App() {
         {/* On a computer driving another station, what it waits for: connecting, control held
             elsewhere, or why the station did not take it. Nothing on a station's own screen. */}
         <ClientBanner />
+        {/* The saved keys held back until the operator confirms them (a restore set their address). */}
+        <KeyConfirmBanner />
         <span>{t('shell.loading')}</span>
       </div>
     )
@@ -4084,6 +4087,7 @@ function App() {
   return (
     <div className="app">
       <ClientBanner />
+      <KeyConfirmBanner />
       {/* The window's one station card: a call clicked anywhere on screen opens it (CallCard.tsx). */}
       <CallCardHost snap={snap} spots={allSpots} needAlertsByCall={needAlertsByCall} />
       {/* ⚠️ NOT ON CONNECT, by the operator's ruling (2026-10-01): "at very top, its the frequency, the

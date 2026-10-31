@@ -731,6 +731,47 @@ pub fn tci_reachable(rig_model: u32, rig_conn: &str, host: &str, port: u16) -> b
     rig_model != 0 && rig_conn_is_tci(rig_conn) && !host.trim().is_empty() && port != 0
 }
 
+/// One radio's settings that say where its transmit audio goes ([`tx_audio_on_sound_card`]).
+pub struct TxAudioRoute<'a> {
+    pub rig_model: u32,
+    pub rig_conn: &'a str,
+    pub tci_host: &'a str,
+    pub tci_port: u16,
+    pub tci_audio: bool,
+    pub flex_native_cat: bool,
+    pub flex_radio_ip: &'a str,
+    pub flex_native_audio: bool,
+}
+
+/// Does this radio's transmit audio leave through this computer's sound card? False only where
+/// Nexus sends no transmit audio to a card at all, decided the way the radio's audio path decides:
+/// - the Icom network connection: nothing transmits over it, and the engine refuses every over
+///   before PTT ([`rig_conn_is_icom_lan`], `tempo_audio::icomlan`);
+/// - Nexus's TCI client with Audio over TCI on: the transmit audio goes into the TCI session through
+///   its tee, and that client keys Nexus's audio only while the tee is in ([`tci_reachable`],
+///   [`Settings::tci_audio`]);
+/// - Nexus's own Flex client with native audio on: DAX over the network, and Phone at the shack
+///   keys the radio's own microphone ([`flex_client_reachable`], [`Settings::flex_native_audio`]).
+///
+/// Every other radio, and any of these with its network audio off, takes its audio from the card.
+/// The headphone monitor and the JS8 sounds use it to leave out a TX device of "system default" on
+/// a radio that does not transmit from a card ([`Settings`]'s TX devices, in `tempo_audio`).
+///
+/// This is decided from the settings, and the live path can still fall back to the card: while the
+/// Flex client's DAX audio has failed, or before the TCI tee is ready, the radio loop plays the
+/// transmit audio to the TX device, and a TX device of "system default" is the default output.
+/// That is safe only because the operating radio's backend holds its resolved TX output open
+/// (`tempo_audio::notify_sound::hold_tx_output`), which those guards also refuse; an idle radio
+/// does not transmit. Dropping that hold for network radios would turn this rule into a hole.
+pub fn tx_audio_on_sound_card(r: &TxAudioRoute) -> bool {
+    let icom_lan = rig_conn_is_icom_lan(r.rig_conn);
+    let tci = tci_reachable(r.rig_model, r.rig_conn, r.tci_host, r.tci_port) && r.tci_audio;
+    let flex = r.flex_native_cat
+        && flex_client_reachable(r.rig_model, r.flex_radio_ip)
+        && r.flex_native_audio;
+    !(icom_lan || tci || flex)
+}
+
 /// The port Nexus's own TCI server listens on unless the operator moves it
 /// ([`Settings::tci_server_port`]): 40001, where WSJT-X, JTDX, MacLoggerDX and the Go TCI tools
 /// look by default, and clear of 50001, where Thetis (and, by a user's report, ExpertSDR3) serves
@@ -1115,6 +1156,68 @@ pub enum PounceThreshold {
 /// a blank key.
 fn cloudlog_key_absent(s: &str) -> bool {
     s.trim().is_empty()
+}
+
+/// The saved keys this station holds back until the operator confirms them for the address they
+/// now go to ([`Settings::keys_to_confirm`]). Names only which keys: never a key, and nothing
+/// about one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KeysToConfirm {
+    /// The Cloudlog/Wavelog API key.
+    pub cloudlog: bool,
+    /// The Icom network password of each of these radios, by profile id.
+    pub icom_lan: Vec<u32>,
+    /// Of those that wait, the ones kept only because removing them from the keychain failed:
+    /// Cloudlog's key, and each of these radios' passwords. The station knows such a key was typed
+    /// for another address (or for a radio it no longer has), so it can only be removed, never
+    /// used ([`Self::not_removed`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cloudlog_not_removed: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub icom_lan_not_removed: Vec<u32>,
+}
+
+impl KeysToConfirm {
+    pub fn is_empty(&self) -> bool {
+        !self.cloudlog && self.icom_lan.is_empty()
+    }
+
+    /// Whether radio `id`'s Icom network password waits.
+    pub fn icom_lan_waits(&self, id: u32) -> bool {
+        self.icom_lan.contains(&id)
+    }
+
+    /// Whether this key (Cloudlog's for `None`, else radio `radio_id`'s password) waits only
+    /// because removing it failed.
+    pub fn not_removed(&self, radio_id: Option<u32>) -> bool {
+        radio_id.map_or(self.cloudlog_not_removed, |id| {
+            self.icom_lan_not_removed.contains(&id)
+        })
+    }
+
+    /// Hold this key back as one whose removal failed: it waits, and can only be removed.
+    pub fn hold_not_removed(&mut self, radio_id: Option<u32>) {
+        match radio_id {
+            None => (self.cloudlog, self.cloudlog_not_removed) = (true, true),
+            Some(id) => {
+                if !self.icom_lan_waits(id) {
+                    self.icom_lan.push(id);
+                }
+                if !self.icom_lan_not_removed.contains(&id) {
+                    self.icom_lan_not_removed.push(id);
+                }
+            }
+        }
+    }
+
+    /// Forget why a key waited once it waits no more, so a later wait starts afresh.
+    pub(crate) fn only_of_keys_that_wait(mut self) -> Self {
+        self.cloudlog_not_removed &= self.cloudlog;
+        let waits = self.icom_lan.clone();
+        self.icom_lan_not_removed.retain(|id| waits.contains(id));
+        self
+    }
 }
 
 /// ⭐ **The seven settings a contest weekend changes, as they were before it changed them** —
@@ -3806,6 +3909,19 @@ pub struct Settings {
     /// prior build's behaviour; the mitigation is simply not to downgrade with a migration pending.
     #[serde(default, skip_serializing_if = "cloudlog_key_absent")]
     pub cloudlog_key: String,
+    /// ⛔ THE SAVED KEYS NOT TO SEND YET. A settings restore onto a station that had no address for
+    /// a service (a fresh install, or reset settings) lands the backup's address, while the system
+    /// keychain, which outlives both, may still hold a key, and cannot say which address it was
+    /// typed for. That key is kept but not used: no Cloudlog upload goes out with it and the Icom
+    /// network radio does not sign in with it, until the operator answers Use (it is the key for
+    /// that address) or Remove. Typing the key again answers too.
+    ///
+    /// ENGINE-OWNED, like the pending key above: `Engine::apply_settings_inner` keeps the
+    /// engine's value across every form save, profile load and restore, so a form that posts it
+    /// back empty can never let a key go out. Only the restore, the operator's answer, a key typed
+    /// again and removing the radio change it (`Engine::set_keys_to_confirm`).
+    #[serde(default, skip_serializing_if = "KeysToConfirm::is_empty")]
+    pub keys_to_confirm: KeysToConfirm,
     /// Auto-forward each logged QSO to the Cloudlog/Wavelog instance above. Off by default.
     #[serde(default)]
     pub cloudlog_upload: bool,
@@ -5141,6 +5257,37 @@ impl RadioProfile {
     /// the monitor does not watch it, although the radio has CAT when it is the one in use.
     pub fn monitored_while(&self, active: u32) -> bool {
         self.enabled && self.id != active && self.rig_model != 0
+    }
+
+    /// Where this radio's transmit audio goes ([`tx_audio_on_sound_card`]).
+    pub fn tx_audio_route(&self) -> TxAudioRoute<'_> {
+        TxAudioRoute {
+            rig_model: self.rig_model,
+            rig_conn: &self.rig_conn,
+            tci_host: &self.tci_host,
+            tci_port: self.tci_port,
+            tci_audio: self.tci_audio,
+            flex_native_cat: self.flex_native_cat,
+            flex_radio_ip: &self.flex_radio_ip,
+            flex_native_audio: self.flex_native_audio,
+        }
+    }
+}
+
+impl Settings {
+    /// Where the radio in use's transmit audio goes, from the flat mirror of its settings
+    /// ([`tx_audio_on_sound_card`]).
+    pub fn tx_audio_route(&self) -> TxAudioRoute<'_> {
+        TxAudioRoute {
+            rig_model: self.rig_model,
+            rig_conn: &self.rig_conn,
+            tci_host: &self.tci_host,
+            tci_port: self.tci_port,
+            tci_audio: self.tci_audio,
+            flex_native_cat: self.flex_native_cat,
+            flex_radio_ip: &self.flex_radio_ip,
+            flex_native_audio: self.flex_native_audio,
+        }
     }
 }
 
@@ -6572,6 +6719,7 @@ impl Default for Settings {
             cloudlog_url: String::new(),
             cloudlog_station_id: String::new(),
             cloudlog_key: String::new(),
+            keys_to_confirm: KeysToConfirm::default(),
             cloudlog_upload: false,
             opening_regional: true,
             macros: Macros::default(),
@@ -7023,7 +7171,16 @@ impl Settings {
     /// flat rig form always edits the active radio). Does NOT change the active radio.
     pub fn add_radio_profile(&mut self) -> u32 {
         self.ensure_radio_profiles();
-        let next_id = self.radios.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        // Never the id of a password that waits for the operator (`keys_to_confirm`): that one
+        // belongs to a radio no longer on the roster, and a new radio inherits none.
+        let next_id = self
+            .radios
+            .iter()
+            .map(|p| p.id)
+            .chain(self.keys_to_confirm.icom_lan.iter().copied())
+            .max()
+            .unwrap_or(0)
+            + 1;
         let mut used: Vec<u16> = self
             .radios
             .iter()
@@ -14870,6 +15027,151 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE SAVED KEYS HELD BACK FOR CONFIRMING ARE THE ENGINE'S: a form save, a profile load and
+    /// a restore that carry none (as every form does) keep them, so no stale form lets a key go
+    /// out; they survive a save to disk and back; removing the radio keeps its wait (the shell
+    /// lets it go once the password is removed), and a radio added then never takes its id.
+    /// CONTROL: the engine's own setter changes them.
+    #[test]
+    fn the_keys_held_back_for_confirming_survive_every_apply() {
+        use crate::engine::Engine;
+        let mut station = Settings::default();
+        station.radios = vec![
+            RadioProfile {
+                id: 0,
+                ..Default::default()
+            },
+            RadioProfile {
+                id: 1,
+                ..Default::default()
+            },
+        ];
+        station.active_radio = 0;
+        station.sync_flat_from_active();
+        let mut eng = Engine::with_settings(station);
+        let held = KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![1],
+            ..Default::default()
+        };
+        eng.set_keys_to_confirm(held.clone());
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &held,
+            "CONTROL: the setter sets them"
+        );
+
+        let mut form = eng.settings().clone();
+        form.keys_to_confirm = KeysToConfirm::default();
+        form.mycall = "W9FORM".into();
+        eng.apply_settings(form.clone());
+        assert_eq!(
+            (eng.settings().mycall.as_str(), eng.keys_to_confirm()),
+            ("W9FORM", &held),
+            "a form save that carries none keeps them"
+        );
+        eng.apply_restored_settings(form);
+        assert_eq!(eng.keys_to_confirm(), &held, "so does a restore's apply");
+
+        let dir = std::env::temp_dir().join(format!("tempo_keys_confirm_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        eng.settings().save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).keys_to_confirm,
+            held,
+            "saved and read back"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(eng.remove_radio(1), "premise: radio 1 removed");
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &held,
+            "the removed radio's wait stays until its password is removed"
+        );
+        assert_eq!(
+            eng.add_radio(),
+            2,
+            "a radio added then never takes the id whose password waits"
+        );
+        eng.set_keys_to_confirm(KeysToConfirm::default());
+        assert!(eng.remove_radio(2), "premise: radio 2 removed");
+        assert_eq!(
+            eng.add_radio(),
+            1,
+            "CONTROL: with nothing waiting, the next id after the roster's"
+        );
+    }
+
+    /// ★ A KEY KEPT ONLY BECAUSE ITS REMOVAL FAILED SAYS SO UNTIL IT STOPS WAITING: the mark is
+    /// saved and read back, and goes with the wait, so a later wait for that key starts afresh.
+    /// CONTROL: a settings file from before the mark existed reads as no removal failed.
+    #[test]
+    fn a_failed_removals_mark_lives_and_ends_with_its_wait() {
+        use crate::engine::Engine;
+        let mut eng = Engine::with_settings(Settings::default());
+        let mut keys = KeysToConfirm::default();
+        keys.hold_not_removed(None);
+        keys.hold_not_removed(Some(3));
+        keys.hold_not_removed(Some(3));
+        eng.set_keys_to_confirm(keys.clone());
+        assert_eq!(
+            (
+                eng.keys_to_confirm().clone(),
+                keys.not_removed(None),
+                keys.not_removed(Some(3)),
+                keys.not_removed(Some(4)),
+            ),
+            (
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![3],
+                    cloudlog_not_removed: true,
+                    icom_lan_not_removed: vec![3],
+                },
+                true,
+                true,
+                false
+            ),
+            "each waits, marked once"
+        );
+        let json = serde_json::to_string(&keys).unwrap();
+        assert_eq!(
+            serde_json::from_str::<KeysToConfirm>(&json).unwrap(),
+            keys,
+            "saved and read back"
+        );
+
+        let mut let_go = eng.keys_to_confirm().clone();
+        let_go.cloudlog = false;
+        let_go.icom_lan.clear();
+        eng.set_keys_to_confirm(let_go);
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &KeysToConfirm::default(),
+            "the marks went with the waits"
+        );
+        let mut again = KeysToConfirm::default();
+        again.cloudlog = true;
+        again.icom_lan.push(3);
+        eng.set_keys_to_confirm(again);
+        assert!(
+            !eng.keys_to_confirm().not_removed(None) && !eng.keys_to_confirm().not_removed(Some(3)),
+            "a later wait starts afresh"
+        );
+        assert_eq!(
+            serde_json::from_str::<KeysToConfirm>(r#"{"cloudlog":true,"icomLan":[1]}"#).unwrap(),
+            KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+                ..Default::default()
+            },
+            "CONTROL: an older file reads as no removal failed"
+        );
     }
 
     /// round 10 N2 — the serializer skip and the migration gate must agree on a WHITESPACE-only key.
