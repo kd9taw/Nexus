@@ -8,7 +8,7 @@
 // General station keeps its class (it used to be written over with "Outside the US", which takes the
 // lockout off). Once the wizard writes a class, a second run in the same session opens on it.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react'
+import { render, cleanup, waitFor, fireEvent, screen, within } from '@testing-library/react'
 import type { AppSnapshot } from './types'
 import defaultSettings from './components/__fixtures__/defaultSettings.json'
 import { EN } from './i18n'
@@ -165,22 +165,27 @@ beforeEach(() => {
 afterEach(cleanup)
 
 const settle = () => new Promise((r) => setTimeout(r, 100))
-const next = () => fireEvent.click(screen.getByRole('button', { name: /^Next/ }))
-const back = () => fireEvent.click(screen.getByRole('button', { name: EN['setup.nav.back'] }))
+// The wizard's own controls are looked up inside the wizard dialog, not across the whole App. A
+// role query over the whole App weighs every button behind the dialog (its name, whether it is
+// hidden) and took ~150 ms a query on an idle box; the steps below make ~30 of them, so on a loaded
+// box the run outgrew its time limit. Inside the dialog the same query takes a few ms.
+const wizard = () => within(screen.getByRole('dialog', { name: EN['setup.title'] }))
+const next = () => fireEvent.click(wizard().getByRole('button', { name: /^Next/ }))
+const back = () => fireEvent.click(wizard().getByRole('button', { name: EN['setup.nav.back'] }))
 const LABEL: Record<string, string> = {
   technician: EN['setup.finish.license.technician'],
   general: EN['setup.finish.license.general'],
   extra: EN['setup.finish.license.extra'],
   open: EN['setup.finish.license.open'],
 }
-const classButton = (c: string) => screen.getByRole('button', { name: new RegExp(`^${LABEL[c]}`) })
+const classButton = (c: string) => wizard().getByRole('button', { name: new RegExp(`^${LABEL[c]}`) })
 /** The licence class the licence step shows as picked, by its token. */
 function shownClass(): string | null {
   const picked = Object.keys(LABEL).filter((c) => classButton(c).getAttribute('aria-pressed') === 'true')
   return picked.length === 1 ? picked[0] : `${picked.length} picked`
 }
 async function finish() {
-  fireEvent.click(screen.getByRole('button', { name: /^Finish/ }))
+  fireEvent.click(wizard().getByRole('button', { name: /^Finish/ }))
   await waitFor(() => expect(screen.queryByRole('heading', { name: EN['setup.finish.title'] })).toBeNull())
   await settle()
 }
@@ -193,8 +198,10 @@ async function mount(hash: string): Promise<void> {
 }
 /** Open the wizard again from Settings, by the Radio tab's button or the App tab's link (beside Features). */
 async function openRerun(from: 'radio' | 'app') {
-  // Finish lands on the operating screen; the gear in the mode rail goes back to Settings.
-  const gear = screen.queryByRole('button', { name: EN['nav.settings.label'] })
+  // Finish lands on the operating screen; the gear in the mode rail goes back to Settings. It is
+  // looked up inside the rail, for the same reason the wizard's controls are looked up in the wizard.
+  const rail = within(screen.getByRole('navigation', { name: EN['nav.aria'] }))
+  const gear = rail.queryByRole('button', { name: EN['nav.settings.label'] })
   if (gear && gear.getAttribute('aria-current') !== 'page') fireEvent.click(gear)
   fireEvent.click(await screen.findByRole('tab', { name: EN[`settings.tabs.${from}`] }))
   const name = from === 'radio' ? /Re-run setup wizard/ : EN['settings.features.rerunWizard']
@@ -230,7 +237,7 @@ describe('re-running setup keeps the licence class', () => {
   it('a re-run skipped writes no class', async () => {
     await mountStation()
     await openRerun('radio')
-    fireEvent.click(screen.getByRole('button', { name: EN['setup.nav.skip'] }))
+    fireEvent.click(wizard().getByRole('button', { name: EN['setup.nav.skip'] }))
     await settle()
     expect(backend.licence).toEqual([])
     expect(backend.stored.licenseClass).toBe('technician')
