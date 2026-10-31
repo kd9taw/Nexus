@@ -399,6 +399,44 @@ fn a_new_contact_is_graded_from_the_card_kept_for_its_station() {
     assert_eq!(at_log(&other, "", &live, &region, &[]), None);
 }
 
+/// The flare and proton overlay is display only: a card that carries one grades a new contact
+/// exactly as the same card without it does.
+#[test]
+fn a_now_overlay_on_the_card_changes_no_contacts_grade() {
+    let _s = serial();
+    let live = Mutex::new(propagation::LiveSpots::default());
+    let region = Mutex::new(propagation::LiveSpots::default());
+    let rec = qso("VK2AA", "QF56", "20m", NOW, None);
+    let plain = sydney_card("FN42", NOW);
+    keep_outlook("FN42aa", "QF56", NOW, &plain, Some(&measured()));
+    let want = at_log(&rec, "", &live, &region, &[]).expect("graded");
+    // The same card under an X2 flare and an S3 proton event.
+    let mut storm = sydney_card("FN42", NOW);
+    let inputs = crate::NowInputs {
+        xray: Some(propagation::pathnow::XraySample {
+            flux: 2e-4,
+            at: NOW - 60,
+        }),
+        protons: Some(propagation::pathnow::ProtonSample {
+            j1: 4000.0,
+            j5: 2000.0,
+            j10: 1000.0,
+            at: NOW - 300,
+        }),
+        ..Default::default()
+    };
+    crate::attach_now(
+        &mut storm,
+        latlon("FN42").unwrap(),
+        latlon("QF56").unwrap(),
+        &inputs,
+        NOW,
+    );
+    assert!(storm.overlay.is_some(), "the overlay under test is there");
+    keep_outlook("FN42aa", "QF56", NOW, &storm, Some(&measured()));
+    assert_eq!(at_log(&rec, "", &live, &region, &[]), Some(want));
+}
+
 #[test]
 fn the_grade_reasons_are_tokens_the_logbook_can_read() {
     use propagation::RouteReason as R;

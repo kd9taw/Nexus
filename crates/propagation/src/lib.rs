@@ -50,6 +50,7 @@ pub mod opening;
 pub mod p533;
 pub mod pathday;
 pub mod pathgeo;
+pub mod pathnow;
 pub mod pca;
 pub mod pota;
 pub mod pounce;

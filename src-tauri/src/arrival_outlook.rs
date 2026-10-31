@@ -227,6 +227,12 @@ pub(crate) fn assemble(s: &State, now: i64) -> ArrivalOutlook {
     }
 }
 
+/// The watch [`assemble`] would serve at `now`, from what is held — never fetched here (the
+/// band outlook's "now" line reads it beside the climatology).
+pub(crate) fn watch_now(now: i64) -> Option<Watch> {
+    STATE.lock().ok().and_then(|s| assemble(&s, now).watch)
+}
+
 /// Everything "coming": NOAA's watch, the model run, the measured wind at L1
 /// and the forecasters' rationale, each with its own time. See the module header.
 #[tauri::command]
