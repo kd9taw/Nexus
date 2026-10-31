@@ -101,6 +101,54 @@ pub fn absorption_db(
     scale_to_freq(a30 * factor, freq_mhz)
 }
 
+/// NOAA's S-scale (solar radiation storm) from J(≥10 MeV) in pfu: S1 at 10, S2 at 100, … S5 at
+/// 10⁵; 0 below S1 (and for a non-finite flux).
+pub fn s_scale(j10: f64) -> u8 {
+    [1e5, 1e4, 1e3, 100.0, 10.0]
+        .iter()
+        .position(|&t| j10 >= t)
+        .map_or(0, |i| 5 - i as u8)
+}
+
+/// NOAA's rule of thumb (the D-RAP documentation) for how long a proton event's polar-cap
+/// absorption lasts, from the J(≥10 MeV) flux: `24.235·log10(J/15)` hours. `None` at or below
+/// 15 pfu, where the rule gives nothing (zero or negative hours) — never a made-up figure.
+pub fn sep_recovery_hours(j10: f64) -> Option<f64> {
+    (j10 > 15.0).then(|| 24.235 * (j10 / 15.0).log10())
+}
+
+/// How old a GOES proton sample may be and still say a proton event is on (the product is
+/// every 5 minutes; the shack asks every 5).
+pub const PROTON_FRESH_SECS: i64 = 30 * 60;
+
+/// Whether a proton event (S1+) is measured now: J(≥10 MeV) ≥ 10 pfu at a dated sample younger
+/// than [`PROTON_FRESH_SECS`]. An undated or old sample is no event (fail closed).
+pub fn proton_event(j10: f64, at: Option<i64>, now: i64) -> bool {
+    s_scale(j10) >= 1 && at.is_some_and(|at| now - at < PROTON_FRESH_SECS)
+}
+
+/// Bearing step (degrees) round the cap edge.
+const EDGE_STEP_DEG: usize = 4;
+
+/// The polar-cap edge at cutoff `cutoff_deg` (geomagnetic latitude): one closed `[lon, lat]`
+/// ring per hemisphere (north, south) — the small circle that far from each centred-dipole
+/// pole. The cap is poleward of it; the 5° taper ([`cap_factor`]) lies just outside.
+pub fn cap_edge_rings(cutoff_deg: f64) -> [Vec<[f32; 2]>; 2] {
+    let ring = |sign: f64| {
+        let mut r: Vec<[f32; 2]> = (0..360)
+            .step_by(EDGE_STEP_DEG)
+            .map(|mlon| {
+                let (lat, lon) =
+                    crate::geo::geographic_from_geomagnetic(sign * cutoff_deg, mlon as f64);
+                [lon as f32, lat as f32]
+            })
+            .collect();
+        r.push(r[0]);
+        r
+    };
+    [ring(1.0), ring(-1.0)]
+}
+
 /// One polar-shading sample for the map overlay: where, and the 30 MHz
 /// absorption there (dB) — the UI maps dB → opacity.
 #[derive(Debug, Clone, Serialize)]
@@ -192,6 +240,62 @@ mod tests {
         assert_eq!(cap_factor(50.0, 62.0), 0.0);
         let midway = cap_factor(59.5, 62.0);
         assert!((midway - 0.5).abs() < 1e-9); // cosine taper midpoint
+    }
+
+    #[test]
+    fn the_s_scale_follows_noaas_thresholds() {
+        let at = [
+            (0.2, 0),
+            (9.99, 0),
+            (10.0, 1),
+            (99.0, 1),
+            (100.0, 2),
+            (1e3, 3),
+            (1e4, 4),
+            (1e5, 5),
+            (1e7, 5),
+        ];
+        for (j, s) in at {
+            assert_eq!(s_scale(j), s, "J≥10 = {j}");
+        }
+        assert_eq!(s_scale(f64::NAN), 0);
+    }
+
+    #[test]
+    fn sep_recovery_is_noaas_rule_and_says_nothing_below_its_floor() {
+        // 24.235·log10(150/15) = 24.235 h; 1500 pfu → 48.47 h.
+        assert!((sep_recovery_hours(150.0).unwrap() - 24.235).abs() < 1e-9);
+        assert!((sep_recovery_hours(1500.0).unwrap() - 48.47).abs() < 1e-9);
+        assert_eq!(sep_recovery_hours(15.0), None);
+        assert_eq!(sep_recovery_hours(12.0), None);
+    }
+
+    #[test]
+    fn a_proton_event_needs_s1_and_a_fresh_dated_sample() {
+        let now = 1_800_000_000;
+        assert!(proton_event(12.0, Some(now - 300), now));
+        assert!(!proton_event(9.0, Some(now - 300), now), "below S1");
+        assert!(!proton_event(500.0, None, now), "undated");
+        assert!(
+            !proton_event(500.0, Some(now - PROTON_FRESH_SECS), now),
+            "old"
+        );
+        assert!(proton_event(500.0, Some(now - PROTON_FRESH_SECS + 1), now));
+    }
+
+    #[test]
+    fn the_cap_edge_is_the_cutoff_latitude_round_each_pole() {
+        let [n, s] = cap_edge_rings(62.0);
+        assert_eq!(n.first(), n.last());
+        assert_eq!(n.len(), 360 / EDGE_STEP_DEG + 1);
+        for p in &n {
+            let m = crate::geo::geomagnetic_lat_deg(f64::from(p[1]), f64::from(p[0]));
+            assert!((m - 62.0).abs() < 1e-3, "{p:?} at {m}");
+        }
+        for p in &s {
+            let m = crate::geo::geomagnetic_lat_deg(f64::from(p[1]), f64::from(p[0]));
+            assert!((m + 62.0).abs() < 1e-3, "{p:?} at {m}");
+        }
     }
 
     #[test]

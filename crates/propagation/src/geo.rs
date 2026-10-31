@@ -355,9 +355,86 @@ pub fn geomagnetic_lat_deg(lat: f64, lon: f64) -> f64 {
         .to_degrees()
 }
 
+/// The centred-dipole geomagnetic north pole [`geomagnetic_lat_deg`] uses (degrees).
+const DIPOLE_POLE: (f64, f64) = (80.65, -72.68);
+
+/// Geographic (lat, lon) → centred-dipole geomagnetic (lat, lon), degrees. The latitude is
+/// [`geomagnetic_lat_deg`]'s; the longitude is only ever used as a difference (magnetic local
+/// time), so its zero meridian is whatever the rotation gives.
+pub fn geomagnetic_latlon(lat: f64, lon: f64) -> (f64, f64) {
+    let (p, l) = (lat.to_radians(), lon.to_radians());
+    let (x, y, z) = (p.cos() * l.cos(), p.cos() * l.sin(), p.sin());
+    // Turn the pole's meridian to 0°, then tip the pole onto the z axis.
+    let a = DIPOLE_POLE.1.to_radians();
+    let (x, y) = (x * a.cos() + y * a.sin(), -x * a.sin() + y * a.cos());
+    let b = (90.0 - DIPOLE_POLE.0).to_radians();
+    let (x, z) = (x * b.cos() - z * b.sin(), x * b.sin() + z * b.cos());
+    (
+        z.clamp(-1.0, 1.0).asin().to_degrees(),
+        y.atan2(x).to_degrees(),
+    )
+}
+
+/// The inverse of [`geomagnetic_latlon`]: centred-dipole (lat, lon) → geographic (lat, lon).
+pub fn geographic_from_geomagnetic(mlat: f64, mlon: f64) -> (f64, f64) {
+    let (p, l) = (mlat.to_radians(), mlon.to_radians());
+    let (x, y, z) = (p.cos() * l.cos(), p.cos() * l.sin(), p.sin());
+    let b = (90.0 - DIPOLE_POLE.0).to_radians();
+    let (x, z) = (x * b.cos() + z * b.sin(), -x * b.sin() + z * b.cos());
+    let a = DIPOLE_POLE.1.to_radians();
+    let (x, y) = (x * a.cos() - y * a.sin(), x * a.sin() + y * a.cos());
+    (
+        z.clamp(-1.0, 1.0).asin().to_degrees(),
+        y.atan2(x).to_degrees(),
+    )
+}
+
+/// The point the sun is overhead at `unix` (lat, lon), with the same declination and equation
+/// of time as [`solar_elevation_deg`], so the two agree.
+pub fn subsolar_point(unix: i64) -> (f64, f64) {
+    let utc_hours = (unix.rem_euclid(86_400) as f64) / 3600.0;
+    let lon = -(utc_hours + equation_of_time_min(unix) / 60.0 - 12.0) * 15.0;
+    (
+        solar_declination_deg(unix),
+        (lon + 540.0).rem_euclid(360.0) - 180.0,
+    )
+}
+
+/// Magnetic local time (hours, 0..24) at a geomagnetic longitude: 12 under the sun's
+/// geomagnetic meridian, 0 opposite it.
+pub fn magnetic_local_time(mlon: f64, unix: i64) -> f64 {
+    let (slat, slon) = subsolar_point(unix);
+    let sun_mlon = geomagnetic_latlon(slat, slon).1;
+    (12.0 + (mlon - sun_mlon) / 15.0).rem_euclid(24.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn geomagnetic_coordinates_round_trip_and_agree_with_the_latitude() {
+        for &(lat, lon) in &[(42.5, -89.0), (-33.9, 18.4), (69.6, 18.9), (0.0, 179.0)] {
+            let (mlat, mlon) = geomagnetic_latlon(lat, lon);
+            assert!((mlat - geomagnetic_lat_deg(lat, lon)).abs() < 1e-9);
+            let (lat2, lon2) = geographic_from_geomagnetic(mlat, mlon);
+            assert!((lat2 - lat).abs() < 1e-9, "{lat} → {lat2}");
+            assert!(((lon2 - lon + 540.0).rem_euclid(360.0) - 180.0).abs() < 1e-9);
+        }
+        // The dipole pole is the geomagnetic pole.
+        assert!((geomagnetic_latlon(80.65, -72.68).0 - 90.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_sun_is_overhead_at_the_subsolar_point_and_its_meridian_is_magnetic_noon() {
+        let unix = 1_793_488_980; // 2026-10-31 23:23Z
+        let (lat, lon) = subsolar_point(unix);
+        assert!(solar_elevation_deg(lat, lon, unix) > 89.9);
+        let mlon = geomagnetic_latlon(lat, lon).1;
+        assert!((magnetic_local_time(mlon, unix) - 12.0).abs() < 1e-9);
+        assert!((magnetic_local_time(mlon + 180.0, unix) - 0.0).abs() < 1e-9);
+        assert!((magnetic_local_time(mlon + 90.0, unix) - 18.0).abs() < 1e-9);
+    }
 
     #[test]
     fn maidenhead_known_grids() {

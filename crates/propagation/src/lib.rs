@@ -47,6 +47,7 @@ pub mod memchan;
 pub mod model;
 pub mod needalert;
 pub mod opening;
+pub mod oval;
 pub mod p533;
 pub mod pathday;
 pub mod pathgeo;

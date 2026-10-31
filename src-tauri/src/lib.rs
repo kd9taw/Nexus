@@ -9654,7 +9654,33 @@ fn tv_getting_out_since(args: &serde_json::Value) -> Option<i64> {
 #[tauri::command]
 async fn get_aurora(
     cache: State<'_, AuroraCache>,
+    prop: State<'_, PropCache>,
 ) -> Result<propagation::live::aurora::AuroraOval, String> {
+    // The Kp-fit edge rides with every answer, modelled now from the measured Kp now (oval.rs);
+    // the map draws it only when the OVATION oval itself is stale.
+    let now = now_unix();
+    let kp_fit = {
+        let g = prop.lock().map_err(|e| e.to_string())?;
+        kp_fit_now(g.as_ref().map(|(_, s)| &s.space_wx), now)
+    };
+    let mut oval = aurora_oval(&cache).await?;
+    oval.kp_fit = kp_fit;
+    Ok(oval)
+}
+
+/// The Kp-fit oval edge at `now`, only from a Kp SWPC measured and that may speak for now
+/// ([`swpc_kp`]): a stand-in, an old or a missing Kp models nothing.
+fn kp_fit_now(
+    wx: Option<&propagation::SpaceWxView>,
+    now: i64,
+) -> Option<propagation::oval::KpFitOval> {
+    let kp = swpc_kp(wx, now)?;
+    let at = wx?.stamps.kp_at?;
+    Some(propagation::oval::kp_fit(kp, at, now))
+}
+
+/// The OVATION oval, cached `AURORA_TTL_SECS` (see `get_aurora`).
+async fn aurora_oval(cache: &AuroraCache) -> Result<propagation::live::aurora::AuroraOval, String> {
     const AURORA_TTL_SECS: u64 = 600;
     {
         let g = cache.lock().map_err(|e| e.to_string())?;
@@ -9708,6 +9734,14 @@ struct PcaView {
     /// The GOES proton sample's own time (Unix seconds), so a copy served after a failed
     /// refetch says how old it is.
     protons_at: Option<i64>,
+    /// NOAA's S-scale from `j10` (0 below S1).
+    s_scale: u8,
+    /// NOAA's rule of thumb for how long the event lasts (hours), from `j10`; `None` where the
+    /// rule says nothing (≤ 15 pfu).
+    sep_recovery_h: Option<f64>,
+    /// The cap's edge at `cutoff_deg`, `[north, south]` closed `[lon, lat]` rings — only with a
+    /// measured Kp (`None` exactly when `cutoff_deg` is). An approximation (pca.rs), labelled so.
+    edge: Option<[Vec<[f32; 2]>; 2]>,
 }
 
 #[tauri::command]
@@ -9716,8 +9750,6 @@ async fn get_pca(
     protons: State<'_, ProtonCache>,
 ) -> Result<Option<PcaView>, String> {
     const PROTON_TTL_SECS: u64 = 300;
-    /// Below this 30 MHz cap absorption the event isn't operationally visible.
-    const MIN_DB: f64 = 0.5;
     let cached = {
         let g = protons.lock().map_err(|e| e.to_string())?;
         g.as_ref()
@@ -9755,14 +9787,25 @@ async fn get_pca(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         pca_kp(guard.as_ref().map(|(_, s)| &s.space_wx), now)
     };
-    Ok(Some(PcaView {
+    Ok(Some(pca_view(flux, kp, now)))
+}
+
+/// The polar-cap view from the proton reading and the measured Kp (if any) at `now`.
+fn pca_view(flux: propagation::live::protons::ProtonFlux, kp: Option<f64>, now: i64) -> PcaView {
+    /// Below this 30 MHz cap absorption the event isn't operationally visible.
+    const MIN_DB: f64 = 0.5;
+    let cutoff_deg = kp.map(propagation::pca::cutoff_lat_deg);
+    PcaView {
         j10: flux.j10,
         a30_day: propagation::pca::a30_day(flux.j5),
         a30_night: propagation::pca::a30_night(flux.j1),
-        cutoff_deg: kp.map(propagation::pca::cutoff_lat_deg),
+        cutoff_deg,
         points: propagation::pca::pca_layer(flux.j5, flux.j1, kp.unwrap_or(0.0), now, MIN_DB),
         protons_at: flux.at,
-    }))
+        s_scale: propagation::pca::s_scale(flux.j10),
+        sep_recovery_h: propagation::pca::sep_recovery_hours(flux.j10),
+        edge: cutoff_deg.map(propagation::pca::cap_edge_rings),
+    }
 }
 
 /// The Kp the polar-cap edge is placed at: the snapshot's Kp only when it may speak for `now`
@@ -15300,8 +15343,9 @@ struct XrayNow {
     recent: Vec<(i64, f32)>,
     /// NOAA's newest flare event, when its list has answered.
     event: Option<propagation::flare::FlareEvent>,
-    /// NOAA's D-RAP grid, only while the flux is at a flare (M1+, where the map draws it):
-    /// it is not asked on a quiet sun, and not sent where nothing would draw it.
+    /// NOAA's D-RAP grid, only during a flare (M1+, where the map draws its footprint) or a
+    /// measured proton event (where the map draws its polar caps, `drap_wanted`): it is not asked
+    /// on a quiet sun, and not sent where nothing would draw it.
     drap: Option<propagation::flare::DrapGrid>,
 }
 
@@ -15328,19 +15372,37 @@ async fn lane_ask<T: Clone + Send + 'static>(
 /// snapshot so a flare's ONSET reaches the map + alert in ~1 min. Serves the
 /// last-good reading on a fetch failure; errors only when we never had one.
 #[tauri::command]
-async fn get_xray_now() -> Result<XrayNow, String> {
+async fn get_xray_now(protons: State<'_, ProtonCache>) -> Result<XrayNow, String> {
     use propagation::live::swpc;
     let x = lane_ask(&XRAY_LANE, swpc::fetch_xray_trace)
         .await
         .ok_or("xray: no GOES reading yet")?;
     let event = lane_ask(&FLARE_EVENT_LANE, swpc::fetch_flare_latest).await;
-    // Only during a flare, and only beside a GOES sample the UI still uses (flare.rs `wants_drap`).
-    let drap = if propagation::flare::wants_drap(x.now.value, x.now.at, now_unix()) {
+    // The proton reading the polar-cap layer already holds (never fetched here).
+    let held = protons
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, p)| *p));
+    let drap = if drap_wanted(x.now.value, x.now.at, held, now_unix()) {
         lane_ask(&DRAP_LANE, swpc::fetch_drap_grid).await
     } else {
         None
     };
     Ok(xray_now(x, event, drap))
+}
+
+/// Whether NOAA's D-RAP grid is asked for: during a flare, beside a GOES sample the UI still uses
+/// (flare.rs `wants_drap`), OR during a measured proton event (pca.rs `proton_event`), where the
+/// grid carries NOAA's own polar-cap absorption and real cutoff. A quiet sun with no proton
+/// event costs NOAA nothing.
+fn drap_wanted(
+    xray: f32,
+    xray_at: i64,
+    protons: Option<propagation::live::protons::ProtonFlux>,
+    now: i64,
+) -> bool {
+    propagation::flare::wants_drap(xray, xray_at, now)
+        || protons.is_some_and(|p| propagation::pca::proton_event(p.j10, p.at, now))
 }
 
 /// The fast lane's answer: the flux, its time, the sparkline and the raw minutes all from the
@@ -38770,8 +38832,8 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             .await),
             "get_kc2g_muf" => ok(get_kc2g_muf(app.state()).await),
             "get_space_wx_scales" => ok(get_space_wx_scales(app.state()).await),
-            "get_xray_now" => ok(get_xray_now().await),
-            "get_aurora" => ok(get_aurora(app.state()).await),
+            "get_xray_now" => ok(get_xray_now(app.state()).await),
+            "get_aurora" => ok(get_aurora(app.state(), app.state()).await),
             "get_pca" => ok(get_pca(app.state(), app.state()).await),
             "get_satellites" => ok(get_satellites(app.state()).await),
             "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
@@ -54689,6 +54751,89 @@ mod tests {
         // A cached snapshot's measured Kp from two hours ago places no edge.
         snap.stamps.kp_at = Some(now - 2 * 3600);
         assert_eq!(crate::pca_kp(Some(&snap), now), None, "an hours-old Kp");
+    }
+
+    /// The cap's edge line travels only with a measured Kp, beside the S-scale and NOAA's
+    /// recovery rule from the same J(≥10 MeV).
+    #[test]
+    fn the_pca_view_draws_its_edge_only_at_a_measured_kp() {
+        let now = 1_761_800_000;
+        let flux = propagation::live::protons::ProtonFlux {
+            j1: 5000.0,
+            j5: 800.0,
+            j10: 150.0,
+            at: Some(now - 300),
+        };
+        let v = serde_json::to_value(crate::pca_view(flux, Some(5.0), now)).unwrap();
+        assert_eq!(v["sScale"], 2);
+        assert!((v["sepRecoveryH"].as_f64().unwrap() - 24.235).abs() < 1e-9);
+        assert_eq!(v["cutoffDeg"], 60.0);
+        let north = v["edge"][0].as_array().unwrap();
+        let p = &north[0];
+        let m =
+            propagation::geo::geomagnetic_lat_deg(p[1].as_f64().unwrap(), p[0].as_f64().unwrap());
+        assert!((m - 60.0).abs() < 1e-3, "the edge is at the cutoff, {m}");
+        let blind = serde_json::to_value(crate::pca_view(flux, None, now)).unwrap();
+        assert!(blind["edge"].is_null() && blind["cutoffDeg"].is_null());
+        let quiet = propagation::live::protons::ProtonFlux { j10: 12.0, ..flux };
+        let q = serde_json::to_value(crate::pca_view(quiet, Some(5.0), now)).unwrap();
+        assert_eq!(q["sScale"], 1);
+        assert!(
+            q["sepRecoveryH"].is_null(),
+            "NOAA's rule says nothing at 12 pfu"
+        );
+    }
+
+    /// NOAA's grid is asked during a flare or during a measured proton event, and not on a quiet
+    /// sun, nor for an undated or old proton sample.
+    #[test]
+    fn the_drap_grid_is_wanted_for_a_flare_or_a_proton_event() {
+        let now = 1_761_800_000;
+        let p = |j10: f64, at: Option<i64>| {
+            Some(propagation::live::protons::ProtonFlux {
+                j1: 1.0,
+                j5: 1.0,
+                j10,
+                at,
+            })
+        };
+        let (qx, qat) = (2e-7_f32, now - 60);
+        assert!(crate::drap_wanted(2e-5, now - 60, None, now), "an M2 flare");
+        assert!(!crate::drap_wanted(qx, qat, None, now), "quiet");
+        assert!(
+            crate::drap_wanted(qx, qat, p(40.0, Some(now - 300)), now),
+            "S1"
+        );
+        assert!(
+            !crate::drap_wanted(qx, qat, p(5.0, Some(now - 300)), now),
+            "below S1"
+        );
+        assert!(!crate::drap_wanted(qx, qat, p(40.0, None), now), "undated");
+        assert!(
+            !crate::drap_wanted(qx, qat, p(40.0, Some(now - 7200)), now),
+            "old"
+        );
+    }
+
+    /// The Kp-fit oval is modelled only from a measured Kp that may speak for now, and carries
+    /// that Kp and its sample time.
+    #[test]
+    fn the_kp_fit_oval_needs_a_measured_kp() {
+        let now = 1_761_800_000;
+        let mut snap = propagation::offline(now, "K1ABC", "FN31").space_wx;
+        snap.kp = 2.0;
+        assert!(crate::kp_fit_now(None, now).is_none(), "cold cache");
+        assert!(crate::kp_fit_now(Some(&snap), now).is_none(), "stand-in Kp");
+        snap.kp = 6.0;
+        snap.stamps.kp_at = Some(now - 120);
+        let fit = crate::kp_fit_now(Some(&snap), now).expect("a measured Kp models an edge");
+        assert_eq!((fit.kp, fit.kp_at), (6.0, now - 120));
+        assert_eq!(fit, propagation::oval::kp_fit(6.0, now - 120, now));
+        snap.stamps.kp_at = Some(now - 2 * 3600);
+        assert!(
+            crate::kp_fit_now(Some(&snap), now).is_none(),
+            "an hours-old Kp"
+        );
     }
 
     /// A KC2G set served after a failed refetch is older by the time since it was fetched.
