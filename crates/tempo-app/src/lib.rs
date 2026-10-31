@@ -41,12 +41,14 @@ pub mod privileges;
 pub mod remote_control;
 pub mod remote_monitor;
 pub mod scp;
+pub mod sstv_gallery;
 #[cfg(test)]
 mod stage1_tests;
 pub mod station;
 #[cfg(any(test, feature = "test-util"))]
 pub mod test_util;
 pub mod update;
+pub mod upload_start;
 pub mod watchlist;
 pub mod window_geometry;
 pub mod winlink;

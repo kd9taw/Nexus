@@ -85,6 +85,7 @@ import {
   setLotwPassword,
   setQrzLogbookKey,
   setQrzPassword,
+  uploadBacklog,
   setRepeaterbookToken,
   setRxGain,
   setSettings,
@@ -106,6 +107,9 @@ import {
   tciProbe,
   tciServerDisconnect,
   qrzTestConnection,
+  lotwTestConnection,
+  eqslTestConnection,
+  clublogTestConnection,
   syncQrz,
   n3fjpTestConnection,
   callbookRefresh,
@@ -150,6 +154,16 @@ import {
   clubFirewallPressLine,
   clubFirewallRefusalLine,
 } from '../features/clubFirewall'
+
+// The Connections rows with a read-only Test (beside QRZ Logbook's own), by row id. Each signs in
+// with the stored credentials and reads; none uploads or changes anything on the service. Each verb
+// is read when its Test runs, not when this module loads (a test that mocks `../api` with a fixed
+// list of verbs would otherwise fail on import).
+const SERVICE_TESTS: Record<string, () => Promise<string>> = {
+  lotw: () => lotwTestConnection(),
+  eqsl: () => eqslTestConnection(),
+  clublog: () => clublogTestConnection(),
+}
 
 /** The Cabrillo `CATEGORY-OPERATOR` tokens, in the order a sponsor's template lists
  *  them. INVARIANT: each goes into the file verbatim, so none is ever translated and
@@ -1543,6 +1557,19 @@ export function SettingsPanel({
     qrzTestConnection()
       .then((msg) => setQrzTest({ state: 'ok', msg }))
       .catch((e) => setQrzTest({ state: 'fail', msg: String(e) }))
+  }
+  // LoTW / eQSL / ClubLog Tests: each signs in and READS (never uploads), keyed by the
+  // Connections row id. Same idle | testing | result shape as the QRZ Test above.
+  const [svcTest, setSvcTest] = useState<
+    Record<string, { state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>
+  >({})
+  const runSvcTest = (id: string) => {
+    const test = SERVICE_TESTS[id]
+    if (!test) return
+    setSvcTest((p) => ({ ...p, [id]: { state: 'testing', msg: t('settings.connections.test.testing') } }))
+    test()
+      .then((msg) => setSvcTest((p) => ({ ...p, [id]: { state: 'ok', msg } })))
+      .catch((e) => setSvcTest((p) => ({ ...p, [id]: { state: 'fail', msg: String(e) } })))
   }
   const [n3fjpTest, setN3fjpTest] = useState<{ state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ state: 'idle', msg: '' })
   const runN3fjpTest = () => {
@@ -3517,10 +3544,40 @@ export function SettingsPanel({
     }
   }
 
+  // The FIRST login saved for QRZ Logbook, ClubLog or eQSL turns its upload on, and its catch-up
+  // would send every contact never sent there — an imported log included, since an import marks
+  // nothing as sent. So it asks first, and the default (the button that has the focus, and what
+  // Escape, a click outside or a dialog that cannot open all answer) is "Only contacts made from
+  // now on". `true` sends them, as a save did before. A login saved over a stored one, or one whose
+  // upload switch is already on, asks nothing (`undefined`: the backend changes nothing either).
+  // With nothing waiting there is nothing to ask, and the answer is "from now on", so a log
+  // imported later is not sent by the next save. A count that cannot be read is no answer, and no
+  // question asked: the backend then saves as it always did, with no start point.
+  const askSendOld = async (
+    service: 'qrz' | 'clublog' | 'eqsl',
+    name: string,
+  ): Promise<boolean | undefined> => {
+    let owed: number | null
+    try {
+      owed = await uploadBacklog(service)
+    } catch {
+      return undefined
+    }
+    if (owed == null) return undefined
+    if (owed === 0) return false
+    return confirmDialog({
+      title: t('settings.connections.backlog.title', { count: owed, service: name }),
+      body: t('settings.connections.backlog.body', { service: name }),
+      confirmLabel: t('settings.connections.backlog.send'),
+      cancelLabel: t('settings.connections.backlog.fromNow'),
+    })
+  }
+
   const onSaveEqslPassword = async () => {
     if (!eqslPw) return
+    const sendOld = await askSendOld('eqsl', 'eQSL')
     const ok = await withErrorToast(async () => {
-      await setEqslPassword(eqslPw)
+      await setEqslPassword(eqslPw, sendOld)
       return true
     }, t('settings.connections.eqsl.password.saveFailed'))
     if (ok) {
@@ -3650,8 +3707,9 @@ export function SettingsPanel({
 
   const onSaveQrzLogbookKey = async () => {
     if (!qrzKey) return
+    const sendOld = await askSendOld('qrz', 'QRZ Logbook')
     const ok = await withErrorToast(async () => {
-      await setQrzLogbookKey(qrzKey)
+      await setQrzLogbookKey(qrzKey, sendOld)
       return true
     }, t('settings.connections.qrz.key.saveFailed'))
     if (ok) {
@@ -3700,8 +3758,9 @@ export function SettingsPanel({
 
   const onSaveClublogPassword = async () => {
     if (!clublogPw) return
+    const sendOld = await askSendOld('clublog', 'ClubLog')
     const ok = await withErrorToast(async () => {
-      await setClublogPassword(clublogPw)
+      await setClublogPassword(clublogPw, sendOld)
       return true
     }, t('settings.connections.clublog.password.saveFailed'))
     if (ok) {
@@ -12155,6 +12214,19 @@ export function SettingsPanel({
                         : t('settings.connections.qrz.test.action')}
                     </button>
                   )}
+                  {SERVICE_TESTS[c.id] && (
+                    <button
+                      type="button"
+                      className="settings-test-btn"
+                      onClick={() => runSvcTest(c.id)}
+                      disabled={svcTest[c.id]?.state === 'testing'}
+                      title={t('settings.connections.service.test.title', { service: c.connector })}
+                    >
+                      {svcTest[c.id]?.state === 'testing'
+                        ? t('settings.connections.test.busy')
+                        : t('settings.connections.service.test.action')}
+                    </button>
+                  )}
                 </div>
                 )
               })}
@@ -12172,6 +12244,17 @@ export function SettingsPanel({
                 )}
               </p>
             )}
+            {creds.map((c) => {
+              const r = svcTest[c.id]
+              if (!SERVICE_TESTS[c.id] || !r || r.state === 'idle' || r.state === 'testing') return null
+              return (
+                <p key={c.id} className={`conn-test-result ${r.state}`}>
+                  {r.state === 'ok'
+                    ? t('settings.connections.service.test.ok', { service: c.connector, detail: r.msg })
+                    : t('settings.connections.service.test.fail', { service: c.connector, detail: r.msg })}
+                </p>
+              )
+            })}
             <div className="conn-log">
               <div className="conn-log-head">
                 <span>{t('settings.connections.log.title')}</span>

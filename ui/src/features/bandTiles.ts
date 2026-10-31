@@ -13,10 +13,11 @@
 //   · a ring on the band the radio is on;
 //   · on 6 m, 4 m, 2 m and the UHF bands, the mode of an opening the detector sees there (Es, Tropo, Aurora, F2, MS).
 // UNKNOWN IS NEVER GREEN: no snapshot, an offline one, or one older than the band menu's staleness bound
-// gives hollow neutral tiles for the standard bands — the band menu's own rule, from its own store.
+// gives hollow neutral tiles for the standard bands — the band menu's own rule, from its own store. So
+// does a silent band with no model word (no usable space weather): it is unknown, never open or best.
 import type { BandReport, OpeningView, PropagationSnapshot } from '../types'
 import { BAND_CONDITIONS_STALE_S } from '../bandConditions'
-import { bandConditionCell, modeledVar } from '../propViz'
+import { bandConditionCell, bandWordState, modeledVar } from '../propViz'
 
 /** The rig's band stack, low to high. The advisor reports HF and 6 m; 4 m and 2 m appear when it
  *  reports them or the opening detector sees one there. The UHF bands appear only while the
@@ -74,7 +75,10 @@ export function bandTiles(prop: PropagationSnapshot | null, rigBand: string | nu
   const reports = new Map((usable ? (prop!.advisory?.bands ?? []) : []).map((b) => [b.band, b]))
   const openings = usable ? (prop!.openings ?? []) : []
   const ranked = usable ? (prop!.advisory?.bands ?? []) : []
-  const best = ranked.find((b) => bandConditionCell(b).word !== 'Closed')?.band ?? null
+  // The best band is one whose word says open or marginal: an unknown band (no model, nobody
+  // heard) is never the best.
+  const known = (s: string) => s === 'open' || s === 'marginal'
+  const best = ranked.find((b) => known(bandWordState(bandConditionCell(b).word)))?.band ?? null
   const bands = usable
     ? TILE_BANDS.filter((b) =>
         UHF.has(b) ? modeOn(b, openings) != null || rigBand === b : reports.has(b) || modeOn(b, openings) != null,
@@ -88,8 +92,9 @@ export function bandTiles(prop: PropagationSnapshot | null, rigBand: string | nu
     if (!report && base.mode) return { ...base, state: 'open', word: 'Open', color: modeledVar('Open'), heard: 'active', best: false }
     if (!report) return { ...base, state: 'unknown', word: '', color: null, heard: 'none', best: false }
     const cell = bandConditionCell(report)
-    const state: TileState = cell.word === 'Closed' ? 'closed' : cell.word === 'Marginal' ? 'marginal' : 'open'
+    const state: TileState = bandWordState(cell.word)
     const heard = report.tier === 'Active' ? 'active' : report.tier === 'Moderate' ? 'some' : 'none'
+    if (state === 'unknown') return { ...base, state, word: '', color: null, heard, best: false }
     return { ...base, state, word: cell.word, color: cell.color, heard, best: best === band }
   })
 }

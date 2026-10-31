@@ -727,6 +727,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           stripRef={wfRef}
           {...closeProps('scope')}
           paneTitle={pskPanelLabels().scope}
+          zoomKey="nexus.waterfall.psk.zoom"
           theme={theme}
           active={active}
           rowMs={50} // live band instrument — rig-scope cadence (the RTTY value)

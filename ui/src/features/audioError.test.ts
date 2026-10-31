@@ -10,6 +10,7 @@ import { audioErrorLane } from './audioError'
 import type { AudioErrorKind } from '../types'
 
 const PTT = "The rig didn't accept PTT — check your PTT method and CAT/port."
+const PTT_UNCONFIRMED = 'The rig did not answer the PTT key in time — check the CAT link to the radio.'
 
 // Each kind the station names (crates/tempo-app/src/dto.rs, AudioErrorKind, by its wire name):
 // a sentence its writer puts on the line, the headline, and the tier.
@@ -28,6 +29,7 @@ const KINDS: [AudioErrorKind, string, string, 'critical' | 'warning'][] = [
   ],
   ['noReceiveAudio', 'Audio device reopened, waiting for samples…', 'NO RECEIVE AUDIO', 'critical'],
   ['ptt', PTT, 'PTT NOT ACCEPTED', 'critical'],
+  ['pttUnconfirmed', PTT_UNCONFIRMED, 'PTT NOT CONFIRMED', 'warning'],
   [
     'flexAudio',
     'Native Flex audio is selected but no audio is arriving — switched back to the sound card.',
@@ -66,6 +68,16 @@ describe('the status lane for the station audio-error line', () => {
     expect(lane?.message).toBe('PTT NOT ACCEPTED')
     expect(lane?.message).not.toBe('RADIO STOPPED')
     expect(lane?.detail).toBe(PTT)
+  })
+
+  // A key the rig did not answer in time is not one it refused: it may still be keying, so the
+  // headline must not say "not accepted", and it is a warning rather than a stopped transmitter.
+  it('a PTT with no answer in time reads PTT NOT CONFIRMED, never PTT NOT ACCEPTED', () => {
+    const lane = audioErrorLane(PTT_UNCONFIRMED, 'pttUnconfirmed')
+    expect(lane?.message).toBe('PTT NOT CONFIRMED')
+    expect(lane?.message).not.toBe(audioErrorLane(PTT, 'ptt')?.message)
+    expect(lane?.tier).toBe('warning')
+    expect(lane?.detail).toBe(PTT_UNCONFIRMED)
   })
 
   it('gives every kind words of its own', () => {

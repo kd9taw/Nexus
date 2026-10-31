@@ -65,6 +65,8 @@ mod command_classes;
 /// admits: deny by default at both ends, Stop never refused, at most once, the caps, and the
 /// revision a whole save is checked against.
 mod command_dispatch;
+/// Settings ▸ Connections ▸ Test for LoTW, eQSL and ClubLog: sign in and read, never upload.
+mod connector_checks;
 /// The contest strip's Super Check Partial download and call-history file: the HTTP and the
 /// commands, off the Engine lock. The rules are `tempo_app::scp` and `tempo_app::call_history`.
 mod contest_lists;
@@ -104,6 +106,13 @@ mod log_tools;
 /// Parsec presence mode's watcher thread: stop latched transmissions when the operator's Parsec
 /// session drops (off by default; started on Windows only).
 mod parsec_presence;
+/// Your contacts' paths: the log-time grade of a new contact, and the display-only grading of the
+/// existing log, kept beside settings.json.
+mod path_grades;
+/// `get_path_outlook`'s kept predictions: six hours per day, grids, engine, power and SSN.
+mod path_outlook;
+/// The region strips' sweep: ten DX regions' path over the day, kept in memory and on disk.
+mod path_regions;
 mod pouncer;
 /// The licence-class band edges the scopes draw, read from the transmit gate's own table. Display
 /// only: the gate stays `privileges::tx_allowed`.
@@ -603,14 +612,7 @@ mod whole_log_reader_tests {
 
 /// TTL cache for the OVATION aurora oval (distinct payload type from PropCache, so
 /// a distinct TypeId for `.manage()`).
-type AuroraCache = Arc<
-    Mutex<
-        Option<(
-            std::time::Instant,
-            Vec<propagation::live::aurora::AuroraPoint>,
-        )>,
-    >,
->;
+type AuroraCache = Arc<Mutex<Option<(std::time::Instant, propagation::live::aurora::AuroraOval)>>>;
 /// TTL cache for the KC2G ionosonde MUF map. Distinct payload type → distinct
 /// TypeId for `.manage()`.
 type Kc2gCache = Arc<Mutex<Option<(std::time::Instant, Vec<propagation::MufStation>)>>>;
@@ -761,10 +763,11 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
         // board showed "Digital" for a spot and "FT8" for a PSK Reporter row describing the same
         // FT8 station, with nothing to explain the difference (reported on 1.0.3).
         //
-        // Display only, verified before changing it: `workTarget` picks a cockpit by matching
-        // 'CW' / 'Phone' / 'RTTY' exactly and defaulting everything else to Operate, and
-        // `modeDefaultMhz` returns null for anything that is not CW or Phone. "Digital" and "FT8"
-        // therefore take the same arm in both, so where a click lands is unchanged.
+        // Not display only: on a Work click the UI's `workTier` reads FT8 or FT4 from this name and
+        // opens the FT screen on that tier (the frequency is the spot's either way). Which cockpit
+        // opens is unchanged by it: `workTarget` matches 'CW' / 'Phone' / 'RTTY' exactly and sends
+        // everything else to Operate, and `modeDefaultMhz` returns null for anything that is not
+        // CW or Phone, so "Digital", "FT8" and "FT4" take the same arm in both.
         mode: propagation::digital_hole_mode(freq_mhz)
             .map(str::to_string)
             .unwrap_or_else(|| {
@@ -2182,7 +2185,14 @@ static LAST_SOLAR_WIND: Mutex<Option<propagation::SolarWind>> = Mutex::new(None)
 /// to a Covington inversion of SFI). Refreshed on the space-wx fetch cadence.
 static LAST_SSN: Mutex<Option<f32>> = Mutex::new(None);
 
-/// The X-ray "fast lane" cache: (fetched-at, flux W/m², reading unix time). A
+/// The smoothed sunspot number the solar-cycle feed last gave, if it has given one. Only a value
+/// NOAA's feed answered is ever stored (`LAST_SSN` is written on a successful fetch alone), so it
+/// is never the model's stand-in; the grades take it only for a recent contact.
+fn current_ssn() -> Option<f64> {
+    LAST_SSN.lock().ok().and_then(|g| *g).map(f64::from)
+}
+
+/// The X-ray "fast lane" cache: (fetched-at, flux W/m², the GOES sample's unix time). A
 /// flare's rise takes minutes, so `get_xray_now` refetches GOES every 60 s —
 /// much fresher than the 5-min snapshot TTL — and serves last-good on failure.
 static LAST_XRAY: Mutex<Option<(std::time::Instant, f32, i64)>> = Mutex::new(None);
@@ -2772,6 +2782,7 @@ fn data_dir_entries(from: &Path) -> Vec<PathBuf> {
         "fd-rules.json",
         "fd-rules.meta.json",
         "tles.json",
+        tempo_app::upload_start::FILE_NAME,
     ] {
         if from.join(name).is_file() {
             out.push(PathBuf::from(name));
@@ -3271,11 +3282,15 @@ mod durable_command_tests {
 
     /// A store-backed engine on a folder of the test's own, with `n` contacts.
     pub(super) fn engine_on_store(tag: &str, n: usize) -> (PathBuf, SharedEngine) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-durable-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-durable-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch");
         let mut adif = tempo_core::logbook::adif_header();
         for i in 0..n {
@@ -3775,11 +3790,15 @@ mod logbook_startup_tests {
     /// A folder of the test's own — created only when `contacts` is `Some`, holding a 1.13
     /// `log.adi` of that many contacts.
     fn folder(tag: &str, contacts: Option<usize>) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-startup-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-startup-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         if let Some(n) = contacts {
             std::fs::create_dir_all(&dir).expect("scratch");
             let mut adif = tempo_core::logbook::adif_header();
@@ -4787,11 +4806,15 @@ mod data_folder_tests {
     /// A unique scratch directory. No tempfile dependency in this crate; the name carries the
     /// test's own label so a leftover is attributable.
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-data-folder-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-data-folder-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -6050,11 +6073,15 @@ mod assistance_journal_tests {
     const ASIDE: &str = "assistance_journal.unreadable-20260930-142233.json";
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-assist-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-assist-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -6535,23 +6562,195 @@ fn legacy_sstv_gallery_dir() -> PathBuf {
 /// stall the whole window on a slow disk. Caught by `no_engine_locking_command_runs_on_the_ui_thread`.
 #[tauri::command(async)]
 fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(), String> {
-    delete_sstv_gallery_image(&mut engine_lock(&state), &path)
+    delete_sstv_gallery_image(&state, &sstv_gallery_dir(), &path)
 }
 
-/// Delete one received picture and reconcile the gallery index, for the desktop command above and
-/// for the Remote gallery delete, which resolves the path from its own gallery row and never takes
-/// one from a browser. The caller holds the Engine lock; the file removal is inside it, which the
-/// directory read below already was.
+/// Delete one received picture and reconcile the gallery index, for the desktop command above. The
+/// Engine lock is held only to copy the gallery and, later, to apply the result: the file lookups,
+/// the removal, the folder read and the gallery.json write all run without it (see
+/// [`rewrite_sstv_gallery_index`]).
 ///
-/// ⛔ The containment check is load-bearing whichever caller arrives: only a file inside the
-/// station's own gallery folder can be removed, and a path that does not resolve there is refused
-/// rather than followed.
+/// ⛔ The containment and membership checks are load-bearing whichever caller arrives: only a
+/// picture the gallery lists, inside the station's own gallery folder, can be removed, and a path
+/// that does not resolve there is refused rather than followed.
 pub(crate) fn delete_sstv_gallery_image(
-    eng: &mut tempo_app::engine::Engine,
+    engine: &std::sync::Mutex<tempo_app::engine::Engine>,
+    dir: &std::path::Path,
     path: &str,
 ) -> Result<(), String> {
-    let dir = sstv_gallery_dir();
+    let _deleting = sstv_gallery_delete_lock();
+    let listed = engine_lock(engine).sstv_gallery().to_vec();
+    unlink_sstv_gallery_file(dir, &canonical_gallery_paths(&listed), path)?;
+    let (gen, entries) = rewrite_sstv_gallery_index(engine, dir, &[path]);
+    tempo_app::sstv_gallery::write_gallery_json(dir, gen, &entries);
+    Ok(())
+}
+
+/// One gallery delete at a time, single or batch, for the whole of the delete.
+///
+/// A delete reads the gallery folder with the Engine lock released, then relocks and adopts the
+/// files the read found that its copy did not list. If a second delete could remove such a file
+/// in between (a picture received after the first delete's copy, deleted from the desktop and from
+/// Remote at the same moment), the first would put it back as an entry whose file is gone. With
+/// deletes serialised, only the decoder changes the gallery during the read, and it only adds.
+///
+/// ⛔ Lock order: this lock first, then the Engine lock, briefly. Never the reverse: nothing takes
+/// this lock while holding the Engine lock, and the decoder and the radio loop never take it, so
+/// they never wait on a delete. Not the Engine lock itself, which would put the folder read back
+/// under the lock the radio loop and Stop TX wait on.
+fn sstv_gallery_delete_lock() -> std::sync::MutexGuard<'static, ()> {
+    static SSTV_GALLERY_DELETE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SSTV_GALLERY_DELETE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// One picture the batch delete could not remove, and why, in the words the single delete uses.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SstvDeleteFailure {
+    path: String,
+    reason: String,
+}
+
+/// Delete several received pictures at once: the gallery's "Delete selected".
+///
+/// Each path goes through the same removal the single delete uses, containment and membership
+/// checks included, so a path the single delete refuses is refused here too. The index is
+/// rewritten ONCE at the end, not once per picture. One picture that cannot be removed (already
+/// gone, locked by another program, not a gallery picture) does not stop the rest; it comes back in
+/// the list with its reason, and the UI says which ones stayed. A path asked for twice is removed
+/// once and is not a failure.
+///
+/// A picture open in the viewer needs nothing extra: the viewer reads the gallery and moves on
+/// from a picture that is no longer in it, as it does after a single delete.
+///
+/// `(async)` for the single delete's reason: the engine mutex plus file I/O, here for many files.
+#[tauri::command(async)]
+fn sstv_delete_images(
+    state: State<'_, SharedEngine>,
+    paths: Vec<String>,
+) -> Vec<SstvDeleteFailure> {
+    delete_sstv_gallery_images(&state, &sstv_gallery_dir(), &paths)
+}
+
+/// [`sstv_delete_images`] against an explicit gallery folder, so the tests can use a scratch one.
+///
+/// The Engine lock is never held across file work: it is taken only to copy the gallery, and then
+/// by [`rewrite_sstv_gallery_index`] to copy it again and to apply the result. The file lookups,
+/// the unlinks, the folder read and the gallery.json write all run without it, since a Select all
+/// over a full gallery in a slow folder would otherwise hold the radio loop off for every file. The
+/// rewrite reconciles against the folder as it stands then, so the index matches the disk whichever
+/// unlinks failed, and a picture received in between is kept.
+fn delete_sstv_gallery_images(
+    engine: &std::sync::Mutex<tempo_app::engine::Engine>,
+    dir: &std::path::Path,
+    paths: &[String],
+) -> Vec<SstvDeleteFailure> {
+    let _deleting = sstv_gallery_delete_lock();
+    let listed = engine_lock(engine).sstv_gallery().to_vec();
+    let pictures = canonical_gallery_paths(&listed);
+    let mut asked = std::collections::HashSet::new();
+    let mut failed = Vec::new();
+    let mut removed = Vec::new();
+    for path in paths {
+        if !asked.insert(path.as_str()) {
+            continue;
+        }
+        match unlink_sstv_gallery_file(dir, &pictures, path) {
+            Ok(()) => removed.push(path.as_str()),
+            Err(reason) => failed.push(SstvDeleteFailure {
+                path: path.clone(),
+                reason,
+            }),
+        }
+    }
+    #[cfg(test)]
+    if let Some(hook) = BEFORE_BATCH_RELOCK.with(|h| h.borrow_mut().take()) {
+        hook(engine);
+    }
+    if !removed.is_empty() {
+        let (gen, entries) = rewrite_sstv_gallery_index(engine, dir, &removed);
+        tempo_app::sstv_gallery::write_gallery_json(dir, gen, &entries);
+    }
+    failed
+}
+
+#[cfg(test)]
+type BatchRelockHook = Box<dyn FnOnce(&std::sync::Mutex<tempo_app::engine::Engine>)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once, between the batch delete's unlinks and its relock: the seam a test uses to land
+    /// a newly received picture at exactly that moment.
+    static BEFORE_BATCH_RELOCK: std::cell::RefCell<Option<BatchRelockHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+type GalleryDiskHook = Box<dyn FnMut(&'static str)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs at each step of a delete that touches the gallery folder (resolving the gallery's
+    /// pictures, removing a file, reading the folder back): the seam a test uses to ask whether the
+    /// Engine lock is free at that moment.
+    static ON_GALLERY_DISK_WORK: std::cell::RefCell<Option<GalleryDiskHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn gallery_disk_work(step: &'static str) {
+    ON_GALLERY_DISK_WORK.with(|h| {
+        if let Some(hook) = h.borrow_mut().as_mut() {
+            hook(step);
+        }
+    });
+}
+
+/// The gallery's pictures as canonical paths, for the membership check below. A picture whose
+/// file is already gone has no canonical path and is left out; it could not be removed anyway.
+/// So is an entry that is a symbolic link rather than a picture file: following it would make
+/// whatever it points at count as a gallery picture.
+fn canonical_gallery_paths(
+    entries: &[tempo_app::dto::SstvGalleryEntry],
+) -> std::collections::HashSet<std::path::PathBuf> {
+    #[cfg(test)]
+    gallery_disk_work("membership");
+    entries
+        .iter()
+        .map(|e| std::path::Path::new(&e.path))
+        .filter(|p| is_regular_file(p))
+        .filter_map(|p| p.canonicalize().ok())
+        .collect()
+}
+
+/// A plain file, not a symbolic link to one. The gallery holds only the pictures the decoder wrote,
+/// and those are never links.
+fn is_regular_file(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
+}
+
+/// Remove one picture file. The in-memory gallery and the index on disk are the caller's to update,
+/// once, after it has removed everything it is going to.
+///
+/// ⛔ The containment check is load-bearing: only a file inside `dir` can be removed. Both sides
+/// are canonicalised, so `..` cannot walk out. ⛔ So is the membership check: inside the folder is
+/// not enough, the file must be one of the gallery's `pictures` (canonical, from
+/// [`canonical_gallery_paths`]), so an operator's own file kept there, or `gallery.json` itself, is
+/// refused. A request that names a symbolic link is refused as not a picture: removing what it
+/// points at would delete a file the request never named.
+fn unlink_sstv_gallery_file(
+    dir: &std::path::Path,
+    pictures: &std::collections::HashSet<std::path::PathBuf>,
+    path: &str,
+) -> Result<(), String> {
+    #[cfg(test)]
+    gallery_disk_work("unlink");
     let target = std::path::Path::new(path);
+    if std::fs::symlink_metadata(target).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("That file is not a picture in the SSTV gallery".into());
+    }
     let canon_dir = dir
         .canonicalize()
         .map_err(|e| format!("no gallery folder: {e}"))?;
@@ -6561,21 +6760,81 @@ pub(crate) fn delete_sstv_gallery_image(
     if !canon.starts_with(&canon_dir) {
         return Err("That file is not in the SSTV gallery folder".into());
     }
+    if !pictures.contains(&canon) {
+        return Err("That file is not a picture in the SSTV gallery".into());
+    }
     std::fs::remove_file(&canon)
         .map_err(|e| format!("Could not delete {}: {e}", canon.display()))?;
-    eng.remove_sstv_gallery(path);
-    // Rewrite the index from what the directory now holds, rather than from the entry we just
-    // dropped: it costs one directory read and it also sweeps up any other drift.
-    let entries = reconcile_gallery(&dir, eng.sstv_gallery().to_vec());
-    if let Ok(text) = serde_json::to_string(&entries) {
-        let p = dir.join("gallery.json");
-        let tmp = p.with_extension("json.tmp");
-        if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &p);
-        }
-    }
-    eng.load_sstv_gallery(entries);
     Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread rewrote a gallery index, for the test that holds the batch
+    /// delete to one rewrite.
+    static SSTV_INDEX_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Drop the `removed` pictures from the gallery and reconcile it with what the directory now
+/// holds, rather than with the entries just dropped: it costs one directory read and it also
+/// sweeps up any other drift. Returns the gallery and its generation for the caller to write to
+/// `gallery.json`.
+///
+/// ⛔ No file work under the Engine lock. The radio loop and Stop TX wait on that lock, and the
+/// gallery folder can be a slow OneDrive or network folder, where each lookup is a round trip. So
+/// the folder is read against a copy of the gallery, and the lock is retaken only to apply what the
+/// read found to the gallery as it stands THEN: entries whose files have gone are dropped, files
+/// the gallery did not list are adopted, and anything the decoder added or changed in between (a
+/// new picture, its FSK ID) is kept as the decoder left it.
+///
+/// ⛔ The caller writes with `tempo_app::sstv_gallery::write_gallery_json` AFTER this returns, with
+/// no lock held. The decode thread writes the same way; the generation stops an older copy landing
+/// after a newer one.
+fn rewrite_sstv_gallery_index(
+    engine: &std::sync::Mutex<tempo_app::engine::Engine>,
+    dir: &std::path::Path,
+    removed: &[&str],
+) -> (u64, Vec<tempo_app::dto::SstvGalleryEntry>) {
+    #[cfg(test)]
+    SSTV_INDEX_WRITES.with(|n| n.set(n.get() + 1));
+    let listed: Vec<tempo_app::dto::SstvGalleryEntry> = engine_lock(engine)
+        .sstv_gallery()
+        .iter()
+        .filter(|e| !removed.contains(&e.path.as_str()))
+        .cloned()
+        .collect();
+    let found = reconcile_gallery(dir, listed.clone());
+    let on_disk: std::collections::HashSet<&str> = found.iter().map(|e| e.path.as_str()).collect();
+    let was_listed: std::collections::HashSet<&str> =
+        listed.iter().map(|e| e.path.as_str()).collect();
+    let vanished: std::collections::HashSet<&str> = was_listed
+        .iter()
+        .copied()
+        .filter(|p| !on_disk.contains(p))
+        .collect();
+
+    let mut eng = engine_lock(engine);
+    for path in removed {
+        eng.remove_sstv_gallery(path);
+    }
+    let mut entries: Vec<tempo_app::dto::SstvGalleryEntry> = eng
+        .sstv_gallery()
+        .iter()
+        .filter(|e| !vanished.contains(e.path.as_str()))
+        .cloned()
+        .collect();
+    // Adopt only files the copy did not list: one it did list and the gallery no longer has was
+    // removed in between (another delete), and must not come back.
+    let known: std::collections::HashSet<String> = entries.iter().map(|e| e.path.clone()).collect();
+    entries.extend(
+        found
+            .iter()
+            .filter(|e| !was_listed.contains(e.path.as_str()) && !known.contains(&e.path))
+            .cloned(),
+    );
+    entries.sort_by(|a, b| a.finished_utc.cmp(&b.finished_utc));
+    eng.load_sstv_gallery(entries);
+    eng.sstv_gallery_snapshot()
 }
 
 /// Reconcile a gallery index against the files that are actually on disk.
@@ -6597,9 +6856,13 @@ fn reconcile_gallery(
     dir: &std::path::Path,
     entries: Vec<tempo_app::dto::SstvGalleryEntry>,
 ) -> Vec<tempo_app::dto::SstvGalleryEntry> {
+    #[cfg(test)]
+    gallery_disk_work("reconcile");
+    // Plain files only, here and in the adoption below: a symbolic link named like a picture
+    // (dangling, or pointing at something else in or out of the folder) is not one the decoder wrote.
     let mut kept: Vec<tempo_app::dto::SstvGalleryEntry> = entries
         .into_iter()
-        .filter(|e| std::path::Path::new(&e.path).is_file())
+        .filter(|e| is_regular_file(std::path::Path::new(&e.path)))
         .collect();
     let known: std::collections::HashSet<String> = kept.iter().map(|e| e.path.clone()).collect();
 
@@ -6617,7 +6880,9 @@ fn reconcile_gallery(
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(str::to_ascii_lowercase);
-            if !matches!(ext.as_deref(), Some("bmp") | Some("png")) {
+            if !matches!(ext.as_deref(), Some("bmp") | Some("png"))
+                || !f.file_type().is_ok_and(|t| t.is_file())
+            {
                 continue;
             }
             let p = path.to_string_lossy().into_owned();
@@ -6816,11 +7081,15 @@ mod conversations_file_tests {
     const ASIDE: &str = "conversations.unreadable-20260930-142233.json";
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-convs-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-convs-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -7047,11 +7316,15 @@ mod ui_state_file_tests {
     use super::*;
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-ui-state-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-ui-state-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -7515,6 +7788,26 @@ fn set_source(state: State<'_, SharedEngine>, kind: String) -> Result<AppSnapsho
     Ok(eng.snapshot())
 }
 
+/// The space weather a logged contact may carry, each number only if it is a reading and each
+/// with its own stamp: the planetary Kp and its sample time, NOAA's daily planetary A for every
+/// UT day it has published (`a_by_day`, each with its day; never the Kp-derived ap estimate),
+/// and the solar flux with its measurement time. The engine judges each stamp against the
+/// contact's own time when it logs one, and takes only the contact's own day's A. A stand-in is
+/// `None`, so its ADIF field is left off rather than filled with a guess.
+#[allow(clippy::type_complexity)] // three stamped readings, named by the doc above
+fn space_wx_for_log(
+    wx: &propagation::SpaceWx,
+    stamps: &propagation::model::SpaceWxStamps,
+    a_by_day: &[(i64, f32)],
+) -> (Option<(f32, u64)>, Vec<(f32, u64)>, Option<(f32, u64)>) {
+    let at = |t: i64| t.max(0) as u64;
+    (
+        stamps.kp_at.map(|t| (wx.kp, at(t))),
+        a_by_day.iter().map(|&(day, a)| (a, at(day))).collect(),
+        stamps.sfi_at.map(|t| (wx.sfi, at(t))),
+    )
+}
+
 /// The propagation & opening-intelligence nowcast, built from LIVE NOAA SWPC +
 /// PSK Reporter data for the operator's call/grid. Cached for [`PROP_TTL_SECS`]
 /// to respect PSK Reporter's query cadence; falls back to the last good snapshot
@@ -7662,7 +7955,8 @@ async fn get_propagation(
     // live-spot window (the detector's full baseline) and replaces the snapshot's
     // openings with the tracker-stamped set (hysteresis-entered, onset-timed).
     let cfg = propagation::OpeningConfig::default();
-    let wx = propagation::SpaceWx {
+    let stamps = snap.space_wx.stamps;
+    let measured = propagation::SpaceWx {
         sfi: snap.space_wx.sfi,
         ssn: None, // opening detector/heuristic don't read R12
         kp: snap.space_wx.kp,
@@ -7671,6 +7965,10 @@ async fn get_propagation(
         // true R-scale — an X-class blackout no longer collapses to "R1 / M-class".
         xray_long: snap.space_wx.xray_long,
     };
+    // What the detector, advisor, banners, insights and model run on: only the Kp and X-ray
+    // that may speak for now. A cached snapshot is served at any age, and a GOES gap keeps its
+    // last flux, so an hours-old Kp 6 or flare would otherwise raise a storm or flare line.
+    let wx = measured.speaking_now(&stamps, now);
     // ANCHORED window = operator-REACHABLE evidence only: own-call PSK Reporter MQTT
     // + the near-region (≤REGION_RADIUS_KM) census (disjoint — the region feed drops
     // own-call spots) + the operator's own decodes. This is what drives the BAND
@@ -7791,27 +8089,7 @@ async fn get_propagation(
         record_opening_episodes(tr.drain_closed());
     }
 
-    // Rebuild the band advisor on the ANCHORED (operator-reachable) window — "best
-    // band FOR YOU", reflecting activity AROUND the operator, NOT the busiest band
-    // worldwide. Rebuild whenever we have any anchored evidence (own-call MQTT,
-    // near-region, or own decodes); when empty we keep the cached snapshot's
-    // own-call advisory (never the global firehose, which `anchored` excludes).
-    if !anchored.is_empty() {
-        let advisor = propagation::PropAdvisor::new(&mycall, &mygrid);
-        snap.advisory = advisor.advise(now, &anchored, &wx);
-        // Best-band-per-region recommender + the (region, band) activity matrix, from the
-        // SAME anchored window (operator-reachable only — never the firehose). One pass.
-        let rb = advisor.region_band(now, &anchored, &snap.advisory.bands);
-        snap.best_to_region = rb.best_to_region;
-        snap.region_band = rb.cells;
-    }
-    // "Worldwide activity" = the SAME advisor over the GLOBAL firehose window, so the
-    // UI can show busy-worldwide beside best-FOR-YOU (workable vs merely-loud). Only
-    // when the firehose actually adds something beyond the anchored set.
-    if wide.len() > anchored.len() {
-        snap.worldwide =
-            Some(propagation::PropAdvisor::new(&mycall, &mygrid).advise(now, &wide, &wx));
-    }
+    advise_for_now(&mut snap, &mycall, &mygrid, now, &anchored, &wide, &wx);
 
     // Locate the merged window for the map (grid or DXCC centroid), so the map
     // fills with the cluster/RBN/PSKR firehose + own decodes, not just the native
@@ -7823,25 +8101,36 @@ async fn get_propagation(
     // trend and regenerate the insight feed with it (overwriting the engine layer's
     // threshold-only insights). me_ll drives the representative MUF + greyline test.
     let me_ll = propagation::geo::maidenhead_to_latlon(&mygrid);
-    // A reading SWPC actually answered, for the opt-in space weather on each logged contact —
-    // never the model's stand-in values a failed fetch leaves in the snapshot.
+    // The readings SWPC actually answered, each on its own with its stamp, for the opt-in space
+    // weather on each logged contact — never the model's stand-in values a failed product leaves
+    // in the snapshot (`space_wx_for_log`).
     if fetched_fresh && snap.space_wx.fetched {
-        let (kp, a_index, sfi, at) = (wx.kp, wx.a_index, wx.sfi, now.max(0) as u64);
+        let (kp, a_daily, sfi) = space_wx_for_log(&measured, &stamps, &snap.space_wx.a_by_day);
+        let at = now.max(0) as u64;
         let _ = with_engine(&state, move |mut eng| {
-            eng.note_space_weather(kp, a_index, sfi, at)
+            eng.note_space_weather(kp, &a_daily, sfi, at)
         })
         .await;
     }
+    // The trend history takes only a whole sample that speaks for now: a stand-in SFI 120
+    // between two real 90s would read as "flux rising" and its model MUF as "MUF building", and
+    // a frozen feed's old number would be filed as now's.
+    let sample_measured = {
+        use propagation::model::WxKey;
+        [WxKey::Sfi, WxKey::Kp, WxKey::Xray]
+            .into_iter()
+            .all(|k| stamps.usable(k, now))
+    };
     if fetched_fresh {
-        if let Ok(mut h) = wx_history.lock() {
+        if let Some(mut h) = wx_history.lock().ok().filter(|_| sample_measured) {
             let muf = me_ll
-                .map(|me| propagation::representative_muf(me, now, &wx))
+                .map(|me| propagation::representative_muf(me, now, &measured))
                 .unwrap_or(0.0);
             h.push(propagation::SpaceWxSample {
                 t: now,
-                sfi: wx.sfi,
-                kp: wx.kp,
-                xray_long: wx.xray_long,
+                sfi: measured.sfi,
+                kp: measured.kp,
+                xray_long: measured.xray_long,
                 muf,
             });
         }
@@ -7877,10 +8166,12 @@ async fn get_propagation(
         .lock()
         .map(|h| h.trend(now, 3 * 3600))
         .unwrap_or_default();
+    // The trend lines ("MUF building", "flux rising") speak only while the flux they rest on
+    // is measured; with a stand-in SFI the model MUF behind them is the stand-in's.
     snap.insights = propagation::generate_insights(
         now,
         &wx,
-        Some(&snap.wx_trend),
+        Some(&snap.wx_trend).filter(|_| stamps.usable(propagation::model::WxKey::Sfi, now)),
         &snap.advisory.bands,
         &snap.openings,
         me_ll,
@@ -7895,11 +8186,18 @@ async fn get_propagation(
 /// the current space weather. Answers "is THIS path workable, which band, when"
 /// for a station you may have no live spots on. Empty bands if either grid is
 /// unknown (operator hasn't set a grid, or the station has none).
+///
+/// Also attaches the path's geometry (polar cap, auroral oval, grey line, Kp per hour)
+/// from the Kp outlook and aurora oval already held — read from their caches, never
+/// fetched here, so a cold cache simply means "latest Kp only" / "oval unknown", and with
+/// no SWPC reading at all, "Kp unknown".
 #[tauri::command]
 async fn get_path_outlook(
     grid: String,
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
+    kp_cache: State<'_, KpForecastCache>,
+    aurora: State<'_, AuroraCache>,
 ) -> Result<propagation::PathPrediction, String> {
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = engine_lock(&state);
@@ -7918,30 +8216,609 @@ async fn get_path_outlook(
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
+            geometry: None,
+            long_path: None,
+            routes: None,
+            day: None,
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
-    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold.
-    let wx = {
+    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold. Its stamps go
+    // with the card to `path_grades::keep_outlook`, which keeps it for a contact's grade only
+    // when they say the flux and Kp were measured and current.
+    let (wx, stamps) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        guard
-            .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
-                sfi: s.space_wx.sfi,
-                ssn: LAST_SSN.lock().ok().and_then(|g| *g),
-                kp: s.space_wx.kp,
-                a_index: s.space_wx.a_index,
-                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
-            })
-            .unwrap_or_default()
+        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+        let wx = view
+            .map(|v| outlook_wx(v, LAST_SSN.lock().ok().and_then(|g| *g), now_unix()))
+            .unwrap_or_default();
+        (wx, view.map(|v| v.stamps))
     };
     // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or
     // the heuristic fallback. p533 is compute-heavy → keep it off the async core.
     let eng = propagation::make_predictor(&prop_engine, me, station_power_w, ant_gain_dbi);
     let t = now_unix();
-    tauri::async_runtime::spawn_blocking(move || eng.predict(dx, t, &wx))
-        .await
-        .map_err(|e| e.to_string())
+    let forecast = kp_cache
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+    // The oval is a ~30-minute nowcast: an older one says nothing about now.
+    const OVAL_FRESH_SECS: u64 = 1800;
+    let oval: Option<Vec<(f32, f32)>> = aurora.lock().ok().and_then(|g| {
+        g.as_ref()
+            .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
+            .map(|(_, oval)| oval.points.iter().map(|p| (p.lat, p.lon)).collect())
+    });
+    // The geometry's Kp is only ever one SWPC reported: `wx.kp` above may be the cold-cache
+    // default or a failed fetch's stand-in, which the engine may use but no label may call a
+    // reading.
+    let kp_now = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), t)
+    };
+    // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
+    // serving hour's scalars and the geometry are recomputed then.
+    let keep = prop_engine == "p533";
+    let key = path_outlook::key(
+        t,
+        &mygrid,
+        &grid,
+        &prop_engine,
+        station_power_w,
+        ant_gain_dbi,
+        &wx,
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
+            Some((mut sp, mut lp)) => {
+                path_outlook::refresh_now(&mut sp, t);
+                if let Some(lp) = lp.as_mut() {
+                    path_outlook::refresh_now(lp, t);
+                }
+                (sp, lp)
+            }
+            None => {
+                // Both routes at once on their own threads: the long path costs the same chain
+                // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
+                let (sp, lp) = std::thread::scope(|s| {
+                    let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
+                    let sp = eng.predict(dx, t, &wx);
+                    (sp, lp.join().ok().flatten())
+                });
+                if keep {
+                    path_outlook::put(key, sp.clone(), lp.clone());
+                }
+                (sp, lp)
+            }
+        };
+        if let Some(me) = me {
+            let geom = |route| {
+                propagation::path_geometry_route(
+                    me,
+                    dx,
+                    route,
+                    t,
+                    kp_now,
+                    forecast.as_ref(),
+                    oval.as_deref(),
+                )
+            };
+            pred.geometry = Some(geom(propagation::Route::Short));
+            let long = long.map(|mut lp| {
+                lp.geometry = Some(geom(propagation::Route::Long));
+                lp
+            });
+            // The day as the path-over-the-day strip draws it (both routes, every hour).
+            pred.day = propagation::path_day(&pred, long.as_ref());
+            if let Some(lp) = long {
+                pred.routes = Some(propagation::compare_routes(&pred, &lp));
+                pred.long_path = Some(Box::new(lp));
+            }
+        }
+        // Kept for the grade of a contact logged with this station (`path_grades::at_log`), when
+        // it was computed from measured space weather (`keep_outlook` decides).
+        path_grades::keep_outlook(&mygrid, &grid, t, &pred, stamps.as_ref());
+        pred
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// The path grade of each Logbook row asked about: its own stamp when it carries one made for its
+/// current grid and band, else the display-only grade of the existing log (`path_grades`), else
+/// none. Reads only what `path_grades` holds; the Engine lock for the station's grid, once.
+#[tauri::command]
+async fn log_path_grades(
+    rows: Vec<path_grades::GradeAsk>,
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<Option<path_grades::GradeView>>, String> {
+    let mygrid = with_engine(&state, |eng| eng.settings().mygrid.clone()).await?;
+    let (now, ssn) = (now_unix(), current_ssn());
+    tauri::async_runtime::spawn_blocking(move || {
+        rows.iter()
+            .map(|a| path_grades::view_for(a, &mygrid, now, ssn))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// One contact's path over the day it was made (`path_grades::contact_day`) — the contact card.
+/// Two predictions on a blocking thread with no lock held.
+#[tauri::command]
+async fn contact_path_day(
+    row: path_grades::GradeAsk,
+    state: State<'_, SharedEngine>,
+) -> Result<Option<path_grades::ContactDay>, String> {
+    let (mygrid, power, gain) = with_engine(&state, |eng| {
+        let st = eng.settings();
+        (
+            st.mygrid.clone(),
+            st.station_power_w,
+            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        )
+    })
+    .await?;
+    let (now, ssn) = (now_unix(), current_ssn());
+    tauri::async_runtime::spawn_blocking(move || {
+        path_grades::contact_day(&row, &mygrid, power, gain, now, ssn)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// How the display-only grading of the log is going, and the success measures it counted.
+#[tauri::command]
+fn path_grading_status() -> path_grades::Status {
+    path_grades::status()
+}
+
+/// The region strips: ten fixed DX regions' path over the day from the operator's grid — both
+/// routes per band and UTC hour, the route the model favours, and each hour's Kp with its source.
+/// With P.533 the sweep (~2 s of compute, on a blocking thread, no Engine lock held) is kept six
+/// hours in memory and beside settings.json (`path_regions`); the hours' Kp is re-read from the
+/// held outlook on every ask, never fetched here. Empty when the operator's grid is unset.
+#[tauri::command]
+async fn get_path_regions(
+    state: State<'_, SharedEngine>,
+    cache: State<'_, PropCache>,
+    kp_cache: State<'_, KpForecastCache>,
+) -> Result<path_regions::PathRegionsView, String> {
+    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
+        let eng = engine_lock(&state);
+        let st = eng.settings();
+        (
+            st.mygrid.clone(),
+            st.prop_engine.clone(),
+            st.station_power_w,
+            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        )
+    };
+    let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
+        return Ok(path_regions::PathRegionsView {
+            engine: prop_engine,
+            computed_unix: 0,
+            regions: Vec::new(),
+        });
+    };
+    // The same space weather get_path_outlook reads, from the propagation cache's last snapshot:
+    // its Kp and X-ray only while they may speak for now (`outlook_wx`).
+    let t = now_unix();
+    let wx = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        guard
+            .as_ref()
+            .map(|(_, s)| {
+                let ssn = LAST_SSN.lock().ok().and_then(|g| *g);
+                outlook_wx(&s.space_wx, ssn, t)
+            })
+            .unwrap_or_default()
+    };
+    let forecast = kp_cache
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+    // Only a Kp SWPC reported labels an hour (see `swpc_kp`); the engine may use the stand-in.
+    let kp_now = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), t)
+    };
+    let ask = path_regions::Ask {
+        me,
+        key: path_regions::sweep_key(t, &mygrid, &prop_engine, station_power_w, ant_gain_dbi, &wx),
+        engine: propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+        t,
+        kp_now,
+        wx,
+        forecast,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        path_regions::serve(ask, &path_regions::file_path())
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// The band advice of a served snapshot (fresh, or cached at any age), made for `now`: the
+/// advisor, the best band per region, the banners and the worldwide ranking, from the windows
+/// `get_propagation` gathered and from `wx`, the Kp and X-ray that may speak for now.
+fn advise_for_now(
+    snap: &mut propagation::PropagationSnapshot,
+    call: &str,
+    grid: &str,
+    now: i64,
+    anchored: &[propagation::PathSpot],
+    wide: &[propagation::PathSpot],
+    wx: &propagation::SpaceWx,
+) {
+    // Rebuild the band advisor on the ANCHORED (operator-reachable) window — "best
+    // band FOR YOU", reflecting activity AROUND the operator, NOT the busiest band
+    // worldwide. Rebuild whenever we have any anchored evidence (own-call MQTT,
+    // near-region, or own decodes); when empty we keep the cached snapshot's
+    // own-call advisory (never the global firehose, which `anchored` excludes).
+    // The model's words need a usable solar flux and Kp; otherwise the advisor reports only what
+    // was heard (`PropAdvisor::without_model`), here and for the worldwide ranking below.
+    let model_usable = snap.space_wx.stamps.model_usable(now);
+    let advisor_for = || {
+        let a = propagation::PropAdvisor::new(call, grid);
+        if model_usable {
+            a
+        } else {
+            a.without_model()
+        }
+    };
+    if !anchored.is_empty() {
+        let advisor = advisor_for();
+        snap.advisory = advisor.advise(now, anchored, wx);
+        // Best-band-per-region recommender + the (region, band) activity matrix, from the
+        // SAME anchored window (operator-reachable only — never the firehose). One pass.
+        let rb = advisor.region_band(now, anchored, &snap.advisory.bands);
+        snap.best_to_region = rb.best_to_region;
+        snap.region_band = rb.cells;
+    } else if !model_usable {
+        // Not rebuilt: the served words are the model's at the fetch, from a Kp and an hour of
+        // the day that are gone. Once the model may not speak, the bands say only what was heard.
+        served_without_model(snap, call, grid);
+    }
+    // A served snapshot's banners were built from the numbers it was fetched with: rebuild
+    // them from the ones that may speak for now, rebuilt advisory or not.
+    snap.advisory.banners = advisor_for().banners(wx);
+    // "Worldwide activity" = the SAME advisor over the GLOBAL firehose window, so the
+    // UI can show busy-worldwide beside best-FOR-YOU (workable vs merely-loud). Only
+    // when the firehose actually adds something beyond the anchored set.
+    if wide.len() > anchored.len() {
+        snap.worldwide = Some(advisor_for().advise(now, wide, wx));
+    }
+}
+
+#[cfg(test)]
+mod served_advisory_tests {
+    use super::advise_for_now;
+    use propagation::model::{ActivityTier, SpaceWxStamps};
+
+    const NOW: i64 = 1_761_800_000;
+    const FETCHED: i64 = NOW - 2 * 3600;
+
+    /// A snapshot fetched two hours ago with a measured flux and Kp, so its bands carry the
+    /// model's words from then, and a best-to-region row carrying one too. Its Kp is stamped at
+    /// the fetch; `kp_at` restamps it.
+    fn cached(kp_at: i64) -> propagation::PropagationSnapshot {
+        let wx = propagation::SpaceWx::default();
+        let mut snap = propagation::PropagationEngine::new("KD9TAW", "EN52").snapshot_measured(
+            FETCHED,
+            &[],
+            &wx,
+            true,
+            &[],
+            &propagation::NeedsSet::default(),
+        );
+        snap.source = "cached".into();
+        snap.space_wx.fetched = true;
+        snap.space_wx.stamps = SpaceWxStamps {
+            sfi_at: Some(FETCHED - 3600),
+            kp_at: Some(kp_at),
+            xray_at: Some(kp_at),
+            a_day: None,
+        };
+        snap.best_to_region = vec![propagation::advisor::RegionBest {
+            region: "Europe".into(),
+            octant: "NE".into(),
+            bearing_deg: 45.0,
+            band: "20m".into(),
+            tier: ActivityTier::Quiet,
+            modeled: "Open".into(),
+            stations: 1,
+            bidirectional: false,
+            score: 0.1,
+        }];
+        snap
+    }
+
+    fn model_words(snap: &propagation::PropagationSnapshot) -> Vec<String> {
+        let bands = snap.advisory.bands.iter();
+        bands
+            .flat_map(|b| [&b.modeled, &b.modeled_reason])
+            .chain(snap.best_to_region.iter().map(|r| &r.modeled))
+            .filter(|w| !w.is_empty())
+            .cloned()
+            .collect()
+    }
+
+    /// A cached snapshot with nothing heard since: its Kp is two hours old, so the model may not
+    /// speak, and the words it spoke at the fetch are not served as now's.
+    #[test]
+    fn a_cached_snapshot_keeps_no_model_words_once_its_kp_is_old() {
+        let mut snap = cached(FETCHED);
+        assert!(!model_words(&snap).is_empty(), "control: the fetch spoke");
+        let wx = propagation::SpaceWx::default();
+        advise_for_now(&mut snap, "KD9TAW", "EN52", NOW, &[], &[], &wx);
+        assert_eq!(model_words(&snap), Vec::<String>::new());
+        assert_eq!(heard_only_wrongs(&snap.advisory), Vec::<String>::new());
+        assert_eq!(
+            snap.advisory.bands.len(),
+            propagation::model::Band::ALL.len()
+        );
+    }
+
+    /// What a band nobody heard may not say once the model is gone: the model's reason ("open
+    /// per model", "solar flux too low"), or the Quiet tier and meter its prior gave; and the
+    /// headline may not name a band to try. Every band of the fixture was heard by nobody.
+    fn heard_only_wrongs(a: &propagation::PropAdvisory) -> Vec<String> {
+        let mut out: Vec<String> = a
+            .bands
+            .iter()
+            .filter(|b| {
+                b.reason != "no activity heard" || b.tier != ActivityTier::Closed || b.score != 0.0
+            })
+            .map(|b| format!("{} {:?} {:.3} {}", b.band, b.tier, b.score, b.reason))
+            .collect();
+        if a.headline.contains("safest bet") {
+            out.push(a.headline.clone());
+        }
+        out
+    }
+
+    /// The TV summary page reads the cached snapshot itself, not through `get_propagation`, so
+    /// it takes the same rule: no model word, model reason or model tier once the Kp is old.
+    #[test]
+    fn the_tv_board_serves_no_model_words_once_the_kp_is_old() {
+        let board =
+            super::connect_board(cached(FETCHED), "KD9TAW".into(), "EN52".into(), None, NOW);
+        let wrong: Vec<String> = board
+            .bands
+            .iter()
+            .filter(|b| {
+                !b.modeled.is_empty() || b.reason != "no activity heard" || b.tier != "Closed"
+            })
+            .map(|b| format!("{} {} {} {}", b.band, b.tier, b.modeled, b.reason))
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new());
+        assert!(!board.headline.contains("safest bet"), "{}", board.headline);
+        // A fresh Kp beside a stand-in flux is no model either: the board strips on the flux too.
+        let mut standin = cached(NOW - 60);
+        standin.space_wx.stamps.sfi_at = None;
+        let board = super::connect_board(standin, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert!(board
+            .bands
+            .iter()
+            .all(|b| b.modeled.is_empty() && b.reason == "no activity heard"));
+        // Negative control: with a Kp that may speak, the board carries the model's words.
+        let fresh =
+            super::connect_board(cached(NOW - 60), "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert!(fresh.bands.iter().any(|b| !b.modeled.is_empty()));
+    }
+
+    /// The TV summary prints an index only while it may speak for now: the hours-old Kp and X-ray
+    /// and the stand-in A are dashes, never the raw numbers. The flux, measured 3 h ago, speaks.
+    #[test]
+    fn the_tv_board_prints_no_stand_in_or_old_index() {
+        let board =
+            super::connect_board(cached(FETCHED), "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(
+            (board.sfi, board.kp, board.a_index, board.xray_class),
+            (Some(120.0), None, None, None)
+        );
+        let mut standin = cached(NOW - 60);
+        standin.space_wx.stamps.sfi_at = None;
+        let board = super::connect_board(standin, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(board.sfi, None, "a stand-in flux is no reading");
+        // Positive control: a Kp and X-ray measured a minute ago are printed.
+        assert_eq!(board.kp, Some(2.0));
+        assert!(board.xray_class.is_some());
+        // Each index on its own stamp: a fresh Kp beside an old X-ray, and the reverse.
+        let mut old_xray = cached(NOW - 60);
+        old_xray.space_wx.stamps.xray_at = Some(NOW - 2 * 3600);
+        let board = super::connect_board(old_xray, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!((board.kp, board.xray_class), (Some(2.0), None));
+        let mut old_kp = cached(NOW - 2 * 3600);
+        old_kp.space_wx.stamps.xray_at = Some(NOW - 60);
+        let board = super::connect_board(old_kp, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(board.kp, None);
+        assert!(board.xray_class.is_some());
+    }
+
+    /// The negative control: a Kp that may still speak keeps the served words.
+    #[test]
+    fn a_cached_snapshot_with_a_fresh_kp_keeps_its_model_words() {
+        let mut snap = cached(NOW - 60);
+        let before = model_words(&snap);
+        let wx = propagation::SpaceWx::default();
+        advise_for_now(&mut snap, "KD9TAW", "EN52", NOW, &[], &[], &wx);
+        assert!(!before.is_empty());
+        assert_eq!(model_words(&snap), before);
+    }
+}
+
+/// A served snapshot's band advice told again with no model, from the stations it heard at the
+/// fetch ([`propagation::PropAdvisor::forget_model`]): no model word, reason, tier or rank, and
+/// no best-to-region word. For a cached snapshot once its solar flux or Kp may not speak; the
+/// desktop, Remote and TV page (`advise_for_now`) and the TV summary (`connect_board`) share it.
+fn served_without_model(snap: &mut propagation::PropagationSnapshot, call: &str, grid: &str) {
+    propagation::PropAdvisor::new(call, grid)
+        .without_model()
+        .forget_model(&mut snap.advisory);
+    for r in &mut snap.best_to_region {
+        r.modeled.clear();
+    }
+}
+
+/// The space weather a path, band or DXpedition outlook runs on, from the propagation cache's
+/// snapshot: its Kp and X-ray only while they may speak for `now`
+/// ([`propagation::SpaceWx::speaking_now`]), since a cached snapshot is served at any age and an
+/// hours-old Kp 6 or a GOES gap's last flare would otherwise shape the forecast. `ssn` is the R12
+/// for the engines that read it. The path and band outlooks once passed only the flare flag as a
+/// flux (M1 or B1); their engines read no X-ray, so the measured flux changes none of their numbers.
+fn outlook_wx(v: &propagation::SpaceWxView, ssn: Option<f32>, now: i64) -> propagation::SpaceWx {
+    propagation::SpaceWx {
+        sfi: v.sfi,
+        ssn,
+        kp: v.kp,
+        a_index: v.a_index,
+        xray_long: v.xray_long,
+    }
+    .speaking_now(&v.stamps, now)
+}
+
+/// The Kp SWPC actually reported, from the propagation cache's snapshot, when it may speak for
+/// `now` — `None` when the cache is cold, when the Kp is the model's stand-in (its product did
+/// not answer), or when its sample is older than the gauge's limit (a cached snapshot is served
+/// at any age). The Kp's own stamp decides, not `fetched`, which is true when any one product
+/// answered ([`propagation::model::SpaceWxStamps::usable`]).
+fn swpc_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f32> {
+    wx.filter(|w| w.stamps.usable(propagation::model::WxKey::Kp, now))
+        .map(|w| w.kp)
+}
+
+#[cfg(test)]
+mod ring_key_tests {
+    use super::ring_key;
+    use propagation::SpaceWx;
+
+    #[test]
+    fn with_no_sunspot_number_held_an_sfi_change_is_another_ring_key() {
+        let at = |sfi: f32, ssn: Option<f32>| {
+            ring_key(
+                0,
+                "FN42",
+                0.0,
+                None,
+                &SpaceWx {
+                    sfi,
+                    ssn,
+                    ..SpaceWx::default()
+                },
+            )
+        };
+        assert_ne!(at(70.0, None), at(200.0, None));
+        assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+    }
+}
+
+#[cfg(test)]
+mod path_outlook_kp_tests {
+    use super::{outlook_wx, swpc_kp};
+
+    const NOW: i64 = 1_761_800_000;
+
+    /// A snapshot's space weather whose Kp was sampled at `kp_at` (`None` = the stand-in).
+    fn view(kp: f32, kp_at: Option<i64>) -> propagation::SpaceWxView {
+        propagation::SpaceWxView {
+            sfi: 120.0,
+            kp,
+            a_index: 8.0,
+            xray_class: "B-class".into(),
+            flare: false,
+            xray_long: 1e-7,
+            solar_wind: None,
+            fetched: kp_at.is_some(),
+            stamps: propagation::model::SpaceWxStamps {
+                kp_at,
+                ..Default::default()
+            },
+            ap_now: None,
+            a_by_day: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_cold_cache_gives_no_kp() {
+        assert_eq!(swpc_kp(None, NOW), None);
+    }
+
+    #[test]
+    fn a_failed_fetchs_stand_in_kp_is_not_a_reading() {
+        assert_eq!(swpc_kp(Some(&view(2.0, None)), NOW), None);
+    }
+
+    #[test]
+    fn a_fetched_kp_is_passed_on() {
+        assert_eq!(swpc_kp(Some(&view(3.33, Some(NOW - 60))), NOW), Some(3.33));
+    }
+
+    /// Another product answering does not make the Kp a reading: its own stamp decides.
+    #[test]
+    fn a_stand_in_kp_beside_a_measured_flux_is_not_a_reading() {
+        let mut v = view(2.0, None);
+        v.stamps.sfi_at = Some(NOW - 3600);
+        v.fetched = true;
+        assert_eq!(swpc_kp(Some(&v), NOW), None);
+    }
+
+    /// A cached snapshot's Kp from two hours ago says nothing about the path now.
+    #[test]
+    fn an_hours_old_cached_kp_is_not_now() {
+        assert_eq!(swpc_kp(Some(&view(6.0, Some(NOW - 2 * 3600))), NOW), None);
+    }
+
+    /// The path, band and DXpedition outlooks run on the cached snapshot's Kp and X-ray only
+    /// while each may speak for now: an hours-old storm and flare shape no forecast.
+    #[test]
+    fn the_outlooks_take_only_a_kp_and_flare_that_speak_for_now() {
+        let quiet = propagation::SpaceWx::default();
+        let storm = |at: i64| {
+            let mut v = view(6.0, Some(at));
+            v.xray_long = 2e-4;
+            v.flare = true;
+            v.stamps.xray_at = Some(at);
+            v
+        };
+        let old = outlook_wx(&storm(NOW - 2 * 3600), Some(80.0), NOW);
+        assert_eq!((old.kp, old.xray_long), (quiet.kp, quiet.xray_long));
+        assert!(!old.flare_in_progress());
+        // Positive control: the same storm, measured a minute ago, reaches the outlook whole.
+        let fresh = outlook_wx(&storm(NOW - 60), Some(80.0), NOW);
+        assert_eq!(
+            (fresh.kp, fresh.xray_long, fresh.ssn),
+            (6.0, 2e-4, Some(80.0))
+        );
+        assert!(fresh.flare_in_progress());
+        // The flux and A are not the gate's: they pass as they are.
+        assert_eq!((old.sfi, old.a_index), (120.0, 8.0));
+    }
+
+    #[test]
+    fn an_unfetched_snapshot_draws_no_polar_stretch_on_either_route() {
+        // Boston -> Tokyo runs over a cap both ways round at any real Kp.
+        let (me, dx, t) = ((42.36, -71.06), (35.68, 139.69), 1_778_846_400);
+        let polar = |kp_now, route| {
+            propagation::path_geometry_route(me, dx, route, t, kp_now, None, None)
+                .segments_now
+                .iter()
+                .any(|s| s.kind == propagation::SegmentKind::Polar)
+        };
+        for route in [propagation::Route::Short, propagation::Route::Long] {
+            assert!(!polar(swpc_kp(None, NOW), route), "cold cache, {route:?}");
+            assert!(
+                !polar(swpc_kp(Some(&view(2.0, None)), NOW), route),
+                "stand-in, {route:?}"
+            );
+            // Positive control: the same Kp, really reported, draws the stretch.
+            assert!(
+                polar(swpc_kp(Some(&view(2.0, Some(NOW - 60))), NOW), route),
+                "{route:?}"
+            );
+        }
+    }
 }
 
 /// Ring-outlook cache (p533 only): (computed-at, params-key, value). The 8-azimuth
@@ -7978,6 +8855,10 @@ async fn get_band_outlook(
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
+            geometry: None,
+            long_path: None,
+            routes: None,
+            day: None,
         });
     };
     let p533 = prop_engine == "p533";
@@ -7985,18 +8866,15 @@ async fn get_band_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
+            .map(|(_, s)| {
                 // R12 only matters to p533; withholding it from the heuristic keeps
                 // that path byte-identical to its pre-engine-seam behavior.
-                ssn: if p533 {
+                let ssn = if p533 {
                     LAST_SSN.lock().ok().and_then(|g| *g)
                 } else {
                     None
-                },
-                sfi: s.space_wx.sfi,
-                kp: s.space_wx.kp,
-                a_index: s.space_wx.a_index,
-                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
+                };
+                outlook_wx(&s.space_wx, ssn, now_unix())
             })
             .unwrap_or_default()
     };
@@ -8011,6 +8889,32 @@ async fn get_band_outlook(
         t,
     )
     .await
+}
+
+/// The sunspot number a P.533 cache keys on, as a key fragment: the one the engine runs on (the
+/// R12 held, else the one it derives from the SFI — `effective_ssn`, the engine's own rule), so
+/// a changed SFI is another key whenever no R12 is held.
+pub(crate) fn ssn_key(wx: &propagation::SpaceWx) -> String {
+    format!(
+        "ssn{}",
+        propagation::p533::engine::effective_ssn(wx).round() as i32
+    )
+}
+
+/// The ring outlook's cache key: UTC day, grid, gain, power and the sunspot number the engine runs on.
+fn ring_key(
+    t: i64,
+    mygrid: &str,
+    ant_gain_dbi: f64,
+    station_power_w: Option<f64>,
+    wx: &propagation::SpaceWx,
+) -> String {
+    format!(
+        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{}",
+        t / 86_400,
+        station_power_w,
+        ssn_key(wx),
+    )
 }
 
 async fn ring_prediction(
@@ -8029,12 +8933,7 @@ async fn ring_prediction(
         let eng = propagation::HeuristicEngine::new(Some(me));
         return Ok(propagation::band_outlook_ring(&eng, me, 9000.0, 8, t, &wx));
     }
-    let key = format!(
-        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{:?}",
-        t / 86_400,
-        station_power_w,
-        wx.ssn.map(|v| v.round() as i32),
-    );
+    let key = ring_key(t, &mygrid, ant_gain_dbi, station_power_w, &wx);
     if let Ok(g) = RING_OUTLOOK.lock() {
         if let Some((when, k, v)) = g.as_ref() {
             if *k == key && when.elapsed().as_secs() < RING_TTL_SECS {
@@ -8201,13 +9100,11 @@ async fn get_dxped_windows(
                 ));
             }
         }
-        let wx = propagation::SpaceWx {
-            sfi: s.space_wx.sfi,
-            ssn: LAST_SSN.lock().ok().and_then(|g| *g),
-            kp: s.space_wx.kp,
-            a_index: s.space_wx.a_index,
-            xray_long: s.space_wx.xray_long,
-        };
+        let wx = outlook_wx(
+            &s.space_wx,
+            LAST_SSN.lock().ok().and_then(|g| *g),
+            now_unix(),
+        );
         (targets, wx)
     };
     if targets.is_empty() {
@@ -8249,6 +9146,11 @@ async fn get_dxped_windows(
                 // different question, where 60 m is a legitimate answer and demoting it
                 // would be a lie. Only a caller that knows it is ranking chases may do it.
                 p.demote_award_ineligible();
+                // The chase board reads scores and windows, never the per-hour hop geometry:
+                // drop it so each expedition does not carry ~1 KB of it per band.
+                for b in &mut p.bands {
+                    b.detail = None;
+                }
                 // NO TRUNCATION HERE, AND THAT IS THE FIX. A `p.bands.truncate(4)` used to
                 // follow this line with no recorded reason. Once each WORK NOW card began
                 // headlining its OWN band instead of a shared cross-band line, that truncation
@@ -8326,8 +9228,12 @@ async fn get_dxped_windows(
 /// "Am I getting out?" — who is hearing the operator right now, from the live PSK
 /// Reporter / RBN firehose (spots where the operator is the TX side). Pure
 /// observed data — the most reassuring live answer a station can get.
+/// `since` (Unix secs) is the screen's "Start fresh" time: reports before it are left out.
+/// Each screen keeps its own and sends it, so a remote one never changes what the shack's
+/// own screen shows.
 #[tauri::command]
 async fn get_getting_out(
+    since: Option<i64>,
     state: State<'_, SharedEngine>,
     live_paths: State<'_, SharedLivePaths>,
 ) -> Result<propagation::GettingOut, String> {
@@ -8341,15 +9247,24 @@ async fn get_getting_out(
         .lock()
         .map(|b| b.recent(now, 1800))
         .unwrap_or_default();
-    Ok(propagation::getting_out(&mycall, &mygrid, &spots, now))
+    Ok(propagation::getting_out(
+        &mycall, &mygrid, &spots, now, since,
+    ))
 }
 
-/// The current OVATION aurora oval (downsampled prob ≥ 8 %), for the map overlay.
-/// Cached `AURORA_TTL_SECS`; serves the last-good set on a fetch failure.
+/// The TV page's `since` for `get_getting_out`: the same key the desktop's IPC call carries.
+fn tv_getting_out_since(args: &serde_json::Value) -> Option<i64> {
+    args.get("since").and_then(|x| x.as_i64())
+}
+
+/// The current OVATION aurora oval (downsampled prob ≥ 8 %), for the map overlay, with the
+/// time it is a forecast for, when its input was observed, and when this copy was fetched.
+/// Cached `AURORA_TTL_SECS`; serves the last-good oval on a fetch failure, its stamps saying
+/// how old it is; an empty oval with no stamps if we never had one.
 #[tauri::command]
 async fn get_aurora(
     cache: State<'_, AuroraCache>,
-) -> Result<Vec<propagation::live::aurora::AuroraPoint>, String> {
+) -> Result<propagation::live::aurora::AuroraOval, String> {
     const AURORA_TTL_SECS: u64 = 600;
     {
         let g = cache.lock().map_err(|e| e.to_string())?;
@@ -8365,11 +9280,12 @@ async fn get_aurora(
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
     match fetched {
-        Ok(pts) => {
+        Ok(mut oval) => {
+            oval.fetched_at = Some(now_unix());
             if let Ok(mut g) = cache.lock() {
-                *g = Some((std::time::Instant::now(), pts.clone()));
+                *g = Some((std::time::Instant::now(), oval.clone()));
             }
-            Ok(pts)
+            Ok(oval)
         }
         Err(_) => {
             // Serve a stale oval rather than nothing; empty if we never had one.
@@ -8393,10 +9309,15 @@ struct PcaView {
     /// Day/night 30 MHz cap absorption (dB) — the headline numbers.
     a30_day: f64,
     a30_night: f64,
-    /// Polar-cap cutoff (geomagnetic latitude, °) at the current Kp.
-    cutoff_deg: f64,
+    /// Polar-cap cutoff (geomagnetic latitude, °) at the measured Kp. `None` without a measured
+    /// Kp: the edge is then unknown, and the shading below is drawn at the quiet-field cutoff
+    /// (Kp 0, the most poleward cap), the least it can be — never at a stand-in Kp.
+    cutoff_deg: Option<f64>,
     /// Polar shading samples (empty when quiet — draw nothing).
     points: Vec<propagation::pca::PcaPoint>,
+    /// The GOES proton sample's own time (Unix seconds), so a copy served after a failed
+    /// refetch says how old it is.
+    protons_at: Option<i64>,
 }
 
 #[tauri::command]
@@ -8437,21 +9358,28 @@ async fn get_pca(
     let Some(flux) = flux else {
         return Ok(None); // never fetched — honest offline, not a fabricated quiet
     };
+    // Only a measured, fresh Kp places the cap edge: a cold cache, a snapshot whose Kp is a
+    // stand-in, or an hours-old cached one gives none (`pca_kp`).
+    let now = now_unix();
     let kp = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        guard
-            .as_ref()
-            .map(|(_, s)| s.space_wx.kp as f64)
-            .unwrap_or(0.0)
+        pca_kp(guard.as_ref().map(|(_, s)| &s.space_wx), now)
     };
-    let now = now_unix();
     Ok(Some(PcaView {
         j10: flux.j10,
         a30_day: propagation::pca::a30_day(flux.j5),
         a30_night: propagation::pca::a30_night(flux.j1),
-        cutoff_deg: propagation::pca::cutoff_lat_deg(kp),
-        points: propagation::pca::pca_layer(flux.j5, flux.j1, kp, now, MIN_DB),
+        cutoff_deg: kp.map(propagation::pca::cutoff_lat_deg),
+        points: propagation::pca::pca_layer(flux.j5, flux.j1, kp.unwrap_or(0.0), now, MIN_DB),
+        protons_at: flux.at,
     }))
+}
+
+/// The Kp the polar-cap edge is placed at: the snapshot's Kp only when it may speak for `now`
+/// ([`swpc_kp`]), never the stand-in a failed fetch leaves or an hours-old cached reading, and
+/// nothing on a cold cache.
+fn pca_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f64> {
+    swpc_kp(wx, now).map(f64::from)
 }
 
 /// Magnetic declination (degrees, east-positive) at the operator's QTH right
@@ -13860,7 +14788,9 @@ async fn get_kp_forecast(
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
     match fetched {
-        Ok(v) => {
+        Ok(mut v) => {
+            // When this copy was fetched, so a last-good one served after a failure says how old.
+            v.fetched_at = Some(now_unix());
             if let Ok(mut g) = cache.lock() {
                 *g = Some((std::time::Instant::now(), v.clone()));
             }
@@ -13939,11 +14869,27 @@ async fn get_kc2g_muf(cache: State<'_, Kc2gCache>) -> Result<Vec<propagation::Mu
             Ok(v)
         }
         Err(_) => {
-            // Serve a stale set rather than nothing; empty if we never had one.
+            // Serve a stale set rather than nothing; empty if we never had one. Each station's
+            // age was measured when the copy was fetched, so it grows by the time since — a
+            // reading kept through an outage is not as young as it was then.
             let g = cache.lock().map_err(|e| e.to_string())?;
-            Ok(g.as_ref().map(|(_, v)| v.clone()).unwrap_or_default())
+            Ok(g.as_ref()
+                .map(|(when, v)| kc2g_aged(v, when.elapsed().as_secs()))
+                .unwrap_or_default())
         }
     }
+}
+
+/// A cached KC2G set with every station's age moved on by `elapsed` seconds.
+fn kc2g_aged(v: &[propagation::MufStation], elapsed: u64) -> Vec<propagation::MufStation> {
+    let elapsed = i64::try_from(elapsed).unwrap_or(i64::MAX);
+    v.iter()
+        .cloned()
+        .map(|mut s| {
+            s.age_secs = s.age_secs.saturating_add(elapsed);
+            s
+        })
+        .collect()
 }
 
 /// The freshest GOES long-band X-ray flux for the D-RAP flare layer + heads-up.
@@ -13952,7 +14898,8 @@ async fn get_kc2g_muf(cache: State<'_, Kc2gCache>) -> Result<Vec<propagation::Mu
 struct XrayNow {
     /// GOES 0.1–0.8 nm flux, W/m².
     flux: f32,
-    /// When the reading was fetched (Unix seconds, UTC).
+    /// The GOES sample's own time (Unix seconds, UTC) — never the fetch time, so a feed gap
+    /// reads as an old sample and not as "now".
     as_of: i64,
 }
 
@@ -13971,8 +14918,10 @@ async fn get_xray_now() -> Result<XrayNow, String> {
         .await
         .map_err(|e| e.to_string())?;
     match fetched {
-        Ok(flux) => {
-            let as_of = now_unix();
+        Ok(propagation::live::swpc::Sample {
+            value: flux,
+            at: as_of,
+        }) => {
             if let Ok(mut g) = LAST_XRAY.lock() {
                 *g = Some((std::time::Instant::now(), flux, as_of));
             }
@@ -14130,15 +15079,26 @@ fn get_scope_row(
 /// radio sweeps commits each sweep once instead of scrolling copies of the last one. The span
 /// request, the precedence and the fallbacks are `get_scope_row`'s; see
 /// `SpectrumFeed::scope_frame_after` for the two answers that come back on every poll.
+///
+/// `rf_lo_hz`/`rf_hi_hz`, when both are given, are the absolute RF window the scope is drawing on a
+/// native panadapter row: the standing request an IQ panadapter zooms its rows to
+/// (`SpectrumFeed::request_rf_view`). Absent from an older UI or a Remote page, and then nothing
+/// is asked.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 fn get_scope_frame(
     lo_hz: f32,
     hi_hz: f32,
     window: Option<String>,
     last_seq: u64,
+    rf_lo_hz: Option<f64>,
+    rf_hi_hz: Option<f64>,
     feed: State<'_, tempo_app::engine::SpectrumFeed>,
     state: State<'_, SharedEngine>,
 ) -> Result<Option<tempo_app::dto::SpectrumFrame>, String> {
+    if let (Some(lo), Some(hi)) = (rf_lo_hz, rf_hi_hz) {
+        feed.request_rf_view(lo, hi);
+    }
     // The same default as `get_scope_row`, for the reason given there.
     let win = window
         .as_deref()
@@ -14327,12 +15287,7 @@ fn reset_settings(
     health: State<'_, SharedHealth>,
     cache: State<'_, PropCache>,
 ) -> Result<AppSnapshot, String> {
-    // A default Settings has an empty roster, which is not a state `load` can ever produce and
-    // not one the radio loop can drive. Establish the same invariants a fresh install gets.
-    let mut fresh = Settings::default();
-    fresh.ensure_radio_profiles();
-    fresh.ensure_distinct_radio_ports();
-    fresh.ensure_routing_targets();
+    let fresh = factory_settings();
     // The ordinary save path in full — its persistence, its feed handling and the process-global
     // state it resets — but with the ROSTER CONTRACT of a restore. Routing a reset through a form
     // save keeps the engine's live roster, so every radio the dialog promised to erase survives it.
@@ -14347,6 +15302,17 @@ fn reset_settings(
         true,
     )
 }
+/// The settings a factory reset puts in place ([`reset_settings`]).
+fn factory_settings() -> Settings {
+    // A default Settings has an empty roster, which is not a state `load` can ever produce and
+    // not one the radio loop can drive. Establish the same invariants a fresh install gets.
+    let mut fresh = Settings::default();
+    fresh.ensure_radio_profiles();
+    fresh.ensure_distinct_radio_ports();
+    fresh.ensure_routing_targets();
+    fresh
+}
+
 /// Apply + persist new settings. Returns the refreshed snapshot.
 ///
 /// Also lazily starts the live network feeds: if this change supplies a real
@@ -14555,11 +15521,6 @@ fn save_and_publish(
                 LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
                 LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
             }
-            // Keep the live DXpedition layer's most-wanted key current (Settings
-            // override, else the build's baked application key).
-            propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-                &settings.clublog_api_key,
-            ));
             // Apply FIRST, then persist the engine's AUTHORITATIVE merged state — apply_settings keeps the
             // LIVE dual-radio roster / active radio / peg / tune (discarding the form's possibly-stale
             // copies), so saving the raw form here would write a roster that diverges from the engine and
@@ -14891,11 +15852,15 @@ mod contest_session_tests {
     /// An engine on a store of its own, with the Field Day master left on — the station a launch
     /// resumes Field Day on — and not in Field Day yet.
     fn field_day_left_on(tag: &str) -> (PathBuf, SharedEngine) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-resume-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-resume-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch");
         std::fs::write(dir.join("log.adi"), tempo_core::logbook::adif_header()).expect("log");
         let opened = tempo_app::logstore::open(
@@ -15285,7 +16250,14 @@ fn restore_settings_bundle(
         }
         None => return Err("That backup is missing its format version.".to_string()),
     }
-    let settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
+    let mut settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
+    // Where uploads start is kept beside the log, never in the settings, so a restore leaves it as
+    // it is. A backup an earlier build of that change wrote may carry one in its settings: it
+    // fills a service that has none beside the log, once the restore has gone through.
+    let carried = tempo_app::station::UploadStart::left_in(&settings);
+    settings.qrz_logbook_upload_from = None;
+    settings.clublog_upload_from = None;
+    settings.eqsl_upload_from = None;
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
     // which is right for a form and wrong for a restore. A bundle that opens a contest session
@@ -15316,6 +16288,16 @@ fn restore_settings_bundle(
         persist_routing_to_base(eng.settings());
         Ok(())
     })??;
+    if carried != Default::default() {
+        if let Err(e) =
+            tempo_app::upload_start::update(&shared_data_dir(), |s| *s = s.fill_from(carried))
+        {
+            tempo_core::applog::warn(
+                "uploads",
+                &format!("couldn't keep the backup's start point for uploads: {e}"),
+            );
+        }
+    }
     let snap = { engine_lock(engine).snapshot() };
     Ok(snap)
 }
@@ -18333,7 +19315,7 @@ struct RttyScopeDto {
 /// Receive-only: it reads what the decode thread pushed and changes nothing.
 #[tauri::command]
 async fn get_rtty_scope(state: State<'_, SharedEngine>) -> Result<RttyScopeDto, String> {
-    with_engine(&state, |eng| {
+    with_engine(&state, |mut eng| {
         let s = eng.rtty_scope();
         RttyScopeDto {
             live: s.live,
@@ -19685,6 +20667,27 @@ fn sstv_auto_disarm(state: State<'_, SharedEngine>) -> Result<SstvStateDto, Stri
     let mut eng = engine_lock(&state);
     eng.sstv_auto_disarm();
     Ok(sstv_state_dto(&eng))
+}
+
+/// The operator left a receive screen (RTTY, PSK, JTTY, SSTV, APRS) for another section: stop
+/// the decoder that opening it started, unless something still needs it — and, while a computer
+/// driving the station is attached, stop nothing until it has gone. RX only — see
+/// [`tempo_app::engine::Engine::leave_decoder_screen`]. The SSTV picture viewer, open in its own
+/// window here, keeps the SSTV screen in the section; this refreshes that from the window itself
+/// before deciding. Returns whether the decoder is still running on its screen's arm, so the
+/// caller asks again at the next section change.
+#[tauri::command(async)]
+fn leave_decoder_screen(
+    app: tauri::AppHandle,
+    state: State<'_, SharedEngine>,
+    screen: tempo_app::engine::decoder_screens::DecoderScreen,
+) -> Result<bool, String> {
+    let viewer_open = app
+        .get_webview_window(&panel_label(SSTV_VIEWER_SLUG, Instance::Main))
+        .is_some();
+    let mut eng = engine_lock(&state);
+    eng.set_sstv_viewer_open(viewer_open);
+    Ok(eng.leave_decoder_screen(screen))
 }
 
 /// Start decoding an SSTV picture NOW, in the mode the operator named, without
@@ -22397,6 +23400,10 @@ fn set_psk_macros(
 /// progress with the main window's while it is open (`tempo_app::engine::contest_entry`).
 pub(crate) const CONTEST_LOGGER_SLUG: &str = "contestlog";
 
+/// The received-picture viewer's panel slug (`SstvViewer.tsx`'s `SSTV_VIEWER_PANEL`): the SSTV
+/// screen in a window of its own, which keeps that screen in the section (`leave_decoder_screen`).
+const SSTV_VIEWER_SLUG: &str = "sstvviewer";
+
 /// The contest screen window's panel slug: the main window's Contest screen below its log line
 /// (the contest switch, the controls, the club board, the scoreboard, the bonuses and the log),
 /// popped out to a monitor of its own. The main window keeps the log line and the last contacts
@@ -22636,6 +23643,13 @@ async fn open_panel_window(
     // handler). Never persisted, so a restart cannot leave it shared.
     if slug == CONTEST_LOGGER_SLUG && matches!(inst, Instance::Main) {
         share_the_contest_entry(&app);
+    }
+    // THE SSTV PICTURE VIEWER keeps the SSTV screen in its section while it is open (the station
+    // does not stop that receiver behind it), from here to its `Destroyed` event.
+    if slug == SSTV_VIEWER_SLUG && matches!(inst, Instance::Main) {
+        if let Some(engine) = app.try_state::<SharedEngine>() {
+            engine_lock(&engine).set_sstv_viewer_open(true);
+        }
     }
     if let Some(side) = docked_side {
         // Re-pin to the edge of the current work area (best-effort; ignore if unmapped) so a
@@ -28229,12 +29243,7 @@ fn clear_lotw_password() -> Result<(), String> {
 ///
 /// Only the legs that leave a per-QSO upload stamp can be swept (`StationCore::unsent_legs`
 /// holds that list and why), so HRDLog, N3FJP, Cloudlog and WRL have no saver calling this.
-fn catch_up_failed_uploads(
-    state: &State<'_, SharedEngine>,
-    leg: u8,
-    service: &'static str,
-    lead_in: &str,
-) {
+fn catch_up_failed_uploads(state: &SharedEngine, leg: u8, service: &'static str, lead_in: &str) {
     // The pick reads the logbook store, so it runs with the engine lock released: the queue's
     // room and the log's rows are taken under it, and the contacts picked are queued under it
     // again (a record the queue has filled up past meanwhile stays unsent for the next sweep).
@@ -28242,7 +29251,22 @@ fn catch_up_failed_uploads(
         let eng = engine_lock(state);
         (eng.log_rows(), eng.catch_up_room())
     };
-    let stale = match tempo_app::station::catch_up_records(&rows, leg, room) {
+    // Where each service's uploads start is kept beside the shared log, so every window honours
+    // the same answer. One that cannot be read sends nothing old: that answer may be "no".
+    let start = match tempo_app::upload_start::read(&shared_data_dir()) {
+        Ok(start) => start,
+        Err(e) => {
+            conn_log(
+                service,
+                "error",
+                format!(
+                    "{lead_in} — where uploads to {service} start could not be read ({e}), so                      no older contact is sent now; send one from the Logbook"
+                ),
+            );
+            return;
+        }
+    };
+    let stale = match tempo_app::station::catch_up_records(&rows, leg, room, start) {
         Ok(stale) => stale,
         Err(e) => {
             conn_log(
@@ -28272,11 +29296,236 @@ fn catch_up_failed_uploads(
     );
 }
 
+/// Move the start points an earlier build of this change wrote into this window's settings file
+/// beside the shared log (`dir`), where every window reads them, keeping each service's earliest
+/// of the two, and clear them from the settings, whose next save then drops the key. A move that
+/// fails leaves them in the settings, saved with them, for the next launch to try again.
+fn move_upload_start_beside_the_log(settings: &mut Settings, dir: &Path) {
+    let left = tempo_app::station::UploadStart::left_in(settings);
+    if left == Default::default() {
+        return;
+    }
+    match tempo_app::upload_start::update(dir, |s| *s = s.keep_earliest(left)) {
+        Ok(_) => {
+            settings.qrz_logbook_upload_from = None;
+            settings.clublog_upload_from = None;
+            settings.eqsl_upload_from = None;
+            tempo_core::applog::info(
+                "uploads",
+                "moved where uploads start from this window's settings to beside the log",
+            );
+        }
+        Err(e) => tempo_core::applog::warn(
+            "uploads",
+            &format!("couldn't move where uploads start to beside the log: {e}"),
+        ),
+    }
+}
+
+/// The first login saved for QRZ Logbook, ClubLog or eQSL: where its automatic uploads start,
+/// set BEFORE the upload is turned on and the catch-up runs, so nothing older than the answer is
+/// ever queued. The start points are kept beside the shared log ([`tempo_app::upload_start`]), so
+/// the answer holds in every window that shares the log: the base window, each radio's window and
+/// a hand-named profile. `first` is whether no login was stored before this save (read before it
+/// was written); a login saved over one changes nothing. `send_old` is the operator's answer to
+/// "Send N contacts not yet sent to <service>?": `Some(true)`, "Send them", clears the start point;
+/// `Some(false)`, "Only contacts made from now on" (also what Escape and a dialog that cannot open
+/// answer), sets it to now or keeps an earlier one. `None` is no question asked (the count could
+/// not be read): no start point, as before. Returns whether the save's catch-up may run: not when
+/// a "from now on" could not be kept, so this save sends nothing old.
+fn start_uploads_for_login(
+    state: &SharedEngine,
+    leg: u8,
+    service: &'static str,
+    first: bool,
+    send_old: Option<bool>,
+) -> bool {
+    let Some(send_old) = send_old.filter(|_| first) else {
+        return true;
+    };
+    if !engine_lock(state).login_question_applies(leg) {
+        return true;
+    }
+    let now = now_unix().max(0) as u64;
+    match tempo_app::upload_start::update(&shared_data_dir(), |s| s.answer(leg, send_old, now)) {
+        Ok((before, after)) => {
+            if let Some(from) = after.of_leg(leg) {
+                engine_lock(state).drop_waiting_before(leg, from);
+            }
+            if before != after && !send_old {
+                conn_log(
+                    service,
+                    "info",
+                    format!(
+                        "only contacts made from now on are sent to {service} automatically; \
+                         send an older one from the Logbook"
+                    ),
+                );
+            }
+            true
+        }
+        Err(e) => {
+            conn_log(
+                service,
+                "error",
+                format!("couldn't keep where uploads to {service} start: {e}"),
+            );
+            if send_old {
+                return true;
+            }
+            // The answer could not be kept: this save sends nothing older than now all the same.
+            engine_lock(state).drop_waiting_before(leg, now);
+            false
+        }
+    }
+}
+
+/// Whether a login is stored in the keychain `entry`, for the first login's question. Only a
+/// genuine "no entry" is a no: a keychain that cannot be read is an error, never a first login. A
+/// stored value that is not readable text is still a stored login (and its bytes are never shown).
+/// The secret itself is read and dropped here, as [`keychain_has`] does.
+fn login_stored(entry: &keyring::Entry) -> Result<bool, keyring::Error> {
+    match entry.get_password() {
+        Ok(_) | Err(keyring::Error::BadEncoding(_)) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// QRZ Logbook, ClubLog or eQSL, as a login save names it.
+#[derive(Clone, Copy)]
+struct UploadLogin {
+    leg: u8,
+    service: &'static str,
+    toggle: UploadToggle,
+    /// The Connections log's line once the login is in the keychain.
+    saved: &'static str,
+    /// What the catch-up's log line starts with.
+    lead_in: &'static str,
+}
+
+/// ⛔ A login save for QRZ Logbook, ClubLog or eQSL, in the one order that keeps the first login's
+/// answer: whether a login was `stored` is read BEFORE `store` writes the new one (read after, every
+/// login looks stored and the answer is ignored), and the start point is set BEFORE the upload is
+/// turned on and its catch-up runs (after, the old log is already on its way). A keychain that
+/// cannot be read is no first login: the error is logged, and the save goes on as it always did.
+fn save_upload_login(
+    engine: &SharedEngine,
+    login: UploadLogin,
+    stored: impl FnOnce() -> Result<bool, keyring::Error>,
+    store: impl FnOnce() -> Result<(), String>,
+    send_old: Option<bool>,
+) -> Result<(), String> {
+    let first = match stored() {
+        Ok(stored) => !stored,
+        Err(e) => {
+            conn_log(
+                login.service,
+                "error",
+                format!(
+                    "couldn't read the system keychain: {e}; the login is saved as one already \
+                     stored, and uploads go on as before"
+                ),
+            );
+            false
+        }
+    };
+    store()?;
+    conn_log(login.service, "ok", login.saved);
+    let catch_up = start_uploads_for_login(engine, login.leg, login.service, first, send_old);
+    set_upload_toggle(engine, login.toggle, true);
+    if catch_up {
+        catch_up_failed_uploads(engine, login.leg, login.service, login.lead_in);
+    }
+    Ok(())
+}
+
+/// The service a login question is about, by its name on the wire: its upload leg, the keychain
+/// user its login is kept under, and its name in the Connections log.
+fn backlog_service(service: &str) -> Result<(u8, &'static str, &'static str), String> {
+    use tempo_app::engine::upload_legs;
+    match service {
+        "qrz" => Ok((upload_legs::QRZ, QRZ_LOGBOOK_KEYCHAIN_USER, "QRZ Logbook")),
+        "clublog" => Ok((upload_legs::CLUBLOG, CLUBLOG_KEYCHAIN_USER, "ClubLog")),
+        "eqsl" => Ok((upload_legs::EQSL, EQSL_KEYCHAIN_USER, "eQSL")),
+        other => Err(format!("no upload service called {other:?}")),
+    }
+}
+
+/// What saving a login for `service` ("qrz", "clublog" or "eqsl") would ask first: `None` when the
+/// save asks nothing (see [`backlog_question`]), else how many logged contacts have not been sent
+/// there. Asked by Settings before it saves the login; it says only whether a login is stored,
+/// never anything of it.
+#[tauri::command]
+async fn upload_backlog(
+    service: String,
+    state: State<'_, SharedEngine>,
+) -> Result<Option<usize>, String> {
+    let (leg, user, name) = backlog_service(&service)?;
+    let engine = state.inner().clone();
+    log_folds::off_the_runtime(move || {
+        let entry = keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, user)
+            .map_err(|e| format!("couldn't open the system keychain: {e}"))?;
+        backlog_question(
+            &engine,
+            leg,
+            name,
+            login_stored(&entry),
+            tempo_app::station::backlog_count,
+        )
+    })
+    .await
+}
+
+/// [`upload_backlog`] once the keychain is read: no question (`None`) when a login is `stored` or
+/// the service's upload switch is already on; an error, so no question either, when the keychain
+/// cannot be read (the save then goes on as before, see [`save_upload_login`]); else the `count`.
+/// A log that cannot be counted is an error too, and logged: nothing is asked, and the save then
+/// sets no start point and sends as before (review L3), never a start point the operator was not
+/// asked about.
+fn backlog_question(
+    engine: &SharedEngine,
+    leg: u8,
+    service: &'static str,
+    stored: Result<bool, keyring::Error>,
+    count: impl FnOnce(&tempo_app::logstore::LogRows, u8) -> Result<usize, String>,
+) -> Result<Option<usize>, String> {
+    if stored.map_err(|e| format!("couldn't read the system keychain: {e}"))? {
+        return Ok(None);
+    }
+    let rows = {
+        let eng = engine_lock(engine);
+        if !eng.login_question_applies(leg) {
+            return Ok(None);
+        }
+        eng.log_rows()
+    };
+    match count(&rows, leg) {
+        Ok(n) => Ok(Some(n)),
+        Err(e) => {
+            conn_log(
+                service,
+                "error",
+                format!(
+                    "couldn't count the contacts not yet sent to {service}: {e}; nothing is \
+                     asked, and saving the login sends them as before"
+                ),
+            );
+            Err(format!("couldn't read the logbook: {e}"))
+        }
+    }
+}
+
 /// Store (or, if empty, clear) the eQSL website password in the OS keychain.
 /// Write-only, like the LoTW counterpart. Saving also switches eQSL auto-upload
-/// ON (entering the credential is the intent).
+/// ON (entering the credential is the intent). The first password saved asks first what becomes of
+/// the contacts never sent there (`send_old`, see [`start_uploads_for_login`]).
 #[tauri::command(async)]
-fn set_eqsl_password(password: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn set_eqsl_password(
+    password: String,
+    send_old: Option<bool>,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
     let entry = eqsl_keychain()?;
     if password.is_empty() {
         clear_keychain_entry(&entry)?;
@@ -28284,18 +29533,23 @@ fn set_eqsl_password(password: String, state: State<'_, SharedEngine>) -> Result
         set_upload_toggle(&state, UploadToggle::Eqsl, false);
         return Ok(());
     }
-    entry
-        .set_password(&password)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("eQSL", "ok", "password saved to the OS keychain");
-    set_upload_toggle(&state, UploadToggle::Eqsl, true);
-    catch_up_failed_uploads(
+    save_upload_login(
         &state,
-        tempo_app::engine::upload_legs::EQSL,
-        "eQSL",
-        "password saved",
-    );
-    Ok(())
+        UploadLogin {
+            leg: tempo_app::engine::upload_legs::EQSL,
+            service: "eQSL",
+            toggle: UploadToggle::Eqsl,
+            saved: "password saved to the OS keychain",
+            lead_in: "password saved",
+        },
+        || login_stored(&entry),
+        || {
+            entry
+                .set_password(&password)
+                .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        },
+        send_old,
+    )
 }
 
 /// Remove the stored eQSL password from the OS keychain (idempotent).
@@ -28399,9 +29653,15 @@ fn entered_credential(raw: &str) -> &str {
 /// Store (or, if empty, clear) the QRZ **Logbook API key** (distinct from the XML
 /// password) in the OS keychain. Write-only. Saving a key also switches QRZ
 /// auto-upload ON: entering the key IS the intent ("upload my QSOs to QRZ") —
-/// previously the separate toggle silently stayed off and nothing uploaded.
+/// previously the separate toggle silently stayed off and nothing uploaded. The first key saved
+/// asks first what becomes of the contacts never sent there (`send_old`, see
+/// [`start_uploads_for_login`]).
 #[tauri::command(async)]
-fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn set_qrz_logbook_key(
+    key: String,
+    send_old: Option<bool>,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
     let key = entered_credential(&key); // #224
     let entry = qrz_logbook_keychain()?;
     // #291: a different key can unlock a different book, so the owner learned for the old one
@@ -28418,18 +29678,23 @@ fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<()
         set_upload_toggle(&state, UploadToggle::Qrz, false);
         return Ok(());
     }
-    entry
-        .set_password(key)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("QRZ Logbook", "ok", "API key saved to the OS keychain");
-    set_upload_toggle(&state, UploadToggle::Qrz, true);
-    catch_up_failed_uploads(
+    save_upload_login(
         &state,
-        tempo_app::engine::upload_legs::QRZ,
-        "QRZ Logbook",
-        "API key saved",
-    );
-    Ok(())
+        UploadLogin {
+            leg: tempo_app::engine::upload_legs::QRZ,
+            service: "QRZ Logbook",
+            toggle: UploadToggle::Qrz,
+            saved: "API key saved to the OS keychain",
+            lead_in: "API key saved",
+        },
+        || login_stored(&entry),
+        || {
+            entry
+                .set_password(key)
+                .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        },
+        send_old,
+    )
 }
 
 /// Which connector's auto-upload toggle to flip alongside its credential.
@@ -28450,7 +29715,7 @@ enum UploadToggle {
 /// NEVER `apply_settings` — that resets the operating mode and drops queued TX,
 /// and a credential save mid-QSO must not kill the QSO. No-op when already in
 /// the requested state.
-fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: bool) {
+fn set_upload_toggle(state: &SharedEngine, which: UploadToggle, on: bool) {
     {
         let mut eng = engine_lock(state);
         let (connector, already) = {
@@ -28695,20 +29960,25 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     )
 }
 
-/// What `fetch` brings back that is not LoTW's report file.
+/// What to say about a `body` from `fetch` that is not LoTW's report file.
 ///
-/// ⚠️ DO NOT BLAME THE CREDENTIALS HERE — the exact sibling of the eQSL guard, and the same
-/// reasoning. `fetch_report` has already returned a body, so the login worked; a wrong password
-/// fails earlier with its own message. eQSL demonstrated the failure mode on 2026-08-28: it
-/// changed the wording its download opens with, the structural check started rejecting good
-/// files, and operators were told to re-enter passwords that were provably correct because their
-/// UPLOADS were still landing. LoTW can change its wording the same way, and it is the one that
-/// carries award credit, so it should not be the place we find this out again.
-fn lotw_not_a_report() -> String {
-    "LoTW answered, but the download was not the report file it should have been. Your \
-     username and password are fine — this is not a login problem. LoTW may be \
-     returning an error page, or may be down for maintenance. Try again shortly, and \
-     if it keeps happening please report it."
+/// LoTW answers a wrong username or password with its sign-in page, HTTP 200, so that page is
+/// told apart by its words ([`tempo_core::lotw::is_login_refused`]) and called what it is.
+///
+/// ⚠️ ANY OTHER PAGE IS NOT BLAMED ON THE CREDENTIALS — the sibling of the eQSL guard, and the
+/// same reasoning. eQSL demonstrated the failure mode on 2026-08-28: it changed the wording its
+/// download opens with, the structural check started rejecting good files, and operators were
+/// told to re-enter passwords that were provably correct because their UPLOADS were still
+/// landing. LoTW can change its wording the same way. Nor are the credentials vouched for: an
+/// unrecognised page says nothing about them either way.
+fn lotw_not_a_report(body: &str) -> String {
+    if tempo_core::lotw::is_login_refused(body) {
+        return "LoTW did not accept your username or password. Check the LoTW username and \
+                password in Settings (your LoTW website login)."
+            .to_string();
+    }
+    "LoTW answered with a page that isn't a report. LoTW may be showing an error page, or may \
+     be down for maintenance. Try again shortly, and if it keeps happening please report it."
         .to_string()
 }
 
@@ -28823,7 +30093,7 @@ fn lotw_since_cursor(
     }; // `query` + `url` (both hold the password) dropped here
 
     if !tempo_core::lotw::is_lotw_adif(&body) {
-        return Err(lotw_not_a_report());
+        return Err(lotw_not_a_report(&body));
     }
 
     // Merge via the shared reconcile path, then advance the cursor only on a real
@@ -28935,7 +30205,7 @@ fn lotw_history_by_year(
             &query, year, newest, oldest,
         )) {
             Ok(b) if !tempo_core::lotw::is_lotw_adif(&b) => {
-                return Err(stopped(lotw_not_a_report(), &result))
+                return Err(stopped(lotw_not_a_report(&b), &result))
             }
             // A year cut off before its end marker is not in: what it holds would be merged, and
             // the place moved past what it lost.
@@ -29410,13 +30680,43 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     let password = eqsl_keychain()?
         .get_password()
         .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
+    download_eqsl_report_on(
+        state,
+        username,
+        qth_nickname,
+        since,
+        password,
+        now_unix(),
+        &|url| propagation::live::eqsl::fetch_inbox(url),
+        &|updated| {
+            persist_settings(updated, |e| {
+                eprintln!("tempo: failed to persist eQSL cursor: {e}")
+            });
+        },
+    )
+}
+
+/// [`download_eqsl_report_impl`] with the account and cursor as Settings held them, the password,
+/// the clock (`now`), eQSL (`fetch`, both steps) and the settings file (`persist`, handed the
+/// cursor's change to save, under the Engine lock) supplied.
+#[allow(clippy::too_many_arguments)]
+fn download_eqsl_report_on(
+    state: &SharedEngine,
+    username: String,
+    qth_nickname: String,
+    since: String,
+    password: String,
+    now: i64,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+    persist: &dyn Fn(Settings),
+) -> Result<LotwSyncResult, String> {
     let used_username = username.clone();
     let used_nickname = qth_nickname.clone();
     // Candidate next cursor: this sync's start, floored to the minute and rolled
     // back by the margin (eQSL's RcvdSince timezone is unstated — over-fetch so we
     // never skip records). Captured BEFORE the fetch so nothing arriving during it
     // is missed next time.
-    let next_cursor = tempo_core::eqsl::format_rcvd_since(now_unix() - EQSL_RCVD_MARGIN_SECS);
+    let next_cursor = tempo_core::eqsl::format_rcvd_since(now - EQSL_RCVD_MARGIN_SECS);
 
     // Build the URL, fetch (two GETs), and drop the secret-bearing values after.
     let body = {
@@ -29429,7 +30729,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
             qth_nickname: Some(qth_nickname).filter(|n| !n.is_empty()),
         };
         let url = tempo_core::eqsl::build_inbox_url(&query);
-        propagation::live::eqsl::fetch_inbox(&url)?
+        fetch(&url)?
     }; // `query` + `url` (both hold the password) dropped here
 
     if !tempo_core::eqsl::is_eqsl_adif(&body) {
@@ -29463,10 +30763,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     {
         let mut eng = engine_lock(state);
         if eqsl_cursor_may_advance(eng.settings(), &body, &used_username, &used_nickname) {
-            let updated = eng.set_eqsl_cursor(next_cursor);
-            persist_settings(updated, |e| {
-                eprintln!("tempo: failed to persist eQSL cursor: {e}")
-            });
+            persist(eng.set_eqsl_cursor(next_cursor));
         }
     }
     // On disk before the sync says so — off the lock, on the blocking pool.
@@ -29603,29 +30900,9 @@ fn service_words_without_secrets(words: &str, echoed: &[Echoed<'_>], withheld: &
     let scrubbed = echoed.iter().fold(words.to_string(), |text, e| {
         tempo_core::qrz_correct::scrub_secret(&text, e.secret, e.marker)
     });
-    let folded = |text: &str| -> String {
-        text.chars()
-            .filter(char::is_ascii_alphanumeric)
-            .map(|c| c.to_ascii_lowercase())
-            .collect()
-    };
-    let shown = folded(&scrubbed);
+    let shown = alnum_folded(&scrubbed);
     let still_shown = echoed.iter().any(|e| {
-        // The secret's letters and digits, and those of its percent-encoded form (a `-` as `2d`).
-        let plain = folded(e.secret);
-        let encoded: String = e
-            .secret
-            .trim()
-            .bytes()
-            .map(|b| {
-                if b.is_ascii_alphanumeric() {
-                    (b.to_ascii_lowercase() as char).to_string()
-                } else {
-                    format!("{b:02x}")
-                }
-            })
-            .collect();
-        [plain, encoded]
+        folded_secret_forms(e.secret)
             .iter()
             .any(|k| !k.is_empty() && shown.contains(k.as_str()))
     });
@@ -29634,6 +30911,32 @@ fn service_words_without_secrets(words: &str, echoed: &[Echoed<'_>], withheld: &
     } else {
         scrubbed
     }
+}
+
+/// `text`'s letters and digits, lower-cased: the form [`service_words_without_secrets`] looks
+/// for a secret in, whatever case or separators the service wrote it with.
+fn alnum_folded(text: &str) -> String {
+    text.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// A secret as [`alnum_folded`] text would show it: its letters and digits, and those of its
+/// percent-encoded form (a `-` as `2d`).
+fn folded_secret_forms(secret: &str) -> [String; 2] {
+    let encoded = secret
+        .trim()
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b.to_ascii_lowercase() as char).to_string()
+            } else {
+                format!("{b:02x}")
+            }
+        })
+        .collect();
+    [alnum_folded(secret), encoded]
 }
 
 /// What the operator is told instead of QRZ's words when they still show the Logbook API key.
@@ -31458,9 +32761,14 @@ async fn qrz_correct_undo_miss() -> Result<String, String> {
 /// Store (or, if empty, clear) the ClubLog **Application Password** in the OS
 /// keychain. Also re-arms ClubLog auto-push (a credential change clears the 403
 /// suspend latch). Write-only. Saving also switches ClubLog auto-upload ON
-/// (entering the credential is the intent).
+/// (entering the credential is the intent). The first app-password saved asks first what becomes
+/// of the contacts never sent there (`send_old`, see [`start_uploads_for_login`]).
 #[tauri::command(async)]
-fn set_clublog_password(password: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn set_clublog_password(
+    password: String,
+    send_old: Option<bool>,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
     let entry = clublog_keychain()?;
     if password.is_empty() {
         // Clearing = "turn ClubLog off": drop the credential AND the toggle. The
@@ -31479,22 +32787,27 @@ fn set_clublog_password(password: String, state: State<'_, SharedEngine>) -> Res
     // no-credentials announce latch, so the next dry spell is announced again.
     CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
     CLUBLOG_NO_CREDS_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
-    entry
-        .set_password(&password)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("ClubLog", "ok", "app-password saved to the OS keychain");
-    set_upload_toggle(&state, UploadToggle::Clublog, true);
     // CATCH-UP (F4MQS): entering the credential the QSOs were failing on is the moment to
     // re-send them. Without this, every QSO logged before the password was stored stayed
-    // un-uploaded with nothing to flag it. Now AFTER the toggle, not before — see
+    // un-uploaded with nothing to flag it. The catch-up runs AFTER the toggle, not before — see
     // `catch_up_failed_uploads`: a record drained in the gap would lose the leg silently.
-    catch_up_failed_uploads(
+    save_upload_login(
         &state,
-        tempo_app::engine::upload_legs::CLUBLOG,
-        "ClubLog",
-        "app-password saved",
-    );
-    Ok(())
+        UploadLogin {
+            leg: tempo_app::engine::upload_legs::CLUBLOG,
+            service: "ClubLog",
+            toggle: UploadToggle::Clublog,
+            saved: "app-password saved to the OS keychain",
+            lead_in: "app-password saved",
+        },
+        || login_stored(&entry),
+        || {
+            entry
+                .set_password(&password)
+                .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        },
+        send_old,
+    )
 }
 
 /// Remove the stored ClubLog app-password from the OS keychain (idempotent);
@@ -33277,7 +34590,6 @@ fn build_connect_board(
     prop: &PropCache,
     kp: &KpForecastCache,
 ) -> Option<tempo_app::connect_web::ConnectBoardData> {
-    use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
     // One bounded clone under each lock; everything else is built off-lock.
     let snap = prop.lock().ok()?.as_ref().map(|(_, p)| p.clone())?;
     let (call, grid) = {
@@ -33293,11 +34605,42 @@ fn build_connect_board(
         .ok()
         .and_then(|g| g.as_ref().map(|(_, f)| f.clone()))
         .and_then(|f| f.peak_ahead().cloned());
-    Some(ConnectBoardData {
+    Some(connect_board(snap, call, grid, peak, now_unix()))
+}
+
+/// The TV summary page's payload from one propagation snapshot, the station, and the Kp
+/// forecast's peak, for `now` ([`build_connect_board`] gathers them under their locks).
+fn connect_board(
+    mut snap: propagation::PropagationSnapshot,
+    call: String,
+    grid: String,
+    peak: Option<propagation::KpPoint>,
+    now: i64,
+) -> tempo_app::connect_web::ConnectBoardData {
+    use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
+    // The cached snapshot is served at any age: its storm and flare lines speak only while the
+    // Kp or X-ray they rest on may speak for now, as on the desktop (`get_propagation`).
+    let stamps = snap.space_wx.stamps;
+    // Its band advice, as `get_propagation` serves it, once the model may not speak.
+    if !stamps.model_usable(now) {
+        served_without_model(&mut snap, &call, &grid);
+    }
+    // A number is shown only while it may speak for now: a stand-in or an old reading is a dash,
+    // as on the gauges (this page has no dimmed ink to age one in).
+    let speaks = |k: propagation::model::WxKey| stamps.usable(k, now);
+    let wx_now = propagation::SpaceWx {
+        sfi: snap.space_wx.sfi,
+        ssn: None,
+        kp: snap.space_wx.kp,
+        a_index: snap.space_wx.a_index,
+        xray_long: snap.space_wx.xray_long,
+    }
+    .speaking_now(&stamps, now);
+    ConnectBoardData {
+        banners: propagation::PropAdvisor::new(&call, &grid).banners(&wx_now),
         call,
         grid,
         headline: snap.advisory.headline.clone(),
-        banners: snap.advisory.banners.clone(),
         bands: snap
             .advisory
             .bands
@@ -33322,16 +34665,22 @@ fn build_connect_board(
                 is_new: o.is_new,
             })
             .collect(),
-        sfi: snap.space_wx.sfi,
-        kp: snap.space_wx.kp,
-        a_index: snap.space_wx.a_index,
-        xray_class: snap.space_wx.xray_class.clone(),
-        insights: snap.insights.iter().map(|i| i.plain.clone()).collect(),
+        sfi: speaks(propagation::model::WxKey::Sfi).then_some(snap.space_wx.sfi),
+        kp: speaks(propagation::model::WxKey::Kp).then_some(snap.space_wx.kp),
+        a_index: speaks(propagation::model::WxKey::A).then_some(snap.space_wx.a_index),
+        xray_class: speaks(propagation::model::WxKey::Xray)
+            .then(|| snap.space_wx.xray_class.clone()),
+        insights: snap
+            .insights
+            .iter()
+            .filter(|i| propagation::insight_speaks_now(i, &stamps, now))
+            .map(|i| i.plain.clone())
+            .collect(),
         kp_peak_ahead: peak.as_ref().map(|p| p.kp),
         kp_peak_unix: peak.as_ref().map(|p| p.time_unix),
         source: snap.source.clone(),
         as_of_unix: snap.as_of,
-    })
+    }
 }
 
 /// The app handle the TV page's closures read at call time. Set once in `.setup()`;
@@ -33398,15 +34747,21 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_solar_indices" => ok(get_solar_indices(app.state()).await),
             "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
+            "get_path_regions" => ok(get_path_regions(app.state(), app.state(), app.state()).await),
             "get_path_outlook" => {
                 let grid = v
                     .get("grid")
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                ok(get_path_outlook(grid, app.state(), app.state()).await)
+                ok(
+                    get_path_outlook(grid, app.state(), app.state(), app.state(), app.state())
+                        .await,
+                )
             }
-            "get_getting_out" => ok(get_getting_out(app.state(), app.state()).await),
+            "get_getting_out" => {
+                ok(get_getting_out(tv_getting_out_since(&v), app.state(), app.state()).await)
+            }
             "get_dxped_windows" => {
                 let days = v.get("days").and_then(|x| x.as_u64()).map(|d| d as u32);
                 ok(get_dxped_windows(app.state(), app.state(), days).await)
@@ -34627,7 +35982,8 @@ fn fd_club_import(
     text: String,
     posid: String,
 ) -> Result<tempo_app::dto::FdClubImportDto, String> {
-    engine_lock(&state).fd_club_import(&text, &posid)
+    // The file is read with the Engine lock let go: the lock is taken only to check and to merge.
+    tempo_app::engine::fd_club_import_in(&state, &text, &posid)
 }
 
 /// What the host's Give button did: the position given, or why nothing changed.
@@ -36248,11 +37604,15 @@ mod radioprog_file_tests {
 
     /// A unique scratch directory; the name carries the test's own label.
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-radioprog-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-radioprog-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -37378,8 +38738,9 @@ struct UpdateInfo {
 /// stamped into the binary (`tauri::utils::platform::bundle_type`).
 ///
 /// ⚠️ THE PACKAGE DECIDES, NOT WHETHER A CHECK SUCCEEDS. The manifest (`latest.json`, built in
-/// release.yml) carries three installers: the NSIS setup under `windows-x86_64`, the AppImage
-/// under `linux-x86_64` and the macOS app under `darwin-aarch64`. The plugin looks up
+/// release.yml) carries four installers: the NSIS setup under `windows-x86_64`, the AppImage
+/// under `linux-x86_64`, and the macOS app under `darwin-aarch64` (Apple Silicon) and
+/// `darwin-x86_64` (Intel), each Mac asking for its own architecture's. The plugin looks up
 /// `linux-x86_64-deb` and then the bare `linux-x86_64`, so on a PC's .deb the check found the
 /// AppImage, downloaded it, and Install failed every time: the plugin installs over a .deb only
 /// from a .deb (`InvalidUpdaterFormat`). The .deb packages (the PC one and both Pi ones) are
@@ -38268,8 +39629,13 @@ fn install_panic_logger() {
         // `info` renders payload + location; the applog redactor scrubs it either way.
         tempo_core::applog::error("panic", &format!("at {where_}: {info}"));
         // Error level flushes, but a panic can be followed immediately by an abort, so make
-        // the wait explicit rather than relying on the writer getting a slice first.
-        tempo_core::applog::flush();
+        // the wait explicit rather than relying on the writer getting a slice first. TX SAFETY:
+        // not on a transmit session's driver, whose stops go out the moment this hook returns
+        // (it catches its own panic, so no abort follows): the line is queued, and the writer
+        // flushes an error line as soon as it has it.
+        if !tempo_net::on_a_transmit_driver() {
+            tempo_core::applog::flush();
+        }
         // ★ THE STARTUP-SILENCE CATCH. A panic BEFORE the main window exists is the shape the
         // operator experiences as "I double-click it and nothing happens" — and in tauri
         // 2.11.2 that is exactly where a WebView2 failure lands, because windows are created
@@ -38376,6 +39742,7 @@ pub fn run() {
     }
 
     let mut settings = Settings::load(&settings_path());
+    move_upload_start_beside_the_log(&mut settings, &shared_data_dir());
     // The DEBUG tier, as early as the settings are known — a diagnostic session must capture
     // the startup it was turned on for, not just what came after.
     tempo_core::applog::set_debug(settings.diag_debug_log);
@@ -38801,6 +40168,20 @@ pub fn run() {
     if region_enabled {
         start_pskr_region_feed(&region_paths, &cluster_call, &region_grid);
     }
+    // The log-time path grader: a contact being logged takes the route the path card graded for
+    // its station, as new fields only, and never an antenna field. It reads
+    // what `path_grades` already holds (it runs under the Engine lock); the record's own
+    // MY_GRIDSQUARE, which the log funnel has stamped by then, names the operator's end.
+    {
+        let live = live_paths.clone();
+        let region = region_paths.0.clone();
+        engine_lock(&engine)
+            .set_path_grader(move |rec, late| path_grades::at_log(rec, "", &live, &region, late));
+    }
+    // The display-only grading of the existing log (a first pass two minutes after launch, then
+    // whenever the log has changed).
+    #[cfg(feature = "radio")]
+    path_grades::start_grader(engine.clone());
     // Record the LOGIN IDENTITY the feeds were started under, so a later Settings rename
     // knows to tear them down and reconnect (topics/login are call-bound). Built the same
     // way the comparison in `apply_and_persist` is: a seed in any other shape reads as a
@@ -38808,14 +40189,10 @@ pub fn run() {
     if let Ok(mut c) = PREV_FEED_CALL.lock() {
         *c = tempo_net::cluster::login_call(&cluster_call, &cluster_ssid);
     }
-    // Feed the live DXpedition layer the ClubLog key (most-wanted ranks). Pushed,
-    // not pulled — keeps the propagation crate decoupled from settings IO.
-    {
-        let eng = engine_lock(&engine);
-        propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-            &eng.settings().clublog_api_key,
-        ));
-    }
+    // The live DXpedition layer keeps ClubLog's answers here between runs, so a restart does
+    // not ask ClubLog again before its schedule says so. Shared by every profile, like cty.dat.
+    // Disk only, and before the warm-up below asks anything.
+    propagation::live::dxped::set_cache_dir(&shared_data_dir());
     // Warm the DXpedition plan cache in the background so the Needed board's
     // expedition tagging works from launch — without it the cache stays cold until
     // the operator first opens Connect/DXpeditions.
@@ -39128,8 +40505,8 @@ fn start_on_the_logbook(
             std::thread::sleep(std::time::Duration::from_secs(subsec_jitter(120)));
             maybe_kick_tle_refresh(false);
         });
-        // The IOTA island-group list: the copy the operator chose to download, refreshed when a
-        // month old. Nothing at all without their yes (`iota_list`).
+        // The IOTA island-group list: the copy that shipped or a newer download, checked for an
+        // update when a month old; none while the operator has it off (`iota_list`).
         iota_list::load_at_startup();
         // LoTW-user marks: restore the persisted ARRL activity list (if the
         // operator ever fetched it) and wire the recency-windowed resolver.
@@ -40811,6 +42188,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         reveal_diag_log,
         recordings_location,
         sstv_delete_image,
+        sstv_delete_images,
         reveal_recordings,
         reveal_sstv_gallery,
         shack_files::shack_file_list,
@@ -40956,6 +42334,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         sstv_manual_rx,
         sstv_auto_arm,
         sstv_auto_disarm,
+        leave_decoder_screen,
         get_sstv_state,
         sstv_send,
         sstv_stop,
@@ -41090,6 +42469,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         resume_chat_cq,
         notify_erase,
         qrz_test_connection,
+        connector_checks::lotw_test_connection,
+        connector_checks::eqsl_test_connection,
+        connector_checks::clublog_test_connection,
         set_hunt_target,
         clear_hunt_target,
         fd_log_manual,
@@ -41244,6 +42626,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         open_download_page,
         update_route,
         set_qrz_logbook_key,
+        upload_backlog,
         clear_qrz_logbook_key,
         set_cloudlog_key,
         clear_cloudlog_key,
@@ -41301,6 +42684,10 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         click_tci_spot,
         get_propagation,
         get_path_outlook,
+        get_path_regions,
+        log_path_grades,
+        contact_path_day,
+        path_grading_status,
         get_band_outlook,
         get_getting_out,
         get_aurora,
@@ -41318,7 +42705,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         freq_markers::freq_marker_qsy,
         get_lotw_users_status,
         iota_list::get_iota_list_status,
-        iota_list::set_iota_list_consent,
+        iota_list::set_iota_list_enabled,
         iota_list::get_iota_groups,
         get_iota_offer,
         fetch_lotw_users,
@@ -41441,6 +42828,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             }
             // The TV page's asset + RPC closures read this at call time (see TV_APP).
             let _ = TV_APP.set(app.handle().clone());
+            // The IOTA list tells the windows when a background download changes it.
+            iota_list::set_app(app.handle().clone());
             // Probe the display's physical density HERE, on the main thread, where GDK is safe
             // to call. The frontend reads the cached answer through `display_metrics` and uses
             // it to seed the UI scale cap on a first launch only. No-op off Linux.
@@ -41534,6 +42923,13 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                 if window.label() == panel_label(CONTEST_LOGGER_SLUG, Instance::Main) {
                     if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
                         engine_lock(&engine).contest_entry_share(false);
+                    }
+                }
+                // The SSTV picture viewer is gone: the SSTV screen no longer shows anywhere but
+                // its own screen.
+                if window.label() == panel_label(SSTV_VIEWER_SLUG, Instance::Main) {
+                    if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
+                        engine_lock(&engine).set_sstv_viewer_open(false);
                     }
                 }
             }
@@ -43526,6 +44922,55 @@ mod tests {
         }
     }
 
+    /// The SSTV picture viewer keeps the SSTV screen in its section from the moment its window is
+    /// built to its `Destroyed` event (the engine's flag the decoders' held-leave poll reads; the
+    /// leave command itself also reads the live window). The contest logger's test, below, is the
+    /// pattern.
+    #[test]
+    fn the_sstv_viewer_keeps_its_screen_from_its_open_to_its_destroy() {
+        let src = include_str!("lib.rs");
+        let body = |sig: &str| -> String {
+            let rest = src
+                .split_once(sig)
+                .unwrap_or_else(|| panic!("{sig} is defined"))
+                .1;
+            rest[..rest.find("\n}\n").expect("the end of the function")].to_string()
+        };
+        let open = body("\nasync fn open_panel_window(");
+        let built = open.find("builder.build()").expect("the window is built");
+        let kept = open
+            .find("set_sstv_viewer_open(true)")
+            .expect("opening the viewer keeps the SSTV screen");
+        assert!(built < kept, "only once the window exists");
+        assert!(
+            open[..kept].contains("slug == SSTV_VIEWER_SLUG"),
+            "only the viewer's window"
+        );
+        let build = body("\nfn build_app(");
+        let destroyed = build
+            .find("WindowEvent::Destroyed")
+            .expect("the app handles a window's Destroyed event");
+        let after = &build[destroyed..];
+        let label = after
+            .find("panel_label(SSTV_VIEWER_SLUG, Instance::Main)")
+            .expect("the viewer's own window");
+        assert!(
+            after[label..].contains("set_sstv_viewer_open(false)"),
+            "the viewer window's Destroyed event ends it"
+        );
+        let leave = body("\nfn leave_decoder_screen(");
+        let refreshed = leave
+            .find("set_sstv_viewer_open(")
+            .expect("the command refreshes the viewer from its window");
+        let decided = leave
+            .find(".leave_decoder_screen(")
+            .expect("the command asks the engine");
+        assert!(
+            refreshed < decided,
+            "the command reads the live window before deciding"
+        );
+    }
+
     /// ⭐ THE CONTEST LOGGER WINDOW: its strip shares the contact in progress only if the put is
     /// REGISTERED, the sharing starts when that window is built and ends when it is destroyed,
     /// and all three log commands log through the engine's claim (`contest_log_entry`) — the one
@@ -43800,7 +45245,7 @@ mod tests {
     }
 
     /// ⭐ The host's "Import a laptop's file…" reaches the engine only if its command is REGISTERED
-    /// and goes through `Engine::fd_club_import`, and no Remote dispatcher names either: a club
+    /// and goes through `engine::fd_club_import_in`, and no Remote dispatcher names either: a club
     /// change is refused from afar. POSITIVE CONTROL: the dispatchers read here do name the engine
     /// calls they make.
     #[test]
@@ -43824,7 +45269,10 @@ mod tests {
             .split_once("\n}\n")
             .expect("the end of the command")
             .0;
-        assert!(body.contains(".fd_club_import(&text, &posid)"), "{body}");
+        assert!(
+            body.contains("engine::fd_club_import_in(&state, &text, &posid)"),
+            "{body}"
+        );
         let remote = [
             include_str!("remote_service/operations.rs"),
             include_str!("remote_service/operations/station.rs"),
@@ -47162,6 +48610,793 @@ mod tests {
         }
     }
 
+    /// A gallery folder with `names` in it as pictures, an index naming them, and an engine holding
+    /// the same entries — the state the batch delete starts from.
+    fn batch_gallery(
+        label: &str,
+        names: &[&str],
+    ) -> (std::path::PathBuf, tempo_app::engine::Engine) {
+        let dir = scratch(label);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut entries = Vec::new();
+        for (i, n) in names.iter().enumerate() {
+            let p = dir.join(n);
+            std::fs::write(&p, b"PNG-not-really").unwrap();
+            entries.push(entry(&p, &format!("2026-10-30T10:0{i}:00Z")));
+        }
+        std::fs::write(
+            dir.join("gallery.json"),
+            serde_json::to_string(&entries).unwrap(),
+        )
+        .unwrap();
+        let mut eng = tempo_app::engine::Engine::new("N0CALL", "EN52", 0);
+        eng.load_sstv_gallery(entries);
+        (dir, eng)
+    }
+
+    /// The batch delete takes the Engine lock itself, so hand it the engine behind a mutex and
+    /// take it back afterwards for the assertions.
+    fn delete_batch(
+        eng: &mut tempo_app::engine::Engine,
+        dir: &std::path::Path,
+        paths: &[String],
+    ) -> Vec<super::SstvDeleteFailure> {
+        let engine = std::sync::Mutex::new(std::mem::replace(
+            eng,
+            tempo_app::engine::Engine::new("N0CALL", "EN52", 0),
+        ));
+        let failed = super::delete_sstv_gallery_images(&engine, dir, paths);
+        *eng = engine.into_inner().unwrap();
+        failed
+    }
+
+    /// The single delete takes the Engine lock itself too; the same hand-over as [`delete_batch`].
+    fn delete_one(
+        eng: &mut tempo_app::engine::Engine,
+        dir: &std::path::Path,
+        path: &str,
+    ) -> Result<(), String> {
+        let engine = std::sync::Mutex::new(std::mem::replace(
+            eng,
+            tempo_app::engine::Engine::new("N0CALL", "EN52", 0),
+        ));
+        let got = super::delete_sstv_gallery_image(&engine, dir, path);
+        *eng = engine.into_inner().unwrap();
+        got
+    }
+
+    /// Whether another thread could take the Engine lock while `delete` was writing gallery.json.
+    /// The seam holds the write back and, in the meantime, asks a second thread for the lock, as
+    /// the radio loop or a Stop TX would.
+    fn engine_was_free_during_the_gallery_write(
+        engine: &std::sync::Arc<std::sync::Mutex<tempo_app::engine::Engine>>,
+        delete: impl FnOnce(),
+    ) -> bool {
+        let free = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let taker = std::sync::Arc::new(std::sync::Mutex::new(None));
+        {
+            let (engine, free, taker) = (engine.clone(), free.clone(), taker.clone());
+            tempo_app::sstv_gallery::before_next_write(move || {
+                let (got_tx, got_rx) = std::sync::mpsc::channel();
+                let t = std::thread::spawn(move || {
+                    let _e = engine_lock(&engine);
+                    let _ = got_tx.send(());
+                });
+                let got = got_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .is_ok();
+                *free.lock().unwrap() = Some(got);
+                *taker.lock().unwrap() = Some(t);
+            });
+        }
+        delete();
+        let t = taker.lock().unwrap().take();
+        t.expect("the gallery write ran").join().unwrap();
+        let got = free.lock().unwrap().take();
+        got.expect("the seam ran")
+    }
+
+    /// ⛔ The radio loop takes the Engine lock every tick and Stop TX takes it too, and the gallery
+    /// folder can be a slow OneDrive or network folder. Neither delete may hold the lock while it
+    /// writes gallery.json.
+    #[test]
+    fn the_engine_lock_is_free_while_a_gallery_delete_writes_gallery_json() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-write-off-lock", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let one = dir.join(names[0]).to_string_lossy().into_owned();
+        let two = dir.join(names[1]).to_string_lossy().into_owned();
+        assert!(
+            engine_was_free_during_the_gallery_write(&engine, || {
+                assert_eq!(
+                    super::delete_sstv_gallery_image(&engine, &dir, &one),
+                    Ok(())
+                );
+            }),
+            "the single delete's gallery.json write must not hold the Engine lock"
+        );
+        assert_eq!(index_paths(&dir), vec![two.clone()], "and it landed");
+        assert!(
+            engine_was_free_during_the_gallery_write(&engine, || {
+                assert_eq!(
+                    super::delete_sstv_gallery_images(&engine, &dir, std::slice::from_ref(&two)),
+                    vec![]
+                );
+            }),
+            "the batch delete's gallery.json write must not hold the Engine lock"
+        );
+        assert_eq!(index_paths(&dir), Vec::<String>::new(), "and it landed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Records each step at which a delete touches the gallery folder, and whether another thread
+    /// (the radio loop, a Stop TX) could have taken the Engine lock at that moment.
+    fn record_gallery_disk_work(
+        engine: &std::sync::Arc<std::sync::Mutex<tempo_app::engine::Engine>>,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<(&'static str, bool)>>> {
+        let steps = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (engine, seen) = (engine.clone(), steps.clone());
+        super::ON_GALLERY_DISK_WORK.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |step| {
+                let engine = engine.clone();
+                let free = std::thread::spawn(move || engine.try_lock().is_ok())
+                    .join()
+                    .unwrap();
+                seen.borrow_mut().push((step, free));
+            }));
+        });
+        steps
+    }
+
+    /// ⛔ The gallery folder can be a slow OneDrive or network folder, where every file lookup is a
+    /// round trip, and the radio loop and Stop TX wait on the Engine lock. Neither delete may hold
+    /// the lock while it resolves the gallery's pictures, removes a file or reads the folder back:
+    /// a delete clicked during an over must never hold off the unkey.
+    #[test]
+    fn the_engine_lock_is_free_while_a_gallery_delete_reads_and_removes_files() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+            "20261030T100200Z_pd120.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-disk-off-lock", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let paths: Vec<String> = names
+            .iter()
+            .map(|n| dir.join(n).to_string_lossy().into_owned())
+            .collect();
+        let steps = record_gallery_disk_work(&engine);
+
+        assert_eq!(
+            super::delete_sstv_gallery_image(&engine, &dir, &paths[0]),
+            Ok(())
+        );
+        assert_eq!(
+            steps.take(),
+            vec![("membership", true), ("unlink", true), ("reconcile", true)],
+            "the single delete's file work must not hold the Engine lock"
+        );
+        assert_eq!(
+            super::delete_sstv_gallery_images(&engine, &dir, &paths[1..]),
+            vec![]
+        );
+        assert_eq!(
+            steps.take(),
+            vec![
+                ("membership", true),
+                ("unlink", true),
+                ("unlink", true),
+                ("reconcile", true)
+            ],
+            "the batch delete's file work must not hold the Engine lock"
+        );
+        super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+
+        assert_eq!(index_paths(&dir), Vec::<String>::new());
+        assert!(engine_lock(&engine).sstv_gallery().is_empty());
+        assert!(names.iter().all(|n| !dir.join(n).exists()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The folder is read with the Engine lock released, so the decoder can finish a picture while
+    /// a delete reads it. That picture must keep everything the decoder knew (its FSK ID, its
+    /// frequency), and the deleted one must stay gone. Applying the folder read wholesale would
+    /// lose the arrival, or keep only a bare re-adopted copy of it.
+    #[test]
+    fn a_picture_received_while_a_gallery_delete_reads_the_folder_keeps_its_fsk_id() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        for batch in [false, true] {
+            let (dir, eng) = batch_gallery(&format!("sstv-read-arrival-{batch}"), &names);
+            let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+            let arrival = dir
+                .join("20261030T100500Z_pd120.png")
+                .to_string_lossy()
+                .into_owned();
+            {
+                let (engine, arrival) = (engine.clone(), arrival.clone());
+                super::ON_GALLERY_DISK_WORK.with(|h| {
+                    *h.borrow_mut() = Some(Box::new(move |step| {
+                        if step != "reconcile" {
+                            return;
+                        }
+                        // What the decode thread does for a finished picture and its FSK ID.
+                        std::fs::write(&arrival, b"PNG-not-really").unwrap();
+                        let mut e = engine_lock(&engine);
+                        let mut got = entry(std::path::Path::new(&arrival), "2026-10-30T10:05:00Z");
+                        got.freq_mhz = 14.233;
+                        e.push_sstv_gallery(got);
+                        e.set_sstv_gallery_fsk_id(&arrival, "K1ABC".into());
+                    }));
+                });
+            }
+            let gone = dir.join(names[0]).to_string_lossy().into_owned();
+            let kept = dir.join(names[1]).to_string_lossy().into_owned();
+            if batch {
+                assert_eq!(
+                    super::delete_sstv_gallery_images(&engine, &dir, std::slice::from_ref(&gone)),
+                    vec![]
+                );
+            } else {
+                assert_eq!(
+                    super::delete_sstv_gallery_image(&engine, &dir, &gone),
+                    Ok(())
+                );
+            }
+            super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+
+            let text = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+            let on_disk: Vec<tempo_app::dto::SstvGalleryEntry> =
+                serde_json::from_str(&text).unwrap();
+            let in_memory = engine_lock(&engine).sstv_gallery().to_vec();
+            for (label, gallery) in [("on disk", &on_disk), ("in memory", &in_memory)] {
+                let paths: Vec<&str> = gallery.iter().map(|e| e.path.as_str()).collect();
+                assert_eq!(
+                    paths,
+                    vec![kept.as_str(), arrival.as_str()],
+                    "batch {batch}, {label}: the arrival is kept and the deleted picture stays deleted"
+                );
+                assert_eq!(
+                    gallery[1].fsk_id.as_deref(),
+                    Some("K1ABC"),
+                    "batch {batch}, {label}: the arrival keeps its FSK ID"
+                );
+                assert_eq!(gallery[1].freq_mhz, 14.233, "batch {batch}, {label}");
+            }
+            assert!(!dir.join(names[0]).exists());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Two deletes at once must not resurrect a picture. A delete reads the folder with the Engine
+    /// lock released and then adopts files its copy did not list; a picture received after that
+    /// copy and deleted by a second delete before the first relocks would come back as an entry
+    /// with no file. So deletes run one at a time: a second delete (B) waits while the first (A)
+    /// is between its copy and its relock, and the picture B deletes stays deleted.
+    #[test]
+    fn a_second_gallery_delete_waits_for_the_first_and_its_picture_stays_deleted() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-two-deletes", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let a = dir.join(names[0]).to_string_lossy().into_owned();
+        let z = dir
+            .join("20261030T100500Z_pd120.png")
+            .to_string_lossy()
+            .into_owned();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let b_ran_while_a_was_parked = std::rc::Rc::new(std::cell::Cell::new(None));
+        let b_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        {
+            let (engine, dir, z) = (engine.clone(), dir.clone(), z.clone());
+            let (seen, b_thread) = (b_ran_while_a_was_parked.clone(), b_thread.clone());
+            super::ON_GALLERY_DISK_WORK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |step| {
+                    if step != "reconcile" {
+                        return;
+                    }
+                    // A has its copy and has not read the folder. The decoder finishes Z...
+                    std::fs::write(&z, b"PNG-not-really").unwrap();
+                    engine_lock(&engine)
+                        .push_sstv_gallery(entry(std::path::Path::new(&z), "2026-10-30T10:05:00Z"));
+                    // ...and B deletes it from another thread.
+                    let (engine, dir, z, done_tx) =
+                        (engine.clone(), dir.clone(), z.clone(), done_tx.clone());
+                    *b_thread.borrow_mut() = Some(std::thread::spawn(move || {
+                        let got = super::delete_sstv_gallery_image(&engine, &dir, &z);
+                        // Only a signal; nobody listens once A has moved on.
+                        let _ = done_tx.send(());
+                        got
+                    }));
+                    seen.set(Some(
+                        done_rx
+                            .recv_timeout(std::time::Duration::from_secs(1))
+                            .is_ok(),
+                    ));
+                }));
+            });
+        }
+        assert_eq!(super::delete_sstv_gallery_image(&engine, &dir, &a), Ok(()));
+        super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+        assert_eq!(
+            b_ran_while_a_was_parked.get(),
+            Some(false),
+            "the second delete must wait while the first is between its copy and its relock"
+        );
+        let b_thread = b_thread.borrow_mut().take().unwrap();
+        assert_eq!(b_thread.join().unwrap(), Ok(()), "B's delete then runs");
+
+        let kept = dir.join(names[1]).to_string_lossy().into_owned();
+        let mem: Vec<String> = engine_lock(&engine)
+            .sstv_gallery()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        assert_eq!(mem, vec![kept.clone()], "in memory");
+        assert_eq!(index_paths(&dir), vec![kept], "on disk");
+        assert!(!std::path::Path::new(&z).exists(), "B removed Z's file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The adoption takes only files the delete's copy did not list. A picture the copy listed and
+    /// the gallery no longer has at the relock was removed by another delete in between, and must
+    /// not come back, even though the folder read still saw its file.
+    #[test]
+    fn a_picture_another_delete_removed_during_the_folder_read_does_not_come_back() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+            "20261030T100200Z_pd120.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-listed-removed", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let x = dir.join(names[0]).to_string_lossy().into_owned();
+        let y = dir.join(names[1]).to_string_lossy().into_owned();
+        {
+            let (engine, y) = (engine.clone(), y.clone());
+            super::ON_GALLERY_DISK_WORK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |step| {
+                    if step == "reconcile" {
+                        // The other delete's relock; its unlink lands after this read.
+                        engine_lock(&engine).remove_sstv_gallery(&y);
+                    }
+                }));
+            });
+        }
+        assert_eq!(super::delete_sstv_gallery_image(&engine, &dir, &x), Ok(()));
+        super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+        std::fs::remove_file(&y).unwrap();
+        let c = dir.join(names[2]).to_string_lossy().into_owned();
+        let mem: Vec<String> = engine_lock(&engine)
+            .sstv_gallery()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        assert_eq!(mem, vec![c.clone()], "in memory");
+        assert_eq!(index_paths(&dir), vec![c], "on disk");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn index_paths(dir: &std::path::Path) -> Vec<String> {
+        let text = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+        serde_json::from_str::<Vec<tempo_app::dto::SstvGalleryEntry>>(&text)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.path)
+            .collect()
+    }
+
+    /// "Delete selected" removes exactly the pictures asked for, keeps the rest, and rewrites
+    /// gallery.json once for the whole batch.
+    #[test]
+    fn the_batch_delete_removes_exactly_the_selected_pictures_and_writes_the_index_once() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+            "20261030T100200Z_pd120.png",
+        ];
+        let (dir, mut eng) = batch_gallery("sstv-batch", &names);
+        let gone: Vec<String> = [names[0], names[2]]
+            .iter()
+            .map(|n| dir.join(n).to_string_lossy().into_owned())
+            .collect();
+        let kept = dir.join(names[1]).to_string_lossy().into_owned();
+
+        super::SSTV_INDEX_WRITES.with(|n| n.set(0));
+        let failed = delete_batch(&mut eng, &dir, &gone);
+
+        assert_eq!(
+            failed,
+            vec![],
+            "every selected picture was inside the folder"
+        );
+        assert!(!dir.join(names[0]).exists() && !dir.join(names[2]).exists());
+        assert!(
+            dir.join(names[1]).exists(),
+            "an unselected picture must stay"
+        );
+        assert_eq!(index_paths(&dir), vec![kept.clone()], "the index on disk");
+        let in_memory: Vec<String> = eng.sstv_gallery().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(in_memory, vec![kept], "and the gallery the UI reads");
+        assert_eq!(
+            super::SSTV_INDEX_WRITES.with(|n| n.get()),
+            1,
+            "two pictures deleted, one index rewrite"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ The negative control: a path outside the gallery folder is refused and the file stays,
+    /// and so is one that walks out with `..`. The pictures that were inside are still deleted,
+    /// and the refusals come back with their reasons.
+    #[test]
+    fn the_batch_delete_refuses_a_path_outside_the_gallery_and_reports_each_failure() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, mut eng) = batch_gallery("sstv-batch-out", &names);
+        let outside_dir = scratch("sstv-batch-outside");
+        let _ = std::fs::remove_dir_all(&outside_dir);
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        let outside = outside_dir.join("not-a-picture.txt");
+        std::fs::write(&outside, b"keep me").unwrap();
+        let walk_out = dir
+            .join("..")
+            .join(outside_dir.file_name().unwrap())
+            .join("not-a-picture.txt");
+        let inside = dir.join(names[0]).to_string_lossy().into_owned();
+        let missing = dir.join("never-there.png").to_string_lossy().into_owned();
+        let paths = vec![
+            outside.to_string_lossy().into_owned(),
+            inside.clone(),
+            walk_out.to_string_lossy().into_owned(),
+            missing.clone(),
+        ];
+
+        super::SSTV_INDEX_WRITES.with(|n| n.set(0));
+        let failed = delete_batch(&mut eng, &dir, &paths);
+
+        assert!(
+            outside.exists(),
+            "a file outside the gallery folder must never be deleted"
+        );
+        assert!(
+            !dir.join(names[0]).exists(),
+            "the picture that was inside is deleted"
+        );
+        assert!(dir.join(names[1]).exists(), "the unselected one stays");
+        let failed_paths: Vec<&str> = failed.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            failed_paths,
+            vec![paths[0].as_str(), paths[2].as_str(), missing.as_str()],
+            "each failure, in the order asked"
+        );
+        assert_eq!(
+            failed[0].reason,
+            "That file is not in the SSTV gallery folder"
+        );
+        assert_eq!(
+            failed[1].reason,
+            "That file is not in the SSTV gallery folder"
+        );
+        assert!(
+            failed[2].reason.starts_with("Could not find"),
+            "{}",
+            failed[2].reason
+        );
+        assert_eq!(
+            index_paths(&dir),
+            vec![dir.join(names[1]).to_string_lossy().into_owned()]
+        );
+        assert_eq!(super::SSTV_INDEX_WRITES.with(|n| n.get()), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside_dir);
+    }
+
+    /// Nothing removed, nothing rewritten: a batch that deleted no picture leaves the index alone.
+    #[test]
+    fn a_batch_that_deletes_nothing_leaves_the_index_alone() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-none", &names);
+        let before = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+        super::SSTV_INDEX_WRITES.with(|n| n.set(0));
+        let failed = delete_batch(
+            &mut eng,
+            &dir,
+            &[dir.join("gone.png").to_string_lossy().into_owned()],
+        );
+        assert_eq!(failed.len(), 1);
+        assert_eq!(super::SSTV_INDEX_WRITES.with(|n| n.get()), 0);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("gallery.json")).unwrap(),
+            before
+        );
+        assert!(dir.join(names[0]).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ Inside the folder is not enough: only a picture the gallery lists can be deleted. An
+    /// operator's own file kept in the folder and the gallery's index itself are refused and stay;
+    /// the real picture in the same batch is still deleted.
+    #[test]
+    fn the_batch_delete_refuses_a_file_in_the_folder_that_is_not_a_gallery_picture() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-member", &names);
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"the operator's notes").unwrap();
+        let index = dir.join("gallery.json");
+        let picture = dir.join(names[0]);
+        let paths: Vec<String> = [&notes, &index, &picture]
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+
+        let failed = delete_batch(&mut eng, &dir, &paths);
+
+        assert!(notes.exists(), "a file the gallery does not list must stay");
+        assert!(index.exists(), "the gallery index must stay");
+        assert!(!picture.exists(), "the gallery picture is deleted");
+        let failed_paths: Vec<&str> = failed.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(failed_paths, vec![paths[0].as_str(), paths[1].as_str()]);
+        for f in &failed {
+            assert_eq!(f.reason, "That file is not a picture in the SSTV gallery");
+        }
+        assert_eq!(index_paths(&dir), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The single delete makes the same refusal, through the same check, and still deletes a
+    /// picture the gallery lists.
+    #[test]
+    fn the_single_delete_refuses_a_file_in_the_folder_that_is_not_a_gallery_picture() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-single-member", &names);
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"the operator's notes").unwrap();
+        let index = dir.join("gallery.json");
+
+        for refused in [&notes, &index] {
+            let got = delete_one(&mut eng, &dir, &refused.to_string_lossy());
+            assert_eq!(
+                got,
+                Err("That file is not a picture in the SSTV gallery".to_string())
+            );
+            assert!(refused.exists(), "{} must stay", refused.display());
+        }
+        let picture = dir.join(names[0]);
+        assert_eq!(
+            delete_one(&mut eng, &dir, &picture.to_string_lossy()),
+            Ok(())
+        );
+        assert!(!picture.exists(), "the gallery picture is deleted");
+        assert!(eng.sstv_gallery().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same picture asked for twice is deleted once and is not reported as a failure.
+    #[test]
+    fn a_duplicate_path_in_the_gallery_batch_is_harmless() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, mut eng) = batch_gallery("sstv-batch-dup", &names);
+        let twice = dir.join(names[0]).to_string_lossy().into_owned();
+
+        let failed = delete_batch(&mut eng, &dir, &[twice.clone(), twice]);
+
+        assert_eq!(failed, vec![]);
+        assert!(!dir.join(names[0]).exists());
+        assert!(dir.join(names[1]).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The batch delete lets go of the Engine while it unlinks, so the decoder can finish a picture
+    /// in between. That picture must come through with everything the decoder knew about it (its
+    /// FSK ID here; frequency and line count likewise), and the picture the batch removed must not
+    /// come back. Writing back the gallery as it stood before the unlinks would lose the FSK ID:
+    /// the arrival would survive only because the folder scan re-adopts its file, bare.
+    #[test]
+    fn a_picture_received_during_a_gallery_batch_delete_keeps_its_fsk_id_and_the_deleted_one_stays_gone(
+    ) {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-arrival", &names);
+        let arrival = dir.join("20261030T100500Z_robot36.png");
+        let arrival_path = arrival.to_string_lossy().into_owned();
+        {
+            let arrival_path = arrival_path.clone();
+            super::BEFORE_BATCH_RELOCK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |engine| {
+                    // What the decode thread does for a finished picture and its trailing FSK ID.
+                    std::fs::write(&arrival_path, b"PNG-not-really").unwrap();
+                    let mut e = engine.lock().unwrap();
+                    let mut got =
+                        entry(std::path::Path::new(&arrival_path), "2026-10-30T10:05:00Z");
+                    got.freq_mhz = 14.233;
+                    e.push_sstv_gallery(got);
+                    e.set_sstv_gallery_fsk_id(&arrival_path, "K1ABC".into());
+                }));
+            });
+        }
+
+        let gone = dir.join(names[0]).to_string_lossy().into_owned();
+        let failed = delete_batch(&mut eng, &dir, std::slice::from_ref(&gone));
+
+        assert_eq!(failed, vec![]);
+        let text = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+        let on_disk: Vec<tempo_app::dto::SstvGalleryEntry> = serde_json::from_str(&text).unwrap();
+        for (label, gallery) in [
+            ("on disk", on_disk.as_slice()),
+            ("in memory", eng.sstv_gallery()),
+        ] {
+            let paths: Vec<&str> = gallery.iter().map(|e| e.path.as_str()).collect();
+            assert_eq!(
+                paths,
+                vec![arrival_path.as_str()],
+                "{label}: the arrival is kept and the deleted picture stays deleted"
+            );
+            assert_eq!(
+                gallery[0].fsk_id.as_deref(),
+                Some("K1ABC"),
+                "{label}: the arrival keeps its FSK ID"
+            );
+            assert_eq!(gallery[0].freq_mhz, 14.233, "{label}: and its frequency");
+        }
+        assert!(!dir.join(names[0]).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two builds can share one gallery folder. The index rewrite must not write through another
+    /// writer's scratch file (the fixed name earlier builds use): two writes in one file can be
+    /// published as a mix of both, which loads as an empty gallery.
+    #[test]
+    fn a_gallery_delete_leaves_another_writers_scratch_file_alone() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-other-writer", &names);
+        let theirs = dir.join("gallery.json.tmp");
+        std::fs::write(&theirs, "[{\"path\":").unwrap();
+        let picture = dir.join(names[0]).to_string_lossy().into_owned();
+        assert_eq!(delete_one(&mut eng, &dir, &picture), Ok(()));
+        assert_eq!(
+            std::fs::read_to_string(&theirs).ok().as_deref(),
+            Some("[{\"path\":"),
+            "another writer's half-written scratch file must not be overwritten or moved"
+        );
+        assert_eq!(
+            index_paths(&dir),
+            Vec::<String>::new(),
+            "this rewrite still landed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symbolic link is never a gallery picture, whatever it is named and wherever it points:
+    /// the folder scan does not adopt one, an index entry that is one drops out, and a delete that
+    /// names one (or names the file a listed link points at) is refused with both files left.
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_in_the_gallery_folder_is_never_a_picture() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-symlink", &names);
+        let picture = dir.join(names[0]);
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"the operator's notes").unwrap();
+        // A link named like a picture pointing at a listed picture, one pointing at the notes,
+        // and a dangling one.
+        let to_picture = dir.join("20261030T100100Z_robot36.png");
+        let to_notes = dir.join("20261030T100200Z_pd120.png");
+        let dangling = dir.join("20261030T100300Z_martin1.bmp");
+        std::os::unix::fs::symlink(&picture, &to_picture).unwrap();
+        std::os::unix::fs::symlink(&notes, &to_notes).unwrap();
+        std::os::unix::fs::symlink(dir.join("gone.png"), &dangling).unwrap();
+
+        // The folder scan adopts the real picture only.
+        let adopted: Vec<String> = reconcile_gallery(&dir, Vec::new())
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(adopted, vec![picture.to_string_lossy().into_owned()]);
+
+        // An index that already lists a link drops it.
+        let mut listed = eng.sstv_gallery().to_vec();
+        listed.push(entry(&to_notes, "2026-10-30T10:02:00Z"));
+        let kept: Vec<String> = reconcile_gallery(&dir, listed.clone())
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(kept, vec![picture.to_string_lossy().into_owned()]);
+
+        // Delete: a link that points at a listed picture is refused, and neither goes.
+        eng.load_sstv_gallery(listed);
+        let not_a_picture = Err("That file is not a picture in the SSTV gallery".to_string());
+        assert_eq!(
+            delete_one(&mut eng, &dir, &to_picture.to_string_lossy()),
+            not_a_picture
+        );
+        assert!(
+            picture.is_file(),
+            "the picture the link points at must stay"
+        );
+        assert!(
+            std::fs::symlink_metadata(&to_picture).is_ok(),
+            "and so does the link"
+        );
+        // A listed link does not make the file it points at a picture.
+        assert_eq!(
+            delete_one(&mut eng, &dir, &notes.to_string_lossy()),
+            not_a_picture
+        );
+        assert!(notes.is_file(), "the operator's notes must stay");
+        // Positive control: the real picture still deletes.
+        assert_eq!(
+            delete_one(&mut eng, &dir, &picture.to_string_lossy()),
+            Ok(())
+        );
+        assert!(!picture.exists());
+        assert!(
+            index_paths(&dir).is_empty(),
+            "no link is listed after the rewrite: {:?}",
+            index_paths(&dir)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A picture the OS will not let go of stays listed, on disk and in memory, while the others in
+    /// the batch are removed from both: gallery.json always matches the folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_gallery_picture_that_cannot_be_deleted_stays_in_the_index_while_the_rest_go() {
+        use std::os::unix::fs::PermissionsExt;
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-stuck", &names);
+        let held = dir.join("held");
+        std::fs::create_dir_all(&held).unwrap();
+        let stuck = held.join("20261030T100100Z_robot36.png");
+        std::fs::write(&stuck, b"PNG-not-really").unwrap();
+        let mut entries = eng.sstv_gallery().to_vec();
+        entries.push(entry(&stuck, "2026-10-30T10:01:00Z"));
+        eng.load_sstv_gallery(entries);
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root ignores the read-only folder, so there is nothing to refuse there.
+        if std::fs::write(held.join("probe"), b"").is_ok() {
+            eprintln!("skipped: running as root, a read-only folder refuses nothing");
+            let _ = std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let gone = dir.join(names[0]).to_string_lossy().into_owned();
+        let stuck_path = stuck.to_string_lossy().into_owned();
+
+        let failed = delete_batch(&mut eng, &dir, &[gone.clone(), stuck_path.clone()]);
+        let _ = std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755));
+
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].path, stuck_path);
+        assert!(
+            failed[0].reason.starts_with("Could not delete"),
+            "{}",
+            failed[0].reason
+        );
+        assert!(stuck.exists() && !dir.join(names[0]).exists());
+        assert_eq!(
+            index_paths(&dir),
+            vec![stuck_path.clone()],
+            "the index on disk"
+        );
+        let in_memory: Vec<String> = eng.sstv_gallery().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(in_memory, vec![stuck_path], "and the gallery the UI reads");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ISSUE #23, first half: deleting a `.bmp` by hand left a thumbnail over nothing, because the
     /// startup seed handed the index straight to the gallery without stat'ing a single file.
     #[test]
@@ -48321,7 +50556,7 @@ mod tests {
         "contests::parse_contest_rss",
         "dxped::cached_active_calls",
         "dxped::call_matches",
-        "dxped::set_clublog_key",
+        "dxped::set_cache_dir",
         "lotw_users::parse_user_activity",
         "tle::parse_mirror_manifest",
         "tle::tle_bird_ok",
@@ -48452,6 +50687,77 @@ mod tests {
         }
         offenders.dedup();
         offenders
+    }
+
+    /// A logged contact takes each space-weather number only when it is a reading, each with its
+    /// own stamp (the engine judges the stamps against the contact's time): the Kp and its sample
+    /// time, NOAA's daily A with its day (never the Kp-derived estimate), the SFI and when it was
+    /// measured. A stand-in gives `None`, so the field is left off.
+    #[test]
+    fn a_contact_takes_only_measured_space_weather() {
+        let now = 1_761_800_000;
+        let wx = propagation::SpaceWx {
+            sfi: 89.0,
+            ssn: None,
+            kp: 0.67,
+            a_index: 4.0,
+            xray_long: 2.1e-7,
+        };
+        let all = propagation::model::SpaceWxStamps {
+            sfi_at: Some(now - 6 * 3600),
+            kp_at: Some(now - 360),
+            xray_at: Some(now - 240),
+            a_day: Some(now / 86_400 * 86_400 - 86_400),
+        };
+        let u = |t: i64| t as u64;
+        let day = now / 86_400 * 86_400;
+        let table = [(day - 2 * 86_400, 7.0), (day - 86_400, 4.0)];
+        assert_eq!(
+            crate::space_wx_for_log(&wx, &all, &table),
+            (
+                Some((0.67, u(now - 360))),
+                vec![(7.0, u(day - 2 * 86_400)), (4.0, u(day - 86_400))],
+                Some((89.0, u(now - 6 * 3600)))
+            )
+        );
+        // Every number a stand-in: nothing.
+        let none = propagation::model::SpaceWxStamps::default();
+        assert_eq!(
+            crate::space_wx_for_log(&wx, &none, &[]),
+            (None, vec![], None)
+        );
+    }
+
+    /// The polar-cap edge sits at a MEASURED Kp only: none on a cold cache, none on a snapshot
+    /// whose Kp is the stand-in, the reading when it is one.
+    #[test]
+    fn the_pca_edge_needs_a_measured_kp() {
+        let mut snap = propagation::offline(1_761_800_000, "K1ABC", "FN31").space_wx;
+        snap.kp = 2.0; // the stand-in a failed fetch leaves
+        let now = 1_761_800_000;
+        assert_eq!(crate::pca_kp(None, now), None, "cold cache");
+        assert_eq!(crate::pca_kp(Some(&snap), now), None, "stand-in Kp");
+        snap.kp = 5.33;
+        snap.stamps.kp_at = Some(1_761_799_700);
+        assert_eq!(crate::pca_kp(Some(&snap), now), Some(5.33_f32 as f64));
+        // A cached snapshot's measured Kp from two hours ago places no edge.
+        snap.stamps.kp_at = Some(now - 2 * 3600);
+        assert_eq!(crate::pca_kp(Some(&snap), now), None, "an hours-old Kp");
+    }
+
+    /// A KC2G set served after a failed refetch is older by the time since it was fetched.
+    #[test]
+    fn a_stale_kc2g_set_ages() {
+        let st = propagation::MufStation {
+            lat: 40.0,
+            lon: -105.0,
+            muf_mhz: Some(18.0),
+            fof2_mhz: Some(6.0),
+            age_secs: 300,
+            confidence: None,
+        };
+        let aged = crate::kc2g_aged(&[st], 3600);
+        assert_eq!(aged[0].age_secs, 3900);
     }
 
     /// A command body runs on a runtime WORKER — an `async fn`, or a sync fn under
@@ -54013,6 +56319,128 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// What eQSL's transport hands back for a step-1 `page` that is not the built page, as
+    /// [`propagation::live::eqsl::fetch_inbox`] maps it.
+    fn eqsl_step1_answer(page: &str) -> Result<String, String> {
+        tempo_core::eqsl::not_built_answer(page)
+            .map(str::to_string)
+            .map_err(str::to_string)
+    }
+
+    const EQSL_NO_ENTRIES: &str = "<html><body>You have no log entries</body></html>";
+    const EQSL_REFUSED: &str = "<html><H3>Error: No such Username/Password found</H3></html>";
+    const EQSL_UNKNOWN_PAGE: &str = "<html><body>eQSL is down for maintenance.</body></html>";
+
+    /// eQSL answers a whole-InBox check of an account with no cards with "You have no log
+    /// entries". That is the InBox, empty: the check reads it, holding nothing, as it reads LoTW's
+    /// empty history. Controls: a refused login and an unknown page still fail the check.
+    #[test]
+    fn an_eqsl_inbox_with_no_log_entries_checks_empty() {
+        let (dir, engine, _) = check_scene("check-eqsl-no-entries");
+        let checks = crate::ConfirmationChecks::default();
+        let session = checks.start("main");
+        let fetched = |page: &'static str| {
+            crate::checked_and_held(
+                &checks,
+                session,
+                tempo_core::reconcile::check::Channel::Eqsl,
+                || crate::eqsl_check_on(&engine, &test_eqsl(), &|_| eqsl_step1_answer(page)),
+            )
+        };
+        let empty = fetched(EQSL_NO_ENTRIES).expect("an empty InBox checks");
+        assert_eq!((empty.records, empty.lines.len()), (0, 0));
+        for page in [EQSL_REFUSED, EQSL_UNKNOWN_PAGE] {
+            assert_eq!(
+                fetched(page).map(|dto| dto.records),
+                Err(eqsl_step1_answer(page).unwrap_err()),
+                "{page}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One eQSL download of `page`'s answer for the account K2DEF syncs as, from the cursor
+    /// `202610010000`, with every settings change it saves kept in `saved`.
+    fn eqsl_synced(
+        engine: &SharedEngine,
+        answer: Result<String, String>,
+        saved: &std::cell::RefCell<Vec<crate::Settings>>,
+    ) -> Result<crate::LotwSyncResult, String> {
+        {
+            let mut eng = engine.lock().unwrap();
+            let s = crate::Settings {
+                eqsl_username: "k2def-test".into(),
+                eqsl_qth_nickname: "Home".into(),
+                ..eng.settings().clone()
+            };
+            eng.apply_settings(s);
+            eng.set_eqsl_cursor("202610010000".into());
+        }
+        crate::download_eqsl_report_on(
+            engine,
+            "k2def-test".into(),
+            "Home".into(),
+            "202610010000".into(),
+            "not-a-password".into(),
+            CHECKED_AT as i64,
+            &|url| {
+                assert!(url.ends_with("&RcvdSince=202610010000"), "from the cursor");
+                answer.clone()
+            },
+            &|s| saved.borrow_mut().push(s),
+        )
+    }
+
+    /// ★ A download with nothing new since the cursor is a sync that found nothing, not an error.
+    /// eQSL answers it with "You have no log entries" where it would otherwise build the file, and
+    /// it ends the way a download of an InBox file holding no cards ends: no new confirmations,
+    /// and the cursor moved to this sync's start less the margin, once and saved. Controls: a
+    /// refused login and an unknown page fail with their own words and leave the cursor alone.
+    #[test]
+    fn an_eqsl_download_with_nothing_new_succeeds_and_moves_the_cursor_once() {
+        let (dir, engine) = store_holding(
+            "eqsl-nothing-new",
+            &tempo_core::logbook::parse_adif(&check_row("W1AW", "20m", "FT8", "180000", "")),
+        );
+        let moved_to =
+            tempo_core::eqsl::format_rcvd_since(CHECKED_AT as i64 - crate::EQSL_RCVD_MARGIN_SECS);
+        let ended = |answer: Result<String, String>| {
+            let saved = std::cell::RefCell::new(Vec::new());
+            let synced = eqsl_synced(&engine, answer, &saved)
+                .map(|r| (r.newly_confirmed, r.newly_confirmed_any, r.orphans.len()));
+            let saved: Vec<String> = saved
+                .into_inner()
+                .into_iter()
+                .map(|s| s.eqsl_last_sync)
+                .collect();
+            let held = engine.lock().unwrap().settings().eqsl_last_sync.clone();
+            (synced, saved, held)
+        };
+        let nothing_new = ended(eqsl_step1_answer(EQSL_NO_ENTRIES));
+        assert_eq!(
+            nothing_new,
+            (Ok((0, 0, 0)), vec![moved_to.clone()], moved_to.clone()),
+            "eQSL's \"no log entries\""
+        );
+        assert_eq!(
+            ended(Ok(eqsl_answer(&[]))),
+            nothing_new,
+            "control: the same as an InBox file holding no cards"
+        );
+        for page in [EQSL_REFUSED, EQSL_UNKNOWN_PAGE] {
+            assert_eq!(
+                ended(eqsl_step1_answer(page)),
+                (
+                    Err(eqsl_step1_answer(page).unwrap_err()),
+                    vec![],
+                    "202610010000".to_string()
+                ),
+                "control: {page}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Logbook ▸ Check confirmations reaches the backend only through its four commands, each
     /// DEFINED as an `async fn` — so none runs on the UI thread, and the census scans above read
     /// every one of them — and REGISTERED: a name missing from `generate_handler!` fails at
@@ -58518,6 +60946,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// LoTW's answer to a wrong username or password: its sign-in page, sent with HTTP 200 in
+    /// place of the report.
+    const LOTW_SIGN_IN_PAGE: &str = "<html><title>ARRL's Logbook of The World</title><body>\
+        <p>Log on to Logbook of The World -- LoTW</p>\
+        <p class=\"error\">Username/password incorrect</p></body></html>";
+
+    /// A wrong LoTW password is called one. LoTW answers it with its sign-in page, HTTP 200, so
+    /// the download used to say the username and password were fine.
+    #[test]
+    fn a_wrong_lotw_password_is_called_one_on_a_first_download() {
+        let (dir, engine) = sweep_scene("lotw-sign-in-first");
+        let mut lotw = LargeLotw::scene();
+        lotw.years.insert(2026, LOTW_SIGN_IN_PAGE.to_string());
+        let saved = std::cell::RefCell::new(Vec::new());
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("the login is refused");
+        assert!(
+            e.contains("LoTW did not accept your username or password"),
+            "{e}"
+        );
+        assert!(!e.contains("are fine"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same on a download from a cursor.
+    #[test]
+    fn a_wrong_lotw_password_is_called_one_on_a_later_download() {
+        let (dir, engine) = sweep_scene("lotw-sign-in-later");
+        let mut lotw = LargeLotw::scene();
+        let saved = std::cell::RefCell::new(Vec::new());
+        fetch_lotw(&engine, &lotw, &saved).expect("the first download");
+        lotw.since_answer = LOTW_SIGN_IN_PAGE.to_string();
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("the login is refused");
+        assert!(
+            e.contains("LoTW did not accept your username or password"),
+            "{e}"
+        );
+        assert!(!e.contains("are fine"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Control: a page that is neither the report nor the sign-in page is not called a wrong
+    /// password, and the credentials are not vouched for either.
+    #[test]
+    fn a_lotw_page_that_is_not_a_report_blames_neither_way() {
+        let (dir, engine) = sweep_scene("lotw-not-a-report");
+        let mut lotw = LargeLotw::scene();
+        lotw.years.insert(
+            2026,
+            "<html><body>Down for maintenance</body></html>".to_string(),
+        );
+        let saved = std::cell::RefCell::new(Vec::new());
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("not a report");
+        assert!(
+            e.contains("LoTW answered with a page that isn't a report"),
+            "{e}"
+        );
+        assert!(!e.contains("are fine"), "{e}");
+        assert!(!e.contains("did not accept"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A year whose download stops before LoTW's end marker is not in: its place is not passed.
     #[test]
     fn a_year_cut_short_is_not_passed() {
@@ -59496,5 +61985,677 @@ mod secrets_toward_remote_tests {
             tempo_core::clublog::ClubLogResult::Duplicate,
             "CONTROL"
         );
+    }
+}
+
+/// The first login's question ("Send N contacts not yet sent to <service>?") is the station's to
+/// answer: the answer rides on the login's own save, which another computer driving the station
+/// cannot make, and so is the count it is asked from.
+#[cfg(test)]
+mod upload_backlog_tests {
+    use tempo_app::engine::upload_legs;
+    use tempo_client::classes::{class_of, Class};
+
+    #[test]
+    fn only_the_station_answers_the_first_logins_question() {
+        for command in [
+            "set_qrz_logbook_key",
+            "set_clublog_password",
+            "set_eqsl_password",
+            "upload_backlog",
+        ] {
+            assert_eq!(class_of(command), Some(Class::RefusedHere), "{command}");
+        }
+    }
+
+    #[test]
+    fn the_question_is_asked_of_the_three_services_with_an_upload_record() {
+        assert_eq!(
+            super::backlog_service("qrz"),
+            Ok((
+                upload_legs::QRZ,
+                super::QRZ_LOGBOOK_KEYCHAIN_USER,
+                "QRZ Logbook"
+            ))
+        );
+        assert_eq!(
+            super::backlog_service("clublog"),
+            Ok((
+                upload_legs::CLUBLOG,
+                super::CLUBLOG_KEYCHAIN_USER,
+                "ClubLog"
+            ))
+        );
+        assert_eq!(
+            super::backlog_service("eqsl"),
+            Ok((upload_legs::EQSL, super::EQSL_KEYCHAIN_USER, "eQSL"))
+        );
+        assert!(super::backlog_service("hrdlog").is_err());
+    }
+
+    /// Three contacts from 2019, as an import from another program brings them: sent nowhere.
+    const OLD_LOG: &str = "<EOH>\n\
+        <CALL:5>W1OLD<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20190601<TIME_ON:6>120000<EOR>\n\
+        <CALL:5>W2OLD<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20190602<TIME_ON:6>120000<EOR>\n\
+        <CALL:5>W3OLD<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20190603<TIME_ON:6>120000<EOR>\n";
+
+    const QRZ: super::UploadLogin = super::UploadLogin {
+        leg: upload_legs::QRZ,
+        service: "QRZ Logbook",
+        toggle: super::UploadToggle::Qrz,
+        saved: "API key saved to the OS keychain",
+        lead_in: "API key saved",
+    };
+
+    fn station(log: &str) -> super::SharedEngine {
+        let mut e = super::Engine::new("K2DEF", "FN31", 0);
+        e.import_adif(log);
+        std::sync::Arc::new(std::sync::Mutex::new(e))
+    }
+
+    /// A keychain as the OS keeps one: a read sees a login only once the write has stored it.
+    struct Keychain(std::cell::Cell<bool>);
+
+    impl Keychain {
+        fn stored(&self) -> Result<bool, keyring::Error> {
+            Ok(self.0.get())
+        }
+        fn store(&self) -> Result<(), String> {
+            self.0.set(true);
+            Ok(())
+        }
+    }
+
+    /// Save a QRZ key through the setters' own sequence; what it queued to send, by call and leg.
+    fn save(
+        engine: &super::SharedEngine,
+        keychain: &Keychain,
+        send_old: Option<bool>,
+    ) -> Vec<(String, u8)> {
+        super::save_upload_login(
+            engine,
+            QRZ,
+            || keychain.stored(),
+            || keychain.store(),
+            send_old,
+        )
+        .expect("the login is saved");
+        super::engine_lock(engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|p| (p.rec.call, p.legs))
+            .collect()
+    }
+
+    /// QRZ's start point as every window reads it: beside the shared log. The engine is the window
+    /// asking, and holds none of its own.
+    fn qrz_from(_engine: &super::SharedEngine) -> Option<u64> {
+        kept().qrz
+    }
+
+    /// The start points kept beside the shared log.
+    fn kept() -> tempo_app::station::UploadStart {
+        tempo_app::upload_start::read(&super::shared_data_dir()).expect("readable")
+    }
+
+    /// Whether anything about start points was ever written beside the log.
+    fn nothing_written() -> bool {
+        let dir = super::shared_data_dir();
+        !dir.join(tempo_app::upload_start::FILE_NAME).exists()
+            && !dir.join(tempo_app::upload_start::LOCK_NAME).exists()
+    }
+
+    /// The real count, as `upload_backlog` asks it.
+    fn ask(
+        engine: &super::SharedEngine,
+        stored: Result<bool, keyring::Error>,
+    ) -> Result<Option<usize>, String> {
+        super::backlog_question(
+            engine,
+            upload_legs::QRZ,
+            "QRZ Logbook",
+            stored,
+            tempo_app::station::backlog_count,
+        )
+    }
+
+    fn old_log() -> Vec<(String, u8)> {
+        ["W1OLD", "W2OLD", "W3OLD"]
+            .iter()
+            .map(|c| (c.to_string(), upload_legs::QRZ))
+            .collect()
+    }
+
+    /// ⛔ THE SETTER'S ORDER. A first key saved with the default answer: whether a login was stored
+    /// is read before the key is written (read after, the save looks like one over a stored key and
+    /// the old log goes), and the start point is set before the upload is turned on and the
+    /// catch-up runs (after, the switch is already on, or the old log is already queued). "Send
+    /// them" is the positive control: the same save, the catch-up sends the whole old log.
+    #[test]
+    fn a_first_key_saved_sets_its_start_point_before_anything_is_sent() {
+        let before = super::now_unix().max(0) as u64;
+        let engine = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert!(nothing_written(), "premise");
+        assert_eq!(
+            save(&engine, &keychain, Some(false)),
+            vec![],
+            "nothing old is sent"
+        );
+        let from = qrz_from(&engine).expect("a start point");
+        assert!(from >= before && from <= super::now_unix().max(0) as u64);
+        assert!(
+            super::engine_lock(&engine).settings().qrz_logbook_upload,
+            "QRZ is on"
+        );
+
+        std::fs::remove_file(super::shared_data_dir().join(tempo_app::upload_start::FILE_NAME))
+            .expect("premise: written");
+        let control = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&control, &keychain, Some(true)), old_log());
+        assert_eq!(qrz_from(&control), None);
+    }
+
+    /// ⛔ M4. A keychain that cannot be read is no first login: no start point, and the save goes
+    /// on exactly as before, its catch-up sending every contact not yet sent.
+    #[test]
+    fn a_keychain_that_cannot_be_read_is_no_first_login() {
+        let engine = station(OLD_LOG);
+        let stored = || -> Result<bool, keyring::Error> {
+            Err(keyring::Error::NoStorageAccess(
+                "the keychain is locked".into(),
+            ))
+        };
+        let wrote = std::cell::Cell::new(false);
+        super::save_upload_login(
+            &engine,
+            QRZ,
+            stored,
+            || {
+                wrote.set(true);
+                Ok(())
+            },
+            None,
+        )
+        .expect("the login is saved");
+        assert!(wrote.get(), "the key is still written");
+        assert_eq!(qrz_from(&engine), None, "no start point");
+        let sent: Vec<(String, u8)> = super::engine_lock(&engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|p| (p.rec.call, p.legs))
+            .collect();
+        assert_eq!(sent, old_log(), "the catch-up sends as before");
+        assert!(nothing_written(), "and nothing is written beside the log");
+
+        assert_eq!(
+            ask(
+                &engine,
+                Err(keyring::Error::PlatformFailure("denied".into()))
+            )
+            .map_err(|e| e.starts_with("couldn't read the system keychain")),
+            Err(true),
+            "and nothing is asked"
+        );
+    }
+
+    /// ⛔ M4. Only the keychain's genuine "no entry" is no login. Any other error is an error, and a
+    /// stored value that is not readable text is still a stored login. A mock credential, never the
+    /// OS keychain.
+    #[test]
+    fn only_a_genuine_no_entry_is_no_login() {
+        use keyring::mock::MockCredential;
+        let entry = keyring::Entry::new_with_credential(Box::new(MockCredential::default()));
+        let mock = || -> &MockCredential { entry.get_credential().downcast_ref().expect("a mock") };
+        assert!(matches!(super::login_stored(&entry), Ok(false)));
+        mock().set_error(keyring::Error::NoStorageAccess("locked".into()));
+        assert!(matches!(
+            super::login_stored(&entry),
+            Err(keyring::Error::NoStorageAccess(_))
+        ));
+        mock().set_error(keyring::Error::PlatformFailure("denied".into()));
+        assert!(matches!(
+            super::login_stored(&entry),
+            Err(keyring::Error::PlatformFailure(_))
+        ));
+        entry
+            .set_password("FAKE-LOGIN")
+            .expect("the mock stores it");
+        assert!(matches!(super::login_stored(&entry), Ok(true)));
+        mock().set_error(keyring::Error::BadEncoding(vec![0xff]));
+        assert!(matches!(super::login_stored(&entry), Ok(true)));
+    }
+
+    /// What Settings asks before a save: nothing over a stored login, nothing with the upload
+    /// switch already on (operator ruling "Skip the question", where the save then sends as
+    /// before), else the count.
+    #[test]
+    fn the_question_is_asked_only_of_a_first_login_with_the_upload_off() {
+        let engine = station(OLD_LOG);
+        let ask = |stored| ask(&engine, Ok(stored));
+        assert_eq!(ask(true), Ok(None));
+        assert_eq!(ask(false), Ok(Some(3)));
+        super::engine_lock(&engine).set_upload_toggles(Some(true), None, None);
+        assert_eq!(ask(false), Ok(None));
+
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, None), old_log(), "sent as before");
+        assert_eq!(qrz_from(&engine), None);
+        assert!(nothing_written(), "and nothing is written beside the log");
+    }
+
+    /// Operator ruling "Set it silently": a first key saved with nothing waiting starts QRZ's
+    /// uploads from then, so a log imported afterwards and the key saved again send nothing old.
+    #[test]
+    fn a_log_imported_after_the_first_key_is_not_sent_by_a_later_save() {
+        let engine = station("<EOH>\n");
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(
+            ask(&engine, keychain.stored()),
+            Ok(Some(0)),
+            "premise: nothing waiting, so Settings asks nothing and answers from now on"
+        );
+        assert_eq!(save(&engine, &keychain, Some(false)), vec![]);
+        assert!(qrz_from(&engine).is_some());
+        // Imported as Import ADIF does, outside the Engine lock.
+        let mut e = std::sync::Arc::into_inner(engine)
+            .expect("one owner")
+            .into_inner()
+            .expect("not poisoned");
+        let (added, ..) = e.import_adif(OLD_LOG);
+        assert_eq!(added, 3);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(e));
+        assert_eq!(
+            save(&engine, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+    }
+
+    /// ⛔ H1: a factory reset keeps the answer. It turns the uploads off and keeps the logins, and
+    /// saving the stored key again (how QRZ comes back on) sends nothing old.
+    #[test]
+    fn a_factory_reset_keeps_the_answer() {
+        let engine = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, Some(false)), vec![]);
+        let answered = qrz_from(&engine).expect("premise: answered");
+        super::engine_lock(&engine).apply_restored_settings(super::factory_settings());
+        assert!(
+            !super::engine_lock(&engine).settings().qrz_logbook_upload,
+            "premise: the reset turned QRZ off"
+        );
+        assert_eq!(qrz_from(&engine), Some(answered));
+        assert_eq!(
+            save(&engine, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+    }
+
+    /// ⛔ H1, through the backup's own restore: an answer given after the backup was made survives
+    /// restoring it, and the stored key saved again sends nothing old.
+    #[test]
+    fn restoring_an_older_backup_keeps_the_answer() {
+        let engine = station(OLD_LOG);
+        let older = super::engine_lock(&engine).settings().clone();
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, Some(false)), vec![]);
+        let answered = qrz_from(&engine).expect("premise: answered");
+        let text = serde_json::json!({
+            "kind": "nexus-settings-backup",
+            "schema": 1,
+            "settings": older,
+        })
+        .to_string();
+        super::restore_settings_bundle(&engine, text, |_| true).expect("restored");
+        assert!(
+            !super::engine_lock(&engine).settings().qrz_logbook_upload,
+            "premise: the backup's switch is off"
+        );
+        assert_eq!(qrz_from(&engine), Some(answered));
+        assert_eq!(
+            save(&engine, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+    }
+
+    // ─── H2: one answer for every window sharing the log ────────────────────────────────────
+
+    /// A window of its own on the same log: its own engine and its own `settings` (each profile
+    /// window keeps its own settings file), the log's contacts the same, and the same data folder.
+    fn window(settings: super::Settings) -> super::SharedEngine {
+        let mut e = super::Engine::with_settings(settings);
+        e.import_adif(OLD_LOG);
+        std::sync::Arc::new(std::sync::Mutex::new(e))
+    }
+
+    /// ⛔ H2. Two radio windows on one log: "Only contacts made from now on" answered in window A,
+    /// then the stored key saved again in window B (how a reset or a switched-off upload comes back
+    /// on). B was seeded before the answer, so its own settings know nothing of it, and nothing old
+    /// is sent from B either.
+    #[test]
+    fn an_answer_in_one_window_holds_in_another() {
+        let a = station(OLD_LOG);
+        let seeded = super::engine_lock(&a).settings().clone();
+        let b = window(seeded);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(
+            save(&a, &keychain, Some(false)),
+            vec![],
+            "premise: window A"
+        );
+        assert!(qrz_from(&a).is_some(), "premise: answered");
+        assert_eq!(
+            super::engine_lock(&b).settings().qrz_logbook_upload_from,
+            None,
+            "window B's settings hold no start point"
+        );
+        assert_eq!(
+            save(&b, &keychain, None),
+            vec![],
+            "nothing old is sent from window B"
+        );
+    }
+
+    /// ⛔ H2. The base window after leaving multi-radio mode reads its own settings file, which no
+    /// radio window wrote the answer into, and still sends nothing old.
+    ///
+    /// The radio window runs on a thread of its own. Every window in a test process saves under the
+    /// one profile the process started with, so a radio window on this thread would save its
+    /// settings (on the writer's thread, a moment later) into the very file the base window reads.
+    /// A test build keeps each thread's files in a folder of its own (`test_dirs`), which gives the
+    /// radio window a settings file of its own, as its `tempo-r<id>` folder does in the app; a
+    /// data-folder pointer there names this thread's data folder, so both share the one log.
+    #[test]
+    fn the_base_window_after_multi_radio_honours_the_answer() {
+        let log_folder = super::shared_data_dir();
+        let keychain = std::thread::spawn(move || {
+            super::write_data_dir_pointer_in(&super::config_dir_for(None), &log_folder)
+                .expect("premise: the radio window shares the log");
+            let radio = station(OLD_LOG);
+            let keychain = Keychain(std::cell::Cell::new(false));
+            assert_eq!(save(&radio, &keychain, Some(false)), vec![]);
+            // Its settings on the disk before its folder goes with the thread.
+            let radio_file = super::config_dir_for(None).join("settings.json");
+            assert!(matches!(
+                super::SettingsWriter::of(&radio_file).flush(std::time::Duration::from_secs(10)),
+                tempo_app::settings::writer::Flushed::Saved
+            ));
+            keychain
+        })
+        .join()
+        .expect("the radio window saved");
+        assert!(kept().qrz.is_some(), "premise: answered beside the log");
+        let base_file = super::config_dir_for(None).join("settings.json");
+        assert!(
+            !base_file.exists(),
+            "premise: nothing wrote the base settings"
+        );
+        let base = window(super::Settings::load(&base_file));
+        assert_eq!(save(&base, &keychain, None), vec![], "nothing old is sent");
+    }
+
+    /// ⛔ H2. A radio profile created after the answer seeds its settings from the base file, which
+    /// holds no start point, and still sends nothing old.
+    #[test]
+    fn a_radio_profile_created_after_the_answer_honours_it() {
+        let base = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&base, &keychain, Some(false)), vec![]);
+        // The base window's own settings file, as its save just persisted it.
+        let base_file = super::config_dir_for(None).join("settings.json");
+        assert!(matches!(
+            super::SettingsWriter::of(&base_file).flush(std::time::Duration::from_secs(10)),
+            tempo_app::settings::writer::Flushed::Saved
+        ));
+        let profile_file = super::config_dir_for(Some("r2")).join("settings.json");
+        std::fs::create_dir_all(profile_file.parent().unwrap()).unwrap();
+        std::fs::copy(&base_file, &profile_file).expect("seeded as a first launch seeds it");
+        assert!(
+            !std::fs::read_to_string(&profile_file)
+                .unwrap()
+                .contains("UploadFrom"),
+            "premise: the seed carries no start point"
+        );
+        let mut seeded = super::Settings::load(&profile_file);
+        seeded.qrz_logbook_upload = false;
+        let profile = window(seeded);
+        assert_eq!(
+            save(&profile, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+    }
+
+    /// When window A answered, in these tests: 2020-09-13, after the old log's 2019 contacts.
+    const EARLY: u64 = 1_600_000_000;
+
+    /// A contact made after `EARLY` and long before now, never sent anywhere.
+    const MID_QSO: &str =
+        "<CALL:5>K4MID<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20210101<TIME_ON:6>120000<EOR>\n";
+
+    /// Window A answered "from now on" at `EARLY`, and its login was cleared since.
+    fn answered_early_in_another_window() {
+        tempo_app::upload_start::update(&super::shared_data_dir(), |s| {
+            s.answer(upload_legs::QRZ, false, EARLY)
+        })
+        .expect("written");
+    }
+
+    /// ⛔ Operator ruling "Keep the earlier point", across windows: window A answered at `EARLY`,
+    /// the login was cleared, and window B's first login answered "from now on" again. A's earlier
+    /// point is kept, so the contact made between the two answers is still sent; the older log not.
+    #[test]
+    fn a_second_from_now_on_in_another_window_keeps_the_earlier_point() {
+        answered_early_in_another_window();
+        let b = station(&format!("{OLD_LOG}{MID_QSO}"));
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(
+            save(&b, &keychain, Some(false)),
+            vec![("K4MID".to_string(), upload_legs::QRZ)]
+        );
+        assert_eq!(qrz_from(&b), Some(EARLY));
+    }
+
+    /// ⛔ Review L2: a second first login answered "Send them" clears the earlier start point,
+    /// for every window, and the old log is sent.
+    #[test]
+    fn send_them_on_a_second_login_clears_the_earlier_point() {
+        answered_early_in_another_window();
+        let b = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&b, &keychain, Some(true)), old_log());
+        assert_eq!(kept(), tempo_app::station::UploadStart::default());
+    }
+
+    /// ⛔ Review L3: a log that cannot be counted asks nothing and says so in the Connections log,
+    /// and the save then sets no start point: it sends as before, as no question was asked.
+    #[test]
+    fn a_log_that_cannot_be_counted_sets_no_start_point() {
+        let engine = station(OLD_LOG);
+        let asked = super::backlog_question(
+            &engine,
+            upload_legs::QRZ,
+            "QRZ Logbook",
+            Ok(false),
+            |_, _| Err("disk I/O error".to_string()),
+        );
+        assert_eq!(
+            asked,
+            Err("couldn't read the logbook: disk I/O error".into())
+        );
+        assert!(
+            super::get_connection_log()
+                .iter()
+                .any(|e| e.connector == "QRZ Logbook"
+                    && e.level == "error"
+                    && e.message
+                        == "couldn't count the contacts not yet sent to QRZ Logbook: disk I/O \
+                        error; nothing is asked, and saving the login sends them as before"),
+            "logged"
+        );
+        // The settings page passes no answer when the count failed.
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, None), old_log(), "sent as before");
+        assert!(nothing_written(), "no start point set silently");
+    }
+
+    /// A start point an earlier build left in a window's settings file moves beside the log, each
+    /// service keeping the earliest of every window's, and leaves the settings.
+    #[test]
+    fn start_points_left_in_settings_move_beside_the_log() {
+        let dir = super::shared_data_dir();
+        let mut none = super::Settings::default();
+        super::move_upload_start_beside_the_log(&mut none, &dir);
+        assert!(
+            nothing_written(),
+            "no start point anywhere: nothing written"
+        );
+
+        let mut r1 = super::Settings {
+            qrz_logbook_upload_from: Some(EARLY + 100),
+            eqsl_upload_from: Some(EARLY),
+            ..super::Settings::default()
+        };
+        super::move_upload_start_beside_the_log(&mut r1, &dir);
+        let mut base = super::Settings {
+            qrz_logbook_upload_from: Some(EARLY),
+            ..super::Settings::default()
+        };
+        super::move_upload_start_beside_the_log(&mut base, &dir);
+        assert_eq!(
+            kept(),
+            tempo_app::station::UploadStart {
+                qrz: Some(EARLY),
+                clublog: None,
+                eqsl: Some(EARLY),
+            }
+        );
+        for s in [&r1, &base] {
+            assert_eq!(
+                tempo_app::station::UploadStart::left_in(s),
+                Default::default()
+            );
+        }
+    }
+
+    /// A settings backup never moves the start points beside the log; one an earlier build wrote
+    /// with a start point in it fills only a service that has none there.
+    #[test]
+    fn a_backup_carrying_a_start_point_fills_only_where_none_is_kept() {
+        answered_early_in_another_window();
+        let engine = station(OLD_LOG);
+        let mut carried = super::engine_lock(&engine).settings().clone();
+        carried.qrz_logbook_upload_from = Some(1);
+        carried.clublog_upload_from = Some(EARLY + 5);
+        let text = serde_json::json!({
+            "kind": "nexus-settings-backup",
+            "schema": 1,
+            "settings": carried,
+        })
+        .to_string();
+        super::restore_settings_bundle(&engine, text, |_| true).expect("restored");
+        assert_eq!(
+            kept(),
+            tempo_app::station::UploadStart {
+                qrz: Some(EARLY),
+                clublog: Some(EARLY + 5),
+                eqsl: None,
+            }
+        );
+        assert_eq!(
+            tempo_app::station::UploadStart::left_in(super::engine_lock(&engine).settings()),
+            Default::default(),
+            "and the window's settings hold none"
+        );
+    }
+}
+
+#[cfg(test)]
+mod getting_out_since_tests {
+    //! Getting Out's Start fresh `since`, from the screen to the station's filter. At the end of the
+    //! file: the registration tests read the FIRST `generate_handler!` in lib.rs as the app's list,
+    //! so a test's own handler list must come after it.
+    use super::*;
+    use crate::command_dispatch::{tauri_runner, Runner};
+    use serde_json::{json, Value};
+
+    /// A report of the operator heard by `rx` at `time`.
+    fn heard_me(rx: &str, grid: &str, time: i64) -> propagation::PathSpot {
+        propagation::PathSpot {
+            time,
+            tx_call: "W9XYZ".to_string(),
+            tx_grid: Some("EN52".to_string()),
+            rx_call: rx.to_string(),
+            rx_grid: Some(grid.to_string()),
+            band: propagation::Band::B20,
+            mode: Some("FT8".to_string()),
+            snr: Some(-12.0),
+            freq_mhz: None,
+        }
+    }
+
+    /// The `since` a screen sends reaches the station's filter through the real command handler:
+    /// with it only the later receiver counts, without it both do.
+    #[test]
+    fn the_command_counts_from_the_since_it_is_sent() {
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let now = now_unix();
+        let live: SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        {
+            let mut b = live.lock().unwrap();
+            b.push(heard_me("VK3AA", "QF22", now - 600));
+            b.push(heard_me("DL1AA", "JN58", now - 60));
+        }
+        let app = tauri::test::mock_builder()
+            .manage(engine)
+            .manage(live)
+            .invoke_handler(tauri::generate_handler![get_getting_out])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |args: Value| -> Vec<String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "get_getting_out".to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            let said = answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+                .expect("an answer");
+            let mut calls: Vec<String> = said["reports"]
+                .as_array()
+                .expect("reports")
+                .iter()
+                .map(|r| r["call"].as_str().unwrap_or_default().to_string())
+                .collect();
+            calls.sort();
+            calls
+        };
+        assert_eq!(ask(json!({ "since": now - 300 })), ["DL1AA"]);
+        assert_eq!(ask(json!({})), ["DL1AA", "VK3AA"], "no start: every report");
+    }
+
+    /// The TV page reads the same key.
+    #[test]
+    fn the_tv_page_reads_since_from_its_arguments() {
+        assert_eq!(
+            tv_getting_out_since(&json!({ "since": 1_793_369_130_i64 })),
+            Some(1_793_369_130)
+        );
+        assert_eq!(tv_getting_out_since(&json!({})), None);
+        assert_eq!(tv_getting_out_since(&Value::Null), None);
     }
 }

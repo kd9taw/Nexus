@@ -597,6 +597,14 @@ Before 2026-08-24 only Windows carried the bundle. Linux relied on the .deb's
 nothing by design, with no CAT until they found out unaided that they needed a
 Hamlib package; macOS relied on `brew install hamlib` the same way.
 
+### libusb — <https://libusb.info/>
+License: **LGPL-2.1-or-later**. libusb **1.0.30** ships in the macOS app beside the bundled
+Hamlib, which loads it for USB-attached radios; Nexus itself does not call it. It is built from the
+official source tarball (SHA-256 pinned in `scripts/fetch-hamlib-unix.sh`), unmodified, as a
+separate dynamic library (`libusb-1.0.0.dylib`) that can be replaced, and its licence text travels
+in the bundle as `libusb-COPYING.txt`. Earlier macOS builds carried Homebrew's copy of the same
+library without this entry.
+
 ### DXCC country file (cty.dat) — Jim Reisert, AD1C
 `crates/propagation/data/cty.dat` is the AD1C "Country Files" (the big-CTY
 `cty.dat` database) by Jim Reisert, **AD1C** (<https://www.country-files.com/>),
@@ -651,6 +659,10 @@ number a logged contact carries, so the DXCC / WAS / WAZ awards count a contact 
 entity its record or LoTW names. It ships in the same release zip as `cty.dat`, under the
 same **MIT License** and the same notice. The DXCC entity numbers are those the ARRL
 assigns for its DXCC program.
+
+### IOTA island-group list — © RSGB and IOTA Ltd
+© RSGB and IOTA Ltd (as shown on <https://www.iota-world.org/>); included with IOTA Ltd's permission.
+The list ships in the installer as an app resource and is not in this repository.
 
 ### Deleted DXCC entities — ARRL, from TrustedQSL
 `crates/propagation/data/dxcc_deleted.csv` lists the 62 deleted DXCC entities: each one's
@@ -1365,7 +1377,7 @@ principal third-party components, not a substitute for that gate:
   model — see the DeepCW section at the end of this file for the model's own, different,
   AGPL-3.0-only terms) — MIT OR Apache-2.0.
 - **rustfft** (the FFT behind the SSTV receiver: VIS decode, sync, per-line demodulation and
-  SNR) — MIT OR Apache-2.0.
+  SNR; and the RF scope's zoomed SDR panadapter rows) — MIT OR Apache-2.0.
 - **microfft** (fixed-size in-place FFTs on the hot decode paths — the waterfall spectrum, the
   RTTY demodulator, and DeepCW's front end) — MIT.
 - **thiserror** (error types in `crates/tempo-sstv`) — MIT OR Apache-2.0.

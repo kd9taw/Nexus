@@ -2,7 +2,7 @@
 // once per render) — pinned to what the two inline filters it replaced counted.
 import { describe, expect, it } from 'vitest'
 import type { LoggedQso } from '../types'
-import { lotwBacklog } from './lotwBacklog'
+import { lotwBacklog, lotwOneRefusal } from './lotwBacklog'
 
 const q = (over: Partial<LoggedQso>) =>
   ({ call: 'W1AW', band: '20m', mode: 'FT8', whenUnix: 1_700_000_000, confirmed: false, awardConfirmed: false, ...over }) as LoggedQso
@@ -36,5 +36,23 @@ describe('lotwBacklog', () => {
 
   it('an empty log owes nothing', () => {
     expect(lotwBacklog([])).toEqual({ unsent: 0, timeless: 0 })
+  })
+})
+
+// The row's own LoTW button asks the same question of one contact: owed, or why not.
+describe('lotwOneRefusal', () => {
+  it('sends a contact the backlog counts as unsent, a bounce included', () => {
+    expect(lotwOneRefusal(q({}))).toBeNull()
+    expect(lotwOneRefusal(q({ timeKnown: true }))).toBeNull()
+    expect(lotwOneRefusal(q({ upload: lotw('rejected') }))).toBeNull()
+    expect(lotwOneRefusal(q({ upload: lotw('authfail') }))).toBeNull()
+  })
+
+  it('says why it refuses the others, as the backlog leaves them out', () => {
+    expect(lotwOneRefusal(q({ upload: lotw('pending') }))).toBe('sent')
+    expect(lotwOneRefusal(q({ upload: lotw('accepted') }))).toBe('sent')
+    expect(lotwOneRefusal(q({ upload: lotw('duplicate') }))).toBe('sent')
+    expect(lotwOneRefusal(q({ awardConfirmed: true }))).toBe('confirmed')
+    expect(lotwOneRefusal(q({ timeKnown: false }))).toBe('timeless')
   })
 })

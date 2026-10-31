@@ -14,8 +14,14 @@
 //! Kenwood, any rig at 19200 baud or less) can key and answer after the loop's PTT deadline; its
 //! over went out then, with the warning, and still does (`a_late_answer_*`). Nor is Hamlib's own
 //! "the rig did not answer" (`RPRT -5`, and its I/O and bus kin): rigctld sent the key on and heard
-//! nothing back, so the radio may be keying (`hamlibs_no_answer_*`). A rig that rejects the key
-//! (`RPRT -9`) is refusing it.
+//! nothing back, so the radio may be keying (`hamlibs_no_answer_*`). Their warning says the key was
+//! not confirmed, never that it was not accepted. A rig that rejects the key (`RPRT -9`) is
+//! refusing it.
+//!
+//! The TUNE is the exception: its carrier plays only into a key the radio confirmed. A key still
+//! unanswered could reach the radio seconds later, after the tone, or after the operator let go of
+//! Tune; so a tune whose key is not confirmed plays nothing, ends, and says so, and its release
+//! goes out behind the key (`a_tune_whose_key_*`).
 //!
 //! The slot overs (FT8, FT4, JS8 and the other timed-slot modes) key in `crate::slot` and follow
 //! WSJT-X instead: a refusal, and Hamlib's own "the rig did not answer" with it, plays nothing and
@@ -25,7 +31,7 @@ use super::*;
 
 /// What the rigctld answers to the key.
 #[derive(Clone, Copy, PartialEq)]
-enum Key {
+pub(super) enum Key {
     /// `RPRT 0`, always.
     Accepts,
     /// `RPRT -1`, always.
@@ -50,7 +56,7 @@ const LATE: Duration = Duration::from_millis(1_500);
 
 /// A rigctld answering the key as `key`, `f` with a 20 m dial and everything else `RPRT 0`,
 /// logging every line it was sent.
-fn rigctld(key: Key) -> (String, Arc<Mutex<Vec<String>>>) {
+pub(super) fn rigctld(key: Key) -> (String, Arc<Mutex<Vec<String>>>) {
     rigctld_on(key, 14_250_000)
 }
 
@@ -179,7 +185,11 @@ impl Scene {
 }
 
 /// The voice keyer's words for a refused key.
-const REFUSED: &str = "The rig didn't accept PTT — check your PTT method and CAT/port.";
+pub(super) const REFUSED: &str = "The rig didn't accept PTT — check your PTT method and CAT/port.";
+
+/// The words for a key the radio did not answer in time.
+pub(super) const UNCONFIRMED: &str =
+    "The rig did not answer the PTT key in time — check the CAT link to the radio.";
 
 fn phone(e: &mut Engine) {
     e.set_operating_mode("phone", true);
@@ -545,21 +555,107 @@ fn a_refused_remote_microphone_over_plays_nothing_and_ends() {
     }
 }
 
-/// ⭐ A LATE ANSWER TO THE TUNE'S KEY IS NOT A REFUSAL. A slow radio keyed and answered after the
-/// PTT deadline, and the tune put its carrier into it, as it always did. Only a radio that answers
-/// no drops the tune; this one keeps it, and the line says the key was not confirmed.
+/// ⛔ A TUNE WHOSE KEY IS NOT CONFIRMED PLAYS NO CARRIER. Its key answered after the PTT deadline,
+/// and the tune used to put its carrier into the radio anyway. Behind a rigctld held up for
+/// seconds the key was still on its way: the tone went into a receiving radio and the key reached
+/// it long after, once after the operator had let go of Tune. Now nothing plays, the tune ends and
+/// is not started again by the late answer (an over that late is stale), the line says the key
+/// was not confirmed, and the release goes out after the key.
 #[test]
-fn a_late_answer_to_the_tune_key_still_plays_the_carrier() {
+fn a_tune_whose_key_is_answered_late_plays_no_carrier_and_ends() {
     let mut s = Scene::new(Key::AnswersLate, |e| {
         phone(e);
         e.set_tune(true);
     });
     s.run_to(300.0);
     assert!(s.keys() >= 1, "premise: the tune tried the key");
-    // The words of a key that did not come back accepted: the premise that this one was late.
-    assert_eq!(s.banner().as_deref(), Some(REFUSED));
-    assert!(!s.backend.played.is_empty(), "the carrier was dropped");
-    assert!(s.engine.lock().unwrap().tuning(), "the tune ended");
+    assert!(
+        s.backend.played.is_empty(),
+        "a carrier went into an unconfirmed key"
+    );
+    assert!(!s.engine.lock().unwrap().tuning(), "the tune is still on");
+    assert_eq!(s.banner().as_deref(), Some(UNCONFIRMED));
+    assert_eq!(s.kind(), "pttUnconfirmed");
+    s.run_to(3_000.0);
+    assert!(
+        s.backend.played.is_empty(),
+        "the late answer started the carrier"
+    );
+    assert_eq!(s.keys(), 1, "the tune keyed again");
+    let log = s.log.lock().unwrap().clone();
+    let key = log.iter().position(|l| l == "T 1").unwrap();
+    assert!(
+        log[key..].iter().any(|l| l == "T 0"),
+        "the release did not follow the key: {log:?}"
+    );
+}
+
+/// The control: a tune whose key the radio confirms at once plays its carrier on that same tick.
+#[test]
+fn a_tune_keyed_at_once_still_plays_on_the_first_tick() {
+    let mut s = Scene::new(Key::Accepts, |e| {
+        phone(e);
+        e.set_tune(true);
+    });
+    s.run_to(s.t + 20.0);
+    assert_eq!(s.keys(), 1, "premise: the tune keyed");
+    assert!(
+        !s.backend.played.is_empty(),
+        "no carrier on the keying tick"
+    );
+    assert_eq!(s.banner(), None);
+}
+
+/// The operator's own PTT names a key with no answer in time as not confirmed, and a refusal as
+/// not accepted. Nothing of Nexus's plays under it either way: the voice is the operator's, at
+/// the radio's microphone.
+#[test]
+fn a_phone_ptt_not_answered_in_time_reads_not_confirmed_and_a_refusal_not_accepted() {
+    for (key, words, kind) in [
+        (Key::AnswersLate, UNCONFIRMED, "pttUnconfirmed"),
+        (Key::Answers(-5), UNCONFIRMED, "pttUnconfirmed"),
+        (Key::Refuses, REFUSED, "ptt"),
+    ] {
+        let mut s = Scene::new(key, |e| {
+            phone(e);
+            e.set_ptt(true);
+        });
+        s.run_to(300.0);
+        assert!(s.keys() >= 1, "premise: the PTT tried the key");
+        assert_eq!(s.banner().as_deref(), Some(words));
+        assert_eq!(s.kind(), kind);
+        assert!(s.backend.played.is_empty(), "Nexus played under the mic");
+    }
+}
+
+/// On a network chain the loop's own overs and the operator's PTT wait the network window for the
+/// key's answer: a key answered after the local PTT deadline but inside that window is a key, with
+/// no warning, and the voice message plays. The local controls are the `a_late_answer_*` tests and
+/// `a_phone_ptt_not_answered_in_time_*`, the same answer read as not confirmed.
+#[test]
+fn on_a_network_chain_a_key_answered_inside_its_window_is_confirmed() {
+    let mut ptt = Scene::new(Key::AnswersLate, |e| {
+        phone(e);
+        e.set_ptt(true);
+    });
+    ptt.rig.set_network_chain(true);
+    ptt.run_to(300.0);
+    assert!(ptt.keys() >= 1, "premise: the PTT tried the key");
+    assert_eq!(ptt.banner(), None, "the operator's PTT");
+
+    let mut voice = Scene::new(Key::AnswersLate, |e| {
+        phone(e);
+        e.send_voice(vec![0.05; 12_000]).unwrap();
+    });
+    voice.rig.set_network_chain(true);
+    voice.run_to(2_000.0);
+    assert!(voice.keys() >= 1, "premise: the keyer tried the key");
+    assert_eq!(voice.banner(), None, "the voice keyer");
+    assert_eq!(
+        voice.backend.played.len(),
+        12_000,
+        "the message was not played"
+    );
 }
 
 /// ⭐ A VOICE MESSAGE WHOSE KEY IS ANSWERED LATE IS PLAYED, WHOLE, WITH THE WARNING.
@@ -571,7 +667,8 @@ fn a_late_answer_to_the_voice_keyers_key_still_plays_the_message() {
     });
     s.run_to(2_000.0);
     assert!(s.keys() >= 1, "premise: the keyer tried the key");
-    assert_eq!(s.banner().as_deref(), Some(REFUSED));
+    assert_eq!(s.banner().as_deref(), Some(UNCONFIRMED));
+    assert_eq!(s.kind(), "pttUnconfirmed");
     assert_eq!(s.backend.played.len(), 12_000, "the message was not played");
 }
 
@@ -585,7 +682,7 @@ fn a_late_answer_to_the_sstv_key_still_sends_the_picture() {
     });
     s.run_to(2_000.0);
     assert!(s.keys() >= 1, "premise: the picture tried the key");
-    assert_eq!(s.banner().as_deref(), Some(REFUSED));
+    assert_eq!(s.banner().as_deref(), Some(UNCONFIRMED));
     assert!(!s.backend.played.is_empty(), "the picture was not sent");
 }
 
@@ -654,12 +751,13 @@ fn a_late_answer_to_the_aprs_key_still_plays_the_frame() {
     assert_eq!(s.engine.lock().unwrap().aprs_tx_notice(), None);
 }
 
-/// ⭐ HAMLIB'S OWN "THE RIG DID NOT ANSWER" TO THE TUNE'S KEY IS NOT A REFUSAL. A radio too slow
-/// for Hamlib makes rigctld answer the key with its timeout (`RPRT -5`), as Nexus's own deadline
-/// would; the tune keeps its carrier, with the warning, as it always did. A rejection (`RPRT -9`)
-/// still drops it.
+/// ⛔ HAMLIB'S OWN "THE RIG DID NOT ANSWER" TO THE TUNE'S KEY IS NOT A CONFIRMED KEY. A radio too
+/// slow for Hamlib makes rigctld answer the key with its timeout (`RPRT -5`), as Nexus's own
+/// deadline would. It is not a refusal, so the line says the key was not confirmed; and as for
+/// any key not confirmed, the tune plays no carrier and ends. A rejection (`RPRT -9`) drops it
+/// too, as a refusal.
 #[test]
-fn hamlibs_no_answer_to_the_tune_key_still_plays_the_carrier() {
+fn a_tune_whose_key_hamlib_could_not_get_answered_plays_no_carrier() {
     let tune = |e: &mut Engine| {
         phone(e);
         e.set_tune(true);
@@ -671,14 +769,15 @@ fn hamlibs_no_answer_to_the_tune_key_still_plays_the_carrier() {
             s.keys() >= 1,
             "premise: RPRT {code}: the tune tried the key"
         );
-        assert_eq!(s.banner().as_deref(), Some(REFUSED), "RPRT {code}");
+        assert_eq!(s.banner().as_deref(), Some(UNCONFIRMED), "RPRT {code}");
+        assert_eq!(s.kind(), "pttUnconfirmed", "RPRT {code}");
         assert!(
-            !s.backend.played.is_empty(),
-            "RPRT {code}: the carrier was dropped"
+            s.backend.played.is_empty(),
+            "RPRT {code}: a carrier went into an unconfirmed key"
         );
         assert!(
-            s.engine.lock().unwrap().tuning(),
-            "RPRT {code}: the tune ended"
+            !s.engine.lock().unwrap().tuning(),
+            "RPRT {code}: the tune is still on"
         );
     }
 
@@ -711,7 +810,7 @@ fn hamlibs_no_answer_to_the_voice_keyers_key_still_plays_the_message() {
             s.keys() >= 1,
             "premise: RPRT {code}: the keyer tried the key"
         );
-        assert_eq!(s.banner().as_deref(), Some(REFUSED), "RPRT {code}");
+        assert_eq!(s.banner().as_deref(), Some(UNCONFIRMED), "RPRT {code}");
         assert_eq!(
             s.backend.played.len(),
             12_000,

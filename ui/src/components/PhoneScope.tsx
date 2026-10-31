@@ -34,6 +34,7 @@
 // snaps onto the signal in the passband; [ ] the width; ↑/↓ scroll back while paused), and none of
 // them is Esc or Space, which belong to the cockpit's stop and its PTT.
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { getRfFrame, getScopeFrame } from '../api'
 import type { SpectrumFrameWire, SpotRow } from '../types'
 import {
@@ -116,6 +117,9 @@ const KEY_IDLE_MS = 800
  *  `widthPx` wide. A filter edge inside it is still grabbed (operator, 2026-10-05: "Allow it"), so a
  *  press there scans only away from an edge. */
 const scanZonePx = (widthPx: number) => Math.min(36, widthPx / 4)
+/** The widest RF window a scope asks a panadapter for (Hz). Full's ±1 GHz is no window: it asks for
+ *  nothing, and the source sends its whole sweep. */
+const RF_VIEW_MAX_HZ = 50_000_000
 /** The focused scope's keys, for `aria-keyshortcuts` (key names, not prose). */
 const SCOPE_KEYS = 'ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight Enter [ ] ArrowUp ArrowDown'
 
@@ -214,6 +218,14 @@ interface Props {
   /** Reports the drawn window whenever it changes (feed source + absolute Hz span) so
    * the host cockpit can keep its scope label honest (RX audio vs real RF span). */
   onFeed?: (source: string, loHz: number, hiHz: number) => void
+  /** An ABSOLUTE RF window (Hz) to draw on a native panadapter row instead of the view props'
+   *  dial-relative one: the cockpits' Band span (`spectrum/rfSpan.ts`). Clamped to the row like any
+   *  view; ignored on an audio row. */
+  rfViewHz?: { loHz: number; hiHz: number } | null
+  /** Reports the newest row's own span whenever it changes (feed source + absolute Hz): what the
+   *  source is sweeping, as against `onFeed`'s window drawn from it. The cockpits read it to know
+   *  whether the radio's sweep already fits the span chosen (`spectrum/rfSpan.ts`). */
+  onSweep?: (source: string, loHz: number, hiHz: number) => void
   /** Click/drag tuning (Flex-style). A single click snap-detects the signal under the
    * cursor and reports the dial that works it; press-and-hold on a native RF row shows
    * a passband-width box that live-tunes as it drags. The request carries the FINAL
@@ -258,6 +270,9 @@ interface Props {
    *  analog meter and keeps the strip — one host's change must not reach the other
    *  (`TxMeters`' four-row contract leaking into Operate is what that costs). */
   hideSmeter?: boolean
+  /** Controls the host puts at the START of this toolbar strip, before the S-meter: CW's audio span
+   *  chips, which on a row of their own took their height out of the picture. Absent = nothing. */
+  toolbarStart?: ReactNode
   /** Trace peak-hold time constant (ms) — how long a column's peak stands after the signal
    * stops. See TRACE_HOLD_MS: the cockpit picks it, because the right answer depends on the
    * SIGNAL, not on the operator. CW passes `fast` (48 ms dits have to be visible as keying);
@@ -324,6 +339,7 @@ function sMeterDisplay(db: number): { frac: number; label: string; zone: 'ok' | 
 
 export function PhoneScope({
   hideSmeter = false,
+  toolbarStart,
   transmitting,
   theme,
   active = true,
@@ -335,6 +351,8 @@ export function PhoneScope({
   sideband = 'USB',
   dialHz = null,
   onFeed,
+  rfViewHz = null,
+  onSweep,
   onTune,
   onBeginClick,
   filterWidthHz,
@@ -380,6 +398,8 @@ export function PhoneScope({
   const sidebandRef = useRef(sideband)
   const dialRef = useRef(dialHz)
   const onFeedRef = useRef(onFeed)
+  const rfViewRef = useRef(rfViewHz)
+  const onSweepRef = useRef(onSweep)
   const lutRef = useRef<Uint8ClampedArray>(bakeLut(resolveColormap(palette, theme, night, skin)))
   // The picture's host: the renderer puts its canvas here, under the overlay canvas. Retained
   // history lives in the renderer's ring (the DATA at each row's native resolution, with its own
@@ -522,6 +542,8 @@ export function PhoneScope({
   sidebandRef.current = sideband
   dialRef.current = dialHz
   onFeedRef.current = onFeed
+  rfViewRef.current = rfViewHz
+  onSweepRef.current = onSweep
   onTuneRef.current = onTune
   onBeginClickRef.current = onBeginClick
   filterWidthRef.current = filterWidthHz
@@ -589,7 +611,8 @@ export function PhoneScope({
     const canvas = canvasRef.current
     const host = renderHostRef.current
     if (!canvas || !host) return
-    // The OVERLAY: write-only, cleared and redrawn on every draw over the renderer's picture. The
+    // The OVERLAY (the marks): write-only, cleared and redrawn over the renderer's picture whenever
+    // anything it is drawn from moves (`syncMarks`). The
     // picture itself is the renderer's (see the file header), on its own canvas in `host`.
     const ctx = canvas.getContext('2d')
     if (!ctx) return
@@ -635,6 +658,7 @@ export function PhoneScope({
     let agcFloor = 0
     let agcInit = false
     let lastFeed = '' // last onFeed-reported "source:lo:hi" (fire only on change)
+    let lastSweep = '' // last onSweep-reported "source:lo:hi" (fire only on change)
     // The AGC window, reused. `row.slice(vLo, vHi)` allocated a fresh array 20x/second for a
     // read-only percentile scan. Float64Array, not Float32Array: `row` arrives from JSON as
     // doubles and narrowing it would nudge the AGC floor for no benefit (see agcScratch).
@@ -669,6 +693,14 @@ export function PhoneScope({
     let holdKey = ''
     let traceFrame: SpectrumFrame | null = null
     let lastHoldTs = 0
+    /** The hold as the picture last drew it, and its bins' key: a poll whose hold is still within
+     *  TRACE_EPS of it draws nothing (see `holdTrace`). null = no trace drawn yet. */
+    let drawnHold: Float32Array | null = null
+    let drawnHoldKey = ''
+    // A hold within this of the drawn one (of the trace band's height) is the same picture: under a
+    // hundredth of a device pixel on the tallest scope. A held peak falls back to the row exactly, so
+    // only bins below the floor, decaying towards a zero they never reach, ever need it.
+    const TRACE_EPS = 1e-5
 
     // Device-pixel backing store (correct under the app's CSS zoom), mirroring Waterfall.
     let devW = 0
@@ -721,6 +753,19 @@ export function PhoneScope({
         isSymmetricMode(sidebandRef.current),
         carrierCenteredRef.current,
       )
+      // An absolute RF window (the Band span) replaces the dial-relative one on an RF row, clamped
+      // to the row as every view is. Where it misses the row altogether the relative view stands.
+      const abs = rfViewRef.current
+      if (abs && isRfScopeSource(src)) {
+        const lo = Math.max(rowLo, abs.loHz)
+        const hi = Math.min(rowHi, abs.hiHz)
+        if (hi - lo >= 50) view = { loHz: lo, hiHz: hi, markerAtHz: view.markerAtHz, mirrored: false }
+      }
+      const sweep = `${src}:${rowLo}:${rowHi}`
+      if (sweep !== lastSweep) {
+        lastSweep = sweep
+        onSweepRef.current?.(src, rowLo, rowHi)
+      }
       // Tell the host what's actually drawn (only on change) — the honest scope label.
       const feed = `${src}:${view.loHz}:${view.hiHz}`
       if (feed !== lastFeed) {
@@ -857,10 +902,12 @@ export function PhoneScope({
     }
 
     /** The trace: the newest averaged sweep through the peak hold, in the newest row's range. A
-     *  new signal jumps up instantly; a pause fades down over ~traceHoldMs instead of strobing. */
-    const holdTrace = () => {
+     *  new signal jumps up instantly; a pause fades down over ~traceHoldMs instead of strobing.
+     *  Answers whether the trace has moved from the one last drawn: once the hold has fallen back
+     *  onto a sweep that is not changing, it has not, and there is nothing to draw. */
+    const holdTrace = (): boolean => {
       const a = averaged
-      if (!a || !newest) return
+      if (!a || !newest) return false
       const nowTs = performance.now()
       const dt = lastHoldTs > 0 ? nowTs - lastHoldTs : ROW_MS
       lastHoldTs = nowTs
@@ -875,20 +922,44 @@ export function PhoneScope({
         holdKey = key
       }
       const { floor, ceil } = newest.range
+      const drawn = drawnHoldKey === key ? drawnHold : null
+      let moved = drawn == null
       for (let b = 0; b < n; b++) {
         const s = normalize(a.bins[b], floor, ceil)
         const h = hold[b] * decay
         hold[b] = s > h ? s : h
         heldBins[b] = floor + hold[b] * (ceil - floor)
+        if (!moved && Math.abs(hold[b] - drawn![b]) > TRACE_EPS) moved = true
       }
       traceFrame = { ...a, bins: heldBins }
+      return moved
     }
 
-    /** The picture, then the overlay over it. */
+    /** Everything the picture is drawn from besides its rows and its trace, as one string: the view,
+     *  the look and the geometry. A poll that moves none of it, commits no row and leaves the trace
+     *  where it was drawn has nothing to draw (`poll`). */
+    const sceneKeyOf = () =>
+      [view.loHz, view.hiHz, view.mirrored, newestAtTopRef.current, dssRef.current, scaleRef.current.detector,
+        devW, devH, scaleY].join('|')
+    let drawnScene = ''
+    let drawnLut: Uint8ClampedArray | null = null
+
+    /** The picture, then the overlays and the marks over it. Draws every time it is called: the cold
+     *  changes (palette, detector, flow, 3D, pause, scrollback, size) call it directly. */
     const draw = () => {
       if (!(devW > 0 && devH > 0)) return
       const dssOn = dssRef.current
       const pausedNow = pausedRef.current
+      drawnScene = sceneKeyOf()
+      drawnLut = lutRef.current
+      // Paused, the trace band is the floor: the trace is not drawn, so the next live poll draws it.
+      if (hold && !pausedNow) {
+        if (!drawnHold || drawnHold.length !== hold.length) drawnHold = new Float32Array(hold.length)
+        drawnHold.set(hold)
+        drawnHoldKey = holdKey
+      } else {
+        drawnHoldKey = ''
+      }
       renderer.draw({
         view: { loHz: view.loHz, hiHz: view.hiHz },
         lut: lutRef.current,
@@ -903,13 +974,14 @@ export function PhoneScope({
         trace: !pausedNow && traceFrame && newest ? { frame: oriented(traceFrame), range: newest.range } : null,
       })
       syncOverlays()
-      drawOverlay()
+      syncMarks()
     }
     rebuildRef.current = draw
     overlayRef.current = () => {
       if (devW > 0 && devH > 0) {
         syncOverlays()
-        drawOverlay()
+        marksKey = ''
+        syncMarks()
       }
     }
 
@@ -961,6 +1033,23 @@ export function PhoneScope({
       hitsRef.current = { w: devW, h: devH, hits: out.hits }
     }
     overlaysSyncRef.current = syncOverlays
+
+    /** Everything the marks last drew from, as one string; '' = draw them again. */
+    let marksKey = ''
+    /** The marks, drawn again only when something they are drawn from moved (the overlays' rule): the
+     *  geometry, the axis and its view, the dial, the pitch, the Sub, the width shown and whether its
+     *  edges can be grabbed, and the notch. Asked on every poll, so a width just commanded still gives
+     *  way to the rig's own when it expires. */
+    const syncMarks = () => {
+      const sub = subRef.current
+      const key = [devW, devH, scaleY, textScale, dssRef.current, newest?.src ?? null, view.loHz, view.hiHz,
+        view.markerAtHz, carrierCenteredRef.current, sidebandRef.current, dialRef.current, pitchRef.current,
+        cwPitchRefRef.current, sub ? `${sub.dialHz}/${sub.sideband}/${sub.widthHz}` : '-', shownWidth(),
+        canEditPassband(), notchRef.current].join('|')
+      if (key === marksKey) return
+      marksKey = key
+      drawOverlay()
+    }
 
     /** The marks over the picture: what the operator reads and aims with. Cleared every draw. */
     const drawOverlay = () => {
@@ -1215,6 +1304,31 @@ export function PhoneScope({
       ro.observe(canvas)
     }
 
+    /** The absolute RF window this scope wants on its native panadapter row, before the row clamps
+     *  it: the Band span's window, or the view props mapped round the dial as `scopeView` maps them.
+     *  Null on an audio row, with no dial to anchor on, or for a window wider than any sweep (Full),
+     *  which asks for nothing. */
+    const wantedRf = (): { loHz: number; hiHz: number } | null => {
+      if (!newest || !isRfScopeSource(newest.src)) return null
+      const abs = rfViewRef.current
+      if (abs) return abs
+      const v = scopeView(
+        -Infinity,
+        Infinity,
+        newest.src,
+        viewLoRef.current,
+        viewHiRef.current,
+        markerRef.current,
+        sidebandSign(sidebandRef.current),
+        dialRef.current,
+        isSymmetricMode(sidebandRef.current),
+        carrierCenteredRef.current,
+      )
+      return Number.isFinite(v.loHz) && Number.isFinite(v.hiHz) && v.hiHz - v.loHz <= RF_VIEW_MAX_HZ
+        ? { loHz: v.loHz, hiHz: v.hiHz }
+        : null
+    }
+
     const poll = async (myGen: number) => {
       let wire: SpectrumFrameWire | null
       try {
@@ -1228,9 +1342,15 @@ export function PhoneScope({
         // duplicating the RF test here against a source we only learn from the PREVIOUS row.
         // An unhonourable request returns exactly what `getSpectrumRow` would have, and the
         // frame's own loHz/hiHz below is what everything downstream reads anyway.
+        //
+        // On a native RF row the poll also carries the ABSOLUTE window this scope wants drawn
+        // (`wantedRf`): an SDR's IQ panadapter computes its rows over it, finer than its whole span.
+        const want = rfOnly ? null : wantedRf()
         wire = rfOnly
           ? await getRfFrame(lastSeq)
-          : await getScopeFrame(viewLoRef.current, viewHiRef.current, analysisRef.current, lastSeq)
+          : want
+            ? await getScopeFrame(viewLoRef.current, viewHiRef.current, analysisRef.current, lastSeq, want)
+            : await getScopeFrame(viewLoRef.current, viewHiRef.current, analysisRef.current, lastSeq)
       } catch {
         if (rfOnly && latch.owns(myGen)) setScopeAvailable(false)
         return
@@ -1238,6 +1358,8 @@ export function PhoneScope({
       // Superseded while awaiting — the watchdog gave this call up. Drawing now would put a
       // stale trace and a stale waterfall row on screen out of order.
       if (!latch.owns(myGen)) return
+      /** A row went into the history on this poll: the band moves, so the picture is drawn. */
+      let committed = false
       if (wire) {
         // An empty frame: the source went quiet — or, for the RF pane, no panadapter is streaming.
         // The RF pane says so on every window; the rig scope only on a remote one, as before.
@@ -1247,6 +1369,7 @@ export function PhoneScope({
         }
         if (rfOnly) setScopeAvailable(true)
         accept(wire)
+        committed = true
       } else if (newest) {
         // The source has not swept since the last row. The view still follows the dial and the
         // props, so the pointer maps against what is on screen between two sweeps.
@@ -1254,15 +1377,27 @@ export function PhoneScope({
         // SMOOTH SCROLL: the newest sweep again, as a REPEAT — its own number, which is what marks
         // it (a row carrying the number of the row before it), and its own time. ONE ROW PER SWEEP:
         // nothing; the waterfall moves when the source does.
-        if (rowCadenceRef.current === 'smooth') commit({ ...newest.frame, tMs: Date.now() }, newest.range)
+        if (rowCadenceRef.current === 'smooth') {
+          commit({ ...newest.frame, tMs: Date.now() }, newest.range)
+          committed = true
+        }
       } else {
         return
       }
       // PAUSED = review mode: history keeps filling (nothing is lost) but the scope is frozen;
       // the mouse wheel scrolls the band back through `rebuildRef`.
       if (pausedRef.current) return
-      holdTrace()
-      draw()
+      const traceMoved = holdTrace()
+      // NOTHING CHANGED, NOTHING DRAWN. A poll with no new row, a trace still where it was drawn and
+      // the same view and look would put back the same pixels: on a source sweeping a few times a
+      // second in a row per sweep, most polls. The overlays and the marks still follow the dial and
+      // the props between two sweeps; each redraws only if its own key moved.
+      if (committed || traceMoved || sceneKeyOf() !== drawnScene || lutRef.current !== drawnLut) {
+        draw()
+      } else if (devW > 0 && devH > 0) {
+        syncOverlays()
+        syncMarks()
+      }
     }
 
     const loop = (now: number) => {
@@ -1835,6 +1970,7 @@ export function PhoneScope({
             control — hiding the strip would take those with it, which is a different and much
             worse change than the one asked for. Phone hides the reading because its analog
             meter shows the same number on the same screen; CW keeps it. */}
+        {toolbarStart}
         {!hideSmeter && (
           <>
             <span className="ph-scope-smeter-label">S</span>

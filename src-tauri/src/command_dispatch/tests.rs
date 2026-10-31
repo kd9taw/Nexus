@@ -1860,6 +1860,9 @@ fn a_credential_badge_and_a_connector_test_run_at_the_shack_from_afar() {
         ("get_credentials_status", json!({})),
         ("icom_lan_password_saved", json!({ "radioId": 1 })),
         ("qrz_test_connection", json!({})),
+        ("lotw_test_connection", json!({})),
+        ("eqsl_test_connection", json!({})),
+        ("clublog_test_connection", json!({})),
         ("n3fjp_test_connection", json!({})),
         ("cloudlog_station_info", json!({})),
     ]

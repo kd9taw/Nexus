@@ -19,10 +19,11 @@
 //! has no record, so no service is asked more often than one call per pace (the call and then its
 //! base for a stroked call, which the cap counts as two). The cap counts every turn's lookups,
 //! whichever service answered. The station's own tally of the day's network lookups lives in the
-//! cache file ([`tempo_core::callbook_cache::CallbookCache::note_lookups`]), and QRZ's own count of
-//! the account's lookups ([`note_qrz_session`]) holds the cap too when an answer carries it; the
-//! last one is kept in the same file with its time, so the next preview and run start from it. A
-//! sign-in to QRZ or HamQTH is a request too ([`note_login`]), and counts.
+//! cache file ([`tempo_core::callbook_cache::CallbookCache::note_lookups`]). QRZ's own count of the
+//! account's lookups ([`note_qrz_session`]) is kept in the same file with its time and shown in the
+//! preview, but it **never holds the cap**: every program on the account
+//! adds to it, so another program's day of lookups stopped every run before its first. A sign-in
+//! to QRZ or HamQTH is a request too ([`note_login`]), and counts.
 //!
 //! **What the services said** is noted by the lookups themselves ([`note_qrz_answer`],
 //! [`note_login`], [`note_hamqth_refused`], [`note_qrz_session`]...) and taken after each of the
@@ -296,20 +297,17 @@ pub(crate) fn kept(
     .then(|| crate::callbook_answer(&dto))
 }
 
-/// The day's network lookups as the cap reads them: the cache file's tally, or the session's —
-/// or QRZ's own count when it kept a larger one in the last day.
+/// The day's network lookups as the cap reads them: the cache file's tally, or the session's.
+/// Never QRZ's own count of the account: every program on the account adds
+/// to that, so it is shown beside this, not counted in it.
 fn spent(app: &AppHandle) -> usize {
     let now = crate::now_unix();
     let cache = app.state::<SharedCallbookCache>();
-    let qrz = cache
-        .store()
-        .and_then(|s| s.lock().ok().and_then(|s| s.qrz_count(now).ok().flatten()))
-        .unwrap_or(0);
     if let Some(n) = cache
         .store()
         .and_then(|s| s.lock().ok().and_then(|s| s.lookups_spent(now).ok()))
     {
-        return n.max(qrz);
+        return n;
     }
     let job = app.state::<CallbookUpdate>();
     let tally = lock(&job.fallback_tally);
@@ -500,7 +498,8 @@ pub struct UpdatePreviewDto {
     pub estimate_secs: u64,
     pub spent: usize,
     pub cap: usize,
-    /// QRZ's own count of the account's lookups, from its last answer in the last day.
+    /// QRZ's own count of the account's lookups, from its last answer in the last day. Shown for
+    /// information; it is not in `spent` and never holds the cap.
     pub qrz_count: Option<usize>,
     pub could_change: usize,
     /// `[ADIF field, contacts]`, most first: exact for kept answers, at most for the rest.

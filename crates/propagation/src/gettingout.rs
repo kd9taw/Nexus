@@ -39,13 +39,26 @@ pub struct GettingOut {
 
 /// Build the report from a window of spots (the live PSK Reporter / RBN firehose).
 /// Keeps the most-recent report per receiver; sorts most-distant first.
-pub fn getting_out(me_call: &str, me_grid: &str, spots: &[PathSpot], now: i64) -> GettingOut {
+///
+/// `since` (Unix secs) is the operator's "Start fresh" time: a report received before it
+/// is left out of everything here (count, furthest, the per-receiver list), so an antenna
+/// change can be judged on what was heard after it. Nothing is dropped from the buffer.
+pub fn getting_out(
+    me_call: &str,
+    me_grid: &str,
+    spots: &[PathSpot],
+    now: i64,
+    since: Option<i64>,
+) -> GettingOut {
     let me = maidenhead_to_latlon(me_grid);
     let mut best: HashMap<String, HeardMe> = HashMap::new();
 
     for s in spots {
         // HeardMe = a spot where the operator transmitted and `far` received them.
         if s.side(me_call) != Side::HeardMe {
+            continue;
+        }
+        if since.is_some_and(|t| s.time < t) {
             continue;
         }
         let Some(call) = s.far_call(me_call) else {
@@ -126,7 +139,7 @@ mod tests {
                 freq_mhz: None,
             },
         ];
-        let go = getting_out("KD9TAW", "EN52", &spots, NOW);
+        let go = getting_out("KD9TAW", "EN52", &spots, NOW, None);
         assert_eq!(go.count, 2, "two distinct receivers (DL deduped)");
         assert_eq!(go.reports[0].call, "VK3AA", "furthest first");
         assert!(go.reports[0].km > go.reports[1].km);
@@ -138,9 +151,50 @@ mod tests {
 
     #[test]
     fn empty_when_nobody_heard_me() {
-        let go = getting_out("KD9TAW", "EN52", &[], NOW);
+        let go = getting_out("KD9TAW", "EN52", &[], NOW, None);
         assert_eq!(go.count, 0);
         assert_eq!(go.max_km, 0);
         assert!(go.reports.is_empty());
+    }
+
+    #[test]
+    fn start_fresh_leaves_out_reports_before_the_start_time() {
+        let spots = vec![
+            heard_me("VK3AA", "QF22", 600), // furthest, but before the start
+            heard_me("DL1AA", "JN58", 500), // before the start...
+            heard_me("DL1AA", "JN58", 100), // ...and again after it
+            heard_me("W1AW", "FN31", 50),
+        ];
+        let since = NOW - 300;
+        let go = getting_out("KD9TAW", "EN52", &spots, NOW, Some(since));
+        let calls: Vec<&str> = go.reports.iter().map(|r| r.call.as_str()).collect();
+        assert_eq!(
+            calls,
+            ["DL1AA", "W1AW"],
+            "only receivers heard at or after the start"
+        );
+        assert_eq!(go.count, 2);
+        let dl = go.reports.iter().find(|r| r.call == "DL1AA").unwrap();
+        assert_eq!(
+            dl.age_secs, 100,
+            "the after-start report, never the earlier one"
+        );
+        assert_eq!(
+            go.max_km, dl.km,
+            "furthest is DL now that VK is before the start"
+        );
+        // A report AT the start time counts.
+        let at = getting_out(
+            "KD9TAW",
+            "EN52",
+            &[heard_me("W1AW", "FN31", 300)],
+            NOW,
+            Some(since),
+        );
+        assert_eq!(at.count, 1);
+        // "Show all" (no start time) brings everything back.
+        let all = getting_out("KD9TAW", "EN52", &spots, NOW, None);
+        assert_eq!(all.count, 3);
+        assert_eq!(all.reports[0].call, "VK3AA");
     }
 }

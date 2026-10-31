@@ -56,9 +56,9 @@ WSJT-X muscle memory works unchanged inside a UI built this decade.
   sources, tracking upstream **3.0.2**. On identical recorded audio, the decode floor measures
   **−21.3 dB against stock WSJT-X's −20.7**, with zero false decodes, and the suite includes
   false-alarm tests that feed the decoder pure noise and require it to produce nothing at all.
-  **Rovers keep decoding here**: upstream 3.0.2 discards any decode containing `/R` outside contest
-  mode, which is exactly the VHF traffic worth catching, and a test fails if anyone reintroduces
-  that filter.
+  **Rovers decode in Contest mode**: as in WSJT-X 3.0.2, FT8 drops rover (`/R`) and `TU;` decodes
+  outside a contest, where they are almost always false, and keeps them with Contest mode on or as
+  a Hound, so VHF contest rovers still come through. Tests fail if either half changes.
 - **🗺️ APRS that shows you the network and tells you the truth about your receiver.** Stations draw
   as their **actual APRS symbol** rather than identical dots: cars, trucks, bicycles and people,
   weather stations, digipeaters and iGates, campsites, balloons, boats and aircraft, with vehicles
@@ -274,12 +274,13 @@ logs, and never shown back to the UI beyond "configured."
 ## Quick start
 
 1. **[Download](https://github.com/kd9taw/Nexus/releases/latest)** the file for your platform.
-   Every release carries all six, built from the same tree:
+   Every release carries all seven, built from the same tree:
 
    | File | Platform |
    |---|---|
    | `Nexus_<version>_x64-setup.exe` | **Windows 10/11 x64** — NSIS, per-user, no admin rights, bundles WebView2 **and** Hamlib so it works offline |
-   | `Nexus_<version>_aarch64.dmg` | **macOS on Apple Silicon** (M-series, macOS 12+) — signed and notarized; bundles Hamlib, so CAT works with nothing else installed; Intel Macs build from source |
+   | `Nexus_<version>_aarch64.dmg` | **macOS on Apple Silicon** (M-series, macOS 12+) — signed and notarized; bundles Hamlib, so CAT works with nothing else installed |
+   | `Nexus_<version>_x64.dmg` | **macOS on an Intel Mac** (macOS 12+) — the same app built for Intel, signed, notarized and self-updating like the Apple Silicon one |
    | `Nexus_<version>_amd64.AppImage` | **Linux on a PC, portable** — one file, runs from anywhere, updates itself in place, bundles Hamlib so CAT works with nothing installed |
    | `Nexus_<version>_pc_amd64.deb` | **Debian / Ubuntu on a PC** — apt-managed; bundles Hamlib, and still pulls `libhamlib-utils` as a fallback |
    | `Nexus_<version>_pi_arm64_bookworm.deb` | **Raspberry Pi OS bookworm**, 64-bit (Pi 3/4/5) |
@@ -492,6 +493,9 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
 - **[AD1C Country Files](https://www.country-files.com/)** (MIT) — **Jim Reisert AD1C**. `cty.dat`
   maps callsigns to DXCC entities and CQ/ITU zones for the awards, the map and the Needed board
   (see **[NOTICE](NOTICE)**).
+- **[IOTA](https://www.iota-world.org/)** — **RSGB and IOTA Ltd**. The island-group list ships in the
+  installer with IOTA Ltd's permission (it is not in this repository) and names the group beside an
+  IOTA reference; Nexus checks iota-world.org for a newer copy at most monthly (see **[NOTICE](NOTICE)**).
 - **Street maps** (optional download) — map data © **[OpenStreetMap](https://www.openstreetmap.org/copyright)**
   contributors (ODbL), from the **[Protomaps basemap](https://github.com/protomaps/basemaps)**;
   drawn with **[MapLibre GL JS](https://github.com/maplibre/maplibre-gl-js)** (BSD-3-Clause) and
@@ -532,6 +536,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   (see **[NOTICE](NOTICE)**).
 - **[Hamlib](https://hamlib.github.io/)** — `rigctld` for CAT control, bundled on every platform
   (tools GPL-2.0-or-later, library LGPL-2.1-or-later; launched as a separate process, not linked).
+- **[libusb](https://libusb.info/)** (LGPL-2.1-or-later) — ships beside Hamlib in the macOS app as an
+  unmodified dynamic library, for radios on USB.
 - **[OpenSSL](https://www.openssl.org/)** (Apache-2.0) — the secure connection for HRDLog.net
   uploads on Linux, through the [`native-tls`](https://github.com/sfackler/rust-native-tls) crate
   (SChannel on Windows, Security.framework on macOS); bundled in the AppImage (see

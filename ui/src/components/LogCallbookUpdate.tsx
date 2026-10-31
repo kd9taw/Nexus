@@ -249,15 +249,21 @@ export function LogCallbookUpdate({
           )}
           <p className="qso-detail-bare">
             {t('logbook.tools.callbook.today', { spent: preview.spent, cap: preview.cap })}
+            {/* QRZ's count covers every program on the account and never holds the cap (ruling
+                954), so it is said here, as information, and not as the reason a run stops. */}
+            {preview.qrzCount !== null && (
+              <>
+                {' '}
+                {t('logbook.tools.callbook.qrzCount', { count: preview.qrzCount })}{' '}
+                {t('logbook.tools.callbook.qrzCountNote')}
+              </>
+            )}
           </p>
           {preview.lookupsNeeded > left && (
             <p className="qso-detail-bare">
               <strong>{t('logbook.tools.callbook.overCap', { count: left })}</strong>
               {preview.lookupsNeeded > preview.toLookUp && (
                 <> {t('logbook.tools.callbook.stroked', { count: preview.lookupsNeeded })}</>
-              )}
-              {preview.qrzCount !== null && (
-                <> {t('logbook.tools.callbook.qrzCount', { count: preview.qrzCount })}</>
               )}
             </p>
           )}

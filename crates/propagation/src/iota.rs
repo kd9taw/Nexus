@@ -16,10 +16,10 @@
 //! not a four-digit park number), and a comment naming two different groups names none. The bare
 //! `EU131` spelling counts only right after the word IOTA.
 //!
-//! **The island-group list ([`IotaGroups`]) is never shipped.** It is © Radio Society of Great
-//! Britain and © Islands On The Air (IOTA) Ltd, published at iota-world.org for personal,
-//! non-commercial home use. Nexus downloads it onto the operator's own machine only when they say
-//! yes, and only parses it here; without it, a reference is checked by its shape alone.
+//! **The island-group list ([`IotaGroups`]).** It is © Radio Society of Great Britain and
+//! © Islands On The Air (IOTA) Ltd, published at iota-world.org. A copy ships with Nexus by IOTA
+//! Ltd's permission and the shell refreshes it at most monthly (see NOTICE); this module only
+//! parses it. Without a list (the operator turned it off), a reference is checked by its shape alone.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -112,8 +112,7 @@ pub struct IotaGroup {
     pub name: String,
 }
 
-/// The island-group list, by reference. Built only from a copy the operator chose to download
-/// (see the module header).
+/// The island-group list, by reference (see the module header).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IotaGroups {
     by_ref: BTreeMap<String, String>,
@@ -123,6 +122,10 @@ pub struct IotaGroups {
 /// else): the copy is refused and the one already held is kept. The list held 1,178 groups in
 /// October 2026 and changes by a handful a year.
 pub const MIN_PLAUSIBLE_GROUPS: usize = 900;
+
+/// The longest group name kept, in characters; a longer one is cut to it. A real name is a few
+/// words.
+pub const NAME_MAX_CHARS: usize = 200;
 
 /// One entry of IOTA's `groups.json`, as far as Nexus reads it.
 #[derive(Deserialize)]
@@ -144,6 +147,10 @@ impl IotaGroups {
                 continue;
             };
             let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+            let name = match name.char_indices().nth(NAME_MAX_CHARS) {
+                Some((cut, _)) => name[..cut].trim_end().to_string(),
+                None => name,
+            };
             if !name.is_empty() {
                 by_ref.insert(r, name);
             }
@@ -262,6 +269,23 @@ mod tests {
         assert_eq!(g.name("OC-902"), Some("Sample Reef -aka Test Atoll-"));
         assert!(!g.contains("EU-999"));
         assert!(!g.plausible(), "three groups is not the real list");
+    }
+
+    /// A name far longer than any group's is cut to [`NAME_MAX_CHARS`], at a character, never
+    /// mid-way through one; a name at the limit is kept whole.
+    #[test]
+    fn a_very_long_group_name_is_cut() {
+        let long = "é".repeat(NAME_MAX_CHARS + 50);
+        let at = "a".repeat(NAME_MAX_CHARS);
+        let json =
+            format!(r#"[{{"refno":"EU-901","name":"{long}"}},{{"refno":"EU-902","name":"{at}"}}]"#);
+        let g = IotaGroups::parse(&json).expect("parses");
+        assert_eq!(g.name("EU-901"), Some("é".repeat(NAME_MAX_CHARS).as_str()));
+        assert_eq!(
+            g.name("EU-902"),
+            Some(at.as_str()),
+            "CONTROL: at the limit, kept whole"
+        );
     }
 
     #[test]

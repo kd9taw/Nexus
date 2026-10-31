@@ -161,19 +161,19 @@ describe('nonstandard-call (hashed) display parity', () => {
   // Mirrors qso.rs::nonstandard_form — the panel must show what goes ON AIR, or
   // snap.qso.txNow stops matching a row.
   it('a /P or /R station keeps its grid and its reports', () => {
-    // The reported bug: F4CYH/P's panel read `CQ  F4CYH/P` with no grid, and his Tx1
+    // The reported bug: K1ABC/P's panel read `CQ  K1ABC/P` with no grid, and its Tx1
     // and Tx2 rendered to the SAME string, so he could send neither locator nor report.
-    const m = genStdMessages({ dxCall: 'W9XYZ', myCall: 'F4CYH/P', myGrid: 'JN18', snr: -8 })
-    expect(m.tx1).toBe('W9XYZ F4CYH/P JN18')
-    expect(m.tx2).toBe('W9XYZ F4CYH/P -08')
-    expect(m.tx3).toBe('W9XYZ F4CYH/P R-08')
-    expect(m.tx4).toBe('W9XYZ F4CYH/P RR73')
-    expect(m.tx5).toBe('W9XYZ F4CYH/P 73')
-    expect(m.tx6).toBe('CQ F4CYH/P JN18')
+    const m = genStdMessages({ dxCall: 'W9XYZ', myCall: 'K1ABC/P', myGrid: 'JN18', snr: -8 })
+    expect(m.tx1).toBe('W9XYZ K1ABC/P JN18')
+    expect(m.tx2).toBe('W9XYZ K1ABC/P -08')
+    expect(m.tx3).toBe('W9XYZ K1ABC/P R-08')
+    expect(m.tx4).toBe('W9XYZ K1ABC/P RR73')
+    expect(m.tx5).toBe('W9XYZ K1ABC/P 73')
+    expect(m.tx6).toBe('CQ K1ABC/P JN18')
     // Working a /P DX is equally in the clear — nothing hashed in either direction.
-    const dx = genStdMessages({ dxCall: 'F4CYH/P', myCall: 'W9XYZ', myGrid: 'EN37', snr: -8 })
-    expect(dx.tx1).toBe('F4CYH/P W9XYZ EN37')
-    expect(dx.tx2).toBe('F4CYH/P W9XYZ -08')
+    const dx = genStdMessages({ dxCall: 'K1ABC/P', myCall: 'W9XYZ', myGrid: 'EN37', snr: -8 })
+    expect(dx.tx1).toBe('K1ABC/P W9XYZ EN37')
+    expect(dx.tx2).toBe('K1ABC/P W9XYZ -08')
     const r = genStdMessages({ dxCall: 'W9XYZ', myCall: 'KD9TAW/R', myGrid: 'EN52', snr: 3 })
     expect(r.tx1).toBe('W9XYZ KD9TAW/R EN52')
     expect(r.tx2).toBe('W9XYZ KD9TAW/R +03')
@@ -244,21 +244,21 @@ describe('nonstandard-call (hashed) display parity', () => {
     expect(m.tx2).toBe('K1ABC W9XYZ +03')
   })
   it('isStdCall matches WSJT-X stdCall — /P and /R in, everything else out', () => {
-    for (const c of ['W9XYZ', 'KD9TAW', 'W1AW', '9A1A', '2E0ABC', 'F4CYH/P', 'KD9TAW/R', 'f4cyh/p'])
+    for (const c of ['W9XYZ', 'KD9TAW', 'W1AW', '9A1A', '2E0ABC', 'K1ABC/P', 'KD9TAW/R', 'k1abc/p'])
       expect(isStdCall(c), c).toBe(true)
     for (const c of ['PJ4/K1ABC', 'KD9TAW/QRP', 'KD9TAW/3', 'YW18FIFA', '', 'AB', '<W9XYZ>'])
       expect(isStdCall(c), c).toBe(false)
   })
   it('suffixConflict is a property of the PAIR — /P beside /R only', () => {
-    expect(suffixConflict('KD9TAW/R', 'F4CYH/P')).toBe(true)
-    expect(suffixConflict('KD9TAW/P', 'F4CYH/R')).toBe(true)
+    expect(suffixConflict('KD9TAW/R', 'K1ABC/P')).toBe(true)
+    expect(suffixConflict('KD9TAW/P', 'K1ABC/R')).toBe(true)
     for (const [a, b] of [
-      ['KD9TAW/P', 'F4CYH/P'],
-      ['KD9TAW/R', 'F4CYH/R'],
+      ['KD9TAW/P', 'K1ABC/P'],
+      ['KD9TAW/R', 'K1ABC/R'],
       ['KD9TAW/P', 'W9XYZ'],
-      ['KD9TAW', 'F4CYH/R'],
+      ['KD9TAW', 'K1ABC/R'],
       ['KD9TAW', 'W9XYZ'],
-      ['W1/P', 'F4CYH/R'], // '/' before position 4 is not a suffix to the packer
+      ['W1/P', 'K1ABC/R'], // '/' before position 4 is not a suffix to the packer
     ])
       expect(suffixConflict(a, b), `${a} × ${b}`).toBe(false)
   })
@@ -278,21 +278,21 @@ describe('the pairs the packer cannot express — panel parity with the air', ()
     stdMessageList(genStdMessages({ dxCall, myCall, myGrid: grid, snr: -7 }))
 
   it('a /P × /R pair falls back to the hashed form rather than rename a station', () => {
-    // One `i3` per frame says what BOTH suffix bits mean, so `F4CYH/P KD9TAW/R EN52`
-    // goes on the air as `F4CYH/P KD9TAW/P EN52` — a station that does not exist. The
+    // One `i3` per frame says what BOTH suffix bits mean, so `K1ABC/P KD9TAW/R EN52`
+    // goes on the air as `K1ABC/P KD9TAW/P EN52` — a station that does not exist. The
     // hashed form carries both calls verbatim; the grid and the number are the price.
-    expect(gen('KD9TAW/R', 'F4CYH/P')).toEqual([
-      '<F4CYH/P> KD9TAW/R',
-      '<F4CYH/P> KD9TAW/R',
-      '<F4CYH/P> KD9TAW/R RRR',
-      '<F4CYH/P> KD9TAW/R RR73',
-      '<F4CYH/P> KD9TAW/R 73',
+    expect(gen('KD9TAW/R', 'K1ABC/P')).toEqual([
+      '<K1ABC/P> KD9TAW/R',
+      '<K1ABC/P> KD9TAW/R',
+      '<K1ABC/P> KD9TAW/R RRR',
+      '<K1ABC/P> KD9TAW/R RR73',
+      '<K1ABC/P> KD9TAW/R 73',
       'CQ KD9TAW/R EN52', // a CQ has no pair — still an ordinary Type 1 frame
     ])
-    expect(gen('KD9TAW/P', 'F4CYH/R')[0]).toBe('<F4CYH/R> KD9TAW/P')
+    expect(gen('KD9TAW/P', 'K1ABC/R')[0]).toBe('<K1ABC/R> KD9TAW/P')
     // Same suffix on both sides packs fine and stays in the clear.
-    expect(gen('KD9TAW/P', 'F4CYH/P')[0]).toBe('F4CYH/P KD9TAW/P EN52')
-    expect(gen('KD9TAW/R', 'F4CYH/R')[1]).toBe('F4CYH/R KD9TAW/R -07')
+    expect(gen('KD9TAW/P', 'K1ABC/P')[0]).toBe('K1ABC/P KD9TAW/P EN52')
+    expect(gen('KD9TAW/R', 'K1ABC/R')[1]).toBe('K1ABC/R KD9TAW/R -07')
   })
 
   it('a /P operator working a hashed DX rogers with RRR, so Tx3 stays tellable', () => {
@@ -360,7 +360,7 @@ describe('the pairs the packer cannot express — panel parity with the air', ()
 
   it('every callsign-class pair names both stations, and Tx3–Tx5 never collide', () => {
     for (const my of ['KD9TAW', 'KD9TAW/P', 'KD9TAW/R', 'YW18FIFA'])
-      for (const dx of ['W9XYZ', 'F4CYH/P', 'F4CYH/R', 'PJ4/K1ABC']) {
+      for (const dx of ['W9XYZ', 'K1ABC/P', 'K1ABC/R', 'PJ4/K1ABC']) {
         const m = gen(my, dx)
         for (let i = 0; i < 5; i++) {
           expect(m[i], `${my} × ${dx} tx${i + 1}`).toContain(my)
