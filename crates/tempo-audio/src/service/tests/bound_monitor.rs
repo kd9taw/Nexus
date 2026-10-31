@@ -1,0 +1,64 @@
+//! ONE WINDOW PER RADIO: a process bound to one radio never monitors another.
+//!
+//! Under simultaneous radios each radio runs in its own Nexus process (`--profile r<id>`). The
+//! monitor's read-only connection used to take every enabled radio regardless, so each window
+//! started a rigctld for the OTHER window's radio, on that radio's COM port and TCP port: the
+//! second window adopted the first window's daemon (and lost it whenever the first recycled its
+//! monitor), and the first kept retrying a COM port the second held. The single band-following
+//! window (no bound radio) still monitors every other radio, exactly as before.
+
+use super::*;
+
+/// Three enabled radios with rig models, each on its own COM port and rigctld port; radio 0 active.
+fn three_radios() -> Settings {
+    Settings {
+        radios: (0..3)
+            .map(|id| tempo_app::settings::RadioProfile {
+                id,
+                enabled: true,
+                rig_model: 1035,
+                serial_port: format!("COM{}", id + 4),
+                rigctld_port: 4540 + id as u16,
+                ..tempo_app::settings::RadioProfile::default()
+            })
+            .collect(),
+        active_radio: 0,
+        ..Settings::default()
+    }
+}
+
+fn ids(want: &[(u32, Transport)]) -> Vec<u32> {
+    want.iter().map(|(id, _)| *id).collect()
+}
+
+#[test]
+fn a_bound_process_monitors_no_other_radio() {
+    let s = three_radios();
+    let (active, want) = monitor_want(&s, None, Some(0));
+    assert_eq!((active, ids(&want)), (0, vec![]));
+}
+
+/// A bound window whose operator moved off its own radio still watches its own, and only that.
+#[test]
+fn a_bound_process_switched_away_watches_only_its_own_radio() {
+    let mut s = three_radios();
+    s.active_radio = 2;
+    let (_, want) = monitor_want(&s, None, Some(0));
+    assert_eq!(ids(&want), vec![0]);
+}
+
+/// A `--profile r<id>` that names no radio in the roster opens nothing at all.
+#[test]
+fn a_process_bound_to_a_missing_radio_monitors_nothing() {
+    let s = three_radios();
+    let (_, want) = monitor_want(&s, None, Some(9));
+    assert_eq!(ids(&want), Vec::<u32>::new());
+}
+
+/// The single band-following window: every enabled, non-active radio with a rig model, as before.
+#[test]
+fn an_unbound_process_monitors_every_other_radio() {
+    let s = three_radios();
+    let (active, want) = monitor_want(&s, None, None);
+    assert_eq!((active, ids(&want)), (0, vec![1, 2]));
+}

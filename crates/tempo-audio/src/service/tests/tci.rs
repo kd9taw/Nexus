@@ -270,7 +270,7 @@ fn the_launch_and_the_monitor_dial_the_tci_server_the_settings_name() {
         tci_port: 50001,
         ..tempo_app::settings::RadioProfile::default()
     });
-    let (_, pool) = monitor_want(&s, None);
+    let (_, pool) = monitor_want(&s, None, None);
     let (_, t) = pool
         .iter()
         .find(|(id, _)| *id == 9)
