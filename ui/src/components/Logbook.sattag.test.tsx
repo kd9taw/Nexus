@@ -18,8 +18,10 @@
 // unmistakably a decision. The last test here is the other half of the bargain — the edit form
 // still carries neither field, so the preserve rule is untouched.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
-import { render, waitFor, fireEvent, cleanup } from '@testing-library/react'
+import { render, waitFor, fireEvent, cleanup, screen } from '@testing-library/react'
 import { Logbook } from './Logbook'
+import { itemLabels, menuItem, openRowSubmenu } from './Logbook.rowMenu.testkit'
+import { t } from '../i18n'
 import * as api from '../api'
 import type { LogQuestion } from '../features/logAnswers'
 
@@ -76,19 +78,13 @@ async function renderLog(tagged: boolean) {
     <Logbook defaultBand="70cm" defaultFreqMhz={435.5} defaultMode="SSB" />,
   )
   await waitFor(() => expect(container.querySelector('.logbook-row:not(.head)')).not.toBeNull())
-  // By its accessible name, the way an operator finds it — the row carries a QSL select too,
-  // so a bare `querySelector('select')` would answer with the wrong control.
-  const sat = await waitFor(() => {
-    const el = container.querySelector(
-      'select[aria-label="Set satellite for K0ABC"]',
-    ) as HTMLSelectElement
-    expect(el).not.toBeNull()
-    return el
-  })
+  // The row's ⋯ menu, its Satellite submenu.
+  const sat = await openRowSubmenu('K0ABC', t('logbook.row.menu.sat'))
   return { container, sat }
 }
 
-const values = (s: HTMLSelectElement) => [...s.options].map((o) => o.value)
+const CLEAR = t('logbook.row.sat.clear')
+const values = (m: HTMLElement) => itemLabels(m)
 const setSatTag = () => api.setSatTagById as ReturnType<typeof vi.fn>
 /** The contact on screen, by its id — never its position (a Remote delete shifts positions). */
 const K0ABC = expect.objectContaining({ id: 'id-K0ABC' })
@@ -112,14 +108,14 @@ describe('correcting a satellite tag from inside Nexus', () => {
 
   it('corrects a wrong designator to the one the operator picked', async () => {
     const { sat } = await renderLog(true)
-    fireEvent.change(sat, { target: { value: 'AO-91' } })
+    fireEvent.click(menuItem(sat, 'AO-91'))
     await waitFor(() => expect(setSatTag()).toHaveBeenCalledWith(K0ABC, 'AO-91'))
   })
 
   it('REMOVES the tag when the operator says the contact was not via satellite', async () => {
     const { sat } = await renderLog(true)
-    expect(values(sat), 'the way out has to be reachable').toContain('clear')
-    fireEvent.change(sat, { target: { value: 'clear' } })
+    expect(values(sat), 'the way out has to be reachable').toContain(CLEAR)
+    fireEvent.click(menuItem(sat, CLEAR))
     // `null`, and only `null`, is the removal — the same shape as markQslSent's withdrawal.
     await waitFor(() => expect(setSatTag()).toHaveBeenCalledWith(K0ABC, null))
   })
@@ -129,15 +125,15 @@ describe('correcting a satellite tag from inside Nexus', () => {
     // Positive control: the picker itself rendered, so the missing entry below is a real
     // absence and not a dead query against a control that was never there.
     expect(values(sat)).toContain('SO-50')
-    expect(values(sat)).not.toContain('clear')
+    expect(values(sat)).not.toContain(CLEAR)
   })
 
   it('treats the placeholder as a non-choice and writes nothing', async () => {
     const { sat } = await renderLog(true)
-    // '' is where the select sits when the operator has chosen nothing. Honouring it as a
-    // removal would erase a tag nobody asked to erase — the same trap an empty QSL-sent code
-    // is refused for.
-    fireEvent.change(sat, { target: { value: '' } })
+    // Opening the menu and leaving it is choosing nothing. Honouring that as a removal would
+    // erase a tag nobody asked to erase — the same trap an empty QSL-sent code is refused for.
+    fireEvent.keyDown(sat, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
     expect(setSatTag()).not.toHaveBeenCalled()
   })
 })

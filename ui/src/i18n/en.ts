@@ -1887,6 +1887,82 @@ export const EN = {
   'logbook.column.ituz': 'ITU zone',
   'logbook.column.cont': 'Continent',
   'logbook.column.distance': 'Distance (km)',
+  // Your contacts' paths (features/pathGrade.ts, the Logbook's Path column and filter, the contact
+  // card): which way round each logged contact most likely went. A grade stamped when the contact
+  // was logged is the station's own (beam heading, receivers, decodes) over the model; one made
+  // afterwards is the model's monthly median alone, never a measurement. `{{n}}`, `{{pct}}`,
+  // `{{open}}`, `{{outside}}`, `{{polar}}`, `{{other}}`, `{{ms}}`, `{{done}}` and `{{total}}` are
+  // numbers; ▸ ◂ ▸◂ ? ⊕ are invariant marks; ANT_PATH and ADIF are field names, kept verbatim.
+  'logbook.column.path': 'Path',
+  'logbook.column.path.title':
+    'The path each contact most likely took: ▸ short, ◂ long, ▸◂ either, ? outside the model, ⊕ across the polar cap. Bright: graded when it was logged. Dim: modelled afterwards.',
+  'logbook.filters.path': 'Path',
+  'logbook.filters.pathTitle':
+    'The path each contact most likely took, as the Path column grades it',
+  'logbook.filters.pathLong': 'Long path',
+  'logbook.filters.pathPolar': 'Across the polar cap',
+  'pathGrade.verdict.short': 'Short path',
+  'pathGrade.verdict.long': 'Long path',
+  'pathGrade.verdict.either': 'Either path',
+  'pathGrade.verdict.unknown': 'Outside the model',
+  'pathGrade.cell.either': 'either',
+  'pathGrade.cell.outside': 'outside',
+  'pathGrade.none': 'No path grade yet',
+  'pathGrade.sentence': '{{verdict}}, {{conf}}.',
+  'pathGrade.sentence.polar': '{{verdict}}, {{conf}} — across the polar cap.',
+  'pathGrade.sentence.bare': '{{verdict}}.',
+  'pathGrade.sentence.barePolar': '{{verdict}} — across the polar cap.',
+  'pathGrade.sentence.either': 'Either path: the two were modelled within 6 dB of each other.',
+  'pathGrade.sentence.eitherPolar':
+    'Either path: the two were modelled within 6 dB of each other; the short path crosses the polar cap.',
+  'pathGrade.sentence.outside': 'Outside the model: both paths were modelled closed at that hour.',
+  'pathGrade.why.lead': 'Why: {{text}}.',
+  'pathGrade.why.openS': 'only the short path was modelled open',
+  'pathGrade.why.openL': 'only the long path was modelled open',
+  'pathGrade.why.marginS': 'the short path was modelled at least 6 dB better',
+  'pathGrade.why.marginL': 'the long path was modelled at least 6 dB better',
+  'pathGrade.why.reliabS':
+    'the short path was modelled much more reliable (the model gave no signal-to-noise figure)',
+  'pathGrade.why.reliabL':
+    'the long path was modelled much more reliable (the model gave no signal-to-noise figure)',
+  'pathGrade.why.within': 'the two paths were modelled within 6 dB of each other',
+  'pathGrade.why.closed': 'both paths were modelled closed',
+  'pathGrade.why.greyS': 'grey line along the short path',
+  'pathGrade.why.greyL': 'grey line along the long path',
+  'pathGrade.why.heardS': 'other receivers along the short path heard the same signal: {{n}}',
+  'pathGrade.why.heardL': 'other receivers along the long path heard the same signal: {{n}}',
+  'pathGrade.why.lateDt':
+    'their decodes ran {{ms}} ms late (decodes: {{n}}), which is not evidence on its own',
+  'pathGrade.tier.logged': 'Graded when it was logged, from the path card for that station.',
+  'pathGrade.tier.modelled':
+    'Modelled afterwards from the propagation model alone (a monthly median, not a measurement).',
+  'pathGrade.ssn.logged': 'Solar activity from the flux logged with the contact.',
+  'pathGrade.ssn.recent': 'Solar activity: today’s, as no flux was logged with the contact.',
+  'pathGrade.stale':
+    'The grade stamped when it was logged was made for another grid or band, so this one is the model’s.',
+  'pathGrade.measure.progress': 'Grading the log: {{done}} of {{total}}',
+  'pathGrade.measure.coverage':
+    'Last 30 days, graded contacts: {{n}}. In hours the model calls open on some path: {{open}}%. Outside the model: {{outside}}%.',
+  'pathGrade.measure.polar':
+    'Open on some path — polar paths: {{polar}}%, other paths: {{other}}%.',
+  'pathGrade.measure.heading':
+    'A beam heading logged with the contact (ANT_AZ) agrees with the model’s better path: {{pct}}% (contacts judged: {{n}}).',
+  'pathGrade.measure.noHeading':
+    'No contact yet with a logged beam heading and a clear model margin.',
+  'pathGrade.measure.none': 'No graded contacts in the last 30 days yet.',
+  'pathGrade.measure.ungradable':
+    'Not graded: {{n}} (no grid square, a VHF band, or no solar flux for their part of the cycle).',
+  'contactCard.path': 'Path',
+  'contactCard.path.loading': 'Working out the path…',
+  'contactCard.path.none':
+    'No path for this contact: it needs both grid squares, and solar flux logged with it if it is more than three months old.',
+  'contactCard.path.details': 'Why, and how sure',
+  'contactCard.path.day': 'The path over that day, modelled. The marked hour is the contact’s.',
+  'contactCard.path.pick': 'Your antenna path',
+  'contactCard.path.pickTitle':
+    'Adds the ADIF field ANT_PATH, written when you save the contact. Nexus never fills it by itself.',
+  'contactCard.path.pickShort': 'Short path',
+  'contactCard.path.pickLong': 'Long path',
   'logbook.column.qslSentDate': 'Card sent',
   'logbook.column.qslRcvdDate': 'Card received',
   'logbook.column.lotwRcvdDate': 'LoTW received',
@@ -1969,13 +2045,10 @@ export const EN = {
   'logbook.row.qsl.none': 'Not confirmed',
   'logbook.row.spot.title':
     "Spot {{call}} to the DX cluster (pre-fills this QSO's call + frequency)",
-  'logbook.row.spot.aria': 'Spot {{call}} to the DX cluster',
   'logbook.row.pushQrz.title':
     'Push {{call}} to your QRZ logbook (re-push is safe — duplicates are detected)',
-  'logbook.row.pushQrz.aria': 'Push {{call}} to QRZ',
   'logbook.row.qrzCorrect.title':
     'Correct {{call}} in your QRZ logbook — overwrites the copy QRZ already holds. One contact at a time; you confirm what changes first.',
-  'logbook.row.qrzCorrect.aria': 'Correct {{call}} at QRZ',
   'logbook.qrzCorrect.aria': 'Correct a contact at QRZ',
   'logbook.qrzCorrect.heading': 'Correct {{call}} at QRZ',
   'logbook.qrzCorrect.reading': 'Reading QRZ’s copy of {{call}}…',
@@ -1987,10 +2060,10 @@ export const EN = {
   'logbook.qrzCorrect.recovering': 'Deleting…',
   'logbook.row.pushClublog.title':
     'Push {{call}} to ClubLog (re-push is safe — duplicates are detected)',
-  'logbook.row.pushClublog.aria': 'Push {{call}} to ClubLog',
   // World Radio League per-row push (the manual verification / bounce-recovery path).
   'logbook.row.pushWrl.title': 'Send this QSO with {{call}} to World Radio League',
-  'logbook.row.pushWrl.aria': 'Push the QSO with {{call}} to World Radio League',
+  // LoTW per-row upload: the bulk upload's TQSL path, one contact at a time.
+  'logbook.row.pushLotw.title': 'Sign the QSO with {{call}} with TQSL and upload it to LoTW (uses your Station Location in Settings)',
   'logbook.push.wrl.ok': '{{call}} sent to World Radio League',
   'logbook.push.wrl.duplicate': 'World Radio League already has {{call}}',
   'logbook.push.wrl.unavailable': 'World Radio League is busy — {{call}} will go on the next try',
@@ -1998,13 +2071,11 @@ export const EN = {
   'logbook.push.wrl.failed': 'World Radio League push failed: {{detail}}',
   'logbook.row.pushHrdlog.title':
     'Push {{call}} to HRDLog.net (live-logging/awards site — not an ARRL confirmation source; re-push is safe)',
-  'logbook.row.pushHrdlog.aria': 'Push {{call}} to HRDLog.net',
   // The <select>'s VALUES are the ADIF QSL_SENT_VIA letters B/D/E and stay in the code; only
   // these labels are prose. They are capitalised menu items, which is why they are not the
   // same entries as the lower-case words that appear inside the sentences below.
   'logbook.row.qslSent.title':
     "Mark a QSL request sent to {{call}} (bureau/direct/electronic). A request is not a confirmation — the row stays here until it's confirmed.",
-  'logbook.row.qslSent.aria': 'Mark QSL sent to {{call}}',
   'logbook.qsl.cardMarked': 'QSL card recorded for {{call}}',
   'logbook.qsl.cardCleared': 'QSL card cleared for {{call}}',
   'logbook.row.qslRcvd.card': 'Card received',
@@ -2015,6 +2086,17 @@ export const EN = {
   'logbook.row.qslSent.electronic': 'Electronic',
   'logbook.row.edit': 'Edit {{call}}',
   'logbook.row.delete': 'Delete {{call}}',
+  'logbook.row.more': 'More actions for {{call}}',
+  'logbook.row.menu.spot': 'Spot to the DX cluster',
+  'logbook.row.menu.qrz': 'Upload to QRZ Logbook',
+  'logbook.row.menu.qrzCorrect': 'Correct on QRZ Logbook',
+  'logbook.row.menu.clublog': 'Upload to Club Log',
+  'logbook.row.menu.hrdlog': 'Upload to HRDLog',
+  'logbook.row.menu.wrl': 'Upload to World Radio League',
+  'logbook.row.menu.lotw': 'Upload to LoTW',
+  'logbook.row.menu.lotwBusy': 'Not now: a LoTW upload is already running',
+  'logbook.row.menu.sat': 'Satellite',
+  'logbook.row.menu.delete': 'Delete',
 
   // The satellite tag. The <select>'s VALUES are LoTW's own satellite names and stay in the
   // code — only these labels are prose. "Clear" is a separate entry and not a blank box on
@@ -2022,7 +2104,6 @@ export const EN = {
   // something the operator chooses rather than something a form submits by omission.
   'logbook.row.sat.title':
     'Record which satellite {{call}} was worked through, or clear a tag added by mistake. Only satellites LoTW accepts are offered.',
-  'logbook.row.sat.aria': 'Set satellite for {{call}}',
   'logbook.row.sat.clear': 'Not via satellite',
   'logbook.sat.tagged': '{{call}} tagged as worked via {{sat}}',
   'logbook.sat.cleared': 'Satellite tag cleared for {{call}}',
@@ -2080,6 +2161,13 @@ export const EN = {
     'HRDLog.net unavailable — {{call}} not confirmed uploaded; try again later',
   'logbook.push.hrdlog.rejected': '✗ HRDLog.net rejected {{call}}: {{reason}}',
   'logbook.push.hrdlog.failed': '✗ HRDLog.net push failed: {{detail}}',
+  // LoTW per-row upload results. Failures reuse the bulk upload's logbook.lotw.upload.* words.
+  'logbook.push.lotw.ok': '✓ {{call}} signed and uploaded to LoTW — it confirms when the other station uploads',
+  'logbook.push.lotw.duplicate': '✓ {{call}} was already on LoTW',
+  'logbook.push.lotw.already': '{{call}} is already uploaded to LoTW',
+  'logbook.push.lotw.confirmed': '{{call}} is already confirmed, so it is not uploaded to LoTW',
+  'logbook.push.lotw.timeless': '{{call}} has no time of day, so LoTW can never match it — not sent',
+  'logbook.push.lotw.none': '{{call}} was not sent to LoTW',
 
   // Deleting one contact. `{{band}}` is a band name — never translated.
   'logbook.delete.heading': 'Delete the QSO with {{call}} on {{band}}?',
@@ -3754,6 +3842,12 @@ export const EN = {
   'map.layer.relief.label': 'Relief (World view)',
   'map.layer.muf.label': 'Ionosonde MUF',
   'map.layer.aurora.label': 'Aurora oval',
+  // The aurora row's second line: NOAA's OVATION oval is a forecast, for {{time}} (a UTC stamp,
+  // "30 Oct 04:04Z"). {{ago}} is prop.opening.ago.* ("2h ago").
+  'map.layer.aurora.forecast': 'forecast for {{time}}',
+  'map.layer.aurora.forecast.past': 'forecast for {{time}} ({{ago}})',
+  'map.layer.aurora.forecast.title': 'NOAA OVATION aurora forecast for {{time}}',
+  'map.layer.aurora.observed': 'from the solar wind observed {{time}}',
   'map.layer.flare.label': 'Flare blackout (D-RAP)',
   'map.layer.pca.label': 'Proton polar cap (PCA)',
   'map.layer.coast.label': 'Coastlines',
@@ -3864,7 +3958,7 @@ export const EN = {
   'globe.layer.heat': 'Band heat',
   'globe.layer.openings': 'Opening sectors',
   'globe.layer.flare': 'Flare blackout',
-  'globe.layer.aurora': 'Aurora',
+  'globe.layer.aurora': 'Aurora (forecast)',
   // The MUF layer's whole name is the acronym — a token, and a constant in the component.
   'globe.layer.pca': 'Polar cap (PCA)',
   'globe.layer.greyline': 'Greyline',
@@ -3938,6 +4032,18 @@ export const EN = {
   // The Bz gauge when its reading is old or missing ({{ago}} is prop.opening.ago.*: "45m ago").
   'prop.spaceWx.bz.stale': 'last reading {{ago}}',
   'prop.spaceWx.bz.none': 'no solar-wind reading',
+  // Every other index under the same rule: a number NOAA did not give is drawn as "—" with this
+  // line (never the model's stand-in), and a reading past its product's cadence with its age.
+  'prop.spaceWx.none': 'no reading from NOAA',
+  'prop.spaceWx.stale': 'last reading {{ago}}',
+  // Each gauge's hover: where the number came from and when it was measured. {{time}} is a UTC
+  // stamp ("29 Oct 20:00Z"), {{day}} a date ("29 Oct"), {{ap}} a whole number.
+  'prop.spaceWx.src.sfi': 'NOAA · Penticton 10.7 cm solar flux, measured {{time}}',
+  'prop.spaceWx.src.kp': 'NOAA · estimated planetary Kp (1-minute), {{time}}',
+  'prop.spaceWx.src.xray': 'NOAA · GOES X-ray flux, {{time}}',
+  'prop.spaceWx.src.a': 'NOAA · daily planetary A for {{day}}',
+  'prop.spaceWx.src.apNow': 'ap now ≈{{ap}} (estimated from Kp)',
+  'prop.spaceWx.src.standIn': 'NOAA gave no reading of this, so none is shown',
   'prop.impact.a.storm': 'stormy day — HF rough, polar paths out',
   'prop.impact.a.active': 'active day — paths up and down',
   'prop.impact.a.unsettled': 'unsettled day — minor fading spells',
@@ -4035,6 +4141,8 @@ export const EN = {
 
   // SWPC R/S/G scales. The letters R, S and G are the scale names and stay in the code.
   'prop.scales.none': 'No live space-weather scales right now.',
+  // The scales chips' age once the station's copy is old ({{ago}} is prop.opening.ago.*).
+  'prop.scales.asOf': 'as of {{ago}}',
   'prop.scales.r.title': 'Radio blackout — HF absorption on sunlit paths',
   'prop.scales.s.title': 'Solar radiation storm — polar HF',
   'prop.scales.g.title': 'Geomagnetic storm — high-lat paths + aurora',
@@ -4110,6 +4218,11 @@ export const EN = {
   // Geomagnetic storm heads-up (stormAlert.ts). A storm is hours-to-days of degraded
   // HF, unlike a flare's minutes — the copy says what it means for operating, and the
   // forecast line is explicitly a forecast.
+  // The flare heads-up toast. {{cls}} is the flare class ("M2.0"), {{r}} the NOAA R level digit,
+  // {{mhz}} and {{mins}} whole numbers (the D-RAP ceiling and NOAA's empirical fade estimate).
+  'prop.flareAlert.now': '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded',
+  'prop.flareAlert.fade':
+    '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded · fade ~{{mins}} min',
   'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} (Kp {{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
   'prop.stormAlert.forecast': '🧲 NOAA expects G{{g}} (Kp {{kp}}) from {{when}} — HF likely degraded then',
   'prop.openingAlert.thin':
@@ -4825,6 +4938,10 @@ export const EN = {
   'logbook.filters.activation.title': 'Show only the contacts of the activation running now ({{reference}}): its park on each UTC day it has run. Click again to show every contact.',
   'connect.pane.activation.title': 'Activation',
   'connect.pane.activation.basic': 'Your POTA or SOTA activation: each park’s count today, park to park, the rate and its contacts.',
+  'connect.pane.pathDay.title': 'Path over the day',
+  'connect.pane.pathDay.basic': 'Select a station to see when its path opens today, and which way round.',
+  'connect.pane.pathRegions.title': 'Paths to the regions',
+  'connect.pane.pathRegions.basic': 'When and which way round each DX region opens today, modelled from your grid.',
   'activation.pane.none': 'No activation running. Start one on the POTA / SOTA view.',
   'activation.pane.running': 'Running {{span}}',
   'activation.pane.midnight': '0000Z in {{span}}',
@@ -7773,6 +7890,17 @@ export const EN = {
   'settings.connections.qrz.key.saved': 'QRZ Logbook key saved — auto-upload to QRZ is ON',
   'settings.connections.qrz.key.clearFailed': 'Could not clear the QRZ Logbook key',
   'settings.connections.qrz.key.cleared': 'QRZ Logbook key cleared — auto-upload to QRZ is off',
+  // The first login saved for QRZ Logbook, ClubLog or eQSL asks before it sends the contacts never
+  // sent there (an imported log included). {{service}} is the service's own name. The cancel
+  // button, "fromNow", is the default: it has the focus, and Escape answers it.
+  'settings.connections.backlog.title': {
+    one: 'Send {{count}} contact not yet sent to {{service}}?',
+    other: 'Send {{count}} contacts not yet sent to {{service}}?',
+  },
+  'settings.connections.backlog.body':
+    'Saving this login turns uploads to {{service}} on. Contacts you make from now on are sent as you log them either way. Older contacts can still be sent from the Logbook whenever you choose.',
+  'settings.connections.backlog.send': 'Send them',
+  'settings.connections.backlog.fromNow': 'Only contacts made from now on',
   'settings.connections.qrz.sync.failed': 'QRZ sync failed',
   // ⚠️ QSO is the hobby's own word for a contact — it does not inflect into another language.
   'settings.connections.qrz.sync.done': {
@@ -8606,6 +8734,20 @@ export const EN = {
   'setup.about.newToDigital.blurb': 'You work phone or CW and are new to FT8 and the other digital modes. The Phone and CW screens stay on.',
   'setup.about.experienced': 'Experienced',
   'setup.about.experienced.blurb': 'Every screen on and all of Settings open, as you would expect.',
+  // The first step's second question: how many radios. Never stored; "Two or more" opens the radio
+  // setup once the rig step has saved the second radio.
+  'setup.about.radios.title': 'How many radios will Nexus run?',
+  'setup.about.radios.one': 'One radio',
+  'setup.about.radios.one.blurb': 'Set it up on the “Your rig” step.',
+  'setup.about.radios.several': 'Two or more',
+  'setup.about.radios.several.blurb': 'Set up the first on the “Your rig” step and add the next there. Nexus then asks which radio does which bands and modes.',
+  'setup.rig.several.hint': 'Set up your first radio here. Then “{{button}}” below adds the next, and the radio setup opens to say which radio does which bands and modes. A radio on the network is added in Settings ▸ Radio ▸ Radios.',
+  // The log step's logbook services, for an operator switching from another program. Nothing is
+  // typed or sent here; logins stay in Settings ▸ Confirmations.
+  'setup.services.title': 'Where your contacts go',
+  'setup.services.sub': 'Nothing is sent from this setup. Logins go in Settings ▸ Confirmations, beside each service. Saving a QRZ, ClubLog or eQSL login there turns its upload on, and Nexus then sends that service the contacts in your log it has no record of sending there, imported ones included.',
+  'setup.services.openAfter.label': 'Open Settings ▸ Confirmations when I finish',
+  'setup.services.openAfter.blurb': 'Where you enter your logins and choose what uploads.',
   'setup.finish.walk.label': 'Walk me through my first FT8 contact',
   'setup.finish.walk.blurb': 'Four short lines after Finish. It changes nothing and sends nothing.',
   'firstContact.title': 'Your first FT8 contact',
@@ -9754,6 +9896,13 @@ export const EN = {
   'settings.connections.qrz.test.ok': '✓ QRZ Logbook reachable: {{detail}}',
   'settings.connections.qrz.test.fail':
     '✗ QRZ test failed: {{detail}} (Uploads need the per-logbook <b>API key</b> from logbook.qrz.com ▸ Settings ▸ API — not your QRZ password.)',
+  // LoTW / eQSL / ClubLog Tests. `{{service}}` is the connector's name (data, never translated);
+  // `{{detail}}` is the Test's own answer — the service's words or Nexus's — inserted verbatim.
+  'settings.connections.service.test.action': 'Test',
+  'settings.connections.service.test.title':
+    'Signs in to {{service}} with the saved login and reads — uploads nothing and changes nothing there',
+  'settings.connections.service.test.ok': '✓ {{service}}: {{detail}}',
+  'settings.connections.service.test.fail': '✗ {{service}} test failed: {{detail}}',
   'settings.connections.log.title': 'Connection log',
   'settings.connections.log.hint': 'every save, sync, push, and failure lands here',
   'settings.connections.log.empty':
@@ -10006,11 +10155,7 @@ export const EN = {
   // is set once at launch, so every "applies at next launch" is literal, not caution.
   'iota.credit': '© IOTA Ltd',
   'iota.credit.title': 'Island group names: © Islands On The Air (IOTA) Ltd and RSGB — iota-world.org',
-  'iota.consent.line': "Show island names? Nexus downloads IOTA Ltd's island-group list (about 300 KB) from iota-world.org onto this computer, for your own use, and refreshes it at most monthly.",
-  'iota.consent.yes': 'Download',
-  'iota.consent.no': 'No thanks',
-  'iota.consent.aria': 'IOTA island list',
-  'iota.consent.failed': 'The IOTA island list could not be downloaded',
+  'iota.list.failed': 'The IOTA island list could not be downloaded',
   'iota.notOnList': '{{ref}} is not on the IOTA island list.',
   'iota.offer.chip': 'IOTA {{ref}}',
   'iota.offer.aria': 'IOTA reference offered: {{ref}}',
@@ -10025,10 +10170,12 @@ export const EN = {
   'spots.row.iota.title': 'IOTA {{ref}}, from the spot comment',
   'spots.row.iota.needed': 'New IOTA: {{ref}}, from the spot comment',
   'settings.iotaList.legend': 'IOTA island list',
-  'settings.iotaList.consent.label': 'Download the IOTA island-group list',
-  'settings.iotaList.consent.hint': "IOTA Ltd's list (© RSGB and IOTA Ltd), downloaded from iota-world.org onto this computer for your own use and refreshed at most monthly. It names island groups and flags a reference that is not one. Off deletes the copy.",
-  'settings.iotaList.status': '{{count}} island groups · fetched {{date}}',
-  'settings.iotaList.empty': 'Not downloaded: references are checked by their shape (EU-131) only.',
+  'settings.iotaList.label': 'Show IOTA island names',
+  'settings.iotaList.hint': "IOTA Ltd's island-group list (© RSGB and IOTA Ltd) ships with Nexus by IOTA Ltd's permission and is checked at iota-world.org for a newer copy at most monthly. It names island groups and flags a reference that is not one. Off shows no names, stops the check and deletes any downloaded copy.",
+  'settings.iotaList.status': '{{count}} island groups · updated {{date}}',
+  'settings.iotaList.statusShipped': '{{count}} island groups · the copy shipped with Nexus ({{date}})',
+  'settings.iotaList.empty': 'Off: references are checked by their shape (EU-131) only.',
+  'settings.iotaList.none': 'On, no list yet: references are checked by their shape (EU-131) until the first download.',
   'settings.iotaList.failed': 'Last download failed: {{detail}}',
   'settings.countryFile.legend': 'Country file (DXCC)',
   'settings.countryFile.update.action': 'Update country file',
@@ -10766,6 +10913,148 @@ export const EN = {
   'connect.path.greyline.title': 'Greyline (terminator) opening',
   'connect.path.modeChip.title':
     '{{mode}}: ~{{pct}}% of days this circuit works right now (P.533)',
+  // The path "why" line (features/pathWhy.ts) — one sentence under the Path card's ceiling and
+  // on the selected station card. Clauses are joined with `pathWhy.sep`, a storm warning with
+  // `pathWhy.sepWarn`, and the whole is wrapped by `pathWhy.sentence`, so each language sets its
+  // own punctuation. `{{band}}` (20m), `{{layer}}` (E / F2), `{{mode}}` (2F2), `{{time}}` (1800Z)
+  // and Kp are invariant tokens. The hops and take-off angle are the P.533 model's monthly
+  // median (beyond 7000 km an estimate, `hopsEstimate` / `detail.modeEstimate`); the auroral
+  // zone, the polar cap and the aurora are space weather laid over it — the storm clauses say
+  // "may", never "will", and an unknown Kp is said to be unknown. The auroral zone is the band
+  // a quiet-time cap edge (~64° geomagnetic) sits in; the polar cap proper lies poleward of it.
+  'pathWhy.lead.band': '{{band}} short path',
+  'pathWhy.lead': 'Short path',
+  'pathWhy.hops': {
+    one: '{{count}} {{layer}} hop',
+    other: '{{count}} {{layer}} hops',
+  },
+  'pathWhy.hopsEstimate': {
+    one: 'about {{count}} {{layer}} hop',
+    other: 'about {{count}} {{layer}} hops',
+  },
+  'pathWhy.polar': 'crosses the polar cap',
+  'pathWhy.auroralZone': 'crosses the auroral zone',
+  'pathWhy.kpUnknown': 'Kp unknown (no Kp reading)',
+  'pathWhy.oval': 'crosses the auroral oval right now',
+  'pathWhy.grey.both': 'grey line at both ends',
+  'pathWhy.grey.me': 'grey line at your end',
+  'pathWhy.grey.dx': 'grey line at their end',
+  'pathWhy.storm.aurora': 'an aurora (Kp {{kp}} forecast at {{time}}) may weaken it',
+  'pathWhy.storm.cap': 'a storm (Kp {{kp}} forecast at {{time}}) may push the auroral zone over it',
+  'pathWhy.sep': ', ',
+  'pathWhy.sepWarn': ' — ',
+  'pathWhy.sentence': '{{text}}.',
+  'pathWhy.detail.summary': 'Details',
+  'pathWhy.detail.mode': 'Mode {{mode}}, take-off {{deg}}° (P.533 monthly median)',
+  'pathWhy.detail.modeEstimate':
+    'Mode {{mode}}, take-off {{deg}}° (an estimate: beyond 7000 km P.533 assumes this hop geometry from the distance alone, so it is the same every hour)',
+  'pathWhy.detail.polar':
+    'Auroral zone and polar cap: {{pct}}% of the path (poleward of {{lat}}° geomagnetic at Kp {{kp}}, {{source}})',
+  'pathWhy.detail.polarUnknown': 'Auroral zone and polar cap: unknown, because Kp is unknown',
+  'pathWhy.detail.polarNever':
+    'Auroral zone and polar cap: 0% of the path (it never reaches {{floor}}° geomagnetic, the edge at Kp 9)',
+  'pathWhy.detail.maxLat': 'Highest geomagnetic latitude on the path: {{lat}}°',
+  'pathWhy.detail.grey': 'Grey line: {{pct}}% of the path · in daylight: {{sun}}%',
+  'pathWhy.detail.oval': 'The live auroral oval lies across the path.',
+  'pathWhy.detail.note':
+    'The model is a monthly median and does not include storms; the auroral zone, the polar cap and the aurora are laid over it from space weather. Kp this hour: {{source}}.',
+  'pathWhy.kpSource.measured': 'measured',
+  'pathWhy.kpSource.forecast': 'forecast',
+  'pathWhy.kpSource.current': 'latest reading, no forecast for this hour',
+  'pathWhy.kpSource.unknown': 'unknown (no Kp reading)',
+  // Short path or long path (features/pathRoute.ts): the heading hint on the Path card and the
+  // selected station card, the polar chip, and the map's long-path button. The route call is the
+  // P.533 model's opinion (a monthly median), so the confidence words are "likely" / "possible",
+  // never "confirmed"; the long path has no reference fixture, so wherever it is shown it is
+  // labelled modelled and unvalidated, and the engine never calls it more than "possible". The hint is advice: nothing turns the rotator. `{{brg}}`,
+  // `{{sp}}` and `{{lp}}` are degrees (true), `{{band}}` (20m) and `{{time}}` (1800Z) invariant.
+  // The hint is wrapped by `pathWhy.sentence`. The chip names the polar cap or the auroral zone as
+  // the why line does; its title's `{{source}}` is a `pathWhy.kpSource.*` phrase.
+  'pathRoute.conf.likely': 'likely',
+  'pathRoute.conf.possible': 'possible',
+  'pathRoute.hint.short': 'Beam {{brg}}° for {{band}}: short path ({{conf}})',
+  'pathRoute.hint.long': 'Beam {{brg}}° for {{band}}: long path ({{conf}})',
+  'pathRoute.hint.either':
+    '{{band}} works either way: short path {{sp}}° or long path {{lp}}°, modelled within 6 dB',
+  'pathRoute.hint.eitherGreyLong':
+    '{{band}} could go either way: the short path {{sp}}° is modelled stronger, the long path {{lp}}° lies along the grey line',
+  'pathRoute.hint.eitherGreyShort':
+    '{{band}} could go either way: the long path {{lp}}° is modelled stronger, the short path {{sp}}° lies along the grey line',
+  'pathRoute.antipode': 'Near the antipode: every heading is about the same distance',
+  'pathRoute.why.shortClosed': ' — the short path is modelled closed now',
+  'pathRoute.why.margin': ', modelled about {{db}} dB better now',
+  'pathRoute.why.grey': ', the grey line lies along it',
+  'pathRoute.detail.now':
+    'Now on {{band}}: short path {{sp}}°, reliability {{spPct}}% · long path {{lp}}°, reliability {{lpPct}}% (P.533 monthly median)',
+  'pathRoute.detail.margin': 'Long path minus short path: {{db}} dB median SNR',
+  'pathRoute.lpCaveat':
+    'Modelled, unvalidated for long path: the reference model is checked for the short path only.',
+  'pathRoute.lpBadge': 'modelled, unvalidated for long path',
+  'pathRoute.chip.polar': 'Polar path',
+  'pathRoute.chip.storm': 'Polar path · Kp {{kp}} forecast from {{time}}',
+  'pathRoute.chip.zone': 'Auroral zone',
+  'pathRoute.chip.zoneStorm': 'Auroral zone · Kp {{kp}} forecast from {{time}}',
+  'pathRoute.chip.stormIf': 'Auroral zone if Kp {{kp}} (forecast from {{time}})',
+  'pathRoute.chip.title.cap':
+    'This route crosses the polar cap, where an aurora brings fading and flutter. The model has no storms; this comes from space weather. Kp this hour: {{source}}.',
+  'pathRoute.chip.title.zone':
+    'This route crosses the auroral zone, where an aurora brings fading and flutter. The model has no storms; this comes from space weather. Kp this hour: {{source}}.',
+  'pathRoute.chip.title.stormIf':
+    'The space-weather forecast puts the auroral zone over this route from {{time}} (Kp {{kp}}, forecast). The model has no storms.',
+  'map.path.long.suggested':
+    'The model favours the long path now (modelled, unvalidated for long path). Advice only: the rotator does not move.',
+  // Path over the day (components/prop/PathDayStrip.tsx, features/pathDay.ts): the selected
+  // station's band x UTC-hour strip and the ten DX regions' strips. Every figure is the model's
+  // monthly median, never a measurement; the long path is unvalidated (pathRoute.lpBadge shows
+  // beside it). Kp is labelled with its source (pathWhy.kpSource.*). `{{time}}`, `{{from}}` and
+  // `{{to}}` are UTC hours (14Z), `{{band}}` (20m), `{{pct}}` a whole percent, `{{kp}}` a number;
+  // Kp and MUF are invariant tokens. `pathDay.best.*` items are joined by `pathDay.best.sep` and
+  // wrapped by `pathDay.best.lead`.
+  'pathDay.mode.best': 'Best',
+  'pathDay.mode.aria': 'Which route the strip shows',
+  'pathDay.mode.title.best': 'Colour each hour by the route the model favours',
+  'pathDay.mode.title.short': 'Colour each hour by the short path',
+  'pathDay.mode.title.long': 'Colour each hour by the long path (modelled, unvalidated)',
+  'pathDay.aria': 'Path over the day: modelled reliability per band and UTC hour',
+  'pathDay.hour.title': 'Show {{time}} on the map',
+  'pathDay.cell.title': '{{band}} {{time}}, modelled: {{text}}',
+  'pathDay.cell.short': 'short path {{pct}}%',
+  'pathDay.cell.long': 'long path {{pct}}%',
+  'pathDay.cell.favours.short': 'the model favours the short path ({{conf}})',
+  'pathDay.cell.favours.long': 'the model favours the long path ({{conf}})',
+  'pathDay.cell.either': 'either way',
+  'pathDay.cell.closed': 'both ways modelled closed',
+  'pathDay.cell.aboveMuf': 'above the MUF',
+  'pathDay.grey.title': '{{time}}: {{text}}',
+  'pathDay.kp.title': '{{time}}: Kp {{kp}}, {{source}}',
+  'pathDay.legend.short': 'short path',
+  'pathDay.legend.long': 'long path',
+  'pathDay.legend.polar': 'auroral zone / polar cap',
+  'pathDay.legend.muf': 'MUF ceiling',
+  'pathDay.legend.kp': 'Kp: solid measured, hollow forecast, dashed the latest reading carried forward, dotted unknown',
+  'pathDay.legend.modelled': 'Modelled monthly median, not a measurement',
+  'pathDay.best.lead': 'Best: {{text}}.',
+  'pathDay.best.sep': '; ',
+  'pathDay.best.short': '{{band}} {{from}}–{{to}} by the short path',
+  'pathDay.best.long': '{{band}} {{from}}–{{to}} by the long path',
+  'pathDay.best.either': '{{band}} {{from}}–{{to}} either way',
+  'pathDay.best.plain': '{{band}} {{from}}–{{to}}',
+  'pathDay.best.none': 'No band is modelled open on this path today.',
+  'pathDay.scrub.map': 'Map at {{time}}',
+  'pathDay.scrub.back': 'Now',
+  'pathDay.region.eu': 'Europe',
+  'pathDay.region.ja': 'Japan & East Asia',
+  'pathDay.region.vk': 'Australia & New Zealand',
+  'pathDay.region.pacific': 'Pacific',
+  'pathDay.region.sa': 'South America',
+  'pathDay.region.af': 'Africa',
+  'pathDay.region.carib': 'Caribbean',
+  'pathDay.region.me': 'Middle East',
+  'pathDay.region.sas': 'South Asia',
+  'pathDay.region.polar': 'Antarctica',
+  'pathDay.region.expand': 'Show every band for {{region}}',
+  'pathDay.region.collapse': 'Show only the best band for {{region}}',
+  'pathDay.region.order': 'Ordered by the needed stations heard, then your logged contacts, in each region',
   'connect.outlook.heading': 'Band outlook',
   'connect.outlook.muf.title':
     'Maximum Usable Frequency — the modeled ceiling to long-haul DX right now. Bands below it are open; above it, closed.',
@@ -10775,6 +11064,12 @@ export const EN = {
   'connect.getout.none': 'No reception reports yet — call CQ, then watch who hears you.',
   'connect.getout.summary': '<b>{{count}}</b> hearing you · furthest <b>{{dist}}</b>',
   'connect.getout.select.title': 'Select {{call}} on the map',
+  'connect.getout.fresh': 'Start fresh',
+  'connect.getout.fresh.title': 'Count only the reception reports that arrive from now on, for trying an antenna. Nothing is deleted.',
+  'connect.getout.since': 'since {{time}}',
+  'connect.getout.showAll': 'Show all',
+  'connect.getout.showAll.title': 'Count every reception report again',
+  'connect.getout.none.since': 'No reception reports since {{time}} yet — call CQ, then watch who hears you.',
 
   // ── The Basic projections — one whole sentence per pane, per state ──────────────────
   // Every one of these was assembled from fragments. They are whole sentences now, with
@@ -10784,6 +11079,7 @@ export const EN = {
   'connect.basic.offline': 'No live propagation data right now.',
   'connect.basic.bandAdvisor.offline': 'No live band data yet.',
   'connect.basic.bandAdvisor.none': 'No bands modelled open right now.',
+  'connect.basic.bandAdvisor.unknown': 'No band heard yet, and with no current NOAA reading there is no model to say which bands are open.',
   'connect.basic.bandAdvisor.best': 'Best band now: {{band}} ({{word}}).',
   'connect.basic.bandAdvisor.bestRegion': 'Best band now: {{band}} to {{region}} ({{word}}).',
   'connect.basic.selection.none': 'Tap a station, spot, or DXpedition on the map.',
@@ -10813,8 +11109,11 @@ export const EN = {
     'SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} flare in progress; R{{scale}} radio blackout.',
   'connect.basic.getout.dir': '{{count}} hearing you — {{dir}}.',
   'connect.basic.getout.furthest': '{{count}} hearing you — furthest {{dist}}.',
+  'connect.basic.getout.dir.since': '{{count}} hearing you since {{time}} — {{dir}}.',
+  'connect.basic.getout.furthest.since': '{{count}} hearing you since {{time}} — furthest {{dist}}.',
   'connect.basic.bestband.none': 'No region reachable on any band yet.',
   'connect.basic.bestband': 'To {{region}}: try {{band}} ({{word}}).',
+  'connect.basic.bestband.noWord': 'To {{region}}: try {{band}}.',
   'connect.basic.activity.offline': 'No live activity data right now.',
   'connect.basic.activity.none': 'Quiet on all bands — no activity around you yet.',
   'connect.basic.activity.top': {
@@ -11442,6 +11741,9 @@ export const EN = {
   // The filter chips. `CQ`, `CQ+73` and `B4` are Q-code/log tokens and stay in the code;
   // these four are words. Every chip's EXPLANATION is a word.
   'operate.decodes.filters.aria': 'Filter decodes',
+  'operate.decodes.fold.label': 'Filters',
+  'operate.decodes.fold.labelLit': 'Filters · {{count}}',
+  'operate.decodes.fold.title': "Show or hide this pane's filter and sort controls. They fold away when the pane is short, so the list keeps its rows. Lit while a filter is on.",
   'operate.decodes.filter.all': 'All',
   'operate.decodes.filter.me': 'To me',
   'operate.decodes.filter.rx': 'On RX',
@@ -11483,6 +11785,20 @@ export const EN = {
   'operate.decodes.sort.label': 'sort',
   'operate.decodes.sort.time': 'Time',
   'operate.decodes.sort.freq': 'Freq',
+
+  // The Band Activity search box (in the pane's title row). It narrows the list to the lines that
+  // contain every word typed; `*` and `?` are wildcards. `{{shown}}` is how many rows are on screen,
+  // `{{total}}` how many the chips would show with the box empty.
+  'operate.decodes.search.placeholder': 'Search',
+  'operate.decodes.search.aria': 'Search Band Activity',
+  'operate.decodes.search.title':
+    'Show only the lines that contain what you type: a call, grid, report, CQ DX or POTA, or a country. Every word must match; * and ? are wildcards. Only this list changes: decoding, alerts and transmitting do not. ✕ or Esc clears it (Esc also stops transmitting, as everywhere).',
+  'operate.decodes.search.clear': 'Clear the search',
+  'operate.decodes.search.count': '{{shown}} of {{total}} match',
+  'operate.decodes.search.count.title':
+    'The search box is hiding the lines that do not match. Clear it to see the whole list.',
+  'operate.decodes.emptySearch.detail':
+    '{{count}} decodes are hidden by the search — clear it to see them.',
 
   // `{{count}}` is how many rows the pane is showing.
   'operate.decodes.heard': '{{count}} heard',
@@ -12684,6 +13000,25 @@ export const EN = {
   'sstv.gallery.delete.confirm.body': 'The image file is removed and cannot be recovered.',
   'sstv.gallery.delete.confirm.label': 'Delete image',
   'sstv.gallery.delete.failed': 'Could not delete the image',
+  'sstv.gallery.select.toolbar': 'Select pictures',
+  'sstv.gallery.select.all': 'Select all',
+  'sstv.gallery.select.clear': 'Clear selection',
+  'sstv.gallery.select.one.aria': 'Select the {{mode}} image received {{when}}',
+  'sstv.gallery.deleteSelected.label': 'Delete selected ({{count}})',
+  'sstv.gallery.deleteSelected.confirm.title': {
+    one: "Delete {{count}} picture?",
+    other: "Delete {{count}} pictures?",
+  },
+  'sstv.gallery.deleteSelected.confirm.body': 'The picture files are removed and cannot be recovered.',
+  'sstv.gallery.deleteSelected.confirm.label': {
+    one: "Delete {{count}} picture",
+    other: "Delete {{count}} pictures",
+  },
+  'sstv.gallery.deleteSelected.failed': 'Could not delete the selected pictures',
+  'sstv.gallery.deleteSelected.partial': {
+    one: "{{count}} picture was not deleted: {{reasons}}",
+    other: "{{count}} pictures were not deleted: {{reasons}}",
+  },
   'sstv.gallery.edit.aria': 'Edit and resend the {{mode}} image received {{when}}',
   'sstv.gallery.edit.title': 'Load this image into the composer',
   'sstv.gallery.edit.loaded': 'Loaded {{mode}} image into the composer',
@@ -12806,6 +13141,13 @@ export const EN = {
   'cw.scope.audio.title':
     'Receiver AUDIO centered on your CW pitch ({{lo}}–{{hi}} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.',
   'cw.scope.audio.sub': 'zero-beat',
+  'cw.scope.span.aria': 'Audio scope span',
+  'cw.scope.span.filter.label': 'Filter',
+  'cw.scope.span.filter.title': "Your radio's filter, centered on your CW pitch — the view for zero-beating",
+  'cw.scope.span.std.label': 'Std',
+  'cw.scope.span.std.title': 'The usual waterfall view: {{lo}}–{{hi}} Hz of receive audio',
+  'cw.scope.span.full.label': 'Full',
+  'cw.scope.span.full.title': 'All the receive audio: {{lo}}–{{hi}} Hz',
   'cw.scope.colors.label': 'Colors',
   'cw.scope.splitter.label': 'scope height',
   'cw.seam.columns.label': 'Decode column / Rig controls column',
@@ -12815,6 +13157,9 @@ export const EN = {
   'cw.rfZoom.full.label': 'Full',
   'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
   'cw.rfZoom.span.title': '±{{khz}} kHz around your dial',
+  'cw.rfZoom.band.label': 'Band',
+  'cw.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
+  'cw.rfZoom.band.partial': 'Your scope sweeps only part of this band',
 
   // ── CW ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ──────────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an
@@ -13261,6 +13606,9 @@ export const EN = {
   'phone.rfZoom.full.label': 'Full',
   'phone.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
   'phone.rfZoom.span.title': '±{{khz}} kHz around your dial',
+  'phone.rfZoom.band.label': 'Band',
+  'phone.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
+  'phone.rfZoom.band.partial': 'Your scope sweeps only part of this band',
 
   // ── Phone ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ───────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an escape
@@ -13415,6 +13763,7 @@ export const EN = {
   'shell.lane.audio.soundCard': 'SOUND CARD FAILED',
   'shell.lane.audio.noReceiveAudio': 'NO RECEIVE AUDIO',
   'shell.lane.audio.ptt': 'PTT NOT ACCEPTED',
+  'shell.lane.audio.pttUnconfirmed': 'PTT NOT CONFIRMED',
   'shell.lane.audio.flexAudio': 'NO FLEX AUDIO',
   'shell.lane.audio.flexAddress': 'NO FLEX RADIO IP',
   'shell.lane.audio.monitor': 'HEADPHONE MONITOR OFF',
@@ -13545,6 +13894,8 @@ export const EN = {
   'shell.work.failed': 'Could not work {{call}}',
   'shell.work.started': '▶ Working {{call}} — transmitting your call',
   'shell.work.failed.cat': 'Could not work {{call}} — check CAT',
+  'shell.work.unresolvedCq': 'This CQ\'s call shows as <...>: Nexus has not decoded it in full yet. Click the station\'s next CQ once its call shows.',
+  'shell.work.unresolvedCall': 'This call shows as <...>: Nexus has not decoded it in full yet. Click the station\'s next message once its call shows.',
   'shell.work.ready': '▶ {{call}} — {{mode}} {{band}}, ready to log',
   'shell.work.here': '▶ {{call}} — {{band}} {{freq}} MHz',
   'shell.pounce.qsy.failed': 'Could not QSY to {{call}}',

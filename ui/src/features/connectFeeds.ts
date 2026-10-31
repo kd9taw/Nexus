@@ -37,6 +37,7 @@ import {
   getKpForecast,
   getOtaSpots,
   getPathOutlook,
+  getPathRegions,
   getSolarIndices,
   getSpaceWxScales,
   getXrayNow,
@@ -51,6 +52,7 @@ import type {
   NoaaScalesView,
   OtaSpot,
   PathPrediction,
+  PathRegions,
   XrayNow,
 } from '../types'
 import { t } from '../i18n'
@@ -68,6 +70,8 @@ export interface Feed<T> {
 export interface KeyedFeed<T> {
   readonly name: string
   readonly load: (key: string) => Promise<T>
+  /** Poll each key this often while it is shown; absent = asked once per stretch of being shown. */
+  readonly everyMs?: number
 }
 
 /** What a feed holds (see the header). */
@@ -83,6 +87,18 @@ export interface Held<T> {
 export const BAND_OUTLOOK: Feed<PathPrediction> = { name: 'bandOutlook', load: () => getBandOutlook(), everyMs: 60_000 }
 /** Who hears me now: the backend reads the live PSK Reporter / RBN firehose on every call. */
 export const GETTING_OUT: Feed<GettingOut> = { name: 'gettingOut', load: () => getGettingOut(), everyMs: 30_000 }
+const GETTING_OUT_SINCE = new Map<number, Feed<GettingOut>>()
+/** Who hears me since a Start fresh time (Unix seconds); `null` is GETTING_OUT itself. One feed per
+ *  start time, so a new start asks afresh and never shows the last answer under the new start. */
+export function gettingOutFeed(since: number | null): Feed<GettingOut> {
+  if (since == null) return GETTING_OUT
+  let feed = GETTING_OUT_SINCE.get(since)
+  if (!feed) {
+    feed = { name: `gettingOut:${since}`, load: () => getGettingOut(since), everyMs: 30_000 }
+    GETTING_OUT_SINCE.set(since, feed)
+  }
+  return feed
+}
 /** NOAA's R/S/G scales and alerts: a 15-minute server cache, asked every 5 minutes (cheap). */
 export const SPACE_WX_SCALES: Feed<{ scales: NoaaScalesView; alerts: AlertView[] }> = {
   name: 'spaceWxScales',
@@ -101,8 +117,13 @@ export const SOLAR_INDICES: Feed<DailySolarIndices> = { name: 'solarIndices', lo
 /** The 3-day Kp forecast: the server's 15-minute cache (SWPC republishes every 30). App's storm
  *  heads-up and the Kp outlook box. */
 export const KP_FORECAST: Feed<KpForecast> = { name: 'kpForecast', load: () => getKpForecast(), everyMs: 900_000 }
-/** The outlook along the path to the selected station's grid, asked once per selection. */
-export const PATH_OUTLOOK: KeyedFeed<PathPrediction> = { name: 'pathOutlook', load: (grid) => getPathOutlook(grid) }
+/** The ten DX regions' path over the day: the shack keeps the model six hours, so this poll only
+ *  picks up the hours' Kp as the outlook moves (SWPC republishes every 30 minutes). */
+export const PATH_REGIONS: Feed<PathRegions> = { name: 'pathRegions', load: () => getPathRegions(), everyMs: 900_000 }
+/** The outlook along the path to the selected station's grid, asked again every minute while the
+ *  station stays selected: the shack keeps the day's prediction (P.533), so each ask only moves the
+ *  current hour, the Kp per hour and the route calls on. */
+export const PATH_OUTLOOK: KeyedFeed<PathPrediction> = { name: 'pathOutlook', load: (grid) => getPathOutlook(grid), everyMs: 60_000 }
 
 /** A programme's activators on the air now, with when the answer came (the board's "Updated" line). */
 export interface OtaAnswer {
@@ -295,7 +316,7 @@ function feedFor<T>(kf: KeyedFeed<T>, key: string): Feed<T> {
   }
   let feed = byKey.get(key)
   if (!feed) {
-    feed = { name: `${kf.name}:${key}`, load: () => kf.load(key), everyMs: null }
+    feed = { name: `${kf.name}:${key}`, load: () => kf.load(key), everyMs: kf.everyMs ?? null }
     byKey.set(key, feed)
   }
   return feed as Feed<T>

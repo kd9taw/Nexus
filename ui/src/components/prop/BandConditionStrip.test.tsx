@@ -26,6 +26,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { MapInsightRail } from './MapInsightRail'
 import type { BandReport, PropagationSnapshot } from '../../types'
+import { NO_MODEL_WORD } from '../../propViz'
 import {
   BASE_MODES,
   MODES,
@@ -218,7 +219,8 @@ describe('the map’s Band conditions list is lettered in the theme’s inks (#3
     const words = pills.map((p) => [p.textContent, ink(p) === 'browser' ? 'browser' : (ink(p) as { value: string }).value])
     expect(words).toEqual(
       BANDS.map((b) => {
-        const word = b.tier === 'Active' || b.tier === 'Moderate' ? 'Open' : (b.modeled ?? 'Open')
+        // A silent band with no model word is unknown (bandNoModel.test.tsx), lettered like any other.
+        const word = b.tier === 'Active' || b.tier === 'Moderate' ? 'Open' : (b.modeled ?? NO_MODEL_WORD)
         return [word, word === 'Closed' ? 'var(--text-dim)' : 'var(--text)']
       }),
     )

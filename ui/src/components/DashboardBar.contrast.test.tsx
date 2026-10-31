@@ -245,6 +245,31 @@ describe('the dashboard bar reads in every theme and mode', () => {
     for (const mode of MODES) expect(winnerAt(RULES, mode, quiet[0].chain, 'text-decoration-line')?.value ?? 'none', mode).not.toBe('underline')
   }, 60_000)
 
+  // A stale number is dimmed as its Space Wx gauge's is: the dim ink, never the full ink a TV across
+  // the room reads as the field now, and still readable.
+  it('a stale reading is lettered in the dim ink, readable, in every mode; a fresh one in full ink', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const stamped = (kpAt: number) =>
+      ({ ...PROP, source: 'live', spaceWx: { ...PROP.spaceWx, kp: 6, fetched: true, sfiAt: now - 3600, kpAt, xrayAt: now - 60, aDay: now - 3600 } }) as unknown as PropagationSnapshot
+    const kpOf = (words: Word[]) => words.find((w) => w.what.endsWith('.dash-index-v') && 'data-dim' in (w.chain[w.chain.length - 2]?.attrs ?? {}))
+    const stale = kpOf(await wordsOn('app tv-app', false, undefined, stamped(now - 3 * 3600)))
+    expect(stale, 'control: the stale Kp is marked dim').toBeTruthy()
+    const wrong: string[] = []
+    for (const mode of MODES) {
+      const face = nearest(RULES, mode, stale!.chain, 'background', 'background-color')!
+      const bg = colourOf(RULES, mode, face.at, face.value, pageOf(RULES, mode, stale!.chain))
+      const ink = nearest(RULES, mode, stale!.chain, 'color')!
+      const fg = hex(colourOf(RULES, mode, ink.at, ink.value, bg))
+      const dim = hex(colourOf(RULES, mode, stale!.chain, 'var(--text-dim)', bg))
+      if (fg !== dim) wrong.push(`${mode}: ${fg}, not the dim ink ${dim}`)
+    }
+    expect(wrong).toEqual([])
+    expect(unreadable(RULES, [stale!]), 'the dimmed number reads at 4.5:1').toEqual([])
+    // Negative control: the same storm, measured a minute ago, is drawn in no dim ink.
+    const fresh = await wordsOn('app tv-app', false, undefined, stamped(now - 60))
+    expect(kpOf(fresh), 'a fresh Kp is not dimmed').toBeUndefined()
+  }, 60_000)
+
   it('FIRES: a word lettered in the warning colour is caught on this bar in the light theme', async () => {
     // The planted rule above, owned by this test: the style the bar first reused.
     const words = await wordsOn('app detached', false, <span className="dash-fires-fixture">CACHED 12m</span>)

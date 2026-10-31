@@ -1285,3 +1285,45 @@ fn a_connection_can_be_shared_across_threads() {
     fn shared<T: Send + Sync>() {}
     shared::<Connection>();
 }
+
+/// What the driver publishes to, for a session driven by hand.
+fn shared_for(s: &Session) -> Shared {
+    Shared {
+        snapshot: Mutex::new(s.snapshot()),
+        changed: Condvar::new(),
+        over: AtomicBool::new(false),
+        open: AtomicBool::new(true),
+        on_air: AtomicBool::new(false),
+        hold: Mutex::new(None),
+    }
+}
+
+/// ⭐ AN IDLE LINK'S MODEL IS NOT COPIED AGAIN EVERY TURN. The driver publishes after every turn,
+/// fifty a second on an idle link, and the model is everything the radio has reported: it is
+/// copied only when it has changed, and readers see the session's own values either way. The
+/// control: a status line that changes the model is published at once.
+#[test]
+fn an_unchanged_model_is_published_without_a_copy() {
+    let mut h = Harness::ready_to_key();
+    let shared = shared_for(&h.s);
+    publish(&h.s, &shared);
+    // Where the published model keeps the interlock's state: a new copy keeps it somewhere new.
+    let state = |shared: &Shared| {
+        let published = lock(&shared.snapshot);
+        let sample = published.model.interlock.sample.as_ref();
+        sample.expect("an interlock sample").state.as_ptr() as usize
+    };
+    let before = state(&shared);
+    h.tick(20);
+    publish(&h.s, &shared);
+    assert_eq!(
+        state(&shared),
+        before,
+        "an unchanged model was copied again"
+    );
+    assert_eq!(*lock(&shared.snapshot), h.s.snapshot());
+    h.line("S12345678|slice 0 RF_frequency=7.074000");
+    publish(&h.s, &shared);
+    assert_ne!(state(&shared), before, "a changed model is a new copy");
+    assert_eq!(*lock(&shared.snapshot), h.s.snapshot());
+}

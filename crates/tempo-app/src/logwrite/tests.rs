@@ -3365,7 +3365,7 @@ fn sync_from_qrz_changes_only_which_contacts_go_to_lotw() {
     let all = QRZ | CLUBLOG | EQSL;
     let swept = |e: &Mutex<Engine>| -> Vec<(String, u8)> {
         let rows = engine_lock(e).log_rows();
-        station::catch_up_records(&rows, all, 256)
+        station::catch_up_records(&rows, all, 256, Default::default())
             .expect("the store reads")
             .into_iter()
             .map(|(r, legs)| (r.call, legs))

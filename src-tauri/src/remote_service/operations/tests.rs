@@ -466,6 +466,24 @@ fn acquire_controls_version(f: &Fixture, now: Instant, version: u8) -> Value {
         .unwrap()
 }
 
+/// The radio loop's authority poll says whether a computer holds the lease, presence or not: the
+/// receive decoders count it as attached (a watch-only internet client has a lease and no
+/// presence). It goes with the lease, and it never holds anything from transmit.
+#[test]
+fn the_authority_poll_says_whether_a_lease_is_held() {
+    let f = Fixture::new();
+    let now = Instant::now();
+    let before = f.authority.current_transmit_hold(now).unwrap();
+    assert!(!before.lease_held, "nobody attached");
+    f.acquire(now);
+    let during = f.authority.current_transmit_hold(now).unwrap();
+    assert!(during.lease_held, "the lease is held");
+    assert!(!during.held, "and holding it holds nothing from transmit");
+    f.authority.disconnect_session(SESSION);
+    let after = f.authority.current_transmit_hold(now).unwrap();
+    assert!(!after.lease_held, "the computer went: its lease with it");
+}
+
 #[test]
 fn a_disconnect_takeover_or_reconnect_cannot_restore_a_lease() {
     for kind in ["disconnect", "takeover", "socket"] {

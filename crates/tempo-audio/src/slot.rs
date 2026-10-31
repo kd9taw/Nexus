@@ -281,6 +281,7 @@ pub(crate) fn play_keyed_over(
             secs += w.len() as f32 / tempo_fast::SAMPLE_RATE;
             backend.play(w);
         }
+        backend.mark_unit_end();
         return KeyedOver {
             tx_until_ms: tx_deadline_ms(keyed_ms, secs as f64 * 1000.0, period_ms),
             audio_until_ms: None,
@@ -319,6 +320,7 @@ pub(crate) fn play_keyed_over(
             backend.play(rest);
         }
     }
+    backend.mark_unit_end();
     on_the_window
 }
 
@@ -467,8 +469,7 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             let md = eng.rig_mode_effective();
             // What the radio confirmed for this dial, only while this connection holds the split.
             let mut confirmed = rig
-                .split_confirmed
-                .take()
+                .take_split_confirmed()
                 .filter(|c| rig.tx_split_held && c.rx_dial == dial)
                 .unwrap_or(SplitConfirmed {
                     rx_dial: dial,
@@ -608,6 +609,10 @@ pub(crate) fn key_slot_transmitter(
         eng.halt_tx_for_tx_audio(&why);
         return false;
     }
+    // PTT is asserted here: a WSPR or FST4W beacon's alternation flips on the attempt, whatever
+    // the radio answers, as WSJT-X flips it on the tick that raises PTT
+    // (`widgets/mainwindow.cpp:7808`, `:7855`, `:7880`, `:15462`). Every return above keys nothing.
+    eng.note_slot_ptt_asserted();
     let key = rig.ptt(true);
     if eng.poll_remote_transmit(std::time::Instant::now()) {
         let _ = rig.ptt(false);
@@ -1961,6 +1966,33 @@ mod tests {
         }
     }
 
+    /// A slot over is one unit, marked where its audio ends, so the sound card running out at its
+    /// end is not counted as an underrun: FT8 and FT4 on the slot clock, keyed on time and late,
+    /// and a tier played whole from the key.
+    #[test]
+    fn a_keyed_slot_over_marks_its_end() {
+        for tier in [
+            tempo_app::dto::Tier::Ft8,
+            tempo_app::dto::Tier::Ft4,
+            tempo_app::dto::Tier::Q65,
+        ] {
+            let eng = armed_engine_on(tier);
+            let waves = vec![armed_engine_on(tier).poll_tx(0).remove(0)];
+            let slot_start = 1_000.0 * eng.active_slot_secs() * 1000.0;
+            for late_ms in [20.0, 1_000.0] {
+                let keyed = slot_start + late_ms;
+                let mut backend = MockBackend::new();
+                play_keyed_over(&eng, &mut backend, &waves, keyed, keyed);
+                assert!(!backend.played.is_empty(), "{tier:?}: premise: played");
+                assert_eq!(
+                    backend.unit_ends,
+                    vec![backend.played.len()],
+                    "{tier:?} keyed {late_ms} ms in"
+                );
+            }
+        }
+    }
+
     #[test]
     fn an_ft8_over_whose_carrier_came_after_its_last_tone_is_held_to_the_window() {
         // FT8's tones run past its latest key, so it finds none left only when more than 1.89 s pass
@@ -3191,14 +3223,30 @@ mod tests {
     fn scripted_rigctld(
         answer: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
     ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let (addr, log, _) = scripted_rigctld_counted(answer);
+        (addr, log)
+    }
+
+    /// [`scripted_rigctld`], also counting the connections it accepted. An empty `Some("")` reply
+    /// closes the connection instead of answering.
+    fn scripted_rigctld_counted(
+        answer: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let log_w = log.clone();
+        let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let connections_w = connections.clone();
         let answer = std::sync::Arc::new(answer);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
+                connections_w.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let (log, answer) = (log_w.clone(), answer.clone());
                 std::thread::spawn(move || {
                     let mut w = stream.try_clone().unwrap();
@@ -3208,16 +3256,20 @@ mod tests {
                             continue;
                         }
                         log.lock().unwrap().push(t.clone());
-                        if let Some(reply) = answer(&t) {
-                            if w.write_all(reply.as_bytes()).is_err() {
-                                return;
+                        match answer(&t) {
+                            Some(reply) if reply.is_empty() => return,
+                            Some(reply) => {
+                                if w.write_all(reply.as_bytes()).is_err() {
+                                    return;
+                                }
                             }
+                            None => {}
                         }
                     }
                 });
             }
         });
-        (addr, log)
+        (addr, log, connections)
     }
 
     /// An FT8 CQ in Split Operation `split` whose 750 Hz TX offset needs a -1000 Hz dial shift, its
@@ -3861,6 +3913,177 @@ mod tests {
         keyed_as_before("still Rig", &act, &backend, &eng);
     }
 
+    // ── A held Rig split behind a late key line ─────────────────────────────────────────────────
+    // A key line (`T 1`, `T 0`) whose answer is late keeps its connection, its answer owed. The
+    // split writes before the next over are not key lines: each reads the owed answers first, within
+    // its own deadline, and goes out after them on the same connection, or is not sent at all and
+    // the over keys nothing. The connection is dropped when its owed answer is given up for lost or
+    // it closes while being read; what the radio confirmed through it goes with it, so the next held
+    // over writes its TX dial and mode again, as after any new connection.
+
+    /// A rigctld answering `T 1` (the first one only, once `lose` is set) never, `f` with the dial
+    /// and everything else `RPRT 0`.
+    fn a_link_that_loses_one_key_answer(
+        lose: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::Ordering;
+        scripted_rigctld_counted(move |line: &str| {
+            if line == "T 1" && lose.swap(false, Ordering::SeqCst) {
+                return None; // the radio keyed; its answer is lost
+            }
+            Some(
+                if line == "f" {
+                    "14074000\n"
+                } else {
+                    "RPRT 0\n"
+                }
+                .to_string(),
+            )
+        })
+    }
+
+    #[test]
+    fn a_held_split_writes_its_tx_dial_and_mode_again_after_a_lost_key_answer_is_given_up() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let lose = Arc::new(AtomicBool::new(false));
+        let (addr, log, connections) = a_link_that_loses_one_key_answer(lose.clone());
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_owed_bound_for_test(std::time::Duration::from_millis(1_500));
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]
+        );
+        keyed_as_before("the first over", &act, &backend, &eng);
+        // A key whose answer never comes, its release queued behind it, and the bound passed.
+        lose.store(true, Ordering::SeqCst);
+        assert!(rig.ptt(true).is_err(), "premise: the key's answer is late");
+        assert!(rig.ptt(false).is_err(), "premise: the release is behind it");
+        std::thread::sleep(std::time::Duration::from_millis(1_600));
+        assert_eq!(connections.load(Ordering::SeqCst), 1, "premise: one link");
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            2,
+            "premise: the late key's connection was given up"
+        );
+        assert_eq!(
+            sent,
+            ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+            "the new connection's over skipped its TX dial and mode as already confirmed"
+        );
+        keyed_as_before("on the new connection", &act, &backend, &eng);
+    }
+
+    #[test]
+    fn a_held_split_writes_its_tx_dial_and_mode_again_after_a_late_keys_connection_closes() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let close = Arc::new(AtomicBool::new(false));
+        let c = close.clone();
+        // The late key's connection closes, unanswered, while its answer is being read.
+        let (addr, log, connections) = scripted_rigctld_counted(move |line: &str| {
+            if line == "T 1" && c.swap(false, Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(1_500));
+                return Some(String::new());
+            }
+            Some(
+                if line == "f" {
+                    "14074000\n"
+                } else {
+                    "RPRT 0\n"
+                }
+                .to_string(),
+            )
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(
+            sent,
+            ["S 1 VFOB", "I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"]
+        );
+        keyed_as_before("the first over", &act, &backend, &eng);
+        close.store(true, Ordering::SeqCst);
+        assert!(rig.ptt(true).is_err(), "premise: the key's answer is late");
+        assert!(
+            rig.read_freq().is_err(),
+            "premise: the connection closed while its owed answer was read"
+        );
+        let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+        assert_eq!(connections.load(Ordering::SeqCst), 2, "premise: a new link");
+        assert_eq!(
+            sent,
+            ["I 14073000", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+            "the new connection's over skipped its TX dial and mode as already confirmed"
+        );
+        keyed_as_before("on the new connection", &act, &backend, &eng);
+    }
+
+    #[test]
+    fn split_writes_behind_an_owed_key_line_go_out_after_it_on_its_connection_or_not_at_all() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+        // The owed line is a key (`T 1`) or a release (`T 0`), answered `late_ms` after it arrives:
+        // past its own deadline (it may read until about 1 s), and then inside or past the first
+        // split write's 700 ms.
+        for owed in ["T 1", "T 0"] {
+            for late_ms in [1_200, 3_000] {
+                let what = format!("{owed} answered at {late_ms} ms");
+                let late = Arc::new(AtomicU64::new(0));
+                let l = late.clone();
+                let (addr, log, connections) = scripted_rigctld_counted(move |line: &str| {
+                    if line == owed {
+                        let ms = l.swap(0, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                    }
+                    Some(
+                        if line == "f" {
+                            "14074000\n"
+                        } else {
+                            "RPRT 0\n"
+                        }
+                        .to_string(),
+                    )
+                });
+                let mut rig = Rig::rigctld(&addr);
+                let (act, backend, eng, _) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
+                keyed_as_before(&what, &act, &backend, &eng);
+                late.store(late_ms, Ordering::SeqCst);
+                if owed == "T 0" {
+                    rig.ptt(true).unwrap();
+                }
+                assert!(rig.ptt(owed == "T 1").is_err(), "{what}: premise, owed");
+                let before = log.lock().unwrap().len();
+                // A new TX offset, so the over has a TX dial to write.
+                let (act, backend, mut eng, sent) =
+                    over_through(rig_split_cq_at(1700.0), &mut rig, &log);
+                assert_eq!(
+                    log.lock().unwrap()[before - 1],
+                    owed,
+                    "{what}: premise, the owed line is the last before the over"
+                );
+                if late_ms < 1_700 {
+                    // Answered inside the first write's own deadline: the writes follow it.
+                    assert_eq!(sent, ["I 14074000", "S 1 VFOB", "T 1"], "{what}");
+                    keyed_as_before(&what, &act, &backend, &eng);
+                } else {
+                    // Still owed past it: no write goes out ahead of the answer, nothing keys.
+                    assert_split_sent_nothing(&what, &act, &backend, &mut eng, &sent, &[]);
+                }
+                assert_eq!(
+                    connections.load(Ordering::SeqCst),
+                    1,
+                    "{what}: everything on the owed line's connection"
+                );
+            }
+        }
+    }
+
     #[test]
     fn tx_slot_keys_ptt_plays_audio_and_sets_hold() {
         // Engine with tx_parity 0 transmits on EVEN slots; queue a broadcast.
@@ -4207,6 +4430,173 @@ mod tests {
         assert!(eng.tx_enabled(), "control: TX went off");
         assert!(!eng.take_slot_tx_abort(), "control: a cut was asked for");
         assert_eq!(eng.snapshot().radio.slot_key_refused, None, "control");
+    }
+
+    /// ⭐ A COMPOUND CALL'S BEACON FLIPS TYPE WHEN ITS PTT IS ASSERTED, AS WSJT-X DOES (`m_tx=1-m_tx`
+    /// in `WSPR_message`, `widgets/mainwindow.cpp:15462`, called on the tick that sets `g_iptt=1`
+    /// and asserts PTT, `:7808`, `:7855`, `:7880`), before the rig answers. A key the radio refuses
+    /// still flips it; an over whose key is never attempted (Remote revoked first) does not; an FT8
+    /// over never counts. Through the real plan, commit and key.
+    #[test]
+    fn a_beacon_over_flips_the_compound_call_alternation_at_its_ptt_assert() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        use tempo_app::remote_control::transmit::TransmitAuthority;
+        let beacon = |eng: &mut Engine, slot: u64| -> (String, Vec<Vec<f32>>) {
+            let plan = eng.plan_tx(slot).expect("a beacon over");
+            let tempo_app::engine::TxWaveform::Native { text, .. } = &plan.waveform else {
+                panic!("not a beacon over");
+            };
+            let text = text.clone();
+            (text, eng.commit_tx(&plan, vec![0.25; 1_200], slot))
+        };
+        let phase = |eng: &mut Engine, rig: &mut Rig, slot: u64, waves: Vec<Vec<f32>>| {
+            let now = steered_now_ms(eng);
+            slot_tx_phase(
+                eng,
+                rig,
+                &mut MockBackend::new(),
+                &mut RxRing::new(),
+                slot,
+                now,
+                false,
+                None,
+                Some(waves),
+                false,
+            )
+            .tx_this_slot
+        };
+        let key = |eng: &mut Engine, answer: &str, slot: u64, waves: Vec<Vec<f32>>| {
+            let (addr, log, _) = keying_rigctld(answer, 0);
+            let keyed = phase(eng, &mut Rig::rigctld(&addr), slot, waves);
+            assert!(
+                log.lock().unwrap().iter().any(|l| l == "T 1"),
+                "{answer}: premise: the over asserted PTT"
+            );
+            keyed
+        };
+        let beaconing = |tier: tempo_app::dto::Tier| {
+            let mut eng = Engine::new("PJ4/K1ABC", "FK52UD", 0);
+            eng.set_tier(tier);
+            let _ = eng.take_slot_tx_abort();
+            let mut s = eng.settings().clone();
+            s.beacon_tx_percent = 100;
+            s.beacon_power_dbm = 37;
+            eng.apply_settings(s);
+            eng.set_tx_enabled(true);
+            eng
+        };
+        let two = "PJ4/K1ABC 37";
+        let is_three = |text: &str| text.starts_with("<PJ4/K1ABC> FK52UD");
+        for tier in [tempo_app::dto::Tier::Wspr, tempo_app::dto::Tier::Fst4w] {
+            let mut eng = beaconing(tier);
+            let (text, waves) = beacon(&mut eng, 10);
+            assert_eq!(text, two, "{tier:?}: premise: the first over is the type 2");
+            assert!(
+                !key(&mut eng, "RPRT -1", 10, waves),
+                "{tier:?}: premise: refused"
+            );
+            assert!(
+                !eng.tx_enabled(),
+                "{tier:?}: premise: a refused key halts TX"
+            );
+            let _ = eng.take_slot_tx_abort();
+            eng.set_tx_enabled(true);
+
+            let (text, waves) = beacon(&mut eng, 11);
+            assert!(
+                is_three(&text),
+                "{tier:?}: a refused key did not flip the alternation: {text}"
+            );
+            assert!(
+                key(&mut eng, "RPRT 0", 11, waves),
+                "{tier:?}: premise: keyed"
+            );
+            let (text, _) = beacon(&mut eng, 12);
+            assert_eq!(
+                text, two,
+                "{tier:?}: a keyed over did not flip the alternation"
+            );
+
+            // Remote revoked before the key, whether the tick or the key itself sees it first: PTT
+            // is never asserted, so nothing flips.
+            let mut eng = beaconing(tier);
+            let presence = |eng: &mut Engine| {
+                let authority = Arc::new(TransmitAuthority::default());
+                let now = Instant::now();
+                assert!(eng.hold_remote_presence(
+                    authority
+                        .permit(now + Duration::from_secs(24 * 60 * 60))
+                        .unwrap(),
+                    now,
+                ));
+                authority
+            };
+            let authority = presence(&mut eng);
+            let (text, waves) = beacon(&mut eng, 10);
+            assert_eq!(text, two, "{tier:?}: premise: Remote, the type 2");
+            authority.revoke();
+            let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+            assert!(
+                !phase(&mut eng, &mut Rig::rigctld(&addr), 10, waves),
+                "{tier:?}: premise: the tick saw the revoke"
+            );
+            assert!(
+                !log.lock().unwrap().iter().any(|l| l == "T 1"),
+                "{tier:?}: premise: no PTT asserted"
+            );
+            let _ = eng.take_slot_tx_abort();
+            eng.set_tx_enabled(true);
+            let authority = presence(&mut eng);
+            let (text, _) = beacon(&mut eng, 11);
+            assert_eq!(
+                text, two,
+                "{tier:?}: an over the tick stopped flipped the alternation"
+            );
+            authority.revoke();
+            let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+            assert!(
+                !key_slot_transmitter(
+                    &mut eng,
+                    &mut Rig::rigctld(&addr),
+                    &mut MockBackend::new(),
+                    false
+                ),
+                "{tier:?}: premise: the key saw the revoke"
+            );
+            assert!(
+                !log.lock().unwrap().iter().any(|l| l == "T 1"),
+                "{tier:?}: premise: no PTT asserted by the key"
+            );
+            let _ = eng.take_slot_tx_abort();
+            eng.set_tx_enabled(true);
+            let (text, _) = beacon(&mut eng, 12);
+            assert_eq!(
+                text, two,
+                "{tier:?}: a key stopped before PTT flipped the alternation"
+            );
+        }
+
+        // CONTROL: an FT8 over whose PTT is asserted is not a beacon over.
+        let mut eng = armed_engine();
+        let (addr, log, _) = keying_rigctld("RPRT 0", 0);
+        let mut rig = Rig::rigctld(&addr);
+        let act = key_one_over(&mut eng, &mut rig, &mut MockBackend::new());
+        assert!(act.tx_this_slot, "premise: the FT8 over keyed");
+        assert!(log.lock().unwrap().iter().any(|l| l == "T 1"));
+        let mut s = eng.settings().clone();
+        s.mycall = "PJ4/K1ABC".into();
+        s.mygrid = "FK52UD".into();
+        eng.apply_settings(s);
+        eng.set_tier(tempo_app::dto::Tier::Wspr);
+        let _ = eng.take_slot_tx_abort();
+        let mut s = eng.settings().clone();
+        s.beacon_tx_percent = 100;
+        s.beacon_power_dbm = 37;
+        eng.apply_settings(s);
+        eng.set_tx_enabled(true);
+        let (text, _) = beacon(&mut eng, 10);
+        assert_eq!(text, two, "CONTROL: an FT8 key flipped the beacon");
     }
 
     #[test]

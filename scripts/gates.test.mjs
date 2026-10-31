@@ -17,14 +17,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+
+import { scratchDir } from './scratch-dir.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GATES = path.join(ROOT, 'scripts', 'gates');
 const CI = path.join(ROOT, '.github', 'workflows', 'ci.yml');
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gates-test-'));
+const tmp = scratchDir('gates-test-');
 const scratch = (name, text) => {
   const p = path.join(tmp, name);
   fs.writeFileSync(p, text);
@@ -374,6 +376,47 @@ jobs:
   const list = gates(['--list', '--workflow', file]).out;
   assert.ok(/RUSTFLAGS=-D warnings/.test(list), 'the job-level env was not shown');
   assert.ok(/working-directory: ui/.test(list), 'the working-directory was not shown');
+});
+
+test("the link-profile expression is evaluated against this checkout's ref, and nothing else is guessed", () => {
+  // ci.yml picks the Windows and Pi link profile from github.ref. Left unresolved, it held the
+  // Windows cross gate back on every box, including the ones that can run it.
+  const pick = "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/'))";
+  const file = scratch(
+    'ref-choice.yml',
+    MINIMAL.replace(
+      '      - name: alpha gate\n',
+      `      - name: profile gate\n        env:\n          PICK: \${{ ${pick} && 'true' || 'false' }}\n        run: echo "picked [$PICK]"\n      - name: alpha gate\n`
+    )
+  );
+  const as = (ref, args) => {
+    const r = spawnSync(GATES, args, { encoding: 'utf8', cwd: ROOT, env: { ...env, GATES_GITHUB_REF: ref } });
+    return { code: r.status, out: `${r.stdout}${r.stderr}` };
+  };
+  for (const [ref, want] of [
+    ['refs/heads/land/some-batch', 'false'],
+    ['refs/pull/12/merge', 'false'],
+    ['refs/heads/mainline', 'false'],
+    ['refs/heads/main', 'true'],
+    ['refs/heads/release/1.2.3', 'true'],
+    ['refs/tags/v1.2.3', 'true'],
+  ]) {
+    const r = as(ref, ['--workflow', file]);
+    assert.equal(r.code, 0, `${ref}:\n${r.out}`);
+    assert.ok(r.out.includes(`picked [${want}]`), `${ref} should pick ${want}:\n${r.out}`);
+  }
+  // CONTROL: any other shape that reads github.ref is still unresolved and holds the gate back.
+  const other = scratch('ref-other.yml', MINIMAL.replace('      - name: alpha gate\n',
+    "      - name: other gate\n        env:\n          WHERE: ${{ github.ref }}\n        run: echo \"where [$WHERE]\"\n      - name: alpha gate\n"));
+  const o = as('refs/heads/main', ['--workflow', other]);
+  assert.notEqual(o.code, 0, o.out);
+  assert.ok(o.out.includes('unexpanded workflow expression'), o.out);
+  assert.ok(!o.out.includes('where ['), 'an unresolved ref was run anyway');
+  // CONTROL: with no ref to read (a detached checkout), the expression is not guessed either.
+  const d = spawnSync(GATES, ['--list', '--unrunnable', '--workflow', file], {
+    encoding: 'utf8', cwd: ROOT, env: { ...env, GATES_GITHUB_REF: '', GIT_DIR: path.join(tmp, 'no-such-git-dir') },
+  });
+  assert.ok(`${d.stdout}${d.stderr}`.includes('unexpanded workflow expression'), `${d.stdout}${d.stderr}`);
 });
 
 test('`if:` is shown, and one that cannot be evaluated blocks the step instead of guessing', () => {
@@ -988,4 +1031,42 @@ test('two runs never share a step-script path', () => {
     !a.includes('nexus-gates-runner-temp/'),
     'the step-script directory is back to a fixed shared name'
   );
+});
+
+// ---------------------------------------------------------------------------
+// The step-script directory goes away however the run ends. Nothing removed it
+// once, and a RAM-disk /tmp filled with thousands of them. Each case first sees
+// the directory exist while its step runs, so "nothing left" cannot pass by the
+// directory never having been made.
+// ---------------------------------------------------------------------------
+
+test('a run leaves no step-script directory behind: green, red, or stopped by a signal', async () => {
+  const box = fs.mkdtempSync(path.join(tmp, 'runner-temp-'));
+  const boxEnv = { ...env, TMPDIR: box };
+  const left = () => fs.readdirSync(box).filter((n) => n.startsWith('nexus-gates-runner-'));
+  const step = (body) => MINIMAL.replace('        run: echo alpha-ran\n', `        run: |\n          ${body.join('\n          ')}\n`);
+
+  for (const [name, exit, want] of [['green', 'exit 0', 'PASS'], ['red', 'exit 1', 'FAIL']]) {
+    const r = spawnSync(GATES, ['--workflow', scratch(`runner-temp-${name}.yml`, step(['test -d "$RUNNER_TEMP" && echo runner-temp-was-there', exit]))], { encoding: 'utf8', cwd: ROOT, env: boxEnv });
+    assert.match(r.stdout, /runner-temp-was-there/, `${name}: the step never saw its directory, so the check below is vacuous`);
+    assert.match(r.stdout, new RegExp(`=== ${want}  exit`), `${name}: the step did not end as planted`);
+    assert.deepEqual(left(), [], `${name}: the run left its step-script directory behind`);
+  }
+
+  // Ctrl-C, a closed terminal and `timeout` all signal the whole process group, so the run is
+  // given a group of its own and the signal goes to all of it, step included.
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+    const file = scratch(`runner-temp-${signal}.yml`, step(['touch "$RUNNER_TEMP/started"', 'sleep 60']));
+    const child = spawn(GATES, ['--workflow', file], { cwd: ROOT, env: boxEnv, stdio: 'ignore', detached: true });
+    const closed = new Promise((resolve) => child.once('close', (code, sig) => resolve({ code, sig })));
+    const deadline = Date.now() + 30_000;
+    while (!left().some((d) => fs.existsSync(path.join(box, d, 'started')))) {
+      assert.ok(Date.now() < deadline, `${signal}: the step never started`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    process.kill(-child.pid, signal);
+    const { code } = await closed;
+    assert.equal(code, 128 + os.constants.signals[signal], `${signal}: the run must exit as a shell reports that signal`);
+    assert.deepEqual(left(), [], `${signal}: the run left its step-script directory behind`);
+  }
 });

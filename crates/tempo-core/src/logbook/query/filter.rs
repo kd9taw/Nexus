@@ -17,6 +17,8 @@
 //!   cty.dat's answer **as of the day the row was written**, so filtering on it would disagree with
 //!   the country the Logbook shows after a cty.dat update.
 //! - `need` is the award fold's answer: which band slots are worked and not confirmed.
+//! - `path` is the grade of the contact's path: its own stamp, else the display-only grade of the
+//!   log, which the caller holds outside the log.
 //!
 //! **Free text** with any letter outside ASCII is decided here ([`LogFilter::text_matches`]):
 //! SQLite's `LIKE` folds ASCII case only, so `münchen` would never find `MÜNCHEN`. ASCII text is
@@ -89,6 +91,16 @@ pub enum AwardNeed {
     Ffma,
 }
 
+/// The path a contact took, as the Logbook's path column grades it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PathFilter {
+    /// The grade names the long path.
+    Long,
+    /// The route the grade names (the short path when it names none) crosses the polar cap.
+    Polar,
+}
+
 /// The Logbook's field filters. An empty field filters nothing; the fields set combine with AND.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -149,6 +161,10 @@ pub struct LogFilter {
     /// Words in the comment, the name or the QTH.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// The path the contact's grade names — its own stamp, else the display-only grade of the
+    /// log, which lives outside it. Decided by the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathFilter>,
 }
 
 /// A text field as the filter reads it: trimmed as JavaScript trims, and empty for nothing asked.
@@ -180,6 +196,7 @@ impl LogFilter {
             contest,
             need,
             text,
+            path,
         } = self;
         [
             call, band, mode, entity, continent, grid, state, county, iota, reference, my_ref,
@@ -192,6 +209,7 @@ impl LogFilter {
             && cq_zone.is_none()
             && itu_zone.is_none()
             && need.is_none()
+            && path.is_none()
             && qsl.is_empty()
     }
 
@@ -202,6 +220,7 @@ impl LogFilter {
             || !field(&self.continent).is_empty()
             || self.cq_zone.is_some()
             || self.need.is_some()
+            || self.path.is_some()
     }
 
     /// Whether the rows this filter lets through can change without the log's `index_rev`

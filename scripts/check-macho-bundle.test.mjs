@@ -1,5 +1,5 @@
-// Tests for scripts/check-macho-bundle.mjs, the check release.yml and ci.yml run on every Mach-O
-// a macOS build ships.
+// Tests for scripts/check-macho-bundle.mjs, the check release.yml runs on every Mach-O a macOS
+// build ships.
 //
 // The fixtures are real Mach-O headers and load commands, written here byte by byte in the layout
 // <mach-o/loader.h> defines, so the check reads them exactly as it reads a shipped file. Every
@@ -12,11 +12,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { readMachO, checkSlices, parseVersion, plistMinimum } from './check-macho-bundle.mjs';
+import { scratchDir } from './scratch-dir.mjs';
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'check-macho-bundle.mjs');
 const CPU = { arm64: 0x0100000c, x86_64: 0x01000007 };
@@ -115,7 +115,7 @@ ${v === null ? '' : `  <key>LSMinimumSystemVersion</key>\n  <string>${v}</string
 
 /** A scratch .app laid out as the bundler lays Nexus out. Overrides replace or add files. */
 function app(over = {}, { arch = 'arm64', plist = '12.0' } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'macho-check-'));
+  const root = scratchDir('macho-check-');
   const a = path.join(root, 'Nexus.app');
   const hl = 'Contents/Resources/resources/hamlib';
   const files = {
@@ -218,7 +218,7 @@ test('positive controls: no minimum recorded, no libSystem, or a non-macOS platf
 });
 
 test('a folder with no Mach-O in it fails rather than passing on nothing read', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'macho-empty-'));
+  const root = scratchDir('macho-empty-');
   fs.writeFileSync(path.join(root, 'COPYING.txt'), 'text');
   const r = run(['--floor', '12.0', '--arch', 'arm64', root]);
   assert.equal(r.code, 1);
@@ -280,7 +280,7 @@ test('a Java class file (same magic as a universal file) is not mistaken for one
 
 test('symbolic links are not followed, so a link out of the bundle reads nothing', () => {
   const a = app();
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'macho-outside-'));
+  const outside = scratchDir('macho-outside-');
   fs.writeFileSync(path.join(outside, 'bad'), macho({ minos: '15.0' }));
   fs.symlinkSync(path.join(outside, 'bad'), path.join(a, HL, 'linked'));
   assert.equal(full(a).code, 0);
@@ -294,4 +294,171 @@ test('usage errors exit 2, never 0', () => {
   assert.equal(run(['--floor', '12.0', '--arch', 'ppc', a]).code, 2);
   assert.equal(run(['--floor', '12.0', '--arch', 'arm64']).code, 2);
   assert.equal(run(['--floor', '12.0', '--arch', 'arm64', '--bogus', a]).code, 2);
+});
+
+// ---- The static runtimes: what libgfortran.a, libquadmath.a and libemutls_w.a import ----
+//
+// The fixtures are object files (MH_OBJECT) with a real symbol table, in the layout <mach-o/nlist.h>
+// defines, packed into a BSD `ar` archive the way Apple's and GCC's archivers write one.
+
+const ALLOWLIST = path.join(path.dirname(SCRIPT), 'macos-static-runtime-imports.txt');
+
+/** A 64-bit object file that defines `defs`, imports `undefs`, and carries the other kinds given. */
+function object({ arch = 'arm64', defs = [], undefs = [], common = [], locals = [], stabs = [], minos = '15.0' } = {}) {
+  const syms = [
+    ...stabs.map((n) => [n, 0x24, 1, 0]), // N_FUN, a debugger entry
+    ...locals.map((n) => [n, 0x0e, 1, 0]), // N_SECT, not external
+    ...defs.map((n) => [n, 0x0f, 1, 0]), // N_SECT | N_EXT
+    ...common.map((n) => [n, 0x01, 0, 8]), // N_UNDF | N_EXT with a size: a tentative definition
+    ...undefs.map((n) => [n, 0x01, 0, 0]), // N_UNDF | N_EXT: an import
+  ];
+  let strtab = Buffer.from(' \0'); // index 0 means "no name"
+  const nlist = Buffer.alloc(16 * syms.length);
+  syms.forEach(([name, type, sect, value], i) => {
+    nlist.writeUInt32LE(strtab.length, 16 * i);
+    nlist.writeUInt8(type, 16 * i + 4);
+    nlist.writeUInt8(sect, 16 * i + 5);
+    nlist.writeUInt16LE(0, 16 * i + 6);
+    nlist.writeBigUInt64LE(BigInt(value), 16 * i + 8);
+    strtab = Buffer.concat([strtab, Buffer.from(`${name}\0`)]);
+  });
+  const cmds = Buffer.concat([buildVersion(minos), Buffer.alloc(24)]);
+  const symoff = 32 + cmds.length;
+  const symtab = cmds.subarray(24);
+  symtab.writeUInt32LE(0x02, 0); // LC_SYMTAB
+  symtab.writeUInt32LE(24, 4);
+  symtab.writeUInt32LE(symoff, 8);
+  symtab.writeUInt32LE(syms.length, 12);
+  symtab.writeUInt32LE(symoff + nlist.length, 16);
+  symtab.writeUInt32LE(strtab.length, 20);
+  const h = Buffer.alloc(32);
+  h.writeUInt32LE(0xfeedfacf, 0);
+  h.writeUInt32LE(CPU[arch], 4);
+  h.writeUInt32LE(1, 12); // MH_OBJECT
+  h.writeUInt32LE(2, 16);
+  h.writeUInt32LE(cmds.length, 20);
+  return Buffer.concat([h, cmds, nlist, strtab]);
+}
+
+/** A BSD `ar` archive: a symbol index first, as ranlib leaves it, then the members by long name. */
+function ar(members, { index = true } = {}) {
+  const parts = [Buffer.from('!<arch>\n')];
+  for (const [name, data] of [...(index ? [['__.SYMDEF SORTED', Buffer.alloc(8)]] : []), ...members]) {
+    const n = Buffer.alloc(Math.ceil((name.length + 1) / 8) * 8);
+    n.write(name);
+    const body = Buffer.concat([n, data]);
+    const field = (s, w) => String(s).padEnd(w, ' ');
+    parts.push(Buffer.from(`${field(`#1/${n.length}`, 16)}${field(0, 12)}${field(0, 6)}${field(0, 6)}${field(644, 8)}${field(body.length, 10)}\`\n`));
+    parts.push(body, Buffer.alloc(body.length & 1, 0x0a));
+  }
+  return Buffer.concat(parts);
+}
+
+/** The three runtimes as the app links them; each override replaces one archive (null: absent). */
+function runtimes({ gfortran, quadmath, emutls } = {}) {
+  const dir = scratchDir('macho-ar-');
+  const files = {
+    'libgfortran.a': gfortran ?? ar([
+      ['write.o', object({ defs: ['__gfortran_st_write'], undefs: ['_malloc', '_memcpy', '_quadmath_snprintf', '___emutls_get_address'] })],
+      ['read.o', object({ defs: ['__gfortran_st_read'], undefs: ['__gfortran_st_write', '_strtod'], locals: ['ltmp0'], stabs: ['_not_an_import'] })],
+    ]),
+    'libquadmath.a': quadmath ?? ar([['printf.o', object({ defs: ['_quadmath_snprintf'], undefs: ['_malloc'], common: ['_qm_buffer'] })]]),
+    'libemutls_w.a': emutls === undefined ? ar([['emutls.o', object({ minos: '11.0', defs: ['___emutls_get_address'], undefs: ['_pthread_once', '_free'] })]]) : emutls,
+  };
+  for (const [n, d] of Object.entries(files)) if (d !== null) fs.writeFileSync(path.join(dir, n), d);
+  return dir;
+}
+function allow(names) {
+  const f = path.join(scratchDir('macho-allow-'), 'imports.txt');
+  fs.writeFileSync(f, `# reviewed\n\n${names.join('\n')}\n`);
+  return f;
+}
+const CLEAN = ['_malloc', '_memcpy', '_strtod', '_pthread_once', '_free'];
+const imports = (dir, list, arch = 'arm64', names = ['libgfortran.a', 'libquadmath.a', 'libemutls_w.a']) =>
+  run(['--arch', arch, '--imports', list, ...names.flatMap((n) => ['--archive', path.join(dir, n)])]);
+
+test('static runtimes whose every import is on the reviewed list pass, and say how much was read', () => {
+  const r = imports(runtimes(), allow(CLEAN));
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /3 archive\(s\), 4 object\(s\), 5 external import\(s\), every one on the reviewed list/);
+});
+
+test('an import missing from the reviewed list fails, and names the symbol, the object and the list', () => {
+  const list = allow(CLEAN);
+  const r = imports(runtimes({
+    gfortran: ar([['random.o', object({ defs: ['__gfortran_random'], undefs: ['_malloc', '_arc4random_uniform_newer'] })]]),
+  }), list);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /_arc4random_uniform_newer, imported by .*libgfortran\.a\(random\.o\), is not on the reviewed list/);
+  assert.ok(r.out.includes(list), r.out);
+  assert.doesNotMatch(r.out, /_malloc,/);
+});
+
+test('a symbol one runtime defines is no import of another; locals, debugger entries and common symbols are none either', () => {
+  // ___emutls_get_address and _quadmath_snprintf are defined by the other archives, so leaving
+  // libemutls_w.a out turns its symbol into an import nobody reviewed.
+  const r = imports(runtimes(), allow(CLEAN), 'arm64', ['libgfortran.a', 'libquadmath.a']);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /___emutls_get_address, imported by .*libgfortran\.a\(write\.o\)/);
+  assert.doesNotMatch(r.out, /_quadmath_snprintf|ltmp0|_not_an_import|_qm_buffer/);
+});
+
+test('an object for the other architecture fails', () => {
+  const r = imports(runtimes({ quadmath: ar([['printf.o', object({ arch: 'x86_64', defs: ['_quadmath_snprintf'], undefs: ['_malloc'] })]]) }), allow(CLEAN));
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /libquadmath\.a\(printf\.o\): an x86_64 object, expected arm64/);
+});
+
+test('positive controls: a missing archive, a non-archive, an archive with no object, or a member that is not an object each fail', () => {
+  const list = allow(CLEAN);
+  const missing = imports(runtimes({ emutls: null }), list);
+  assert.equal(missing.code, 1);
+  assert.match(missing.out, /libemutls_w\.a: does not exist/);
+  const notAr = imports(runtimes({ emutls: macho() }), list);
+  assert.equal(notAr.code, 1);
+  assert.match(notAr.out, /libemutls_w\.a: not an ar archive/);
+  const universal = imports(runtimes({ emutls: fat([macho(), macho({ arch: 'x86_64' })]) }), list);
+  assert.equal(universal.code, 1);
+  assert.match(universal.out, /libemutls_w\.a: not an ar archive/);
+  const empty = imports(runtimes({ emutls: ar([]) }), list);
+  assert.equal(empty.code, 1);
+  assert.match(empty.out, /libemutls_w\.a: no object file in it; nothing was read/);
+  const text = imports(runtimes({ quadmath: ar([['README', Buffer.from('text\n')], ['printf.o', object({ defs: ['_quadmath_snprintf'] })]]) }), list);
+  assert.equal(text.code, 1);
+  assert.match(text.out, /libquadmath\.a\(README\): not a Mach-O object/);
+});
+
+test('a symbol table that runs past its object, or a truncated archive, fails instead of reading less', () => {
+  const list = allow(CLEAN);
+  const obj = object({ defs: ['_quadmath_snprintf'], undefs: ['_malloc'] });
+  obj.writeUInt32LE(9999, 32 + 24 + 12); // nsyms
+  const r = imports(runtimes({ quadmath: ar([['printf.o', obj]]) }), list);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /libquadmath\.a\(printf\.o\): unreadable object \(the symbol table runs past the end of the object\)/);
+  const whole = ar([['printf.o', object({ defs: ['_quadmath_snprintf'] })]]);
+  const cut = imports(runtimes({ quadmath: whole.subarray(0, whole.length - 40) }), list);
+  assert.equal(cut.code, 1, cut.out);
+  assert.match(cut.out, /libquadmath\.a: unreadable archive/);
+});
+
+test('archive usage errors exit 2: no list, an empty or missing list, no --arch, or bundle options given too', () => {
+  const dir = runtimes();
+  const a = ['--archive', path.join(dir, 'libgfortran.a')];
+  assert.equal(run(['--arch', 'arm64', ...a]).code, 2);
+  assert.equal(run(['--arch', 'arm64', '--imports', allow([]), ...a]).code, 2);
+  assert.equal(run(['--arch', 'arm64', '--imports', path.join(dir, 'nope.txt'), ...a]).code, 2);
+  assert.equal(run(['--imports', allow(CLEAN), ...a]).code, 2);
+  assert.equal(run(['--arch', 'arm64', '--imports', allow(CLEAN), ...a, dir]).code, 2);
+  assert.equal(run(['--arch', 'arm64', '--imports', allow(CLEAN), '--floor', '12.0', ...a]).code, 2);
+});
+
+test('the committed list says what it is, and is one sorted, unique Mach-O symbol per line', () => {
+  const text = fs.readFileSync(ALLOWLIST, 'utf8');
+  assert.match(text, /^# .*reviewed against macOS 12 on 2026-10-30/m);
+  const names = text.split('\n').filter((l) => l.trim() && !l.startsWith('#'));
+  assert.ok(names.length > 200, `only ${names.length} names`);
+  for (const n of names) assert.match(n, /^_[A-Za-z0-9_$.]+$/, `not a Mach-O symbol: ${JSON.stringify(n)}`);
+  assert.deepEqual(names, [...new Set(names)].sort(), 'sorted and unique');
+  // The APIs that set the floor: the newest libSystem ones the runtimes call (10.12).
+  for (const n of ['_getentropy', '_clock_gettime', '_mkostemp']) assert.ok(names.includes(n), n);
 });

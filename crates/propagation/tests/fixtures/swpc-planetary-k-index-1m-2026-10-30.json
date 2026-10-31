@@ -1,0 +1,26 @@
+[
+ {
+  "time_tag": "2026-10-30T02:37:00",
+  "kp_index": 2,
+  "estimated_kp": 1.67,
+  "kp": "2M"
+ },
+ {
+  "time_tag": "2026-10-30T02:38:00",
+  "kp_index": 1,
+  "estimated_kp": 1.33,
+  "kp": "1P"
+ },
+ {
+  "time_tag": "2026-10-30T02:39:00",
+  "kp_index": 1,
+  "estimated_kp": 1.0,
+  "kp": "1Z"
+ },
+ {
+  "time_tag": "2026-10-30T02:40:00",
+  "kp_index": 1,
+  "estimated_kp": 0.67,
+  "kp": "1M"
+ }
+]

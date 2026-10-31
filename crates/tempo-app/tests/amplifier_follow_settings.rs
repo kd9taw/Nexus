@@ -7,13 +7,22 @@ use tempo_app::{
 struct Store(PathBuf);
 impl Store {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "nexus-amp-follow-{}-{}",
-            std::process::id(),
+        Self::at(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+        )
+    }
+    /// The store for one clock reading. The tests run in parallel threads of one process, and
+    /// a coarse clock (a CI runner's) hands two of them the same reading, so the name also
+    /// carries a count of its own.
+    fn at(nanos: u128) -> Self {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "nexus-amp-follow-{}-{nanos}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir(&path).unwrap();
         Self(path)
@@ -26,6 +35,13 @@ impl Drop for Store {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn two_stores_made_on_the_same_clock_reading_are_two_folders() {
+    let a = Store::at(1);
+    let b = Store::at(1);
+    assert_ne!(a.0, b.0);
 }
 
 fn settings() -> Settings {
