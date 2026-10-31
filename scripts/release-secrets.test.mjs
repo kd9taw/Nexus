@@ -1079,18 +1079,24 @@ test('every job that stages the IOTA list sets up Node first', () => {
 // instead, through cargo's CARGO_PROFILE_RELEASE_LTO / _CODEGEN_UNITS overrides; its runs on main, a
 // release/* branch and a tag keep the profile, and scripts/require-green-ci accepts a release only on
 // one of those. A release must never take the branch values, and nothing may move the profile
-// behind the manifest's back. The check is per line, and full-line `#` comments are not read: a
-// comment changes no build. It is defence in depth against an edit that moves the profile, not a
-// boundary against someone set on hiding one: a name split across a backslash-newline, a name built
-// by indirection, a `--config <file>` or RUSTFLAGS codegen flags are out of its reach. It fails
-// closed on prose, too: a step name, an echo or a trailing comment that names an override or a
-// profile table is refused; reword it.
+// behind the manifest's back. The check is per line, with a backslash-newline joined first (shell
+// and Dockerfile join one even inside a word), and full-line `#` comments are not read: a comment
+// changes no build. It is defence in depth against an edit that moves the profile, not a boundary
+// against someone set on hiding one: a name built by indirection (`CARGO_${p}_RELEASE_LTO`) is out
+// of its reach. It fails closed on prose, too: a step name, an echo or a trailing comment that names
+// an override, a profile table or a rustc link flag is refused; reword it.
 //  - no workflow but ci.yml, and neither release build entry point (build-linux.sh,
 //    build-windows-cross.sh), has a line that names ANY CARGO_PROFILE_RELEASE_* variable, however
 //    it would set it (`env:`, `export`, a `$GITHUB_ENV` line, a prefix on a command);
 //  - no workflow, build script, ci.yml or Dockerfile.pi names a profile table to cargo, in any of
 //    its spellings (`--config profile.release.lto=…`, `--config "profile.release={…}"`,
-//    `[profile.release]`, `[profile]` with `release.lto`, quoted key parts);
+//    `[profile.release]`, `[profile]` with `release.lto`, quoted key parts, the inline table
+//    `profile = { release = { … } }`);
+//  - no line there hands cargo a config FILE (`cargo … --config <path>`): its tables are never
+//    read here, so only the `key=value` form is allowed;
+//  - no line there, nor a .cargo/config*, passes rustc a codegen-units or LTO flag
+//    (`-Ccodegen-units=16` in RUSTFLAGS, `rustflags`, `cargo rustc -- -C lto=off`): rustc takes
+//    those over the profile's;
 //  - no .cargo/config* (repository root or src-tauri) carries any profile table, which cargo
 //    would apply over the manifest;
 //  - in ci.yml and Dockerfile.pi every mention of CARGO_PROFILE_RELEASE_* is one of the exact lines
@@ -1103,10 +1109,32 @@ const CARGO_TAURI = process.env.CARGO_TAURI || path.join(ROOT, 'src-tauri', 'Car
 const ANY_OVERRIDE = /CARGO_PROFILE_RELEASE_/;
 // TOML allows a key part to be quoted (`["profile".release]`, `'"profile".release.lto=false'`), with
 // spaces around the dots.
-const PROFILE_TABLE = /["']?profile["']?\s*\.\s*["']?release|\[\s*["']?profile["']?\s*[\].]/;
+// And as an inline table (`profile = { release = { lto = false } }`, `--config 'profile={…}'`).
+const PROFILE_TABLE = /["']?profile["']?\s*\.\s*["']?release|\[\s*["']?profile["']?\s*[\].]|["']?profile["']?\s*=\s*\{/;
+// rustc's own codegen-units and LTO switches, short (`-Ccodegen-units`, `-C lto`) or long
+// (`--codegen=lto`); rustc reads `_` as `-` in them.
+const RUSTC_LINK_FLAG = /(?:-C|--codegen)\s*=?\s*["']?(?:codegen[-_]units|lto)\b/;
+// The argument of each `--config` on a line that runs cargo: `key=value`, or else a file path.
+const CONFIG_ARG = /--config(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+const configFiles = (line) =>
+  /\bcargo\b/.test(line) ? [...line.matchAll(CONFIG_ARG)].map((m) => m[1] ?? m[2] ?? m[3]).filter((a) => !a.includes('=')) : [];
 // Every format read here (YAML, bash, Dockerfile, TOML) comments with `#` only; `//usr/bin/env` is a
-// command in bash, so `//` is not skipped.
-const codeLines = (text) => text.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+// command in bash, so `//` is not skipped. A line ending in `\` continues on the next, whose indent
+// is dropped, so `CARGO_PROFILE_\` + `  RELEASE_LTO=false` reads as the one name it is. A comment
+// never continues (bash ends it at the newline), so the line after one is read on its own.
+function codeLines(text) {
+  const lines = [];
+  let open = '';
+  for (const raw of text.split('\n')) {
+    const l = open + raw.trim();
+    open = '';
+    if (!l || l.startsWith('#')) continue;
+    if (l.endsWith('\\')) open = l.slice(0, -1);
+    else lines.push(l);
+  }
+  if (open) lines.push(open);
+  return lines;
+}
 function releaseProfile(cargoToml) {
   const section = cargoToml.split(/^\[profile\.release\]\s*$/m)[1]?.split(/^\[/m)[0] ?? '';
   const lto = section.match(/^lto\s*=\s*"?([\w]+)"?\s*$/m)?.[1];
@@ -1123,10 +1151,17 @@ function linkProfileFindings({ workflows, buildScripts, cargoConfigs, ci, docker
     for (const l of codeLines(text)) if (ANY_OVERRIDE.test(l)) bad.push(`${file}: names a link-profile override; only ci.yml's branch runs may: ${l}`);
   }
   for (const [file, text] of [...workflows, ...buildScripts, ['ci.yml', ci], ['Dockerfile.pi', docker]]) {
-    for (const l of codeLines(text)) if (PROFILE_TABLE.test(l)) bad.push(`${file}: overrides a cargo profile table: ${l}`);
+    for (const l of codeLines(text)) {
+      if (PROFILE_TABLE.test(l)) bad.push(`${file}: overrides a cargo profile table: ${l}`);
+      for (const f of configFiles(l)) bad.push(`${file}: hands cargo a config file (${f}), whose profile this check cannot read: ${l}`);
+      if (RUSTC_LINK_FLAG.test(l)) bad.push(`${file}: passes rustc a link flag over the profile's: ${l}`);
+    }
   }
   for (const [file, text] of cargoConfigs) {
-    for (const l of codeLines(text)) if (PROFILE_TABLE.test(l)) bad.push(`${file}: sets a cargo profile, which cargo applies over the manifest: ${l}`);
+    for (const l of codeLines(text)) {
+      if (PROFILE_TABLE.test(l)) bad.push(`${file}: sets a cargo profile, which cargo applies over the manifest: ${l}`);
+      if (RUSTC_LINK_FLAG.test(l)) bad.push(`${file}: passes rustc a link flag over the profile's: ${l}`);
+    }
   }
   const allowedCi = new Set();
   const allowedDocker = new Set();
@@ -1212,4 +1247,26 @@ test('only ci.yml land/topic runs leave the shipped link profile; release, main,
   const args = 'ARG CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1\n';
   has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, args, `${args}ENV CARGO_PROFILE_RELEASE_LTO=false\n`) }), 'ENV CARGO_PROFILE_RELEASE_LTO=false');
   has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, '    && ./scripts/build-linux.sh', '    && CARGO_PROFILE_RELEASE_LTO=off ./scripts/build-linux.sh') }), 'CARGO_PROFILE_RELEASE_LTO=off ./scripts/build-linux.sh');
+  // The TOML inline table, in a config file and on the command line.
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', 'profile = { release = { lto = false } }\n']] }), 'profile = { release = { lto = false } }');
+  has(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', `cargo tauri build --config 'profile={release={lto=false}}' --features`))), `'profile={release={lto=false}}'`);
+  // A name split by a backslash-newline: shell joins it even mid-word, and so does a Dockerfile.
+  has(linkProfileFindings(scripts('build-linux.sh', `${linux}\nexport CARGO_PROFILE_\\\nRELEASE_LTO=false\n`)), 'export CARGO_PROFILE_RELEASE_LTO=false');
+  has(linkProfileFindings({ ...LINK, docker: plant(DOCKERFILE, args, `${args}ENV CARGO_PROFILE_\\\n    RELEASE_LTO=false\n`) }), 'ENV CARGO_PROFILE_RELEASE_LTO=false');
+  // A comment ends at its newline: the line after `# … \` is a command, and is read.
+  has(linkProfileFindings(scripts('build-windows-cross.sh', `${cross}\n# a note \\\nexport CARGO_PROFILE_RELEASE_LTO=false\n`)), 'build-windows-cross.sh: names a link-profile override');
+  // A config FILE handed to cargo, in either spelling.
+  has(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', 'cargo tauri build --config "$REPO/scripts/thin.toml" --features'))), 'hands cargo a config file ($REPO/scripts/thin.toml)');
+  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, nai, `          cargo build --release --config=ci/thin.toml\n${nai}`) }), 'hands cargo a config file (ci/thin.toml)');
+  // rustc's own codegen-units / LTO switches, wherever they ride: RUSTFLAGS, `cargo rustc --`, a
+  // cargo config's rustflags.
+  const rustflags = 'export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$HOME=~"';
+  has(linkProfileFindings(scripts('build-linux.sh', plant(linux, rustflags, `${rustflags}\nexport RUSTFLAGS="$RUSTFLAGS -Ccodegen-units=16"`))), '-Ccodegen-units=16');
+  has(linkProfileFindings(scripts('build-windows-cross.sh', plant(cross, rustflags, `${rustflags}\nexport RUSTFLAGS="$RUSTFLAGS -C codegen_units=16"`))), '-C codegen_units=16');
+  has(linkProfileFindings({ ...LINK, ci: plant(CI_TEXT, nai, `          cargo rustc --release -- --codegen=lto=off\n${nai}`) }), '--codegen=lto=off');
+  has(linkProfileFindings({ ...LINK, cargoConfigs: [['.cargo/config.toml', '[build]\nrustflags = ["-Clto=off"]\n']] }), 'passes rustc a link flag');
+  // Negative controls: a comment that names each shape, and a key=value `--config` with no profile
+  // in it, are not reported.
+  assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', `${linux}\n# never: -Ccodegen-units=16, profile = { release = {} }, --config thin.toml\n`)), []);
+  assert.deepEqual(linkProfileFindings(scripts('build-linux.sh', plant(linux, 'cargo tauri build --features', "cargo tauri build --config 'net.git-fetch-with-cli=true' --features"))), []);
 });

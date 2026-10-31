@@ -22,6 +22,11 @@
 # download with no checksum, here as in release.yml.
 
 name: CI
+# The run's title names the ref it ran on, as GitHub resolved it (`CI on refs/tags/v1.2.3`): the
+# run list's headBranch is a bare name and cannot tell a tag from a branch called like it, and
+# scripts/require-green-ci accepts a tag's run only when this title says it was the tag. A pull
+# request keeps its own title in front.
+run-name: ${{ github.event.pull_request.title || 'CI' }} on ${{ github.ref }}
 
 on:
   # A push to main starts this through ci-main.yml, which skips a commit that already passed here.

@@ -3780,7 +3780,7 @@ mod lotw_batch_tests {
 
 #[cfg(test)]
 mod logbook_startup_tests {
-    use super::durable_command_tests::{card_at, engine_on_store, id_at};
+    use super::durable_command_tests::{by_command, card_at, engine_on_store, id_at};
     use super::*;
     use crate::remote_service::stored_log_tests::StoredLog;
     use std::time::{Duration, Instant};
@@ -4068,7 +4068,13 @@ mod logbook_startup_tests {
 
         // The control: beside the writer, while a change waits on a stalled disk.
         let hold = WriteHold::take(&db).expect("stall the store");
-        assert!(card_at(&engine, 3));
+        let id = id_at(&engine, 3);
+        let (made, landed) = by_command(
+            &engine,
+            id,
+            tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+        );
+        assert!(made);
         let beside = dir.with_extension("beside");
         copy_data_dir_verified(&dir, &beside, None).expect("copied");
         drop(hold);
@@ -4076,6 +4082,12 @@ mod logbook_startup_tests {
             !marked(&beside, 3),
             "control: a copy beside the writer misses the change on its way"
         );
+        // The released change commits now, and holds the write lock through its flush. The next
+        // stall starts once it is on disk: taken beside that commit, it would wait for the lock
+        // and give up after the store's busy timeout on a disk slow to flush.
+        landed
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .expect("the control's change lands once released");
 
         // Through the writer: another change, the same stall, released while the copy waits.
         let hold = WriteHold::take(&db).expect("stall the store");

@@ -150,7 +150,9 @@ echo
 echo "12. WHERE THE RUN CAME FROM. ci.yml links the Windows and Pi builds with the shipped fat-LTO"
 echo "    profile only on main, release/* and a tag; a green run from any other branch proves the"
 echo "    tests but not the link that ships, so it is not release evidence."
-branch_run() { printf '[{"databaseId":12,"headBranch":%s,"status":"completed","conclusion":"success","headSha":"%s","event":"workflow_dispatch","createdAt":"t","url":"u"}]' "$1" "$SHA"; }
+# branch_run <headBranch JSON> [displayTitle]: the title ci.yml's run-name gives a run on the tag
+# by default; only a run accepted for the tag reads it.
+branch_run() { printf '[{"databaseId":12,"headBranch":%s,"status":"completed","conclusion":"success","headSha":"%s","event":"workflow_dispatch","createdAt":"t","url":"u","displayTitle":"%s"}]' "$1" "$SHA" "${2:-CI on refs/tags/$REF}"; }
 run 0 "green on release/1.2.3-2026-10-26        => PASS" "$(branch_run '"release/1.2.3-2026-10-26"')"
 run 0 "green on the tag being released ($REF)    => PASS" "$(branch_run "\"$REF\"")"
 run 0 "green on main                            => PASS" "$(branch_run '"main"')"
@@ -181,7 +183,7 @@ echo "    that name exists."
 RUNENV="NEXUS_CI_REF_IS_BRANCH=no"  run 0 "run on '$REF', no branch of that name       => PASS" "$(branch_run "\"$REF\"")"
 RUNENV="NEXUS_CI_REF_IS_BRANCH=yes" run 1 "run on '$REF', a branch '$REF' exists       => REFUSE" "$(branch_run "\"$REF\"")"
 RUNENV="NEXUS_CI_REF_IS_BRANCH=yes" run 0 "same, but a release/* run also green       => PASS" \
-  "[{\"databaseId\":17,\"headBranch\":\"$REF\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\"},
+  "[{\"databaseId\":17,\"headBranch\":\"$REF\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\",\"displayTitle\":\"CI on refs/tags/$REF\"},
     {\"databaseId\":18,\"headBranch\":\"release/9.9.9\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\"}]"
 RUNENV="NEXUS_CI_REF_IS_BRANCH=maybe" run 2 "branch answer neither yes nor no           => ERROR" "$(branch_run "\"$REF\"")"
 RUNENV="NEXUS_CI_REF_IS_BRANCH=yes" run 0 "a branch '$REF' exists, run is on main     => PASS" "$(branch_run '"main"')"
@@ -238,7 +240,7 @@ FAKE
 chmod +x "$LAB/bin/gh"
 live() {  # live <expected-exit> <name> <FAKE_BRANCH> <headBranch> [ref]
   local want="$1" name="$2" mode="$3" hb="$4" ref="${5:-$REF}" out rc
-  printf '[{"databaseId":20,"headBranch":"%s","status":"completed","conclusion":"success","headSha":"%s","event":"workflow_dispatch","createdAt":"t","url":"u"}]' "$hb" "$SHA" > "$LAB/live.json"
+  printf '[{"databaseId":20,"headBranch":"%s","status":"completed","conclusion":"success","headSha":"%s","event":"workflow_dispatch","createdAt":"t","url":"u","displayTitle":"CI on refs/tags/%s"}]' "$hb" "$SHA" "$hb" > "$LAB/live.json"
   : > "$LAB/api.log"
   out=$(env -u NEXUS_CI_RUNS_JSON PATH="$LAB/bin:$PATH" FAKE_RUNS="$LAB/live.json" FAKE_BRANCH="$mode" FAKE_LOG="$LAB/api.log" \
         "$SCRIPT" --sha "$SHA" --ref "$ref" --repo owner/repo 2>&1)
@@ -274,6 +276,29 @@ if printf '%s' "$msg" | grep -qF 'gh run rerun 4242 --failed'; then
 else
   fail=$((fail+1)); printf '  FAIL %-58s\n' "in a workflow, the advice does NOT re-run the failed jobs"
 fi
+
+echo
+echo "16. THE RUN SAYS IT RAN ON THE TAG. ci.yml's run-name records the full ref; a run accepted only"
+echo "    because its headBranch equals the tag must be titled 'CI on refs/tags/<tag>'. A branch"
+echo "    named like the tag, run and then deleted before the tag was pushed, is refused by it."
+RUNENV="NEXUS_CI_REF_IS_BRANCH=no"
+run 0 "titled 'CI on refs/tags/$REF'               => PASS"   "$(branch_run "\"$REF\"" "CI on refs/tags/$REF")"
+run 1 "titled 'CI on refs/heads/$REF' (a branch)   => REFUSE" "$(branch_run "\"$REF\"" "CI on refs/heads/$REF")"
+run 1 "titled for another tag                      => REFUSE" "$(branch_run "\"$REF\"" "CI on refs/tags/v1.0.0")"
+run 1 "titled 'CI' (before the run-name)           => REFUSE" "$(branch_run "\"$REF\"" "CI")"
+run 1 "no title at all                             => REFUSE" \
+  "[{\"databaseId\":22,\"headBranch\":\"$REF\",\"status\":\"completed\",\"conclusion\":\"success\",\"headSha\":\"$SHA\",\"event\":\"workflow_dispatch\",\"createdAt\":\"t\",\"url\":\"u\"}]"
+run 0 "a main run needs no title                   => PASS"   "$(branch_run '"main"' "CI")"
+RUNENV=""
+branch_run "\"$REF\"" "CI on refs/heads/$REF" > "$LAB/runs.json"
+msg=$(NEXUS_CI_RUNS_JSON="$LAB/runs.json" NEXUS_CI_REF_IS_BRANCH=no "$SCRIPT" --sha "$SHA" --ref "$REF" --repo owner/repo 2>&1)
+for want in "its title does not say it ran on the" "title=CI on refs/heads/$REF"; do
+  if printf '%s' "$msg" | grep -qF "$want"; then
+    pass=$((pass+1)); printf '  ok   %-58s\n' "the refusal names '$want'"
+  else
+    fail=$((fail+1)); printf '  FAIL %-58s\n' "the refusal does NOT name '$want'"
+  fi
+done
 
 echo
 echo "--------------------------------------------------------------"

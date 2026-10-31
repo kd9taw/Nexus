@@ -52,10 +52,12 @@
 #
 # A BRANCH NAMED LIKE THE TAG. The run list records only a name, not whether it was a branch or
 # a tag, so a branch called `v1.2.3` would pass for the tag while linking as a branch does. A run
-# accepted ONLY because its headBranch equals the tag is therefore taken only after asking the
-# API whether a branch of that name exists; if one does, the run is refused, and an unreadable
-# answer is exit 2 as everywhere else. (Seam: NEXUS_CI_REF_IS_BRANCH=yes|no with
-# NEXUS_CI_RUNS_JSON.)
+# accepted ONLY because its headBranch equals the tag must therefore say it ran on the tag:
+# ci.yml's run-name records the full ref GitHub resolved, so its displayTitle must be exactly
+# `CI on refs/tags/<ref>`. That holds even for a branch that existed only while its run ran and
+# was deleted before the tag was pushed. On top of that the API is asked whether a branch of
+# that name exists now; if one does, the run is refused, and an unreadable answer is exit 2 as
+# everywhere else. (Seam: NEXUS_CI_REF_IS_BRANCH=yes|no with NEXUS_CI_RUNS_JSON.)
 #
 # THE SHORT-SHA TRAP, found while building this. `gh run list --commit 5badb66d` returns
 # `[]` — an empty list, exit 0 — for a commit that HAS a run. The API matches head_sha
@@ -184,7 +186,7 @@ named override if this is a genuine break-glass release."
       || die_usage "could not determine the repository — pass --repo owner/name"
   fi
   runs=$(gh run list --repo "$repo" --workflow "$WORKFLOW" --commit "$sha" --limit 100 \
-           --json databaseId,status,conclusion,headSha,headBranch,event,createdAt,url 2>&1)
+           --json databaseId,status,conclusion,headSha,headBranch,event,createdAt,url,displayTitle 2>&1)
   rc=$?
   if [ $rc -ne 0 ]; then
     echo "require-green-ci: could not read ci.yml runs for $sha from $repo:" >&2
@@ -217,8 +219,10 @@ evidence() {  # $1: the jq condition on .headBranch that this pass accepts
 }
 green=$(evidence '.headBranch == "main" or (.headBranch | startswith("release/"))')
 tag_named_branch=''
+tag_untitled=''
 if [ -z "$green" ]; then
-  tag_run=$(evidence '.headBranch == $ref')
+  tag_run=$(evidence '.headBranch == $ref and .displayTitle == ("CI on refs/tags/" + $ref)')
+  [ -n "$tag_run" ] || tag_untitled=$(evidence '.headBranch == $ref')
   if [ -n "$tag_run" ]; then
     # See A BRANCH NAMED LIKE THE TAG above.
     if [ -n "$RUNS_JSON_FILE" ]; then
@@ -263,6 +267,12 @@ fi
   echo "  commit: $sha"
   echo "  repo:   ${repo:-<recorded>}"
   echo
+  if [ -n "$tag_untitled" ]; then
+    echo "A green $WORKFLOW run names '$ref' as its branch, but its title does not say it ran on the"
+    echo "tag (CI on refs/tags/$ref), so it may have been a branch's run, linked as a branch run is."
+    echo "It is not accepted."
+    echo
+  fi
   if [ -n "$tag_named_branch" ]; then
     echo "A green $WORKFLOW run names '$ref' as its branch, but a BRANCH called '$ref' exists in"
     echo "this repository, so that run may be the branch's, linked as a branch run is. It is not"
@@ -278,7 +288,7 @@ fi
     echo "  (no $WORKFLOW run has ever been recorded for this commit)"
   else
     printf '%s' "$runs" | jq -r --arg sha "$sha" '.[] |
-      "  run \(.databaseId)  status=\(.status)  conclusion=\(.conclusion // "null")  event=\(.event)  branch=\(.headBranch // "null")"
+      "  run \(.databaseId)  status=\(.status)  conclusion=\(.conclusion // "null")  event=\(.event)  branch=\(.headBranch // "null")  title=\(.displayTitle // "null")"
       + (if .headSha == $sha then "" else "  ⚠ headSha=\(.headSha) — NOT this commit" end)'
   fi
   echo
