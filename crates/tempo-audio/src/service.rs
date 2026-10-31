@@ -12994,7 +12994,7 @@ impl RadioLoop {
                         if let Some(d) = marked {
                             d.set_voice_key(false);
                         }
-                        self.report_ptt(engine, key.warns());
+                        self.report_key(engine, &key);
                         if let KeyUp::Refused(why) = &key {
                             // The rig did not key, so none of the microphone may be played.
                             note_refused_key("computer microphone over not keyed", why);

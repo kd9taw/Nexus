@@ -784,3 +784,49 @@ fn a_re_press_during_the_key_starts_a_fresh_over() {
     assert!(e.pc_mic_keyed(), "the new over was dropped");
     assert_eq!(e.snapshot().radio.pc_mic_ended, None);
 }
+
+/// A press whose key the radio did not answer in time says the key was not confirmed, as the
+/// Remote microphone and the voice keyer say it, and its voice still goes out, as theirs does: a
+/// slow radio behind rigctld keys and answers late. Only a key the radio refused says it was not
+/// accepted, and that over plays nothing. Rigctld answering the key late, with Hamlib's own "the
+/// rig did not answer", refusing it, and (the control) accepting it.
+#[test]
+fn a_key_with_no_answer_in_time_reads_not_confirmed_and_a_refusal_not_accepted() {
+    use super::refused_key::{rigctld, Key, REFUSED, UNCONFIRMED};
+    for (key, words, plays) in [
+        (Key::AnswersLate, Some(UNCONFIRMED), true),
+        (Key::Answers(-5), Some(UNCONFIRMED), true),
+        (Key::Refuses, Some(REFUSED), false),
+        (Key::Accepts, None, true),
+    ] {
+        let (addr, log) = rigctld(key);
+        let mut s = PcScene::new(true);
+        s.rig = Rig::rigctld(&addr);
+        s.ptt(true);
+        for k in 0..30 {
+            s.tick(k as f64 * 20.0, 0.5);
+        }
+        let keys = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| *l == "T 1" || *l == "T 3")
+            .count();
+        assert!(keys >= 1, "premise: the press tried the key");
+        assert_eq!(
+            s.engine
+                .lock()
+                .unwrap()
+                .snapshot()
+                .radio
+                .audio_error
+                .as_deref(),
+            words
+        );
+        assert_eq!(
+            s.backend.played.contains(&0.5),
+            plays,
+            "whether the voice went out ({words:?})"
+        );
+    }
+}
