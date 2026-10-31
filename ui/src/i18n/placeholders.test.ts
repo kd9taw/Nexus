@@ -56,6 +56,7 @@ import { FR } from './fr'
 import { JA } from './ja'
 import { RU } from './ru'
 import { ZH } from './zh'
+import { ZH_HANT } from './zh-hant'
 import type { PluralForms } from './types'
 
 /** A `t()` / `<T>` call site with everything written literally enough to check. */
@@ -350,6 +351,7 @@ describe('translated catalogs agree with English', () => {
     ['ja', JA as Record<string, unknown>],
     ['ru', RU as Record<string, unknown>],
     ['zh', ZH as Record<string, unknown>],
+    ['zh-hant', ZH_HANT as Record<string, unknown>],
   ]
 
   const holesOf = (v: unknown): Set<string> => {

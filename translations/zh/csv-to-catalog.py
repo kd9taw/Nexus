@@ -7,6 +7,10 @@ csv-to-catalog.py — turn a filled Nexus Chinese translation CSV into `ui/src/i
         --splash-out splash-zh.json
     python3 csv-to-catalog.py nexus-zh-translation.csv             # writes the catalog to stdout
 
+The same script builds the Traditional catalog (`translations/zh-hant/`), which differs only in
+the header it writes and the export it names: pass `--variant hant`. The CSV's column names stay
+`chinese` in both kits — the guard on this script's side reads the column, not the language.
+
 This is the RETURN PATH: the kit's other half. `verify-zh.py` says the filled CSV is mechanically
 sound; this turns it into the TypeScript catalog the application imports.
 
@@ -80,6 +84,29 @@ HEADER = '''\
 import type { PartialCatalog } from './index'
 
 export const ZH: PartialCatalog = {
+'''
+
+# The Traditional variant of the same kit. Same contract as `ZH` — one string per plural, no
+# plural object, absent key falls back to English — and the id is lower-case for the same reason
+# `zh` is: the guards' `/installCatalog\(\s*'([a-z-]+)'/` would miss `zh-Hant` entirely.
+HEADER_HANT = '''\
+// CHINESE (TRADITIONAL, Taiwan wording) — GENERATED. Do not hand-edit; edit the translation CSV
+// and re-run the converter.
+//
+//     python3 translations/zh/csv-to-catalog.py \\
+//         translations/zh-hant/nexus-zh-hant-translation.csv -o ui/src/i18n/zh-hant.ts --variant hant
+//
+// Registered as `zh-hant`, and the id stays lower-case: the guards that read the shipped locale
+// list out of `main.tsx` match `[a-z-]+`, so `zh-Hant` would drop this catalog out of them
+// silently. `initLocale()` prefers it for a Traditional-script or Taiwan/Hong Kong/Macao system
+// and falls back to `zh` for everything else.
+//
+// PARTIAL BY DESIGN AT RUNTIME, like `zh.ts`: an absent key renders the English source string.
+// One string per plural key — `Intl.PluralRules('zh-hant')` selects `other` for every count.
+
+import type { PartialCatalog } from './index'
+
+export const ZH_HANT: PartialCatalog = {
 '''
 
 
@@ -204,8 +231,8 @@ def build(rows, errors):
     return out, (splash if splash_filled else OrderedDict()), stats
 
 
-def render(entries):
-    lines = [HEADER]
+def render(entries, variant):
+    lines = [HEADER if variant == 'hans' else HEADER_HANT]
     for key, value in entries.items():
         lines.append('  %s: %s,\n' % (ts_string(key), ts_string(value)))
     lines.append('}\n')
@@ -217,6 +244,8 @@ def main(argv):
     ap.add_argument('csv', help='the filled nexus-zh-translation.csv')
     ap.add_argument('-o', '--out', help='write here instead of stdout (e.g. ui/src/i18n/zh.ts)')
     ap.add_argument('--splash-out', help='write the splash page strings here, as JSON')
+    ap.add_argument('--variant', choices=('hans', 'hant'), default='hans',
+                    help='which Chinese catalog to write: hans -> ZH, hant -> ZH_HANT')
     args = ap.parse_args(argv[1:])
 
     try:
@@ -244,7 +273,7 @@ def main(argv):
         print('\nNothing was written. Fix the CSV (run verify-zh.py) and try again.', file=sys.stderr)
         return 1
 
-    text = render(entries)
+    text = render(entries, args.variant)
     if args.out:
         with open(args.out, 'w', encoding='utf-8', newline='\n') as fh:
             fh.write(text)
