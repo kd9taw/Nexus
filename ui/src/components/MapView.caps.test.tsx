@@ -398,6 +398,21 @@ describe('round 3: the storm rule and the untick, on the 2-D map', () => {
     expect(auroraChip(r.container)!.textContent).toContain(t('map.aurora.chip.undated'))
   })
 
+  it('on the 2-D globe too: an undated oval draws no dots and no line, and says its time is unknown', async () => {
+    layersOn(['aurora'])
+    feeds.aurora = { points: [{ lat: 66, lon: -100, prob: 50 }], observedAt: null, forecastAt: null, edge: { north: LATS, south: LATS } }
+    const r = await mount({ projection: 'globe' })
+    expect(auroraFills(r.container)).toEqual([])
+    expect(strokes(r.container, AURORA_INK)).toEqual([])
+    expect(auroraChip(r.container)!.textContent).toContain(t('map.aurora.chip.undated'))
+    cleanup()
+    // CONTROL: the same oval dated and current draws its dots and its edge on the 2-D globe
+    feeds.aurora = { points: [{ lat: 66, lon: -100, prob: 50 }], observedAt: NOW_S - 1200, forecastAt: NOW_S + 1800, edge: { north: LATS, south: LATS } }
+    const c = await mount({ projection: 'globe' })
+    expect(auroraFills(c.container).length).toBeGreaterThan(0)
+    expect(strokes(c.container, AURORA_INK).length).toBeGreaterThan(0)
+  })
+
   it('CONTROL — the same older-station oval with a current forecast time draws its dots', async () => {
     layersOn(['aurora'])
     feeds.aurora = { points: [{ lat: 66, lon: -100, prob: 50 }], observedAt: NOW_S - 1200, forecastAt: NOW_S + 1800 }
