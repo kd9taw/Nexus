@@ -495,6 +495,10 @@ export interface AuroraOval {
   observedAt: number | null
   forecastAt: number | null
   fetchedAt?: number | null
+  /** OVATION's own equatorward edge (its 10 % line): one latitude per 15° of longitude from
+   *  −180 (bin centres −172.5 + 15·i), null where OVATION never reaches it. Absent from an older
+   *  station. */
+  edge?: { north: (number | null)[]; south: (number | null)[] }
 }
 /** A forward-calendar entry — an announced DXpedition to plan for. */
 export interface CalendarEntry {
@@ -560,6 +564,21 @@ export interface PcaView {
   points: { lat: number; lon: number; db30: number }[]
   /** The GOES proton sample's own time (Unix seconds); absent from an older station. */
   protonsAt?: number | null
+  /** NOAA's S-scale from `j10`; absent from an older station. */
+  sScale?: number
+  /** NOAA's rule of thumb for how long the event lasts (hours); null where it says nothing. */
+  sepRecoveryH?: number | null
+  /** The approximate cap edge at `cutoffDeg`, [north, south] closed [lon, lat] rings; null without
+   *  a measured Kp. */
+  edge?: [number, number][][] | null
+  /** Whether a proton event is held now, by the shack's one rule (`pca::proton_event`: S1+, dated,
+   *  under 30 min). Absent from an older station, which counts as no event. */
+  protonEvent?: boolean
+  /** When the held event stops being held (the sample time + 30 min, from the shack); present exactly
+   *  when `protonEvent` is. The map stops drawing it then on its own clock. */
+  protonEventUntil?: number | null
+  /** The shack's reason (`pca::proton_state`): held, or why not. Absent from an older station. */
+  protonWhy?: 'held' | 'quiet' | 'stale' | 'ahead' | 'undated'
 }
 
 /** Satellites view (get_satellites): amateur-bird subpoints now + next-24h passes

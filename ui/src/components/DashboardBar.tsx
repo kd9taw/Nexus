@@ -32,13 +32,18 @@
 // are dimmed (`data-dim`), as their gauges are, so a stale Kp 6 is never read across the room as
 // the field now. The A is NOAA's daily planetary A, dated like the SSN.
 //
+// THE KP SAYS WHAT IT IS (capsNow `kpNow`): NOAA's measured 3-hour Kp while its period ended within
+// the last 3 hours, drawn with that period ("4 21Z–00Z"); else the 1-minute estimate under the rule
+// above, drawn with "est."; the hover names which and when. The forecast is the Kp outlook feed this
+// window already polls for the storm toasts (`fc`).
+//
 // OFFLINE HONESTY, Connect's rule (connect/panes.tsx): an offline snapshot is non-null and
 // carries MODELLED values (SFI 120 …), so the bar draws a dash for every index then and says NO
 // LIVE DATA. A cached or partial one keeps its last real numbers and says so, in the panes' words
 // on a chip of the bar's own (styles.css `.dash-prov`: the panes' chip letters its warning in a
 // colour that reads under 4.5:1 on this bar in the light theme).
 import { useEffect, useState, type ReactNode } from 'react'
-import type { DailySolarIndices, PropagationSnapshot, SpaceWxView } from '../types'
+import type { DailySolarIndices, KpForecast, PropagationSnapshot, SpaceWxView } from '../types'
 import {
   aImpact,
   kpImpact,
@@ -56,6 +61,8 @@ import { agoLabel } from './prop/SpaceWxGauges'
 import { getWindowBehind, setWindowBehind, type WindowBehind } from '../api'
 import { withErrorToast } from '../toast'
 import { t } from '../i18n'
+import { kpLabel, kpNow, kpWord } from '../capsNow'
+import { KP_FORECAST, useFeed } from '../features/connectFeeds'
 
 /** Tokens, not prose: the same on every ham's screen in every language. */
 const UTC = 'UTC'
@@ -84,7 +91,7 @@ export interface BarIndex {
  * SSN is the newest day of NOAA's daily file that has a count (`daily`), dated as that day and
  * hovered with the Space Wx box's own caption for the file; a dash while there is none.
  */
-export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null): BarIndex[] {
+export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null, fc?: KpForecast | null): BarIndex[] {
   const now = Date.now()
   const ssn = daily && daily.days.length > 0 ? newest(daily.days, (d) => d.ssn) : null
   const windKms = windSpeedKms(wx, now)
@@ -98,9 +105,20 @@ export function barIndices(wx: SpaceWxView, daily?: DailySolarIndices | null): B
     const i: BarIndex = { key, value, ...(day ? { day } : {}), title, ...(r.stale ? { dim: true } : {}) }
     return marks ? { ...i, warn: !stale && impact.sev === 'warn' } : i
   }
+  // The Kp: measured when NOAA has a recent period, else the estimate under the honesty rule.
+  const kn = kpNow(wx, fc, now)
+  const kpIndex = (): BarIndex => {
+    if (kn?.source === 'measured') {
+      const impact = kpImpact(kn.kp)
+      return { key: NAME.kp, value: kn.kp.toFixed(0), day: kpWord(kn), title: `${impact.text}\n${kpLabel(kn)}`, warn: impact.sev === 'warn' }
+    }
+    const i = index(NAME.kp, 'kp', wx.kp.toFixed(0), kpImpact(wx.kp), true)
+    if (i.value === DASH) return i
+    return { ...i, day: t('dash.kp.est'), ...(kn ? { title: `${i.title}\n${kpLabel(kn)}` } : {}) }
+  }
   return [
     index(NAME.sfi, 'sfi', wx.sfi.toFixed(0), sfiImpact(wx.sfi), false),
-    index(NAME.kp, 'kp', wx.kp.toFixed(0), kpImpact(wx.kp), true),
+    kpIndex(),
     daily && ssn
       ? { key: NAME.ssn, value: ssn.value.toFixed(0), day: dayLabel(ssn.dayUnix), title: trendsCaption(daily.days).text }
       : { key: NAME.ssn, value: DASH, title: '' },
@@ -161,10 +179,11 @@ interface Props {
 
 export function DashboardBar({ call, grid, prop, clock, children }: Props) {
   const daily = useSolarIndices()
+  const fc = useFeed(KP_FORECAST).value ?? null
   // `spaceWx` is read defensively: the TV page's LAN transport hands over whatever the station
   // serves, and a missing block is "no live data", never a throw that blanks the wall.
   const wx = prop?.spaceWx
-  const indices = prop && wx && prop.source !== 'offline' ? barIndices(wx, daily) : NO_INDICES
+  const indices = prop && wx && prop.source !== 'offline' ? barIndices(wx, daily, fc) : NO_INDICES
   // Live is the normal state and gets no chip; anything else says what it is.
   const prov = prop && prop.source !== 'live' ? provLabel(prop.source, prop.asOf) : null
   return (

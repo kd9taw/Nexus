@@ -3825,8 +3825,36 @@ export const EN = {
   // The chip reads ★ when the filter is on and this word when it is off.
   'map.sats.filter.all': 'All',
 
-  'map.pca.chip':
-    '☢ Proton event · S{{scale}} · polar caps absorbing ~{{db}} dB @30 MHz (day) — high-lat paths degraded',
+  // ---- The polar-cap chip (map and globe). {{scale}} is NOAA's S level digit; {{db}} the strongest
+  // absorption drawn, dB at 30 MHz; {{protons}} one of the map.pca.protons* fragments; {{time}} UTC
+  // `HH:MMZ`; {{h}} whole hours. Two sources, never mixed: NOAA's D-RAP grid, or Nexus's model
+  // (NOAA's D-RAP method over GOES protons) whose cap edge is Nexus's own approximation.
+  'map.pca.head': '☢ S{{scale}} proton event · polar caps up to ~{{db}} dB at 30 MHz — polar paths degraded',
+  'map.pca.headWeak': '☢ S{{scale}} proton event · polar caps under 0.5 dB at 30 MHz',
+  'map.pca.protons': 'GOES protons {{time}}',
+  'map.pca.protonsOld': 'GOES protons {{time}} ({{ago}})',
+  'map.pca.protonsUndated': 'GOES protons',
+  'map.pca.src.noaa': 'NOAA D-RAP {{time}} · {{protons}}',
+  'map.pca.src.model': 'Modelled from {{protons}} · cap edge approx. ({{deg}}° geomagnetic)',
+  'map.pca.src.modelNoKp': 'Modelled from {{protons}} · cap edge unknown (no measured Kp)',
+  'map.pca.recovery': 'Lasts ~{{h}} h (NOAA’s rule of thumb from the proton level)',
+  'map.pca.title':
+    'Polar-cap absorption from a solar proton event. NOAA D-RAP: NOAA’s own map, with its real proton cutoff. Modelled: NOAA’s D-RAP method over the GOES proton flux; the dashed cap edge is Nexus’s approximation (66° − 1.2·Kp geomagnetic), not NOAA’s cutoff model.',
+  'map.pca.edge.label': 'cap edge (approx.)',
+
+  // ---- The aurora chip and edge lines (map and globe). {{time}} UTC `HH:MMZ`; {{kp}} one of the
+  // prop.kpNow.* phrases; {{why}} a prop.kpNow.* phrase or map.aurora.why.watch; {{g}} NOAA's G digit.
+  'map.aurora.chip.storm': '🌌 Aurora layer on for the storm ({{why}})',
+  'map.aurora.why.watch': 'NOAA G{{g}} watch',
+  'map.aurora.chip.ovation': 'NOAA OVATION, expected at {{time}} · edge where the chance reaches 10 %',
+  'map.aurora.chip.stale': 'No aurora oval drawn: NOAA OVATION is out of date (its forecast was for {{time}})',
+  'map.aurora.chip.undated': 'No aurora oval drawn: the NOAA OVATION forecast carries no time, so it cannot be shown as current',
+  'map.aurora.chip.none': 'No aurora oval drawn: no NOAA OVATION forecast',
+  'map.aurora.edge.label': 'aurora edge (NOAA OVATION)',
+  'map.layer.aurora.stale': 'out of date (forecast for {{time}}): nothing drawn',
+  'map.layer.aurora.undated': 'forecast time unknown: nothing drawn',
+  'map.layer.aurora.none': 'no NOAA OVATION forecast: nothing drawn',
+  'map.layer.aurora.auto': 'on for the storm',
 
   // ---- The "coming" chip (map): NOAA's geomagnetic watch, the WSA-Enlil model run and the solar
   // wind measured at L1, three sources kept apart — only the L1 line may say "arrived". {{g}} is
@@ -3916,6 +3944,15 @@ export const EN = {
   'map.layer.aurora.observed': 'from the solar wind observed {{time}}',
   'map.layer.flare.label': 'Flare blackout (D-RAP)',
   'map.layer.pca.label': 'Proton polar cap (PCA)',
+  // The polar-cap layer's row while no proton event is held, in the station's own reason (below S1,
+  // 30 min old or more, dated ahead of the station's clock (which the station judges, so it is the
+  // station's clock even when this window is remote), undated, or not said by an older station);
+  // {{time}} is a UTC stamp such as "31 Oct 23:35Z".
+  'map.layer.pca.quiet': 'no proton event (below S1): nothing drawn',
+  'map.layer.pca.stale': 'proton reading out of date ({{time}}): nothing drawn',
+  'map.layer.pca.ahead': 'proton reading dated ahead of the station’s clock ({{time}}): nothing drawn',
+  'map.layer.pca.unknown': 'this station does not say whether a proton event is on: nothing drawn',
+  'map.layer.pca.undated': 'proton reading has no time: nothing drawn',
   'map.layer.coast.label': 'Coastlines',
   'map.layer.states.label': 'US states',
   'map.layer.grid.label': 'Grid (20°×10°)',
@@ -4106,6 +4143,11 @@ export const EN = {
   // stamp ("29 Oct 20:00Z"), {{day}} a date ("29 Oct"), {{ap}} a whole number.
   'prop.spaceWx.src.sfi': 'NOAA · Penticton 10.7 cm solar flux, measured {{time}}',
   'prop.spaceWx.src.kp': 'NOAA · estimated planetary Kp (1-minute), {{time}}',
+  // The Kp now, with what it is: NOAA's measured 3-hour Kp ({{from}}–{{to}}, `HHZ`) or its 1-minute
+  // estimate at {{time}} (`HH:MMZ`). {{kp}} keeps its decimal point.
+  'prop.kpNow.measured': 'Kp {{kp}} measured {{from}}–{{to}}',
+  'prop.kpNow.est': 'Kp {{kp}} est. {{time}}',
+  'prop.kpNow.estUndated': 'Kp {{kp}} est.',
   'prop.spaceWx.src.xray': 'NOAA · GOES X-ray flux, {{time}}',
   'prop.spaceWx.src.a': 'NOAA · daily planetary A for {{day}}',
   'prop.spaceWx.src.apNow': 'ap now ≈{{ap}} (estimated from Kp)',
@@ -4295,7 +4337,8 @@ export const EN = {
     "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min (NOAA's rule of thumb from the X-ray level)",
   'prop.flareAlert.noaa.fadeOwn':
     "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min (NOAA's own estimate)",
-  'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} (Kp {{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
+  // {{kp}} is a prop.kpNow.* phrase ("Kp 6.0 est. 22:36Z").
+  'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} ({{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
   'prop.stormAlert.forecast': '🧲 NOAA expects G{{g}} (Kp {{kp}}) from {{when}} — HF likely degraded then',
   // The watch heads-up, once per NOAA watch. {{days}} is a UT day or range ("31 Oct–1 Nov").
   'prop.arrivalAlert.watch': '🧲 NOAA storm watch: G{{g}} expected {{days}} — HF likely degraded then',
@@ -7658,6 +7701,8 @@ export const EN = {
   // X-ray, SW) and `UTC` are tokens, not catalog strings.
   'dash.bar.aria': 'Clock and space weather',
   'dash.index.sw.title': 'Solar wind speed, km/s',
+  // After the bar's Kp: NOAA's 1-minute estimate (a measured Kp shows its 3-hour period instead).
+  'dash.kp.est': 'est.',
   'dash.behind.label': 'Stay behind',
   'dash.behind.title': 'Keep this window behind your other windows, even when you click on it, so it can fill the screen behind Nexus',
   'dash.behind.failed': 'Could not change whether this window stays behind',

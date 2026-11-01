@@ -57,6 +57,9 @@ import { STANDARD_SKY, type SkyToken } from '../features/skins'
 import { bandColor, openingModeColor } from '../bandColors'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
+import { AuroraChip, PcaChip } from './prop/CapsChips'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, heldUntil, kpAlert, setAuroraDismissal, useAuroraDismissal, useWakeAt } from '../capsNow'
+import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../features/connectFeeds'
 import {
   subsolarPoint,
   moonAt,
@@ -82,6 +85,7 @@ import type {
   PropagationSnapshot,
   PathPrediction,
   MufStation,
+  AuroraOval,
   AuroraPoint,
   PcaView,
   SatView,
@@ -223,6 +227,8 @@ function syncCloud(
       blending: THREE.AdditiveBlending,
     })
     pts = new THREE.Points(new THREE.BufferGeometry(), mat)
+    // Named by its key, like the line groups, so the scene can be read back.
+    pts.name = `cloud:${key}`
     store[key] = pts
     g.scene().add(pts)
   }
@@ -597,6 +603,7 @@ function Globe3DView({
   const auroraPts=nativeAuroraPts
   const [nativePca, setPca] = useState<PcaView | null>(null)
   const pca=nativePca
+  const [auroraOval, setAuroraOval] = useState<AuroraOval | null>(null)
   const [nativeSats, setSats] = useState<SatView | null>(null)
   const sats=nativeSats
   // ★/All chip state + star-set revision, synced by SAT_CHASE_EVENT. Without
@@ -632,6 +639,34 @@ function Globe3DView({
     setSeenLayersRev(layersRev)
     setShow(loadGlobeLayers(showStates))
   }
+  // THE STORM TURNS THE AURORA LAYER ON — the 2-D map's rule (capsNow `auroraStorm`), never saved,
+  // and the operator's untick during the storm sticks until it is over.
+  const kpFc = useFeed(KP_FORECAST).value ?? null
+  const arrival = useFeed(ARRIVAL_OUTLOOK).value ?? null
+  // The Kp to warn on (capsNow `kpAlert`), as on the 2-D map.
+  const kn = useMemo(() => kpAlert(prop?.spaceWx, kpFc, nowMs), [prop, kpFc, nowMs])
+  const storm = auroraStorm(kn, arrival)
+  // The storm's untick is ONE for the window (capsNow `useAuroraDismissal`): it holds across every
+  // map surface and a remount, and clears when the storm ends: here only when this map SEES it end
+  // (on, then off — a map mounting before its data has arrived sees "no storm" for a moment, and that
+  // must not throw the untick away), and in App's poll whether or not a map is on screen.
+  const auroraDismissed = useAuroraDismissal()
+  const stormSeen = useRef(storm)
+  useEffect(() => {
+    if (stormSeen.current && !storm) setAuroraDismissal(false)
+    stormSeen.current = storm
+  }, [storm])
+  const auroraAuto = storm && !auroraDismissed && !show.aurora
+  const auroraOn = show.aurora || auroraAuto
+  const auroraPic = useMemo(() => (auroraOn ? auroraPicture(auroraOval, nowMs) : null), [auroraOn, auroraOval, nowMs])
+  // The cap: NOAA's D-RAP grid while current, else the model with its approximate edge.
+  // The cap goes at the moment its event stops being held (the shack's `protonEventUntil`), not at
+  // the next 60 s tick: one timer wakes the clock then (capsNow `useWakeAt`).
+  useWakeAt(heldUntil(pca), setNowMs)
+  const capPic = useMemo(
+    () => (show.pca ? capPicture(pca, flareNoaa?.drap, flareNoaa ? xrayLong ?? null : null, nowMs) : null),
+    [show.pca, pca, flareNoaa, xrayLong, nowMs],
+  )
 
   // Measure the container BEFORE paint so the globe is never sized to the whole window
   // (react-globe.gl's default when width/height are undefined) — that was painting over
@@ -1188,14 +1223,19 @@ function Globe3DView({
 
   // Self-fetch aurora while its layer is on (server caches ~10 min).
   useEffect(() => {
-    if (!show.aurora) {
+    if (!auroraOn) {
       setAuroraPts([])
+      setAuroraOval(null)
       return
     }
     let live = true
     const poll = () =>
       getAurora()
-        .then((a) => live && setAuroraPts(a?.points ?? []))
+        .then((a) => {
+          if (!live) return
+          setAuroraPts(a?.points ?? [])
+          setAuroraOval(a ?? null)
+        })
         .catch(() => {})
     poll()
     const id = setInterval(poll, 600_000)
@@ -1203,7 +1243,7 @@ function Globe3DView({
       live = false
       clearInterval(id)
     }
-  }, [show.aurora])
+  }, [auroraOn])
 
   // Self-fetch PCA while its layer is on (~5 min).
   useEffect(() => {
@@ -1245,11 +1285,12 @@ function Globe3DView({
       g,
       store,
       'aurora',
-      auroraPts
-        .filter((a) => a.prob >= 8)
-        .map((a) => ({ lat: a.lat, lng: a.lon, rgb: auroraRgb(a.prob), alt: 0.01 })),
+      // The dots only while OVATION is the picture (capsNow `auroraPicture`).
+      auroraPic?.mode === 'ovation'
+        ? auroraPts.filter((a) => a.prob >= 8).map((a) => ({ lat: a.lat, lng: a.lon, rgb: auroraRgb(a.prob), alt: 0.01 }))
+        : [],
       4,
-      show.aurora,
+      auroraOn,
     )
     // Ionosonde MUF (measured stations).
     syncCloud(
@@ -1267,7 +1308,7 @@ function Globe3DView({
       g,
       store,
       'pca',
-      (pca?.points ?? []).map((p) => ({ lat: p.lat, lng: p.lon, rgb: [0.72, 0.34, 1] as RGB, alt: 0.009 })),
+      (capPic?.points ?? []).map((p) => ({ lat: p.lat, lng: p.lon, rgb: [0.72, 0.34, 1] as RGB, alt: 0.009 })),
       5,
       show.pca,
     )
@@ -1305,7 +1346,21 @@ function Globe3DView({
         glowSprite(),
       )
     }
-  }, [ready, nowMs, flareFoot, show.flare, show.aurora, show.muf, show.pca, show.heat, auroraPts, muf, pca, spots])
+  }, [ready, nowMs, flareFoot, show.flare, auroraOn, auroraPic, show.muf, show.pca, show.heat, auroraPts, muf, capPic, spots])
+
+  // THE EDGES — the aurora oval's equatorward edge (OVATION's own, only while it is current) and the
+  // polar cap's approximate edge (dashed, beside the model's shading only), as line groups like the
+  // flare rings: no new WebGL context, redrawn only when the picture changes.
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    const flip = (line: [number, number][]) => line.map(([lon, lat]) => [lat, lon] as [number, number])
+    const aurora = auroraPic?.mode === 'ovation' ? auroraPic.edge : []
+    syncLines(g, linesRef.current, 'auroraEdge', aurora.map(flip), 'rgb(120, 230, 140)', 0.9, auroraOn && aurora.length > 0, 0.011)
+    const cap = capPic?.edge && capPic.points.length > 0 ? capPic.edge : []
+    syncLines(g, linesRef.current, 'capEdge', cap.map(flip), 'rgb(200, 110, 240)', 0.9, show.pca && cap.length > 0, 0.01, true)
+    frameRef.current()
+  }, [ready, auroraOn, auroraPic, show.pca, capPic])
 
   // THE BREATH — the only per-second work: two material writes, no geometry,
   // no rebuild. The heat cloud dims/brightens and the opening wedges pulse,
@@ -2029,8 +2084,13 @@ function Globe3DView({
               <label>
                 <input
                   type="checkbox"
-                  checked={show[row.k]}
-                  onChange={(e) => setShow((s) => ({ ...s, [row.k]: e.target.checked }))}
+                  checked={row.k === 'aurora' ? auroraOn : show[row.k]}
+                  onChange={(e) => {
+                    // Unticking the aurora during a storm is the operator's off, in one click (the
+                    // 2-D map's rule); their own choice is written unless the storm alone had it on.
+                    if (row.k === 'aurora' && storm && !e.target.checked) setAuroraDismissal(true)
+                    if (!(row.k === 'aurora' && auroraAuto)) setShow((s) => ({ ...s, [row.k]: e.target.checked }))
+                  }}
                 />
                 {'labelKey' in row ? t(row.labelKey) : row.label}
               </label>
@@ -2073,6 +2133,10 @@ function Globe3DView({
             nowMs={nowMs}
             snapAt={prop?.spaceWx?.xrayAt ?? null}
           />
+        )}
+        {show.pca && pca && capPic && capShown(pca, capPic) && <PcaChip pca={pca} pic={capPic} nowMs={nowMs} />}
+        {auroraPic && auroraOval != null && (storm || auroraPic.mode !== 'ovation') && (
+          <AuroraChip pic={auroraPic} stormWhy={storm ? auroraStormWhy(kn, arrival) : null} />
         )}
         <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
       </div>

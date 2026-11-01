@@ -370,7 +370,8 @@ describe('on the Globe, a far-side marker is not drawn through the planet — an
 
   it('the aurora oval', async () => {
     layers(['aurora'])
-    feeds.aurora = { points: [{ ...FAR, prob: 50 }, { ...NEAR, prob: 50 }], observedAt: null, forecastAt: null }
+    // A current forecast: an undated oval draws nothing (capsNow `auroraPicture` fails closed).
+    feeds.aurora = { points: [{ ...FAR, prob: 50 }, { ...NEAR, prob: 50 }], observedAt: null, forecastAt: Math.floor(Date.now() / 1000) + 1800 }
     const r = await mount()
     const far = at(FAR)
     const near = at(NEAR)
@@ -380,7 +381,8 @@ describe('on the Globe, a far-side marker is not drawn through the planet — an
 
   it('the proton polar cap', async () => {
     layers(['pca'])
-    feeds.pca = { j10: 100, a30Day: 5, a30Night: 2, cutoffDeg: 60, points: [{ ...FAR, db30: 5 }, { ...NEAR, db30: 5 }] }
+    // A held proton event (fresh, dated, S2; the shack's `protonEvent`): anything else draws no cap.
+    feeds.pca = { j10: 100, a30Day: 5, a30Night: 2, cutoffDeg: 60, points: [{ ...FAR, db30: 5 }, { ...NEAR, db30: 5 }], protonsAt: Math.floor(Date.now() / 1000) - 300, protonEvent: true, protonEventUntil: Math.floor(Date.now() / 1000) + 1500 }
     const r = await mount()
     const far = at(FAR)
     const near = at(NEAR)

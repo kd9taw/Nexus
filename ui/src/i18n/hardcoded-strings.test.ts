@@ -234,6 +234,8 @@ const MIGRATED = [
   'propViz.ts',
   'openingAlert.ts',
   'stormAlert.ts',
+  // The Kp-now words and the aurora chip's watch word (caps and ovals).
+  'capsNow.ts',
   // The flare heads-up toast, its copy in the catalog like the storm toast's.
   'flareAlert.ts',
   // The NOAA storm-watch heads-up toast (once per watch serial).
@@ -265,6 +267,8 @@ const MIGRATED = [
   'components/prop/KpOutlookPane.tsx',
   // The "coming" chip on the map and globe: NOAA's watch, the model line, a measured arrival.
   'components/prop/ArrivalChip.tsx',
+  // The polar-cap and aurora chips on the map and globe (caps and ovals).
+  'components/prop/CapsChips.tsx',
   'components/prop/DxpedCalendar.tsx',
   'components/prop/DxpedDigest.tsx',
   'components/prop/DxpedMonth.tsx',
