@@ -7,7 +7,7 @@
 // on no stop-line census is stop-line.test.tsx.
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { AmpPane } from './AmpPane'
+import { AmpPane, resetOperateHold } from './AmpPane'
 import { t } from '../../i18n'
 import type { AmpStatus } from '../../types'
 import { css, loadSheets, resolveVal } from '../../cssCascade.testkit'
@@ -21,7 +21,11 @@ vi.mock('../../api', async (importOriginal) => ({
 import { ampCommand } from '../../api'
 
 beforeAll(() => loadSheets())
-beforeEach(() => vi.mocked(ampCommand).mockClear())
+beforeEach(() => {
+  vi.mocked(ampCommand).mockClear()
+  // The press in flight is the window's, not a render's: no test inherits the last one's.
+  resetOperateHold()
+})
 afterEach(cleanup)
 
 const live = (over: Partial<AmpStatus> = {}): AmpStatus => ({
@@ -237,6 +241,78 @@ describe('the Amplifier box’s Operate/Standby button', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('the hold survives a remount: switching screens right after a click does not hand back a live button', async () => {
+    vi.useFakeTimers()
+    try {
+      const first = render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+      await act(async () => {
+        fireEvent.click(button())
+      })
+      await act(async () => {
+        vi.advanceTimersByTime(3000)
+      })
+      first.unmount()
+      // Back on a screen with the box: still held, still saying so, and a click sends nothing.
+      render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+      expect(button().disabled).toBe(true)
+      expect(screen.getByRole('status').textContent).toBe(t('amp.op.waiting'))
+      fireEvent.click(button())
+      expect(vi.mocked(ampCommand)).toHaveBeenCalledTimes(1)
+      // The ORIGINAL deadline, not a fresh five seconds from the remount.
+      await act(async () => {
+        vi.advanceTimersByTime(1900)
+      })
+      expect(button().disabled, 'gave up early after the remount').toBe(true)
+      await act(async () => {
+        vi.advanceTimersByTime(200)
+      })
+      expect(button().disabled).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('…and a hold that ran out while no box was on screen is over when one comes back', async () => {
+    vi.useFakeTimers()
+    try {
+      const first = render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+      await act(async () => {
+        fireEvent.click(button())
+      })
+      // Off the box's screen past the deadline: no box was mounted to run the timer.
+      first.unmount()
+      vi.advanceTimersByTime(6000)
+      render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+      expect(button().disabled).toBe(false)
+      expect(screen.queryByText(t('amp.op.waiting'))).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('…and every box in the window for the same amplifier holds together; the new state frees them all', async () => {
+    const a = render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+    const b = render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+    const buttons = () => [...document.querySelectorAll<HTMLButtonElement>('.amp-opbtn')]
+    await act(async () => {
+      fireEvent.click(buttons()[0])
+    })
+    expect(buttons().map((x) => x.disabled)).toEqual([true, true])
+    a.rerender(<AmpPane amp={live({ operate: true })} radioOnAir={false} />)
+    b.rerender(<AmpPane amp={live({ operate: true })} radioOnAir={false} />)
+    expect(buttons().map((x) => x.disabled)).toEqual([false, false])
+  })
+
+  it('…but a press to one amplifier does not hold another', async () => {
+    render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+    await act(async () => {
+      fireEvent.click(button())
+    })
+    cleanup()
+    render(<AmpPane amp={live({ operate: false, family: 'kpa', model: '' })} radioOnAir={false} />)
+    expect(button().disabled).toBe(false)
   })
 
   it('every title says Standby does NOT stop a transmission — in every state', () => {

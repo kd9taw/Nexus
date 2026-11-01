@@ -28,7 +28,9 @@
 //     a dead button; a press that could not be queued releases it. While held it says "Sent —
 //     waiting for the amplifier" until the amplifier's reported state changes or WAIT_MS passes (a
 //     dropped press never changes it). A second click in that time would toggle the amplifier
-//     straight back. It still shows the state the amplifier last REPORTED, never the one we expect.
+//     straight back. The hold is the WINDOW's, not the component's (`hold`, below), so a remount
+//     (a screen switch right after a click) keeps it, with its original deadline. It still shows
+//     the state the amplifier last REPORTED, never the one we expect.
 //   • DEAD, AND SAYING WHY, WHEN THE STATE IS UNKNOWN. A configured amplifier that is not
 //     answering, or answers without an Operate state, draws '—' and the reason. Toggling a state
 //     we cannot see would be toggling blind; this is the one place it refuses more than the strip.
@@ -57,7 +59,7 @@
 // cell's width in any box (the dashboard rail at its 200 px floor, a wide Connect strip) and never
 // wraps or runs past its cell, and a height cap in styles.css that rides --text-scale stops it growing
 // past what Text size asks for in a wide one. The other readings are text a step larger than the body.
-import { useEffect, useState } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import type { AmpStatus } from '../../types'
 import { t } from '../../i18n'
 import { T } from '../../i18n/T'
@@ -82,6 +84,41 @@ const SEP = ' · '
  *  milliseconds; an Elecraft's read is six verbs at up to 0.4 s each, so a slow one runs past 3 s.
  *  Five seconds covers both. A press the poll thread dropped never moves the state at all. */
 const WAIT_MS = 5000
+
+/** THE PRESS IN FLIGHT, per WINDOW, keyed by the amplifier — not component state. A component's
+ *  state dies with it, so switching screens right after a click (or the box moving between the rail
+ *  and a cockpit) would hand back a live button inside the window a second press would toggle the
+ *  amplifier straight back in. Held here, every Amplifier box in this window drawn for the same
+ *  amplifier reads the same hold, and a remount keeps it. It ends the same two ways: the amplifier
+ *  reports a different state (or none), or `until` passes. Another window is another JS realm and
+ *  holds its own; the poll thread's queue is the only thing they share. */
+interface Hold {
+  /** Which amplifier: its family and model id, the only identity the status carries. */
+  amp: string
+  /** The Operate state it had reported when the operator clicked. */
+  from: boolean
+  /** When the hold gives up (ms since the epoch). */
+  until: number
+}
+let hold: Hold | null = null
+const holdListeners = new Set<() => void>()
+function setHold(next: Hold | null): void {
+  hold = next
+  for (const l of holdListeners) l()
+}
+/** Release `h` only if it is still the hold in force: a newer press keeps its own. */
+function releaseHold(h: Hold): void {
+  if (hold === h) setHold(null)
+}
+function subscribeHold(l: () => void): () => void {
+  holdListeners.add(l)
+  return () => holdListeners.delete(l)
+}
+/** Test seam: module state outlives a test's render, so each test starts with no press in flight. */
+export function resetOperateHold(): void {
+  setHold(null)
+}
+const ampKey = (amp: AmpStatus) => `${amp.family}/${amp.model}`
 
 /** Wire tag → the sentence for it, each as a THUNK.
  *
@@ -212,25 +249,27 @@ function OperateButton({
   control: ReturnType<typeof useAmpControl>
 }) {
   const known = operate != null
-  // THE PRESS IN FLIGHT: the Operate state the amplifier had reported when the operator clicked, or null.
-  // It ends when the amplifier reports a different state (or none), or after WAIT_MS.
-  const [waitingFrom, setWaitingFrom] = useState<boolean | null>(null)
-  const waiting = waitingFrom != null
+  // THE PRESS IN FLIGHT (the window's `hold`, above), when it is this amplifier's and not yet given up.
+  const current = useSyncExternalStore(subscribeHold, () => hold)
+  const mine = current != null && current.amp === ampKey(amp) ? current : null
+  const waiting = mine != null && Date.now() < mine.until
+  // Ends when the amplifier reports a different state (or none)…
   useEffect(() => {
-    if (waitingFrom != null && operate !== waitingFrom) setWaitingFrom(null)
-  }, [operate, waitingFrom])
+    if (mine != null && operate !== mine.from) releaseHold(mine)
+  }, [operate, mine])
+  // …or when it gives up: the time LEFT, so a remount mid-wait keeps the original deadline.
   useEffect(() => {
-    if (waitingFrom == null) return
-    const timer = setTimeout(() => setWaitingFrom(null), WAIT_MS)
+    if (mine == null) return
+    const timer = setTimeout(() => releaseHold(mine), Math.max(0, mine.until - Date.now()))
     return () => clearTimeout(timer)
-  }, [waitingFrom])
+  }, [mine])
   const press = async () => {
     if (operate == null) return
-    const from = operate
     // Held from the click, not from the answer: the second click of a double click lands before it.
-    setWaitingFrom(from)
+    const h: Hold = { amp: ampKey(amp), from: operate, until: Date.now() + WAIT_MS }
+    setHold(h)
     const queued = await send('operate')
-    if (!queued) setWaitingFrom(null)
+    if (!queued) releaseHold(h)
   }
   // Every title ends on the same warning, because this is the control an operator could reach
   // for in a hurry: Standby does NOT stop a transmission.
