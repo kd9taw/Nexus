@@ -1,0 +1,32 @@
+[
+ {
+  "product_id": "A20F",
+  "issue_datetime": "2026-10-20 19:12:44.190",
+  "message": "Space Weather Message Code: WATA20\r\nSerial Number: 1132\r\nIssue Time: 2026 Oct 20 1912 UTC\r\n\r\nWATCH: Geomagnetic Storm Category G1 Predicted \nHighest Storm Level Predicted by Day:\nOct 21:  G1 (Minor)   Oct 22:  None (Below G1)   Oct 23:  None (Below G1)   \nTHIS SUPERSEDES ANY/ALL PRIOR WATCHES IN EFFECT\nComment: \r\n\r\nNOAA Space Weather Scale descriptions can be found at\r\nwww.swpc.noaa.gov/noaa-scales-explanation\r\n\r\nPotential Impacts: Area of impact primarily poleward of 60 degrees Geomagnetic Latitude.\r\nInduced Currents - Weak power grid fluctuations can occur.\r\nSpacecraft - Minor impact on satellite operations possible.\r\nAurora - Aurora may be visible at high latitudes, i.e., northern tier of the U.S. such as northern Michigan and Maine."
+ },
+ {
+  "product_id": "A20F",
+  "issue_datetime": "2026-10-28 16:38:01.100",
+  "message": "Space Weather Message Code: WATA20\r\nSerial Number: 1133\r\nIssue Time: 2026 Oct 28 1638 UTC\r\n\r\nWATCH: Geomagnetic Storm Category G1 Predicted \nHighest Storm Level Predicted by Day:\nOct 29:  None (Below G1)   Oct 30:  None (Below G1)   Oct 31:  G1 (Minor)   \nTHIS SUPERSEDES ANY/ALL PRIOR WATCHES IN EFFECT\nComment: G1 (Minor) geomagnetic storms are likely on 31 Oct primarily due to recurrent, positive polarity coronal hole high speed stream effects.\n\r\n\r\nNOAA Space Weather Scale descriptions can be found at\r\nwww.swpc.noaa.gov/noaa-scales-explanation\r\n\r\nPotential Impacts: Area of impact primarily poleward of 60 degrees Geomagnetic Latitude.\r\nInduced Currents - Weak power grid fluctuations can occur.\r\nSpacecraft - Minor impact on satellite operations possible.\r\nAurora - Aurora may be visible at high latitudes, i.e., northern tier of the U.S. such as northern Michigan and Maine."
+ },
+ {
+  "product_id": "A20F",
+  "issue_datetime": "2026-10-29 19:10:52.657",
+  "message": "Space Weather Message Code: WATA20\r\nSerial Number: 1134\r\nIssue Time: 2026 Oct 29 1910 UTC\r\n\r\nWATCH: Geomagnetic Storm Category G1 Predicted \nHighest Storm Level Predicted by Day:\nOct 30:  None (Below G1)   Oct 31:  G1 (Minor)   Nov 01:  G1 (Minor)   \nTHIS SUPERSEDES ANY/ALL PRIOR WATCHES IN EFFECT\nComment: \r\n\r\nNOAA Space Weather Scale descriptions can be found at\r\nwww.swpc.noaa.gov/noaa-scales-explanation\r\n\r\nPotential Impacts: Area of impact primarily poleward of 60 degrees Geomagnetic Latitude.\r\nInduced Currents - Weak power grid fluctuations can occur.\r\nSpacecraft - Minor impact on satellite operations possible.\r\nAurora - Aurora may be visible at high latitudes, i.e., northern tier of the U.S. such as northern Michigan and Maine."
+ },
+ {
+  "product_id": "K05W",
+  "issue_datetime": "2026-10-30 23:11:02.193",
+  "message": "Space Weather Message Code: WARK05\r\nSerial Number: 2272\r\nIssue Time: 2026 Oct 30 2311 UTC\r\n\r\nWARNING: Geomagnetic K-index of 5 expected \nValid From: 2026 Oct 30 2310 UTC\nValid To: 2026 Oct 31 0600 UTC\nWarning Conditions: Onset\nNoaa Scale: G1 - Minor\nComment: \r\n\r\nNOAA Scale: G1 - Minor\r\n\r\nNOAA Space Weather Scale descriptions can be found at\r\nwww.swpc.noaa.gov/noaa-scales-explanation\r\n\r\nPotential Impacts: Area of impact primarily poleward of 60 degrees Geomagnetic Latitude.\r\nInduced Currents - Weak power grid fluctuations can occur.\r\nSpacecraft - Minor impact on satellite operations possible.\r\nAurora - Aurora may be visible at high latitudes, i.e., northern tier of the U.S. such as northern Michigan and Maine."
+ },
+ {
+  "product_id": "K04A",
+  "issue_datetime": "2026-10-30 22:40:49.120",
+  "message": "Space Weather Message Code: ALTK04\r\nSerial Number: 2695\r\nIssue Time: 2026 Oct 30 2240 UTC\r\n\r\nALERT: Geomagnetic K-index of 4 \nThreshold Reached: 2026 Oct 30 2235 UTC\nSynoptic Period: 2100-2400\nActive Warning: YES\nComment: \r\n\r\nNOAA Space Weather Scale descriptions can be found at\r\nwww.swpc.noaa.gov/noaa-scales-explanation\r\n\r\nPotential Impacts: Area of impact primarily poleward of 65 degrees Geomagnetic Latitude.\r\nInduced Currents - Weak power grid fluctuations can occur.\r\nAurora - Aurora may be visible at high latitudes such as Canada and Alaska."
+ },
+ {
+  "product_id": "K04W",
+  "issue_datetime": "2026-10-30 22:24:12.210",
+  "message": "Space Weather Message Code: WARK04\r\nSerial Number: 5444\r\nIssue Time: 2026 Oct 30 2224 UTC\r\n\r\nWARNING: Geomagnetic K-index of 4 expected \nValid From: 2026 Oct 30 2223 UTC\nValid To: 2026 Oct 31 1200 UTC\nWarning Conditions: Onset\nComment: \r\n\r\nNOAA Space Weather Scale descriptions can be found at\r\nwww.swpc.noaa.gov/noaa-scales-explanation\r\n\r\nPotential Impacts: Area of impact primarily poleward of 65 degrees Geomagnetic Latitude.\r\nInduced Currents - Weak power grid fluctuations can occur.\r\nAurora - Aurora may be visible at high latitudes such as Canada and Alaska."
+ }
+]

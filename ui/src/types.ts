@@ -1036,6 +1036,43 @@ export interface XrayNow {
   /** The GOES sample's own time (Unix seconds, UTC), not the fetch time — a feed gap shows
    *  as an old sample (propViz `xrayFastFresh`). */
   asOf: number
+  /** The six-hour trace, `[unix, flux]` per five minutes (each bucket's peak), oldest first: the
+   *  sparkline. Absent from an older station. */
+  series?: [number, number][]
+  /** The raw GOES minutes of the last 70 minutes, `[unix, flux]`, oldest first: the direction word.
+   *  Absent from an older station, which then gets no direction word (never one from the peaks). */
+  recent?: [number, number][]
+  /** NOAA's newest flare event, when its list answered. */
+  event?: FlareEvent | null
+  /** NOAA's D-RAP grid — sent only while the flux is M1 or above. */
+  drap?: DrapGrid | null
+}
+
+/** One flare as NOAA's event list reports it (Unix seconds, UTC). A time NOAA has not called
+ *  yet is null, never a guess. */
+export interface FlareEvent {
+  /** When NOAA last updated the entry. */
+  at: number
+  beginAt: number
+  beginClass: string | null
+  maxAt: number | null
+  maxClass: string | null
+  maxFlux: number | null
+  endAt: number | null
+  currentClass: string | null
+}
+
+/** NOAA's D-RAP global grid of Highest Affected Frequency (MHz). Rows north first, columns west
+ *  first, regular spacing, columns round the whole globe. */
+export interface DrapGrid {
+  /** NOAA's `Product Valid At`. */
+  validAt: number
+  /** NOAA's `Estimated Recovery Time`, when it gives one. */
+  recoveryAt: number | null
+  lats: number[]
+  lons: number[]
+  /** `lats.length × lons.length`, row-major. */
+  haf: number[]
 }
 export interface PropagationSnapshot {
   advisory: PropAdvisory
@@ -1231,6 +1268,58 @@ export interface KpForecast {
   points: KpPoint[]
   /** When the station fetched this copy (Unix seconds); absent from an older station. */
   fetchedAt?: number | null
+}
+
+/** "Coming" (`get_arrival_outlook`): what NOAA expects to reach Earth, three ways of knowing
+ *  kept apart — the watch (NOAA's call), the model run (WSA-Enlil) and the measurement at L1 —
+ *  each with its own time. Every part is absent when it is not known; nothing is filled in.
+ *  Times are Unix seconds UTC. */
+export interface ArrivalWatch {
+  serial: number
+  code: string
+  issued: number
+  days: { day: number; g: number }[]
+  comment: string | null
+  /** First G1+ day's 00Z … the last one's end. */
+  window: [number, number] | null
+  maxG: number
+}
+export interface ArrivalModelPoint {
+  at: number
+  speed: number
+  density: number
+  cloud: boolean
+}
+export interface ArrivalModel {
+  /** The model file's own publication time, when the server sent one. */
+  runAt: number | null
+  fetchedAt: number
+  peak: ArrivalModelPoint | null
+  arrival: { riseAt: number; start: number; end: number; speedFrom: number; speedTo: number; cloud: boolean } | null
+}
+export interface ArrivalL1Sample {
+  at: number
+  arrives: number
+  speed: number | null
+  bt: number | null
+}
+export interface ArrivalL1 {
+  latest: ArrivalL1Sample | null
+  jump: {
+    at: number
+    arrives: number
+    speedBefore: number | null
+    speedAfter: number | null
+    btBefore: number | null
+    btAfter: number | null
+  } | null
+}
+export interface ArrivalOutlook {
+  watch: ArrivalWatch | null
+  model: ArrivalModel | null
+  l1: ArrivalL1 | null
+  /** The 3-day forecast's geomagnetic rationale: NOAA's own words, untranslated. */
+  rationale: { issued: number; text: string } | null
 }
 
 /** One day of NOAA SWPC's daily solar indices. `null` = SWPC published no value for that day —

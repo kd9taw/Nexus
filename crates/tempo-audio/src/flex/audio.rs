@@ -112,6 +112,9 @@ struct Shared {
     /// Another program feeds the radio's DAX transmit audio, as the control thread last saw it.
     other_feeder: AtomicBool,
     tx: Arc<DaxTx>,
+    /// Tests only: the control thread leaves `radio_dax` as it is, as a late tick does.
+    #[cfg(test)]
+    hold_radio_dax: AtomicBool,
 }
 
 impl Audio {
@@ -135,6 +138,8 @@ impl Audio {
             radio_dax: AtomicU8::new(0),
             other_feeder: AtomicBool::new(false),
             tx,
+            #[cfg(test)]
+            hold_radio_dax: AtomicBool::new(false),
         });
         let mut threads = Vec::new();
         let spawn = |name: &str, f: Box<dyn FnOnce() + Send>| {
@@ -191,6 +196,13 @@ impl Audio {
     /// The transmit route.
     pub(crate) fn tx(&self) -> Arc<DaxTx> {
         Arc::clone(&self.shared.tx)
+    }
+
+    /// Tests only: hold the radio's DAX source flag as last read, as a control thread that has not
+    /// ticked since does. The flag stays what it is until released.
+    #[cfg(test)]
+    pub(crate) fn hold_radio_dax(&self, on: bool) {
+        self.shared.hold_radio_dax.store(on, Ordering::SeqCst);
     }
 
     /// Our receive streams and their channels.
@@ -356,14 +368,22 @@ fn tick(
 ) {
     let ours = snap.handle;
     let model = &snap.model;
-    shared.radio_dax.store(
-        match model.transmit.dax {
-            None => 0,
-            Some(false) => 1,
-            Some(true) => 2,
-        },
-        Ordering::Release,
-    );
+    // Read after the snapshot: a hold set before the session changed is seen by any tick whose
+    // snapshot shows that change.
+    #[cfg(test)]
+    let held = shared.hold_radio_dax.load(Ordering::SeqCst);
+    #[cfg(not(test))]
+    let held = false;
+    if !held {
+        shared.radio_dax.store(
+            match model.transmit.dax {
+                None => 0,
+                Some(false) => 1,
+                Some(true) => 2,
+            },
+            Ordering::Release,
+        );
+    }
     // What the radio says about our streams: registered by a status stamped with our handle,
     // forgotten when one it reported is gone.
     let reported: BTreeMap<u32, u8> = model

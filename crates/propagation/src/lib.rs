@@ -17,6 +17,7 @@
 
 pub mod achievements;
 pub mod advisor;
+pub mod arrival;
 pub mod award_status;
 pub mod awards;
 pub mod awards_more;
@@ -30,6 +31,7 @@ pub mod dxped;
 pub mod engine;
 pub mod fccstate;
 pub mod ffma;
+pub mod flare;
 pub mod geo;
 pub mod gettingout;
 pub mod gridrarity;

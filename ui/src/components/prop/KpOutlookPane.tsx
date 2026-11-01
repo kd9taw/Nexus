@@ -11,7 +11,8 @@
 // final. Bars past the measured edge are hollow and the boundary is marked, so a
 // forecast can never be read as a reading. Same rule the rest of the propagation
 // stack follows.
-import { KP_FORECAST, useFeed } from '../../features/connectFeeds'
+import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../../features/connectFeeds'
+import { wxStampLabel } from '../../propViz'
 import type { KpForecast, KpPoint } from '../../types'
 import { t, type MessageKey } from '../../i18n'
 
@@ -55,6 +56,9 @@ export function KpOutlookPane() {
   // The window's one poll of the forecast (features/connectFeeds, on the server's 15-minute cache;
   // SWPC republishes every 30), shared with App's storm heads-up, which watches the same feed.
   const fc: KpForecast | null = useFeed(KP_FORECAST).value ?? null
+  // The forecasters' own reasoning (the 3-day forecast's geomagnetic rationale, NOAA's English,
+  // with its issue time) is the lines' hover: why the bars ahead look the way they do.
+  const rationale = useFeed(ARRIVAL_OUTLOOK).value?.rationale ?? null
 
   // No series at all = we have never had the feed. Say so; a flat line at zero would
   // read as "quiet", which is a forecast we do not have.
@@ -90,7 +94,14 @@ export function KpOutlookPane() {
           />
         ))}
       </div>
-      <div className="kp-lines">
+      <div
+        className="kp-lines"
+        title={
+          rationale
+            ? t('connect.kp.rationale.title', { issued: wxStampLabel(rationale.issued), text: rationale.text })
+            : undefined
+        }
+      >
         {now && (
           <div className="kp-line">
             {t('connect.kp.now', { kp: now.kp.toFixed(2), when: slot(now.timeUnix) })}

@@ -4674,6 +4674,9 @@ pub struct Engine {
     /// Until when the radio loop holds the key on a deadline of its own — a voice-keyer message
     /// or an APRS frame it is still playing — see [`Self::observe_loop_tx_hold`]. `None` = none.
     loop_tx_hold_until: Option<Instant>,
+    /// The turn the app takes to change a saved key a notice can ask about — see
+    /// [`Self::key_changes`].
+    key_changes: Arc<Mutex<()>>,
     rig_tx_swr: Option<f32>,
     /// Consecutive keyed SWR readings above [`Settings::swr_stop_ratio`]. The cutoff fires at
     /// TWO, never one — see [`Self::observe_rig_tx_meters`]. Zeroed by a reading at or below
@@ -7427,6 +7430,7 @@ impl Engine {
             rig_keyed: false,
             cw_keying_until: None,
             loop_tx_hold_until: None,
+            key_changes: Arc::default(),
             rig_tx_swr: None,
             swr_over_count: 0,
             rig_tx_alc: None,
@@ -7786,6 +7790,14 @@ impl Engine {
         if cloudlog_let_go {
             self.station.repace_catch_up(upload_legs::CLOUDLOG);
         }
+    }
+
+    /// This engine's turn for changing a saved key that can wait for the operator
+    /// ([`Self::keys_to_confirm`]), handed out to be locked once the engine lock is RELEASED: the
+    /// app holds it across a keychain call that can wait on an unlock prompt, so that a change
+    /// and an answer about the same key never interleave. Nothing in the engine takes it.
+    pub fn key_changes(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.key_changes)
     }
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {

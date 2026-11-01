@@ -370,6 +370,9 @@ const SHARED = [
  *  not merely annoy — it re-fires the same alert once per open window, mid-pass. */
 const DEDUPE = [
   'nexus-journey-seen',
+  // The NOAA storm-watch serials already announced (arrivalAlert.ts): one toast per watch for the
+  // whole station, not one per open window.
+  'nexus.arrival.watchSeen',
   'nexus.dxped.alarms.fired',
   'nexus.sats.alarms.fired',
   // "The seed notice was read." Per-surface, the notice would reappear in

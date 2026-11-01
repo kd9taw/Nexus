@@ -1834,8 +1834,11 @@ export const EN = {
   'contactCard.callFix.title': 'Correct {{old}} to {{call}}?',
   'contactCard.callFix.body': 'Saving takes off what belonged to {{old}}: {{fields}}. Undo puts it back.',
   'contactCard.callFix.confirm': 'Save the correction',
+  'contactCard.callFix.card': 'the paper card marked received',
+  'contactCard.callFix.cardDated': 'the paper card marked received, with its date',
   'contactCard.callFix.lotw': 'the LoTW confirmation',
   'contactCard.callFix.eqsl': 'the eQSL confirmation',
+  'contactCard.callFix.qrz': 'the QRZ confirmation',
   'contactCard.lotwNotResent': 'Already uploaded to LoTW — not sent again: {{fields}}',
   'contactCard.cancel': 'Cancel',
   'logbook.confirmations.all.label': 'Download confirmations',
@@ -3864,15 +3867,67 @@ export const EN = {
   'map.pca.chip':
     '☢ Proton event · S{{scale}} · polar caps absorbing ~{{db}} dB @30 MHz (day) — high-lat paths degraded',
 
+  // ---- The "coming" chip (map): NOAA's geomagnetic watch, the WSA-Enlil model run and the solar
+  // wind measured at L1, three sources kept apart — only the L1 line may say "arrived". {{g}} is
+  // the NOAA G level digit; {{days}} a UT day or day range ("31 Oct–1 Nov"); {{in}} one of the
+  // `map.arrival.in.*` countdowns; times are "31 Oct 04:13Z". WSA-Enlil and L1 are names, kept.
+  'map.arrival.watch.ahead': '🧲 G{{g}} watch · NOAA expects {{days}} ({{in}})',
+  'map.arrival.watch.now': '🧲 G{{g}} watch in force · NOAA expects it through {{last}}',
+  'map.arrival.in.mins': 'in {{n}} min',
+  'map.arrival.in.hours': 'in {{n}} h',
+  'map.arrival.in.days': 'in {{d}} d {{h}} h',
+  'map.arrival.model.peak': 'Model (WSA-Enlil): wind up to {{speed}} km/s around {{when}}',
+  'map.arrival.model.arrival': 'Model (WSA-Enlil): arrival between {{from}} and {{to}}, {{speed}} km/s',
+  'map.arrival.l1.jump': 'Arrived at L1 {{at}} · reaching Earth ~{{earth}} (measured)',
+  'map.arrival.title.watch': 'NOAA geomagnetic storm watch {{code}}, serial {{serial}}, issued {{issued}} — a forecast, by the UT day.',
+  // {{comment}} is NOAA's own English text, shown as NOAA wrote it.
+  'map.arrival.title.comment': 'NOAA comment: {{comment}}',
+  'map.arrival.title.model':
+    'Model line: the WSA-Enlil run published {{run}} — a model, not a measurement; its arrival times are typically off by up to 6 hours.',
+  'map.arrival.title.modelNoRun':
+    'Model line: the latest WSA-Enlil run — a model, not a measurement; its arrival times are typically off by up to 6 hours.',
+  'map.arrival.title.l1':
+    'Arrived: a jump in the solar wind measured at L1, 1.5 million km sunward, with NOAA\'s time for it to reach Earth.',
+  'map.arrival.title.l1Now': 'Solar wind at L1 now {{speed}} km/s (measured {{at}}, reaches Earth ~{{earth}}).',
+  'map.arrival.title.why':
+    'Solar wind takes one to three days from the sun. A flare is never "coming": its X-rays arrive at light speed, so it is here the instant it is seen.',
+
   // The flare chip and its tail. Each phase is its OWN statement appended to the chip — see
   // the `logbook.import.dupes` note — because where "recovering" belongs in the sentence is
   // a decision for each language. `{{cls}}` is the GOES class (M2.1) and `{{r}}` the R-scale.
   'map.flare.chip': '☀️ {{cls}} flare · R{{r}} · HF ≤{{haf}} MHz absorbed on dayside',
-  'map.flare.phase.rising': ' · rising',
-  'map.flare.phase.recovering': ' · recovering',
-  'map.flare.phase.recoveringIn': ' · recovering (~{{mins}} min)',
-  'map.flare.phase.fade': ' · fade (~{{mins}} min)',
   'map.flare.phase.preview': ' · PREVIEW',
+  // The flare chip's lines (components/prop/FlareChip.tsx). Each is a whole statement. NOAA's
+  // event words carry NOAA's own UTC times ({{begin}}, {{peak}}, {{end}} such as 12:38Z); the
+  // "estimated" lines are Nexus's trend word when NOAA's list is silent. {{out}} and {{weak}} are
+  // band names such as 40m: the highest band out (≥ 10 dB) and the highest weakened (≥ 1 dB).
+  'map.flare.noaa.rising': 'NOAA: began {{begin}}, still rising',
+  'map.flare.noaa.peaked': 'NOAA: began {{begin}}, peaked {{peak}}',
+  'map.flare.noaa.peakedClass': 'NOAA: began {{begin}}, peaked {{peak}} at {{cls}}',
+  'map.flare.noaa.ended': 'NOAA: ended {{end}} (began {{begin}})',
+  'map.flare.est.rising': 'Rising (estimated from the GOES trend)',
+  'map.flare.est.falling': 'Falling (estimated from the GOES trend)',
+  'map.flare.src.noaa': 'NOAA D-RAP {{time}} · GOES {{xtime}}',
+  'map.flare.src.goes': 'Estimated from GOES {{xtime}} (no current NOAA grid)',
+  'map.flare.src.goesOnly': 'Estimated from GOES (no current NOAA grid)',
+  'map.flare.src.noaa.title': "Footprint and rings: NOAA's D-RAP absorption grid, valid {{time}}.",
+  'map.flare.src.goes.title': "Footprint and rings: estimated from the GOES X-ray flux with NOAA's D-RAP formula. NOAA's own grid is not current.",
+  'map.flare.src.gap.title': "NOAA's grid differs from the GOES estimate by {{mhz}} MHz under the sun. The map draws NOAA's.",
+  'map.flare.lightspeed': "A flare's X-rays travel at the speed of light: a flare is here the moment it is seen, never on its way.",
+  'map.flare.toggle.aria': 'Flare details',
+  'map.flare.sun.out': 'Under the sun: {{out}} and below out, weakened up to {{weak}}',
+  'map.flare.sun.weak': 'Under the sun: weakened up to {{weak}}',
+  'map.flare.sun.none': 'Under the sun: no HF band affected',
+  'map.flare.here.night': 'Your QTH: night side, no flare effect',
+  'map.flare.here.out': 'Your QTH: {{out}} and below out, weakened up to {{weak}}',
+  'map.flare.here.weak': 'Your QTH: weakened up to {{weak}}',
+  'map.flare.here.none': 'Your QTH: no HF band affected',
+  'map.flare.recovery.noaa': "HF recovery in ~{{mins}} min (NOAA's own estimate)",
+  'map.flare.recovery.fit': "HF recovery in ~{{mins}} min (NOAA's rule of thumb from the X-ray level)",
+  'map.flare.rings.legend': 'Rings: dashed = band weakened (1 dB), solid = band out (10 dB)',
+  'map.flare.spark.aria': 'GOES X-ray flux {{from}}–{{to}}, with the M1 and X1 lines',
+  'map.hover.sun': 'Sun · GOES X-ray {{cls}} at {{time}}',
+  'map.hover.sun.none': 'Sun · no current X-ray reading',
   'map.flare.preview.title':
     'Simulate an X2 flare on the map for 60 s — visual preview only (no alerts). The layer otherwise draws nothing until a real M-class flare.',
   'map.flare.preview.stop': '■ stop',
@@ -4269,12 +4324,20 @@ export const EN = {
   // HF, unlike a flare's minutes — the copy says what it means for operating, and the
   // forecast line is explicitly a forecast.
   // The flare heads-up toast. {{cls}} is the flare class ("M2.0"), {{r}} the NOAA R level digit,
-  // {{mhz}} and {{mins}} whole numbers (the D-RAP ceiling and NOAA's empirical fade estimate).
-  'prop.flareAlert.now': '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded',
+  // {{mhz}} and {{mins}} whole numbers (the D-RAP ceiling and how long until HF recovers). Each
+  // figure says where it comes from, as the map's flare chip does: the ceiling from NOAA's D-RAP
+  // grid while it is current, else estimated from the GOES X-ray flux; the fade from NOAA's own
+  // recovery time on that grid, else NOAA's rule of thumb from the X-ray level.
   'prop.flareAlert.fade':
-    '☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded · fade ~{{mins}} min',
+    "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (estimated from GOES) · fade ~{{mins}} min (NOAA's rule of thumb from the X-ray level)",
+  'prop.flareAlert.noaa.fade':
+    "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min (NOAA's rule of thumb from the X-ray level)",
+  'prop.flareAlert.noaa.fadeOwn':
+    "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min (NOAA's own estimate)",
   'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} (Kp {{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
   'prop.stormAlert.forecast': '🧲 NOAA expects G{{g}} (Kp {{kp}}) from {{when}} — HF likely degraded then',
+  // The watch heads-up, once per NOAA watch. {{days}} is a UT day or range ("31 Oct–1 Nov").
+  'prop.arrivalAlert.watch': '🧲 NOAA storm watch: G{{g}} expected {{days}} — HF likely degraded then',
   'prop.openingAlert.thin':
     '📻 {{band}} possible {{mode}} — thin evidence: {{stations}} stns to ~{{dist}} {{octant}}; may not be audible by ear',
 
@@ -10917,6 +10980,8 @@ export const EN = {
   'connect.kp.peak': 'Worst ahead: Kp {{kp}} at {{when}}',
   'connect.kp.onset': 'Storm level (Kp {{kp}}) expected from {{when}}',
   'connect.kp.relief': 'Settling below storm level around {{when}}',
+  // The pane's hover: the 3-day forecast's geomagnetic rationale. {{text}} is NOAA's own English.
+  'connect.kp.rationale.title': 'NOAA forecaster, issued {{issued}}: {{text}}',
   'connect.kp.chart.aria': 'Planetary K index, measured hours then forecast',
   'connect.kp.bar.title': '{{when}} · Kp {{kp}} · {{kind}}{{scale}}',
   'connect.kp.kind.observed': 'measured',

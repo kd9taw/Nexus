@@ -756,22 +756,31 @@ impl FlexDaemon {
     /// judge, as for the digital refusal at `T 1`. It holds from the moment Nexus writes the mic
     /// ([`Routing::mic_write_in_flight`]), before the radio reports it: a press then (right after a
     /// digital mode, or after a slow switch back) takes the switch to DAX around it rather than the
-    /// stale DAX the radio still reports. Cheap: what the audio control thread last read, and the
+    /// stale DAX the radio still reports.
+    ///
+    /// ⛔ The radio's flag, Nexus's mic write and the keyer's DAX are read from ONE look at the
+    /// session, under the routing's lock: at the end of a message the radio's report of its mic
+    /// ends the other two at once, so the flag must be read in the same look. The audio control
+    /// thread's copy of the flag (refreshed once per tick) can only add a yes: right after a
+    /// switch to DAX it still says mic, and the radio keeps the mic until it agrees. Cheap: the
     /// session's state read in place.
     pub fn radio_has_mic(&self) -> bool {
         self.state.native_audio.load(Ordering::Relaxed)
             && self.audio.as_ref().is_some_and(|a| {
-                !a.other_feeder()
-                    && (a.radio_dax() == Some(false)
-                        || self.dax_for_keyer()
-                        || self.mic_write_in_flight())
+                !a.other_feeder() && (a.radio_dax() == Some(false) || self.session_has_mic())
             })
     }
 
-    /// [`Routing::mic_write_in_flight`], on the session's state now.
-    fn mic_write_in_flight(&self) -> bool {
+    /// The session's part of [`Self::radio_has_mic`]: the radio reports its mic, the keyer's DAX
+    /// ([`Routing::dax_for_keyer`]), or Nexus's mic write in flight
+    /// ([`Routing::mic_write_in_flight`]), all in one look.
+    fn session_has_mic(&self) -> bool {
+        // The routing's lock, then the session's state: the order every holder of both keeps.
+        let routing = lock(&self.state.routing);
         let view = self.conn().read(|s| routing_view(s, &self.state));
-        lock(&self.state.routing).mic_write_in_flight(&view)
+        view.radio == Some(false)
+            || routing.dax_for_keyer(&view)
+            || routing.mic_write_in_flight(&view)
     }
 
     /// Whether the radio takes its transmit audio from DAX only for a voice-keyer message: Nexus
@@ -849,6 +858,14 @@ impl FlexDaemon {
     pub(crate) fn hold_tx_route_out(&self, on: bool) {
         if let Some(a) = self.audio.as_ref() {
             a.tx().hold_out(on);
+        }
+    }
+
+    /// Tests only: [`audio::Audio::hold_radio_dax`].
+    #[cfg(test)]
+    pub(crate) fn hold_radio_dax(&self, on: bool) {
+        if let Some(a) = self.audio.as_ref() {
+            a.hold_radio_dax(on);
         }
     }
 

@@ -1954,6 +1954,68 @@ fn a_corrected_calls_undo_puts_back_what_the_old_call_carried() {
     );
 }
 
+/// ★ A corrected call takes the paper card's received mark off and its received date
+/// (`QSLRDATE`) with it — the Card received column must not keep a date for a card no longer
+/// marked — and its undo puts back the mark and the same date exactly. The other contacts in the
+/// log are not touched.
+#[test]
+fn a_corrected_calls_card_goes_with_its_date_and_the_undo_puts_both_back() {
+    let d = Dir::new("history-call-card");
+    let engine = shared(&d, 3);
+    let id = id_at(&*engine, 1);
+    let (marked, dur) = logwrite::change_ops(
+        &engine,
+        id,
+        None,
+        &[logwrite::qsl_card(id, true)],
+        "mark_qsl_card",
+    );
+    assert!(matches!(marked, Ok(Ok(_))), "the card is marked");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let before = QsoRecord::clone(&row_of(&engine, id).unwrap());
+    let card_date = tempo_core::logbook::extra_field(&before, "QSLRDATE").map(str::to_string);
+    assert!(
+        before.qsl_rcvd.card && card_date.is_some(),
+        "premise: a card marked received, dated: {before:?}"
+    );
+    let others: Vec<Arc<QsoRecord>> = engine
+        .stored_log()
+        .iter()
+        .filter(|r| r.id != Some(id))
+        .cloned()
+        .collect();
+    let entries = history_of(&engine, id).unwrap().len();
+
+    correct_call(&engine, id, &before);
+    let fixed = row_of(&engine, id).unwrap();
+    assert!(!fixed.qsl_rcvd.card, "the correction takes the card off");
+    assert_eq!(
+        tempo_core::logbook::extra_field(&fixed, "QSLRDATE"),
+        None,
+        "and its received date with it"
+    );
+    let now: Vec<Arc<QsoRecord>> = engine
+        .stored_log()
+        .iter()
+        .filter(|r| r.id != Some(id))
+        .cloned()
+        .collect();
+    assert_eq!(now, others, "the other contacts are untouched");
+    let h = history_of(&engine, id).unwrap();
+    assert_eq!(h.len(), entries + 1, "one save, one entry");
+
+    let (undone, dur) = undo_entry(&engine, h.last().unwrap().seq);
+    assert_eq!(undone.expect("undone").changed, 1);
+    dur.wait(DURABLE_WAIT).unwrap();
+    let back = row_of(&engine, id).unwrap();
+    assert_eq!(
+        tempo_core::logbook::extra_field(&back, "QSLRDATE").map(str::to_string),
+        card_date,
+        "the undo puts the same date back"
+    );
+    assert_eq!(*back, before, "the undo puts the whole row back");
+}
+
 /// `service`'s stamp `outcome` on the contact `rec` names, made as a push's is (by its id, only
 /// while the row still carries the call it was sent under).
 fn stamp(

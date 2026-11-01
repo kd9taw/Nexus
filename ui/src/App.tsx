@@ -91,7 +91,7 @@ import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall, ownScreen, workTier, pskSubmode, workHintView, WORK_SECTION, spotNeed, type OwnScreen } from './features/needs'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, JTTY_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
-import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
+import { ARRIVAL_OUTLOOK, DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
 import { DASH_RAIL_FOLDS, DASH_SLOT_IDS, isDashRailSection, railOnScreen, useDashRailSections, type DashRailSection, type DashSlotId } from './features/dashRail'
 import { sharedPaneById, sharedPaneOf } from './features/sharedPanes'
 import type { PaneId } from './features/connectConfig'
@@ -190,9 +190,10 @@ import {
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
-import { processFlare, effectiveXray } from './flareAlert'
+import { processFlare, effectiveXray, flareToastGrid } from './flareAlert'
 import { snapXray, wxUsable, xrayFastFresh } from './propViz'
 import { processStorm, processStormForecast } from './stormAlert'
+import { processArrivalWatch } from './arrivalAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
@@ -217,7 +218,7 @@ import { askAgainWhileSaving } from './features/notAnswered'
 import { useTciSpots } from './features/tciSpots'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
-import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
+import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt, XrayNow } from './types'
 import { pointedTo } from './components/rotorPointAt'
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
@@ -1000,6 +1001,9 @@ function App() {
   // Freshest fast-lane X-ray reading (60 s poller below) — merged with each prop
   // snapshot so the flare heads-up fires app-wide, whatever view is open.
   const xrayFastRef = useRef<number | null>(null)
+  // The fast lane's last answer: its D-RAP grid gives the flare toast the map's ceiling, through
+  // flareToastGrid (none beside a stale sample or the dev override's simulated flux).
+  const xrayLaneRef = useRef<XrayNow | null>(null)
   // Chased-DXpedition alert inputs: the latest windows sweep (10-min poller
   // below), the current QSO partner (kept fresh by the decode-alert effect),
   // and the work action (assigned once handleWorkMapSpot exists).
@@ -1021,7 +1025,10 @@ function App() {
           // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup). Only a
           // measured, fresh flux may alert: a stand-in or an old sample is no flux (propViz).
           const nowMs = Date.now()
-          processFlare(effectiveXray(xrayFastRef.current, snapXray(p.spaceWx, nowMs)))
+          processFlare(
+            effectiveXray(xrayFastRef.current, snapXray(p.spaceWx, nowMs)),
+            flareToastGrid(xrayLaneRef.current, nowMs),
+          )
           // Geomagnetic storm heads-up, same edge-triggered shape over the MEASURED
           // Kp already in this snapshot — no extra fetch. Until this existed a storm
           // reached the operator only if they had the Space Weather pane in front of
@@ -1215,6 +1222,9 @@ function App() {
   // be an alert. stormAlert.ts dedups by the predicted onset time, so this announces once per
   // forecast event however often it is asked.
   useEffect(() => watchFeed(KP_FORECAST, (f) => processStormForecast(f, kpNowRef.current)), [])
+  // NOAA storm WATCH heads-up, app-wide, once per watch serial (arrivalAlert.ts keeps the serials
+  // across restarts); the map's countdown chip reads the same feed.
+  useEffect(() => watchFeed(ARRIVAL_OUTLOOK, (o) => processArrivalWatch(o)), [])
   // X-ray fast lane (60 s): flare ONSET reaches the operator in ~1 min instead of
   // the 5-min prop-snapshot cadence. Best-effort — a failed fetch just leaves the
   // snapshot's slower value driving the watcher.
@@ -1222,8 +1232,10 @@ function App() {
     () =>
       watchFeed(XRAY_NOW, (x) => {
         // The GOES sample's own time gates it: a feed gap is an old sample, not a flare now.
-        xrayFastRef.current = xrayFastFresh(x, Date.now())
-        processFlare(effectiveXray(xrayFastRef.current, null))
+        const nowMs = Date.now()
+        xrayFastRef.current = xrayFastFresh(x, nowMs)
+        xrayLaneRef.current = x
+        processFlare(effectiveXray(xrayFastRef.current, null), flareToastGrid(x, nowMs))
       }),
     [],
   )

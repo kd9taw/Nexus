@@ -19,6 +19,7 @@ import type {
   PropagationSnapshot,
   Station,
   WorkableCard,
+  XrayNow,
 } from '../../types'
 import type { Theme } from '../../useTheme'
 import type { MapIntent } from '../MapView'
@@ -84,6 +85,8 @@ export interface ConnectFeedValues {
   alerts: AlertView[]
   muf: MufStation[]
   xrayNow: number | null
+  /** The whole fast-lane answer (trace, NOAA's event and grid) while its GOES sample is fresh. */
+  xrayLane: XrayNow | null
   dxpedWindows: Map<string, DxpedWindow>
 }
 
@@ -111,6 +114,7 @@ export function useConnectFeeds(enabled = true): ConnectFeedValues {
     muf: muf ?? NO_MUF,
     // The fast lane's flux only while its GOES sample is young enough to be now (a gap ages it).
     xrayNow: xrayFastFresh(xray, Date.now()),
+    xrayLane: xray && xrayFastFresh(xray, Date.now()) != null ? xray : null,
     dxpedWindows,
   }
 }
@@ -152,7 +156,11 @@ export interface PaneContextInput {
 }
 
 /** A box context, and the X-ray reading the map's flare layer draws (it is not a box's). */
-export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow: number | null } {
+export function usePaneContext(i: PaneContextInput): {
+  ctx: PaneContext
+  xrayNow: number | null
+  xrayLane: XrayNow | null
+} {
   // Fetched once per window and shared (features/entityCentroids): several boxes render through
   // plain functions that cannot hold the hook themselves.
   const entityCentroids = useEntityCentroids()
@@ -204,5 +212,5 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
     dayScrub: i.dayScrub ?? null,
     onDayScrub: i.onDayScrub,
   }
-  return { ctx, xrayNow: f.xrayNow }
+  return { ctx, xrayNow: f.xrayNow, xrayLane: f.xrayLane }
 }
