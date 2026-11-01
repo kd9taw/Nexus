@@ -1623,11 +1623,24 @@ async fn listening() -> Option<Running> {
         eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
         return None;
     };
-    let port = std::net::TcpListener::bind((address, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    // The port is free when picked, but let go before the listener binds it, and a case running
+    // beside this one can take it in between: then it is all done again on another port.
+    for _ in 0..20 {
+        let port = std::net::TcpListener::bind((address, 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        if let Some(r) = listening_on(address, port).await {
+            return Some(r);
+        }
+    }
+    panic!("never listened: every port picked was taken before the listener bound it");
+}
+
+/// Listening on `address` at `port`, LAN on, with nobody connected yet. `None` when something else
+/// holds the port by the time the listener binds it.
+async fn listening_on(address: Ipv4Addr, port: u16) -> Option<Running> {
     let network = Network::new(address, 32).unwrap();
     let s = shack(network);
     let scratch = Scratch::new();
@@ -1639,11 +1652,11 @@ async fn listening() -> Option<Running> {
     );
     lan.turn_on(None, Some(port)).unwrap();
     let at = SocketAddr::new(address.into(), port);
-    eventually(&lan, "never listened", |st| {
-        st.listening.as_deref() == Some(at.to_string().as_str())
+    let status = eventually(&lan, "never listened", |st| {
+        st.listening.as_deref() == Some(at.to_string().as_str()) || st.reason == Some("portInUse")
     })
     .await;
-    Some(Running {
+    status.listening.is_some().then_some(Running {
         lan,
         s,
         at,
