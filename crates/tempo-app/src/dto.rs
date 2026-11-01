@@ -3018,6 +3018,11 @@ pub struct FieldDayStatus {
     // over rows therefore has the right value in hand and no reason to reach out here.
     pub running: bool,
     pub state: String,
+    /// The call this contest entry is operated and logged under (`FieldDayLog::mycall`, the
+    /// Cabrillo `CALLSIGN:`): Settings names it when a save would change the station's call
+    /// mid-entry. `""` from a build that predates it.
+    #[serde(default)]
+    pub entry_call: String,
     /// The station currently being worked (the FD sequencer's partner) — lets
     /// the UI quiet decode popups about them mid-contact, like QsoStatus.dxcall.
     #[serde(default)]

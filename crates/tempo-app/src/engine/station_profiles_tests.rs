@@ -3117,3 +3117,143 @@ fn an_over_taken_back_at_the_key_does_not_stamp_the_contact() {
     );
     assert_eq!(key_over(&mut e, 2).as_deref(), Some("W1AW KD9TAW/P EN52"));
 }
+
+/// No profiles, S&P: our call keyed, W1AW's report heard, and the operator's free text "TU" keyed
+/// in slot 2 as "W1AW KD9TAW TU", sender-less free text Nexus addressed; the call saved as `edit`,
+/// when given, while that over is on the air.
+fn free_text_on_the_air(edit: Option<&str>) -> Engine {
+    let mut e = plain_ft8();
+    e.call_station("W1AW");
+    assert!(key_over(&mut e, 0).is_some(), "premise: our call");
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -7)], 1);
+    e.qso_freetext_checked("TU").unwrap();
+    assert_eq!(
+        key_over(&mut e, 2).as_deref(),
+        Some("W1AW KD9TAW TU"),
+        "premise: on the air"
+    );
+    if let Some(call) = edit {
+        settings_call_edit(&mut e, call);
+    }
+    e
+}
+
+/// ⛔ An over on the air finishes under the call it was keyed under. Free text "W1AW KD9TAW TU" is
+/// on the air when the call is saved as KD9TAW/P or W9XYZ; then a late decode moves the sequencer
+/// (to our 73, made under the new call), or the operator clicks a Tx row under the new call. The
+/// rest of the over is not switched: the route is handed nothing and the Status still reports the
+/// over keyed. The next over carries the new call. CONTROLS: with the call unchanged, the same late
+/// decode and the same click switch the rest of the over, as before.
+#[test]
+fn an_over_on_the_air_never_switches_calls_after_a_call_edit() {
+    use super::ft_midover::FtSwitch;
+    let switched = |got: &Option<FtSwitch>| matches!(got, Some(FtSwitch::Switched { .. }));
+    let mut control = free_text_on_the_air(None);
+    control.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW RR73", -7)], 2);
+    let (got, handed) = switch_mid_over(&mut control, 2, 3_000.0, false);
+    assert!(switched(&got) && handed, "CONTROL, late decode: {got:?}");
+    let mut control = free_text_on_the_air(None);
+    control.override_next_tx("W1AW", Some("FN31"), "W1AW KD9TAW RR73");
+    assert!(control.take_ft_restart(), "premise: the click asks");
+    let (got, handed) = switch_mid_over(&mut control, 2, 3_000.0, true);
+    assert!(switched(&got) && handed, "CONTROL, click: {got:?}");
+
+    for to in ["KD9TAW/P", "W9XYZ"] {
+        let mut e = free_text_on_the_air(Some(to));
+        let status = e.tx_message.clone();
+        e.ingest_decodes_for_test(&[dec_snr(&format!("{to} W1AW RR73"), -7)], 2);
+        assert_eq!(tx_now(&e), format!("W1AW {to} 73"), "{to}: premise, moved");
+        let got = switch_mid_over(&mut e, 2, 3_000.0, false);
+        assert_eq!(
+            (got, e.tx_message.clone(), key_over(&mut e, 4)),
+            ((None, false), status, Some(format!("W1AW {to} 73"))),
+            "{to}: late decode"
+        );
+
+        let mut e = free_text_on_the_air(Some(to));
+        let status = e.tx_message.clone();
+        e.override_next_tx("W1AW", Some("FN31"), &format!("W1AW {to} RR73"));
+        assert!(e.take_ft_restart(), "{to}: premise, the click asks");
+        let got = switch_mid_over(&mut e, 2, 3_000.0, true);
+        assert_eq!(
+            (got, e.tx_message.clone(), key_over(&mut e, 4)),
+            ((None, false), status, Some(format!("W1AW {to} RR73"))),
+            "{to}: Tx-row click"
+        );
+    }
+}
+
+/// ⛔ An over refused for its call at the key is refused BEFORE it is counted. The call changes by
+/// a path that skipped the save (here, directly), so the message waiting is still made under
+/// KD9TAW: a run's RR73, and an S&P final 73 in Q65 with "Disable Tx after sending 73" and the CW
+/// ID on. Neither keys; the step count is unchanged, neither the disable nor the CW ID is armed,
+/// and the contact is not logged or queued for upload. CONTROL: the same RR73 and 73 with the
+/// call unchanged key, count, arm and log.
+#[test]
+fn an_over_refused_for_its_call_is_not_counted_armed_logged_or_uploaded() {
+    for change in [false, true] {
+        let (mut e, id) = ft8_station();
+        e.start_cq(None).unwrap();
+        let _ = e.take_immediate_tx();
+        assert_eq!(key_over(&mut e, 100).as_deref(), Some("CQ KD9TAW EN52"));
+        e.hear_for_test("KD9TAW W1AW FN31", -5, 102);
+        assert_eq!(key_over(&mut e, 102).as_deref(), Some("W1AW KD9TAW -05"));
+        e.hear_for_test("KD9TAW W1AW R-07", -5, 104);
+        assert_eq!(tx_now(&e), "W1AW KD9TAW RR73", "premise");
+        let count = tx_count(&e);
+        if change {
+            call_becomes(&mut e, &id);
+        }
+        let keyed = key_over(&mut e, 104);
+        let counted = tx_count(&e) != count;
+        e.hear_for_test("CQ K1ABC FN42", -5, 106);
+        let got = (
+            keyed.is_some(),
+            counted,
+            logged_calls(&e).len(),
+            e.take_pending_uploads().len(),
+        );
+        let want = if change {
+            (false, false, 0, 0)
+        } else {
+            (true, true, 1, 1)
+        };
+        assert_eq!(got, want, "run's RR73, change={change}");
+
+        let (mut e, id) = ft8_station();
+        e.settings.cw_id_after_73 = true;
+        e.settings.disable_tx_after_73 = true;
+        e.set_tier(Tier::Q65);
+        e.call_station("W1AW");
+        e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -7)], 1);
+        e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW RR73", -7)], 3);
+        assert_eq!(tx_now(&e), "W1AW KD9TAW 73", "premise");
+        if change {
+            call_becomes(&mut e, &id);
+        }
+        let got = (
+            key_over(&mut e, 4).is_some(),
+            tx_count(&e),
+            e.take_pending_tx_disable(),
+            e.take_pending_cw_id(),
+        );
+        let want = if change {
+            (false, 0, false, false)
+        } else {
+            (true, 1, true, true)
+        };
+        assert_eq!(got, want, "S&P final 73, change={change}");
+    }
+}
+
+/// The contest entry's call, as Settings names it before a call change mid-entry: the call the
+/// contest log and its Cabrillo are kept under. A Settings save of another call changes what the
+/// contest sequencer signs as, never the entry's call.
+#[test]
+fn the_snapshot_names_the_entry_call_and_a_call_edit_does_not_move_it() {
+    let mut e = plain_field_day_run();
+    let entry = |e: &Engine| e.snapshot().field_day.map(|f| f.entry_call);
+    assert_eq!(entry(&e).as_deref(), Some(ME));
+    settings_call_edit(&mut e, "KD9TAW/P");
+    assert_eq!(entry(&e).as_deref(), Some(ME));
+}

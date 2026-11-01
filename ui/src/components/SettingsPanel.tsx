@@ -307,6 +307,21 @@ import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from 
 import { normaliseTyped, upperTyped } from '../typedInput'
 import { IotaListSettings } from './Iota'
 
+/** The call a running contest entry is operated under, when saving `form` over `saved` would
+ *  change the station's call (`mycall`) while the entry runs (the live snapshot, `fieldDay`) and
+ *  the Save does not turn the contest off; `null` otherwise. The operator at the key
+ *  (`fdOperator`) is not the station's call, and changing it never asks. */
+function entryCallChanged(
+  saved: Settings | null,
+  form: Settings,
+  fieldDay: FieldDayStatus | null | undefined,
+): string | null {
+  if (!fieldDay || !saved || (saved.fdActive === true && !form.fdActive)) return null
+  const call = (c?: string | null) => (c ?? '').trim().toUpperCase()
+  if (call(form.mycall) === call(saved.mycall)) return null
+  return call(fieldDay.entryCall) || call(saved.mycall)
+}
+
 interface Props {
   /** The live contest session, for the READ-ONLY role read-out on the Contesting tab.
    *  Optional: this panel is rendered by tests and by the setup wizard with no
@@ -4052,6 +4067,22 @@ export function SettingsPanel({
         setError(t('settings.save.contestBlocked', { contest: pickedContest, reason: blockerText(blocked, pickedContest) }))
         return
       }
+    }
+    // ⭐ THE STATION'S CALL CHANGED WHILE A CONTEST ENTRY RUNS asks once before it saves (the
+    // operator's decision, 2026-11-01): an entry is operated under one call (ARRL Field Day rules
+    // 6.12 and 6.2), and its log and Cabrillo stay under the call it was started with. Asked of the
+    // station's call only, never the operator at the key (`fdOperator`), whom a club rotates. A
+    // Save that turns the contest off is the checklist's below, and asks nothing here.
+    const entryCall = entryCallChanged(savedRef.current, form, fieldDay)
+    if (
+      entryCall &&
+      !(await confirmDialog({
+        title: t('settings.save.entryCall.title'),
+        body: t('settings.save.entryCall.body', { call: entryCall }),
+        confirmLabel: t('settings.save.entryCall.action'),
+      }))
+    ) {
+      return
     }
     // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): a Save that turns Contest mode off
     // offers it FIRST and saves nothing until it is answered — the merge and the export need the

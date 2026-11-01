@@ -4313,6 +4313,9 @@ export interface FieldDayStatus {
      a row's own sent exchange is `FieldDayQso.mex`. */
   running: boolean
   state: string
+  /** The call this contest entry is operated and logged under (its Cabrillo CALLSIGN). Settings
+   *  names it when a save would change the station's call mid-entry. */
+  entryCall?: string
   /** The station currently being worked (quiets decode popups about them). */
   dxcall?: string | null
   qsoCount: number

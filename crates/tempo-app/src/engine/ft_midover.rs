@@ -37,7 +37,10 @@
 //! on the air and the new message are both addressed to the same station. A contact is never
 //! started mid-over, nor a CQ switched (contest rules: the operator starts every QSO).
 
-use super::{Engine, Mode, Msg, QsoState, QsoStation, Tier, TxGateStamp, TxPlan, TxWaveform};
+use super::{
+    call_changed_refusal, Engine, Mode, Msg, QsoState, QsoStation, Tier, TxGateStamp, TxPlan,
+    TxWaveform,
+};
 
 /// The FT8/FT4 over [`Engine::commit_tx`] handed to the radio loop last: what is on the air while
 /// the loop holds its slot over, and how it was built.
@@ -52,6 +55,9 @@ pub(crate) struct FtOnAir {
     /// The over carries a 73 or an RR73, so a decode no longer switches it (WSJT-X's Enable Tx is
     /// off from its key).
     sent_73: bool,
+    /// The station's call when the over was keyed: once the call is saved as another, nothing
+    /// switches the rest of this over ([`Engine::ft_midover_switch`]).
+    call: String,
 }
 
 /// WSJT-X's `message_is_73` for a standard message (`widgets/mainwindow.cpp:315-321`): one of its
@@ -93,6 +99,7 @@ impl Engine {
                     wave_len,
                     stamp: plan.stamp.clone(),
                     sent_73: is_73(text),
+                    call: self.settings.mycall.clone(),
                 })
             }
             _ => None,
@@ -218,25 +225,15 @@ impl Engine {
             );
             return None;
         }
-        // ⛔ …nor by an over under another call than the one on the air: a call saved during the
-        // over makes the sequencer's messages again under the new call ([`Engine::note_call_saved`]),
+        // ⛔ …nor at all once the station's call has changed since the over was keyed: a call saved
+        // during the over makes the sequencer's messages again under the new call
+        // ([`Engine::note_call_saved`]), whatever the over on the air is (free text names no sender),
         // and the new call goes out from the next over. The over on the air goes out as keyed.
-        let signed = |text: &str| {
-            Msg::parse(text).sender().map(|c| {
-                tempo_core::message::unhash_call(c)
-                    .trim()
-                    .to_ascii_uppercase()
-            })
-        };
-        if signed(&on.text)
-            .zip(signed(&to))
-            .is_some_and(|(keyed, next)| keyed != next)
-        {
+        if let Some(why) = call_changed_refusal(&on.call, &self.settings.mycall) {
             tempo_core::applog::info(
                 "tx",
                 &format!(
-                    "over not switched mid-air: {to:?} is under another call than the over on the \
-                     air; it goes out as {:?}",
+                    "over not switched mid-air: {why} The over goes out as {:?}.",
                     on.text
                 ),
             );
