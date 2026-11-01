@@ -397,6 +397,7 @@ describe('the recent contacts with the call', () => {
     for (const cid of ['cqz', 'ituz', 'county']) expect(said).toContain(columnName(logColumn(cid)!))
     expect(said).toContain(t('contactCard.callFix.lotw'))
     expect(said, 'eQSL never confirmed it').not.toContain(t('contactCard.callFix.eqsl'))
+    expect(said, 'no paper card was marked').not.toContain(t('contactCard.callFix.card'))
     fireEvent.click(within(dialog).getByRole('button', { name: t('contactCard.discard.keep') }))
     await new Promise((r) => setTimeout(r, 30))
     expect(api.editQsoById, 'Keep editing saves nothing').not.toHaveBeenCalled()

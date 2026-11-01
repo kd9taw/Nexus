@@ -3152,6 +3152,12 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
                 || OLD_CALL_PLACE.contains(&k.as_str());
             !(of_old_call && old.extra.iter().any(|(ok, ov)| ok == k && ov == v))
         });
+        // The paper card's received mark went above, and its received date goes with it, as an
+        // untick takes it ([`qsl_card_marked`]): a card not received has no received date. Only
+        // a card the row held: a date with no card mark is left as it is.
+        if old.qsl_rcvd.card {
+            rec.extra.retain(|(k, _)| k != CARD_RCVD_DATE);
+        }
     }
     // A grid or state Nexus filled in itself that the operator has now changed is the operator's:
     // it goes to LoTW like one they typed ([`SELF_FILLED_FIELD`]).
@@ -8606,6 +8612,89 @@ mod tests {
         named.grid = Some("FN42".into());
         assert!(lb.update_record(0, named));
         assert_eq!(held(&lb.records()[0]), held(&original));
+    }
+
+    /// ★ A corrected call takes the paper card's received mark off, and the card's received date
+    /// (`QSLRDATE`) goes with it: a card not received has no received date. LoTW's and eQSL's
+    /// dates go with their confirmations the same way, whether the edit carries the extras or
+    /// leaves them to the row. An ordinary edit keeps every confirmation and every date, and the
+    /// contact the operator did not correct is left exactly as it was.
+    #[test]
+    fn a_call_correction_takes_each_cleared_confirmations_date_with_it() {
+        let dates = [
+            ("QSLRDATE", "20150303"),
+            ("LOTW_QSLRDATE", "20150301"),
+            ("EQSL_QSLRDATE", "20150302"),
+        ];
+        let mut original = rec("K1N", "20m", 1_423_571_640);
+        original.qsl_rcvd = QslRcvd {
+            card: true,
+            lotw: true,
+            eqsl: true,
+            qrz: false,
+        };
+        original.confirmed = true;
+        original.award_confirmed = true;
+        for (k, v) in dates.iter().chain(&[("PFX", "K1"), ("QSL_RCVD_VIA", "B")]) {
+            original.extra.push((k.to_string(), v.to_string()));
+        }
+        let mut other = original.clone();
+        other.call = "W1AW".into();
+        other.when_unix += 600;
+        let names = |r: &QsoRecord| -> Vec<String> {
+            let mut x: Vec<String> = r.extra.iter().map(|(k, _)| k.clone()).collect();
+            x.sort();
+            x
+        };
+        let w1aw = |lb: &Logbook| lb.records().iter().find(|r| r.call == "W1AW").cloned();
+
+        for sent_back in [false, true] {
+            let mut lb = Logbook::new();
+            lb.add(original.clone());
+            lb.add(other.clone());
+            let untouched = w1aw(&lb).expect("W1AW logged");
+            let at = lb.records().iter().position(|r| r.call == "K1N").unwrap();
+            let mut fixed = rec("K1NX", "20m", 1_423_571_640);
+            if sent_back {
+                fixed.extra = original.extra.clone();
+            }
+            assert!(lb.update_record(at, fixed));
+            let r = lb.records().iter().find(|r| r.call == "K1NX").unwrap();
+            assert!(!r.qsl_rcvd.any(), "sent back: {sent_back}");
+            assert_eq!(
+                names(r),
+                ["PFX", "QSL_RCVD_VIA"],
+                "every cleared confirmation's date goes, nothing else: sent back {sent_back}"
+            );
+            assert_eq!(w1aw(&lb), Some(untouched), "the other contact is untouched");
+        }
+
+        // A card held alone: its date goes with it.
+        let mut card_only = original.clone();
+        card_only.qsl_rcvd = QslRcvd {
+            card: true,
+            ..QslRcvd::default()
+        };
+        card_only
+            .extra
+            .retain(|(k, _)| k != "LOTW_QSLRDATE" && k != "EQSL_QSLRDATE");
+        let mut lb = Logbook::new();
+        lb.add(card_only);
+        assert!(lb.update_record(0, rec("K1NX", "20m", 1_423_571_640)));
+        assert_eq!(names(&lb.records()[0]), ["PFX", "QSL_RCVD_VIA"]);
+
+        // An ordinary edit keeps the confirmations, and every date with them.
+        let mut lb = Logbook::new();
+        lb.add(original.clone());
+        let mut named = rec("K1N", "20m", 1_423_571_640);
+        named.name = Some("Bob".into());
+        assert!(lb.update_record(0, named));
+        let r = &lb.records()[0];
+        assert_eq!(r.qsl_rcvd, original.qsl_rcvd);
+        assert_eq!(names(r), names(&original));
+        for (k, v) in dates {
+            assert_eq!(extra_value(r, k), Some(v), "{k} stays");
+        }
     }
 
     /// ★ A corrected call drops the old call's State only where the edit leaves it as it was: a

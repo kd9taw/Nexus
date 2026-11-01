@@ -165,8 +165,17 @@ describe('what a corrected call takes off, said before the save', () => {
   const clears = (over: Partial<CardDraft>, fields: CardField[] = fieldsOf(HELD)) =>
     clearedByCallFix(HELD, { ...draftOf(HELD), ...over }, fields)
 
-  it('names the zones, continent, county and the LoTW and eQSL confirmations the contact holds', () => {
-    expect(clears({ call: 'W1AX' })).toEqual(['CQZ', 'ITUZ', 'CONT', 'CNTY', 'lotw', 'eqsl'])
+  it('names the zones, continent, county, the paper card and the LoTW and eQSL confirmations the contact holds', () => {
+    expect(clears({ call: 'W1AX' })).toEqual(['CQZ', 'ITUZ', 'CONT', 'CNTY', 'card', 'lotw', 'eqsl'])
+  })
+
+  it('names the paper card only when it is marked received, and QRZ when QRZ confirmed it', () => {
+    const only = (qslRcvd: LoggedQso['qslRcvd']): LoggedQso => ({ ...Q, qslRcvd, extra: [['QSLRDATE', '20260101']] })
+    const named = (q: LoggedQso) => clearedByCallFix(q, { ...draftOf(q), call: 'W1AX' }, fieldsOf(q))
+    expect(named(only({ card: true, lotw: false, eqsl: false, qrz: false }))).toContain('card')
+    expect(named(only({ card: false, lotw: false, eqsl: false, qrz: false })), 'a date with no card stays').not.toContain('card')
+    expect(named(only({ card: false, lotw: false, eqsl: false, qrz: true }))).toContain('qrz')
+    expect(named(only({ card: true, lotw: false, eqsl: false, qrz: false }))).not.toContain('qrz')
   })
 
   it('nothing when the call is not corrected: the same call in other capitals or padded is not', () => {
@@ -177,7 +186,7 @@ describe('what a corrected call takes off, said before the save', () => {
   it('a value changed or removed in the same save is not named: changed it stays, removed it goes anyway', () => {
     const fields = fieldsOf(HELD).map((f) =>
       f.tag === 'CQZ' ? { ...f, value: '4' } : f.tag === 'ITUZ' ? { ...f, removed: true } : f)
-    expect(clears({ call: 'W1AX' }, fields)).toEqual(['CONT', 'CNTY', 'lotw', 'eqsl'])
+    expect(clears({ call: 'W1AX' }, fields)).toEqual(['CONT', 'CNTY', 'card', 'lotw', 'eqsl'])
   })
 
   it('names only what the contact holds', () => {
