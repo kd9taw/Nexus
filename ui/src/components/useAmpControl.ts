@@ -25,8 +25,12 @@ import type { AmpStatus } from '../types'
  * - **`refused`**: the last command Nexus could not QUEUE (the queue was full, the call failed, or a
  *   Remote client does not hold the station), shown until the next one that is queued, because a
  *   keystroke the operator watched themselves make and that silently vanished reads as broken. It
- *   is NOT the amplifier refusing, and not the transmit interlock: a queued command the poll thread
- *   then drops because the rig is keyed is dropped without a word, and nothing here can see it.
+ *   is NOT the amplifier refusing, and not the poll thread's interlock: a queued command it then drops
+ *   is dropped without a word, and nothing here can see it. It drops one whenever it cannot be sure
+ *   the radio is not transmitting (anything keyed, output power on the amplifier) and, for an
+ *   Elecraft, which reports no transmit state, EVERY one while there is no fresh PTT reading from the
+ *   radio over CAT (CAT not connected, or none in the last second); also one for an amplifier that is
+ *   not the model set in Settings.
  *
  * And what it does NOT hold, on purpose: any notion of the amplifier's Operate state. `OPERATE`
  * is a toggle with no idempotent "set" in the protocol, so a lost or duplicated frame inverts

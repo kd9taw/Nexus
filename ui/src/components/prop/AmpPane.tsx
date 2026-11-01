@@ -14,14 +14,21 @@
 //     frame and nothing else; a click sets no local state, and the next poll moves it.
 //   • DEAD WHILE KEYED — the amplifier's own flag OR the radio's ON AIR answer (`radioOnAir`) —
 //     and while the link is down, drawn with a dashed edge (a dimming faded the state colour under
-//     4.5:1 at Night). A courtesy: the poll thread's transmit interlock is the real guard, and it
-//     DROPS a queued press without a word — nothing on screen says so, and the button simply stays
-//     as it was. "Not sent" appears only when Nexus could not QUEUE the press (the queue was full,
-//     the call failed, or a Remote client does not hold the station), as on the strip.
-//   • ONE PRESS AT A TIME. After a press Nexus queued, the button is dead and says "Sent — waiting
-//     for the amplifier" until the amplifier's reported state changes or WAIT_MS passes (a dropped
-//     press never changes it). A second click in that second would toggle the amplifier straight
-//     back. It still shows the state the amplifier last REPORTED, never the one we expect.
+//     4.5:1 at Night). A courtesy: the poll thread's interlock (the engine's amplifier permit) is the
+//     real guard, and it DROPS a queued press without a word — nothing on screen says so, and the
+//     button simply stays as it was. It drops one whenever it cannot be sure the radio is not
+//     transmitting: anything keyed, the amplifier showing output power, and — for an Elecraft, which
+//     reports no transmit state of its own — EVERY press while Nexus has no fresh PTT reading from
+//     the radio over CAT (CAT not connected, or no PTT reading in the last second). It also drops
+//     one when the amplifier answering is not the model set in Settings. "Not sent" appears only
+//     when Nexus could not QUEUE the press (the queue was full, the call failed, or a Remote client
+//     does not hold the station), as on the strip.
+//   • ONE PRESS AT A TIME, HELD FROM THE CLICK. The click itself puts the button on hold, before
+//     the call to queue the press is even answered, so the second click of a double click lands on
+//     a dead button; a press that could not be queued releases it. While held it says "Sent —
+//     waiting for the amplifier" until the amplifier's reported state changes or WAIT_MS passes (a
+//     dropped press never changes it). A second click in that time would toggle the amplifier
+//     straight back. It still shows the state the amplifier last REPORTED, never the one we expect.
 //   • DEAD, AND SAYING WHY, WHEN THE STATE IS UNKNOWN. A configured amplifier that is not
 //     answering, or answers without an Operate state, draws '—' and the reason. Toggling a state
 //     we cannot see would be toggling blind; this is the one place it refuses more than the strip.
@@ -68,9 +75,13 @@ const DASH = '—'
 const BIG_CHARS = 6
 /** Between the Operate button's word and its second word, in its accessible name. A mark, not prose. */
 const SEP = ' · '
-/** How long a queued press holds the button before giving up on an answer. The amplifier is polled
- *  about once a second; a press the poll thread dropped never moves the state at all. */
-const WAIT_MS = 3000
+/** How long a queued press holds the button before giving up on an answer. The new state reaches the
+ *  screen two poll cycles after the click, not one: the poll thread sleeps a second, reads, sends the
+ *  press, and publishes the reading it took BEFORE sending, so the change shows on the NEXT cycle's
+ *  read, plus up to 300 ms for the snapshot. That is about 2.3 s for an SPE, whose read takes
+ *  milliseconds; an Elecraft's read is six verbs at up to 0.4 s each, so a slow one runs past 3 s.
+ *  Five seconds covers both. A press the poll thread dropped never moves the state at all. */
+const WAIT_MS = 5000
 
 /** Wire tag → the sentence for it, each as a THUNK.
  *
@@ -201,7 +212,7 @@ function OperateButton({
   control: ReturnType<typeof useAmpControl>
 }) {
   const known = operate != null
-  // THE PRESS IN FLIGHT: the Operate state the amplifier reported when Nexus queued the press, or null.
+  // THE PRESS IN FLIGHT: the Operate state the amplifier had reported when the operator clicked, or null.
   // It ends when the amplifier reports a different state (or none), or after WAIT_MS.
   const [waitingFrom, setWaitingFrom] = useState<boolean | null>(null)
   const waiting = waitingFrom != null

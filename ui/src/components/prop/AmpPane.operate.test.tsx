@@ -188,7 +188,7 @@ describe('the Amplifier box’s Operate/Standby button', () => {
       })
       expect(button().disabled).toBe(true)
       await act(async () => {
-        vi.advanceTimersByTime(2900)
+        vi.advanceTimersByTime(4900)
       })
       expect(button().disabled, 'gave up early').toBe(true)
       await act(async () => {
@@ -196,6 +196,44 @@ describe('the Amplifier box’s Operate/Standby button', () => {
       })
       expect(button().disabled).toBe(false)
       expect(screen.queryByText(t('amp.op.waiting'))).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the hold starts at the CLICK: a double click (two events, before the press is even queued) sends one press', async () => {
+    // A browser dispatches the two clicks of a double click as separate events, and the second can land
+    // while the call that queues the first is still out. Held only once that call answered, the button
+    // would take both, and two toggles put the amplifier back where it was.
+    render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+    fireEvent.click(button())
+    fireEvent.click(button())
+    await act(async () => {})
+    expect(vi.mocked(ampCommand)).toHaveBeenCalledTimes(1)
+  })
+
+  it('…held while the call is still out, and a press that then could not be queued says "Not sent"', async () => {
+    vi.useFakeTimers()
+    try {
+      let answer!: (queued: boolean) => void
+      vi.mocked(ampCommand).mockImplementationOnce(() => new Promise<boolean>((res) => (answer = res)))
+      render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+      await act(async () => {
+        fireEvent.click(button())
+      })
+      // The call has not answered: already held, already saying so.
+      expect(button().disabled).toBe(true)
+      expect(screen.getByRole('status').textContent).toBe(t('amp.op.waiting'))
+      // A call that hangs past the wait does not wedge the button.
+      await act(async () => {
+        vi.advanceTimersByTime(5000)
+      })
+      expect(button().disabled).toBe(false)
+      await act(async () => {
+        answer(false)
+      })
+      expect(screen.getByRole('status').textContent).toBe(t('amp.strip.refused'))
+      expect(button().disabled).toBe(false)
     } finally {
       vi.useRealTimers()
     }

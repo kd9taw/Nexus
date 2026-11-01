@@ -345,15 +345,23 @@ button that is **red, "OPERATE · Active"** with a lamp symbol while the amplifi
 and **green, "STANDBY · Not active"** with a pause symbol while it is in Standby, so the words and
 the shape say it as well as the colour. It shows what the amplifier last reported, never what you
 just clicked: a click sends one Operate/Standby press (the protocol has only a toggle), and the
-button changes when the amplifier reports the new state, usually within about a second. Until
-then the button is held and says **Sent — waiting for the amplifier**, so a second click cannot
-switch it straight back; if no change is reported within three seconds it frees up again. It is
+button changes when the amplifier reports the new state, usually within a second or two. From the
+click until then the button is held and says **Sent — waiting for the amplifier**, so a second
+click cannot switch it straight back; if no change is reported within five seconds it frees up
+again. It is
 locked, with a dashed edge, while you are transmitting (whichever of the radio or the amplifier
 says so) and while the amplifier is not answering or has not said which state it is in, when it
 shows **—**. **Not sent** under the button means Nexus could not send the press at all (for
-example, a Remote screen that does not hold the station). A press that arrives just as you start
-transmitting is dropped by Nexus's transmit interlock without a message: the button simply stays
-as it was. **Standby is not a stop**: the radio keeps transmitting and its drive passes straight
+example, a Remote screen that does not hold the station).
+
+**A press Nexus cannot make safely is dropped without a message**, and the button simply stays as
+it was. Nexus drops one whenever it cannot be sure the radio is not transmitting: something is
+keyed, or the amplifier shows output power. **An Elecraft KPA500 or KPA1500 does not report
+transmitting itself**, so for an Elecraft Nexus also needs a fresh reading of the radio's PTT over
+CAT: without a CAT connection to your radio (or with no PTT reading in the last second), **every**
+press is dropped — the button says "Sent — waiting for the amplifier" and frees up five seconds
+later having done nothing. The same holds for the strip in the cockpit header. A press is also
+dropped when the amplifier answering is not the model set in Settings. **Standby is not a stop**: the radio keeps transmitting and its drive passes straight
 through, and the button's tooltip says so.
 
 It has to be **its own port**. A serial port can only be opened once, so an amplifier
