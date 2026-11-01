@@ -15,6 +15,10 @@
 #   - The `$INODE64` names are the x86_64 spellings of the stat/statfs/opendir family that arm64
 #     imports plainly: no Intel build has been released, so they were added from the arm64 names
 #     whose x86_64 variant libSystem exports.
+#   - Seven x86_64-only names came from the first Intel release build (1.22.0, 2026-11-01), whose
+#     check reported them: ____chkstk_darwin (the stack probe, libSystem since macOS 10.15),
+#     ___bzero, _close$NOCANCEL, _fma, _lround, _lroundf and _strtold (C library and libm
+#     functions present on every macOS the app supports).
 #   - Every name is exported by libSystem in the macOS 11.3 SDK (usr/lib/libSystem.B.tbd and the
 #     usr/lib/system/*.tbd it re-exports) for the architecture that imports it, so it exists on
 #     macOS 12.
@@ -48,7 +52,9 @@ __Unwind_RaiseException
 __Unwind_Resume
 __Unwind_SetGR
 __Unwind_SetIP
+____chkstk_darwin
 ___assert_rtn
+___bzero
 ___chkstk_darwin
 ___cxa_atexit
 ___error
@@ -106,6 +112,7 @@ _chroot
 _clock
 _clock_gettime
 _close
+_close$NOCANCEL
 _closedir
 _confstr
 _connect
@@ -148,6 +155,7 @@ _fdopendir$INODE64
 _fegetround
 _fflush
 _flock
+_fma
 _fmod
 _fmodf
 _fork
@@ -205,6 +213,8 @@ _log1p
 _log1pf
 _log2
 _logf
+_lround
+_lroundf
 _lseek
 _lstat
 _lstat$INODE64
@@ -351,6 +361,7 @@ _strspn
 _strtod
 _strtof
 _strtok
+_strtold
 _strtoull
 _symlink
 _sysconf
