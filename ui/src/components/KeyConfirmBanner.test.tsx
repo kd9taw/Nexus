@@ -151,6 +151,52 @@ describe('KeyConfirmBanner', () => {
     expect(screen.getByRole('group', { name: EN['keyConfirm.label'] })).toBeTruthy()
   })
 
+  it('an older ask answering last never brings back a key already answered', async () => {
+    mockKeys.mockResolvedValue([CLOUDLOG])
+    const { container } = render(<KeyConfirmBanner />)
+    await settle()
+    let answered = () => {}
+    mockAnswer.mockReturnValue(new Promise<void>((resolve) => (answered = resolve)))
+    fireEvent.click(screen.getByRole('button', { name: EN['keyConfirm.remove'] }))
+    // A routine ask goes out while the Remove is on its way, and answers after the one that
+    // follows the Remove.
+    let stale = (_: KeyToConfirm[]) => {}
+    mockKeys.mockReturnValueOnce(new Promise<KeyToConfirm[]>((resolve) => (stale = resolve)))
+    await act(async () => {
+      vi.advanceTimersByTime(KEYS_TO_CONFIRM_EVERY_MS)
+    })
+    mockKeys.mockResolvedValue([])
+    answered()
+    await settle()
+    await settle()
+    expect(container.innerHTML).toBe('')
+    stale([CLOUDLOG])
+    await settle()
+    expect(mockKeys).toHaveBeenCalledTimes(3)
+    expect(container.innerHTML).toBe('')
+  })
+
+  it('an older ask refused last neither hides the newer rows nor stops asking', async () => {
+    let refuseOld = (_: Error) => {}
+    mockKeys.mockReturnValueOnce(new Promise<KeyToConfirm[]>((_, reject) => (refuseOld = reject)))
+    render(<KeyConfirmBanner />)
+    mockKeys.mockResolvedValue([IC9700])
+    await act(async () => {
+      vi.advanceTimersByTime(KEYS_TO_CONFIRM_EVERY_MS)
+    })
+    await settle()
+    const radio = fill(EN['keyConfirm.icomLan'], { radio: 'IC-9700', address: '192.168.1.20' })
+    expect(screen.getByText(radio)).toBeTruthy()
+    refuseOld(new Error('Credentials are set at the shack only.'))
+    await settle()
+    expect(screen.getByText(radio)).toBeTruthy()
+    await act(async () => {
+      vi.advanceTimersByTime(KEYS_TO_CONFIRM_EVERY_MS)
+    })
+    await settle()
+    expect(mockKeys).toHaveBeenCalledTimes(3)
+  })
+
   it('on a computer refused the question, shows nothing and stops asking', async () => {
     mockKeys.mockRejectedValue(new Error('Credentials are set at the shack only.'))
     const { container } = render(<KeyConfirmBanner />)

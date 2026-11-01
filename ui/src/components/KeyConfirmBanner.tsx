@@ -15,7 +15,7 @@
 // An in-flow strip, a child of `.app` like the client banner: it takes its own height from the
 // shell below and covers nothing, so no control of any cockpit, Stop included, is ever under it.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { answerSavedKey, isTauri, keysToConfirm, type KeyToConfirm } from '../api'
 import { t } from '../i18n'
 import { pushToast } from '../toast'
@@ -51,12 +51,19 @@ export function KeyConfirmBanner() {
   const [keys, setKeys] = useState<KeyToConfirm[]>([])
   const [answering, setAnswering] = useState(false)
   const [refused, setRefused] = useState(false)
+  // Only the newest ask is shown: one sent before an answer can come back after the ask that
+  // follows the answer, and would bring back a row already answered.
+  const asked = useRef(0)
   const ask = useCallback(() => {
+    const n = ++asked.current
     // An answer that is not a list (another build's station, a stand-in) shows nothing, as a
     // refusal does.
     void keysToConfirm()
-      .then((answer) => setKeys(Array.isArray(answer) ? answer : []))
+      .then((answer) => {
+        if (n === asked.current) setKeys(Array.isArray(answer) ? answer : [])
+      })
       .catch(() => {
+        if (n !== asked.current) return
         setKeys([])
         setRefused(true)
       })
