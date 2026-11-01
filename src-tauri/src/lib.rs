@@ -16552,6 +16552,14 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// What [`restored_at_the_station`] hands back: the restored settings' (TQSL program, JS8 CQ
+    /// sound), the restored saved profiles by name, and the restored settings' voice-keyer slots.
+    type RestoredAtTheStation = (
+        (String, Option<String>),
+        std::collections::BTreeMap<String, serde_json::Value>,
+        Vec<tempo_app::settings::VoiceMessage>,
+    );
+
     /// A backup made at the station (no `afar`), its settings and each of its saved profiles'
     /// settings changed by `edit`, with a second profile "Away" this station has none of, restored
     /// at a station whose paths are under `D:\Now` (`tag` names its store): the restored settings'
@@ -16560,11 +16568,7 @@ mod contest_session_tests {
     fn restored_at_the_station(
         tag: &str,
         edit: impl Fn(&mut serde_json::Map<String, serde_json::Value>),
-    ) -> (
-        (String, Option<String>),
-        std::collections::BTreeMap<String, serde_json::Value>,
-        Vec<tempo_app::settings::VoiceMessage>,
-    ) {
+    ) -> RestoredAtTheStation {
         let (dir, engine) = super::durable_command_tests::engine_on_store(tag, 0);
         let ui = with_station_paths_set(&engine, "D:\\Now");
         let mut v: serde_json::Value =
