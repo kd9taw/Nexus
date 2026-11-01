@@ -58,7 +58,7 @@ import { bandColor, openingModeColor } from '../bandColors'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
 import { AuroraChip, PcaChip } from './prop/CapsChips'
-import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpAlert, setAuroraDismissal, useAuroraDismissal } from '../capsNow'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, heldUntil, kpAlert, setAuroraDismissal, useAuroraDismissal, useWakeAt } from '../capsNow'
 import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../features/connectFeeds'
 import {
   subsolarPoint,
@@ -660,6 +660,9 @@ function Globe3DView({
   const auroraOn = show.aurora || auroraAuto
   const auroraPic = useMemo(() => (auroraOn ? auroraPicture(auroraOval, nowMs) : null), [auroraOn, auroraOval, nowMs])
   // The cap: NOAA's D-RAP grid while current, else the model with its approximate edge.
+  // The cap goes at the moment its event stops being held (the shack's `protonEventUntil`), not at
+  // the next 60 s tick: one timer wakes the clock then (capsNow `useWakeAt`).
+  useWakeAt(heldUntil(pca), setNowMs)
   const capPic = useMemo(
     () => (show.pca ? capPicture(pca, flareNoaa?.drap, flareNoaa ? xrayLong ?? null : null, nowMs) : null),
     [show.pca, pca, flareNoaa, xrayLong, nowMs],

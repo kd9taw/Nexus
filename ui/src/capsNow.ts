@@ -35,7 +35,7 @@
 // usable estimate, labelled with which one it is ("Kp 6.3 est. 22:36Z"), so an estimate is still
 // never called a measurement. A tie goes to the measurement.
 
-import { useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import type { AuroraOval, DrapGrid, KpForecast, PcaView, SpaceWxView, ArrivalOutlook } from './types'
 import { drapFresh } from './flareNow'
 import { flareHafAt } from './mapGeo'
@@ -223,6 +223,28 @@ export function capPicture(
 }
 
 const maxOf = (pts: { db30: number }[]) => pts.reduce((m, p) => Math.max(m, p.db30), 0)
+
+/** The longest delay `setTimeout` takes (2³¹ − 1 ms, ~24.8 days); a longer one fires at once. */
+const MAX_TIMEOUT_MS = 2 ** 31 - 1
+
+/** Wake a surface at `untilSec` (Unix seconds): one timer that sets `setNowMs(Date.now())` then, so a
+ *  held proton event's cap, edge and chip go at `protonEventUntil` itself, not up to a minute later at
+ *  the next 60 s tick. Nothing is scheduled for a missing or past time (or one beyond `setTimeout`'s
+ *  range: the 60 s tick covers that); the timer is cleared when the time changes and on unmount. */
+export function useWakeAt(untilSec: number | null | undefined, setNowMs: (ms: number) => void): void {
+  useEffect(() => {
+    if (untilSec == null || !Number.isFinite(untilSec)) return
+    const ms = untilSec * 1000 - Date.now()
+    if (!(ms > 0) || ms > MAX_TIMEOUT_MS) return
+    const id = setTimeout(() => setNowMs(Date.now()), ms)
+    return () => clearTimeout(id)
+  }, [untilSec, setNowMs])
+}
+
+/** The time a held proton event ends, for `useWakeAt`: only while the shack says one is held. */
+export function heldUntil(pca: PcaView | null | undefined): number | null {
+  return pca?.protonEvent === true ? (pca.protonEventUntil ?? null) : null
+}
 
 /** NOAA's S-scale from J(≥10 MeV) (the shack sends it; an older one does not). */
 export function sScale(pca: PcaView): number {

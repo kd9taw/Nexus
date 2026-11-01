@@ -4227,7 +4227,7 @@ export const ES: PartialCatalog = {
   "map.layer.pca.label": "Casquete polar de protones (PCA)",
   "map.layer.pca.quiet": "sin evento de protones (por debajo de S1): nada dibujado",
   "map.layer.pca.stale": "lectura de protones desactualizada ({{time}}): nada dibujado",
-  "map.layer.pca.ahead": "lectura de protones fechada por delante de este reloj ({{time}}): nada dibujado",
+  "map.layer.pca.ahead": "lectura de protones fechada por delante del reloj de la estación ({{time}}): nada dibujado",
   "map.layer.pca.unknown": "esta estación no indica si hay un evento de protones: nada dibujado",
   "map.layer.pca.undated": "la lectura de protones no tiene hora: nada dibujado",
   "map.layer.relief.label": "Relieve (vista Mundo)",

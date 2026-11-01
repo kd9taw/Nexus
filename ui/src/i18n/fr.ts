@@ -4227,7 +4227,7 @@ export const FR: PartialCatalog = {
   "map.layer.pca.label": "Calotte polaire protonique (PCA)",
   "map.layer.pca.quiet": "pas d’événement protonique (sous S1) : rien de tracé",
   "map.layer.pca.stale": "mesure de protons plus à jour ({{time}}) : rien de tracé",
-  "map.layer.pca.ahead": "mesure de protons datée après cette horloge ({{time}}) : rien de tracé",
+  "map.layer.pca.ahead": "mesure de protons datée en avance sur l’horloge de la station ({{time}}) : rien de tracé",
   "map.layer.pca.unknown": "cette station n’indique pas si un événement protonique est en cours : rien de tracé",
   "map.layer.pca.undated": "la mesure de protons n’a pas d’heure : rien de tracé",
   "map.layer.relief.label": "Relief (vue Monde)",

@@ -82,6 +82,7 @@ vi.mock('react-globe.gl', async () => {
 })
 
 import Globe3D from './Globe3D'
+import { getPca } from '../api'
 import { MapView } from './MapView'
 import * as ReactGlobe from 'react-globe.gl'
 import * as THREE from 'three'
@@ -100,6 +101,7 @@ class RO {
 }
 
 beforeEach(() => {
+  vi.mocked(getPca).mockImplementation(async () => feeds.pca as never)
   fake.paused = false
   fake.frames = 0
   feeds.aurora = null
@@ -377,5 +379,25 @@ describe('round 5: the globe’s own clearing of the storm’s untick', () => {
       r.rerender(globe(6))
     })
     expect(box(r.container).checked, 'a new storm, no untick yet').toBe(true)
+  })
+})
+
+describe('round 7: on the 3-D globe the held event goes AT its until', () => {
+  it('until 30 s after a tick, polls failing: held 1 s before, gone 1 s after', async () => {
+    feeds.pca = { ...PCA, protonsAt: NOW_S + 90 - 30 * 60, protonEventUntil: NOW_S + 90 }
+    const r = await mount(3)
+    vi.mocked(getPca).mockImplementation(async () => {
+      throw new Error('link down')
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(89_000 - 10)
+    })
+    expect(r.container.querySelector('.pca-chip'), 'held at until − 1 s').not.toBeNull()
+    expect(group('capEdge'), 'CONTROL: the edge is drawn').toBeDefined()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000)
+    })
+    expect(r.container.querySelector('.pca-chip'), 'gone at until + 1 s, before the next tick').toBeNull()
+    expect(group('capEdge')).toBeUndefined()
   })
 })

@@ -590,3 +590,24 @@ describe('round 6: the held event ends on this clock, and the row says the shack
     expect(pcaRow(r.container).textContent).toContain(t('map.layer.pca.ahead', { time: wxStampLabel(NOW_S + 180) }))
   })
 })
+
+describe('round 7: the held event goes AT its until, not at the next 60 s tick', () => {
+  it('until 30 s after a tick, polls failing: held 1 s before, gone 1 s after', async () => {
+    layersOn(['pca'])
+    // the 60 s clock ticks at +60 s, +120 s …; until falls at +90 s, between two ticks
+    feeds.pca = { ...PCA, protonsAt: NOW_S + 90 - 30 * 60, protonEventUntil: NOW_S + 90 }
+    const r = await mount()
+    vi.mocked(getPca).mockImplementation(async () => {
+      throw new Error('link down')
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(89_000 - 10)
+    })
+    expect(capChip(r.container), 'held at until − 1 s').not.toBeNull()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000)
+    })
+    expect(capChip(r.container), 'gone at until + 1 s, before the next tick').toBeNull()
+    expect(pcaRow(r.container).textContent).toContain(t('map.layer.pca.stale', { time: wxStampLabel(NOW_S + 90 - 30 * 60) }))
+  })
+})

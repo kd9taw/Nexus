@@ -117,7 +117,7 @@ import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, XRAY_LIVE_SECS, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
 import { AuroraChip, PcaChip } from './prop/CapsChips'
-import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpAlert, setAuroraDismissal, useAuroraDismissal } from '../capsNow'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, heldUntil, kpAlert, setAuroraDismissal, useAuroraDismissal, useWakeAt } from '../capsNow'
 import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../features/connectFeeds'
 import { useViewportClass } from '../useViewport'
 // The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
@@ -1665,6 +1665,9 @@ export function MapView({
   const pcaOn = layers.pca.visible
   // NOAA's D-RAP grid is the cap while it is current, else the model (capsNow `capPicture`); never
   // beside the simulated Preview flux (`noaaNow` is null then).
+  // The cap goes at the moment its event stops being held (the shack's `protonEventUntil`), not at
+  // the next 60 s tick: one timer wakes the clock then (capsNow `useWakeAt`).
+  useWakeAt(heldUntil(pca), setNowMs)
   const capPic = useMemo(
     () => (pcaOn ? capPicture(pca, noaaNow?.drap, noaaNow ? xrayLong ?? null : null, nowMs) : null),
     [pcaOn, pca, noaaNow, xrayLong, nowMs],
