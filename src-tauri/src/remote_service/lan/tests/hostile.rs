@@ -1024,16 +1024,54 @@ async fn three_wrong_codes_close_the_window_and_reach_nothing() {
     reached_nothing(&r.s, &before, "three wrong codes");
 }
 
+/// Listening where nothing else in a parallel run binds the listener's own port for UDP, so the
+/// stream's socket there is the station's or nobody's. A listener holds UDP one and two ports above
+/// its own (its audio and Stop roads), so another case's listener just below would land a road on
+/// this port: the two TCP ports below are held (and handed back, to be kept as long as the
+/// listener). And the port is below the systems' usual ephemeral ranges (Linux from 32768, Windows
+/// and macOS from 49152), so no socket asking the system for any port is given it. `None`, said on
+/// stderr, on a box with no private address of its own.
+async fn listening_alone() -> Option<(Running, [std::net::TcpListener; 2])> {
+    let Some(address) = own_private_address() else {
+        eprintln!("skipped: this box has no private IPv4 address of its own to listen on");
+        return None;
+    };
+    // A first port that differs from run to run, so a case in another run beside this one starts
+    // elsewhere.
+    let first = std::net::TcpListener::bind((address, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    for n in 0..200 {
+        let port = 20_000 + first.wrapping_add(n * 3) % 12_000;
+        let (Ok(below), Ok(two_below)) = (
+            std::net::TcpListener::bind((address, port - 1)),
+            std::net::TcpListener::bind((address, port - 2)),
+        ) else {
+            continue;
+        };
+        if std::net::UdpSocket::bind((address, port)).is_err() {
+            continue;
+        }
+        if let Some(r) = listening_on(address, port).await {
+            return Some((r, [below, two_below]));
+        }
+    }
+    panic!("never listened: no port below the ephemeral range was free with the two below it");
+}
+
 /// ★ An offer signed by another key, on the paired computer's own connection: unsigned, signed by a
 /// key that is not the one its connection proved, carrying another key and that key's signature, or
 /// signed for another session. Each is refused at admission (`deviceKeyMismatch`), before a stream
 /// exists: the stream's slot is free, and no socket was opened at the stream's address and port (one
 /// binds there now). The over stays on the air, and it reached nothing. CONTROL: the offer the
 /// computer signs for this session passes every check the station makes, to the platform's own
-/// answer (this box captures no window: `streamUnavailable`).
+/// answer (this box captures no window: `streamUnavailable`). The listener is [`listening_alone`], so
+/// a socket at the stream's address and port can only be the station's.
 #[tokio::test]
 async fn an_offer_signed_by_another_key_is_refused_at_admission_and_reaches_nothing() {
-    let Some(r) = listening().await else {
+    let Some((r, _below)) = listening_alone().await else {
         return;
     };
     let mut controller = Controller::on(&r.s, r.at).await;
