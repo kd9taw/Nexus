@@ -16,7 +16,11 @@ use crate::logbook::UploadOutcome;
 /// Station Location (`-l <name>`); when `None`, OMIT `-l` so TQSL signs from the
 /// location embedded in the ADIF (STATION_CALLSIGN/MY_GRIDSQUARE) — the traveler
 /// workflow. Pure + testable; the caller prepends the resolved `tqsl` binary.
-pub fn tqsl_args(station_location: Option<&str>, adif_path: &str) -> Vec<String> {
+///
+/// A Station Location name that starts with `-` is refused, never passed: TQSL's option parser
+/// could read it as an option of its own rather than as the name after `-l`. The name comes from
+/// Settings or from a station profile, both typed by the operator, so the refusal says where.
+pub fn tqsl_args(station_location: Option<&str>, adif_path: &str) -> Result<Vec<String>, String> {
     let mut args = vec![
         "-d".into(),
         "-u".into(),
@@ -25,11 +29,18 @@ pub fn tqsl_args(station_location: Option<&str>, adif_path: &str) -> Vec<String>
         "compliant".into(),
     ];
     if let Some(loc) = station_location {
+        if loc.trim_start().starts_with('-') {
+            return Err(format!(
+                "The TQSL Station Location \"{loc}\" starts with \"-\", which TQSL would read as \
+                 an option. Rename it in TQSL, then in Nexus (Settings ▸ Logging & Connectors, or \
+                 the station profile that names it)."
+            ));
+        }
         args.push("-l".into());
         args.push(loc.into());
     }
     args.push(adif_path.into());
-    args
+    Ok(args)
 }
 
 /// Map a TQSL process exit code (+ its stderr) to an [`UploadOutcome`], or `None`
@@ -264,7 +275,7 @@ mod tests {
 
     #[test]
     fn args_sign_and_upload() {
-        let a = tqsl_args(Some("Home FT8"), "/tmp/x.adi");
+        let a = tqsl_args(Some("Home FT8"), "/tmp/x.adi").expect("a plain name");
         assert_eq!(
             a,
             vec![
@@ -283,9 +294,26 @@ mod tests {
     #[test]
     fn args_omit_location_for_adif_signing() {
         // Traveler mode: no `-l`, so TQSL signs from the location embedded in the ADIF.
-        let a = tqsl_args(None, "/tmp/x.adi");
+        let a = tqsl_args(None, "/tmp/x.adi").expect("no name");
         assert_eq!(a, vec!["-d", "-u", "-x", "-a", "compliant", "/tmp/x.adi"]);
         assert!(!a.iter().any(|s| s == "-l"), "no -l in ADIF-location mode");
+    }
+
+    /// A Station Location name TQSL could read as an option is refused, never put after `-l`.
+    /// CONTROL: a dash inside the name is an ordinary name.
+    #[test]
+    fn args_refuse_a_station_location_that_reads_as_an_option() {
+        for name in ["-x", "--help", " -Home"] {
+            let refused = tqsl_args(Some(name), "/tmp/x.adi").expect_err("refused");
+            assert!(
+                refused.contains(name),
+                "the refusal names {name:?}: {refused}"
+            );
+        }
+        assert_eq!(
+            tqsl_args(Some("Home-2"), "/tmp/x.adi").expect("a plain name")[6],
+            "Home-2"
+        );
     }
 
     #[test]

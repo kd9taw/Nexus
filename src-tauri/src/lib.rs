@@ -4498,6 +4498,131 @@ mod lotw_location_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A later run TQSL REFUSED (a rejection, or a Station Location it does not know) whose
+    /// refusal mark could not be shown on disk: nothing of it went to LoTW, so the report shows
+    /// the refusal and counts none of it as gone; only the runs after it, which do not start, are
+    /// unsent. CONTROL: the exit-0 case above still counts its run as gone.
+    #[test]
+    fn a_later_run_tqsl_refused_and_not_confirmed_on_disk_is_never_counted_as_gone() {
+        for (code, outcome) in [(3, "rejected"), (5, "authfail")] {
+            let (dir, engine) = station(&format!("lotw-profile-later-refused-{code}"), "Home");
+            let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+            let mut hold = None;
+            let mut ran = 0;
+            let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+                ran += 1;
+                if ran == 2 {
+                    hold = Some(
+                        tempo_core::logbook::sqlite::WriteHold::take(&db)
+                            .expect("hold the write lock"),
+                    );
+                    // Exit 5 with these words is a Station Location TQSL does not know.
+                    return Ok((code, "Station Location Home not found".into()));
+                }
+                Ok((0, String::new()))
+            })
+            .expect("the earlier run's report");
+            drop(hold);
+            assert_eq!(ran, 2, "exit {code}: the run after it does not start");
+            assert_eq!(
+                report.outcome, outcome,
+                "exit {code}: the refusal is what the screen reads"
+            );
+            assert_eq!(
+                (report.unconfirmed_after_error, report.unsent_after_error),
+                (0, 1),
+                "exit {code}: none of the refused run went; only Club's was not sent"
+            );
+            let refused = format!(
+                "TQSL refused the 2 contact(s) of the run with Station Location Home ({outcome})"
+            );
+            assert!(
+                get_connection_log()
+                    .iter()
+                    .any(|e| e.connector == "LoTW" && e.message.contains(&refused)),
+                "exit {code}: the connection log says the run was refused, not that it went"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A Station Location name TQSL could read as an option, from Settings or from a profile,
+    /// never reaches TQSL: that run is refused before TQSL starts, says why, and its contacts and
+    /// the later runs' stay unsent. CONTROL: the runs before it go as usual.
+    #[test]
+    fn a_station_location_that_reads_as_an_option_never_reaches_tqsl() {
+        let upload = |engine: &SharedEngine| {
+            let mut runs: Runs = Vec::new();
+            let report = lotw_upload_batch_with(engine, LotwPick::Unsent, true, |_, args| {
+                assert!(
+                    !args
+                        .iter()
+                        .any(|a| a.starts_with("-H") || a.starts_with("-C")),
+                    "no dashed name in TQSL's arguments: {args:?}"
+                );
+                runs.push(run_of(args));
+                Ok((0, String::new()))
+            })
+            .expect("the earlier runs' report");
+            let locations: Vec<Option<String>> = runs.into_iter().map(|(l, _)| l).collect();
+            (report, locations)
+        };
+
+        // The Settings field: the Home run is refused, Club's after it never starts.
+        let (dir, engine) = station("lotw-profile-dashed-settings", "-Home");
+        let (report, locations) = upload(&engine);
+        assert_eq!(locations, vec![Some("Portable".to_string())]);
+        assert_eq!((report.dispatched, report.outcome.as_str()), (2, "pending"));
+        assert_eq!(report.unsent_after_error, 3, "Home's two and Club's one");
+        assert!(
+            report
+                .unsent_error
+                .as_deref()
+                .is_some_and(|e| e.contains("\"-Home\"")),
+            "the refusal names the location: {:?}",
+            report.unsent_error
+        );
+        let sent = Some(UploadOutcome::Pending);
+        assert_eq!(
+            stamped(&engine, &["K1POR", "K2POR", "K1HOM", "K2HOM", "K1CLB"]),
+            vec![sent, sent, None, None, None]
+        );
+
+        // A profile's field: the Club run, last, is refused; Portable and Home go.
+        let (dir2, engine2) = station("lotw-profile-dashed-profile", "Home");
+        let club = engine_lock(&engine2)
+            .settings()
+            .station_profiles
+            .iter()
+            .find(|p| p.name == "Club")
+            .cloned()
+            .expect("the Club profile");
+        engine_lock(&engine2)
+            .save_station_profile(StationProfile {
+                lotw_location: "-Club".into(),
+                ..club
+            })
+            .expect("the profile is saved");
+        let (report, locations) = upload(&engine2);
+        assert_eq!(
+            locations,
+            vec![Some("Portable".to_string()), Some("Home".to_string())]
+        );
+        assert_eq!((report.dispatched, report.outcome.as_str()), (4, "pending"));
+        assert_eq!(report.unsent_after_error, 1, "Club's one");
+        assert!(
+            report
+                .unsent_error
+                .as_deref()
+                .is_some_and(|e| e.contains("\"-Club\"")),
+            "the refusal names the location: {:?}",
+            report.unsent_error
+        );
+        assert_eq!(stamped(&engine2, &["K1CLB"]), vec![None]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
     /// Signing from the ADIF, a contact no profile tells apart is signed from the call and grid in
     /// its own record, and the report says so, for the screen's words; with a named Station
     /// Location it does not. CONTROL: the one-profile contact is signed with its profile's.
@@ -35598,38 +35723,49 @@ fn lotw_upload_batch_with(
                 break;
             }
         };
-        // A run TQSL signed and sent whose stamps could not be shown on disk. After earlier runs,
-        // its contacts went to LoTW, so they are counted with what went and said to be
-        // unconfirmed (a stamp the disk refused leaves its contact owed, sent again next time);
-        // only the runs after it, which do not start, are unsent. The first run's is the error,
-        // as it was before runs.
+        // A run whose stamps could not be shown on disk. After earlier runs, a run TQSL signed and
+        // sent (or LoTW already had) went to LoTW, so its contacts are counted with what went and
+        // said to be unconfirmed (a stamp the disk refused leaves its contact owed, sent again
+        // next time). A run TQSL REFUSED sent nothing: the report shows the refusal, and none of
+        // it is counted as gone. Either way only the runs after it, which do not start, are
+        // unsent. The first run's is the error, as it was before runs.
         if let Some(why) = unconfirmed {
             let Some(sent) = report else {
                 return Err(durability_failed(why));
             };
+            let went = matches!(done.outcome.as_str(), "pending" | "duplicate");
             let signed = done.dispatched;
             let unsent = runs.map(|r| r.batch.len()).sum::<usize>();
-            conn_log(
-                "LoTW",
-                "error",
+            let unsent_words = if unsent > 0 {
+                format!(
+                    " {unsent} contact(s) not sent; they are offered again with the next upload."
+                )
+            } else {
+                String::new()
+            };
+            let said = if went {
                 format!(
                     "{signed} contact(s) went to LoTW, but Nexus could not confirm their upload \
                      mark was saved to disk ({why}); any not saved are offered again with the next \
-                     upload, and LoTW ignores a contact it already has.{}",
-                    if unsent > 0 {
-                        format!(
-                            " {unsent} contact(s) not sent; they are offered again with the next \
-                             upload."
-                        )
-                    } else {
-                        String::new()
-                    }
-                ),
-            );
+                     upload, and LoTW ignores a contact it already has.{unsent_words}"
+                )
+            } else {
+                format!(
+                    "TQSL refused the {signed} contact(s) of the run {} ({}), so none of them \
+                     went to LoTW, and Nexus could not confirm their refusal mark was saved to \
+                     disk ({why}). They stay unsent.{unsent_words}",
+                    run.location.as_deref().map_or_else(
+                        || "signed from the ADIF".to_string(),
+                        |l| format!("with Station Location {l}")
+                    ),
+                    done.outcome
+                )
+            };
+            conn_log("LoTW", "error", said);
             report = Some(UploadReportDto {
                 unsent_after_error: unsent,
                 unsent_error: Some(why),
-                unconfirmed_after_error: signed,
+                unconfirmed_after_error: if went { signed } else { 0 },
                 ..lotw_reports_together(sent, done)
             });
             break;
@@ -35689,7 +35825,7 @@ fn lotw_reports_together(a: UploadReportDto, b: UploadReportDto) -> UploadReport
 /// One TQSL run of a LoTW upload: `batch` signed with `location` (`None`: from the location in
 /// the ADIF, `station` = the live call and grid as the fallback), and stamped with its outcome.
 /// With the report, why its stamps could not be shown on disk when `wait` asked for that: TQSL
-/// had signed and sent the batch by then, so the caller says which happened.
+/// had answered by then (signed and sent, or refused), so the caller says which happened.
 #[allow(clippy::too_many_arguments)]
 fn lotw_sign_run(
     state: &SharedEngine,
@@ -35739,7 +35875,7 @@ fn lotw_sign_run(
     let path_str = path.to_string_lossy().to_string();
 
     // Run TQSL one-shot, capturing its result.
-    let args = tempo_core::lotw_upload::tqsl_args(location, &path_str);
+    let args = tempo_core::lotw_upload::tqsl_args(location, &path_str)?;
     let (code, stderr) = tqsl(tqsl_path, &args)?;
     // ⛔ TWO details, and they are not interchangeable. `detail` is TQSL's own tail and goes
     // to the operator's toast — a screen. `stamped` is the CLASS and is the only one written
@@ -35813,7 +35949,7 @@ fn lotw_sign_run(
             }
             // The Logbook button waits for the stamps to reach the disk; the six-hourly
             // automatic batch does not (a stamp it loses is re-derived by the next echo).
-            // TQSL has signed and sent the batch by now, whatever the wait answers.
+            // TQSL has answered by now (signed and sent, or refused), whatever the wait answers.
             let unconfirmed = if wait {
                 durable.wait(tempo_app::logstore::DURABLE_WAIT).err()
             } else {
