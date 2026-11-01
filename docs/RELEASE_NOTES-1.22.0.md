@@ -23,8 +23,8 @@ This release also fixes the problems you reported most. Two radios in two window
 radio. Card received, LoTW received and eQSL received show their dates. A Flex never puts the shack's microphone on
 the air in place of a voice message, an APRS beacon or an SSTV picture. Split Operation works as it does in WSJT-X.
 Mac CAT works on macOS 12 and 13. Settings backups and restores keep your service keys safe, and a restore always
-keeps this computer's own TQSL program and JS8 sound files. And Nexus uses much less of the computer when nothing is
-happening on screen.
+keeps this computer's own TQSL program, JS8 sound files and voice-keyer recordings. And Nexus uses much less of the
+computer when nothing is happening on screen.
 
 **Updating from inside Nexus never worked on the stable channel.** Install 1.22.0 from the download page once, and
 later updates come through Nexus.
@@ -45,7 +45,7 @@ later updates come through Nexus.
   Nexus's own Flex client.
 - **Mac CAT on macOS 12 and 13**, and a Mac build for Intel Macs.
 - **Your service keys stay safe** in settings backups and restores, and a restore keeps this computer's own TQSL
-  program and JS8 sound files.
+  program, JS8 sound files and voice-keyer recordings.
 - **Much less CPU** from waterfalls, decode lists, hidden screens, idle decoders, the 3-D globe and a missing sound card.
 - **The in-app updater works**, once you have installed 1.22.0 from the download page.
 - **A contact card in the Logbook**, a ⋯ menu on every row, Upload to LoTW for one contact, and columns you can move.
@@ -307,8 +307,10 @@ later updates come through Nexus.
   computer.
 - **A restore that points Cloudlog or an Icom radio at a different address asks before using a saved key.** A notice
   asks "Use your saved Cloudlog key with …?", with Use and Remove, and a restore is refused while you transmit.
-- **A settings restore always keeps this computer's own TQSL program and JS8 sound files.** Where TQSL lives and
-  which sound files JS8 plays stay as you set them on this computer, whatever the backup says.
+- **A settings restore always keeps this computer's own TQSL program, JS8 sound files and voice-keyer recordings.**
+  Where TQSL lives, which sound files JS8 plays and which recordings the voice keyer uses stay as you set them on this
+  computer, whatever the backup says. The voice keyer's slot names still come from the backup, so on a new computer
+  those slots have no recording until you record or import one there.
 - **Deleting an SSTV picture can only delete a picture**, never another file in that folder.
 - **Callbook answers and downloads are read only up to a sane size.**
 - **Closing Nexus right after logging waits for the log.adi copy.**
