@@ -1255,6 +1255,69 @@ mod tests {
         }
     }
 
+    /// Phase 2's own case table for the one rule, copied VERBATIM (rows and order) from
+    /// `pca::cases::PROTON_EVENT_CASES` at wt-solar2 `79d10f1b4`, whose `pca::proton_event` this
+    /// branch does not have yet: `(name, j10, age in seconds (None = undated), held)`, the sample
+    /// time `now − age`, saturating. `pathnow::proton_event` must hold exactly where it says. When
+    /// the trains merge, `pathnow` switches to `pca::proton_event` and this copy is deleted.
+    pub(crate) const PHASE2_PROTON_EVENT_CASES: &[(&str, f64, Option<i64>, bool)] = &[
+        ("fresh S1 (10 pfu, 5 min)", 10.0, Some(300), true),
+        ("fresh S2 (150 pfu, 5 min)", 150.0, Some(300), true),
+        ("S2 just now", 150.0, Some(0), true),
+        ("S2 at 30 min less 1 s", 150.0, Some(30 * 60 - 1), true),
+        ("S2 at exactly 30 min", 150.0, Some(30 * 60), false),
+        ("S2 6 h old", 150.0, Some(6 * 3600), false),
+        (
+            "S2 dated 120 s ahead (the skew limit)",
+            150.0,
+            Some(-120),
+            true,
+        ),
+        ("S2 dated 121 s ahead", 150.0, Some(-121), false),
+        (
+            "S2 dated 3 min ahead (clock skew)",
+            150.0,
+            Some(-180),
+            false,
+        ),
+        ("S2 undated", 150.0, None, false),
+        ("quiet 0.3 pfu, fresh", 0.3, Some(300), false),
+        ("sub-S1 9.99 pfu, fresh", 9.99, Some(300), false),
+        ("5 pfu, fresh", 5.0, Some(300), false),
+        ("NaN flux, fresh", f64::NAN, Some(300), false),
+        ("+inf flux, fresh", f64::INFINITY, Some(300), false),
+        ("-inf flux, fresh", f64::NEG_INFINITY, Some(300), false),
+        ("huge finite flux (1e300), fresh", 1e300, Some(300), true),
+        ("f64::MAX flux, fresh", f64::MAX, Some(300), true),
+        (
+            "age i64::MAX (dated at the far past)",
+            150.0,
+            Some(i64::MAX),
+            false,
+        ),
+        (
+            "age i64::MIN (dated at the far future)",
+            150.0,
+            Some(i64::MIN),
+            false,
+        ),
+    ];
+
+    #[test]
+    fn phase_twos_case_table_holds_for_the_path_overlays_rule() {
+        let now = MAY_12Z;
+        for &(name, j10, age, held) in PHASE2_PROTON_EVENT_CASES {
+            let p = ProtonSample {
+                j1: j10,
+                j5: j10,
+                j10,
+                at: age.map(|a| now.saturating_sub(a)),
+            };
+            assert_eq!(proton_event(Some(p), now).is_some(), held, "{name}");
+        }
+        assert_eq!(PHASE2_PROTON_EVENT_CASES.len(), 20);
+    }
+
     #[test]
     fn the_one_rule_for_a_held_proton_event_matches_its_case_table() {
         check_the_one_rule(
