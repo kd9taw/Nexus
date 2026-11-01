@@ -348,7 +348,7 @@ describe('Settings ▸ Digital ▸ JS8', () => {
         '@APRSIS is a group that cannot be joined',
       ),
     )
-    fireEvent.click(await screen.findByRole('tab', { name: 'Appearance' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'App' }))
     fireEvent.click(await screen.findByRole('switch', { name: 'Turn on beta updates' }))
     await waitFor(() => expect(api.get('setBetaUpdates'), 'the beta switch still saves').toHaveBeenCalledWith(true))
     // The CW cockpit's macro-set switch, as it writes it.

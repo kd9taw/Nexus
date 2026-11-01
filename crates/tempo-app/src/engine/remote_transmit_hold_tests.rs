@@ -286,6 +286,7 @@ fn the_hold_is_shown_with_the_time_left_only_after_a_notice() {
                 held: true,
                 owner_notified,
                 left,
+                lease_held: false,
             }));
             e.poll_remote_transmit(std::time::Instant::now());
             assert_eq!(
@@ -301,6 +302,7 @@ fn the_hold_is_shown_with_the_time_left_only_after_a_notice() {
             held: false,
             owner_notified: true,
             left,
+            lease_held: false,
         }));
         e.poll_remote_transmit(std::time::Instant::now());
         assert_eq!(e.snapshot().radio.tx_hold, None, "{section}: not held");

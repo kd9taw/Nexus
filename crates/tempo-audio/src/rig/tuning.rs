@@ -21,6 +21,30 @@ pub(crate) fn passband_for(md: &str) -> i32 {
     }
 }
 
+/// The width a mode write carries to Hamlib model `rig_model`: `width` as chosen
+/// ([`passband_for`], [`retune_passband`] or the retry ladder), except `PKTFM` to an Icom, which
+/// goes out as `0` (`RIG_PASSBAND_NORMAL`) in place of `-1`.
+///
+/// ⭐ ON AN ICOM, `-1` LOSES THE DATA BYTE. Hamlib 4.6.5 and 4.7.1 send FM and PKTFM with
+/// `RIG_PASSBAND_NOCHANGE` as the bare `26 00 05` (`icom_set_mode_x26`), and Icom's guides say a
+/// `26` with the DATA and filter bytes skipped selects "DATA OFF and the default filter"
+/// (IC-9700 A7508-3EX-4, command 26). So `M PKTFM -1` left the radio in plain FM, and APRS or
+/// SSTV in DATA-FM went out of the wrong input. `M PKTFM 0` is `26 00 05 01 01` on both (FM,
+/// DATA on, FIL1), captured against a fake radio for the IC-7100, IC-7300, IC-7610, IC-9700,
+/// IC-705 and IC-905. The cost is that the FM filter goes to FIL1, the radio's own FM default.
+///
+/// Icom only: the FT-991A's `MD0A;` lands with `-1` as it is, and `0` would add an `NA00;`
+/// (narrow off) write over the operator's own FM width. The SSB data modes keep `-1` everywhere
+/// (see [`passband_for`]). Nexus's own CI-V, Flex and TCI daemons read `-1` and `0` alike.
+pub(crate) fn hamlib_mode_width(md: &str, rig_model: u32, width: i32) -> i32 {
+    let icom = (3000..4000).contains(&rig_model); // Hamlib's Icom backend numbers
+    if icom && width < 0 && md.trim().eq_ignore_ascii_case("PKTFM") {
+        0
+    } else {
+        width
+    }
+}
+
 /// Are `a` and `b` (Hz) on the SAME NAMED amateur band — i.e. does a retune between them
 /// cross no band boundary?
 ///

@@ -470,6 +470,9 @@ fn a_loggers_halt_tx_whose_unkey_the_radio_refuses_says_so_and_the_unkey_goes_on
         logger
             .send_to(&halt_tx_datagram(), server.local_addr().unwrap())
             .unwrap();
+        // A datagram arrives between ticks, as in `udp_requests::deliver`: loopback need not
+        // deliver it before `send_to` returns (WSL2's mirrored networking never does).
+        std::thread::sleep(Duration::from_millis(20));
         s.run_with(Some(&server), cut);
         assert_eq!(
             s.state.tx_until_ms, None,

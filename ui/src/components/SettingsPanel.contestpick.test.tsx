@@ -369,7 +369,7 @@ describe('the role / category block', () => {
       )
       api.get('getFdRuleset').mockImplementation(() => Promise.resolve({ ...wfd, ...(spotsRfOnly ? { spotsRfOnly } : {}) } as never))
       renderPanel()
-      fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+      fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
       await screen.findByText('PSK Reporter')
       // The ruleset arrives on its own fetch; let it land before anything is read off the page.
       await waitFor(() => expect(api.get('getFdRuleset')).toHaveBeenCalled())

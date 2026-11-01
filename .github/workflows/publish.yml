@@ -329,6 +329,7 @@ jobs:
           req=$(printf '%s\n' \
             "Nexus_${VER}_x64-setup.exe" \
             "Nexus_${VER}_aarch64.dmg" \
+            "Nexus_${VER}_x64.dmg" \
             "Nexus_${VER}_amd64.AppImage" \
             "Nexus_${VER}_pc_amd64.deb" \
             "Nexus_${VER}_pi_arm64_bookworm.deb" \
@@ -387,7 +388,8 @@ jobs:
           # absent), which breaks in-app self-update for this version. release.yml
           # deliberately allows that, so this warns rather than fails — but it must never
           # pass unremarked.
-          for s in "Nexus_${VER}_x64-setup.exe.sig" "Nexus_${VER}_amd64.AppImage.sig" "Nexus_${VER}_aarch64.app.tar.gz.sig"; do
+          for s in "Nexus_${VER}_x64-setup.exe.sig" "Nexus_${VER}_amd64.AppImage.sig" \
+                   "Nexus_${VER}_aarch64.app.tar.gz.sig" "Nexus_${VER}_x64.app.tar.gz.sig"; do
             [ -f "$s" ] || echo "::warning::$s is not in the release — this build is UNSIGNED and clients cannot self-update to it"
           done
 
@@ -614,6 +616,10 @@ jobs:
           assets = {
               "windows":       f"Nexus_{ver}_x64-setup.exe",
               "macos":         f"Nexus_{ver}_aarch64.dmg",
+              # Intel Macs (since the release after 1.21.0). A key of its own rather than a
+              # change to "macos", which every page reading this feed already treats as THE Mac
+              # download: Apple Silicon, as it has been since 1.5.1.
+              "macosIntel":    f"Nexus_{ver}_x64.dmg",
               "linuxAppimage": f"Nexus_{ver}_amd64.AppImage",
               "linuxDeb":      f"Nexus_{ver}_pc_amd64.deb",
               "piBookwormDeb": f"Nexus_{ver}_pi_arm64_bookworm.deb",
@@ -730,10 +736,10 @@ jobs:
       - name: Verify every published download URL resolves
         run: |
           set -euo pipefail
-          # version.json now advertises five URLs to every operator. A 404 here would be a
+          # version.json advertises every one of these to every operator. A 404 here would be a
           # broken download button that nothing else in the pipeline can see.
           bad=0
-          for n in "Nexus_${VER}_x64-setup.exe" "Nexus_${VER}_aarch64.dmg" \
+          for n in "Nexus_${VER}_x64-setup.exe" "Nexus_${VER}_aarch64.dmg" "Nexus_${VER}_x64.dmg" \
                    "Nexus_${VER}_amd64.AppImage" \
                    "Nexus_${VER}_pc_amd64.deb" "Nexus_${VER}_pi_arm64_bookworm.deb" \
                    "Nexus_${VER}_pi_arm64_trixie.deb"; do

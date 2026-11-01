@@ -17,7 +17,7 @@
 // on data we do not have is the one way this feature could mislead an operator.
 import { useSyncExternalStore } from 'react'
 import type { BandReport, PropagationSnapshot } from './types'
-import { bandConditionCell } from './propViz'
+import { bandConditionCell, bandWordState } from './propViz'
 import { t } from './i18n'
 
 /** Older than this and the advisory is not shown. The snapshot refreshes every 5 minutes, so
@@ -66,11 +66,12 @@ function resolve(pub: Published | null, band: string, nowS: number): BandConditi
     return { state: 'unknown', word: t('bandMenu.condition.unknown'), color: null, title: t('bandMenu.condition.unknown.title') }
   }
   const cell = bandConditionCell(report)
-  const state: BandConditionState = cell.word === 'Closed' ? 'closed' : cell.word === 'Marginal' ? 'marginal' : 'open'
+  // A silent band with no model word is unknown: a hollow dot, never an open one.
+  const state: BandConditionState = bandWordState(cell.word)
   return {
     state,
     word: cell.word,
-    color: cell.color,
+    color: state === 'unknown' ? null : cell.color,
     title: t('prop.bandConditions.cell.title', { band, state: cell.word, sub: cell.sub ? ` · ${cell.sub}` : '', reason: report.reason }),
   }
 }

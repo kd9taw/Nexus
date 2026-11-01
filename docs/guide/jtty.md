@@ -16,8 +16,11 @@ and opening the PSK screen makes it PSK again.
 ## The tour
 
 **The header.** A **JTTY** badge, the band picker and the frequency readout. The band picker
-serves WSJT-X's JTTY frequencies, eleven of them from 160 m (1.839) to 2 m (144.160), with
-**20 m at 14.090**; a channel where your license class may not send data is marked RX only.
+serves JTTY's published dials (a table marked preliminary), eleven of them from 160 m (1.838)
+to 2 m (144.160), with **20 m at 14.090**, the main meeting place; a channel where your
+license class may not send data is marked RX only. Some of these dials are shared with
+another mode, so expect its signals in the same passband: 17 m (18.100) is FT8's dial,
+80 m (3.575) and 30 m (10.140) are FT4's, and 160 m (1.838) is PSK31's and RTTY's.
 Opening the JTTY screen from another mode moves the dial to JTTY's frequency on the band you
 are on, if your class may send data there.
 

@@ -271,7 +271,7 @@ pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
 /// were down at once — ve7cc accepted TCP and never sent a login prompt, wa9pie refused — and
 /// every default-config install had no phone source at all; that is the whole reason the list
 /// grew. The migration recognises exactly that shipped pair and appends the rest; the operator
-/// edits the list in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Spot Sources.
+/// edits the list in Settings ▸ Services ▸ Integrations & Feeds ▸ Spot Sources.
 ///
 /// ⚠️ **"Accepts TCP" is not "is a working node", and this comment previously got that wrong.**
 /// It claimed ve7cc "was answering again by 2026-09-17" on the strength of a connect check,
@@ -454,11 +454,21 @@ pub fn rig_has_xit(rig_model: u32) -> bool {
 /// ⭐ #393 (FT-991A): APRS is soundcard audio, and the FT-991/991A takes it from the USB codec in
 /// DATA-FM when menu 077 FM PKT PORT SELECT is USB (its default is DATA, the rear jack), while
 /// plain FM takes 074 FM MIC SELECT. Hamlib's `PKTFM` is `MD0A;` (DATA-FM) on model 1035 — the
-/// FT-991 and FT-991A share it. Only the model with that evidence: the FT-891 (1036) has no 2 m,
-/// and the native Icom path keeps APRS in plain FM on purpose (`CivBackend::try_set_mode`).
+/// FT-991 and FT-991A share it. The FT-891 (1036) has no 2 m.
+///
+/// The Icoms with a 2 m FM-D, where the USB codec feeds the modulator through the radio's DATA
+/// MOD setting rather than plain FM's MOD input: the IC-7100 (3070), IC-9700 (3081), IC-705
+/// (3085) and IC-905 (3090). Hamlib (4.6.5 and the bundled 4.7.1, captured against a fake
+/// radio) sends `PKTFM` to each as `26 00 05 01 01` — FM, Data mode ON, FIL1 — the same frame
+/// it sends `PKTUSB` as with `01` for the mode. The native CI-V daemon sends `06 05` and
+/// `1A 06 01 01` (`CivBackend::try_set_mode`), the bytes each radio's CI-V reference defines
+/// (the IC-7100 is Hamlib-only). Left out, each on its evidence: the IC-9100 (3068), whose
+/// Hamlib caps list no FM-D and whose `1A 06` from Hamlib carries filter byte `05`, outside the
+/// `01`–`03` Icom defines; the ID-5100 (3071), whose backend refuses `PKTFM`; and the ID-4100
+/// (3082), whose backend sends it as plain `06 05`. Plain FM still turns DATA off everywhere.
 /// Mirrored in the UI as `APRS_DATA_FM_MODELS` (SettingsPanel).
 pub fn aprs_data_fm_available(rig_model: u32) -> bool {
-    rig_model == 1035
+    matches!(rig_model, 1035 | 3070 | 3081 | 3085 | 3090)
 }
 
 /// Full-duplex satellite rigs with no Main/Sub CAT path in this build: the
@@ -728,6 +738,47 @@ fn default_tci_dialect() -> String {
 /// itself), and a TCI client can key the transmitter, so it stops this one too.
 pub fn tci_reachable(rig_model: u32, rig_conn: &str, host: &str, port: u16) -> bool {
     rig_model != 0 && rig_conn_is_tci(rig_conn) && !host.trim().is_empty() && port != 0
+}
+
+/// One radio's settings that say where its transmit audio goes ([`tx_audio_on_sound_card`]).
+pub struct TxAudioRoute<'a> {
+    pub rig_model: u32,
+    pub rig_conn: &'a str,
+    pub tci_host: &'a str,
+    pub tci_port: u16,
+    pub tci_audio: bool,
+    pub flex_native_cat: bool,
+    pub flex_radio_ip: &'a str,
+    pub flex_native_audio: bool,
+}
+
+/// Does this radio's transmit audio leave through this computer's sound card? False only where
+/// Nexus sends no transmit audio to a card at all, decided the way the radio's audio path decides:
+/// - the Icom network connection: nothing transmits over it, and the engine refuses every over
+///   before PTT ([`rig_conn_is_icom_lan`], `tempo_audio::icomlan`);
+/// - Nexus's TCI client with Audio over TCI on: the transmit audio goes into the TCI session through
+///   its tee, and that client keys Nexus's audio only while the tee is in ([`tci_reachable`],
+///   [`Settings::tci_audio`]);
+/// - Nexus's own Flex client with native audio on: DAX over the network, and Phone at the shack
+///   keys the radio's own microphone ([`flex_client_reachable`], [`Settings::flex_native_audio`]).
+///
+/// Every other radio, and any of these with its network audio off, takes its audio from the card.
+/// The headphone monitor and the JS8 sounds use it to leave out a TX device of "system default" on
+/// a radio that does not transmit from a card ([`Settings`]'s TX devices, in `tempo_audio`).
+///
+/// This is decided from the settings, and the live path can still fall back to the card: while the
+/// Flex client's DAX audio has failed, or before the TCI tee is ready, the radio loop plays the
+/// transmit audio to the TX device, and a TX device of "system default" is the default output.
+/// That is safe only because the operating radio's backend holds its resolved TX output open
+/// (`tempo_audio::notify_sound::hold_tx_output`), which those guards also refuse; an idle radio
+/// does not transmit. Dropping that hold for network radios would turn this rule into a hole.
+pub fn tx_audio_on_sound_card(r: &TxAudioRoute) -> bool {
+    let icom_lan = rig_conn_is_icom_lan(r.rig_conn);
+    let tci = tci_reachable(r.rig_model, r.rig_conn, r.tci_host, r.tci_port) && r.tci_audio;
+    let flex = r.flex_native_cat
+        && flex_client_reachable(r.rig_model, r.flex_radio_ip)
+        && r.flex_native_audio;
+    !(icom_lan || tci || flex)
 }
 
 /// The port Nexus's own TCI server listens on unless the operator moves it
@@ -1114,6 +1165,68 @@ pub enum PounceThreshold {
 /// a blank key.
 fn cloudlog_key_absent(s: &str) -> bool {
     s.trim().is_empty()
+}
+
+/// The saved keys this station holds back until the operator confirms them for the address they
+/// now go to ([`Settings::keys_to_confirm`]). Names only which keys: never a key, and nothing
+/// about one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KeysToConfirm {
+    /// The Cloudlog/Wavelog API key.
+    pub cloudlog: bool,
+    /// The Icom network password of each of these radios, by profile id.
+    pub icom_lan: Vec<u32>,
+    /// Of those that wait, the ones kept only because removing them from the keychain failed:
+    /// Cloudlog's key, and each of these radios' passwords. The station knows such a key was typed
+    /// for another address (or for a radio it no longer has), so it can only be removed, never
+    /// used ([`Self::not_removed`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cloudlog_not_removed: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub icom_lan_not_removed: Vec<u32>,
+}
+
+impl KeysToConfirm {
+    pub fn is_empty(&self) -> bool {
+        !self.cloudlog && self.icom_lan.is_empty()
+    }
+
+    /// Whether radio `id`'s Icom network password waits.
+    pub fn icom_lan_waits(&self, id: u32) -> bool {
+        self.icom_lan.contains(&id)
+    }
+
+    /// Whether this key (Cloudlog's for `None`, else radio `radio_id`'s password) waits only
+    /// because removing it failed.
+    pub fn not_removed(&self, radio_id: Option<u32>) -> bool {
+        radio_id.map_or(self.cloudlog_not_removed, |id| {
+            self.icom_lan_not_removed.contains(&id)
+        })
+    }
+
+    /// Hold this key back as one whose removal failed: it waits, and can only be removed.
+    pub fn hold_not_removed(&mut self, radio_id: Option<u32>) {
+        match radio_id {
+            None => (self.cloudlog, self.cloudlog_not_removed) = (true, true),
+            Some(id) => {
+                if !self.icom_lan_waits(id) {
+                    self.icom_lan.push(id);
+                }
+                if !self.icom_lan_not_removed.contains(&id) {
+                    self.icom_lan_not_removed.push(id);
+                }
+            }
+        }
+    }
+
+    /// Forget why a key waited once it waits no more, so a later wait starts afresh.
+    pub(crate) fn only_of_keys_that_wait(mut self) -> Self {
+        self.cloudlog_not_removed &= self.cloudlog;
+        let waits = self.icom_lan.clone();
+        self.icom_lan_not_removed.retain(|id| waits.contains(id));
+        self
+    }
 }
 
 /// ⭐ **The seven settings a contest weekend changes, as they were before it changed them** —
@@ -2161,6 +2274,24 @@ pub struct Settings {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// Feed THIS computer's microphone to the radio while the operator holds Phone's PTT: its audio
+    /// goes out by the radio's transmit audio route (the sound card's output, or the TCI connection
+    /// on a TCI radio) and the radio is keyed as for any audio Nexus plays. OFF by default, so a
+    /// station that talks into the radio's own microphone, or routes a microphone by the OS, sees
+    /// no change. Per radio: it is a property of how THAT radio is wired. Phone only; the digital
+    /// modes never take it (`engine/pc_mic.rs`).
+    /// Flat mirror of [`RadioProfile::pc_mic`].
+    #[serde(default)]
+    pub pc_mic: bool,
+    /// The input device the computer's microphone is captured from (flat mirror of
+    /// [`RadioProfile::pc_mic_device`]). Empty = none chosen: the microphone is never the system
+    /// default, which on a radio station is often the radio's own receive audio.
+    #[serde(default)]
+    pub pc_mic_device: String,
+    /// The computer microphone's gain in dB, -20 to +20, 0 = as captured (flat mirror of
+    /// [`RadioProfile::pc_mic_gain_db`]).
+    #[serde(default)]
+    pub pc_mic_gain_db: f32,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
     /// force their mode), so this opt-out is no longer consulted by
     /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
@@ -2880,6 +3011,13 @@ pub struct Settings {
     /// today's behaviour exactly.
     #[serde(default)]
     pub aprs_ssid: Option<u8>,
+    /// Doppler correction on the APRS cockpit's ISS channel (145.825 MHz). On (the default),
+    /// while that channel is selected and the ISS is above the horizon, Nexus keeps the radio on
+    /// the receive-corrected frequency between overs and moves it to the transmit-corrected one
+    /// for each APRS over, never while keyed. Off leaves the radio on 145.825. No other channel
+    /// is ever corrected.
+    #[serde(default = "default_true")]
+    pub aprs_iss_doppler: bool,
 
     // --- audio I/O ---
     /// Input (capture) device name. Empty = system default input.
@@ -2919,7 +3057,11 @@ pub struct Settings {
     pub station_power_w: Option<f64>,
     /// Log the space weather on each contact (ADIF `K_INDEX`, `A_INDEX`, `SFI`): the latest
     /// planetary K and A index and 10.7 cm solar flux Nexus fetched, and only when that reading is
-    /// no more than three hours old. Off by default — a logger's propagation fields are opt-in.
+    /// no more than three hours old. ⭐ **On for a NEW install** (`Settings::default()`, no
+    /// settings file): the path a contact took is explained from the space weather at the time.
+    /// An existing station keeps what its file says, and a file without the key (from before
+    /// the default changed) or one that cannot be read reads off — the field's own serde
+    /// default — so an update turns nothing on.
     #[serde(default)]
     pub log_space_weather: bool,
     /// Display units for distances/temperature/speed (F4MQS): `"auto"` (from the OS
@@ -3708,6 +3850,18 @@ pub struct Settings {
     /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
     /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
     pub eqsl_upload: bool,
+    /// Where QRZ Logbook's automatic uploads start, as an earlier build of this change kept it
+    /// in one window's settings. Read only to be moved beside the shared log, where every window
+    /// reads it ([`crate::upload_start`]), and cleared once moved; nothing else reads or writes it.
+    /// `None`, the only value a released build's file has, writes no key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qrz_logbook_upload_from: Option<u64>,
+    /// ClubLog's, as [`Self::qrz_logbook_upload_from`]: read only to be moved beside the log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clublog_upload_from: Option<u64>,
+    /// eQSL's, as [`Self::qrz_logbook_upload_from`]: read only to be moved beside the log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqsl_upload_from: Option<u64>,
     /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has
     /// several QTH profiles ("if not logged in, if multiple accounts with same
     /// callsign" — their spec); such an account cannot authenticate at all without
@@ -3774,6 +3928,19 @@ pub struct Settings {
     /// prior build's behaviour; the mitigation is simply not to downgrade with a migration pending.
     #[serde(default, skip_serializing_if = "cloudlog_key_absent")]
     pub cloudlog_key: String,
+    /// ⛔ THE SAVED KEYS NOT TO SEND YET. A settings restore onto a station that had no address for
+    /// a service (a fresh install, or reset settings) lands the backup's address, while the system
+    /// keychain, which outlives both, may still hold a key, and cannot say which address it was
+    /// typed for. That key is kept but not used: no Cloudlog upload goes out with it and the Icom
+    /// network radio does not sign in with it, until the operator answers Use (it is the key for
+    /// that address) or Remove. Typing the key again answers too.
+    ///
+    /// ENGINE-OWNED, like the pending key above: `Engine::apply_settings_inner` keeps the
+    /// engine's value across every form save, profile load and restore, so a form that posts it
+    /// back empty can never let a key go out. Only the restore, the operator's answer, a key typed
+    /// again and removing the radio change it (`Engine::set_keys_to_confirm`).
+    #[serde(default, skip_serializing_if = "KeysToConfirm::is_empty")]
+    pub keys_to_confirm: KeysToConfirm,
     /// Auto-forward each logged QSO to the Cloudlog/Wavelog instance above. Off by default.
     #[serde(default)]
     pub cloudlog_upload: bool,
@@ -4818,6 +4985,18 @@ pub struct RadioProfile {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// Feed THIS computer's microphone to the radio while the operator holds Phone's PTT: its audio
+    /// goes out by the radio's transmit audio route (the sound card's output, or the TCI connection
+    /// on a TCI radio) and the radio is keyed as for any audio Nexus plays. OFF by default, so a
+    /// station that talks into the radio's own microphone, or routes a microphone by the OS, sees
+    /// no change. Per radio: it is a property of how THAT radio is wired. Phone only; the digital
+    /// modes never take it (`engine/pc_mic.rs`).
+    pub pc_mic: bool,
+    /// The input device the computer's microphone is captured from. Empty = none chosen; never
+    /// the system default.
+    pub pc_mic_device: String,
+    /// The computer microphone's gain in dB, -20 to +20; 0 = as captured.
+    pub pc_mic_gain_db: f32,
     // --- audio (a rig's own RX codec) ---
     pub audio_in: String,
     pub audio_out: String,
@@ -4997,6 +5176,15 @@ pub struct RadioProfilePatch {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// See `RadioProfile::pc_mic` and the two fields after it. `Option`s, like the TCI fields:
+    /// `None` leaves the radio's stored value alone, so a form from before them neither fails its
+    /// Save nor turns the computer's microphone off.
+    #[serde(default)]
+    pub pc_mic: Option<bool>,
+    #[serde(default)]
+    pub pc_mic_device: Option<String>,
+    #[serde(default)]
+    pub pc_mic_gain_db: Option<f32>,
     pub audio_in: String,
     pub audio_out: String,
     pub tx_level: f32,
@@ -5089,6 +5277,37 @@ impl RadioProfile {
     pub fn monitored_while(&self, active: u32) -> bool {
         self.enabled && self.id != active && self.rig_model != 0
     }
+
+    /// Where this radio's transmit audio goes ([`tx_audio_on_sound_card`]).
+    pub fn tx_audio_route(&self) -> TxAudioRoute<'_> {
+        TxAudioRoute {
+            rig_model: self.rig_model,
+            rig_conn: &self.rig_conn,
+            tci_host: &self.tci_host,
+            tci_port: self.tci_port,
+            tci_audio: self.tci_audio,
+            flex_native_cat: self.flex_native_cat,
+            flex_radio_ip: &self.flex_radio_ip,
+            flex_native_audio: self.flex_native_audio,
+        }
+    }
+}
+
+impl Settings {
+    /// Where the radio in use's transmit audio goes, from the flat mirror of its settings
+    /// ([`tx_audio_on_sound_card`]).
+    pub fn tx_audio_route(&self) -> TxAudioRoute<'_> {
+        TxAudioRoute {
+            rig_model: self.rig_model,
+            rig_conn: &self.rig_conn,
+            tci_host: &self.tci_host,
+            tci_port: self.tci_port,
+            tci_audio: self.tci_audio,
+            flex_native_cat: self.flex_native_cat,
+            flex_radio_ip: &self.flex_radio_ip,
+            flex_native_audio: self.flex_native_audio,
+        }
+    }
 }
 
 impl RadioProfilePatch {
@@ -5117,6 +5336,15 @@ impl RadioProfilePatch {
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
         p.sstv_hold_data_submode = self.sstv_hold_data_submode;
         p.aprs_data_fm = self.aprs_data_fm;
+        if let Some(v) = self.pc_mic {
+            p.pc_mic = v;
+        }
+        if let Some(v) = self.pc_mic_device {
+            p.pc_mic_device = v;
+        }
+        if let Some(v) = self.pc_mic_gain_db {
+            p.pc_mic_gain_db = v;
+        }
         p.audio_in = self.audio_in;
         p.audio_out = self.audio_out;
         p.tx_level = self.tx_level;
@@ -5262,6 +5490,9 @@ impl Default for RadioProfile {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: false,
+            pc_mic_device: String::new(),
+            pc_mic_gain_db: 0.0,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -6203,6 +6434,9 @@ impl Default for Settings {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: false,
+            pc_mic_device: String::new(),
+            pc_mic_gain_db: 0.0,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             keyboard_modem: KeyboardModem::Psk,
@@ -6356,6 +6590,7 @@ impl Default for Settings {
             aprs_comment: default_aprs_comment(),
             aprs_path: default_aprs_path(),
             aprs_ssid: None,
+            aprs_iss_doppler: true,
             audio_in: String::new(),
             audio_out: String::new(),
             voice_mic_device: String::new(),
@@ -6365,7 +6600,7 @@ impl Default for Settings {
             monitor_device: String::new(),
             monitor_level: 0.5,
             station_power_w: None,
-            log_space_weather: false,
+            log_space_weather: true,
             units: default_units(),
             swr_stop_enabled: false,
             swr_stop_threshold: 2.5,
@@ -6494,6 +6729,9 @@ impl Default for Settings {
             clublog_api_key: String::new(),
             clublog_upload: false,
             eqsl_upload: false,
+            qrz_logbook_upload_from: None,
+            clublog_upload_from: None,
+            eqsl_upload_from: None,
             eqsl_qth_nickname: String::new(),
             hrdlog_upload: false,
             wrl_upload: false, // the credential is the opt-in
@@ -6502,6 +6740,7 @@ impl Default for Settings {
             cloudlog_url: String::new(),
             cloudlog_station_id: String::new(),
             cloudlog_key: String::new(),
+            keys_to_confirm: KeysToConfirm::default(),
             cloudlog_upload: false,
             opening_regional: true,
             macros: Macros::default(),
@@ -6656,6 +6895,9 @@ impl Settings {
             data_modes_plain_ssb: self.data_modes_plain_ssb,
             sstv_hold_data_submode: self.sstv_hold_data_submode,
             aprs_data_fm: self.aprs_data_fm,
+            pc_mic: self.pc_mic,
+            pc_mic_device: self.pc_mic_device.clone(),
+            pc_mic_gain_db: self.pc_mic_gain_db,
             audio_in: self.audio_in.clone(),
             audio_out: self.audio_out.clone(),
             tx_level: self.tx_level,
@@ -6950,7 +7192,16 @@ impl Settings {
     /// flat rig form always edits the active radio). Does NOT change the active radio.
     pub fn add_radio_profile(&mut self) -> u32 {
         self.ensure_radio_profiles();
-        let next_id = self.radios.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        // Never the id of a password that waits for the operator (`keys_to_confirm`): that one
+        // belongs to a radio no longer on the roster, and a new radio inherits none.
+        let next_id = self
+            .radios
+            .iter()
+            .map(|p| p.id)
+            .chain(self.keys_to_confirm.icom_lan.iter().copied())
+            .max()
+            .unwrap_or(0)
+            + 1;
         let mut used: Vec<u16> = self
             .radios
             .iter()
@@ -7156,6 +7407,9 @@ impl Settings {
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.sstv_hold_data_submode = p.sstv_hold_data_submode;
         self.aprs_data_fm = p.aprs_data_fm;
+        self.pc_mic = p.pc_mic;
+        self.pc_mic_device = p.pc_mic_device;
+        self.pc_mic_gain_db = p.pc_mic_gain_db;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
         self.tx_level = p.tx_level;
@@ -7214,6 +7468,9 @@ impl Settings {
             data_modes_plain_ssb,
             sstv_hold_data_submode,
             aprs_data_fm,
+            pc_mic,
+            pc_mic_device,
+            pc_mic_gain_db,
             audio_in,
             audio_out,
             tx_level,
@@ -7260,6 +7517,9 @@ impl Settings {
             self.data_modes_plain_ssb,
             self.sstv_hold_data_submode,
             self.aprs_data_fm,
+            self.pc_mic,
+            self.pc_mic_device.clone(),
+            self.pc_mic_gain_db,
             self.audio_in.clone(),
             self.audio_out.clone(),
             self.tx_level,
@@ -7307,6 +7567,9 @@ impl Settings {
             p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.sstv_hold_data_submode = sstv_hold_data_submode;
             p.aprs_data_fm = aprs_data_fm;
+            p.pc_mic = pc_mic;
+            p.pc_mic_device = pc_mic_device;
+            p.pc_mic_gain_db = pc_mic_gain_db;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
             p.tx_level = tx_level;
@@ -7544,10 +7807,12 @@ impl Settings {
     }
 
     /// The defaults for a settings file that is present but could not be used: the station is not a
-    /// new install, so the first-run setup wizard is not shown ([`Self::setup_wizard_seen`]).
+    /// new install, so the first-run setup wizard is not shown ([`Self::setup_wizard_seen`]) and
+    /// space weather is not newly logged ([`Self::log_space_weather`]).
     fn not_a_new_install() -> Self {
         Settings {
             setup_wizard_seen: true,
+            log_space_weather: false,
             ..Settings::default()
         }
     }
@@ -8549,6 +8814,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **Space weather is logged with each contact from a NEW install on; an existing station
+    /// keeps the choice its file holds.** A first run (no file) starts on. A file that says either
+    /// way keeps it. A file without the key (every station from before the default changed) is
+    /// an existing station that never turned it on, so it stays off; so does a file that is
+    /// present but cannot be read. CONTROL: a new install's first save keeps it on, and turning
+    /// it off there stays off.
+    #[test]
+    fn space_weather_logging_starts_on_for_a_new_install_only() {
+        let dir = scratch_dir("log_space_weather");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let fresh = Settings::load_at(&path, KEPT_AT);
+        assert!(fresh.log_space_weather, "no file: a new install starts on");
+        fresh.save(&path).unwrap();
+        assert!(Settings::load_at(&path, KEPT_AT).log_space_weather);
+        let mut off = Settings::load_at(&path, KEPT_AT);
+        off.log_space_weather = false;
+        off.save(&path).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "turned off stays off"
+        );
+
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        assert!(
+            full.contains("\"logSpaceWeather\": false"),
+            "fixture holds the old default"
+        );
+        std::fs::write(&path, full).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "an existing file says off"
+        );
+        std::fs::write(
+            &path,
+            full.replace("\"logSpaceWeather\": false", "\"logSpaceWeather\": true"),
+        )
+        .unwrap();
+        assert!(
+            Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "an existing file says on"
+        );
+        let without: String = full
+            .lines()
+            .filter(|l| !l.contains("logSpaceWeather"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, without).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "a file from before the key is an existing station: off"
+        );
+        std::fs::write(&path, "{ not json").unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "a file that does not read is not a new install"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **The experience answer is asked of a new install only, and an existing file never grows
     /// one.** A first run and a file without the key both read "not asked" (`None`): the answer
     /// is the first-run wizard's to give, never a default. A full stored file (the UI's fixture
@@ -8762,6 +9088,9 @@ mod tests {
             data_modes_plain_ssb: true,
             sstv_hold_data_submode: true,
             aprs_data_fm: true,
+            pc_mic: Some(true),
+            pc_mic_device: Some("Desk Mic".into()),
+            pc_mic_gain_db: Some(6.0),
             audio_in: "USB Audio CODEC #2".into(),
             audio_out: "USB Audio CODEC #2 out".into(),
             tx_level: 0.42,
@@ -9119,6 +9448,9 @@ mod tests {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: None,
+            pc_mic_device: None,
+            pc_mic_gain_db: None,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -9283,6 +9615,9 @@ mod tests {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: None,
+            pc_mic_device: None,
+            pc_mic_gain_db: None,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -9620,6 +9955,9 @@ mod tests {
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
             aprs_data_fm: p.aprs_data_fm,
+            pc_mic: Some(p.pc_mic),
+            pc_mic_device: Some(p.pc_mic_device.clone()),
+            pc_mic_gain_db: Some(p.pc_mic_gain_db),
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,
@@ -14713,6 +15051,151 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE SAVED KEYS HELD BACK FOR CONFIRMING ARE THE ENGINE'S: a form save, a profile load and
+    /// a restore that carry none (as every form does) keep them, so no stale form lets a key go
+    /// out; they survive a save to disk and back; removing the radio keeps its wait (the shell
+    /// lets it go once the password is removed), and a radio added then never takes its id.
+    /// CONTROL: the engine's own setter changes them.
+    #[test]
+    fn the_keys_held_back_for_confirming_survive_every_apply() {
+        use crate::engine::Engine;
+        let mut station = Settings::default();
+        station.radios = vec![
+            RadioProfile {
+                id: 0,
+                ..Default::default()
+            },
+            RadioProfile {
+                id: 1,
+                ..Default::default()
+            },
+        ];
+        station.active_radio = 0;
+        station.sync_flat_from_active();
+        let mut eng = Engine::with_settings(station);
+        let held = KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![1],
+            ..Default::default()
+        };
+        eng.set_keys_to_confirm(held.clone());
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &held,
+            "CONTROL: the setter sets them"
+        );
+
+        let mut form = eng.settings().clone();
+        form.keys_to_confirm = KeysToConfirm::default();
+        form.mycall = "W9FORM".into();
+        eng.apply_settings(form.clone());
+        assert_eq!(
+            (eng.settings().mycall.as_str(), eng.keys_to_confirm()),
+            ("W9FORM", &held),
+            "a form save that carries none keeps them"
+        );
+        eng.apply_restored_settings(form);
+        assert_eq!(eng.keys_to_confirm(), &held, "so does a restore's apply");
+
+        let dir = std::env::temp_dir().join(format!("tempo_keys_confirm_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        eng.settings().save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).keys_to_confirm,
+            held,
+            "saved and read back"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(eng.remove_radio(1), "premise: radio 1 removed");
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &held,
+            "the removed radio's wait stays until its password is removed"
+        );
+        assert_eq!(
+            eng.add_radio(),
+            2,
+            "a radio added then never takes the id whose password waits"
+        );
+        eng.set_keys_to_confirm(KeysToConfirm::default());
+        assert!(eng.remove_radio(2), "premise: radio 2 removed");
+        assert_eq!(
+            eng.add_radio(),
+            1,
+            "CONTROL: with nothing waiting, the next id after the roster's"
+        );
+    }
+
+    /// ★ A KEY KEPT ONLY BECAUSE ITS REMOVAL FAILED SAYS SO UNTIL IT STOPS WAITING: the mark is
+    /// saved and read back, and goes with the wait, so a later wait for that key starts afresh.
+    /// CONTROL: a settings file from before the mark existed reads as no removal failed.
+    #[test]
+    fn a_failed_removals_mark_lives_and_ends_with_its_wait() {
+        use crate::engine::Engine;
+        let mut eng = Engine::with_settings(Settings::default());
+        let mut keys = KeysToConfirm::default();
+        keys.hold_not_removed(None);
+        keys.hold_not_removed(Some(3));
+        keys.hold_not_removed(Some(3));
+        eng.set_keys_to_confirm(keys.clone());
+        assert_eq!(
+            (
+                eng.keys_to_confirm().clone(),
+                keys.not_removed(None),
+                keys.not_removed(Some(3)),
+                keys.not_removed(Some(4)),
+            ),
+            (
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![3],
+                    cloudlog_not_removed: true,
+                    icom_lan_not_removed: vec![3],
+                },
+                true,
+                true,
+                false
+            ),
+            "each waits, marked once"
+        );
+        let json = serde_json::to_string(&keys).unwrap();
+        assert_eq!(
+            serde_json::from_str::<KeysToConfirm>(&json).unwrap(),
+            keys,
+            "saved and read back"
+        );
+
+        let mut let_go = eng.keys_to_confirm().clone();
+        let_go.cloudlog = false;
+        let_go.icom_lan.clear();
+        eng.set_keys_to_confirm(let_go);
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &KeysToConfirm::default(),
+            "the marks went with the waits"
+        );
+        let mut again = KeysToConfirm::default();
+        again.cloudlog = true;
+        again.icom_lan.push(3);
+        eng.set_keys_to_confirm(again);
+        assert!(
+            !eng.keys_to_confirm().not_removed(None) && !eng.keys_to_confirm().not_removed(Some(3)),
+            "a later wait starts afresh"
+        );
+        assert_eq!(
+            serde_json::from_str::<KeysToConfirm>(r#"{"cloudlog":true,"icomLan":[1]}"#).unwrap(),
+            KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+                ..Default::default()
+            },
+            "CONTROL: an older file reads as no removal failed"
+        );
     }
 
     /// round 10 N2 — the serializer skip and the migration gate must agree on a WHITESPACE-only key.

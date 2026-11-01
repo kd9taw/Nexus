@@ -17,6 +17,8 @@ import * as api from '../api'
 import { announce } from '../announce'
 import type { LogQuestion } from '../features/logAnswers'
 import type { LogColumnsSaved } from '../features/logColumns'
+import { chooseRowAction } from './Logbook.rowMenu.testkit'
+import { t } from '../i18n'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -78,6 +80,8 @@ const headers = () => screen.getAllByRole('columnheader').map((h) => h.getAttrib
 const row = (c: HTMLElement) => c.querySelector('.logbook-row:not(.head):not(.placeholder)') as HTMLElement
 const table = (c: HTMLElement) => c.querySelector('.logbook-table') as HTMLElement
 const template = (c: HTMLElement) => table(c).style.getPropertyValue('--log-cols')
+/** A template's tracks: split on the spaces outside `minmax(…)`. */
+const tracksOf = (tpl: string) => tpl.split(/ (?![^(]*\))/)
 
 async function openChooser() {
   fireEvent.keyDown(screen.getByRole('button', { name: 'Columns' }), { key: 'Enter' })
@@ -97,7 +101,7 @@ describe('the default table is the one the Logbook had', () => {
   it('the same columns, and one track per cell rendered', async () => {
     const { container } = await renderLog()
     expect(headers()).toEqual(['Call', 'Country', 'Band', 'Freq', 'Mode', 'Sent', 'Rcvd', 'Date (UTC)', 'Time (UTC)', 'Park', 'QSL', 'Notes', 'Edit / delete'])
-    const tracks = template(container).replace(/minmax\([^)]*\)/, 'M').split(/\s+/)
+    const tracks = tracksOf(template(container))
     expect(tracks).toHaveLength(row(container).querySelectorAll(':scope > .log-cell').length)
     expect(tracks).toHaveLength(container.querySelectorAll('.logbook-row.head > .log-cell').length)
     expect(table(container).classList.contains('wide')).toBe(false)
@@ -107,7 +111,7 @@ describe('the default table is the one the Logbook had', () => {
     document.documentElement.setAttribute('data-viewport', 'sm')
     const { container } = await renderLog()
     expect(headers()).toEqual(['Call', 'Country', 'Band', 'QSL', 'Notes', 'Edit / delete'])
-    expect(template(container)).toBe('1fr 1.3fr 0.7fr 0.7fr 1fr minmax(384px, 0.8fr)')
+    expect(template(container)).toBe('minmax(96px, 1fr) 1.3fr 0.7fr 0.7fr 1fr minmax(80px, 80px)')
     expect(row(container).querySelectorAll(':scope > .log-cell')).toHaveLength(6)
   })
 })
@@ -145,7 +149,8 @@ describe('the added columns show what the store holds', () => {
     expect(at('Exchange received').textContent).toBe('599 14')
     // A table showing added columns scrolls sideways, as "More columns" did.
     expect(table(container).classList.contains('wide')).toBe(true)
-    expect(table(container).style.getPropertyValue('--log-min-w')).toMatch(/rem$/)
+    // The columns' shares in rem, plus the action cluster's fixed 80 px.
+    expect(table(container).style.getPropertyValue('--log-min-w')).toMatch(/^calc\([\d.]+rem \+ 80px\)$/)
   })
 
   it('every column but the actions sorts: its header is a button, and a click asks the engine for that order', async () => {
@@ -202,7 +207,7 @@ describe('resize', () => {
     fireEvent.keyDown(screen.getByRole('columnheader', { name: 'Country' }), { key: 'ArrowRight', altKey: true })
     // From the column's laid-out width (120 px here) by one step.
     expect(saved).toHaveBeenLastCalledWith({ shown: [], hidden: [], widths: { country: 136 } })
-    expect(template(container).split(' ')[1]).toBe('136px')
+    expect(tracksOf(template(container))[1]).toBe('136px')
     // An arrow without Alt is the grid's own keys, not a resize.
     saved.mockClear()
     fireEvent.keyDown(screen.getByRole('columnheader', { name: 'Country' }), { key: 'ArrowRight' })
@@ -217,7 +222,7 @@ describe('resize', () => {
     expect(handle).not.toBeNull()
     fireEvent.pointerDown(handle, { button: 0, clientX: 300, pointerId: 1 })
     fireEvent.pointerMove(handle, { clientX: 360, pointerId: 1 })
-    expect(template(container).split(' ')[1]).toBe('180px')
+    expect(tracksOf(template(container))[1]).toBe('180px')
     expect(saved).not.toHaveBeenCalled()
     fireEvent.pointerUp(handle, { clientX: 360, pointerId: 1 })
     fireEvent.click(handle)
@@ -414,5 +419,41 @@ describe('the editor shows the added fields and edits IOTA', () => {
     ]))
     // The two the form edits are boxes, not this line.
     expect(pairs.some((p) => p.startsWith('IOTA=') || p.startsWith('Their grid='))).toBe(false)
+  })
+})
+
+// The operator's report: cards marked received showed in the QSL column, and the Card received
+// column beside it stayed empty — the mark wrote no date. The engine now dates the card it marks
+// (ADIF `QSLRDATE`); the row the Logbook reloads after the mark shows that date.
+describe('a card marked received shows its date', () => {
+  it('in the Card received column, from the row the engine answers after the mark', async () => {
+    const unmarked = {
+      ...CONTACT,
+      qslRcvd: { card: false, lotw: false, eqsl: false, qrz: false },
+      confirmed: false, awardConfirmed: false,
+      extra: CONTACT.extra.filter(([k]) => !k.endsWith('QSLRDATE')),
+    }
+    const marked = {
+      ...unmarked,
+      qslRcvd: { ...unmarked.qslRcvd, card: true },
+      confirmed: true, awardConfirmed: true,
+      extra: [...unmarked.extra, ['QSLRDATE', '20261031']],
+    }
+    engineLog.mockResolvedValue([unmarked])
+    vi.mocked(api.markQslCardById).mockImplementationOnce(async () => {
+      engineLog.mockResolvedValue([marked])
+      return { kind: 'applied' } as Awaited<ReturnType<typeof api.markQslCardById>>
+    })
+    const columns: LogColumnsSaved = { shown: ['qslRcvdDate'], hidden: [], widths: {} }
+    const { container } = render(
+      <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" columns={columns} />,
+    )
+    await waitFor(() => expect(row(container)).not.toBeNull())
+    const cell = () => [...row(container).querySelectorAll(':scope > .log-cell')][headers().indexOf('Card received')]
+    expect(cell().textContent).toBe('—')
+
+    await chooseRowAction('DL1ABC', 'QSL', t('logbook.row.qslRcvd.card'))
+    await waitFor(() => expect(api.markQslCardById).toHaveBeenCalledWith(expect.objectContaining({ id: 'id-DL1ABC' }), true))
+    await waitFor(() => expect(cell().textContent).toBe('2026-10-31'))
   })
 })

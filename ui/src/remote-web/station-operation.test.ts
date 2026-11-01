@@ -294,7 +294,7 @@ describe('split and clarifier requests', () => {
     }
   })
   it('admits an APRS tune only to one of the regional APRS channels, and nothing beside it', () => {
-    for (const dialMhz of [144.39, 144.8, 145.175, 144.575, 144.66, 144.93, 145.57]) {
+    for (const dialMhz of [144.39, 144.8, 145.175, 144.575, 144.66, 144.93, 145.57, 145.825]) {
       const action = { action: 'radio.aprsTune', dialMhz }
       expect(stationAction(action)).toEqual(action)
       expect(actionCapability(stationAction(action))).toBe('aprsTuning')
@@ -302,7 +302,7 @@ describe('split and clarifier requests', () => {
     // The grammar's list is the cockpit's picker list, channel for channel.
     for (const [dialMhz] of APRS_FREQS) expect(stationAction({ action: 'radio.aprsTune', dialMhz })).toEqual({ action: 'radio.aprsTune', dialMhz })
     const action = { action: 'radio.aprsTune', dialMhz: 144.39 }
-    for (const dialMhz of [144.391, 146.52, 14.105, 0, NaN, Infinity, '144.39', null]) expect(() => stationAction({ ...action, dialMhz })).toThrow()
+    for (const dialMhz of [144.391, 145.82, 145.83, 146.52, 14.105, 0, NaN, Infinity, '144.39', null]) expect(() => stationAction({ ...action, dialMhz })).toThrow()
     for (const extra of ['band', 'mode', 'shift', 'txEnabled', 'settings', 'radioId']) expect(() => stationAction({ ...action, [extra]: 1 })).toThrow()
     expect(() => stationAction({ action: 'radio.aprsTune' })).toThrow()
   })

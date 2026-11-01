@@ -733,6 +733,47 @@ impl Msg {
             _ => None,
         }
     }
+
+    /// This message as the same over sent by `now` where it was made by `was`, the change WSJT-X's
+    /// `genStdMsgs` makes to its Tx messages when My Call changes: the sender a standard message
+    /// names, and each word of free text that is `was`, become `now`, hashed where they were
+    /// hashed. Anything else is left exactly as it is, and so is free text when only one of the
+    /// two calls is standard: a standard frame cannot carry the other, so it is not made one.
+    pub fn signed_by(mut self, was: &str, now: &str) -> Msg {
+        let was = unhash_call(was).trim();
+        let is_was = |c: &str| !was.is_empty() && unhash_call(c).trim().eq_ignore_ascii_case(was);
+        let now_as = |c: &str| {
+            if c.starts_with('<') {
+                format!("<{now}>")
+            } else {
+                now.to_string()
+            }
+        };
+        match &mut self {
+            Msg::Cq { de, .. }
+            | Msg::Grid { de, .. }
+            | Msg::Report { de, .. }
+            | Msg::RReport { de, .. }
+            | Msg::Rr73 { de, .. }
+            | Msg::Rrr { de, .. }
+            | Msg::Bye73 { de, .. }
+            | Msg::FieldDay { de, .. } => {
+                if is_was(de) {
+                    *de = now_as(de);
+                }
+            }
+            Msg::Other(text) => {
+                if is_std_call(was) == is_std_call(now) && text.split_whitespace().any(&is_was) {
+                    *text = text
+                        .split_whitespace()
+                        .map(|w| if is_was(w) { now_as(w) } else { w.to_string() })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                }
+            }
+        }
+        self
+    }
 }
 
 /// True for an ARRL Field Day class like `3A`, `12A`, `1B`, `3H` (1–2 digits + letter).
@@ -1431,5 +1472,40 @@ mod fidelity_tests {
         assert!(matches!(Msg::parse("CQ FD W9XYZ EN37"), Msg::Cq { .. }));
         assert_eq!(Msg::parse("W9XYZ K2DEF 3A WI").addressee(), Some("W9XYZ"));
         assert_eq!(Msg::parse("W9XYZ K2DEF 3A WI").sender(), Some("K2DEF"));
+    }
+}
+
+#[cfg(test)]
+mod signed_by_tests {
+    use super::*;
+
+    /// The same over signed by the new call: the sender of a standard message, whole or hashed;
+    /// in free text each word that is the old call, when both calls have the same shape. Nothing
+    /// another station sent, and no free text across a change of shape, is touched.
+    #[test]
+    fn an_over_signed_by_the_new_call_changes_only_its_own_call() {
+        let signed = |text: &str, was: &str, now: &str| Msg::parse(text).signed_by(was, now);
+        let cases = [
+            ("W1AW KD9TAW -05", "KD9TAW", "KD9TAW/P", "W1AW KD9TAW/P -05"),
+            ("CQ KD9TAW EN52", "kd9taw", "W9XYZ", "CQ W9XYZ EN52"),
+            ("W1AW <KD9TAW> RR73", "KD9TAW", "W9XYZ", "W1AW <W9XYZ> RR73"),
+            ("KD9TAW W1AW R-07", "KD9TAW", "W9XYZ", "KD9TAW W1AW R-07"),
+            (
+                "W1AW KD9TAW TNX JOE",
+                "KD9TAW",
+                "W9XYZ",
+                "W1AW W9XYZ TNX JOE",
+            ),
+            (
+                "W1AW KD9TAW TNX JOE",
+                "KD9TAW",
+                "PJ4/KD9TAW",
+                "W1AW KD9TAW TNX JOE",
+            ),
+            ("TNX JOE 73", "KD9TAW", "W9XYZ", "TNX JOE 73"),
+        ];
+        for (text, was, now, want) in cases {
+            assert_eq!(signed(text, was, now).to_text(), want, "{text}");
+        }
     }
 }

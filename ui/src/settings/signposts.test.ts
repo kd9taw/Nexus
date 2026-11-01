@@ -1,7 +1,7 @@
 // A SIGNPOST MUST NAME A PLACE THAT EXISTS.
 //
 // #358: the Repeaters screen told operators to add a token in "Settings ▸ Integrations". No such
-// place existed; the token lives in Logging & Connectors ▸ Confirmations. Nothing went red, because
+// place existed; the token lives in Services ▸ Confirmations. Nothing went red, because
 // nothing checked an in-app hint against the Settings the app actually has. The registry already
 // knows every tab and section (registry.ts), so this does:
 //
@@ -137,10 +137,13 @@ describe('every "Settings ▸" in the English catalog names a place that exists'
     const walk = (s: string) => settingsPaths(s).map(walkSettingsPath)
     expect(walk('Add a token in Settings ▸ Integrations.')).toEqual([null])
     expect(walk('Set a cluster in Settings ▸ Spot Sources.')).toEqual([null])
-    expect(walk('in Settings ▸ Logging & Connectors ▸ Integrations.')).toEqual([null])
-    expect(walk('in Settings ▸ Logging & Connectors ▸ Confirmations fills the gap.')).toEqual([
-      { tab: 'logging', section: 'confirmations' },
+    expect(walk('in Settings ▸ Services ▸ Integrations.')).toEqual([null])
+    expect(walk('in Settings ▸ Services ▸ Confirmations fills the gap.')).toEqual([
+      { tab: 'services', section: 'confirmations' },
     ])
+    // A tab the regroup removed is an alias now, not a place, so a hint still naming it fails.
+    expect(walk('in Settings ▸ Logging & Connectors ▸ Confirmations fills the gap.')).toEqual([null])
+    expect(walk('in Settings ▸ Config ▸ Backup & reset.')).toEqual([null])
     expect(walk('your grid (Settings ▸ Station ▸ Grid) to know when')).toEqual([
       { tab: 'station', section: 'operator-radio' },
     ])

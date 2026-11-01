@@ -3196,7 +3196,7 @@ export function SatellitesView({ focusSat, snap, onPopOut, onOpenLogbook, onSnap
             above IS the refresh, but under median semantics it correctly
             disappears on a healthy catalog — which used to take the section's
             only refresh affordance with it (leaving the arm-confirm, the armed
-            rail past 14 d, and Settings ▸ Radio ▸ Orbital elements). It is
+            rail past 14 d, and Settings ▸ Satellites ▸ Orbital elements). It is
             here with no elements at all, too: that is when fetching them is
             the only thing to do. Quiet by construction — it states no age and
             makes no claim, so it can never be the warning that lied. Exactly

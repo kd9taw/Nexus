@@ -122,9 +122,9 @@ describe('APRS-IS settings live where operators look for them', () => {
     }
   })
 
-  it('they are NOT under Logging & Connectors any more', async () => {
+  it('they are NOT under Services (once Logging & Connectors) any more', async () => {
     renderPanel()
-    await openTab('Logging & Connectors')
+    await openTab('Services')
     // The old home. Finding the iGate toggle here again means the move was reverted.
     expect(screen.queryByText('Receive-only iGate')).toBeNull()
     expect(screen.queryByText('APRS-IS feed')).toBeNull()

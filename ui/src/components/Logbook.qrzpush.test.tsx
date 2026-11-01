@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
-import { render, waitFor, screen, cleanup } from '@testing-library/react'
+import { render, waitFor, cleanup } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import type { LogQuestion } from '../features/logAnswers'
+import { t } from '../i18n'
+import { menuItem, openRowMenu } from './Logbook.rowMenu.testkit'
 
 // Same jsdom shims the sibling Logbook suites need: react-virtual measures the scroll
 // element and rows via offsetHeight + a ResizeObserver, neither of which jsdom implements.
@@ -58,21 +60,21 @@ function oneContact() {
 // #270 (ddobbins1686): the per-row QRZ push existed in 1.10.3, but its only visible mark was a
 // bare ↥ arrow, so an operator hunting for "Upload to QRZ" reported the control as gone.
 describe('Logbook row — the QRZ push is recognisable as QRZ (#270)', () => {
-  it('shows QRZ on the button and keeps its accessible name', async () => {
+  it('names QRZ Logbook in the row menu', async () => {
     engineLog.mockResolvedValue(oneContact())
     const { container } = render(
       <Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />,
     )
     await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
 
-    // Found by its accessible name — that name is what screen readers and the existing
-    // guidance ("Push <call> to QRZ") rely on, so it must not change.
-    const push = await screen.findByRole('button', { name: 'Push K0ABC to QRZ' })
-    // Positive control: the sibling ClubLog push renders on the same row with its own label,
-    // so a missing QRZ label below is a real absence, not a row that failed to render.
-    const clublog = screen.getByRole('button', { name: 'Push K0ABC to ClubLog' })
-    expect(clublog.textContent).toBe('CL')
+    // In the row's ⋯ menu, by the service's full name, so an operator looking for "Upload to
+    // QRZ" finds it in words.
+    const menu = await openRowMenu('K0ABC')
+    const push = menuItem(menu, t('logbook.row.menu.qrz'))
+    // Positive control: the sibling Club Log upload is in the same menu with its own name, so a
+    // missing QRZ item below is a real absence, not a menu that failed to render.
+    expect(menuItem(menu, t('logbook.row.menu.clublog')).textContent).toContain('Club Log')
 
-    expect(push.textContent).toContain('QRZ')
+    expect(push.textContent).toContain('QRZ Logbook')
   })
 })

@@ -159,8 +159,10 @@ describe('the first-run experience question in the app', () => {
     for (let i = 0; i < 4; i++) fireEvent.click(screen.getByRole('button', { name: /Next/ }))
     fireEvent.click(screen.getByRole('button', { name: /^Finish/ }))
     await waitFor(() => expect(calls(setExperienceLevel)).toEqual([['newToHobby']]))
-    // Sequenced after the licence write, as that one is after the draft.
-    expect(calls(setLicenseClass).length).toBe(1)
+    // The class was left as the station holds it (Outside the US), so there is none to write
+    // (App.wizardLicence.test.tsx holds the licence class; the order of the writes is
+    // App.journeys.test.tsx's).
+    expect(calls(setLicenseClass)).toEqual([])
     const stored = JSON.parse(localStorage.getItem('nexus.features.v1') ?? '{}')
     expect(stored.profile).toBe('starter')
     expect(stored.enabled.phone).toBe(false)
@@ -206,15 +208,18 @@ describe('the first-run experience question in the app', () => {
     Element.prototype.scrollIntoView = () => {}
     Element.prototype.scrollTo = () => {}
     await mount('#settings')
-    fireEvent.click(await screen.findByRole('tab', { name: EN['settings.tabs.appearance'] }))
+    fireEvent.click(await screen.findByRole('tab', { name: EN['settings.tabs.app'] }))
     fireEvent.click(await screen.findByRole('button', { name: EN['settings.features.rerunWizard'] }))
     await screen.findByRole('heading', { name: EN['setup.station.title'] })
     expect(screen.queryByText(EN['setup.about.title'])).toBeNull()
     for (let i = 0; i < 3; i++) fireEvent.click(screen.getByRole('button', { name: /Next/ }))
     fireEvent.click(screen.getByRole('button', { name: /^Finish/ }))
-    await waitFor(() => expect(calls(setLicenseClass).length).toBe(1))
+    await waitFor(() => expect(screen.queryByRole('heading', { name: EN['setup.finish.title'] })).toBeNull())
     expect(localStorage.getItem('nexus.features.v1')).toBe(tuned)
     expect(calls(setExperienceLevel)).toEqual([])
+    // Untouched, so nothing is written: not the class, not the "done" record it already has.
+    expect(calls(setLicenseClass)).toEqual([])
+    expect(calls(markSetupWizardSeen)).toEqual([])
   })
 
   it('Help ▸ Your first FT8 contact says what a double-click does with this station\'s setting', async () => {

@@ -45,8 +45,8 @@ pub enum PlayRefusal {
     /// The device that would open is one the station transmits from.
     TxDevice,
     /// A TX audio device is set to "the system default output" (the station's, or a radio
-    /// profile's that has none, as a radio whose audio is not on this computer has), and the sound
-    /// would open that default, or a default nobody can name.
+    /// profile's that has none and transmits from a sound card), and the sound would open that
+    /// default, or a default nobody can name.
     TxDefault,
     /// The two cannot be proven different by name, so the sound is refused (Linux): the sound
     /// server's default sink (`default`, `pulse`, `pipewire`…) or a PCM routed by a config file
@@ -61,10 +61,37 @@ pub enum PlayRefusal {
 }
 
 /// Every TX audio device the station has configured: the flat `audio_out` and each radio
-/// profile's. An empty name is "the system default output".
+/// profile's. An empty name is "the system default output", except on a radio whose transmit audio
+/// does not leave through this computer's sound card at all (the Icom network connection, TCI with
+/// its audio on, Nexus's own Flex client with native audio on:
+/// [`tempo_app::settings::tx_audio_on_sound_card`]). There an empty name is no device, and is left
+/// out. A device such a radio names is kept, and the TX output the radio in use holds open is
+/// guarded on its own ([`guarded_tx_devices`]).
 pub fn tx_audio_devices(settings: &Settings) -> Vec<String> {
-    std::iter::once(settings.audio_out.clone())
-        .chain(settings.radios.iter().map(|r| r.audio_out.clone()))
+    tx_audio_device_owners(settings)
+        .into_iter()
+        .map(|(device, _)| device)
+        .collect()
+}
+
+/// [`tx_audio_devices`], each with the radio whose TX audio it is: a profile's name, or `None` for
+/// the flat setting (the radio in use, or the station's own before it had profiles).
+pub fn tx_audio_device_owners(settings: &Settings) -> Vec<(String, Option<String>)> {
+    use tempo_app::settings::tx_audio_on_sound_card;
+    let counts = |device: &str, on_card: bool| on_card || !device.trim().is_empty();
+    let flat = counts(
+        &settings.audio_out,
+        tx_audio_on_sound_card(&settings.tx_audio_route()),
+    )
+    .then(|| (settings.audio_out.clone(), None));
+    flat.into_iter()
+        .chain(
+            settings
+                .radios
+                .iter()
+                .filter(|r| counts(&r.audio_out, tx_audio_on_sound_card(&r.tx_audio_route())))
+                .map(|r| (r.audio_out.clone(), Some(r.name.clone()))),
+        )
         .collect()
 }
 
@@ -112,9 +139,9 @@ pub fn open_tx_outputs() -> Vec<String> {
 }
 
 /// The TX devices a sound is refused against: the settings' (`tx_devices`) and every TX output
-/// the radio holds open now ([`open_tx_outputs`]).
-#[cfg_attr(not(feature = "device"), allow(dead_code))]
-fn guarded_tx_devices(tx_devices: &[String]) -> Vec<String> {
+/// the radio holds open now ([`open_tx_outputs`]). The headphone monitor's guard is refused
+/// against the same list ([`crate::monitor::monitor_would_transmit`]).
+pub(crate) fn guarded_tx_devices(tx_devices: &[String]) -> Vec<String> {
     let mut all = tx_devices.to_vec();
     all.extend(open_tx_outputs());
     all
@@ -163,7 +190,7 @@ const CARD_PLUGINS: [&str; 13] = [
 
 /// How this computer's audio host names an output device, and so how two names are compared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Naming {
+pub(crate) enum Naming {
     /// Linux: ALSA PCM names, whose routing may live in a config file.
     Alsa,
     /// Windows / macOS: one name per endpoint.
@@ -171,7 +198,7 @@ enum Naming {
 }
 
 /// This computer's naming (cpal's ALSA host on Linux, WASAPI / CoreAudio elsewhere).
-const HOST_NAMING: Naming = if cfg!(target_os = "linux") {
+pub(crate) const HOST_NAMING: Naming = if cfg!(target_os = "linux") {
     Naming::Alsa
 } else {
     Naming::Endpoint
@@ -310,7 +337,7 @@ fn collide(a: &Route, b: &Route) -> Option<Collision> {
 }
 
 /// An ALSA card's id from its number, as the kernel lists it (`/proc/asound/card<N>/id`).
-fn system_card_id(n: u32) -> Option<String> {
+pub(crate) fn system_card_id(n: u32) -> Option<String> {
     if cfg!(target_os = "linux") {
         std::fs::read_to_string(format!("/proc/asound/card{n}/id"))
             .ok()
@@ -324,7 +351,7 @@ fn system_card_id(n: u32) -> Option<String> {
 /// THE GUARD for one name: why playing on `device` might play into one of `tx_devices`, where an
 /// empty TX name is the system default output, `default_output` (`None` when the host cannot name
 /// one). The strongest reason wins: a named TX device over an unprovable one over a default one.
-fn device_verdict(
+pub(crate) fn device_verdict(
     device: &str,
     tx_devices: &[String],
     default_output: Option<&str>,
@@ -437,11 +464,53 @@ pub fn refuse_tx(
     }
 }
 
+/// THE GUARD, for two INPUTS: whether capturing `mic` may capture the same input as `input`, by
+/// the same naming rules a sound is refused by (the computer microphone, `tempo_app::engine::pc_mic`,
+/// asks this of every receive input, so a microphone that is the band never goes on the air).
+/// `Same` where the names are one device (identically named twins included), `Unsure` where they
+/// cannot be proven different (on Linux: a sound server's route, a config-file PCM, a card by an
+/// unresolved number), `None` only where they are proven different. An empty `input` is the system
+/// default input, which no name can be told apart from but the sound server's own: a microphone
+/// named as a sound server's route (`default`, `pulse`, `pipewire`…) captures whatever the server
+/// defaults to, so it is unsure against every input, on every host.
+pub fn same_input(mic: &str, input: &str) -> Option<tempo_app::engine::pc_mic::SameInput> {
+    input_collision(mic, input, HOST_NAMING, &system_card_id)
+}
+
+/// [`same_input`] with the naming and the card-number lookup handed in (tests name their own).
+fn input_collision(
+    mic: &str,
+    input: &str,
+    naming: Naming,
+    card_id: &dyn Fn(u32) -> Option<String>,
+) -> Option<tempo_app::engine::pc_mic::SameInput> {
+    use tempo_app::engine::pc_mic::SameInput;
+    let (mic, input) = (mic.trim(), input.trim());
+    if mic.is_empty() {
+        return Some(SameInput::Unsure); // a device with no name cannot be told apart
+    }
+    // Whatever this host calls its devices: no Windows or macOS endpoint is named like this.
+    let server = route(mic, Naming::Alsa, card_id) == Route::Server;
+    if input.is_empty() {
+        return server.then_some(SameInput::Unsure);
+    }
+    match collide(&route(mic, naming, card_id), &route(input, naming, card_id)) {
+        Some(Collision::Same) => Some(SameInput::Same),
+        Some(Collision::Unsure) => Some(SameInput::Unsure),
+        None => server.then_some(SameInput::Unsure),
+    }
+}
+
 /// A built-in tone: a short sine at `hz` with the alerts' envelope (10 ms up to 0.18, down to
 /// silence at 220 ms), twice for `double`, the second a fifth higher 130 ms later — what the
-/// window's own alert beeps sound like.
+/// window's own alert beeps sound like. At [`TONE_RATE`].
 pub fn tone(hz: f32, double: bool) -> Vec<f32> {
-    let rate = TONE_RATE as f32;
+    tone_at(hz, double, TONE_RATE)
+}
+
+/// [`tone`], made at `rate` samples a second (an output that plays at its own rate).
+pub fn tone_at(hz: f32, double: bool, rate: u32) -> Vec<f32> {
+    let rate = rate.max(1) as f32;
     let beep = |f: f32| -> Vec<f32> {
         let n = (0.24 * rate) as usize;
         (0..n)
@@ -1159,7 +1228,9 @@ mod tests {
     #[test]
     fn the_tx_output_the_radio_holds_open_is_refused_whatever_settings_say() {
         let tx = s(&[""]);
-        let codec = "Nexus Test Held CODEC";
+        // A card's name, so on Linux it is told apart from the other tests' cards while it is held:
+        // the hold is process-wide, and the headphone monitor's guard reads it too.
+        let codec = "plughw:CARD=NexusHeldTest,DEV=0";
         assert_eq!(
             ep_refuse(codec, codec, &guarded_tx_devices(&tx), Some("Headphones")),
             Ok(()),
@@ -1368,5 +1439,89 @@ mod tests {
         let two = tone(784.0, true);
         assert!(two.len() > one.len());
         assert!(two.iter().all(|v| v.abs() <= 1.0));
+    }
+
+    /// ⛔ The computer microphone's receive check ([`same_input`]) is this guard's naming, applied
+    /// to two inputs: one device under any of its names is `Same`, what cannot be told apart is
+    /// `Unsure`, and only what is proven different passes. Every case the microphone's own check
+    /// refused before this guard took it over still refuses (no weaker), each beside a CONTROL that
+    /// passes.
+    #[test]
+    fn a_microphone_is_judged_against_a_receive_input_by_this_guards_naming() {
+        use tempo_app::engine::pc_mic::SameInput::{Same, Unsure};
+        let cards = |n: u32| match n {
+            1 => Some("Codec".to_string()),
+            2 => Some("Headset".to_string()),
+            _ => None,
+        };
+        let alsa = |mic: &str, input: &str| input_collision(mic, input, Naming::Alsa, &cards);
+        let ep = |mic: &str, input: &str| input_collision(mic, input, Naming::Endpoint, &no_cards);
+        // One card under another ALSA name, by id, by number, or by a twin's `_N` id.
+        assert_eq!(
+            alsa("plughw:CARD=Codec,DEV=0", "hw:CARD=Codec,DEV=0"),
+            Some(Same)
+        );
+        assert_eq!(alsa("dsnoop:1,0", "hw:1,0"), Some(Same));
+        assert_eq!(
+            alsa("hw:1,0", "hw:CARD=Codec,DEV=0"),
+            Some(Same),
+            "number resolved"
+        );
+        assert_eq!(
+            alsa("plughw:CARD=Codec_1", "hw:CARD=Codec"),
+            Some(Same),
+            "twin"
+        );
+        assert_eq!(alsa("sysdefault:CARD=Codec", "hw:CARD=codec"), Some(Same));
+        // A card by a number nobody resolves, against one by id: unsure.
+        assert_eq!(alsa("hw:5,0", "hw:CARD=Codec,DEV=0"), Some(Unsure));
+        // A sound server's route, against a card, against the system default, on every host.
+        for server in ["default", "pulse", " PipeWire ", "jack", "sysdefault"] {
+            assert_eq!(
+                alsa(server, "hw:CARD=Codec,DEV=0"),
+                Some(Unsure),
+                "{server}"
+            );
+            assert_eq!(alsa(server, ""), Some(Unsure), "{server} vs the default");
+            assert_eq!(
+                ep(server, "Radio Codec"),
+                Some(Unsure),
+                "{server} off Linux"
+            );
+            assert_eq!(ep(server, ""), Some(Unsure), "{server} off Linux, default");
+        }
+        // Receive on the system default as the sound card reports it (`default`): a card cannot
+        // be proven different from whatever the server takes as its default input.
+        assert_eq!(alsa("plughw:CARD=Headset,DEV=0", "default"), Some(Unsure));
+        // A config-file PCM against anything but itself, and a card's `default:` alias.
+        assert_eq!(alsa("headsetmic", "hw:CARD=Codec"), Some(Unsure));
+        assert_eq!(alsa("default:CARD=Headset", "hw:CARD=Codec"), Some(Unsure));
+        // Endpoint names: case, spaces, the list's " #N" and Windows' "N- ".
+        assert_eq!(ep("Radio Codec", "Radio Codec"), Some(Same));
+        assert_eq!(ep("radio codec #2", "Radio Codec"), Some(Same));
+        assert_eq!(
+            ep(
+                "Microphone (2- USB Audio CODEC)",
+                "Microphone (USB Audio CODEC)"
+            ),
+            Some(Same)
+        );
+        assert_eq!(ep("", "Radio Codec"), Some(Unsure), "a nameless microphone");
+        // CONTROLS: proven different, so nothing is refused.
+        assert_eq!(alsa("hw:CARD=Headset,DEV=0", "hw:CARD=Codec,DEV=0"), None);
+        assert_eq!(alsa("plughw:2,0", "hw:1,0"), None, "two resolved numbers");
+        assert_eq!(
+            alsa("hw:2,0", "hw:CARD=Codec"),
+            None,
+            "a number resolved to another id"
+        );
+        assert_eq!(alsa("sysdefault:CARD=Headset", "hw:CARD=Codec,DEV=0"), None);
+        assert_eq!(
+            alsa("plughw:CARD=Headset,DEV=0", ""),
+            None,
+            "unset: the loop asks the opened"
+        );
+        assert_eq!(ep("Desk Microphone", "Radio Codec"), None);
+        assert_eq!(ep("Desk Microphone", ""), None);
     }
 }

@@ -237,7 +237,7 @@ function ctxOf(over: Partial<PaneContext> = {}): PaneContext {
       ],
     },
     focusBand: null, amp: AMP_UP,
-    scales: { r: 1, s: 0, g: 3, gTomorrow: 2, asOf: NOW },
+    scales: { r: 1, s: 0, g: 3, gTomorrow: { level: 2, date: new Date((NOW + 86400) * 1000).toISOString().slice(0, 10) }, asOf: NOW },
     alerts: [{ productId: 'K05A', issued: NOW, kind: 'ALERT', message: 'Geomagnetic K-index of 5 reached' }],
     muf: [],
     spotsFeed: SPOTS_FEED, otaBoard: OTA_BOARD,

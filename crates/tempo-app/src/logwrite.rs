@@ -302,6 +302,16 @@ pub fn qsl_sent(id: RecordId, via: Option<tempo_core::logbook::QslVia>) -> LogOp
     }
 }
 
+/// The operator's word on a paper card for `id` — `true` it arrived, `false` it did not — dated
+/// now, as [`StationCore::mark_qsl_card`] makes it.
+pub fn qsl_card(id: RecordId, received: bool) -> LogOp {
+    LogOp::MarkQslCard {
+        id,
+        received,
+        date_unix: crate::engine::now_unix_secs(),
+    }
+}
+
 /// Stamp a connector's answer for the QSO it pushed (`pushed`) on the row that push names
 /// ([`station::push_target`]: by its id while it is still that contact, or — a push that names
 /// no row — the newest with its push key), planned with the Engine lock released. Whether a

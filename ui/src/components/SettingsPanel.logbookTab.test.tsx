@@ -131,8 +131,8 @@ describe('Settings ▸ Logbook', () => {
     for (const id of MOVED) expect(document.getElementById(`settings-${id}`), id).not.toBeNull()
   })
 
-  it('Logging & Connectors keeps the sign-ins and uploads, and none of the moved sections', async () => {
-    await openTab('Logging & Connectors')
+  it('Services (once Logging & Connectors) keeps the sign-ins and uploads, and none of the moved sections', async () => {
+    await openTab('Services')
     for (const id of MOVED) expect(document.getElementById(`settings-${id}`), id).toBeNull()
     const conf = section('confirmations')
     expect(conf.getByRole('textbox', { name: /^LoTW username/ })).toBeTruthy()
@@ -145,13 +145,13 @@ describe('Settings ▸ Logbook', () => {
     expect(document.getElementById('settings-integrations-feeds')).not.toBeNull()
   })
 
-  it('the controls it left behind are gone from Appearance and Config', async () => {
+  it('the controls it left behind are gone from Appearance and App (once Config)', async () => {
     await openTab('Appearance')
     expect(screen.queryByRole('checkbox', { name: 'Open the station card when the pointer rests on a call' })).toBeNull()
     expect(section('map-globe').queryByRole('button', { name: 'Reset' })).toBeNull()
     // Positive control: the globe switch stayed with the map.
     expect(section('map-globe').getByRole('checkbox', { name: 'Show the 3-D globe above the Logbook' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('tab', { name: 'Config' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'App' }))
     expect(section('data-folder').queryByRole('spinbutton', { name: /^Keep deleted contacts/ })).toBeNull()
   })
 })

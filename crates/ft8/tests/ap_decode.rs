@@ -79,14 +79,16 @@ fn ap_recovers_frames_the_no_context_path_cannot() {
     for seed in 0..seeds {
         let iwave = noisy_frame(msg, -22.0, seed);
         // AP context: responder awaiting RR73 → nQSOProgress = 3; nfqso on carrier.
-        let decs = decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, true, false);
+        let decs = decode_frame(
+            &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, true, false, false,
+        );
         if let Some(d) = decs.iter().find(|d| d.message == msg) {
             ap += 1;
             if d.nap > 0 {
                 ap_via_ap_pass += 1; // recovery explicitly credited to an AP pass
             }
         }
-        if decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false)
+        if decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false, false)
             .iter()
             .any(|d| d.message == msg)
         {
@@ -128,7 +130,7 @@ fn ap_off_and_cq_only_provably_gate_the_ap_passes() {
         let iwave = noisy_frame(msg, -22.0, seed);
         // Full AP context supplied but AP switched OFF.
         if decode_frame(
-            &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, false, false,
+            &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, false, false, false,
         )
         .iter()
         .any(|d| d.message == msg)
@@ -136,9 +138,11 @@ fn ap_off_and_cq_only_provably_gate_the_ap_passes() {
             ap_off_hits += 1;
         }
         // AP on but restricted to the CQ hypothesis only.
-        if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, true, true)
-            .iter()
-            .any(|d| d.message == msg)
+        if decode_frame(
+            &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, true, true, false,
+        )
+        .iter()
+        .any(|d| d.message == msg)
         {
             cq_only_hits += 1;
         }
@@ -170,7 +174,7 @@ fn nfqso_steers_deep_ap_to_an_off_center_carrier() {
         let iwave = noisy_frame_at(msg, -22.0, seed, f0);
         // nfqso ON the carrier → deep AP fires there.
         if decode_frame(
-            &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, f0 as i32, true, false,
+            &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, f0 as i32, true, false, false,
         )
         .iter()
         .any(|d| d.message == msg)
@@ -179,9 +183,11 @@ fn nfqso_steers_deep_ap_to_an_off_center_carrier() {
         }
         // nfqso = 0 → C-ABI falls back to band center; the off-center station is
         // outside the deep-AP window, so iaptype>=3 never fires for it.
-        if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 0, true, false)
-            .iter()
-            .any(|d| d.message == msg)
+        if decode_frame(
+            &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 0, true, false, false,
+        )
+        .iter()
+        .any(|d| d.message == msg)
         {
             centered += 1;
         }
@@ -226,6 +232,7 @@ fn decode_shaped(
         false,
         partial,
         true,
+        false,
         false,
     )
 }
@@ -359,14 +366,16 @@ fn explore_ap_vs_frequency() {
         let (mut centered, mut steered) = (0u32, 0u32);
         for seed in 0..seeds {
             let iwave = noisy_frame_at(msg, -22.0, seed, f0);
-            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 0, true, false)
-                .iter()
-                .any(|d| d.message == msg)
+            if decode_frame(
+                &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 0, true, false, false,
+            )
+            .iter()
+            .any(|d| d.message == msg)
             {
                 centered += 1;
             }
             if decode_frame(
-                &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, f0 as i32, true, false,
+                &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, f0 as i32, true, false, false,
             )
             .iter()
             .any(|d| d.message == msg)
@@ -390,13 +399,15 @@ fn explore_ap_margin() {
         let seeds = 12u64;
         for seed in 0..seeds {
             let iwave = noisy_frame(msg, snr, seed);
-            if decode_frame(&iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, true, false)
-                .iter()
-                .any(|d| d.message == msg)
+            if decode_frame(
+                &iwave, 200, 2900, 3, "KD9TAW", "W1AW", 3, 1500, true, false, false,
+            )
+            .iter()
+            .any(|d| d.message == msg)
             {
                 ap += 1;
             }
-            if decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false)
+            if decode_frame(&iwave, 200, 2900, 3, "", "", 0, 0, true, false, false)
                 .iter()
                 .any(|d| d.message == msg)
             {

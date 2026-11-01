@@ -252,6 +252,64 @@ fn an_undo_puts_an_edit_back_and_undoing_the_undo_makes_it_again() {
     assert!(mirror(&d).contains("edited by hand"));
 }
 
+/// ★ A paper card's received date (`QSLRDATE`) comes and goes with the card, and an undo puts
+/// back exactly what was there: the undo of a mark takes the date off with the card, and the
+/// undo of an untick brings the card back with the date it had.
+#[test]
+fn an_undo_of_a_card_mark_puts_its_received_date_back_exactly() {
+    let d = Dir::new("history-card-date");
+    let engine = shared(&d, 3);
+    let id = id_at(&*engine, 1);
+    let card = |received: bool| {
+        let (made, dur) = logwrite::change_ops(
+            &engine,
+            id,
+            None,
+            &[logwrite::qsl_card(id, received)],
+            "mark_qsl_card",
+        );
+        assert!(matches!(made, Ok(Ok(_))), "the mark is made");
+        dur.wait(DURABLE_WAIT).expect("on disk");
+        history_of(&engine, id).unwrap().last().unwrap().seq
+    };
+    let date = |engine: &Mutex<Engine>| {
+        tempo_core::logbook::extra_field(&row_of(engine, id).unwrap(), "QSLRDATE")
+            .map(str::to_string)
+    };
+    assert_eq!(date(&engine), None, "premise: no card, no date");
+
+    let marked = card(true);
+    let dated = date(&engine).expect("the mark dates the card");
+    assert_eq!(dated.len(), 8, "ADIF YYYYMMDD: {dated}");
+    let (undone, dur) = undo_entry(&engine, marked);
+    undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    let row = row_of(&engine, id).unwrap();
+    assert!(!row.qsl_rcvd.card);
+    assert_eq!(
+        date(&engine),
+        None,
+        "the undo takes the date off with the card"
+    );
+
+    // Marked again, then taken back: the untick's undo restores the date it took off.
+    card(true);
+    let dated = date(&engine).expect("dated again");
+    let cleared = card(false);
+    assert_eq!(date(&engine), None, "an untick takes the date off");
+    let (undone, dur) = undo_entry(&engine, cleared);
+    undone.expect("undone");
+    dur.wait(DURABLE_WAIT).unwrap();
+    assert!(row_of(&engine, id).unwrap().qsl_rcvd.card);
+    assert_eq!(
+        date(&engine),
+        Some(dated),
+        "and its undo puts the same date back"
+    );
+    settle(&engine);
+    assert!(mirror(&d).contains("<QSLRDATE:8>"), "log.adi follows");
+}
+
 /// ★ The Redo of one change's undo goes through [`undo_contact_run`], which a computer driving
 /// the station may ask for: it makes the change again, as [`undo_run`] does.
 #[test]
@@ -435,6 +493,7 @@ fn a_run_undo_the_store_turns_back_changes_nothing() {
                     &[LogOp::MarkQslCard {
                         id: last,
                         received: true,
+                        date_unix: 1_700_000_000,
                     }],
                     "window B",
                 );

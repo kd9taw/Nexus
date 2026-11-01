@@ -186,7 +186,7 @@ describe('a station-wide setting survives Save while a non-active radio is being
     // Now go somewhere station-wide and change something. This is the reporter's exact move:
     // nothing on this tab belongs to a radio, and nothing on screen said the save was aimed
     // at one.
-    fireEvent.click(screen.getByRole('tab', { name: 'Logging & Connectors' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Services' }))
     fireEvent.click(await screen.findByRole('switch', { name: /Auto-upload QSOs to QRZ/ }))
     clickSave()
 
@@ -202,7 +202,7 @@ describe('a station-wide setting survives Save while a non-active radio is being
     // onto radio 1. `withActiveRadioConfig` is what makes the fold a no-op.
     renderPanel()
     await editTheSecondRadio()
-    fireEvent.click(screen.getByRole('tab', { name: 'Logging & Connectors' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Services' }))
     fireEvent.click(await screen.findByRole('switch', { name: /Auto-upload QSOs to QRZ/ }))
     clickSave()
 
@@ -218,7 +218,7 @@ describe('a station-wide setting survives Save while a non-active radio is being
     // Both halves, or the fix trades one silent loss for another.
     renderPanel()
     await editTheSecondRadio()
-    fireEvent.click(screen.getByRole('tab', { name: 'Logging & Connectors' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Services' }))
     fireEvent.click(await screen.findByRole('switch', { name: /Auto-upload QSOs to QRZ/ }))
     clickSave()
 

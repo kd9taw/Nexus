@@ -70,7 +70,7 @@ Nexus keeps a plain-text record of what it did, in its data folder:
 | **macOS and Linux** | `~/.local/share/Nexus/nexus-diag.log` (or `$XDG_DATA_HOME/Nexus/`) |
 
 It sits beside `ALL.TXT` and the crash report `nexus-crash.txt`, so there is one folder to
-look in. If Nexus does start, **Settings ▸ Logging & Connectors ▸ Write ALL.TXT decode log ▸
+look in. If Nexus does start, **Settings ▸ Services ▸ Write ALL.TXT decode log ▸
 Reveal in folder** opens that folder for you.
 
 It holds timestamped, human-readable lines for the startup steps, the CAT and audio device
@@ -94,7 +94,7 @@ Three things worth knowing:
 
 ### More detail in the log, and the `--debug` that does not exist
 
-When we ask you to "turn logging up", this is the switch: **Settings ▸ Logging & Connectors ▸
+When we ask you to "turn logging up", this is the switch: **Settings ▸ Services ▸
 Integrations & Feeds ▸ Local APIs & Loggers ▸ "Extra detail in the diagnostic log"**. It sits
 below the ALL.TXT row and below the diagnostic-log entry itself, a fair way down that page. It
 takes effect immediately — no restart — and it adds each transmission, the per-period decode
@@ -339,8 +339,8 @@ immediately.
 
 ### Reading the daemon's own error
 
-**Settings ▸ Radio ▸ Connections log**, filtered to **Rotator**, is where the
-answer is. Nexus captures `rotctld`'s stderr and prints Hamlib's own words:
+The **Connection log** in **Settings ▸ Services ▸ Connections**, in its **Rotator**
+rows, is where the answer is. Nexus captures `rotctld`'s stderr and prints Hamlib's own words:
 
 - `rotctld launched (model 901 on COM7 @ 600, :4533)` — it is up. Any failure
   after this is on the wire, not the daemon.
@@ -445,12 +445,12 @@ them before assuming something's broken:
 ## Where the Connections log lives
 
 Connector activity — every LoTW/QRZ/ClubLog/eQSL/HRDLog push and its result — is
-recorded in the **Connections log** at **Settings ▸ Logging & Connectors ▸
+recorded in the **Connections log** at **Settings ▸ Services ▸
 Connections** (the last 200 events). When an upload "isn't working," this log
 shows the actual server response, which is what separates a credential problem
 from a service outage or a changed web page. Check it before assuming the worst.
 
-<!-- TODO: capture screenshot — Settings ▸ Logging & Connectors ▸ Connections showing the Connections log with recent upload events and their outcomes -->
+<!-- TODO: capture screenshot — Settings ▸ Services ▸ Connections showing the Connections log with recent upload events and their outcomes -->
 
 ---
 

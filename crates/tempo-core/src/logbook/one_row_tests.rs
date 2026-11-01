@@ -395,6 +395,8 @@ const EXTRA: &[(&str, &str)] = &[
     ("LOTW_QSLRDATE", "20250301"),
     ("EQSL_QSLRDATE", "20250302"),
     ("APP_EQSL_AG", "Y"),
+    // A paper card's received date, which a card mark keeps or takes off.
+    ("QSLRDATE", "20250303"),
 ];
 const T0: u64 = 1_788_000_000;
 
@@ -531,6 +533,7 @@ fn op_on(lb: &Logbook, at: usize, rng: &mut Rng) -> LogOp {
         4 => LogOp::MarkQslCard {
             id,
             received: rng.chance(50),
+            date_unix: 1_700_000_000,
         },
         5 => LogOp::SetSatTag {
             id,
@@ -578,7 +581,26 @@ fn by_the_old_bodies(records: &mut Vec<Arc<QsoRecord>>, op: &LogOp) -> Effects {
         LogOp::MarkQslSent { via, date_unix, .. } => {
             vec_bodies::mark_qsl_sent(records, i, via, date_unix)
         }
-        LogOp::MarkQslCard { received, .. } => vec_bodies::mark_qsl_card(records, i, received),
+        // The body it replaced, verbatim — and then the card's received date, which goes with it
+        // now: written on a card that arrives where the contact holds none, taken off with a card
+        // taken back.
+        LogOp::MarkQslCard {
+            received,
+            date_unix,
+            ..
+        } => {
+            let was = records[i].qsl_rcvd.card;
+            let done = vec_bodies::mark_qsl_card(records, i, received);
+            let rec = Arc::make_mut(&mut records[i]);
+            let held = rec.extra.iter().any(|(k, _)| k == "QSLRDATE");
+            if !was && received && !held {
+                let (y, m, d, ..) = crate::logbook::datetime_utc(date_unix);
+                super::set_extra(rec, "QSLRDATE", Some(format!("{y:04}{m:02}{d:02}")));
+            } else if was && !received {
+                rec.extra.retain(|(k, _)| k != "QSLRDATE");
+            }
+            done
+        }
         LogOp::SetSatTag { sat_name, .. } => {
             vec_bodies::set_sat_tag(records, i, sat_name.as_deref())
         }
@@ -637,6 +659,7 @@ fn every_one_row_change_is_the_vec_body_it_replaced() {
                         ordinal: rng.below(9) as u32,
                     },
                     received: true,
+                    date_unix: 1_700_000_000,
                 }
             } else {
                 op_on(&lb, at, &mut rng)

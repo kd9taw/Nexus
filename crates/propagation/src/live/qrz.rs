@@ -24,7 +24,7 @@ use std::time::Duration;
 pub fn fetch(url: &str, app_version: &str) -> Result<String, String> {
     let client = client()?;
     let request = get_request(&client, url, app_version)?;
-    read_body(client.execute(request).map_err(redact)?)
+    read_callbook_body(client.execute(request).map_err(redact)?)
 }
 
 /// POST a `name=value` form body — the QRZ Logbook push (`ACTION=INSERT`). Same
@@ -34,8 +34,14 @@ pub fn fetch(url: &str, app_version: &str) -> Result<String, String> {
 pub fn post_form(url: &str, app_version: &str, body: String) -> Result<String, String> {
     let client = client()?;
     let request = post_request(&client, url, app_version, body)?;
-    read_body(client.execute(request).map_err(redact)?)
+    read_logbook_body(client.execute(request).map_err(redact)?)
 }
+
+/// The most a QRZ Logbook answer is read to. A FETCH with no `MODSINCE` (Logbook sync's first
+/// run, Check confirmations ▸ QRZ) returns the WHOLE book as one ADIF blob, unpaged, with QRZ's
+/// own fields on every record and the tag brackets HTML-entity-encoded: about 1–1.5 KB a contact.
+/// 256 MB holds a 100 000-contact book about twice over. The callbook limit is far too small here.
+const LOGBOOK_REPLY_BYTES: u64 = 256 * 1024 * 1024;
 
 /// What Nexus calls itself to QRZ: `Nexus/<version>`, the app's own name and version and nothing
 /// else. QRZ asks every application for an identifiable User-Agent and may restrict a generic one;
@@ -147,13 +153,22 @@ fn client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|_| "QRZ: HTTP client initialization failed".to_string())
 }
 
-fn read_body(resp: reqwest::blocking::Response) -> Result<String, String> {
+/// A callbook lookup or login answer ([`fetch`]): a few kilobytes of XML.
+fn read_callbook_body(resp: reqwest::blocking::Response) -> Result<String, String> {
+    read_body(resp, super::body::CALLBOOK_REPLY_BYTES)
+}
+
+/// A Logbook API answer ([`post_form`]), which may be the whole logbook.
+fn read_logbook_body(resp: reqwest::blocking::Response) -> Result<String, String> {
+    read_body(resp, LOGBOOK_REPLY_BYTES)
+}
+
+fn read_body(resp: reqwest::blocking::Response, limit: u64) -> Result<String, String> {
     let status = resp.status();
     if !status.is_success() {
         return Err(format!("QRZ: server returned HTTP {}", status.as_u16()));
     }
-    resp.text()
-        .map_err(|_| "QRZ: could not read the response body".to_string())
+    super::body::read_capped(resp, limit, "QRZ")
 }
 
 /// Map a transport error to a safe, category-only message. Uses ONLY boolean
@@ -166,6 +181,52 @@ fn redact(e: reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An answer of a normal size is read whole; one past the callbook limit is refused, not
+    /// read to the end.
+    #[test]
+    fn a_callbook_answer_past_the_limit_is_refused() {
+        let normal = tempo_core::qrz::fixtures::LOOKUP_FULL;
+        let huge = vec![b' '; super::super::body::CALLBOOK_REPLY_BYTES as usize + 1];
+        let port = super::super::body::serve(vec![
+            super::super::body::ok_reply(normal.as_bytes()),
+            super::super::body::ok_reply(&huge),
+        ]);
+        let get =
+            || reqwest::blocking::get(format!("http://127.0.0.1:{port}/")).expect("loopback reply");
+        assert_eq!(read_callbook_body(get()).as_deref(), Ok(normal));
+        let err = read_callbook_body(get()).unwrap_err();
+        assert!(
+            err.starts_with("QRZ: ") && err.contains("larger than"),
+            "{err}"
+        );
+    }
+
+    /// A whole-book FETCH answer of several megabytes, as QRZ sends it (entity-encoded ADIF after
+    /// `RESULT=OK&COUNT=`), is read whole through the Logbook API's reader, every record in it;
+    /// the same answer read as a callbook lookup is still refused.
+    #[test]
+    fn a_whole_logbook_fetch_of_several_megabytes_is_read_whole() {
+        let record = "&lt;CALL:5&gt;W1AW&lt;QSO_DATE:8&gt;20240101&lt;TIME_ON:4&gt;1200\
+                      &lt;BAND:3&gt;20m&lt;MODE:3&gt;FT8&lt;APP_QRZLOG_STATUS:1&gt;C&lt;eor&gt;\n";
+        let count = 4 * 1024 * 1024 / record.len() + 1;
+        let body = format!("RESULT=OK&COUNT={count}&ADIF={}", record.repeat(count));
+        assert!(body.len() > 4 * 1024 * 1024);
+        let port = super::super::body::serve(vec![
+            super::super::body::ok_reply(body.as_bytes()),
+            super::super::body::ok_reply(body.as_bytes()),
+        ]);
+        let get =
+            || reqwest::blocking::get(format!("http://127.0.0.1:{port}/")).expect("loopback reply");
+        let read = read_logbook_body(get()).expect("a whole book is read");
+        assert_eq!(read.len(), body.len());
+        let fetched = tempo_core::qrz::parse_fetch(&read);
+        assert!(fetched.ok);
+        assert_eq!(fetched.count as usize, count);
+        assert!(tempo_core::qrz::is_whole_fetch(&fetched));
+        let err = read_callbook_body(get()).unwrap_err();
+        assert!(err.contains("larger than 256 KB"), "{err}");
+    }
 
     /// Every QRZ request, the callbook lookup and login and each Logbook post, names Nexus and its
     /// version, and nothing that identifies the operator.

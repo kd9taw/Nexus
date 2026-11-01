@@ -179,8 +179,26 @@ describe('a pointer written against the old layout still lands', () => {
   it('follows a legacy tab name from the 0.17 consolidation', async () => {
     // "Logbook & QSL" has been dead since 0.17 and is STILL cited in six places in the tree.
     renderPanel('Settings ▸ Logbook & QSL')
-    await waitFor(() => expect(selectedTab()).toBe('Logging & Connectors'))
+    await waitFor(() => expect(selectedTab()).toBe('Services'))
   })
+
+  // Logging & Connectors and Config were removed by the regroup (their sections went to Services
+  // and App). A deep link or a remembered place carrying either old tab id must open the tab that
+  // holds their sections now, showing them — never a blank panel.
+  for (const [target, tab, shows] of [
+    ['logging', 'Services', 'confirmations'],
+    ['Logging & Connectors', 'Services', 'connections'],
+    ['configurations', 'App', 'configurations'],
+    ['config', 'App', 'data-folder'],
+    ['Config', 'App', 'features'],
+  ] as const) {
+    it(`opens ${tab} for the removed tab "${target}", with its sections on screen`, async () => {
+      renderPanel(target)
+      await waitFor(() => expect(selectedTab()).toBe(tab))
+      await waitFor(() => expect(document.getElementById(`settings-${shows}`)).toBeTruthy())
+      expect(document.querySelectorAll('.settings-scroll fieldset.settings-section').length).toBeGreaterThan(1)
+    })
+  }
 
   it('degrades to the default landing when it cannot resolve the target', async () => {
     // Never a blank panel and never a dead end: unresolvable is exactly as good as the old

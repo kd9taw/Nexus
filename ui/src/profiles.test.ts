@@ -237,7 +237,7 @@ describe('mergeProfile — the logbook upload switches never import', () => {
     expect(merged.band).toBe('40m') // control: the profile's real settings still apply
   })
 
-  // Every upload switch under Settings ▸ Logging & Connectors ▸ Confirmations, both ways round.
+  // Every upload switch under Settings ▸ Services ▸ Confirmations, both ways round.
   it.each([
     'qrzLogbookUpload',
     'clublogUpload',

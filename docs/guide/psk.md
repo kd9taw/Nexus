@@ -12,7 +12,7 @@ exchange and flags dupes.
 
 PSK ships enabled — the wizard turns everything on; there is no mode picker to miss it
 in. No goal profile enables it, though, so if you pick one in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features), switch PSK back on
+[Settings ▸ App ▸ Features](settings-reference.md#features), switch PSK back on
 there — or take **Everything (expert)**, which includes it.
 
 ## The tour
@@ -193,7 +193,7 @@ Normal is USB, the convention this section uses throughout.
   ([Settings ▸ Digital ▸ PSK](settings-reference.md#psk)): whether the decoder arms itself when
   the screen opens. Everything else is on this screen.
 - **One label in the app still calls PSK receive-only.** The PSK entry in
-  [Settings ▸ Appearance ▸ Features](settings-reference.md#features) ends "click a trace, read
+  [Settings ▸ App ▸ Features](settings-reference.md#features) ends "click a trace, read
   the ragchew (receive)". That wording is left over from the phase when the decoder shipped
   ahead of the transmitter. PSK31 and QPSK31 both transmit in 1.10.3 — **Send**, the macros
   and the continuous latch on this screen all key the rig.

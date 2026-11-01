@@ -191,9 +191,9 @@ works out of the box on all three. On a slower Pi,
 **Settings ▸ Digital ▸ Decode depth ▸ Fast** keeps FT8 and FT4 decoding in real time.
 
 **macOS ships too, since 1.5.0**, as `Nexus_<version>_aarch64.dmg` for Apple Silicon
-(M-series, macOS 12 or later) — signed and notarized, so Gatekeeper opens it without a
-warning, and it self-updates like the Windows build. Hamlib is bundled, so CAT needs nothing
-installed. Intel Macs are source-build only.
+(M-series) and, from the release after 1.21.0, `Nexus_<version>_x64.dmg` for Intel Macs, both
+for macOS 12 or later — signed and notarized, so Gatekeeper opens them without a warning, and
+they self-update like the Windows build. Hamlib is bundled, so CAT needs nothing installed.
 
 ### Will there be automatic updates?
 

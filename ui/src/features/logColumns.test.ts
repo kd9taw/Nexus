@@ -25,15 +25,17 @@ import {
 import type { LoggedQso } from '../types'
 
 /** `.logbook-row`'s template before the model (styles.css, 59aeae99e). */
-const OLD_COMPACT = '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(384px, 0.8fr)'
+const OLD_COMPACT = 'minmax(96px, 1fr) 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr minmax(84px, 1fr) minmax(64px, 0.6fr) 0.9fr 0.7fr 1.4fr minmax(80px, 80px)'
 /** `[data-viewport='sm'] .logbook-row`'s. */
-const OLD_NARROW = '1fr 1.3fr 0.7fr 0.7fr 1fr minmax(384px, 0.8fr)'
+const OLD_NARROW = 'minmax(96px, 1fr) 1.3fr 0.7fr 0.7fr 1fr minmax(80px, 80px)'
 /** `.logbook-table.wide .logbook-row`'s ("More columns"). */
 const OLD_WIDE =
-  '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr 1.4fr minmax(384px, 0.8fr)'
+  'minmax(96px, 1fr) 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr minmax(84px, 1fr) minmax(64px, 0.6fr) 0.9fr 0.7fr 0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr 1.4fr minmax(80px, 80px)'
 
 const template = (saved: LogColumnsSaved, narrow = false) =>
   logGridTemplate(renderedColumns(saved, narrow), saved, narrow)
+/** A template's tracks: split on the spaces outside `minmax(…)`. */
+const tracksOf = (tpl: string) => tpl.split(/ (?![^(]*\))/)
 const ids = (saved: LogColumnsSaved, narrow = false) => renderedColumns(saved, narrow).map((c) => c.id)
 
 describe('the defaults are the table the Logbook had', () => {
@@ -52,7 +54,7 @@ describe('the defaults are the table the Logbook had', () => {
     expect(template(more)).toBe(OLD_WIDE)
     // …and at a narrow window it still shows every column, scrolling sideways.
     expect(template(more, true)).toBe(OLD_WIDE)
-    expect(logTableMinWidth(renderedColumns(more, false), more)).toBe('123rem')
+    expect(logTableMinWidth(renderedColumns(more, false), more)).toBe('calc(117.53rem + 80px)')
     expect(legacyLogColumns(false)).toEqual(DEFAULT_LOG_COLUMNS)
   })
 
@@ -86,7 +88,7 @@ describe('show and hide', () => {
     expect(off.hidden).toEqual(['freq'])
     expect(ids(off)).not.toContain('freq')
     // One track fewer, and still one per column shown.
-    expect(template(off).split(' minmax')[0].trim().split(/\s+/)).toHaveLength(ids(off).length - 1)
+    expect(tracksOf(template(off))).toHaveLength(ids(off).length)
     expect(withColumnShown(off, 'freq', true)).toEqual(DEFAULT_LOG_COLUMNS)
   })
 
@@ -102,7 +104,7 @@ describe('resize', () => {
   it('a dragged width replaces the share with px, and null puts the share back', () => {
     const wide = withColumnWidth(DEFAULT_LOG_COLUMNS, 'country', 210, 1366)
     expect(wide.widths).toEqual({ country: 210 })
-    expect(template(wide).split(' ')[1]).toBe('210px')
+    expect(tracksOf(template(wide))[1]).toBe('210px')
     expect(withColumnWidth(wide, 'country', null, 1366).widths).toEqual({})
   })
 
@@ -117,7 +119,7 @@ describe('resize', () => {
 
   it('a wide table grows by the px it was given', () => {
     const saved = withColumnWidth(withColumnShown(DEFAULT_LOG_COLUMNS, 'county', true), 'county', 150, 1920)
-    expect(logTableMinWidth(renderedColumns(saved, false), saved)).toMatch(/^calc\([\d.]+rem \+ 150px\)$/)
+    expect(logTableMinWidth(renderedColumns(saved, false), saved)).toMatch(/^calc\([\d.]+rem \+ 230px\)$/)
   })
 })
 
@@ -156,7 +158,7 @@ describe('order', () => {
     expect(moved.order).toBeDefined()
     expect(ids(moved)).toEqual(['call', 'notes', 'country', 'band', 'freq', 'mode', 'sent', 'rcvd', 'date', 'time', 'park', 'qsl', 'actions'])
     // The template is cut from the same list: Notes' share follows Notes.
-    expect(template(moved).split(' ').slice(0, 3)).toEqual(['1fr', '1.4fr', '1.3fr'])
+    expect(tracksOf(template(moved)).slice(0, 3)).toEqual(['minmax(96px, 1fr)', '1.4fr', '1.3fr'])
     // Before the first column, and back.
     expect(ids(withColumnMoved(moved, 'qsl', 'call', 'before')).slice(0, 2)).toEqual(['qsl', 'call'])
   })
@@ -265,6 +267,9 @@ describe('the values the added columns print', () => {
       exchSent: '599 4',
       // No exchange logged on this side: the serial.
       exchRcvd: '345',
+      // The path is not printed from the record: its cell asks the shack for the grade
+      // (components/prop/PathGradeCell.tsx, features/pathGrade).
+      path: null,
     })
   })
 

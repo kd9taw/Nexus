@@ -301,6 +301,9 @@ fn a_restore_that_opens_no_session_reads_nothing_and_lands_as_before() {
                 engine_lock(m)
                     .set_mode("fieldday-run")
                     .expect("premise: calling CQ");
+                // A restore while TX is armed between overs is refused (its hold can wait on the
+                // keychain across a slot boundary): the CQ run stays, with TX off.
+                engine_lock(m).set_tx_enabled(false);
             }
         }
         let start = session_start(&restored);

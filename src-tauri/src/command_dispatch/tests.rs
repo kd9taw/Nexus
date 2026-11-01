@@ -1190,6 +1190,97 @@ fn a_save_from_afar_keeps_the_flex_beta_of_the_radio_its_form_edited() {
     );
 }
 
+/// ⛔ THE SHACK COMPUTER'S MICROPHONE IS SET AT THE SHACK ONLY. A save from a computer driving the
+/// station (the whole save, and one radio's edit) cannot turn on Phone's PTT sending the shack's
+/// microphone, pick which, or raise its gain: those are the radio's transmit audio, and the
+/// client's form shows the client's devices. Each is kept as the shack has it for the radio the
+/// form edited, on and off, and an older client's save that carries none of them leaves them as
+/// they are. CONTROL: the shack's own form takes them, and the rest of each save is taken.
+#[test]
+fn a_save_from_afar_keeps_the_shacks_computer_microphone() {
+    let mut shack = two_radio_shack();
+    shack.radios[1].pc_mic = true;
+    shack.radios[1].pc_mic_device = "Shack Desk Mic".into();
+    shack.radios[1].pc_mic_gain_db = 3.0;
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
+    let mic =
+        |s: &tempo_app::settings::Settings| (s.pc_mic, s.pc_mic_device.clone(), s.pc_mic_gain_db);
+    // Radio 0 (off at the shack): a save from afar turning it on, with a device and +20 dB.
+    let mut asked = shack.clone();
+    asked.pc_mic = true;
+    asked.pc_mic_device = "Client Webcam".into();
+    asked.pc_mic_gain_db = 20.0;
+    asked.cw_wpm = 31;
+    let mut save = asked.clone();
+    keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+    assert_eq!(
+        mic(&save),
+        (false, String::new(), 0.0),
+        "from afar, radio 0"
+    );
+    assert_eq!(save.cw_wpm, 31, "CONTROL: the rest of the save");
+    // Radio 1 (on at the shack): the form edited it, turning it off. Kept on, as radio 1 has it.
+    let mut save = shack.clone();
+    save.active_radio = 1;
+    save.pc_mic = false;
+    save.pc_mic_device = String::new();
+    keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+    assert_eq!(
+        mic(&save),
+        (true, "Shack Desk Mic".to_string(), 3.0),
+        "from afar, radio 1's microphone"
+    );
+    // An older client's save, which has never heard of them, wipes nothing.
+    let mut old = serde_json::to_value(&shack).unwrap();
+    for key in ["pcMic", "pcMicDevice", "pcMicGainDb"] {
+        old.as_object_mut().unwrap().remove(key);
+    }
+    old["activeRadio"] = json!(1);
+    let mut save: tempo_app::settings::Settings = serde_json::from_value(old).unwrap();
+    keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+    assert_eq!(
+        mic(&save),
+        (true, "Shack Desk Mic".to_string(), 3.0),
+        "an older client's save"
+    );
+    // CONTROL: the shack's own form.
+    let mut save = asked.clone();
+    keep_the_shacks_settings(&shack, &mut save, None);
+    assert_eq!(mic(&save), (true, "Client Webcam".to_string(), 20.0));
+
+    // One radio's edit from afar, turning radio 0's on.
+    let mut patch = serde_json::to_value(&shack.radios[0]).unwrap();
+    patch["pcMic"] = json!(true);
+    patch["pcMicDevice"] = json!("Client Webcam");
+    patch["pcMicGainDb"] = json!(20.0);
+    patch["txLevel"] = json!(0.25);
+    let asked: tempo_app::settings::RadioProfilePatch = serde_json::from_value(patch).unwrap();
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_ptt(&shack, 0, &mut patch, Some(&afar));
+    let mut e = tempo_app::engine::Engine::with_settings(shack.clone());
+    e.update_radio_profile(0, patch).expect("the edit is taken");
+    let r0 = &e.settings().radios[0];
+    assert_eq!(
+        (r0.pc_mic, r0.pc_mic_device.as_str(), r0.pc_mic_gain_db),
+        (false, "", 0.0),
+        "a radio's edit from afar"
+    );
+    assert_eq!(r0.tx_level, 0.25, "CONTROL: the rest of the edit");
+    let mut patch = asked.clone();
+    keep_the_shacks_radio_ptt(&shack, 0, &mut patch, None);
+    assert_eq!(patch.pc_mic, Some(true), "CONTROL: the shack's own edit");
+    let flagged = station_only_settings(Some(&afar), &shack).unwrap();
+    for key in ["pcMic", "pcMicDevice", "pcMicGainDb"] {
+        assert!(
+            flagged.contains(&key),
+            "{key} is not shown as set at the station"
+        );
+    }
+}
+
 /// ⛔ …and a radio's edit from afar keeps that radio's Beta as the shack has it. CONTROL: the
 /// shack's own edit takes it, and the rest of the edit is taken from afar.
 #[test]
@@ -1769,6 +1860,9 @@ fn a_credential_badge_and_a_connector_test_run_at_the_shack_from_afar() {
         ("get_credentials_status", json!({})),
         ("icom_lan_password_saved", json!({ "radioId": 1 })),
         ("qrz_test_connection", json!({})),
+        ("lotw_test_connection", json!({})),
+        ("eqsl_test_connection", json!({})),
+        ("clublog_test_connection", json!({})),
         ("n3fjp_test_connection", json!({})),
         ("cloudlog_station_info", json!({})),
     ]
@@ -3777,6 +3871,29 @@ fn a_profile_saved_from_afar_keeps_every_station_only_setting() {
     );
 }
 
+/// ⛔ No path on the station's disk crosses to a computer driving it: a saved profile read from
+/// afar carries none of the station's JS8 sound files. CONTROL: the rest of the profile goes as it
+/// was.
+#[test]
+fn a_saved_profile_carries_no_station_sound_file_toward_afar() {
+    let shack_profiles = json!([
+        { "name": "Home", "settings": { "js8SoundFiles": { "cq": "/home/op/sounds/cq.wav" }, "mygrid": "EN52" } },
+    ])
+    .to_string();
+    let shack = map(&[("nexus.profiles", shack_profiles.as_str())]);
+    let read = station_answer(serde_json::to_value(&shack).unwrap());
+    let text = read["nexus.profiles"]
+        .as_str()
+        .expect("the profiles are read");
+    assert!(!text.contains("cq.wav"), "from afar: {text}");
+    let profiles: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(profiles[0]["settings"].get("js8SoundFiles"), None);
+    assert_eq!(
+        profiles[0]["settings"]["mygrid"], "EN52",
+        "CONTROL: the rest"
+    );
+}
+
 /// A profile saved at the shack is read from afar and saved back as it was read: it comes back
 /// whole, every field of a whole Settings, its stored key and its station-only settings included.
 /// What the shack's own screen saves never passes here (`ui_state_save`, at the shack, writes the
@@ -3787,6 +3904,7 @@ fn a_profile_saved_at_the_shack_comes_back_whole_through_a_save_from_afar() {
         tx_watchdog_min: 3,
         clublog_api_key: "FAKE-HOME-KEY-0003".into(),
         tqsl_path: "C:\\TrustedQSL\\tqsl.exe".into(),
+        js8_sound_files: [("cq".to_string(), "C:\\Sounds\\cq.wav".to_string())].into(),
         ..Default::default()
     })
     .unwrap();
@@ -3797,6 +3915,11 @@ fn a_profile_saved_at_the_shack_comes_back_whole_through_a_save_from_afar() {
     assert_eq!(
         read[0]["settings"]["clublogApiKey"], "",
         "premise: read blank"
+    );
+    assert_eq!(
+        read[0]["settings"].get("js8SoundFiles"),
+        None,
+        "premise: no sound file read"
     );
     let saved = profiles_saved_from_afar(&shack_profiles, &read);
     assert_eq!(saved, shack_profiles);

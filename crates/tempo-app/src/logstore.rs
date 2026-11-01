@@ -3595,13 +3595,15 @@ pub(crate) mod tests {
             upload_legs::ALL,
         ] {
             for room in [0, 1, 5, 256] {
-                let from_store = crate::station::catch_up_records(&store, legs, room).unwrap();
+                let from_store =
+                    crate::station::catch_up_records(&store, legs, room, Default::default())
+                        .unwrap();
                 assert_eq!(from_store, old(legs, room), "legs {legs:#b}, room {room}");
                 assert!(from_store.len() <= room);
             }
         }
         assert!(
-            !crate::station::catch_up_records(&store, upload_legs::QRZ, 256)
+            !crate::station::catch_up_records(&store, upload_legs::QRZ, 256, Default::default())
                 .unwrap()
                 .is_empty(),
             "premise: something is owed"
@@ -5164,6 +5166,7 @@ pub(crate) mod tests {
             LogOp::MarkQslCard {
                 id: second,
                 received: true,
+                date_unix: 1_700_000_000,
             },
         );
         let c = by_command(&engine, fifth, LogOp::Delete(fifth));
@@ -5219,7 +5222,11 @@ pub(crate) mod tests {
         let durability = by_command(
             &engine,
             id,
-            tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+            tempo_core::logbook::LogOp::MarkQslCard {
+                id,
+                received: true,
+                date_unix: 1_700_000_000,
+            },
         );
         let _e = engine_lock(&engine);
         let _ = durability.wait(DURABLE_WAIT); // `_e` is held
@@ -5237,7 +5244,11 @@ pub(crate) mod tests {
         let durability = by_command(
             &engine,
             id,
-            tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+            tempo_core::logbook::LogOp::MarkQslCard {
+                id,
+                received: true,
+                date_unix: 1_700_000_000,
+            },
         );
         durability
             .wait(DURABLE_WAIT)
@@ -5675,7 +5686,11 @@ pub(crate) mod tests {
         let rows_before = stored(&d).len();
 
         // The change the database dropped: in memory, not in the store.
-        let dropped = LogOp::MarkQslCard { id, received: true };
+        let dropped = LogOp::MarkQslCard {
+            id,
+            received: true,
+            date_unix: 1_700_000_000,
+        };
         let effects = log.apply(dropped.clone());
         let lost = Change::of(&dropped, &effects, &log, |_| (None, None));
         let t0 = Instant::now();
@@ -5868,7 +5883,11 @@ pub(crate) mod tests {
         // Window A's card on the row, dropped by its writer: in A's memory only. Built as the
         // station builds a change, from the row as read and as the change left it.
         let before = Arc::clone(&log_a.records()[2]);
-        let _ = log_a.apply(LogOp::MarkQslCard { id, received: true });
+        let _ = log_a.apply(LogOp::MarkQslCard {
+            id,
+            received: true,
+            date_unix: 1_700_000_000,
+        });
         let after = Arc::clone(&log_a.records()[2]);
         let lost = Change::of_pairs(log_a.marks(), false, &[(Some(before), Some(after))], |_| {
             (None, None)
@@ -5941,7 +5960,11 @@ pub(crate) mod tests {
 
         // Window A's paper card on the row, dropped by its writer: held in A's store only.
         let before = Arc::clone(&log_a.records()[2]);
-        let _ = log_a.apply(LogOp::MarkQslCard { id, received: true });
+        let _ = log_a.apply(LogOp::MarkQslCard {
+            id,
+            received: true,
+            date_unix: 1_700_000_000,
+        });
         let after = Arc::clone(&log_a.records()[2]);
         let lost = Change::of_pairs(log_a.marks(), false, &[(Some(before), Some(after))], |_| {
             (None, None)
@@ -6004,7 +6027,11 @@ pub(crate) mod tests {
         let id = log_a.records()[2].id.expect("an id");
 
         let before = Arc::clone(&log_a.records()[2]);
-        let _ = log_a.apply(LogOp::MarkQslCard { id, received: true });
+        let _ = log_a.apply(LogOp::MarkQslCard {
+            id,
+            received: true,
+            date_unix: 1_700_000_000,
+        });
         let carded = Arc::clone(&log_a.records()[2]);
         let lost = Change::of_pairs(
             log_a.marks(),
@@ -7475,7 +7502,11 @@ pub(crate) mod tests {
                     // The change, then 1.13's `save_log`: the file rewritten whole.
                     Here::Code(log) => {
                         let id = log.records()[0].id.expect("an id");
-                        let op = LogOp::MarkQslCard { id, received: true };
+                        let op = LogOp::MarkQslCard {
+                            id,
+                            received: true,
+                            date_unix: 1_700_000_000,
+                        };
                         assert!(!log.apply(op).is_empty());
                         log.save(&d.log()).expect("saved");
                     }

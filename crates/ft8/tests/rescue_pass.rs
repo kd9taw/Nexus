@@ -143,6 +143,7 @@ fn carried(
         true,
         true,
         false,
+        false,
         &mut |_| false,
         carry,
     );
@@ -166,6 +167,7 @@ fn carried(
         true,
         false,
         true,
+        false,
         false,
         &mut |p| match p {
             Progress::Found(d) => {
@@ -210,6 +212,7 @@ fn raw(all: &[i16], nutc: i32, st: Station) -> Vec<Decode> {
         true,
         false,
         true,
+        false,
         false,
         &mut |_| false,
     )
@@ -384,6 +387,7 @@ fn a_full_pass_given_up_is_not_rescued() {
         true,
         true,
         false,
+        false,
         &mut |_| false,
         &mut carry,
     );
@@ -410,6 +414,7 @@ fn a_full_pass_given_up_is_not_rescued() {
         true,
         false,
         true,
+        false,
         false,
         &mut |p| match p {
             Progress::Candidate => {

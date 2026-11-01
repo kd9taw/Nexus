@@ -233,7 +233,10 @@ impl Drop for Peer {
     }
 }
 
-fn permission(authority: &Revocation, native: &Revocation) -> (WritePermission, Completion) {
+pub(crate) fn permission(
+    authority: &Revocation,
+    native: &Revocation,
+) -> (WritePermission, Completion) {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let authority = authority.permit(deadline).unwrap();
     let completion = Completion::guarded(authority.clone());
@@ -580,6 +583,66 @@ fn remote_retune_uses_native_filter_policy_and_corrects_band_stacking_once() {
         assert_eq!(observed.position().dial_hz(), dial);
         assert_eq!(observed.position().mode(), "PKTUSB");
         assert_eq!(completion.outcome(), Outcome::Pending);
+    }
+}
+
+/// FM-D picked from Remote must reach a Hamlib Icom as FM-D, as it does from the shack: Hamlib
+/// sends `M PKTFM -1` to an Icom without the DATA byte (plain FM), `M PKTFM 0` with it. Every
+/// Remote mode write is covered: a mode change, an in-band dial move and the band-stack
+/// correction after a band change.
+#[test]
+fn remote_pktfm_to_a_hamlib_icom_carries_width_0_and_nothing_else_moves() {
+    let run = |model: u32, from: (u64, &str), to: (u64, &str)| {
+        let peer = retuning_peer(from.0, from.1, |_, state| {
+            state.band_stack = true;
+            None
+        });
+        let mut rig = Rig::rigctld(&peer.address);
+        rig.set_hamlib_model(model);
+        let (permission, _) = permission(&Revocation::default(), &Revocation::default());
+        rig.remote_retune(retune(from, to), &permission).unwrap();
+        writes(&peer)
+            .into_iter()
+            .filter(|w| w.starts_with("M "))
+            .collect::<Vec<_>>()
+    };
+    for model in [3081, 3070, 3085, 3090, 3073] {
+        assert_eq!(
+            run(model, (144_390_000, "FM"), (144_390_000, "PKTFM")),
+            ["M PKTFM 0"],
+            "{model}: FM to FM-D"
+        );
+        assert_eq!(
+            run(model, (144_390_000, "PKTFM"), (144_800_000, "PKTFM")),
+            ["M PKTFM 0"],
+            "{model}: an in-band dial move"
+        );
+        assert_eq!(
+            run(model, (144_390_000, "PKTFM"), (432_500_000, "PKTFM")),
+            ["M PKTFM 0", "M PKTFM 0"],
+            "{model}: a band change and its band-stack correction"
+        );
+        // Control: every other mode keeps its width on the same radio.
+        for (from, to, want) in [
+            ("PKTFM", "FM", "M FM -1"),
+            ("FM", "PKTUSB", "M PKTUSB -1"),
+            ("FM", "USB", "M USB -1"),
+            ("FM", "AM", "M AM 6000"),
+        ] {
+            assert_eq!(
+                run(model, (144_390_000, from), (144_390_000, to)),
+                [want],
+                "{model}: {to}"
+            );
+        }
+    }
+    // Control: the FT-991A, other makes and a link with no model keep -1 for FM-D.
+    for model in [1035, 2014, 0] {
+        assert_eq!(
+            run(model, (144_390_000, "FM"), (144_390_000, "PKTFM")),
+            ["M PKTFM -1"],
+            "{model}"
+        );
     }
 }
 

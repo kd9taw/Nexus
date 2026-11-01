@@ -245,7 +245,7 @@ describe('the fence: styles.css never names a structural class', () => {
   // size, from the sheet that has lost every one of these fights before.
   // The RF scope pane's modifier on FT's waterfall strip (2026-10-04) too: the strip's direction is
   // structure, and the styles.css `.panel` it overrides is exactly the kind of rule that wins a tie.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside']) {
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside', 'op-rail-floor']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -439,6 +439,21 @@ describe("FT'S ARRANGED COLUMNS (2026-10-07): stacks that scroll, FT's gap, and 
   it('the rail goes first by `order` only, through its own class, never every arranged column', () => {
     expect(classWinner('op-stack-lead', blockDecl('order'))?.value).toBe('-1')
     expect(classWinner('op-stack', blockDecl('order')), 'every arranged column would stand first').toBeNull()
+  })
+})
+
+describe("FT'S STOCK RAIL WITH THE RECENT CONTACTS PANE: a scroller whose feeds floor at a yielding 10em", () => {
+  // Ticked, the Recent contacts pane stands at the foot of FT's STOCK rail (`.cockpit-side`), content-height,
+  // and FT keeps its stock layout. The host adds `.op-rail-floor` to the rail only then: the feeds above the
+  // pane floor through the knob instead of giving it their height, so the rail itself must be the scroller
+  // behind those floors.
+  it('scrolls, and sets the knob to the yielding 10em the arranged columns use', () => {
+    const y = classWinner('op-rail-floor', blockOverflowY)
+    expect(y && SCROLLS(y.value), `the floored rail does not scroll: ${JSON.stringify(y)}`).toBe(true)
+    expect(classWinner('op-rail-floor', blockVar('--cockpit-fill-min'))?.value).toMatch(/^min\(10em, ?100%\)$/)
+    expect(classWinner('op-rail-floor', blockVar('--cockpit-fill-min'))?.value).toBe(
+      classWinner('op-stack', blockVar('--cockpit-fill-min'))?.value,
+    )
   })
 })
 
@@ -1119,8 +1134,9 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
     ])
     // …and Phone's LEFT SIDE (2026-10-03), whose column IS the scroller its frames sit in
     // (`.cockpit-left-col`, overflow-y: auto — computed in the left-side block above), and FT's arranged
-    // columns (2026-10-07), the same: `.op-stack` scrolls (computed in its block above).
-    const ALLOWED_REGION = new Set([".cockpit-panes[data-flow='fill']", '.cockpit-left-col', '.op-stack'])
+    // columns (2026-10-07), the same: `.op-stack` scrolls (computed in its block above). So does FT's stock
+    // rail while it holds the Recent contacts pane (`.op-rail-floor`, computed in its block above).
+    const ALLOWED_REGION = new Set([".cockpit-panes[data-flow='fill']", '.cockpit-left-col', '.op-stack', '.op-rail-floor'])
     const offenders = [
       ...STYLES_RULES.filter(
         (r) => /--cockpit-fill-min\s*:/.test(r.body) && !ALLOWED_KNOB.has(r.selector),
@@ -1135,5 +1151,30 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
         'A frame floor with a clip edge and nothing else beneath it is the documented clip ' +
         'bug; the knob is legal only where a deficit valve scrolls behind it.',
     ).toEqual([])
+  })
+})
+
+describe('a pane frame holds its own positioned content, without a backdrop blur', () => {
+  // The region's comment (cockpit-panes.css, `.cockpit-panes`) relies on every frame being the
+  // containing block of what is absolutely positioned inside it, and on each frame stacking on
+  // its own: that is why the region contains only the column dividers and a drag's marks. A
+  // backdrop blur used to supply both, as a side effect. It was dropped from the frames (it cost
+  // a blurred compositing surface per pane and blurred only the page behind an 82 %-opaque fill),
+  // so the two are now declared outright, and these winners pin them.
+  it('the winning position on .pane-frame is relative (the containing block of its content)', () => {
+    const w = classWinner('pane-frame', blockDecl('position'))
+    expect(w?.value, `.pane-frame position is won by ${w?.selector} in ${w?.sheet}`).toBe('relative')
+  })
+
+  it('the winning isolation on .pane-frame is isolate (a stacking context of its own)', () => {
+    const w = classWinner('pane-frame', blockDecl('isolation'))
+    expect(w?.value, `.pane-frame isolation is won by ${w?.selector} in ${w?.sheet}`).toBe('isolate')
+  })
+
+  it('no rule on .pane-frame brings the backdrop blur back', () => {
+    for (const prop of ['backdrop-filter', '-webkit-backdrop-filter']) {
+      const w = classWinner('pane-frame', blockDecl(prop))
+      expect(w?.value ?? 'none', `${prop} on .pane-frame from ${w?.selector} in ${w?.sheet}`).toBe('none')
+    }
   })
 })

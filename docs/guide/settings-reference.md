@@ -1,6 +1,6 @@
 # Settings reference
 
-Settings is organized into twelve tabs. Only the active tab renders, so typing in
+Settings is organized into thirteen tabs. Only the active tab renders, so typing in
 one field doesn't lag the whole panel. **Save** at the bottom applies your
 changes; most take effect live (a few say "takes effect on restart", and a few
 apply the instant you touch them — those say so too).
@@ -11,10 +11,11 @@ leaving a dead button with no reason and no fix.
 
 The tabs, in the order they appear:
 
-[Station](#station) · [Remote](#remote) · [Radio](#radio) · [Phone](#phone) ·
-[CW](#cw) · [Digital](#digital) · [Spots & Alerts](#spots--alerts) ·
-[Logbook](#logbook) · [Logging & Connectors](#logging--connectors) ·
-[Contesting](#contesting) · [Appearance](#appearance) · [Config](#config)
+[Station](#station) · [Remote](#remote) · [Radio](#radio) ·
+[Satellites](#satellites) · [Phone](#phone) · [CW](#cw) ·
+[Digital](#digital) · [Spots & Alerts](#spots--alerts) · [Logbook](#logbook) ·
+[Services](#services) · [Contesting](#contesting) ·
+[Appearance](#appearance) · [App](#app)
 
 The panel header carries the **build stamp** (confirm a fresh install actually
 took), a **Check for updates** button and a **Licenses** button (the license
@@ -682,55 +683,6 @@ frequency, with the dial, the passband and spots drawn on it as usual.
 - **Feed the receiver from the rig's RX OUT, or from a splitter with transmit protection** —
   never a plain T-piece on the transmit line. An RSP takes at most 0 dBm; 100 W is +50 dBm.
 
-### Satellite Doppler
-
-Corrects both legs of a pass — the downlink you listen on and the uplink you
-transmit on. Nexus tunes only while auto-track is following a pass and you have
-picked a transponder in the Satellites section.
-
-![The Satellite Doppler group: a ticked Doppler correction box, VFO mapping set to "Main = downlink, Sub = uplink (IC-9700 full duplex)", Minimum shift 20 Hz and Update interval 1000 ms.](../img/manual/settings-satellite-doppler.webp)
-
-*Satellite Doppler in Nexus 1.10.3, set up for a full-duplex IC-9700. Pass alert
-sounds sit to the right, off-frame. The VFO mapping has to match your own wiring
-— copying this one is how you transmit on your own downlink.*
-
-- **Doppler correction** — on by default. "Retunes the radio through a pass so
-  you stay on the station you are working." Clearing it stops both legs.
-- **VFO mapping** — which VFO carries your uplink; match it to how your radio is
-  wired. **A wrong mapping transmits on your own downlink** — into the
-  satellite's output passband, on top of everyone else working the bird. Picking
-  one applies immediately and confirms it for the radio you are *operating*; a
-  second radio gets its own confirmation on the pass rail. The control is
-  disabled while you are editing a non-active radio, and says why.
-- **Minimum shift (Hz)** — corrections smaller than this aren't sent. "20 Hz is
-  inaudible on SSB and keeps the CAT link quiet. 0 sends every update."
-- **Update interval (ms)** — shortest gap between corrections. "1000 ms is what a
-  low-orbit pass needs. Shorter fights your own tuning knob and saturates a
-  serial CAT link."
-- **Pass alert sounds** — a rising tone at AOS and a falling one at LOS,
-  alongside the popup. On by default; clearing it silences only the tones, never
-  the popups.
-
-### Orbital elements
-
-Keplerian elements (TLEs) for the amateur satellites — pass times, pointing and
-Doppler all come from them. Refreshed every 6 h from hamradiotools.io: the bird
-list from the SatNOGS database (CC BY-SA 4.0), the elements from CelesTrak and
-SatNOGS.
-
-- **Update now** — fetch immediately.
-- **Import from file** — a Celestrak TLE, AMSAT keps, or a new launch's SupGP
-  set; the offline-shack escape hatch. Imports persist across refreshes and the
-  newest epoch per satellite wins.
-
-The status line always shows the bird count, the band coverage, the fetch date
-and the source. A failed refresh adds a plain-language "Last refresh" line.
-
-![The Orbital elements group: Update now and Import from file buttons beside a status line reading "372 birds · 1 past 14 d · 39 sit out past 30 d · fetched 2026-09-07 · mirror".](../img/manual/settings-orbital-elements.webp)
-
-*Orbital elements in Nexus 1.10.3. The status line is the thing to read — it says
-how fresh the elements actually are.*
-
 ### Rotator
 
 The rotator itself, and its pointing manners. The manners apply to satellite
@@ -973,6 +925,63 @@ full power on every mode.*
     refused it, and **Disconnect**.
 
   See [Share by TCI](../rigs/tci-server.md).
+
+---
+
+## Satellites
+
+Working satellites: how Nexus corrects the downlink and uplink for Doppler during a
+pass, and where the orbital elements it tracks with come from. These were on the
+Radio tab before.
+
+### Satellite Doppler
+
+Corrects both legs of a pass — the downlink you listen on and the uplink you
+transmit on. Nexus tunes only while auto-track is following a pass and you have
+picked a transponder in the Satellites section.
+
+![The Satellite Doppler group: a ticked Doppler correction box, VFO mapping set to "Main = downlink, Sub = uplink (IC-9700 full duplex)", Minimum shift 20 Hz and Update interval 1000 ms.](../img/manual/settings-satellite-doppler.webp)
+
+*Satellite Doppler in Nexus 1.10.3, set up for a full-duplex IC-9700. Pass alert
+sounds sit to the right, off-frame. The VFO mapping has to match your own wiring
+— copying this one is how you transmit on your own downlink.*
+
+- **Doppler correction** — on by default. "Retunes the radio through a pass so
+  you stay on the station you are working." Clearing it stops both legs.
+- **VFO mapping** — which VFO carries your uplink; match it to how your radio is
+  wired. **A wrong mapping transmits on your own downlink** — into the
+  satellite's output passband, on top of everyone else working the bird. Picking
+  one applies immediately and confirms it for the radio you are *operating*; a
+  second radio gets its own confirmation on the pass rail. The control is
+  disabled while you are editing a non-active radio, and says why.
+- **Minimum shift (Hz)** — corrections smaller than this aren't sent. "20 Hz is
+  inaudible on SSB and keeps the CAT link quiet. 0 sends every update."
+- **Update interval (ms)** — shortest gap between corrections. "1000 ms is what a
+  low-orbit pass needs. Shorter fights your own tuning knob and saturates a
+  serial CAT link."
+- **Pass alert sounds** — a rising tone at AOS and a falling one at LOS,
+  alongside the popup. On by default; clearing it silences only the tones, never
+  the popups.
+
+### Orbital elements
+
+Keplerian elements (TLEs) for the amateur satellites — pass times, pointing and
+Doppler all come from them. Refreshed every 6 h from hamradiotools.io: the bird
+list from the SatNOGS database (CC BY-SA 4.0), the elements from CelesTrak and
+SatNOGS.
+
+- **Update now** — fetch immediately.
+- **Import from file** — a Celestrak TLE, AMSAT keps, or a new launch's SupGP
+  set; the offline-shack escape hatch. Imports persist across refreshes and the
+  newest epoch per satellite wins.
+
+The status line always shows the bird count, the band coverage, the fetch date
+and the source. A failed refresh adds a plain-language "Last refresh" line.
+
+![The Orbital elements group: Update now and Import from file buttons beside a status line reading "372 birds · 1 past 14 d · 39 sit out past 30 d · fetched 2026-09-07 · mirror".](../img/manual/settings-orbital-elements.webp)
+
+*Orbital elements in Nexus 1.10.3. The status line is the thing to read — it says
+how fresh the elements actually are.*
 
 ---
 
@@ -1226,7 +1235,15 @@ Units used to be the last field in this row; it is now on the Station tab under
 tab. 1000 W is one station's figure, recorded so the Journey miles-per-watt
 maths is right — not a setting that changes the rig.*
 
-### JT65 — classic EME
+### Weak-signal and beacons
+
+The modes most stations never need, under one heading: JT65, MSK144, the WSPR and
+FST4W beacons, FST4 and Q65. Each keeps its own box inside it. For a station new
+to the hobby or new to digital this heading starts folded, like the other sections
+a first contact does not need; **Show all**, a search, or a link to one of the five
+opens it.
+
+#### JT65 — classic EME
 
 - **Submode (tone spacing)** — A (HF standard, narrowest), B (2× spacing), or C
   (4× spacing, most Doppler-tolerant). "JT65 always uses a 60 s T/R period, so
@@ -1238,7 +1255,7 @@ JT65 transmits and receives. Its messages are the older 22-character format, not
 the 37-character one FT8 and friends use — nothing downstream cares, decodes are
 just shorter.
 
-### MSK144 — meteor scatter
+#### MSK144 — meteor scatter
 
 - **T/R period** — 5 s (fast turnaround, big showers), 10 s, 15 s (the 6 m
   standard), or 30 s (sparse pings, more to stack). Both stations must match.
@@ -1249,7 +1266,7 @@ minutes of apparent silence. The audio frequency is fixed at a 1500 Hz centre an
 the signal is 1 kHz wide, so **there is nowhere to tune it**. Shorthand (MSK40)
 messages are off, matching WSJT-X's default.
 
-### Beacons — WSPR & FST4W
+#### Beacons — WSPR & FST4W
 
 A separate surface from the QSO modes: there is no exchange, only a schedule. Off
 by default — beaconing keys the radio unattended, so it is always an explicit
@@ -1280,7 +1297,7 @@ keys a radio whose transmit you have not enabled.**
 *Beacons in Nexus 1.10.3, at their defaults — Transmit % 0 is listen-only, and
 Transmit power 0 keeps the beacon silent until you enter your real power.*
 
-### FST4 (QSO) / FST4W (beacon)
+#### FST4 (QSO) / FST4W (beacon)
 
 - **T/R period** — 15 / 30 / 60 / 120 / 300 / 900 / 1800 s, shared by both tiers.
   "Longer periods hear weaker signals at fewer exchanges per hour. FST4W beacons
@@ -1293,7 +1310,7 @@ callsigns show as `<...>`: the lookup table upstream fills from a file this buil
 does not carry. (The fieldset's in-app note still says Nexus transmits neither;
 that text is stale — both report `tx: true`.)
 
-### Q65 — EME / VHF+ scatter
+#### Q65 — EME / VHF+ scatter
 
 - **T/R period** — 15 s (troposcatter), 30 s (6 m meteor / ionoscatter), 60 s
   (EME, most common), 120 s (deep EME), 300 s (deepest, microwave EME). Changing
@@ -1872,7 +1889,7 @@ HF grids back.
 The logbook's own settings: how the Logbook shows your contacts, how long a deleted
 contact can be put back, the callbook that fills in a station's name and grid, and the
 lists a logged contact is checked against. The services you upload to are on
-[Logging & Connectors](#logging--connectors).
+[Services](#services).
 
 ### Logbook display
 
@@ -1901,7 +1918,7 @@ log it. QRZ is asked first, then HamQTH, then callook.info.
 
 - **QRZ username** / **QRZ password** — "this is what powers callbook lookups"
   (name, QTH, grid). Separate from the QRZ Logbook API key on
-  [Logging & Connectors ▸ Confirmations](#confirmations), which only uploads QSOs.
+  [Services ▸ Confirmations](#confirmations), which only uploads QSOs.
   "Grid & state need a QRZ XML subscription; free accounts return only
   name/address/country."
 
@@ -1972,22 +1989,24 @@ way. Most awards count band slots, not band-and-mode slots, which is why off is 
 
 ### IOTA island list
 
-- **Download the IOTA island-group list** — off until you turn it on (or say
-  **Download** on the one-line offer beside an IOTA reference). The list is © RSGB and
-  © Islands On The Air (IOTA) Ltd, published at iota-world.org for personal,
-  non-commercial use, so Nexus never ships a copy: it downloads the list (about
-  300 KB) onto this computer when you say yes, and refreshes it at most monthly.
-  With it, the Logbook and the contact card show each group's name beside a
+- **Show IOTA island names** — on by default. IOTA Ltd's island-group list
+  (© RSGB and © Islands On The Air (IOTA) Ltd) ships with Nexus by IOTA Ltd's
+  permission, and while this is on Nexus checks iota-world.org for a newer copy at
+  most monthly; a newer download replaces the shipped one, and a failed check keeps
+  the copy in use. The Logbook and the contact card show each group's name beside a
   reference, with IOTA Ltd's credit and a link, and flag a reference that is not an
-  island group. Without it, a reference is checked by its shape (`EU-131`) only.
-  Turning it off deletes the copy.
+  island group. The line below says how many groups are in use and whether that is
+  the copy shipped with Nexus or a newer one. Turning it off shows no names, stops
+  the check and deletes any downloaded copy: a reference is then checked by its
+  shape (`EU-131`) only.
 
 ---
 
-## Logging & Connectors
+## Services
 
-Where QSOs go and what feeds come in. Credentials live in the **OS keychain**,
-never on disk; a saved password or key isn't shown again after you click **Set**,
+Where QSOs go and what feeds come in: the logbook services, the programs that log
+through Nexus, and the spot and data feeds. It used to be called **Logging &
+Connectors**. Credentials live in the **OS keychain**, never on disk; a saved password or key isn't shown again after you click **Set**,
 and **Forget** removes it.
 
 ### Connections
@@ -2095,7 +2114,8 @@ Nexus connects to all of them and merges what they report.*
 - **Near-region opening watch** — "Watch VHF/10 m activity near your QTH (not
   just your own contacts) so openings flag 'open around you' before you've worked
   anyone." Takes effect on restart.
-- **Log space weather on each contact** — off by default. On, every contact you
+- **Log space weather on each contact** — on for a new installation; a station that
+  already had Nexus keeps the choice it had (off unless you turned it on). On, every contact you
   log carries the planetary K index, A index and solar flux (ADIF `K_INDEX`,
   `A_INDEX`, `SFI`) from the latest reading Nexus fetched from NOAA SWPC, and
   nothing when that reading is more than 3 hours old.
@@ -2884,14 +2904,6 @@ The Conditions map's own choices — the view (Globe, Flat or Beam), its layers 
 colours — are made on the map itself, and Conditions keeps a separate set for each
 activity you pick there.
 
-### Performance
-
-- **Motion** — **Follow the computer** or **Reduce**. Reduce turns off the
-  animations and fades, which also helps a slow computer (a Raspberry Pi, an old
-  laptop in the field) keep up. Alerts still appear; they just stop pulsing.
-  Follow the computer uses your system's own reduce-motion setting. Remembered per
-  computer.
-
 ### Conditions on a TV
 
 Serves the [Conditions](connect.md) view — the map with every layer, the panes,
@@ -2943,6 +2955,45 @@ use — change it and save.
 propagation data the app has, fetched by the page as it refreshes. It loads no
 script, font or image from anywhere outside your machine, because a shack TV is
 often on a network with no route to the internet at all.
+
+### Accessibility & eyes-free
+
+Speech and sound cues for operating by ear. The keyboard and screen-reader labels
+throughout Nexus are **always on** — these settings only control what comes out
+of the speakers.
+
+![The Accessibility & eyes-free group: "Announce decodes (screen reader)" set to Needed, with TX / RX earcon and Decode-batch tick both switched off.](../img/manual/settings-accessibility.webp)
+
+*Accessibility in Nexus 1.10.3. A screenshot cannot show what these do — each cue
+is described below.*
+
+![The Settings tab strip with the CW tab outlined by the keyboard focus ring while the Station tab stays selected.](../img/manual/settings-keyboard-focus.webp)
+
+*Keyboard focus in Nexus 1.10.3. Tab and Shift-Tab move the ring, and the outlined tab is where
+the keyboard is — separate from the coloured one, which is still the tab being shown. Every
+interactive control in Nexus carries the same ring. The speech and earcon settings above cannot
+be photographed, and were not exercised for this capture.*
+
+- **Announce decodes (screen reader)** — Off / Needed only (calling you / new /
+  watched) / All (adds a per-cycle CQ summary). Silent without a reader running.
+- **TX / RX earcon** — "A rising tone when you key up, falling when you unkey —
+  know your TX state by ear."
+- **Decode-batch tick** — "A soft tick each cycle new signals are decoded — the
+  band's rhythm, eyes-free."
+- **CW turn sound** — "A short rising chirp when the CW turn cue says it is your
+  turn to send. Never while you transmit." Off as it comes. The cue itself is on
+  the CW screen ([Turn Cue](../manual/CW.md#turn-cue)).
+
+---
+
+## App
+
+The app and this computer, rather than the station or the look: which screens are
+on (Features), updates, starting with Windows or macOS, this computer's own audio
+when it drives a station over the network, motion, where your data lives, and your
+whole setup in one file with the way back to a clean slate. Features, updates,
+starting at sign-in, this computer and Performance used to be on Appearance; the
+data folder and Backup & reset were under Config, which merged into this one.
 
 ### Features
 
@@ -3004,42 +3055,13 @@ level** shows your microphone while this section is open, and **Play a test tone
 note in the output you picked. The voice keyer's **Record** records from this microphone too, and
 the message goes to the station's slot. Nexus opens the microphone only while something needs it.
 
-### Accessibility & eyes-free
+### Performance
 
-Speech and sound cues for operating by ear. The keyboard and screen-reader labels
-throughout Nexus are **always on** — these settings only control what comes out
-of the speakers.
-
-![The Accessibility & eyes-free group: "Announce decodes (screen reader)" set to Needed, with TX / RX earcon and Decode-batch tick both switched off.](../img/manual/settings-accessibility.webp)
-
-*Accessibility in Nexus 1.10.3. A screenshot cannot show what these do — each cue
-is described below.*
-
-![The Settings tab strip with the CW tab outlined by the keyboard focus ring while the Station tab stays selected.](../img/manual/settings-keyboard-focus.webp)
-
-*Keyboard focus in Nexus 1.10.3. Tab and Shift-Tab move the ring, and the outlined tab is where
-the keyboard is — separate from the coloured one, which is still the tab being shown. Every
-interactive control in Nexus carries the same ring. The speech and earcon settings above cannot
-be photographed, and were not exercised for this capture.*
-
-- **Announce decodes (screen reader)** — Off / Needed only (calling you / new /
-  watched) / All (adds a per-cycle CQ summary). Silent without a reader running.
-- **TX / RX earcon** — "A rising tone when you key up, falling when you unkey —
-  know your TX state by ear."
-- **Decode-batch tick** — "A soft tick each cycle new signals are decoded — the
-  band's rhythm, eyes-free."
-- **CW turn sound** — "A short rising chirp when the CW turn cue says it is your
-  turn to send. Never while you transmit." Off as it comes. The cue itself is on
-  the CW screen ([Turn Cue](../manual/CW.md#turn-cue)).
-
----
-
-## Config
-
-Your whole setup in one file, and the way back to a clean slate. These were
-previously under *Radio → Transmit limits & sharing*, where they were effectively
-undiscoverable: backing up a whole station has nothing to do with transmit
-limits.
+- **Motion** — **Follow the computer** or **Reduce**. Reduce turns off the
+  animations and fades, which also helps a slow computer (a Raspberry Pi, an old
+  laptop in the field) keep up. Alerts still appear; they just stop pulsing.
+  Follow the computer uses your system's own reduce-motion setting. Remembered per
+  computer.
 
 ### Data & log folder
 
@@ -3087,7 +3109,7 @@ renamed one. Run one, or keep one machine's Nexus closed.
 
 ![The Backup & reset group: an explanation, "Back up" and "Restore…" links, a note that the file holds no passwords or API keys, and a red "Reset all settings…" link under a Start over heading.](../img/manual/settings-backup-reset.webp)
 
-*Backup & reset in Nexus 1.10.3 — the whole of the Config tab.*
+*Backup & reset in Nexus 1.10.3.*
 
 - **Back up** — writes your radios, operating preferences, memory channels,
   watchlist and chase sets to a single `.json`. For a new computer, or before a
@@ -3106,7 +3128,7 @@ renamed one. Run one, or keep one machine's Nexus closed.
 - **Reset all settings…** — returns everything to factory defaults: radios, audio
   devices, callsign, preferences. **Your logbook is not touched** (it lives
   outside the settings), and **stored passwords stay in your keychain** — clear
-  those individually under *Logging & Connectors*. Confirms first, and cannot be
+  those individually under *Services*. Confirms first, and cannot be
   undone, so back up if you have not. Use this rather than deleting
   `settings.json` by hand: deleting the file while Nexus is running resets
   nothing, because the app holds your old configuration in memory and writes it

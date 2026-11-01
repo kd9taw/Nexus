@@ -19,7 +19,7 @@ full of live decodes, and one FT8 QSO in your log.
 ## 1. Install and get past SmartScreen (~3 min)
 
 Download the file for your platform — `Nexus_<version>_x64-setup.exe` on Windows,
-`Nexus_<version>_aarch64.dmg` on a Mac with Apple Silicon,
+`Nexus_<version>_aarch64.dmg` on a Mac with Apple Silicon, `Nexus_<version>_x64.dmg` on an Intel Mac,
 `Nexus_<version>_amd64.AppImage` or `Nexus_<version>_pc_amd64.deb` on Linux,
 `Nexus_<version>_pi_arm64_bookworm.deb` / `..._trixie.deb` on a 64-bit Raspberry Pi —
 from the
@@ -118,7 +118,7 @@ the app useful on day one.
 There is nothing to unlock: **every mode and every section starts on** —
 FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. If you would
 rather run a leaner app, sections come off one at a time afterwards in
-[Settings ▸ Appearance ▸ Features](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md#features), which is
+[Settings ▸ App ▸ Features](https://github.com/kd9taw/Nexus/blob/main/docs/guide/settings-reference.md#features), which is
 also where the goal profiles — getting started, DX/awards, contesting, POTA/SOTA,
 6m/VHF, and **Everything (expert)**, which turns the whole console back on — set
 a batch of sensible defaults in one pick. Toggle features by hand and the profile

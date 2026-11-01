@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Download everything again (Settings ▸ Logging & Connectors ▸ Confirmations ▸ LoTW), end to end
+// Download everything again (Settings ▸ Services ▸ Confirmations ▸ LoTW), end to end
 // through its confirmation. An account whose LoTW sync cursor moved past confirmations it never
 // received (a first download that asked for too little, #399) had no way to get them back: every
 // download asks only for what LoTW matched after the cursor. The button empties the cursor and
@@ -105,7 +105,7 @@ function renderPanel() {
 
 async function openLotw() {
   renderPanel()
-  fireEvent.click(await screen.findByRole('tab', { name: 'Logging & Connectors' }))
+  fireEvent.click(await screen.findByRole('tab', { name: 'Services' }))
   return screen.findByRole('button', { name: 'Download everything again' })
 }
 

@@ -17,6 +17,13 @@
 // fill sibling splits the column by weight whatever the form needs, and a content-first log pane grows
 // past its hidden height and takes it from RTTY's and PSK's receive text (measured too).
 //
+// FT IS THE ONE EXCEPTION, because it has no log entry form (it logs through its confirm dialog) and so
+// no log pane to ride in. There the pane is a member of FT's side rail, FT's log column, at the rail's
+// foot (OperateCockpit `railFloor`). The rule above still holds there in its substance: nothing the
+// operator needs gives it room. FT keeps its stock layout, so the Tx1–Tx6 machine and its divider stand
+// exactly as they do with the pane hidden, and the rail's feeds keep a floor and the rail scrolls
+// (cockpit-panes.css `.op-rail-floor`), where without one they gave the pane their height.
+//
 // READ AS THE LOGBOOK READS ITS LIST: the first page of the order it opens on (newest first by QSO
 // time), through the window's log source, following the snapshot's log tick. Nothing here counts the
 // log a second way.
@@ -39,8 +46,8 @@ export const RECENT_QSOS = 5
 
 const QUESTION = { kind: 'page', query: DEFAULT_LOG_QUERY, offset: 0, limit: RECENT_QSOS } as const
 
-/** The pane as every cockpit draws it under its `recent` id, inside the log pane under the form (WHERE IT
- *  STANDS, above): a content-height frame, its ✕ the cockpit's own ⊞ tick. */
+/** The pane as every cockpit draws it under its `recent` id, inside the log pane under the form, or at the
+ *  foot of FT's side rail (WHERE IT STANDS, above): a content-height frame, its ✕ the cockpit's own ⊞ tick. */
 export function RecentQsosFrame({
   close,
   ...pane

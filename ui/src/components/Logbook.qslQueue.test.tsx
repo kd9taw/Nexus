@@ -9,6 +9,7 @@ import { Logbook } from './Logbook'
 import type { LogQuestion } from '../features/logAnswers'
 import { queueQslCardById } from '../api'
 import { t } from '../i18n'
+import { itemLabels, menuItem, openRowSubmenu } from './Logbook.rowMenu.testkit'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -57,11 +58,9 @@ function logRow(extra: [string, string][], sent = false) {
 async function qslMenu(extra: [string, string][], sent = false) {
   engineLog.mockResolvedValue([logRow(extra, sent)])
   const { container } = render(<Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" />)
-  const aria = t('logbook.row.qslSent.aria', { call: 'K0ABC' })
-  await waitFor(() => expect(container.querySelector(`select[aria-label="${aria}"]`)).not.toBeNull())
-  const select = container.querySelector(`select[aria-label="${aria}"]`) as HTMLSelectElement
-  const options = [...select.options].map((o) => [o.value, o.textContent])
-  return { select, options }
+  await waitFor(() => expect(container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
+  const menu = await openRowSubmenu('K0ABC', 'QSL')
+  return { menu, options: itemLabels(menu) }
 }
 
 describe('queueing a paper card from the Logbook', () => {
@@ -71,10 +70,10 @@ describe('queueing a paper card from the Logbook', () => {
   })
 
   it('offers to queue a card for a contact not sent, and queues it', async () => {
-    const { select, options } = await qslMenu([])
-    expect(options).toContainEqual(['Q', t('logbook.row.qslQueue.add')])
-    expect(options.map((o) => o[0])).not.toContain('q')
-    fireEvent.change(select, { target: { value: 'Q' } })
+    const { menu, options } = await qslMenu([])
+    expect(options).toContain(t('logbook.row.qslQueue.add'))
+    expect(options).not.toContain(t('logbook.row.qslQueue.remove'))
+    fireEvent.click(menuItem(menu, t('logbook.row.qslQueue.add')))
     await waitFor(() => expect(queueQslCardById).toHaveBeenCalledTimes(1))
     expect(vi.mocked(queueQslCardById).mock.calls[0][0]).toMatchObject({ id: 'id-K0ABC' })
     expect(vi.mocked(queueQslCardById).mock.calls[0][1]).toBe(true)
@@ -82,10 +81,10 @@ describe('queueing a paper card from the Logbook', () => {
 
   it('offers to take a queued or requested card out, and takes it out', async () => {
     for (const v of ['Q', 'R']) {
-      const { select, options } = await qslMenu([['QSL_SENT', v]])
-      expect(options).toContainEqual(['q', t('logbook.row.qslQueue.remove')])
-      expect(options.map((o) => o[0])).not.toContain('Q')
-      fireEvent.change(select, { target: { value: 'q' } })
+      const { menu, options } = await qslMenu([['QSL_SENT', v]])
+      expect(options).toContain(t('logbook.row.qslQueue.remove'))
+      expect(options).not.toContain(t('logbook.row.qslQueue.add'))
+      fireEvent.click(menuItem(menu, t('logbook.row.qslQueue.remove')))
       await waitFor(() => expect(queueQslCardById).toHaveBeenCalledTimes(1))
       expect(vi.mocked(queueQslCardById).mock.calls[0][1]).toBe(false)
       cleanup()
@@ -95,6 +94,8 @@ describe('queueing a paper card from the Logbook', () => {
 
   it('offers neither once the card is marked sent', async () => {
     const { options } = await qslMenu([['QSL_SENT', 'Q']], true)
-    expect(options.map((o) => o[0]).filter((v) => v === 'Q' || v === 'q')).toEqual([])
+    expect(options.filter((v) => v === t('logbook.row.qslQueue.add') || v === t('logbook.row.qslQueue.remove'))).toEqual([])
+    // Positive control: the menu did open, with the clear that a sent card offers.
+    expect(options).toContain(t('logbook.row.qslSent.clear'))
   })
 })

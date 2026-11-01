@@ -33,6 +33,12 @@ export const CHROME_COLD_START_MS = 240_000
 // `startupMs` bounds the wait for the debugging endpoint.
 export async function chrome(switches = [], startupMs = 30_000) {
   const profile = await mkdtemp(join(tmpdir(), 'nexus-remote-browser-'))
+  // Chrome's temp directory is its profile, so removing the profile removes the temp folders Chrome
+  // leaves behind (its single-instance folder even after a clean close, empty url-fetcher folders when it
+  // is killed). Its single-instance socket then sits under the profile, and Chrome aborts at start on a
+  // socket path over 107 bytes; under a temp directory too long for that it keeps the shared one, and
+  // those small folders stay behind there.
+  const ownTemp = Buffer.byteLength(join(profile, 'org.chromium.Chromium.XXXXXX', 'SingletonSocket')) <= 107
   const child = spawn(process.env.CHROME_BIN || 'google-chrome', [
     '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
     '--disable-background-networking', '--no-first-run', '--no-default-browser-check',
@@ -40,10 +46,27 @@ export async function chrome(switches = [], startupMs = 30_000) {
     // Isolate synthetic browser cookies from a locked desktop credential store.
     '--password-store=basic', '--use-mock-keychain',
     '--remote-debugging-port=0', `--user-data-dir=${profile}`, ...switches, 'about:blank',
-  ], { stdio: 'ignore', detached: true })
+  ], { stdio: 'ignore', detached: true, env: ownTemp ? { ...process.env, TMPDIR: profile } : process.env })
   let exited = false
   child.once('error', () => { exited = true })
   const exit = new Promise(resolve => child.once('exit', () => { exited = true; resolve() }))
+  // THE ORPHAN GUARD (2026-10-30). Chrome runs in its own process group (detached), so nothing ended it
+  // when this process died without calling stop(): runners killed by `timeout`, Ctrl-C, a closed
+  // terminal or SIGKILL left thirty headless Chromes running, each holding a 190-365 MB profile, until
+  // /tmp (a RAM disk on the development box) filled and every tool on it failed. This shell, outside
+  // both process groups, waits on a pipe only this process writes to. The pipe closes when this process
+  // ends, however it ends; the shell then ends Chrome's group and removes the profile. teardown() does
+  // the same itself and then ends the guard.
+  const guard = spawn('sh', ['-c', 'cat >/dev/null; kill -TERM -"$1" 2>/dev/null && sleep 2; kill -KILL -"$1" 2>/dev/null; rm -rf "$2"', 'sh', String(child.pid), profile],
+    { stdio: ['pipe', 'ignore', 'ignore'], detached: true })
+  guard.unref(); guard.stdin.unref()
+  // Ends Chrome's whole process group and removes its profile; stop() and a failed start share it.
+  const teardown = async () => {
+    if(!exited){process.kill(-child.pid,'SIGTERM');await Promise.race([exit,sleep(2000)])}
+    if(!exited)process.kill(-child.pid,'SIGKILL')
+    await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100})
+    guard.kill('SIGKILL')
+  }
   let ws
   try {
     let endpoint
@@ -71,12 +94,10 @@ export async function chrome(switches = [], startupMs = 30_000) {
       const id=++next, timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Browser command timed out: ${method}`))},10000)
       pending.set(id,{resolve,reject,timer,method});ws.send(JSON.stringify({id,method,params,sessionId}))
     })
-    return { call, on: (method, fn) => listeners.set(method,fn), async stop() {
+    return { call, on: (method, fn) => listeners.set(method,fn), profile, async stop() {
       await call('Browser.close').catch(()=>{}); ws.close()
       await Promise.race([exit,sleep(2000)])
-      if(!exited){process.kill(-child.pid,'SIGTERM');await Promise.race([exit,sleep(2000)])}
-      if(!exited)process.kill(-child.pid,'SIGKILL')
-      await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100})
+      await teardown()
     } }
-  } catch(error) { ws?.close(); if(!exited)process.kill(-child.pid,'SIGTERM'); await rm(profile,{recursive:true,force:true,maxRetries:8,retryDelay:100}); throw error }
+  } catch(error) { ws?.close(); await teardown(); throw error }
 }

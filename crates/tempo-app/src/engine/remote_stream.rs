@@ -208,6 +208,8 @@ impl Engine {
             halted = true;
         }
         self.end_what_presence_left();
+        // Decoder screens left while that computer was attached stop once it has gone (RX only).
+        self.carry_out_held_leaves(now);
         if let Some(hold) = self.remote_ptt_hold.clone() {
             let may_key = self.remote_presence_live(now)
                 && self.settings.operating_mode == OperatingMode::Phone;

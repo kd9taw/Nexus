@@ -221,6 +221,11 @@ pub enum Refusal {
     /// and `W9XYZ/M K1ABC TNX` a frame naming `<...>`, nobody (1412-1456: neither call is in
     /// brackets, so the hash and the call it writes were never set).
     NoFrame,
+    /// A character outside printable ASCII, for the modes whose encoder stops the program on a
+    /// frame `pack77` did not write ([`q65_refusal`]): this port does not judge such text, and
+    /// `W9XYZ K1ABC TNXÉ 73` stops it. WSJT-X's Tx boxes take only `[- @A-Za-z0-9+./?#<>;$]`
+    /// (`widgets/mainwindow.cpp`, `message_alphabet`).
+    Alphabet,
 }
 
 /// Why FT8 cannot send `msg`, or `None` where it can. Where only the vendored encoder can tell
@@ -239,6 +244,49 @@ fn refusal(msg37: &[u8; 37]) -> Option<Refusal> {
         return Some(Refusal::NoFrame);
     }
     matches!(pack::pack(msg37), Ok(None)).then_some(Refusal::BadMessage)
+}
+
+/// Why Q65 cannot send `msg`, or `None` where it can. `genq65` reads the frame `pack77` wrote with
+/// no `err=`, so a text `pack77` writes no frame for stops the whole process the first time
+/// (`Bad value during integer read`, `genq65.f90` 29-32) and sends the previous message's frame after
+/// that ([`pack::writes_frame`]). Only that is refused: a frame `unpack77` calls bad goes out as
+/// it does from WSJT-X, which sends `genq65`'s tones whatever they are. A text starting `@` is
+/// `genq65`'s single test tone, never packed (and the entry point refuses it).
+pub fn q65_refusal(msg: &str) -> Option<Refusal> {
+    if msg.starts_with('@') {
+        return None;
+    }
+    frame_refusal(c_message(msg))
+}
+
+/// [`q65_refusal`] for MSK144: `genmsk_128_90` strips leading blanks as `genft4` does, and sends a
+/// bracketed pair (`<K1ABC W9XYZ> R-03`) as a 40-bit short message, never packed.
+pub fn msk144_refusal(msg: &str) -> Option<Refusal> {
+    if msg.starts_with('@') {
+        return None;
+    }
+    let msg37 = ft4_message(msg);
+    if let Some(m) = &msg37 {
+        // `if(message(1:1).eq.'<')`: `genmsk40` when a blank comes before the first `>`.
+        let i2 = m.iter().position(|&b| b == b'>');
+        if m[0] == b'<' && i2.is_some_and(|i2| m[..i2].contains(&b' ')) {
+            return None;
+        }
+    }
+    frame_refusal(msg37)
+}
+
+/// [`q65_refusal`] for FST4 and FST4W: `genfst4` strips leading blanks as `genft4` does. FST4W's
+/// hint only adds the `<CALL> GRID6` form, which `pack77` writes either way.
+pub fn fst4_refusal(msg: &str) -> Option<Refusal> {
+    frame_refusal(ft4_message(msg))
+}
+
+fn frame_refusal(msg37: Option<[u8; 37]>) -> Option<Refusal> {
+    let Some(msg37) = msg37 else {
+        return Some(Refusal::Alphabet);
+    };
+    (!pack::writes_frame(&msg37)).then_some(Refusal::NoFrame)
 }
 
 #[cfg(test)]

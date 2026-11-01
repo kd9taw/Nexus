@@ -216,7 +216,7 @@ describe('the span buttons', () => {
   const leftOf = () => parseFloat((screen.getByRole('button', { name: 'W1AW' }) as HTMLElement).style.left)
 
   it('replace the select, set the span, persist it, and move what is drawn', async () => {
-    render(<Waterfall {...base} spanChoices={RTTY_WATERFALL_SPANS} tags={[tag]} />)
+    render(<Waterfall {...base} spanChoices={RTTY_WATERFALL_SPANS} zoomKey="nexus.waterfall.rtty.zoom" tags={[tag]} />)
     expect(screen.queryByRole('combobox', { name: 'Waterfall zoom span' })).toBeNull()
     const group = screen.getByRole('group', { name: 'Waterfall span' })
     const btn = (label: string) => Array.from(group.querySelectorAll('button')).find((b) => b.textContent === label)!
@@ -224,14 +224,14 @@ describe('the span buttons', () => {
     expect(btn('3k').getAttribute('aria-pressed')).toBe('true')
     expect(leftOf()).toBeCloseTo(50, 6)
     fireEvent.click(btn('1k'))
-    expect(localStorage.getItem('nexus.waterfall.zoom')).toBe('1000')
+    expect(localStorage.getItem('nexus.waterfall.rtty.zoom')).toBe('1000')
     // 1 kHz round the decoder at 1500: 1000–2000 Hz, so 1600 Hz is 60 % across.
     expect(leftOf()).toBeCloseTo(60, 6)
     fireEvent.click(btn('4k'))
-    expect(localStorage.getItem('nexus.waterfall.zoom')).toBe('-1')
+    expect(localStorage.getItem('nexus.waterfall.rtty.zoom')).toBe('-1')
     expect(leftOf()).toBeCloseTo((1400 / 3800) * 100, 6)
     cleanup()
-    render(<Waterfall {...base} spanChoices={RTTY_WATERFALL_SPANS} tags={[tag]} />)
+    render(<Waterfall {...base} spanChoices={RTTY_WATERFALL_SPANS} zoomKey="nexus.waterfall.rtty.zoom" tags={[tag]} />)
     expect(screen.getByRole('button', { name: '4k' }).getAttribute('aria-pressed')).toBe('true')
     expect(leftOf()).toBeCloseTo((1400 / 3800) * 100, 6)
   })

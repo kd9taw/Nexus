@@ -203,7 +203,7 @@ describe('Settings: an empty box shows no made-up sample value', () => {
     [t('settings.aprs.is.watchCalls.label'), ''],
     [t('settings.alerts.geo.entities.label'), 'type to search'],
     [t('watchlist.add.value.aria'), ''],
-    // Logging & Connectors
+    // Services
     [t('settings.integrations.clusterSsid.label'), ''],
     [t('settings.dxkeeper.host.label'), 'empty = off'],
     [t('settings.n3fjp.host.label'), 'empty = off'],
