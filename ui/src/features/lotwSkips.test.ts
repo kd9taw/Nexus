@@ -92,12 +92,12 @@ describe('the LoTW toast for contacts signed with the Station Location in Settin
 })
 
 describe('the LoTW toast when signing from the ADIF, and when a later TQSL run never ran', () => {
-  it('says the contacts were signed from the call and grid they carry, not a Station Location', () => {
+  it('says the contacts were signed from the call, grid and place fields they carry, not a Station Location', () => {
     expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationTie: 1, locationFromAdif: true })).toBe(
-      "1 contact fits two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: it was signed from the call and grid it carries.",
+      "1 contact fits two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: it was signed from the call, grid, state, county, zones and IOTA it carries.",
     )
     expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationUnmatched: 2, locationFromAdif: true })).toBe(
-      "2 contacts fit none of your station profiles by their call and grid, so no profile's Station Location was used: they were signed from the call and grid they carry.",
+      "2 contacts fit none of your station profiles by their call and grid, so no profile's Station Location was used: they were signed from the call, grid, state, county, zones and IOTA they carry.",
     )
     // Control: with a named Station Location, the Settings sentence as before.
     expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationTie: 1, locationFromAdif: false })).toMatch(

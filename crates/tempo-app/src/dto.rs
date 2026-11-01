@@ -4496,8 +4496,8 @@ pub struct UploadReportDto {
     /// profiles, while one names a location. LoTW only; 0 elsewhere.
     #[serde(default)]
     pub location_unmatched: usize,
-    /// The tie and no-match contacts above were signed from the call and grid in their own
-    /// records (signing from the ADIF), not with the Station Location in Settings. LoTW only.
+    /// The tie and no-match contacts above were signed from the call, grid and place fields in
+    /// their own records (signing from the ADIF), not with the Station Location in Settings. LoTW only.
     #[serde(default)]
     pub location_from_adif: bool,
     /// Contacts not sent because a later TQSL run could not run (TQSL gone or timed out, the

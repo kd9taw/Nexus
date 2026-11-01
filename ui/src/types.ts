@@ -3153,8 +3153,8 @@ export interface UploadReport {
   /** Contacts signed with the Station Location in Settings because they fit none of the station
    *  profiles while one names a location. Absent from an older station. */
   locationUnmatched?: number
-  /** The tie and no-match contacts were signed from the call and grid they carry (signing from
-   *  the ADIF), not with the Station Location in Settings. Absent from an older station. */
+  /** The tie and no-match contacts were signed from the call, grid and place fields they carry
+   *  (signing from the ADIF), not with the Station Location in Settings. Absent from an older station. */
   locationFromAdif?: boolean
   /** Contacts not sent because a later TQSL run could not run after earlier runs had sent
    *  theirs: still marked not uploaded. Absent from an older station. */

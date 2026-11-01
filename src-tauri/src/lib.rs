@@ -35530,11 +35530,11 @@ fn lotw_upload_batch_with(
     if runs.iter().any(|r| r.location.as_deref() == Some("")) {
         return Err(LOTW_NO_LOCATION.into());
     }
-    // Signing from the ADIF, a contact no profile tells apart goes with the call and grid it
-    // carries; otherwise with the Station Location in Settings.
+    // Signing from the ADIF, a contact no profile tells apart goes with the call, grid and place
+    // fields it carries; otherwise with the Station Location in Settings.
     let from_adif = location.is_none();
     let how = if from_adif {
-        "from the call and grid they carry"
+        "from the call, grid, state, county, zones and IOTA they carry"
     } else {
         "with the Station Location in Settings"
     };

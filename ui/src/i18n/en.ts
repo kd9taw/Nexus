@@ -1675,16 +1675,16 @@ export const EN = {
       '{{count}} contacts fit none of your station profiles by their call and grid, so they were signed with the Station Location in Settings ▸ Logging & Connectors.',
   },
   // The same two, when TQSL signs from the location in the ADIF (Settings ▸ Logging & Connectors):
-  // no Station Location signs the contact; TQSL takes the call and grid it carries.
+  // no Station Location signs the contact; TQSL takes the call, grid and place fields it carries.
   'logbook.lotw.location.tieAdif': {
-    one: "{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: it was signed from the call and grid it carries.",
+    one: "{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: it was signed from the call, grid, state, county, zones and IOTA it carries.",
     other:
-      "{{count}} contacts fit two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: they were signed from the call and grid they carry.",
+      "{{count}} contacts fit two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: they were signed from the call, grid, state, county, zones and IOTA they carry.",
   },
   'logbook.lotw.location.unmatchedAdif': {
-    one: "{{count}} contact fits none of your station profiles by its call and grid, so no profile's Station Location was used: it was signed from the call and grid it carries.",
+    one: "{{count}} contact fits none of your station profiles by its call and grid, so no profile's Station Location was used: it was signed from the call, grid, state, county, zones and IOTA it carries.",
     other:
-      "{{count}} contacts fit none of your station profiles by their call and grid, so no profile's Station Location was used: they were signed from the call and grid they carry.",
+      "{{count}} contacts fit none of your station profiles by their call and grid, so no profile's Station Location was used: they were signed from the call, grid, state, county, zones and IOTA they carry.",
   },
   // A LoTW upload signed in several TQSL runs (one per Station Location) where a later run could
   // not run at all; the earlier runs' contacts went. `{{detail}}` is the error, in English.
