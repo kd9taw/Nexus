@@ -18209,6 +18209,256 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ★ A REMOVE PRESSED WHILE A SETTINGS SAVE IS ON ITS WAY WAITS FOR IT, THEN FINDS NOTHING
+    /// WAITING: the key typed is kept and nothing is deleted. (A Remove that checked the wait
+    /// before its turn would delete the key just typed.)
+    #[test]
+    fn a_remove_pressed_during_a_save_finds_nothing_waiting() {
+        use tempo_app::settings::KeysToConfirm;
+        const TYPED: &str = "PLANTED-SAVED-FIRST";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-save-first", 0);
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            ..Default::default()
+        });
+        let keychain = std::sync::Mutex::new(FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER]));
+        let (at_write, held_there) = std::sync::mpsc::channel();
+        let (landed, remove_done) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            let (engine, keychain) = (&engine, &keychain);
+            let save = s.spawn(move || {
+                key_typed_in_settings(engine, None, || {
+                    at_write.send(()).unwrap();
+                    let _ = remove_done.recv_timeout(std::time::Duration::from_millis(400));
+                    keychain
+                        .lock()
+                        .unwrap()
+                        .change(KeychainChange::Store {
+                            account: CLOUDLOG_KEYCHAIN_USER,
+                            key: TYPED,
+                        })
+                        .map(|_| ())
+                })
+            });
+            held_there.recv().unwrap();
+            let remove = s.spawn(move || {
+                let r = answer_key_to_confirm(engine, None, false, None, |c| {
+                    keychain.lock().unwrap().change(c)
+                });
+                let _ = landed.send(());
+                r
+            });
+            save.join().unwrap().unwrap();
+            remove.join().unwrap().unwrap();
+        });
+        let kept = keychain.into_inner().unwrap();
+        assert_eq!(
+            (
+                kept.held.get(CLOUDLOG_KEYCHAIN_USER).map(String::as_str),
+                kept.forgot.len(),
+                engine_lock(&engine).keys_to_confirm().cloudlog,
+            ),
+            (Some(TYPED), 0, false),
+            "the key typed is kept, nothing deleted, nothing waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A KEY TYPED WHILE A RESTORE BRINGS CLOUDLOG AN ADDRESS THE STATION HAD NONE FOR WAITS FOR
+    /// THAT ADDRESS: the restore asks the keychain only after the save, so it sees the key and
+    /// holds it back, and the key is never sent to the backup's server unasked. (A restore that
+    /// asked the keychain before its turn would see none, and let the typed key go there.)
+    #[test]
+    fn a_key_typed_during_a_restore_to_a_new_address_waits() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-unknown", 0);
+        let station = station_with(&engine, restore_test_roster(), "");
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm::default());
+        let keychain = std::sync::Mutex::new(FakeKeychain::holding(&[]));
+        let (at_write, held_there) = std::sync::mpsc::channel();
+        let (landed, restore_done) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            let (engine, keychain, v) = (&engine, &keychain, &v);
+            let save = s.spawn(move || {
+                key_typed_in_settings(engine, None, || {
+                    at_write.send(()).unwrap();
+                    let _ = restore_done.recv_timeout(std::time::Duration::from_millis(400));
+                    keychain
+                        .lock()
+                        .unwrap()
+                        .change(KeychainChange::Store {
+                            account: CLOUDLOG_KEYCHAIN_USER,
+                            key: "PLANTED-TYPED-BEFORE-RESTORE",
+                        })
+                        .map(|_| ())
+                })
+            });
+            held_there.recv().unwrap();
+            s.spawn(move || {
+                restore_settings_bundle(
+                    engine,
+                    v.to_string(),
+                    Default::default,
+                    |_| true,
+                    |c| keychain.lock().unwrap().change(c),
+                )
+                .unwrap();
+                let _ = landed.send(());
+            });
+            save.join().unwrap().unwrap();
+        });
+        assert!(
+            engine_lock(&engine).keys_to_confirm().cloudlog,
+            "the key typed before the restore waits for the backup's address"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ ADDING A RADIO NEVER DELETES THE PASSWORD TYPED FOR IT WHILE ITS LEFTOVER CHECK WAITS ON
+    /// THE KEYCHAIN: the clear of any password left under the new id runs first, and the one
+    /// typed meanwhile lands after it and is kept.
+    #[test]
+    fn adding_a_radio_never_deletes_a_password_typed_meanwhile() {
+        struct SlowVault {
+            map: std::sync::Mutex<std::collections::BTreeMap<u32, String>>,
+            at_clear: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+            go: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        }
+        impl IcomLanVault for SlowVault {
+            fn get(&self, id: u32) -> Result<Option<String>, String> {
+                Ok(self.map.lock().unwrap().get(&id).cloned())
+            }
+            fn set(&self, id: u32, p: &str) -> Result<(), String> {
+                self.map.lock().unwrap().insert(id, p.to_string());
+                Ok(())
+            }
+            fn clear(&self, id: u32) -> Result<(), String> {
+                let first = self.at_clear.lock().unwrap().take();
+                if let Some(tx) = first {
+                    tx.send(()).unwrap();
+                    let go = self.go.lock().unwrap().take();
+                    if let Some(rx) = go {
+                        let _ = rx.recv_timeout(std::time::Duration::from_millis(400));
+                    }
+                }
+                self.map.lock().unwrap().remove(&id);
+                Ok(())
+            }
+        }
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-add-radio", 0);
+        let (tx, at_clear) = std::sync::mpsc::channel();
+        let (landed, go) = std::sync::mpsc::channel();
+        let vault = SlowVault {
+            map: Default::default(),
+            at_clear: std::sync::Mutex::new(Some(tx)),
+            go: std::sync::Mutex::new(Some(go)),
+        };
+        let mut id = 0;
+        std::thread::scope(|s| {
+            let add = s.spawn(|| add_radio_without_a_password(&engine, &vault).map(|_| ()));
+            at_clear.recv().unwrap();
+            id = engine_lock(&engine)
+                .settings()
+                .radios
+                .iter()
+                .map(|r| r.id)
+                .max()
+                .unwrap();
+            let id = id;
+            let vault = &vault;
+            let engine = &engine;
+            s.spawn(move || {
+                key_typed_in_settings(engine, Some(id), || {
+                    icom_lan_set_password(vault, id, "PLANTEDTYPED".to_string())
+                })
+                .unwrap();
+                let _ = landed.send(());
+            });
+            add.join().unwrap().unwrap();
+        });
+        assert_eq!(
+            vault.map.lock().unwrap().get(&id).map(String::as_str),
+            Some("PLANTEDTYPED"),
+            "the password typed for the new radio is kept"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ REMOVING A RADIO AND THE NOTICE'S REMOVE OF ITS PASSWORD TAKE TURNS: with the radio's
+    /// password removal waiting on the keychain, a Remove pressed for that radio in the notice
+    /// waits, then finds nothing waiting, so the password is deleted once and nothing waits.
+    #[test]
+    fn removing_a_radio_and_the_notices_remove_take_turns() {
+        struct SlowVault {
+            map: std::sync::Mutex<std::collections::BTreeMap<u32, String>>,
+            deletes: std::sync::atomic::AtomicUsize,
+            at_clear: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+            go: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        }
+        impl IcomLanVault for SlowVault {
+            fn get(&self, id: u32) -> Result<Option<String>, String> {
+                Ok(self.map.lock().unwrap().get(&id).cloned())
+            }
+            fn set(&self, id: u32, p: &str) -> Result<(), String> {
+                self.map.lock().unwrap().insert(id, p.to_string());
+                Ok(())
+            }
+            fn clear(&self, id: u32) -> Result<(), String> {
+                let first = self.at_clear.lock().unwrap().take();
+                if let Some(tx) = first {
+                    tx.send(()).unwrap();
+                    let go = self.go.lock().unwrap().take();
+                    if let Some(rx) = go {
+                        let _ = rx.recv_timeout(std::time::Duration::from_millis(400));
+                    }
+                }
+                self.deletes
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.map.lock().unwrap().remove(&id);
+                Ok(())
+            }
+        }
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-rm-radio", 0);
+        let station = station_with(&engine, restore_test_roster(), "");
+        engine_lock(&engine).apply_restored_settings(station);
+        let (tx, at_clear) = std::sync::mpsc::channel();
+        let (landed, go) = std::sync::mpsc::channel();
+        let vault = SlowVault {
+            map: std::sync::Mutex::new([(1, "PLANTED-RADIO-1".to_string())].into()),
+            deletes: Default::default(),
+            at_clear: std::sync::Mutex::new(Some(tx)),
+            go: std::sync::Mutex::new(Some(go)),
+        };
+        std::thread::scope(|s| {
+            let (engine, vault) = (&engine, &vault);
+            let remove_radio = s.spawn(move || remove_radio_and_its_password(engine, 1, vault));
+            at_clear.recv().unwrap();
+            s.spawn(move || {
+                answer_key_to_confirm(engine, Some(1), false, None, |_| {
+                    vault.clear(1).map(|()| true)
+                })
+                .unwrap();
+                let _ = landed.send(());
+            });
+            remove_radio.join().unwrap().unwrap();
+        });
+        assert_eq!(
+            (
+                vault.deletes.load(std::sync::atomic::Ordering::SeqCst),
+                vault.map.lock().unwrap().get(&1).cloned(),
+                engine_lock(&engine).keys_to_confirm().icom_lan_waits(1),
+            ),
+            (1, None, false),
+            "the password deleted once, by the radio's removal; nothing waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ USE CONFIRMS THE ADDRESS THE NOTICE SHOWED, AND NO OTHER: when a restore or a Save moves
     /// the Cloudlog URL or a radio's network address after the notice asked, Use is refused, the
     /// key still waits, and the notice asks again about the new address. CONTROL: Use with the
@@ -20170,9 +20420,11 @@ fn answer_key_to_confirm(
 /// Take the turn for one change at a time to the saved keys a notice can ask about
 /// ([`keys_to_confirm_in`]): a Settings save or clear with the answer it gives
 /// ([`key_typed_in_settings`]), a notice's Remove from its check that the key waits to the wait it
-/// drops ([`answer_key_to_confirm`]), and a restore ([`restore_settings_bundle`]). Without it a
-/// Remove that had checked, then let go to delete, deleted the key typed or restored in between:
-/// the operator was told it was saved, and the service had none.
+/// drops ([`answer_key_to_confirm`]), a restore ([`restore_settings_bundle`]), and adding or
+/// removing a radio ([`add_radio_without_a_password`], [`remove_radio_and_its_password`]), which
+/// clear a radio's password. Without it a Remove or a clear that had checked, then let go to
+/// delete, deleted the key typed or restored in between: the operator was told it was saved, and
+/// the service had none.
 ///
 /// The turn is the engine's own ([`tempo_app::engine::Engine::key_changes`]), fetched in a brief
 /// engine-lock hold that ends before it is taken. ⛔ Taken with the engine lock RELEASED, and the
@@ -25075,11 +25327,14 @@ fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// password was held back) is removed. Until it is, it waits for the operator as a held-back key
 /// does ([`tempo_app::settings::Settings::keys_to_confirm`]), and a removal that fails leaves it
 /// waiting: the new radio never signs in with it. The keychain is asked with the engine lock
-/// released, since it can wait on an unlock prompt.
+/// released, since it can wait on an unlock prompt, and in this change's turn ([`take_turn`]), so
+/// a password typed for the new radio meanwhile lands after the clear, never before it.
 fn add_radio_without_a_password(
     engine: &SharedEngine,
     vault: &dyn IcomLanVault,
 ) -> Result<AppSnapshot, String> {
+    let turn = engine_lock(engine).key_changes();
+    let _turn = take_turn(&turn);
     let id = {
         let mut eng = engine_lock(engine);
         let id = eng.add_radio();
@@ -25137,13 +25392,16 @@ fn remove_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, 
 /// with it. Until `vault` has removed it, it waits for the operator as a held-back key does
 /// ([`tempo_app::settings::Settings::keys_to_confirm`]), so a radio added meanwhile never takes
 /// its id; a removal that fails leaves it waiting, so it is never let go. The keychain is asked
-/// with the engine lock released, since it can wait on an unlock prompt. A failure is reported,
-/// never the password.
+/// with the engine lock released, since it can wait on an unlock prompt, and in this change's turn
+/// ([`take_turn`]), so the notice's Remove of the same password waits for it. A failure is
+/// reported, never the password.
 fn remove_radio_and_its_password(
     engine: &SharedEngine,
     id: u32,
     vault: &dyn IcomLanVault,
 ) -> Result<AppSnapshot, String> {
+    let turn = engine_lock(engine).key_changes();
+    let _turn = take_turn(&turn);
     {
         let mut eng = engine_lock(engine);
         if !eng.remove_radio(id) {

@@ -176,6 +176,27 @@ describe('KeyConfirmBanner', () => {
     expect(container.innerHTML).toBe('')
   })
 
+  it('an older ask refused last neither hides the newer rows nor stops asking', async () => {
+    let refuseOld = (_: Error) => {}
+    mockKeys.mockReturnValueOnce(new Promise<KeyToConfirm[]>((_, reject) => (refuseOld = reject)))
+    render(<KeyConfirmBanner />)
+    mockKeys.mockResolvedValue([IC9700])
+    await act(async () => {
+      vi.advanceTimersByTime(KEYS_TO_CONFIRM_EVERY_MS)
+    })
+    await settle()
+    const radio = fill(EN['keyConfirm.icomLan'], { radio: 'IC-9700', address: '192.168.1.20' })
+    expect(screen.getByText(radio)).toBeTruthy()
+    refuseOld(new Error('Credentials are set at the shack only.'))
+    await settle()
+    expect(screen.getByText(radio)).toBeTruthy()
+    await act(async () => {
+      vi.advanceTimersByTime(KEYS_TO_CONFIRM_EVERY_MS)
+    })
+    await settle()
+    expect(mockKeys).toHaveBeenCalledTimes(3)
+  })
+
   it('on a computer refused the question, shows nothing and stops asking', async () => {
     mockKeys.mockRejectedValue(new Error('Credentials are set at the shack only.'))
     const { container } = render(<KeyConfirmBanner />)
