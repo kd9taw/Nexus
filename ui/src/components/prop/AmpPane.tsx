@@ -80,9 +80,15 @@ const SEP = ' · '
 /** How long a queued press holds the button before giving up on an answer. The new state reaches the
  *  screen two poll cycles after the click, not one: the poll thread sleeps a second, reads, sends the
  *  press, and publishes the reading it took BEFORE sending, so the change shows on the NEXT cycle's
- *  read, plus up to 300 ms for the snapshot. That is about 2.3 s for an SPE, whose read takes
- *  milliseconds; an Elecraft's read is six verbs at up to 0.4 s each, so a slow one runs past 3 s.
- *  Five seconds covers both. A press the poll thread dropped never moves the state at all. */
+ *  read, plus up to 300 ms for the snapshot: about 1 + R + 1 + R + 0.3 s, R the read time. That is
+ *  about 2.3 s for an SPE, whose read takes milliseconds. An Elecraft's read is six verbs at up to
+ *  0.4 s each in the normal case, which five seconds covers (it covers R up to about 1.35 s); but a
+ *  slow KPA read can take up to 2.4 s, about 7 s click to screen, and a press deferred one cycle
+ *  behind a Remote browser's command adds another 1 + R. So five seconds covers an SPE and a
+ *  TYPICAL Elecraft, not every Elecraft. Chosen over a longer wait because every press the poll
+ *  thread drops (an Elecraft with no fresh CAT PTT reading drops all of them) holds the button for
+ *  the full wait, and an early release never makes the screen lie: it still shows what the
+ *  amplifier reported, and only a second click inside the slow case could toggle it back. */
 const WAIT_MS = 5000
 
 /** THE PRESS IN FLIGHT, per WINDOW, keyed by the amplifier — not component state. A component's
@@ -97,7 +103,8 @@ interface Hold {
   amp: string
   /** The Operate state it had reported when the operator clicked. */
   from: boolean
-  /** When the hold gives up (ms since the epoch). */
+  /** When the hold gives up, on this window's MONOTONIC clock (`performance.now()`), never the wall
+   *  clock: a system clock stepping back must not keep the button locked for the size of the step. */
   until: number
 }
 let hold: Hold | null = null
@@ -252,7 +259,7 @@ function OperateButton({
   // THE PRESS IN FLIGHT (the window's `hold`, above), when it is this amplifier's and not yet given up.
   const current = useSyncExternalStore(subscribeHold, () => hold)
   const mine = current != null && current.amp === ampKey(amp) ? current : null
-  const waiting = mine != null && Date.now() < mine.until
+  const waiting = mine != null && performance.now() < mine.until
   // Ends when the amplifier reports a different state (or none)…
   useEffect(() => {
     if (mine != null && operate !== mine.from) releaseHold(mine)
@@ -260,13 +267,13 @@ function OperateButton({
   // …or when it gives up: the time LEFT, so a remount mid-wait keeps the original deadline.
   useEffect(() => {
     if (mine == null) return
-    const timer = setTimeout(() => releaseHold(mine), Math.max(0, mine.until - Date.now()))
+    const timer = setTimeout(() => releaseHold(mine), Math.max(0, mine.until - performance.now()))
     return () => clearTimeout(timer)
   }, [mine])
   const press = async () => {
     if (operate == null) return
     // Held from the click, not from the answer: the second click of a double click lands before it.
-    const h: Hold = { amp: ampKey(amp), from: operate, until: Date.now() + WAIT_MS }
+    const h: Hold = { amp: ampKey(amp), from: operate, until: performance.now() + WAIT_MS }
     setHold(h)
     const queued = await send('operate')
     if (!queued) releaseHold(h)

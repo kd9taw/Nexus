@@ -292,6 +292,55 @@ describe('the Amplifier box’s Operate/Standby button', () => {
     }
   })
 
+  it('…and a wall clock stepping BACK while away does not keep the button locked (the hold runs on a monotonic clock)', async () => {
+    vi.useFakeTimers()
+    try {
+      const first = render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+      await act(async () => {
+        fireEvent.click(button())
+      })
+      first.unmount()
+      // The computer's clock is set back an hour (NTP, a manual change) between the click and the return.
+      vi.setSystemTime(Date.now() - 3_600_000)
+      render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+      expect(button().disabled, 'the hold should still be in force right after the remount').toBe(true)
+      await act(async () => {
+        vi.advanceTimersByTime(5100)
+      })
+      expect(button().disabled, 'an hour-long wall-clock step kept the button locked').toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('…and a late "not queued" answer to an OLD press does not free the newer press', async () => {
+    // Press 1's call hangs past the wait; press 2 is queued; then press 1 answers that it could not be
+    // queued. That answer is about press 1's hold, which is long gone, and must not end press 2's.
+    vi.useFakeTimers()
+    try {
+      let answer1!: (queued: boolean) => void
+      vi.mocked(ampCommand).mockImplementationOnce(() => new Promise<boolean>((res) => (answer1 = res)))
+      render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+      await act(async () => {
+        fireEvent.click(button())
+      })
+      await act(async () => {
+        vi.advanceTimersByTime(5000)
+      })
+      expect(button().disabled).toBe(false)
+      await act(async () => {
+        fireEvent.click(button())
+      })
+      expect(button().disabled).toBe(true)
+      await act(async () => {
+        answer1(false)
+      })
+      expect(button().disabled, "press 1's late refusal freed press 2").toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('…and every box in the window for the same amplifier holds together; the new state frees them all', async () => {
     const a = render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
     const b = render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
@@ -303,6 +352,15 @@ describe('the Amplifier box’s Operate/Standby button', () => {
     a.rerender(<AmpPane amp={live({ operate: true })} radioOnAir={false} />)
     b.rerender(<AmpPane amp={live({ operate: true })} radioOnAir={false} />)
     expect(buttons().map((x) => x.disabled)).toEqual([false, false])
+  })
+
+  it('…and another amplifier’s box reporting a DIFFERENT state does not free this amplifier’s hold', async () => {
+    render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+    await act(async () => {
+      fireEvent.click(document.querySelectorAll<HTMLButtonElement>('.amp-opbtn')[0])
+    })
+    render(<AmpPane amp={live({ family: 'kpa', model: '', operate: true })} radioOnAir={false} />)
+    expect([...document.querySelectorAll<HTMLButtonElement>('.amp-opbtn')].map((b) => b.disabled)).toEqual([true, false])
   })
 
   it('…but a press to one amplifier does not hold another', async () => {
