@@ -54790,6 +54790,13 @@ mod tests {
         assert!(!ev(200.0, Some(now - 6 * 3600)), "S2, 6 h (S1)");
         assert!(!ev(0.3, Some(now - 6 * 3600)), "quiet, 6 h (F3, Q3)");
         assert!(!ev(150.0, None), "undated");
+        // A reading dated 3 min ahead of the shack's clock is refused: no event, so no cap is drawn.
+        assert!(!ev(150.0, Some(now + 180)), "3 min in the future");
+        assert!(ev(150.0, Some(now + 120)), "the 120 s skew allowance");
+        // A non-finite flux is no reading; a huge finite one is S5.
+        assert!(!ev(f64::INFINITY, Some(now - 300)), "+inf");
+        assert!(!ev(f64::NAN, Some(now - 300)), "NaN");
+        assert!(ev(1e300, Some(now - 300)), "huge finite");
     }
 
     /// NOAA's grid is asked during a flare or during a measured proton event, and not on a quiet

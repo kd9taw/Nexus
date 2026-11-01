@@ -102,8 +102,12 @@ pub fn absorption_db(
 }
 
 /// NOAA's S-scale (solar radiation storm) from J(≥10 MeV) in pfu: S1 at 10, S2 at 100, … S5 at
-/// 10⁵; 0 below S1 (and for a non-finite flux).
+/// 10⁵ and above (a huge finite flux saturates at S5); 0 below S1, and 0 for a non-finite flux (NaN
+/// or ±∞ is no reading, so no event: fail closed).
 pub fn s_scale(j10: f64) -> u8 {
+    if !j10.is_finite() {
+        return 0;
+    }
     [1e5, 1e4, 1e3, 100.0, 10.0]
         .iter()
         .position(|&t| j10 >= t)
@@ -121,10 +125,69 @@ pub fn sep_recovery_hours(j10: f64) -> Option<f64> {
 /// every 5 minutes; the shack asks every 5).
 pub const PROTON_FRESH_SECS: i64 = 30 * 60;
 
-/// Whether a proton event (S1+) is measured now: J(≥10 MeV) ≥ 10 pfu at a dated sample younger
-/// than [`PROTON_FRESH_SECS`]. An undated or old sample is no event (fail closed).
+/// How far ahead of the clock a proton sample may be dated and still be taken (clock skew between
+/// the shack and NOAA); further ahead it is refused. The path overlay's `DRAP_AHEAD_SECS`.
+pub const PROTON_AHEAD_SECS: i64 = 120;
+
+/// THE rule for "a proton event is held now", one for the map and the path overlay: S1+ from a
+/// finite J(≥10 MeV) ([`s_scale`]), at a dated sample whose age is at least −[`PROTON_AHEAD_SECS`]
+/// and under [`PROTON_FRESH_SECS`]. An undated, old, or too-far-future sample is no event (fail
+/// closed); the age never overflows.
 pub fn proton_event(j10: f64, at: Option<i64>, now: i64) -> bool {
-    s_scale(j10) >= 1 && at.is_some_and(|at| now - at < PROTON_FRESH_SECS)
+    s_scale(j10) >= 1
+        && at.is_some_and(|at| {
+            let age = now.saturating_sub(at);
+            (-PROTON_AHEAD_SECS..PROTON_FRESH_SECS).contains(&age)
+        })
+}
+
+/// The differential case table for [`proton_event`]: every caller that decides "a proton event is
+/// held" (the polar-cap layer, the path overlay) runs its own rule over these and must agree.
+/// `(name, j10, age in seconds (None = undated), held)`; the sample time is `now − age`, saturating.
+#[cfg(test)]
+pub(crate) mod cases {
+    pub const PROTON_EVENT_CASES: &[(&str, f64, Option<i64>, bool)] = &[
+        ("fresh S1 (10 pfu, 5 min)", 10.0, Some(300), true),
+        ("fresh S2 (150 pfu, 5 min)", 150.0, Some(300), true),
+        ("S2 just now", 150.0, Some(0), true),
+        ("S2 at 30 min less 1 s", 150.0, Some(30 * 60 - 1), true),
+        ("S2 at exactly 30 min", 150.0, Some(30 * 60), false),
+        ("S2 6 h old", 150.0, Some(6 * 3600), false),
+        (
+            "S2 dated 120 s ahead (the skew limit)",
+            150.0,
+            Some(-120),
+            true,
+        ),
+        ("S2 dated 121 s ahead", 150.0, Some(-121), false),
+        (
+            "S2 dated 3 min ahead (clock skew)",
+            150.0,
+            Some(-180),
+            false,
+        ),
+        ("S2 undated", 150.0, None, false),
+        ("quiet 0.3 pfu, fresh", 0.3, Some(300), false),
+        ("sub-S1 9.99 pfu, fresh", 9.99, Some(300), false),
+        ("5 pfu, fresh", 5.0, Some(300), false),
+        ("NaN flux, fresh", f64::NAN, Some(300), false),
+        ("+inf flux, fresh", f64::INFINITY, Some(300), false),
+        ("-inf flux, fresh", f64::NEG_INFINITY, Some(300), false),
+        ("huge finite flux (1e300), fresh", 1e300, Some(300), true),
+        ("f64::MAX flux, fresh", f64::MAX, Some(300), true),
+        (
+            "age i64::MAX (dated at the far past)",
+            150.0,
+            Some(i64::MAX),
+            false,
+        ),
+        (
+            "age i64::MIN (dated at the far future)",
+            150.0,
+            Some(i64::MIN),
+            false,
+        ),
+    ];
 }
 
 /// Bearing step (degrees) round the cap edge.
@@ -268,6 +331,30 @@ mod tests {
         assert!((sep_recovery_hours(1500.0).unwrap() - 48.47).abs() < 1e-9);
         assert_eq!(sep_recovery_hours(15.0), None);
         assert_eq!(sep_recovery_hours(12.0), None);
+    }
+
+    /// The shared table: the rule's own answer for every case (sample time `now − age`, saturating).
+    #[test]
+    fn proton_event_agrees_with_the_differential_case_table() {
+        let now = 1_800_000_000_i64;
+        for &(name, j10, age, held) in cases::PROTON_EVENT_CASES {
+            let at = age.map(|a| now.saturating_sub(a));
+            assert_eq!(proton_event(j10, at, now), held, "{name}");
+        }
+        // The age itself never overflows, whatever the sample time.
+        assert!(!proton_event(150.0, Some(i64::MIN), now));
+        assert!(!proton_event(150.0, Some(i64::MAX), now));
+        assert!(!proton_event(150.0, Some(i64::MIN), i64::MAX));
+    }
+
+    #[test]
+    fn the_s_scale_is_safe_at_the_edges_of_f64() {
+        assert_eq!(s_scale(f64::NAN), 0);
+        assert_eq!(s_scale(f64::INFINITY), 0, "a non-finite flux is no reading");
+        assert_eq!(s_scale(f64::NEG_INFINITY), 0);
+        assert_eq!(s_scale(1e300), 5, "a huge finite flux saturates at S5");
+        assert_eq!(s_scale(f64::MAX), 5);
+        assert_eq!(s_scale(-1.0), 0);
     }
 
     #[test]
