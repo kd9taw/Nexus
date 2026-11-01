@@ -265,10 +265,13 @@ pub fn footprint(
     })
 }
 
-/// NOAA's S-scale level for a J(≥10 MeV) flux in pfu: S1 at 10, S2 at 100, … S5 at 10⁵; 0 below
-/// S1 and for NaN. A threshold table, never arithmetic on the flux, so a huge or infinite value is
-/// the top level and never an overflow (the polar-cap layer's `pca::s_scale`, the same table).
+/// NOAA's S-scale level for a J(≥10 MeV) flux in pfu: S1 at 10, S2 at 100, … S5 at 10⁵ and above
+/// (a huge finite flux saturates at S5, never an overflow); 0 below S1, and 0 for a non-finite flux
+/// (NaN or ±∞ is no reading, so no event: fail closed). The polar-cap layer's `pca::s_scale`.
 pub fn s_scale(j10: f64) -> u8 {
+    if !j10.is_finite() {
+        return 0;
+    }
     [1e5, 1e4, 1e3, 100.0, 10.0]
         .iter()
         .position(|&t| j10 >= t)
@@ -281,14 +284,17 @@ pub fn s_scale(j10: f64) -> u8 {
 /// [`PROTONS_FRESH_SECS`]. A non-finite flux is refused (fail closed), as is a quiet, stale,
 /// undated or future-dated reading. It gates the PCA figure, the grid split and the now line.
 pub fn proton_event(p: Option<ProtonSample>, now: i64) -> Option<ProtonSample> {
-    protons_fresh(p, now).filter(|p| p.j10.is_finite() && s_scale(p.j10) >= 1)
+    protons_fresh(p, now).filter(|p| s_scale(p.j10) >= 1)
 }
 
 /// A proton sample that may speak for `now`: dated, at most [`PROTONS_AHEAD_SECS`] ahead of our
 /// clock and under [`PROTONS_FRESH_SECS`] old.
 pub fn protons_fresh(p: Option<ProtonSample>, now: i64) -> Option<ProtonSample> {
     p.filter(|p| {
-        p.at.is_some_and(|at| now - at < PROTONS_FRESH_SECS && now - at >= -PROTONS_AHEAD_SECS)
+        p.at.is_some_and(|at| {
+            let age = now.saturating_sub(at);
+            (-PROTONS_AHEAD_SECS..PROTONS_FRESH_SECS).contains(&age)
+        })
     })
 }
 
@@ -1209,8 +1215,8 @@ mod tests {
         // Huge but finite: the top level, never an overflow.
         (1e300, Some(60), true, 5),
         (f64::MAX, Some(60), true, 5),
-        // Non-finite: refused (fail closed); the scale itself still reads +inf as the top level.
-        (f64::INFINITY, Some(60), false, 5),
+        // Non-finite: no reading at all, so S0 and no event (fail closed).
+        (f64::INFINITY, Some(60), false, 0),
         (f64::NAN, Some(60), false, 0),
         (f64::NEG_INFINITY, Some(60), false, 0),
         (0.0, Some(60), false, 0),
@@ -1227,6 +1233,9 @@ mod tests {
         (200.0, Some(-3600), false, 2),
         // Undated: never an event.
         (200.0, None, false, 2),
+        // Ages at the ends of the clock: never an overflow, never an event.
+        (200.0, Some(i64::MAX), false, 2),
+        (200.0, Some(i64::MIN), false, 2),
     ];
 
     /// Run [`PROTON_EVENT_CASES`] against a rule `event(j10, at, now)` and a scale `s(j10)`.
@@ -1236,7 +1245,7 @@ mod tests {
     ) {
         let now = MAY_12Z;
         for &(j10, age, want_event, want_s) in PROTON_EVENT_CASES {
-            let at = age.map(|a| now - a);
+            let at = age.map(|a| now.saturating_sub(a));
             assert_eq!(
                 event(j10, at, now),
                 want_event,
@@ -1260,6 +1269,11 @@ mod tests {
             },
             s_scale,
         );
+        // Sample times at the ends of the clock: no overflow (a panic in a debug build), no event.
+        for at in [i64::MIN, i64::MAX] {
+            let p = storm(200.0, 0).map(|p| ProtonSample { at: Some(at), ..p });
+            assert!(proton_event(p, MAY_12Z).is_none(), "at {at}");
+        }
     }
 
     #[test]
