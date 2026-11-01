@@ -132,10 +132,13 @@ describe('pathNow — the flare and proton clauses on a path', () => {
     const counted = nowDetail({ ...NOAA_FLARE, source: splitSrc, bands: [{ band: '20m', hops: 2, hopsModelled: true, flareDb: 8.6, pcaDb: 12 }] }, '20m').join('\n')
     expect(counted).toContain('Poleward of 50° geomagnetic the flare figure takes no more than the GOES X-ray estimate')
     expect(counted).toContain('counted once, as polar-cap absorption')
-    // … and without one (no Kp, or below S1) it is said to be counted nowhere, never "once".
+    // … and without one (no Kp) it is said to be counted nowhere, never "once".
     const uncounted = nowDetail({ ...NOAA_FLARE, source: splitSrc }, '20m').join('\n')
     expect(uncounted).toContain('Poleward of 50° geomagnetic')
     expect(uncounted).toContain('is not counted here')
+    // The split runs only during a held proton event, so the only reason left is the missing Kp.
+    expect(uncounted).toContain('no Kp reading')
+    expect(uncounted).not.toContain('S1+')
     expect(uncounted).not.toContain('counted once')
     const a = nowDetail(NOAA_FLARE, '10m').join('\n')
     expect(a).toContain('assumed')

@@ -7351,7 +7351,7 @@ export const DE: PartialCatalog = {
   "pathNow.detail.hopsAssumed": "Durchgänge durch die D-Schicht: {{crossings}} (Sprünge: {{hops}}, angenommen zu je 4000 km; das Modell gibt für diese Stunde keine Ausbreitungsart)",
   "pathNow.detail.note": "Flare- und Protonenwerte sind Schätzungen über dem Modell, das beides nicht enthält; die Zahlen des Modells bleiben unverändert.",
   "pathNow.detail.capSplit": "Polwärts von {{lat}}° geomagnetisch nimmt der Flare-Wert höchstens die GOES-Röntgenschätzung, wo das NOAA-Raster höher liegt: Das Raster fasst die Protonenabsorption in denselben Wert. Dieser Protonenteil wird einmal gezählt, als Polkappen-Absorption.",
-  "pathNow.detail.capSplitUncounted": "Polwärts von {{lat}}° geomagnetisch nimmt der Flare-Wert höchstens die GOES-Röntgenschätzung, wo das NOAA-Raster höher liegt: Das Raster fasst die Protonenabsorption in denselben Wert. Dieser Protonenteil wird hier nicht gezählt: Einen Polkappen-Wert gibt es nur während eines NOAA-Protonenereignisses ab S1 mit einem Kp-Messwert.",
+  "pathNow.detail.capSplitUncounted": "Polwärts von {{lat}}° geomagnetisch nimmt der Flare-Wert höchstens die GOES-Röntgenschätzung, wo das NOAA-Raster höher liegt: Während des Protonenereignisses fasst das Raster die Protonenabsorption in denselben Wert. Dieser Protonenteil wird hier nicht gezählt: Ohne Kp-Messwert ist der Rand der Polkappe unbekannt, daher gibt es keinen Polkappen-Wert.",
   "pathNow.cell": "Jetzt: {{text}}",
   "pathNow.legend": "Schraffiert: jetzt von einem Flare oder Protonenereignis getroffen (geschätzt)",
   "spaceNow.flare.out": "Flare {{cls}} (R{{r}}): {{band}} und darunter auf der Tagseite ausgefallen {{until}} · {{source}}",

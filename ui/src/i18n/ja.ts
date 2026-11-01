@@ -7020,7 +7020,7 @@ export const JA: PartialCatalog = {
   "pathNow.detail.hopsAssumed": "D領域の通過：{{crossings}}回（ホップ：{{hops}}、各4000 kmと仮定。この時間のモデルのモードなし）",
   "pathNow.detail.note": "フレアとプロトンの数値はモデルに重ねた推定値です。モデルはどちらも含まず、モデルの数値は変わりません。",
   "pathNow.detail.capSplit": "地磁気緯度{{lat}}°より極側では、NOAAのグリッドの方が高い所でフレアの値はGOESのX線推定値を超えません。グリッドはプロトン吸収を同じ値に含めるためです。そのプロトン分は極冠吸収として一度だけ数えます。",
-  "pathNow.detail.capSplitUncounted": "地磁気緯度{{lat}}°より極側では、NOAAのグリッドの方が高い所でフレアの値はGOESのX線推定値を超えません。グリッドはプロトン吸収を同じ値に含めるためです。そのプロトン分はここでは数えません。極冠の値は、Kpの観測値があるNOAAのS1以上のプロトンイベント中にだけ示します。",
+  "pathNow.detail.capSplitUncounted": "地磁気緯度{{lat}}°より極側では、NOAAのグリッドの方が高い所でフレアの値はGOESのX線推定値を超えません。プロトンイベント中はグリッドがプロトン吸収を同じ値に含めるためです。そのプロトン分はここでは数えません。Kpの観測値がないため極冠の境界が不明で、極冠の値は示しません。",
   "pathNow.cell": "現在：{{text}}",
   "pathNow.legend": "斜線：現在フレアまたはプロトンイベントの影響あり（推定）",
   "spaceNow.flare.out": "フレア {{cls}}（R{{r}}）：昼側で{{band}}以下は不通 {{until}} · {{source}}",

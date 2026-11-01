@@ -11074,7 +11074,7 @@ export const EN = {
   'pathNow.detail.hopsAssumed': 'D-region crossings: {{crossings}} (hops: {{hops}}, assumed at 4000 km each; the model gives no mode this hour)',
   'pathNow.detail.note': "Flare and proton figures are estimates laid over the model, which includes neither; the model's numbers are unchanged.",
   'pathNow.detail.capSplit': "Poleward of {{lat}}° geomagnetic the flare figure takes no more than the GOES X-ray estimate where NOAA's grid is higher: the grid folds proton absorption into the same figure. That proton part is counted once, as polar-cap absorption.",
-  'pathNow.detail.capSplitUncounted': "Poleward of {{lat}}° geomagnetic the flare figure takes no more than the GOES X-ray estimate where NOAA's grid is higher: the grid folds proton absorption into the same figure. That proton part is not counted here: a polar-cap figure is given only during a NOAA S1+ proton event with a Kp reading.",
+  'pathNow.detail.capSplitUncounted': "Poleward of {{lat}}° geomagnetic the flare figure takes no more than the GOES X-ray estimate where NOAA's grid is higher: during the proton event the grid folds proton absorption into the same figure. That proton part is not counted here: with no Kp reading the polar-cap edge is unknown, so no polar-cap figure is given.",
   'pathNow.cell': 'Now: {{text}}',
   'pathNow.legend': 'Hatched: hit now by a flare or a proton event (estimated)',
   'spaceNow.flare.out': 'Flare {{cls}} (R{{r}}): {{band}} and below out on the dayside {{until}} · {{source}}',

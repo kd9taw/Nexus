@@ -9311,6 +9311,29 @@ mod path_now_tests {
         assert!(undated.protons.is_none());
         assert!(undated.space_now(NOW).and_then(|n| n.protons).is_none());
         assert!(dated.space_now(NOW).and_then(|n| n.protons).is_some());
+        // The grid split runs only during a held proton event: beside the dated S2 reading it keeps
+        // the grid's polar excess out of the flare figure; beside the same reading undated, NOAA's
+        // grid stands as its word.
+        let split_flag = |inputs: &NowInputs| {
+            let mut p = card();
+            attach_now(&mut p, BOSTON, LONDON, inputs, NOW);
+            let o = p.overlay.expect("a flare overlay");
+            let from = o
+                .bands
+                .iter()
+                .filter_map(|b| b.flare_from)
+                .collect::<Vec<_>>();
+            (o.source.flare_cap_geomag, from)
+        };
+        let (flag, _) = split_flag(&dated);
+        assert_eq!(flag, Some(50.0));
+        let (flag, from) = split_flag(&undated);
+        assert_eq!(flag, None);
+        assert!(
+            from.iter()
+                .all(|f| *f == propagation::pathnow::FlareFrom::Noaa),
+            "{from:?}"
+        );
     }
 
     #[test]
