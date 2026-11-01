@@ -4247,7 +4247,11 @@ export function MapView({
                         ? t('map.layer.pca.quiet')
                         : capPic.why === 'stale' && capPic.protonsAt != null
                           ? t('map.layer.pca.stale', { time: wxStampLabel(capPic.protonsAt) })
-                          : t('map.layer.pca.undated')}
+                          : capPic.why === 'ahead' && capPic.protonsAt != null
+                            ? t('map.layer.pca.ahead', { time: wxStampLabel(capPic.protonsAt) })
+                            : capPic.why === 'undated'
+                              ? t('map.layer.pca.undated')
+                              : t('map.layer.pca.unknown')}
                     </span>
                   )}
                   {k === 'aurora' && auroraPic?.mode === 'none' && auroraOval != null && (

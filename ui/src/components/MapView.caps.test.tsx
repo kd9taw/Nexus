@@ -33,7 +33,7 @@ vi.mock('../api', () => ({
 }))
 
 import { MapView } from './MapView'
-import { getAurora } from '../api'
+import { getAurora, getPca } from '../api'
 import { t } from '../i18n'
 import { kpLabel } from '../capsNow'
 import { wxStampLabel } from '../propViz'
@@ -93,6 +93,7 @@ beforeEach(() => {
   feeds.kpForecast = { points: [] }
   feeds.arrival = { watch: null, model: null, l1: null, rationale: null }
   vi.mocked(getAurora).mockClear()
+  vi.mocked(getPca).mockImplementation(async () => feeds.pca as never)
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
   const ctxs = new WeakMap<HTMLCanvasElement, unknown>()
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement) {
@@ -176,6 +177,8 @@ const PCA: PcaView = {
   sScale: 2,
   sepRecoveryH: 24.235,
   protonEvent: true,
+  protonEventUntil: NOW_S - 300 + 30 * 60,
+  protonWhy: 'held',
   edge: [ring(62), ring(-62)],
 }
 
@@ -228,7 +231,7 @@ describe('the polar cap on the 2-D map', () => {
 
   it('a proton sample over 15 min old (still under 30) says how old, dims, and drops NOAA’s duration', async () => {
     layersOn(['pca'])
-    feeds.pca = { ...PCA, protonsAt: NOW_S - 20 * 60 }
+    feeds.pca = { ...PCA, protonsAt: NOW_S - 20 * 60, protonEventUntil: NOW_S + 10 * 60 }
     const r = await mount()
     const chip = capChip(r.container)!
     expect(chip.hasAttribute('data-stale')).toBe(true)
@@ -239,7 +242,7 @@ describe('the polar cap on the 2-D map', () => {
   it('a proton reading 30 min old or more draws no cap, no edge and no chip, from either source; the row says how old', async () => {
     for (const lane0 of [null, lane(capGrid())]) {
       layersOn(['pca'])
-      feeds.pca = { ...PCA, protonsAt: NOW_S - 7200, protonEvent: false }
+      feeds.pca = { ...PCA, protonsAt: NOW_S - 7200, protonEvent: false, protonEventUntil: null, protonWhy: 'stale' }
       const r = await mount({ xrayLong: 2e-7, flareNoaa: lane0 })
       expect(capFills(r.container), 'no cap shading').toEqual([])
       expect(strokes(r.container, CAP_INK), 'no cap edge').toEqual([])
@@ -251,7 +254,7 @@ describe('the polar cap on the 2-D map', () => {
 
   it('an undated proton reading draws nothing, and the row says it has no time', async () => {
     layersOn(['pca'])
-    feeds.pca = { ...PCA, protonsAt: null, protonEvent: false }
+    feeds.pca = { ...PCA, protonsAt: null, protonEvent: false, protonEventUntil: null, protonWhy: 'undated' }
     const r = await mount({ xrayLong: 2e-7, flareNoaa: lane(capGrid()) })
     expect(capFills(r.container)).toEqual([])
     expect(capChip(r.container)).toBeNull()
@@ -270,7 +273,7 @@ describe('the polar cap on the 2-D map', () => {
     for (const lane0 of [null, lane(capGrid())]) {
       layersOn(['pca'])
       // the model's sub-S1 points and a grid excess are both there, and neither may be drawn as protons
-      feeds.pca = { ...PCA, j10: 0.3, sScale: 0, sepRecoveryH: null, protonEvent: false }
+      feeds.pca = { ...PCA, j10: 0.3, sScale: 0, sepRecoveryH: null, protonEvent: false, protonEventUntil: null, protonWhy: 'quiet' }
       const r = await mount({ xrayLong: 2e-7, flareNoaa: lane0 })
       expect(capChip(r.container)).toBeNull()
       expect(capFills(r.container)).toEqual([])
@@ -537,5 +540,53 @@ describe('round 4: one untick for the whole storm, on every map', () => {
       r.rerender(view(6))
     })
     expect(auroraBox(r.container).checked, 'the storm turns it on').toBe(true)
+  })
+})
+
+describe('round 6: the held event ends on this clock, and the row says the shack’s reason', () => {
+  it('K1: a held S2 whose later polls all fail goes at its until (30 min after the reading), not hours later', async () => {
+    layersOn(['pca'])
+    // read 25 min ago; held until 5 min from now
+    feeds.pca = { ...PCA, protonsAt: NOW_S - 25 * 60, protonEventUntil: NOW_S + 5 * 60 }
+    const r = await mount()
+    expect(capChip(r.container), 'CONTROL: held at 25 min').not.toBeNull()
+    vi.mocked(getPca).mockImplementation(async () => {
+      throw new Error('link down')
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4 * 60_000)
+    })
+    expect(capChip(r.container), 'CONTROL: still held at 29 min').not.toBeNull()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60_000)
+    })
+    expect(capChip(r.container), 'gone at 31 min, with no new answer').toBeNull()
+    marks(r.container).length = 0
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 3600_000)
+    })
+    expect(capChip(r.container), 'and still gone 2 h on').toBeNull()
+    expect(marks(r.container).length, 'CONTROL: the map redrew').toBeGreaterThan(0)
+    expect(capFills(r.container)).toEqual([])
+    expect(pcaRow(r.container).textContent).toContain(t('map.layer.pca.stale', { time: wxStampLabel(NOW_S - 25 * 60) }))
+  })
+
+  it('K3: an older station (no flag, no reason) with a fresh S2: nothing drawn, and not called out of date', async () => {
+    layersOn(['pca'])
+    feeds.pca = { ...PCA, protonEvent: undefined, protonEventUntil: undefined, protonWhy: undefined }
+    const r = await mount({ xrayLong: 2e-7, flareNoaa: lane(capGrid()) })
+    expect(capChip(r.container)).toBeNull()
+    expect(capFills(r.container)).toEqual([])
+    expect(pcaRow(r.container).textContent).toContain(t('map.layer.pca.unknown'))
+    expect(pcaRow(r.container).textContent).not.toContain(t('map.layer.pca.stale', { time: wxStampLabel(NOW_S - 300) }))
+  })
+
+  it('a reading dated 3 min ahead of the clock: nothing drawn, and the row says it is dated ahead', async () => {
+    layersOn(['pca'])
+    feeds.pca = { ...PCA, protonsAt: NOW_S + 180, protonEvent: false, protonEventUntil: null, protonWhy: 'ahead' }
+    const r = await mount()
+    expect(capChip(r.container)).toBeNull()
+    expect(capFills(r.container)).toEqual([])
+    expect(pcaRow(r.container).textContent).toContain(t('map.layer.pca.ahead', { time: wxStampLabel(NOW_S + 180) }))
   })
 })

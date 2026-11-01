@@ -4044,6 +4044,8 @@ export const RU: PartialCatalog = {
   "map.layer.pca.label": "Протонная полярная шапка (PCA)",
   "map.layer.pca.quiet": "протонного события нет (ниже S1): ничего не нарисовано",
   "map.layer.pca.stale": "данные о протонах устарели ({{time}}): ничего не нарисовано",
+  "map.layer.pca.ahead": "данные о протонах датированы позже этих часов ({{time}}): ничего не нарисовано",
+  "map.layer.pca.unknown": "эта станция не сообщает, идёт ли протонное событие: ничего не нарисовано",
   "map.layer.pca.undated": "у данных о протонах нет времени: ничего не нарисовано",
   "map.layer.coast.label": "Береговые линии",
   "map.layer.states.label": "Штаты США",

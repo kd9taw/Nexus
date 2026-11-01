@@ -574,6 +574,11 @@ export interface PcaView {
   /** Whether a proton event is held now, by the shack's one rule (`pca::proton_event`: S1+, dated,
    *  under 30 min). Absent from an older station, which counts as no event. */
   protonEvent?: boolean
+  /** When the held event stops being held (the sample time + 30 min, from the shack); present exactly
+   *  when `protonEvent` is. The map stops drawing it then on its own clock. */
+  protonEventUntil?: number | null
+  /** The shack's reason (`pca::proton_state`): held, or why not. Absent from an older station. */
+  protonWhy?: 'held' | 'quiet' | 'stale' | 'ahead' | 'undated'
 }
 
 /** Satellites view (get_satellites): amateur-bird subpoints now + next-24h passes

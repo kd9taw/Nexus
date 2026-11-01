@@ -121,6 +121,8 @@ const PCA: PcaView = {
   sScale: 2,
   sepRecoveryH: 24.2,
   protonEvent: true,
+  protonEventUntil: now - 300 + 30 * 60,
+  protonWhy: 'held',
   edge: [
     [[0, 70], [10, 70], [0, 70]],
     [[0, -70], [10, -70], [0, -70]],
@@ -170,19 +172,26 @@ describe('the polar cap: NOAA’s grid while current, else the model with its ap
     // flag it sends for each (src-tauri `the_pca_view_says_whether_a_proton_event_is_held`).
     const g = grid((la, lo) => (Math.abs(geomagLat(la, lo)) >= 62 ? 25 : 0))
     const NO: [string, Partial<PcaView>, string][] = [
-      ['quiet 0.3 pfu, fresh (Bp, F2, Q1)', { j10: 0.3, sScale: 0, protonEvent: false }, 'quiet'],
-      ['5 pfu, fresh (E)', { j10: 5, sScale: 0, protonEvent: false }, 'quiet'],
-      ['S2, 30 min old', { protonsAt: now - 30 * 60, protonEvent: false }, 'stale'],
-      ['S2, 2 h old', { protonsAt: now - 7200, protonEvent: false }, 'stale'],
-      ['S2, undated', { protonsAt: null, protonEvent: false }, 'undated'],
-      ['an older station (no flag, no sample time sent)', { protonEvent: undefined, protonsAt: undefined }, 'undated'],
+      ['quiet 0.3 pfu, fresh (Bp, F2, Q1)', { j10: 0.3, sScale: 0, protonEvent: false, protonEventUntil: null, protonWhy: 'quiet' }, 'quiet'],
+      ['5 pfu, fresh (E)', { j10: 5, sScale: 0, protonEvent: false, protonEventUntil: null, protonWhy: 'quiet' }, 'quiet'],
+      ['S2, 30 min old', { protonsAt: now - 30 * 60, protonEvent: false, protonEventUntil: null, protonWhy: 'stale' }, 'stale'],
+      ['S2, 2 h old', { protonsAt: now - 7200, protonEvent: false, protonEventUntil: null, protonWhy: 'stale' }, 'stale'],
+      ['S2, dated 3 min ahead', { protonsAt: now + 180, protonEvent: false, protonEventUntil: null, protonWhy: 'ahead' }, 'ahead'],
+      ['S2, undated', { protonsAt: null, protonEvent: false, protonEventUntil: null, protonWhy: 'undated' }, 'undated'],
+      // K3: an older station sends no flag and no reason; a fresh S2 is not called "out of date"
+      ['an older station (no flag, no reason), fresh S2', { protonEvent: undefined, protonEventUntil: undefined, protonWhy: undefined }, 'unknown'],
+      ['a held flag with no until (a station between versions)', { protonEventUntil: undefined }, 'unknown'],
+      // K1/K2: held when served, and its until has passed on this clock since
+      ['held when served, until reached', { protonEventUntil: now }, 'stale'],
+      ['held when served, until 2 h ago (polls failing)', { protonEventUntil: now - 7200 }, 'stale'],
     ]
     for (const [what, drap] of [['NOAA’s grid', g], ['the model', null]] as const) {
-      it(`${what}: a held event draws the cap (CONTROL)`, () => {
+      it(`${what}: a held event draws the cap (CONTROL), up to the second before its until`, () => {
         const pic = capPicture(PCA, drap, null, NOW)!
         expect(pic.source).toBe(drap ? 'noaa' : 'model')
         expect(pic.points.length).toBeGreaterThan(0)
         expect(capShown(PCA, pic)).toBe(true)
+        expect(capPicture({ ...PCA, protonEventUntil: now + 1 }, drap, null, NOW)!.source).not.toBe('none')
       })
       for (const [name, over, why] of NO) {
         it(`${what}: ${name} draws no cap, no edge, no chip, and NOAA's grid is not called protons`, () => {

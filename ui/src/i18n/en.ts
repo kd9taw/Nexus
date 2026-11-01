@@ -3941,10 +3941,13 @@ export const EN = {
   'map.layer.aurora.observed': 'from the solar wind observed {{time}}',
   'map.layer.flare.label': 'Flare blackout (D-RAP)',
   'map.layer.pca.label': 'Proton polar cap (PCA)',
-  // The polar-cap layer's row while no proton event is held (below S1, 30 min old or more, or undated);
+  // The polar-cap layer's row while no proton event is held, in the station's own reason (below S1,
+  // 30 min old or more, dated ahead of this computer's clock, undated, or not said by an older station);
   // {{time}} is a UTC stamp such as "31 Oct 23:35Z".
   'map.layer.pca.quiet': 'no proton event (below S1): nothing drawn',
   'map.layer.pca.stale': 'proton reading out of date ({{time}}): nothing drawn',
+  'map.layer.pca.ahead': 'proton reading dated ahead of this clock ({{time}}): nothing drawn',
+  'map.layer.pca.unknown': 'this station does not say whether a proton event is on: nothing drawn',
   'map.layer.pca.undated': 'proton reading has no time: nothing drawn',
   'map.layer.coast.label': 'Coastlines',
   'map.layer.states.label': 'US states',

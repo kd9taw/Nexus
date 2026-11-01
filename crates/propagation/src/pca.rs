@@ -129,16 +129,56 @@ pub const PROTON_FRESH_SECS: i64 = 30 * 60;
 /// the shack and NOAA); further ahead it is refused. The path overlay's `DRAP_AHEAD_SECS`.
 pub const PROTON_AHEAD_SECS: i64 = 120;
 
+/// Where a proton reading stands against the rule ([`proton_event`]), and so what the map may say:
+/// held, or the reason it is not. A reading that fails more than one test takes the first of
+/// undated, ahead, stale, then quiet: a reading whose time is wrong or old says nothing about the
+/// S level now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProtonState {
+    /// A proton event is held now: S1+, dated, age in −[`PROTON_AHEAD_SECS`]..[`PROTON_FRESH_SECS`].
+    Held,
+    /// The sample carries no time.
+    Undated,
+    /// Dated more than [`PROTON_AHEAD_SECS`] ahead of the clock.
+    Ahead,
+    /// [`PROTON_FRESH_SECS`] old or more.
+    Stale,
+    /// Current, but below S1 (or the flux is not a finite number): no proton event.
+    Quiet,
+}
+
+/// [`ProtonState`] of a reading at `now`. The one place the rule is written.
+pub fn proton_state(j10: f64, at: Option<i64>, now: i64) -> ProtonState {
+    let Some(at) = at else {
+        return ProtonState::Undated;
+    };
+    // Saturating: no sample time can overflow the age.
+    let age = now.saturating_sub(at);
+    if age < -PROTON_AHEAD_SECS {
+        ProtonState::Ahead
+    } else if age >= PROTON_FRESH_SECS {
+        ProtonState::Stale
+    } else if s_scale(j10) < 1 {
+        ProtonState::Quiet
+    } else {
+        ProtonState::Held
+    }
+}
+
 /// THE rule for "a proton event is held now", one for the map and the path overlay: S1+ from a
 /// finite J(≥10 MeV) ([`s_scale`]), at a dated sample whose age is at least −[`PROTON_AHEAD_SECS`]
 /// and under [`PROTON_FRESH_SECS`]. An undated, old, or too-far-future sample is no event (fail
 /// closed); the age never overflows.
 pub fn proton_event(j10: f64, at: Option<i64>, now: i64) -> bool {
-    s_scale(j10) >= 1
-        && at.is_some_and(|at| {
-            let age = now.saturating_sub(at);
-            (-PROTON_AHEAD_SECS..PROTON_FRESH_SECS).contains(&age)
-        })
+    proton_state(j10, at, now) == ProtonState::Held
+}
+
+/// When a held reading stops being held: its sample time plus [`PROTON_FRESH_SECS`] (saturating).
+/// The map stops drawing the event at this time on its own clock, without a new answer from the
+/// shack — so a reading kept through failed polls still ends at 30 minutes.
+pub fn proton_event_until(at: i64) -> i64 {
+    at.saturating_add(PROTON_FRESH_SECS)
 }
 
 /// The differential case table for [`proton_event`]: every caller that decides "a proton event is
@@ -345,6 +385,34 @@ mod tests {
         assert!(!proton_event(150.0, Some(i64::MIN), now));
         assert!(!proton_event(150.0, Some(i64::MAX), now));
         assert!(!proton_event(150.0, Some(i64::MIN), i64::MAX));
+    }
+
+    #[test]
+    fn the_proton_state_names_why_a_reading_is_not_held() {
+        let now = 1_800_000_000_i64;
+        let st =
+            |j10: f64, age: Option<i64>| proton_state(j10, age.map(|a| now.saturating_sub(a)), now);
+        assert_eq!(st(150.0, Some(300)), ProtonState::Held);
+        assert_eq!(st(150.0, None), ProtonState::Undated);
+        assert_eq!(st(150.0, Some(-180)), ProtonState::Ahead, "3 min ahead");
+        assert_eq!(
+            st(150.0, Some(-120)),
+            ProtonState::Held,
+            "the skew allowance"
+        );
+        assert_eq!(st(150.0, Some(30 * 60)), ProtonState::Stale);
+        assert_eq!(st(0.3, Some(300)), ProtonState::Quiet);
+        assert_eq!(st(f64::NAN, Some(300)), ProtonState::Quiet);
+        // a time problem is named before the S level: an old or future reading says nothing of now
+        assert_eq!(st(0.3, Some(7200)), ProtonState::Stale);
+        assert_eq!(st(0.3, Some(-600)), ProtonState::Ahead);
+        assert_eq!(st(0.3, None), ProtonState::Undated);
+        // the state and the event are one rule, case for case
+        for &(name, j10, age, held) in cases::PROTON_EVENT_CASES {
+            assert_eq!(st(j10, age) == ProtonState::Held, held, "{name}");
+        }
+        assert_eq!(proton_event_until(now), now + PROTON_FRESH_SECS);
+        assert_eq!(proton_event_until(i64::MAX), i64::MAX);
     }
 
     #[test]

@@ -2687,6 +2687,8 @@ export const JA: PartialCatalog = {
   "map.layer.pca.label": "プロトン極冠吸収（PCA）",
   "map.layer.pca.quiet": "プロトン現象なし（S1 未満）：描画なし",
   "map.layer.pca.stale": "プロトン値が古い（{{time}}）：描画なし",
+  "map.layer.pca.ahead": "プロトン値の時刻がこの時計より先（{{time}}）：描画なし",
+  "map.layer.pca.unknown": "この局はプロトン現象の有無を伝えていません：描画なし",
   "map.layer.pca.undated": "プロトン値に時刻なし：描画なし",
   "map.layer.coast.label": "海岸線",
   "map.layer.states.label": "米国州境",

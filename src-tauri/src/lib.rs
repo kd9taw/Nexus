@@ -9721,6 +9721,13 @@ struct PcaView {
     /// reads NOAA's grid's polar excess as protons — the same rule that asks NOAA for the grid
     /// (`drap_wanted`) and that the path overlay uses, so they cannot disagree.
     proton_event: bool,
+    /// When the held event stops being held (`pca::proton_event_until`: the sample time + 30 min),
+    /// present exactly when `proton_event` is. The map stops drawing it then on its own clock, so a
+    /// view kept through failed polls still ends on time.
+    proton_event_until: Option<i64>,
+    /// Why (`pca::proton_state`): held, or undated / ahead / stale / quiet — the map's words for
+    /// "nothing drawn" come from here, never from a guess on its side.
+    proton_why: propagation::pca::ProtonState,
 }
 
 #[tauri::command]
@@ -9774,6 +9781,7 @@ fn pca_view(flux: propagation::live::protons::ProtonFlux, kp: Option<f64>, now: 
     /// Below this 30 MHz cap absorption the event isn't operationally visible.
     const MIN_DB: f64 = 0.5;
     let cutoff_deg = kp.map(propagation::pca::cutoff_lat_deg);
+    let state = propagation::pca::proton_state(flux.j10, flux.at, now);
     PcaView {
         j10: flux.j10,
         a30_day: propagation::pca::a30_day(flux.j5),
@@ -9784,7 +9792,11 @@ fn pca_view(flux: propagation::live::protons::ProtonFlux, kp: Option<f64>, now: 
         s_scale: propagation::pca::s_scale(flux.j10),
         sep_recovery_h: propagation::pca::sep_recovery_hours(flux.j10),
         edge: cutoff_deg.map(propagation::pca::cap_edge_rings),
-        proton_event: propagation::pca::proton_event(flux.j10, flux.at, now),
+        proton_event: state == propagation::pca::ProtonState::Held,
+        proton_event_until: (state == propagation::pca::ProtonState::Held)
+            .then(|| flux.at.map(propagation::pca::proton_event_until))
+            .flatten(),
+        proton_why: state,
     }
 }
 
@@ -54797,6 +54809,40 @@ mod tests {
         assert!(!ev(f64::INFINITY, Some(now - 300)), "+inf");
         assert!(!ev(f64::NAN, Some(now - 300)), "NaN");
         assert!(ev(1e300, Some(now - 300)), "huge finite");
+    }
+
+    /// `protonEventUntil` travels exactly with `protonEvent` (the sample time + 30 min), and
+    /// `protonWhy` names the reason in the shack's words.
+    #[test]
+    fn the_pca_view_says_until_when_and_why() {
+        let now = 1_761_800_000;
+        let view = |j10: f64, at: Option<i64>| {
+            let flux = propagation::live::protons::ProtonFlux {
+                j1: 1.0,
+                j5: 1.0,
+                j10,
+                at,
+            };
+            serde_json::to_value(crate::pca_view(flux, Some(3.0), now)).unwrap()
+        };
+        let held = view(150.0, Some(now - 300));
+        assert_eq!(held["protonEvent"], true);
+        assert_eq!(held["protonEventUntil"], now - 300 + 30 * 60);
+        assert_eq!(held["protonWhy"], "held");
+        for (j10, at, why) in [
+            (0.3, Some(now - 300), "quiet"),
+            (150.0, Some(now - 31 * 60), "stale"),
+            (150.0, Some(now + 180), "ahead"),
+            (150.0, None, "undated"),
+        ] {
+            let v = view(j10, at);
+            assert_eq!(v["protonEvent"], false, "{why}");
+            assert!(
+                v["protonEventUntil"].is_null(),
+                "no until without an event ({why})"
+            );
+            assert_eq!(v["protonWhy"], why);
+        }
     }
 
     /// NOAA's grid is asked during a flare or during a measured proton event, and not on a quiet

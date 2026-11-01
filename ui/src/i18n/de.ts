@@ -4472,6 +4472,8 @@ export const DE: PartialCatalog = {
   "map.layer.pca.label": "Protonen-Polkappe (PCA)",
   "map.layer.pca.quiet": "kein Protonenereignis (unter S1): nichts gezeichnet",
   "map.layer.pca.stale": "Protonenmessung veraltet ({{time}}): nichts gezeichnet",
+  "map.layer.pca.ahead": "Protonenmessung liegt vor dieser Uhr ({{time}}): nichts gezeichnet",
+  "map.layer.pca.unknown": "diese Station meldet nicht, ob ein Protonenereignis läuft: nichts gezeichnet",
   "map.layer.pca.undated": "Protonenmessung ohne Zeit: nichts gezeichnet",
   "map.layer.coast.label": "Küstenlinien",
   "map.layer.states.label": "US-Bundesstaaten",

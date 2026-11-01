@@ -171,9 +171,10 @@ export interface CapPicture {
   /** 'noaa': NOAA's D-RAP grid; 'model': the shack's Sauer & Wilkinson model over GOES protons;
    *  'none': no cap, because the proton reading is not held (`why`). */
   source: 'noaa' | 'model' | 'none'
-  /** Why there is no cap ('none' only): the reading is below S1 (no proton event), 30 min old or
-   *  more, or carries no time. */
-  why?: 'quiet' | 'stale' | 'undated'
+  /** Why there is no cap ('none' only), in the shack's words (`protonWhy`): below S1, 30 min old or
+   *  more (or past `protonEventUntil` on this clock), dated ahead of the clock, or no time; 'unknown'
+   *  when the station does not say (an older one). */
+  why?: 'quiet' | 'stale' | 'ahead' | 'undated' | 'unknown'
   /** The proton reading's own time ('none' with `why: 'stale'`, for the layer row). */
   protonsAt?: number | null
   points: { lat: number; lon: number; db30: number }[]
@@ -194,13 +195,23 @@ export function capPicture(
   nowMs: number,
 ): CapPicture | null {
   if (!pca) return null
-  // FAIL CLOSED on the shack's one rule (`protonEvent` = `pca::proton_event`; an older station sends
-  // no flag, which is no event). Without it there is no cap from either source (not NOAA's grid's
-  // polar excess called "proton", not the model's points), no edge and no chip. `why` only words
-  // the layer row; it decides nothing.
-  if (pca.protonEvent !== true) {
+  // FAIL CLOSED on the shack's one rule (`protonEvent` = `pca::proton_event`), AND only until the
+  // time the shack says it stops being held (`protonEventUntil`), compared with this clock at render
+  // time: a view kept through failed polls still ends on time. No flag or no `until` (an older
+  // station) is no event. Without it there is no cap from either source (not NOAA's grid's polar
+  // excess called "proton", not the model's points), no edge and no chip. `why` is the shack's own
+  // reason and only words the layer row.
+  const until = pca.protonEventUntil
+  if (!(pca.protonEvent === true && until != null && nowMs / 1000 < until)) {
     const at = pca.protonsAt ?? null
-    const why = at == null ? 'undated' : sScale(pca) < 1 ? 'quiet' : 'stale'
+    const why: CapPicture['why'] =
+      pca.protonEvent === true
+        ? until != null
+          ? 'stale' // held when served, and its time has run out since
+          : 'unknown'
+        : pca.protonWhy != null && pca.protonWhy !== 'held'
+          ? pca.protonWhy
+          : 'unknown'
     return { source: 'none', why, protonsAt: at, points: [], validAt: null, edge: null, maxDb: 0 }
   }
   if (drapFresh(drap, nowMs)) {

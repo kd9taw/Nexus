@@ -174,6 +174,8 @@ const PCA: PcaView = {
   sScale: 2,
   sepRecoveryH: 24.235,
   protonEvent: true,
+  protonEventUntil: NOW_S - 300 + 30 * 60,
+  protonWhy: 'held',
   edge: [ring(62), ring(-62)],
 }
 
@@ -228,7 +230,7 @@ describe('the polar cap on the 3-D globe', () => {
   })
 
   it('a proton reading 2 h old draws no cap, no edge and no chip on the globe', async () => {
-    feeds.pca = { ...PCA, protonsAt: NOW_S - 7200, protonEvent: false }
+    feeds.pca = { ...PCA, protonsAt: NOW_S - 7200, protonEvent: false, protonEventUntil: null, protonWhy: 'stale' }
     const r = await mount(3)
     expect(group('capEdge')).toBeUndefined()
     expect(r.container.querySelector('.pca-chip')).toBeNull()
