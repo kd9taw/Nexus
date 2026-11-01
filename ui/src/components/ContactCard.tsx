@@ -72,6 +72,7 @@ const QRZ_PAGE = 'QRZ ↗'
  *  name, a confirmation in words. */
 function callFixLabel(c: CallFixClear): string {
   if (c === 'card') return t('contactCard.callFix.card')
+  if (c === 'cardDated') return t('contactCard.callFix.cardDated')
   if (c === 'lotw') return t('contactCard.callFix.lotw')
   if (c === 'eqsl') return t('contactCard.callFix.eqsl')
   if (c === 'qrz') return t('contactCard.callFix.qrz')
