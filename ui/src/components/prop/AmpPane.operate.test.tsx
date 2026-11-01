@@ -142,10 +142,63 @@ describe('the Amplifier box’s Operate/Standby button', () => {
       fireEvent.click(button())
     })
     expect(screen.getByRole('status').textContent).toBe(t('amp.strip.refused'))
+    // A refused press holds nothing: the button is live for the retry.
+    expect(button().disabled).toBe(false)
     await act(async () => {
       fireEvent.click(button())
     })
-    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText(t('amp.strip.refused'))).toBeNull()
+  })
+
+  it('a queued press holds the button — "Sent, waiting" — so a second click cannot toggle it back', async () => {
+    render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+    await act(async () => {
+      fireEvent.click(button())
+    })
+    expect(button().disabled).toBe(true)
+    expect(screen.getByRole('status').textContent).toBe(t('amp.op.waiting'))
+    await act(async () => {
+      fireEvent.click(button())
+    })
+    expect(vi.mocked(ampCommand)).toHaveBeenCalledTimes(1)
+    // Waiting is about OUR keystroke: the button still says what the amplifier last reported.
+    expect(button().classList.contains('is-standby')).toBe(true)
+    expect(button().getAttribute('aria-label')).toBe(`${t('amp.standby')} · ${t('amp.op.notActive')}`)
+  })
+
+  it('…until the amplifier reports the new state — not on a frame that repeats the old one', async () => {
+    const r = render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+    await act(async () => {
+      fireEvent.click(button())
+    })
+    r.rerender(<AmpPane amp={live({ operate: false, volts: 47.9 })} radioOnAir={false} />)
+    expect(button().disabled, 'a frame that still says Standby ended the wait').toBe(true)
+    r.rerender(<AmpPane amp={live({ operate: true })} radioOnAir={false} />)
+    expect(button().disabled).toBe(false)
+    expect(button().classList.contains('is-operate')).toBe(true)
+    expect(screen.queryByText(t('amp.op.waiting'))).toBeNull()
+  })
+
+  it('…or until it gives up: a press dropped by the transmit interlock never changes the state', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+      await act(async () => {
+        fireEvent.click(button())
+      })
+      expect(button().disabled).toBe(true)
+      await act(async () => {
+        vi.advanceTimersByTime(2900)
+      })
+      expect(button().disabled, 'gave up early').toBe(true)
+      await act(async () => {
+        vi.advanceTimersByTime(200)
+      })
+      expect(button().disabled).toBe(false)
+      expect(screen.queryByText(t('amp.op.waiting'))).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('every title says Standby does NOT stop a transmission — in every state', () => {

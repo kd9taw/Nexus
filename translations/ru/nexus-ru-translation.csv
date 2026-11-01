@@ -8084,6 +8084,7 @@ Click for internet feed controls.","{{detail}}
 "5","amp.op.active","Active","Активен","","Second word on the Amplifier box's Operate button: the amplifier is in line (in Operate). The opposite of amp.op.notActive."
 "5","amp.op.notActive","Not active","Не активен","","Second word on the Amplifier box's Standby button: the amplifier is out of line (in Standby). The opposite of amp.op.active."
 "5","amp.op.notStop","Standby does NOT stop a transmission — the exciter keeps keying and the drive passes straight through.","Режим ожидания НЕ останавливает передачу — трансивер продолжает передавать, и сигнал возбуждения проходит напрямую.","","Ends every tooltip of the Amplifier box's Operate/Standby button. Keep the emphasis on NOT."
+"5","amp.op.waiting","Sent — waiting for the amplifier","Отправлено — ждём ответа усилителя","","Under the Amplifier box's Operate/Standby button for about a second after a press: Nexus queued the press and is waiting for the amplifier's next status report. It does not say the amplifier switched."
 "5","amp.k.power","Power out","Вых. мощность","",""
 "5","amp.k.temp","PA temp","Темп. PA","PA",""
 "5","amp.k.current","Current","Ток","","One-word control on: amplifier strip / Propagation pane. Out of context this could be a noun or a verb — open that screen (or read the key name) before choosing the Russian word."

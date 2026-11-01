@@ -754,6 +754,7 @@ export const FR: PartialCatalog = {
   "amp.op.active": "Actif",
   "amp.op.notActive": "Inactif",
   "amp.op.notStop": "La veille n'arrête PAS une émission : l'excitateur continue de manipuler et la puissance passe quand même.",
+  "amp.op.waiting": "Envoyé — en attente de l'amplificateur",
   "amp.swr.title": "Rapport d'ondes stationnaires mesuré à l'antenne.",
   "amp.swrAtu.title": "Rapport d'ondes stationnaires mesuré avant le coupleur de l'amplificateur.",
   "amp.temp.unknownScale": "Le protocole SPE ne dit pas s'il s'agit de °C ou de °F : l'amplificateur rapporte ce que son propre afficheur indique. Vérifiez en face avant.",

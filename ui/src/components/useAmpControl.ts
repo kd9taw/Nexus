@@ -22,9 +22,11 @@ import type { AmpStatus } from '../types'
  * - **`usable`**: live and not keyed. This is a COURTESY, not the protection — the poll thread
  *   refuses to send while the amplifier reports transmitting (and checks current measurements),
  *   and that refusal is what actually guards the hardware.
- * - **`refused`**: the last command the queue refused or that failed, shown until the next one
- *   that goes through, because a keystroke the operator watched themselves make and that
- *   silently vanished reads as broken.
+ * - **`refused`**: the last command Nexus could not QUEUE (the queue was full, the call failed, or a
+ *   Remote client does not hold the station), shown until the next one that is queued, because a
+ *   keystroke the operator watched themselves make and that silently vanished reads as broken. It
+ *   is NOT the amplifier refusing, and not the transmit interlock: a queued command the poll thread
+ *   then drops because the rig is keyed is dropped without a word, and nothing here can see it.
  *
  * And what it does NOT hold, on purpose: any notion of the amplifier's Operate state. `OPERATE`
  * is a toggle with no idempotent "set" in the protocol, so a lost or duplicated frame inverts
@@ -41,13 +43,18 @@ export function useAmpControl(
   const keyed = amp?.transmitting === true || radioTransmitting
   const usable = live && !keyed
 
-  const send = async (which: 'bandDown' | 'bandUp' | 'operate') => {
-    if (!usable) return
+  /** Resolves true when Nexus QUEUED the command, which is all it can know: the poll thread may still
+   *  drop it without a word (a key that came up meanwhile), and the amplifier says nothing back but
+   *  its next status frame. */
+  const send = async (which: 'bandDown' | 'bandUp' | 'operate'): Promise<boolean> => {
+    if (!usable) return false
     try {
       const ok = await ampCommand(which)
       setRefused(!ok)
+      return ok
     } catch {
       setRefused(true)
+      return false
     }
   }
 

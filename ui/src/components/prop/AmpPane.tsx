@@ -14,8 +14,14 @@
 //     frame and nothing else; a click sets no local state, and the next poll moves it.
 //   • DEAD WHILE KEYED — the amplifier's own flag OR the radio's ON AIR answer (`radioOnAir`) —
 //     and while the link is down, drawn with a dashed edge (a dimming faded the state colour under
-//     4.5:1 at Night). A courtesy: the backend's refusal to send while transmitting is the real
-//     guard, and a refusal reaches the screen as "Not sent", as it does on the strip.
+//     4.5:1 at Night). A courtesy: the poll thread's transmit interlock is the real guard, and it
+//     DROPS a queued press without a word — nothing on screen says so, and the button simply stays
+//     as it was. "Not sent" appears only when Nexus could not QUEUE the press (the queue was full,
+//     the call failed, or a Remote client does not hold the station), as on the strip.
+//   • ONE PRESS AT A TIME. After a press Nexus queued, the button is dead and says "Sent — waiting
+//     for the amplifier" until the amplifier's reported state changes or WAIT_MS passes (a dropped
+//     press never changes it). A second click in that second would toggle the amplifier straight
+//     back. It still shows the state the amplifier last REPORTED, never the one we expect.
 //   • DEAD, AND SAYING WHY, WHEN THE STATE IS UNKNOWN. A configured amplifier that is not
 //     answering, or answers without an Operate state, draws '—' and the reason. Toggling a state
 //     we cannot see would be toggling blind; this is the one place it refuses more than the strip.
@@ -44,6 +50,7 @@
 // cell's width in any box (the dashboard rail at its 200 px floor, a wide Connect strip) and never
 // wraps or runs past its cell, and a height cap in styles.css that rides --text-scale stops it growing
 // past what Text size asks for in a wide one. The other readings are text a step larger than the body.
+import { useEffect, useState } from 'react'
 import type { AmpStatus } from '../../types'
 import { t } from '../../i18n'
 import { T } from '../../i18n/T'
@@ -61,6 +68,9 @@ const DASH = '—'
 const BIG_CHARS = 6
 /** Between the Operate button's word and its second word, in its accessible name. A mark, not prose. */
 const SEP = ' · '
+/** How long a queued press holds the button before giving up on an answer. The amplifier is polled
+ *  about once a second; a press the poll thread dropped never moves the state at all. */
+const WAIT_MS = 3000
 
 /** Wire tag → the sentence for it, each as a THUNK.
  *
@@ -191,6 +201,26 @@ function OperateButton({
   control: ReturnType<typeof useAmpControl>
 }) {
   const known = operate != null
+  // THE PRESS IN FLIGHT: the Operate state the amplifier reported when Nexus queued the press, or null.
+  // It ends when the amplifier reports a different state (or none), or after WAIT_MS.
+  const [waitingFrom, setWaitingFrom] = useState<boolean | null>(null)
+  const waiting = waitingFrom != null
+  useEffect(() => {
+    if (waitingFrom != null && operate !== waitingFrom) setWaitingFrom(null)
+  }, [operate, waitingFrom])
+  useEffect(() => {
+    if (waitingFrom == null) return
+    const timer = setTimeout(() => setWaitingFrom(null), WAIT_MS)
+    return () => clearTimeout(timer)
+  }, [waitingFrom])
+  const press = async () => {
+    if (operate == null) return
+    const from = operate
+    // Held from the click, not from the answer: the second click of a double click lands before it.
+    setWaitingFrom(from)
+    const queued = await send('operate')
+    if (!queued) setWaitingFrom(null)
+  }
   // Every title ends on the same warning, because this is the control an operator could reach
   // for in a hurry: Standby does NOT stop a transmission.
   const notStop = t('amp.op.notStop')
@@ -221,11 +251,11 @@ function OperateButton({
       <button
         type="button"
         className={`amp-opbtn${tone}`}
-        disabled={!usable || !known}
+        disabled={!usable || !known || waiting}
         title={title}
         aria-label={name}
         // The amplifier answers on the next poll; nothing here moves until it does.
-        onClick={() => void send('operate')}
+        onClick={() => void press()}
       >
         {known && <span className="amp-opbtn-icon">{operate ? LAMP : PAUSE}</span>}
         <span className="amp-opbtn-word">{word}</span>
@@ -234,6 +264,11 @@ function OperateButton({
       {refused && (
         <span className="amp-strip-refused" role="status">
           <T k="amp.strip.refused" />
+        </span>
+      )}
+      {waiting && (
+        <span className="amp-op-waiting" role="status">
+          <T k="amp.op.waiting" />
         </span>
       )}
     </div>

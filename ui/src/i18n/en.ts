@@ -14810,6 +14810,7 @@ export const EN = {
   'amp.op.active': 'Active',
   'amp.op.notActive': 'Not active',
   'amp.op.notStop': 'Standby does NOT stop a transmission — the exciter keeps keying and the drive passes straight through.',
+  'amp.op.waiting': 'Sent — waiting for the amplifier',
   'amp.k.power': 'Power out',
   'amp.k.temp': 'PA temp',
   'amp.k.current': 'Current',

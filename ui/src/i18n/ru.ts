@@ -7476,6 +7476,7 @@ export const RU: PartialCatalog = {
   "amp.op.active": "Активен",
   "amp.op.notActive": "Не активен",
   "amp.op.notStop": "Режим ожидания НЕ останавливает передачу — трансивер продолжает передавать, и сигнал возбуждения проходит напрямую.",
+  "amp.op.waiting": "Отправлено — ждём ответа усилителя",
   "amp.k.power": "Вых. мощность",
   "amp.k.temp": "Темп. PA",
   "amp.k.current": "Ток",

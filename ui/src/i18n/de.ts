@@ -1821,6 +1821,7 @@ export const DE: PartialCatalog = {
   "amp.op.active": "Aktiv",
   "amp.op.notActive": "Nicht aktiv",
   "amp.op.notStop": "Standby beendet KEINE Aussendung — der Treiber tastet weiter und die Ansteuerung läuft durch.",
+  "amp.op.waiting": "Gesendet — warte auf die Endstufe",
   "amp.k.power": "Ausgangsleistung",
   "amp.k.temp": "PA-Temperatur",
   "amp.k.current": "Strom",

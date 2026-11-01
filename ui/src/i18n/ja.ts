@@ -9422,6 +9422,7 @@ export const JA: PartialCatalog = {
   "amp.op.active": "稼働中",
   "amp.op.notActive": "非稼働",
   "amp.op.notStop": "スタンバイでは送信は停止しません — エキサイターはキーイングを続け、ドライブはそのまま通過します。",
+  "amp.op.waiting": "送信済み — アンプの応答待ち",
   "amp.k.power": "出力",
   "amp.k.temp": "PA温度",
   "amp.k.current": "電流",

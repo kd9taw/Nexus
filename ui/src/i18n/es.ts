@@ -754,6 +754,7 @@ export const ES: PartialCatalog = {
   "amp.op.active": "Activo",
   "amp.op.notActive": "No activo",
   "amp.op.notStop": "La espera NO detiene una transmisión: el excitador sigue manipulando y la excitación pasa igual.",
+  "amp.op.waiting": "Enviado: esperando al amplificador",
   "amp.swr.title": "Relación de onda estacionaria medida en la antena.",
   "amp.swrAtu.title": "Relación de onda estacionaria medida antes del acoplador del amplificador.",
   "amp.temp.unknownScale": "El protocolo SPE no dice si esto es °C o °F: el amplificador informa de lo que tenga puesto en su propia pantalla. Míralo en el frontal.",

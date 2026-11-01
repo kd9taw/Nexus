@@ -2744,6 +2744,12 @@ button.nb-chip:hover {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+/* "Sent — waiting for the amplifier", under the button while a queued press holds it. Quiet: it is
+   a note about our own keystroke, not the amplifier's state, which stays on the button. */
+.amp-op-waiting {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
 .amp-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(5.5em, 1fr));
