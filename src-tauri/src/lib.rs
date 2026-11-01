@@ -18085,6 +18085,130 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A notice's Remove of the Cloudlog key that waits, held at its keychain delete while
+    /// `meanwhile` runs on another thread: it lands before the delete when nothing keeps it out,
+    /// and when something does it waits, and the delete goes on after a short while. What the
+    /// Remove answered.
+    fn a_remove_raced_by(
+        engine: &SharedEngine,
+        keychain: &std::sync::Mutex<FakeKeychain>,
+        meanwhile: impl FnOnce() + Send,
+    ) -> Result<(), String> {
+        let (at_delete, held_there) = std::sync::mpsc::channel();
+        let (landed, meanwhile_done) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            let remove = s.spawn(move || {
+                answer_key_to_confirm(engine, None, false, None, |change| {
+                    if matches!(change, KeychainChange::Forget(_)) {
+                        at_delete.send(()).unwrap();
+                        let _ = meanwhile_done.recv_timeout(std::time::Duration::from_millis(400));
+                    }
+                    keychain.lock().unwrap().change(change)
+                })
+            });
+            held_there.recv().unwrap();
+            s.spawn(move || {
+                meanwhile();
+                let _ = landed.send(());
+            });
+            remove.join().unwrap()
+        })
+    }
+
+    /// ★ A REMOVE IN THE NOTICE NEVER DELETES A KEY TYPED IN SETTINGS WHILE IT WAS ON ITS WAY:
+    /// the key the notice asked about is removed, the one typed meanwhile is kept and in use, and
+    /// nothing waits. (Before, the Remove checked the wait, let go, and its delete then took the
+    /// key just typed, while Settings said it was saved.) CONTROL: the Remove did delete once.
+    #[test]
+    fn a_remove_never_deletes_a_key_typed_while_it_was_on_its_way() {
+        use tempo_app::settings::KeysToConfirm;
+        const TYPED: &str = "PLANTED-TYPED-IN-SETTINGS";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-save", 0);
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            ..Default::default()
+        });
+        let keychain = std::sync::Mutex::new(FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER]));
+        a_remove_raced_by(&engine, &keychain, || {
+            key_typed_in_settings(&engine, None, || {
+                keychain
+                    .lock()
+                    .unwrap()
+                    .change(KeychainChange::Store {
+                        account: CLOUDLOG_KEYCHAIN_USER,
+                        key: TYPED,
+                    })
+                    .map(|_| ())
+            })
+            .unwrap()
+        })
+        .unwrap();
+        let kept = keychain.into_inner().unwrap();
+        assert_eq!(
+            (
+                kept.held.get(CLOUDLOG_KEYCHAIN_USER).map(String::as_str),
+                engine_lock(&engine).keys_to_confirm().cloudlog,
+            ),
+            (Some(TYPED), false),
+            "the key typed in Settings is kept, and waits no more"
+        );
+        assert_eq!(
+            kept.forgot,
+            vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+            "CONTROL: the Remove deleted the key it asked about"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A REMOVE IN THE NOTICE NEVER DELETES THE KEY A RESTORE PUT IN MEANWHILE: a backup that
+    /// moves Cloudlog and carries its own key, restored while a Remove is on its way, keeps that
+    /// key in the keychain. CONTROL: the Remove deleted the station's key it asked about.
+    #[test]
+    fn a_remove_never_deletes_the_key_a_restore_put_in_meanwhile() {
+        use tempo_app::settings::KeysToConfirm;
+        const BACKUP_KEY: &str = "PLANTED-BACKUP-OWN-KEY";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-restore", 0);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        v["settings"]["cloudlogKey"] = serde_json::json!(BACKUP_KEY);
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            ..Default::default()
+        });
+        let keychain = std::sync::Mutex::new(FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER]));
+        a_remove_raced_by(&engine, &keychain, || {
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.lock().unwrap().change(change),
+            )
+            .unwrap();
+        })
+        .unwrap();
+        let kept = keychain.into_inner().unwrap();
+        assert_eq!(
+            kept.held.get(CLOUDLOG_KEYCHAIN_USER).map(String::as_str),
+            Some(BACKUP_KEY),
+            "the backup's own key is kept"
+        );
+        assert_eq!(
+            kept.forgot,
+            vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+            "CONTROL: the Remove deleted the station's key it asked about"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ USE CONFIRMS THE ADDRESS THE NOTICE SHOWED, AND NO OTHER: when a restore or a Save moves
     /// the Cloudlog URL or a radio's network address after the notice asked, Use is refused, the
     /// key still waits, and the notice asks again about the new address. CONTROL: Use with the
@@ -19427,6 +19551,9 @@ fn restore_settings_bundle(
     save_ui: impl FnOnce(std::collections::BTreeMap<String, String>) -> bool,
     keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
 ) -> Result<AppSnapshot, String> {
+    // A Remove on its way finishes first ([`take_turn`]).
+    let turn = engine_lock(engine).key_changes();
+    let _turn = take_turn(&turn);
     let mut v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
     if v.get("kind").and_then(|k| k.as_str()) != Some("nexus-settings-backup") {
@@ -19988,7 +20115,10 @@ const KEY_NOT_REMOVED: &str = "Removing this saved key failed, and it was saved 
 ///
 /// ⛔ The keychain is asked with the engine lock RELEASED: a delete can wait on an unlock prompt,
 /// and the radio loop needs that lock to end an over. The key waits throughout, so nothing is let
-/// go meanwhile; the wait is dropped only once the delete has succeeded.
+/// go meanwhile; the wait is dropped only once the delete has succeeded. A Remove holds its
+/// [`take_turn`] from the check to the dropped wait, so a key typed or restored meanwhile
+/// lands after it, never before its delete. Use asks no keychain, so it takes no turn (and
+/// [`key_typed_again`], which answers Use inside a Settings save's turn, may call it).
 fn answer_key_to_confirm(
     engine: &SharedEngine,
     radio_id: Option<u32>,
@@ -19996,6 +20126,8 @@ fn answer_key_to_confirm(
     shown: Option<&str>,
     mut keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
 ) -> Result<(), String> {
+    let turn = (!use_it).then(|| engine_lock(engine).key_changes());
+    let _turn = turn.as_deref().map(take_turn);
     {
         let mut eng = engine_lock(engine);
         let keys = eng.keys_to_confirm();
@@ -20033,6 +20165,25 @@ fn answer_key_to_confirm(
     keychain(KeychainChange::Forget(&account))?;
     stop_waiting(&mut engine_lock(engine), radio_id);
     Ok(())
+}
+
+/// Take the turn for one change at a time to the saved keys a notice can ask about
+/// ([`keys_to_confirm_in`]): a Settings save or clear with the answer it gives
+/// ([`key_typed_in_settings`]), a notice's Remove from its check that the key waits to the wait it
+/// drops ([`answer_key_to_confirm`]), and a restore ([`restore_settings_bundle`]). Without it a
+/// Remove that had checked, then let go to delete, deleted the key typed or restored in between:
+/// the operator was told it was saved, and the service had none.
+///
+/// The turn is the engine's own ([`tempo_app::engine::Engine::key_changes`]), fetched in a brief
+/// engine-lock hold that ends before it is taken. ⛔ Taken with the engine lock RELEASED, and the
+/// engine lock only ever taken inside it, so the two never wait on each other. It may be held
+/// across a keychain call that waits on an unlock prompt: only the commands above take it, and
+/// they all run off the UI thread, so a second one waits for the prompt (as the keychain itself
+/// would) and nothing else does. It guards no data, so a holder that panicked leaves nothing
+/// torn: the next one takes its turn.
+fn take_turn(turn: &std::sync::Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+    turn.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// [`answer_key_to_confirm`]'s last step, in one hold: this key waits no more, and that is saved.
@@ -32947,17 +33098,15 @@ fn set_icom_lan_password(
     radio_id: u32,
     password: String,
 ) -> Result<(), String> {
-    icom_lan_set_password(&OsKeychain, radio_id, password)?;
-    key_typed_again(&state, Some(radio_id));
-    Ok(())
+    key_typed_in_settings(&state, Some(radio_id), || {
+        icom_lan_set_password(&OsKeychain, radio_id, password)
+    })
 }
 
 /// Remove a radio profile's Icom network password from the OS keychain (idempotent).
 #[tauri::command(async)]
 fn clear_icom_lan_password(state: State<'_, SharedEngine>, radio_id: u32) -> Result<(), String> {
-    OsKeychain.clear(radio_id)?;
-    key_typed_again(&state, Some(radio_id));
-    Ok(())
+    key_typed_in_settings(&state, Some(radio_id), || OsKeychain.clear(radio_id))
 }
 
 /// A key the operator typed or cleared in Settings answers whether the saved one may go to the
@@ -32965,6 +33114,20 @@ fn clear_icom_lan_password(state: State<'_, SharedEngine>, radio_id: u32) -> Res
 /// (`None`) or radio `radio_id`'s. Nothing changes for a key that did not wait.
 fn key_typed_again(engine: &SharedEngine, radio_id: Option<u32>) {
     let _ = answer_key_to_confirm(engine, radio_id, true, None, no_keychain_change);
+}
+
+/// A key typed or cleared in Settings for Cloudlog (`None`) or radio `radio_id`: `write` changes
+/// the keychain, and once it has, the key answers for itself ([`key_typed_again`]).
+fn key_typed_in_settings(
+    engine: &SharedEngine,
+    radio_id: Option<u32>,
+    write: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let turn = engine_lock(engine).key_changes();
+    let _turn = take_turn(&turn);
+    write()?;
+    key_typed_again(engine, radio_id);
+    Ok(())
 }
 
 /// An answer that touches no keychain entry ([`key_typed_again`]): asked for none.
@@ -33792,18 +33955,18 @@ fn clear_qrz_logbook_key(state: State<'_, SharedEngine>) -> Result<(), String> {
 #[tauri::command(async)]
 fn set_cloudlog_key(state: State<'_, SharedEngine>, key: String) -> Result<(), String> {
     let entry = cloudlog_keychain()?;
-    if key.trim().is_empty() {
-        clear_keychain_entry(&entry)?;
-        conn_log("Cloudlog", "info", "API key cleared from the OS keychain");
-        key_typed_again(&state, None);
-        return Ok(());
-    }
-    entry
-        .set_password(key.trim())
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("Cloudlog", "ok", "API key saved to the OS keychain");
-    key_typed_again(&state, None);
-    Ok(())
+    key_typed_in_settings(&state, None, || {
+        if key.trim().is_empty() {
+            clear_keychain_entry(&entry)?;
+            conn_log("Cloudlog", "info", "API key cleared from the OS keychain");
+            return Ok(());
+        }
+        entry
+            .set_password(key.trim())
+            .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+        conn_log("Cloudlog", "ok", "API key saved to the OS keychain");
+        Ok(())
+    })
 }
 
 /// The saved keys that wait for the operator ([`keys_to_confirm_in`]), for the notice.
@@ -33826,12 +33989,12 @@ fn answer_saved_key(
 /// Remove the stored Cloudlog/Wavelog API key from the OS keychain (idempotent).
 #[tauri::command(async)]
 fn clear_cloudlog_key(state: State<'_, SharedEngine>) -> Result<(), String> {
-    let r = clear_keychain_entry(&cloudlog_keychain()?);
-    if r.is_ok() {
+    let entry = cloudlog_keychain()?;
+    key_typed_in_settings(&state, None, || {
+        clear_keychain_entry(&entry)?;
         conn_log("Cloudlog", "info", "API key cleared from the OS keychain");
-        key_typed_again(&state, None);
-    }
-    r
+        Ok(())
+    })
 }
 
 /// `RcvdSince` safety margin: eQSL does not document the timezone of this filter,
