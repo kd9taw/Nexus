@@ -200,6 +200,16 @@ describe('the aurora oval on the 3-D globe', () => {
   })
 })
 
+describe('an undated oval on the 3-D globe', () => {
+  it('fails closed: no dots and no line, even in a storm, and the chip says its time is unknown', async () => {
+    feeds.aurora = { points: OVAL.points, observedAt: null, forecastAt: null }
+    const r = await mount(6)
+    expect(auroraDots()).toBe(0)
+    expect(group('auroraEdge')).toBeUndefined()
+    expect(r.container.querySelector('.aurora-chip')!.textContent).toContain(t('map.aurora.chip.undated'))
+  })
+})
+
 describe('the polar cap on the 3-D globe', () => {
   it('draws the approximate edge dashed at a measured Kp, with the cap chip', async () => {
     feeds.pca = PCA

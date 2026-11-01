@@ -196,8 +196,8 @@ describe('the aurora oval: OVATION while current, and nothing at all when it is 
   it('a stale forecast draws no oval and no edge, and says for when it was', () => {
     const f = now - AURORA_STALE_SECS - 1
     expect(auroraPicture({ ...OVAL, forecastAt: f }, NOW)).toEqual({ mode: 'none', why: 'stale', forecastAt: f })
-    // an undated oval from a current station is no current forecast either
-    expect(auroraPicture({ ...OVAL, forecastAt: null }, NOW)).toEqual({ mode: 'none', why: 'stale', forecastAt: null })
+    // an undated oval cannot be proven current: nothing, and it says it is undated
+    expect(auroraPicture({ ...OVAL, forecastAt: null }, NOW)).toEqual({ mode: 'none', why: 'undated' })
   })
 
   it('no feed at all draws nothing and says so', () => {
@@ -212,11 +212,11 @@ describe('the aurora oval: OVATION while current, and nothing at all when it is 
     expect(auroraPicture({ ...old, forecastAt: now + 600 }, NOW).mode).toBe('ovation')
   })
 
-  it('an older station’s oval (no edge sent) is drawn as it always was, with no age claimed', () => {
+  it('an older station’s UNDATED oval (no edge, no forecast time) fails closed: nothing drawn, said undated', () => {
     const old = { points: OVAL.points, observedAt: null, forecastAt: null }
-    expect(auroraPicture(old, NOW)).toEqual({ mode: 'ovation', forecastAt: null, edge: [] })
-    // control: the same undated oval from a current station is not current
-    expect(auroraPicture({ ...old, edge: OVAL.edge }, NOW).mode).toBe('none')
+    expect(auroraPicture(old, NOW)).toEqual({ mode: 'none', why: 'undated' })
+    // control: the same older-station oval with a current forecast time is drawn
+    expect(auroraPicture({ ...old, forecastAt: now + 600 }, NOW)).toEqual({ mode: 'ovation', forecastAt: now + 600, edge: [] })
   })
 
   it('OVATION’s edge is joined bin to bin, broken at a gap, joined across the dateline', () => {

@@ -4235,11 +4235,13 @@ export function MapView({
                     <AuroraForecastNote forecastAt={auroraTimes.forecastAt} observedAt={auroraTimes.observedAt} />
                   )}
                   {k === 'aurora' && auroraPic?.mode === 'none' && auroraOval != null && (
-                    // Nothing is drawn, and the row says why: out of date (for when), or no forecast held.
+                    // Nothing is drawn, and the row says why: out of date (for when), undated, or no forecast held.
                     <span className="map-layer-note" data-stale="">
-                      {auroraPic.why === 'stale' && auroraPic.forecastAt != null
+                      {auroraPic.why === 'stale'
                         ? t('map.layer.aurora.stale', { time: wxStampLabel(auroraPic.forecastAt) })
-                        : t('map.layer.aurora.none')}
+                        : auroraPic.why === 'undated'
+                          ? t('map.layer.aurora.undated')
+                          : t('map.layer.aurora.none')}
                     </span>
                   )}
                   {k === 'flare' && (

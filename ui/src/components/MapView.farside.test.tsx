@@ -370,7 +370,8 @@ describe('on the Globe, a far-side marker is not drawn through the planet — an
 
   it('the aurora oval', async () => {
     layers(['aurora'])
-    feeds.aurora = { points: [{ ...FAR, prob: 50 }, { ...NEAR, prob: 50 }], observedAt: null, forecastAt: null }
+    // A current forecast: an undated oval draws nothing (capsNow `auroraPicture` fails closed).
+    feeds.aurora = { points: [{ ...FAR, prob: 50 }, { ...NEAR, prob: 50 }], observedAt: null, forecastAt: Math.floor(Date.now() / 1000) + 1800 }
     const r = await mount()
     const far = at(FAR)
     const near = at(NEAR)

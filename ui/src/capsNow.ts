@@ -13,7 +13,7 @@
 //
 // THE AURORA OVAL. NOAA OVATION is the picture while it is a forecast for now or later (or at most
 // AURORA_STALE_SECS past): its dots and its own equatorward edge (the 10 % line). Past that it is
-// stale (an undated one is not current either), and then NO oval and no edge is drawn at all, by
+// stale, or undated from any station (its age cannot be proven), and then NO oval and no edge is drawn at all, by
 // the operator's rule: nothing is ever modelled in its place. The layer row and the chip say why
 // (out of date, with the time it was a forecast for; or no forecast held). Kp and NOAA's Kp outlook
 // stay on screen with their own labels.
@@ -215,24 +215,22 @@ export const PROTONS_STALE_SECS = 15 * 60
 export const AURORA_STALE_SECS = 10 * 60
 
 export type AuroraPicture =
-  | { mode: 'ovation'; forecastAt: number | null; edge: [number, number][][] }
+  | { mode: 'ovation'; forecastAt: number; edge: [number, number][][] }
   | { mode: 'none'; why: 'nofeed' }
-  | { mode: 'none'; why: 'stale'; forecastAt: number | null }
+  | { mode: 'none'; why: 'undated' }
+  | { mode: 'none'; why: 'stale'; forecastAt: number }
 
 /** The oval the map draws (see the header). */
 export function auroraPicture(oval: AuroraOval | null | undefined, nowMs: number): AuroraPicture {
   const now = nowMs / 1000
   const f = oval?.forecastAt ?? null
-  // An older station sends no edge and may send no stamps: its oval is drawn as it always was, with
-  // no age claimed either way (propViz `wxReading`'s rule for an older station's numbers).
-  // A dated one past AURORA_STALE_SECS is stale like any other.
-  if (oval && oval.edge === undefined && oval.points.length > 0 && (f == null || now - f <= AURORA_STALE_SECS)) {
-    return { mode: 'ovation', forecastAt: f, edge: [] }
-  }
+  // FAIL CLOSED, whatever the source (an older station's oval included): only an oval whose
+  // forecast time proves it current is drawn. An undated one draws nothing, as a stale one does.
   if (oval && f != null && now - f <= AURORA_STALE_SECS) {
     return { mode: 'ovation', forecastAt: f, edge: [...edgeLines(oval.edge?.north), ...edgeLines(oval.edge?.south)] }
   }
-  if (oval && (f != null || oval.points.length > 0)) return { mode: 'none', why: 'stale', forecastAt: f }
+  if (oval && f != null) return { mode: 'none', why: 'stale', forecastAt: f }
+  if (oval && oval.points.length > 0) return { mode: 'none', why: 'undated' }
   return { mode: 'none', why: 'nofeed' }
 }
 

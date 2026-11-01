@@ -65,12 +65,12 @@ export function PcaChip({ pca, pic, nowMs }: { pca: PcaView; pic: CapPicture; no
 export function AuroraChip({ pic, stormWhy }: { pic: AuroraPicture; stormWhy: string | null }) {
   const line =
     pic.mode === 'ovation'
-      ? pic.forecastAt != null
-        ? t('map.aurora.chip.ovation', { time: hm(pic.forecastAt) })
-        : t('map.aurora.chip.ovationUndated')
-      : pic.why === 'stale' && pic.forecastAt != null
+      ? t('map.aurora.chip.ovation', { time: hm(pic.forecastAt) })
+      : pic.why === 'stale'
         ? t('map.aurora.chip.stale', { time: hm(pic.forecastAt) })
-        : t('map.aurora.chip.none')
+        : pic.why === 'undated'
+          ? t('map.aurora.chip.undated')
+          : t('map.aurora.chip.none')
   return (
     <div
       className="flare-chip aurora-chip"

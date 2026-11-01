@@ -379,10 +379,29 @@ describe('round 3: the storm rule and the untick, on the 2-D map', () => {
     )
   })
 
-  it('an older station’s dated oval an hour past its forecast time draws no dots', async () => {
+  it('an older station’s dated oval an hour past its forecast time draws no dots, and says it is out of date', async () => {
     layersOn(['aurora'])
     feeds.aurora = { points: [{ lat: 66, lon: -100, prob: 50 }], observedAt: NOW_S - 4000, forecastAt: NOW_S - 3600 }
     const r = await mount()
     expect(auroraFills(r.container)).toEqual([])
+    expect(auroraRow(r.container).textContent).toContain(t('map.layer.aurora.stale', { time: wxStampLabel(NOW_S - 3600) }))
+    expect(auroraChip(r.container)!.textContent).toContain(t('map.aurora.chip.stale', { time: '00:30Z' }))
+  })
+
+  it('an older station’s UNDATED oval draws no dots, and says its time is unknown', async () => {
+    layersOn(['aurora'])
+    feeds.aurora = { points: [{ lat: 66, lon: -100, prob: 50 }], observedAt: null, forecastAt: null }
+    const r = await mount()
+    expect(auroraFills(r.container)).toEqual([])
+    expect(strokes(r.container, AURORA_INK)).toEqual([])
+    expect(auroraRow(r.container).textContent).toContain(t('map.layer.aurora.undated'))
+    expect(auroraChip(r.container)!.textContent).toContain(t('map.aurora.chip.undated'))
+  })
+
+  it('CONTROL — the same older-station oval with a current forecast time draws its dots', async () => {
+    layersOn(['aurora'])
+    feeds.aurora = { points: [{ lat: 66, lon: -100, prob: 50 }], observedAt: NOW_S - 1200, forecastAt: NOW_S + 1800 }
+    const r = await mount()
+    expect(auroraFills(r.container).length).toBeGreaterThan(0)
   })
 })

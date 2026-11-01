@@ -3845,11 +3845,12 @@ export const EN = {
   'map.aurora.chip.storm': '🌌 Aurora layer on for the storm ({{why}})',
   'map.aurora.why.watch': 'NOAA G{{g}} watch',
   'map.aurora.chip.ovation': 'NOAA OVATION, expected at {{time}} · edge where the chance reaches 10 %',
-  'map.aurora.chip.ovationUndated': 'NOAA OVATION aurora forecast',
   'map.aurora.chip.stale': 'No aurora oval drawn: NOAA OVATION is out of date (its forecast was for {{time}})',
+  'map.aurora.chip.undated': 'No aurora oval drawn: the NOAA OVATION forecast carries no time, so it cannot be shown as current',
   'map.aurora.chip.none': 'No aurora oval drawn: no NOAA OVATION forecast',
   'map.aurora.edge.label': 'aurora edge (NOAA OVATION)',
   'map.layer.aurora.stale': 'out of date (forecast for {{time}}): nothing drawn',
+  'map.layer.aurora.undated': 'forecast time unknown: nothing drawn',
   'map.layer.aurora.none': 'no NOAA OVATION forecast: nothing drawn',
   'map.layer.aurora.auto': 'on for the storm',
 
