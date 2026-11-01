@@ -9840,7 +9840,7 @@ export const FR: PartialCatalog = {
   "contestSetup.start.restoreFailed": "La station n'est pas entrée dans {{contest}}, et la remise des réglages précédents a échoué : {{error}}. Le mode Concours est peut-être encore enregistré comme activé : vérifiez Réglages ▸ Concours.",
   "settings.save.contestUncheckable": "Non enregistré : choisir {{contest}} terminerait le concours en cours, et la station n'a pas pu vérifier que {{contest}} peut démarrer.",
   "settings.save.entryCall.title": "Changer l'indicatif quand même ?",
-  "settings.save.entryCall.body": "Cette participation est opérée sous {{call}}. Le règlement du Field Day autorise un indicatif par participation, et une radio utilisée sous un indicatif ne peut plus ensuite être utilisée sous un autre. Votre log et votre Cabrillo restent sous {{call}}.",
+  "settings.save.entryCall.body": "Cette participation est opérée sous {{call}}. Le règlement de cette participation autorise un indicatif par participation, et une radio utilisée sous un indicatif ne peut plus ensuite être utilisée sous un autre. Votre log et votre Cabrillo restent sous {{call}}.",
   "settings.save.entryCall.action": "Changer l'indicatif",
   "contestSetup.nav.back": "Retour",
   "contestSetup.nav.next": "Suivant",

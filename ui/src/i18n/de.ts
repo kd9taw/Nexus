@@ -9830,7 +9830,7 @@ export const DE: PartialCatalog = {
   "contestSetup.start.restoreFailed": "Die Station ist {{contest}} nicht beigetreten, und das Zurücksetzen der früheren Einstellungen ist fehlgeschlagen: {{error}}. Der Contest-Modus ist womöglich noch als an gespeichert: prüfe Einstellungen ▸ Contest.",
   "settings.save.contestUncheckable": "Nicht gespeichert: {{contest}} zu wählen würde den laufenden Contest beenden, und die Station konnte nicht prüfen, ob {{contest}} starten kann.",
   "settings.save.entryCall.title": "Rufzeichen trotzdem ändern?",
-  "settings.save.entryCall.body": "Dieser Beitrag wird unter {{call}} betrieben. Die Field-Day-Regeln erlauben ein Rufzeichen pro Beitrag, und ein Funkgerät, das unter einem Rufzeichen benutzt wurde, darf danach nicht unter einem anderen benutzt werden. Dein Log und dein Cabrillo bleiben unter {{call}}.",
+  "settings.save.entryCall.body": "Dieser Beitrag wird unter {{call}} betrieben. Die Regeln dieses Beitrags erlauben ein Rufzeichen pro Beitrag, und ein Funkgerät, das unter einem Rufzeichen benutzt wurde, darf danach nicht unter einem anderen benutzt werden. Dein Log und dein Cabrillo bleiben unter {{call}}.",
   "settings.save.entryCall.action": "Rufzeichen ändern",
   "contestSetup.nav.back": "Zurück",
   "contestSetup.nav.next": "Weiter",

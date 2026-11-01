@@ -5451,7 +5451,7 @@ export const EN = {
   'contestSetup.start.restoreFailed': 'The station did not enter {{contest}}, and putting the earlier settings back failed: {{error}}. Contest mode may still be saved on: check Settings ▸ Contesting.',
   'settings.save.contestUncheckable': 'Not saved: picking {{contest}} would end the running contest, and the station could not check that {{contest}} can start.',
   'settings.save.entryCall.title': 'Change the call anyway?',
-  'settings.save.entryCall.body': 'This entry is operated under {{call}}. Field Day rules allow one call per entry, and a radio used under one call may not then be used under another. Your log and Cabrillo stay under {{call}}.',
+  'settings.save.entryCall.body': 'This entry is operated under {{call}}. Its rules allow one call per entry, and a radio used under one call may not then be used under another. Your log and Cabrillo stay under {{call}}.',
   'settings.save.entryCall.action': 'Change the call',
   'contestSetup.nav.back': 'Back',
   'contestSetup.nav.next': 'Next',

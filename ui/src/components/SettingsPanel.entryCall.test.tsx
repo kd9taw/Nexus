@@ -11,6 +11,7 @@ import { ConfirmHost } from '../confirm'
 import type { FeaturesApi } from '../useFeatures'
 import type { FieldDayStatus, Settings } from '../types'
 import defaultSettings from './__fixtures__/defaultSettings.json'
+import { saveProfile } from '../profiles'
 
 // The house budget for a Settings render under a loaded full suite (SettingsPanel.stalecopy.test.tsx).
 vi.setConfig({ testTimeout: 15_000 })
@@ -106,6 +107,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  localStorage.clear()
 })
 
 const writes = () => api.get('setSettings').mock.calls.map((c) => c[0] as Record<string, unknown>)
@@ -128,7 +130,7 @@ const pressSave = () =>
   )
 
 const BODY =
-  'This entry is operated under K9ABC. Field Day rules allow one call per entry, and a radio used under one call may not then be used under another. Your log and Cabrillo stay under K9ABC.'
+  'This entry is operated under K9ABC. Its rules allow one call per entry, and a radio used under one call may not then be used under another. Your log and Cabrillo stay under K9ABC.'
 
 describe('a station call changed while a contest entry runs', () => {
   it('asks once, naming the entry call, and saves nothing until it is answered; Cancel saves nothing', async () => {
@@ -187,5 +189,40 @@ describe('CONTROLS: no question', () => {
     pressSave()
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
+describe('CONTROL: a Save that turns the contest off and changes the call', () => {
+  it('asks nothing about the call and goes straight to the contest-over checklist', async () => {
+    // A config profile saved with Contest mode off. Loading it puts the mode off on the form (the
+    // profile's other settings come with it); the Save after it is one that turns the contest off.
+    saveProfile('Home rig', { ...(defaultSettings as unknown as Settings), fdActive: false })
+    openOn(
+      {
+        fdActive: true,
+        contestBefore: {
+          mycall: 'W9OLD',
+          fdOperator: '',
+          fdPositionName: '',
+          contestCategoryOperator: '',
+          contestEntryClass: '',
+          contestCategoryPower: '',
+          unassistedMode: false,
+        },
+      } as Partial<Settings>,
+      entry('K9ABC'),
+    )
+    await screen.findAllByDisplayValue('K9ABC')
+    fireEvent.click(screen.getByRole('tab', { name: 'Radio' }))
+    const profiles = document.getElementById('settings-profiles')!
+    fireEvent.change(within(profiles).getByRole('combobox'), { target: { value: 'Home rig' } })
+    fireEvent.click(within(profiles).getByRole('button', { name: 'Load' }))
+    await waitFor(() => expect(writes()).toHaveLength(1))
+    fireEvent.click(screen.getByRole('tab', { name: 'Contesting' }))
+    await edit('Callsign on the air', 'W9XYZ')
+    pressSave()
+    expect(await screen.findByRole('button', { name: 'Turn off' })).toBeTruthy()
+    expect(screen.queryByText('Change the call anyway?')).toBeNull()
+    expect(writes()).toHaveLength(1)
   })
 })

@@ -325,7 +325,7 @@ export const RU: PartialCatalog = {
   "alerts.batch.cq": " CQ от {{calls}}.",
   "settings.save.contestUncheckable": "Не сохранено: выбор {{contest}} завершил бы текущее соревнование, а станция не смогла проверить, можно ли начать {{contest}}.",
   "settings.save.entryCall.title": "Всё равно сменить позывной?",
-  "settings.save.entryCall.body": "Это участие идёт под позывным {{call}}. Правила Field Day допускают один позывной на участие, а трансивер, работавший под одним позывным, нельзя затем использовать под другим. Ваш журнал и Cabrillo остаются под {{call}}.",
+  "settings.save.entryCall.body": "Это участие идёт под позывным {{call}}. Правила этого участия допускают один позывной на участие, а трансивер, работавший под одним позывным, нельзя затем использовать под другим. Ваш журнал и Cabrillo остаются под {{call}}.",
   "settings.save.entryCall.action": "Сменить позывной",
   "logEntry.contest.notRunning.aria": "Соревнование не идёт",
   "logEntry.contest.notRunning": "Режим соревнований включён, но соревнование не идёт.",

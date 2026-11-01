@@ -9840,7 +9840,7 @@ export const ES: PartialCatalog = {
   "contestSetup.start.restoreFailed": "La estación no entró en {{contest}} y no se pudieron restaurar los ajustes anteriores: {{error}}. El modo Concurso puede seguir guardado como encendido: revisa Ajustes ▸ Concursos.",
   "settings.save.contestUncheckable": "No guardado: elegir {{contest}} terminaría el concurso en curso, y la estación no pudo comprobar que {{contest}} pueda empezar.",
   "settings.save.entryCall.title": "¿Cambiar el indicativo de todos modos?",
-  "settings.save.entryCall.body": "Esta participación se opera bajo {{call}}. Las reglas del Field Day permiten un indicativo por participación, y un equipo usado bajo un indicativo no puede usarse después bajo otro. Tu log y tu Cabrillo siguen bajo {{call}}.",
+  "settings.save.entryCall.body": "Esta participación se opera bajo {{call}}. Las reglas de esta participación permiten un indicativo por participación, y un equipo usado bajo un indicativo no puede usarse después bajo otro. Tu log y tu Cabrillo siguen bajo {{call}}.",
   "settings.save.entryCall.action": "Cambiar el indicativo",
   "contestSetup.nav.back": "Atrás",
   "contestSetup.nav.next": "Siguiente",

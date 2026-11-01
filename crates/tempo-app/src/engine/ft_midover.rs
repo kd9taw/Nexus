@@ -229,12 +229,13 @@ impl Engine {
         // during the over makes the sequencer's messages again under the new call
         // ([`Engine::note_call_saved`]), whatever the over on the air is (free text names no sender),
         // and the new call goes out from the next over. The over on the air goes out as keyed.
-        if let Some(why) = call_changed_refusal(&on.call, &self.settings.mycall) {
+        if call_changed_refusal(&on.call, &self.settings.mycall).is_some() {
             tempo_core::applog::info(
                 "tx",
                 &format!(
-                    "over not switched mid-air: {why} The over goes out as {:?}.",
-                    on.text
+                    "over not switched mid-air: the over on the air finishes under {} as {:?}; \
+                     the next over goes out as {}",
+                    on.call, on.text, self.settings.mycall
                 ),
             );
             return None;
