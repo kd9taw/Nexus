@@ -165,8 +165,35 @@ describe('what a corrected call takes off, said before the save', () => {
   const clears = (over: Partial<CardDraft>, fields: CardField[] = fieldsOf(HELD)) =>
     clearedByCallFix(HELD, { ...draftOf(HELD), ...over }, fields)
 
-  it('names the zones, continent, county and the LoTW and eQSL confirmations the contact holds', () => {
-    expect(clears({ call: 'W1AX' })).toEqual(['CQZ', 'ITUZ', 'CONT', 'CNTY', 'lotw', 'eqsl'])
+  it('names the zones, continent, county, the paper card and the LoTW and eQSL confirmations the contact holds', () => {
+    expect(clears({ call: 'W1AX' })).toEqual(['CQZ', 'ITUZ', 'CONT', 'CNTY', 'card', 'lotw', 'eqsl'])
+  })
+
+  it('names the paper card only when it is marked received, and QRZ when QRZ confirmed it', () => {
+    const only = (qslRcvd: LoggedQso['qslRcvd']): LoggedQso => ({ ...Q, qslRcvd, extra: [['QSLRDATE', '20260101']] })
+    const named = (q: LoggedQso) => clearedByCallFix(q, { ...draftOf(q), call: 'W1AX' }, fieldsOf(q))
+    const none = { card: false, lotw: false, eqsl: false, qrz: false }
+    const dated = named(only({ ...none, card: true }))
+    expect(dated, 'a dated card names its date').toContain('cardDated')
+    expect(dated, 'once').not.toContain('card')
+    const unmarked = named(only(none))
+    expect(unmarked, 'a date with no card stays').not.toContain('card')
+    expect(unmarked).not.toContain('cardDated')
+    expect(named(only({ ...none, qrz: true }))).toContain('qrz')
+    expect(dated).not.toContain('qrz')
+  })
+
+  it('a card with no date, or whose date this save changes, is named without its date', () => {
+    const card = { card: true, lotw: false, eqsl: false, qrz: false }
+    const undated: LoggedQso = { ...Q, qslRcvd: card, extra: [] }
+    expect(clearedByCallFix(undated, { ...draftOf(undated), call: 'W1AX' }, fieldsOf(undated)), 'marked before cards were dated')
+      .toEqual(['card'])
+    const dated: LoggedQso = { ...Q, qslRcvd: card, extra: [['QSLRDATE', '20260101']] }
+    const typed = fieldsOf(dated).map((f) => (f.tag === 'QSLRDATE' ? { ...f, value: '20260202' } : f))
+    expect(clearedByCallFix(dated, { ...draftOf(dated), call: 'W1AX' }, typed), 'the typed date is the edit’s, and stays')
+      .toEqual(['card'])
+    expect(clearedByCallFix(dated, { ...draftOf(dated), call: 'W1AX' }, fieldsOf(dated)), 'left as it is, it goes')
+      .toEqual(['cardDated'])
   })
 
   it('nothing when the call is not corrected: the same call in other capitals or padded is not', () => {
@@ -177,7 +204,7 @@ describe('what a corrected call takes off, said before the save', () => {
   it('a value changed or removed in the same save is not named: changed it stays, removed it goes anyway', () => {
     const fields = fieldsOf(HELD).map((f) =>
       f.tag === 'CQZ' ? { ...f, value: '4' } : f.tag === 'ITUZ' ? { ...f, removed: true } : f)
-    expect(clears({ call: 'W1AX' }, fields)).toEqual(['CONT', 'CNTY', 'lotw', 'eqsl'])
+    expect(clears({ call: 'W1AX' }, fields)).toEqual(['CONT', 'CNTY', 'card', 'lotw', 'eqsl'])
   })
 
   it('names only what the contact holds', () => {

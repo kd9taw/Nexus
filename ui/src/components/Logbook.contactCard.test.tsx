@@ -397,6 +397,7 @@ describe('the recent contacts with the call', () => {
     for (const cid of ['cqz', 'ituz', 'county']) expect(said).toContain(columnName(logColumn(cid)!))
     expect(said).toContain(t('contactCard.callFix.lotw'))
     expect(said, 'eQSL never confirmed it').not.toContain(t('contactCard.callFix.eqsl'))
+    expect(said, 'no paper card was marked').not.toContain(t('contactCard.callFix.card'))
     fireEvent.click(within(dialog).getByRole('button', { name: t('contactCard.discard.keep') }))
     await new Promise((r) => setTimeout(r, 30))
     expect(api.editQsoById, 'Keep editing saves nothing').not.toHaveBeenCalled()
@@ -404,6 +405,27 @@ describe('the recent contacts with the call', () => {
     fireEvent.click(await screen.findByRole('button', { name: t('contactCard.callFix.confirm') }))
     await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
     expect(vi.mocked(api.editQsoById).mock.calls[0][1].call).toBe('DL1ABD')
+  })
+
+  it('a corrected call names a dated paper card with its date, and an undated one without', async () => {
+    const cases: [LoggedQso['extra'], 'contactCard.callFix.cardDated' | 'contactCard.callFix.card'][] = [
+      [[['QSLRDATE', '20231114']], 'contactCard.callFix.cardDated'],
+      [[], 'contactCard.callFix.card'],
+    ]
+    for (const [extra, label] of cases) {
+      engine.log = [{ ...DL, qslRcvd: { card: true, lotw: false, eqsl: false, qrz: false }, extra }]
+      engine.revision += 1
+      const r = await mounted()
+      const card = await openCard()
+      fireEvent.change(box(card, t('logbook.field.call.label')), { target: { value: 'DL1ABD' } })
+      save(card)
+      const title = await screen.findByText(t('contactCard.callFix.title', { old: 'DL1ABC', call: 'DL1ABD' }))
+      const said = (title.closest('[role="dialog"], [role="alertdialog"]') as HTMLElement).textContent ?? ''
+      expect(said, label).toContain(t(label))
+      if (label === 'contactCard.callFix.card') expect(said, 'no date to take').not.toContain(t('contactCard.callFix.cardDated'))
+      r.unmount()
+      cleanup()
+    }
   })
 
   it('a save that leaves the call alone asks nothing', async () => {

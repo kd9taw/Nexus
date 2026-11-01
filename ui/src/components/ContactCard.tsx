@@ -71,8 +71,11 @@ const QRZ_PAGE = 'QRZ ↗'
 /** A value a corrected call takes off, as the card names it: a place under its Logbook column's
  *  name, a confirmation in words. */
 function callFixLabel(c: CallFixClear): string {
+  if (c === 'card') return t('contactCard.callFix.card')
+  if (c === 'cardDated') return t('contactCard.callFix.cardDated')
   if (c === 'lotw') return t('contactCard.callFix.lotw')
   if (c === 'eqsl') return t('contactCard.callFix.eqsl')
+  if (c === 'qrz') return t('contactCard.callFix.qrz')
   const column = logColumn({ CQZ: 'cqz', ITUZ: 'ituz', CONT: 'cont', CNTY: 'county' }[c])
   return column ? columnName(column) : c
 }

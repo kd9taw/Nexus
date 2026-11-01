@@ -197,6 +197,11 @@ mod vec_bodies {
                         !(OF_OLD_CALL.contains(&k.as_str())
                             && old.extra.iter().any(|(ok, ov)| ok == k && ov == v))
                     });
+                    // ⚠️ AMENDED, not verbatim (2026-11-01): the paper card the correction
+                    // takes off takes its received date with it, as an untick does.
+                    if old.qsl_rcvd.card {
+                        rec.extra.retain(|(k, _)| k != "QSLRDATE");
+                    }
                 }
                 // The same resurrection, for a park. A side's OTHER programme's reference rides
                 // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
