@@ -421,7 +421,7 @@ fn a_now_overlay_on_the_card_changes_no_contacts_grade() {
             j1: 4000.0,
             j5: 2000.0,
             j10: 1000.0,
-            at: NOW - 300,
+            at: Some(NOW - 300),
         }),
         ..Default::default()
     };

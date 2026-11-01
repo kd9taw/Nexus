@@ -127,13 +127,14 @@ pub struct XraySample {
     pub at: i64,
 }
 
-/// The GOES integral protons (pfu) the overlay runs on, with the sample's own time.
+/// The GOES integral protons (pfu) the overlay runs on, with the sample's own time — `None` when
+/// the reading carried none (an undated reading is never an event: [`proton_event`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProtonSample {
     pub j1: f64,
     pub j5: f64,
     pub j10: f64,
-    pub at: i64,
+    pub at: Option<i64>,
 }
 
 /// Where a flare footprint came from.
@@ -281,7 +282,9 @@ pub fn proton_event(p: Option<ProtonSample>, now: i64) -> Option<ProtonSample> {
 
 /// A proton sample that may speak for `now`: at most [`PROTONS_FRESH_SECS`] old.
 pub fn protons_fresh(p: Option<ProtonSample>, now: i64) -> Option<ProtonSample> {
-    p.filter(|p| now - p.at < PROTONS_FRESH_SECS && p.at - now <= DRAP_AHEAD_SECS)
+    p.filter(|p| {
+        p.at.is_some_and(|at| now - at < PROTONS_FRESH_SECS && at - now <= DRAP_AHEAD_SECS)
+    })
 }
 
 /// The secant of a ray's incidence where it crosses the D region (110 km) for a take-off angle:
@@ -552,7 +555,7 @@ pub fn path_overlay(
         source.recovery = fp.recovery();
     }
     if let Some((p, _)) = pca {
-        source.protons_at = Some(p.at);
+        source.protons_at = p.at;
         source.j10 = Some(p.j10 as f32);
         source.s_scale = Some(s_scale(p.j10));
     }
@@ -663,7 +666,8 @@ pub fn space_now(
     let protons = proton_event(protons, now).map(|p| NowProtons {
         s: s_scale(p.j10),
         j10: p.j10 as f32,
-        at: p.at,
+        // An event is always dated (`proton_event`).
+        at: p.at.unwrap_or(now),
     });
     let watch = watch.and_then(|w| {
         let (from, to) = w.window?;
@@ -787,7 +791,7 @@ mod tests {
             j1: j10 * 4.0,
             j5: j10 * 2.0,
             j10,
-            at,
+            at: Some(at),
         })
     }
 
@@ -1178,6 +1182,37 @@ mod tests {
         assert!(proton_event(storm(10.0, now - PROTONS_FRESH_SECS), now).is_none());
         assert!(proton_event(storm(9.9, now), now).is_none());
         assert!(proton_event(None, now).is_none());
+    }
+
+    #[test]
+    fn a_dated_s2_reading_splits_and_the_same_reading_undated_does_not() {
+        for (me, dx, t) in POLAR_PATHS {
+            let capped = proton_grid(true, t);
+            let dated = storm(200.0, t - 300);
+            let undated = dated.map(|p| ProtonSample { at: None, ..p });
+            let (oracle, _, _, _, _) = flare_part(me, dx, t, None, None);
+            let (grid_word, _, _, _, _) = flare_part(me, dx, t, Some(&capped), None);
+            let (got, _, pca, from, flag) = flare_part(me, dx, t, Some(&capped), dated);
+            assert!(
+                (got - oracle).abs() <= 0.3,
+                "{me:?}: dated {got} vs {oracle}"
+            );
+            assert_eq!(flag, Some(50.0), "{me:?}");
+            assert!(pca.is_some() && from != Some(FlareFrom::Noaa), "{me:?}");
+            // Undated: no event — no split, no PCA figure, NOAA's grid stands.
+            let (got, _, pca, from, flag) = flare_part(me, dx, t, Some(&capped), undated);
+            assert_eq!(got, grid_word, "{me:?}: undated");
+            assert_eq!(
+                (pca, from, flag),
+                (None, Some(FlareFrom::Noaa), None),
+                "{me:?}"
+            );
+        }
+        assert!(proton_event(
+            storm(200.0, MAY_12Z).map(|p| ProtonSample { at: None, ..p }),
+            MAY_12Z
+        )
+        .is_none());
     }
 
     /// A grid that is the analytic X1 field at `t` plus `excess` MHz at |geomagnetic lat| ≥ 50°.

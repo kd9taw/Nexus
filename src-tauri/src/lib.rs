@@ -9099,13 +9099,13 @@ impl NowInputs {
             xray: newer(lane, snapshot_xray(wx)),
             drap: DRAP_LANE.lock().ok().and_then(|l| l.kept().cloned()),
             protons: protons.lock().ok().and_then(|g| {
-                g.as_ref().and_then(|(_, p)| {
-                    p.at.map(|at| ProtonSample {
-                        j1: p.j1,
-                        j5: p.j5,
-                        j10: p.j10,
-                        at,
-                    })
+                // Carried with its own time, or none: the event rule (`proton_event`) refuses an
+                // undated reading.
+                g.as_ref().map(|(_, p)| ProtonSample {
+                    j1: p.j1,
+                    j5: p.j5,
+                    j10: p.j10,
+                    at: p.at,
                 })
             }),
             watch: arrival_outlook::watch_now(now),
@@ -9307,8 +9307,8 @@ mod path_now_tests {
         assert_eq!(fl.drap_valid_at, Some(NOW - 30));
         assert_eq!(fl.xray_at, NOW - 60);
         // A dated proton sample is carried with its time; an undated one is no sample at all.
-        assert_eq!(dated.protons.map(|p| p.at), Some(NOW - 300));
-        assert!(undated.protons.is_none());
+        assert_eq!(dated.protons.and_then(|p| p.at), Some(NOW - 300));
+        assert_eq!(undated.protons.map(|p| p.at), Some(None));
         assert!(undated.space_now(NOW).and_then(|n| n.protons).is_none());
         assert!(dated.space_now(NOW).and_then(|n| n.protons).is_some());
         // The grid split runs only during a held proton event: beside the dated S2 reading it keeps
@@ -9413,7 +9413,7 @@ mod path_now_tests {
                 j1: 2.0,
                 j5: 1.0,
                 j10: 0.3,
-                at: NOW - 300,
+                at: Some(NOW - 300),
             }),
             ..Default::default()
         };
