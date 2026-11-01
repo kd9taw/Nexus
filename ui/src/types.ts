@@ -439,6 +439,9 @@ export interface BandNow {
   flareDb?: number
   /** Estimated polar-cap (proton) absorption over the path (dB), during an S1+ event. */
   pcaDb?: number
+  /** Where `flareDb` came from: NOAA's grid at every crossing, the GOES estimate (no current grid,
+   * or the split kept the grid's proton part out), or both. Absent from an older shack. */
+  flareFrom?: 'noaa' | 'goes' | 'both'
   /** Stretches the map draws on the ribbon for this band now. */
   segments?: PathSegmentNow[]
 }

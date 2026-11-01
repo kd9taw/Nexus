@@ -36,11 +36,17 @@ export function bandNowOf(o: PathHourOverlay | null | undefined, band: string | 
   return o.bands.find((b) => b.band === band) ?? null
 }
 
-function flareSource(o: PathHourOverlay, nowSec: number): string {
+/** The source of one band's flare figure: NOAA's grid, our GOES estimate, or both — as the shack
+ *  says for that band (`flareFrom`), so a figure the split took from GOES is never called NOAA's. */
+function flareSource(o: PathHourOverlay, b: BandNow, nowSec: number): string {
   const s = o.source
-  if (s.haf === 'noaa' && s.drapValidAt != null)
-    return t('pathNow.src.noaa', { time: clockZ(s.drapValidAt, nowSec) })
-  return t('pathNow.src.goes', { time: clockZ(s.xrayAt ?? o.unix, nowSec) })
+  const xtime = clockZ(s.xrayAt ?? o.unix, nowSec)
+  const grid = s.haf === 'noaa' && s.drapValidAt != null
+  // An older shack sends no `flareFrom`: its figure is the footprint's own source.
+  const from = b.flareFrom ?? (grid ? 'noaa' : 'goes')
+  if (!grid || from === 'goes') return t('pathNow.src.goes', { time: xtime })
+  const time = clockZ(s.drapValidAt!, nowSec)
+  return from === 'both' ? t('pathNow.src.noaaGoes', { time, xtime }) : t('pathNow.src.noaa', { time })
 }
 
 function recoveryWords(o: PathHourOverlay, nowSec: number): string | null {
@@ -53,7 +59,7 @@ function recoveryWords(o: PathHourOverlay, nowSec: number): string | null {
 function flareClause(o: PathHourOverlay, b: BandNow, nowSec: number): string | null {
   const db = b.flareDb
   if (db == null || db < SPEAK_DB) return null
-  const source = flareSource(o, nowSec)
+  const source = flareSource(o, b, nowSec)
   const text =
     db > OUT_DB
       ? t('pathNow.flareOut', { db: OUT_DB, band: b.band, source })
@@ -94,7 +100,10 @@ export function nowDetail(o: PathHourOverlay | null | undefined, band: string | 
   // NOAA's grid holds a proton event's absorption in the same figure as the flare's: say where the
   // flare figure was held to the X-ray part.
   const lat = o.source.flareCapGeomag
-  if (lat != null && b.flareDb != null) rows.push(t('pathNow.detail.capSplit', { lat }))
+  if (lat != null && b.flareDb != null)
+    rows.push(
+      b.pcaDb != null ? t('pathNow.detail.capSplit', { lat }) : t('pathNow.detail.capSplitUncounted', { lat }),
+    )
   rows.push(t('pathNow.detail.note'))
   return rows
 }

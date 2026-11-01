@@ -61,6 +61,19 @@ describe('pathNow — the flare and proton clauses on a path', () => {
     expect(c[0]).toContain("12:42Z (NOAA's own estimate)")
   })
 
+  it('names where each band’s figure came from when the split took the GOES estimate', () => {
+    const at = (flareFrom: 'noaa' | 'goes' | 'both') =>
+      nowClauses({ ...NOAA_FLARE, source: { ...NOAA_FLARE.source, xrayAt: NOW - 180, flareCapGeomag: 50 }, bands: [{ band: '20m', hops: 2, hopsModelled: true, flareDb: 8.6, flareFrom }] }, '20m', NOW).join(' ')
+    // Wholly from our GOES estimate: GOES with its time, never "NOAA's D-RAP grid".
+    expect(at('goes')).toContain('(estimated from GOES 11:57Z)')
+    expect(at('goes')).not.toContain('D-RAP')
+    // Partly: both, each with its own time.
+    expect(at('both')).toContain("(estimated from NOAA's D-RAP grid 11:59Z and GOES 11:57Z)")
+    // Where the grid stood throughout, NOAA's grid.
+    expect(at('noaa')).toContain("(estimated from NOAA's D-RAP grid 11:59Z)")
+    expect(at('noaa')).not.toContain('and GOES')
+  })
+
   it('never names NOAA for the GOES estimate, and names the rule of thumb as such', () => {
     const c = nowClauses(GOES_FLARE, '20m', NOW).join(' ')
     expect(c).toContain('~12 dB')
@@ -114,8 +127,16 @@ describe('pathNow — the flare and proton clauses on a path', () => {
     expect(d).toContain("hops: 2, the model's mode this hour")
     // No proton event: nothing about the grid's polar part.
     expect(d).not.toContain('polar-cap absorption')
-    const split = nowDetail({ ...NOAA_FLARE, source: { ...NOAA_FLARE.source, flareCapGeomag: 50 } }, '20m').join('\n')
-    expect(split).toContain('poleward of 50° geomagnetic the flare figure takes no more than the GOES X-ray estimate')
+    // The split took GOES on this route. With a PCA figure the proton part is counted once …
+    const splitSrc = { ...NOAA_FLARE.source, flareCapGeomag: 50 }
+    const counted = nowDetail({ ...NOAA_FLARE, source: splitSrc, bands: [{ band: '20m', hops: 2, hopsModelled: true, flareDb: 8.6, pcaDb: 12 }] }, '20m').join('\n')
+    expect(counted).toContain('Poleward of 50° geomagnetic the flare figure takes no more than the GOES X-ray estimate')
+    expect(counted).toContain('counted once, as polar-cap absorption')
+    // … and without one (no Kp, or below S1) it is said to be counted nowhere, never "once".
+    const uncounted = nowDetail({ ...NOAA_FLARE, source: splitSrc }, '20m').join('\n')
+    expect(uncounted).toContain('Poleward of 50° geomagnetic')
+    expect(uncounted).toContain('is not counted here')
+    expect(uncounted).not.toContain('counted once')
     const a = nowDetail(NOAA_FLARE, '10m').join('\n')
     expect(a).toContain('assumed')
     expect(nowDetail(undefined, '20m')).toEqual([])

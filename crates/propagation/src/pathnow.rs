@@ -18,11 +18,15 @@
 //!   [`PROTONS_FRESH_SECS`] old; with no Kp there is no cap edge, so nothing is claimed.
 //!
 //! **The grid's proton part is never flare absorption.** NOAA's grid folds a proton event's
-//! absorption into the same HAF as the X-rays (D-RAP sums the two). During an S1+ event the flare
-//! figure therefore takes, poleward of [`CAP_FROM_GEOMAG_DEG`], no more than the X-ray part the
-//! GOES flux gives there (`min(grid, analytic)`); the proton part is counted once, as polar-cap
-//! absorption, and the overlay says so (`OverlaySource::flare_cap_geomag`). Without a proton event
-//! NOAA's grid stands everywhere.
+//! absorption into the same HAF as the X-rays (D-RAP sums the two in dB). So whenever a proton
+//! reading is held — at any S level, the polar-cap layer's own condition for reading the grid's
+//! proton part — a point poleward of [`CAP_FROM_GEOMAG_DEG`] where the grid holds more than the
+//! X-ray part the GOES flux gives there (beyond [`SPLIT_TOL_MHZ`]) takes that GOES X-ray part for
+//! the flare figure and its stretches. The proton part is then counted once, as polar-cap
+//! absorption, only during an S1+ event with a Kp; otherwise it is not counted at all, and the
+//! detail row says which. Each band says where its figure came from ([`FlareFrom`]: NOAA's grid,
+//! the GOES estimate, or both), and the route says when the split took GOES
+//! (`OverlaySource::flare_cap_geomag`). With no proton reading held, NOAA's grid stands everywhere.
 //!
 //! Both laws give the absorption of a VERTICAL pass through the D region (1 dB at the HAF, and
 //! `(HAF/f)^1.5` dB at f). A path crosses the D region twice per hop, obliquely: [`path_overlay`]
@@ -77,6 +81,10 @@ pub const PROTONS_FRESH_SECS: i64 = 30 * 60;
 /// lowest cap edge, 55°, less its 5° taper) — the polar-cap layer reads the grid's proton part from
 /// the same line.
 pub const CAP_FROM_GEOMAG_DEG: f64 = 50.0;
+/// NOAA's grid and the GOES field differ a little where both are X-rays alone (the grid's own
+/// interpolation, NOAA's taper): within this the grid stands, so a proton-free grid stays NOAA's
+/// word. Phase 1's agreement measure allows a median 1 MHz under the sun.
+pub const SPLIT_TOL_MHZ: f64 = 1.0;
 /// NOAA's S1: J(≥10 MeV) at or above 10 pfu.
 const S1_PFU: f64 = 10.0;
 /// 10 dB at f needs a local HAF of f·10^(2/3).
@@ -342,10 +350,21 @@ pub struct OverlaySource {
     pub j10: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub s_scale: Option<u8>,
-    /// Set (to [`CAP_FROM_GEOMAG_DEG`]) when NOAA's grid is the footprint during a proton event:
-    /// poleward of that geomagnetic latitude the flare figure took no more than the GOES X-ray part.
+    /// Set (to [`CAP_FROM_GEOMAG_DEG`]) only when, on this route, NOAA's grid held more than the GOES
+    /// X-ray part somewhere poleward of that geomagnetic latitude and the flare figure or its
+    /// stretches took the GOES estimate there instead (beside a proton reading).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flare_cap_geomag: Option<f32>,
+}
+
+/// Where a band's flare figure came from on a route: NOAA's grid at every crossing it counted,
+/// the GOES estimate at every one (no current grid, or the split took it), or both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FlareFrom {
+    Noaa,
+    Goes,
+    Both,
 }
 
 /// One band's overlay on a route, now.
@@ -365,6 +384,9 @@ pub struct BandNow {
     /// with a Kp to place the cap edge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pca_db: Option<f32>,
+    /// Where `flare_db` came from (present with it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flare_from: Option<FlareFrom>,
     /// The stretches of the route a map draws for this band now: ≥ 1 dB / ≥ 10 dB under the
     /// flare (vertical), ≥ 1 dB in the polar cap.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -401,18 +423,28 @@ pub fn path_overlay(
     flare: Option<&Footprint>,
     protons: Option<ProtonSample>,
 ) -> Option<PathHourOverlay> {
+    // NOAA's grid beside a proton reading: its polar excess over the X-ray part is the proton part
+    // (see the header) — the polar-cap layer's own condition, at any S level.
+    let split = protons.is_some() && flare.is_some_and(|fp| fp.grid.is_some());
     // A proton event speaks only at S1+, beside a fresh sample, with a Kp to place the cap edge.
     let protons = protons_fresh(protons, now).filter(|p| s_scale(p.j10) >= 1);
     let pca = protons.zip(geo_now.kp);
-    // NOAA's grid during a proton event: its polar cells hold the proton part too (see the header).
-    let split = protons.is_some() && flare.is_some_and(|fp| fp.grid.is_some());
-    let flare_haf = |fp: &Footprint, la: f64, lo: f64| {
+    // Whether the split took the GOES estimate anywhere on this route.
+    let took_goes = std::cell::Cell::new(false);
+    // The flare's HAF at a point, and whether it is the GOES estimate (no grid, or the split took it).
+    let flare_haf = |fp: &Footprint, la: f64, lo: f64| -> (f64, bool) {
         let h = fp.haf_at(la, lo);
-        if split && geo::geomagnetic_lat_deg(la, lo).abs() >= CAP_FROM_GEOMAG_DEG {
-            h.min(f64::from(analytic_haf(la, lo, now, fp.xray.flux)))
-        } else {
-            h
+        if fp.grid.is_none() {
+            return (h, true);
         }
+        if split && h > 0.0 && geo::geomagnetic_lat_deg(la, lo).abs() >= CAP_FROM_GEOMAG_DEG {
+            let x = f64::from(analytic_haf(la, lo, now, fp.xray.flux));
+            if h > x + SPLIT_TOL_MHZ {
+                took_goes.set(true);
+                return (x, true);
+            }
+        }
+        (h, false)
     };
     if flare.is_none() && pca.is_none() {
         return None;
@@ -424,7 +456,10 @@ pub fn path_overlay(
         })
     };
     let hafs: Vec<f64> = match flare {
-        Some(fp) => pts.iter().map(|&(la, lo)| flare_haf(fp, la, lo)).collect(),
+        Some(fp) => pts
+            .iter()
+            .map(|&(la, lo)| flare_haf(fp, la, lo).0)
+            .collect(),
         None => Vec::new(),
     };
     let out = bands
@@ -433,15 +468,26 @@ pub fn path_overlay(
             let f = band_mhz(&b.band)?;
             let (hops, takeoff, hops_modelled) = hops_for(b, now_hour, dist_km);
             let sec = d_secant(takeoff);
+            // Which source the crossings that absorb anything took.
+            let (noaa_used, goes_used) = (std::cell::Cell::new(false), std::cell::Cell::new(false));
             let flare_db = flare.map(|fp| {
                 tenth(over_crossings(me, bearing, dist_km, hops, sec, |la, lo| {
-                    let haf = flare_haf(fp, la, lo);
+                    let (haf, goes) = flare_haf(fp, la, lo);
                     if haf > 0.0 {
+                        if goes { &goes_used } else { &noaa_used }.set(true);
                         (haf / f).powf(1.5)
                     } else {
                         0.0
                     }
                 }))
+            });
+            let flare_from = flare.map(|fp| match (noaa_used.get(), goes_used.get()) {
+                (true, true) => FlareFrom::Both,
+                (false, true) => FlareFrom::Goes,
+                (true, false) => FlareFrom::Noaa,
+                // Nothing absorbed (a path the sun is not on): the footprint's own source.
+                (false, false) if fp.grid.is_some() => FlareFrom::Noaa,
+                (false, false) => FlareFrom::Goes,
             });
             let pca_db = pca.map(|_| {
                 tenth(over_crossings(me, bearing, dist_km, hops, sec, |la, lo| {
@@ -470,6 +516,7 @@ pub fn path_overlay(
                 hops_modelled,
                 flare_db,
                 pca_db,
+                flare_from,
                 segments,
             })
         })
@@ -480,7 +527,7 @@ pub fn path_overlay(
         source.xray_long = Some(fp.xray.flux);
         source.haf = Some(fp.source);
         source.drap_valid_at = fp.grid.map(|g| g.valid_at);
-        source.flare_cap_geomag = split.then_some(CAP_FROM_GEOMAG_DEG as f32);
+        source.flare_cap_geomag = took_goes.get().then_some(CAP_FROM_GEOMAG_DEG as f32);
         source.recovery = fp.recovery();
     }
     if let Some((p, _)) = pca {
@@ -967,17 +1014,17 @@ mod tests {
     }
 
     /// NOAA's grid folds a proton event's absorption into the same HAF as the flare's. A grid that
-    /// is the analytic X1 field everywhere, and the same plus 15 MHz at |geomagnetic lat| ≥ 60°
-    /// (the proton part), on 15 May 12Z with NOAA's grid current.
-    fn proton_grid(capped: bool) -> DrapGrid {
-        let mut g = grid(0.0, MAY_12Z - 30, None);
+    /// is the analytic X1 field at `t` everywhere, and (capped) the same plus 15 MHz at
+    /// |geomagnetic lat| ≥ 60° in either hemisphere (the proton part), valid 30 s before `t`.
+    fn proton_grid(capped: bool, t: i64) -> DrapGrid {
+        let mut g = grid(0.0, t - 30, None);
         let cols = g.lons.len();
         for (r, la) in g.lats.iter().enumerate() {
             for (c, lo) in g.lons.iter().enumerate() {
                 let (la, lo) = (f64::from(*la), f64::from(*lo));
                 let cap = capped && geo::geomagnetic_lat_deg(la, lo).abs() >= 60.0;
                 g.haf[r * cols + c] =
-                    analytic_haf(la, lo, MAY_12Z - 30, X1) + if cap { 15.0 } else { 0.0 };
+                    analytic_haf(la, lo, t - 30, X1) + if cap { 15.0 } else { 0.0 };
             }
         }
         g
@@ -987,66 +1034,137 @@ mod tests {
     const FAIRBANKS: (f64, f64) = (64.84, -147.72);
     const OSLO: (f64, f64) = (59.91, 10.75);
     const ANCHORAGE: (f64, f64) = (61.22, -149.9);
+    /// Two Antarctic stations, both deep in the southern cap and sunlit in December.
+    const MAWSON: (f64, f64) = (-67.6, 62.87);
+    const CASEY: (f64, f64) = (-66.28, 110.53);
+    /// 2026-12-15 12:00 UTC: southern summer.
+    const DEC_12Z: i64 = 1_797_336_000;
 
+    type Stretches = Vec<(SegmentKind, f32, f32)>;
+    type FlarePart = (f32, Stretches, Option<f32>, Option<FlareFrom>, Option<f32>);
+    type Ends = ((f64, f64), (f64, f64), i64);
+
+    /// 20m on a path at `t` with NOAA's grid `g` (None: the GOES estimate alone) and `protons`:
+    /// the flare figure, its flare stretches, the PCA figure, where the flare figure came from, and
+    /// the route's split flag.
     fn flare_part(
         me: (f64, f64),
         dx: (f64, f64),
-        g: &DrapGrid,
+        t: i64,
+        g: Option<&DrapGrid>,
         protons: Option<ProtonSample>,
-    ) -> (f32, Vec<(SegmentKind, f32, f32)>, Option<f32>) {
-        let f = footprint(x(X1, MAY_12Z - 30), Some(g), MAY_12Z).unwrap();
-        assert_eq!(f.source, HafSource::Noaa);
+    ) -> FlarePart {
+        let f = footprint(x(X1, t - 30), g, t).unwrap();
+        assert_eq!(f.source == HafSource::Noaa, g.is_some());
         let b = [band("20m", None)];
-        let o = overlay(
-            me,
-            dx,
-            Route::Short,
-            &b,
-            Some(2.0),
-            MAY_12Z,
-            Some(&f),
-            protons,
-        )
-        .unwrap();
+        let o = overlay(me, dx, Route::Short, &b, Some(2.0), t, Some(&f), protons).unwrap();
         // Every input keeps its own time, never the ask's.
-        assert_eq!(o.source.xray_at, Some(MAY_12Z - 30));
-        assert_eq!(o.source.drap_valid_at, Some(MAY_12Z - 30));
-        // And the overlay says when the grid's polar part was kept out of the flare figure.
-        assert_eq!(o.source.flare_cap_geomag, protons.map(|_| 50.0));
+        assert_eq!(o.source.xray_at, Some(t - 30));
+        assert_eq!(o.source.drap_valid_at, g.map(|_| t - 30));
         let segs = o.bands[0]
             .segments
             .iter()
             .filter(|s| matches!(s.kind, SegmentKind::FlareWeak | SegmentKind::FlareOut))
             .map(|s| (s.kind, s.from, s.to))
             .collect();
-        (o.bands[0].flare_db.unwrap(), segs, o.bands[0].pca_db)
+        let b = &o.bands[0];
+        (
+            b.flare_db.unwrap(),
+            segs,
+            b.pca_db,
+            b.flare_from,
+            o.source.flare_cap_geomag,
+        )
+    }
+
+    fn same_stretches(a: &[(SegmentKind, f32, f32)], b: &[(SegmentKind, f32, f32)], what: &str) {
+        assert_eq!(a.len(), b.len(), "{what}: {a:?} vs {b:?}");
+        for (x, y) in a.iter().zip(b) {
+            assert_eq!(x.0, y.0, "{what}");
+            assert!(
+                (x.1 - y.1).abs() <= 0.02 && (x.2 - y.2).abs() <= 0.02,
+                "{what}: {x:?} {y:?}"
+            );
+        }
+    }
+
+    const POLAR_PATHS: [Ends; 4] = [
+        (TROMSO, FAIRBANKS, MAY_12Z),
+        (OSLO, ANCHORAGE, MAY_12Z),
+        (LONDON, TOKYO, MAY_12Z),
+        (MAWSON, CASEY, DEC_12Z),
+    ];
+
+    #[test]
+    fn with_a_proton_reading_the_flare_figure_is_the_x_ray_part_alone_in_both_caps() {
+        // The oracle is independent of the split: the GOES estimate with no grid at all, which
+        // never goes through it.
+        for (me, dx, t) in POLAR_PATHS {
+            let s2 = storm(200.0, t - 300);
+            let (oracle, oracle_segs, oracle_pca, _, _) = flare_part(me, dx, t, None, s2);
+            let capped = proton_grid(true, t);
+            let (got, segs, pca, _, flag) = flare_part(me, dx, t, Some(&capped), s2);
+            assert!(
+                (got - oracle).abs() <= 0.3,
+                "{me:?}: {got} vs X-ray part {oracle}"
+            );
+            same_stretches(&segs, &oracle_segs, "capped vs GOES");
+            // The proton part is counted once, as PCA, and the route says the split took GOES.
+            assert_eq!(pca, oracle_pca);
+            assert!(pca.unwrap() > 1.0);
+            assert_eq!(flag, Some(50.0), "{me:?}");
+            // A proton-free grid with no proton reading at all is NOAA's word, and agrees.
+            let plain = proton_grid(false, t);
+            let (noaa, noaa_segs, _, from, flag) = flare_part(me, dx, t, Some(&plain), None);
+            assert!((noaa - oracle).abs() <= 0.3, "{me:?}: {noaa} vs {oracle}");
+            same_stretches(&noaa_segs, &oracle_segs, "proton-free grid vs GOES");
+            assert_eq!((from, flag), (Some(FlareFrom::Noaa), None));
+        }
     }
 
     #[test]
-    fn during_a_proton_event_the_grids_polar_part_is_never_called_flare_absorption() {
-        let s2 = storm(200.0, MAY_12Z - 300);
-        for (me, dx) in [(TROMSO, FAIRBANKS), (OSLO, ANCHORAGE), (LONDON, TOKYO)] {
-            let (plain, plain_segs, plain_pca) = flare_part(me, dx, &proton_grid(false), s2);
-            let (capped, capped_segs, capped_pca) = flare_part(me, dx, &proton_grid(true), s2);
-            // The flare figure and its stretches are the X-ray part's alone …
-            assert!((capped - plain).abs() <= 0.3, "{me:?}: {capped} vs {plain}");
-            assert_eq!(capped_segs.len(), plain_segs.len(), "{me:?}");
-            for (a, b) in capped_segs.iter().zip(&plain_segs) {
-                assert_eq!(a.0, b.0);
-                assert!(
-                    (a.1 - b.1).abs() <= 0.02 && (a.2 - b.2).abs() <= 0.02,
-                    "{me:?}: {a:?} {b:?}"
-                );
-            }
-            // … and the proton part is counted once, as PCA.
-            assert_eq!(capped_pca, plain_pca);
-            assert!(capped_pca.unwrap() > 1.0);
+    fn below_s1_the_grids_polar_excess_is_still_not_flare_absorption() {
+        // An M5-class tail of 5 pfu: no NOAA proton event, no PCA figure — and the grid's polar
+        // excess is still the proton part, as the polar-cap layer reads it, never the flare's.
+        for (me, dx, t) in POLAR_PATHS {
+            let tail = storm(5.0, t - 300);
+            let (oracle, oracle_segs, _, _, _) = flare_part(me, dx, t, None, None);
+            let capped = proton_grid(true, t);
+            let (got, segs, pca, _, flag) = flare_part(me, dx, t, Some(&capped), tail);
+            assert!(
+                (got - oracle).abs() <= 0.3,
+                "{me:?}: {got} vs X-ray part {oracle}"
+            );
+            same_stretches(&segs, &oracle_segs, "below S1");
+            assert_eq!(pca, None, "no PCA figure below S1");
+            assert_eq!(flag, Some(50.0));
         }
-        // Control: with no proton event NOAA's grid is the flare's word everywhere, polar cells
-        // included — the estimate never displaces it.
-        let (plain, _, _) = flare_part(TROMSO, FAIRBANKS, &proton_grid(false), None);
-        let (capped, _, _) = flare_part(TROMSO, FAIRBANKS, &proton_grid(true), None);
-        assert!(capped > plain + 1.0, "{capped} vs {plain}");
+        // Control: with no proton reading held at all, NOAA's grid is the flare's word everywhere.
+        let capped = proton_grid(true, MAY_12Z);
+        let (grid_word, _, _, from, flag) =
+            flare_part(TROMSO, FAIRBANKS, MAY_12Z, Some(&capped), None);
+        let (oracle, _, _, _, _) = flare_part(TROMSO, FAIRBANKS, MAY_12Z, None, None);
+        assert!(grid_word > oracle + 1.0, "{grid_word} vs {oracle}");
+        assert_eq!((from, flag), (Some(FlareFrom::Noaa), None));
+    }
+
+    #[test]
+    fn each_band_says_whether_its_flare_figure_came_from_noaa_goes_or_both() {
+        let s2 = storm(200.0, MAY_12Z - 300);
+        let capped = proton_grid(true, MAY_12Z);
+        // Wholly inside the cap: every crossing took the GOES estimate.
+        let (_, _, _, from, _) = flare_part(TROMSO, FAIRBANKS, MAY_12Z, Some(&capped), s2);
+        assert_eq!(from, Some(FlareFrom::Goes));
+        // London–Tokyo: NOAA's grid at London, GOES over the cap.
+        let (_, _, _, from, _) = flare_part(LONDON, TOKYO, MAY_12Z, Some(&capped), s2);
+        assert_eq!(from, Some(FlareFrom::Both));
+        // Madrid–Cairo stays far below the cap: the grid stands, and the route carries no flag.
+        let (_, _, _, from, flag) =
+            flare_part((40.42, -3.7), (30.04, 31.24), MAY_12Z, Some(&capped), s2);
+        assert_eq!((from, flag), (Some(FlareFrom::Noaa), None));
+        // The GOES estimate alone is GOES's.
+        let (_, _, _, from, flag) = flare_part(TROMSO, FAIRBANKS, MAY_12Z, None, s2);
+        assert_eq!((from, flag), (Some(FlareFrom::Goes), None));
     }
 
     #[test]
