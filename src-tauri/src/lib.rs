@@ -9246,6 +9246,73 @@ mod path_now_tests {
         sp
     }
 
+    /// The lanes are process globals: the one test that fills them holds this.
+    static LANES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn proton_cache(at: Option<i64>) -> super::ProtonCache {
+        std::sync::Arc::new(std::sync::Mutex::new(Some((
+            std::time::Instant::now(),
+            propagation::live::protons::ProtonFlux {
+                j1: 800.0,
+                j5: 400.0,
+                j10: 200.0,
+                at,
+            },
+        ))))
+    }
+
+    #[test]
+    fn the_inputs_carry_noaas_grid_from_its_lane_and_an_undated_proton_sample_is_none() {
+        let _g = LANES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lats: Vec<f32> = (0..90).map(|i| 89.0 - 2.0 * i as f32).collect();
+        let lons: Vec<f32> = (0..90).map(|i| -178.0 + 4.0 * i as f32).collect();
+        let grid = propagation::flare::DrapGrid {
+            valid_at: NOW - 30,
+            recovery_at: Some(NOW + 1800),
+            haf: vec![30.0; lats.len() * lons.len()],
+            lats,
+            lons,
+        };
+        super::XRAY_LANE
+            .lock()
+            .unwrap()
+            .answered(propagation::live::swpc::XrayTrace {
+                now: propagation::live::swpc::Sample {
+                    value: 1e-4,
+                    at: NOW - 60,
+                },
+                series: Vec::new(),
+                recent: Vec::new(),
+            });
+        super::DRAP_LANE.lock().unwrap().answered(grid);
+        let dated = NowInputs::read(None, &proton_cache(Some(NOW - 300)), NOW);
+        let undated = NowInputs::read(None, &proton_cache(None), NOW);
+        *super::XRAY_LANE.lock().unwrap() = propagation::flare::Lane::new();
+        *super::DRAP_LANE.lock().unwrap() = propagation::flare::Lane::new();
+        // NOAA's word reaches the now line, with the grid's own valid time and the GOES sample's.
+        assert_eq!(
+            dated.xray,
+            Some(XraySample {
+                flux: 1e-4,
+                at: NOW - 60
+            })
+        );
+        let fl = dated
+            .space_now(NOW)
+            .and_then(|n| n.flare)
+            .expect("a flare now");
+        assert_eq!(fl.haf, propagation::pathnow::HafSource::Noaa);
+        assert_eq!(fl.drap_valid_at, Some(NOW - 30));
+        assert_eq!(fl.xray_at, NOW - 60);
+        // A dated proton sample is carried with its time; an undated one is no sample at all.
+        assert_eq!(dated.protons.map(|p| p.at), Some(NOW - 300));
+        assert!(undated.protons.is_none());
+        assert!(undated.space_now(NOW).and_then(|n| n.protons).is_none());
+        assert!(dated.space_now(NOW).and_then(|n| n.protons).is_some());
+    }
+
     #[test]
     fn a_stand_in_x_ray_never_feeds_the_overlay_and_the_newer_sample_wins() {
         assert_eq!(snapshot_xray(Some(&view(1e-4, None))), None);
@@ -9281,7 +9348,29 @@ mod path_now_tests {
         attach_now(&mut p, BOSTON, LONDON, &flare, NOW);
         let o = p.overlay.as_ref().expect("short-path overlay");
         assert!(o.bands.iter().any(|b| b.flare_db.is_some_and(|d| d > 1.0)));
-        assert!(p.long_path.as_ref().unwrap().overlay.is_some());
+        // The long route carries the long route's own figures (its own arc and hops), not the
+        // short route's.
+        let lp = p.long_path.as_ref().unwrap();
+        let own = |route| {
+            let g = lp.geometry.as_ref().unwrap();
+            let h = usize::from(g.now_hour);
+            let fp = propagation::pathnow::footprint(flare.xray, None, NOW);
+            propagation::pathnow::path_overlay(
+                BOSTON,
+                LONDON,
+                route,
+                &lp.bands,
+                &g.hours[h],
+                h,
+                NOW,
+                fp.as_ref(),
+                None,
+            )
+        };
+        assert_eq!(lp.overlay, own(propagation::Route::Long));
+        assert_ne!(lp.overlay, own(propagation::Route::Short));
+        // Each input keeps its own time.
+        assert_eq!(o.source.xray_at, Some(NOW - 60));
         assert!(p.space_now.as_ref().unwrap().flare.is_some());
         let v = serde_json::to_value(&p).unwrap();
         assert!(v["overlay"]["bands"].is_array() && v["spaceNow"]["flare"]["out"].is_string());

@@ -462,6 +462,10 @@ export interface PathHourOverlay {
     protonsAt?: number
     j10?: number
     sScale?: number
+    /** During a proton event with NOAA's grid as the footprint: the geomagnetic latitude poleward
+     * of which the flare figure took no more than the GOES X-ray part (the grid's proton part is
+     * counted once, as polar-cap absorption). */
+    flareCapGeomag?: number
   }
   bands: BandNow[]
 }

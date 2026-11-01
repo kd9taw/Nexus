@@ -196,7 +196,7 @@ describe('the path ribbon on the globe', () => {
 
   it('draws what a flare hits NOW on the drawn band over each route, in its own ink, and drops it when the flare goes', async () => {
     const base = { myGrid: 'EN52', onSelectCall: () => {}, stations: [] }
-    const over = (kind: 'flareOut' | 'flareWeak') => ({
+    const over = (kind: 'flareOut' | 'flareWeak' | 'pca') => ({
       unix: 1,
       kp: 2,
       kpSource: 'measured' as const,
@@ -217,6 +217,16 @@ describe('the path ribbon on the globe', () => {
     expect(ink('path-sp-flareOut')).toBe('#ff4d4d')
     expect(ink('path-lp-flareWeak')).toBe('#ffa64d')
     expect(ink('path-sp-flareWeak')).toBeNull()
+    // A proton event's stretch, in its own ink (the 3-D globe cannot be drawn in this box's
+    // headless Chrome, so this is its only check).
+    hit.overlay = over('pca')
+    r.rerender(<Globe3D {...base} prop={snap()} selectedCall="VK2ABC" outlook={{ ...hit }} />)
+    await act(async () => {})
+    expect(ink('path-sp-pca')).toBe('#ff5ce1')
+    expect(ink('path-sp-flareOut')).toBeNull()
+    hit.overlay = over('flareOut')
+    r.rerender(<Globe3D {...base} prop={snap()} selectedCall="VK2ABC" outlook={{ ...hit }} />)
+    await act(async () => {})
     // Drawn over the polar stretch: added to the scene after it.
     const order = scene.children.map((c) => c.name)
     expect(order.indexOf('path-sp-flareOut')).toBeGreaterThan(order.indexOf('path-sp-polar'))

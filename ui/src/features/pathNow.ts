@@ -86,12 +86,17 @@ export function nowDetail(o: PathHourOverlay | null | undefined, band: string | 
   const b = bandNowOf(o, band)
   if (!o || !b || (b.flareDb == null && b.pcaDb == null)) return []
   const crossings = 2 * b.hops
-  return [
+  const rows = [
     b.hopsModelled
       ? t('pathNow.detail.hops', { crossings, hops: b.hops })
       : t('pathNow.detail.hopsAssumed', { crossings, hops: b.hops }),
-    t('pathNow.detail.note'),
   ]
+  // NOAA's grid holds a proton event's absorption in the same figure as the flare's: say where the
+  // flare figure was held to the X-ray part.
+  const lat = o.source.flareCapGeomag
+  if (lat != null && b.flareDb != null) rows.push(t('pathNow.detail.capSplit', { lat }))
+  rows.push(t('pathNow.detail.note'))
+  return rows
 }
 
 /** The path-over-the-day strip's now-cell hover for `band`, or null when the cell is not marked. */
@@ -123,7 +128,7 @@ export function spaceNowLines(s: SpaceNow | null | undefined, nowSec: number): s
     const cls = flareClass(f.xrayLong)
     const source =
       f.haf === 'noaa' && f.drapValidAt != null
-        ? t('spaceNow.src.noaa', { time: clockZ(f.drapValidAt, nowSec) })
+        ? t('spaceNow.src.noaa', { time: clockZ(f.drapValidAt, nowSec), xtime: clockZ(f.xrayAt, nowSec) })
         : t('spaceNow.src.goes', { time: clockZ(f.xrayAt, nowSec) })
     const until = f.recovery
       ? f.recovery.source === 'noaa'
@@ -141,8 +146,8 @@ export function spaceNowLines(s: SpaceNow | null | undefined, nowSec: number): s
     const w = s.watch
     lines.push(
       w.from > nowSec
-        ? t('spaceNow.watch.ahead', { g: w.g, time: clockZ(w.from, nowSec) })
-        : t('spaceNow.watch.now', { g: w.g, time: clockZ(w.to, nowSec) }),
+        ? t('spaceNow.watch.ahead', { g: w.g, issued: clockZ(w.issued, nowSec), time: clockZ(w.from, nowSec) })
+        : t('spaceNow.watch.now', { g: w.g, issued: clockZ(w.issued, nowSec), time: clockZ(w.to, nowSec) }),
     )
   }
   return lines

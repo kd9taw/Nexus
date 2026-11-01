@@ -112,6 +112,10 @@ describe('pathNow — the flare and proton clauses on a path', () => {
     const d = nowDetail(NOAA_FLARE, '20m').join('\n')
     expect(d).toContain('D-region crossings: 4')
     expect(d).toContain("hops: 2, the model's mode this hour")
+    // No proton event: nothing about the grid's polar part.
+    expect(d).not.toContain('polar-cap absorption')
+    const split = nowDetail({ ...NOAA_FLARE, source: { ...NOAA_FLARE.source, flareCapGeomag: 50 } }, '20m').join('\n')
+    expect(split).toContain('poleward of 50° geomagnetic the flare figure takes no more than the GOES X-ray estimate')
     const a = nowDetail(NOAA_FLARE, '10m').join('\n')
     expect(a).toContain('assumed')
     expect(nowDetail(undefined, '20m')).toEqual([])
@@ -145,7 +149,7 @@ describe('spaceNowLines — the outlook’s and the strip’s "now" line', () =>
       flare: {
         r: 3,
         xrayLong: 1e-4,
-        xrayAt: NOW - 60,
+        xrayAt: NOW - 180,
         haf: 'noaa',
         drapValidAt: NOW - 45,
         hafSubMhz: 30,
@@ -157,7 +161,8 @@ describe('spaceNowLines — the outlook’s and the strip’s "now" line', () =>
     const [line] = spaceNowLines(s, NOW)
     expect(line).toContain('Flare X1.0 (R3): 60m and below out on the dayside')
     expect(line).toContain("until ~13:20Z (NOAA's own estimate)")
-    expect(line).toContain('NOAA D-RAP 11:59Z')
+    // NOAA's HAF with its valid time, and the GOES sample behind the class with its own.
+    expect(line).toContain('NOAA D-RAP 11:59Z · GOES 11:57Z')
   })
 
   it('a GOES estimate is labelled as one, and a weakened-only flare says weakened', () => {
@@ -186,9 +191,11 @@ describe('spaceNowLines — the outlook’s and the strip’s "now" line', () =>
     )
     expect(lines[0]).toContain('S2 proton event')
     expect(lines[0]).toContain('GOES 11:55Z')
-    expect(lines[1]).toContain('G1 watch (NOAA) from')
+    // NOAA's issue time travels with the watch.
+    expect(lines[1]).toContain('G1 watch (NOAA, issued 11:00Z) from')
     const inForce = spaceNowLines({ watch: { g: 2, from: NOW - 3600, to: NOW + 12 * 3600, issued: NOW - 86_400 } }, NOW)
-    expect(inForce[0]).toContain('G2 watch (NOAA) in force until')
+    // Issued the day before: dated.
+    expect(inForce[0]).toMatch(/^G2 watch \(NOAA, issued \S+ \S+ 12:00Z\) in force until /)
     expect(spaceNowLines(undefined, NOW)).toEqual([])
     expect(spaceNowLines({}, NOW)).toEqual([])
   })

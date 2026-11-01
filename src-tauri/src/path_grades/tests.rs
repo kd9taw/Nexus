@@ -435,6 +435,13 @@ fn a_now_overlay_on_the_card_changes_no_contacts_grade() {
     assert!(storm.overlay.is_some(), "the overlay under test is there");
     keep_outlook("FN42aa", "QF56", NOW, &storm, Some(&measured()));
     assert_eq!(at_log(&rec, "", &live, &region, &[]), Some(want));
+    // The kept card carries none of it, on either route, whenever it was attached.
+    let kept = outlook_for("FN42", "QF56", NOW).expect("kept");
+    assert!(kept.overlay.is_none() && kept.space_now.is_none());
+    assert!(kept
+        .long_path
+        .as_deref()
+        .is_some_and(|lp| lp.overlay.is_none()));
 }
 
 #[test]

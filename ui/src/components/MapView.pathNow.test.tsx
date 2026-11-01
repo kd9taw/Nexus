@@ -89,7 +89,7 @@ afterEach(() => {
 const VK = { call: 'VK2ABC', grid: 'QF56', snr: -10, lastHeardSlot: 1, heardCount: 2, presence: 'active', worked: false } as unknown as Station
 const SP_KM = haversineKm(gridToLatLon('EN52')!, gridToLatLon('QF56')!)
 
-function over(kind: 'flareOut' | 'flareWeak'): PathHourOverlay {
+function over(kind: 'flareOut' | 'flareWeak' | 'pca'): PathHourOverlay {
   return {
     unix: NOW / 1000,
     kp: 2,
@@ -100,7 +100,7 @@ function over(kind: 'flareOut' | 'flareWeak'): PathHourOverlay {
   }
 }
 
-function outlook(withOverlay: boolean): PathPrediction {
+function outlook(withOverlay: boolean, shortKind: 'flareOut' | 'pca' = 'flareOut'): PathPrediction {
   const geometry = (distKm: number, bearingDeg: number) => ({ distKm, bearingDeg, maxGmlatDeg: 40, nowHour: 18, hours: [], segmentsNow: [] })
   return {
     engine: 'p533',
@@ -117,7 +117,7 @@ function outlook(withOverlay: boolean): PathPrediction {
       ...(withOverlay ? { overlay: over('flareWeak') } : {}),
     },
     routes: [{ band: '20m', verdict: 'short', confidence: 'likely', shortBcr: 0.8, longBcr: 0.05, reasons: [{ kind: 'oneClosed', open: 'short' }] }],
-    ...(withOverlay ? { overlay: over('flareOut') } : {}),
+    ...(withOverlay ? { overlay: over(shortKind) } : {}),
   }
 }
 
@@ -154,6 +154,12 @@ describe('the ribbon under a flare on the 2-D map', () => {
     // The short route's stretch is solid, the long route's dashed like its route.
     expect(out.every((x) => x.dash.length === 0)).toBe(true)
     expect(weak.every((x) => x.dash.length > 0)).toBe(true)
+  })
+
+  it('strokes a proton event’s stretch in its own ink, never the polar cap’s', async () => {
+    const s = await strokes(outlook(true, 'pca'))
+    expect(s.some((x) => x.ink === INKS['--route-pca'])).toBe(true)
+    expect(s.some((x) => x.ink === INKS['--route-polar'])).toBe(false)
   })
 
   it('draws no flare stretch without the overlay (control: the route itself is still drawn)', async () => {
