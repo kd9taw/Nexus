@@ -334,11 +334,22 @@ its large readings: like the Clock's digits, they grow with the width of the box
 
 ![The Amplifier pane showing link state, power out, SWR before and after the tuner, PA temperature, volts and current.](../img/manual/connect-amplifier-pane.webp)
 
-*The Amplifier pane in Nexus 1.10.3. Everything in it is **telemetry the amplifier reported** —
-there is no control here. Operate/Standby and the band ladder ride in the cockpit's own
-amplifier strip, where you are transmitting. The temperature prints with a degree sign and no
-scale letter because the SPE protocol does not state the unit. No amplifier was connected for
-this capture; the readings are a documentation fixture.*
+*The Amplifier pane in Nexus 1.10.3, before it had its Operate/Standby button. Every reading in
+it is **telemetry the amplifier reported**. The band ladder rides in the cockpit's own amplifier
+strip, where you are transmitting. The temperature prints with a degree sign and no scale letter
+because the SPE protocol does not state the unit. No amplifier was connected for this capture;
+the readings are a documentation fixture.*
+
+**Operate/Standby, big and coloured.** Under the link line the pane has one control: a large
+button that is **red, "OPERATE · Active"** with a lamp symbol while the amplifier is in Operate,
+and **green, "STANDBY · Not active"** with a pause symbol while it is in Standby, so the words and
+the shape say it as well as the colour. It shows what the amplifier last reported, never what you
+just clicked: a click sends one Operate/Standby press (the protocol has only a toggle), and the
+button changes when the amplifier answers, within about a second. It is locked, with a dashed
+edge, while you are transmitting (whichever of the radio or the amplifier says so) and while the
+amplifier is not answering or has not said which state it is in, when it shows **—**. A press the
+amplifier refuses shows **Not sent** under the button. **Standby is not a stop**: the radio keeps
+transmitting and its drive passes straight through, and the button's tooltip says so.
 
 It has to be **its own port**. A serial port can only be opened once, so an amplifier
 typed onto the CAT port does not give you a silent amplifier — it gives you a radio

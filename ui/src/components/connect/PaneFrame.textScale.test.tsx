@@ -451,6 +451,7 @@ const CTX: PaneContext = {
     alarmActive: false,
     warning: '',
   } as unknown as PaneContext['amp'],
+  radioOnAir: false,
   rigBand: '20m',
   scales: { r: 1, s: 0, g: 2, gTomorrow: { level: 1, date: new Date((fx.NOW + 86400) * 1000).toISOString().slice(0, 10) }, asOf: fx.NOW - 300 },
   alerts: [{ productId: 'K05W', issued: fx.NOW - 3600, kind: 'warning', message: 'Geomagnetic K-index of 5 expected' }],

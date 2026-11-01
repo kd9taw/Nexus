@@ -3415,6 +3415,7 @@ function App() {
     needByCall,
     needAlerts: visibleAlerts,
     amp: snap.radio.amp ?? null,
+    radioOnAir: isOnAir(snap.radio),
     rigBand: snap.radio.band ?? null,
     fieldDay: snap.fieldDay ?? null,
     activation: { act: snap.activation ?? null, logTick: snap.logTick },
@@ -3880,6 +3881,9 @@ function App() {
           // The amplifier rides the snapshot App already polls at 300 ms — no fourth poller,
           // no new command. Absent when none is configured, and the pane then renders nothing.
           amp={snap?.radio.amp ?? null}
+          // …and the ON AIR answer the cockpit header's amplifier strip locks on, for the Amplifier
+          // box's Operate/Standby button.
+          radioOnAir={snap ? isOnAir(snap.radio) : false}
           rigBand={snap?.radio.band ?? null}
           fieldDay={snap?.fieldDay ?? null}
           activation={snap ? { act: snap.activation ?? null, logTick: snap.logTick } : undefined}

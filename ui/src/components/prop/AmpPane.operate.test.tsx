@@ -1,0 +1,165 @@
+// @vitest-environment jsdom
+//
+// THE AMPLIFIER BOX'S OPERATE/STANDBY BUTTON, by what it renders and what a click sends (operator,
+// 2026-10-31: "red being ready to operate and green being on standby. Clearly label things active vs
+// standby"). Its rules are the cockpit header strip's (AmpStrip.tsx), held in one hook both use
+// (useAmpControl.ts); the colours' contrast in every theme is AmpPane.contrast.test.tsx, and that it is
+// on no stop-line census is stop-line.test.tsx.
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { AmpPane } from './AmpPane'
+import { t } from '../../i18n'
+import type { AmpStatus } from '../../types'
+import { css, loadSheets, resolveVal } from '../../cssCascade.testkit'
+
+// Derived from the real module (AmpStrip.test.tsx's rule): a partial mock leaves every other export
+// undefined.
+vi.mock('../../api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api')>()),
+  ampCommand: vi.fn(async () => true),
+}))
+import { ampCommand } from '../../api'
+
+beforeAll(() => loadSheets())
+beforeEach(() => vi.mocked(ampCommand).mockClear())
+afterEach(cleanup)
+
+const live = (over: Partial<AmpStatus> = {}): AmpStatus => ({
+  family: 'spe',
+  model: '15K',
+  linked: true,
+  reason: '',
+  operate: true,
+  transmitting: false,
+  outputWatts: 0,
+  swr: 1.1,
+  swrAtu: 1.0,
+  volts: 48.0,
+  amps: 0,
+  temp: 30,
+  tempCelsius: false,
+  alarm: 'none',
+  alarmRaised: false,
+  warning: 'none',
+  warningRaised: false,
+  kpaFault: null,
+  ...over,
+})
+
+const button = () => document.querySelector<HTMLButtonElement>('.amp-opbtn')!
+
+describe('the Amplifier box’s Operate/Standby button', () => {
+  it('Operate is RED and says Active; Standby is GREEN and says Standby — in words and shape, not colour alone', () => {
+    render(<AmpPane amp={live({ operate: true })} radioOnAir={false} />)
+    const op = button()
+    expect(op.getAttribute('aria-label')).toBe(`${t('amp.operate')} · ${t('amp.op.active')}`)
+    expect(op.textContent).toContain(t('amp.op.active'))
+    // Its colour is its class; which colour that class paints, in every theme, is AmpPane.contrast.test.tsx.
+    expect(op.classList.contains('is-operate')).toBe(true)
+    // The lamp, a shape a colour-blind operator reads without the red.
+    expect(op.querySelectorAll('.amp-opbtn-icon circle').length).toBe(2)
+    cleanup()
+
+    render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+    const sb = button()
+    expect(sb.getAttribute('aria-label')).toBe(`${t('amp.standby')} · ${t('amp.op.notActive')}`)
+    expect(sb.classList.contains('is-standby')).toBe(true)
+    expect(sb.classList.contains('is-operate')).toBe(false)
+    // The pause mark, a different shape from Operate's lamp.
+    expect(sb.querySelectorAll('.amp-opbtn-icon rect').length).toBe(2)
+    expect(sb.querySelectorAll('.amp-opbtn-icon circle').length).toBe(0)
+  })
+
+  it('its word is uppercase on screen and big — the title size, not the box’s micro text', () => {
+    render(<AmpPane amp={live()} radioOnAir={false} />)
+    expect(css(button().querySelector('.amp-opbtn-word')!, 'text-transform')).toBe('uppercase')
+    expect(css(button(), 'font-size')).toBe(resolveVal('var(--fs-title)'))
+    expect(css(button(), 'width')).toBe('100%')
+  })
+
+  it('a click sends OPERATE and moves NOTHING: only the next status frame does', async () => {
+    render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+    await act(async () => {
+      fireEvent.click(button())
+    })
+    expect(vi.mocked(ampCommand)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(ampCommand)).toHaveBeenCalledWith('operate')
+    // OPERATE is a toggle with no idempotent set: an optimistic flip would lie on a lost frame.
+    expect(button().getAttribute('aria-label')).toBe(`${t('amp.standby')} · ${t('amp.op.notActive')}`)
+    expect(button().classList.contains('is-standby')).toBe(true)
+  })
+
+  it('…and the next frame is what turns it red', () => {
+    const r = render(<AmpPane amp={live({ operate: false })} radioOnAir={false} />)
+    r.rerender(<AmpPane amp={live({ operate: true })} radioOnAir={false} />)
+    expect(button().classList.contains('is-operate')).toBe(true)
+  })
+
+  it('⛔ is dead while the AMPLIFIER reports keyed, and sends nothing', () => {
+    render(<AmpPane amp={live({ transmitting: true })} radioOnAir={false} />)
+    expect(button().disabled).toBe(true)
+    expect(button().title).toContain(t('amp.strip.keyed.title'))
+    fireEvent.click(button())
+    expect(vi.mocked(ampCommand)).not.toHaveBeenCalled()
+  })
+
+  it('⛔ is dead while the RADIO is on air, even with an amplifier that reports idle or no flag', () => {
+    for (const transmitting of [false, null]) {
+      render(<AmpPane amp={live({ transmitting })} radioOnAir />)
+      expect(button().disabled, `amplifier flag ${transmitting}`).toBe(true)
+      cleanup()
+    }
+    // The control: the same amplifier is usable with the radio off the air, so this is the lock and
+    // not a button that is always dead.
+    render(<AmpPane amp={live({ transmitting: null })} radioOnAir={false} />)
+    expect(button().disabled).toBe(false)
+  })
+
+  it('a configured amplifier that is not answering draws "—", dead, with the reason in words', () => {
+    render(<AmpPane amp={live({ linked: false, reason: 'portBusy', operate: true })} radioOnAir={false} />)
+    const b = button()
+    expect(b.disabled).toBe(true)
+    expect(b.querySelector('.amp-opbtn-word')!.textContent).toBe('—')
+    expect(b.querySelector('.amp-opbtn-sub')!.textContent).toBe(t('amp.strip.statusUnknown'))
+    // The reason is named in words: on the box's head line above (AmpPane.test.tsx), in the button's
+    // spoken name and in its title.
+    expect(b.getAttribute('aria-label')).toBe(`${t('amp.strip.statusUnknown')} · ${t('amp.reason.portBusy')}`)
+    expect(b.title).toContain(t('amp.reason.portBusy'))
+    // Neither colour: a stale Operate from a dead link must not paint the button red.
+    expect(b.classList.contains('is-operate') || b.classList.contains('is-standby')).toBe(false)
+  })
+
+  it('a linked amplifier with no Operate state is dead too — toggling a state we cannot see is toggling blind', () => {
+    render(<AmpPane amp={live({ operate: null })} radioOnAir={false} />)
+    expect(button().disabled).toBe(true)
+    expect(button().getAttribute('aria-label')).toBe(t('amp.strip.statusUnknown'))
+  })
+
+  it('says so when a keystroke is refused, and clears it on the next one that goes through', async () => {
+    vi.mocked(ampCommand).mockResolvedValueOnce(false)
+    render(<AmpPane amp={live()} radioOnAir={false} />)
+    await act(async () => {
+      fireEvent.click(button())
+    })
+    expect(screen.getByRole('status').textContent).toBe(t('amp.strip.refused'))
+    await act(async () => {
+      fireEvent.click(button())
+    })
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('every title says Standby does NOT stop a transmission — in every state', () => {
+    const states: Array<[string, AmpStatus, boolean]> = [
+      ['operate', live({ operate: true }), false],
+      ['standby', live({ operate: false }), false],
+      ['keyed', live({ operate: true }), true],
+      ['unlinked', live({ linked: false, reason: 'noAnswer' }), false],
+      ['unknown', live({ operate: null }), false],
+    ]
+    for (const [name, amp, onAir] of states) {
+      render(<AmpPane amp={amp} radioOnAir={onAir} />)
+      expect(button().title, name).toMatch(/does NOT stop a transmission/)
+      cleanup()
+    }
+  })
+})

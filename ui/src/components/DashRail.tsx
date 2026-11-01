@@ -154,6 +154,8 @@ export interface DashRailProps {
   needByCall: Map<string, NeedTag>
   needAlerts?: NeedAlert[]
   amp?: AmpStatus | null
+  /** The radio's ON AIR answer, for the Amplifier box's Operate/Standby (PaneContext `radioOnAir`). */
+  radioOnAir?: boolean
   rigBand?: string | null
   /** The running contest, for the Operators box (PaneContext `fieldDay`). */
   fieldDay?: FieldDayStatus | null
@@ -303,6 +305,7 @@ function DashRailBody(p: DashRailProps) {
     needByCall: p.needByCall,
     needAlerts: p.needAlerts,
     amp: p.amp,
+    radioOnAir: p.radioOnAir,
     rigBand: p.rigBand ?? null,
     selectedCall,
     selection,

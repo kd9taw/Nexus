@@ -2672,10 +2672,77 @@ button.nb-chip:hover {
   text-transform: none;
   letter-spacing: 0;
 }
-.amp-model,
-.amp-state {
+.amp-model {
   font-size: var(--fs-micro);
   color: var(--text-dim);
+}
+/* THE PANE'S ONE CONTROL: Operate/Standby (AmpPane `OperateButton`). The operator's colours, "red being
+   ready to operate and green being on standby" — the reverse of the header strip's quiet green Operate,
+   on purpose. Both colours are locked tokens of both themes: Operate takes the TX red (`--tx`, never
+   re-coloured by a preset), Standby the good-state green (`--state-good`, the OK role's). The colour is
+   the border and a strong tint of the face; the word stays the theme's text colour, because a status
+   colour is held to 3:1 and lettering needs 4.5:1 (the strip's light-theme fix). Colour is never the
+   only cue: the word, a second word and a shape (lamp / pause) say it too. AmpPane.contrast.test.tsx
+   measures every mode, preset and backdrop. Full width of the box and wrapping, so it holds from the
+   dashboard rail's 200 px floor to a wide Connect strip; sized by the text, never by the viewport. */
+.amp-op-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.amp-opbtn {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1) var(--space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: 2.6em;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-size: var(--fs-title);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--text);
+  background: var(--panel);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.amp-opbtn.is-operate {
+  border-color: var(--tx);
+  background: color-mix(in srgb, var(--tx) 26%, var(--panel));
+}
+.amp-opbtn.is-standby {
+  border-color: var(--state-good);
+  background: color-mix(in srgb, var(--state-good) 26%, var(--panel));
+}
+/* Locked while keyed or unlinked: a DASHED border, not a dimming. The word and its colour are the
+   amplifier's own state, which matters most during an over, and a dimmed green face read under 4.5:1 at
+   Night; a broken edge says "not now" without fading the state. */
+.amp-opbtn:disabled {
+  border-style: dashed;
+  cursor: not-allowed;
+}
+.amp-opbtn-icon {
+  display: inline-flex;
+  flex: none;
+}
+.amp-opbtn-icon svg {
+  width: 1em;
+  height: 1em;
+}
+.amp-opbtn-word {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  overflow-wrap: anywhere;
+}
+.amp-opbtn-sub {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .amp-grid {
   display: grid;

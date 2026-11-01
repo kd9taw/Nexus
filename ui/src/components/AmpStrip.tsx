@@ -1,8 +1,7 @@
-import { useState } from 'react'
-import { ampCommand } from '../api'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import type { AmpStatus } from '../types'
+import { useAmpControl } from './useAmpControl'
 
 /**
  * The amplifier's own controls, in every cockpit header that has an amplifier behind it.
@@ -23,6 +22,9 @@ import type { AmpStatus } from '../types'
  * 3. **Disabled while keyed.** Stepping band under drive pits relays and can take a PA out.
  *    This disabling is a COURTESY, not the protection — the poll thread refuses to send while
  *    the amplifier reports transmitting, and that is what actually guards the hardware.
+ *
+ * Properties 2 and 3 and the refused note are `useAmpControl` (./useAmpControl.ts), the one
+ * copy the Amplifier box's Operate/Standby button uses too.
  */
 export function AmpStrip({
   amp: snapshotAmp,
@@ -32,34 +34,18 @@ export function AmpStrip({
   /** The RADIO's transmit state, used when the amplifier does not report its own. */
   radioTransmitting?: boolean
 }) {
-  // A command the queue refused. Shown once, cleared on the next successful click, because a
-  // keystroke the operator watched themselves make and that silently vanished reads as broken.
-  const [refused, setRefused] = useState(false)
+  // The command rules (live, keyed, usable, the refused note) are useAmpControl's, shared with
+  // the Amplifier box's Operate/Standby button so the two cannot drift apart.
   const amp = snapshotAmp
+  const { keyed, usable, refused, send } = useAmpControl(amp, radioTransmitting)
 
   // Almost every station. No amplifier configured → this surface does not exist.
   if (amp == null) return null
 
   // Configured but not answering: the readings are gone and the controls would be sending into
   // the dark. The strip STAYS (so the operator can see the link is down where they expect the
-  // amplifier to be) but nothing is clickable.
-  const live = amp.linked
-  // Either device reporting keying disables controls. Elecraft has no amplifier
-  // transmit flag; an SPE idle flag must never override a keyed exciter either.
-  // The backend also checks current measurements before issuing a command.
-  const keyed = amp.transmitting === true || radioTransmitting
-  const usable = live && !keyed
+  // amplifier to be) but nothing is clickable — `usable` is false on a dead link.
   const bandUsable = usable
-
-  const send = async (which: 'bandDown' | 'bandUp' | 'operate') => {
-    if (!usable || (which !== 'operate' && !bandUsable)) return
-    try {
-      const ok = await ampCommand(which)
-      setRefused(!ok)
-    } catch {
-      setRefused(true)
-    }
-  }
 
   return (
     <div

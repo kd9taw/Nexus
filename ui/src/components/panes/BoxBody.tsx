@@ -39,6 +39,7 @@ export function BoxBody({ pane, source, selection }: { pane: PaneId; source: Box
     needByCall: source.needByCall,
     needAlerts: source.needAlerts,
     amp: source.amp,
+    radioOnAir: source.radioOnAir,
     rigBand: source.rigBand ?? null,
     selectedCall,
     selection: resolved,

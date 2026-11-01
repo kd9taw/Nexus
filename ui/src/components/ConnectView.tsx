@@ -390,8 +390,11 @@ interface Props {
   /** Click a map satellite → open it in the Satellites section (forwarded to MapView). */
   onSelectSat?: (name: string) => void
   /** The active radio's amplifier status, off App's existing 300 ms snapshot poll. Null when
-   * none is configured (the Amplifier pane then renders nothing). Read-only; it stops nothing. */
+   * none is configured (the Amplifier pane then renders nothing). It stops nothing. */
   amp?: AmpStatus | null
+  /** The radio's ON AIR answer off the same poll: the Amplifier pane's Operate/Standby button is
+   *  dead while it is true. Absent is read as on air (connect/usePaneContext). */
+  radioOnAir?: boolean
   /** The running contest, off the same snapshot poll, for the Operators box. Null when none runs. */
   fieldDay?: FieldDayStatus | null
   /** The running activation and the log tick, off the same snapshot, for the Activation box. */
@@ -440,6 +443,7 @@ export function ConnectView({
   needByCall,
   needAlerts,
   amp,
+  radioOnAir,
   fieldDay,
   activation,
   onPoint,
@@ -565,6 +569,7 @@ export function ConnectView({
     needByCall,
     needAlerts,
     amp,
+    radioOnAir,
     rigBand: rigBand ?? null,
     selectedCall,
     selection,
