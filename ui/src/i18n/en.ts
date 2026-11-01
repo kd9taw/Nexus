@@ -3846,14 +3846,11 @@ export const EN = {
   'map.aurora.why.watch': 'NOAA G{{g}} watch',
   'map.aurora.chip.ovation': 'NOAA OVATION, expected at {{time}} · edge where the chance reaches 10 %',
   'map.aurora.chip.ovationUndated': 'NOAA OVATION aurora forecast',
-  'map.aurora.chip.kpfit': 'Edge modelled from {{kp}}: NOAA OVATION is out of date',
-  'map.aurora.chip.none': 'Nothing drawn: no current NOAA OVATION forecast and no measured Kp',
-  'map.aurora.fit.title':
-    'Modelled from Kp: the equatorward edge of the diffuse aurora from Starkov’s empirical model (1994), on a centred dipole. Drawn only while NOAA OVATION is out of date; usually within a few degrees of OVATION’s edge.',
+  'map.aurora.chip.stale': 'No aurora oval drawn: NOAA OVATION is out of date (its forecast was for {{time}})',
+  'map.aurora.chip.none': 'No aurora oval drawn: no NOAA OVATION forecast',
   'map.aurora.edge.label': 'aurora edge (NOAA OVATION)',
-  'map.aurora.fit.label': 'aurora edge (modelled from Kp)',
-  'map.layer.aurora.fit': 'modelled from {{kp}}',
-  'map.layer.aurora.none': 'no current NOAA OVATION forecast',
+  'map.layer.aurora.stale': 'out of date (forecast for {{time}}): nothing drawn',
+  'map.layer.aurora.none': 'no NOAA OVATION forecast: nothing drawn',
   'map.layer.aurora.auto': 'on for the storm',
 
   // ---- The "coming" chip (map): NOAA's geomagnetic watch, the WSA-Enlil model run and the solar

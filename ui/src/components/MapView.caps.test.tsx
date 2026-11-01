@@ -8,8 +8,8 @@
 //   which it drops (and dims) when the proton sample is old;
 // - the aurora layer turns itself on in a storm (Kp ≥ 5, or a NOAA G watch), the operator's untick
 //   sticks, and nothing is fetched without one;
-// - a current OVATION draws its dots and its own edge (solid); a stale one draws only the Kp-fit edge
-//   (dashed) and no dots; with neither, nothing, and the row says so.
+// - a current OVATION draws its dots and its own edge; a stale or missing one draws no dots and no
+//   line at all, and the row and chip say why.
 // Each has a control, so a test cannot pass by the map drawing nothing.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
@@ -36,6 +36,7 @@ import { MapView } from './MapView'
 import { getAurora } from '../api'
 import { t } from '../i18n'
 import { kpLabel } from '../capsNow'
+import { wxStampLabel } from '../propViz'
 import type { AuroraOval, DrapGrid, PcaView, PropagationSnapshot } from '../types'
 import type { FlareNoaa } from '../flareNow'
 
@@ -244,7 +245,6 @@ const OVAL: AuroraOval = {
   observedAt: NOW_S - 20 * 60,
   forecastAt: NOW_S + 40 * 60,
   edge: { north: LATS, south: LATS.map((l) => -l) },
-  kpFit: { kp: 6, kpAt: NOW_S - 120, north: ring(57), south: ring(-57) },
 }
 const auroraFills = (c: HTMLElement) => marks(c).filter((m) => m.op === 'fill' && /^rgb\(\d+, \d+, \d+\)$/.test(String(m.ink)) && m.ink !== CAP_INK)
 
@@ -298,7 +298,7 @@ describe('the aurora layer turns itself on in a storm', () => {
   })
 })
 
-describe('the aurora oval: OVATION while current, the Kp-fit edge when it is stale', () => {
+describe('the aurora oval: OVATION while current, nothing when it is stale or missing', () => {
   it('a current OVATION draws its dots and its own edge, solid', async () => {
     layersOn(['aurora'])
     feeds.aurora = OVAL
@@ -310,22 +310,20 @@ describe('the aurora oval: OVATION while current, the Kp-fit edge when it is sta
     expect(auroraChip(r.container), 'no chip on a quiet night with a current forecast').toBeNull()
   })
 
-  it('a stale OVATION draws only the Kp-fit edge, dashed, no dots; the row and chip say modelled', async () => {
+  it('a stale OVATION draws no oval line and no dots, in a storm too; the row and chip say it is out of date', async () => {
     layersOn(['aurora'])
-    feeds.aurora = { ...OVAL, forecastAt: NOW_S - 3600 }
-    const r = await mount()
-    const edge = strokes(r.container, AURORA_INK)
-    expect(edge.length).toBe(2)
-    expect(edge.every((s) => s.dash.join() === '6,4')).toBe(true)
+    const f = NOW_S - 3600
+    feeds.aurora = { ...OVAL, forecastAt: f }
+    const r = await mount({ prop: snap(6) })
+    expect(strokes(r.container, AURORA_INK)).toEqual([])
     expect(auroraFills(r.container)).toEqual([])
-    const kp = kpLabel({ kp: 6, source: 'estimated', at: NOW_S - 120 })
-    expect(auroraRow(r.container).textContent).toContain(t('map.layer.aurora.fit', { kp }))
-    expect(auroraChip(r.container)!.textContent).toContain(t('map.aurora.chip.kpfit', { kp }))
+    expect(auroraRow(r.container).textContent).toContain(t('map.layer.aurora.stale', { time: wxStampLabel(f) }))
+    expect(auroraChip(r.container)!.textContent).toContain(t('map.aurora.chip.stale', { time: '00:30Z' }))
   })
 
-  it('stale with no measured Kp draws nothing, and says so', async () => {
+  it('no OVATION forecast at all draws nothing, and says so', async () => {
     layersOn(['aurora'])
-    feeds.aurora = { ...OVAL, forecastAt: NOW_S - 3600, kpFit: null }
+    feeds.aurora = { points: [], observedAt: null, forecastAt: null, edge: { north: [], south: [] } }
     const r = await mount()
     expect(strokes(r.container, AURORA_INK)).toEqual([])
     expect(auroraFills(r.container)).toEqual([])

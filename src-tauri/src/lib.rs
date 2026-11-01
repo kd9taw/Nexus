@@ -9654,33 +9654,7 @@ fn tv_getting_out_since(args: &serde_json::Value) -> Option<i64> {
 #[tauri::command]
 async fn get_aurora(
     cache: State<'_, AuroraCache>,
-    prop: State<'_, PropCache>,
 ) -> Result<propagation::live::aurora::AuroraOval, String> {
-    // The Kp-fit edge rides with every answer, modelled now from the measured Kp now (oval.rs);
-    // the map draws it only when the OVATION oval itself is stale.
-    let now = now_unix();
-    let kp_fit = {
-        let g = prop.lock().map_err(|e| e.to_string())?;
-        kp_fit_now(g.as_ref().map(|(_, s)| &s.space_wx), now)
-    };
-    let mut oval = aurora_oval(&cache).await?;
-    oval.kp_fit = kp_fit;
-    Ok(oval)
-}
-
-/// The Kp-fit oval edge at `now`, only from a Kp SWPC measured and that may speak for now
-/// ([`swpc_kp`]): a stand-in, an old or a missing Kp models nothing.
-fn kp_fit_now(
-    wx: Option<&propagation::SpaceWxView>,
-    now: i64,
-) -> Option<propagation::oval::KpFitOval> {
-    let kp = swpc_kp(wx, now)?;
-    let at = wx?.stamps.kp_at?;
-    Some(propagation::oval::kp_fit(kp, at, now))
-}
-
-/// The OVATION oval, cached `AURORA_TTL_SECS` (see `get_aurora`).
-async fn aurora_oval(cache: &AuroraCache) -> Result<propagation::live::aurora::AuroraOval, String> {
     const AURORA_TTL_SECS: u64 = 600;
     {
         let g = cache.lock().map_err(|e| e.to_string())?;
@@ -38833,7 +38807,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_kc2g_muf" => ok(get_kc2g_muf(app.state()).await),
             "get_space_wx_scales" => ok(get_space_wx_scales(app.state()).await),
             "get_xray_now" => ok(get_xray_now(app.state()).await),
-            "get_aurora" => ok(get_aurora(app.state(), app.state()).await),
+            "get_aurora" => ok(get_aurora(app.state()).await),
             "get_pca" => ok(get_pca(app.state(), app.state()).await),
             "get_satellites" => ok(get_satellites(app.state()).await),
             "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
@@ -54812,27 +54786,6 @@ mod tests {
         assert!(
             !crate::drap_wanted(qx, qat, p(40.0, Some(now - 7200)), now),
             "old"
-        );
-    }
-
-    /// The Kp-fit oval is modelled only from a measured Kp that may speak for now, and carries
-    /// that Kp and its sample time.
-    #[test]
-    fn the_kp_fit_oval_needs_a_measured_kp() {
-        let now = 1_761_800_000;
-        let mut snap = propagation::offline(now, "K1ABC", "FN31").space_wx;
-        snap.kp = 2.0;
-        assert!(crate::kp_fit_now(None, now).is_none(), "cold cache");
-        assert!(crate::kp_fit_now(Some(&snap), now).is_none(), "stand-in Kp");
-        snap.kp = 6.0;
-        snap.stamps.kp_at = Some(now - 120);
-        let fit = crate::kp_fit_now(Some(&snap), now).expect("a measured Kp models an edge");
-        assert_eq!((fit.kp, fit.kp_at), (6.0, now - 120));
-        assert_eq!(fit, propagation::oval::kp_fit(6.0, now - 120, now));
-        snap.stamps.kp_at = Some(now - 2 * 3600);
-        assert!(
-            crate::kp_fit_now(Some(&snap), now).is_none(),
-            "an hours-old Kp"
         );
     }
 

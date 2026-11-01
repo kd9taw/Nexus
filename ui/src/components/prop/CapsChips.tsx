@@ -7,12 +7,11 @@
 //     "unknown" without a measured Kp); NOAA's rule of thumb for how long it lasts, dropped when the
 //     proton sample is old;
 //   · the aurora: why the layer turned itself on (the Kp with its word, or NOAA's watch); OVATION's
-//     forecast time; or that the edge is modelled from Kp because OVATION is out of date; or that
-//     nothing is drawn.
+//     forecast time; or that no oval is drawn because OVATION is out of date (for when) or missing.
 
 import { t } from '../../i18n'
 import { agoLabel } from './SpaceWxGauges'
-import { kpLabel, sScale, PROTONS_STALE_SECS, type AuroraPicture, type CapPicture } from '../../capsNow'
+import { sScale, PROTONS_STALE_SECS, type AuroraPicture, type CapPicture } from '../../capsNow'
 import type { PcaView } from '../../types'
 
 /** `HH:MMZ`. */
@@ -69,15 +68,14 @@ export function AuroraChip({ pic, stormWhy }: { pic: AuroraPicture; stormWhy: st
       ? pic.forecastAt != null
         ? t('map.aurora.chip.ovation', { time: hm(pic.forecastAt) })
         : t('map.aurora.chip.ovationUndated')
-      : pic.mode === 'kpfit'
-        ? t('map.aurora.chip.kpfit', { kp: kpLabel({ kp: pic.kp, source: 'estimated', at: pic.kpAt }) })
+      : pic.why === 'stale' && pic.forecastAt != null
+        ? t('map.aurora.chip.stale', { time: hm(pic.forecastAt) })
         : t('map.aurora.chip.none')
   return (
     <div
       className="flare-chip aurora-chip"
       role="status"
       data-mode={pic.mode}
-      title={pic.mode === 'kpfit' ? t('map.aurora.fit.title') : undefined}
     >
       {stormWhy != null && <div className="caps-chip-head">{t('map.aurora.chip.storm', { why: stormWhy })}</div>}
       <div className={`flare-chip-line flare-chip-src${stormWhy == null ? ' caps-chip-head' : ''}`} data-source={pic.mode === 'ovation' ? 'noaa' : 'goes'}>

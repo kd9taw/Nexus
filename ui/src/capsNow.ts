@@ -13,9 +13,10 @@
 //
 // THE AURORA OVAL. NOAA OVATION is the picture while it is a forecast for now or later (or at most
 // AURORA_STALE_SECS past): its dots and its own equatorward edge (the 10 % line). Past that it is
-// stale (an undated one is not current either): the dots go and only the Kp-fit edge (Starkov's diffuse-aurora boundary, the shack's
-// propagation/src/oval.rs) is drawn, dashed, "modelled from Kp" — and only when the shack modelled
-// one from a measured Kp. With neither, nothing is drawn and the layer row says why.
+// stale (an undated one is not current either), and then NO oval and no edge is drawn at all, by
+// the operator's rule: nothing is ever modelled in its place. The layer row and the chip say why
+// (out of date, with the time it was a forecast for; or no forecast held). Kp and NOAA's Kp outlook
+// stay on screen with their own labels.
 //
 // KP NOW. NOAA's 3-hourly OBSERVED Kp when its period ended within the last 3 hours ("measured
 // 21–00Z"), else the 1-minute ESTIMATED Kp when it may speak for now ("est. 22:36Z"), else none —
@@ -185,8 +186,8 @@ export const AURORA_STALE_SECS = 10 * 60
 
 export type AuroraPicture =
   | { mode: 'ovation'; forecastAt: number | null; edge: [number, number][][] }
-  | { mode: 'kpfit'; kp: number; kpAt: number; rings: [number, number][][]; forecastAt: number | null }
-  | { mode: 'none'; why: 'nofeed' | 'stale' }
+  | { mode: 'none'; why: 'nofeed' }
+  | { mode: 'none'; why: 'stale'; forecastAt: number | null }
 
 /** The oval the map draws (see the header). */
 export function auroraPicture(oval: AuroraOval | null | undefined, nowMs: number): AuroraPicture {
@@ -198,17 +199,8 @@ export function auroraPicture(oval: AuroraOval | null | undefined, nowMs: number
   if (oval && f != null && now - f <= AURORA_STALE_SECS) {
     return { mode: 'ovation', forecastAt: f, edge: [...edgeLines(oval.edge?.north), ...edgeLines(oval.edge?.south)] }
   }
-  const fit = oval?.kpFit
-  if (fit && Array.isArray(fit.north) && Array.isArray(fit.south)) {
-    return {
-      mode: 'kpfit',
-      kp: fit.kp,
-      kpAt: fit.kpAt,
-      rings: [fit.north as [number, number][], fit.south as [number, number][]],
-      forecastAt: f,
-    }
-  }
-  return { mode: 'none', why: f != null || (oval?.points.length ?? 0) > 0 ? 'stale' : 'nofeed' }
+  if (oval && (f != null || oval.points.length > 0)) return { mode: 'none', why: 'stale', forecastAt: f }
+  return { mode: 'none', why: 'nofeed' }
 }
 
 /** Longitude of OVATION edge bin `i` (the shack's `oval::edge_bin_lon`). */

@@ -1336,15 +1336,15 @@ function Globe3DView({
     }
   }, [ready, nowMs, flareFoot, show.flare, auroraOn, auroraPic, show.muf, show.pca, show.heat, auroraPts, muf, capPic, spots])
 
-  // THE EDGES — the aurora oval's equatorward edge (OVATION's own, solid; or the Kp-fit, dashed) and the
+  // THE EDGES — the aurora oval's equatorward edge (OVATION's own, only while it is current) and the
   // polar cap's approximate edge (dashed, beside the model's shading only), as line groups like the
   // flare rings: no new WebGL context, redrawn only when the picture changes.
   useEffect(() => {
     const g = globeRef.current
     if (!g || !ready) return
     const flip = (line: [number, number][]) => line.map(([lon, lat]) => [lat, lon] as [number, number])
-    const aurora = auroraPic?.mode === 'ovation' ? auroraPic.edge : auroraPic?.mode === 'kpfit' ? auroraPic.rings : []
-    syncLines(g, linesRef.current, 'auroraEdge', aurora.map(flip), 'rgb(120, 230, 140)', 0.9, auroraOn && aurora.length > 0, 0.011, auroraPic?.mode === 'kpfit')
+    const aurora = auroraPic?.mode === 'ovation' ? auroraPic.edge : []
+    syncLines(g, linesRef.current, 'auroraEdge', aurora.map(flip), 'rgb(120, 230, 140)', 0.9, auroraOn && aurora.length > 0, 0.011)
     const cap = capPic?.edge && capPic.points.length > 0 ? capPic.edge : []
     syncLines(g, linesRef.current, 'capEdge', cap.map(flip), 'rgb(200, 110, 240)', 0.9, show.pca && cap.length > 0, 0.01, true)
     frameRef.current()

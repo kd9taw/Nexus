@@ -151,14 +151,13 @@ describe('the polar cap: NOAA’s grid while current, else the model with its ap
   })
 })
 
-describe('the aurora oval: OVATION while current, the Kp-fit edge only when it is stale', () => {
+describe('the aurora oval: OVATION while current, and nothing at all when it is stale or missing', () => {
   const lats = Array.from({ length: 24 }, (_, i) => (i === 3 || i === 4 ? null : 60 + i * 0.1))
   const OVAL: AuroraOval = {
     points: [{ lat: 66, lon: 10, prob: 40 }],
     observedAt: now - 15 * 60,
     forecastAt: now + 40 * 60,
     edge: { north: lats, south: lats.map((l) => (l == null ? null : -l)) },
-    kpFit: { kp: 6, kpAt: now - 120, north: [[0, 55], [90, 58], [0, 55]], south: [[0, -55], [90, -58], [0, -55]] },
   }
 
   it('a current forecast draws OVATION’s own edge', () => {
@@ -171,15 +170,14 @@ describe('the aurora oval: OVATION while current, the Kp-fit edge only when it i
     expect(auroraPicture({ ...OVAL, forecastAt: now - AURORA_STALE_SECS }, NOW).mode).toBe('ovation')
   })
 
-  it('a stale forecast drops OVATION and draws only the Kp-fit edge, with its Kp', () => {
-    const p = auroraPicture({ ...OVAL, forecastAt: now - AURORA_STALE_SECS - 1 }, NOW)
-    expect(p).toMatchObject({ mode: 'kpfit', kp: 6, kpAt: now - 120, rings: [OVAL.kpFit!.north, OVAL.kpFit!.south] })
-    // an undated oval is no current forecast either
-    expect(auroraPicture({ ...OVAL, forecastAt: null }, NOW).mode).toBe('kpfit')
+  it('a stale forecast draws no oval and no edge, and says for when it was', () => {
+    const f = now - AURORA_STALE_SECS - 1
+    expect(auroraPicture({ ...OVAL, forecastAt: f }, NOW)).toEqual({ mode: 'none', why: 'stale', forecastAt: f })
+    // an undated oval from a current station is no current forecast either
+    expect(auroraPicture({ ...OVAL, forecastAt: null }, NOW)).toEqual({ mode: 'none', why: 'stale', forecastAt: null })
   })
 
-  it('fails closed: stale with no measured Kp, or no feed at all, draws nothing and says which', () => {
-    expect(auroraPicture({ ...OVAL, forecastAt: now - 3600, kpFit: null }, NOW)).toEqual({ mode: 'none', why: 'stale' })
+  it('no feed at all draws nothing and says so', () => {
     expect(auroraPicture({ points: [], observedAt: null, forecastAt: null }, NOW)).toEqual({ mode: 'none', why: 'nofeed' })
     expect(auroraPicture(null, NOW)).toEqual({ mode: 'none', why: 'nofeed' })
   })

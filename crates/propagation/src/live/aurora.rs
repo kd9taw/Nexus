@@ -77,10 +77,6 @@ pub struct AuroraOval {
     /// OVATION's own equatorward edge (the 10 % line), read from the whole grid.
     #[serde(default)]
     pub edge: crate::oval::OvalEdge,
-    /// The Kp-fit edge at the time of asking, from a measured Kp — set by the command layer,
-    /// never by the parser; the map draws it only when this oval is stale ([`crate::oval`]).
-    #[serde(default)]
-    pub kp_fit: Option<crate::oval::KpFitOval>,
 }
 
 /// The oval plus its `Observation Time` / `Forecast Time` stamps. Pure.
@@ -96,7 +92,6 @@ pub fn parse_oval(v: &Value, min_prob: f32, step: i64) -> AuroraOval {
         forecast_at: stamp("Forecast Time"),
         fetched_at: None,
         edge: crate::oval::ovation_edge(v),
-        kp_fit: None,
     }
 }
 
@@ -160,9 +155,8 @@ mod tests {
         assert_eq!(oval.forecast_at, Some(utc("2026-10-30T04:04:00Z")));
         assert_eq!(oval.observed_at, Some(utc("2026-10-30T02:39:00Z")));
         assert!(!oval.points.is_empty());
-        // The edge is read with the stamps, and the parser never models one from Kp.
+        // The edge is read with the stamps.
         assert_eq!(oval.edge, crate::oval::ovation_edge(&v));
-        assert!(oval.kp_fit.is_none());
         let bare = parse_oval(&json!({"coordinates": []}), 8.0, 2);
         assert_eq!((bare.forecast_at, bare.observed_at), (None, None));
     }

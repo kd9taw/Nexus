@@ -117,7 +117,7 @@ import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, XRAY_LIVE_SECS, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
 import { AuroraChip, PcaChip } from './prop/CapsChips'
-import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpLabel, kpNow } from '../capsNow'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpNow } from '../capsNow'
 import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../features/connectFeeds'
 import { useViewportClass } from '../useViewport'
 // The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
@@ -1623,7 +1623,7 @@ export function MapView({
   }, [storm])
   const auroraAuto = storm && !auroraDismissed && !layers.aurora.visible
   const auroraOn = layers.aurora.visible || auroraAuto
-  // What is drawn: OVATION while current, else the Kp-fit edge, else nothing (capsNow `auroraPicture`).
+  // What is drawn: OVATION while current, else nothing at all (capsNow `auroraPicture`).
   const auroraPic = useMemo(() => (auroraOn ? auroraPicture(auroraOval, nowMs) : null), [auroraOn, auroraOval, nowMs])
   useEffect(() => {
     if (!auroraOn) {
@@ -2724,7 +2724,7 @@ export function MapView({
     // High aurora = degraded high-lat/polar HF paths, so it's both pretty and
     // operationally meaningful. Drawn over the field layers, under spots.
     if (auroraOn && auroraPic) {
-      // The dots only while OVATION is the picture: a stale oval draws only the Kp-fit edge.
+      // Only while OVATION is the picture: a stale or missing oval draws nothing at all.
       for (const a of auroraPic.mode === 'ovation' ? auroraPts : []) {
         const p = placePoint(kind, proj, { lat: a.lat, lon: a.lon })
         if (!p) continue
@@ -2738,23 +2738,19 @@ export function MapView({
         ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
         ctx.fill()
       }
-      // THE EQUATORWARD EDGE: OVATION's own 10 % line (solid), or the Kp-fit edge (dashed, "modelled
-      // from Kp"). Labelled at md and up.
-      const lines = auroraPic.mode === 'ovation' ? auroraPic.edge : auroraPic.mode === 'kpfit' ? auroraPic.rings : []
+      // THE EQUATORWARD EDGE: OVATION's own 10 % line, labelled at md and up.
+      const lines = auroraPic.mode === 'ovation' ? auroraPic.edge : []
       if (lines.length > 0) {
         ctx.globalAlpha = Math.min(1, layers.aurora.opacity + 0.15)
         ctx.lineWidth = 1.6
         ctx.strokeStyle = AURORA_EDGE_INK
-        ctx.setLineDash(auroraPic.mode === 'kpfit' ? [6, 4] : [])
+        ctx.setLineDash([])
         for (const line of lines) {
           ctx.beginPath()
           path({ type: 'LineString', coordinates: line } as unknown as GeoPermissibleObjects)
           ctx.stroke()
         }
-        ctx.setLineDash([])
-        if (ringLabels) {
-          edgeLabel(lines, auroraPic.mode === 'kpfit' ? t('map.aurora.fit.label') : t('map.aurora.edge.label'), AURORA_EDGE_INK)
-        }
+        if (ringLabels) edgeLabel(lines, t('map.aurora.edge.label'), AURORA_EDGE_INK)
       }
       ctx.globalAlpha = 1
     }
@@ -4235,13 +4231,13 @@ export function MapView({
                   {k === 'aurora' && auroraPic?.mode === 'ovation' && auroraTimes?.forecastAt != null && (
                     <AuroraForecastNote forecastAt={auroraTimes.forecastAt} observedAt={auroraTimes.observedAt} />
                   )}
-                  {k === 'aurora' && auroraPic?.mode === 'kpfit' && (
-                    <span className="map-layer-note" data-stale="" title={t('map.aurora.fit.title')}>
-                      {t('map.layer.aurora.fit', { kp: kpLabel({ kp: auroraPic.kp, source: 'estimated', at: auroraPic.kpAt }) })}
-                    </span>
-                  )}
                   {k === 'aurora' && auroraPic?.mode === 'none' && auroraOval != null && (
-                    <span className="map-layer-note" data-stale="">{t('map.layer.aurora.none')}</span>
+                    // Nothing is drawn, and the row says why: out of date (for when), or no forecast held.
+                    <span className="map-layer-note" data-stale="">
+                      {auroraPic.why === 'stale' && auroraPic.forecastAt != null
+                        ? t('map.layer.aurora.stale', { time: wxStampLabel(auroraPic.forecastAt) })
+                        : t('map.layer.aurora.none')}
+                    </span>
                   )}
                   {k === 'flare' && (
                     // The layer is event-driven (nothing draws below an M1 flare), so

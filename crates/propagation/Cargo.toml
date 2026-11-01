@@ -53,7 +53,3 @@ required-features = ["live"]
 [[example]]
 name = "drap_compare"
 required-features = ["live"]
-
-[[example]]
-name = "oval_compare"
-required-features = ["live"]

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // THE CAPS AND OVALS ON THE 3-D GLOBE: the aurora layer turns itself on in a storm and draws OVATION's
-// edge (solid) or, when OVATION is stale, the Kp-fit edge (dashed); the polar cap's approximate edge is
+// own edge, and none at all when OVATION is stale; the polar cap's approximate edge is
 // a dashed line group only at a measured Kp; the cap and aurora chips sit in the chip stack. Each with
 // a control. The pure rules are pinned in capsNow.test.ts and the 2-D map's in MapView.caps.test.tsx.
 //
@@ -150,7 +150,6 @@ const OVAL: AuroraOval = {
   observedAt: NOW_S - 20 * 60,
   forecastAt: NOW_S + 40 * 60,
   edge: { north: LATS, south: LATS.map((l) => -l) },
-  kpFit: { kp: 6, kpAt: NOW_S - 120, north: ring(57), south: ring(-57) },
 }
 const PCA: PcaView = {
   j10: 150,
@@ -177,12 +176,11 @@ describe('the aurora oval on the 3-D globe', () => {
     )
   })
 
-  it('a stale OVATION draws the Kp-fit edge dashed instead', async () => {
+  it('a stale OVATION draws no oval line, even in a storm, and the chip says it is out of date', async () => {
     feeds.aurora = { ...OVAL, forecastAt: NOW_S - 3600 }
-    await mount(6)
-    const g = group('auroraEdge')!
-    expect(dashed(g)).toBe(true)
-    expect(g.children.length).toBe(2)
+    const r = await mount(6)
+    expect(group('auroraEdge')).toBeUndefined()
+    expect(r.container.querySelector('.aurora-chip')!.textContent).toContain(t('map.aurora.chip.stale', { time: '00:30Z' }))
   })
 
   it('CONTROL — no storm and the layer off: no edge, no chip', async () => {

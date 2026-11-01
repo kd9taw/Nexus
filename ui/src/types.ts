@@ -499,9 +499,6 @@ export interface AuroraOval {
    *  −180 (bin centres −172.5 + 15·i), null where OVATION never reaches it. Absent from an older
    *  station. */
   edge?: { north: (number | null)[]; south: (number | null)[] }
-  /** The Kp-fit edge (Starkov's diffuse-aurora boundary) modelled now from a measured Kp, for the
-   *  map to draw only when the oval is stale; null without a measured Kp. */
-  kpFit?: { kp: number; kpAt: number; north: [number, number][]; south: [number, number][] } | null
 }
 /** A forward-calendar entry — an announced DXpedition to plan for. */
 export interface CalendarEntry {
