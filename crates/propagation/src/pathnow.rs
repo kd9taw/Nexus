@@ -98,8 +98,9 @@ fn split_tol_mhz(lat: f64, lon: f64, now: i64) -> f64 {
         SPLIT_TOL_TAPER_MHZ
     }
 }
-/// NOAA's S1: J(≥10 MeV) at or above 10 pfu.
-const S1_PFU: f64 = 10.0;
+/// A proton reading dated up to this far ahead of our clock is clock skew and taken; further ahead
+/// it is refused (part of the one rule, [`proton_event`]).
+pub const PROTONS_AHEAD_SECS: i64 = 120;
 /// 10 dB at f needs a local HAF of f·10^(2/3).
 fn ten_db() -> f64 {
     10f64.powf(2.0 / 3.0)
@@ -264,26 +265,30 @@ pub fn footprint(
     })
 }
 
-/// NOAA's S-scale level for a J(≥10 MeV) flux (0 below S1).
+/// NOAA's S-scale level for a J(≥10 MeV) flux in pfu: S1 at 10, S2 at 100, … S5 at 10⁵; 0 below
+/// S1 and for NaN. A threshold table, never arithmetic on the flux, so a huge or infinite value is
+/// the top level and never an overflow (the polar-cap layer's `pca::s_scale`, the same table).
 pub fn s_scale(j10: f64) -> u8 {
-    if j10.is_nan() || j10 < S1_PFU {
-        return 0;
-    }
-    // S1 at 10 pfu, each level a decade more, S5 from 100 000.
-    ((j10 / S1_PFU).log10().floor() as u8 + 1).min(5)
+    [1e5, 1e4, 1e3, 100.0, 10.0]
+        .iter()
+        .position(|&t| j10 >= t)
+        .map_or(0, |i| 5 - i as u8)
 }
 
-/// The one rule for "a proton event is held": a NOAA S1+ reading (J(≥10 MeV) ≥ 10 pfu) at a dated
-/// sample under [`PROTONS_FRESH_SECS`] old — the polar-cap layer's `pca::proton_event`. It gates
-/// both the PCA figure and the grid split; a quiet, stale or undated reading is no event.
+/// The one rule for "a proton event is held", the same in both solar phases (the polar-cap layer's
+/// `pca::proton_event`): J(≥10 MeV) finite and at S1 or above, at a DATED reading whose age is
+/// at least −[`PROTONS_AHEAD_SECS`] (no more than that ahead of our clock) and under
+/// [`PROTONS_FRESH_SECS`]. A non-finite flux is refused (fail closed), as is a quiet, stale,
+/// undated or future-dated reading. It gates the PCA figure, the grid split and the now line.
 pub fn proton_event(p: Option<ProtonSample>, now: i64) -> Option<ProtonSample> {
-    protons_fresh(p, now).filter(|p| s_scale(p.j10) >= 1)
+    protons_fresh(p, now).filter(|p| p.j10.is_finite() && s_scale(p.j10) >= 1)
 }
 
-/// A proton sample that may speak for `now`: at most [`PROTONS_FRESH_SECS`] old.
+/// A proton sample that may speak for `now`: dated, at most [`PROTONS_AHEAD_SECS`] ahead of our
+/// clock and under [`PROTONS_FRESH_SECS`] old.
 pub fn protons_fresh(p: Option<ProtonSample>, now: i64) -> Option<ProtonSample> {
     p.filter(|p| {
-        p.at.is_some_and(|at| now - at < PROTONS_FRESH_SECS && at - now <= DRAP_AHEAD_SECS)
+        p.at.is_some_and(|at| now - at < PROTONS_FRESH_SECS && now - at >= -PROTONS_AHEAD_SECS)
     })
 }
 
@@ -1182,6 +1187,79 @@ mod tests {
         assert!(proton_event(storm(10.0, now - PROTONS_FRESH_SECS), now).is_none());
         assert!(proton_event(storm(9.9, now), now).is_none());
         assert!(proton_event(None, now).is_none());
+    }
+
+    /// THE ONE RULE, as a case table both solar phases run unchanged: (J(≥10 MeV) pfu, the
+    /// reading's age in seconds — None for undated, negative for ahead of our clock —, is it an
+    /// event, its S level). When the trains merge and `pathnow` switches to `pca::proton_event` /
+    /// `pca::s_scale`, [`check_the_one_rule`] runs this same table against those, so the two are
+    /// proven identical.
+    pub(crate) const PROTON_EVENT_CASES: &[(f64, Option<i64>, bool, u8)] = &[
+        // NOAA's S thresholds, at and just under each decade.
+        (9.999, Some(60), false, 0),
+        (10.0, Some(60), true, 1),
+        (99.99, Some(60), true, 1),
+        (100.0, Some(60), true, 2),
+        (999.9, Some(60), true, 2),
+        (1e3, Some(60), true, 3),
+        (1e4, Some(60), true, 4),
+        (99_999.0, Some(60), true, 4),
+        (1e5, Some(60), true, 5),
+        (1e6, Some(60), true, 5),
+        // Huge but finite: the top level, never an overflow.
+        (1e300, Some(60), true, 5),
+        (f64::MAX, Some(60), true, 5),
+        // Non-finite: refused (fail closed); the scale itself still reads +inf as the top level.
+        (f64::INFINITY, Some(60), false, 5),
+        (f64::NAN, Some(60), false, 0),
+        (f64::NEG_INFINITY, Some(60), false, 0),
+        (0.0, Some(60), false, 0),
+        (-5.0, Some(60), false, 0),
+        // Age: under 30 minutes, the boundary itself refused.
+        (200.0, Some(0), true, 2),
+        (200.0, Some(1799), true, 2),
+        (200.0, Some(1800), false, 2),
+        (200.0, Some(6 * 3600), false, 2),
+        // Ahead of our clock: up to 120 s is clock skew and taken; 3 minutes or an hour is refused.
+        (200.0, Some(-120), true, 2),
+        (200.0, Some(-121), false, 2),
+        (200.0, Some(-180), false, 2),
+        (200.0, Some(-3600), false, 2),
+        // Undated: never an event.
+        (200.0, None, false, 2),
+    ];
+
+    /// Run [`PROTON_EVENT_CASES`] against a rule `event(j10, at, now)` and a scale `s(j10)`.
+    pub(crate) fn check_the_one_rule(
+        event: impl Fn(f64, Option<i64>, i64) -> bool,
+        s: impl Fn(f64) -> u8,
+    ) {
+        let now = MAY_12Z;
+        for &(j10, age, want_event, want_s) in PROTON_EVENT_CASES {
+            let at = age.map(|a| now - a);
+            assert_eq!(
+                event(j10, at, now),
+                want_event,
+                "event: j10 {j10} age {age:?}"
+            );
+            assert_eq!(s(j10), want_s, "s_scale: j10 {j10}");
+        }
+    }
+
+    #[test]
+    fn the_one_rule_for_a_held_proton_event_matches_its_case_table() {
+        check_the_one_rule(
+            |j10, at, now| {
+                let p = ProtonSample {
+                    j1: j10,
+                    j5: j10,
+                    j10,
+                    at,
+                };
+                proton_event(Some(p), now).is_some()
+            },
+            s_scale,
+        );
     }
 
     #[test]
