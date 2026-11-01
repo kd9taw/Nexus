@@ -20,7 +20,15 @@
 //
 // KP NOW. NOAA's 3-hourly OBSERVED Kp when its period ended within the last 3 hours ("measured
 // 21–00Z"), else the 1-minute ESTIMATED Kp when it may speak for now ("est. 22:36Z"), else none —
-// no number, no storm word, no toast. The estimate never displaces a measurement.
+// no number, no storm word, no toast. The estimate never displaces a measurement in the WORDS (the
+// dashboard bar's number is `kpNow`).
+//
+// KP TO WARN ON (`kpAlert`). Whether to warn is a different question from which number to show: NOAA
+// marks each finished 3-hour period "observed" promptly, so a measured period is almost always held,
+// and it lags a storm's onset by up to 3 hours. The storm toast, the forecast heads-up's "already
+// stormy" gate and the aurora layer's auto-on warn on the HIGHER of the recent measurement and the
+// usable estimate, labelled with which one it is ("Kp 6.3 est. 22:36Z"), so an estimate is still
+// never called a measurement. A tie goes to the measurement.
 
 import type { AuroraOval, DrapGrid, KpForecast, PcaView, SpaceWxView, ArrivalOutlook } from './types'
 import { drapFresh } from './flareNow'
@@ -53,6 +61,24 @@ export function kpNow(
   fc: KpForecast | null | undefined,
   nowMs: number,
 ): KpNow | null {
+  return measuredKp(fc, nowMs) ?? estimatedKp(wx, nowMs)
+}
+
+/** The Kp to warn on (see the header): the higher of the recent measurement and the usable estimate,
+ *  each keeping its own label; a tie goes to the measurement; null when neither is held. */
+export function kpAlert(
+  wx: SpaceWxView | null | undefined,
+  fc: KpForecast | null | undefined,
+  nowMs: number,
+): KpNow | null {
+  const m = measuredKp(fc, nowMs)
+  const e = estimatedKp(wx, nowMs)
+  if (m && e) return e.kp > m.kp ? e : m
+  return m ?? e
+}
+
+/** NOAA's observed period that ended within KP_MEASURED_WITHIN_SECS (the newest), or null. */
+function measuredKp(fc: KpForecast | null | undefined, nowMs: number): KpNow | null {
   const now = nowMs / 1000
   const points = Array.isArray(fc?.points) ? fc.points : []
   let measured: KpNow | null = null
@@ -63,7 +89,11 @@ export function kpNow(
       measured = { kp: p.kp, source: 'measured', at: p.timeUnix, until: end }
     }
   }
-  if (measured) return measured
+  return measured
+}
+
+/** The 1-minute estimate when it may speak for now (the honesty rule's `wxUsable`), or null. */
+function estimatedKp(wx: SpaceWxView | null | undefined, nowMs: number): KpNow | null {
   if (wx && Number.isFinite(wx.kp) && wxUsable(wx, 'kp', nowMs)) {
     return { kp: wx.kp, source: 'estimated', at: wx.kpAt ?? null }
   }
@@ -195,7 +225,10 @@ export function auroraPicture(oval: AuroraOval | null | undefined, nowMs: number
   const f = oval?.forecastAt ?? null
   // An older station sends no edge and may send no stamps: its oval is drawn as it always was, with
   // no age claimed either way (propViz `wxReading`'s rule for an older station's numbers).
-  if (oval && oval.edge === undefined && oval.points.length > 0) return { mode: 'ovation', forecastAt: f, edge: [] }
+  // A dated one past AURORA_STALE_SECS is stale like any other.
+  if (oval && oval.edge === undefined && oval.points.length > 0 && (f == null || now - f <= AURORA_STALE_SECS)) {
+    return { mode: 'ovation', forecastAt: f, edge: [] }
+  }
   if (oval && f != null && now - f <= AURORA_STALE_SECS) {
     return { mode: 'ovation', forecastAt: f, edge: [...edgeLines(oval.edge?.north), ...edgeLines(oval.edge?.south)] }
   }
@@ -230,8 +263,8 @@ export function edgeLines(lats: (number | null)[] | null | undefined): [number, 
   return lines
 }
 
-/** A storm that turns the aurora layer on by itself: Kp ≥ 5 now (measured or a usable estimate), or
- *  a NOAA G watch in force. */
+/** A storm that turns the aurora layer on by itself: Kp ≥ 5 now (`kpAlert`: the higher of the recent
+ *  measurement and the usable estimate), or a NOAA G watch in force. */
 export function auroraStorm(k: KpNow | null, outlook: ArrivalOutlook | null | undefined): boolean {
   return (k != null && k.kp >= 5) || (outlook?.watch?.maxG ?? 0) >= 1
 }

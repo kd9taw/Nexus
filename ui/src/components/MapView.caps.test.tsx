@@ -331,3 +331,58 @@ describe('the aurora oval: OVATION while current, nothing when it is stale or mi
     expect(auroraChip(r.container)!.textContent).toContain(t('map.aurora.chip.none'))
   })
 })
+
+describe('round 3: the storm rule and the untick, on the 2-D map', () => {
+  // A 3-hour period NOAA measured, which ended 90 minutes ago.
+  const START = NOW_S - 90 * 60 - 3 * 3600
+  const measured = (kp: number) => ({ points: [{ timeUnix: START, kp, kind: 'observed', noaaScale: null }] })
+
+  it('an operator who had the aurora on and unticks it during a storm gets it off in one click, and it stays off', async () => {
+    layersOn(['aurora'])
+    feeds.aurora = OVAL
+    const r = await mount({ prop: snap(6) })
+    expect(auroraBox(r.container).checked).toBe(true)
+    await act(async () => {
+      fireEvent.click(auroraBox(r.container))
+    })
+    expect(auroraBox(r.container).checked).toBe(false)
+    // across the next OVATION poll and the 60 s clock: what is drawn from here on has no oval
+    marks(r.container).length = 0
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(11 * 60_000)
+    })
+    expect(auroraBox(r.container).checked).toBe(false)
+    expect(marks(r.container).length, 'CONTROL: the map redrew').toBeGreaterThan(0)
+    expect(strokes(r.container, AURORA_INK)).toEqual([])
+    expect(auroraFills(r.container)).toEqual([])
+  })
+
+  it('measured Kp 4 (a period that ended 90 min ago) and an estimate of 6.3: the storm turns the layer on, said as the estimate', async () => {
+    layersOn([])
+    feeds.aurora = OVAL
+    feeds.kpForecast = measured(4)
+    const r = await mount({ prop: snap(6.3) })
+    expect(auroraBox(r.container).checked).toBe(true)
+    expect(auroraChip(r.container)!.textContent).toContain(
+      t('map.aurora.chip.storm', { why: kpLabel({ kp: 6.3, source: 'estimated', at: NOW_S - 120 }) }),
+    )
+  })
+
+  it('CONTROL — measured Kp 6 and an estimate of 3: on, said as NOAA’s measurement', async () => {
+    layersOn([])
+    feeds.aurora = OVAL
+    feeds.kpForecast = measured(6)
+    const r = await mount({ prop: snap(3) })
+    expect(auroraBox(r.container).checked).toBe(true)
+    expect(auroraChip(r.container)!.textContent).toContain(
+      t('map.aurora.chip.storm', { why: kpLabel({ kp: 6, source: 'measured', at: START, until: START + 3 * 3600 }) }),
+    )
+  })
+
+  it('an older station’s dated oval an hour past its forecast time draws no dots', async () => {
+    layersOn(['aurora'])
+    feeds.aurora = { points: [{ lat: 66, lon: -100, prob: 50 }], observedAt: NOW_S - 4000, forecastAt: NOW_S - 3600 }
+    const r = await mount()
+    expect(auroraFills(r.container)).toEqual([])
+  })
+})

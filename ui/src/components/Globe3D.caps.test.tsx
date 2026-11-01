@@ -9,17 +9,17 @@
 // REAL component.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { forwardRef, useEffect, useImperativeHandle } from 'react'
-import { render, cleanup, act } from '@testing-library/react'
+import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import type { PropagationSnapshot } from '../types'
 import type * as THREE_NS from 'three'
 
-const feeds = vi.hoisted(() => ({ aurora: null as unknown, pca: null as unknown }))
+const feeds = vi.hoisted(() => ({ aurora: null as unknown, pca: null as unknown, kpForecast: { points: [] } as unknown }))
 vi.mock('../api', () => ({
   getAurora: vi.fn(async () => feeds.aurora),
   getPca: vi.fn(async () => feeds.pca),
   getSatellites: vi.fn(async () => null),
   getSatTrackStatus: vi.fn(async () => null),
-  getKpForecast: vi.fn(async () => ({ points: [] })),
+  getKpForecast: vi.fn(async () => feeds.kpForecast),
   getArrivalOutlook: vi.fn(async () => ({ watch: null, model: null, l1: null, rationale: null })),
 }))
 vi.mock('three/examples/jsm/postprocessing/UnrealBloomPass.js', () => ({
@@ -81,6 +81,7 @@ import * as ReactGlobe from 'react-globe.gl'
 import * as THREE from 'three'
 import { t } from '../i18n'
 import { kpLabel } from '../capsNow'
+import { loadGlobeLayers, saveGlobeLayers } from '../features/globeLayers'
 import type { AuroraOval, PcaView } from '../types'
 
 type FakeGlobe = { paused: boolean; frames: number; scene: () => THREE_NS.Scene }
@@ -97,6 +98,7 @@ beforeEach(() => {
   fake.frames = 0
   feeds.aurora = null
   feeds.pca = null
+  feeds.kpForecast = { points: [] }
   localStorage.clear()
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
@@ -141,6 +143,11 @@ async function mount(kp: number) {
   return r
 }
 const group = (name: string) => fake.scene().children.find((o) => o.name === name) as THREE_NS.Group | undefined
+/** The aurora point cloud's drawn points: 0 when it is hidden or absent. */
+const auroraDots = () => {
+  const c = fake.scene().children.find((o) => o.name === 'cloud:aurora') as THREE_NS.Points | undefined
+  return c && c.visible ? (c.geometry.getAttribute('position')?.count ?? 0) : 0
+}
 const dashed = (g: THREE_NS.Group) => (g.children[0] as THREE_NS.Line).material instanceof THREE.LineDashedMaterial
 
 const ring = (lat: number): [number, number][] => [[-170, lat], [-90, lat], [0, lat], [90, lat], [170, lat]]
@@ -169,6 +176,7 @@ describe('the aurora oval on the 3-D globe', () => {
     const r = await mount(6)
     const g = group('auroraEdge')
     expect(g, 'the edge line group').toBeDefined()
+    expect(auroraDots(), 'CONTROL: the current OVATION’s dots are drawn').toBeGreaterThan(0)
     expect(g!.children.length).toBe(2)
     expect(dashed(g!)).toBe(false)
     expect(r.container.querySelector('.wx-chip-stack .aurora-chip')!.textContent).toContain(
@@ -176,10 +184,11 @@ describe('the aurora oval on the 3-D globe', () => {
     )
   })
 
-  it('a stale OVATION draws no oval line, even in a storm, and the chip says it is out of date', async () => {
+  it('a stale OVATION draws no oval line and no dots, even in a storm, and the chip says it is out of date', async () => {
     feeds.aurora = { ...OVAL, forecastAt: NOW_S - 3600 }
     const r = await mount(6)
     expect(group('auroraEdge')).toBeUndefined()
+    expect(auroraDots(), 'no aurora point cloud drawn').toBe(0)
     expect(r.container.querySelector('.aurora-chip')!.textContent).toContain(t('map.aurora.chip.stale', { time: '00:30Z' }))
   })
 
@@ -206,5 +215,38 @@ describe('the polar cap on the 3-D globe', () => {
     const r = await mount(3)
     expect(group('capEdge')).toBeUndefined()
     expect(r.container.querySelector('.pca-chip')).not.toBeNull()
+  })
+})
+
+describe('round 3: the storm rule and the untick on the 3-D globe', () => {
+  it('NOAA’s measured Kp 6 (a period that ended 90 min ago) beside an estimate of 3 turns the layer on, said as measured', async () => {
+    const start = NOW_S - 90 * 60 - 3 * 3600
+    feeds.kpForecast = { points: [{ timeUnix: start, kp: 6, kind: 'observed', noaaScale: null }] }
+    feeds.aurora = OVAL
+    const r = await mount(3)
+    expect(group('auroraEdge'), 'the layer is on').toBeDefined()
+    expect(r.container.querySelector('.aurora-chip')!.textContent).toContain(
+      t('map.aurora.chip.storm', { why: kpLabel({ kp: 6, source: 'measured', at: start, until: start + 3 * 3600 }) }),
+    )
+  })
+
+  it('an operator who had the aurora on and unticks it during a storm gets it off in one click, and it stays off', async () => {
+    saveGlobeLayers({ ...loadGlobeLayers(true), aurora: true })
+    feeds.aurora = OVAL
+    const r = await mount(6)
+    const box = () =>
+      [...r.container.querySelectorAll('.globe3d-layers label')]
+        .find((l) => l.textContent?.includes(t('globe.layer.aurora')))!
+        .querySelector('input') as HTMLInputElement
+    expect(box().checked).toBe(true)
+    await act(async () => {
+      fireEvent.click(box())
+    })
+    expect(box().checked).toBe(false)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(11 * 60_000)
+    })
+    expect(box().checked).toBe(false)
+    expect(group('auroraEdge')).toBeUndefined()
   })
 })

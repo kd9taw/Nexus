@@ -117,7 +117,7 @@ import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, XRAY_LIVE_SECS, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
 import { AuroraChip, PcaChip } from './prop/CapsChips'
-import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpNow } from '../capsNow'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpAlert } from '../capsNow'
 import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../features/connectFeeds'
 import { useViewportClass } from '../useViewport'
 // The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
@@ -1615,7 +1615,8 @@ export function MapView({
   // polls (App's storm and watch toasts; the arrival chip).
   const kpFc = useFeed(KP_FORECAST).value ?? null
   const arrival = useFeed(ARRIVAL_OUTLOOK).value ?? null
-  const kn = useMemo(() => kpNow(prop?.spaceWx, kpFc, nowMs), [prop, kpFc, nowMs])
+  // The Kp to warn on: the higher of NOAA's recent measurement and the usable estimate (capsNow `kpAlert`).
+  const kn = useMemo(() => kpAlert(prop?.spaceWx, kpFc, nowMs), [prop, kpFc, nowMs])
   const storm = auroraStorm(kn, arrival)
   const [auroraDismissed, setAuroraDismissed] = useState(false)
   useEffect(() => {
@@ -4217,13 +4218,15 @@ export function MapView({
                     <input
                       type="checkbox"
                       checked={k === 'aurora' ? auroraOn : layers[k].visible}
-                      onChange={(e) =>
-                        // Unticking the aurora while the storm has it on is the operator's off: it
-                        // sticks until the storm is over, and their own choice stays as it was.
-                        k === 'aurora' && auroraAuto && !e.target.checked
-                          ? setAuroraDismissed(true)
-                          : setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))
-                      }
+                      onChange={(e) => {
+                        // Unticking the aurora during a storm is the operator's off, in one click
+                        // whoever had it on: it sticks until the storm is over. Their own choice is
+                        // written too, unless the storm alone had it on (then it was already off).
+                        if (k === 'aurora' && storm && !e.target.checked) setAuroraDismissed(true)
+                        if (!(k === 'aurora' && auroraAuto)) {
+                          setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))
+                        }
+                      }}
                     />
                     {layerLabel(k)}
                   </label>

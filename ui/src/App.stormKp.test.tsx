@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 //
-// THE STORM TOAST'S KP AT APP'S CALL SITE. capsNow `kpNow` picks NOAA's measured 3-hour Kp while its
-// period ended within the last 3 hours, else the 1-minute estimate; its own tests pin that. This mounts
-// the REAL App and pins that the propagation poll hands `processStorm` that choice, with the Kp outlook
-// App already watches: a recent measured period wins over the snapshot's estimate; with none, the
-// estimate (labelled) is what reaches the toast.
+// THE STORM TOAST'S KP AT APP'S CALL SITE. capsNow `kpAlert` warns on the HIGHER of NOAA's recent
+// measured 3-hour Kp and the usable 1-minute estimate, labelled with which; its own tests pin that. This
+// mounts the REAL App and pins that the propagation poll hands `processStorm` that choice, with the Kp
+// outlook App already watches.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/react'
 import type { AppSnapshot, KpForecast, PropagationSnapshot, XrayNow } from './types'
@@ -157,10 +156,16 @@ async function stormHanded(): Promise<unknown> {
 }
 
 describe('App hands the storm toast the Kp that speaks for now, with what it is', () => {
-  it('a 3-hour period NOAA measured that ended within 3 hours wins over the estimate', async () => {
+  it('a higher 3-hour period NOAA measured within 3 hours warns, labelled measured', async () => {
     const end = Math.floor(Date.now() / 1000 / (3 * H)) * 3 * H
-    forecast = { points: [{ timeUnix: end - 3 * H, kp: 5.67, kind: 'observed', noaaScale: 'G1' }] } as unknown as KpForecast
-    expect(await stormHanded()).toEqual({ kp: 5.67, source: 'measured', at: end - 3 * H, until: end })
+    forecast = { points: [{ timeUnix: end - 3 * H, kp: 6.67, kind: 'observed', noaaScale: 'G2' }] } as unknown as KpForecast
+    expect(await stormHanded()).toEqual({ kp: 6.67, source: 'measured', at: end - 3 * H, until: end })
+  }, BUDGET)
+
+  it('a lower measured period (Kp 4) never holds back the higher estimate (6.33): it warns, labelled est.', async () => {
+    const end = Math.floor(Date.now() / 1000 / (3 * H)) * 3 * H
+    forecast = { points: [{ timeUnix: end - 3 * H, kp: 4, kind: 'observed', noaaScale: null }] } as unknown as KpForecast
+    expect(await stormHanded()).toMatchObject({ kp: 6.33, source: 'estimated' })
   }, BUDGET)
 
   it('CONTROL: with no recent measurement, the usable estimate reaches the toast, labelled as one', async () => {

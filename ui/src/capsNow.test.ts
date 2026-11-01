@@ -9,6 +9,7 @@ import {
   edgeLines,
   geomagLat,
   gridCap,
+  kpAlert,
   kpLabel,
   kpNow,
   kpWord,
@@ -74,6 +75,28 @@ describe('kpNow: NOAA’s measured Kp first, the estimate only without one, noth
     expect(kpNow(wx(), {} as KpForecast, NOW)?.source).toBe('estimated')
     // the measurement still speaks when the snapshot's Kp is a stand-in
     expect(kpNow(wx({ kpAt: null }), fc([[P21, 3, 'observed']]), NOW)?.source).toBe('measured')
+  })
+})
+
+describe('kpAlert: the warning fires on the higher of NOAA’s measurement and the estimate, labelled with which', () => {
+  it('measured 4 (a period that ended 90 min ago) and an estimate of 6.3: the estimate warns, as an estimate', () => {
+    const k = kpAlert(wx({ kp: 6.3 }), fc([[P21, 4, 'observed']]), NOW)
+    expect(k).toMatchObject({ kp: 6.3, source: 'estimated', at: now - 120 })
+    // the words for the bar stay NOAA's measurement
+    expect(kpNow(wx({ kp: 6.3 }), fc([[P21, 4, 'observed']]), NOW)?.source).toBe('measured')
+  })
+
+  it('CONTROL — measured 6 and an estimate of 3: NOAA’s measurement warns, labelled measured', () => {
+    expect(kpAlert(wx({ kp: 3 }), fc([[P21, 6, 'observed']]), NOW)).toEqual({ kp: 6, source: 'measured', at: P21, until: P21 + 3 * H })
+    // a tie goes to the measurement
+    expect(kpAlert(wx({ kp: 6 }), fc([[P21, 6, 'observed']]), NOW)?.source).toBe('measured')
+  })
+
+  it('one source alone is that source; neither, or a stand-in and an old period, is nothing', () => {
+    expect(kpAlert(wx({ kp: 5.3 }), null, NOW)).toMatchObject({ kp: 5.3, source: 'estimated' })
+    expect(kpAlert(wx({ kpAt: null }), fc([[P21, 5, 'observed']]), NOW)).toMatchObject({ kp: 5, source: 'measured' })
+    expect(kpAlert(wx({ kpAt: null }), fc([[P21 - 6 * H, 7, 'observed']]), NOW)).toBeNull()
+    expect(kpAlert(null, null, NOW)).toBeNull()
   })
 })
 
@@ -180,6 +203,13 @@ describe('the aurora oval: OVATION while current, and nothing at all when it is 
   it('no feed at all draws nothing and says so', () => {
     expect(auroraPicture({ points: [], observedAt: null, forecastAt: null }, NOW)).toEqual({ mode: 'none', why: 'nofeed' })
     expect(auroraPicture(null, NOW)).toEqual({ mode: 'none', why: 'nofeed' })
+  })
+
+  it('an older station’s DATED oval an hour past its forecast time is stale like any other: nothing drawn', () => {
+    const old = { points: OVAL.points, observedAt: now - 4000, forecastAt: now - 3600 }
+    expect(auroraPicture(old, NOW)).toEqual({ mode: 'none', why: 'stale', forecastAt: now - 3600 })
+    // control: the same older-station oval while its forecast time is current is drawn
+    expect(auroraPicture({ ...old, forecastAt: now + 600 }, NOW).mode).toBe('ovation')
   })
 
   it('an older station’s oval (no edge sent) is drawn as it always was, with no age claimed', () => {

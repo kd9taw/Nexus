@@ -58,7 +58,7 @@ import { bandColor, openingModeColor } from '../bandColors'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
 import { AuroraChip, PcaChip } from './prop/CapsChips'
-import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpNow } from '../capsNow'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpAlert } from '../capsNow'
 import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../features/connectFeeds'
 import {
   subsolarPoint,
@@ -227,6 +227,8 @@ function syncCloud(
       blending: THREE.AdditiveBlending,
     })
     pts = new THREE.Points(new THREE.BufferGeometry(), mat)
+    // Named by its key, like the line groups, so the scene can be read back.
+    pts.name = `cloud:${key}`
     store[key] = pts
     g.scene().add(pts)
   }
@@ -641,7 +643,8 @@ function Globe3DView({
   // and the operator's untick during the storm sticks until it is over.
   const kpFc = useFeed(KP_FORECAST).value ?? null
   const arrival = useFeed(ARRIVAL_OUTLOOK).value ?? null
-  const kn = useMemo(() => kpNow(prop?.spaceWx, kpFc, nowMs), [prop, kpFc, nowMs])
+  // The Kp to warn on (capsNow `kpAlert`), as on the 2-D map.
+  const kn = useMemo(() => kpAlert(prop?.spaceWx, kpFc, nowMs), [prop, kpFc, nowMs])
   const storm = auroraStorm(kn, arrival)
   const [auroraDismissed, setAuroraDismissed] = useState(false)
   useEffect(() => {
@@ -2073,12 +2076,12 @@ function Globe3DView({
                 <input
                   type="checkbox"
                   checked={row.k === 'aurora' ? auroraOn : show[row.k]}
-                  onChange={(e) =>
-                    // Unticking the aurora while the storm has it on is the operator's off (the 2-D map's rule).
-                    row.k === 'aurora' && auroraAuto && !e.target.checked
-                      ? setAuroraDismissed(true)
-                      : setShow((s) => ({ ...s, [row.k]: e.target.checked }))
-                  }
+                  onChange={(e) => {
+                    // Unticking the aurora during a storm is the operator's off, in one click (the
+                    // 2-D map's rule); their own choice is written unless the storm alone had it on.
+                    if (row.k === 'aurora' && storm && !e.target.checked) setAuroraDismissed(true)
+                    if (!(row.k === 'aurora' && auroraAuto)) setShow((s) => ({ ...s, [row.k]: e.target.checked }))
+                  }}
                 />
                 {'labelKey' in row ? t(row.labelKey) : row.label}
               </label>

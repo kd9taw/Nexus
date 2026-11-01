@@ -192,7 +192,7 @@ import { sameCall } from './callsign'
 import { processFlare, effectiveXray, flareToastGrid } from './flareAlert'
 import { snapXray, xrayFastFresh } from './propViz'
 import { processStorm, processStormForecast } from './stormAlert'
-import { kpNow } from './capsNow'
+import { kpAlert } from './capsNow'
 import { processArrivalWatch } from './arrivalAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
@@ -1036,9 +1036,9 @@ function App() {
           // reached the operator only if they had the Space Weather pane in front of
           // them, which is backwards: a flare is minutes, a storm is days. A stand-in Kp
           // or one past its cadence raises nothing and is not "the Kp now".
-          // NOAA's measured 3-hour Kp while recent, else the usable 1-minute estimate, else none
-          // (capsNow `kpNow`); the toast says which.
-          const kn = kpNow(p.spaceWx, kpFcRef.current, nowMs)
+          // The higher of NOAA's recent measured 3-hour Kp and the usable 1-minute estimate, else
+          // none (capsNow `kpAlert`); the toast says which one it is.
+          const kn = kpAlert(p.spaceWx, kpFcRef.current, nowMs)
           processStorm(kn)
           kpNowRef.current = kn?.kp ?? null
           // Chased-expedition window alerts (dxpedChase.ts owns the dedup).
