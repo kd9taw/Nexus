@@ -16709,6 +16709,91 @@ mod contest_session_tests {
         );
     }
 
+    /// A backup made at the station whose saved profile list is `profiles` (as written, a JSON
+    /// text), restored at a station whose paths are under `D:\Now` (`tag` names its store) and
+    /// whose own saved profiles are kept (`station_list`) or not: (the station's own list, the
+    /// list the restore saves).
+    fn profiles_restored_from(
+        tag: &str,
+        profiles: &str,
+        station_list: bool,
+    ) -> (Option<String>, Option<String>) {
+        let (dir, engine) = super::durable_command_tests::engine_on_store(tag, 0);
+        let mut ui = with_station_paths_set(&engine, "D:\\Now");
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, ui.clone(), None).unwrap()).unwrap();
+        v["uiState"][crate::command_dispatch::PROFILES] = serde_json::json!(profiles);
+        if !station_list {
+            ui.remove(crate::command_dispatch::PROFILES);
+        }
+        let own = ui.get(crate::command_dispatch::PROFILES).cloned();
+        let mut saved = None;
+        restore_settings_bundle(
+            &engine,
+            v.to_string(),
+            || ui,
+            |ui| {
+                saved = Some(ui);
+                true
+            },
+            no_key_change,
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        (
+            own,
+            saved.unwrap().remove(crate::command_dispatch::PROFILES),
+        )
+    }
+
+    /// ★ A PROFILE LIST THIS BUILD CANNOT READ NEVER LANDS: its station paths could not be put
+    /// back, and the screen's own reader takes lists this one refuses (a number past `f64`, a lone
+    /// surrogate escape, nesting deeper than this reader's limit), so one profile load would hand
+    /// the backup's TQSL program to the station. The restore keeps the station's own list, or none
+    /// where it has none.
+    #[test]
+    fn restoring_a_backup_never_keeps_a_profile_list_it_cannot_read() {
+        let with = |n: &str| {
+            format!(
+                r#"[{{"name":"Home","settings":{{"tqslPath":"\\\\elsewhere\\share\\tqsl.exe","n":{n}}}}}]"#
+            )
+        };
+        for (case, unreadable) in [
+            ("a number past f64", with("1e400")),
+            ("a lone surrogate", with(r#""\ud800""#)),
+            (
+                "nesting past the limit",
+                with(&format!("{}{}", "[".repeat(200), "]".repeat(200))),
+            ),
+        ] {
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&unreadable).is_err(),
+                "{case}: unreadable here"
+            );
+            let (own, saved) = profiles_restored_from("restore-unreadable", &unreadable, true);
+            assert!(own.is_some(), "{case}: the station has a list");
+            assert_eq!(saved, own, "{case}: the station's own list");
+            let (_, saved) = profiles_restored_from("restore-unreadable-none", &unreadable, false);
+            assert_eq!(saved, None, "{case}: the station has no list");
+        }
+    }
+
+    /// CONTROL for the above: a profile list that reads lands, the station's paths put back.
+    #[test]
+    fn restoring_a_backup_lands_a_profile_list_it_can_read() {
+        let readable = r#"[{"name":"Home","settings":{"tqslPath":"\\\\elsewhere\\share\\tqsl.exe","mycall":"W9NEW"}}]"#;
+        let (_, saved) = profiles_restored_from("restore-readable", readable, true);
+        let saved: serde_json::Value = serde_json::from_str(&saved.unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            serde_json::json!([{ "name": "Home", "settings": {
+                "tqslPath": "D:\\Now\\TrustedQSL\\tqsl.exe",
+                "js8SoundFiles": { "cq": "D:\\Now\\Sounds\\cq.wav" },
+                "mycall": "W9NEW",
+            } }])
+        );
+    }
+
     /// The station's stored keys, planted (fake): its own Club Log and Cloudlog keys in its
     /// settings, and each of two saved profiles' own, every one a distinct string under `tag`.
     /// With the UI state holding a station key (the watch list) and this computer's own (the UI
@@ -19874,7 +19959,9 @@ fn import_settings_bundle(
 /// `station_ui` holds them. Every bundle, wherever it was made, keeps the station's
 /// [`STATION_PATHS`] ([`with_stations_own_paths`]); a bundle exported from afar
 /// ([`STATION_PATHS_LEFT_OUT`]) keeps the station's voice-keyer recordings too
-/// ([`with_station_paths`]), and one made at the station restores its own.
+/// ([`with_station_paths`]), and one made at the station restores its own. A saved profile list
+/// that does not read here ([`each_profile`]) is replaced by the station's own, or left out where
+/// the station has none: it is never kept as the file has it.
 fn keep_the_stations_paths(
     bundle: &mut serde_json::Value,
     station: &serde_json::Value,
@@ -19899,14 +19986,29 @@ fn keep_the_stations_paths(
     else {
         return;
     };
+    let station_ui = station_ui();
+    let own = station_ui.get(command_dispatch::PROFILES);
     let mut held = std::collections::BTreeMap::new();
-    if let Some(own) = station_ui().get(command_dispatch::PROFILES) {
+    if let Some(own) = own {
         each_profile(own, |name, s| {
             held.insert(name.to_string(), s.clone());
         });
     }
-    if let Some(kept) = each_profile(&text, |name, s| keep(s, held.get(name))) {
-        bundle["uiState"][command_dispatch::PROFILES] = serde_json::Value::String(kept);
+    // ⛔ A list that does not read here never lands: its paths could not be put back, and the
+    // screen reads lists this build refuses (a number past `f64`, a lone surrogate escape, deep
+    // nesting). The station's own list stays, or none where it had none.
+    match each_profile(&text, |name, s| keep(s, held.get(name))).or_else(|| own.cloned()) {
+        Some(kept) => {
+            bundle["uiState"][command_dispatch::PROFILES] = serde_json::Value::String(kept);
+        }
+        None => {
+            if let Some(ui) = bundle
+                .get_mut("uiState")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                ui.remove(command_dispatch::PROFILES);
+            }
+        }
     }
 }
 
