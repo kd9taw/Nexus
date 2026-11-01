@@ -218,6 +218,30 @@ impl Engine {
             );
             return None;
         }
+        // ⛔ …nor by an over under another call than the one on the air: a call saved during the
+        // over makes the sequencer's messages again under the new call ([`Engine::note_call_saved`]),
+        // and the new call goes out from the next over. The over on the air goes out as keyed.
+        let signed = |text: &str| {
+            Msg::parse(text).sender().map(|c| {
+                tempo_core::message::unhash_call(c)
+                    .trim()
+                    .to_ascii_uppercase()
+            })
+        };
+        if signed(&on.text)
+            .zip(signed(&to))
+            .is_some_and(|(keyed, next)| keyed != next)
+        {
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "over not switched mid-air: {to:?} is under another call than the over on the \
+                     air; it goes out as {:?}",
+                    on.text
+                ),
+            );
+            return None;
+        }
         if matches!(self.mode, Mode::FieldDay { .. })
             && !addressee(&on.text)
                 .zip(addressee(&to))

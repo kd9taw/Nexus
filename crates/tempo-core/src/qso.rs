@@ -134,6 +134,10 @@ pub struct Station {
     /// (`widgets/mainwindow.cpp:9216-9231`); the engine reads this to do the same with the rest
     /// of an over still on the air. Nothing is queued for a later over.
     pub signed_off_with_73: bool,
+    /// The call this station's latest over went out under ([`Self::after_tx`]): its call then.
+    /// `None` until it keys. A contact is logged under it, so a call changed after that over, and
+    /// taken up for the overs after it ([`Self::sign_as`]), does not relabel what the air carried.
+    pub keyed_as: Option<String>,
     /// Human-readable event log.
     pub transcript: Vec<String>,
 }
@@ -188,6 +192,7 @@ impl Station {
             advanced_on_air: false,
             keyed_on_air: false,
             signed_off_with_73: false,
+            keyed_as: None,
             transcript: Vec::new(),
         }
     }
@@ -213,6 +218,7 @@ impl Station {
             advanced_on_air: false,
             keyed_on_air: false,
             signed_off_with_73: false,
+            keyed_as: None,
             transcript: Vec::new(),
         }
     }
@@ -417,6 +423,7 @@ impl Station {
             advanced_on_air: false,
             keyed_on_air: false,
             signed_off_with_73: false,
+            keyed_as: None,
             transcript: vec![log_line],
         };
         // The resume table above names the Tx we queue; only now, with both calls in
@@ -837,9 +844,19 @@ impl Station {
         // advance zeroes it, so it cannot be asked "did this QSO ever transmit?" —
         // this can (see `report_impossible_exchange`).
         self.keyed_on_air = true;
+        self.keyed_as = Some(self.mycall.clone());
         if self.state == State::Done {
             self.pending = None;
         }
+    }
+
+    /// Make every over from now on under `call`, the station's call after a change: the message
+    /// waiting is the same over signed by `call` ([`Msg::signed_by`]), and every message made
+    /// after it is made under `call`, as WSJT-X regenerates its Tx messages when My Call changes.
+    /// The step, the counts and the partner are left as they are: the contact goes on.
+    pub fn sign_as(&mut self, call: &str) {
+        let was = std::mem::replace(&mut self.mycall, call.to_string());
+        self.pending = self.pending.take().map(|m| m.signed_by(&was, call));
     }
 
     fn log(&mut self, s: String) {

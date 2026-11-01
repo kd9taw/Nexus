@@ -4158,6 +4158,10 @@ pub struct FieldDayStation {
     /// (`MessageClient::qso_logged`'s `time_on`), and a row records only the moment it was
     /// logged. Read by the WSJT-X UDP sink, which sends a row the slot after it is logged.
     row_starts: Vec<(u64, u64)>,
+    /// The call this station puts on the air when it is not the log's own
+    /// ([`FieldDayLog::mycall`]): the station's call after a change mid-contest
+    /// ([`sign_as`](Self::sign_as)). The log keeps its call, so no row already in it changes.
+    signed_as: Option<String>,
     pub log: FieldDayLog,
     pub transcript: Vec<String>,
 }
@@ -4168,7 +4172,35 @@ const ROW_STARTS_KEPT: usize = 32;
 
 impl FieldDayStation {
     fn mycall(&self) -> &str {
-        &self.log.mycall
+        self.signed_as.as_deref().unwrap_or(&self.log.mycall)
+    }
+
+    /// The call this station's overs are made under: the log's, or the one it signs as since a
+    /// change ([`sign_as`](Self::sign_as)).
+    pub fn call(&self) -> &str {
+        self.mycall()
+    }
+
+    /// Make every over from now on under `call`, the station's call after a change, as WSJT-X
+    /// regenerates its Tx messages when My Call changes: a CQ waiting is called again under it, and
+    /// any other message waiting is the same over signed by `call` ([`Msg::signed_by`]). Where
+    /// only one of the two calls is standard the other messages take another shape, which this
+    /// cannot make of the one waiting, so it is dropped and the station waits for its partner's
+    /// next over. The contact, the step and the log are left as they are.
+    pub fn sign_as(&mut self, call: &str) {
+        let was = self.mycall().to_string();
+        self.signed_as = Some(call.to_string());
+        let same_shape = crate::message::is_std_call(&was) == crate::message::is_std_call(call);
+        self.pending = match self.pending.take() {
+            Some(Msg::Cq { .. }) if self.state == FdState::CallingCq => Some(self.cq()),
+            Some(m) if same_shape => Some(m.signed_by(&was, call)),
+            Some(_) => {
+                self.transcript
+                    .push(format!("over dropped: it cannot be signed by {call}"));
+                None
+            }
+            None => None,
+        };
     }
 
     /// A running station (calls CQ FD).
@@ -4195,6 +4227,7 @@ impl FieldDayStation {
             cq_dir: String::new(),
             started_unix: None,
             row_starts: Vec::new(),
+            signed_as: None,
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -4221,6 +4254,7 @@ impl FieldDayStation {
             cq_dir: String::new(),
             started_unix: None,
             row_starts: Vec::new(),
+            signed_as: None,
             log: FieldDayLog::new(mycall, session, band),
             transcript: Vec::new(),
         }
@@ -6298,6 +6332,46 @@ mod tests {
             run.outgoing().unwrap().to_text(),
             "K2DEF W9XYZ RR73",
             "closes with RR73 to the caller"
+        );
+    }
+
+    /// A station whose call changes mid-contest signs every over after under the new call, and
+    /// the log keeps its own: a CQ is called again under it (a nonstandard call's plain CQ), an
+    /// exchange waiting is the same exchange signed by it, and one a call of another shape cannot
+    /// carry is dropped rather than sent in the old call's shape.
+    #[test]
+    fn a_station_signed_by_a_new_call_makes_its_overs_under_it_and_keeps_the_logs() {
+        let fd = || ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI");
+        let mut run = FieldDayStation::running("W9XYZ", "EN37", fd(), "20M");
+        run.sign_as("PJ4/W9XYZ");
+        assert_eq!(
+            (
+                run.outgoing().map(|m| m.to_text()),
+                run.call(),
+                run.log.mycall.as_str()
+            ),
+            (Some("CQ PJ4/W9XYZ".to_string()), "PJ4/W9XYZ", "W9XYZ")
+        );
+
+        let answering = || {
+            let mut run = FieldDayStation::running("W9XYZ", "EN37", fd(), "20M");
+            run.observe(&[dec("W9XYZ K2DEF 2A IL")], 0);
+            assert_eq!(run.state, FdState::AwaitConfirm, "premise");
+            run
+        };
+        let mut same = answering();
+        let was = same.outgoing().map(|m| m.to_text()).unwrap_or_default();
+        same.sign_as("W9XYZ/P");
+        assert_eq!(
+            same.outgoing().map(|m| m.to_text()),
+            Some(was.replace("W9XYZ", "W9XYZ/P")),
+            "the same exchange, signed by the new call"
+        );
+        let mut other = answering();
+        other.sign_as("PJ4/W9XYZ");
+        assert_eq!(
+            (other.outgoing(), other.state),
+            (None, FdState::AwaitConfirm)
         );
     }
 

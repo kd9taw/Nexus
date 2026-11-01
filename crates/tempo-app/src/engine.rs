@@ -6511,6 +6511,10 @@ struct QsoStep {
     tx_count: u32,
     rv_count: u8,
     keyed_on_air: bool,
+    /// The call the sequencer makes its overs under, and the one its latest over went out under: a
+    /// call saved while the over's wave is built makes the messages again ([`QsoStation::sign_as`]).
+    mycall: String,
+    keyed_as: Option<String>,
 }
 
 impl QsoStep {
@@ -6522,7 +6526,20 @@ impl QsoStep {
             tx_count: s.tx_count,
             rv_count: s.rv_count,
             keyed_on_air: s.keyed_on_air,
+            mycall: s.mycall.clone(),
+            keyed_as: s.keyed_as.clone(),
         }
+    }
+
+    /// This step with its messages made again under `call`, as a save of the call does
+    /// ([`QsoStation::sign_as`]).
+    fn signed_by(&self, call: &str) -> Self {
+        let mut s = self.clone();
+        if s.mycall != call {
+            s.pending = s.pending.map(|m| m.signed_by(&self.mycall, call));
+            s.mycall = call.to_string();
+        }
+        s
     }
 }
 
@@ -6531,6 +6548,8 @@ struct FdStep {
     state: tempo_core::fieldday::FdState,
     dxcall: Option<String>,
     pending: Option<Msg>,
+    /// The call the contest sequencer makes its overs under ([`FieldDayStation::call`]).
+    call: String,
 }
 
 impl FdStep {
@@ -6539,7 +6558,15 @@ impl FdStep {
             state: s.state,
             dxcall: s.dxcall.clone(),
             pending: s.pending.clone(),
+            call: s.call().to_string(),
         }
+    }
+
+    /// Whether this step is `after`, or `after` with its messages made again under another call
+    /// ([`FieldDayStation::sign_as`]): the same state and partner, only the call moved.
+    fn moved_only_by_its_call(&self, after: &FdStep) -> bool {
+        self == after
+            || (self.call != after.call && self.state == after.state && self.dxcall == after.dxcall)
     }
 }
 
@@ -6620,7 +6647,7 @@ fn ft_over_call_refusal(
 }
 
 /// ⛔ The keying-time call check for a contest over (`Mode::FieldDay`): every over the contest
-/// sequencer sends is made under the call it was started with (`FieldDayLog::mycall`), the ARRL
+/// sequencer sends is made under its call (`FieldDayStation::call`), the ARRL
 /// VHF contests' rogered grid ("W1AW KD9TAW R EN52", free text to `Msg::parse`) included, so it is
 /// judged by that call.
 fn contest_over_call_refusal(built: &str, now: &str) -> Option<&'static str> {
@@ -8321,12 +8348,13 @@ impl Engine {
     }
 
     /// After a save that changed the station's call from `was`: `was` becomes one of the calls the
-    /// station transmitted under before ([`Self::former_calls`]), and the operator's free text
-    /// waiting to go is addressed again under the call now ([`Self::qso_freetext`]) when it has no
-    /// sender ("W1AW KD9TAW TNX 73"): the call in it is the one Nexus put there, so it is the
-    /// station's call at the key, never the one before. Free text that reads as a standard message
-    /// ("W1AW KD9TAW 73") names the old call as its sender, so it stays as it was and is refused at
-    /// the key ([`ft_over_call_refusal`]), as the sequencer's own over would be.
+    /// station transmitted under before ([`Self::former_calls`]), and the FT or contest sequencer
+    /// makes its messages again under the call now, the one waiting included
+    /// ([`QsoStation::sign_as`], [`FieldDayStation::sign_as`]), so its next over goes out under
+    /// it. The operator's free text waiting to go is addressed again under the call now
+    /// ([`Self::qso_freetext`]) when it has no sender ("W1AW KD9TAW TNX 73"): the call in it is the
+    /// one Nexus put there. Free text that reads as a standard message ("W1AW KD9TAW 73") is signed
+    /// by the call now like the sequencer's own messages.
     fn note_call_saved(&mut self, was: &str) {
         let now = self.settings.mycall.clone();
         if call_changed_refusal(was, &now).is_none() {
@@ -8338,19 +8366,31 @@ impl Engine {
         self.former_calls
             .retain(|c| !c.eq_ignore_ascii_case(&was) && !c.eq_ignore_ascii_case(now.trim()));
         self.former_calls.push(was);
-        let Some((typed, made)) = self.qso_freetext.take() else {
-            return;
+        let freetext = self.qso_freetext.take();
+        // ⭐ THE MESSAGES ARE MADE AGAIN UNDER THE CALL NOW (the operator's decision, 2026-10-31):
+        // WSJT-X regenerates Tx1-Tx6 on Settings OK (`on_actionSettings_triggered` → `set_mode` →
+        // `displayWidgets` → `genStdMsgs`), and neither stops TX nor ends the QSO. So the over the
+        // sequencer was about to send goes out under the new call, counted as any over is, and the
+        // contact goes on. Nothing made under the old call is sent.
+        let station = match &mut self.mode {
+            Mode::FieldDay { station, .. } => {
+                if call_changed_refusal(station.call(), &now).is_some() {
+                    station.sign_as(&now);
+                }
+                return;
+            }
+            Mode::Qso { station, .. } => station,
+            Mode::Chat => return,
         };
-        let Mode::Qso { station, .. } = &mut self.mode else {
-            return;
-        };
-        let Some(dx) = station.dxcall.clone() else {
-            return;
-        };
-        if station.pending.as_ref() != Some(&made) || Msg::parse(&made.to_text()).sender().is_some()
-        {
-            return;
+        let readdress = freetext.filter(|(_, made)| {
+            station.pending.as_ref() == Some(made) && Msg::parse(&made.to_text()).sender().is_none()
+        });
+        if call_changed_refusal(&station.mycall, &now).is_some() {
+            station.sign_as(&now);
         }
+        let (Some((typed, _)), Some(dx)) = (readdress, station.dxcall.clone()) else {
+            return;
+        };
         let msg = addressed_free_text(&now, &dx, &typed);
         tempo_core::applog::info(
             "tx",
@@ -17430,10 +17470,11 @@ impl Engine {
     }
 
     /// The station callsign to stamp on the FT contact with `dxcall`: while the sequencer holds
-    /// that contact, the call its overs were made under (`QsoStation::mycall`), which is the call
-    /// they went out under, since an over made under another call than the station's is never
-    /// keyed; otherwise [`Self::station_callsign_now`]. A call saved mid-contact on a station with
-    /// no profiles does not relabel a contact the air carried under the call before it.
+    /// that contact, the call its latest over went out under (`QsoStation::keyed_as`), or the call
+    /// its overs are made under (`QsoStation::mycall`) before one has; otherwise
+    /// [`Self::station_callsign_now`]. A call saved mid-contact makes the overs after it under the
+    /// new call ([`Self::note_call_saved`]), and does not relabel a contact whose overs so far went
+    /// out under the call before it.
     fn contact_station_callsign(&self, dxcall: &str) -> Option<String> {
         let built = match &self.mode {
             Mode::Qso { station, .. }
@@ -17442,7 +17483,8 @@ impl Engine {
                     .as_deref()
                     .is_some_and(|c| same_call(c, dxcall)) =>
             {
-                tempo_core::message::unhash_call(&station.mycall).trim()
+                let sent = station.keyed_as.as_deref().unwrap_or(&station.mycall);
+                tempo_core::message::unhash_call(sent).trim()
             }
             _ => "",
         };
@@ -18096,8 +18138,8 @@ impl Engine {
         // changes callsign mid-contact. The mode builders that CAN be delayed (a
         // `prompt_to_log` record waits in `pending_log`, and on disk, for the operator's
         // confirm) stamp it at contact time instead, and this fill leaves theirs alone; the FT
-        // builder stamps the call the sequencer's overs carried
-        // ([`Self::contact_station_callsign`]), since an over under any other call never keys.
+        // builder stamps the call the sequencer's latest over went out under
+        // ([`Self::contact_station_callsign`]).
         //
         // A record arriving with its own station call — an imported club log, or a row the
         // operator repaired by hand — is left alone. Same rule as `operator` below.
@@ -21477,7 +21519,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let complete = ft_contact_complete(was, self.qso_report_sent);
         if !complete && !roger {
             // Unfinished, with a report crossed, and made under a call the station no longer
-            // uses: its overs are refused at the key, so the run's give-up, which
+            // uses, which a save would have made again under the new one (`note_call_saved`): its
+            // overs are refused at the key, so the run's give-up, which
             // sets such a contact aside (#153), never comes. It is set aside here instead, for Log
             // QSO, under the call its overs carried ([`Self::set_aside`]). Logging only.
             //
@@ -28535,7 +28578,7 @@ contact yourself."
         let now = &self.settings.mycall;
         let owed = self.recent_partner.as_ref().and_then(|p| p.owed.as_ref());
         match &self.mode {
-            Mode::FieldDay { station, .. } => contest_over_call_refusal(&station.log.mycall, now),
+            Mode::FieldDay { station, .. } => contest_over_call_refusal(station.call(), now),
             Mode::Qso { station, .. } => ft_over_call_refusal(
                 text,
                 now,
@@ -31538,7 +31581,7 @@ contact yourself."
                     // ⛔ The keying-time call check, before the station counts the over as sent
                     // (as the QSO arm above).
                     if let Some(why) =
-                        contest_over_call_refusal(&station.log.mycall, &self.settings.mycall)
+                        contest_over_call_refusal(station.call(), &self.settings.mycall)
                     {
                         tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
                         self.app.set_transmitting(false);
@@ -32025,12 +32068,16 @@ contact yourself."
         // start time the operator set in the window (a Tx2 or Tx3 pick) is theirs and stays.
         match (&count.step, &mut self.mode) {
             (CountedStep::Qso { before, after }, Mode::Qso { station, .. })
-                if QsoStep::of(station) == *after =>
+                if QsoStep::of(station) == after.signed_by(&station.mycall) =>
             {
-                station.pending = before.pending.clone();
+                // The save in the window made the messages again under the call now
+                // (`note_call_saved`): the over goes back as made again under it.
+                let before = before.signed_by(&station.mycall);
+                station.pending = before.pending;
                 station.tx_count = before.tx_count;
                 station.rv_count = before.rv_count;
                 station.keyed_on_air = before.keyed_on_air;
+                station.keyed_as = before.keyed_as;
                 if self.qso_start_unix.is_some() && count.qso_start_unix.is_none() {
                     self.qso_start_unix = None;
                 }
@@ -32039,9 +32086,17 @@ contact yourself."
                 }
             }
             (CountedStep::FieldDay { before, after }, Mode::FieldDay { station, .. })
-                if FdStep::of(station) == *after =>
+                if FdStep::of(station).moved_only_by_its_call(after) =>
             {
+                // As the QSO arm: the over goes back as made again under the call now.
+                let now = station.call().to_string();
+                if now != before.call {
+                    station.sign_as(&before.call);
+                }
                 station.pending = before.pending.clone();
+                if station.call() != now {
+                    station.sign_as(&now);
+                }
             }
             (CountedStep::Owed(_), _) => {
                 self.ft_late_reply_dropped = true;

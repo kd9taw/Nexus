@@ -1698,13 +1698,19 @@ fn every_family(keyed: bool, notice: Option<&str>) -> Vec<(&'static str, bool, O
 }
 
 /// ⛔ No profiles: the callsign is edited in Settings (KD9TAW to KD9TAW/P) while a message made
-/// under KD9TAW waits. In every mode family that message is not keyed, and its cockpit says why.
+/// under KD9TAW waits. The FT and Field Day sequencers make theirs again under KD9TAW/P, as WSJT-X
+/// regenerates its Tx messages, and key it; in every other mode family the message is not keyed,
+/// and its cockpit says why.
 #[test]
-fn without_profiles_a_settings_call_edit_drops_the_message_made_under_the_old_call() {
-    assert_eq!(
-        waiting_after(|e| settings_call_edit(e, "KD9TAW/P")),
-        every_family(false, Some(CALL_CHANGED))
-    );
+fn without_profiles_a_settings_call_edit_drops_a_queued_message_and_remakes_the_ft_ones() {
+    let want: Vec<_> = every_family(false, Some(CALL_CHANGED))
+        .into_iter()
+        .map(|(name, keyed, notice)| match name {
+            "FT8 run" | "Field Day" => (name, true, None),
+            _ => (name, keyed, notice),
+        })
+        .collect();
+    assert_eq!(waiting_after(|e| settings_call_edit(e, "KD9TAW/P")), want);
 }
 
 /// CONTROL for the test above: no profiles, the call unchanged (a Settings save that leaves it as it
@@ -1777,9 +1783,10 @@ fn the_call_check_compares_calls_as_the_transmit_path_reads_them() {
 }
 
 /// ⛔ A compound call, no profiles: a CQ run under PJ4/KD9TAW and the contact a caller starts with
-/// it (our call hashed in the report) key as before. Then a Settings edit to KD9TAW stops the run.
+/// it (our call hashed in the report) key as before. Then a Settings edit to KD9TAW: the run calls
+/// under KD9TAW from its next over, with the grid a standard call carries.
 #[test]
-fn without_profiles_a_compound_call_keys_and_an_edit_away_from_it_does_not() {
+fn without_profiles_a_compound_call_keys_and_an_edit_away_from_it_calls_under_the_new_one() {
     let make = || {
         let mut e = plain_ft8();
         e.settings.mycall = "PJ4/KD9TAW".into();
@@ -1805,7 +1812,7 @@ fn without_profiles_a_compound_call_keys_and_an_edit_away_from_it_does_not() {
     settings_call_edit(&mut e, "KD9TAW");
     assert_eq!(
         (keyed(&mut e, 0..4), ft_notice(&e)),
-        (Vec::<String>::new(), Some(CALL_CHANGED.to_string()))
+        (vec!["CQ KD9TAW EN52".to_string(); 2], None)
     );
 }
 
@@ -1939,11 +1946,12 @@ fn after_switch(
 }
 
 /// ⛔ C1. No profiles: our report is on the air under KD9TAW when the operator saves the call as
-/// KD9TAW/P. Then W1AW's roger folds late (the sequencer moves to RR73 under KD9TAW), or the
-/// operator clicks the RR73 row: the rest of the over is NOT switched to a message made under the
-/// old call. The over on the air goes out as it was keyed, nothing is written to ALL.TXT, the
-/// Status still reports the report, and nothing is counted. CONTROL: with the call unchanged the
-/// same late roger switches the rest of the over to RR73.
+/// KD9TAW/P. Then W1AW's roger folds late (the sequencer moves to RR73, made under KD9TAW/P), or the
+/// operator clicks the RR73 row a screen drew under KD9TAW: the rest of the over is NOT switched to
+/// a message under another call than the one on the air. The over on the air goes out as it was
+/// keyed, nothing is written to ALL.TXT, the Status still reports the report, and nothing is
+/// counted; the RR73 under KD9TAW/P is the next over. CONTROL: with the call unchanged the same
+/// late roger switches the rest of the over to RR73.
 #[test]
 fn without_profiles_a_call_edit_mid_over_never_switches_in_a_message_made_under_the_old_call() {
     use super::ft_midover::FtSwitch;
@@ -1980,8 +1988,8 @@ fn without_profiles_a_call_edit_mid_over_never_switches_in_a_message_made_under_
     e.hear_for_test("KD9TAW W1AW R-07", -5, 102);
     assert_eq!(
         tx_now(&e),
-        "W1AW KD9TAW RR73",
-        "premise: moved, under KD9TAW"
+        "W1AW KD9TAW/P RR73",
+        "premise: moved, under KD9TAW/P"
     );
     let got = switch_mid_over(&mut e, 102, 3_000.0, false);
     assert_eq!(
@@ -2021,7 +2029,7 @@ fn run_at_their_roger(edit: bool) -> Engine {
         settings_call_edit(&mut e, "KD9TAW/P");
     }
     e.hear_for_test("KD9TAW W1AW R-07", -5, 104);
-    assert_eq!(tx_now(&e), "W1AW KD9TAW RR73", "premise: our RR73 queued");
+    assert!(tx_now(&e).ends_with(" RR73"), "premise: our RR73 queued");
     e
 }
 
@@ -2053,72 +2061,6 @@ fn rr73_outcome(e: &mut Engine) -> Rr73Outcome {
     )
 }
 
-/// ⛔ H1 (the review's sequence). No profiles: the call is edited mid-contact, W1AW rogers, and
-/// our RR73 is refused at the key. The refused RR73 is not counted as sent, so the contact is not
-/// logged (it never closed on the air, and would have carried KD9TAW/P while the air carried
-/// KD9TAW) and nothing is queued for upload. CONTROL: unchanged, the RR73 keys and the contact
-/// logs itself under KD9TAW and is queued for upload.
-#[test]
-fn without_profiles_a_refused_rr73_is_not_counted_logged_or_uploaded() {
-    let mut control = run_at_their_roger(false);
-    assert_eq!(
-        rr73_outcome(&mut control),
-        (
-            Some("W1AW KD9TAW RR73".into()),
-            1,
-            vec![("W1AW".into(), Some(ME.into()))],
-            1,
-            0
-        ),
-        "CONTROL"
-    );
-    let mut e = run_at_their_roger(true);
-    assert_eq!(rr73_outcome(&mut e), (None, 0, vec![], 0, 0));
-    assert_eq!(ft_notice(&e).as_deref(), Some(CALL_CHANGED));
-}
-
-/// ⛔ H1 and L2: an S&P contact's final 73 refused at the key (the call saved as KD9TAW/P after
-/// W1AW's RR73 queued it under KD9TAW) is not counted as sent, so "Disable Tx after sending 73"
-/// is not armed and no CW ID follows it, in FT8 and FT4 and in Q65, FST4 and MSK144 (which keep
-/// the CW ID). CONTROL: unchanged, the 73 keys, TX is to go off, and the three keep their CW ID.
-#[test]
-fn without_profiles_a_refused_final_73_arms_neither_disable_tx_nor_a_cw_id() {
-    let tiers = [Tier::Ft8, Tier::Ft4, Tier::Q65, Tier::Fst4, Tier::Msk144];
-    let mut got = Vec::new();
-    let mut want = Vec::new();
-    for tier in tiers {
-        for edit in [false, true] {
-            let mut e = station();
-            e.settings.cw_id_after_73 = true;
-            e.settings.disable_tx_after_73 = true;
-            e.set_tier(tier);
-            e.call_station("W1AW");
-            e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -7)], 1);
-            e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW RR73", -7)], 3);
-            assert_eq!(tx_now(&e), "W1AW KD9TAW 73", "{tier:?}: premise");
-            if edit {
-                settings_call_edit(&mut e, "KD9TAW/P");
-            }
-            let keyed = !e.poll_tx(4).is_empty();
-            got.push((
-                tier,
-                edit,
-                keyed,
-                tx_count(&e),
-                e.take_pending_tx_disable(),
-                e.take_pending_cw_id(),
-            ));
-            let keeps_id = matches!(tier, Tier::Q65 | Tier::Fst4 | Tier::Msk144);
-            want.push(if edit {
-                (tier, edit, false, 0, false, false)
-            } else {
-                (tier, edit, true, 1, true, keeps_id)
-            });
-        }
-    }
-    assert_eq!(got, want);
-}
-
 /// No profiles: an ARRL VHF contest, running on FT8, our CQ keyed under KD9TAW and W1AW's grid
 /// heard, so the next over is our rogered grid (WSJT-X's grid-contest Tx3), saved as KD9TAW/P
 /// first when `edit`.
@@ -2147,33 +2089,30 @@ fn vhf_run_at_our_rogered_grid(edit: bool) -> Engine {
 }
 
 /// ⛔ H2. The ARRL VHF contests' rogered grid ("W1AW KD9TAW R EN52", free text to the message
-/// reader) is made under the station's call like every contest over: after a call edit it is not
-/// keyed, and the cockpit says why. CONTROL: unchanged, it keys.
+/// reader) is made under the station's call like every contest over: after a call edit it is made
+/// again under the new call and keys, with nothing said. CONTROL: unchanged, it keys.
 #[test]
-fn without_profiles_the_vhf_contests_rogered_grid_is_not_keyed_under_an_edited_call() {
-    let mut control = vhf_run_at_our_rogered_grid(false);
-    assert_eq!(
-        (key_over(&mut control, 2), ft_notice(&control)),
-        (Some("W1AW KD9TAW R EN52".into()), None),
-        "CONTROL"
-    );
-    let mut e = vhf_run_at_our_rogered_grid(true);
-    assert_eq!(
-        ft_notice(&e).as_deref(),
-        Some(CALL_CHANGED),
-        "said before the key"
-    );
-    assert_eq!(
-        (key_over(&mut e, 2), ft_notice(&e)),
-        (None, Some(CALL_CHANGED.into()))
-    );
+fn without_profiles_the_vhf_contests_rogered_grid_is_made_again_under_an_edited_call() {
+    for (edit, me) in [(false, ME), (true, "KD9TAW/P")] {
+        let mut e = vhf_run_at_our_rogered_grid(edit);
+        assert_eq!(
+            ft_notice(&e),
+            None,
+            "edit={edit}: nothing said before the key"
+        );
+        assert_eq!(
+            (key_over(&mut e, 2), ft_notice(&e)),
+            (Some(format!("W1AW {me} R EN52")), None),
+            "edit={edit}"
+        );
+    }
 }
 
 /// ⛔ L1 (the operator's ruling): the check is for messages Nexus made from the station's call.
 /// Text the operator types goes out as before, even where it reads as another station's message:
 /// Tx 5 "W1AW 5NN 73" ("5NN" reads as a sender), the strip's free text "CQ DX EN52" ("DX" reads
 /// as a sender), and a logger's free text. Nothing else changes: the run's CQ made under KD9TAW is
-/// still refused once the call is KD9TAW/P.
+/// made again under KD9TAW/P once the call is saved as KD9TAW/P.
 #[test]
 fn without_profiles_typed_text_that_reads_as_another_sender_keys_as_before() {
     let mut e = plain_ft8();
@@ -2206,8 +2145,8 @@ fn without_profiles_typed_text_that_reads_as_another_sender_keys_as_before() {
     settings_call_edit(&mut e, "KD9TAW/P");
     assert_eq!(
         (keyed(&mut e, 0..4), ft_notice(&e)),
-        (Vec::<String>::new(), Some(CALL_CHANGED.into())),
-        "a message made under the old call is still refused"
+        (vec!["CQ KD9TAW/P EN52".to_string(); 2], None),
+        "the run's CQ, made again under the new call"
     );
 }
 
@@ -2252,23 +2191,6 @@ fn contest_closing(e: &mut Engine) -> (Option<String>, bool, Option<String>) {
         _ => None,
     };
     (keyed, e.take_pending_tx_disable(), held)
-}
-
-/// ⛔ H1 in a contest: the closing RR73 of a contact the operator picked, refused for its call,
-/// is not counted as sent: "Disable Tx after sending 73" is not armed and the sequencer still
-/// holds the RR73 (as it holds any over that did not go). CONTROL: unchanged, the RR73 keys,
-/// is cleared once sent, and TX is to go off after it.
-#[test]
-fn without_profiles_a_refused_contest_rr73_is_not_counted_as_sent() {
-    assert_eq!(
-        contest_closing(&mut vhf_pick_at_our_rr73(false)),
-        (Some("W1AW KD9TAW RR73".into()), true, None),
-        "CONTROL"
-    );
-    assert_eq!(
-        contest_closing(&mut vhf_pick_at_our_rr73(true)),
-        (None, false, Some("W1AW KD9TAW RR73".into()))
-    );
 }
 
 /// ⛔ L1's bound, with profiles: a Tx row whose sender is the call of another of the station's
@@ -2325,9 +2247,10 @@ fn key_over_with_a_call_edit_in_the_build(e: &mut Engine, slot: u64, call: &str)
 
 /// ⛔ M1. An S&P contact's final 73, planned under KD9TAW and refused at the key because the
 /// call was saved as KD9TAW/P while its wave was built, is not counted as sent: the step count
-/// is unchanged, "Disable Tx after sending 73" is not armed, no CW ID follows it, and the
-/// sequencer still holds the 73, so the cockpit says why. CONTROL: the same key with no edit
-/// keys, counts the over, arms the disable and (Q65, FST4, MSK144) the CW ID, exactly as before.
+/// is unchanged, "Disable Tx after sending 73" is not armed and no CW ID follows it. The save made
+/// the 73 again under KD9TAW/P, and it goes out at the next slot, counted, arming the disable and
+/// the CW ID then. CONTROL: the same key with no edit keys, counts the over, arms the disable and
+/// (Q65, FST4, MSK144) the CW ID, exactly as before.
 #[test]
 fn without_profiles_a_final_73_refused_at_the_key_arms_neither_disable_tx_nor_a_cw_id() {
     let tiers = [Tier::Ft8, Tier::Ft4, Tier::Q65, Tier::Fst4, Tier::Msk144];
@@ -2359,18 +2282,23 @@ fn without_profiles_a_final_73_refused_at_the_key_arms_neither_disable_tx_nor_a_
             ));
             let keeps_id = matches!(tier, Tier::Q65 | Tier::Fst4 | Tier::Msk144);
             want.push(if edit {
-                (
-                    tier,
-                    edit,
-                    false,
-                    0,
-                    false,
-                    false,
-                    Some(CALL_CHANGED.into()),
-                )
+                (tier, edit, false, 0, false, false, None)
             } else {
                 (tier, edit, true, 1, true, keeps_id, None)
             });
+            if edit {
+                let next = key_over(&mut e, 6);
+                got.push((
+                    tier,
+                    edit,
+                    next.as_deref() == Some("W1AW KD9TAW/P 73"),
+                    tx_count(&e),
+                    e.take_pending_tx_disable(),
+                    e.take_pending_cw_id(),
+                    ft_notice(&e),
+                ));
+                want.push((tier, edit, true, 1, true, keeps_id, None));
+            }
         }
     }
     assert_eq!(got, want);
@@ -2378,7 +2306,8 @@ fn without_profiles_a_final_73_refused_at_the_key_arms_neither_disable_tx_nor_a_
 
 /// ⛔ M1 in a CQ run: our RR73, planned under KD9TAW and refused at the key because the call was
 /// saved while it was built, is not counted, so the contact is not logged or queued for upload
-/// (it never closed on the air). CONTROL: `without_profiles_a_refused_rr73_is_not_counted_logged_or_uploaded`.
+/// (it never closed on the air). CONTROL:
+/// `an_rr73_after_a_call_edit_goes_out_under_the_new_call_counted_and_logged_under_it`.
 #[test]
 fn without_profiles_an_rr73_refused_at_the_key_is_not_counted_logged_or_uploaded() {
     let mut e = run_at_their_roger(false);
@@ -2398,8 +2327,8 @@ fn without_profiles_an_rr73_refused_at_the_key_is_not_counted_logged_or_uploaded
 
 /// ⛔ M1 in a contest: the closing RR73 of a contact the operator picked, refused at the key
 /// because the call was saved while it was built, is not counted: "Disable Tx after sending 73"
-/// is not armed and the sequencer still holds the RR73. CONTROL:
-/// `without_profiles_a_refused_contest_rr73_is_not_counted_as_sent`.
+/// is not armed and the sequencer still holds the RR73, made again under the new call. CONTROL:
+/// `a_contest_rr73_after_a_call_edit_goes_out_under_the_new_call_counted`.
 #[test]
 fn without_profiles_a_contest_rr73_refused_at_the_key_is_not_counted_as_sent() {
     let mut e = vhf_pick_at_our_rr73(false);
@@ -2410,7 +2339,7 @@ fn without_profiles_a_contest_rr73_refused_at_the_key_is_not_counted_as_sent() {
     };
     assert_eq!(
         (keyed, e.take_pending_tx_disable(), held),
-        (false, false, Some("W1AW KD9TAW RR73".into()))
+        (false, false, Some("W1AW KD9TAW/P RR73".into()))
     );
 }
 
@@ -2469,17 +2398,21 @@ fn without_profiles_a_late_reply_owed_under_the_old_call_is_dropped_and_the_new_
 }
 
 /// ⛔ M1 and L1 together: the owed late RR73, planned under KD9TAW and refused at the key because
-/// the call was saved while it was built, is dropped, not owed again, and said. The run's own CQ,
-/// made under KD9TAW too, is held and says so first; once Call CQ is pressed again the drop is
-/// said until the new CQ keys.
+/// the call was saved while it was built, is dropped, not owed again, and said. The run's own CQ is
+/// made again under KD9TAW/P by the save; once Call CQ is pressed again the drop is still said
+/// until the new CQ keys.
 #[test]
 fn without_profiles_a_late_reply_refused_at_the_key_is_dropped_and_said() {
     let mut e = run_owing_a_late_rr73();
     let keyed = key_over_with_a_call_edit_in_the_build(&mut e, 8, "KD9TAW/P");
     assert_eq!(
         (keyed, tx_now(&e), ft_notice(&e).as_deref()),
-        (false, "CQ KD9TAW EN52".to_string(), Some(CALL_CHANGED)),
-        "dropped, and the run's own CQ is held"
+        (
+            false,
+            "CQ KD9TAW/P EN52".to_string(),
+            Some(LATE_REPLY_DROPPED)
+        ),
+        "dropped and said, and the run's own CQ is under the new call"
     );
     e.start_cq(None).unwrap();
     let _ = e.take_immediate_tx();
@@ -2648,8 +2581,10 @@ fn sp_closed(before: Option<&str>, after: Option<&str>) -> Engine {
 }
 
 /// ⛔ No profiles: every over of an S&P contact went out as KD9TAW; the call is saved as KD9TAW/P
-/// (or another call, W9XYZ) after our roger and before W1AW's RR73 completes it. The contact is
-/// logged under KD9TAW, the call its overs carried, not the call in force when it is logged.
+/// after our roger and before W1AW's RR73 completes it. The contact is logged under KD9TAW, the
+/// call its overs carried, not the call in force when it is logged. Saved as another base call
+/// (W9XYZ), W1AW's RR73 to KD9TAW is not addressed to the station any more, as WSJT-X reads replies
+/// by its base call after Settings OK, so it does not complete the contact and nothing is logged.
 /// CONTROLS: unchanged, it logs KD9TAW; with the call saved as KD9TAW/P before the click, every
 /// over carries KD9TAW/P and it logs KD9TAW/P.
 #[test]
@@ -2668,8 +2603,8 @@ fn without_profiles_a_contact_finished_after_a_call_edit_logs_the_call_its_overs
     );
     assert_eq!(
         logged_calls(&sp_closed(None, Some("W9XYZ"))),
-        w1aw(ME),
-        "another call saved mid-contact"
+        vec![],
+        "another base call saved mid-contact"
     );
 }
 
@@ -2869,12 +2804,11 @@ fn free_text_after_our_roger(
 
 /// ⛔ No profiles: free text that reads as a standard message ("73", "RR73", a report) is an over
 /// Nexus wrote with the station's call as its sender, "W1AW KD9TAW 73". Saved as W9XYZ before it
-/// keys, it is refused at the key with the call-changed notice, as the sequencer's own 73 is in
-/// that state; it is not sent as "W1AW W9XYZ 73" to a station that never worked W9XYZ.
-/// CONTROLS: unchanged, it keys; free text with no sender ("GL") is addressed again under W9XYZ
-/// and keys.
+/// keys, it is made again under W9XYZ, as the sequencer's own 73 is, and goes out as
+/// "W1AW W9XYZ 73". CONTROLS: unchanged, it keys; free text with no sender ("GL") is addressed
+/// again under W9XYZ and keys.
 #[test]
-fn without_profiles_free_text_naming_the_old_call_as_sender_is_refused_at_the_key() {
+fn without_profiles_free_text_naming_the_old_call_as_sender_is_made_again_under_the_new_call() {
     assert_eq!(
         free_text_after_our_roger("73", None),
         (
@@ -2894,10 +2828,10 @@ fn without_profiles_free_text_naming_the_old_call_as_sender_is_refused_at_the_ke
         "CONTROL: no sender, addressed again"
     );
     for text in ["73", "RR73", "R-07"] {
-        let was = format!("W1AW KD9TAW {text}");
+        let now = format!("W1AW W9XYZ {text}");
         assert_eq!(
             free_text_after_our_roger(text, Some("W9XYZ")),
-            (was, Vec::<String>::new(), Some(CALL_CHANGED.into())),
+            (now.clone(), vec![now], None),
             "{text}"
         );
     }
@@ -2922,20 +2856,19 @@ fn run_left_after_a_call_edit(edit: Option<&str>) -> (bool, bool, Vec<(String, O
     (aside, pressed, logged_calls(&e))
 }
 
-/// ⛔ No profiles: the call is saved as W9XYZ after the reports crossed in a run, so the run's
-/// overs, made under KD9TAW, are refused and its give-up never comes. Ending the run sets the
-/// contact aside, as a contact that stops part-way is, and Log QSO logs it under KD9TAW, the
-/// call its overs went out under. CONTROL: with the call unchanged, nothing new: the RR73 keys,
-/// the contact completes on the air and logs itself, KD9TAW.
+/// ⛔ No profiles: the call is saved as W9XYZ after the reports crossed in a run. The save makes
+/// the RR73 again under W9XYZ; it goes out, the contact completes on the air and logs itself when
+/// the run is left, under W9XYZ, the call its latest over went out under, with nothing set aside.
+/// CONTROL: with the call unchanged, the same under KD9TAW.
 #[test]
-fn without_profiles_a_run_contact_left_after_a_call_edit_is_set_aside_for_log_qso() {
-    let w1aw = vec![("W1AW".to_string(), Some(ME.to_string()))];
+fn without_profiles_a_run_contact_after_a_call_edit_closes_on_the_air_under_the_new_call() {
+    let w1aw = |call: &str| vec![("W1AW".to_string(), Some(call.to_string()))];
     assert_eq!(
         run_left_after_a_call_edit(Some("W9XYZ")),
-        (true, true, w1aw.clone())
+        (false, false, w1aw("W9XYZ"))
     );
     let (_, _, control) = run_left_after_a_call_edit(None);
-    assert_eq!(control, w1aw, "CONTROL: unchanged");
+    assert_eq!(control, w1aw(ME), "CONTROL: unchanged");
 }
 
 /// CONTROL for the set-aside on a call edit: with the call unchanged, a mode change that ends an
@@ -2956,10 +2889,10 @@ fn a_mode_change_without_a_call_edit_still_sets_no_unfinished_contact_aside() {
     );
 }
 
-/// ⛔ No profiles: a run as KD9TAW, the call saved as W9XYZ, then W1AW answers our CQ with only a
-/// grid. Our report is queued under KD9TAW and refused at the key, so no report crossed either
-/// way. Ending the run sets nothing aside and Log QSO logs nothing: a report queued and never
-/// sent is not a contact. The set-aside on a call edit (the test above) needs W1AW's report to us.
+/// ⛔ No profiles: a run as KD9TAW, the call saved as W9XYZ, then W1AW answers our CQ, under
+/// KD9TAW, with only a grid. The run is under W9XYZ now and, as WSJT-X reads replies by its base
+/// call, does not take an answer to KD9TAW: it keeps calling CQ under W9XYZ. Ending the run sets
+/// nothing aside and Log QSO logs nothing.
 #[test]
 fn without_profiles_a_run_left_after_a_call_edit_with_no_report_in_sets_nothing_aside() {
     let mut e = plain_ft8();
@@ -2968,8 +2901,12 @@ fn without_profiles_a_run_left_after_a_call_edit_with_no_report_in_sets_nothing_
     assert_eq!(key_over(&mut e, 100).as_deref(), Some("CQ KD9TAW EN52"));
     settings_call_edit(&mut e, "W9XYZ");
     e.hear_for_test("KD9TAW W1AW FN31", -5, 102);
-    assert_eq!(tx_now(&e), "W1AW KD9TAW -05", "premise: our report queued");
-    assert_eq!(key_over(&mut e, 102), None, "premise: refused at the key");
+    assert_eq!(
+        tx_now(&e),
+        "CQ W9XYZ EN52",
+        "premise: the answer is not taken"
+    );
+    assert_eq!(key_over(&mut e, 102).as_deref(), Some("CQ W9XYZ EN52"));
     e.halt_tx();
     e.set_mode("qso-monitor").unwrap();
     assert_eq!(
@@ -2980,4 +2917,203 @@ fn without_profiles_a_run_left_after_a_call_edit_with_no_report_in_sets_nothing_
         ),
         (false, false, vec![])
     );
+}
+
+// --- A call saved mid-contact: the messages are made again under the new call ------------------
+//
+// WSJT-X regenerates Tx1-Tx6 under the new call on Settings OK (`set_mode` → `displayWidgets` →
+// `genStdMsgs`) and carries on: it neither stops TX nor ends the contact. So the over the sequencer
+// was about to send is made again under the new call, and goes out and is counted as any over is;
+// the contact goes on, and is logged under the call its latest over went out under.
+
+/// ⛔ A run's RR73, the call saved as KD9TAW/P before it keys: it goes out as "W1AW KD9TAW/P RR73",
+/// counted, the contact logs itself under KD9TAW/P, the call that over went out under, and is queued
+/// for upload, and the run's next CQ is under KD9TAW/P. CONTROL: unchanged, all under KD9TAW.
+#[test]
+fn an_rr73_after_a_call_edit_goes_out_under_the_new_call_counted_and_logged_under_it() {
+    for (edit, me) in [(false, ME), (true, "KD9TAW/P")] {
+        let mut e = run_at_their_roger(edit);
+        let mut got = rr73_outcome(&mut e);
+        got.4 = usize::from(ft_notice(&e).is_some());
+        assert_eq!(
+            (got, key_over(&mut e, 106)),
+            (
+                (
+                    Some(format!("W1AW {me} RR73")),
+                    1,
+                    vec![("W1AW".into(), Some(me.into()))],
+                    1,
+                    0
+                ),
+                Some(format!("CQ {me} EN52"))
+            ),
+            "edit={edit}"
+        );
+    }
+}
+
+/// ⛔ The next over is made under the call saved: a CQ run under KD9TAW, saved as KD9TAW/P, calls
+/// under KD9TAW/P from its next over, counting each and saying nothing; our report to W1AW, queued
+/// under KD9TAW when the call is saved, goes out as "W1AW KD9TAW/P -05". CONTROL: unchanged, every
+/// over under KD9TAW.
+#[test]
+fn the_over_after_a_call_edit_is_made_under_the_new_call_and_counted() {
+    let mut control = plain_ft8_run();
+    assert_eq!(
+        (keyed(&mut control, 0..4), tx_count(&control)),
+        (vec!["CQ KD9TAW EN52".to_string(); 2], 2),
+        "CONTROL"
+    );
+    let mut e = plain_ft8_run();
+    settings_call_edit(&mut e, "KD9TAW/P");
+    assert_eq!(
+        (tx_now(&e), ft_notice(&e)),
+        ("CQ KD9TAW/P EN52".to_string(), None)
+    );
+    assert_eq!(
+        (keyed(&mut e, 0..4), tx_count(&e), ft_notice(&e)),
+        (vec!["CQ KD9TAW/P EN52".to_string(); 2], 2, None)
+    );
+
+    let mut e = plain_ft8();
+    e.start_cq(None).unwrap();
+    let _ = e.take_immediate_tx();
+    assert_eq!(key_over(&mut e, 100).as_deref(), Some("CQ KD9TAW EN52"));
+    e.hear_for_test("KD9TAW W1AW FN31", -5, 102);
+    assert_eq!(
+        tx_now(&e),
+        "W1AW KD9TAW -05",
+        "premise: queued under KD9TAW"
+    );
+    settings_call_edit(&mut e, "KD9TAW/P");
+    assert_eq!(
+        (key_over(&mut e, 102), tx_count(&e)),
+        (Some("W1AW KD9TAW/P -05".to_string()), 1),
+        "the report"
+    );
+}
+
+/// ⛔ An S&P contact's final 73, queued under KD9TAW when the call is saved as KD9TAW/P: it goes
+/// out as "W1AW KD9TAW/P 73", counted, so "Disable Tx after sending 73" is armed and Q65, FST4 and
+/// MSK144 keep their CW ID after it, as with no edit. CONTROL: no edit, under KD9TAW.
+#[test]
+fn a_final_73_after_a_call_edit_goes_out_under_the_new_call_and_arms_disable_tx_and_the_cw_id() {
+    for tier in [Tier::Ft8, Tier::Ft4, Tier::Q65, Tier::Fst4, Tier::Msk144] {
+        let outcome = |edit: bool| {
+            let mut e = station();
+            e.settings.cw_id_after_73 = true;
+            e.settings.disable_tx_after_73 = true;
+            e.set_tier(tier);
+            e.call_station("W1AW");
+            e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW -10", -7)], 1);
+            e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW RR73", -7)], 3);
+            assert_eq!(tx_now(&e), "W1AW KD9TAW 73", "{tier:?}: premise");
+            if edit {
+                settings_call_edit(&mut e, "KD9TAW/P");
+            }
+            (
+                key_over(&mut e, 4),
+                tx_count(&e),
+                e.take_pending_tx_disable(),
+                e.take_pending_cw_id(),
+                ft_notice(&e),
+            )
+        };
+        let keeps_id = matches!(tier, Tier::Q65 | Tier::Fst4 | Tier::Msk144);
+        let want = |me: &str| (Some(format!("W1AW {me} 73")), 1, true, keeps_id, None);
+        assert_eq!(
+            (outcome(false), outcome(true)),
+            (want(ME), want("KD9TAW/P")),
+            "{tier:?}"
+        );
+    }
+}
+
+/// ⛔ Field Day: the run's CQ, the call saved as KD9TAW/P, goes out under KD9TAW/P from its next
+/// over, saying nothing. CONTROL: unchanged, under KD9TAW.
+#[test]
+fn a_field_day_run_after_a_call_edit_calls_under_the_new_call() {
+    for (edit, me) in [(false, ME), (true, "KD9TAW/P")] {
+        let mut e = plain_field_day_run();
+        e.set_tx_enabled(true);
+        if edit {
+            settings_call_edit(&mut e, "KD9TAW/P");
+        }
+        assert_eq!(ft_notice(&e), None, "edit={edit}");
+        let sent = [key_over(&mut e, 0), key_over(&mut e, 2)];
+        let cq = Some(format!("CQ FD {me} EN52"));
+        assert_eq!(
+            (sent, ft_notice(&e)),
+            ([cq.clone(), cq], None),
+            "edit={edit}"
+        );
+    }
+}
+
+/// ⛔ A contest contact's closing RR73, queued under KD9TAW when the call is saved as KD9TAW/P: it
+/// goes out as "W1AW KD9TAW/P RR73", counted, "Disable Tx after sending 73" is armed and the
+/// sequencer holds nothing more. CONTROL: no edit, under KD9TAW.
+#[test]
+fn a_contest_rr73_after_a_call_edit_goes_out_under_the_new_call_counted() {
+    assert_eq!(
+        (
+            contest_closing(&mut vhf_pick_at_our_rr73(false)),
+            contest_closing(&mut vhf_pick_at_our_rr73(true))
+        ),
+        (
+            (Some("W1AW KD9TAW RR73".to_string()), true, None),
+            (Some("W1AW KD9TAW/P RR73".to_string()), true, None)
+        )
+    );
+}
+
+/// ⛔ The licence class still wins: the call saved as KD9TAW/P and a Technician class, which has no
+/// FT8 on 20 m. The run's CQ, made again under KD9TAW/P, is not keyed or counted. Once the class
+/// allows 20 m, it keys. CONTROL for the identity refusal:
+/// `a_club_run_never_keys_once_the_call_is_home_whatever_moved_it`.
+#[test]
+fn a_licence_refusal_still_refuses_after_a_call_edit() {
+    let mut e = plain_ft8_run();
+    settings_call_edit(&mut e, "KD9TAW/P");
+    assert!(e.set_license_class("technician"));
+    assert!(!e.tx_allowed(), "premise: refused on 20 m");
+    assert_eq!(
+        (keyed(&mut e, 0..4), tx_count(&e), tx_now(&e)),
+        (Vec::<String>::new(), 0, "CQ KD9TAW/P EN52".to_string())
+    );
+    assert!(e.set_license_class("general"));
+    assert_eq!(keyed(&mut e, 4..8), vec!["CQ KD9TAW/P EN52".to_string(); 2]);
+}
+
+/// ⛔ The contact is logged under the call its latest over went out under: an S&P contact whose
+/// call and roger went out as KD9TAW, the call saved as KD9TAW/P, then W1AW's RR73 completes it
+/// before any over under KD9TAW/P: it logs KD9TAW. Our 73 then goes out under KD9TAW/P.
+#[test]
+fn a_contact_completed_before_an_over_under_the_new_call_logs_the_old_call() {
+    let mut e = sp_closed(None, Some("KD9TAW/P"));
+    assert_eq!(
+        (logged_calls(&e), keyed(&mut e, 4..6)),
+        (
+            vec![("W1AW".to_string(), Some(ME.to_string()))],
+            vec!["W1AW KD9TAW/P 73".to_string()]
+        )
+    );
+}
+
+/// ⛔ An over taken back at the key is not one the contact went out under: our first call to W1AW,
+/// planned under KD9TAW, is refused at the key because the call was saved as KD9TAW/P while its
+/// wave was built. No over of the contact has gone out, so it stamps KD9TAW/P, the call its overs
+/// are made under now, and the call goes out next slot as "W1AW KD9TAW/P EN52".
+#[test]
+fn an_over_taken_back_at_the_key_does_not_stamp_the_contact() {
+    let mut e = plain_ft8();
+    e.call_station("W1AW");
+    assert!(!key_over_with_a_call_edit_in_the_build(
+        &mut e, 0, "KD9TAW/P"
+    ));
+    assert_eq!(
+        e.contact_station_callsign("W1AW").as_deref(),
+        Some("KD9TAW/P")
+    );
+    assert_eq!(key_over(&mut e, 2).as_deref(), Some("W1AW KD9TAW/P EN52"));
 }
