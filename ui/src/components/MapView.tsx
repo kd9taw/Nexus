@@ -4243,9 +4243,11 @@ export function MapView({
                   {k === 'pca' && capPic?.source === 'none' && (
                     // A proton reading that is not held draws nothing (capsNow `capPicture`); the row says why.
                     <span className="map-layer-note" data-stale="">
-                      {capPic.why === 'stale' && capPic.protonsAt != null
-                        ? t('map.layer.pca.stale', { time: wxStampLabel(capPic.protonsAt) })
-                        : t('map.layer.pca.undated')}
+                      {capPic.why === 'quiet'
+                        ? t('map.layer.pca.quiet')
+                        : capPic.why === 'stale' && capPic.protonsAt != null
+                          ? t('map.layer.pca.stale', { time: wxStampLabel(capPic.protonsAt) })
+                          : t('map.layer.pca.undated')}
                     </span>
                   )}
                   {k === 'aurora' && auroraPic?.mode === 'none' && auroraOval != null && (

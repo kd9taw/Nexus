@@ -571,6 +571,9 @@ export interface PcaView {
   /** The approximate cap edge at `cutoffDeg`, [north, south] closed [lon, lat] rings; null without
    *  a measured Kp. */
   edge?: [number, number][][] | null
+  /** Whether a proton event is held now, by the shack's one rule (`pca::proton_event`: S1+, dated,
+   *  under 30 min). Absent from an older station, which counts as no event. */
+  protonEvent?: boolean
 }
 
 /** Satellites view (get_satellites): amateur-bird subpoints now + next-24h passes

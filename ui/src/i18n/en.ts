@@ -3828,7 +3828,6 @@ export const EN = {
   // (NOAA's D-RAP method over GOES protons) whose cap edge is Nexus's own approximation.
   'map.pca.head': '☢ S{{scale}} proton event · polar caps up to ~{{db}} dB at 30 MHz — polar paths degraded',
   'map.pca.headWeak': '☢ S{{scale}} proton event · polar caps under 0.5 dB at 30 MHz',
-  'map.pca.headBelowS1': '☢ Polar-cap absorption (protons below S1) · up to ~{{db}} dB at 30 MHz',
   'map.pca.protons': 'GOES protons {{time}}',
   'map.pca.protonsOld': 'GOES protons {{time}} ({{ago}})',
   'map.pca.protonsUndated': 'GOES protons',
@@ -3942,8 +3941,9 @@ export const EN = {
   'map.layer.aurora.observed': 'from the solar wind observed {{time}}',
   'map.layer.flare.label': 'Flare blackout (D-RAP)',
   'map.layer.pca.label': 'Proton polar cap (PCA)',
-  // The polar-cap layer's row while the proton reading is not held (30 min old or more, or undated);
+  // The polar-cap layer's row while no proton event is held (below S1, 30 min old or more, or undated);
   // {{time}} is a UTC stamp such as "31 Oct 23:35Z".
+  'map.layer.pca.quiet': 'no proton event (below S1): nothing drawn',
   'map.layer.pca.stale': 'proton reading out of date ({{time}}): nothing drawn',
   'map.layer.pca.undated': 'proton reading has no time: nothing drawn',
   'map.layer.coast.label': 'Coastlines',

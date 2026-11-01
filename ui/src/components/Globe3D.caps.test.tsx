@@ -86,7 +86,7 @@ import { MapView } from './MapView'
 import * as ReactGlobe from 'react-globe.gl'
 import * as THREE from 'three'
 import { t } from '../i18n'
-import { kpLabel } from '../capsNow'
+import { auroraDismissal, kpLabel, setAuroraDismissal } from '../capsNow'
 import { loadGlobeLayers, saveGlobeLayers } from '../features/globeLayers'
 import type { AuroraOval, PcaView } from '../types'
 
@@ -173,6 +173,7 @@ const PCA: PcaView = {
   protonsAt: NOW_S - 300,
   sScale: 2,
   sepRecoveryH: 24.235,
+  protonEvent: true,
   edge: [ring(62), ring(-62)],
 }
 
@@ -227,7 +228,7 @@ describe('the polar cap on the 3-D globe', () => {
   })
 
   it('a proton reading 2 h old draws no cap, no edge and no chip on the globe', async () => {
-    feeds.pca = { ...PCA, protonsAt: NOW_S - 7200 }
+    feeds.pca = { ...PCA, protonsAt: NOW_S - 7200, protonEvent: false }
     const r = await mount(3)
     expect(group('capEdge')).toBeUndefined()
     expect(r.container.querySelector('.pca-chip')).toBeNull()
@@ -342,5 +343,37 @@ describe('round 4: one untick for the whole storm, on the 3-D globe too', () => 
     expect(r.container.querySelector('.aurora-chip')!.textContent).toContain(
       t('map.aurora.chip.storm', { why: kpLabel({ kp: 6.3, source: 'estimated', at: NOW_S - 120 }) }),
     )
+  })
+})
+
+describe('round 5: the globe’s own clearing of the storm’s untick', () => {
+  const box = (c: HTMLElement) =>
+    [...c.querySelectorAll('.globe3d-layers label')]
+      .find((l) => l.textContent?.includes(t('globe.layer.aurora')))!
+      .querySelector('input') as HTMLInputElement
+  const globe = (kp: number) => <Globe3D myGrid="EN52" prop={snap(kp)} selectedCall={null} onSelectCall={() => {}} stations={[]} xrayLong={2e-7} />
+
+  it('R5: the globe mounting on a quiet sky keeps a held untick (it has seen no storm end)', async () => {
+    setAuroraDismissal(true)
+    feeds.aurora = OVAL
+    await mount(3)
+    expect(auroraDismissal()).toBe(true)
+  })
+
+  it('the storm ends with the globe on screen (no App here): the untick goes, and the next storm turns the layer on', async () => {
+    feeds.aurora = OVAL
+    const r = await mount(6)
+    await act(async () => {
+      fireEvent.click(box(r.container))
+    })
+    expect(auroraDismissal()).toBe(true)
+    await act(async () => {
+      r.rerender(globe(3))
+    })
+    expect(auroraDismissal(), 'the globe saw the storm end').toBe(false)
+    await act(async () => {
+      r.rerender(globe(6))
+    })
+    expect(box(r.container).checked, 'a new storm, no untick yet').toBe(true)
   })
 })

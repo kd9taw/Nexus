@@ -23,12 +23,8 @@ function hm(unix: number): string {
 export function PcaChip({ pca, pic, nowMs }: { pca: PcaView; pic: CapPicture; nowMs: number }) {
   const s = sScale(pca)
   const db = pic.maxDb.toFixed(1)
-  const head =
-    s >= 1
-      ? pic.points.length > 0
-        ? t('map.pca.head', { scale: s, db })
-        : t('map.pca.headWeak', { scale: s })
-      : t('map.pca.headBelowS1', { db })
+  // Shown only during a held proton event (S1+, capsNow `capShown`).
+  const head = pic.points.length > 0 ? t('map.pca.head', { scale: s, db }) : t('map.pca.headWeak', { scale: s })
   const at = pca.protonsAt ?? null
   const age = at != null ? Math.max(0, nowMs / 1000 - at) : null
   const stale = age != null && age >= PROTONS_STALE_SECS

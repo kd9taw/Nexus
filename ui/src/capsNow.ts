@@ -4,8 +4,11 @@
 // THE POLAR CAP. Two sources, never mixed, each labelled. NOAA's D-RAP grid (sent by the shack
 // during a flare or a measured proton event) carries NOAA's own polar-cap absorption with NOAA's
 // real proton cutoff: while it is current (flareNow `drapFresh`) it IS the cap. Either source speaks
-// only from a HELD proton reading (`protonsHeld`: dated, under 30 min, the shack's proton_event rule);
-// a stale or undated one draws no cap and no chip, and the layer row says why. Its proton part is
+// only while the shack says a proton event is held (`PcaView.protonEvent`, computed by
+// `pca::proton_event`: S1+, dated, under 30 min — ONE rule, the same one that asks NOAA for the grid
+// and that the path overlay uses; it is never re-implemented here). Below S1, stale or undated: no cap
+// from either source, NOAA's grid's polar excess is never called protons, no chip, and the layer row
+// says which. Its proton part is
 // what the grid holds beyond the X-ray part at each cell (D-RAP adds the two: A = A_X + A_P, at
 // 30 MHz A = (HAF/30)^1.5 dB), poleward of 50° geomagnetic. Otherwise the shack's model (the
 // Sauer & Wilkinson D-RAP method over GOES protons) is the cap, and its edge, Nexus's 66° − 1.2·Kp
@@ -168,8 +171,9 @@ export interface CapPicture {
   /** 'noaa': NOAA's D-RAP grid; 'model': the shack's Sauer & Wilkinson model over GOES protons;
    *  'none': no cap, because the proton reading is not held (`why`). */
   source: 'noaa' | 'model' | 'none'
-  /** Why there is no cap ('none' only): the reading is 30 min old or more, or carries no time. */
-  why?: 'stale' | 'undated'
+  /** Why there is no cap ('none' only): the reading is below S1 (no proton event), 30 min old or
+   *  more, or carries no time. */
+  why?: 'quiet' | 'stale' | 'undated'
   /** The proton reading's own time ('none' with `why: 'stale'`, for the layer row). */
   protonsAt?: number | null
   points: { lat: number; lon: number; db30: number }[]
@@ -190,14 +194,14 @@ export function capPicture(
   nowMs: number,
 ): CapPicture | null {
   if (!pca) return null
-  // FAIL CLOSED: a proton cap only from a HELD reading, dated and under PROTONS_HELD_SECS old (the
-  // shack's `pca::proton_event`). The shack serves its last reading after a failed fetch with no age
-  // limit, so a stale or undated one is no proton event now: no cap from either source (not NOAA's
-  // grid's polar excess called "proton", not the model's points), no edge and no chip. The layer
-  // row says which.
-  if (!protonsHeld(pca, nowMs)) {
+  // FAIL CLOSED on the shack's one rule (`protonEvent` = `pca::proton_event`; an older station sends
+  // no flag, which is no event). Without it there is no cap from either source (not NOAA's grid's
+  // polar excess called "proton", not the model's points), no edge and no chip. `why` only words
+  // the layer row; it decides nothing.
+  if (pca.protonEvent !== true) {
     const at = pca.protonsAt ?? null
-    return { source: 'none', why: at == null ? 'undated' : 'stale', protonsAt: at, points: [], validAt: null, edge: null, maxDb: 0 }
+    const why = at == null ? 'undated' : sScale(pca) < 1 ? 'quiet' : 'stale'
+    return { source: 'none', why, protonsAt: at, points: [], validAt: null, edge: null, maxDb: 0 }
   }
   if (drapFresh(drap, nowMs)) {
     const points = gridCap(drap, xray, nowMs)
@@ -216,19 +220,9 @@ export function sScale(pca: PcaView): number {
   return j >= 1e5 ? 5 : j >= 1e4 ? 4 : j >= 1e3 ? 3 : j >= 100 ? 2 : j >= 10 ? 1 : 0
 }
 
-/** Whether there is a cap worth a chip: a proton event (S1+) or any absorption drawn. */
+/** Whether there is a cap chip: only while a proton event is held (the picture is not 'none'). */
 export function capShown(pca: PcaView | null | undefined, pic: CapPicture | null): boolean {
-  return !!pca && !!pic && pic.source !== 'none' && (sScale(pca) >= 1 || pic.points.length > 0)
-}
-
-/** How old a GOES proton reading may be and still be held: the shack's `pca::PROTON_FRESH_SECS`, the
- *  same limit at which it stops asking NOAA for the grid for a proton event. */
-export const PROTONS_HELD_SECS = 30 * 60
-
-/** A proton reading that may speak for now: dated, and under PROTONS_HELD_SECS old. */
-export function protonsHeld(pca: PcaView, nowMs: number): boolean {
-  const at = pca.protonsAt
-  return at != null && nowMs / 1000 - at < PROTONS_HELD_SECS
+  return !!pca && !!pic && pic.source !== 'none'
 }
 
 /** How old the GOES proton sample may be before the chip says how old it is and drops the

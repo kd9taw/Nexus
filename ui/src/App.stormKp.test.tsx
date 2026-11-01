@@ -28,6 +28,8 @@ let lane: XrayNow
 let forecast: KpForecast
 // The outlook answers at once unless a test holds it back.
 let forecastReply: Promise<unknown>
+// NOAA's storm-watch outlook (none unless a test sets one).
+let arrival: unknown
 // The snapshot poll answers only when the test says so, after the outlook has been heard.
 let releaseProp: (p: PropagationSnapshot) => void
 let propReply: Promise<PropagationSnapshot>
@@ -69,6 +71,7 @@ vi.mock('./api', async (importOriginal) => {
     getFeedHealth: vi.fn(async () => null),
     getXrayNow: vi.fn(async () => lane),
     getKpForecast: vi.fn(() => forecastReply.then(() => forecast)),
+    getArrivalOutlook: vi.fn(async () => arrival),
     getDxpedWindows: vi.fn(async () => []),
     getBandOutlook: vi.fn(async () => ({ bands: [], asOf: 0 })),
     getGettingOut: vi.fn(async () => null),
@@ -127,6 +130,7 @@ beforeEach(() => {
   lane = { flux: 2e-7, asOf: Date.now() / 1000 - 60, drap: null } as unknown as XrayNow
   forecast = { points: [] } as unknown as KpForecast
   forecastReply = Promise.resolve()
+  arrival = { watch: null, model: null, l1: null, rationale: null }
   setAuroraDismissal(false)
   propReply = new Promise((r) => (releaseProp = r))
 })
@@ -230,5 +234,30 @@ describe('round 4: App’s storm housekeeping', () => {
     await waitFor(() => expect(vi.mocked(processStorm).mock.calls.length).toBeGreaterThan(0), { timeout: 10_000 })
     await new Promise((r) => setTimeout(r, 100))
     expect(auroraDismissal()).toBe(true)
+  }, BUDGET)
+})
+
+describe('round 5: a NOAA G watch keeps the storm (and its untick) on in App', () => {
+  const WATCH = { watch: { serial: 7, code: 'WATA20', issued: Date.now() / 1000 - 3600, days: [], comment: null, window: null, maxG: 1 }, model: null, l1: null, rationale: null }
+
+  it('A1: Kp 3 but a NOAA G watch in force: the untick holds', async () => {
+    arrival = WATCH
+    setAuroraDismissal(true)
+    window.location.hash = '#spots'
+    render(<App />)
+    await new Promise((r) => setTimeout(r, 300)) // the watch outlook answers first
+    releaseProp(prop(3))
+    await waitFor(() => expect(vi.mocked(processStorm).mock.calls.length).toBeGreaterThan(0), { timeout: 10_000 })
+    await new Promise((r) => setTimeout(r, 100))
+    expect(auroraDismissal()).toBe(true)
+  }, BUDGET)
+
+  it('A2: CONTROL — no watch, Kp 3: cleared', async () => {
+    setAuroraDismissal(true)
+    window.location.hash = '#spots'
+    render(<App />)
+    await new Promise((r) => setTimeout(r, 300))
+    releaseProp(prop(3))
+    await waitFor(() => expect(auroraDismissal()).toBe(false), { timeout: 10_000 })
   }, BUDGET)
 })

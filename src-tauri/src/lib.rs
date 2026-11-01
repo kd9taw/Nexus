@@ -9716,6 +9716,11 @@ struct PcaView {
     /// The cap's edge at `cutoff_deg`, `[north, south]` closed `[lon, lat]` rings — only with a
     /// measured Kp (`None` exactly when `cutoff_deg` is). An approximation (pca.rs), labelled so.
     edge: Option<[Vec<[f32; 2]>; 2]>,
+    /// THE one answer to "is a proton event held now" (`pca::proton_event`: S1+, dated, under
+    /// `PROTON_FRESH_SECS`). The map draws no proton cap, no edge and no chip without it, and never
+    /// reads NOAA's grid's polar excess as protons — the same rule that asks NOAA for the grid
+    /// (`drap_wanted`) and that the path overlay uses, so they cannot disagree.
+    proton_event: bool,
 }
 
 #[tauri::command]
@@ -9779,6 +9784,7 @@ fn pca_view(flux: propagation::live::protons::ProtonFlux, kp: Option<f64>, now: 
         s_scale: propagation::pca::s_scale(flux.j10),
         sep_recovery_h: propagation::pca::sep_recovery_hours(flux.j10),
         edge: cutoff_deg.map(propagation::pca::cap_edge_rings),
+        proton_event: propagation::pca::proton_event(flux.j10, flux.at, now),
     }
 }
 
@@ -54756,6 +54762,34 @@ mod tests {
             q["sepRecoveryH"].is_null(),
             "NOAA's rule says nothing at 12 pfu"
         );
+    }
+
+    /// `protonEvent` is `pca::proton_event` on the reading served: S1+, dated, under 30 min. The
+    /// cases are the path overlay's probe set (a quiet or sub-S1 fresh reading is no event; nor is a
+    /// stale or an undated one).
+    #[test]
+    fn the_pca_view_says_whether_a_proton_event_is_held() {
+        let now = 1_761_800_000;
+        let ev = |j10: f64, at: Option<i64>| {
+            let flux = propagation::live::protons::ProtonFlux {
+                j1: 1.0,
+                j5: 1.0,
+                j10,
+                at,
+            };
+            serde_json::to_value(crate::pca_view(flux, Some(3.0), now)).unwrap()["protonEvent"]
+                .as_bool()
+                .unwrap()
+        };
+        assert!(ev(20.0, Some(now - 300)), "S1, fresh (A, F1, H)");
+        assert!(ev(1000.0, Some(now - 300)), "S3, fresh (D)");
+        assert!(ev(150.0, Some(now - 1799)), "S2 just under 30 min");
+        assert!(!ev(0.3, Some(now - 300)), "quiet, fresh (Bp, F2, Q1)");
+        assert!(!ev(5.0, Some(now - 300)), "5 pfu, fresh (E)");
+        assert!(!ev(200.0, Some(now - 1860)), "S2, 31 min (S2)");
+        assert!(!ev(200.0, Some(now - 6 * 3600)), "S2, 6 h (S1)");
+        assert!(!ev(0.3, Some(now - 6 * 3600)), "quiet, 6 h (F3, Q3)");
+        assert!(!ev(150.0, None), "undated");
     }
 
     /// NOAA's grid is asked during a flare or during a measured proton event, and not on a quiet

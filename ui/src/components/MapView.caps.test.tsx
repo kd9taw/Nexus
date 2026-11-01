@@ -175,6 +175,7 @@ const PCA: PcaView = {
   protonsAt: NOW_S - 300,
   sScale: 2,
   sepRecoveryH: 24.235,
+  protonEvent: true,
   edge: [ring(62), ring(-62)],
 }
 
@@ -238,7 +239,7 @@ describe('the polar cap on the 2-D map', () => {
   it('a proton reading 30 min old or more draws no cap, no edge and no chip, from either source; the row says how old', async () => {
     for (const lane0 of [null, lane(capGrid())]) {
       layersOn(['pca'])
-      feeds.pca = { ...PCA, protonsAt: NOW_S - 7200 }
+      feeds.pca = { ...PCA, protonsAt: NOW_S - 7200, protonEvent: false }
       const r = await mount({ xrayLong: 2e-7, flareNoaa: lane0 })
       expect(capFills(r.container), 'no cap shading').toEqual([])
       expect(strokes(r.container, CAP_INK), 'no cap edge').toEqual([])
@@ -250,7 +251,7 @@ describe('the polar cap on the 2-D map', () => {
 
   it('an undated proton reading draws nothing, and the row says it has no time', async () => {
     layersOn(['pca'])
-    feeds.pca = { ...PCA, protonsAt: null }
+    feeds.pca = { ...PCA, protonsAt: null, protonEvent: false }
     const r = await mount({ xrayLong: 2e-7, flareNoaa: lane(capGrid()) })
     expect(capFills(r.container)).toEqual([])
     expect(capChip(r.container)).toBeNull()
@@ -265,12 +266,18 @@ describe('the polar cap on the 2-D map', () => {
     expect(capChip(r.container)).not.toBeNull()
   })
 
-  it('a quiet sky has no cap chip', async () => {
-    layersOn(['pca'])
-    feeds.pca = { ...PCA, j10: 0.3, sScale: 0, points: [], sepRecoveryH: null }
-    const r = await mount()
-    expect(capChip(r.container)).toBeNull()
-    expect(strokes(r.container, CAP_INK)).toEqual([])
+  it('a quiet sky (fresh, below S1) has no cap chip and no cap, even beside NOAA’s grid with a polar excess; the row says so', async () => {
+    for (const lane0 of [null, lane(capGrid())]) {
+      layersOn(['pca'])
+      // the model's sub-S1 points and a grid excess are both there, and neither may be drawn as protons
+      feeds.pca = { ...PCA, j10: 0.3, sScale: 0, sepRecoveryH: null, protonEvent: false }
+      const r = await mount({ xrayLong: 2e-7, flareNoaa: lane0 })
+      expect(capChip(r.container)).toBeNull()
+      expect(capFills(r.container)).toEqual([])
+      expect(strokes(r.container, CAP_INK)).toEqual([])
+      expect(pcaRow(r.container).textContent).toContain(t('map.layer.pca.quiet'))
+      cleanup()
+    }
   })
 })
 

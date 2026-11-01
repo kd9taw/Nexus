@@ -120,6 +120,7 @@ const PCA: PcaView = {
   protonsAt: now - 300,
   sScale: 2,
   sepRecoveryH: 24.2,
+  protonEvent: true,
   edge: [
     [[0, 70], [10, 70], [0, 70]],
     [[0, -70], [10, -70], [0, -70]],
@@ -164,40 +165,38 @@ describe('the polar cap: NOAA’s grid while current, else the model with its ap
     expect(capPicture(null, stale, null, NOW)).toBeNull()
   })
 
-  describe('a proton cap only from a held proton reading: dated, under 30 min (the shack’s proton_event)', () => {
+  describe('a proton cap only while the shack says a proton event is held (protonEvent = pca::proton_event)', () => {
+    // The shack's one rule: S1+, dated, under 30 min. These are the readings it says no to, with the
+    // flag it sends for each (src-tauri `the_pca_view_says_whether_a_proton_event_is_held`).
     const g = grid((la, lo) => (Math.abs(geomagLat(la, lo)) >= 62 ? 25 : 0))
+    const NO: [string, Partial<PcaView>, string][] = [
+      ['quiet 0.3 pfu, fresh (Bp, F2, Q1)', { j10: 0.3, sScale: 0, protonEvent: false }, 'quiet'],
+      ['5 pfu, fresh (E)', { j10: 5, sScale: 0, protonEvent: false }, 'quiet'],
+      ['S2, 30 min old', { protonsAt: now - 30 * 60, protonEvent: false }, 'stale'],
+      ['S2, 2 h old', { protonsAt: now - 7200, protonEvent: false }, 'stale'],
+      ['S2, undated', { protonsAt: null, protonEvent: false }, 'undated'],
+      ['an older station (no flag, no sample time sent)', { protonEvent: undefined, protonsAt: undefined }, 'undated'],
+    ]
     for (const [what, drap] of [['NOAA’s grid', g], ['the model', null]] as const) {
-      it(`${what}: a fresh reading draws the cap (CONTROL), and just under 30 min still does`, () => {
-        const fresh = capPicture({ ...PCA, protonsAt: now - 300 }, drap, null, NOW)!
-        expect(fresh.source).toBe(drap ? 'noaa' : 'model')
-        expect(fresh.points.length).toBeGreaterThan(0)
-        expect(capShown(PCA, fresh)).toBe(true)
-        const edge = capPicture({ ...PCA, protonsAt: now - 30 * 60 + 1 }, drap, null, NOW)!
-        expect(edge.points.length).toBeGreaterThan(0)
+      it(`${what}: a held event draws the cap (CONTROL)`, () => {
+        const pic = capPicture(PCA, drap, null, NOW)!
+        expect(pic.source).toBe(drap ? 'noaa' : 'model')
+        expect(pic.points.length).toBeGreaterThan(0)
+        expect(capShown(PCA, pic)).toBe(true)
       })
-      it(`${what}: a reading 30 min old or more draws no cap, no edge and no chip, and says how old`, () => {
-        for (const at of [now - 30 * 60, now - 7200]) {
-          const p = capPicture({ ...PCA, protonsAt: at }, drap, null, NOW)!
-          expect(p).toMatchObject({ source: 'none', why: 'stale', protonsAt: at, points: [], edge: null, maxDb: 0 })
-          expect(capShown({ ...PCA, protonsAt: at }, p)).toBe(false)
-        }
-      })
-      it(`${what}: an undated reading (or an older station's) draws nothing and says it has no time`, () => {
-        for (const at of [null, undefined]) {
-          const p = capPicture({ ...PCA, protonsAt: at }, drap, null, NOW)!
-          expect(p).toMatchObject({ source: 'none', why: 'undated', points: [], edge: null })
-          expect(capShown({ ...PCA, protonsAt: at }, p)).toBe(false)
-        }
-      })
+      for (const [name, over, why] of NO) {
+        it(`${what}: ${name} draws no cap, no edge, no chip, and NOAA's grid is not called protons`, () => {
+          const p = { ...PCA, ...over }
+          const pic = capPicture(p, drap, null, NOW)!
+          expect(pic).toMatchObject({ source: 'none', why, points: [], edge: null, maxDb: 0 })
+          expect(capShown(p, pic)).toBe(false)
+        })
+      }
     }
   })
 
-  it('a chip for a proton event or any drawn absorption, not for a quiet sky', () => {
-    const quiet = { ...PCA, j10: 0.3, sScale: 0, points: [] }
-    expect(capShown(quiet, capPicture(quiet, null, null, NOW))).toBe(false)
-    const s1 = { ...quiet, j10: 12, sScale: 1 }
-    expect(capShown(s1, capPicture(s1, null, null, NOW))).toBe(true)
-    expect(capShown(PCA, capPicture(PCA, null, null, NOW))).toBe(true)
+  it('no reading at all is no picture', () => {
+    expect(capPicture(null, grid(() => 25), null, NOW)).toBeNull()
     expect(capShown(null, null)).toBe(false)
   })
 })
