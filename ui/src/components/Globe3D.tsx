@@ -58,7 +58,7 @@ import { bandColor, openingModeColor } from '../bandColors'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
 import { AuroraChip, PcaChip } from './prop/CapsChips'
-import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpAlert } from '../capsNow'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpAlert, setAuroraDismissal, useAuroraDismissal } from '../capsNow'
 import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../features/connectFeeds'
 import {
   subsolarPoint,
@@ -646,9 +646,15 @@ function Globe3DView({
   // The Kp to warn on (capsNow `kpAlert`), as on the 2-D map.
   const kn = useMemo(() => kpAlert(prop?.spaceWx, kpFc, nowMs), [prop, kpFc, nowMs])
   const storm = auroraStorm(kn, arrival)
-  const [auroraDismissed, setAuroraDismissed] = useState(false)
+  // The storm's untick is ONE for the window (capsNow `useAuroraDismissal`): it holds across every
+  // map surface and a remount, and clears when the storm ends: here only when this map SEES it end
+  // (on, then off — a map mounting before its data has arrived sees "no storm" for a moment, and that
+  // must not throw the untick away), and in App's poll whether or not a map is on screen.
+  const auroraDismissed = useAuroraDismissal()
+  const stormSeen = useRef(storm)
   useEffect(() => {
-    if (!storm) setAuroraDismissed(false)
+    if (stormSeen.current && !storm) setAuroraDismissal(false)
+    stormSeen.current = storm
   }, [storm])
   const auroraAuto = storm && !auroraDismissed && !show.aurora
   const auroraOn = show.aurora || auroraAuto
@@ -2079,7 +2085,7 @@ function Globe3DView({
                   onChange={(e) => {
                     // Unticking the aurora during a storm is the operator's off, in one click (the
                     // 2-D map's rule); their own choice is written unless the storm alone had it on.
-                    if (row.k === 'aurora' && storm && !e.target.checked) setAuroraDismissed(true)
+                    if (row.k === 'aurora' && storm && !e.target.checked) setAuroraDismissal(true)
                     if (!(row.k === 'aurora' && auroraAuto)) setShow((s) => ({ ...s, [row.k]: e.target.checked }))
                   }}
                 />

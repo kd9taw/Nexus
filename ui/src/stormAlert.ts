@@ -47,11 +47,12 @@ export function resetStormAlerts(): void {
 }
 
 /**
- * Edge-triggered storm alert over the planetary K now (capsNow `kpNow`: NOAA's measured 3-hour Kp
- * while recent, else the usable 1-minute estimate). Call on every propagation snapshot; it toasts
- * only when a storm first reaches a G level or escalates to a higher one. The toast says which Kp
- * it is and when ("Kp 6.0 est. 22:36Z" / "Kp 6.0 measured 21–00Z"); a bare number is taken as the
- * undated estimate it always was.
+ * Edge-triggered storm alert over the Kp to warn on (capsNow `kpAlert`: the HIGHER of NOAA's recent
+ * measured 3-hour Kp and the usable 1-minute estimate, so a storm that has just begun is not held back
+ * until NOAA's next 3-hour figure). Call on every propagation snapshot; it toasts only when a storm
+ * first reaches a G level or escalates to a higher one. The toast says which Kp it is and when
+ * ("Kp 6.3 est. 22:36Z" / "Kp 6.0 measured 21–00Z"); a bare number is taken as the undated estimate
+ * it always was.
  */
 export function processStorm(reading: KpNow | number | null | undefined): void {
   const k: KpNow | null = typeof reading === 'number' ? { kp: reading, source: 'estimated', at: null } : (reading ?? null)

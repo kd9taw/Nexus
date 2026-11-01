@@ -26,6 +26,8 @@ const snapshot = {
 let lane: XrayNow
 // The Kp outlook App watches for its storm toasts.
 let forecast: KpForecast
+// The outlook answers at once unless a test holds it back.
+let forecastReply: Promise<unknown>
 // The snapshot poll answers only when the test says so, after the outlook has been heard.
 let releaseProp: (p: PropagationSnapshot) => void
 let propReply: Promise<PropagationSnapshot>
@@ -66,7 +68,7 @@ vi.mock('./api', async (importOriginal) => {
     getPropagation: vi.fn(() => propReply),
     getFeedHealth: vi.fn(async () => null),
     getXrayNow: vi.fn(async () => lane),
-    getKpForecast: vi.fn(async () => forecast),
+    getKpForecast: vi.fn(() => forecastReply.then(() => forecast)),
     getDxpedWindows: vi.fn(async () => []),
     getBandOutlook: vi.fn(async () => ({ bands: [], asOf: 0 })),
     getGettingOut: vi.fn(async () => null),
@@ -99,10 +101,12 @@ vi.mock('./components/Waterfall', () => ({ Waterfall: () => <div data-testid="wa
 vi.mock('./stormAlert', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   processStorm: vi.fn(),
+  processStormForecast: vi.fn(),
 }))
 
 import App from './App'
-import { processStorm } from './stormAlert'
+import { processStorm, processStormForecast } from './stormAlert'
+import { auroraDismissal, setAuroraDismissal } from './capsNow'
 import { getKpForecast } from './api'
 import { pastTheSwitch } from './components/ConnectView.testkit'
 
@@ -122,6 +126,8 @@ beforeEach(() => {
   }) as unknown as MediaQueryList) as typeof window.matchMedia
   lane = { flux: 2e-7, asOf: Date.now() / 1000 - 60, drap: null } as unknown as XrayNow
   forecast = { points: [] } as unknown as KpForecast
+  forecastReply = Promise.resolve()
+  setAuroraDismissal(false)
   propReply = new Promise((r) => (releaseProp = r))
 })
 afterEach(() => {
@@ -130,7 +136,7 @@ afterEach(() => {
 })
 
 /** A live snapshot whose Kp 6.33 is NOAA's 1-minute estimate, two minutes old. */
-const prop = () => {
+const prop = (kp = 6.33) => {
   const now = Date.now() / 1000
   return {
     asOf: now,
@@ -138,7 +144,7 @@ const prop = () => {
     advisory: { bands: [] },
     openings: [],
     dxpeditions: { workableNow: [], active: [], upcoming: [] },
-    spaceWx: { sfi: 100, kp: 6.33, aIndex: 5, xrayClass: 'B2.0', flare: false, fetched: true, sfiAt: now - H, kpAt: now - 120, xrayAt: now - 60, aDay: now - 86400 },
+    spaceWx: { sfi: 100, kp, aIndex: 5, xrayClass: 'B2.0', flare: false, fetched: true, sfiAt: now - H, kpAt: now - 120, xrayAt: now - 60, aDay: now - 86400 },
   } as unknown as PropagationSnapshot
 }
 
@@ -172,5 +178,57 @@ describe('App hands the storm toast the Kp that speaks for now, with what it is'
     const k = (await stormHanded()) as { kp: number; source: string; at: number }
     expect(k).toMatchObject({ kp: 6.33, source: 'estimated' })
     expect(k.at).toBeGreaterThan(0)
+  }, BUDGET)
+})
+
+describe('round 4: App’s storm housekeeping', () => {
+  /** Mounts App, lets the snapshot poll answer with an estimate of `kp`, then the held-back Kp outlook
+   *  (a measured 4 and a predicted G1), and returns the Kp App handed the forecast heads-up. */
+  async function forecastGate(kp: number): Promise<unknown> {
+    let releaseFc!: () => void
+    forecastReply = new Promise<void>((r) => (releaseFc = r))
+    const end = Math.floor(Date.now() / 1000 / (3 * H)) * 3 * H
+    forecast = {
+      points: [
+        { timeUnix: end - 3 * H, kp: 4, kind: 'observed', noaaScale: null },
+        { timeUnix: end + 6 * H, kp: 5.33, kind: 'predicted', noaaScale: 'G1' },
+      ],
+    } as unknown as KpForecast
+    window.location.hash = '#spots'
+    render(<App />)
+    await waitFor(() => expect(getKpForecast).toHaveBeenCalled(), { timeout: 10_000 })
+    releaseProp(prop(kp))
+    await waitFor(() => expect(vi.mocked(processStorm).mock.calls.length).toBeGreaterThan(0), { timeout: 10_000 })
+    releaseFc()
+    await waitFor(() => expect(vi.mocked(processStormForecast).mock.calls.length).toBeGreaterThan(0), { timeout: 10_000 })
+    const calls = vi.mocked(processStormForecast).mock.calls
+    return calls[calls.length - 1][1]
+  }
+
+  it('the forecast heads-up is told it is already stormy by a usable estimate of 6.33 (measured only 4)', async () => {
+    expect(await forecastGate(6.33)).toBe(6.33)
+  }, BUDGET)
+
+  it('CONTROL — an estimate of 3: the heads-up is told the Kp now is 3, so it may fire', async () => {
+    expect(await forecastGate(3)).toBe(3)
+  }, BUDGET)
+
+  it('the storm ending clears the aurora untick, even with no map on screen', async () => {
+    setAuroraDismissal(true)
+    window.location.hash = '#spots'
+    render(<App />)
+    releaseProp(prop(3))
+    await waitFor(() => expect(vi.mocked(processStorm).mock.calls.length).toBeGreaterThan(0), { timeout: 10_000 })
+    await waitFor(() => expect(auroraDismissal()).toBe(false), { timeout: 5_000 })
+  }, BUDGET)
+
+  it('CONTROL — while the storm goes on the untick holds', async () => {
+    setAuroraDismissal(true)
+    window.location.hash = '#spots'
+    render(<App />)
+    releaseProp(prop(6.33))
+    await waitFor(() => expect(vi.mocked(processStorm).mock.calls.length).toBeGreaterThan(0), { timeout: 10_000 })
+    await new Promise((r) => setTimeout(r, 100))
+    expect(auroraDismissal()).toBe(true)
   }, BUDGET)
 })

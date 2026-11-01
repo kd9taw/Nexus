@@ -20,6 +20,11 @@ vi.mock('../api', () => ({
   getSatellites: vi.fn(async () => null),
   getSatTrackStatus: vi.fn(async () => null),
   getKpForecast: vi.fn(async () => feeds.kpForecast),
+  // The 2-D map's own feeds, for the test that unticks on the map and then opens the globe.
+  getDeclination: vi.fn(async () => null),
+  getLogStats: vi.fn(async () => null),
+  getOtaMapSpots: vi.fn(async () => []),
+  getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
   getArrivalOutlook: vi.fn(async () => ({ watch: null, model: null, l1: null, rationale: null })),
 }))
 vi.mock('three/examples/jsm/postprocessing/UnrealBloomPass.js', () => ({
@@ -77,6 +82,7 @@ vi.mock('react-globe.gl', async () => {
 })
 
 import Globe3D from './Globe3D'
+import { MapView } from './MapView'
 import * as ReactGlobe from 'react-globe.gl'
 import * as THREE from 'three'
 import { t } from '../i18n'
@@ -258,5 +264,74 @@ describe('round 3: the storm rule and the untick on the 3-D globe', () => {
     })
     expect(box().checked).toBe(false)
     expect(group('auroraEdge')).toBeUndefined()
+  })
+})
+
+describe('round 4: one untick for the whole storm, on the 3-D globe too', () => {
+  const box = (c: HTMLElement) =>
+    [...c.querySelectorAll('.globe3d-layers label')]
+      .find((l) => l.textContent?.includes(t('globe.layer.aurora')))!
+      .querySelector('input') as HTMLInputElement
+  const globe = (kp: number) => <Globe3D myGrid="EN52" prop={snap(kp)} selectedCall={null} onSelectCall={() => {}} stations={[]} xrayLong={2e-7} />
+
+  it('G4: an untick of the storm’s layer survives a remount during the same storm', async () => {
+    feeds.aurora = OVAL
+    const r = await mount(6)
+    expect(box(r.container).checked).toBe(true)
+    await act(async () => {
+      fireEvent.click(box(r.container))
+    })
+    cleanup()
+    const r2 = await mount(6)
+    expect(box(r2.container).checked).toBe(false)
+    expect(group('auroraEdge')).toBeUndefined()
+  })
+
+  it('an untick on the 2-D map holds when the 3-D globe opens, in the same storm', async () => {
+    feeds.aurora = OVAL
+    vi.useFakeTimers({ now: NOW })
+    let m!: ReturnType<typeof render>
+    await act(async () => {
+      m = render(
+        <MapView myGrid="EN52" theme={'dark' as never} stations={[]} prop={snap(6)} selectedCall={null} onSelectCall={() => {}} needByCall={new Map()} intent="dx" projection="world" />,
+      )
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10)
+    })
+    const mapBox = [...m.container.querySelectorAll('.map-layer')]
+      .find((r) => r.textContent?.includes(t('map.layer.aurora.label')))!
+      .querySelector('input') as HTMLInputElement
+    expect(mapBox.checked, 'CONTROL: the storm had it on').toBe(true)
+    await act(async () => {
+      fireEvent.click(mapBox)
+    })
+    cleanup()
+    const r = await mount(6)
+    expect(box(r.container).checked).toBe(false)
+  })
+
+  it('an untick on a quiet day does not stop the next storm turning the layer on', async () => {
+    saveGlobeLayers({ ...loadGlobeLayers(true), aurora: true })
+    feeds.aurora = OVAL
+    const r = await mount(3)
+    await act(async () => {
+      fireEvent.click(box(r.container))
+    })
+    expect(box(r.container).checked).toBe(false)
+    await act(async () => {
+      r.rerender(globe(6))
+    })
+    expect(box(r.container).checked, 'the storm turns it on').toBe(true)
+  })
+
+  it('measured Kp 4 beside an estimate of 6.3 turns it on, said as the estimate', async () => {
+    feeds.kpForecast = { points: [{ timeUnix: NOW_S - 90 * 60 - 3 * 3600, kp: 4, kind: 'observed', noaaScale: null }] }
+    feeds.aurora = OVAL
+    const r = await mount(6.3)
+    expect(group('auroraEdge')).toBeDefined()
+    expect(r.container.querySelector('.aurora-chip')!.textContent).toContain(
+      t('map.aurora.chip.storm', { why: kpLabel({ kp: 6.3, source: 'estimated', at: NOW_S - 120 }) }),
+    )
   })
 })

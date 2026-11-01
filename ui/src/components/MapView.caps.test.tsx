@@ -420,3 +420,80 @@ describe('round 3: the storm rule and the untick, on the 2-D map', () => {
     expect(auroraFills(r.container).length).toBeGreaterThan(0)
   })
 })
+
+describe('round 4: one untick for the whole storm, on every map', () => {
+  const view = (kp: number) => (
+    <MapView myGrid="EN52" theme={'dark' as never} stations={[]} prop={snap(kp)} selectedCall={null} onSelectCall={() => {}} needByCall={new Map()} intent="dx" projection="world" />
+  )
+
+  it('P7: an untick of the storm’s layer survives a remount during the same storm', async () => {
+    layersOn([])
+    feeds.aurora = OVAL
+    const r = await mount({ prop: snap(6) })
+    await act(async () => {
+      fireEvent.click(auroraBox(r.container))
+    })
+    expect(auroraBox(r.container).checked).toBe(false)
+    cleanup()
+    const r2 = await mount({ prop: snap(6) })
+    expect(auroraBox(r2.container).checked, 'the storm is still on; the operator unticked it').toBe(false)
+  })
+
+  it('P7b: the same when the operator had turned the layer on', async () => {
+    layersOn(['aurora'])
+    feeds.aurora = OVAL
+    const r = await mount({ prop: snap(6) })
+    await act(async () => {
+      fireEvent.click(auroraBox(r.container))
+    })
+    cleanup()
+    const r2 = await mount({ prop: snap(6) })
+    expect(auroraBox(r2.container).checked).toBe(false)
+  })
+
+  it('P9: the storm ends with the map on screen; the next storm turns the layer on again', async () => {
+    layersOn([])
+    feeds.aurora = OVAL
+    const r = await mount({ prop: snap(6) })
+    await act(async () => {
+      fireEvent.click(auroraBox(r.container))
+    })
+    await act(async () => {
+      r.rerender(view(3))
+    })
+    expect(auroraBox(r.container).checked).toBe(false)
+    await act(async () => {
+      r.rerender(view(6))
+    })
+    expect(auroraBox(r.container).checked, 'a new storm, no untick yet').toBe(true)
+  })
+
+  it('a map that mounts before its data has arrived keeps the storm’s untick', async () => {
+    layersOn([])
+    feeds.aurora = OVAL
+    const r = await mount({ prop: snap(6) })
+    await act(async () => {
+      fireEvent.click(auroraBox(r.container))
+    })
+    cleanup()
+    const r2 = await mount({ prop: null })
+    await act(async () => {
+      r2.rerender(view(6))
+    })
+    expect(auroraBox(r2.container).checked).toBe(false)
+  })
+
+  it('an untick on a quiet day does not stop the next storm turning the layer on', async () => {
+    layersOn(['aurora'])
+    feeds.aurora = OVAL
+    const r = await mount({ prop: snap(3) })
+    await act(async () => {
+      fireEvent.click(auroraBox(r.container))
+    })
+    expect(auroraBox(r.container).checked).toBe(false)
+    await act(async () => {
+      r.rerender(view(6))
+    })
+    expect(auroraBox(r.container).checked, 'the storm turns it on').toBe(true)
+  })
+})

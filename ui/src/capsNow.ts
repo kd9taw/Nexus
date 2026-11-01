@@ -3,7 +3,8 @@
 //
 // THE POLAR CAP. Two sources, never mixed, each labelled. NOAA's D-RAP grid (sent by the shack
 // during a flare or a measured proton event) carries NOAA's own polar-cap absorption with NOAA's
-// real proton cutoff: while it is current (flareNow `drapFresh`) it IS the cap. Its proton part is
+// real proton cutoff: while it is current (flareNow `drapFresh`), beside a held proton reading
+// (`protonsHeld`: dated, under 30 min), it IS the cap. Its proton part is
 // what the grid holds beyond the X-ray part at each cell (D-RAP adds the two: A = A_X + A_P, at
 // 30 MHz A = (HAF/30)^1.5 dB), poleward of 50° geomagnetic. Otherwise the shack's model (the
 // Sauer & Wilkinson D-RAP method over GOES protons) is the cap, and its edge, Nexus's 66° − 1.2·Kp
@@ -30,6 +31,7 @@
 // usable estimate, labelled with which one it is ("Kp 6.3 est. 22:36Z"), so an estimate is still
 // never called a measurement. A tie goes to the measurement.
 
+import { useSyncExternalStore } from 'react'
 import type { AuroraOval, DrapGrid, KpForecast, PcaView, SpaceWxView, ArrivalOutlook } from './types'
 import { drapFresh } from './flareNow'
 import { flareHafAt } from './mapGeo'
@@ -182,7 +184,10 @@ export function capPicture(
   nowMs: number,
 ): CapPicture | null {
   if (!pca) return null
-  if (drapFresh(drap, nowMs)) {
+  // NOAA's grid's polar excess is read as its proton part only beside a proton reading that is held:
+  // dated and under PROTONS_HELD_SECS old. A stale or undated reading leaves the cap to the model,
+  // whose chip says how old (or that it is undated).
+  if (drapFresh(drap, nowMs) && protonsHeld(pca, nowMs)) {
     const points = gridCap(drap, xray, nowMs)
     return { source: 'noaa', points, validAt: drap.validAt, edge: null, maxDb: maxOf(points) }
   }
@@ -202,6 +207,16 @@ export function sScale(pca: PcaView): number {
 /** Whether there is a cap worth a chip: a proton event (S1+) or any absorption drawn. */
 export function capShown(pca: PcaView | null | undefined, pic: CapPicture | null): boolean {
   return !!pca && !!pic && (sScale(pca) >= 1 || pic.points.length > 0)
+}
+
+/** How old a GOES proton reading may be and still be held: the shack's `pca::PROTON_FRESH_SECS`, the
+ *  same limit at which it stops asking NOAA for the grid for a proton event. */
+export const PROTONS_HELD_SECS = 30 * 60
+
+/** A proton reading that may speak for now: dated, and under PROTONS_HELD_SECS old. */
+export function protonsHeld(pca: PcaView, nowMs: number): boolean {
+  const at = pca.protonsAt
+  return at != null && nowMs / 1000 - at < PROTONS_HELD_SECS
 }
 
 /** How old the GOES proton sample may be before the chip says how old it is and drops the
@@ -266,6 +281,49 @@ export function edgeLines(lats: (number | null)[] | null | undefined): [number, 
 export function auroraStorm(k: KpNow | null, outlook: ArrivalOutlook | null | undefined): boolean {
   return (k != null && k.kp >= 5) || (outlook?.watch?.maxG ?? 0) >= 1
 }
+
+// ───────────────────────────── the storm's untick ─────────────────────────────
+//
+// ONE UNTICK FOR THE WHOLE STORM, ON EVERY MAP. An operator who unticks the aurora layer while a storm
+// has it on means "not this storm": it must hold on the flat map, the 2-D globe and the 3-D globe, on
+// every screen that hosts them, and across leaving and coming back. So the dismissal is one value for
+// the window, here, not state inside a map that a remount forgets. It is never saved (a restart is a
+// new look at the sky), and it is cleared when the storm ends: by App on every propagation poll,
+// whether or not a map is on screen, and by a mounted map as soon as it sees the storm end. A storm
+// that ends while nothing watches can therefore never carry an old untick into the next one.
+
+let dismissed = false
+const listeners = new Set<() => void>()
+
+/** Whether the operator has unticked the aurora layer during the current storm. */
+export function auroraDismissal(): boolean {
+  return dismissed
+}
+
+/** Set (an untick during a storm) or clear (the storm is over) the storm's untick. */
+export function setAuroraDismissal(v: boolean): void {
+  if (dismissed === v) return
+  dismissed = v
+  for (const l of listeners) l()
+}
+
+/** The storm's untick, re-rendering the caller when any surface changes it. */
+export function useAuroraDismissal(): boolean {
+  return useSyncExternalStore(
+    (l) => {
+      listeners.add(l)
+      return () => {
+        listeners.delete(l)
+      }
+    },
+    () => dismissed,
+  )
+}
+
+/** Tests: no untick carried from one test to the next (src/test-setup.ts). */
+;(globalThis as { __nexusTestResets?: Set<() => void> }).__nexusTestResets?.add(() => {
+  dismissed = false
+})
 
 /** Why the layer is on for the storm, for the chip: the Kp, or NOAA's watch. */
 export function auroraStormWhy(k: KpNow | null, outlook: ArrivalOutlook | null | undefined): string {

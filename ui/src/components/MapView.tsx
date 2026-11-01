@@ -117,7 +117,7 @@ import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, XRAY_LIVE_SECS, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
 import { AuroraChip, PcaChip } from './prop/CapsChips'
-import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpAlert } from '../capsNow'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, kpAlert, setAuroraDismissal, useAuroraDismissal } from '../capsNow'
 import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../features/connectFeeds'
 import { useViewportClass } from '../useViewport'
 // The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
@@ -1618,9 +1618,15 @@ export function MapView({
   // The Kp to warn on: the higher of NOAA's recent measurement and the usable estimate (capsNow `kpAlert`).
   const kn = useMemo(() => kpAlert(prop?.spaceWx, kpFc, nowMs), [prop, kpFc, nowMs])
   const storm = auroraStorm(kn, arrival)
-  const [auroraDismissed, setAuroraDismissed] = useState(false)
+  // The storm's untick is ONE for the window (capsNow `useAuroraDismissal`): it holds across every
+  // map surface and a remount, and clears when the storm ends: here only when this map SEES it end
+  // (on, then off — a map mounting before its data has arrived sees "no storm" for a moment, and that
+  // must not throw the untick away), and in App's poll whether or not a map is on screen.
+  const auroraDismissed = useAuroraDismissal()
+  const stormSeen = useRef(storm)
   useEffect(() => {
-    if (!storm) setAuroraDismissed(false)
+    if (stormSeen.current && !storm) setAuroraDismissal(false)
+    stormSeen.current = storm
   }, [storm])
   const auroraAuto = storm && !auroraDismissed && !layers.aurora.visible
   const auroraOn = layers.aurora.visible || auroraAuto
@@ -4222,7 +4228,7 @@ export function MapView({
                         // Unticking the aurora during a storm is the operator's off, in one click
                         // whoever had it on: it sticks until the storm is over. Their own choice is
                         // written too, unless the storm alone had it on (then it was already off).
-                        if (k === 'aurora' && storm && !e.target.checked) setAuroraDismissed(true)
+                        if (k === 'aurora' && storm && !e.target.checked) setAuroraDismissal(true)
                         if (!(k === 'aurora' && auroraAuto)) {
                           setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))
                         }

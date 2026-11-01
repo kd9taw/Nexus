@@ -164,6 +164,15 @@ describe('the polar cap: NOAA’s grid while current, else the model with its ap
     expect(capPicture(null, stale, null, NOW)).toBeNull()
   })
 
+  it('NOAA’s grid is the cap only beside a held proton reading: dated and under 30 min old', () => {
+    const g = grid((la, lo) => (Math.abs(geomagLat(la, lo)) >= 62 ? 25 : 0))
+    expect(capPicture({ ...PCA, protonsAt: now - 29 * 60 }, g, null, NOW)!.source, 'held').toBe('noaa')
+    // stale or undated: the grid's polar excess is not read as NOAA's proton part
+    expect(capPicture({ ...PCA, protonsAt: now - 30 * 60 }, g, null, NOW)!.source, 'stale').toBe('model')
+    expect(capPicture({ ...PCA, protonsAt: null }, g, null, NOW)!.source, 'undated').toBe('model')
+    expect(capPicture({ ...PCA, protonsAt: undefined }, g, null, NOW)!.source, 'older station').toBe('model')
+  })
+
   it('a chip for a proton event or any drawn absorption, not for a quiet sky', () => {
     const quiet = { ...PCA, j10: 0.3, sScale: 0, points: [] }
     expect(capShown(quiet, capPicture(quiet, null, null, NOW))).toBe(false)
