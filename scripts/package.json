@@ -3,5 +3,5 @@
   "private": true,
   "type": "module",
   "description": "Dev-only tooling for Tempo (screenshot capture). Not part of the shipped app.",
-  "devDependencies": { "puppeteer-core": "^23.0.0" }
+  "devDependencies": { "puppeteer-core": "^25.16.0" }
 }

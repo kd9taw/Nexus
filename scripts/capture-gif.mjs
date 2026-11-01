@@ -71,7 +71,7 @@ async function main() {
   const url = `http://localhost:${PORT}/`
   const browser = await puppeteer.launch({
     executablePath: CHROME,
-    headless: 'new',
+    headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--hide-scrollbars', '--force-color-profile=srgb'],
     defaultViewport: { width: 1440, height: 900, deviceScaleFactor: 1 },
   })
