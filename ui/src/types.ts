@@ -414,6 +414,79 @@ export interface PathPrediction {
   routes?: RouteCall[]
   /** The request's day as the path-over-the-day strip draws it; per-path outlook only. */
   day?: PathDay
+  /** What a flare or a proton event does to this route NOW (propagation::pathnow), display only:
+   * never folded into the model's numbers. Per-path outlook only; absent when nothing is happening. */
+  overlay?: PathHourOverlay
+  /** The "now" line beside the climatology (propagation::pathnow::space_now): a flare, a proton
+   * event, a NOAA watch, each with its own time. Absent when nothing is happening. */
+  spaceNow?: SpaceNow
+}
+/** Where a flare footprint came from: NOAA's current D-RAP grid, or the analytic field from GOES. */
+export type HafSource = 'noaa' | 'goes'
+/** When HF is estimated to recover, and whose estimate: NOAA's own (its grid), or NOAA's rule of
+ * thumb from the X-ray level. */
+export interface FlareRecoveryAt {
+  at: number
+  source: 'noaa' | 'ruleOfThumb'
+}
+/** One band's overlay on a route now. Every figure is an estimate from NOAA's inputs. */
+export interface BandNow {
+  band: string
+  /** Hops the D-region crossings were counted for; `hopsModelled` false = assumed 4000 km F2 hops. */
+  hops: number
+  hopsModelled: boolean
+  /** Estimated flare absorption over the path (dB), while a flare (M1+) footprint stands. */
+  flareDb?: number
+  /** Estimated polar-cap (proton) absorption over the path (dB), during an S1+ event. */
+  pcaDb?: number
+  /** Where `flareDb` came from: NOAA's grid at every crossing, the GOES estimate (no current grid,
+   * or the split kept the grid's proton part out), or both. Absent from an older shack. */
+  flareFrom?: 'noaa' | 'goes' | 'both'
+  /** Stretches the map draws on the ribbon for this band now. */
+  segments?: PathSegmentNow[]
+}
+export interface PathSegmentNow {
+  from: number
+  to: number
+  kind: 'polar' | 'grey' | 'flareWeak' | 'flareOut' | 'pca'
+}
+/** A route's "now" overlay (propagation::pathnow::PathHourOverlay). */
+export interface PathHourOverlay {
+  unix: number
+  kp: number | null
+  kpSource: PathGeoHour['kpSource']
+  capLatDeg: number | null
+  source: {
+    xrayAt?: number
+    xrayLong?: number
+    haf?: HafSource
+    drapValidAt?: number
+    recovery?: FlareRecoveryAt
+    protonsAt?: number
+    j10?: number
+    sScale?: number
+    /** During a proton event with NOAA's grid as the footprint: the geomagnetic latitude poleward
+     * of which the flare figure took no more than the GOES X-ray part (the grid's proton part is
+     * counted once, as polar-cap absorption). */
+    flareCapGeomag?: number
+  }
+  bands: BandNow[]
+}
+/** The "now" line's facts (propagation::pathnow::SpaceNow). */
+export interface SpaceNow {
+  flare?: {
+    r: number
+    xrayLong: number
+    xrayAt: number
+    haf: HafSource
+    drapValidAt?: number
+    hafSubMhz: number
+    out?: string
+    weak?: string
+    recovery?: FlareRecoveryAt
+  }
+  protons?: { s: number; j10: number; at: number }
+  watch?: { g: number; from: number; to: number; issued: number }
 }
 /** One band at one UTC hour of a path's day (propagation::pathday). Modelled, never measured. */
 export interface PathDayCell {

@@ -54,6 +54,45 @@ const TWO_F2: PathHour = { layer: 'F2', hops: 2, takeoffDeg: 11.24, estimated: f
 /** No SWPC data at all: no reading, no outlook. */
 const UNKNOWN = { kp: null, kpSource: 'unknown' as const, capLatDeg: null, polarFrac: null }
 
+describe('the path why line — what a flare or a proton event does now', () => {
+  const flare = (db: number) => ({
+    unix: T12,
+    kp: 2,
+    kpSource: 'current' as const,
+    capLatDeg: 63.6,
+    source: {
+      xrayAt: T12 - 60,
+      xrayLong: 1e-4,
+      haf: 'noaa' as const,
+      drapValidAt: T12 - 45,
+      recovery: { at: T12 + 42 * 60, source: 'noaa' as const },
+    },
+    bands: [{ band: '20m', hops: 2, hopsModelled: true, flareDb: db }],
+  })
+
+  it('adds the estimate on the line’s band, with its NOAA source and time, and the detail rows behind it', () => {
+    const p = pred([band('20m', 0.8, TWO_F2)], hours())
+    p.overlay = flare(8.6)
+    const f = pathWhyFacts(p)
+    expect(pathWhyLine(f)).toBe(
+      "20m short path, 2 F2 hops, ~9 dB of flare absorption on 20m (estimated from NOAA's D-RAP grid 11:59Z), recovery ~12:42Z (NOAA's own estimate).",
+    )
+    const rows = pathWhyDetail(f, 71)
+    expect(rows).toContain("D-region crossings: 4 (hops: 2, the model's mode this hour)")
+    expect(rows.some((r) => r.includes('estimates laid over the model'))).toBe(true)
+  })
+
+  it('says nothing of a flare without an overlay or below 1 dB (the model line is unchanged)', () => {
+    const plain = pred([band('20m', 0.8, TWO_F2)], hours())
+    const base = pathWhyLine(pathWhyFacts(plain))
+    expect(base).toBe('20m short path, 2 F2 hops.')
+    const tiny = pred([band('20m', 0.8, TWO_F2)], hours())
+    tiny.overlay = flare(0.4)
+    expect(pathWhyLine(pathWhyFacts(tiny))).toBe(base)
+    expect(pathWhyDetail(pathWhyFacts(tiny), 71).some((r) => r.includes('D-region'))).toBe(true)
+  })
+})
+
 describe('the path why line', () => {
   it('a polar path with a storm forecast: model clause, overlay clause, and the forecast worded as one', () => {
     // In the cap now (quiet Kp); Kp 5.33 forecast for 18–21Z.

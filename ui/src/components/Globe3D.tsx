@@ -373,6 +373,16 @@ function ribbonInk(i: RibbonInk | null): string {
 }
 /** The polar stretch on the globe: the dark theme's aurora violet, for the same reason. */
 const GLOBE_ROUTE_POLAR = '#c77dff'
+/** Every ribbon stretch on the globe, drawn in this order (later on top): the polar cap, the grey
+ * line, then what a flare or a proton event hits NOW on the drawn band (features/pathNow) — the
+ * dark theme's inks, as above. */
+const GLOBE_STRETCHES = [
+  ['polar', GLOBE_ROUTE_POLAR],
+  ['grey', '#ffc86e'],
+  ['flareWeak', '#ffa64d'],
+  ['flareOut', '#ff4d4d'],
+  ['pca', '#ff5ce1'],
+] as const
 /** A ribbon label's size (world units; the globe's radius is 100): larger than the opening
  * labels, so a heading is found at a glance. */
 const RIBBON_LABEL_SCALE: [number, number] = [30, 5.6]
@@ -1913,11 +1923,10 @@ function Globe3DView({
       const dashed = l.route === 'long'
       keys.push(key)
       syncLines(g, linesRef.current, key, [asLatLng(l.points)], ribbonInk(l.ink), 0.95, true, PATH_ALT, dashed)
-      for (const kind of ['polar', 'grey'] as const) {
+      for (const [kind, ink] of GLOBE_STRETCHES) {
         const parts = l.stretches.filter((st) => st.kind === kind).map((st) => asLatLng(st.points))
         const k = `${key}-${kind}`
         keys.push(k)
-        const ink = kind === 'polar' ? GLOBE_ROUTE_POLAR : '#ffc86e'
         syncLines(g, linesRef.current, k, parts, ink, 1, parts.length > 0, PATH_ALT + 0.001, dashed)
       }
     }

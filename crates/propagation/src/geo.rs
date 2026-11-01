@@ -317,6 +317,18 @@ pub fn solar_elevation_deg(lat: f64, lon: f64, unix: i64) -> f64 {
         .to_degrees()
 }
 
+/// The sub-solar point (lat, lon degrees) at a UTC instant: where [`solar_elevation_deg`] is 90°
+/// (the declination, and the longitude where its hour angle is zero). The map's `subsolarPoint`
+/// is the same formula.
+pub fn subsolar_point(unix: i64) -> (f64, f64) {
+    let utc_hours = (unix.rem_euclid(86_400) as f64) / 3600.0;
+    let lon = -(utc_hours + equation_of_time_min(unix) / 60.0 - 12.0) * 15.0;
+    (
+        solar_declination_deg(unix),
+        (lon + 540.0).rem_euclid(360.0) - 180.0,
+    )
+}
+
 /// Point at great-circle fraction `f` (0=a, 1=b) between two (lat, lon) — used to
 /// sample a path's ionospheric control points.
 pub fn interpolate(a: (f64, f64), b: (f64, f64), f: f64) -> (f64, f64) {

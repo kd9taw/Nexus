@@ -8576,6 +8576,7 @@ async fn get_path_outlook(
     cache: State<'_, PropCache>,
     kp_cache: State<'_, KpForecastCache>,
     aurora: State<'_, AuroraCache>,
+    protons: State<'_, ProtonCache>,
 ) -> Result<propagation::PathPrediction, String> {
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = engine_lock(&state);
@@ -8598,6 +8599,8 @@ async fn get_path_outlook(
             long_path: None,
             routes: None,
             day: None,
+            overlay: None,
+            space_now: None,
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
@@ -8630,9 +8633,10 @@ async fn get_path_outlook(
     // The geometry's Kp is only ever one SWPC reported: `wx.kp` above may be the cold-cache
     // default or a failed fetch's stand-in, which the engine may use but no label may call a
     // reading.
-    let kp_now = {
+    let (kp_now, now_inputs) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), t)
+        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+        (swpc_kp(view, t), NowInputs::read(view, &protons, t))
     };
     // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
     // serving hour's scalars and the geometry are recomputed then.
@@ -8696,6 +8700,10 @@ async fn get_path_outlook(
         // Kept for the grade of a contact logged with this station (`path_grades::at_log`), when
         // it was computed from measured space weather (`keep_outlook` decides).
         path_grades::keep_outlook(&mygrid, &grid, t, &pred, stamps.as_ref());
+        // Then the display-only "now" overlay, which the kept card never carries.
+        if let Some(me) = me {
+            attach_now(&mut pred, me, dx, &now_inputs, t);
+        }
         pred
     })
     .await
@@ -9064,6 +9072,110 @@ fn swpc_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f32> {
         .map(|w| w.kp)
 }
 
+/// What the "now" overlays run on ([`propagation::pathnow`]), each with its own sample time, read
+/// from what the map's own layers keep — the X-ray fast lane and its D-RAP grid, the snapshot's
+/// X-ray, the proton cache, the watch — and never fetched here: a lane nobody is polling simply
+/// ages out, and the overlay then claims nothing.
+#[derive(Default)]
+struct NowInputs {
+    xray: Option<propagation::pathnow::XraySample>,
+    drap: Option<propagation::flare::DrapGrid>,
+    protons: Option<propagation::pathnow::ProtonSample>,
+    watch: Option<propagation::arrival::Watch>,
+}
+
+impl NowInputs {
+    fn read(wx: Option<&propagation::SpaceWxView>, protons: &ProtonCache, now: i64) -> NowInputs {
+        use propagation::pathnow::{ProtonSample, XraySample};
+        // The newer of the fast lane's GOES sample and the snapshot's, each by its own time (the
+        // snapshot's only when it is a reading, never the stand-in a failed fetch leaves).
+        let lane = XRAY_LANE.lock().ok().and_then(|l| {
+            l.kept().map(|x| XraySample {
+                flux: x.now.value,
+                at: x.now.at,
+            })
+        });
+        NowInputs {
+            xray: newer(lane, snapshot_xray(wx)),
+            drap: DRAP_LANE.lock().ok().and_then(|l| l.kept().cloned()),
+            protons: protons.lock().ok().and_then(|g| {
+                // Carried with its own time, or none: the event rule (`proton_event`) refuses an
+                // undated reading.
+                g.as_ref().map(|(_, p)| ProtonSample {
+                    j1: p.j1,
+                    j5: p.j5,
+                    j10: p.j10,
+                    at: p.at,
+                })
+            }),
+            watch: arrival_outlook::watch_now(now),
+        }
+    }
+
+    /// The "now" line at `now`.
+    fn space_now(&self, now: i64) -> Option<propagation::pathnow::SpaceNow> {
+        let fp = propagation::pathnow::footprint(self.xray, self.drap.as_ref(), now);
+        propagation::pathnow::space_now(fp.as_ref(), self.protons, self.watch.as_ref(), now)
+    }
+}
+
+/// The snapshot's GOES sample, only when its X-ray is a reading (stamped), never the stand-in a
+/// failed fetch leaves.
+fn snapshot_xray(
+    wx: Option<&propagation::SpaceWxView>,
+) -> Option<propagation::pathnow::XraySample> {
+    wx.and_then(|w| {
+        w.stamps.xray_at.map(|at| propagation::pathnow::XraySample {
+            flux: w.xray_long,
+            at,
+        })
+    })
+}
+
+/// The newer of two GOES samples by their own times.
+fn newer(
+    a: Option<propagation::pathnow::XraySample>,
+    b: Option<propagation::pathnow::XraySample>,
+) -> Option<propagation::pathnow::XraySample> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if b.at > a.at { b } else { a }),
+        (a, b) => a.or(b),
+    }
+}
+
+/// Lay the "now" overlay over a per-path card's routes and attach the "now" line: display only,
+/// so it is done AFTER the card is kept for contact grading and changes none of the model's numbers.
+fn attach_now(
+    pred: &mut propagation::PathPrediction,
+    me: (f64, f64),
+    dx: (f64, f64),
+    inputs: &NowInputs,
+    now: i64,
+) {
+    let fp = propagation::pathnow::footprint(inputs.xray, inputs.drap.as_ref(), now);
+    let over = |p: &propagation::PathPrediction, route| {
+        let g = p.geometry.as_ref()?;
+        let h = usize::from(g.now_hour);
+        propagation::pathnow::path_overlay(
+            me,
+            dx,
+            route,
+            &p.bands,
+            g.hours.get(h)?,
+            h,
+            now,
+            fp.as_ref(),
+            inputs.protons,
+        )
+    };
+    pred.overlay = over(pred, propagation::Route::Short);
+    if let Some(lp) = pred.long_path.as_deref_mut() {
+        lp.overlay = over(lp, propagation::Route::Long);
+    }
+    pred.space_now =
+        propagation::pathnow::space_now(fp.as_ref(), inputs.protons, inputs.watch.as_ref(), now);
+}
+
 #[cfg(test)]
 mod ring_key_tests {
     use super::ring_key;
@@ -9086,6 +9198,230 @@ mod ring_key_tests {
         };
         assert_ne!(at(70.0, None), at(200.0, None));
         assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+    }
+}
+
+#[cfg(test)]
+mod path_now_tests {
+    use super::{attach_now, newer, snapshot_xray, NowInputs};
+    use propagation::pathnow::{ProtonSample, XraySample};
+
+    /// 2026-05-15 12:00 UTC.
+    const NOW: i64 = 1_778_846_400;
+    const BOSTON: (f64, f64) = (42.36, -71.06);
+    const LONDON: (f64, f64) = (51.5, -0.12);
+
+    fn view(xray_long: f32, xray_at: Option<i64>) -> propagation::SpaceWxView {
+        propagation::SpaceWxView {
+            sfi: 120.0,
+            kp: 2.0,
+            a_index: 8.0,
+            xray_class: "X1.0".into(),
+            flare: true,
+            xray_long,
+            solar_wind: None,
+            fetched: xray_at.is_some(),
+            stamps: propagation::model::SpaceWxStamps {
+                xray_at,
+                ..Default::default()
+            },
+            ap_now: None,
+            a_by_day: Vec::new(),
+        }
+    }
+
+    /// Both routes of a heuristic card Boston → London with their geometry (Kp 2 measured).
+    fn card() -> propagation::PathPrediction {
+        let eng = propagation::HeuristicEngine::new(Some(BOSTON));
+        use propagation::PathPredictor;
+        let wx = propagation::SpaceWx::default();
+        let mut sp = eng.predict(LONDON, NOW, &wx);
+        let geom = |route| {
+            propagation::path_geometry_route(BOSTON, LONDON, route, NOW, Some(2.0), None, None)
+        };
+        sp.geometry = Some(geom(propagation::Route::Short));
+        let mut lp = sp.clone();
+        lp.geometry = Some(geom(propagation::Route::Long));
+        sp.long_path = Some(Box::new(lp));
+        sp
+    }
+
+    /// The lanes are process globals: the one test that fills them holds this.
+    static LANES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn proton_cache(at: Option<i64>) -> super::ProtonCache {
+        std::sync::Arc::new(std::sync::Mutex::new(Some((
+            std::time::Instant::now(),
+            propagation::live::protons::ProtonFlux {
+                j1: 800.0,
+                j5: 400.0,
+                j10: 200.0,
+                at,
+            },
+        ))))
+    }
+
+    #[test]
+    fn the_inputs_carry_noaas_grid_from_its_lane_and_an_undated_proton_sample_is_none() {
+        let _g = LANES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lats: Vec<f32> = (0..90).map(|i| 89.0 - 2.0 * i as f32).collect();
+        let lons: Vec<f32> = (0..90).map(|i| -178.0 + 4.0 * i as f32).collect();
+        let grid = propagation::flare::DrapGrid {
+            valid_at: NOW - 30,
+            recovery_at: Some(NOW + 1800),
+            haf: vec![30.0; lats.len() * lons.len()],
+            lats,
+            lons,
+        };
+        super::XRAY_LANE
+            .lock()
+            .unwrap()
+            .answered(propagation::live::swpc::XrayTrace {
+                now: propagation::live::swpc::Sample {
+                    value: 1e-4,
+                    at: NOW - 60,
+                },
+                series: Vec::new(),
+                recent: Vec::new(),
+            });
+        super::DRAP_LANE.lock().unwrap().answered(grid);
+        let dated = NowInputs::read(None, &proton_cache(Some(NOW - 300)), NOW);
+        let undated = NowInputs::read(None, &proton_cache(None), NOW);
+        *super::XRAY_LANE.lock().unwrap() = propagation::flare::Lane::new();
+        *super::DRAP_LANE.lock().unwrap() = propagation::flare::Lane::new();
+        // NOAA's word reaches the now line, with the grid's own valid time and the GOES sample's.
+        assert_eq!(
+            dated.xray,
+            Some(XraySample {
+                flux: 1e-4,
+                at: NOW - 60
+            })
+        );
+        let fl = dated
+            .space_now(NOW)
+            .and_then(|n| n.flare)
+            .expect("a flare now");
+        assert_eq!(fl.haf, propagation::pathnow::HafSource::Noaa);
+        assert_eq!(fl.drap_valid_at, Some(NOW - 30));
+        assert_eq!(fl.xray_at, NOW - 60);
+        // A dated proton sample is carried with its time; an undated one is no sample at all.
+        assert_eq!(dated.protons.and_then(|p| p.at), Some(NOW - 300));
+        assert_eq!(undated.protons.map(|p| p.at), Some(None));
+        assert!(undated.space_now(NOW).and_then(|n| n.protons).is_none());
+        assert!(dated.space_now(NOW).and_then(|n| n.protons).is_some());
+        // The grid split runs only during a held proton event: beside the dated S2 reading it keeps
+        // the grid's polar excess out of the flare figure; beside the same reading undated, NOAA's
+        // grid stands as its word.
+        let split_flag = |inputs: &NowInputs| {
+            let mut p = card();
+            attach_now(&mut p, BOSTON, LONDON, inputs, NOW);
+            let o = p.overlay.expect("a flare overlay");
+            let from = o
+                .bands
+                .iter()
+                .filter_map(|b| b.flare_from)
+                .collect::<Vec<_>>();
+            (o.source.flare_cap_geomag, from)
+        };
+        let (flag, _) = split_flag(&dated);
+        assert_eq!(flag, Some(50.0));
+        let (flag, from) = split_flag(&undated);
+        assert_eq!(flag, None);
+        assert!(
+            from.iter()
+                .all(|f| *f == propagation::pathnow::FlareFrom::Noaa),
+            "{from:?}"
+        );
+    }
+
+    #[test]
+    fn a_stand_in_x_ray_never_feeds_the_overlay_and_the_newer_sample_wins() {
+        assert_eq!(snapshot_xray(Some(&view(1e-4, None))), None);
+        assert_eq!(snapshot_xray(None), None);
+        let snap = snapshot_xray(Some(&view(1e-4, Some(NOW - 30))));
+        assert_eq!(
+            snap,
+            Some(XraySample {
+                flux: 1e-4,
+                at: NOW - 30
+            })
+        );
+        let lane = Some(XraySample {
+            flux: 2e-4,
+            at: NOW - 90,
+        });
+        assert_eq!(newer(lane, snap), snap);
+        assert_eq!(newer(snap, lane), snap);
+        assert_eq!(newer(lane, None), lane);
+        assert_eq!(newer(None, None), None);
+    }
+
+    #[test]
+    fn a_flare_lays_an_overlay_on_both_routes_and_a_now_line_and_quiet_lays_none() {
+        let flare = NowInputs {
+            xray: Some(XraySample {
+                flux: 1e-4,
+                at: NOW - 60,
+            }),
+            ..Default::default()
+        };
+        let mut p = card();
+        attach_now(&mut p, BOSTON, LONDON, &flare, NOW);
+        let o = p.overlay.as_ref().expect("short-path overlay");
+        assert!(o.bands.iter().any(|b| b.flare_db.is_some_and(|d| d > 1.0)));
+        // The long route carries the long route's own figures (its own arc and hops), not the
+        // short route's.
+        let lp = p.long_path.as_ref().unwrap();
+        let own = |route| {
+            let g = lp.geometry.as_ref().unwrap();
+            let h = usize::from(g.now_hour);
+            let fp = propagation::pathnow::footprint(flare.xray, None, NOW);
+            propagation::pathnow::path_overlay(
+                BOSTON,
+                LONDON,
+                route,
+                &lp.bands,
+                &g.hours[h],
+                h,
+                NOW,
+                fp.as_ref(),
+                None,
+            )
+        };
+        assert_eq!(lp.overlay, own(propagation::Route::Long));
+        assert_ne!(lp.overlay, own(propagation::Route::Short));
+        // Each input keeps its own time.
+        assert_eq!(o.source.xray_at, Some(NOW - 60));
+        assert!(p.space_now.as_ref().unwrap().flare.is_some());
+        let v = serde_json::to_value(&p).unwrap();
+        assert!(v["overlay"]["bands"].is_array() && v["spaceNow"]["flare"]["out"].is_string());
+        // The model's numbers are untouched.
+        let plain = card();
+        assert_eq!(
+            serde_json::to_value(&plain.bands).unwrap(),
+            serde_json::to_value(&p.bands).unwrap()
+        );
+        // Quiet: a C-class sample, quiet protons, no watch → no overlay, no now line, no keys.
+        let quiet = NowInputs {
+            xray: Some(XraySample {
+                flux: 5e-6,
+                at: NOW - 60,
+            }),
+            protons: Some(ProtonSample {
+                j1: 2.0,
+                j5: 1.0,
+                j10: 0.3,
+                at: Some(NOW - 300),
+            }),
+            ..Default::default()
+        };
+        let mut q = card();
+        attach_now(&mut q, BOSTON, LONDON, &quiet, NOW);
+        assert!(q.overlay.is_none() && q.space_now.is_none());
+        let v = serde_json::to_value(&q).unwrap();
+        assert!(v.get("overlay").is_none() && v.get("spaceNow").is_none());
     }
 }
 
@@ -9213,6 +9549,7 @@ static RING_OUTLOOK: Mutex<Option<(std::time::Instant, String, propagation::Path
 async fn get_band_outlook(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
+    protons: State<'_, ProtonCache>,
 ) -> Result<propagation::PathPrediction, String> {
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = engine_lock(&state);
@@ -9234,6 +9571,8 @@ async fn get_band_outlook(
             long_path: None,
             routes: None,
             day: None,
+            overlay: None,
+            space_now: None,
         });
     };
     let p533 = prop_engine == "p533";
@@ -9250,7 +9589,11 @@ async fn get_band_outlook(
             .unwrap_or_default()
     };
     let t = now_unix();
-    ring_prediction(
+    let now_inputs = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        NowInputs::read(guard.as_ref().map(|(_, s)| &s.space_wx), &protons, t)
+    };
+    let mut out = ring_prediction(
         mygrid,
         prop_engine,
         station_power_w,
@@ -9259,7 +9602,10 @@ async fn get_band_outlook(
         wx,
         t,
     )
-    .await
+    .await?;
+    // The "now" line beside the climatology (never cached with it: it is re-read every ask).
+    out.space_now = now_inputs.space_now(t);
+    Ok(out)
 }
 
 /// The sunspot number a P.533 cache keys on, as a key fragment: the one the engine runs on (the
@@ -39252,7 +39598,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_solar_indices" => ok(get_solar_indices(app.state()).await),
-            "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
+            "get_band_outlook" => ok(get_band_outlook(app.state(), app.state(), app.state()).await),
             "get_path_regions" => ok(get_path_regions(app.state(), app.state(), app.state()).await),
             "get_path_outlook" => {
                 let grid = v
@@ -39260,10 +39606,15 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                ok(
-                    get_path_outlook(grid, app.state(), app.state(), app.state(), app.state())
-                        .await,
+                ok(get_path_outlook(
+                    grid,
+                    app.state(),
+                    app.state(),
+                    app.state(),
+                    app.state(),
+                    app.state(),
                 )
+                .await)
             }
             "get_getting_out" => {
                 ok(get_getting_out(tv_getting_out_since(&v), app.state(), app.state()).await)

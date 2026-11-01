@@ -89,6 +89,13 @@ pub enum SegmentKind {
     Polar,
     /// On the grey line (sun within ±6° of the horizon).
     Grey,
+    /// Under a flare right now: the band in question loses at least 1 dB on a vertical pass
+    /// through the D region here ([`crate::pathnow`]; the current hour only, never a scrubbed one).
+    FlareWeak,
+    /// ...and at least 10 dB.
+    FlareOut,
+    /// Inside a proton event's polar-cap absorption right now, at least 1 dB on that band.
+    Pca,
 }
 
 /// A stretch of the arc, as fractions of its length from the operator (0) to the far end (1).
@@ -122,7 +129,7 @@ pub struct PathGeometry {
 }
 
 /// Runs of flagged samples as arc fractions; each sample stands for half a step either side.
-fn segments_of(flags: &[bool], kind: SegmentKind, out: &mut Vec<PathSegment>) {
+pub(crate) fn segments_of(flags: &[bool], kind: SegmentKind, out: &mut Vec<PathSegment>) {
     let last = (flags.len() - 1) as f32;
     let half = 0.5 / last;
     let mut i = 0;
@@ -175,6 +182,38 @@ fn oval_cell(lat: f64, lon: f64) -> (i32, i32) {
     )
 }
 
+/// The route's sample points (me first), its length (km) and initial bearing (degrees true):
+/// [`SAMPLES`] along the short arc, [`SAMPLES_LONG`] along the long one at the same spacing.
+pub(crate) fn route_points(
+    me: (f64, f64),
+    dx: (f64, f64),
+    route: Route,
+) -> (Vec<(f64, f64)>, f64, f64) {
+    let sp_km = geo::haversine_km(me, dx);
+    let sp_brg = geo::bearing_deg(me, dx);
+    match route {
+        Route::Short => (
+            (0..SAMPLES)
+                .map(|i| geo::interpolate(me, dx, i as f64 / (SAMPLES - 1) as f64))
+                .collect(),
+            sp_km,
+            sp_brg,
+        ),
+        Route::Long => {
+            let km = CIRCUMFERENCE_KM - sp_km;
+            let brg = (sp_brg + 180.0) % 360.0;
+            let n = SAMPLES_LONG;
+            (
+                (0..n)
+                    .map(|i| geo::destination_point(me, brg, km * i as f64 / (n - 1) as f64))
+                    .collect(),
+                km,
+                brg,
+            )
+        }
+    }
+}
+
 /// Classify the short path `me` → `dx` (lat, lon degrees) for the 24 UTC hours starting at
 /// the hour containing `from_unix`. `kp_now` is the planetary K SWPC last reported — `None`
 /// when no reading is held, never a stand-in; `forecast` the SWPC outlook when held; `oval` the live OVATION oval as (lat, lon) cells on its 2° grid — every
@@ -201,29 +240,7 @@ pub fn path_geometry_route(
     forecast: Option<&KpForecast>,
     oval: Option<&[(f32, f32)]>,
 ) -> PathGeometry {
-    let sp_km = geo::haversine_km(me, dx);
-    let sp_brg = geo::bearing_deg(me, dx);
-    let (pts, dist_km, bearing_deg): (Vec<(f64, f64)>, f64, f64) = match route {
-        Route::Short => (
-            (0..SAMPLES)
-                .map(|i| geo::interpolate(me, dx, i as f64 / (SAMPLES - 1) as f64))
-                .collect(),
-            sp_km,
-            sp_brg,
-        ),
-        Route::Long => {
-            let km = CIRCUMFERENCE_KM - sp_km;
-            let brg = (sp_brg + 180.0) % 360.0;
-            let n = SAMPLES_LONG;
-            (
-                (0..n)
-                    .map(|i| geo::destination_point(me, brg, km * i as f64 / (n - 1) as f64))
-                    .collect(),
-                km,
-                brg,
-            )
-        }
-    };
+    let (pts, dist_km, bearing_deg) = route_points(me, dx, route);
     let samples = pts.len();
     let gmlat: Vec<f64> = pts
         .iter()

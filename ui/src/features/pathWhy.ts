@@ -16,6 +16,7 @@
 
 import { t } from '../i18n'
 import type { BandOutlook, PathGeoHour, PathHour, PathPrediction } from '../types'
+import { nowClauses, nowDetail } from './pathNow'
 
 /** A band counts as open now from this hourly score (the heatmap's Fair threshold). */
 const OPEN_NOW = 0.3
@@ -49,6 +50,10 @@ export interface PathWhyFacts {
   storm: { kp: number; unix: number } | null
   /** This hour's geometry (for the detail rows). */
   now: PathGeoHour
+  /** What a flare or a proton event does to `band` on this path NOW (the shack's overlay, an
+   * estimate laid over the model): its clauses and the detail rows behind them. */
+  nowParts: string[]
+  nowRows: string[]
 }
 
 function bestBandNow(bands: BandOutlook[], hour: number): BandOutlook | null {
@@ -86,6 +91,8 @@ export function pathWhyFacts(p: PathPrediction | null | undefined): PathWhyFacts
     grey: now.greyMe && now.greyDx ? 'both' : now.greyMe ? 'me' : now.greyDx ? 'dx' : null,
     storm,
     now,
+    nowParts: p.overlay ? nowClauses(p.overlay, band?.band ?? null, p.overlay.unix) : [],
+    nowRows: nowDetail(p.overlay, band?.band ?? null),
   }
 }
 
@@ -130,6 +137,7 @@ export function pathWhyLine(f: PathWhyFacts | null): string | null {
   if (f.kpUnknown) parts.push(t('pathWhy.kpUnknown'))
   if (f.ovalNow) parts.push(t('pathWhy.oval'))
   if (f.grey) parts.push(greyWords(f.grey))
+  parts.push(...f.nowParts)
   if (!f.band && parts.length === 0 && !f.storm) return null
   const lead = f.band ? t('pathWhy.lead.band', { band: f.band }) : t('pathWhy.lead')
   let text = [lead, ...parts].join(t('pathWhy.sep'))
@@ -177,6 +185,7 @@ export function pathWhyDetail(f: PathWhyFacts | null, maxGmlatDeg: number): stri
     t('pathWhy.detail.grey', { pct: pct(f.now.greylineFrac), sun: pct(f.now.sunlitFrac) }),
   )
   if (f.ovalNow) rows.push(t('pathWhy.detail.oval'))
+  rows.push(...f.nowRows)
   rows.push(t('pathWhy.detail.note', { source: kpSourceWords(f.now.kpSource) }))
   return rows
 }

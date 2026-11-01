@@ -164,11 +164,20 @@ pub(crate) fn keep_outlook(
         })
         .map_or(kp_at, |k| k.since.min(kp_at));
     kept.retain(|k| !(k.me4 == me4 && k.dx4 == dx4));
+    // The display-only "now" overlay never travels with a kept card, whatever order a caller
+    // attaches it in: the grade is the model's alone.
+    let mut pred = pred.clone();
+    pred.overlay = None;
+    pred.space_now = None;
+    if let Some(lp) = pred.long_path.as_deref_mut() {
+        lp.overlay = None;
+        lp.space_now = None;
+    }
     kept.push_back(KeptOutlook {
         me4,
         dx4,
         at,
-        pred: Arc::new(pred.clone()),
+        pred: Arc::new(pred),
         stamps,
         since,
     });

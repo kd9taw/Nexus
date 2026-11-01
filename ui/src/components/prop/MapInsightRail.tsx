@@ -9,6 +9,7 @@ import type { PropagationSnapshot, PathPrediction } from '../../types'
 import { BandConditionStrip } from './BandConditionStrip'
 import { InsightFeed } from './InsightFeed'
 import { LikelihoodHeatmap } from './LikelihoodHeatmap'
+import { SpaceNowLine } from './SpaceNowLine'
 import { mufCeilingBand, trendArrow, trendVar } from '../../propViz'
 import { surfaceGet, surfaceSet } from '../../features/windowScope'
 import { t, type MessageKey } from '../../i18n'
@@ -96,6 +97,7 @@ export function MapInsightRail({
       {bands.length > 0 && (
         <div className="mi-card">
           <h4 className="mi-card-h">{t('map.insights.bands.head')}</h4>
+          <SpaceNowLine now={outlook?.spaceNow} nowSec={Math.floor(Date.now() / 1000)} />
           <BandConditionStrip bands={bands} onBandClick={onBandClick} activeBand={activeBand} />
         </div>
       )}
