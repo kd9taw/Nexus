@@ -4225,6 +4225,8 @@ export const ES: PartialCatalog = {
   "map.layer.txPaths.label": "Caminos: le oyeron (TX)",
   "map.layer.rxPaths.label": "Caminos: usted oyó (RX)",
   "map.layer.pca.label": "Casquete polar de protones (PCA)",
+  "map.layer.pca.stale": "lectura de protones desactualizada ({{time}}): nada dibujado",
+  "map.layer.pca.undated": "la lectura de protones no tiene hora: nada dibujado",
   "map.layer.relief.label": "Relieve (vista Mundo)",
   "map.layer.rings.label": "Anillos de distancia",
   "map.layer.sats.label": "Satélites (aficionado)",

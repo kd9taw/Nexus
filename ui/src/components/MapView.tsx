@@ -4240,6 +4240,14 @@ export function MapView({
                   {k === 'aurora' && auroraPic?.mode === 'ovation' && auroraTimes?.forecastAt != null && (
                     <AuroraForecastNote forecastAt={auroraTimes.forecastAt} observedAt={auroraTimes.observedAt} />
                   )}
+                  {k === 'pca' && capPic?.source === 'none' && (
+                    // A proton reading that is not held draws nothing (capsNow `capPicture`); the row says why.
+                    <span className="map-layer-note" data-stale="">
+                      {capPic.why === 'stale' && capPic.protonsAt != null
+                        ? t('map.layer.pca.stale', { time: wxStampLabel(capPic.protonsAt) })
+                        : t('map.layer.pca.undated')}
+                    </span>
+                  )}
                   {k === 'aurora' && auroraPic?.mode === 'none' && auroraOval != null && (
                     // Nothing is drawn, and the row says why: out of date (for when), undated, or no forecast held.
                     <span className="map-layer-note" data-stale="">

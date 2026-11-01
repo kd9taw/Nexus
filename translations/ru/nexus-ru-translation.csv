@@ -4467,6 +4467,8 @@
 "5","dash.kp.est","est.","оцен.","","A short word after the Kp value on the dashboard bar: NOAA's 1-minute estimate. Keep it as short as possible."
 "5","map.layer.flare.label","Flare blackout (D-RAP)","Поглощение при вспышке (D-RAP)","",""
 "5","map.layer.pca.label","Proton polar cap (PCA)","Протонная полярная шапка (PCA)","",""
+"5","map.layer.pca.stale","proton reading out of date ({{time}}): nothing drawn","данные о протонах устарели ({{time}}): ничего не нарисовано","{{time}}","Second line under the proton polar cap layer: nothing is drawn because the GOES proton reading is too old, or has no time. {{time}} is a UTC stamp."
+"5","map.layer.pca.undated","proton reading has no time: nothing drawn","у данных о протонах нет времени: ничего не нарисовано","","Second line under the proton polar cap layer: nothing is drawn because the GOES proton reading is too old, or has no time."
 "5","map.layer.coast.label","Coastlines","Береговые линии","","One-word control on: map view. Out of context this could be a noun or a verb — open that screen (or read the key name) before choosing the Russian word."
 "5","map.layer.states.label","US states","Штаты США","","Short label on: map view. The same English text ""US states"" is used by 2 different keys (e.g. globe.layer.states) — each can take a different Russian word, so choose the one that fits THIS screen."
 "5","map.layer.grid.label","Grid (20°×10°)","Локаторы (20°×10°)","",""

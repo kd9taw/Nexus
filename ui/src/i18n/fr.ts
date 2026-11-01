@@ -4225,6 +4225,8 @@ export const FR: PartialCatalog = {
   "map.layer.txPaths.label": "Trajets : vous ont entendu (TX)",
   "map.layer.rxPaths.label": "Trajets : vous avez entendu (RX)",
   "map.layer.pca.label": "Calotte polaire protonique (PCA)",
+  "map.layer.pca.stale": "mesure de protons plus à jour ({{time}}) : rien de tracé",
+  "map.layer.pca.undated": "la mesure de protons n’a pas d’heure : rien de tracé",
   "map.layer.relief.label": "Relief (vue Monde)",
   "map.layer.rings.label": "Cercles de distance",
   "map.layer.sats.label": "Satellites (amateurs)",

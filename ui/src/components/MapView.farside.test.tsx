@@ -381,7 +381,8 @@ describe('on the Globe, a far-side marker is not drawn through the planet — an
 
   it('the proton polar cap', async () => {
     layers(['pca'])
-    feeds.pca = { j10: 100, a30Day: 5, a30Night: 2, cutoffDeg: 60, points: [{ ...FAR, db30: 5 }, { ...NEAR, db30: 5 }] }
+    // A fresh, dated proton reading: an undated one draws no cap (capsNow `capPicture` fails closed).
+    feeds.pca = { j10: 100, a30Day: 5, a30Night: 2, cutoffDeg: 60, points: [{ ...FAR, db30: 5 }, { ...NEAR, db30: 5 }], protonsAt: Math.floor(Date.now() / 1000) - 300 }
     const r = await mount()
     const far = at(FAR)
     const near = at(NEAR)

@@ -164,13 +164,32 @@ describe('the polar cap: NOAA’s grid while current, else the model with its ap
     expect(capPicture(null, stale, null, NOW)).toBeNull()
   })
 
-  it('NOAA’s grid is the cap only beside a held proton reading: dated and under 30 min old', () => {
+  describe('a proton cap only from a held proton reading: dated, under 30 min (the shack’s proton_event)', () => {
     const g = grid((la, lo) => (Math.abs(geomagLat(la, lo)) >= 62 ? 25 : 0))
-    expect(capPicture({ ...PCA, protonsAt: now - 29 * 60 }, g, null, NOW)!.source, 'held').toBe('noaa')
-    // stale or undated: the grid's polar excess is not read as NOAA's proton part
-    expect(capPicture({ ...PCA, protonsAt: now - 30 * 60 }, g, null, NOW)!.source, 'stale').toBe('model')
-    expect(capPicture({ ...PCA, protonsAt: null }, g, null, NOW)!.source, 'undated').toBe('model')
-    expect(capPicture({ ...PCA, protonsAt: undefined }, g, null, NOW)!.source, 'older station').toBe('model')
+    for (const [what, drap] of [['NOAA’s grid', g], ['the model', null]] as const) {
+      it(`${what}: a fresh reading draws the cap (CONTROL), and just under 30 min still does`, () => {
+        const fresh = capPicture({ ...PCA, protonsAt: now - 300 }, drap, null, NOW)!
+        expect(fresh.source).toBe(drap ? 'noaa' : 'model')
+        expect(fresh.points.length).toBeGreaterThan(0)
+        expect(capShown(PCA, fresh)).toBe(true)
+        const edge = capPicture({ ...PCA, protonsAt: now - 30 * 60 + 1 }, drap, null, NOW)!
+        expect(edge.points.length).toBeGreaterThan(0)
+      })
+      it(`${what}: a reading 30 min old or more draws no cap, no edge and no chip, and says how old`, () => {
+        for (const at of [now - 30 * 60, now - 7200]) {
+          const p = capPicture({ ...PCA, protonsAt: at }, drap, null, NOW)!
+          expect(p).toMatchObject({ source: 'none', why: 'stale', protonsAt: at, points: [], edge: null, maxDb: 0 })
+          expect(capShown({ ...PCA, protonsAt: at }, p)).toBe(false)
+        }
+      })
+      it(`${what}: an undated reading (or an older station's) draws nothing and says it has no time`, () => {
+        for (const at of [null, undefined]) {
+          const p = capPicture({ ...PCA, protonsAt: at }, drap, null, NOW)!
+          expect(p).toMatchObject({ source: 'none', why: 'undated', points: [], edge: null })
+          expect(capShown({ ...PCA, protonsAt: at }, p)).toBe(false)
+        }
+      })
+    }
   })
 
   it('a chip for a proton event or any drawn absorption, not for a quiet sky', () => {

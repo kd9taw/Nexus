@@ -4043,6 +4043,8 @@ export const RU: PartialCatalog = {
   "dash.kp.est": "оцен.",
   "map.layer.flare.label": "Поглощение при вспышке (D-RAP)",
   "map.layer.pca.label": "Протонная полярная шапка (PCA)",
+  "map.layer.pca.stale": "данные о протонах устарели ({{time}}): ничего не нарисовано",
+  "map.layer.pca.undated": "у данных о протонах нет времени: ничего не нарисовано",
   "map.layer.coast.label": "Береговые линии",
   "map.layer.states.label": "Штаты США",
   "map.layer.grid.label": "Локаторы (20°×10°)",

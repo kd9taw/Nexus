@@ -2686,6 +2686,8 @@ export const JA: PartialCatalog = {
   "map.layer.aurora.observed": "{{time}}に観測された太陽風から算出",
   "map.layer.flare.label": "フレアブラックアウト（D-RAP）",
   "map.layer.pca.label": "プロトン極冠吸収（PCA）",
+  "map.layer.pca.stale": "プロトン値が古い（{{time}}）：描画なし",
+  "map.layer.pca.undated": "プロトン値に時刻なし：描画なし",
   "map.layer.coast.label": "海岸線",
   "map.layer.states.label": "米国州境",
   "map.layer.grid.label": "グリッド（20°×10°）",

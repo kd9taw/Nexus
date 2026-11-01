@@ -149,6 +149,11 @@ async function mount(over: Record<string, unknown> = {}) {
 const mapCanvas = (c: HTMLElement) => c.querySelector('.map-canvas-wrap > canvas') as HTMLCanvasElement
 const marks = (c: HTMLElement) => marksOf.get(mapCanvas(c)) ?? []
 const strokes = (c: HTMLElement, ink: string) => marks(c).filter((m) => m.op === 'stroke' && m.ink === ink)
+/** The cap's shading: violet dots `rgb(150–210, 80, 190–220)`. */
+const capFills = (c: HTMLElement) => marks(c).filter((m) => m.op === 'fill' && /^rgb\(\d+, 80, \d+\)$/.test(String(m.ink)))
+function pcaRow(c: HTMLElement): HTMLElement {
+  return [...c.querySelectorAll('.map-layer')].find((r) => r.textContent?.includes(t('map.layer.pca.label'))) as HTMLElement
+}
 const capChip = (c: HTMLElement) => c.querySelector('.wx-chip-stack .pca-chip') as HTMLElement | null
 const auroraChip = (c: HTMLElement) => c.querySelector('.wx-chip-stack .aurora-chip') as HTMLElement | null
 function auroraRow(c: HTMLElement): HTMLElement {
@@ -220,14 +225,44 @@ describe('the polar cap on the 2-D map', () => {
     expect(strokes(s.container, CAP_INK).length).toBe(2)
   })
 
-  it('an old proton sample says how old, dims, and drops NOAA’s duration', async () => {
+  it('a proton sample over 15 min old (still under 30) says how old, dims, and drops NOAA’s duration', async () => {
     layersOn(['pca'])
-    feeds.pca = { ...PCA, protonsAt: NOW_S - 40 * 60 }
+    feeds.pca = { ...PCA, protonsAt: NOW_S - 20 * 60 }
     const r = await mount()
     const chip = capChip(r.container)!
     expect(chip.hasAttribute('data-stale')).toBe(true)
-    expect(chip.textContent).toContain(t('map.pca.protonsOld', { time: '00:50Z', ago: t('prop.opening.ago.mins', { mins: 40 }) }))
+    expect(chip.textContent).toContain(t('map.pca.protonsOld', { time: '01:10Z', ago: t('prop.opening.ago.mins', { mins: 20 }) }))
     expect(chip.textContent).not.toContain(t('map.pca.recovery', { h: 24 }))
+  })
+
+  it('a proton reading 30 min old or more draws no cap, no edge and no chip, from either source; the row says how old', async () => {
+    for (const lane0 of [null, lane(capGrid())]) {
+      layersOn(['pca'])
+      feeds.pca = { ...PCA, protonsAt: NOW_S - 7200 }
+      const r = await mount({ xrayLong: 2e-7, flareNoaa: lane0 })
+      expect(capFills(r.container), 'no cap shading').toEqual([])
+      expect(strokes(r.container, CAP_INK), 'no cap edge').toEqual([])
+      expect(capChip(r.container), 'no "S2 proton event" chip').toBeNull()
+      expect(pcaRow(r.container).textContent).toContain(t('map.layer.pca.stale', { time: wxStampLabel(NOW_S - 7200) }))
+      cleanup()
+    }
+  })
+
+  it('an undated proton reading draws nothing, and the row says it has no time', async () => {
+    layersOn(['pca'])
+    feeds.pca = { ...PCA, protonsAt: null }
+    const r = await mount({ xrayLong: 2e-7, flareNoaa: lane(capGrid()) })
+    expect(capFills(r.container)).toEqual([])
+    expect(capChip(r.container)).toBeNull()
+    expect(pcaRow(r.container).textContent).toContain(t('map.layer.pca.undated'))
+  })
+
+  it('CONTROL — a fresh reading draws the cap shading and its chip', async () => {
+    layersOn(['pca'])
+    feeds.pca = PCA
+    const r = await mount()
+    expect(capFills(r.container).length).toBeGreaterThan(0)
+    expect(capChip(r.container)).not.toBeNull()
   })
 
   it('a quiet sky has no cap chip', async () => {

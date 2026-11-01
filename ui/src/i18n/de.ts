@@ -4471,6 +4471,8 @@ export const DE: PartialCatalog = {
   "map.layer.aurora.observed": "aus dem Sonnenwind, gemessen {{time}}",
   "map.layer.flare.label": "Flare-Blackout (D-RAP)",
   "map.layer.pca.label": "Protonen-Polkappe (PCA)",
+  "map.layer.pca.stale": "Protonenmessung veraltet ({{time}}): nichts gezeichnet",
+  "map.layer.pca.undated": "Protonenmessung ohne Zeit: nichts gezeichnet",
   "map.layer.coast.label": "Küstenlinien",
   "map.layer.states.label": "US-Bundesstaaten",
   "map.layer.grid.label": "Locator-Gitter (20°×10°)",

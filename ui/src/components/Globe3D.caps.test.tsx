@@ -226,6 +226,15 @@ describe('the polar cap on the 3-D globe', () => {
     expect(r.container.querySelector('.wx-chip-stack .pca-chip')!.textContent).toContain(t('map.pca.head', { scale: 2, db: '1.4' }))
   })
 
+  it('a proton reading 2 h old draws no cap, no edge and no chip on the globe', async () => {
+    feeds.pca = { ...PCA, protonsAt: NOW_S - 7200 }
+    const r = await mount(3)
+    expect(group('capEdge')).toBeUndefined()
+    expect(r.container.querySelector('.pca-chip')).toBeNull()
+    const c = fake.scene().children.find((o) => o.name === 'cloud:pca') as THREE_NS.Points | undefined
+    expect(c?.visible ?? false, 'no cap shading').toBe(false)
+  })
+
   it('CONTROL — without a measured Kp there is no edge line', async () => {
     feeds.pca = { ...PCA, cutoffDeg: null, edge: null }
     const r = await mount(3)
