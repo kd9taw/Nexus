@@ -85,16 +85,16 @@ describe('the choice each box keeps', () => {
 
   it('a restart brings back what each box chose, apart from the others', () => {
     saveGetoutSort('left1', 'snr')
-    saveGetoutSort('box2', 'call')
+    saveGetoutSort('cw.box2', 'call')
     expect(loadGetoutSort('left1')).toBe('snr')
-    expect(loadGetoutSort('box2')).toBe('call')
+    expect(loadGetoutSort('cw.box2')).toBe('call')
     expect(loadGetoutSort('rail1')).toBe('distance')
   })
 
   it('a value this build does not know reads as Distance', () => {
-    localStorage.setItem(KEY, JSON.stringify({ left1: 'loudest', box2: 7, rail1: 'newest' }))
+    localStorage.setItem(KEY, JSON.stringify({ left1: 'loudest', 'cw.box2': 7, rail1: 'newest' }))
     expect(loadGetoutSort('left1')).toBe('distance')
-    expect(loadGetoutSort('box2')).toBe('distance')
+    expect(loadGetoutSort('cw.box2')).toBe('distance')
     expect(loadGetoutSort('rail1')).toBe('newest')
   })
 
@@ -113,20 +113,6 @@ describe('the choice each box keeps', () => {
     expect(loadGetoutSort('operate.box2')).toBe('call')
     expect(loadGetoutSort('cw.box2')).toBe('snr')
     expect(loadGetoutSort('phone.box2')).toBe('distance')
-  })
-
-  it("a choice saved by the box's place alone (before boxes were told apart by cockpit) still loads, until the cockpit's own", () => {
-    localStorage.setItem(KEY, JSON.stringify({ box2: 'newest' }))
-    expect(loadGetoutSort('operate.box2')).toBe('newest')
-    expect(loadGetoutSort('cw.box2')).toBe('newest')
-    saveGetoutSort('cw.box2', 'call')
-    expect(loadGetoutSort('cw.box2')).toBe('call')
-    expect(loadGetoutSort('operate.box2')).toBe('newest')
-  })
-
-  it('an unknown value under the cockpit\'s own name reads as Distance, never as the old shared choice', () => {
-    localStorage.setItem(KEY, JSON.stringify({ box2: 'newest', 'cw.box2': 'loudest' }))
-    expect(loadGetoutSort('cw.box2')).toBe('distance')
   })
 
   it('a name inherited from the object prototype is not a choice', () => {
