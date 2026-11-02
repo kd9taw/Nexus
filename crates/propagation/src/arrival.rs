@@ -557,14 +557,20 @@ pub fn detect_jump(samples: &[L1Sample]) -> Option<L1Jump> {
 
 // ---- the 3-day forecast --------------------------------------------------------------------
 
-/// "2026 Oct 31 0030" → Unix seconds.
+/// "2026 Oct 31 0030" → Unix seconds. `None` unless the time is exactly four ASCII digits, so a
+/// garbled stamp is no stamp: checking only its byte length would let the hour slice below cut
+/// through a multibyte character and panic.
 fn parse_swpc_issue(s: &str) -> Option<i64> {
     let mut it = s.split_whitespace();
     let y: i64 = it.next()?.parse().ok()?;
     let m = month_of(it.next()?)?;
     let d: u32 = it.next()?.parse().ok()?;
     let hm = it.next()?;
-    if hm.len() != 4 || !(1900..=2100).contains(&y) || !(1..=31).contains(&d) {
+    if hm.len() != 4
+        || !hm.bytes().all(|b| b.is_ascii_digit())
+        || !(1900..=2100).contains(&y)
+        || !(1..=31).contains(&d)
+    {
         return None;
     }
     let (h, mi): (i64, i64) = (hm[..2].parse().ok()?, hm[2..].parse().ok()?);
@@ -928,6 +934,29 @@ mod tests {
              on 02 Nov as CH HSS influence wanes."
         );
         assert!(parse_three_day_rationale("no product here").is_none());
+    }
+
+    /// A garbled `:Issued:` time is no time, never a panic: four bytes that are not four ASCII
+    /// digits (a multibyte character the hour would be cut through, a sign) are refused before
+    /// the hour is sliced, and the rationale without its time is not served.
+    #[test]
+    fn a_garbled_issue_time_is_no_time_not_a_panic() {
+        for hm in ["0é3", "é00", "+130", "-030", "0a30"] {
+            assert_eq!(
+                hm.len(),
+                4,
+                "{hm} must pass the length check to reach the slice"
+            );
+            assert_eq!(parse_swpc_issue(&format!("2026 Oct 31 {hm}")), None, "{hm}");
+            let txt = THREE_DAY.replace("2026 Oct 31 0030 UTC", &format!("2026 Oct 31 {hm} UTC"));
+            assert_ne!(txt, THREE_DAY, "the fixture's stamp moved");
+            assert!(parse_three_day_rationale(&txt).is_none(), "{hm}");
+        }
+        // CONTROL: the well-formed stamp still reads.
+        assert_eq!(
+            parse_swpc_issue("2026 Oct 31 0030"),
+            Some(at("2026-10-31 00:30:00"))
+        );
     }
 
     #[test]

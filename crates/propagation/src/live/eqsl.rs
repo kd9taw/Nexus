@@ -27,16 +27,10 @@ const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
 /// Every failure path returns a **redacted** message — never the URL, the
 /// password, or the raw transport error.
 pub fn fetch_inbox(inbox_url: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(60)) // eQSL builds the file server-side; can be slow.
-        .user_agent(UA)
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| "eQSL: HTTP client initialization failed".to_string())?;
+    let client = client()?;
 
     // Step 1 — the built-page HTML.
-    let html = get_text(&client, inbox_url)?;
+    let html = get_text(&client, inbox_url, PAGE_REPLY_BYTES)?;
     if !eqsl::is_built_page(&html) {
         // An empty range is the InBox with no cards; a refused login or a page that is neither
         // is Nexus's own words for each, never the page's.
@@ -52,7 +46,7 @@ pub fn fetch_inbox(inbox_url: &str) -> Result<String, String> {
         .ok_or_else(|| "eQSL: refused a non-eqsl.cc download link".to_string())?;
 
     // Step 2 — the .adi file.
-    get_text(&client, &adi_url)
+    get_text(&client, &adi_url, ADI_REPLY_BYTES)
 }
 
 /// GET step 1 of the InBox download alone and return its page — the Settings Test of the eQSL
@@ -61,14 +55,8 @@ pub fn fetch_inbox(inbox_url: &str) -> Result<String, String> {
 /// [`tempo_core::eqsl::classify_login_test`]. Same client as [`fetch_inbox`]: cookieless, HTTPS
 /// only, no redirects, redacted errors.
 pub fn fetch_login_page(inbox_url: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .user_agent(UA)
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| "eQSL: HTTP client initialization failed".to_string())?;
-    get_text(&client, inbox_url)
+    let client = client()?;
+    get_text(&client, inbox_url, PAGE_REPLY_BYTES)
 }
 
 /// POST a `name=value` form body — the eQSL `ImportADIF` upload. Same HTTPS +
@@ -77,13 +65,7 @@ pub fn fetch_login_page(inbox_url: &str) -> Result<String, String> {
 /// carry an "eQSL:" prefix (previously this borrowed the QRZ transport, so eQSL
 /// failures surfaced mislabeled as "QRZ: …").
 pub fn post_form(url: &str, body: String) -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .user_agent(UA)
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| "eQSL: HTTP client initialization failed".to_string())?;
+    let client = client()?;
     let resp = client
         .post(url)
         .header(
@@ -97,19 +79,45 @@ pub fn post_form(url: &str, body: String) -> Result<String, String> {
     if !status.is_success() {
         return Err(format!("eQSL: server returned HTTP {}", status.as_u16()));
     }
-    resp.text()
-        .map_err(|_| "eQSL: could not read the response body".to_string())
+    super::body::read_capped(resp, PAGE_REPLY_BYTES, "eQSL")
 }
 
-/// A single GET returning the body text, with status check and **redacted** errors.
-fn get_text(client: &reqwest::blocking::Client, url: &str) -> Result<String, String> {
+/// The most an eQSL page is read to: the built-page, the login Test's page and the upload's
+/// answer are each a short HTML page.
+const PAGE_REPLY_BYTES: u64 = 1024 * 1024;
+
+/// The most the InBox `.adi` is read to. The whole InBox (the first sync, Check confirmations)
+/// comes as one file of a few hundred bytes a card; 256 MB holds several hundred thousand.
+const ADI_REPLY_BYTES: u64 = 256 * 1024 * 1024;
+
+/// The client every eQSL request uses: cookieless, HTTPS only, on [`builder`]'s timeout and
+/// redirect policy.
+fn client() -> Result<reqwest::blocking::Client, String> {
+    builder()
+        .https_only(true)
+        .build()
+        .map_err(|_| "eQSL: HTTP client initialization failed".to_string())
+}
+
+/// A timeout (eQSL builds the file server-side; it can be slow), and no redirect followed. The
+/// loopback tests build on this (plain HTTP); the requests themselves always go through
+/// [`client`].
+fn builder() -> reqwest::blocking::ClientBuilder {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .user_agent(UA)
+        .redirect(reqwest::redirect::Policy::none())
+}
+
+/// A single GET returning the body text, at most `limit` bytes, with status check and
+/// **redacted** errors.
+fn get_text(client: &reqwest::blocking::Client, url: &str, limit: u64) -> Result<String, String> {
     let resp = client.get(url).send().map_err(redact)?;
     let status = resp.status();
     if !status.is_success() {
         return Err(format!("eQSL: server returned HTTP {}", status.as_u16()));
     }
-    resp.text()
-        .map_err(|_| "eQSL: could not read the response body".to_string())
+    super::body::read_capped(resp, limit, "eQSL")
 }
 
 /// Map a transport error to a safe, category-only message. Uses ONLY boolean
@@ -126,6 +134,19 @@ fn redact(e: reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every GET reads through `get_text` on `client`: HTTPS only, no redirect followed, at most
+    /// the limit it is given (the page's here; the `.adi` file's is the same read, larger).
+    #[test]
+    fn the_wire_keeps_its_limits() {
+        super::super::body::assert_wire_limits(
+            builder,
+            client,
+            |c, u| get_text(c, u, PAGE_REPLY_BYTES),
+            PAGE_REPLY_BYTES,
+            "eQSL",
+        );
+    }
 
     #[test]
     fn non_https_url_is_rejected_without_leaking_it() {
