@@ -349,6 +349,9 @@ export function nativeCivBlockedReason(rigModel: number, rigConn: string): strin
   if (rigConn === 'omnirig') return 'omnirig'
   // The Icom network connection always drives the radio with Nexus's own CI-V engine.
   if (rigConn === 'icomlan') return 'icomlan'
+  // TCI: the SDR program drives the radio, and the only port Nexus opens is its TCI server
+  // (`native_civ_model` in crates/tempo-audio/src/service.rs refuses it too).
+  if (rigConn === 'tci') return 'tci'
   return null
 }
 

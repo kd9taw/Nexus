@@ -234,17 +234,34 @@ describe('the CW audio scope span', () => {
 describe('the CW audio scope says when the radio\'s filter is what limits it', () => {
   const note = () => screen.queryByText(/widen it on the radio to see more/)
 
-  it('names the filter when it is narrower than the window drawn', async () => {
+  it('names the filter in Std and Full, where the window is wider than it', async () => {
     await renderCw({ filterWidthHz: 500 })
+    fireEvent.click(chip('Std'))
     expect(note()?.textContent).toBe("Showing your radio's 500 Hz filter — widen it on the radio to see more.")
-    // Std draws 200–3000 Hz of audio, and only the filter's 500 of it can carry a signal.
+    fireEvent.click(chip('Full'))
+    expect(note()).not.toBeNull()
+    // A 1 kHz filter still leaves most of Std's 2800 Hz dark.
+    cleanup()
+    await renderCw({ filterWidthHz: 1000 })
+    fireEvent.click(chip('Std'))
+    expect(note()?.textContent).toBe("Showing your radio's 1000 Hz filter — widen it on the radio to see more.")
+  })
+
+  it('never in Filter, which frames the filter by design', async () => {
+    await renderCw({ filterWidthHz: 500 })
+    expect(chip('Filter').getAttribute('aria-pressed')).toBe('true')
+    expect(note()).toBeNull()
+    // Positive control on the same render: Std names it, and back to Filter it goes.
     fireEvent.click(chip('Std'))
     expect(note()).not.toBeNull()
+    fireEvent.click(chip('Filter'))
+    expect(note()).toBeNull()
   })
 
   it('says nothing when the filter is wider than the window, unknown, or the feed is RF', async () => {
-    // 1 kHz filter: Filter draws 800 Hz, all of it inside the filter.
-    await renderCw({ filterWidthHz: 1000 })
+    localStorage.setItem('nexus.cw.scope.span', 'std')
+    // A 3 kHz filter (the soundcard keyer's data mode) covers Std's 200–3000 Hz.
+    await renderCw({ filterWidthHz: 3000 })
     expect(note()).toBeNull()
     cleanup()
     await renderCw({ filterWidthHz: null })
@@ -311,5 +328,22 @@ describe('the CW scope points an Icom at its own wide scope', () => {
     const onFeed = scopeProps[scopeProps.length - 1].onFeed as (s: string, lo: number, hi: number) => void
     act(() => onFeed('civ', 14_000_000, 14_100_000))
     expect(hint()).toBeNull()
+  })
+
+  it('a radio switch re-reads the settings: an Icom-to-Yaesu switch clears the Icom hint', async () => {
+    settingsNow.value = icomOff
+    const r = await renderCw({}, vi.fn())
+    // Same radio re-rendered: still the Icom.
+    expect(hint()).not.toBeNull()
+    settingsNow.value = { rigModel: 1035, rigConn: 'serial', icomNativeCat: false, baud: 38400 }
+    r.rerender(
+      <CwCockpit snap={{ ...makeSnap(), activeRadioId: 2 } as AppSnapshot} theme="dark" onWorkSpot={() => {}} spots={[]} onOpenSettings={vi.fn()} />,
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(hint()).toBeNull()
+    expect(baudHint()).toBeNull()
   })
 })

@@ -899,7 +899,9 @@ export function CwCockpit({
     return () => {
       alive = false
     }
-  }, [active])
+    // Re-read on a radio switch too: the flat rig fields (model, connection, baud, CI-V switch) are
+    // the ACTIVE radio's, and the scope toolbar's Icom hint reads them (`icomScopeCure`).
+  }, [active, snap.activeRadioId])
   const profileMacros = profiles[activeProfile]?.macros
   // Typed as CwMacro[] so the row renderer reads ONE shape: a profile macro's label is the
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
@@ -1150,10 +1152,12 @@ export function CwCockpit({
         ))}
       </div>
     ) : null
-  // The audio is what came through the RADIO's filter, so where that filter is narrower than the
-  // window drawn, the rest of the window is the filter's stopband and can never show a signal. Say
-  // so, or a 500 Hz filter reads as a scope that is zoomed in and will not zoom out.
-  const filterLimits = !nativeRf && filterHz != null && filterHz > 0 && filterHz < cwView.hiHz - cwView.loHz
+  // The audio is what came through the RADIO's filter, so in Std and Full, where the window is wider
+  // than that filter, the rest of the window is the filter's stopband and can never show a signal.
+  // Say so, or a 500 Hz filter reads as a scope that will not zoom out. Never in Filter: that view
+  // frames the filter by design, and saying so there would be noise.
+  const filterLimits =
+    !nativeRf && audioSpan !== 'filter' && filterHz != null && filterHz > 0 && filterHz < cwView.hiHz - cwView.loHz
   // An Icom whose own wide scope is one setting away (`icomScopeCure`): the audio view is all an
   // operator on Hamlib ever sees, with nothing saying the radio's panadapter can be drawn here.
   const scopeCure = !nativeRf && cwSettings ? icomScopeCure(cwSettings) : null
