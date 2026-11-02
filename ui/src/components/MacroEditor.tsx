@@ -30,11 +30,12 @@
 // `rtty-arm` the same way. Renaming them would be a stylesheet-wide change whose result jsdom
 // cannot see.
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Children, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   isEmptyMacroSlot,
   isStopLikeLabel,
   macroEditShortcut,
+  macroKeyCaption,
   type MacroSetId,
   type MacroSlot,
 } from '../features/macroSets'
@@ -105,7 +106,9 @@ export function MacroButton({
         onClick={empty ? () => onEdit('title') : onSend}
         title={empty ? emptyTitle : title}
       >
-        <span className="cw-macro-key">{slot.key}</span>
+        {/* F1–F12 name their key; keys 13–16 have none to name (a click sends them), and keep
+            the line so every key in a row stands the same height. */}
+        <span className="cw-macro-key">{macroKeyCaption(slot.key) || '\u00a0'}</span>
         <span className="cw-macro-label">
           {empty ? emptyLabel : slot.label.trim() || slot.text}
         </span>
@@ -115,7 +118,7 @@ export function MacroButton({
           type="button"
           className="rtty-macro-edit"
           aria-label={editAria}
-          aria-keyshortcuts={macroEditShortcut(slot.key)}
+          aria-keyshortcuts={macroKeyCaption(slot.key) ? macroEditShortcut(slot.key) : undefined}
           title={editTitle}
           aria-expanded={editing}
           onClick={() => onEdit('title')}
@@ -123,6 +126,44 @@ export function MacroButton({
           ✎
         </button>
       )}
+    </div>
+  )
+}
+
+interface BankProps {
+  /** The keys, in dock order — one element per key. */
+  children: ReactNode
+  /** The group's accessible name, from the cockpit's own catalog. */
+  label: string
+  /** The classes of the eight-key grid, exactly as the dock always drew it. */
+  gridClass: string
+  /** The classes of the bank at 12 or 16 keys (`.macro-bank`, cockpit-panes.css) … */
+  bankClass: string
+  /** … and of each group of four in it (`.macro-quad`), with the dock's own key styling. */
+  quadClass?: string
+}
+
+/** A dock's macro keys. Eight are the grid the dock always drew, unchanged. Twelve or sixteen stand in
+ *  groups of four, the way a keyboard groups its F-keys, in a bank that wraps the groups by the
+ *  dock's width (cockpit-panes.css `.macro-bank`). Either way one group, named once, in dock order. */
+export function MacroBank({ children, label, gridClass, bankClass, quadClass = '' }: BankProps) {
+  const keys = Children.toArray(children)
+  if (keys.length <= 8) {
+    return (
+      <div className={gridClass} role="group" aria-label={label}>
+        {children}
+      </div>
+    )
+  }
+  const quads: ReactNode[][] = []
+  for (let i = 0; i < keys.length; i += 4) quads.push(keys.slice(i, i + 4))
+  return (
+    <div className={bankClass} role="group" aria-label={label}>
+      {quads.map((quad, i) => (
+        <div key={i} className={`macro-quad${quadClass ? ` ${quadClass}` : ''}`}>
+          {quad}
+        </div>
+      ))}
     </div>
   )
 }

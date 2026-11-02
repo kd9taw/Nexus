@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **12 or 16 macro keys on the CW, RTTY and PSK screens.** Wide windows have room for more than eight, so each of the three modes now has a Macro keys choice in Settings: 8 (as before, and still the default), 12 or 16. F1–F12 send the first twelve; keys 13–16 are sent with a click and show no key name. The keys stand in groups of four and wrap onto a second row when the window is narrow. The new keys start empty and are edited like the others. Going back to fewer keys only hides the extra ones, and what they hold is still there when you choose more again.
+
 ## [1.22.0] — 2026-11-01
 
 ### Added

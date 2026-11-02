@@ -22,8 +22,8 @@ import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { RttyMacroButton, RttyMacroEditor, RttyMacroSetSwitch, isEmptyRttySlot } from './RttyMacroEditor'
-import type { MacroEditorFocus } from './MacroEditor'
-import { macroEditChordKey } from '../features/macroSets'
+import { MacroBank, type MacroEditorFocus } from './MacroEditor'
+import { dockMacroKey, macroCount, macroEditChordKey, macroKeyCaption } from '../features/macroSets'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { RTTY_PANEL_IDS, RTTY_PANELS, type RttyPanelId, type PanelLayoutApi } from '../features/panelState'
@@ -790,7 +790,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     setMacroSets({ profiles: macros?.rttyProfiles ?? [], active: macros?.activeRttyProfile ?? '' })
   }, [macros?.rttyProfiles, macros?.activeRttyProfile])
   const macroSet = rttySetId(macroSets.active)
-  const slots = resolveRttySet(macroSets.profiles, macroSet, t)
+  // How many keys the dock shows (Settings ▸ RTTY ▸ Macro keys): 8, 12 or 16. Only what shows:
+  // a saved key past the count is kept, hidden, and is never sent by a key or a press.
+  const slots = resolveRttySet(macroSets.profiles, macroSet, t, macroCount(macros?.rttyMacroCount))
   // ⭐ ENTER SENDS MESSAGE in this cockpit's contest strip (`features/esmHost.ts`): the set the
   // F-keys send, with its own step mapping over the built-in table (`macros.rttyEsmRoles`), and
   // THE ONE PATH above to send through. The auto sequence and Continuous TX make it step aside
@@ -894,18 +896,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     const slot = slots.find((s) => s.key === key)
     if (slot && sendMacro({ ...slot, text: message })) closeEditor()
   }
-  /** A key's hover text: the message with what is known filled in, tokens left where not. */
-  const macroTitle = (message: string) => {
+  /** A key's hover text: the message with what is known filled in, tokens left where not — and,
+   *  on a Mac, how to press its F-key there (keys 13–16 have none). */
+  const macroTitle = (message: string, key: string) => {
     const mycall = snap?.mycall?.trim().toUpperCase() || '{MYCALL}'
     const call = hisCall.trim().toUpperCase() || '{CALL}'
     const filled = message
       .replace(/\{MYCALL\}/gi, mycall)
       .replace(/\{CALL\}/gi, call)
       .replace(/\{RST\}/gi, '599')
-    return `${filled}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`
+    return `${filled}${IS_MAC && macroKeyCaption(key) ? `\n${FN_KEY_HINT}` : ''}`
   }
 
-  // THE KEYBOARD — Esc, and F1–F8. Bound only while this is the VISIBLE view: the cockpit stays
+  // THE KEYBOARD — Esc, and F1–F8 (F1–F12 when the dock shows 12 or 16 keys). Bound only while this is the VISIBLE view: the cockpit stays
   // mounted in the keep-alive host, so an unconditional listener would fire from inside another
   // section. One listener bound per visit, reading the live state through `keys`.
   //
@@ -918,7 +921,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // on its next step and has its own Abort live in the dock. Anything live, Esc stops, editor or
   // no editor.
   //
-  // F1–F8 send through the same `sendMacro` → `send()` → `rtty_send` a click does. They work
+  // F1–F8 (and F9–F12 when the dock shows them; keys 13–16 have no F-key, `dockMacroKey`) send
+  // through the same `sendMacro` → `send()` → `rtty_send` a click does. They work
   // with the caret in the compose bar, the Call box or the log strip; not while the editor is
   // open; not on a held key's repeats (one press, one over); and never with Alt, Ctrl or Cmd,
   // which belong to the system (Alt+F4). A bound F-key's default is cancelled even while the
@@ -950,16 +954,18 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         e.preventDefault()
         return
       }
-      const chord = macroEditChordKey(e)
+      const shown = k.slots.map((s) => s.key)
+      const chord = macroEditChordKey(e, shown)
       if (chord) {
         e.preventDefault()
         if (!e.repeat) k.openEditor(chord, 'message')
         return
       }
-      if (!/^F[1-8]$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
+      const key = dockMacroKey(e, shown)
+      if (!key) return
       e.preventDefault()
       if (e.repeat || k.editorOpen) return
-      const slot = k.slots.find((s) => s.key === e.key)
+      const slot = k.slots.find((s) => s.key === key)
       if (slot) k.sendMacro(slot)
     }
     window.addEventListener('keydown', onKey)
@@ -1561,23 +1567,29 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {/* THE KEYS AND THE FIXED ROW, which share one line where the dock is wide enough for
           both and fold into two where it is not (styles.css `.rtty-dock-keys`). */}
       <div className="rtty-dock-keys">
-      {/* THE KEYS, in keyboard order, eight across at every width but the narrowest. Senders,
-          every one — the rule is indifferent to senders, and none of them may be captioned as a
-          stop (the editor refuses it). Default Mac keyboards eat bare F-keys as media keys, so
-          each key's tooltip carries the cure there. */}
-      <div className="cw-macros rtty-macros" role="group" aria-label={t('rtty.macros.aria')}>
+      {/* THE KEYS, in keyboard order, eight across at every width but the narrowest — or, at 12
+          or 16 (Settings ▸ RTTY ▸ Macro keys), in groups of four that wrap by width (`MacroBank`).
+          Senders, every one — the rule is indifferent to senders, and none of them may be
+          captioned as a stop (the editor refuses it). Default Mac keyboards eat bare F-keys as
+          media keys, so each key's tooltip carries the cure there. */}
+      <MacroBank
+        label={t('rtty.macros.aria')}
+        gridClass="cw-macros rtty-macros"
+        bankClass={`cw-macros macro-bank macro-bank-shared-${slots.length}`}
+        quadClass="rtty-macros"
+      >
         {slots.map((slot) => (
           <RttyMacroButton
             key={slot.key}
             slot={slot}
             editing={editing === slot.key}
             lit={esmLit.includes(slot.key)}
-            title={macroTitle(slot.text)}
+            title={macroTitle(slot.text, slot.key)}
             onSend={() => sendMacro(slot)}
             onEdit={(focus) => openEditor(slot.key, focus)}
           />
         ))}
-      </div>
+      </MacroBank>
 
       {/* THE FIXED ROW: the Call box, the set switch, and — at the right, together, outside
           every pane and outside the editable set — the continuous-TX latch and Esc/Stop. */}

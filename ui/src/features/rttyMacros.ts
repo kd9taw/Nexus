@@ -24,6 +24,7 @@ import {
   withMacroEntry,
   withMacroSetReset,
   type BuiltinMacro,
+  type MacroCount,
   type MacroKey,
   type MacroRefusal,
   type MacroSetId,
@@ -77,14 +78,16 @@ export const rttySetId = macroSetId
  *  so "Reset this button" has something to reset. */
 export type RttyMacroSlot = MacroSlot
 
-/** The eight keys of `set`: the operator's saved entry for a key where there is one — their own
- *  words, never translated — else the built-in, whose caption `translate` resolves. */
+/** The `count` keys of `set` (eight unless the operator chose 12 or 16): the operator's saved
+ *  entry for a key where there is one — their own words, never translated — else the built-in,
+ *  whose caption `translate` resolves. The built-ins fill F1–F8; the keys past them start empty. */
 export function resolveRttySet(
   profiles: KeyboardMacroProfile[] | undefined,
   set: RttySetId,
   translate: Parameters<typeof resolveMacroSet>[3],
+  count: MacroCount = 8,
 ): RttyMacroSlot[] {
-  return resolveMacroSet(profiles, set, RTTY_BUILTINS, translate)
+  return resolveMacroSet(profiles, set, RTTY_BUILTINS, translate, count)
 }
 
 /** `profiles` with `key`'s saved entry in `set` replaced — or removed, for `null`, which puts the

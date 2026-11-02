@@ -22,7 +22,8 @@ import {
   type MacroEditorLabels,
   type MacroSetSwitchLabels,
 } from './MacroEditor'
-import { isEmptyMacroSlot, type MacroSetId } from '../features/macroSets'
+import { isEmptyMacroSlot, macroKeyCaption, type MacroSetId } from '../features/macroSets'
+import { macroSlotName, macroSlotTitle } from '../features/macroSlotWords'
 import { RTTY_TOKENS, unknownRttyTokens, type RttyMacroSlot, type RttySetId } from '../features/rttyMacros'
 
 /** The dock attribute RTTY's cockpit finds its own slots by. */
@@ -60,11 +61,15 @@ export function RttyMacroButton({ slot, editing, lit, title, onSend, onEdit }: B
       lit={lit}
       slotAttr={RTTY_SLOT_ATTR}
       editing={editing}
-      title={title}
+      title={macroSlotTitle(slot.key, title)}
       emptyLabel={t('rtty.macro.empty.label')}
-      emptyTitle={t('rtty.macro.empty.title', { key: slot.key })}
-      editAria={t('rtty.macro.edit.aria', { key: slot.key })}
-      editTitle={t('rtty.macro.edit.title', { key: slot.key })}
+      emptyTitle={t('rtty.macro.empty.title', { key: macroSlotName(slot.key) })}
+      editAria={t('rtty.macro.edit.aria', { key: macroSlotName(slot.key) })}
+      editTitle={
+        macroKeyCaption(slot.key)
+          ? t('rtty.macro.edit.title', { key: slot.key })
+          : t('macroSlot.edit.title', { key: macroSlotName(slot.key) })
+      }
       onSend={onSend}
       onEdit={onEdit}
     />
@@ -87,7 +92,7 @@ interface EditorProps {
  *  word goes on the air. */
 export function RttyMacroEditor({ slot, left, saving, focus, onSave, onSendOnce, onCancel, onReset }: EditorProps) {
   const labels: MacroEditorLabels = {
-    aria: t('rtty.macroEditor.aria', { key: slot.key }),
+    aria: t('rtty.macroEditor.aria', { key: macroSlotName(slot.key) }),
     titleLabel: t('rtty.macroEditor.title.label'),
     messageLabel: t('rtty.macroEditor.message.label'),
     tokensAria: t('rtty.macroEditor.tokens.aria'),

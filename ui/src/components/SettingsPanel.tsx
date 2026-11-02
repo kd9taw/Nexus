@@ -215,7 +215,17 @@ import {
   esmVoiceSlots,
   type EsmRoleMap,
 } from '../features/esmRoles'
-import { MACRO_KEYS, macroSetId, type MacroSetId } from '../features/macroSets'
+import {
+  MACRO_COUNTS,
+  MACRO_KEYS,
+  macroCount,
+  macroKeyCaption,
+  macroSetId,
+  type MacroCount,
+  type MacroSetId,
+} from '../features/macroSets'
+import { macroSlotName } from '../features/macroSlotWords'
+import { cwVisibleMacros } from '../features/cwMacros'
 import { resolveRttySet } from '../features/rttyMacros'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { getDxccEntityNames } from '../api'
@@ -2430,18 +2440,54 @@ export function SettingsPanel({
       return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
     })
   }
-  const updateCwMacro = (i: number, field: 'label' | 'text', value: string) => {
+  // By KEY, not by row: the grid shows the keys the dock shows (`cwVisibleMacros`), so a row past
+  // F8 may be one the profile does not hold yet, and is added to it on the first character.
+  const updateCwMacro = (key: string, field: 'label' | 'text', value: string) => {
     markDirty()
     setForm((prev) => {
       if (!prev) return prev
       const idx = prev.macros.activeCwProfile ?? 0
       const list = (prev.macros.cwProfiles ?? []).map((p, pi) => {
         if (pi !== idx) return p
-        return { ...p, macros: p.macros.map((m, mi) => (mi === i ? { ...m, [field]: value } : m)) }
+        const macros = p.macros.some((m) => m.key === key)
+          ? p.macros.map((m) => (m.key === key ? { ...m, [field]: value } : m))
+          : [...p.macros, { key, label: '', text: '', [field]: value }]
+        return { ...p, macros }
       })
       return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
     })
   }
+
+  // --- How many macro keys each keyboard mode's dock shows: 8 (not written), 12 or 16 ---
+  type MacroCountField = 'cwMacroCount' | 'rttyMacroCount' | 'pskMacroCount'
+  const setMacroCount = (field: MacroCountField, count: MacroCount) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const { [field]: _was, ...macros } = prev.macros
+      return { ...prev, macros: count === 8 ? macros : { ...macros, [field]: count } }
+    })
+  }
+  /** The Macro keys choice for one mode. Fewer keys hides the rest; nothing they hold is deleted. */
+  const macroCountField = (field: MacroCountField) =>
+    form && (
+      <label className="settings-field">
+        <span className="settings-label">{t('settings.macroCount.label')}</span>
+        <select
+          disabled={locked('macros')}
+          className="settings-input"
+          value={macroCount(form.macros[field])}
+          onChange={(e) => setMacroCount(field, macroCount(Number(e.target.value)))}
+        >
+          {MACRO_COUNTS.map((n) => (
+            <option key={n} value={n}>
+              {t('settings.macroCount.option', { count: n })}
+            </option>
+          ))}
+        </select>
+        <span className="settings-hint">{t('settings.macroCount.hint')}</span>
+      </label>
+    )
 
   // --- Enter Sends Message: each set's own mapping of its keys to ESM's steps ---
   // A mapping describes its set, so it is saved WITH the set: on the active CW profile, per
@@ -9940,6 +9986,7 @@ export function SettingsPanel({
                     {t('settings.cw.macros.profiles.delete')}
                   </button>
                 </div>
+                {macroCountField('cwMacroCount')}
                 {!activeCwMacros.length ? (
                   <div className="cw-macro-row">
                     {/* The macro tokens live INSIDE the entry — `{MYCALL}` and friends are
@@ -9956,18 +10003,18 @@ export function SettingsPanel({
                   </div>
                 ) : (
                   <>
-                    {activeCwMacros.map((m, i) => (
+                    {cwVisibleMacros(activeCwMacros, macroCount(form.macros.cwMacroCount)).map((m) => (
                       <div key={m.key} className="cw-macro-row">
                         <span className="cw-macro-key" title={CW_MACRO_ROLES[m.key] ?? ''}>
-                          {m.key}
+                          {macroKeyCaption(m.key) || macroSlotName(m.key)}
                         </span>
                         <span className="cw-macro-role">{CW_MACRO_ROLES[m.key] ?? ''}</span>
                         <input disabled={locked('macros')}
                           className="settings-input cw-macro-label"
                           type="text"
                           value={m.label}
-                          onChange={(e) => updateCwMacro(i, 'label', e.target.value)}
-                          aria-label={t('settings.cw.macros.row.label.aria', { key: m.key })}
+                          onChange={(e) => updateCwMacro(m.key, 'label', e.target.value)}
+                          aria-label={t('settings.cw.macros.row.label.aria', { key: macroSlotName(m.key) })}
                           autoComplete="off"
                           spellCheck={false}
                         />
@@ -9975,8 +10022,8 @@ export function SettingsPanel({
                           className="settings-input cw-macro-text"
                           type="text"
                           value={m.text}
-                          onChange={(e) => updateCwMacro(i, 'text', e.target.value)}
-                          aria-label={t('settings.cw.macros.row.text.aria', { key: m.key })}
+                          onChange={(e) => updateCwMacro(m.key, 'text', e.target.value)}
+                          aria-label={t('settings.cw.macros.row.text.aria', { key: macroSlotName(m.key) })}
                           autoComplete="off"
                           spellCheck={false}
                         />
@@ -10023,6 +10070,7 @@ export function SettingsPanel({
               </label>
               <span className="settings-hint">{t('settings.rtty.rxAutoArm.hint')}</span>
             </div>
+            {macroCountField('rttyMacroCount')}
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.rtty.keying.title')}</span>
               <label className="settings-field">
@@ -10202,6 +10250,7 @@ export function SettingsPanel({
               </label>
               <span className="settings-hint">{t('settings.psk.rxAutoArm.hint')}</span>
             </div>
+            {macroCountField('pskMacroCount')}
             {/* JTTY — WSJT-X's keyboard mode, the Keyboard section's other modem, so its one
                 setting lives in this section (the Digital tab is at its section ceiling). Its F Tol
                 is kept too, but by the JTTY cockpit, its one writer — never by this form. */}

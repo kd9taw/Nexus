@@ -21,7 +21,8 @@ import {
   type MacroEditorLabels,
   type MacroSetSwitchLabels,
 } from './MacroEditor'
-import { isEmptyMacroSlot, type MacroSetId } from '../features/macroSets'
+import { isEmptyMacroSlot, macroKeyCaption, type MacroSetId } from '../features/macroSets'
+import { macroSlotName, macroSlotTitle } from '../features/macroSlotWords'
 import { PSK_TOKENS, unknownPskTokens, type PskMacroSlot, type PskSetId } from '../features/pskMacros'
 
 /** The dock attribute PSK's cockpit finds its own slots by — its own, never RTTY's: both
@@ -58,11 +59,15 @@ export function PskMacroButton({ slot, editing, title, onSend, onEdit }: ButtonP
       slot={slot}
       slotAttr={PSK_SLOT_ATTR}
       editing={editing}
-      title={title}
+      title={macroSlotTitle(slot.key, title)}
       emptyLabel={t('psk.macro.empty.label')}
-      emptyTitle={t('psk.macro.empty.title', { key: slot.key })}
-      editAria={t('psk.macro.edit.aria', { key: slot.key })}
-      editTitle={t('psk.macro.edit.title', { key: slot.key })}
+      emptyTitle={t('psk.macro.empty.title', { key: macroSlotName(slot.key) })}
+      editAria={t('psk.macro.edit.aria', { key: macroSlotName(slot.key) })}
+      editTitle={
+        macroKeyCaption(slot.key)
+          ? t('psk.macro.edit.title', { key: slot.key })
+          : t('macroSlot.edit.title', { key: macroSlotName(slot.key) })
+      }
       onSend={onSend}
       onEdit={onEdit}
     />
@@ -86,7 +91,7 @@ interface EditorProps {
  *  what the operator meant by writing one. */
 export function PskMacroEditor({ slot, left, saving, focus, onSave, onSendOnce, onCancel, onReset }: EditorProps) {
   const labels: MacroEditorLabels = {
-    aria: t('psk.macroEditor.aria', { key: slot.key }),
+    aria: t('psk.macroEditor.aria', { key: macroSlotName(slot.key) }),
     titleLabel: t('psk.macroEditor.title.label'),
     messageLabel: t('psk.macroEditor.message.label'),
     tokensAria: t('psk.macroEditor.tokens.aria'),

@@ -9513,6 +9513,19 @@ export const EN = {
   'settings.cw.macros.tokens.hint':
     "Tokens: {MYCALL} {NAME} {MYGRID} {MYSTATE} {RST} · ! = the worked call · {HISNAME} {HISSTATE} = the worked station's QRZ name/state (fill in Settings ▸ Station for {MYSTATE}; the rest auto-fill from the copilot / roster click + QRZ lookup). Each key KEEPS its role — the Guided copilot's next-step highlight follows the role, so customized text still rolls through F1→F2→F3→F4 exactly as before. Keep the ! token wherever you want the other station's call inserted. Save to apply.",
   'settings.cw.macros.reset': 'Reset to defaults',
+  // HOW MANY MACRO KEYS a keyboard mode's screen shows (CW, RTTY and PSK, each its own setting).
+  'settings.macroCount.label': 'Macro keys',
+  'settings.macroCount.option': {
+    one: '{{count}} key',
+    other: '{{count}} keys',
+  },
+  'settings.macroCount.hint':
+    'How many macro keys this mode’s screen shows. F1–F12 send the first twelve; keys 13–16 send with a click. Fewer keys hides the rest and keeps what they hold.',
+  // Macro keys 13–16, which no keyboard key sends: their name where an F-key's would go, their
+  // editor's tooltip without the Ctrl+Shift shortcut, and the line their tooltip ends with.
+  'macroSlot.name': '#{{n}}',
+  'macroSlot.edit.title': 'Edit the {{key}} macro. You can also right-click the key.',
+  'macroSlot.click.hint': 'Click to send — no keyboard key sends this one.',
   'settings.cw.macros.role.answer': 'Answer a station',
   'settings.cw.macros.role.report': 'Send report',
   'settings.cw.macros.role.signOff': 'Sign off (73)',

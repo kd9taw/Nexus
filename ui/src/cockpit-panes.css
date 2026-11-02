@@ -433,6 +433,49 @@
   z-index: 4;
 }
 
+/* THE MACRO BANK — a keyboard dock of 12 or 16 macro keys (Settings ▸ CW / RTTY / PSK ▸ Macro keys;
+   8, the default, is the dock as it always was and wears none of these). The keys stand in GROUPS OF
+   FOUR, the way a keyboard groups its F-keys — F1–F4, F5–F8, F9–F12, then keys 13–16, which no key
+   sends — and the bank puts as many groups on a line as the dock's own width holds, wrapping the
+   rest under them in keyboard order: one row on a wide window, two on a narrower one, a group per
+   row at phone width. A WRAP, so it follows the dock at any zoom with no viewport rule, and a key
+   keeps its column inside its group. A group's floor is 32em, 8em a key: never narrower than the
+   eight-key row's keys at the 1024×768 floor (111 px there, `.rtty-dock-keys` in styles.css), and
+   yielding to the dock where the dock is narrower still, so nothing overflows.
+   CW's bank is a row of the dock's column and keeps `.cw-macros`' pin (never a shrink victim).
+   RTTY's and PSK's share the keys row with the fixed row (Call, set switch, TX latch, Esc/Stop) as the
+   eight-key grid does, but the fixed row stands beside the bank only where the bank's WHOLE line fits
+   beside it (three groups at 12, four at 16); anywhere narrower the bank takes the full width and the
+   fixed row folds under it, so the keys never wrap early to leave the fixed row room.
+   MEASURED in Chrome with the real app (2026-11-01; CW, RTTY and PSK at 12 and 16 keys, at 1024×768
+   at 150 % (xs) and fit (md), 1366×768 and 1920×1080 (lg), 1920×1080 at 150 % (md), 2560×1440 and
+   3440×1440 (xl)): every key, and RTTY's and PSK's Esc/Stop, on screen and hit-able at every size; no
+   key narrower than 113 px; 16 keys on one row from 2560 wide, two rows down
+   to 1024×768, a group per row at xs. A second row of keys costs the panes above its height: where
+   the cockpit already had no room (1920×1080 at 150 %) its deficit valve scrolls that much more
+   (RTTY 0 → 38 px), with the dock still parked at the bottom.
+   The keys are senders; no stop control is ever in the bank. cockpit-panes.test.ts computes all of it
+   at every viewport. */
+.macro-bank {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(32em, 100%), 1fr));
+  gap: var(--space-1);
+}
+.macro-bank-shared-12 {
+  flex: 999 1 97em;
+  min-width: 0;
+}
+.macro-bank-shared-16 {
+  flex: 999 1 129em;
+  min-width: 0;
+}
+.macro-quad {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-1);
+  min-width: 0;
+}
+
 /* THE TX STRIP — the fifth shell child kind (2026-10-01: "FT's strip under the
    scope in every mode, FT's order, staying in view"). FT's transmit cluster — TX On/Off · Tune ·
    ATU · Stop TX (· Hold Tx) — and the TX state, drawn by components/CockpitTxStrip directly under
