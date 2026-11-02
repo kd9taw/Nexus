@@ -271,7 +271,9 @@ describe('everywhere else the pane keeps its own layout', () => {
       expect(css(p.rose, 'width'), 'the rose is drawn smaller here too').toBeNull()
       expect(css(p.rose, 'grid-row')).toBeNull()
       expect(css(p.aim, 'grid-column')).toBeNull()
-      expect(css(p.input, 'min-height')).toBe('44px')
+      // The stock `.settings-input` floor, `--touch` at Standard: 30 px since the 1080p pass (it was 44).
+      // The rail's own rule (0 px, above) is what must not reach here.
+      expect(css(p.input, 'min-height')).toBe('30px')
       expect(css(p.aim, 'flex-wrap')).toBe('wrap')
       expect(css(p.az, 'font-size')).toBe('1.6em')
       expect(css(await stationLine(p.row.closest<HTMLElement>('.rotor-pane')!), 'vector-effect'), 'the rail’s fixed widths reach the line').toBeNull()

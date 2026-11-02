@@ -11,7 +11,13 @@
     monospace;
   --radius: 12px;
   --radius-sm: 8px;
-  --touch: 44px;
+  /* The floor of a desktop control (form fields, the keyboard docks' send and key rows, Settings,
+     the Logbook toolbar). 30 px at Standard and Dense: a mouse target, WSJT-X's and a desktop form's
+     size, clear of the 24 px WCAG 2.2 minimum. Comfortable keeps the 44 px it always had, Touch 48
+     (the density blocks below). Set per density by the operator, 2026-11-01. */
+  --touch: 30px;
+  /* The Logbook row's vertical padding before `--density-scale` (`.log-row`): 4 px, 10 at Comfortable. */
+  --log-row-pad-y: 4px;
   --gap: 12px;
   --transition: 140ms ease;
   /* Workspace layout (overridden live by usePaneWidths / useScale; the
@@ -66,6 +72,10 @@
 /* Density (compactness) — distinct from --ui-zoom (magnification). */
 [data-density='guided'] {
   --density-scale: 1.18;
+  /* Comfortable: the roomy 44 px controls and 10 px Logbook rows Nexus shipped with until the 1080p
+     pass. */
+  --touch: 44px;
+  --log-row-pad-y: 10px;
 }
 [data-density='standard'] {
   --density-scale: 1;
@@ -77,8 +87,8 @@
 /* TOUCH — Settings ▸ Workspace ▸ Density ▸ Touch: Comfortable (useDensity also sets
    data-density='guided') plus targets sized for a finger. An explicit attribute, never
    `@media (pointer: coarse)` — a touchscreen laptop driven by a mouse reports `fine`, and the
-   responsive vocabulary forbids reaching for the device. The controls already floored at
-   --touch grow to 48px; the chip buttons the app renders (19–26px at Standard, measured in
+   responsive vocabulary forbids reaching for the device. The controls floored at --touch grow to
+   48px (from Comfortable's 44; this block comes after it, so it wins the tie); the chip buttons the app renders (19–26px at Standard, measured in
    a real browser) get a 36px floor and roomier padding. `:root` lifts these to (0,3,0) so
    they outrank every chip's own padding at any source position. */
 [data-touch] {
@@ -9189,7 +9199,9 @@ select optgroup {
   font-weight: 700;
   font-size: calc(14px * var(--text-scale));
   padding: 0 var(--space-5);
-  min-height: var(--touch);
+  /* The Tempo composer's Send transmits: it keeps the 44 px it had when `--touch` dropped to 30 at
+     Standard (the 1080p pass), and still grows with Touch's 48. */
+  min-height: max(var(--touch), 44px);
   transition: var(--transition);
 }
 .send-btn:disabled {
@@ -10726,6 +10738,11 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .cw-send-btn {
   padding: var(--space-2) 18px;
+  /* SEND KEEPS ITS HIT AREA when the send row drops from 44 to 30 px (`--touch` at Standard, the
+     1080p pass): measured at 1920×1040 it was 76×44 and is 76×33 at the new row height, so it is
+     widened to keep at least the area it had (76 × 44 / 33 ≈ 102). A wider target on a horizontal
+     row is the easier one for a mouse; the button stays the row's last, beside the text it sends. */
+  min-width: 104px;
   border-radius: var(--radius-sm);
   font-weight: 800;
   color: var(--accent-ink);
@@ -15046,8 +15063,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   display: grid;
   grid-template-columns: 0.6fr 1fr 0.6fr 3fr;
   gap: 10px;
-  /* Density-aware row packing (see .decode-row) — ×1 at 'standard'. */
-  padding: calc(10px * var(--density-scale)) var(--space-4);
+  /* Density-aware row packing (see .decode-row) — ×1 at 'standard'. The base is `--log-row-pad-y`:
+     4 px at Standard and Dense (the 1080p pass: with the 32 px row buttons a row is 40 px, not 52, and
+     a 1080p window shows about half as many more contacts), 10 px at Comfortable, as before. */
+  padding: calc(var(--density-scale) * var(--log-row-pad-y)) var(--space-4);
   align-items: center;
   border-bottom: 1px solid var(--border-soft);
   font-size: calc(13px * var(--text-scale));
@@ -21335,10 +21354,12 @@ button.cq-skiptx1.on {
 }
 .cockpit-decodes-side {
   /* The full decode window dominates the rail; Rx Frequency keeps a slimmer share. Share is
-     drag-resizable via the seam (--pane-share, default 1.6); flex-grow so a sole survivor
-     auto-fills. NO px min-height floor (cockpit-floors guards this — px floors were the
-     root cause of the old vertical-clipping bug). */
-  flex: var(--pane-share, 1.6) 1 0;
+     drag-resizable via the seam (--pane-share, default 3 : Rx Frequency's 1 — it was 1.6 until the
+     1080p pass, which left Band Activity 8 rows at 1920×1040 under the callsign card while Rx
+     Frequency, a handful of lines, held a third of the rail); flex-grow so a sole survivor
+     auto-fills. A stored share (the seam's drag) still wins. NO px min-height floor (cockpit-floors
+     guards this — px floors were the root cause of the old vertical-clipping bug). */
+  flex: var(--pane-share, 3) 1 0;
   min-height: 0;
   display: flex;
   /* Scrolls rather than clips — see .cockpit-rxfreq. */

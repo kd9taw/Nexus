@@ -1389,6 +1389,11 @@ describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and h
     expect(chainWinner([['ch-overflow']], 'position')?.value).toBe('relative')
   })
 
+  it('FT8 Roster’s rail gives Band Activity three shares to Rx Frequency’s one by default (a stored share still wins)', () => {
+    expect(chainWinner([['cockpit-decodes-side', 'panel']], 'flex')?.value).toBe('var(--pane-share, 3) 1 0')
+    expect(chainWinner([['cockpit-rxfreq', 'panel']], 'flex')?.value).toBe('var(--pane-share, 1) 1 0')
+  })
+
   it('the CW speed slider is shorter only where the header folds: a placement input the stock rule reads', () => {
     const stock = STYLES_RULES.find((r) => r.selector === ".cw-wpm input[type='range']")
     expect(blockDecl('width')(stock!.body)).toBe('var(--cw-wpm-w, 160px)')

@@ -916,6 +916,10 @@ describe('the 1080p pass keeps every transmit control its full size (2026-11-01)
     ['Phone’s PTT (min-height)', [...shellChain('phone-cockpit'), new Set(['cockpit-txdock']), new Set(['ph-ptt-row']), new Set(['ph-ptt'])], 'min-height', '40px'],
     ['Phone’s PTT (min-width)', [...shellChain('phone-cockpit'), new Set(['cockpit-txdock']), new Set(['ph-ptt-row']), new Set(['ph-ptt'])], 'min-width', '220px'],
     ['the strip’s Stop TX (padding)', [...shellChain('cw-cockpit'), new Set(['cockpit-txstrip']), new Set(['op-controls', 'cq-txctl']), new Set(['op-btn', 'stop'])], 'padding', '6px var(--space-4)'],
+    // Send keeps its hit area at the 30 px Standard row (`--touch`, 2026-11-01): wider, 104 px, where it
+    // was 76×44; the Tempo composer's keeps its 44 px height.
+    ['the keyboard docks’ Send (min-width)', [...shellChain('cw-cockpit'), new Set(['cockpit-txdock']), new Set(['cw-send']), new Set(['cw-send-btn'])], 'min-width', '104px'],
+    ['the Tempo composer’s Send (min-height)', [new Set(['app']), new Set(['composer']), new Set(['send-btn'])], 'min-height', 'max(var(--touch), 44px)'],
     ['a macro key (padding)', [...shellChain('rtty-cockpit'), new Set(['cockpit-txdock']), new Set(['rtty-dock-keys']), new Set(['cw-macros', 'rtty-macros', 'dock-fkeys']), new Set(['rtty-macro-slot']), new Set(['cw-macro'])], 'padding', '3px 9px'],
   ]
   for (const [name, chain, prop, want] of SIZE) {

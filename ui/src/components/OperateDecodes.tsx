@@ -247,7 +247,12 @@ const MAX_NEED_ICONS = 3
  * narrowest rail, so every taller pane (Classic at 1024×768, any pane at 1920×1080) keeps its chips
  * on screen exactly as before. Measured in Chrome; em, so it follows the text size and the zoom.
  */
-const FOLD_CHIPS_BELOW_EM = 15
+const FOLD_CHIPS_BELOW_EM = 22
+// …22em since the 1080p pass (2026-11-01, was 15): FT8 Roster's rail at 1920×1040 gives Band Activity
+// about 18em once it takes the rail's larger share, and unfolded, the chips' two to three wrapped lines
+// took more of it than the share gave back (measured in Chrome: 8 rows before, 5 with the chips). Folded
+// there, every chip is one click away on the Filters button, which says when one is lit. Classic's Band
+// Activity at 1080p (~36em) and every taller pane keep their chips on screen.
 
 /**
  * Band Activity / Rx Frequency pane with stock WSJT-X flow: oldest at the top,
