@@ -127,7 +127,8 @@ interface Props {
 }
 
 // License class → sets the transmit-privilege lockout + the licensed-segment band dropdown.
-// "Outside the US" = Open (no transmit limits). Single-select; defaults to Open so the
+// "Outside the US" = Open (never blocks a band; the band picker warns outside the usual band
+// plan). Single-select; defaults to Open so the
 // lockout is opt-in (a US op declares their class to turn it on).
 // The `id` is the stored token; the class NAME and its blurb are prose, exactly as they are in
 // Settings ▸ Station, so they resolve from the catalog at the call site.

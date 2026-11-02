@@ -5,6 +5,20 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **A band-plan note beside the band, never a block.** In Phone, an amber "Outside band plan" chip appears beside the band when your signal is where no IARU region's band plan puts phone: phone anywhere on 30 m, or below the lowest phone line any region uses on the other HF bands, 6 m and 2 m (for example LSB at 7.020 MHz). Hover it for why. It is advice only: Nexus does not block the frequency, and nothing about transmitting changes. Your licence and your country's band plan decide. One worldwide table, with no region to set; 60 m is not judged, because its allocations differ country by country. While transmit is locked by your US licence class, the 🔒 chip shows instead.
+- **60 m in the Phone and CW band pickers.** Picking 60 m outside the US parks in the worldwide 5351.5–5366.5 kHz segment: Phone at 5.363 MHz USB, clear of the 5.357 MHz FT8 frequency, and CW at 5.3525 MHz. A US General, Advanced or Extra lands on the same Phone dial, which is inside the US 60 m segment, and may transmit there on upper sideband; a Technician or Novice can listen there and stays locked. Check your own country's 60 m rules: they differ widely.
+
+### Changed
+- **Band picks outside the US land where every region allows them.** With "Outside the US" as your licence, a Phone or CW band pick now parks inside the amateur allocation shared by every IARU region: 160 m phone at 1.8458 MHz LSB (it used to be 1.8028, below the 1.810 MHz that the UK, Japan and Region 1 start at), 70 cm at 432.100 MHz (it was 420.000, outside 430–440 MHz), 23 cm phone at 1296.150 MHz, and 13 cm at 2400 MHz. The other bands keep their dials.
+- **The setup wizard says plainly what "Outside the US" does.** It used to say "No transmit limits". It now says Nexus won't block any band, warns when you're outside the usual band plan, and that your country's rules are yours to follow. Settings ▸ Station says the same.
+- **Spots from outside the US are classed by their own band plan.** A cluster or skimmer spot's mode (CW, Phone or Digital) comes from its frequency. It used to be judged against US edges for every station, so a European, Asian or Pacific SSB station on 7.053–7.125, 14.112–14.150 or 21.151–21.200 MHz was classed Digital: it missed the Phone health light and showed the wrong mode on the Needed board. A station outside the US is now judged by the IARU Region 1 band plan; a US station keeps the US edges, which bind it by law.
+
+### Fixed
+- **Every band the Phone and CW pickers list now tunes.** Some picks did nothing at all: 30 m in Phone and 9 cm with "Outside the US", and every receive-only band for a US class, such as 4 m for a General. They now tune. With "Outside the US", 30 m Phone parks at 10.120 MHz USB (some licences outside the US allow phone there; the band-plan chip notes that the IARU plans keep 30 m for CW and data), and 9 cm at 3400 MHz. A receive-only band takes you where the band's usual activity is, for example a Technician picking 20 m in Phone hears the phone segment, and transmit stays locked there by your licence, as the 🔒 chip says.
+
 ## [1.22.0] — 2026-11-01
 
 ### Added

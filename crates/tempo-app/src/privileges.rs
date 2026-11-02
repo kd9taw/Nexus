@@ -15,8 +15,8 @@
 //! power caps (§97.313(c)–(e)) are not modelled, as no class's are.
 //!
 //! `Open` = no restrictions (non-US operators); `tx_allowed` short-circuits to true. Its rows
-//! are therefore a PARKING table, not a privilege one — which is why `Open` alone also carries
-//! [`REGION1`], the 4 m band the US table has no way to describe.
+//! are therefore a PARKING table, not a privilege one: [`OPEN_PARKING`], its own list, chosen
+//! so every pick lands inside the amateur allocation of all three IARU regions.
 
 use crate::settings::{LicenseClass, OperatingMode};
 
@@ -78,21 +78,83 @@ const VHF: &[Seg] = &[
     s(24_000.0, 24_250.0, true, true, true), // 1.25 cm all-mode
 ];
 
-// IARU Region 1's 4 m band (69.9–70.5 MHz on a CEPT secondary basis, footnote ECA9), shaped
-// like the 6 m and 2 m rows above: a narrowband bottom slice — beacons, and WSPR at 70.091 —
-// under the all-mode segment.
+// WHERE A BAND PICK PARKS FOR `Open` — the non-US and undeclared class, which Nexus cannot
+// place in a region. ⚠️ A PARKING TABLE, NOT A PRIVILEGE CLAIM: `tx_allowed`, `allowed_spans`,
+// `tx_span_allowed`, `cw_only_within`, `phone_segment`, `lsb_phone_allowed` and
+// `wide_phone_allowed` all short-circuit `Open` before they read a segment, so all these rows
+// decide is the dial and sideband a Phone or CW pick lands on (and so a band is never a pick
+// that does nothing). They must never be folded into a US class's rows.
 //
-// ⚠️ FOR `Open` ONLY, AND IT IS A PARKING TABLE, NOT A PRIVILEGE CLAIM. The US has no 4 m
-// allocation at any class, so this must never be folded into `extra()`: `Open` borrows
-// Extra's rows, and a Seg there would assert a US privilege that does not exist and turn
-// `bandplan::no_us_license_class_may_key_a_4m_channel` red. `tx_allowed` short-circuits
-// `Open` before it ever reads this list, so all these rows decide is where a band pick parks
-// the dial — 70.100 for phone, and CW lifts to the 70.200 SSB/CW calling frequency through
-// `bandplan::cw_activity_mhz`. National 4 m edges vary by tens of kHz inside this span (DL is
-// 70.150–70.210); the band-plan notes carry that warning to the operator, this table cannot.
-const REGION1: &[Seg] = &[
-    s(70.0, 70.1, true, true, false), // 4 m beacons / narrowband bottom (no phone)
-    s(70.1, 70.5, true, true, true),  // 4 m all-mode; SSB/CW calling 70.200
+// Each band's rows sit inside the amateur allocation every IARU region shares, so the dial a
+// pick lands on is amateur spectrum for a UK, a Japanese, an Australian and a US operator alike
+// (ITU Radio Regulations Article 5; `open_parks_inside_the_amateur_allocation_of_every_region`
+// pins it). The cw/data/phone split only places the phone home: phone starts where the IARU
+// Region 1 HF band plan (2023 revision) starts it where that is higher than the shared bottom.
+// National edges inside these spans still differ; the band-plan advice the UI shows and the
+// operator's own licence carry that, this table cannot.
+const OPEN_PARKING: &[Seg] = &[
+    // 160 m from 1.810 (Region 1 starts there, the UK and Japan too); phone from 1.843, the
+    // Region 1 plan's phone line, so the LSB home is 1.8458 with its passband on 1.843.
+    s(1.810, 1.843, true, true, false),
+    s(1.843, 1.850, true, true, true),
+    // 80 m to 3.800, Region 1's top; phone from 3.600 as in the Region 1 plan.
+    s(3.500, 3.600, true, true, false),
+    s(3.600, 3.800, true, true, true),
+    // 60 m: the WRC-15 secondary segment 5351.5-5366.5 kHz most of the world adopted. Phone
+    // parks at 5.363 USB, inside the Region 1 plan's all-mode 5.354-5.366 and clear of the
+    // worldwide FT8 dial 5.357, whose signals reach 5.360. CW lifts to 5.3525 through
+    // `bandplan::cw_activity_mhz`.
+    s(5.3515, 5.363, true, true, false),
+    s(5.363, 5.3665, true, true, true),
+    // 40 m to 7.200, Region 1's top. Phone from 7.125, which every region's plan allows.
+    s(7.000, 7.125, true, true, false),
+    s(7.125, 7.200, true, true, true),
+    // 30 m: phone is legal under some non-US licences (Australia's among them), so it has a
+    // home, at 10.120 USB: above the CW cluster, below FT8 (10.136) and WSPR (10.1387). Every
+    // IARU plan keeps 30 m for CW and narrow data, and the UI's band-plan advice says so.
+    s(10.100, 10.120, true, true, false),
+    s(10.120, 10.150, true, true, true),
+    s(14.000, 14.150, true, true, false), // 20 m
+    s(14.150, 14.350, true, true, true),
+    s(18.068, 18.110, true, true, false), // 17 m
+    s(18.110, 18.168, true, true, true),
+    s(21.000, 21.200, true, true, false), // 15 m
+    s(21.200, 21.450, true, true, true),
+    s(24.890, 24.930, true, true, false), // 12 m
+    s(24.930, 24.990, true, true, true),
+    s(28.000, 28.300, true, true, false), // 10 m
+    s(28.300, 29.700, true, true, true),
+    // 6 m to 52 MHz, Region 1's amateur top; 50.0-50.1 is CW and beacons in every plan.
+    s(50.0, 50.1, true, false, false),
+    s(50.1, 52.0, true, true, true),
+    // 4 m: IARU Region 1's 69.9-70.5 MHz (CEPT secondary, footnote ECA9) — the US has no 4 m
+    // allocation at any class, so this must never reach `extra()` (that would turn
+    // `bandplan::no_us_license_class_may_key_a_4m_channel` red). A narrowband bottom slice
+    // (beacons, WSPR at 70.091) under the all-mode segment; CW lifts to the 70.200 calling
+    // frequency through `bandplan::cw_activity_mhz`. National edges vary by tens of kHz.
+    s(70.0, 70.1, true, true, false),
+    s(70.1, 70.5, true, true, true),
+    // 2 m to 146 MHz, Region 1's top; 144.0-144.1 is CW in every plan.
+    s(144.0, 144.1, true, false, false),
+    s(144.1, 146.0, true, true, true),
+    s(222.0, 225.0, true, true, true), // 1.25 m: Region 2 only
+    // 70 cm inside 430-440 MHz, the Region 1 and Japanese allocation; phone from 432.100,
+    // the bottom of the Region 1 plan's SSB segment.
+    s(430.0, 432.1, true, true, false),
+    s(432.1, 440.0, true, true, true),
+    s(902.0, 928.0, true, true, true), // 33 cm: Region 2 only
+    // 23 cm from 1260, where Japan's allocation starts; phone from 1296.150, the bottom of
+    // the Region 1 plan's narrowband SSB segment. CW lifts to 1296.100.
+    s(1260.0, 1296.15, true, true, false),
+    s(1296.15, 1300.0, true, true, true),
+    // 13 cm: 2400-2450 MHz, the part the US (2390-2450), the UK and Japan all hold, and the
+    // QO-100 uplink's home.
+    s(2400.0, 2450.0, true, true, true),
+    // 9 cm: the Region 1 narrowband segment, 3400-3410 MHz. No US class has 9 cm.
+    s(3400.0, 3410.0, true, true, true),
+    s(5650.0, 5850.0, true, true, true), // 6 cm, to Region 1's top
+    s(10_000.0, 10_500.0, true, true, true), // 3 cm
+    s(24_000.0, 24_250.0, true, true, true), // 1.25 cm
 ];
 
 // 60 m (General/Extra): the 5.3515–5.3665 subband, all-mode, + 4 channels, per 47 CFR
@@ -281,11 +343,8 @@ fn extra() -> Vec<Seg> {
     v
 }
 
-/// The privilege segments for a class. `Open` borrows Extra's segments so the band dropdown
-/// jumps to the conventional full-privilege segment starts (the lockout never consults them —
-/// it short-circuits Open to allowed), PLUS [`REGION1`] — the bands the US table cannot
-/// describe at all. That extension is appended here rather than added to `extra()` for the
-/// reason spelled out on the constant: it is where a non-US pick parks, never a US privilege.
+/// The privilege segments for a class. `Open`'s are [`OPEN_PARKING`], where a pick parks (the
+/// lockout never consults them — it short-circuits Open to allowed), never a US privilege.
 fn segments(class: LicenseClass) -> Vec<Seg> {
     match class {
         LicenseClass::Technician => technician(),
@@ -293,11 +352,7 @@ fn segments(class: LicenseClass) -> Vec<Seg> {
         LicenseClass::Extra => extra(),
         LicenseClass::Novice => novice(),
         LicenseClass::Advanced => advanced(),
-        LicenseClass::Open => {
-            let mut v = extra();
-            v.extend_from_slice(REGION1);
-            v
-        }
+        LicenseClass::Open => OPEN_PARKING.to_vec(),
     }
 }
 
@@ -472,9 +527,10 @@ pub fn usb_only_phone(class: LicenseClass, carrier_mhz: f64) -> bool {
 
 /// The lowest frequency (MHz) at which `class` may use `mode` on `band` — where a band
 /// dropdown should park the VFO. `None` = the operator has no privilege for that band+mode
-/// (so the band is omitted from the dropdown). 60 m is excluded (channelized; tune manually).
+/// (the picker then lists the band receive-only). 60 m is excluded for a US class (channelized:
+/// its lowest row is a channel, not a segment start); `Open` parks in the WRC-15 segment.
 pub fn segment_start(class: LicenseClass, band: &str, mode: OperatingMode) -> Option<f64> {
-    if band == "60m" {
+    if band == "60m" && !matches!(class, LicenseClass::Open) {
         return None;
     }
     segments(class)
@@ -509,8 +565,9 @@ pub const SSB_BW_MHZ: f64 = 0.0028;
 /// the cockpit showed 🔒 TX LOCKED on a band the operator is fully licensed for. 160/80/40 m
 /// are the LSB phone bands this bit. Every phone home in the app now comes from here.
 pub fn phone_home(class: LicenseClass, band: &str) -> Option<(f64, &'static str)> {
+    // The band's sideband convention, 60 m's upper sideband included (`phone_is_lsb`).
     segment_start(class, band, OperatingMode::Phone).map(|lo| {
-        if lo < 10.0 {
+        if crate::bandplan::phone_is_lsb(lo) {
             (lo + SSB_BW_MHZ, "LSB")
         } else {
             (lo, "USB")
@@ -698,6 +755,99 @@ mod tests {
         );
         assert_eq!(phone_home(Extra, "20m"), Some((14.150, "USB"))); // USB: already clear
         assert_eq!(phone_home(Technician, "20m"), None); // no privilege, no home
+    }
+
+    /// The `Open` bands that used to have no home, so a pick of them did nothing: 30 m in Phone
+    /// (the table `Open` borrowed was the US one, which has no 30 m phone row) and 9 cm in Phone
+    /// and CW (no US 9 cm row at all), plus 60 m, which no picker listed. Each now parks, and
+    /// none of it reaches a US class, whose 60 m stays channelised and out of `segment_start`.
+    #[test]
+    fn open_parks_on_30m_phone_9cm_and_60m() {
+        assert_eq!(phone_home(Open, "30m"), Some((10.120, "USB")));
+        assert_eq!(phone_home(Open, "9cm"), Some((3400.0, "USB")));
+        assert_eq!(segment_start(Open, "9cm", Cw), Some(3400.0));
+        // 60 m is upper sideband everywhere, so its phone home is USB though it sits below 10 MHz.
+        assert_eq!(phone_home(Open, "60m"), Some((5.363, "USB")));
+        assert_eq!(segment_start(Open, "60m", Cw), Some(5.3515));
+        // Controls: no US class gains a 60 m segment start, a 30 m phone home or a 9 cm one.
+        for class in US_CLASSES {
+            for mode in [Phone, Cw, Digital] {
+                assert_eq!(
+                    segment_start(class, "60m", mode),
+                    None,
+                    "{class:?} {mode:?}"
+                );
+                assert_eq!(
+                    segment_start(class, "9cm", mode),
+                    None,
+                    "{class:?} {mode:?}"
+                );
+            }
+            assert_eq!(phone_home(class, "30m"), None, "{class:?}");
+            assert!(!tx_allowed(class, 10.120, Phone), "{class:?} 30 m phone");
+        }
+    }
+
+    /// Where `Open` parks must be amateur spectrum in EVERY IARU region, because Nexus has no
+    /// region setting: a pick has to be right for a UK, a Japanese, an Australian and a US
+    /// operator alike. The spans are the ITU Radio Regulations Article 5 amateur allocations
+    /// common to Regions 1, 2 and 3 (160 m from 1.810 and 80 m to 3.800 are Region 1's edges,
+    /// 40 m to 7.200 too, 6 m to 52 MHz, 2 m to 146 MHz, 70 cm 430–440 MHz). 60 m is the WRC-15
+    /// secondary segment. 13 cm is narrowed to 2400–2450 MHz, the part the US (2390–2450), the
+    /// UK and Japan (2400–2450) all hold. Bands that exist in one region only (4 m, 1.25 m,
+    /// 33 cm, 9 cm) are checked against that region's allocation. Both ends of a phone passband
+    /// are checked, not just the dial.
+    #[test]
+    fn open_parks_inside_the_amateur_allocation_of_every_region() {
+        const COMMON: &[(&str, f64, f64)] = &[
+            ("160m", 1.810, 1.850),
+            ("80m", 3.500, 3.800),
+            ("60m", 5.3515, 5.3665),
+            ("40m", 7.000, 7.200),
+            ("30m", 10.100, 10.150),
+            ("20m", 14.000, 14.350),
+            ("17m", 18.068, 18.168),
+            ("15m", 21.000, 21.450),
+            ("12m", 24.890, 24.990),
+            ("10m", 28.000, 29.700),
+            ("6m", 50.000, 52.000),
+            ("4m", 70.000, 70.500),
+            ("2m", 144.000, 146.000),
+            ("1.25m", 222.000, 225.000),
+            ("70cm", 430.000, 440.000),
+            ("33cm", 902.000, 928.000),
+            ("23cm", 1240.000, 1300.000),
+            ("13cm", 2400.000, 2450.000),
+            ("9cm", 3400.000, 3410.000),
+            ("6cm", 5650.000, 5850.000),
+            ("3cm", 10_000.000, 10_500.000),
+            ("1.25cm", 24_000.000, 24_250.000),
+        ];
+        let mut checked = 0;
+        for mode in [Phone, Cw] {
+            for row in crate::bandplan::licensed_bands(Open, mode) {
+                let &(_, lo, hi) = COMMON
+                    .iter()
+                    .find(|(b, _, _)| *b == row.band)
+                    .unwrap_or_else(|| panic!("{} has no common span in this test", row.band));
+                let (a, b) = match (mode, row.mode.as_str()) {
+                    (Phone, "LSB") => (row.dial_mhz - SSB_BW_MHZ, row.dial_mhz),
+                    (Phone, _) => (row.dial_mhz, row.dial_mhz + SSB_BW_MHZ),
+                    _ => (row.dial_mhz, row.dial_mhz),
+                };
+                assert!(
+                    a >= lo && b < hi,
+                    "Open {mode:?} {} parks over [{a:.4}, {b:.4}], outside [{lo}, {hi})",
+                    row.band
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(
+            checked,
+            2 * COMMON.len(),
+            "every band is listed in both modes"
+        );
     }
 
     #[test]

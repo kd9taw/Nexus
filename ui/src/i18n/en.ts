@@ -850,9 +850,9 @@ export const EN = {
   'settings.station.licenseClass.general': 'General (US)',
   'settings.station.licenseClass.advanced': 'Advanced (US, grandfathered)',
   'settings.station.licenseClass.extra': 'Amateur Extra (US)',
-  'settings.station.licenseClass.open': 'Open — no transmit limits',
+  'settings.station.licenseClass.open': 'Open — outside the US, never blocks',
   'settings.station.licenseClass.hint':
-    'Sets your transmit privileges + the licensed-segment band dropdown. Open = no limits (outside the US).',
+    'Sets your transmit privileges + the licensed-segment band dropdown. Open (outside the US) never blocks a band; it warns when you’re outside the usual band plan, and your country’s rules are yours to follow.',
 
   'settings.station.frequency.label': 'Band & Frequency',
   'settings.station.frequency.hint':
@@ -1026,7 +1026,7 @@ export const EN = {
     'Setup wizard ▸ step 4 · everything starts on — this is the one question',
   'gettingStarted.license.shot.title': 'What’s your license?',
   'gettingStarted.license.shot.sub':
-    'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Pick “Outside the US” for no limits.',
+    'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Licensed in another country? Pick “Outside the US”.',
   'gettingStarted.license.shot.technician': 'Technician',
   'gettingStarted.license.shot.technicianBlurb': 'US — limited HF + full VHF/UHF',
   'gettingStarted.license.shot.general': 'General',
@@ -1034,7 +1034,8 @@ export const EN = {
   'gettingStarted.license.shot.extra': 'Amateur Extra',
   'gettingStarted.license.shot.extraBlurb': 'US — full privileges',
   'gettingStarted.license.shot.outside': 'Outside the US',
-  'gettingStarted.license.shot.outsideBlurb': 'No transmit limits',
+  'gettingStarted.license.shot.outsideBlurb':
+    'Nexus won’t block any band and warns when you’re outside the usual band plan. You’re responsible for your country’s rules.',
   // ⚠️ `{{freq}}` is a FREQUENCY — supplied invariant by the call site, never formatted here.
   // This is a PICTURE of the real toast, not a live transmit control.
   'gettingStarted.license.shot.toast':
@@ -7640,6 +7641,10 @@ export const EN = {
   // The lock when the phone MODE is the whole reason: LSB, AM or FM on 60 m, where USB would key.
   'bandPicker.txLock.usbOnlyTitle':
     '60 m allows only USB phone — transmit is blocked. Pick USB or AUTO.',
+  // The amber band-plan chip: advice, never a block. `{{band}}` is a band name ("30m").
+  'bandPicker.planAdvice.label': 'Outside band plan',
+  'bandPicker.planAdvice.title':
+    'Phone here on {{band}} is outside the usual band plan: every IARU region keeps this part of the band for CW and data. Nexus does not block it — your licence and your country’s band plan decide.',
 
   'freq.control.aria': 'Frequency control',
   'freq.channel.label': 'Band / Channel',
@@ -8994,7 +8999,7 @@ export const EN = {
     'Every mode and every section starts ON — FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. Nexus is one program instead of six; there’s nothing to unlock. If you ever want a leaner app, trim sections in Settings.',
   'setup.finish.license.title': 'What’s your license?',
   'setup.finish.license.sub':
-    'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Pick “Outside the US” for no limits.',
+    'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Licensed in another country? Pick “Outside the US”.',
   'setup.finish.license.novice': 'Novice',
   'setup.finish.license.novice.blurb': 'US, grandfathered — CW on 80/40/15 m, 10 m, 222 MHz, 23 cm',
   'setup.finish.license.technician': 'Technician',
@@ -9006,7 +9011,8 @@ export const EN = {
   'setup.finish.license.extra': 'Amateur Extra',
   'setup.finish.license.extra.blurb': 'US — full privileges',
   'setup.finish.license.open': 'Outside the US',
-  'setup.finish.license.open.blurb': 'No transmit limits',
+  'setup.finish.license.open.blurb':
+    'Nexus won’t block any band and warns when you’re outside the usual band plan. You’re responsible for your country’s rules.',
   'setup.finish.packs.title': 'Start with some channels?',
   'setup.finish.packs.sub':
     'Optional — a ready-made set of common frequencies and nets, added to your Memories. Change or remove any of them later in the Memories section.',
