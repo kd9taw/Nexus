@@ -14,7 +14,7 @@
 // `{mycall}` is no token there, and the keyer skips the braces, so the bare word would go out.
 import { EN, type MessageKey } from '../i18n'
 import { cwBuiltInRoles, type EsmRoleMap } from './esmRoles'
-import { unknownTokens } from './macroSets'
+import { MACRO_KEYS, MACRO_SLOT_KEYS, macroKeys, unknownTokens, type MacroCount } from './macroSets'
 
 /** Every brace token the CW expander fills. `!`, the call being worked, is the other one. */
 export const CW_TOKENS = [
@@ -91,4 +91,21 @@ export function withCwEntry(
     : [...before.map((m) => ({ ...m })), { key, ...entry }]
   list[at] = roles ? { ...profile, macros, esmRoles: roles } : { ...profile, macros }
   return { profiles: list, active: at }
+}
+
+/** THE KEYS THE CW DOCK SHOWS at `count` (Settings ▸ CW ▸ Macros): the list it always showed —
+ *  the active profile's keys, or the built-in set — less any key past F8, then F9 up to the count
+ *  in keyboard order, each the list's own entry or an empty key. At 8 a list of F1–F8 is shown
+ *  exactly as before; a key past the count is hidden and kept, and comes back with the count.
+ *  Settings ▸ CW ▸ Macros edits the same keys, so the two always agree. */
+export function cwVisibleMacros<M extends { key: string; label?: string; text: string }>(
+  macros: readonly M[],
+  count: MacroCount,
+): (M | { key: string; label: string; text: string })[] {
+  const extra: readonly string[] = macroKeys(count).slice(MACRO_KEYS.length)
+  const pastF8: readonly string[] = MACRO_SLOT_KEYS.slice(MACRO_KEYS.length)
+  return [
+    ...macros.filter((m) => !pastF8.includes(m.key)),
+    ...extra.map((key) => macros.find((m) => m.key === key) ?? { key, label: '', text: '' }),
+  ]
 }

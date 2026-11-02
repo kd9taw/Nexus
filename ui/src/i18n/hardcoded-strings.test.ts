@@ -112,6 +112,9 @@ const MIGRATED = [
   // CW's half of the same surface: its keys and their editor, captioned from CW's own catalog
   // keys. It stops nothing; CwCockpit.tsx's Esc and Stop TX are the stops.
   'components/CwMacroEditor.tsx',
+  // The words for macro keys 13–16 (2026-11-01), born migrated: their name where an F-key's would
+  // go and the line that says a click sends them. It stops nothing.
+  'features/macroSlotWords.ts',
   'components/SettingsClusterNodes.tsx',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',

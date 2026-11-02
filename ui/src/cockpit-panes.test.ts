@@ -245,7 +245,7 @@ describe('the fence: styles.css never names a structural class', () => {
   // size, from the sheet that has lost every one of these fights before.
   // The RF scope pane's modifier on FT's waterfall strip (2026-10-04) too: the strip's direction is
   // structure, and the styles.css `.panel` it overrides is exactly the kind of rule that wins a tie.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside', 'op-rail-floor']) {
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside', 'op-rail-floor', 'macro-bank', 'macro-bank-shared-12', 'macro-bank-shared-16', 'macro-quad']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -1176,5 +1176,133 @@ describe('a pane frame holds its own positioned content, without a backdrop blur
       const w = classWinner('pane-frame', blockDecl(prop))
       expect(w?.value ?? 'none', `${prop} on .pane-frame from ${w?.selector} in ${w?.sheet}`).toBe('none')
     }
+  })
+})
+
+/** Cascade winner of a property for the element at the end of `chain` (outermost first; each entry
+ *  the classes — and `[attr='v']` attributes — that element carries), across BOTH sheets: styles.css
+ *  sorts first, so an equal-specificity structural rule wins a tie. Compound selectors with
+ *  descendant and child combinators are matched against the chain; a rule with a pseudo-class or a
+ *  tag cannot be matched and is left out, as the other computers here leave it. */
+function chainWinner<T>(
+  chain: ReadonlyArray<ReadonlySet<string>>,
+  blockValue: (body: string) => T | null,
+): { value: T; selector: string; sheet: string } | null {
+  const compound = (c: string): string[] | null => {
+    const parts = c.match(/\.[a-z][a-z0-9-]*|\[[^\]]+\]/g)
+    return parts && parts.join('') === c ? parts.map((x) => (x.startsWith('.') ? x.slice(1) : x)) : null
+  }
+  const has = (at: number, c: string[]) => c.every((x) => chain[at].has(x))
+  const matches = (selector: string): boolean => {
+    const parts = selector.split(/\s*(>)\s*|\s+/).filter((x): x is string => !!x)
+    const subject = compound(parts[parts.length - 1])
+    if (!subject || !has(chain.length - 1, subject)) return false
+    let at = chain.length - 2
+    let child = false
+    for (let i = parts.length - 2; i >= 0; i--) {
+      if (parts[i] === '>') {
+        child = true
+        continue
+      }
+      const c = compound(parts[i])
+      if (!c) return false
+      if (child) {
+        if (at < 0 || !has(at, c)) return false
+      } else {
+        while (at >= 0 && !has(at, c)) at--
+        if (at < 0) return false
+      }
+      at--
+      child = false
+    }
+    return true
+  }
+  const candidates = [
+    ...STYLES_RULES.map((r) => ({ r, sheet: 'styles.css', rank: 0 })),
+    ...RULES.map((r) => ({ r, sheet: 'cockpit-panes.css', rank: 1 })),
+  ]
+  let win: { value: T; selector: string; sheet: string; spec: number; key: number } | null = null
+  for (const { r, sheet, rank } of candidates) {
+    if (!matches(r.selector)) continue
+    const v = blockValue(r.body)
+    if (v === null) continue
+    const spec = specificity(r.selector)
+    const key = rank * 1e6 + r.order
+    if (!win || spec > win.spec || (spec === win.spec && key >= win.key)) win = { value: v, selector: r.selector, sheet, spec, key }
+  }
+  return win && { value: win.value, selector: win.selector, sheet: win.sheet }
+}
+
+describe('a dock of 12 or 16 macro keys is the keyboard: groups of four, wrapping by width', () => {
+  // Settings ▸ CW / RTTY / PSK ▸ Macro keys: 8 (the dock as it always was, none of the classes
+  // below on it), 12 or 16. At 12 and 16 the keys stand in groups of four — F1–F4, F5–F8, F9–F12,
+  // 13–16, as a keyboard groups its F-keys — in a bank that puts as many groups on a line as the
+  // dock's own width holds and wraps the rest under them, in keyboard order: a wide window shows one
+  // row, a narrower one two or more, a phone-width one a group per row. Width-driven, so it follows
+  // the dock at any zoom and needs no viewport rule. The keys are senders; Esc/Stop and the latch are
+  // never in the bank.
+  const VIEWPORTS = ['xs', 'sm', 'md', 'lg', 'xl'] as const
+  const html = (vp: string) => new Set([`[data-viewport='${vp}']`])
+  const shell = (cockpit: string) => [new Set(['app']), new Set(['shell']), new Set(['layout', 'single', cockpit])]
+  const dock = new Set(['cockpit-txdock'])
+  const CW_BANK = new Set(['cw-macros', 'macro-bank'])
+  const KEYS_ROW = new Set(['rtty-dock-keys'])
+  const bankIn = (count: 12 | 16, ...more: string[]) => new Set(['cw-macros', 'macro-bank', `macro-bank-shared-${count}`, ...more])
+  const CHAINS: Array<[string, (vp: string) => Array<Set<string>>, Set<string>]> = [
+    ['CW', (vp) => [html(vp), ...shell('cw-cockpit'), dock, CW_BANK], new Set(['macro-quad'])],
+    ...([12, 16] as const).flatMap((n): Array<[string, (vp: string) => Array<Set<string>>, Set<string>]> => [
+      [`RTTY ×${n}`, (vp) => [html(vp), ...shell('rtty-cockpit'), dock, KEYS_ROW, bankIn(n)], new Set(['rtty-macros', 'macro-quad'])],
+      [`PSK ×${n}`, (vp) => [html(vp), ...shell('psk-cockpit'), dock, KEYS_ROW, bankIn(n, 'psk-macros')], new Set(['rtty-macros', 'macro-quad'])],
+    ]),
+  ]
+  const QUAD_TRACKS = 'repeat(auto-fit, minmax(min(32em, 100%), 1fr))'
+
+  for (const [mode, chainAt, quad] of CHAINS) {
+    for (const vp of VIEWPORTS) {
+      it(`${mode} at ${vp}: the bank lays groups of four by width, and each group is four keys`, () => {
+        const bank = chainAt(vp)
+        const display = chainWinner(bank, blockDecl('display'))
+        expect(display?.value, `the bank's display came from \`${display?.sheet}: ${display?.selector}\``).toBe('grid')
+        const tracks = chainWinner(bank, blockDecl('grid-template-columns'))
+        expect(
+          tracks?.value,
+          `\`${tracks?.sheet}: ${tracks?.selector}\` decides the bank's tracks — the eight-key grid or the ` +
+            "96 px auto-fill would scatter the groups, and a fixed floor would overflow a phone-width dock",
+        ).toBe(QUAD_TRACKS)
+        const quads = chainWinner([...bank, quad], blockDecl('grid-template-columns'))
+        expect(quads?.value, `\`${quads?.sheet}: ${quads?.selector}\` decides a group's tracks`).toBe('repeat(4, minmax(0, 1fr))')
+        expect(chainWinner([...bank, quad], blockDecl('display'))?.value).toBe('grid')
+        expect(chainWinner([...bank, quad], blockDecl('min-width'))?.value, 'a long caption must not widen its group').toBe('0')
+      })
+    }
+  }
+
+  it("CW's bank is a row of the dock's column: it never shrinks (the keys stay hit-able)", () => {
+    const win = chainWinner([...shell('cw-cockpit'), dock, CW_BANK], blockDecl('flex'))
+    expect(win?.value, `\`${win?.sheet}: ${win?.selector}\``).toBe('0 0 auto')
+  })
+
+  // The basis is the bank's whole line — three groups of 32em at 12, four at 16, and their gaps — so the
+  // fixed row stands beside the bank only where every group fits beside it, and folds under it otherwise.
+  for (const [n, basis] of [[12, '97em'], [16, '129em']] as const) {
+    for (const [mode, cockpit, more] of [['RTTY', 'rtty-cockpit', []], ['PSK', 'psk-cockpit', ['psk-macros']]] as const) {
+      it(`${mode}'s bank of ${n} shares the keys row only where its whole line fits beside the fixed row`, () => {
+        const chain = [...shell(cockpit), dock, KEYS_ROW, bankIn(n, ...more)]
+        const flex = chainWinner(chain, blockDecl('flex'))
+        expect(flex?.value, `\`${flex?.sheet}: ${flex?.selector}\``).toBe(`999 1 ${basis}`)
+        expect(chainWinner(chain, blockDecl('min-width'))?.value).toBe('0')
+      })
+    }
+  }
+
+  it('control: the eight-key grid in the keys row is what it always was', () => {
+    const eight = [...shell('rtty-cockpit'), dock, KEYS_ROW, new Set(['cw-macros', 'rtty-macros'])]
+    expect(chainWinner(eight, blockDecl('flex'))?.value).toBe('999 1 76em')
+    expect(chainWinner(eight, blockDecl('grid-template-columns'))?.value).toBe('repeat(8, minmax(0, 1fr))')
+  })
+
+  it('control: the eight-key docks are untouched — CW keeps its auto-fill grid', () => {
+    const win = chainWinner([...shell('cw-cockpit'), dock, new Set(['cw-macros'])], blockDecl('grid-template-columns'))
+    expect(win?.value).toBe('repeat(auto-fill, minmax(96px, 1fr))')
   })
 })

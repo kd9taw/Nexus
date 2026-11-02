@@ -21,7 +21,8 @@ import {
   type MacroEditorLabels,
 } from './MacroEditor'
 import { unknownCwTokens } from '../features/cwMacros'
-import type { MacroSlot } from '../features/macroSets'
+import { macroKeyCaption, type MacroSlot } from '../features/macroSets'
+import { macroSlotName, macroSlotTitle } from '../features/macroSlotWords'
 
 /** The dock attribute the CW cockpit finds its own slots by. */
 export const CW_SLOT_ATTR = 'data-cw-macro'
@@ -59,11 +60,15 @@ export function CwMacroButton({ slot, editing, lit, cue, title, onSend, onEdit }
       cue={cue}
       slotAttr={CW_SLOT_ATTR}
       editing={editing}
-      title={title}
+      title={macroSlotTitle(slot.key, title)}
       emptyLabel={t('cw.macro.empty.label')}
-      emptyTitle={t('cw.macro.empty.title', { key: slot.key })}
-      editAria={t('cw.macro.edit.aria', { key: slot.key })}
-      editTitle={t('cw.macro.edit.title', { key: slot.key })}
+      emptyTitle={t('cw.macro.empty.title', { key: macroSlotName(slot.key) })}
+      editAria={t('cw.macro.edit.aria', { key: macroSlotName(slot.key) })}
+      editTitle={
+        macroKeyCaption(slot.key)
+          ? t('cw.macro.edit.title', { key: slot.key })
+          : t('macroSlot.edit.title', { key: macroSlotName(slot.key) })
+      }
       onSend={onSend}
       onEdit={onEdit}
     />
@@ -85,7 +90,7 @@ interface EditorProps {
  *  it has no Morse for, so an unknown token goes out as a bare word, as on RTTY. */
 export function CwMacroEditor({ slot, left, saving, focus, onSave, onSendOnce, onCancel, onReset }: EditorProps) {
   const labels: MacroEditorLabels = {
-    aria: t('cw.macroEditor.aria', { key: slot.key }),
+    aria: t('cw.macroEditor.aria', { key: macroSlotName(slot.key) }),
     titleLabel: t('cw.macroEditor.title.label'),
     messageLabel: t('cw.macroEditor.message.label'),
     tokensAria: t('cw.macroEditor.tokens.aria'),

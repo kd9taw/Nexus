@@ -39,9 +39,17 @@ import { cueKeys, lamp as turnLamp, pace as paceOf } from '../features/cwTurn'
 import { announce } from '../announce'
 import { turnEarcon } from '../alerts'
 import { CwMacroButton, CwMacroEditor } from './CwMacroEditor'
-import type { MacroEditorFocus } from './MacroEditor'
-import { macroEditChordKey, type MacroKey, type MacroSlot } from '../features/macroSets'
-import { cwStoredBuiltIn, withCwEntry, type CwProfile } from '../features/cwMacros'
+import { MacroBank, type MacroEditorFocus } from './MacroEditor'
+import {
+  dockMacroKey,
+  macroCount,
+  macroEditChordKey,
+  macroKeyCaption,
+  type MacroKey,
+  type MacroSlot,
+} from '../features/macroSets'
+import { macroSlotName } from '../features/macroSlotWords'
+import { cwStoredBuiltIn, cwVisibleMacros, withCwEntry, type CwProfile } from '../features/cwMacros'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
@@ -907,7 +915,14 @@ export function CwCockpit({
     : parkActivation
       ? CW_POTA_SET
       : DEFAULT_MACROS
-  const macros: CwMacro[] = profileMacros && profileMacros.length ? profileMacros : builtIn
+  // …and as many keys as Settings ▸ CW ▸ Macro keys shows: 8, 12 or 16 (`cwVisibleMacros`). A
+  // key past the count is kept in the profile, hidden, and is never sent by a key or a press.
+  // Memoised: the list is a new array otherwise, and the reply previews refetch on its identity.
+  const cwCount = macroCount(cwSettings?.macros?.cwMacroCount)
+  const macros: CwMacro[] = useMemo(
+    () => cwVisibleMacros(profileMacros && profileMacros.length ? profileMacros : builtIn, cwCount),
+    [profileMacros, builtIn, cwCount],
+  )
   // Switch the active macro profile from the cockpit (optimistic) and persist it — the index
   // alone, over the live settings. Saving the view's copy with the index merged in wrote every
   // field changed since the view opened back to what it was, the dial the operator had tuned
@@ -1280,17 +1295,19 @@ export function CwCockpit({
   const dockRef = useRef<HTMLDivElement | null>(null)
   const ownKeys = !!(profileMacros && profileMacros.length)
   const builtInStored = builtIn.map(cwStoredBuiltIn)
+  /** The built-in a key would show here: the set's own for F1–F8, an empty key past them. */
+  const builtInOf = (key: string) => builtInStored.find((b) => b.key === key) ?? { key, label: '', text: '' }
   /** A key as the shared surface reads it. Its caption is the one the dock has always shown (a
    *  key of the operator's with no label shows its F-key name), and a key with neither label nor
    *  message is empty, so a click opens its editor. `custom`: the key is not the built-in the dock
    *  would show here without the profile's keys, so Reset this button has something to put back. */
   const slotOf = (m: CwMacro): MacroSlot => {
-    const stock = builtInStored.find((b) => b.key === m.key)
+    const stock = builtInOf(m.key)
     return {
       key: m.key as MacroKey,
-      label: m.labelKey ? t(m.labelKey) : m.label || (m.text.trim() ? m.key : ''),
+      label: m.labelKey ? t(m.labelKey) : m.label || (m.text.trim() ? macroSlotName(m.key) : ''),
       text: m.text,
-      custom: ownKeys && (!stock || stock.label !== (m.label ?? '') || stock.text !== m.text),
+      custom: ownKeys && (stock.label !== (m.label ?? '') || stock.text !== m.text),
     }
   }
   /** The same key as its editor opens it: its own label, never the F-key name standing in for one. */
@@ -1347,8 +1364,8 @@ export function CwCockpit({
     void writeKey(key, { label: label === was.label && !ownKeys && stock ? stock.label : label, text })
   }
   const resetMacro = (key: string) => {
-    const stock = builtInStored.find((b) => b.key === key)
-    if (stock) void writeKey(key, { label: stock.label, text: stock.text })
+    const stock = builtInOf(key)
+    void writeKey(key, { label: stock.label, text: stock.text })
   }
   // Sent, the editor closes; refused here, it stays open with the draft, as a failed Save does.
   const sendOnce = (key: string, message: string) => {
@@ -1444,7 +1461,8 @@ export function CwCockpit({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingWork?.ts])
 
-  // Keyboard: F1–F8 fire macros; Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4). One press of a
+  // Keyboard: F1–F8 fire macros (F1–F12 when the dock shows 12 or 16 keys; keys 13–16 have no
+  // F-key, `dockMacroKey`, and Shift+F10 is the system's context menu); Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4). One press of a
   // macro key is one send, and never with Alt, Ctrl or Cmd held (RTTY's guard): a held F3's
   // auto-repeat queued the exchange again on every repeat, and Alt+F4, the window's close,
   // sent F4's macro. A modified key is left to the system; PgUp/PgDn still repeat.
@@ -1469,16 +1487,19 @@ export function CwCockpit({
   stateRef.current = { wpm, text }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const macro = macrosRef.current.find((m) => m.key === e.key)
+      const shown = macrosRef.current.map((m) => m.key)
+      const chord = macroEditChordKey(e, shown)
+      const sendKey = dockMacroKey(e, shown)
+      const macro = sendKey ? macrosRef.current.find((m) => m.key === sendKey) : undefined
       if (e.key === 'Escape') {
         e.preventDefault()
-      } else if (macro && macroEditChordKey(e)) {
+      } else if (chord) {
         // Ctrl+Shift with a key's F-key: that key's editor, with the caret in its message. It
         // never sends (`macroEditChordKey` says why the chord is free).
         e.preventDefault()
-        if (!e.repeat) editRef.current.openEditor(macro.key, 'message')
+        if (!e.repeat) editRef.current.openEditor(chord, 'message')
       } else if (macro) {
-        if (e.altKey || e.ctrlKey || e.metaKey) return
+        // `dockMacroKey` has already left Alt, Ctrl and Cmd to the system.
         e.preventDefault()
         // Not while the editor is open: the caret is in it, as in RTTY and PSK.
         if (!e.repeat && !editRef.current.editorOpen) {
@@ -2736,7 +2757,9 @@ export function CwCockpit({
             reading could be read at all. See PhoneCockpit's dock for the full reasoning. */}
         {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
 
-        <div className="cw-macros" role="group" aria-label={t('cw.macros.aria')}>
+        {/* The keys: the grid CW always drew at 8, groups of four that wrap by width at 12 or 16
+            (Settings ▸ CW ▸ Macro keys, `MacroBank`). */}
+        <MacroBank label={t('cw.macros.aria')} gridClass="cw-macros" bankClass="cw-macros macro-bank">
           {/* The buttons ADVERTISE their F-keys, and default Mac keyboards eat bare F-keys
               as media keys — the tooltip carries the cure there (mac QA audit). */}
           {/* A built-in caption that is a WORD arrives as a key; one that is on-air shorthand
@@ -2749,12 +2772,12 @@ export function CwCockpit({
               editing={editing === m.key}
               lit={esmLit.includes(m.key)}
               cue={cueOn(m.key)}
-              title={`${previews[m.key] || m.text}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
+              title={`${previews[m.key] || m.text}${IS_MAC && macroKeyCaption(m.key) ? `\n${FN_KEY_HINT}` : ''}`}
               onSend={() => sendMacro(m)}
               onEdit={(focus) => openEditor(m.key, focus)}
             />
           ))}
-        </div>
+        </MacroBank>
 
         {/* THE EDITOR — out of flow, standing on the dock's top edge over the key it edits, so
             it moves and covers no control in the dock; non-modal, so Stop TX in the TX strip

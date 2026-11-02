@@ -55,8 +55,8 @@ import { t } from '../i18n'
 import { showWhenDriving } from '../features/drivingRefusal'
 import { useEscStop } from '../useEscStop'
 import { PskMacroButton, PskMacroEditor, PskMacroSetSwitch, isEmptyPskSlot } from './PskMacroEditor'
-import type { MacroEditorFocus } from './MacroEditor'
-import { macroEditChordKey } from '../features/macroSets'
+import { MacroBank, type MacroEditorFocus } from './MacroEditor'
+import { dockMacroKey, macroCount, macroEditChordKey, macroKeyCaption } from '../features/macroSets'
 import {
   expandPskMacro,
   pskSetId,
@@ -417,7 +417,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     setMacroSets({ profiles: macros?.pskProfiles ?? [], active: macros?.activePskProfile ?? '' })
   }, [macros?.pskProfiles, macros?.activePskProfile])
   const macroSet = pskSetId(macroSets.active)
-  const slots = resolvePskSet(macroSets.profiles, macroSet, t)
+  // How many keys the dock shows (Settings ▸ PSK ▸ Macro keys): 8, 12 or 16. Only what shows:
+  // a saved key past the count is kept, hidden, and is never sent by a key or a press.
+  const slots = resolvePskSet(macroSets.profiles, macroSet, t, macroCount(macros?.pskMacroCount))
   const [editing, setEditing] = useState<PskMacroKey | null>(null)
   const [editorFocus, setEditorFocus] = useState<MacroEditorFocus>('title')
   const [editorLeft, setEditorLeft] = useState(0)
@@ -513,15 +515,16 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     const slot = slots.find((s) => s.key === key)
     if (slot && sendMacro({ ...slot, text: message })) closeEditor()
   }
-  /** A key's hover text: the message with what is known filled in, tokens left where not. */
-  const macroTitle = (message: string) => {
+  /** A key's hover text: the message with what is known filled in, tokens left where not — and,
+   *  on a Mac, how to press its F-key there (keys 13–16 have none). */
+  const macroTitle = (message: string, key: string) => {
     const mycall = snap?.mycall?.trim() || '{MYCALL}'
     const call = hisCall.trim().toUpperCase() || '{CALL}'
     const filled = message
       .replace(/\{MYCALL\}/gi, mycall)
       .replace(/\{CALL\}/gi, call)
       .replace(/\{RST\}/gi, '599')
-    return `${filled}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`
+    return `${filled}${IS_MAC && macroKeyCaption(key) ? `\n${FN_KEY_HINT}` : ''}`
   }
 
   // THE KEYBOARD — Esc, and F1–F8. Bound only while this is the VISIBLE view: the cockpit stays
@@ -569,16 +572,19 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         e.preventDefault()
         return
       }
-      const chord = macroEditChordKey(e)
+      // F1–F8, and F9–F12 when the dock shows them (keys 13–16 have no F-key: `dockMacroKey`).
+      const shown = k.slots.map((s) => s.key)
+      const chord = macroEditChordKey(e, shown)
       if (chord) {
         e.preventDefault()
         if (!e.repeat) k.openEditor(chord, 'message')
         return
       }
-      if (!/^F[1-8]$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
+      const key = dockMacroKey(e, shown)
+      if (!key) return
       e.preventDefault()
       if (e.repeat || k.editorOpen) return
-      const slot = k.slots.find((s) => s.key === e.key)
+      const slot = k.slots.find((s) => s.key === key)
       if (slot) k.sendMacro(slot)
     }
     window.addEventListener('keydown', onKey)
@@ -1032,22 +1038,28 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           class names verbatim — the eight-key row was measured in a real browser there, and
           jsdom cannot see layout, so PSK inherits the measured result rather than a guess. */}
       <div className="rtty-dock-keys psk-dock-keys">
-      {/* THE KEYS, in keyboard order, eight across at every width but the narrowest. Senders,
-          every one — the rule is indifferent to senders, and none of them may be captioned as a
-          stop (the editor refuses it). Default Mac keyboards eat bare F-keys as media keys, so
-          each key's tooltip carries the cure there. */}
-      <div className="cw-macros rtty-macros psk-macros" role="group" aria-label={t('psk.macros.aria')}>
+      {/* THE KEYS, in keyboard order, eight across at every width but the narrowest — or, at 12
+          or 16 (Settings ▸ PSK ▸ Macro keys), in groups of four that wrap by width (`MacroBank`,
+          RTTY's). Senders, every one — the rule is indifferent to senders, and none of them may
+          be captioned as a stop (the editor refuses it). Default Mac keyboards eat bare F-keys as
+          media keys, so each key's tooltip carries the cure there. */}
+      <MacroBank
+        label={t('psk.macros.aria')}
+        gridClass="cw-macros rtty-macros psk-macros"
+        bankClass={`cw-macros macro-bank macro-bank-shared-${slots.length} psk-macros`}
+        quadClass="rtty-macros"
+      >
         {slots.map((slot) => (
           <PskMacroButton
             key={slot.key}
             slot={slot}
             editing={editing === slot.key}
-            title={macroTitle(slot.text)}
+            title={macroTitle(slot.text, slot.key)}
             onSend={() => sendMacro(slot)}
             onEdit={(focus) => openEditor(slot.key, focus)}
           />
         ))}
-      </div>
+      </MacroBank>
 
       {/* THE FIXED ROW: the Call box, the set switch, and — at the right, together, outside
           every pane and outside the editable set — the continuous-TX latch and Esc/Stop. */}

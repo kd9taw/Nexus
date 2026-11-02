@@ -6175,6 +6175,12 @@ export interface Settings {
     pskProfiles?: KeyboardMacroProfile[]
     /** The PSK set the cockpit shows: `contest`, or Everyday for anything else. */
     activePskProfile?: string
+    /** How many macro keys each keyboard dock shows: 8 (absent — the default), 12 or 16
+     *  (`features/macroSets.ts` `macroCount`). The Settings form writes them; the cockpits'
+     *  macro saves keep them. Fewer hides the keys past the count and keeps what they hold. */
+    cwMacroCount?: number
+    rttyMacroCount?: number
+    pskMacroCount?: number
   }
   // --- dual-radio ---
   /** Configured radios (dual-radio). Migrated to a single profile for a one-radio station; the flat

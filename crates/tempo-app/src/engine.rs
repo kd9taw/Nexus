@@ -44670,6 +44670,90 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// THE MACRO COUNTS (8, 12 or 16 keys per keyboard dock) are the SETTINGS FORM'S to write, and
+    /// the cockpits' macro saves keep them: a form save sets each mode's count while the RTTY and
+    /// PSK sets the cockpits saved stay as they are, and a cockpit save of keys F1–F16 (the
+    /// round-trip-exactly contract) leaves every count where the form put it and persists both.
+    /// Written against the JSON so it compiles, and fails, on a build without the counts.
+    #[test]
+    fn the_form_writes_the_macro_counts_and_the_cockpit_saves_keep_them() {
+        let (mut e, path, _lock) = rtty_macro_engine("counts");
+        let sixteen = |prefix: &str| -> serde_json::Value {
+            serde_json::json!([{"name": "everyday", "macros": (1..=16)
+                .map(|i| serde_json::json!({"key": format!("F{i}"), "label": format!("{prefix}{i}"), "text": format!("{prefix} {i}")}))
+                .collect::<Vec<_>>()}])
+        };
+        let mut panel = serde_json::to_value(e.settings()).unwrap(); // read BEFORE the cockpit edit
+        e.save_rtty_macros(sixteen("R"), serde_json::json!("everyday"))
+            .expect("sixteen RTTY keys save");
+        e.save_psk_macros(sixteen("P"), serde_json::json!(""))
+            .expect("sixteen PSK keys save");
+
+        panel["macros"]["cwMacroCount"] = serde_json::json!(12);
+        panel["macros"]["rttyMacroCount"] = serde_json::json!(16);
+        panel["macros"]["pskMacroCount"] = serde_json::json!(12);
+        e.apply_settings(serde_json::from_value(panel).unwrap());
+        let live = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            live["cwMacroCount"], 12,
+            "the form did not write CW's count"
+        );
+        assert_eq!(
+            live["rttyMacroCount"], 16,
+            "the form did not write RTTY's count"
+        );
+        assert_eq!(
+            live["pskMacroCount"], 12,
+            "the form did not write PSK's count"
+        );
+        assert_eq!(
+            live["rttyProfiles"],
+            sixteen("R"),
+            "the form save reverted the RTTY keys"
+        );
+        assert_eq!(
+            live["pskProfiles"],
+            sixteen("P"),
+            "the form save reverted the PSK keys"
+        );
+
+        // A cockpit save after the form's: the counts stay, the keys past F8 round-trip exactly.
+        let mut edited = sixteen("R");
+        edited[0]["macros"][15]["text"] = serde_json::json!("RTTY 16 EDITED");
+        e.save_rtty_macros(edited.clone(), serde_json::json!("everyday"))
+            .expect("the edit of key 16 saves");
+        let live = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(live["rttyProfiles"], edited);
+        for (field, want) in [
+            ("cwMacroCount", 12),
+            ("rttyMacroCount", 16),
+            ("pskMacroCount", 12),
+        ] {
+            assert_eq!(live[field], want, "the cockpit save moved `{field}`");
+        }
+        let on_disk = serde_json::to_value(Settings::load(&path)).unwrap();
+        assert_eq!(on_disk["macros"]["rttyProfiles"], edited, "persisted");
+        assert_eq!(
+            on_disk["macros"]["rttyMacroCount"], 16,
+            "the count persisted"
+        );
+
+        // Back to 8 through the form: the count goes, the keys past F8 are kept, hidden.
+        let mut panel = serde_json::to_value(e.settings()).unwrap();
+        panel["macros"]["rttyMacroCount"] = serde_json::json!(8);
+        e.apply_settings(serde_json::from_value(panel).unwrap());
+        let live = serde_json::to_value(&e.settings().macros).unwrap();
+        assert!(
+            live.get("rttyMacroCount").is_none(),
+            "8 is the default and is not written"
+        );
+        assert_eq!(
+            live["rttyProfiles"], edited,
+            "choosing 8 deleted the keys past F8"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
     /// **No settings form moves the Logbook's column choice.** `set_logbook_columns` is its one
     /// writer: the Logbook saves a choice the moment it is made, and a Settings payload is a
     /// snapshot from whenever the sending surface last read the settings — saved later, its copy

@@ -4471,6 +4471,55 @@ pub struct Macros {
     /// Same one writer as `psk_profiles`.
     #[serde(default, deserialize_with = "lenient_string")]
     pub active_psk_profile: String,
+    /// HOW MANY MACRO KEYS each keyboard cockpit's dock shows — CW's, RTTY's and PSK's, each its
+    /// own: 8 (the default, F1–F8), 12 (F1–F12) or 16 (F1–F12 and four sent with a click). See
+    /// [`MACRO_COUNTS`]. The SETTINGS FORM writes them, like `rtty_esm_roles`; the cockpits' macro
+    /// saves (`Engine::save_rtty_macros`, `Engine::save_psk_macros`) replace only their own two
+    /// fields and so leave these as they are. A count is only how many keys SHOW: choosing fewer
+    /// hides the keys past it and keeps whatever they hold. Not written at 8, so a file saved
+    /// before these existed loads and saves back byte for byte; any value but 12 or 16 loads as 8.
+    #[serde(
+        default = "default_macro_count",
+        skip_serializing_if = "is_default_macro_count",
+        deserialize_with = "lenient_macro_count"
+    )]
+    pub cw_macro_count: u8,
+    /// The RTTY dock's count — see `cw_macro_count`.
+    #[serde(
+        default = "default_macro_count",
+        skip_serializing_if = "is_default_macro_count",
+        deserialize_with = "lenient_macro_count"
+    )]
+    pub rtty_macro_count: u8,
+    /// The PSK dock's count — see `cw_macro_count`.
+    #[serde(
+        default = "default_macro_count",
+        skip_serializing_if = "is_default_macro_count",
+        deserialize_with = "lenient_macro_count"
+    )]
+    pub psk_macro_count: u8,
+}
+
+/// The macro counts a keyboard cockpit's dock offers, the first the default. The UI's twin is
+/// `MACRO_COUNTS` in `ui/src/features/macroSets.ts`.
+pub const MACRO_COUNTS: [u8; 3] = [8, 12, 16];
+
+fn default_macro_count() -> u8 {
+    MACRO_COUNTS[0]
+}
+
+fn is_default_macro_count(count: &u8) -> bool {
+    *count == MACRO_COUNTS[0]
+}
+
+/// A macro count read LENIENTLY ([`lenient_list`]'s WHY): one of [`MACRO_COUNTS`], else the
+/// default. A hand edit gone wrong costs the count, never the file around it.
+fn lenient_macro_count<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u8, D::Error> {
+    Ok(serde_json::Value::deserialize(de)?
+        .as_u64()
+        .and_then(|n| u8::try_from(n).ok())
+        .filter(|n| MACRO_COUNTS.contains(n))
+        .unwrap_or_else(default_macro_count))
 }
 
 /// One customizable CW F-key macro.
@@ -4627,6 +4676,9 @@ impl Default for Macros {
             rtty_esm_roles: None,
             psk_profiles: Vec::new(),
             active_psk_profile: String::new(),
+            cw_macro_count: default_macro_count(),
+            rtty_macro_count: default_macro_count(),
+            psk_macro_count: default_macro_count(),
         }
     }
 }
@@ -16239,6 +16291,118 @@ mod tests {
             assert_eq!(esm_switches(&Settings::load(&path)), [want; 4]);
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// THE MACRO COUNTS (8, 12 or 16 keys per keyboard dock). A file from before them — eight
+    /// keys in every set, no count — loads as 8 everywhere and saves back with its `macros` BYTE
+    /// FOR BYTE (no count is written at 8). A file at 12 or 16, with keys F9–F16 in a CW profile
+    /// and in the RTTY and PSK sets, comes back by value through a save and a load. A count that
+    /// is not 8, 12 or 16 loads as 8 and costs nothing else. Written against the JSON so it
+    /// compiles, and fails, on a build without the counts.
+    #[test]
+    fn macro_counts_round_trip_and_a_file_without_them_is_unchanged() {
+        let dir = scratch_dir("macro_counts");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let keys = |n: usize, prefix: &str| -> String {
+            (1..=n)
+                .map(|i| {
+                    format!(
+                        r#"{{"key":"F{i}","label":"{prefix}{i}","text":"{prefix} {i} {{MYCALL}}"}}"#
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let macros_of = |s: &Settings| serde_json::to_value(&s.macros).unwrap();
+
+        // The old file: eight keys everywhere, no count.
+        let old_macros = format!(
+            r#"{{"chat":["73"],"qso":["RR73"],"band":["QRZ?"],"cw":[],"cwProfiles":[{{"name":"Mine","macros":[{cw}]}}],"activeCwProfile":0,"rttyProfiles":[{{"name":"contest","macros":[{rtty}]}}],"activeRttyProfile":"contest","pskProfiles":[{{"name":"everyday","macros":[{psk}]}}],"activePskProfile":""}}"#,
+            cw = keys(8, "CW"),
+            rtty = keys(8, "RTTY"),
+            psk = keys(8, "PSK"),
+        );
+        std::fs::write(
+            &path,
+            format!(r#"{{"mycall":"W9XYZ","macros":{old_macros}}}"#),
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.mycall, "W9XYZ", "control: the old file loaded");
+        let v = macros_of(&loaded);
+        for field in ["cwMacroCount", "rttyMacroCount", "pskMacroCount"] {
+            assert!(v.get(field).is_none(), "an old file gained `{field}` at 8");
+        }
+        loaded.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(
+            serde_json::to_string(&back.macros).unwrap(),
+            old_macros,
+            "an eight-key file's macros changed through a save and a load"
+        );
+
+        // 12 and 16, each mode its own count, with every key the count shows.
+        for (cw, rtty, psk) in [(12u64, 16u64, 12u64), (16, 12, 16)] {
+            let mut s = Settings::default();
+            let mut v = serde_json::to_value(&s).unwrap();
+            v["macros"] = serde_json::from_str(&format!(
+                r#"{{"cwProfiles":[{{"name":"Mine","macros":[{c}]}}],"activeCwProfile":0,"rttyProfiles":[{{"name":"everyday","macros":[{r}]}}],"pskProfiles":[{{"name":"contest","macros":[{p}]}}],"activePskProfile":"contest","cwMacroCount":{cw},"rttyMacroCount":{rtty},"pskMacroCount":{psk}}}"#,
+                c = keys(cw as usize, "CW"),
+                r = keys(rtty as usize, "RTTY"),
+                p = keys(psk as usize, "PSK"),
+            ))
+            .unwrap();
+            s = serde_json::from_value(v).unwrap();
+            s.save(&path).unwrap();
+            let back = macros_of(&Settings::load(&path));
+            assert_eq!(back["cwMacroCount"], cw, "the CW count did not round-trip");
+            assert_eq!(
+                back["rttyMacroCount"], rtty,
+                "the RTTY count did not round-trip"
+            );
+            assert_eq!(
+                back["pskMacroCount"], psk,
+                "the PSK count did not round-trip"
+            );
+            assert_eq!(
+                back,
+                macros_of(&s),
+                "the macros changed through a save and a load"
+            );
+            assert_eq!(
+                back["rttyProfiles"][0]["macros"].as_array().unwrap().len() as u64,
+                rtty,
+                "the RTTY keys past F8 were lost"
+            );
+            assert_eq!(
+                back["cwProfiles"][0]["macros"][cw as usize - 1]["key"],
+                format!("F{cw}")
+            );
+        }
+
+        // A count that is not one of the three costs only itself.
+        for bad in ["10", "0", "-1", "300", "\"16\"", "null", "[16]"] {
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{"mycall":"W9XYZ","macros":{{"rttyMacroCount":{bad},"pskMacroCount":16}}}}"#
+                ),
+            )
+            .unwrap();
+            let loaded = Settings::load(&path);
+            assert_eq!(loaded.mycall, "W9XYZ", "a bad count {bad} cost the file");
+            let v = macros_of(&loaded);
+            assert!(
+                v.get("rttyMacroCount").is_none(),
+                "a bad count {bad} did not load as 8"
+            );
+            assert_eq!(
+                v["pskMacroCount"], 16,
+                "a bad RTTY count {bad} cost the PSK one"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A CW profile, the RTTY sets and the voice keyer from before Enter Sends Message carry no

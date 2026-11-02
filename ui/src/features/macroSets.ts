@@ -11,9 +11,67 @@
 import { EN, textInEveryLocale, type MessageKey } from '../i18n'
 import type { KeyboardMacroProfile } from '../types'
 
-/** The eight F-keys a keyboard cockpit's dock binds, in dock order. */
+/** The eight F-keys every dock shows, the built-in sets fill and Enter Sends Message's steps map
+ *  to, in dock order. */
 export const MACRO_KEYS = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8'] as const
-export type MacroKey = (typeof MACRO_KEYS)[number]
+
+/** EVERY KEY A DOCK CAN SHOW, in dock order: the eight, then F9–F12, then four more. The names
+ *  past F12 are the store's ids for keys 13–16 and nothing else — those keys are sent by a click
+ *  only, so no keyboard key sends them and the dock never shows their name
+ *  (`macroKeyCaption`). */
+export const MACRO_SLOT_KEYS = [
+  ...MACRO_KEYS,
+  'F9', 'F10', 'F11', 'F12',
+  'F13', 'F14', 'F15', 'F16',
+] as const
+export type MacroKey = (typeof MACRO_SLOT_KEYS)[number]
+
+/** THE KEYS A KEYBOARD SENDS: F1–F12. Checked before they were bound (2026-11-01): in the main
+ *  window nothing else takes a bare F9–F12 while a keyboard cockpit shows — the voice keyer holds
+ *  F1–F12 only on Phone, the Contest screen holds them only while its entry shows, Operate's F4
+ *  and F6 only on Operate; WebView2's browser keys (F12's developer tools, F5's reload) are off
+ *  in every window (src-tauri `browser_keys.rs`); F11's full screen is the Remote window's alone
+ *  (`remote_window.rs`); nothing registers a global shortcut. Shift+F10 is the system's context
+ *  menu and is left to it (`dockMacroKey`). */
+const KEYED_MACRO_KEYS: readonly string[] = MACRO_SLOT_KEYS.slice(0, 12)
+
+/** How many keys a dock shows — `macros.cwMacroCount`, `rttyMacroCount`, `pskMacroCount`. 8 is the
+ *  default (an old file has no count), so nobody's dock changes unless they choose. The engine's
+ *  twin is `MACRO_COUNTS` in settings.rs. */
+export const MACRO_COUNTS = [8, 12, 16] as const
+export type MacroCount = (typeof MACRO_COUNTS)[number]
+
+/** The count a stored value means: 12 or 16 as stored, 8 for anything else (absent included). */
+export function macroCount(stored: unknown): MacroCount {
+  return stored === 12 || stored === 16 ? stored : 8
+}
+
+/** The keys a dock at `count` shows, in dock order. */
+export function macroKeys(count: MacroCount): readonly MacroKey[] {
+  return MACRO_SLOT_KEYS.slice(0, count)
+}
+
+/** What a key's corner says: its F-key for F1–F12, nothing for keys 13–16, which no key sends. */
+export function macroKeyCaption(key: string): string {
+  return KEYED_MACRO_KEYS.includes(key) ? key : ''
+}
+
+/** A key's place in the dock, 1 to 16 — how keys 13–16, which have no F-key, are named. */
+export function macroSlotNumber(key: string): number {
+  return (MACRO_SLOT_KEYS as readonly string[]).indexOf(key) + 1
+}
+
+/** THE SEND KEY: the key a bare F-key press sends, or null. Only a key among `shown` (the dock's
+ *  keys at its count) and only F1–F12; never with Alt, Ctrl or Cmd held, which belong to the
+ *  system (Alt+F4), and never Shift+F10, the system's context-menu key. Shift with any other
+ *  F-key sends, as Shift+F1–F8 always has. */
+export function dockMacroKey(
+  e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'metaKey'>,
+  shown: readonly string[],
+): MacroKey | null {
+  if (e.altKey || e.ctrlKey || e.metaKey || (e.shiftKey && e.key === 'F10')) return null
+  return KEYED_MACRO_KEYS.includes(e.key) && shown.includes(e.key) ? (e.key as MacroKey) : null
+}
 
 /** The two built-in sets, by the id the mode's `active*Profile` setting stores. */
 export type MacroSetId = 'everyday' | 'contest'
@@ -42,20 +100,24 @@ export function macroSetId(active: string | null | undefined): MacroSetId {
   return active === 'contest' ? 'contest' : 'everyday'
 }
 
-/** The eight keys of `set`: the operator's saved entry for a key where there is one — their own
- *  words, never translated — else the built-in, whose caption `translate` resolves. */
+/** The `count` keys of `set` (eight unless the operator chose more): the operator's saved entry
+ *  for a key where there is one — their own words, never translated — else the built-in, whose
+ *  caption `translate` resolves, and an empty key past the built-ins. A saved key past `count`
+ *  is not shown and is kept. */
 export function resolveMacroSet(
   profiles: KeyboardMacroProfile[] | undefined,
   set: MacroSetId,
   builtins: Record<MacroSetId, BuiltinMacro[]>,
   translate: (key: MessageKey) => string,
+  count: MacroCount = 8,
 ): MacroSlot[] {
   const saved = profiles?.find((p) => p.name === set)?.macros ?? []
-  return builtins[set].map((b) => {
-    const own = saved.find((m) => m.key === b.key)
-    if (own) return { key: b.key, label: own.label, text: own.text, custom: true }
+  return macroKeys(count).map((key) => {
+    const own = saved.find((m) => m.key === key)
+    if (own) return { key, label: own.label, text: own.text, custom: true }
+    const b = builtins[set].find((m) => m.key === key) ?? { key, text: '' }
     const label = b.labelKey ? translate(b.labelKey) : (b.label ?? '')
-    return { key: b.key, label, text: b.text, custom: false }
+    return { key, label, text: b.text, custom: false }
   })
 }
 
@@ -69,8 +131,8 @@ export function withMacroEntry(
   entry: { label: string; text: string } | null,
 ): KeyboardMacroProfile[] {
   const rank = (k: string) => {
-    const i = (MACRO_KEYS as readonly string[]).indexOf(k)
-    return i < 0 ? MACRO_KEYS.length : i
+    const i = (MACRO_SLOT_KEYS as readonly string[]).indexOf(k)
+    return i < 0 ? MACRO_SLOT_KEYS.length : i
   }
   const edit = (macros: KeyboardMacroProfile['macros']) =>
     [...macros.filter((m) => m.key !== key), ...(entry ? [{ key, ...entry }] : [])].sort(
@@ -109,17 +171,19 @@ export function unknownTokens(text: string, known: RegExp): string[] {
 export type MacroRefusal = { missing: 'mycall' | 'call' | 'exch' } | { unknown: string }
 
 /** THE EDIT SHORTCUT, the same in every keyboard dock: Ctrl+Shift with a key's F-key opens that
- *  key's editor, and never sends. The key it names, or null for any other press. Nothing else in
- *  Nexus binds Ctrl+Shift with F1–F8 (the docks send on a bare F-key and leave Alt, Ctrl and Cmd
+ *  key's editor, and never sends. The key it names among `shown` (the dock's keys; F1–F8 unless
+ *  given), or null for any other press — keys 13–16 have no F-key, so no chord. Nothing else in
+ *  Nexus binds Ctrl+Shift with F1–F12 (the docks send on a bare F-key and leave Alt, Ctrl and Cmd
  *  to the system, the voice keyer and the contest entries do the same, Operate's F4 and F6 are
  *  its own), and it is none of the systems' F-key chords: Alt+F4 and Ctrl+F4 (Windows),
- *  Shift+F10 (the context menu), Control+F1–F8 (macOS keyboard navigation), Ctrl+Alt+F1–F7 (a
+ *  Shift+F10 (the context menu), Control+F1–F8 (macOS keyboard navigation), Ctrl+Alt+F1–F12 (a
  *  Linux console). With Alt or Cmd held as well it is not this chord. */
 export function macroEditChordKey(
   e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'metaKey'>,
+  shown: readonly string[] = MACRO_KEYS,
 ): MacroKey | null {
   if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return null
-  return (MACRO_KEYS as readonly string[]).includes(e.key) ? (e.key as MacroKey) : null
+  return KEYED_MACRO_KEYS.includes(e.key) && shown.includes(e.key) ? (e.key as MacroKey) : null
 }
 
 /** The edit shortcut for `key` as `aria-keyshortcuts` names it, for the ✎ that does the same. */
