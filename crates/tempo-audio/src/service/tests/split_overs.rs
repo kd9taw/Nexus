@@ -595,6 +595,10 @@ struct Vfos {
     /// A K3 whose VFO B is in a mode it will not pair with VFO A's: split on (`S 1`) answered
     /// `RPRT -9` and not taken until a TX mode (`X`) is taken.
     split_on_needs_x: bool,
+    /// The TX dial (`I`) answered `RPRT -9` and not taken.
+    refuse_i: bool,
+    /// The TX dial (`I`) taken, and answered this many ms late.
+    i_delay_ms: u64,
 }
 
 struct Hamlib {
@@ -629,15 +633,19 @@ impl Radio for Hamlib {
 /// The loop on a rigctld holding VFO A (the dial), VFO B and split, Split Operation `split`.
 /// `own_split` is the radio's split before Nexus transmits: `Some(vfo_b)` = on, TX on VFO B there.
 fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<Hamlib> {
-    let engine = cq_engine(split, tx_hz, |_| {});
+    hamlib_bench_on(cq_engine(split, tx_hz, |_| {}), FT8_DIAL, own_split)
+}
+
+/// [`hamlib_bench`] for `engine`, the radio's VFO A on `dial` (the engine's own dial).
+fn hamlib_bench_on(engine: Arc<Mutex<Engine>>, dial: u64, own_split: Option<u64>) -> Bench<Hamlib> {
     let keyed = Arc::new(AtomicBool::new(false));
     let vfos = Arc::new(Mutex::new(Vfos {
         split: own_split.is_some(),
-        b: own_split.unwrap_or(FT8_DIAL),
+        b: own_split.unwrap_or(dial),
         ..Vfos::default()
     }));
     let (k, v) = (keyed.clone(), vfos.clone());
-    let peer = retuning_peer(FT8_DIAL, "PKTUSB", move |line, radio| {
+    let peer = retuning_peer(dial, "PKTUSB", move |line, radio| {
         let mut v = v.lock().unwrap();
         let ok = || Some("RPRT 0\n".to_string());
         if line.starts_with("S 0") {
@@ -692,7 +700,11 @@ fn hamlib_bench(split: SplitMode, tx_hz: f32, own_split: Option<u64>) -> Bench<H
             {
                 Some("RPRT -1\n".to_string())
             }
+            _ if line.starts_with("I ") && v.refuse_i => Some("RPRT -9\n".to_string()),
             _ if line.starts_with("I ") => {
+                if v.i_delay_ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(v.i_delay_ms));
+                }
                 v.b = line[2..].trim().parse().unwrap();
                 ok()
             }
@@ -1384,6 +1396,415 @@ fn through_hamlib_a_refused_split_release_is_retried_at_quiet_points_and_nothing
     let _ = b.ticks(150);
     assert!(!b.radio.vfos.lock().unwrap().split, "still in split");
     assert!(!b.rig.split_release_pending, "still owed");
+}
+
+// ── Keys that are not slot overs, with Rig split held ────────────────────────────────────────
+//
+// Split Operation = Rig holds split between overs, VFO B on the last over's TX dial (the RX dial
+// plus a 500 Hz step). A tune, a CW word (the CW ID after 73 is one, queued by `send_cw` exactly
+// as below), the operator's PTT, an APRS beacon and the radio's ATU tune-up are not slot overs:
+// nothing wrote VFO B for them, so they keyed out of it at the shifted dial, a frequency the
+// licence gate never judged (it judges them from the RX dial). WSJT-X writes the TX frequency
+// before every key with split on, XIT 0's being the RX dial; before such a key Nexus puts VFO B
+// back on the RX dial, or lets go of a hold that has ended.
+
+/// The split, TX dial and PTT writes in `writes`, the rest left out.
+fn split_and_keys(writes: &[String]) -> Vec<&str> {
+    writes
+        .iter()
+        .map(String::as_str)
+        .filter(|l| l.starts_with(['S', 'I', 'T']))
+        .collect()
+}
+
+/// The 20 m dial Nexus's first over put a 500 Hz shift under, and VFO B's TX dial for it.
+const SHIFTED_TX_DIAL: u64 = 14_073_500;
+
+/// ⛔ A tune with Rig split held after a shifted over keys only once VFO B is back on the RX dial,
+/// written just before the key (`I` at the dial, then the key). Split stays on, as WSJT-X holds it.
+#[test]
+fn a_tune_with_rig_split_held_keys_with_vfo_b_back_on_the_rx_dial() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    assert_eq!(
+        b.radio.vfos.lock().unwrap().b,
+        SHIFTED_TX_DIAL,
+        "premise: VFO B on the over's TX dial"
+    );
+    b.engine.lock().unwrap().set_tune(true);
+    let writes = b.ticks(3);
+    let sent = split_and_keys(&writes);
+    assert_eq!(sent.len(), 2, "wire {writes:?}");
+    assert_eq!(
+        sent[0], "I 14074000",
+        "VFO B not put back before the key: {writes:?}"
+    );
+    assert!(is_key(sent[1]), "the tune did not key: {writes:?}");
+    let v = b.radio.vfos.lock().unwrap();
+    assert_eq!(
+        (v.split, v.b),
+        (true, FT8_DIAL),
+        "split held, VFO B on the dial"
+    );
+}
+
+/// ⛔ A CW word in the Digital section (what the CW ID after 73 sends, through `send_cw`) with Rig
+/// split held: VFO B back on the RX dial before ANY keyer has it. The soundcard keyer's PTT comes
+/// after the `I`; the radio's own keyer (CAT) is handed the word (`b`) only after it.
+#[test]
+fn a_cw_word_with_rig_split_held_keys_with_vfo_b_back_on_the_rx_dial() {
+    use tempo_app::settings::CwKeyerBackend;
+    for keyer in [CwKeyerBackend::Soundcard, CwKeyerBackend::Cat] {
+        let engine = cq_engine(SplitMode::Rig, 1441.0, |s| s.cw_keyer = keyer);
+        let mut b = hamlib_bench_on(engine, FT8_DIAL, None);
+        let _ = b.overs(1);
+        assert_eq!(
+            b.radio.vfos.lock().unwrap().b,
+            SHIFTED_TX_DIAL,
+            "{keyer:?}: premise"
+        );
+        let lines_before = b.radio.peer.lines.lock().unwrap().len();
+        {
+            let mut e = b.engine.lock().unwrap();
+            let mycall = e.settings().mycall.clone();
+            e.send_cw(&mycall);
+        }
+        let writes = b.ticks(3);
+        let raw: Vec<String> = b.radio.peer.lines.lock().unwrap()[lines_before..].to_vec();
+        let vfo_b = raw.iter().position(|l| l == "I 14074000");
+        let keyed = raw
+            .iter()
+            .position(|l| is_key(l) || l.starts_with("b "))
+            .unwrap_or_else(|| panic!("{keyer:?}: the word was not keyed: {raw:?}"));
+        assert!(
+            vfo_b.is_some_and(|i| i < keyed),
+            "{keyer:?}: VFO B not put back before the key: {raw:?}"
+        );
+        assert_eq!(
+            b.radio.vfos.lock().unwrap().b,
+            FT8_DIAL,
+            "{keyer:?}: VFO B left on the shifted dial: {writes:?}"
+        );
+    }
+}
+
+/// ⛔ The operator's PTT (a Remote's too: the same latch) between two overs with Rig split held:
+/// VFO B back on the RX dial before the key. And the slot overs are as they were: split is never
+/// let go between them, and the next over writes its own TX dial again before its key.
+#[test]
+fn a_ptt_between_held_split_overs_keys_on_the_rx_dial_and_the_next_over_rewrites_its_tx_dial() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let engine = b.engine.clone();
+    let slot = b.slot;
+    // Two seconds into the receive period after the first over, held for two.
+    let overs = b.overs_hooked(
+        3,
+        |_| {},
+        move |t, _| {
+            let mut e = engine.lock().unwrap();
+            if (slot + 17_000.0..slot + 17_020.0).contains(&t) {
+                e.set_ptt(true);
+            }
+            if (slot + 19_000.0..slot + 19_020.0).contains(&t) {
+                e.set_ptt(false);
+            }
+        },
+    );
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!("PTT between held overs, key {}: {o:?}", i + 1);
+    }
+    assert_eq!(
+        overs[0].key,
+        ["S 1 VFOB", "I 14073500", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+        "premise: the first over"
+    );
+    let ptt = split_and_keys(&overs[1].key);
+    assert_eq!(ptt.len(), 2, "the PTT's key: {:?}", overs[1].key);
+    assert_eq!(ptt[0], "I 14074000", "VFO B not put back before the PTT");
+    assert!(is_key(ptt[1]), "the PTT did not key: {:?}", overs[1].key);
+    assert_eq!(
+        overs[2].key,
+        ["I 14073500", "S 1 VFOB", "T 1"],
+        "the next over's TX dial written again before its key"
+    );
+    let let_go = overs
+        .iter()
+        .flat_map(|o| o.key.iter().chain(&o.unkey).chain(&o.rx))
+        .filter(|l| l.starts_with("S 0"))
+        .count();
+    assert_eq!(let_go, 0, "split let go between overs");
+    let v = b.radio.vfos.lock().unwrap();
+    assert_eq!(
+        (v.split, v.b),
+        (true, SHIFTED_TX_DIAL),
+        "held, on the TX dial"
+    );
+}
+
+/// A CQ by a General on 20 m FT8, the dial 200 Hz below the bottom of the class's data privileges
+/// (14.025 MHz) and the TX offset 200 Hz: the gate judges the over at 14.0250 MHz and allows it.
+fn general_cq_near_the_edge(mhz: f64) -> Arc<Mutex<Engine>> {
+    let engine = cq_engine(SplitMode::Rig, 200.0, |_| {});
+    {
+        let mut e = engine.lock().unwrap();
+        assert!(e.set_license_class("general"), "premise: the class");
+        e.set_frequency(mhz, "20m", "USB");
+        e.set_tx_offset(200.0);
+        e.start_cq(None).expect("Call CQ");
+        let _ = e.take_immediate_tx();
+    }
+    engine
+}
+
+/// Whether a General may transmit data on `hz` (a single frequency, judged as a span of 1 Hz).
+fn general_may_send_data_on(hz: u64) -> bool {
+    use tempo_app::settings::{LicenseClass, OperatingMode};
+    let mhz = hz as f64 / 1e6;
+    tempo_app::privileges::tx_span_allowed(
+        LicenseClass::General,
+        mhz,
+        mhz + 1e-6,
+        OperatingMode::Digital,
+    )
+}
+
+/// ⛔ THE LICENCE EDGE. The over's 200 Hz offset is shifted 1500 Hz down (audio at 1700 Hz, VFO B
+/// at 14.0233 MHz). A tune after it, its tone at 1500 Hz, went out of VFO B there at 14.0248 MHz:
+/// below the General's edge, where the gate (which judged 14.0250) never looked. With VFO B back
+/// on the dial it goes out at 14.0263 MHz, inside, where the station's no-split tune goes.
+///
+/// The control: the dial moved 200 Hz down, the gate judges 14.0249 MHz, outside the class, and the
+/// tune is refused before anything is written or keyed.
+#[test]
+fn a_tune_near_the_band_edge_goes_out_inside_the_privileges_the_gate_judged() {
+    let mut b = hamlib_bench_on(general_cq_near_the_edge(14.0248), 14_024_800, None);
+    let overs = b.overs(1);
+    assert_eq!(
+        overs[0].key,
+        ["S 1 VFOB", "I 14023300", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+        "premise: the over's TX dial 1500 Hz down"
+    );
+    assert!(
+        b.engine.lock().unwrap().tx_allowed(),
+        "premise: the gate allows the dial"
+    );
+    b.engine.lock().unwrap().set_tune(true);
+    let writes = b.ticks(3);
+    assert!(
+        split_and_keys(&writes).iter().any(|l| is_key(l)),
+        "premise: the tune keyed: {writes:?}"
+    );
+    let tune_rf = b.radio.vfos.lock().unwrap().b + TUNE_FREQ_HZ as u64;
+    assert_eq!(tune_rf, 14_026_300, "the tune's carrier: {writes:?}");
+    assert!(
+        general_may_send_data_on(tune_rf),
+        "the tune went out outside the privileges at {tune_rf} Hz"
+    );
+    assert!(
+        !general_may_send_data_on(SHIFTED_TX_DIAL_NEAR_EDGE + TUNE_FREQ_HZ as u64),
+        "premise: on the shifted VFO B the tune was outside"
+    );
+
+    // The control.
+    let mut c = hamlib_bench_on(general_cq_near_the_edge(14.0249), 14_024_900, None);
+    let _ = c.overs(1);
+    {
+        let mut e = c.engine.lock().unwrap();
+        e.set_frequency(14.0247, "20m", "USB");
+        e.set_tx_enabled(true);
+        assert!(!e.tx_allowed(), "premise: the gate refuses the moved dial");
+        e.set_tune(true);
+        assert!(!e.tuning(), "a tune armed outside the privileges");
+    }
+    let writes = c.ticks(5);
+    assert!(
+        !writes.iter().any(|l| is_key(l) || l.starts_with("I ")),
+        "keyed or VFO B written outside the privileges: {writes:?}"
+    );
+}
+
+/// VFO B's TX dial for the over at 14.0248 MHz with its 200 Hz offset shifted 1500 Hz down.
+const SHIFTED_TX_DIAL_NEAR_EDGE: u64 = 14_023_300;
+
+/// ⛔ FAIL CLOSED, AND NEVER LATE. VFO B's write for a tune the radio refuses, or confirms only
+/// after the split writes' budget (500 ms), keys nothing: the tune ends, its line says why, VFO B
+/// is where it was or where the radio put it, and nothing is keyed after the budget. The control:
+/// a write confirmed inside the budget (100 ms) keys.
+#[test]
+fn a_tune_whose_vfo_b_write_is_refused_or_late_keys_nothing() {
+    type Radio = fn(&mut Vfos);
+    let cases: [(&str, Radio, bool); 3] = [
+        ("refused", |v| v.refuse_i = true, false),
+        ("answered after the budget", |v| v.i_delay_ms = 650, false),
+        (
+            "control: answered inside the budget",
+            |v| v.i_delay_ms = 100,
+            true,
+        ),
+    ];
+    for (what, radio, keys) in cases {
+        let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+        let _ = b.overs(1);
+        radio(&mut b.radio.vfos.lock().unwrap());
+        b.engine.lock().unwrap().set_tune(true);
+        let writes = b.ticks(5);
+        let sent = split_and_keys(&writes);
+        assert_eq!(sent.first(), Some(&"I 14074000"), "{what}: wire {writes:?}");
+        assert_eq!(
+            sent.iter().any(|l| is_key(l)),
+            keys,
+            "{what}: keyed: {writes:?}"
+        );
+        let e = b.engine.lock().unwrap();
+        assert_eq!(e.tuning(), keys, "{what}: the tune's state");
+        if !keys {
+            let line = e.snapshot().radio.audio_error;
+            assert!(
+                line.as_deref()
+                    .is_some_and(|w| w.contains("Split Operation")),
+                "{what}: nothing says why: {line:?}"
+            );
+        }
+    }
+}
+
+/// ⛔ An APRS beacon and the radio's ATU tune-up from the Digital section with Rig split held: the
+/// beacon's key and the tune-up's `U TUNER` (the radio keys its own carrier for it) come only after
+/// VFO B is back on the RX dial.
+#[test]
+fn an_aprs_beacon_and_an_atu_tune_up_with_rig_split_held_go_out_with_vfo_b_on_the_rx_dial() {
+    type Press = fn(&mut Engine);
+    type Keys = fn(&str) -> bool;
+    // What is pressed, how, what its key looks like on the wire, and how many keys the run sees
+    // (the beacon's PTT is one; the tune-up is the radio's own and keys no PTT).
+    let cases: [(&str, Press, Keys, usize); 2] = [
+        (
+            "APRS beacon",
+            |e| {
+                e.aprs_beacon(41.88, -87.63, '/', '>', "split", &[])
+                    .expect("the beacon is queued");
+            },
+            is_key,
+            3,
+        ),
+        (
+            "ATU tune-up",
+            |e| {
+                // A radio whose tuner is in line and whose CAT can start a tune-up.
+                e.observe_rig_tuner(Some(true), true);
+                e.atu_tune().expect("the press is taken");
+            },
+            |l| l.starts_with("U TUNER "),
+            2,
+        ),
+    ];
+    for (what, press, keys, n) in cases {
+        let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+        let engine = b.engine.clone();
+        let lines = b.radio.peer.lines.clone();
+        let pressed_at = Arc::new(Mutex::new(None));
+        let at = pressed_at.clone();
+        let slot = b.slot;
+        // Two seconds into the receive period after the first over.
+        let _ = b.overs_hooked(
+            n,
+            |_| {},
+            move |t, _| {
+                if (slot + 17_000.0..slot + 17_020.0).contains(&t) {
+                    *at.lock().unwrap() = Some(lines.lock().unwrap().len());
+                    press(&mut engine.lock().unwrap());
+                }
+            },
+        );
+        let from = pressed_at.lock().unwrap().expect("premise: pressed");
+        let raw: Vec<String> = b.radio.peer.lines.lock().unwrap()[from..].to_vec();
+        let keyed = raw
+            .iter()
+            .position(|l| keys(l))
+            .unwrap_or_else(|| panic!("{what}: nothing keyed: {raw:?}"));
+        assert!(
+            raw[..keyed].iter().any(|l| l == "I 14074000"),
+            "{what}: VFO B not put back before the key: {raw:?}"
+        );
+    }
+}
+
+/// ⛔ A PTT press whose VFO B write the radio refuses keys nothing, and, as any key the radio
+/// refused, is not tried again while it is held: one `I`, no key, then only the release's `T 0`,
+/// even with the radio taking the write again meanwhile. Let go and pressed again, it keys, VFO B
+/// on the dial first. The next over is as it always was.
+#[test]
+fn a_ptt_press_refused_for_the_split_is_not_tried_again_while_it_is_held() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let engine = b.engine.clone();
+    let vfos = b.radio.vfos.clone();
+    let slot = b.slot;
+    // In the receive period after the first over: pressed with the write refused, the radio taking
+    // it again a moment later, let go; then pressed again and let go.
+    let overs = b.overs_hooked(
+        3,
+        |_| {},
+        move |t, _| {
+            let at = |ms: f64| (slot + ms..slot + ms + 20.0).contains(&t);
+            let mut e = engine.lock().unwrap();
+            if at(17_000.0) {
+                vfos.lock().unwrap().refuse_i = true;
+                e.set_ptt(true);
+            }
+            if at(17_200.0) {
+                vfos.lock().unwrap().refuse_i = false;
+            }
+            if at(18_000.0) {
+                e.set_ptt(false);
+            }
+            if at(18_200.0) {
+                e.set_ptt(true);
+            }
+            if at(19_000.0) {
+                e.set_ptt(false);
+            }
+        },
+    );
+    for (i, o) in overs.iter().enumerate() {
+        eprintln!("refused PTT, key {}: {o:?}", i + 1);
+    }
+    assert_eq!(
+        split_and_keys(&overs[0].rx),
+        ["I 14074000", "T 0"],
+        "the refused press: one write, no key, then its release"
+    );
+    let again = split_and_keys(&overs[1].key);
+    assert_eq!(again.len(), 2, "pressed again: {:?}", overs[1].key);
+    assert_eq!(again[0], "I 14074000", "pressed again: {:?}", overs[1].key);
+    assert!(is_key(again[1]), "pressed again: {:?}", overs[1].key);
+    // The refused write forgot what the radio had confirmed, so its TX mode goes out again too.
+    assert_eq!(
+        overs[2].key,
+        ["I 14073500", "X PKTUSB -1", "S 1 VFOB", "T 1"],
+        "the next over's TX dial written again before its key"
+    );
+}
+
+/// A hold that has ended (TX turned off) is let go before a tune keys (the tune is the one key
+/// that needs no TX latch): `S 0 VFOA`, then the key, from VFO A. Nothing writes VFO B.
+#[test]
+fn a_tune_after_tx_is_turned_off_keys_after_the_split_is_let_go() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    {
+        let mut e = b.engine.lock().unwrap();
+        e.set_tx_enabled(false);
+        e.set_tune(true);
+    }
+    let writes = b.ticks(3);
+    let sent = split_and_keys(&writes);
+    assert_eq!(sent.len(), 2, "wire {writes:?}");
+    assert_eq!(
+        sent[0], "S 0 VFOA",
+        "split not let go before the key: {writes:?}"
+    );
+    assert!(is_key(sent[1]), "the tune did not key: {writes:?}");
+    assert!(!b.radio.vfos.lock().unwrap().split, "still in split");
 }
 
 impl<R: Radio> Bench<R> {
