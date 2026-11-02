@@ -7853,6 +7853,9 @@ export const EN = {
   'radios.picker.inUse.tag': 'in use',
   'radios.picker.choose.title': 'Operate {{name}}',
   'radios.picker.single': 'Use one radio (follow bands on a single window)',
+  'radios.picker.auto.windows': 'Opening each radio in its own window, as last time, in {{seconds}} s. Click or press a key to choose yourself.',
+  'radios.picker.auto.one': 'Starting this window on one radio in {{seconds}} s. Click or press a key to choose yourself.',
+  'radios.picker.failed': 'Could not do that: {{reason}}',
 
   'radios.switcher.aria': 'Active radio',
   'radios.switcher.active.title': '{{name}} — active radio ({{band}} · {{freq}} MHz)',

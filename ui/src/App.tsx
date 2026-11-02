@@ -174,6 +174,8 @@ import {
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
   radioLaunchInfo,
+  radioPickerTimedOut,
+  radioPickerUnavailable,
   chooseRadio,
   useSingleRadio,
   resendChat,
@@ -447,13 +449,18 @@ function App() {
   // and this window launched without a profile. `null` = not a picker launch (the common case),
   // so a single-radio station never sees any of this.
   const [radioPicker, setRadioPicker] = useState<RadioLaunchInfo | null>(null)
+  // Why the picker's last answer could not be carried out (its radio is open in another window).
+  const [radioPickerError, setRadioPickerError] = useState<string | null>(null)
   useEffect(() => {
     let live = true
     radioLaunchInfo()
       .then((i) => {
         if (live && i.showPicker) setRadioPicker(i)
       })
-      .catch(() => {}) // no picker on error — fall through to normal operation
+      // No picker on error. The backend holds a picker launch's radio until it is answered, so a
+      // window that cannot ask must say so: it starts this window's radio, as the window did
+      // before the picker held it, and the backend logs why.
+      .catch(() => void radioPickerUnavailable().catch(() => {}))
     return () => {
       live = false
     }
@@ -4618,7 +4625,20 @@ function App() {
         <RadioPicker
           info={radioPicker}
           onChoose={(id) => void chooseRadio(id)}
-          onSingleRadio={() => void useSingleRadio().finally(() => setRadioPicker(null))}
+          onSingleRadio={() =>
+            void useSingleRadio().then(
+              () => setRadioPicker(null),
+              (e: unknown) => setRadioPickerError(String(e)),
+            )
+          }
+          // "Windows" relaunches and exits this window; "one radio" starts this window's radio.
+          onTimeout={() =>
+            void radioPickerTimedOut().then(
+              () => setRadioPicker(null),
+              (e: unknown) => setRadioPickerError(String(e)),
+            )
+          }
+          error={radioPickerError}
         />
       )}
 
