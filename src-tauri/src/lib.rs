@@ -17793,6 +17793,36 @@ mod contest_session_tests {
         );
     }
 
+    /// ★ A VOICE SLOT WRITTEN AS A LIST (`[slot, label, file]`, which the settings reader takes as
+    /// readily as `{slot, label, file}`) never brings its recording either: after a restore of a
+    /// backup made at the station, no slot, in the settings or in any saved profile, plays the file
+    /// the backup named.
+    #[test]
+    fn restoring_a_backup_never_takes_a_recording_from_a_slot_written_as_a_list() {
+        let unc = "\\\\elsewhere\\share\\cq.wav";
+        let as_list = serde_json::json!([[1, "CQ CONTEST", unc]]);
+        let read: Vec<tempo_app::settings::VoiceMessage> =
+            serde_json::from_value(as_list.clone()).unwrap();
+        assert_eq!(read[0].file, unc, "the settings reader takes the list form");
+        let (_, profiles, voice) = restored_at_the_station("restore-voice-list", |s| {
+            s.insert("voiceMessages".into(), as_list.clone());
+        });
+        assert!(voice.iter().all(|v| v.file != unc), "settings: {voice:?}");
+        for (name, p) in &profiles {
+            assert!(!p.to_string().contains("elsewhere"), "profile {name}: {p}");
+        }
+    }
+
+    /// ★ A BACKUP MADE FROM AFAR CARRIES NO RECORDING FROM A SLOT WRITTEN AS A LIST either.
+    #[test]
+    fn a_backup_from_afar_leaves_out_a_recording_from_a_slot_written_as_a_list() {
+        let mut settings = serde_json::json!({
+            "voiceMessages": [[1, "CQ", "C:\\Shack\\voice\\slot1.wav"]],
+        });
+        without_station_paths(settings.as_object_mut().unwrap());
+        assert!(!settings.to_string().contains("Shack"), "{settings}");
+    }
+
     /// The station's stored keys, planted (fake): its own Club Log and Cloudlog keys in its
     /// settings, and each of two saved profiles' own, every one a distinct string under `tag`.
     /// With the UI state holding a station key (the watch list) and this computer's own (the UI
@@ -20746,7 +20776,8 @@ const STATION_PATHS_LEFT_OUT: &str = "stationPathsLeftOut";
 
 /// One settings object (the bundle's own, or a saved profile's) without the station's paths: each
 /// of [`STATION_PATHS`] left out, which a restore and a profile load read as "keep this station's",
-/// and each voice-keyer slot's recording blanked, as a slot is before one is recorded.
+/// and each voice-keyer slot's recording blanked, as a slot is before one is recorded. A slot that
+/// is not an object is left out whole.
 fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Value>) {
     for key in STATION_PATHS {
         settings.remove(key);
@@ -20755,6 +20786,9 @@ fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Valu
         .get_mut("voiceMessages")
         .and_then(serde_json::Value::as_array_mut)
     {
+        // ⛔ A slot the settings reader takes in another form (a list, `[slot, label, file]`)
+        // cannot have its recording rewritten here, so it is dropped (Nexus writes none).
+        slots.retain(serde_json::Value::is_object);
         for slot in slots
             .iter_mut()
             .filter_map(serde_json::Value::as_object_mut)
@@ -20768,11 +20802,12 @@ fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Valu
 /// `station` holds them (this station's settings, or its saved profile of the same name): each of
 /// [`STATION_PATHS`], and each voice-keyer slot's recording by slot number. What `station` does not
 /// hold is left out, so loading that profile keeps this station's own. The backup's voice slots are
-/// always kept, labels and all: a slot the station holds no recording for (no profile of that
-/// name here, or one with no voice slots) keeps its recording blank, as a slot is before one is
-/// recorded. ⛔ A path a backup names is never taken: the TQSL program runs with nobody pressing
-/// anything (the automatic LoTW upload), and a file could name any program, or a sound or a
-/// recording on another computer's share.
+/// always kept, labels and all, except a slot that is not an object, which is left out whole: a
+/// slot the station holds no recording for (no profile of that name here, or one with no voice
+/// slots) keeps its recording blank, as a slot is before one is recorded. ⛔ A path a backup names
+/// is never taken: the TQSL program runs with nobody pressing anything (the automatic LoTW
+/// upload), and a file could name any program, or a sound or a recording on another computer's
+/// share.
 fn with_station_paths(
     settings: &mut serde_json::Map<String, serde_json::Value>,
     station: Option<&serde_json::Map<String, serde_json::Value>>,
@@ -20790,6 +20825,9 @@ fn with_station_paths(
         .get_mut("voiceMessages")
         .and_then(serde_json::Value::as_array_mut)
     {
+        // ⛔ A slot the settings reader takes in another form (a list, `[slot, label, file]`)
+        // cannot have its recording rewritten here, so it is dropped (Nexus writes none).
+        slots.retain(serde_json::Value::is_object);
         for slot in slots
             .iter_mut()
             .filter_map(serde_json::Value::as_object_mut)
