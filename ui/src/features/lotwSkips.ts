@@ -9,6 +9,16 @@
 // contact, written `MODE=MFSK SUBMODE=JTTY`): sent, TQSL would drop it and the whole batch would
 // read as rejected, so the station keeps it unsent and says so (`heldMode`, the connection log's
 // sentence). Without this the screen showed an upload that left a contact behind for no reason.
+//
+// …and the contacts signed with the Station Location in Settings because no station profile told
+// which location signs them (`locationTie`, `locationUnmatched`): a contact signed with a place it
+// was not made at is one LoTW never matches, so the operator is told how many, and why. Signing
+// from the ADIF (`locationFromAdif`), no Station Location signed them: the words say so.
+//
+// …and the contacts a later TQSL run never sent (`unsentAfterError`): the batch is signed in one
+// run per Station Location, and when one cannot run at all the earlier runs' contacts have gone,
+// so the toast says both. A run TQSL signed whose mark could not be shown on disk
+// (`unconfirmedAfterError`) went to LoTW: the toast says that, not "not sent".
 
 import { t } from '../i18n'
 import type { UploadReport } from '../types'
@@ -26,8 +36,32 @@ export function lotwSkipNote(r: UploadReport): string | null {
         (edited > 0 ? t('logbook.lotw.skipped.edited', { count: edited }) : '') +
         (deleted > 0 ? t('logbook.lotw.skipped.deleted', { count: deleted }) : '')
   const heldBack = held > 0 ? t('logbook.lotw.held', { count: held }) : null
-  if (skipped == null) return heldBack
-  return heldBack == null ? skipped : `${skipped} ${heldBack}`
+  const tie = r.locationTie ?? 0
+  const unmatched = r.locationUnmatched ?? 0
+  const adif = r.locationFromAdif === true
+  const unsent = r.unsentAfterError ?? 0
+  const unconfirmed = r.unconfirmedAfterError ?? 0
+  const notes = [
+    skipped,
+    heldBack,
+    tie > 0
+      ? adif
+        ? t('logbook.lotw.location.tieAdif', { count: tie })
+        : t('logbook.lotw.location.tie', { count: tie })
+      : null,
+    unmatched > 0
+      ? adif
+        ? t('logbook.lotw.location.unmatchedAdif', { count: unmatched })
+        : t('logbook.lotw.location.unmatched', { count: unmatched })
+      : null,
+    unconfirmed > 0
+      ? t('logbook.lotw.unconfirmedAfterError', { count: unconfirmed, detail: r.unsentError ?? '' })
+      : null,
+    unsent > 0
+      ? t('logbook.lotw.unsentAfterError', { count: unsent, detail: r.unsentError ?? '' })
+      : null,
+  ].filter((n): n is string => n != null)
+  return notes.length === 0 ? null : notes.join(' ')
 }
 
 /** How long the toast stays: three short sentences are more than the default four seconds. */

@@ -38,6 +38,10 @@ export interface OverlayItem {
   /** Palette id from OVERLAY_COLORS. */
   color: string
   treatment: OverlayTreatment
+  /** The station call a preset wrote into `text` when it was added. Sent with the picture, so
+   *  one made before the station's call changed (a profile switch) is not sent under the new
+   *  call. Absent on the operator's own text. */
+  call?: string
 }
 
 /** The 8-swatch palette. `rgb` feeds the canvas; luminance decides the contrast side. */
@@ -166,6 +170,7 @@ export function presetCq(mycall: string): OverlayItem {
   return {
     id: newOverlayId(),
     text: `CQ CQ DE ${mycall}`.trim(),
+    call: mycall,
     cx: 0.5,
     cy: 0.24,
     size: 2,
@@ -178,6 +183,7 @@ export function preset73(mycall: string): OverlayItem {
   return {
     id: newOverlayId(),
     text: `73 DE ${mycall}`.trim(),
+    call: mycall,
     cx: 0.5,
     cy: 0.86,
     size: 2,
@@ -190,6 +196,7 @@ export function presetReply(hiscall: string, mycall: string): OverlayItem {
   return {
     id: newOverlayId(),
     text: `${hiscall} DE ${mycall} 599`.trim(),
+    call: mycall,
     cx: 0.5,
     cy: 0.5,
     size: 2,

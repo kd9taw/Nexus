@@ -77,6 +77,10 @@ pub(crate) struct HeldQso {
     /// 2026-10-27). Kept here and in the journal, never on the record, so no build that logs the
     /// record can carry the note into the log or an upload.
     pub(crate) gridless: bool,
+    /// Stamped with the station it was made under when it was set aside for Log QSO
+    /// (`StalledQso::station`): neither the hold nor the log funnel adds the station's later
+    /// profile or activation to it. Not journaled: a restart logs it as before.
+    pub(crate) stamped: bool,
 }
 
 impl HeldQso {
@@ -86,6 +90,7 @@ impl HeldQso {
             grid_source,
             confirm_only: false,
             gridless: false,
+            stamped: false,
         }
     }
 

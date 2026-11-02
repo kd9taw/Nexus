@@ -8,7 +8,16 @@ use crate::dto::SourceKind;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub mod station_profiles;
 pub mod writer;
+
+pub use station_profiles::{
+    StationProfile, HOME_STATION_PROFILE, STATION_CALL_CHANGED_LATE_REPLY_DROPPED,
+    STATION_CALL_CHANGED_TX_REFUSED, STATION_PROFILE_CALL_TX_REFUSED,
+    STATION_PROFILE_JS8_QUEUED_REFUSED, STATION_PROFILE_JTTY_PROMPT_REFUSED,
+    STATION_PROFILE_RESTORE_REFUSED, STATION_PROFILE_SWITCH_REFUSED,
+    STATION_PROFILE_UNLOGGED_REFUSED,
+};
 
 /// What kind of operating the active section is doing — the per-section rig-mode
 /// policy. **Digital** OBEYS the rig (max compatibility; FT8/FT4 live in an audio
@@ -2798,6 +2807,16 @@ pub struct Settings {
     /// that has no key: the field's own `#[serde(default)]` is what reads a missing key as `Act`.
     #[serde(default)]
     pub radio_switch_policy: RadioSwitchPolicy,
+    /// "My station" profiles: Home, a portable kit, a club call ([`station_profiles`]). Empty
+    /// until the operator makes one, and then not written at all, so a station that never does
+    /// keeps the file it had. One writer each: the profile verbs, never a whole save
+    /// (`Engine::apply_settings` keeps the live list and active id).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub station_profiles: Vec<StationProfile>,
+    /// The id of the profile the station is on; the flat call, grid, state and power are its.
+    /// Empty with no profiles.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub active_station_profile: String,
 
     // --- network (WSJT-X parity) ---
     /// Emit the WSJT-X-compatible UDP protocol (for JTAlert/GridTracker/loggers).
@@ -6525,6 +6544,8 @@ impl Default for Settings {
             default_radio: None,
             // A new install is told when Nexus switches radio by itself (see the field).
             radio_switch_policy: RadioSwitchPolicy::Tell,
+            station_profiles: Vec::new(),
+            active_station_profile: String::new(),
             wsjtx_udp: false,
             wsjtx_udp_addr: "127.0.0.1:2237".to_string(),
             write_all_txt: true,
@@ -8053,6 +8074,9 @@ impl Settings {
             p.flex_native_audio |= flat_audio;
         }
         s.sync_flat_from_active();
+        // ⛔ A station profile id that names no profile is put back on one, with that profile's
+        // call (`Settings::repair_active_station_profile`).
+        s.repair_active_station_profile();
         s
     }
 

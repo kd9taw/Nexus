@@ -145,6 +145,8 @@ mod kept_files_tests;
 /// The cockpit's drive and RX gain survive a later Settings save, and a save of another radio.
 #[cfg(test)]
 mod live_level_tests;
+#[cfg(test)]
+mod lotw_location_tests;
 mod mode_entry;
 /// A program outside Nexus judged across the whole audio passband it could send.
 #[cfg(test)]
@@ -181,6 +183,10 @@ mod remote_transmit_hold_tests;
 mod restore_session_tests;
 #[cfg(test)]
 mod rtty_sideband_tests;
+/// "My station" profiles: switching, the log stamp, the activation's pick, the licence refusal.
+mod station_profiles;
+#[cfg(test)]
+mod station_profiles_tests;
 pub mod tx_extras;
 #[cfg(test)]
 mod tx_extras_tests;
@@ -3350,6 +3356,20 @@ struct RecentPartner {
     owed: Option<Msg>,
 }
 
+impl StalledQso {
+    /// With station profiles, the station as it is now, stamped on a record of the contact's own
+    /// ([`StalledQso::station`]); with none, nothing, as before profiles.
+    fn with_station(mut self, e: &Engine) -> Self {
+        if !e.settings.station_profiles.is_empty() {
+            let mut station =
+                e.qso_record(self.dxcall.clone(), self.dxgrid.clone(), self.rx_report);
+            e.stamp_hold(&mut station);
+            self.station = Some(station);
+        }
+        self
+    }
+}
+
 /// A contact abandoned mid-exchange that still deserves to reach the log (#153), or one a band
 /// change ended before it was logged ([`Engine::band_change_qso`]).
 ///
@@ -3377,6 +3397,15 @@ struct StalledQso {
     /// Our 73 to a roger the operator clicked, with no report exchanged ([`roger_click_73_sent`]):
     /// Log QSO only offers it, in the popup ([`HeldQso::confirm_only`]).
     confirm_only: bool,
+    /// With station profiles: the station it was made under, stamped when it was set aside
+    /// ([`Engine::stamp_hold`] on a record of its own): its call, grid, place, rig and power. Log
+    /// QSO may come after a profile switch, and the contact logs the station its overs went out
+    /// under, not the one on when the button is pressed. `None` with no profiles: the contact is
+    /// stamped when it is logged, as before profiles.
+    station: Option<QsoRecord>,
+    /// The call its overs carried ([`Engine::contact_station_callsign`], taken when it was set
+    /// aside): with no profiles, a call saved before Log QSO does not relabel it.
+    station_callsign: Option<String>,
 }
 
 /// Where and in what mode a finished contact was made, kept when a tier change comes before Log
@@ -3890,10 +3919,28 @@ pub struct Engine {
     /// Whether the active QSO has already been auto-logged (so it logs exactly
     /// once when the sequencer reaches `Done`). Reset when a new QSO starts.
     qso_logged: bool,
+    /// Where an activation's Stop would have taken the station profile back to, kept when the Stop
+    /// could not go (a run or contact under way, or stopped from afar onto another call):
+    /// (the profile before, the park's profile). The next activation started on it takes it up,
+    /// so its Stop goes back; a switch drops it (`engine/station_profiles.rs`).
+    station_profile_return_kept: Option<(String, String)>,
     /// Unix-secs when the current QSO's exchange began (TIME_ON) — set when answering a
     /// station or when our CQ first gets a reply; `None` between QSOs. The log records
     /// this as the contact start, with the completion time as TIME_OFF.
     qso_start_unix: Option<u64>,
+    /// A late reply owed under another call than the station's was dropped
+    /// ([`STATION_CALL_CHANGED_LATE_REPLY_DROPPED`]): said in the cockpit until the next over
+    /// keys or TX is stopped. Display only.
+    ft_late_reply_dropped: bool,
+    /// The calls this station transmitted under before the one it has now, oldest first, each
+    /// once ([`Self::note_call_saved`]). The keying-time call check counts them as the station's
+    /// own ([`ft_over_call_refusal`]), so an over naming one of them is held back on a station with
+    /// no profiles as on one with them: a Tx row a screen drew before the save, say.
+    former_calls: Vec<String>,
+    /// The operator's free text Nexus addressed (`<DX> <ME> <text>`) and the over it made, while
+    /// it may wait in the sequencer ([`Self::qso_freetext_checked`]). A call saved before it keys
+    /// writes it again under the new call ([`Self::note_call_saved`]).
+    qso_freetext: Option<(String, Msg)>,
     /// Whether the operator is RUNNING (called CQ) vs answering a specific station.
     /// When running, a completed QSO returns to calling CQ (WSJT-X's run workflow).
     cq_running: bool,
@@ -4467,6 +4514,9 @@ pub struct Engine {
     /// (`engine/tci/cw.rs`); gated by `tx_enabled` (Monitor) and the privileges, and a word they
     /// refuse is dropped, never held (`poll_cw_one`).
     cw_queue: VecDeque<String>,
+    /// The call the station had when the oldest message in `cw_queue` was queued (its macros'
+    /// `{MYCALL}` was expanded with it): the keying-time call check reads it at the poll.
+    cw_queue_call: Option<String>,
     /// The messages in [`Self::cw_queue`], oldest first, as (words left, CW speed match's speed,
     /// whether its first word has been taken, the TCI program that sent it): `None` keys at the
     /// operator's own speed, and `None` for the sender is Nexus's own. Words leave the front as the
@@ -4962,6 +5012,10 @@ pub struct Engine {
     /// Stop TX / halt clears this queue so the rest never keys, and so does
     /// leaving the RTTY section.
     rtty_queue: VecDeque<String>,
+    /// The call the station had when the oldest over in `rtty_queue` was queued: the keying-time
+    /// call check reads it at the poll ([`Engine::sent_call_refusal`]). Set when an over goes into
+    /// an empty queue; what follows it waits behind it.
+    rtty_queue_call: Option<String>,
     /// One-shot: abort the RTTY transmission in progress (the loop stops the FSK
     /// keying thread / flushes the AFSK audio ring and unkeys PTT).
     rtty_abort: bool,
@@ -5077,6 +5131,9 @@ pub struct Engine {
     /// refuse is dropped there, never held). Stop/halt clears it, and so does
     /// leaving the PSK section.
     psk_queue: VecDeque<String>,
+    /// The call the station had when the oldest text in `psk_queue` was queued, as
+    /// `rtty_queue_call` is for RTTY: the keying-time call check reads it at the poll.
+    psk_queue_call: Option<String>,
     /// One-shot: abort PSK TX now (the radio loop flushes the audio ring and
     /// unkeys on its next tick). Mirrors `rtty_abort`.
     psk_abort: bool,
@@ -5122,6 +5179,9 @@ pub struct Engine {
     /// time via [`Engine::poll_aprs_tx`]; Stop TX / halt clears it, and TX Off or a refusal at the
     /// poll drops it with a notice ([`Self::aprs_tx_notice`]).
     aprs_tx_queue: VecDeque<(Vec<f32>, Option<String>)>,
+    /// The call the station had when the oldest frame in `aprs_tx_queue` was made (its AX.25
+    /// source): the keying-time call check reads it at the poll ([`Engine::sent_call_refusal`]).
+    aprs_tx_queue_call: Option<String>,
     /// The station the frame [`Engine::poll_aprs_tx`] last handed the radio loop acks, when it is
     /// an automatic ack: what [`Engine::aprs_key_refused`] names.
     aprs_keying_ack: Option<String>,
@@ -5264,6 +5324,9 @@ pub struct Engine {
     /// arm/launch/mode-select. The radio loop takes it via [`Engine::poll_sstv_tx`]
     /// behind every TX gate; one image in flight at a time (no queue). `None` = idle.
     sstv_tx: Option<SstvTxJob>,
+    /// The call burned into the picture in `sstv_tx` (its ID plate, its FSK ID, a preset's
+    /// text): the keying-time call check reads it at the poll ([`Engine::sent_call_refusal`]).
+    sstv_tx_call: Option<String>,
     /// One-shot: abort the SSTV image in progress (the loop drops the feed, flushes
     /// the output ring and unkeys PTT). Mirrors `rtty_abort`.
     sstv_abort: bool,
@@ -6402,6 +6465,114 @@ pub struct TxPlan {
     /// Everything the TX gate evaluated when this plan was made — see
     /// [`TxGateStamp`].
     stamp: TxGateStamp,
+    /// What `plan_tx` changed when it counted this FT over as sent, so [`Engine::commit_tx`] can
+    /// take it back when the over is refused at the key for its call. `None` for every other plan.
+    counted: Option<FtOverCount>,
+}
+
+/// What [`Engine::plan_tx`] changed when it counted an FT or contest over as sent: the
+/// sequencer's step and the flags the over arms. A call saved while the radio loop builds the wave
+/// with the engine unlocked makes [`Engine::commit_tx`] refuse the over on its stamp; it was never
+/// sent, so it is not counted either (the operator's decision, 2026-10-28): no step counted, no
+/// "Disable Tx after sending 73", no CW ID. Only that refusal takes the count back. An over that
+/// keys, or one refused at the key for another reason, keeps it exactly as before.
+#[derive(Debug, Clone)]
+struct FtOverCount {
+    /// The sequencer's step before and after the count.
+    step: CountedStep,
+    /// The station's call the plan judged the over under (`settings.mycall`). The key judges it
+    /// by this call, not by whatever station the operator put in the sequencer meanwhile.
+    mycall: String,
+    /// The engine's own bookkeeping before the count.
+    pending_tx_disable: bool,
+    pending_cw_id: bool,
+    qso_start_unix: Option<u64>,
+    cq_pause_until: Option<u64>,
+}
+
+/// The part of a sequencer an over's count changes, with enough of the rest to tell that nothing
+/// else moved it between the plan and the key. Put back only when the sequencer is exactly as the
+/// count left it: a station the operator replaced or moved meanwhile is theirs, and left alone.
+#[derive(Debug, Clone, PartialEq)]
+enum CountedStep {
+    Qso {
+        before: QsoStep,
+        after: QsoStep,
+    },
+    FieldDay {
+        before: FdStep,
+        after: FdStep,
+    },
+    /// The late reply owed to a partner the run had left (#170): taken by the plan, and dropped
+    /// whether it keys or not, since it is one over, once.
+    Owed(Msg),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct QsoStep {
+    state: QsoState,
+    dxcall: Option<String>,
+    pending: Option<Msg>,
+    tx_count: u32,
+    rv_count: u8,
+    keyed_on_air: bool,
+    /// The call the sequencer makes its overs under, and the one its latest over went out under: a
+    /// call saved while the over's wave is built makes the messages again ([`QsoStation::sign_as`]).
+    mycall: String,
+    keyed_as: Option<String>,
+}
+
+impl QsoStep {
+    fn of(s: &QsoStation) -> Self {
+        Self {
+            state: s.state,
+            dxcall: s.dxcall.clone(),
+            pending: s.pending.clone(),
+            tx_count: s.tx_count,
+            rv_count: s.rv_count,
+            keyed_on_air: s.keyed_on_air,
+            mycall: s.mycall.clone(),
+            keyed_as: s.keyed_as.clone(),
+        }
+    }
+
+    /// This step with its messages made again under `call`, as a save of the call does
+    /// ([`QsoStation::sign_as`]).
+    fn signed_by(&self, call: &str) -> Self {
+        let mut s = self.clone();
+        if s.mycall != call {
+            s.pending = s.pending.map(|m| m.signed_by(&self.mycall, call));
+            s.mycall = call.to_string();
+        }
+        s
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FdStep {
+    state: tempo_core::fieldday::FdState,
+    dxcall: Option<String>,
+    pending: Option<Msg>,
+    /// The call the contest sequencer makes its overs under ([`FieldDayStation::call`]).
+    call: String,
+}
+
+impl FdStep {
+    fn of(s: &FieldDayStation) -> Self {
+        Self {
+            state: s.state,
+            dxcall: s.dxcall.clone(),
+            pending: s.pending.clone(),
+            call: s.call().to_string(),
+        }
+    }
+
+    /// Whether this step is `after`, or `after` with its messages made again under another call
+    /// ([`FieldDayStation::sign_as`]): the same state and partner, only the call moved.
+    fn moved_only_by_its_call(&self, after: &FdStep) -> bool {
+        self == after
+            || (self.call != after.call && self.state == after.state && self.dxcall == after.dxcall)
+    }
 }
 
 /// The transmit side of WSJT-X's UDP Status (type 1, `Network/NetworkMessage.hpp`), as
@@ -6423,6 +6594,69 @@ pub struct WsjtxTxStatus {
     pub tx_watchdog: bool,
     /// "Tx Message": `m_currentMessage`, the over on the air or the last one sent.
     pub tx_message: String,
+}
+
+/// The over [`Engine::qso_freetext`] makes of the operator's free `text` to `dx` under `mycall`:
+/// `<DX> <ME> <text>`, or, where exactly one of the two calls is nonstandard and the text reads
+/// as a standard message, that message as WSJT-X writes it for the pair
+/// ([`QsoStation::on_air_form`]). Free text to the sequence either way.
+fn addressed_free_text(mycall: &str, dx: &str, text: &str) -> Msg {
+    let std = |c: &str| tempo_core::message::is_std_call(tempo_core::message::unhash_call(c));
+    let typed = format!("{dx} {mycall} {text}");
+    let parsed = Msg::parse(&typed);
+    if std(mycall) != std(dx) && !matches!(parsed, Msg::Other(_)) {
+        Msg::Other(QsoStation::on_air_form(mycall, dx, parsed).to_text())
+    } else {
+        Msg::Other(typed)
+    }
+}
+
+/// [`Engine::sent_call_refusal`]'s comparison: `built`, the call a message was made under, against
+/// `now`, the call the station transmits under. Unhashed, without surrounding spaces and in any
+/// capitals; a message made with no call is never refused for it.
+fn call_changed_refusal(built: &str, now: &str) -> Option<&'static str> {
+    let built = tempo_core::message::unhash_call(built).trim();
+    (!built.is_empty() && !built.eq_ignore_ascii_case(now.trim()))
+        .then_some(crate::settings::STATION_CALL_CHANGED_TX_REFUSED)
+}
+
+/// ⛔ The keying-time call check for an FT over of the QSO sequencer (or a Chat-tier frame), `text`.
+///
+/// Only an over Nexus made from the station's call is judged (the operator's decision,
+/// 2026-10-28): one whose sender (`Msg::sender`) is one of the station's own calls, that is the
+/// call it transmits under `now`, the call its sequencer was made with (`built`), a stored
+/// station profile's call, a call the station transmitted under before (`former`,
+/// [`Engine::former_calls`]: a Tx row a screen drew before a call was saved names one), or the
+/// sender of the one over owed to a partner the run has left (`owed`, made by the sequencer). Each is compared by its base call (`same_call`), so a
+/// portable or other compound form of one of them is one of them. Such an over is refused when
+/// its sender is not the call of `now` ([`call_changed_refusal`]). Text the operator typed (Tx 5,
+/// the free text, a logger's free text) whose sender is another station's call, or that reads as
+/// one ("W1AW 5NN 73", "CQ DX EN52"), is the operator's own words and goes out as before.
+fn ft_over_call_refusal(
+    text: &str,
+    now: &str,
+    built: &str,
+    profiles: &[crate::settings::StationProfile],
+    former: &[String],
+    owed: Option<&Msg>,
+) -> Option<&'static str> {
+    let msg = Msg::parse(text);
+    let de = msg.sender()?;
+    let own = |call: &str| !call.trim().is_empty() && same_call(de, call);
+    let ours = own(now)
+        || own(built)
+        || profiles.iter().any(|p| own(&p.call))
+        || former.iter().any(|c| own(c))
+        || owed.and_then(Msg::sender).is_some_and(own);
+    ours.then(|| call_changed_refusal(de, now)).flatten()
+}
+
+/// ⛔ The keying-time call check for a contest over (`Mode::FieldDay`): every over the contest
+/// sequencer sends is made under its call (`FieldDayStation::call`), the ARRL
+/// VHF contests' rogered grid ("W1AW KD9TAW R EN52", free text to `Msg::parse`) included, so it is
+/// judged by that call.
+fn contest_over_call_refusal(built: &str, now: &str) -> Option<&'static str> {
+    call_changed_refusal(built, now)
 }
 
 /// The Tx Message WSJT-X reports for an over: `m_currentMessage = QString::fromLatin1 (msgsent)`
@@ -7005,7 +7239,11 @@ impl Engine {
             pending_log_epoch: 0,
             qso_log_epoch: remote_logging::next_identity(),
             qso_logged: false,
+            station_profile_return_kept: None,
             qso_start_unix: None,
+            ft_late_reply_dropped: false,
+            former_calls: Vec::new(),
+            qso_freetext: None,
             cq_running: false,
             // Seeded from the callsign so two stations do not share a draw
             // sequence; the percentage is applied from settings on each decision.
@@ -7142,6 +7380,7 @@ impl Engine {
             off_band_made_on: None,
             rig_dial_seen: false,
             cw_queue: VecDeque::new(),
+            cw_queue_call: None,
             cw_messages: VecDeque::new(),
             cw_sent: VecDeque::new(),
             cw_keyer_error: None,
@@ -7282,6 +7521,7 @@ impl Engine {
             rtty_afc_reset: false,
             rtty_center: None,
             rtty_queue: VecDeque::new(),
+            rtty_queue_call: None,
             rtty_abort: false,
             rtty_latched: false,
             rtty_type_buf: VecDeque::new(),
@@ -7305,6 +7545,7 @@ impl Engine {
             psk_mode: tempo_core::psk::PskModeKind::Bpsk31,
             psk_reverse: false,
             psk_queue: VecDeque::new(),
+            psk_queue_call: None,
             psk_abort: false,
             psk_latched: false,
             psk_type_buf: VecDeque::new(),
@@ -7322,6 +7563,7 @@ impl Engine {
             aprs_heard: Vec::new(),
             aprs_health: AprsHealth::default(),
             aprs_tx_queue: VecDeque::new(),
+            aprs_tx_queue_call: None,
             aprs_keying_ack: None,
             aprs_tx_notice: None,
             aprs_msg_seq: 0,
@@ -7345,6 +7587,7 @@ impl Engine {
             sstv_audio: Vec::new(),
             sstv_progress: None,
             sstv_tx: None,
+            sstv_tx_call: None,
             sstv_abort: false,
             sstv_sending: false,
             sstv_tx_mode: None,
@@ -7519,6 +7762,9 @@ impl Engine {
     /// So the restore keeps nothing. `ensure_radio_profiles` / `ensure_routing_targets` still run,
     /// so a bundle with an empty or inconsistent roster lands in a state the loop can drive.
     pub fn apply_restored_settings(&mut self, s: Settings) {
+        let mut s = s;
+        // ⛔ A bundle whose station profile id names no profile lands on one, with its call.
+        s.repair_active_station_profile();
         self.apply_settings_inner(s, false);
     }
 
@@ -7556,6 +7802,8 @@ impl Engine {
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         self.remote_readings.invalidate();
+        // The station's call before the save ([`Self::note_call_saved`], at the end).
+        let call_was = self.settings.mycall.clone();
         // The address the club link line is about, before the save: a save that moves it
         // starts the line afresh at the end of this function.
         let club_target_was = self.fd_sync_targets().1;
@@ -7676,6 +7924,16 @@ impl Engine {
         // The setup wizard's "seen" record (`mark_setup_wizard_seen`) only ever goes from not seen
         // to seen: no form, restore or reset brings the first-run wizard back to a station.
         let live_setup_wizard_seen = self.settings.setup_wizard_seen;
+        // The station profiles and which one is on: ONE writer each, the profile verbs
+        // (`engine/station_profiles.rs`). The form's own active id says which profile its flat
+        // call, grid, state and power describe (`Settings::keep_station_form`).
+        // ⛔ While a run, a contact, an over or a JS8 message is under way, a save keeps the call
+        // the station transmits under (`keep_live_station_profiles`). Read before the save lands.
+        let live_station_call_waits = (!self.settings.station_profiles.is_empty()
+            && self.station_profile_switch_refusal().is_some())
+        .then(|| self.settings.mycall.clone());
+        let live_station_profiles = std::mem::take(&mut self.settings.station_profiles);
+        let live_active_station = std::mem::take(&mut self.settings.active_station_profile);
         // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
         // the operator presses: the presence beacon (`set_beacon`) and JS8's automatic replies,
         // relay and heartbeat acks (`js8_arm`). From a computer driving the station those run only
@@ -7850,6 +8108,11 @@ impl Engine {
             // A form never writes or wipes the note; the save itself may take it or end it.
             self.settings.contest_before = live_contest_before;
             self.note_contest_before(contest_was, contest_was_active);
+            self.keep_live_station_profiles(
+                live_station_profiles,
+                live_active_station,
+                live_station_call_waits,
+            );
         }
         if let Some(club) = self.fd_club.as_mut() {
             club.note_host_settings(
@@ -8095,6 +8358,63 @@ impl Engine {
             // …and the contacts the mode left were that host's to have ([`Self::fd_left_log`]).
             self.fd_left_log = None;
         }
+        self.note_call_saved(&call_was);
+    }
+
+    /// After a save that changed the station's call from `was`: `was` becomes one of the calls the
+    /// station transmitted under before ([`Self::former_calls`]), and the FT or contest sequencer
+    /// makes its messages again under the call now, the one waiting included
+    /// ([`QsoStation::sign_as`], [`FieldDayStation::sign_as`]), so its next over goes out under
+    /// it. The operator's free text waiting to go is addressed again under the call now
+    /// ([`Self::qso_freetext`]) when it has no sender ("W1AW KD9TAW TNX 73"): the call in it is the
+    /// one Nexus put there. Free text that reads as a standard message ("W1AW KD9TAW 73") is signed
+    /// by the call now like the sequencer's own messages.
+    fn note_call_saved(&mut self, was: &str) {
+        let now = self.settings.mycall.clone();
+        if call_changed_refusal(was, &now).is_none() {
+            return;
+        }
+        let was = tempo_core::message::unhash_call(was)
+            .trim()
+            .to_ascii_uppercase();
+        self.former_calls
+            .retain(|c| !c.eq_ignore_ascii_case(&was) && !c.eq_ignore_ascii_case(now.trim()));
+        self.former_calls.push(was);
+        let freetext = self.qso_freetext.take();
+        // ⭐ THE MESSAGES ARE MADE AGAIN UNDER THE CALL NOW (the operator's decision, 2026-10-31):
+        // WSJT-X regenerates Tx1-Tx6 on Settings OK (`on_actionSettings_triggered` → `set_mode` →
+        // `displayWidgets` → `genStdMsgs`), and neither stops TX nor ends the QSO. So the over the
+        // sequencer was about to send goes out under the new call, counted as any over is, and the
+        // contact goes on. Nothing made under the old call is sent.
+        let station = match &mut self.mode {
+            Mode::FieldDay { station, .. } => {
+                if call_changed_refusal(station.call(), &now).is_some() {
+                    station.sign_as(&now);
+                }
+                return;
+            }
+            Mode::Qso { station, .. } => station,
+            Mode::Chat => return,
+        };
+        let readdress = freetext.filter(|(_, made)| {
+            station.pending.as_ref() == Some(made) && Msg::parse(&made.to_text()).sender().is_none()
+        });
+        if call_changed_refusal(&station.mycall, &now).is_some() {
+            station.sign_as(&now);
+        }
+        let (Some((typed, _)), Some(dx)) = (readdress, station.dxcall.clone()) else {
+            return;
+        };
+        let msg = addressed_free_text(&now, &dx, &typed);
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "free text addressed again under the call now: {}",
+                msg.to_text()
+            ),
+        );
+        station.pending = Some(msg.clone());
+        self.qso_freetext = Some((typed, msg));
     }
 
     /// Re-enter Field Day if the persisted master switch (`fd_active`) left it
@@ -12346,6 +12666,7 @@ impl Engine {
         // this queue) drops the rest of the macro instead of the rig playing it all out.
         if self.cw_queue.is_empty() {
             self.cw_messages.clear();
+            self.cw_queue_call = Some(self.settings.mycall.clone());
         }
         let before = self.cw_queue.len();
         for word in text.split_whitespace() {
@@ -12532,7 +12853,12 @@ impl Engine {
                 CW_REFUSED_CW_PRIVILEGES,
             ))
         } else {
-            None
+            // ⛔ The keying-time call check: queued under another call than the station's now.
+            self.cw_queue_call
+                .as_deref()
+                .filter(|_| !self.cw_queue.is_empty())
+                .and_then(|call| self.sent_call_refusal(call))
+                .map(|why| (why, why))
         };
         if let Some((why, notice)) = refused {
             if !self.cw_queue.is_empty() {
@@ -14584,7 +14910,9 @@ impl Engine {
         // the journal already carries what its hold captured. The station call first, as the log
         // funnel stamps it: with nobody at the key named, the operator is that call. The activation
         // with it ([`Self::stamp_hold`]): the confirm logs the park the contact was made from.
-        self.stamp_hold(&mut held.record);
+        if !held.stamped {
+            self.stamp_hold(&mut held.record);
+        }
         if self.pending_logs.is_empty() {
             self.replace_pending_log(Some(held));
             self.persist_pending_qso();
@@ -17155,6 +17483,31 @@ impl Engine {
         (!call.is_empty()).then(|| call.to_ascii_uppercase())
     }
 
+    /// The station callsign to stamp on the FT contact with `dxcall`: while the sequencer holds
+    /// that contact, the call its latest over went out under (`QsoStation::keyed_as`), or the call
+    /// its overs are made under (`QsoStation::mycall`) before one has; otherwise
+    /// [`Self::station_callsign_now`]. A call saved mid-contact makes the overs after it under the
+    /// new call ([`Self::note_call_saved`]), and does not relabel a contact whose overs so far went
+    /// out under the call before it.
+    fn contact_station_callsign(&self, dxcall: &str) -> Option<String> {
+        let built = match &self.mode {
+            Mode::Qso { station, .. }
+                if station
+                    .dxcall
+                    .as_deref()
+                    .is_some_and(|c| same_call(c, dxcall)) =>
+            {
+                let sent = station.keyed_as.as_deref().unwrap_or(&station.mycall);
+                tempo_core::message::unhash_call(sent).trim()
+            }
+            _ => "",
+        };
+        if built.is_empty() {
+            return self.station_callsign_now();
+        }
+        Some(built.to_ascii_uppercase())
+    }
+
     /// The rig to stamp on a contact (ADIF `MY_RIG`): the active radio's model, or nothing when
     /// none is configured — "No rig" is spelled "None / VOX" by `Settings::default` (and "None"
     /// elsewhere), so the test is the prefix, and a station with no rig stamps nothing rather
@@ -17278,7 +17631,7 @@ impl Engine {
             false,
             StateSource::Operator,
             Vec::new(),
-            false,
+            held.stamped,
             held.gridless,
         );
     }
@@ -17559,6 +17912,7 @@ impl Engine {
             rec.station_callsign = self.station_callsign_now();
         }
         self.stamp_activation(rec);
+        self.stamp_station_profile(rec);
         self.stamp_station_now(rec);
         // ⛔ The satellite FIRST, as the bird held now: the popup then opens on SAT with its name,
         // and the propagation mode it remembers below never takes a satellite contact's place.
@@ -17795,12 +18149,11 @@ impl Engine {
         // them has a start-of-QSO identity snapshot to read (`Station::mycall`,
         // crates/tempo-core/src/qso.rs). Reading that here would leave every other path
         // unstamped, which is most contacts. The two can only disagree when the operator
-        // changes callsign mid-contact, and in that window the WIRE is already wrong — the
-        // sequencer keeps transmitting from its start-of-QSO snapshot while the identity gate
-        // validates the new call — which is a separate transmit-path defect this change
-        // deliberately does not reach into. The mode builders that CAN be delayed (a
+        // changes callsign mid-contact. The mode builders that CAN be delayed (a
         // `prompt_to_log` record waits in `pending_log`, and on disk, for the operator's
-        // confirm) stamp it at contact time instead, and this fill leaves theirs alone.
+        // confirm) stamp it at contact time instead, and this fill leaves theirs alone; the FT
+        // builder stamps the call the sequencer's latest over went out under
+        // ([`Self::contact_station_callsign`]).
         //
         // A record arriving with its own station call — an imported club log, or a row the
         // operator repaired by hand — is left alone. Same rule as `operator` below.
@@ -17810,8 +18163,11 @@ impl Engine {
         // The activation, then the station as it is now — operator, radio, power, grid, state — on
         // a contact made now ([`Self::stamp_activation`], [`Self::stamp_station_now`]). A held
         // contact's activation was decided when it was held.
+        // The station profile's the same way: a held contact took the profile it was made under
+        // when it was held, and a switch before the confirm does not re-stamp it.
         if !from_hold {
             self.stamp_activation(&mut rec);
+            self.stamp_station_profile(&mut rec);
         }
         self.stamp_station_now(&mut rec);
         // Resolve the DXCC entity (country) if the record doesn't already carry one
@@ -19906,8 +20262,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         };
         let grid_source = GridSource::of(st.dxgrid.as_deref());
         let confirm_only = st.confirm_only;
+        let stamped = st.station.is_some();
         Some(HeldQso {
             confirm_only,
+            stamped,
             ..HeldQso::built(self.set_aside_record(st), grid_source)
         })
     }
@@ -19927,6 +20285,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         rx_report: Option<i32>,
         made_on: (String, (f64, Option<f64>)),
     ) -> StalledQso {
+        let station_callsign = self.contact_station_callsign(&dxcall);
         StalledQso {
             dxcall,
             dxgrid,
@@ -19938,7 +20297,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             mode: self.adif_mode_for_tier().to_string(),
             end_unix: now_unix_secs(),
             confirm_only: false,
+            station: None,
+            station_callsign,
         }
+        .with_station(self)
     }
 
     /// The record of a set-aside contact: as [`Self::qso_record`] builds it, with the contact's
@@ -19958,6 +20320,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         (rec.freq_mhz, rec.freq_rx_mhz) = st.freqs;
         rec.mode = st.mode;
         rec.time_off_unix = Some(st.end_unix);
+        rec.station_callsign = st.station_callsign;
+        // The station it was made under ([`StalledQso::station`]): everything the stamps put on
+        // a record, taken as they were when it was set aside.
+        if let Some(station) = st.station {
+            rec.station_callsign = station.station_callsign;
+            rec.operator = station.operator;
+            rec.my_grid = station.my_grid;
+            rec.my_rig = station.my_rig;
+            rec.tx_power = station.tx_power;
+            rec.ota.my_program = station.ota.my_program;
+            rec.ota.my_ref = station.ota.my_ref;
+            rec.extra = station.extra;
+            rec.prop_mode = station.prop_mode;
+            rec.sat_name = station.sat_name;
+        }
         rec
     }
 
@@ -19998,17 +20375,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let Mode::Qso { station, .. } = &self.mode else {
             return Ok(());
         };
-        let std = |c: &str| tempo_core::message::is_std_call(tempo_core::message::unhash_call(c));
+        let addressed = station.dxcall.is_some();
         let msg = match &station.dxcall {
-            Some(dx) => {
-                let typed = format!("{dx} {mycall} {text}");
-                let parsed = Msg::parse(&typed);
-                if std(&mycall) != std(dx) && !matches!(parsed, Msg::Other(_)) {
-                    Msg::Other(QsoStation::on_air_form(&mycall, dx, parsed).to_text())
-                } else {
-                    Msg::Other(typed)
-                }
-            }
+            Some(dx) => addressed_free_text(&mycall, dx, text),
             None => tempo_core::message::Msg::Other(text.to_string()),
         };
         // Free text goes on the air as it is (`QsoStation::hashed_form` passes `Msg::Other`).
@@ -20016,6 +20385,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err(why);
         }
         if let Mode::Qso { station, .. } = &mut self.mode {
+            self.qso_freetext = addressed.then(|| (text.to_string(), msg.clone()));
             station.override_next(msg);
             self.reset_tx_watchdog();
             // No record_own_tx here: QSO free text goes out as a SINGLE non-chunk frame,
@@ -20902,6 +21272,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;
+        // …and a dropped late reply's notice: the operator has stopped.
+        self.ft_late_reply_dropped = false;
         // So does a deferred after-73 disable: TX is already off.
         self.pending_tx_disable = false;
         self.pending_cw_id = false; // halt = silence; no parting CW ID either
@@ -21160,6 +21532,23 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let roger = roger_click_73_sent(was, self.roger_click.as_deref());
         let complete = ft_contact_complete(was, self.qso_report_sent);
         if !complete && !roger {
+            // Unfinished, with a report crossed, and made under a call the station no longer
+            // uses, which a save would have made again under the new one (`note_call_saved`): its
+            // overs are refused at the key, so the run's give-up, which
+            // sets such a contact aside (#153), never comes. It is set aside here instead, for Log
+            // QSO, under the call its overs carried ([`Self::set_aside`]). Logging only.
+            //
+            // A report crossed only when THEIR report to us arrived: it proves they heard us under
+            // the old call. Our report sent is not asked: it is recorded when the over is queued,
+            // and after the call change that over is refused at the key, so it may never have
+            // gone out.
+            if call_changed_refusal(&was.mycall, &self.settings.mycall).is_some()
+                && was.rx_report.is_some()
+            {
+                let made_on = (self.settings.band.clone(), self.log_frequencies());
+                let st = self.set_aside(dx, was.dxgrid.clone(), was.rx_report, made_on);
+                self.stalled_qso = Some(st);
+            }
             return;
         }
         let (dxgrid, rx_report) = (was.dxgrid.clone(), was.rx_report);
@@ -24921,6 +25310,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err("Beacon rendered no audio".to_string());
         }
         self.reset_tx_watchdog();
+        self.note_aprs_queue_call();
         self.aprs_tx_queue.push_back((audio, None));
         Ok(())
     }
@@ -25123,6 +25513,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err("Message rendered no audio".to_string());
         }
         self.reset_tx_watchdog();
+        self.note_aprs_queue_call();
         self.aprs_tx_queue.push_back((audio, None));
         Ok(())
     }
@@ -25187,6 +25578,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let audio = render_aprs_frame(&frame);
         if !audio.is_empty() {
             self.reset_tx_watchdog();
+            self.note_aprs_queue_call();
             self.aprs_tx_queue
                 .push_back((audio, Some(from.to_string())));
         }
@@ -25209,6 +25601,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// and the frame keys when it is free. Ownership comes from the ONE arbiter
     /// ([`Engine::tx_owner`]): the four-flag copy that used to live here knew nothing of
     /// mic/broker PTT, the voice keyer, CW, RTTY or SSTV.
+    /// A frame is about to go into the APRS queue, made with the station's call now: when the
+    /// queue is empty, that is the call the queue was made under (`aprs_tx_queue_call`).
+    fn note_aprs_queue_call(&mut self) {
+        if self.aprs_tx_queue.is_empty() {
+            self.aprs_tx_queue_call = Some(self.settings.mycall.clone());
+        }
+    }
+
     pub fn poll_aprs_tx(&mut self) -> Option<Vec<f32>> {
         if self.aprs_tx_queue.is_empty() {
             return None;
@@ -25234,7 +25634,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 APRS_REFUSED_RADIO_HAS_MIC,
             ))
         } else {
-            None
+            // ⛔ The keying-time call check: the frame's source is another call than the
+            // station's now.
+            self.aprs_tx_queue_call
+                .as_deref()
+                .and_then(|call| self.sent_call_refusal(call))
+                .map(|why| (why, why))
         };
         if let Some((why, notice)) = refused {
             tempo_core::applog::info("tx", &format!("APRS not keyed: {why} (dropped)"));
@@ -25782,6 +26187,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         tempo_core::applog::info("tx", &format!("PSK over queued: {filtered:?}"));
         // An explicit operator send restarts the TX-watchdog clock.
         self.reset_tx_watchdog();
+        if self.psk_queue.is_empty() {
+            self.psk_queue_call = Some(self.settings.mycall.clone());
+        }
         self.psk_queue.push_back(filtered);
         Ok(())
     }
@@ -25872,7 +26280,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 PSK_REFUSED_PRIVILEGES,
             ))
         } else {
-            None
+            // ⛔ The keying-time call check: queued under another call than the station's now.
+            self.psk_queue_call
+                .as_deref()
+                .and_then(|call| self.sent_call_refusal(call))
+                .map(|why| (why, why))
         };
         if let Some((why, notice)) = refused {
             tempo_core::applog::info("tx", &format!("PSK not keyed: {why} (dropped)"));
@@ -26208,6 +26620,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if reset_watchdog {
             self.reset_tx_watchdog();
         }
+        if self.rtty_queue.is_empty() {
+            self.rtty_queue_call = Some(self.settings.mycall.clone());
+        }
         self.rtty_queue.push_back(up);
         Ok(())
     }
@@ -26267,7 +26682,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 RTTY_REFUSED_PRIVILEGES,
             ))
         } else {
-            None
+            // ⛔ The keying-time call check: queued under another call than the station's now.
+            self.rtty_queue_call
+                .as_deref()
+                .and_then(|call| self.sent_call_refusal(call))
+                .map(|why| (why, why))
         };
         if let Some((why, notice)) = refused {
             tempo_core::applog::info("tx", &format!("RTTY not keyed: {why} (dropped)"));
@@ -26277,7 +26696,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 if let Some(seq) = self.rtty_seq.as_mut() {
                     seq.abort();
                 }
-                self.rtty_keyer_error = Some(RTTY_AUTO_REFUSED.to_string());
+                if notice != crate::settings::STATION_CALL_CHANGED_TX_REFUSED {
+                    self.rtty_keyer_error = Some(RTTY_AUTO_REFUSED.to_string());
+                }
             }
             return None;
         }
@@ -26959,6 +27380,34 @@ contact yourself."
     /// dropped BEFORE the actions are applied (the borrow-checker seam). A genuine
     /// state advance resets the TX watchdog; each drained action is then applied.
     fn rtty_drive(&mut self, op: RttyOp) {
+        // ⛔ The keying-time call check (`Engine::sent_call_refusal`): the machine sends the call
+        // it was armed with. Once the station's call has changed, a contact under way under the
+        // old call ends here, before it can queue another over or log, and the cockpit says why;
+        // the machine is armed again under the station's call, as a save arms an idle one.
+        if let Some(why) = self
+            .rtty_seq
+            .as_ref()
+            .and_then(|seq| self.sent_call_refusal(seq.mycall()))
+        {
+            let live = self.rtty_seq.as_ref().is_some_and(|seq| {
+                !matches!(
+                    seq.state(),
+                    tempo_core::rtty::SeqState::Idle | tempo_core::rtty::SeqState::Done
+                )
+            });
+            if let Some(seq) = self.rtty_seq.as_mut() {
+                seq.abort();
+            }
+            if self.set_rtty_auto(true).is_err() {
+                self.rtty_seq = None;
+                self.rtty_auto_over = false;
+            }
+            if live {
+                tempo_core::applog::info("tx", &format!("RTTY Auto stopped: {why}"));
+                self.set_rtty_keyer_error(Some(why.to_string()));
+                return;
+            }
+        }
         let now = now_unix_millis();
         let (advanced, actions) = {
             let seq = match self.rtty_seq.as_mut() {
@@ -27533,8 +27982,21 @@ contact yourself."
     /// then guillotined mid-image. On accept, the watchdog clock restarts (an explicit
     /// operator action, like `rtty_send_text`). `samples` are 12 kHz PCM from
     /// `tempo_sstv::encode::encode_image`; `mode_name` is the human label for the DTO.
-    /// **Human-initiate only**: this is the ONLY writer of `sstv_tx`.
+    /// **Human-initiate only**: this and [`Self::sstv_send_as`] are the ONLY writers of
+    /// `sstv_tx`. The picture is taken to carry the station's call now.
     pub fn sstv_send(&mut self, samples: Vec<f32>, mode_name: String) -> Result<(), String> {
+        let call = self.settings.mycall.clone();
+        self.sstv_send_as(samples, mode_name, &call)
+    }
+
+    /// [`Self::sstv_send`] for a picture whose ID carries `call`, the call read when it was
+    /// drawn: the keying-time call check judges the picture by it.
+    pub fn sstv_send_as(
+        &mut self,
+        samples: Vec<f32>,
+        mode_name: String,
+        call: &str,
+    ) -> Result<(), String> {
         self.sstv_tx_gate()?;
         if samples.is_empty() {
             return Err("Nothing to send — the encoded image is empty".to_string());
@@ -27562,6 +28024,7 @@ contact yourself."
         // An explicit operator send restarts the TX-watchdog clock (same as rtty_send_text).
         self.reset_tx_watchdog();
         self.sstv_tx_mode = Some(mode_name.clone());
+        self.sstv_tx_call = Some(call.to_string());
         self.sstv_tx_progress = Some((0.0, duration_ms));
         self.sstv_tx = Some(SstvTxJob {
             samples,
@@ -27629,7 +28092,12 @@ contact yourself."
                 SSTV_REFUSED_RADIO_HAS_MIC,
             ))
         } else {
-            None
+            // ⛔ The keying-time call check: the picture identifies another call than the
+            // station's now.
+            self.sstv_tx_call
+                .as_deref()
+                .and_then(|call| self.sent_call_refusal(call))
+                .map(|why| (why, why))
         };
         if let Some((why, notice)) = refused {
             tempo_core::applog::info("tx", &format!("SSTV not keyed: {why} (dropped)"));
@@ -28083,6 +28551,80 @@ contact yourself."
     ) -> Option<&'static str> {
         crate::settings::rig_conn_is_icom_lan(&self.settings.rig_conn)
             .then_some(crate::settings::ICOM_LAN_TX_REFUSED)
+            // ⛔ …and a station profile on another licensee's call while a licence class is set
+            // (`Settings::station_profile_tx_refusal`): every transmit path refuses with it.
+            .or_else(|| self.settings.station_profile_tx_refusal())
+    }
+
+    /// ⛔ **THE KEYING-TIME CALL CHECK** (the operator's decision, 2026-10-28): the one test every
+    /// transmission that carries a call built earlier makes as it is about to go out, beside the
+    /// licence and connection refusals above. `built` is the call the message was made with (the
+    /// FT sequencer's `de`, the call a queued CW, RTTY, PSK, JTTY or JS8 message, an SSTV
+    /// picture's ID or an APRS packet's source was made under). When it is not the call the
+    /// station transmits under now ([`Settings::mycall`]), the message is not sent: the station's
+    /// call has changed since (a profile switch, a Settings save) and it would put the old call on
+    /// the air under the new one's licence, and log another. Each caller drops that message and
+    /// says why, as it does for its other refusals, and changes nothing else: no timing, no
+    /// sequence, no other message.
+    ///
+    /// It only ever refuses, and it runs on every station, with station profiles or without (the
+    /// operator's decision, 2026-10-28): a call edited in Settings while a message waits is a
+    /// change of call like a profile switch. The calls are compared as the transmit path reads
+    /// them, without surrounding spaces and in any capitals, so a stored call that differs only so
+    /// is the same call; a portable or other compound form is another call. A message made while
+    /// the station had no call yet carries none, and nothing is refused for it.
+    pub fn sent_call_refusal(&self, built: &str) -> Option<&'static str> {
+        call_changed_refusal(built, &self.settings.mycall)
+    }
+
+    /// [`Self::sent_call_refusal`] for an SSTV picture's own text: the station calls its presets
+    /// wrote (a CQ's or 73's "DE <call>"), as the screen put them in. A picture made before the
+    /// station's call changed is not sent under the new one.
+    pub fn sstv_overlay_call_refusal(&self, calls: &[String]) -> Option<&'static str> {
+        calls.iter().find_map(|call| self.sent_call_refusal(call))
+    }
+
+    /// [`Self::sent_call_refusal`] for an FT over about to key (`text`), judged as `plan_tx` judges
+    /// it before it counts the over as sent: a contest over by the call its sequencer was made under
+    /// ([`contest_over_call_refusal`]), any other by its sender when that is one of the station's
+    /// own calls ([`ft_over_call_refusal`]).
+    fn ft_sent_call_refusal(&self, text: &str) -> Option<&'static str> {
+        let now = &self.settings.mycall;
+        let owed = self.recent_partner.as_ref().and_then(|p| p.owed.as_ref());
+        match &self.mode {
+            Mode::FieldDay { station, .. } => contest_over_call_refusal(station.call(), now),
+            Mode::Qso { station, .. } => ft_over_call_refusal(
+                text,
+                now,
+                &station.mycall,
+                &self.settings.station_profiles,
+                &self.former_calls,
+                owed,
+            ),
+            Mode::Chat => ft_over_call_refusal(
+                text,
+                now,
+                "",
+                &self.settings.station_profiles,
+                &self.former_calls,
+                owed,
+            ),
+        }
+    }
+
+    /// The FT or Field Day sequencer's next over, judged by [`Self::sent_call_refusal`]: the reason
+    /// the cockpit shows while it holds a message made under another call. DISPLAY ONLY: `plan_tx`
+    /// refuses the over itself ([`Self::ft_sent_call_refusal`]).
+    fn ft_held_call_refusal(&self) -> Option<&'static str> {
+        if self.settings.operating_mode != crate::settings::OperatingMode::Digital {
+            return None;
+        }
+        let next = match &self.mode {
+            Mode::Qso { station, .. } => station.pending.as_ref(),
+            Mode::FieldDay { station, .. } => station.pending.as_ref(),
+            Mode::Chat => None,
+        };
+        next.and_then(|m| self.ft_sent_call_refusal(&m.to_text()))
     }
 
     /// Is the licence lock the phone MODE alone? The Phone section is refused, upper sideband is
@@ -29693,7 +30235,16 @@ contact yourself."
         s.radio.tx_enabled = self.tx_enabled;
         s.radio.qso_recording = self.qso_recording;
         s.radio.tx_allowed = self.tx_allowed();
-        s.radio.tx_refusal = self.connection_tx_refusal().map(str::to_string);
+        s.radio.tx_refusal = self
+            .connection_tx_refusal()
+            .or_else(|| self.ft_held_call_refusal())
+            .or_else(|| {
+                // FT runs in the Digital section only, as the held-call notice above.
+                (self.ft_late_reply_dropped
+                    && self.settings.operating_mode == crate::settings::OperatingMode::Digital)
+                    .then_some(crate::settings::STATION_CALL_CHANGED_LATE_REPLY_DROPPED)
+            })
+            .map(str::to_string);
         s.radio.tx_emission_mhz = Some(self.tx_emission_mhz());
         s.radio.phone_usb_only = crate::privileges::usb_only_phone(
             self.settings.license_class,
@@ -29948,6 +30499,9 @@ contact yourself."
         // model), so `catOk`/`smeterDb` are None for them.
         s.active_radio_id = self.settings.active_radio;
         s.radio_pegged = self.settings.radio_pegged;
+        (s.station_profiles, s.active_station_profile) = self.station_profile_choices();
+        s.station_profile_locked =
+            !s.station_profiles.is_empty() && self.station_profile_switch_refusal().is_some();
         s.auto_radio_switch = self.auto_radio_switch.clone();
         // No AI copy or status from an unassisted entry, however it was declared (`cw_decode`).
         let decoding = self.settings.cw_decoder_active();
@@ -30563,6 +31117,7 @@ contact yourself."
             },
             beacon: true,
             stamp: self.tx_gate_stamp(),
+            counted: None,
         })
     }
 
@@ -30706,6 +31261,24 @@ contact yourself."
         // tell a capped station apart from ordinary silence — see the watchdog block there.
         let mut withheld_by_call_cap = false;
         let qso_period_s = self.active_slot_secs();
+        // What this over's count changes, for `commit_tx` to take back if the over is refused at
+        // the key for its call (`FtOverCount`). Set by the arms that count an over.
+        let mut counted: Option<FtOverCount> = None;
+        let flags = (
+            self.pending_tx_disable,
+            self.pending_cw_id,
+            self.qso_start_unix,
+            self.cq_pause_until,
+            self.settings.mycall.clone(),
+        );
+        let count = |step| FtOverCount {
+            step,
+            mycall: flags.4.clone(),
+            pending_tx_disable: flags.0,
+            pending_cw_id: flags.1,
+            qso_start_unix: flags.2,
+            cq_pause_until: flags.3,
+        };
         let text: Option<String> = match &mut self.mode {
             Mode::Chat => {
                 // Open broadcasts have priority and send unconditionally — no
@@ -30852,15 +31425,56 @@ contact yourself."
                 {
                     self.recent_partner = None;
                 }
+                // ⛔ THE KEYING-TIME CALL CHECK COMES FIRST (the operator's decision, 2026-10-28):
+                // an over refused for its call is not sent, so it is not spent or counted either.
+                // Every over below is judged here, before the sequencer's bookkeeping; the
+                // refusals after this `match` stay where they are.
+                let call_refusal = |m: &Msg, built: &str, owed: Option<&Msg>| {
+                    ft_over_call_refusal(
+                        &m.to_text(),
+                        &self.settings.mycall,
+                        built,
+                        &self.settings.station_profiles,
+                        &self.former_calls,
+                        owed,
+                    )
+                };
+                if let Some(why) = self
+                    .recent_partner
+                    .as_ref()
+                    .and_then(|p| p.owed.as_ref())
+                    .and_then(|m| call_refusal(m, &station.mycall, Some(m)))
+                {
+                    // ⛔ …and DROPPED, with the record (the operator's decision, 2026-10-28): held,
+                    // it would block every over after it, a Call CQ under the new call included,
+                    // until it expired. One over, once: this slot was its slot, and the cockpit
+                    // says it did not go. The station's own over is back on the next slot.
+                    tempo_core::applog::info("tx", &format!("late reply dropped: {why}"));
+                    self.recent_partner = None;
+                    self.ft_late_reply_dropped = true;
+                    self.app.set_transmitting(false);
+                    return None;
+                }
                 if let Some(m) = self.recent_partner.as_mut().and_then(|p| p.owed.take()) {
+                    counted = Some(count(CountedStep::Owed(m.clone())));
                     self.recent_partner = None;
                     self.cq_pause_until = None;
                     // `tx_rv` is already 0 and stays there: a one-shot has no step for
                     // IR-HARQ to escalate redundancy over.
                     break 'qso_over Some(m.to_text());
                 }
-                match station.outgoing_rv() {
+                let next = station.outgoing_rv();
+                if let Some(why) = next
+                    .as_ref()
+                    .and_then(|(m, _)| call_refusal(m, &station.mycall, None))
+                {
+                    tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                    self.app.set_transmitting(false);
+                    return None;
+                }
+                match next {
                     Some((m, rv)) => {
+                        let before = QsoStep::of(station);
                         // Something is going out, so no pause is in force — either the run just
                         // resumed, or (the case that matters) somebody ANSWERED and this is the
                         // reply. Clearing it here rather than only on resume means a stale
@@ -30914,6 +31528,10 @@ contact yourself."
                                 self.pending_cw_id = true;
                             }
                         }
+                        counted = Some(count(CountedStep::Qso {
+                            before,
+                            after: QsoStep::of(station),
+                        }));
                         // IR-HARQ off: always transmit RV0 (no redundancy escalation).
                         tx_rv = if self.settings.harq_enabled {
                             rv as i32
@@ -30974,6 +31592,16 @@ contact yourself."
                     station.outgoing()
                 };
                 if m.is_some() {
+                    // ⛔ The keying-time call check, before the station counts the over as sent
+                    // (as the QSO arm above).
+                    if let Some(why) =
+                        contest_over_call_refusal(station.call(), &self.settings.mycall)
+                    {
+                        tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                        self.app.set_transmitting(false);
+                        return None;
+                    }
+                    let before = FdStep::of(station);
                     station.after_tx();
                     // Stock "Disable Tx after sending 73" after a contact the operator picked (a
                     // double-click on its CQ, a logger's Reply to it): the over leaving NOW closes
@@ -30983,6 +31611,10 @@ contact yourself."
                     if station.done() && station.picked() && self.settings.disable_tx_after_73 {
                         self.pending_tx_disable = true;
                     }
+                    counted = Some(count(CountedStep::FieldDay {
+                        before,
+                        after: FdStep::of(station),
+                    }));
                 }
                 m.map(|x| x.to_text())
             }
@@ -30999,7 +31631,15 @@ contact yourself."
                     self.app.set_transmitting(false);
                     return None;
                 }
+                // ⛔ …nor an over made under another call than the station's now: refused here, at
+                // the keying point, exactly as the encoder's refusal above.
+                if let Some(why) = self.ft_sent_call_refusal(&t) {
+                    tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                    self.app.set_transmitting(false);
+                    return None;
+                }
                 self.app.set_transmitting(true);
+                self.ft_late_reply_dropped = false;
                 // Wall-clock watchdog (WSJT-X): start the timer on the first over after
                 // an operator action, then trip (auto-halt TX) once REAL elapsed time
                 // exceeds the limit — counting the RX slots between overs too, so it
@@ -31146,6 +31786,7 @@ contact yourself."
                     waveform,
                     beacon: false,
                     stamp: self.tx_gate_stamp(),
+                    counted,
                 })
             }
             None => {
@@ -31345,6 +31986,7 @@ contact yourself."
             || plan.slot != current_slot
             || plan.stamp != self.tx_gate_stamp()
         {
+            self.uncount_over_refused_for_its_call(plan);
             self.app.set_transmitting(false);
             return Vec::new();
         }
@@ -31390,6 +32032,94 @@ contact yourself."
         self.note_ft_on_air(plan, wave.len());
         self.tx_message = wsjtx_msgsent(plan.tier, &plan.waveform);
         vec![wave]
+    }
+
+    /// ⛔ An FT over `commit_tx` refused because the station's call changed while its wave was
+    /// built is not counted as sent (the operator's decision, 2026-10-28): what `plan_tx` counted
+    /// for it ([`FtOverCount`]) is taken back, as if `plan_tx` had refused it, and a late reply
+    /// is dropped and said. Judged as `plan_tx` judges an over before it counts it; an over
+    /// refused for anything else keeps its count, as before.
+    fn uncount_over_refused_for_its_call(&mut self, plan: &TxPlan) {
+        let Some(count) = &plan.counted else {
+            return;
+        };
+        let text = match &plan.waveform {
+            TxWaveform::Deep { text, .. }
+            | TxWaveform::Fast { text, .. }
+            | TxWaveform::Native { text, .. } => text,
+            TxWaveform::Js8 { .. } => return,
+        };
+        // Judged by the call the plan judged it under as well as by the station now in the
+        // sequencer: a station the operator picked in the window, made under a new call, must not
+        // make the over's own call look like another station's.
+        let now = &self.settings.mycall;
+        let profiles = &self.settings.station_profiles;
+        let former = &self.former_calls;
+        let refused = match &count.step {
+            CountedStep::Owed(m) => {
+                ft_over_call_refusal(text, now, &count.mycall, profiles, former, Some(m))
+            }
+            CountedStep::Qso { .. } => self
+                .ft_sent_call_refusal(text)
+                .or_else(|| ft_over_call_refusal(text, now, &count.mycall, profiles, former, None)),
+            CountedStep::FieldDay { .. } => self
+                .ft_sent_call_refusal(text)
+                .or_else(|| contest_over_call_refusal(&count.mycall, now)),
+        };
+        if refused.is_none() {
+            return;
+        }
+        tempo_core::applog::info("tx", "over refused at the key for its call: not counted");
+        // Only what the count armed is disarmed: a flag that was already up stays up.
+        if !count.pending_tx_disable {
+            self.pending_tx_disable = false;
+        }
+        if !count.pending_cw_id {
+            self.pending_cw_id = false;
+        }
+        // Only what each plan changed is put back: the QSO over's plan sets the start estimate and
+        // clears the CQ pause, the late reply's clears the pause, the contest over's neither. A
+        // start time the operator set in the window (a Tx2 or Tx3 pick) is theirs and stays.
+        match (&count.step, &mut self.mode) {
+            (CountedStep::Qso { before, after }, Mode::Qso { station, .. })
+                if QsoStep::of(station) == after.signed_by(&station.mycall) =>
+            {
+                // The save in the window made the messages again under the call now
+                // (`note_call_saved`): the over goes back as made again under it.
+                let before = before.signed_by(&station.mycall);
+                station.pending = before.pending;
+                station.tx_count = before.tx_count;
+                station.rv_count = before.rv_count;
+                station.keyed_on_air = before.keyed_on_air;
+                station.keyed_as = before.keyed_as;
+                if self.qso_start_unix.is_some() && count.qso_start_unix.is_none() {
+                    self.qso_start_unix = None;
+                }
+                if self.cq_pause_until.is_none() {
+                    self.cq_pause_until = count.cq_pause_until;
+                }
+            }
+            (CountedStep::FieldDay { before, after }, Mode::FieldDay { station, .. })
+                if FdStep::of(station).moved_only_by_its_call(after) =>
+            {
+                // As the QSO arm: the over goes back as made again under the call now.
+                let now = station.call().to_string();
+                if now != before.call {
+                    station.sign_as(&before.call);
+                }
+                station.pending = before.pending.clone();
+                if station.call() != now {
+                    station.sign_as(&now);
+                }
+            }
+            (CountedStep::Owed(_), _) => {
+                self.ft_late_reply_dropped = true;
+                if self.cq_pause_until.is_none() {
+                    self.cq_pause_until = count.cq_pause_until;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Decode a captured frame and fold it into the app *and* the active mode's
@@ -33278,6 +34008,7 @@ contact yourself."
         // settings off, is the contact it was: its mode, band and frequencies ([`MadeOn`]).
         let made_on = self.made_on_for(&dxcall).cloned();
         let dxcall = tempo_core::message::unhash_call(&dxcall).to_string();
+        let station_callsign = self.contact_station_callsign(&dxcall);
         // ADIF mode: one source of truth with the B4 band-key — see adif_mode_for_tier.
         let mode = made_on
             .as_ref()
@@ -33359,10 +34090,11 @@ contact yourself."
             sat_name: None,
             operator: None,
             // Same reason as the RTTY builder: `prompt_to_log` can park this record for as long
-            // as the operator takes to confirm, so the call is captured now.
+            // as the operator takes to confirm, so the call is captured now: the call the
+            // contact's overs carried ([`Self::contact_station_callsign`]).
             my_grid: None,
             my_rig: None,
-            station_callsign: self.station_callsign_now(),
+            station_callsign,
             extra: Vec::new(),
             contest: None,
         }
@@ -34118,15 +34850,39 @@ contact yourself."
         self.station.note_upload(note, ok)
     }
 
-    /// See [`StationCore::set_activation`].
+    /// See [`StationCore::set_activation`]. At the station: a profile that names the park is
+    /// picked ([`Self::set_activation_from`]).
     pub fn set_activation(
         &mut self,
         program: &str,
         reference: &str,
         places: Vec<String>,
     ) -> Result<(String, String), String> {
+        self.set_activation_from(program, reference, places, false)
+    }
+
+    /// See [`StationCore::set_activation`], and the station profile it picks
+    /// (`pick_station_profile_for_activation`). `from_afar`: started from a computer driving the
+    /// station, which may not switch the call the station transmits under.
+    pub fn set_activation_from(
+        &mut self,
+        program: &str,
+        reference: &str,
+        places: Vec<String>,
+        from_afar: bool,
+    ) -> Result<(String, String), String> {
+        // Where a running activation's Stop would have gone back to: the new one keeps it, and so
+        // does one started after a Stop that could not go back.
+        let back = self
+            .station
+            .activation_station_profile_return()
+            .or_else(|| self.station_profile_return_kept.take());
         let started = self.station.set_activation(program, reference, places);
         self.sync_fd_activation();
+        if started.is_ok() {
+            self.station.set_activation_station_profile_return(back);
+            self.pick_station_profile_for_activation(from_afar);
+        }
         started
     }
 
@@ -34147,10 +34903,23 @@ contact yourself."
         self.station.activation_state()
     }
 
-    /// See [`StationCore::clear_activation`].
+    /// See [`StationCore::clear_activation`]. At the station ([`Self::clear_activation_from`]).
     pub fn clear_activation(&mut self) {
+        self.clear_activation_from(false);
+    }
+
+    /// See [`StationCore::clear_activation`], and the station profile it goes back to
+    /// (`return_from_activation_station_profile`). `from_afar`: stopped from a computer driving
+    /// the station, which may not switch the call the station transmits under. The profile it
+    /// could not go back to, once, for the operator to be told how to switch back by hand.
+    pub fn clear_activation_from(
+        &mut self,
+        from_afar: bool,
+    ) -> Option<crate::dto::StationProfileChoice> {
+        let back = self.station.activation_station_profile_return();
         self.station.clear_activation();
         self.sync_fd_activation();
+        self.return_from_activation_station_profile(back, from_afar)
     }
 
     /// See [`StationCore::resume_activation`].
@@ -34197,6 +34966,7 @@ contact yourself."
             started_at: a.started_at,
             utc_day: now / 86_400,
             restored: a.restored,
+            station_profile_back: None,
         }
     }
 
@@ -35022,6 +35792,11 @@ pub fn restore_with_session_rows<T>(
         engine,
         |eng| eng.save_opens_session(&asked),
         |eng, rows| {
+            // ⛔ Not while a run, a contact or an over is under way on a station with profiles:
+            // the bundle would change the call the station transmits under.
+            if let Some(why) = eng.station_profile_restore_refusal(&restored) {
+                return Err(why.to_string());
+            }
             // Never while the radio is keyed, nor while TX is armed to key at the next slot: the
             // restore's hold can wait on the system keychain, and the radio loop needs this lock
             // to end the over, and to key the next one on time. Nothing has changed yet.
@@ -49771,17 +50546,19 @@ mod tests {
         assert_eq!(of("N0CALL").my_rig, None);
         assert_eq!(of("N0CALL").my_grid, None);
 
-        // THE LoTW UPLOAD, both modes: the filled grid is not sent; the arrived one is.
+        // THE LoTW UPLOAD. With a named Station Location the filled grid is not sent; the
+        // arrived one is. Signing from the ADIF, each contact goes with the grid stored on it,
+        // never the live one (EN52 here): the filled FN31 too.
         let batch = [of("W9XYZ"), of("K9AAA")];
         let named = crate::station::lotw_batch_adif(&batch, false, "K2DEF", "FN31");
         assert_eq!(named.matches("<MY_GRIDSQUARE:").count(), 1, "{named}");
         assert!(named.contains("<MY_GRIDSQUARE:4>EM10"), "{named}");
         let located = crate::station::lotw_batch_adif(&batch, true, "K2DEF", "EN52");
         assert!(
-            located.contains("<MY_GRIDSQUARE:4>EN52") && located.contains("<MY_GRIDSQUARE:4>EM10"),
-            "ADIF-location mode stamps the live grid as it always did: {located}"
+            located.contains("<MY_GRIDSQUARE:4>FN31") && located.contains("<MY_GRIDSQUARE:4>EM10"),
+            "ADIF-location mode sends each contact's own grid: {located}"
         );
-        assert!(!located.contains("FN31"), "{located}");
+        assert!(!located.contains("EN52"), "{located}");
     }
 
     /// A logged contact carries the station's power (ADIF `TX_PWR`) — the watts the
@@ -80632,6 +81409,8 @@ mod dedup_gate_tests {
                             mode: "FT8".into(),
                             end_unix: 0,
                             confirm_only: false,
+                            station: None,
+                            station_callsign: None,
                         });
                         let got =
                             matches!(e.log_qso_for_sync(rec.clone()), LogWriteOutcome::Duplicate);

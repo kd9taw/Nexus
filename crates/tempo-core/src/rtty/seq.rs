@@ -631,6 +631,11 @@ impl RttySeq {
         }
     }
 
+    /// The call this machine sends (`{MYCALL}`), as it was armed with.
+    pub fn mycall(&self) -> &str {
+        &self.mycall
+    }
+
     pub fn state(&self) -> SeqState {
         self.state
     }

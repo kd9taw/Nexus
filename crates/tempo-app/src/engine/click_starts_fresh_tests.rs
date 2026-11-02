@@ -853,6 +853,8 @@ fn clearing_drops_an_abandoned_contact_with_the_same_station_only() {
             mode: "FT8".into(),
             end_unix: 0,
             confirm_only: false,
+            station: None,
+            station_callsign: None,
         });
         e.clear_dx_call();
         assert_eq!(

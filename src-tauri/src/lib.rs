@@ -4137,6 +4137,545 @@ mod lotw_batch_tests {
 }
 
 #[cfg(test)]
+mod lotw_location_tests {
+    use super::durable_command_tests::engine_on_store;
+    use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
+    use tempo_app::settings::StationProfile;
+    use tempo_core::logbook::{RecordId, UploadOutcome};
+
+    /// A store-backed station (K2DEF in FN31, Station Location `station_location`) with a Portable
+    /// profile (K2DEF/P in FN42, location "Portable"), a Club profile (W2CLB in FN30, location
+    /// "Club") and Home naming none, and five contacts logged under them.
+    fn station(tag: &str, station_location: &str) -> (PathBuf, SharedEngine) {
+        let (dir, engine) = engine_on_store(tag, 0);
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.lotw_station_location = station_location.into();
+            eng.apply_settings(s);
+            for (name, call, grid, location) in [
+                ("Portable", "K2DEF/P", "FN42", "Portable"),
+                ("Club", "W2CLB", "FN30", "Club"),
+            ] {
+                eng.save_station_profile(StationProfile {
+                    name: name.into(),
+                    call: call.into(),
+                    grid: grid.into(),
+                    lotw_location: location.into(),
+                    ..StationProfile::default()
+                })
+                .expect("the profile is saved");
+            }
+        }
+        let mut adif = String::new();
+        for (i, (call, station, grid)) in [
+            ("K1POR", "K2DEF/P", "FN42"),
+            ("K1HOM", "K2DEF", "FN31"),
+            ("K1CLB", "W2CLB", "FN30"),
+            ("K2POR", "K2DEF/P", "FN42"),
+            ("K2HOM", "K2DEF", "FN31"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            adif.push_str(&format!(
+                "<CALL:5>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261020<TIME_ON:6>12000{i}\
+                 <STATION_CALLSIGN:{}>{station}<MY_GRIDSQUARE:4>{grid}<EOR>\n",
+                station.len()
+            ));
+        }
+        tempo_app::logwrite::import_adif(&engine, &adif)
+            .0
+            .expect("the contacts are imported");
+        (dir, engine)
+    }
+
+    fn id_of(engine: &SharedEngine, call: &str) -> RecordId {
+        engine
+            .stored_log()
+            .iter()
+            .find(|r| r.call == call)
+            .and_then(|r| r.id)
+            .expect("logged")
+    }
+
+    /// The LoTW outcome stamped on each contact, by call, in the order asked.
+    fn stamped(engine: &SharedEngine, calls: &[&str]) -> Vec<Option<UploadOutcome>> {
+        let log = engine.stored_log();
+        calls
+            .iter()
+            .map(|c| {
+                log.iter()
+                    .find(|r| r.call == *c)
+                    .and_then(|r| r.upload.lotw.as_ref().map(|s| s.outcome))
+            })
+            .collect()
+    }
+
+    /// Each TQSL run: the Station Location it was given (`-l`) and the calls in its file.
+    type Runs = Vec<(Option<String>, Vec<String>)>;
+
+    fn run_of(args: &[String]) -> (Option<String>, Vec<String>) {
+        let location = args
+            .iter()
+            .position(|a| a == "-l")
+            .map(|at| args[at + 1].clone());
+        let file = std::fs::read_to_string(args.last().expect("the batch file"))
+            .expect("TQSL can read it");
+        let calls = file
+            .split("<CALL:5>")
+            .skip(1)
+            .map(|f| f[..5].to_string())
+            .collect();
+        (location, calls)
+    }
+
+    fn calls(v: &[&str]) -> Vec<String> {
+        v.iter().map(|c| c.to_string()).collect()
+    }
+
+    /// ★ Each contact is signed with the Station Location of the profile it was logged under, in
+    /// one TQSL run per location; a contact of a profile naming none (Home) with the station's.
+    /// Every contact is stamped with its own run's outcome.
+    #[test]
+    fn each_contact_is_signed_with_its_profiles_location() {
+        let (dir, engine) = station("lotw-profile-locations", "Home");
+        let mut runs: Runs = Vec::new();
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, args| {
+            runs.push(run_of(args));
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!(
+            runs,
+            vec![
+                (Some("Portable".into()), calls(&["K1POR", "K2POR"])),
+                (Some("Home".into()), calls(&["K1HOM", "K2HOM"])),
+                (Some("Club".into()), calls(&["K1CLB"])),
+            ]
+        );
+        assert_eq!((report.dispatched, report.outcome.as_str()), (5, "pending"));
+        let all = ["K1POR", "K1HOM", "K1CLB", "K2POR", "K2HOM"];
+        assert_eq!(
+            stamped(&engine, &all),
+            vec![Some(UploadOutcome::Pending); 5]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A run TQSL refuses (the Club location is not in this TQSL) stamps its own contacts with the
+    /// refusal, and only them; the others are sent. The screen reads the refusal, and the
+    /// connection log names the location it came from.
+    #[test]
+    fn a_refused_location_stamps_only_its_own_contacts() {
+        let (dir, engine) = station("lotw-profile-refused", "Home");
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, args| {
+            Ok(match run_of(args).0.as_deref() {
+                Some("Club") => (5, "Error: station location 'Club' not found".into()),
+                _ => (0, String::new()),
+            })
+        })
+        .expect("the upload ran");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (5, "authfail")
+        );
+        let sent = Some(UploadOutcome::Pending);
+        assert_eq!(
+            stamped(&engine, &["K1POR", "K1HOM", "K1CLB", "K2POR", "K2HOM"]),
+            vec![sent, sent, Some(UploadOutcome::AuthFail), sent, sent]
+        );
+        assert!(
+            get_connection_log().iter().any(|e| e.connector == "LoTW"
+                && e.level == "error"
+                && e.message.contains("(Station Location Club)")),
+            "the connection log names the location"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two profiles with the same call and grid (K2DEF/P in FN42) that name different locations:
+    /// their contact is not guessed. It is signed with the Station Location in Settings, and the
+    /// report the operator reads counts it. A contact no profile fits is counted too. CONTROL:
+    /// while one profile alone fits, its location signs and nothing is counted.
+    #[test]
+    fn a_contact_two_profiles_fit_is_signed_as_settings_say_and_counted() {
+        let (dir, engine) = station("lotw-profile-tie", "Home");
+        let upload = |call: &str| {
+            let mut runs: Runs = Vec::new();
+            let report = lotw_upload_batch_with(
+                &engine,
+                LotwPick::Ids(vec![id_of(&engine, call)]),
+                true,
+                |_, args| {
+                    runs.push(run_of(args));
+                    Ok((0, String::new()))
+                },
+            )
+            .expect("the upload ran");
+            (runs, report.location_tie, report.location_unmatched)
+        };
+        assert_eq!(
+            upload("K2POR"),
+            (vec![(Some("Portable".into()), calls(&["K2POR"]))], 0, 0),
+            "one profile fits: its location, nothing to tell"
+        );
+        engine_lock(&engine)
+            .save_station_profile(StationProfile {
+                name: "Portable B".into(),
+                call: "K2DEF/P".into(),
+                grid: "FN42AB".into(),
+                lotw_location: "Portable B".into(),
+                ..StationProfile::default()
+            })
+            .expect("the profile is saved");
+        assert_eq!(
+            upload("K1POR"),
+            (vec![(Some("Home".into()), calls(&["K1POR"]))], 1, 0),
+            "a tie: the station's location, counted"
+        );
+        tempo_app::logwrite::import_adif(
+            &engine,
+            "<CALL:5>K3OLD<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261020<TIME_ON:6>130000\
+             <STATION_CALLSIGN:7>K2DEF/P<MY_GRIDSQUARE:4>EM10<EOR>\n",
+        )
+        .0
+        .expect("imported");
+        assert_eq!(
+            upload("K3OLD"),
+            (vec![(Some("Home".into()), calls(&["K3OLD"]))], 0, 1),
+            "no profile fits: the station's location, counted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With no Station Location in Settings, contacts whose profiles name one are signed; a batch
+    /// with a contact that needs the station's own is refused before TQSL runs, with today's words,
+    /// and nothing is stamped. CONTROL: no profile naming a location refuses as it always did.
+    #[test]
+    fn the_stations_own_location_is_needed_only_by_its_own_contacts() {
+        let (dir, engine) = station("lotw-profile-no-station", "");
+        let ported = vec![id_of(&engine, "K1POR"), id_of(&engine, "K1CLB")];
+        let mut runs: Runs = Vec::new();
+        lotw_upload_batch_with(&engine, LotwPick::Ids(ported), true, |_, args| {
+            runs.push(run_of(args));
+            Ok((0, String::new()))
+        })
+        .expect("only profile locations are needed");
+        assert_eq!(
+            runs,
+            vec![
+                (Some("Portable".into()), calls(&["K1POR"])),
+                (Some("Club".into()), calls(&["K1CLB"])),
+            ]
+        );
+        let mut ran = false;
+        let refused = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+            ran = true;
+            Ok((0, String::new()))
+        });
+        assert_eq!(refused.unwrap_err(), LOTW_NO_LOCATION);
+        assert!(!ran, "TQSL never ran");
+        assert_eq!(stamped(&engine, &["K1HOM", "K2POR"]), vec![None, None]);
+
+        let (dir2, plain) = engine_on_store("lotw-profile-none-named", 1);
+        let refused = lotw_upload_batch_with(&plain, LotwPick::Unsent, true, |_, _| {
+            panic!("TQSL never runs")
+        });
+        assert_eq!(refused.unwrap_err(), LOTW_NO_LOCATION);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// A later TQSL run that cannot run at all (TQSL gone or timed out) after an earlier run sent
+    /// its contacts: the report keeps the earlier run's outcome, and counts the contacts left
+    /// unsent with why; the runs after it do not start, and nothing of theirs is stamped. CONTROL:
+    /// the first run failing is the error, as it always was.
+    #[test]
+    fn a_later_run_that_fails_keeps_what_the_earlier_runs_sent() {
+        let (dir, engine) = station("lotw-profile-later-error", "Home");
+        let mut ran = 0;
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+            ran += 1;
+            if ran == 2 {
+                Err("TQSL did not answer in time".into())
+            } else {
+                Ok((0, String::new()))
+            }
+        })
+        .expect("the earlier run's report");
+        assert_eq!(ran, 2, "the run after the failure does not start");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (2, "pending"),
+            "the Portable run went"
+        );
+        assert_eq!(
+            (report.unsent_after_error, report.unsent_error.as_deref()),
+            (3, Some("TQSL did not answer in time")),
+            "Home's two and Club's one were not sent"
+        );
+        let sent = Some(UploadOutcome::Pending);
+        assert_eq!(
+            stamped(&engine, &["K1POR", "K2POR", "K1HOM", "K2HOM", "K1CLB"]),
+            vec![sent, sent, None, None, None]
+        );
+        assert!(
+            get_connection_log().iter().any(|e| e.connector == "LoTW"
+                && e.message.contains("3 contact(s) not sent")
+                && e.message.contains("TQSL did not answer in time")),
+            "the connection log says what was left"
+        );
+
+        let (dir2, first) = station("lotw-profile-first-error", "Home");
+        let failed = lotw_upload_batch_with(&first, LotwPick::Unsent, true, |_, _| {
+            Err("TQSL is not installed".into())
+        });
+        assert_eq!(failed.unwrap_err(), "TQSL is not installed");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// A later run TQSL signed whose stamps could not be shown on disk (another program holds the
+    /// database's write lock past every retry): its contacts went to LoTW, so the report counts
+    /// them as sent and says their mark was not confirmed, and counts as unsent only the runs
+    /// after it, which do not start. The disk refused their stamp here, so they stay owed and go
+    /// again with the next upload. CONTROL: the earlier run is reported and stamped as before.
+    #[test]
+    fn a_later_run_signed_but_not_confirmed_on_disk_is_counted_as_sent() {
+        let (dir, engine) = station("lotw-profile-later-unconfirmed", "Home");
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let mut hold = None;
+        let mut ran = 0;
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+            ran += 1;
+            if ran == 2 {
+                hold = Some(
+                    tempo_core::logbook::sqlite::WriteHold::take(&db).expect("hold the write lock"),
+                );
+            }
+            Ok((0, String::new()))
+        })
+        .expect("the earlier run's report");
+        drop(hold);
+        assert_eq!(ran, 2, "the run after it does not start");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (4, "pending"),
+            "the Portable run and the Home run went"
+        );
+        assert_eq!(
+            (report.unconfirmed_after_error, report.unsent_after_error),
+            (2, 1),
+            "Home's two went, unconfirmed; only Club's was not sent"
+        );
+        assert!(
+            report.unsent_error.is_some(),
+            "why the stamp was not confirmed"
+        );
+        // The stamps as the log holds them now, without waiting for the write the disk refused:
+        // Home's were refused, so they are not stamped and stay owed.
+        let rows = engine_lock(&engine).log_rows();
+        let mut held = Vec::new();
+        rows.each_record(std::time::Duration::ZERO, &mut |r| {
+            held.push((r.call.clone(), r.upload.lotw.as_ref().map(|s| s.outcome)));
+            std::ops::ControlFlow::Continue(())
+        })
+        .expect("the store reads");
+        let sent = Some(UploadOutcome::Pending);
+        let of = |call: &str| held.iter().find(|(c, _)| c == call).map(|(_, o)| *o);
+        assert_eq!(
+            ["K1POR", "K2POR", "K1HOM", "K2HOM", "K1CLB"].map(of),
+            [sent, sent, None, None, None].map(Some)
+        );
+        assert!(
+            get_connection_log()
+                .iter()
+                .any(|e| e.connector == "LoTW" && e.message.contains("2 contact(s) went to LoTW")),
+            "the connection log says the signed run went"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A later run TQSL REFUSED (a rejection, or a Station Location it does not know) whose
+    /// refusal mark could not be shown on disk: nothing of it went to LoTW, so the report shows
+    /// the refusal and counts none of it as gone; only the runs after it, which do not start, are
+    /// unsent. CONTROL: the exit-0 case above still counts its run as gone.
+    #[test]
+    fn a_later_run_tqsl_refused_and_not_confirmed_on_disk_is_never_counted_as_gone() {
+        for (code, outcome) in [(3, "rejected"), (5, "authfail")] {
+            let (dir, engine) = station(&format!("lotw-profile-later-refused-{code}"), "Home");
+            let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+            let mut hold = None;
+            let mut ran = 0;
+            let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+                ran += 1;
+                if ran == 2 {
+                    hold = Some(
+                        tempo_core::logbook::sqlite::WriteHold::take(&db)
+                            .expect("hold the write lock"),
+                    );
+                    // Exit 5 with these words is a Station Location TQSL does not know.
+                    return Ok((code, "Station Location Home not found".into()));
+                }
+                Ok((0, String::new()))
+            })
+            .expect("the earlier run's report");
+            drop(hold);
+            assert_eq!(ran, 2, "exit {code}: the run after it does not start");
+            assert_eq!(
+                report.outcome, outcome,
+                "exit {code}: the refusal is what the screen reads"
+            );
+            assert_eq!(
+                (report.unconfirmed_after_error, report.unsent_after_error),
+                (0, 1),
+                "exit {code}: none of the refused run went; only Club's was not sent"
+            );
+            let refused = format!(
+                "TQSL refused the 2 contact(s) of the run with Station Location Home ({outcome})"
+            );
+            assert!(
+                get_connection_log()
+                    .iter()
+                    .any(|e| e.connector == "LoTW" && e.message.contains(&refused)),
+                "exit {code}: the connection log says the run was refused, not that it went"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A Station Location name TQSL could read as an option, from Settings or from a profile,
+    /// never reaches TQSL: that run is refused before TQSL starts, says why, and its contacts and
+    /// the later runs' stay unsent. CONTROL: the runs before it go as usual.
+    #[test]
+    fn a_station_location_that_reads_as_an_option_never_reaches_tqsl() {
+        let upload = |engine: &SharedEngine| {
+            let mut runs: Runs = Vec::new();
+            let report = lotw_upload_batch_with(engine, LotwPick::Unsent, true, |_, args| {
+                assert!(
+                    !args
+                        .iter()
+                        .any(|a| a.starts_with("-H") || a.starts_with("-C")),
+                    "no dashed name in TQSL's arguments: {args:?}"
+                );
+                runs.push(run_of(args));
+                Ok((0, String::new()))
+            })
+            .expect("the earlier runs' report");
+            let locations: Vec<Option<String>> = runs.into_iter().map(|(l, _)| l).collect();
+            (report, locations)
+        };
+
+        // The Settings field: the Home run is refused, Club's after it never starts.
+        let (dir, engine) = station("lotw-profile-dashed-settings", "-Home");
+        let (report, locations) = upload(&engine);
+        assert_eq!(locations, vec![Some("Portable".to_string())]);
+        assert_eq!((report.dispatched, report.outcome.as_str()), (2, "pending"));
+        assert_eq!(report.unsent_after_error, 3, "Home's two and Club's one");
+        assert!(
+            report
+                .unsent_error
+                .as_deref()
+                .is_some_and(|e| e.contains("\"-Home\"")),
+            "the refusal names the location: {:?}",
+            report.unsent_error
+        );
+        let sent = Some(UploadOutcome::Pending);
+        assert_eq!(
+            stamped(&engine, &["K1POR", "K2POR", "K1HOM", "K2HOM", "K1CLB"]),
+            vec![sent, sent, None, None, None]
+        );
+
+        // A profile's field: the Club run, last, is refused; Portable and Home go.
+        let (dir2, engine2) = station("lotw-profile-dashed-profile", "Home");
+        let club = engine_lock(&engine2)
+            .settings()
+            .station_profiles
+            .iter()
+            .find(|p| p.name == "Club")
+            .cloned()
+            .expect("the Club profile");
+        engine_lock(&engine2)
+            .save_station_profile(StationProfile {
+                lotw_location: "-Club".into(),
+                ..club
+            })
+            .expect("the profile is saved");
+        let (report, locations) = upload(&engine2);
+        assert_eq!(
+            locations,
+            vec![Some("Portable".to_string()), Some("Home".to_string())]
+        );
+        assert_eq!((report.dispatched, report.outcome.as_str()), (4, "pending"));
+        assert_eq!(report.unsent_after_error, 1, "Club's one");
+        assert!(
+            report
+                .unsent_error
+                .as_deref()
+                .is_some_and(|e| e.contains("\"-Club\"")),
+            "the refusal names the location: {:?}",
+            report.unsent_error
+        );
+        assert_eq!(stamped(&engine2, &["K1CLB"]), vec![None]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// Signing from the ADIF, a contact no profile tells apart is signed from the call and grid in
+    /// its own record, and the report says so, for the screen's words; with a named Station
+    /// Location it does not. CONTROL: the one-profile contact is signed with its profile's.
+    #[test]
+    fn the_report_says_how_a_contact_no_profile_told_apart_was_signed() {
+        let (dir, engine) = station("lotw-profile-adif-fallback", "Home");
+        engine_lock(&engine)
+            .save_station_profile(StationProfile {
+                name: "Portable B".into(),
+                call: "K2DEF/P".into(),
+                grid: "FN42AB".into(),
+                lotw_location: "Portable B".into(),
+                ..StationProfile::default()
+            })
+            .expect("the profile is saved");
+        let upload = |engine: &SharedEngine, calls_: &[&str]| {
+            let ids = calls_.iter().map(|c| id_of(engine, c)).collect();
+            let mut runs: Runs = Vec::new();
+            let r = lotw_upload_batch_with(engine, LotwPick::Ids(ids), true, |_, args| {
+                runs.push(run_of(args));
+                Ok((0, String::new()))
+            })
+            .expect("the upload ran");
+            (runs, r.location_tie, r.location_from_adif)
+        };
+        assert_eq!(
+            upload(&engine, &["K1POR"]),
+            (vec![(Some("Home".into()), calls(&["K1POR"]))], 1, false),
+            "a named Station Location signs it"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.lotw_use_adif_location = true;
+            eng.apply_settings(s);
+        }
+        assert_eq!(
+            upload(&engine, &["K2POR", "K1CLB"]),
+            (
+                vec![
+                    (None, calls(&["K2POR"])),
+                    (Some("Club".into()), calls(&["K1CLB"]))
+                ],
+                1,
+                true
+            ),
+            "signed from the ADIF, and said so"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
 mod logbook_startup_tests {
     use super::durable_command_tests::{by_command, card_at, engine_on_store, id_at};
     use super::*;
@@ -16082,7 +16621,7 @@ fn settings_read(
         settings: s,
         saved_at_the_station,
         // From afar, which settings the save keeps as the shack has them, so the form says so.
-        set_at_the_station: command_dispatch::station_only_settings(afar),
+        set_at_the_station: command_dispatch::station_only_settings(afar, shack),
     }
 }
 
@@ -16239,11 +16778,11 @@ fn apply_and_persist(
     let cluster_active = settings.cluster_active();
     let node_config = cluster_nodes::NodeConfig::of(&settings);
     let cluster_ssid = settings.cluster_ssid.clone();
-    let mycall = settings.mycall.clone();
-    let mygrid = settings.mygrid.clone();
     let opening_regional = settings.opening_regional;
-    // The engine lock is released again before the feed threads are touched.
-    let snap = save_and_publish(&state, settings, authoritative_roster)?;
+    // The engine lock is released again before the feed threads are touched. The call and grid
+    // the feeds bind to are the station's after the save, not the form's: with station profiles a
+    // form loaded before a switch carries the call the station has left (`save_and_publish`).
+    let (snap, mycall, mygrid) = save_and_publish(&state, settings, authoritative_roster)?;
     // Resolve the authoritative merged profile after the Engine commit.
     sync_rotctld(&state);
 
@@ -16321,11 +16860,16 @@ fn apply_and_persist(
 /// form keeps what the operator typed. So is a form save that would put a daemon of Nexus's, or
 /// its CAT broker, on a NET rigctl radio's Network Address
 /// ([`tempo_app::engine::Engine::port_clash_a_save_introduces`]), with words naming the port.
+///
+/// With the snapshot, the station's call and grid once the save is applied: what the feeds and the
+/// spot ranking's QTH bind to. Not the form's: with "My station" profiles a form loaded before a
+/// switch carries the call the station has left, and the save keeps the station on its profile
+/// (`Settings::keep_station_form`).
 fn save_and_publish(
     engine: &SharedEngine,
     mut settings: Settings,
     authoritative_roster: bool,
-) -> Result<AppSnapshot, String> {
+) -> Result<(AppSnapshot, String, String), String> {
     let published = settings.clone();
     let snap = tempo_app::engine::with_session_rows(
         engine,
@@ -16337,6 +16881,13 @@ fn save_and_publish(
             if !authoritative_roster {
                 if let Some(refusal) = eng.port_clash_a_save_introduces(&settings) {
                     return Err(refusal);
+                }
+            }
+            // ⛔ A reset replaces the station's profiles and call: not while a run, a contact or an
+            // over is under way on a station with profiles (a form save keeps the call instead).
+            if authoritative_roster {
+                if let Some(why) = eng.station_profile_restore_refusal(&settings) {
+                    return Err(why.to_string());
                 }
             }
             // The LoTW sync cursor is bound to the exact query (notably the username);
@@ -16393,7 +16944,12 @@ fn save_and_publish(
             if active_profile().is_some() {
                 persist_simultaneous_to_base(eng.settings().simultaneous_radios);
             }
-            Ok(eng.snapshot())
+            let station = eng.settings();
+            Ok((
+                eng.snapshot(),
+                station.mycall.clone(),
+                station.mygrid.clone(),
+            ))
         },
     )??;
     // Live, so an operator can start a diagnostic session mid-flight without restarting — the
@@ -16413,8 +16969,9 @@ fn save_and_publish(
     journal_assistance(&published, "settings saved", false);
     // The spot buffer's voice ranking is QTH-relative and the feed threads outlive a
     // save, so it reads this mirror rather than a spawn-time capture.
-    set_operator_qth(&published.mycall, &published.mygrid);
-    Ok(snap)
+    let (snap, mycall, mygrid) = snap;
+    set_operator_qth(&mycall, &mygrid);
+    Ok((snap, mycall, mygrid))
 }
 
 /// A command that opens a contest session, and the launch that resumes one, when the logbook is
@@ -25691,6 +26248,7 @@ fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
 /// state (with `sending` true). Refuses — with the reason — on an unknown mode, a
 /// dimension mismatch, or any TX gate being down. `afar`: as [`set_tx_enabled`]'s, checked in the
 /// hold the picture is handed over in.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn sstv_send(
     state: State<'_, SharedEngine>,
@@ -25703,6 +26261,9 @@ fn sstv_send(
     // already carries. §97.119(b)(4) is satisfied by the call being in the image emission; it
     // does not say WE must have drawn it. Optional so every existing caller keeps the plate.
     id_in_image: Option<bool>,
+    // The station calls the picture's text carries, as the screen put them there (a CQ or 73
+    // preset's "DE <call>"): judged by the keying-time call check before anything is encoded.
+    overlay_calls: Option<Vec<String>>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<SstvStateDto, String> {
     let sstv_mode = parse_sstv_mode(&mode).ok_or_else(|| format!("Unknown SSTV mode: {mode}"))?;
@@ -25731,6 +26292,11 @@ fn sstv_send(
     let (mycall, send_fsk_id) = {
         let eng = engine_lock(&state);
         eng.sstv_tx_gate()?;
+        // ⛔ The keying-time call check: a picture whose text names another station call than
+        // the station's now (a preset added before a profile switch) is not sent.
+        if let Some(why) = eng.sstv_overlay_call_refusal(&overlay_calls.unwrap_or_default()) {
+            return Err(why.to_string());
+        }
         (eng.settings().mycall.clone(), eng.settings().sstv_tx_fsk_id)
     };
 
@@ -25791,7 +26357,8 @@ fn sstv_send(
     // duration-budget check; nothing keys until the radio loop takes it).
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    eng.sstv_send(samples, spec.name.to_string())?;
+    // The picture carries the call read above; the poll judges it by that call.
+    eng.sstv_send_as(samples, spec.name.to_string(), &mycall)?;
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(sstv_state_dto(&eng))
 }
@@ -26249,6 +26816,122 @@ fn set_radio_switch_policy(
     let s = eng.set_radio_switch_policy(policy);
     persist_settings(s.clone(), |e| {
         eprintln!("tempo: set_radio_switch_policy save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
+/// Put the station on one of its "My station" profiles (the top bar's picker): its call, grid,
+/// state and power become the station's, applied and saved exactly as a Settings save of them is,
+/// so the feeds bound to the call follow it. The ONE write path for which profile is on
+/// (`Engine::apply_settings` keeps the live one). Set at the station only: it changes the call the
+/// station transmits under. Returns the snapshot.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(async)]
+fn switch_station_profile(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+    id: String,
+) -> Result<AppSnapshot, String> {
+    let settings = {
+        let mut eng = engine_lock(&state);
+        eng.switch_station_profile(&id)?;
+        eng.settings().clone()
+    };
+    apply_and_persist(
+        state,
+        spots,
+        live_paths,
+        region_paths,
+        health,
+        cache,
+        settings,
+        false,
+    )
+}
+
+/// Save one "My station" profile (Settings ▸ Station); an empty id adds one. Saving the profile
+/// the station is on applies its call, grid, state and power as a switch does. Set at the station
+/// only, for the switch's reason. Returns the snapshot.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(async)]
+fn save_station_profile(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+    profile: tempo_app::settings::StationProfile,
+) -> Result<AppSnapshot, String> {
+    let Some(settings) = save_station_profile_on(&state, profile)? else {
+        let eng = engine_lock(&state);
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: save_station_profile save failed: {e}")
+        });
+        return Ok(eng.snapshot());
+    };
+    apply_and_persist(
+        state,
+        spots,
+        live_paths,
+        region_paths,
+        health,
+        cache,
+        settings,
+        false,
+    )
+}
+
+/// [`save_station_profile`]'s body, over the plain handle: the settings to apply and save when the
+/// save moved the station's call, grid, state or power (it was the profile the station is on), so
+/// the feeds follow the call. `None` when it changed the list alone: that is only written to disk,
+/// with no settings apply, so an over already planned keeps its slot.
+fn save_station_profile_on(
+    engine: &SharedEngine,
+    profile: tempo_app::settings::StationProfile,
+) -> Result<Option<Settings>, String> {
+    let flat = |s: &Settings| {
+        (
+            s.mycall.clone(),
+            s.mygrid.clone(),
+            s.op_state.clone(),
+            s.station_power_w,
+        )
+    };
+    let locations = |s: &Settings| {
+        s.station_profiles
+            .iter()
+            .map(|p| (p.id.clone(), p.lotw_location.clone()))
+            .collect::<Vec<_>>()
+    };
+    let mut eng = engine_lock(engine);
+    let before = flat(eng.settings());
+    let located = locations(eng.settings());
+    eng.save_station_profile(profile)?;
+    // A changed TQSL Station Location is the operator fixing what may have suspended the
+    // automatic LoTW batch, as the same change in Settings is (`apply_and_persist`).
+    if locations(eng.settings()) != located {
+        LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+        LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok((flat(eng.settings()) != before).then(|| eng.settings().clone()))
+}
+
+/// Remove one "My station" profile. Home and the profile the station is on stay. Returns the
+/// snapshot.
+#[tauri::command(async)]
+fn remove_station_profile(
+    state: State<'_, SharedEngine>,
+    id: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.remove_station_profile(&id)?;
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: remove_station_profile save failed: {e}")
     });
     Ok(eng.snapshot())
 }
@@ -35563,31 +36246,42 @@ fn lotw_upload_batch(
     lotw_upload_batch_with(state, pick, wait, run_tqsl)
 }
 
-/// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over the batch file, to
+/// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over a batch file, to
 /// completion, and answers its exit code and stderr. The shipped runner is [`run_tqsl`]; a test
 /// stands in for it to change the log while "TQSL" runs — the window this function's stamp has
 /// to survive.
+///
+/// TQSL signs a file with one Station Location, so the batch is signed in one run per location
+/// ([`tempo_app::station::lotw_runs`]): each contact with the location of the station profile it
+/// was logged under, or the station's own. A station whose contacts need one location makes one
+/// run, as before profiles. Each run is stamped with its own outcome.
 fn lotw_upload_batch_with(
     state: &SharedEngine,
     pick: LotwPick,
     wait: bool,
-    tqsl: impl FnOnce(&str, &[String]) -> Result<(i32, String), String>,
+    mut tqsl: impl FnMut(&str, &[String]) -> Result<(i32, String), String>,
 ) -> Result<UploadReportDto, String> {
     // Brief lock: read config and what the batch is, then release it — before the batch is read
     // from the store, and before TQSL is spawned. Held across the spawn it would freeze the
     // whole UI for as long as ARRL takes to answer, which is tens of seconds on a big batch.
-    let (chosen, rows, location, tqsl_path, (adif_location, call, grid)) = {
+    let (chosen, rows, location, tqsl_path, (call, grid), profiles) = {
         let mut eng = engine_lock(state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
+        // The profiles, the one the station is on with its live call and grid.
+        let profiles = {
+            let mut s = eng.settings().clone();
+            s.sync_active_station_from_flat();
+            s.station_profiles
+        };
         // A named Station Location is required UNLESS the operator signs from the ADIF
-        // (travelers who never create TQSL station locations).
-        if location.is_empty() && !use_adif_location {
-            return Err(
-                "Set your LoTW Station Location in Settings before uploading (or enable \
-                        \"sign from ADIF location\" if you don't create TQSL station locations)."
-                    .into(),
-            );
+        // (travelers who never create TQSL station locations), or a profile names one: then it
+        // is required only when a contact of the batch needs the station's own (below).
+        if location.is_empty()
+            && !use_adif_location
+            && profiles.iter().all(|p| p.lotw_location.trim().is_empty())
+        {
+            return Err(LOTW_NO_LOCATION.into());
         }
         // A batch chosen by hand names its contacts by id. The contacts themselves are read from
         // the store once the lock is released, as the default batch's are.
@@ -35598,15 +36292,18 @@ fn lotw_upload_batch_with(
         let tqsl_path = eng.settings().tqsl_path.clone();
         // None in ADIF-location mode → tqsl_args omits `-l`.
         let location = (!use_adif_location).then_some(location);
-        let station = (
-            use_adif_location,
-            eng.settings().mycall.clone(),
-            eng.settings().mygrid.clone(),
-        );
+        let station = (eng.settings().mycall.clone(), eng.settings().mygrid.clone());
         // Counted from here to the last return: while it runs, an undo of a callsign correction
         // cannot tell whether LoTW has the corrected call, so it does not put LoTW's marks back.
         eng.lotw_batch_begun();
-        (chosen, eng.log_rows(), location, tqsl_path, station)
+        (
+            chosen,
+            eng.log_rows(),
+            location,
+            tqsl_path,
+            station,
+            profiles,
+        )
     };
     struct Running<'a>(&'a SharedEngine);
     impl Drop for Running<'_> {
@@ -35649,9 +36346,201 @@ fn lotw_upload_batch_with(
             skipped_edited: 0,
             skipped_deleted: 0,
             held_mode,
+            location_tie: 0,
+            location_unmatched: 0,
+            location_from_adif: false,
+            unsent_after_error: 0,
+            unsent_error: None,
+            unconfirmed_after_error: 0,
         });
     }
-    let adif = tempo_app::station::lotw_batch_adif(&batch, adif_location, &call, &grid);
+    let (runs, fallback) = tempo_app::station::lotw_runs(batch, location.as_deref(), &profiles);
+    if runs.iter().any(|r| r.location.as_deref() == Some("")) {
+        return Err(LOTW_NO_LOCATION.into());
+    }
+    // Signing from the ADIF, a contact no profile tells apart goes with the call, grid and place
+    // fields it carries; otherwise with the Station Location in Settings.
+    let from_adif = location.is_none();
+    let how = if from_adif {
+        "from the call, grid, state, county, zones and IOTA they carry"
+    } else {
+        "with the Station Location in Settings"
+    };
+    if fallback.tie > 0 {
+        conn_log(
+            "LoTW",
+            "info",
+            format!(
+                "{} contact(s) fit two station profiles that name different TQSL Station \
+                 Locations, so they are signed {how}.",
+                fallback.tie
+            ),
+        );
+    }
+    if fallback.unmatched > 0 {
+        conn_log(
+            "LoTW",
+            "info",
+            format!(
+                "{} contact(s) fit none of the station profiles by call and grid, so they are \
+                 signed {how}.",
+                fallback.unmatched
+            ),
+        );
+    }
+    let mut report: Option<UploadReportDto> = None;
+    let mut runs = runs.into_iter();
+    while let Some(run) = runs.next() {
+        let (done, unconfirmed) = match lotw_sign_run(
+            state,
+            &run.batch,
+            run.location.as_deref(),
+            (&call, &grid),
+            &tqsl_path,
+            wait,
+            held_mode,
+            &mut tqsl,
+        ) {
+            Ok(done) => done,
+            // A run that cannot run at all after earlier runs sent theirs: what they sent stays
+            // on the report, and this run's contacts and the rest are left unsent, and counted.
+            // The first run failing is the error, as it was before runs.
+            Err(e) => {
+                let Some(sent) = report else {
+                    return Err(e);
+                };
+                let unsent = run.batch.len() + runs.map(|r| r.batch.len()).sum::<usize>();
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!(
+                        "{unsent} contact(s) not sent ({e}). The earlier TQSL runs' contacts \
+                         were sent; these are offered again with the next upload."
+                    ),
+                );
+                report = Some(UploadReportDto {
+                    unsent_after_error: unsent,
+                    unsent_error: Some(e),
+                    ..sent
+                });
+                break;
+            }
+        };
+        // A run whose stamps could not be shown on disk. After earlier runs, a run TQSL signed and
+        // sent (or LoTW already had) went to LoTW, so its contacts are counted with what went and
+        // said to be unconfirmed (a stamp the disk refused leaves its contact owed, sent again
+        // next time). A run TQSL REFUSED sent nothing: the report shows the refusal, and none of
+        // it is counted as gone. Either way only the runs after it, which do not start, are
+        // unsent. The first run's is the error, as it was before runs.
+        if let Some(why) = unconfirmed {
+            let Some(sent) = report else {
+                return Err(durability_failed(why));
+            };
+            let went = matches!(done.outcome.as_str(), "pending" | "duplicate");
+            let signed = done.dispatched;
+            let unsent = runs.map(|r| r.batch.len()).sum::<usize>();
+            let unsent_words = if unsent > 0 {
+                format!(
+                    " {unsent} contact(s) not sent; they are offered again with the next upload."
+                )
+            } else {
+                String::new()
+            };
+            let said = if went {
+                format!(
+                    "{signed} contact(s) went to LoTW, but Nexus could not confirm their upload \
+                     mark was saved to disk ({why}); any not saved are offered again with the next \
+                     upload, and LoTW ignores a contact it already has.{unsent_words}"
+                )
+            } else {
+                format!(
+                    "TQSL refused the {signed} contact(s) of the run {} ({}), so none of them \
+                     went to LoTW, and Nexus could not confirm their refusal mark was saved to \
+                     disk ({why}). They stay unsent.{unsent_words}",
+                    run.location.as_deref().map_or_else(
+                        || "signed from the ADIF".to_string(),
+                        |l| format!("with Station Location {l}")
+                    ),
+                    done.outcome
+                )
+            };
+            conn_log("LoTW", "error", said);
+            report = Some(UploadReportDto {
+                unsent_after_error: unsent,
+                unsent_error: Some(why),
+                unconfirmed_after_error: if went { signed } else { 0 },
+                ..lotw_reports_together(sent, done)
+            });
+            break;
+        }
+        report = Some(match report {
+            None => done,
+            Some(before) => lotw_reports_together(before, done),
+        });
+    }
+    // Said on the screen as well: a contact signed with a location it was not made at is one
+    // LoTW never matches.
+    Ok(UploadReportDto {
+        location_tie: fallback.tie,
+        location_unmatched: fallback.unmatched,
+        location_from_adif: from_adif,
+        ..report.expect("a batch that is not empty makes a run")
+    })
+}
+
+/// Why a LoTW upload does not start: a contact needs the station's own Station Location, and
+/// none is set.
+const LOTW_NO_LOCATION: &str = "Set your LoTW Station Location in Settings before uploading (or \
+     enable \"sign from ADIF location\" if you don't create TQSL station locations).";
+
+/// Two runs' reports as one, for the screen: the counts added, and the outcome the operator most
+/// needs to read (a sign-in or location failure, then a rejection, then a retry, then sent, then
+/// already on file), with that run's detail.
+fn lotw_reports_together(a: UploadReportDto, b: UploadReportDto) -> UploadReportDto {
+    let rank = |o: &str| match o {
+        "authfail" => 4,
+        "rejected" => 3,
+        "retry" => 2,
+        "pending" => 1,
+        _ => 0,
+    };
+    let (first, other) = if rank(&b.outcome) > rank(&a.outcome) {
+        (b, a)
+    } else {
+        (a, b)
+    };
+    UploadReportDto {
+        dispatched: first.dispatched + other.dispatched,
+        outcome: first.outcome,
+        detail: first.detail.or(other.detail),
+        skipped_edited: first.skipped_edited + other.skipped_edited,
+        skipped_deleted: first.skipped_deleted + other.skipped_deleted,
+        held_mode: first.held_mode,
+        location_tie: 0,
+        location_unmatched: 0,
+        location_from_adif: false,
+        unsent_after_error: 0,
+        unsent_error: None,
+        unconfirmed_after_error: 0,
+    }
+}
+
+/// One TQSL run of a LoTW upload: `batch` signed with `location` (`None`: from the location in
+/// the ADIF, `station` = the live call and grid as the fallback), and stamped with its outcome.
+/// With the report, why its stamps could not be shown on disk when `wait` asked for that: TQSL
+/// had answered by then (signed and sent, or refused), so the caller says which happened.
+#[allow(clippy::too_many_arguments)]
+fn lotw_sign_run(
+    state: &SharedEngine,
+    batch: &[tempo_core::logbook::QsoRecord],
+    location: Option<&str>,
+    (call, grid): (&str, &str),
+    tqsl_path: &str,
+    wait: bool,
+    held_mode: usize,
+    tqsl: &mut impl FnMut(&str, &[String]) -> Result<(i32, String), String>,
+) -> Result<(UploadReportDto, Option<String>), String> {
+    let adif = tempo_app::station::lotw_batch_adif(batch, location.is_none(), call, grid);
     // The contacts by id, taken with the file: the stamp below finds them by id once TQSL is
     // done, and only where each is still the contact that was signed.
     let signed: Vec<tempo_app::station::LotwSigned> = batch
@@ -35689,8 +36578,8 @@ fn lotw_upload_batch_with(
     let path_str = path.to_string_lossy().to_string();
 
     // Run TQSL one-shot, capturing its result.
-    let args = tempo_core::lotw_upload::tqsl_args(location.as_deref(), &path_str);
-    let (code, stderr) = tqsl(&tqsl_path, &args)?;
+    let args = tempo_core::lotw_upload::tqsl_args(location, &path_str)?;
+    let (code, stderr) = tqsl(tqsl_path, &args)?;
     // ⛔ TWO details, and they are not interchangeable. `detail` is TQSL's own tail and goes
     // to the operator's toast — a screen. `stamped` is the CLASS and is the only one written
     // into `log.adi`, because `log.adi` is the file TQSL then signs and uploads to ARRL: a
@@ -35701,14 +36590,23 @@ fn lotw_upload_batch_with(
 
     match tempo_core::lotw_upload::classify_tqsl_exit(code, &stderr) {
         // Network error → leave state untouched so the next attempt retries cleanly.
-        None => Ok(UploadReportDto {
-            dispatched: batch.len(),
-            outcome: "retry".into(),
-            detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
-            skipped_edited: 0,
-            skipped_deleted: 0,
-            held_mode,
-        }),
+        None => Ok((
+            UploadReportDto {
+                dispatched: batch.len(),
+                outcome: "retry".into(),
+                detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
+                skipped_edited: 0,
+                skipped_deleted: 0,
+                held_mode,
+                location_tie: 0,
+                location_unmatched: 0,
+                location_from_adif: false,
+                unsent_after_error: 0,
+                unsent_error: None,
+                unconfirmed_after_error: 0,
+            },
+            None,
+        )),
         Some(outcome) => {
             // By id, planned with the Engine lock released (SPEC-2 v3 C19): each contact read off
             // the store, and stamped under the lock only while it is still the one TQSL signed.
@@ -35754,11 +36652,12 @@ fn lotw_upload_batch_with(
             }
             // The Logbook button waits for the stamps to reach the disk; the six-hourly
             // automatic batch does not (a stamp it loses is re-derived by the next echo).
-            if wait {
-                durable
-                    .wait(tempo_app::logstore::DURABLE_WAIT)
-                    .map_err(durability_failed)?;
-            }
+            // TQSL has answered by now (signed and sent, or refused), whatever the wait answers.
+            let unconfirmed = if wait {
+                durable.wait(tempo_app::logstore::DURABLE_WAIT).err()
+            } else {
+                None
+            };
             // ⛔ THE LINE THAT MAKES THE STAMP'S OWN SENTENCE TRUE.
             //
             // `UploadDetail`'s sentences tell the operator the service's own wording "was in
@@ -35783,21 +36682,32 @@ fn lotw_upload_batch_with(
                     "LoTW",
                     "error",
                     format!(
-                        "TQSL exit {code} — {}",
+                        "TQSL exit {code}{} — {}",
+                        // Which run, when a batch is signed in more than one.
+                        location.map_or(String::new(), |l| format!(" (Station Location {l})")),
                         detail.as_deref().unwrap_or("no output from TQSL")
                     ),
                 );
             }
-            Ok(UploadReportDto {
-                dispatched: batch.len(),
-                outcome: outcome.code().to_string(),
-                detail,
-                // The same counts as the connection-log line above, for the screen: an upload
-                // count that does not clear otherwise reads as an upload that failed.
-                skipped_edited: done.changed,
-                skipped_deleted: done.gone,
-                held_mode,
-            })
+            Ok((
+                UploadReportDto {
+                    dispatched: batch.len(),
+                    outcome: outcome.code().to_string(),
+                    detail,
+                    // The same counts as the connection-log line above, for the screen: an upload
+                    // count that does not clear otherwise reads as an upload that failed.
+                    skipped_edited: done.changed,
+                    skipped_deleted: done.gone,
+                    held_mode,
+                    location_tie: 0,
+                    location_unmatched: 0,
+                    location_from_adif: false,
+                    unsent_after_error: 0,
+                    unsent_error: None,
+                    unconfirmed_after_error: 0,
+                },
+                unconfirmed,
+            ))
         }
     }
 }
@@ -38585,6 +39495,12 @@ fn eqsl_answered(
                 skipped_edited: 0,
                 skipped_deleted: 0,
                 held_mode: 0,
+                location_tie: 0,
+                location_unmatched: 0,
+                location_from_adif: false,
+                unsent_after_error: 0,
+                unsent_error: None,
+                unconfirmed_after_error: 0,
             },
             None,
         )),
@@ -38625,6 +39541,12 @@ fn eqsl_answered(
                     skipped_edited: 0,
                     skipped_deleted: 0,
                     held_mode: 0,
+                    location_tie: 0,
+                    location_unmatched: 0,
+                    location_from_adif: false,
+                    unsent_after_error: 0,
+                    unsent_error: None,
+                    unconfirmed_after_error: 0,
                 },
                 detail,
             ))
@@ -41252,16 +42174,46 @@ fn clear_hunt_target(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Stri
 }
 
 /// Begin an activation — subsequent logged QSOs are tagged (your side). Validates +
-/// normalizes the reference; returns the activation state.
+/// normalizes the reference; returns the activation state. A station profile it puts the station
+/// on is applied and saved exactly as the top bar's picker does it ([`switch_station_profile`]),
+/// so the feeds bound to the call follow it. `afar`: started from a computer driving the station,
+/// which may not switch the call the station transmits under.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn set_activation(
     state: State<'_, SharedEngine>,
     ota_cache: State<'_, SharedOtaSpots>,
     parks: State<'_, SharedParks>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
     program: String,
     reference: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::ActivationDto, String> {
-    set_activation_on(&state, &ota_cache, &parks, &program, &reference)
+    let (dto, moved) = set_activation_on(
+        &state,
+        &ota_cache,
+        &parks,
+        &program,
+        &reference,
+        afar.as_ref(),
+    )?;
+    if let Some(settings) = moved {
+        apply_and_persist(
+            state,
+            spots,
+            live_paths,
+            region_paths,
+            health,
+            cache,
+            settings,
+            false,
+        )?;
+    }
+    Ok(dto)
 }
 
 /// [`set_activation`]'s body, over plain handles so a test drives exactly what the command runs.
@@ -41273,13 +42225,17 @@ fn set_activation(
 /// And the grid it is activated from: the park directory's grid of its first park
 /// ([`ota_park_grid`]), carried as the contacts' `MY_GRIDSQUARE` instead of the home grid. A park
 /// the directory does not hold starts with none; the strip takes one typed.
+///
+/// With it, the settings to apply and save when the start put the station on another station
+/// profile (a profile naming the park), `None` when the profile stayed.
 fn set_activation_on(
     engine: &SharedEngine,
     ota_cache: &SharedOtaSpots,
     parks: &SharedParks,
     program: &str,
     reference: &str,
-) -> Result<tempo_app::dto::ActivationDto, String> {
+    afar: Option<&command_dispatch::Afar>,
+) -> Result<(tempo_app::dto::ActivationDto, Option<Settings>), String> {
     let refs: Vec<&str> = reference
         .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
         .filter(|one| !one.is_empty())
@@ -41296,12 +42252,19 @@ fn set_activation_on(
         .first()
         .and_then(|first| ota_park_grid(parks, program, first));
     let mut eng = engine_lock(engine);
-    eng.set_activation(program, reference, places)?;
+    let profile = eng.settings().active_station_profile.clone();
+    eng.set_activation_from(program, reference, places, afar.is_some())?;
     if let Some(grid) = grid {
         // A directory grid that is not a locator is left out, never the activation refused.
         let _ = eng.set_activation_grid(&grid);
     }
-    Ok(activation_now(&eng))
+    Ok((activation_now(&eng), profile_moved(&eng, &profile)))
+}
+
+/// The settings to apply and save when the station profile is no longer `before`: an activation's
+/// start or stop moved it ([`set_activation`], [`clear_activation`]).
+fn profile_moved(eng: &tempo_app::engine::Engine, before: &str) -> Option<Settings> {
+    (eng.settings().active_station_profile != before).then(|| eng.settings().clone())
 }
 
 /// The park directory's grid for a POTA park, if it holds one. A summit has none here.
@@ -41342,15 +42305,51 @@ fn set_activation_grid(
     Ok(activation_now(&eng))
 }
 
-/// End the current activation (subsequent QSOs untagged).
+/// End the current activation (subsequent QSOs untagged). The station profile it goes back to
+/// is applied and saved as [`set_activation`]'s is. `afar`: stopped from a computer driving the
+/// station, which may not switch the call the station transmits under.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn clear_activation(
     state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::ActivationDto, String> {
-    let mut eng = engine_lock(&state);
-    eng.clear_activation();
+    let (dto, moved) = clear_activation_on(&state, afar.as_ref());
+    if let Some(settings) = moved {
+        apply_and_persist(
+            state,
+            spots,
+            live_paths,
+            region_paths,
+            health,
+            cache,
+            settings,
+            false,
+        )?;
+    }
+    Ok(dto)
+}
+
+/// [`clear_activation`]'s body, over the plain handle: the activation now, and the settings to
+/// apply and save when the stop moved the station profile.
+fn clear_activation_on(
+    engine: &SharedEngine,
+    afar: Option<&command_dispatch::Afar>,
+) -> (tempo_app::dto::ActivationDto, Option<Settings>) {
+    let mut eng = engine_lock(engine);
+    let profile = eng.settings().active_station_profile.clone();
+    let back = eng.clear_activation_from(afar.is_some());
     self_spot::activation_ended();
-    Ok(activation_now(&eng))
+    let dto = tempo_app::dto::ActivationDto {
+        station_profile_back: back,
+        ..activation_now(&eng)
+    };
+    (dto, profile_moved(&eng, &profile))
 }
 
 /// The operator's "Still activating": an activation taken up at launch, paused until now, stamps
@@ -47510,6 +48509,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_routing_rules,
         set_default_radio,
         set_radio_switch_policy,
+        switch_station_profile,
+        save_station_profile,
+        remove_station_profile,
         set_experience_level,
         mark_setup_wizard_seen,
         route_preview,
@@ -60262,14 +61264,16 @@ mod tests {
         line.reference = "US-0003".into();
         let cache = hunter_cache(&[("POTA", &[state_spot("K0ABC", 14_285.0, &["US-ND"]), line])]);
         let parks = crate::SharedParks::default();
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001")
-            .expect("the activation starts");
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", None)
+            .expect("the activation starts")
+            .0;
         assert_eq!(
             (dto.states, dto.my_state),
             (codes(&["US-ND"]), Some("ND".to_string()))
         );
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003")
-            .expect("the activation starts");
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003", None)
+            .expect("the activation starts")
+            .0;
         assert_eq!(
             (dto.states, dto.my_state),
             (codes(&["US-MT", "US-ND"]), None)
@@ -60298,17 +61302,254 @@ mod tests {
             ),
         ));
         let home = engine_lock(&engine).settings().mygrid.clone();
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "us-0001, US-0002")
-            .expect("the activation starts");
+        let dto =
+            crate::set_activation_on(&engine, &cache, &parks, "POTA", "us-0001, US-0002", None)
+                .expect("the activation starts")
+                .0;
         assert_eq!(dto.reference.as_deref(), Some("US-0001,US-0002"));
         assert_eq!(dto.grid.as_deref(), Some("EN07AB"), "the first park's grid");
         assert_eq!(dto.states, codes(&["US-ND", "US-MT"]));
         assert_eq!(dto.my_state, None, "two states: asked, never guessed");
         assert_eq!(dto.parks.len(), 2);
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003")
-            .expect("the activation starts");
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003", None)
+            .expect("the activation starts")
+            .0;
         assert_eq!(dto.grid, None, "a park the directory does not hold");
         assert_eq!(engine_lock(&engine).settings().mygrid, home);
+    }
+
+    /// ⛔ The keying-time call check on an SSTV picture's preset text, through the `sstv_send`
+    /// command itself (the webview's call, the picture encoded and handed to the engine). No
+    /// profiles, Phone on 20 m, TX on. A picture whose preset text names KD9TAW goes out while the
+    /// call is KD9TAW. After the call is saved as KD9TAW/P, the same picture is refused with the
+    /// reason before anything is encoded, and nothing waits to key; one naming KD9TAW/P goes out.
+    #[test]
+    fn sstv_send_refuses_a_picture_whose_preset_names_the_old_call() {
+        use tauri::Manager;
+        let spec = tempo_sstv::for_mode(tempo_sstv::SstvMode::Robot36);
+        let (w, h) = (spec.line_pixels, spec.image_lines);
+        let rgb = b64_encode(&vec![128u8; w as usize * h as usize * 3]);
+        // A fresh station on `call`, the picture sent with `preset` in its text: the command's
+        // answer, and whether a picture now waits for the radio loop to key it.
+        let send = |call: &str, preset: &str| {
+            let engine = fresh_engine();
+            {
+                let mut e = engine_lock(&engine);
+                e.set_frequency(14.230, "20m", "USB");
+                e.set_operating_mode("phone", false);
+                if call != "KD9TAW" {
+                    let mut s = e.settings().clone();
+                    s.mycall = call.into();
+                    e.apply_settings(s);
+                }
+                assert!(e.settings().station_profiles.is_empty(), "premise");
+                assert_eq!(e.settings().mycall, call, "premise");
+            }
+            let app = tauri::test::mock_builder()
+                .manage(engine.clone())
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .expect("a mock app");
+            let answer = crate::sstv_send(
+                app.state::<SharedEngine>(),
+                "robot36".into(),
+                w,
+                h,
+                rgb.clone(),
+                None,
+                Some(vec![preset.to_string()]),
+                None,
+            )
+            .map(|_| ());
+            let waits = engine_lock(&engine).poll_sstv_tx().is_some();
+            (answer, waits)
+        };
+        assert_eq!(send("KD9TAW", "KD9TAW"), (Ok(()), true), "CONTROL");
+        assert_eq!(
+            send("KD9TAW/P", "KD9TAW"),
+            (
+                Err(tempo_app::settings::STATION_CALL_CHANGED_TX_REFUSED.to_string()),
+                false
+            )
+        );
+        assert_eq!(send("KD9TAW/P", "KD9TAW/P"), (Ok(()), true));
+    }
+
+    /// A station with Home (KD9TAW) and a park profile (KD9TAW/P at US-0001).
+    fn station_with_a_park_profile() -> (SharedEngine, String) {
+        let engine = fresh_engine();
+        let id = engine_lock(&engine)
+            .save_station_profile(tempo_app::settings::StationProfile {
+                name: "Park".into(),
+                call: "KD9TAW/P".into(),
+                grid: "EN43".into(),
+                park: "US-0001".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        (engine, id)
+    }
+
+    /// ⭐ POTA Start that puts the station on the park's profile hands its settings to the same
+    /// apply-and-save the top bar's picker uses, so the switch is written to disk and the feeds log
+    /// in again under the new call; Stop that goes back does the same. One that moves nothing hands
+    /// nothing. From a computer driving the station, the call does not change and nothing is handed,
+    /// while the activation itself starts and ends.
+    #[test]
+    fn pota_start_and_stop_hand_a_profile_switch_to_the_save() {
+        let (engine, park) = station_with_a_park_profile();
+        let cache = hunter_cache(&[]);
+        let parks = crate::SharedParks::default();
+        let afar = crate::command_dispatch::Afar {
+            stand_down: 0,
+            starts_voided: 0,
+        };
+        let (dto, moved) =
+            crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", Some(&afar))
+                .expect("the activation starts");
+        assert_eq!(
+            dto.reference.as_deref(),
+            Some("US-0001"),
+            "started from afar"
+        );
+        assert!(moved.is_none(), "from afar: the call stays");
+        assert_eq!(engine_lock(&engine).settings().mycall, "KD9TAW");
+        let (_, moved) = crate::clear_activation_on(&engine, Some(&afar));
+        assert!(moved.is_none());
+        let (_, moved) = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", None)
+            .expect("the activation starts");
+        let moved = moved.expect("the switch is handed to the save");
+        assert_eq!(
+            (moved.mycall.as_str(), moved.active_station_profile.as_str()),
+            ("KD9TAW/P", park.as_str())
+        );
+        let (dto, moved) = crate::clear_activation_on(&engine, None);
+        assert_eq!(dto.reference, None, "stopped");
+        let moved = moved.expect("going back is handed to the save");
+        assert_eq!(moved.mycall, "KD9TAW");
+        let (_, moved) = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0002", None)
+            .expect("another park starts");
+        assert!(
+            moved.is_none(),
+            "CONTROL: no profile names it, nothing handed"
+        );
+    }
+
+    /// A settings reset during a CQ run on a station with profiles is refused whole, with the
+    /// reason: it would change the call the run sends under. Idle, it goes.
+    #[test]
+    fn a_reset_mid_run_is_refused_with_profiles() {
+        let (engine, _) = station_with_a_park_profile();
+        {
+            let mut e = engine_lock(&engine);
+            e.set_tier(tempo_app::dto::Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+            e.start_cq(None).unwrap();
+        }
+        let refused =
+            crate::save_and_publish(&engine, crate::Settings::default(), true).map(|_| ());
+        assert_eq!(
+            refused,
+            Err(tempo_app::settings::STATION_PROFILE_RESTORE_REFUSED.to_string())
+        );
+        assert_eq!(engine_lock(&engine).settings().mycall, "KD9TAW");
+        assert_eq!(engine_lock(&engine).settings().station_profiles.len(), 2);
+        {
+            let mut e = engine_lock(&engine);
+            e.halt_tx();
+            e.set_mode("qso-monitor").unwrap();
+        }
+        crate::save_and_publish(&engine, crate::Settings::default(), true).expect("idle: reset");
+        assert!(engine_lock(&engine).settings().station_profiles.is_empty());
+    }
+
+    /// Stop during a CQ run cannot take the station back from the park's profile: its answer names
+    /// the profile to pick in the top bar, once. Nothing else carries it.
+    #[test]
+    fn a_stop_that_cannot_go_back_names_the_profile_to_pick() {
+        let (engine, park) = station_with_a_park_profile();
+        let cache = hunter_cache(&[]);
+        let parks = crate::SharedParks::default();
+        crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", None)
+            .expect("the activation starts");
+        {
+            let mut e = engine_lock(&engine);
+            assert_eq!(e.settings().active_station_profile, park, "premise");
+            e.set_tier(tempo_app::dto::Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+            e.start_cq(None).unwrap();
+        }
+        let (dto, moved) = crate::clear_activation_on(&engine, None);
+        assert!(moved.is_none(), "the station stays on the park's profile");
+        assert_eq!(
+            dto.station_profile_back.map(|p| (p.id, p.call)),
+            Some((
+                tempo_app::settings::HOME_STATION_PROFILE.to_string(),
+                "KD9TAW".to_string()
+            ))
+        );
+        let again = serde_json::to_string(&crate::activation_now(&engine_lock(&engine))).unwrap();
+        assert!(!again.contains("stationProfileBack"), "{again}");
+    }
+
+    /// Editing a profile the station is not on during a CQ run is only written to disk: no settings
+    /// apply, so the over already planned keys in its slot (the radio loop builds it with the Engine
+    /// unlocked, and an apply in between cancels it). CONTROL: the same over is cancelled by a
+    /// settings apply, which is what saving the profile the station is on still runs.
+    #[test]
+    fn saving_a_profile_the_station_is_not_on_keeps_the_planned_over() {
+        let (engine, park) = station_with_a_park_profile();
+        let plan_cq = |engine: &SharedEngine, slot: u64| {
+            engine_lock(engine)
+                .plan_tx(slot)
+                .expect("premise: the CQ is planned")
+        };
+        {
+            let mut e = engine_lock(&engine);
+            e.set_tier(tempo_app::dto::Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+            e.start_cq(None).unwrap();
+        }
+        let plan = plan_cq(&engine, 0);
+        let mut edit = engine_lock(&engine)
+            .settings()
+            .station_profiles
+            .iter()
+            .find(|p| p.id == park)
+            .cloned()
+            .unwrap();
+        edit.antenna = "Vertical".into();
+        let applied = crate::save_station_profile_on(&engine, edit).expect("saved");
+        if let Some(settings) = applied.clone() {
+            crate::save_and_publish(&engine, settings, false).expect("applied");
+        }
+        let mut e = engine_lock(&engine);
+        let wave = plan.waveform.build();
+        assert!(
+            !e.commit_tx(&plan, wave, 0).is_empty(),
+            "the planned over keys"
+        );
+        assert!(applied.is_none(), "the list alone: no settings apply");
+        assert_eq!(e.settings().station_profiles[1].antenna, "Vertical");
+        drop(e);
+        // CONTROL: a settings apply between plan and key cancels the over.
+        let plan = plan_cq(&engine, 2);
+        let now = engine_lock(&engine).settings().clone();
+        crate::save_and_publish(&engine, now, false).expect("applied");
+        let wave = plan.waveform.build();
+        assert!(engine_lock(&engine).commit_tx(&plan, wave, 2).is_empty());
+    }
+
+    /// A Settings form loaded on Home and saved after a switch to the park profile keeps the station
+    /// on the profile, and the feeds and the spot ranking bind to the station's call, KD9TAW/P, not
+    /// the form's.
+    #[test]
+    fn a_stale_form_save_binds_the_feeds_to_the_stations_call() {
+        let (engine, park) = station_with_a_park_profile();
+        let stale = engine_lock(&engine).settings().clone();
+        engine_lock(&engine).switch_station_profile(&park).unwrap();
+        let (_, mycall, mygrid) = crate::save_and_publish(&engine, stale, false).expect("saved");
+        assert_eq!((mycall.as_str(), mygrid.as_str()), ("KD9TAW/P", "EN43"));
+        assert_eq!(engine_lock(&engine).settings().mycall, "KD9TAW/P");
     }
 
     /// The log form places a typed park by the states its lookup names, read by the hunter feed's
@@ -66916,7 +68157,11 @@ mod secrets_toward_remote_tests {
         let read = serde_json::to_value(settings_read(&shack, Some(&afar), false)).unwrap();
         assert_eq!(
             read[command_dispatch::SET_AT_THE_STATION],
-            serde_json::json!(command_dispatch::station_only_settings(Some(&afar)).unwrap())
+            serde_json::json!(command_dispatch::station_only_settings(
+                Some(&afar),
+                &Settings::default()
+            )
+            .unwrap())
         );
         assert_eq!(
             read.to_string()

@@ -566,16 +566,28 @@ pub fn lotw_owed(rows: &crate::logstore::LogRows) -> Result<bool, String> {
 /// from the live setting, exactly as they always did.
 ///
 /// ⭐ The own-station fields Nexus filled in itself from Settings (`MY_GRIDSQUARE`, `MY_STATE`;
-/// [`tempo_core::logbook::SELF_FILLED_FIELD`]) are left out, in both modes, so TQSL signs every
-/// such contact exactly as it did before Nexus filled them: from the named Station Location, or
-/// from the live setting stamped above. A named location's `-a compliant` check would otherwise
-/// skip, without a word, every contact whose filled grid is not the certificate's location. A
-/// field the operator typed or another program logged is not Nexus's and goes as it always has.
+/// [`tempo_core::logbook::SELF_FILLED_FIELD`]) are left out with a named Station Location, so TQSL
+/// signs every such contact from it exactly as it did before Nexus filled them. Its `-a compliant`
+/// check would otherwise skip, without a word, every contact whose filled grid is not the
+/// certificate's location. A field the operator typed or another program logged is not Nexus's and
+/// goes as it always has.
+///
+/// ⭐ ADIF-location mode is the exception: TQSL signs from the place in the file, so each contact
+/// goes with the place stored on it, filled or not. The grid stamped is the contact's own, and
+/// `grid` (the live one) only for a contact with none; the state, county, zones and IOTA Nexus
+/// filled go as stored ([`tempo_core::logbook::without_self_filled_grid`]), and a contact with
+/// none goes without, as before. A portable contact keeps the place it was made from, whatever
+/// the station has when it is uploaded.
 pub fn lotw_batch_adif(batch: &[QsoRecord], adif_location: bool, call: &str, grid: &str) -> String {
     let mut out = tempo_core::logbook::adif_header();
-    for r in batch {
-        let r = &tempo_core::logbook::without_self_filled(r);
+    for stored in batch {
+        let r = &if adif_location {
+            tempo_core::logbook::without_self_filled_grid(stored)
+        } else {
+            tempo_core::logbook::without_self_filled(stored)
+        };
         if adif_location {
+            let grid = stored.my_grid.as_deref().unwrap_or(grid);
             out.push_str(&tempo_core::logbook::adif_record_with_station(
                 r, call, grid,
             ));
@@ -584,6 +596,142 @@ pub fn lotw_batch_adif(batch: &[QsoRecord], adif_location: bool, call: &str, gri
         }
     }
     out
+}
+
+/// One TQSL run of a LoTW upload: the Station Location it signs with, and its contacts in the
+/// batch's order. `location` is `None` to sign from the location in the ADIF, and `Some("")` when
+/// the station's own location is needed and none is set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LotwRun {
+    pub location: Option<String>,
+    pub batch: Vec<QsoRecord>,
+}
+
+/// Split a LoTW batch into one TQSL run per Station Location: each contact signed with the
+/// location of the station profile it was logged under, and with the station's own
+/// (`station`: the named location, or `None` to sign from the ADIF) when that profile names none.
+/// One run per location, in the order each first appears; a batch that needs one location is one
+/// run, as before profiles. Also answers how many contacts took the station's own because no
+/// profile told which location signs them ([`LotwFallback`]).
+///
+/// A contact records no profile id. The profile it was logged under is the one whose call and grid
+/// it carries: the log stamps the station's call (`STATION_CALLSIGN`) and grid (`MY_GRIDSQUARE`) on
+/// every contact, and those are the active profile's. That is also what a TQSL Station Location
+/// is: a call and a place. A profile fits on the call and the 4-character grid square; the whole
+/// grid decides only between profiles of one square naming different locations. A contact with no
+/// call or grid of its own, or one no profile fits, takes the station's own. `profiles` must carry the live call and grid for the active profile
+/// ([`crate::settings::Settings::sync_active_station_from_flat`]).
+pub fn lotw_runs(
+    batch: Vec<QsoRecord>,
+    station: Option<&str>,
+    profiles: &[crate::settings::StationProfile],
+) -> (Vec<LotwRun>, LotwFallback) {
+    let station = station.map(|l| l.trim().to_string());
+    // Fitting no profile is worth saying only where a profile names a location: otherwise every
+    // contact is signed as Settings says, as before profiles, and nothing was left to chance.
+    let any_named = profiles.iter().any(|p| !p.lotw_location.trim().is_empty());
+    let mut runs: Vec<LotwRun> = Vec::new();
+    let mut fallback = LotwFallback::default();
+    for r in batch {
+        let location = match lotw_profile_location(&r, profiles, station.as_deref()) {
+            Fit::Profile(location) => location,
+            Fit::None => {
+                fallback.unmatched += usize::from(any_named);
+                station.clone()
+            }
+            Fit::Tie => {
+                fallback.tie += 1;
+                station.clone()
+            }
+        };
+        match runs.iter_mut().find(|run| run.location == location) {
+            Some(run) => run.batch.push(r),
+            None => runs.push(LotwRun {
+                location,
+                batch: vec![r],
+            }),
+        }
+    }
+    (runs, fallback)
+}
+
+/// The contacts of a LoTW batch signed with the station's own Station Location because no station
+/// profile told which signs them. The operator is told both counts: a contact signed with a
+/// location it was not made at is one LoTW never matches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LotwFallback {
+    /// Fit two or more profiles (the same call and grid square) that name different locations,
+    /// and the whole grid tells none of them apart.
+    pub tie: usize,
+    /// Fit no profile, while a profile names a location: no call or grid of its own, or a call
+    /// and grid no profile has (an imported contact, one made before the profile was).
+    pub unmatched: usize,
+}
+
+/// Which profile a contact fits, by its call and grid.
+enum Fit {
+    /// One profile, or several naming the same location: the location it signs with.
+    Profile(Option<String>),
+    /// No profile.
+    None,
+    /// Profiles naming different locations.
+    Tie,
+}
+
+/// Which profile `r` fits (see [`lotw_runs`]), and the Station Location that signs it: the
+/// profile's, or `station` when the profile names none.
+fn lotw_profile_location(
+    r: &QsoRecord,
+    profiles: &[crate::settings::StationProfile],
+    station: Option<&str>,
+) -> Fit {
+    let call = r.station_callsign.as_deref().map(str::trim).unwrap_or("");
+    let grid = r
+        .my_grid
+        .as_deref()
+        .or_else(|| tempo_core::logbook::record_field(r, "MY_GRIDSQUARE"))
+        .map(str::trim)
+        .unwrap_or("");
+    let station = || station.map(str::to_string);
+    if call.is_empty() || grid.is_empty() {
+        return Fit::None;
+    }
+    // A profile fits on the 4-character grid square, in any case: a contact made in another
+    // subsquare of the profile's square (a GPS fix that moved) is still the profile's.
+    let square = |g: &str| g.chars().take(4).collect::<String>().to_ascii_uppercase();
+    let fits: Vec<(&str, Option<String>)> = profiles
+        .iter()
+        .filter(|p| p.call.trim().eq_ignore_ascii_case(call))
+        .filter(|p| !p.grid.trim().is_empty() && square(p.grid.trim()) == square(grid))
+        .map(|p| {
+            let location = match p.lotw_location.trim() {
+                "" => station(),
+                named => Some(named.to_string()),
+            };
+            (p.grid.trim(), location)
+        })
+        .collect();
+    let agreed = |fits: &[(&str, Option<String>)]| match fits.split_first() {
+        Some(((_, first), rest)) if rest.iter().all(|(_, l)| l == first) => Some(first.clone()),
+        _ => None,
+    };
+    if fits.is_empty() {
+        return Fit::None;
+    }
+    if let Some(location) = agreed(&fits) {
+        return Fit::Profile(location);
+    }
+    // Profiles of the call share the square and name different locations: the whole grid (6
+    // characters or more on both, one the other written to more characters) tells them apart.
+    let whole = |p: &str| {
+        let (a, b) = (p.to_ascii_uppercase(), grid.to_ascii_uppercase());
+        a.len() >= 6 && b.len() >= 6 && (a.starts_with(&b) || b.starts_with(&a))
+    };
+    let narrowed: Vec<_> = fits.into_iter().filter(|(g, _)| whole(g)).collect();
+    match agreed(&narrowed) {
+        Some(location) => Fit::Profile(location),
+        None => Fit::Tie,
+    }
 }
 
 /// Canonical band key for the per-band worked indices.
@@ -2509,6 +2657,11 @@ pub struct Activation {
     /// home since are not the park's. Not kept: every launch asks again.
     #[serde(skip)]
     pub restored: bool,
+    /// The station profile the station was on before this activation put it on its park's, and
+    /// the one it put it on: Stop goes back to the first while the station is still on the
+    /// second. Kept in the file with the activation, so Stop after a restart still goes back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub station_profile_return: Option<(String, String)>,
 }
 
 impl Activation {
@@ -4132,6 +4285,7 @@ impl StationCore {
             grid: None,
             started_at: now_unix_secs(),
             restored: false,
+            station_profile_return: None,
         };
         let out = (activation.program.clone(), activation.my_ref());
         self.activation = Some(activation);
@@ -4210,6 +4364,22 @@ impl StationCore {
     pub fn activation(&self) -> Option<(String, String)> {
         self.live_activation()
             .map(|a| (a.program.clone(), a.my_ref()))
+    }
+
+    /// Where Stop takes the station profile back to ([`Activation::station_profile_return`]).
+    pub fn activation_station_profile_return(&self) -> Option<(String, String)> {
+        self.activation
+            .as_ref()
+            .and_then(|a| a.station_profile_return.clone())
+    }
+
+    /// Note where Stop takes the station profile back to, and keep it on disk with the
+    /// activation. Nothing with no activation.
+    pub fn set_activation_station_profile_return(&mut self, back: Option<(String, String)>) {
+        if let Some(activation) = self.activation.as_mut() {
+            activation.station_profile_return = back;
+            self.persist_activation();
+        }
     }
 
     /// The activation, whole, paused or not — what the screen shows.

@@ -307,6 +307,21 @@ import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from 
 import { normaliseTyped, upperTyped } from '../typedInput'
 import { IotaListSettings } from './Iota'
 
+/** The call a running contest entry is operated under, when saving `form` over `saved` would
+ *  change the station's call (`mycall`) while the entry runs (the live snapshot, `fieldDay`) and
+ *  the Save does not turn the contest off; `null` otherwise. The operator at the key
+ *  (`fdOperator`) is not the station's call, and changing it never asks. */
+function entryCallChanged(
+  saved: Settings | null,
+  form: Settings,
+  fieldDay: FieldDayStatus | null | undefined,
+): string | null {
+  if (!fieldDay || !saved || (saved.fdActive === true && !form.fdActive)) return null
+  const call = (c?: string | null) => (c ?? '').trim().toUpperCase()
+  if (call(form.mycall) === call(saved.mycall)) return null
+  return call(fieldDay.entryCall) || call(saved.mycall)
+}
+
 interface Props {
   /** The live contest session, for the READ-ONLY role read-out on the Contesting tab.
    *  Optional: this panel is rendered by tests and by the setup wizard with no
@@ -336,6 +351,13 @@ interface Props {
   /** Parsec presence mode as the station reports it (`snap.parsecPresence`), for the readout
    *  under its switch. Absent from tests, the setup wizard and a station older than the mode. */
   parsecPresence?: ParsecPresence | null
+  /** A run, a contact or a JS8 message is under way on a station with "My station" profiles
+   *  (`snap.stationProfileLocked`): the call field waits. Absent from tests and the wizard. */
+  stationProfileLocked?: boolean
+  /** The "My station" profile the station is on (`snap.activeStationProfile`). The Station tab's
+   *  call, grid, state and power reload when it changes, so a form left open across a switch shows
+   *  the profile the station is on. Absent from tests, the wizard and a station with no profiles. */
+  activeStationProfile?: string
   /** The live active radio id (dual-radio). The form reloads when this changes so a switch made from
    * the always-visible TopBar pills while Settings is open can't leave the Rig form stale. */
   activeRadioId?: number
@@ -1133,6 +1155,8 @@ export function SettingsPanel({
   targetSeq,
   radio,
   parsecPresence,
+  stationProfileLocked,
+  activeStationProfile,
   activeRadioId,
   onProveTx,
   scale,
@@ -1934,6 +1958,22 @@ export function SettingsPanel({
   // TopBar switcher pills while Settings is open), the flat Rig/CAT form now describes the WRONG
   // radio. Reload the form from the live settings so a Save can't fold edits into — or command —
   // the wrong rig. Skip the first observation (the mount effect already loads the form).
+  // "My station" profiles: the same for a profile switched underneath the form (the top bar's
+  // picker, a POTA Start or Stop). The Station tab's call, grid, state and power now describe the
+  // profile the station LEFT, and a Save from it would edit nothing (a form on another profile
+  // saves none of the four). They are read again from the station, with the list and the active
+  // id, so the tab shows the profile the station is on; the rest of the form stays as it is.
+  const lastStationProfileRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (activeStationProfile == null) return
+    if (lastStationProfileRef.current === undefined) {
+      lastStationProfileRef.current = activeStationProfile
+      return
+    }
+    if (lastStationProfileRef.current === activeStationProfile) return
+    lastStationProfileRef.current = activeStationProfile
+    void refreshStationFields()
+  }, [activeStationProfile])
   const lastActiveRef = useRef<number | undefined>(undefined)
   useEffect(() => {
     if (activeRadioId == null) return
@@ -2954,6 +2994,32 @@ export function SettingsPanel({
   // starting feature set as the wizard does, so whenever that would turn any screen off (whatever
   // the set is now, a named profile or a hand-tuned one) it asks first and names what would go.
   // Declined, nothing changes.
+  // A "My station" profile was saved or removed (its own writer, not Save): the station's call,
+  // grid, state and power may be the profile's now, so the form and its saved copy take them, with
+  // the list, from the backend; the rest of the form is left as the operator has it.
+  const handleStationProfilesChanged = () => {
+    void refreshStationFields().then((fresh) => {
+      if (fresh) onSaved?.()
+    })
+  }
+  // The station's call, grid, state and power, its profiles and the one it is on, read again from
+  // the backend into the form and its saved copy. Resolves whether it read them.
+  async function refreshStationFields(): Promise<boolean> {
+    const fresh = await getSettings().catch(() => null)
+    if (!fresh) return false
+    const station: Partial<Settings> = {
+      mycall: fresh.mycall,
+      mygrid: fresh.mygrid,
+      opState: fresh.opState,
+      stationPowerW: fresh.stationPowerW,
+      stationProfiles: fresh.stationProfiles,
+      activeStationProfile: fresh.activeStationProfile,
+    }
+    setForm((prev) => (prev ? { ...prev, ...station } : prev))
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...station }
+    return true
+  }
+
   const handleSetExperience = (level: ExperienceLevel) => {
     void (async () => {
       const label = EXPERIENCE_LEVELS.find((l) => l.value === level)?.label ?? level
@@ -4001,6 +4067,22 @@ export function SettingsPanel({
         setError(t('settings.save.contestBlocked', { contest: pickedContest, reason: blockerText(blocked, pickedContest) }))
         return
       }
+    }
+    // ⭐ THE STATION'S CALL CHANGED WHILE A CONTEST ENTRY RUNS asks once before it saves (the
+    // operator's decision, 2026-11-01): an entry is operated under one call (ARRL Field Day rules
+    // 6.12 and 6.2), and its log and Cabrillo stay under the call it was started with. Asked of the
+    // station's call only, never the operator at the key (`fdOperator`), whom a club rotates. A
+    // Save that turns the contest off is the checklist's below, and asks nothing here.
+    const entryCall = entryCallChanged(savedRef.current, form, fieldDay)
+    if (
+      entryCall &&
+      !(await confirmDialog({
+        title: t('settings.save.entryCall.title'),
+        body: t('settings.save.entryCall.body', { call: entryCall }),
+        confirmLabel: t('settings.save.entryCall.action'),
+      }))
+    ) {
+      return
     }
     // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): a Save that turns Contest mode off
     // offers it FIRST and saves nothing until it is answered — the merge and the export need the
@@ -5338,6 +5420,8 @@ export function SettingsPanel({
             onUpdate={update}
             onSetFreq={setFreq}
             onSetExperience={handleSetExperience}
+            onStationProfilesChanged={handleStationProfilesChanged}
+            callWaits={stationProfileLocked}
           />
           )}
 

@@ -1454,6 +1454,10 @@ export interface Activation {
    *  operator answers "Still activating" (`resumeActivation`): nothing is tagged with the park,
    *  keyed or spotted meanwhile. */
   restored?: boolean
+  /** Only on the answer to a Stop pressed here that could not take the station back to the
+   *  "My station" profile it was on before the park's (a run, a contact or a queued message under
+   *  way): that profile, to pick in the top bar once it has ended. */
+  stationProfileBack?: StationProfileChoice
 }
 
 /** One park of the running activation and what it holds today. */
@@ -3235,6 +3239,25 @@ export interface UploadReport {
   /** Contacts held back because TQSL does not know their mode yet (a JTTY contact, written
    *  `MODE=MFSK SUBMODE=JTTY`): not sent, still marked not uploaded. Absent from an older station. */
   heldMode?: number
+  /** Contacts signed with the Station Location in Settings because they fit two station profiles
+   *  naming different TQSL Station Locations. Absent from an older station. */
+  locationTie?: number
+  /** Contacts signed with the Station Location in Settings because they fit none of the station
+   *  profiles while one names a location. Absent from an older station. */
+  locationUnmatched?: number
+  /** The tie and no-match contacts were signed from the call, grid and place fields they carry
+   *  (signing from the ADIF), not with the Station Location in Settings. Absent from an older station. */
+  locationFromAdif?: boolean
+  /** Contacts not sent because a later TQSL run could not run after earlier runs had sent
+   *  theirs: still marked not uploaded. Absent from an older station. */
+  unsentAfterError?: number
+  /** What stopped them (English, from the station), when `unsentAfterError` or
+   *  `unconfirmedAfterError` is not 0. */
+  unsentError?: string | null
+  /** Contacts of a later TQSL run that went to LoTW, whose upload mark could not be shown to be
+   *  saved to disk (one not saved is sent again). Counted in `dispatched`. Absent from an older
+   *  station. */
+  unconfirmedAfterError?: number
 }
 
 /** A confirmation in a synced report with no matching logged QSO (diagnostic). */
@@ -4490,6 +4513,9 @@ export interface FieldDayStatus {
      a row's own sent exchange is `FieldDayQso.mex`. */
   running: boolean
   state: string
+  /** The call this contest entry is operated and logged under (its Cabrillo CALLSIGN). Settings
+   *  names it when a save would change the station's call mid-entry. */
+  entryCall?: string
   /** The station currently being worked (quiets decode popups about them). */
   dxcall?: string | null
   qsoCount: number
@@ -6158,6 +6184,12 @@ export interface Settings {
   activeRadio?: number
   /** Peg-lock: band selection won't auto-switch the active radio when true. */
   radioPegged?: boolean
+  /** "My station" profiles (Home, a portable kit, a club call). Absent until the operator makes
+   *  one. Written only by their own verbs (`saveStationProfile`, `switchStationProfile`,
+   *  `removeStationProfile`); a settings save keeps the live list and active id. */
+  stationProfiles?: StationProfile[]
+  /** The id of the profile the station is on; the flat call, grid, state and power are its. */
+  activeStationProfile?: string
   /** Opt-in: run two radios at once (one per window). When on with ≥2 radios, launch shows a
    *  "which radio?" picker. Off by default so single-radio stations are never bothered. */
   simultaneousRadios?: boolean
@@ -6340,6 +6372,39 @@ export interface RadioSummary {
   bands: string[]
 }
 
+/** The id of the implicit Home profile: today's Settings ▸ Station. */
+export const HOME_STATION_PROFILE = 'home'
+
+/** One "My station" profile (`crates/tempo-app/src/settings/station_profiles.rs`). Blank fields
+ *  stamp nothing on a contact. */
+export interface StationProfile {
+  /** `home` for Home, `p1`… for the others; empty when adding one. */
+  id: string
+  /** Blank for Home, which the screen names in its language. */
+  name: string
+  call: string
+  grid: string
+  state: string
+  county: string
+  cqZone: number | null
+  ituZone: number | null
+  iota: string
+  park: string
+  powerW: number | null
+  rig: string
+  antenna: string
+  /** The TQSL Station Location its contacts are signed with on a LoTW upload; blank = the
+   *  station's own (Settings ▸ Logging). */
+  lotwLocation: string
+}
+
+/** One profile as the top bar offers it. */
+export interface StationProfileChoice {
+  id: string
+  name: string
+  call: string
+}
+
 export interface AppSnapshot {
   mycall: string
   mygrid: string
@@ -6351,6 +6416,12 @@ export interface AppSnapshot {
   activeRadioId?: number
   /** Peg-lock: band selection won't auto-switch the active radio when true. */
   radioPegged?: boolean
+  /** The "My station" profiles the top bar picks from; absent for a station with none. */
+  stationProfiles?: StationProfileChoice[]
+  /** The id of the profile the station is on. */
+  activeStationProfile?: string
+  /** A run, a contact or an over is under way, so the profile cannot change now. */
+  stationProfileLocked?: boolean
   /** The last radio switch Nexus made by itself this session (absent until one happens). */
   autoRadioSwitch?: AutoRadioSwitch
   /** Mirror of Settings b4MatchMode — the B4/Dupe scope every surface applies. */

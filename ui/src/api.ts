@@ -70,6 +70,7 @@ import type {
   QrzPushResult,
   RouteMode,
   RadioSwitchPolicy,
+  StationProfile,
   ExperienceLevel,
   RoutingRule,
   Settings,
@@ -3633,6 +3634,22 @@ export async function setRadioSwitchPolicy(policy: RadioSwitchPolicy): Promise<A
   return invoke<AppSnapshot>('set_radio_switch_policy', { policy })
 }
 
+/** Put the station on a "My station" profile — the ONE writer of `activeStationProfile`. Its call,
+ * grid, state and power become the station's, as a Settings save of them would. */
+export async function switchStationProfile(id: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('switch_station_profile', { id })
+}
+
+/** Save one "My station" profile (an empty id adds one) — the ONE writer of `stationProfiles`. */
+export async function saveStationProfile(profile: StationProfile): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('save_station_profile', { profile })
+}
+
+/** Remove one "My station" profile; Home and the one the station is on stay. */
+export async function removeStationProfile(id: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('remove_station_profile', { id })
+}
+
 /** The first-run wizard's experience answer (also Settings ▸ Station) — the ONE writer of
  * `experienceLevel` (a settings save keeps the live value, as for `setRadioSwitchPolicy`). */
 export async function setExperienceLevel(level: ExperienceLevel): Promise<AppSnapshot> {
@@ -4861,6 +4878,9 @@ export async function sstvSend(
   /** #50: the operator affirms THIS picture already shows their callsign (a pre-made QSO
    *  card), so the ID plate is skipped rather than drawn over it. Per-image, never sticky. */
   idInImage?: boolean,
+  /** The station calls the picture's preset text carries (`OverlayItem.call`): the backend
+   *  refuses the picture when one is not the station's call now. */
+  overlayCalls?: string[],
 ): Promise<SstvState> {
   return invoke<SstvState>('sstv_send', {
     mode,
@@ -4868,6 +4888,7 @@ export async function sstvSend(
     height,
     rgbBase64: rgbB64,
     idInImage: idInImage ?? false,
+    overlayCalls: overlayCalls ?? [],
   })
 }
 

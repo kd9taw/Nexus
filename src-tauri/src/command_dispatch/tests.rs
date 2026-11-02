@@ -1272,7 +1272,7 @@ fn a_save_from_afar_keeps_the_shacks_computer_microphone() {
     let mut patch = asked.clone();
     keep_the_shacks_radio_ptt(&shack, 0, &mut patch, None);
     assert_eq!(patch.pc_mic, Some(true), "CONTROL: the shack's own edit");
-    let flagged = station_only_settings(Some(&afar)).unwrap();
+    let flagged = station_only_settings(Some(&afar), &shack).unwrap();
     for key in ["pcMic", "pcMicDevice", "pcMicGainDb"] {
         assert!(
             flagged.contains(&key),
@@ -1360,7 +1360,7 @@ fn a_save_from_afar_never_lets_programs_on_tci_transmit() {
         "a radio's edit from afar, naming them"
     );
 
-    let flagged = station_only_settings(Some(&afar)).unwrap();
+    let flagged = station_only_settings(Some(&afar), &shack).unwrap();
     assert!(
         flagged.contains(&"tciServerTx") && flagged.contains(&"tciServer"),
         "the read from afar does not say they are set at the station: {flagged:?}"
@@ -4100,12 +4100,18 @@ fn a_save_from_afar_keeps_a_profile_list_its_read_left_out() {
 /// setting the shack's file carries is changed alone in a save from afar, and it is kept when it
 /// comes back as the shack's. Also what could not be changed alone (a list or a table).
 fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<String>) {
-    use tempo_app::settings::Settings;
     // The pending Cloudlog key is written only while it holds one.
-    let shack = Settings {
+    what_a_save_from_afar_keeps_of(tempo_app::settings::Settings {
         cloudlog_key: "FAKE-PENDING-KEY-0001".into(),
         ..Default::default()
-    };
+    })
+}
+
+/// [`what_a_save_from_afar_keeps`] of the shack `shack`.
+fn what_a_save_from_afar_keeps_of(
+    shack: tempo_app::settings::Settings,
+) -> (std::collections::BTreeSet<String>, Vec<String>) {
+    use tempo_app::settings::Settings;
     let file = serde_json::to_value(&shack).unwrap();
     let mut kept = std::collections::BTreeSet::new();
     let mut untried = Vec::new();
@@ -4187,10 +4193,13 @@ fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<Str
 #[test]
 fn every_setting_a_save_from_afar_keeps_is_set_at_the_station() {
     let (kept, untried) = what_a_save_from_afar_keeps();
-    let flagged: std::collections::BTreeSet<String> = station_only_settings(Some(&Afar {
-        stand_down: 1,
-        starts_voided: 0,
-    }))
+    let flagged: std::collections::BTreeSet<String> = station_only_settings(
+        Some(&Afar {
+            stand_down: 1,
+            starts_voided: 0,
+        }),
+        &tempo_app::settings::Settings::default(),
+    )
     .unwrap()
     .into_iter()
     .map(String::from)
@@ -4221,9 +4230,109 @@ fn every_setting_a_save_from_afar_keeps_is_set_at_the_station() {
         assert!(!flagged.contains(name), "{name} is flagged but untried");
     }
     assert_eq!(
-        station_only_settings(None),
+        station_only_settings(None, &tempo_app::settings::Settings::default()),
         None,
         "at the shack nothing is set elsewhere"
+    );
+}
+
+/// ⛔ While the shack has "My station" profiles, its call is set at the station: a whole save from
+/// afar keeps the shack's call, and the read from afar says so, beside every other setting it keeps.
+/// The call it would have written is no edit of the profile the shack is on. CONTROL: a shack with
+/// no profiles takes the call from afar as before (`every_setting_a_save_from_afar_keeps_is_set_at_the_station`).
+#[test]
+fn with_station_profiles_the_call_is_set_at_the_station() {
+    // The pending Cloudlog key is written only while it holds one (`what_a_save_from_afar_keeps`).
+    let mut shack = tempo_app::settings::Settings {
+        mycall: "KD9TAW".into(),
+        cloudlog_key: "FAKE-PENDING-KEY-0001".into(),
+        ..Default::default()
+    };
+    shack.ensure_station_profiles();
+    assert!(
+        !shack.station_profiles.is_empty(),
+        "premise: Home is written"
+    );
+    let (kept, _) = what_a_save_from_afar_keeps_of(shack.clone());
+    let afar = Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    };
+    let flagged: std::collections::BTreeSet<String> = station_only_settings(Some(&afar), &shack)
+        .unwrap()
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert!(kept.contains("mycall"), "the save from afar keeps the call");
+    assert_eq!(
+        kept.symmetric_difference(&flagged).collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "kept and flagged are the same"
+    );
+    let mut save = shack.clone();
+    save.mycall = "W9ABC".into();
+    save.mygrid = "EN53".into();
+    keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+    let mut e = tempo_app::engine::Engine::with_settings(shack.clone());
+    e.apply_settings(save);
+    assert_eq!(
+        (
+            e.settings().mycall.as_str(),
+            e.settings().station_profiles[0].call.as_str(),
+            e.settings().mygrid.as_str(),
+        ),
+        ("KD9TAW", "KD9TAW", "EN53"),
+        "the call stays the shack's; CONTROL: the grid is the save's"
+    );
+}
+
+/// ⛔ The reviewer's sequence from afar. The far computer opens Settings with the shack on Home;
+/// at the shack the operator picks the club profile (W9ABC, refused under a General licence); the
+/// far computer saves an unrelated change. Its form still names Home, and the save from afar takes
+/// the shack's call (W9ABC). Home's call stays KD9TAW, so the club call's licence refusal stands;
+/// the far computer's change is saved.
+#[test]
+fn a_save_from_afar_on_a_stale_profile_never_gives_home_the_club_call() {
+    let mut shack = tempo_app::settings::Settings {
+        mycall: "KD9TAW".into(),
+        mygrid: "EN52".into(),
+        ..Default::default()
+    };
+    let mut e = tempo_app::engine::Engine::with_settings(shack.clone());
+    e.set_frequency(14.074, "20m", "USB");
+    assert!(e.set_license_class("general"));
+    let club = e
+        .save_station_profile(tempo_app::settings::StationProfile {
+            name: "Club".into(),
+            call: "W9ABC".into(),
+            grid: "EN43".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut far_form = e.settings().clone();
+    e.switch_station_profile(&club).unwrap();
+    shack.clone_from(e.settings());
+    far_form.op_name = "Far op".into();
+    let afar = Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    };
+    keep_the_shacks_settings(&shack, &mut far_form, Some(&afar));
+    e.apply_settings(far_form);
+    let home = e
+        .settings()
+        .station_profiles
+        .iter()
+        .find(|p| p.id == tempo_app::settings::HOME_STATION_PROFILE)
+        .map(|p| p.call.clone());
+    assert_eq!(
+        (
+            home.as_deref(),
+            e.settings().mycall.as_str(),
+            e.connection_tx_refusal().is_some(),
+            e.settings().op_name.as_str(),
+        ),
+        (Some("KD9TAW"), "W9ABC", true, "Far op")
     );
 }
 
@@ -4234,10 +4343,13 @@ fn the_ui_fixture_carries_the_station_only_list() {
         "../../../ui/src/components/__fixtures__/stationOnlySettings.json"
     ))
     .unwrap();
-    let sent: Vec<String> = station_only_settings(Some(&Afar {
-        stand_down: 1,
-        starts_voided: 0,
-    }))
+    let sent: Vec<String> = station_only_settings(
+        Some(&Afar {
+            stand_down: 1,
+            starts_voided: 0,
+        }),
+        &tempo_app::settings::Settings::default(),
+    )
     .unwrap()
     .into_iter()
     .map(String::from)

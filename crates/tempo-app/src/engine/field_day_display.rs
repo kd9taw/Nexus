@@ -40,6 +40,7 @@ impl Engine {
         Some(FieldDayStatus {
             running: *running,
             state: format!("{:?}", station.state),
+            entry_call: log.mycall.clone(),
             dxcall: station.dxcall.clone(),
             qso_count: log.qso_count(),
             sections: log.sections(),

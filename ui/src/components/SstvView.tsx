@@ -1576,6 +1576,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
         packed.height,
         packed.slug,
         idInImageRef.current || overlayCarriesId(),
+        overlaysRef.current.flatMap((o) => (o.call ? [o.call] : [])),
       )
     }, t('sstv.tx.send.failed')).then((s) => {
       if (s) {

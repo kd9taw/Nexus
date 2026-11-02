@@ -318,6 +318,7 @@ impl Station {
                     cursor: 0,
                     freq_hint: FreqHint::Dial,
                     typeahead: true,
+                    mycall: self.cfg.mycall.clone(),
                 });
                 if let Some(t) = self.typeahead.as_mut() {
                     t.unsent = unsent;

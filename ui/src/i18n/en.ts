@@ -821,6 +821,7 @@ export const EN = {
 
   'settings.station.callsign.label': 'Callsign',
   'settings.station.callsign.hint': 'Your station callsign (required).',
+  'settings.station.callWaits': 'Your call stays as it is while a run, a contact or a JS8 message is under way. End it first to change the call.',
 
   'settings.station.grid.label': 'Grid',
   'settings.station.grid.hint':
@@ -1660,6 +1661,44 @@ export const EN = {
     one: '{{count}} JTTY contact was not sent: TQSL does not know the JTTY mode yet and would drop it, so it was held back. It stays marked as not uploaded to LoTW.',
     other:
       '{{count}} JTTY contacts were not sent: TQSL does not know the JTTY mode yet and would drop them, so they were held back. They stay marked as not uploaded to LoTW.',
+  },
+  // Contacts a LoTW upload signed with the Station Location in Settings because no station profile
+  // told which TQSL Station Location signs them. TQSL and LoTW are names.
+  'logbook.lotw.location.tie': {
+    one: '{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so it was signed with the Station Location in Settings ▸ Logging & Connectors.',
+    other:
+      '{{count}} contacts fit two of your station profiles, and they name different TQSL Station Locations, so they were signed with the Station Location in Settings ▸ Logging & Connectors.',
+  },
+  'logbook.lotw.location.unmatched': {
+    one: '{{count}} contact fits none of your station profiles by its call and grid, so it was signed with the Station Location in Settings ▸ Logging & Connectors.',
+    other:
+      '{{count}} contacts fit none of your station profiles by their call and grid, so they were signed with the Station Location in Settings ▸ Logging & Connectors.',
+  },
+  // The same two, when TQSL signs from the location in the ADIF (Settings ▸ Logging & Connectors):
+  // no Station Location signs the contact; TQSL takes the call, grid and place fields it carries.
+  'logbook.lotw.location.tieAdif': {
+    one: "{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: it was signed from the call, grid, state, county, zones and IOTA it carries.",
+    other:
+      "{{count}} contacts fit two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: they were signed from the call, grid, state, county, zones and IOTA they carry.",
+  },
+  'logbook.lotw.location.unmatchedAdif': {
+    one: "{{count}} contact fits none of your station profiles by its call and grid, so no profile's Station Location was used: it was signed from the call, grid, state, county, zones and IOTA it carries.",
+    other:
+      "{{count}} contacts fit none of your station profiles by their call and grid, so no profile's Station Location was used: they were signed from the call, grid, state, county, zones and IOTA they carry.",
+  },
+  // A LoTW upload signed in several TQSL runs (one per Station Location) where a later run could
+  // not run at all; the earlier runs' contacts went. `{{detail}}` is the error, in English.
+  'logbook.lotw.unsentAfterError': {
+    one: '{{count}} contact was not sent ({{detail}}). The contacts signed before that went to LoTW. It stays marked as not uploaded to LoTW and goes with the next upload.',
+    other:
+      '{{count}} contacts were not sent ({{detail}}). The contacts signed before that went to LoTW. They stay marked as not uploaded to LoTW and go with the next upload.',
+  },
+  // A later TQSL run of such an upload that TQSL signed and sent, whose upload mark could not be
+  // shown to be saved to disk. `{{detail}}` is why, in English.
+  'logbook.lotw.unconfirmedAfterError': {
+    one: '{{count}} contact went to LoTW, but Nexus could not confirm its upload mark was saved to disk ({{detail}}). If it was not, it goes again with the next upload; LoTW ignores a contact it already has.',
+    other:
+      '{{count}} contacts went to LoTW, but Nexus could not confirm their upload mark was saved to disk ({{detail}}). Any not saved go again with the next upload; LoTW ignores a contact it already has.',
   },
 
   // ⚠️ `{{formatted}}` is a QSO COUNT the call site has already grouped for display
@@ -4990,6 +5029,7 @@ export const EN = {
   'ota.activation.stop.label': 'Stop',
   'ota.activation.stop.title': 'End activation',
   'ota.activation.ended': 'Activation ended',
+  'ota.activation.profileStays': 'The station stays on this profile while a run, a contact or a queued message is under way. When it ends, pick {{profile}} ({{call}}) in the top bar to go back.',
   'ota.activation.stopFailed': 'Could not stop activation',
   'ota.activation.state.ask': 'On a state line. Which state are you in?',
   'ota.activation.state.mine': 'Your state: {{state}}',
@@ -5554,6 +5594,9 @@ export const EN = {
   'contestSetup.start.refusedRestoredUnknown': 'The station did not enter {{contest}}. Your answers were put back, and {{running}} is on again.',
   'contestSetup.start.restoreFailed': 'The station did not enter {{contest}}, and putting the earlier settings back failed: {{error}}. Contest mode may still be saved on: check Settings ▸ Contesting.',
   'settings.save.contestUncheckable': 'Not saved: picking {{contest}} would end the running contest, and the station could not check that {{contest}} can start.',
+  'settings.save.entryCall.title': 'Change the call anyway?',
+  'settings.save.entryCall.body': 'This entry is operated under {{call}}. Its rules allow one call per entry, and a radio used under one call may not then be used under another. Your log and Cabrillo stay under {{call}}.',
+  'settings.save.entryCall.action': 'Change the call',
   'contestSetup.nav.back': 'Back',
   'contestSetup.nav.next': 'Next',
   'contestSetup.nav.cancel': 'Cancel',
@@ -8897,6 +8940,34 @@ export const EN = {
   'firstContact.step.tx': 'TX starts off each time Nexus opens ({{txOff}}). {{stop}} ends a transmission at once; {{txOn}} turns TX off once the current period ends.',
   'firstContact.close': 'Got it',
   'settings.station.experience.label': 'Your experience',
+  'settings.stationProfiles.title': 'My station profiles',
+  'settings.stationProfiles.hint': 'Named setups of your station: Home, a portable kit, a club call. Each holds a call, grid and location, and what you log with. Pick one from the top bar; starting a POTA activation of a profile\'s park picks it by itself, and Stop goes back. New contacts carry the profile\'s details where they are blank; contacts already in your log never change. Saved as you save each one, not with Save.',
+  'settings.stationProfiles.home': 'Home',
+  'settings.stationProfiles.active': 'in use',
+  'settings.stationProfiles.add': 'Add a profile…',
+  'settings.stationProfiles.edit': 'Edit',
+  'settings.stationProfiles.remove': 'Remove',
+  'settings.stationProfiles.save': 'Save profile',
+  'settings.stationProfiles.cancel': 'Cancel',
+  'settings.stationProfiles.failed': 'Could not save the station profile',
+  'settings.stationProfiles.atStation': 'Set at the station.',
+  'settings.stationProfiles.name': 'Name',
+  'settings.stationProfiles.call': 'Callsign',
+  'settings.stationProfiles.call.hint': 'Your own call, or a portable form of it (/P). Another licensee\'s call, such as a club call, will not transmit while a licence class is set: Nexus does not guess its privileges.',
+  'settings.stationProfiles.grid': 'Grid',
+  'settings.stationProfiles.state': 'State',
+  'settings.stationProfiles.county': 'County',
+  'settings.stationProfiles.county.hint': 'A US county, such as Dane; your state is added when you leave it out.',
+  'settings.stationProfiles.cqZone': 'CQ zone',
+  'settings.stationProfiles.ituZone': 'ITU zone',
+  'settings.stationProfiles.iota': 'IOTA',
+  'settings.stationProfiles.park': 'POTA park',
+  'settings.stationProfiles.park.hint': 'The park this setup is for, such as US-1234. Starting its activation picks this profile.',
+  'settings.stationProfiles.power': 'Power (W)',
+  'settings.stationProfiles.rig': 'Rig',
+  'settings.stationProfiles.antenna': 'Antenna',
+  'settings.stationProfiles.lotwLocation': 'TQSL Station Location',
+  'settings.stationProfiles.lotwLocation.hint': 'The Station Location in TQSL that signs this profile\'s contacts for LoTW. Leave blank to use the one in Settings ▸ Logging & Connectors.',
   'settings.station.experience.notSet': 'Not set',
   'settings.station.experience.hint': 'Picks which screens are on and how much of Settings opens at first. Changing it replaces the set in Settings ▸ App ▸ Features. Every setting stays reachable by search.',
   'settings.station.experience.failed': 'Could not save your experience',
@@ -14242,6 +14313,7 @@ export const EN = {
   'shell.proveTx.failed': 'Could not key the transmitter',
   'shell.halt.failed': 'Could not stop transmit',
   'shell.radio.switch.failed': 'Could not switch radios',
+  'shell.stationProfile.failed': 'Could not switch station profile',
   'shell.pegLock.failed': 'Could not set peg-lock',
   'shell.overrideTx.failed': 'Could not queue TX to {{call}}',
   'shell.txPeriod.failed': 'Could not set transmit period',
@@ -15057,6 +15129,10 @@ export const EN = {
 
   'topbar.help.label': 'Help',
   'topbar.field.label': 'Field',
+  'topbar.stationProfile.label': 'Station profile',
+  'topbar.stationProfile.title': 'My station profile: its call, grid and location go on new contacts. Set them up in Settings ▸ Station.',
+  'topbar.stationProfile.atStation': 'Switched at the station only.',
+  'topbar.stationProfile.busy': 'Waits for the run or contact to end: stop transmitting and press S&P, then switch.',
   'topbar.field.on.title': 'Field mode is on: larger type, maximum contrast. Click to turn off.',
   'topbar.field.off.title':
     'Field mode for operating outdoors: larger type, maximum contrast',

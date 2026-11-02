@@ -165,6 +165,12 @@ pub struct ActivationDto {
     /// The activation was taken up at launch from the one the last session left running.
     #[serde(default)]
     pub restored: bool,
+    /// Only on the Stop pressed at the station that ended it, and only when Stop could not take
+    /// the station back to the "My station" profile it was on before the park's (a run, a contact
+    /// or a queued message under way): that profile, which the operator picks in the top bar to
+    /// go back. Absent otherwise, and on a station with no profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub station_profile_back: Option<StationProfileChoice>,
 }
 
 /// One park of an activation, and what it holds today ([`ActivationDto::parks`]).
@@ -3012,6 +3018,11 @@ pub struct FieldDayStatus {
     // over rows therefore has the right value in hand and no reason to reach out here.
     pub running: bool,
     pub state: String,
+    /// The call this contest entry is operated and logged under (`FieldDayLog::mycall`, the
+    /// Cabrillo `CALLSIGN:`): Settings names it when a save would change the station's call
+    /// mid-entry. `""` from a build that predates it.
+    #[serde(default)]
+    pub entry_call: String,
     /// The station currently being worked (the FD sequencer's partner) — lets
     /// the UI quiet decode popups about them mid-contact, like QsoStatus.dxcall.
     #[serde(default)]
@@ -4477,6 +4488,33 @@ pub struct UploadReportDto {
     /// connection log, rather than dropped inside TQSL. LoTW only; 0 elsewhere.
     #[serde(default)]
     pub held_mode: usize,
+    /// Contacts signed with the Station Location in Settings because they fit two station
+    /// profiles naming different locations. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub location_tie: usize,
+    /// Contacts signed with the Station Location in Settings because they fit none of the station
+    /// profiles, while one names a location. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub location_unmatched: usize,
+    /// The tie and no-match contacts above were signed from the call, grid and place fields in
+    /// their own records (signing from the ADIF), not with the Station Location in Settings. LoTW only.
+    #[serde(default)]
+    pub location_from_adif: bool,
+    /// Contacts not sent because a later TQSL run could not run (TQSL gone or timed out, the
+    /// upload file not written), or did not start after a run whose stamps were not confirmed on
+    /// disk (`unconfirmed_after_error`), once earlier runs had sent theirs: left unsent and
+    /// unstamped, and offered again with the next upload. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub unsent_after_error: usize,
+    /// What stopped them, when `unsent_after_error` or `unconfirmed_after_error` is not 0.
+    #[serde(default)]
+    pub unsent_error: Option<String>,
+    /// Contacts of a later TQSL run that TQSL signed and sent, whose stamp could not be shown to be
+    /// on disk: they went to LoTW and are counted in `dispatched` (one whose stamp the disk refused
+    /// stays owed and is sent again), and the runs after theirs did not start. LoTW only; 0
+    /// elsewhere.
+    #[serde(default)]
+    pub unconfirmed_after_error: usize,
 }
 
 /// Result of importing an external ADIF logbook (deduped merge).
@@ -5138,6 +5176,17 @@ pub struct AutoRadioSwitch {
     pub mode: crate::settings::RouteMode,
 }
 
+/// One "My station" profile as the top bar offers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StationProfileChoice {
+    pub id: String,
+    /// The operator's name for it; blank for Home, which the screen names in its language.
+    pub name: String,
+    /// The call it transmits under.
+    pub call: String,
+}
+
 /// The full application snapshot the UI renders from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -5156,6 +5205,18 @@ pub struct AppSnapshot {
     /// Peg-lock state (band selection won't auto-switch when true).
     #[serde(default)]
     pub radio_pegged: bool,
+    /// The "My station" profiles the top bar picks from, in their order; empty (and absent on the
+    /// wire) for a station that has made none, which sees no picker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub station_profiles: Vec<StationProfileChoice>,
+    /// The id of the profile the station is on (one of `station_profiles`); empty with none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub active_station_profile: String,
+    /// The profile cannot change now: a run, a contact or an over is under way
+    /// (`Engine::station_profile_switch_refusal`). The top bar's picker waits, saying why. Never
+    /// set (and absent on the wire) for a station with no profiles.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub station_profile_locked: bool,
     /// The last time Nexus switched the active radio BY ITSELF, for the switch notice. Absent
     /// until a band or mode the routing hands to another radio has switched one this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]

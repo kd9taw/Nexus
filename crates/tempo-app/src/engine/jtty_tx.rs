@@ -192,6 +192,10 @@ pub struct JttyTx {
     notice: Option<String>,
     /// Bumped by every stop, drop and Tx change: a send planned before one is not committed.
     pub(super) gen: u64,
+    /// The call the station had when the over now queued or going out was planned (its `%M`
+    /// macros were expanded with it): the keying-time call check reads it at the poll
+    /// ([`Engine::sent_call_refusal`]).
+    call: Option<String>,
     /// The newest Log QSO prompt, raised when a send starting "TU " goes out (WSJT-X's
     /// `logQSOTimer`), and its number: the cockpit asks the operator once per prompt. It logs
     /// nothing; the operator does, from the log strip. Kept once it is closed, to tell a later
@@ -228,6 +232,7 @@ impl JttyTx {
             keyed_since_ms: None,
             notice: None,
             gen: 0,
+            call: None,
             log_prompt: None,
             log_prompts: 0,
             log_prompt_end: None,
@@ -336,6 +341,8 @@ pub struct JttyPlan {
     substituted: bool,
     /// The DX call the send was made with (`%H`), for its Log QSO prompt.
     his_call: String,
+    /// The station's call when it was planned: what its macros put on the air as ours.
+    my_call: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1041,6 +1048,7 @@ impl Engine {
             sent: String::new(),
             substituted: false,
             his_call: String::new(),
+            my_call: self.settings.mycall.clone(),
         }
     }
 
@@ -1254,6 +1262,8 @@ impl Engine {
         if plan.gen != self.jtty_tx.gen || plan.tx_hz != self.jtty_tx.tx_hz {
             return Err(STOPPED_FOR_PREP.to_string());
         }
+        // A new over takes the call it was planned under; one already queued keeps its own.
+        let new_over = !self.jtty_tx.active();
         let adding: usize = rendered.segments.iter().map(|s| s.pcm.len()).sum();
         let total_ms = self.jtty_tx.queued_ms() + adding as f64 / 12.0;
         let limit_ms = self.jtty_queue_limit_ms();
@@ -1307,6 +1317,9 @@ impl Engine {
                     rendered.segments.len()
                 ),
             );
+        }
+        if new_over {
+            self.jtty_tx.call = Some(plan.my_call.clone());
         }
         self.jtty_tx.queue.extend(rendered.segments);
         if plan.end_live && self.jtty_tx.latched {
@@ -1536,6 +1549,17 @@ impl Engine {
         // the same as under a clock repair ([`Engine::remote_transmit_held`]).
         if self.remote_transmit_held() {
             self.jtty_drop(REFUSED_HOLD);
+            return JttyTick::Idle;
+        }
+        // ⛔ The keying-time call check: the over was planned under another call than the
+        // station's now. Dropped, as the holds above drop it, with the reason.
+        if let Some(why) = self
+            .jtty_tx
+            .call
+            .as_deref()
+            .and_then(|call| self.sent_call_refusal(call))
+        {
+            self.jtty_drop(why);
             return JttyTick::Idle;
         }
         let gates = KbGates {
@@ -1770,7 +1794,7 @@ impl Engine {
 
     /// The Log QSO prompt still to be asked: the newest, unanswered, and no older than
     /// [`JTTY_LOG_PROMPT_MS`].
-    fn jtty_open_log_prompt(&self, now_ms: i64) -> Option<&crate::dto::JttyLogPrompt> {
+    pub(super) fn jtty_open_log_prompt(&self, now_ms: i64) -> Option<&crate::dto::JttyLogPrompt> {
         self.jtty_tx
             .log_prompt
             .as_ref()
