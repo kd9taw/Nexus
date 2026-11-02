@@ -23,8 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Language, or Nexus picks it up from a Chinese system language: a Taiwan, Hong Kong or Macau system, or one set to
   Traditional script, gets Traditional Chinese with Taiwan wording, and any other Chinese system gets Simplified.
   Translated by BG5EQA; completed for this release, so every screen is in Chinese. Frequencies, callsigns, reports,
-  band and mode names stay exactly as they are in every language. The kits for corrections are in `translations/zh/`
-  and `translations/zh-hant/`.
+  band and mode names stay exactly as they are in every language. On Linux, Chinese needs a CJK font installed (for
+  example `fonts-noto-cjk`); Windows and macOS have one. The kits for corrections are in `translations/zh/` and
+  `translations/zh-hant/`.
 
 ### Changed
 - **One sun for the whole station.** The sun on the map and the globes, the night side and grey line, the Greyline box's sunrise and sunset, and the propagation model's solar elevation now all come from one more precise sun position (within about a hundredth of a degree, where the old one could be a degree off around the equinoxes, moving sunrise and sunset by a few minutes). The ITU-R P.533 prediction keeps its own reference sun, so its numbers do not change.

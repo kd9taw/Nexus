@@ -141,6 +141,37 @@ describe('startup', () => {
 //
 // The property, stated so it cannot regress: the choices are read LIVE, and a catalog
 // installed after this module was imported must appear in them.
+describe('the page says which language it is in', () => {
+  // The browser picks fonts by the page's lang. Han characters are shared by Chinese and Japanese
+  // but drawn differently, and Simplified and Traditional want different fonts, so a Chinese
+  // screen under lang="en" can come out in Japanese glyph shapes, or without a CJK font at all
+  // where the system has several. The tag must follow every switch, startup included.
+  it('follows the startup choice and every switch, with the script for Chinese', () => {
+    installCatalog('zh', { 'reveal.notNow': 'zh-notnow' })
+    installCatalog('zh-hant', { 'reveal.notNow': 'zh-hant-notnow' })
+    installCatalog('ja', { 'reveal.notNow': 'ja-notnow' })
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('zh-TW')
+    initLocale()
+    expect(document.documentElement.lang).toBe('zh-Hant')
+    setLocale('zh')
+    expect(document.documentElement.lang).toBe('zh-Hans')
+    setLocale('ja')
+    expect(document.documentElement.lang).toBe('ja')
+    setLocale('en')
+    expect(document.documentElement.lang).toBe('en')
+    vi.restoreAllMocks()
+  })
+
+  it('says English when startup finds no catalog for the OS language (control)', () => {
+    document.documentElement.lang = 'xx'
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('pt-BR')
+    initLocale()
+    expect(getLocale()).toBe('en')
+    expect(document.documentElement.lang).toBe('en')
+    vi.restoreAllMocks()
+  })
+})
+
 describe('the picker can see a catalog installed after import', () => {
   it('lists a locale registered later — the real startup order', () => {
     // 'zz' is installed in beforeEach, i.e. AFTER this module was imported at suite load.

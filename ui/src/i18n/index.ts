@@ -136,6 +136,7 @@ export const LOCALE_KEY = 'nexus.locale'
 export function setLocale(locale: string): void {
   if (!catalogs.has(locale) || locale === active) return
   active = locale
+  applyDocumentLang()
   try {
     localStorage.setItem(LOCALE_KEY, locale)
   } catch {
@@ -157,6 +158,28 @@ export function setLocale(locale: string): void {
  * every other Chinese tag gets the Simplified `zh`.
  */
 export function initLocale(): void {
+  pickInitialLocale()
+  applyDocumentLang()
+}
+
+/**
+ * The BCP 47 tag for `<html lang>`. The browser picks fonts by it: Han characters are shared by
+ * Chinese and Japanese but drawn differently, and Simplified and Traditional want different
+ * fonts, so a Chinese screen left at `lang="en"` can come out in Japanese glyph shapes. Our ids
+ * are lower case and name Chinese by script alone (`zh`, `zh-hant`); the tag says it in full.
+ */
+export function documentLang(locale: string): string {
+  if (locale === 'zh') return 'zh-Hans'
+  if (locale === 'zh-hant') return 'zh-Hant'
+  return locale
+}
+
+/** Keep `<html lang>` on the active locale: at startup and on every switch. */
+function applyDocumentLang(): void {
+  if (typeof document !== 'undefined') document.documentElement.lang = documentLang(active)
+}
+
+function pickInitialLocale(): void {
   let stored: string | null = null
   try {
     stored = localStorage.getItem(LOCALE_KEY)

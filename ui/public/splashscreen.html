@@ -214,7 +214,9 @@
           show(note) {
             if (!note) return
             const lang = locale()
-            document.documentElement.lang = lang
+            // The tag in full, as the app sets it (documentLang in ui/src/i18n/index.ts): the
+            // browser picks Han fonts by it, and our ids name Chinese by script alone.
+            document.documentElement.lang = lang === 'zh' ? 'zh-Hans' : lang === 'zh-hant' ? 'zh-Hant' : lang
             const bar = part('bar')
             const fill = part('fill')
             if (note.state === 'converting') {

@@ -141,4 +141,16 @@ describe('what the splash shows for each note the launch sends', () => {
     splash.show({ state: 'converting', done: 0, total: 0 })
     expect(part('title').textContent).toBe('Moving your logbook into its new database')
   })
+
+  it('tags Chinese with its script, so the browser picks the right Han font', () => {
+    const splash = loadSplash()
+    localStorage.removeItem(LOCALE_KEY)
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('zh-TW')
+    splash.show({ state: 'converting', done: 0, total: 0 })
+    expect(part('title').textContent).toBe('正在將你的日誌簿移入新資料庫')
+    expect(document.documentElement.lang).toBe('zh-Hant')
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('zh-CN')
+    splash.show({ state: 'converting', done: 0, total: 0 })
+    expect(document.documentElement.lang).toBe('zh-Hans')
+  })
 })
