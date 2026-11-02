@@ -8392,6 +8392,7 @@ export const FR: PartialCatalog = {
   "settings.rigControl.serialHandshake.hardware": "Matériel (RTS/CTS)",
   "settings.rigControl.serialHandshake.xonxoff": "XON/XOFF (logiciel)",
   "settings.rigControl.serialHandshake.hint": "Indique à Nexus ce que fait réellement votre câble, au lieu de le laisser deviner. Laissez sur Automatique sauf si vous avez un poste qui passe en émission au démarrage — Automatique ne change rien au fonctionnement actuel de votre station. Si vous le modifiez et que le CAT cesse de fonctionner, remettez-le sur Automatique : sur certains postes Hamlib refuse le réglage en silence puis répond sans avoir jamais ouvert la radio, vous avez donc un voyant CAT et un poste qui vous ignore.",
+  "settings.rigControl.serialHandshake.rtsKeys": "Sur ce port, RTS met votre émetteur en émission, donc le contrôle de flux série ne peut pas être Matériel — réglez-le sur Automatique ou Aucun.",
   "settings.rigControl.pttLineState.label": "Ligne de manipulation au démarrage",
   "settings.rigControl.pttLineState.auto": "Automatique (recommandé)",
   "settings.rigControl.pttLineState.untouched": "Ne jamais y toucher",

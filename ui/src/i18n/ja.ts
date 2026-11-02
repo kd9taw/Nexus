@@ -5422,6 +5422,7 @@ export const JA: PartialCatalog = {
   "settings.rigControl.serialHandshake.hardware": "ハードウェア（RTS/CTS）",
   "settings.rigControl.serialHandshake.xonxoff": "XON/XOFF（ソフトウェア）",
   "settings.rigControl.serialHandshake.hint": "ケーブルの実際の挙動を推測に任せず、Nexusに伝えます。起動時に送信状態になる無線機がある場合を除き「自動」のままにしてください。「自動」は現在の動作を一切変えません。変更してCATが動かなくなったら「自動」に戻してください。一部の無線機ではHamlibが設定を黙って拒否し、無線機を開かないまま応答を返すため、CATランプは点くのに無線機は反応しない状態になります。",
+  "settings.rigControl.serialHandshake.rtsKeys": "このポートではRTSが送信機をキーイングするため、シリアルハンドシェイクを「ハードウェア」にはできません — 「自動」か「なし」に設定してください。",
   "settings.rigControl.pttLineState.label": "起動時のキーイングライン",
   "settings.rigControl.pttLineState.auto": "自動（推奨）",
   "settings.rigControl.pttLineState.untouched": "操作しない",

@@ -9010,6 +9010,7 @@ export const RU: PartialCatalog = {
   "settings.rigControl.serialHandshake.hardware": "Аппаратное (RTS/CTS)",
   "settings.rigControl.serialHandshake.xonxoff": "XON/XOFF (программное)",
   "settings.rigControl.serialHandshake.hint": "Сообщает Nexus, что на самом деле делает ваш кабель, вместо того чтобы угадывать. Оставьте «Авто», если только ваш трансивер не переходит на передачу при запуске, — «Авто» ничего не меняет в нынешней работе станции. Если после изменения перестал работать CAT, верните «Авто»: на некоторых трансиверах Hamlib молча отклоняет настройку и затем отвечает, так и не открыв трансивер, — индикатор CAT горит, а трансивер вас не слушается.",
+  "settings.rigControl.serialHandshake.rtsKeys": "На этом порту RTS включает передачу, поэтому квитирование порта не может быть «Аппаратным» — выберите «Авто» или «Нет».",
   "settings.rigControl.pttLineState.label": "Линия манипуляции при запуске",
   "settings.rigControl.pttLineState.auto": "Авто (рекомендуется)",
   "settings.rigControl.pttLineState.untouched": "Не трогать",

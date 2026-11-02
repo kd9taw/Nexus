@@ -9,6 +9,7 @@ import type { ReactNode } from 'react'
 import { confirmDialog } from '../confirm'
 import type { CatTestResult } from '../types'
 import { t } from '../i18n'
+import { catDetailText } from '../features/catDetail'
 import { rxLevelDb } from './LevelMeter'
 
 /** One health dot. A `<button>` when it can navigate to the fix, a `<span>` when it cannot —
@@ -72,7 +73,8 @@ export function SetupHealth({
   onGoTo?: (section: string) => void
 }) {
   const rigOk = catResult ? catResult.ok : radio?.catOk
-  const rigDetail = catResult ? catResult.detail : radio?.catDetail
+  const sentDetail = catResult ? catResult.detail : radio?.catDetail
+  const rigDetail = sentDetail && catDetailText(sentDetail)
   const rxDb = radio ? Math.round(rxLevelDb(radio.rxLevel)) : null
   // rxLevelDb is the WSJT-X-style 0..90 scale and returns 0 for silence — the old `> -60`
   // was a dBFS threshold that EVERY value on this scale passed, so the dot could never say

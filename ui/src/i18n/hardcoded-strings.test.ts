@@ -125,6 +125,9 @@ const MIGRATED = [
   'features/clientWords.ts',
   // The words for a restore refused while the radio is keyed (2026-10-29), born migrated.
   'features/restoreWords.ts',
+  // The CAT launch Nexus refuses itself (a Hardware handshake where RTS keys the transmitter),
+  // shown in the operator's language in the CAT status and Test CAT — born migrated.
+  'features/catDetail.ts',
   // The saved keys held back until the operator confirms them (2026-10-28), born migrated.
   'components/KeyConfirmBanner.tsx',
   // This computer ▸ Audio (2026-10-08), born migrated: a driving computer's headset.

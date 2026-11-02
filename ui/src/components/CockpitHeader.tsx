@@ -18,6 +18,7 @@ import { pushToast } from '../toast'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
 import { t } from '../i18n'
+import { catDetailText } from '../features/catDetail'
 
 /** The header's annunciator plates — state, not prose: the CAT link's ✓/✗ pill. */
 const CAT_OK = 'CAT ✓'
@@ -271,9 +272,10 @@ export function CockpitHeader({
           {catStatus ?? (
             <span
               className={`cockpit-cat ${catOk ? 'ok' : 'bad'}`}
-              // `catDetail` is the backend's own report and passes through verbatim.
+              // `catDetail` is the backend's own report and passes through verbatim, but for a
+              // launch Nexus refused itself (`catDetailText`).
               title={
-                radio.catDetail ||
+                (radio.catDetail && catDetailText(radio.catDetail)) ||
                 (catOk ? t('cockpit.header.cat.ok.title') : t('cockpit.header.cat.bad.title'))
               }
             >

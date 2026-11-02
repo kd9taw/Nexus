@@ -2780,6 +2780,8 @@ fn monitor_want(
         // Not an operator wish and never read from settings: `resolve_lines` sets it,
         // and only where dropping the handshake is what makes `rts` above achievable.
         handshake_none: false,
+        // Not a wish either: `spawn_rigctld` sets it from the port's keying facts.
+        rts_keys: false,
     };
     let want = s
         .radios
@@ -17937,6 +17939,8 @@ impl Transport {
                 // Not an operator wish and never read from settings: `resolve_lines` sets it,
                 // and only where dropping the handshake is what makes `rts` above achievable.
                 handshake_none: false,
+                // Not a wish either: `spawn_rigctld` sets it from the port's keying facts.
+                rts_keys: false,
             },
             cat_rts_keys_ptt: s.cat_rts_keys_ptt,
             baud: s.baud,
@@ -19108,6 +19112,12 @@ fn rigctld_launch_failed(e: &std::io::Error) -> String {
 /// here alone and both twins kept the raw "os error 2" until the mac QA audit (2026-08-17)
 /// found them; see [`crate::rigctld_proc::hamlib_missing_for`].
 fn rigctld_launch_failed_for(mac: bool, e: &std::io::Error) -> String {
+    // A launch Nexus refused itself (a declared Hardware handshake on a port where RTS keys the
+    // transmitter) is already the operator's sentence: Hamlib never ran, so no Hamlib prefix.
+    let refused = crate::rigctld_proc::HARDWARE_HANDSHAKE_RTS_KEYS;
+    if e.to_string() == refused {
+        return refused.to_string();
+    }
     crate::rigctld_proc::hamlib_missing_for(mac, "rigctld", e)
 }
 
@@ -22143,6 +22153,15 @@ mod tests {
             "a permissions fault is not a missing package: {msg}"
         );
         assert!(msg.contains("permission denied"), "{msg}");
+        // A launch Nexus refused itself reaches the CAT status as the plain sentence, with no
+        // Hamlib prefix — the UI translates that exact sentence, and Test CAT recognises it.
+        let refused = crate::rigctld_proc::HARDWARE_HANDSHAKE_RTS_KEYS;
+        for mac in [false, true] {
+            assert_eq!(
+                rigctld_launch_failed_for(mac, &Error::new(ErrorKind::InvalidInput, refused)),
+                refused
+            );
+        }
     }
 
     /// THE NAVIGATOR REPORT, second half. A WinKeyer whose port will not open was

@@ -27318,7 +27318,12 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             });
             ladder
         };
-        if ok == Some(false) {
+        // A launch Nexus REFUSED (a declared Hardware handshake on a port where RTS keys the
+        // transmitter) is not a fault to sweep: the refusal is the answer, and a sweep would
+        // open the very port the refusal kept shut, then replace the sentence with a verdict.
+        // `contains`, not `==`: a restart notice can lead the sentence.
+        let refused = detail.contains(tempo_audio::rigctld_proc::HARDWARE_HANDSHAKE_RTS_KEYS);
+        if ok == Some(false) && !refused {
             if let Some((port, baud, rig_model, gate, model_name, native)) = ladder {
                 // Ask the loop to release the serial port (our own daemon holds it even
                 // when the rig is mute), wait for the ack, then probe. Always release —
