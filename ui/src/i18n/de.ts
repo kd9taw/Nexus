@@ -1768,6 +1768,8 @@ export const DE: PartialCatalog = {
   "settings.rigControl.flexUnbenched.label": "Nexus CW, Tune und ATU über den nativen Flex-Client senden lassen (noch nicht am Gerät getestet)",
   "settings.rigControl.flexUnbenched.hint": "<b>Noch an keinem echten Flex geprüft:</b> CW, Tune und den ATU zuerst an einer Dummy-Load ausprobieren. Standardmäßig aus. Zum Übernehmen speichern; Nexus verbindet sich dabei neu mit dem Gerät.",
   "settings.rigControl.flexClient.hint": "Nexus verbindet sich selbst mit dem Gerät, unter der <b>Flex-IP</b>, als einer seiner SmartSDR-Clients, und führt CAT und PTT über einen eigenen Slice. Beta und <b>an Hardware nicht verifiziert</b>: Senden zuerst an einer Dummy-Load ausprobieren. Kann Nexus keine Verbindung herstellen, greift es auf SmartSDR CAT zurück. Zum Übernehmen speichern.",
+  "settings.rigControl.flexNeedsNetwork": "Benötigt Verbindung: Netzwerk.",
+  "settings.rigControl.flexClientNotHere": "Der native Flex-Client läuft nicht mit OmniRig oder TCI.",
   "settings.rigControl.civLog.label": "CI-V-Bus-Diagnoseprotokoll",
   "settings.rigControl.civLog.failed": "CI-V-Diagnoseprotokoll konnte nicht umgeschaltet werden",
   "settings.rigControl.civLog.recording": "<b>Zeichnet auf</b> nach <code>{{path}}</code> — läuft auch auf anderen Bildschirmen weiter, also jetzt ins FT8- oder Phone-Cockpit wechseln und das Problem reproduzieren (Tune oder senden). Danach zurückkommen, abschalten und die Datei schicken. Sie zeigt genau, was während des Fehlers auf dem Bus liegt.",

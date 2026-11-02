@@ -4377,6 +4377,17 @@ export function SettingsPanel({
   // network connection; over a cable only through the native switch, asked the way the switch asks it
   // (`civBlocked`): never on Network or through OmniRig, where a switch left on does nothing.
   const civAppliesDataMode = form.rigConn === 'icomlan' || (civBlocked === null && !!form.icomNativeCat)
+  // A Flex model off the network connection. Only the native PANADAPTER needs Connection: Network
+  // (`native_spectrum_kind` serves the Flex stream on the network alone), so on any other
+  // connection it shows disabled with a note saying so, rather than vanishing without a word. The
+  // native client and DAX audio do not depend on the connection (`flex_client_reachable`).
+  const flexPanNeedsNetwork = [2036, 23005].includes(form.rigModel) && form.rigConn !== 'network'
+  // A Flex model on OmniRig or TCI: those connections hand CAT to another program, and the CAT
+  // daemon starts that connection's own driver before it ever asks for the Flex client
+  // (`spawn_cat_daemon`), so the client, its DAX audio and its CW/Tune/ATU setting do nothing
+  // there. Their switches say so and refuse to turn ON, but one left on still turns OFF.
+  const flexClientNotHere =
+    [2036, 23005].includes(form.rigModel) && (form.rigConn === 'omnirig' || form.rigConn === 'tci')
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
   // …and WHY it isn't known, when the reason is that ARRL retired it. A saved `MAR`
@@ -7116,8 +7127,9 @@ export function SettingsPanel({
                   A name-sniff for "flex" also matched the PowerSDR entry, offering an ANAN/HL2
                   operator a SmartSDR VITA-49 stream that radio cannot serve. `native_spectrum_kind`
                   in Rust has always gated on 2036|23005; this is the UI catching up. */}
-              {form.rigConn === 'network' &&
-                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
+              {((form.rigConn === 'network' &&
+                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '')) ||
+                flexPanNeedsNetwork) && (
                   <label className="settings-field">
                     <span className="settings-label">
                       {t('settings.rigControl.flexPan.label')}
@@ -7125,12 +7137,16 @@ export function SettingsPanel({
                     <button
                       type="button"
                       role="switch"
+                      disabled={flexPanNeedsNetwork}
                       aria-checked={form.flexNativePan ?? false}
                       className={`toggle${form.flexNativePan ? ' on' : ''}`}
                       onClick={() => updateBool('flexNativePan', !form.flexNativePan)}
                     >
                       <span className="toggle-knob" />
                     </button>
+                    {flexPanNeedsNetwork && (
+                      <span className="settings-hint">{t('settings.rigControl.flexNeedsNetwork')}</span>
+                    )}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexPan.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -7160,9 +7176,12 @@ export function SettingsPanel({
                 </label>
               )}
 
-              {/* Same model-number gate as the panadapter above — see the note there. */}
-              {form.rigConn === 'network' &&
-                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
+              {/* Same model-number gate as the panadapter above — see the note there. Unlike the
+                  panadapter it rides the native client, which does not depend on the connection,
+                  so a Flex model shows it live on Serial too (and it can always be turned off). */}
+              {((form.rigConn === 'network' &&
+                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '')) ||
+                [2036, 23005].includes(form.rigModel)) && (
                   <label className="settings-field">
                     <span className="settings-label">
                       {t('settings.rigControl.flexAudio.label')}
@@ -7170,12 +7189,16 @@ export function SettingsPanel({
                     <button
                       type="button"
                       role="switch"
+                      disabled={flexClientNotHere && !form.flexNativeAudio}
                       aria-checked={form.flexNativeAudio ?? false}
                       className={`toggle${form.flexNativeAudio ? ' on' : ''}`}
                       onClick={() => updateBool('flexNativeAudio', !form.flexNativeAudio)}
                     >
                       <span className="toggle-knob" />
                     </button>
+                    {flexClientNotHere && (
+                      <span className="settings-hint">{t('settings.rigControl.flexClientNotHere')}</span>
+                    )}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexAudio.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -7186,7 +7209,7 @@ export function SettingsPanel({
                   ruling, 2026-10-03), with SmartSDR CAT the default and the fallback. The Rust
                   side serves it only on these two model numbers and with the radio's own address
                   set (`flex_client_reachable`), so the toggle shows on the models alone. */}
-              {form.rigConn === 'network' && [2036, 23005].includes(form.rigModel) && (
+              {[2036, 23005].includes(form.rigModel) && (
                 <label className="settings-field">
                   <span className="settings-label">
                     {t('settings.rigControl.flexClient.label')}
@@ -7194,12 +7217,16 @@ export function SettingsPanel({
                   <button
                     type="button"
                     role="switch"
+                    disabled={flexClientNotHere && !form.flexNativeCat}
                     aria-checked={form.flexNativeCat ?? false}
                     className={`toggle${form.flexNativeCat ? ' on' : ''}`}
                     onClick={() => updateBool('flexNativeCat', !form.flexNativeCat)}
                   >
                     <span className="toggle-knob" />
                   </button>
+                  {flexClientNotHere && (
+                    <span className="settings-hint">{t('settings.rigControl.flexClientNotHere')}</span>
+                  )}
                   <span className="settings-hint">
                     <T k="settings.rigControl.flexClient.hint" tags={{ b: <strong /> }} />
                   </span>
@@ -7208,18 +7235,21 @@ export function SettingsPanel({
 
               {/* The client's Beta setting for CW, Tune and the ATU, which no bench has confirmed yet
                   (operator ruling, 2026-10-14, "A Beta setting, off by default"). Per radio, and
-                  shown only where Nexus's own Flex client is this radio's connection, the one place
-                  it means anything (`flex_client_reachable` and the opt-in above). Only at the
-                  shack: a press that comes through the Remote stream changes nothing. */}
-              {form.rigConn === 'network' &&
-                [2036, 23005].includes(form.rigModel) &&
+                  shown wherever Nexus's own Flex client can run, the one place it means anything
+                  (`flex_client_reachable` and the opt-in above). That is any CAT connection, Serial
+                  included: the client talks to the radio at its own address and honours this
+                  there, so hiding it off the network left a setting no one could turn off. Only at
+                  the shack: a press that comes through the Remote stream changes nothing. */}
+              {[2036, 23005].includes(form.rigModel) &&
                 form.flexNativeCat &&
                 (form.flexRadioIp ?? '').trim() !== '' && (
                   <label className="settings-field">
                     <span className="settings-label">
                       {t('settings.rigControl.flexUnbenched.label')}
                     </span>
-                    <button disabled={locked('flexNativeUnbenched')} data-setting="flexNativeUnbenched"
+                    <button
+                      disabled={locked('flexNativeUnbenched') || (flexClientNotHere && !form.flexNativeUnbenched)}
+                      data-setting="flexNativeUnbenched"
                       type="button"
                       role="switch"
                       aria-checked={form.flexNativeUnbenched ?? false}
@@ -7236,6 +7266,9 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                     {setAtStation('flexNativeUnbenched')}
+                    {flexClientNotHere && (
+                      <span className="settings-hint">{t('settings.rigControl.flexClientNotHere')}</span>
+                    )}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexUnbenched.hint" tags={{ b: <strong /> }} />
                     </span>

@@ -142,7 +142,11 @@ def load_splash(path):
 
 def load_csv(path):
     with open(path, encoding='utf-8-sig', newline='') as fh:
-        reader = csv.DictReader(fh)
+        # Excel set to Italian (or any language that writes decimal commas) opens and saves CSV with
+        # semicolons between the columns; read whichever separator the header line uses.
+        first = fh.readline()
+        fh.seek(0)
+        reader = csv.DictReader(fh, delimiter=';' if first.count(';') > first.count(',') else ',')
         return reader.fieldnames, list(reader)
 
 

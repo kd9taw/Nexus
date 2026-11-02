@@ -16591,6 +16591,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: var(--accent);
   transform: translateX(20px);
 }
+/* A switch that cannot be used here (Settings ▸ Rig & CAT's Flex native panadapter off the
+   network connection): dimmed, flat-rimmed and not-allowed, so "greyed out" is true and not only
+   the note beside it. `[disabled]`, not `:disabled`: same match for a native button, and the
+   attribute is what the cascade guard (styles-toggle-disabled.test.ts) can resolve. */
+.toggle[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: var(--border);
+}
 /* Core "always on" features aren't toggleable, so they render a static status
    badge instead of a switch — no fake control next to the real settings. */
 .feature-always-on {

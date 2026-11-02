@@ -1058,6 +1058,11 @@ fn roster_local_spots(
 /// Lifted out of [`get_need_alerts`] for the same reason `roster_local_spots` was:
 /// `roster_spot_age_secs` on its own cannot show whether the caller applies it, and
 /// this caller did not.
+///
+/// THE GRID is the decode's own, else `credited[call]` ([`tempo_app::engine::Engine::
+/// credited_grid`]): the grid a contact with that station would be credited with, so a station
+/// decoded here without a grid but whose grid it sent on another band, or was logged before,
+/// still scores the grid the log will take.
 fn own_decode_heards(
     stations: &[tempo_app::dto::Station],
     slot_now: u64,
@@ -1065,6 +1070,7 @@ fn own_decode_heards(
     band: &str,
     tier_mode: &str,
     max_age_secs: i64,
+    credited: &std::collections::HashMap<String, String>,
 ) -> Vec<propagation::Heard> {
     stations
         .iter()
@@ -1078,7 +1084,12 @@ fn own_decode_heards(
             freq_mhz: None, // own decodes are band-level here
             admitted_at: None,
             evidence: Some("decoded by YOUR radio on this band".to_string()),
-            grid: s.grid.clone(), // own decode's Maidenhead grid → drives NewGrid
+            // own decode's Maidenhead grid, else the one its contact would be credited with → NewGrid
+            grid: s
+                .grid
+                .clone()
+                .filter(|g| !g.trim().is_empty())
+                .or_else(|| credited.get(&s.call).cloned()),
             // US state hint (drives WAS NewState): FCC baseline refined by this live decode grid —
             // a precise 6-char grid that disagrees with the license means a rover. See us_state_hint.
             us_state: us_state_hint(&s.call, s.grid.as_deref()),
@@ -30262,7 +30273,7 @@ async fn set_sat_tag(
 }
 
 /// The satellite names LoTW accepts, for the Logbook row's tag picker — the backend owns the
-/// table (`Engine::LOTW_SAT_NAMES`), so the UI offers exactly what the writer will accept and
+/// table (`Engine::LOTW_ACCEPTED_SATS`), so the UI offers exactly what the writer will accept and
 /// the two cannot drift. Same arrangement as [`dxcc_entity_names`].
 #[tauri::command]
 fn lotw_sat_names() -> Vec<String> {
@@ -32752,6 +32763,13 @@ fn read_need_alerts(
     // the same station: they read the same alerts, and those alerts read this.
     let hunted_rows = eng.log_rows();
     let snap = eng.snapshot();
+    // The grid each decoded station's contact would be credited with (roster, then the grid it
+    // sent this session, then a logged one): what its own-decode record scores New grid with.
+    let credited: std::collections::HashMap<String, String> = snap
+        .stations
+        .iter()
+        .filter_map(|s| eng.credited_grid(&s.call).map(|g| (s.call.clone(), g)))
+        .collect();
     // The watch list the desktop last sent — its stations lead the board (see the end).
     let watch = eng.watch_list().to_vec();
     let confirm_tier = eng.settings().alert_confirm_tier;
@@ -32773,15 +32791,20 @@ fn read_need_alerts(
     // of wall clock. The conversion (and the tier-switch refusal it carries) is
     // `own_decode_heards` → `roster_spot_age_secs`.
     const OWN_DECODE_MAX_AGE_SECS: i64 = 120;
-    let mut heard: Vec<propagation::Heard> = own_decode_heards(
+    let own_decodes: Vec<propagation::Heard> = own_decode_heards(
         &snap.stations,
         snap.radio.slot,
         snap.radio.tr_period_secs,
         &band,
         &tier_mode,
         OWN_DECODE_MAX_AGE_SECS,
+        &credited,
     );
-    heard.extend(jtty_heards(&jtty_heard));
+    // This radio's JTTY decodes are its own decodes too: a grid one of them carried is a grid the
+    // station sent on the air, and must not be overwritten by an FT roster entry without one.
+    let jtty = jtty_heards(&jtty_heard);
+    let own_decodes: Vec<propagation::Heard> = own_decodes.into_iter().chain(jtty).collect();
+    let mut heard = own_decodes.clone();
     // The real value (empirical evidence, not a model): two complementary signals
     // over the PSK Reporter firehose + near-region feed —
     //   1. heard_near_me: a receiver NEAR YOU is hearing the DX (their signal
@@ -32859,6 +32882,9 @@ fn read_need_alerts(
             license_class,
         ));
     }
+    // A station this radio is decoding scores the grid it sent on the air (or none), never a PSK
+    // Reporter locator: that is the grid its contact will be credited with.
+    propagation::grids_from_own_decodes(&mut heard, &own_decodes);
     // Each heard station's US state, for the New State need: a live activator's park's, any other
     // station's own (see `place_heards`). Live as the decoration pass below reads it.
     let live_spots: Vec<propagation::OtaSpot> = ota_cache
@@ -55809,6 +55835,61 @@ mod tests {
         assert_eq!(out[0].time, t - 60);
     }
 
+    /// A station decoded here WITHOUT a grid scores the grid its contact would be credited with
+    /// (`Engine::credited_grid`): worked on 40 m from FN42 and logged with it, it is a new grid on
+    /// 20 m, and a 20 m contact would log FN42 — so the own-decode record carries FN42 and the
+    /// board says New grid. A grid the decode itself carried still wins.
+    #[test]
+    fn a_gridless_decode_scores_the_grid_its_contact_would_be_credited_with() {
+        let st = |grid: Option<&str>| tempo_app::dto::Station {
+            call: "W9XYZ".into(),
+            grid: grid.map(str::to_string),
+            snr: -10,
+            last_heard_slot: 100,
+            heard_count: 1,
+            presence: tempo_app::dto::Presence::Active,
+            worked: true,
+            worked_band: false,
+            worked_ago_secs: None,
+            worked_today_utc: false,
+            country: None,
+            tier: None,
+            grid_rarity: None,
+            lotw_user: false,
+            freq_hz: None,
+            calling: None,
+            cq_dir: None,
+            state: None,
+        };
+        let credited: std::collections::HashMap<String, String> =
+            [("W9XYZ".to_string(), "FN42".to_string())].into();
+        let heard = own_decode_heards(&[st(None)], 100, 15.0, "20m", "FT8", 120, &credited);
+        assert_eq!(heard[0].grid.as_deref(), Some("FN42"));
+        let mut needs = propagation::LogNeeds::new();
+        needs.add("W9XYZ", "40m", "FT8", Some("FN42"), None, false);
+        let alerts = propagation::rank_needs(&heard, &needs, &needs.slots());
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.call == "W9XYZ" && a.tags.contains(&propagation::NeedTag::NewGrid)),
+            "FN42 worked on 40 m only: new on 20 m, {alerts:?}"
+        );
+        // Without a credited grid: none, so no New grid (the control).
+        let bare = own_decode_heards(
+            &[st(None)],
+            100,
+            15.0,
+            "20m",
+            "FT8",
+            120,
+            &Default::default(),
+        );
+        assert_eq!(bare[0].grid, None);
+        // The decode's own grid wins over a credited one.
+        let own = own_decode_heards(&[st(Some("EN37"))], 100, 15.0, "20m", "FT8", 120, &credited);
+        assert_eq!(own[0].grid.as_deref(), Some("EN37"));
+    }
+
     /// REGRESSION (the same tier-switch defect, SECOND consumer): the fix above landed
     /// on the opening detector's arm and not on the Needed board's — the same two
     /// fields, off the same roster, in the same file, one `last_heard_slot` grep apart.
@@ -55863,14 +55944,31 @@ mod tests {
             "the pre-switch number must be AHEAD of the new clock: {on_ft4_at_1700} vs {ft8_now}"
         );
         assert!(
-            own_decode_heards(&[st(on_ft4_at_1700)], ft8_now, 15.0, "6m", "FT8", 120).is_empty(),
+            own_decode_heards(
+                &[st(on_ft4_at_1700)],
+                ft8_now,
+                15.0,
+                "6m",
+                "FT8",
+                120,
+                &Default::default()
+            )
+            .is_empty(),
             "an hour-old FT4-numbered decode must not reach the Needed board as fresh"
         );
 
         // …and the gate must still admit what it is for. A decode four FT8 slots back
         // is one minute old, inside the 2-minute window, and carries its grid + state
         // hint through.
-        let fresh = own_decode_heards(&[st(ft8_now - 4)], ft8_now, 15.0, "6m", "FT8", 120);
+        let fresh = own_decode_heards(
+            &[st(ft8_now - 4)],
+            ft8_now,
+            15.0,
+            "6m",
+            "FT8",
+            120,
+            &Default::default(),
+        );
         assert_eq!(
             fresh.len(),
             1,
@@ -55882,7 +55980,16 @@ mod tests {
         // …while one past the 2-minute cap is dropped on the SAME clock (the original
         // 2026-07-23 freshness gate, still doing its job).
         assert!(
-            own_decode_heards(&[st(ft8_now - 12)], ft8_now, 15.0, "6m", "FT8", 120).is_empty(),
+            own_decode_heards(
+                &[st(ft8_now - 12)],
+                ft8_now,
+                15.0,
+                "6m",
+                "FT8",
+                120,
+                &Default::default()
+            )
+            .is_empty(),
             "12 FT8 slots = 3 minutes, past the freshness cap"
         );
         // The other switch direction (FT8 → FT4) ages out rather than being refused —
@@ -55890,7 +55997,16 @@ mod tests {
         let on_ft8_at_1700 = ft8.slot_index(at_1700_ms);
         let ft4_now = ft4.slot_index(at_1800_ms);
         assert!(
-            own_decode_heards(&[st(on_ft8_at_1700)], ft4_now, 7.5, "6m", "FT4", 120).is_empty(),
+            own_decode_heards(
+                &[st(on_ft8_at_1700)],
+                ft4_now,
+                7.5,
+                "6m",
+                "FT4",
+                120,
+                &Default::default()
+            )
+            .is_empty(),
             "the shrinking direction must not survive as a merely-old entry either"
         );
     }

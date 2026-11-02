@@ -3343,7 +3343,7 @@ const CARD_RCVD_DATE: &str = "QSLRDATE";
 /// and refuses a blank name rather than leaving `PROP_MODE=SAT` standing on its own.
 ///
 /// ⚠️ It does NOT vet the name against LoTW's accepted list — that table lives with the
-/// catalog that feeds it (`Engine::LOTW_SAT_NAMES`), and this crate has no business
+/// catalog that feeds it (`Engine::LOTW_ACCEPTED_SATS`), and this crate has no business
 /// holding a second copy of it. The caller gates the name; this stores what it is given.
 ///
 /// Returns false, leaving `rec` untouched, when the name is blank.

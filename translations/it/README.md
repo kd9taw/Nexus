@@ -16,6 +16,22 @@ Leave the other columns exactly as they are. The program matches rows by the `ke
 changed or deleted key is a lost string. When you save, keep the file as CSV in UTF-8, or the
 accents will not survive.
 
+### Opening it in Excel or LibreOffice
+
+Don't double-click the file. Excel set to Italian expects semicolons between columns, and this
+file uses commas, so a double-click opens it with every row split across the wrong columns.
+Import it instead, and it comes in whole:
+
+- **Excel:** open a blank workbook, then **Dati ▸ Da testo/CSV** (Data ▸ From Text/CSV), pick the
+  file, set **Origine file** to **65001: Unicode (UTF-8)** and **Delimitatore** to **Virgola**,
+  then **Carica**. When you are done, **File ▸ Salva con nome ▸ CSV UTF-8**. Excel saves it with
+  semicolons, and that's fine: the checker and the import read either.
+- **LibreOffice Calc:** open the file, and in the dialog that appears choose **UTF-8** as the
+  character set and tick only **Virgola** (comma) as the separator. Save with **File ▸ Salva con
+  nome**, file type **Testo CSV**, keeping UTF-8.
+
+A text editor works too, if you'd rather edit the quoted lines directly.
+
 | Column | What it is |
 |---|---|
 | `priority` | 1 is the most valuable work, 6 the least. See below. |
