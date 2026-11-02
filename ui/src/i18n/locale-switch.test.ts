@@ -102,6 +102,24 @@ describe('startup', () => {
     vi.restoreAllMocks()
   })
 
+  it('reads the script when one language ships in two, rather than the language alone', () => {
+    // zh-CN and zh-TW both reduce to `zh`, so the language-only rule above would hand a
+    // Traditional system the Simplified catalog.
+    installCatalog('zh', { 'reveal.notNow': 'zh-notnow' })
+    installCatalog('zh-hant', { 'reveal.notNow': 'zh-hant-notnow' })
+    const pick = (tag: string) => {
+      vi.spyOn(navigator, 'language', 'get').mockReturnValue(tag)
+      initLocale()
+      return getLocale()
+    }
+    for (const tag of ['zh-TW', 'zh-HK', 'zh-MO', 'zh-Hant', 'zh-Hant-HK'])
+      expect(pick(tag), tag).toBe('zh-hant')
+    // The negative control: every other Chinese tag stays Simplified.
+    for (const tag of ['zh-CN', 'zh-SG', 'zh-Hans', 'zh-Hans-HK', 'zh'])
+      expect(pick(tag), tag).toBe('zh')
+    vi.restoreAllMocks()
+  })
+
   it('prefers a stored choice OVER the OS language', () => {
     localStorage.setItem(LOCALE_KEY, 'zz')
     vi.spyOn(navigator, 'language', 'get').mockReturnValue('de-DE')
