@@ -22,11 +22,11 @@ import sys
 from collections import Counter, defaultdict
 
 # ── What the kit shipped, so a missing row can be detected without a second file ────────────
-EXPECTED_ROWS = 10515
-EXPECTED_KEYS_SHA = 'b04305c30c21c1a04c9c79dfffb07706952aced7943a95b8e8fc5f84babdea6a'
-EXPECTED_ENGLISH_SHA = 'fdf711d32d3b623bce65a3731586b8a0be1d08a717c5a5c955f91b2116266e48'
-EXPECTED_DNT_SHA = '38d9b7a5f8dc6501b5014d0920fd2f05b7a729a226f329727bca631ab33c75e7'
-EXPECTED_TIERS = {1: 1100, 2: 361, 3: 1907, 4: 567, 5: 4101, 6: 2479}
+EXPECTED_ROWS = 10625
+EXPECTED_KEYS_SHA = '5f3af860471ec8fa8fe76a07782d25c82133fbbd37cff7073e07f9620a7fa8c9'
+EXPECTED_ENGLISH_SHA = '0046df1804dc5fcebc99cfbb56ecedfca10224bd279b0ce7c41121458425d939'
+EXPECTED_DNT_SHA = '09a1bf36741046f2fe67b75764b4d056bf5e2e151e7846e289ffe78f3dd7aaf1'
+EXPECTED_TIERS = {1: 1097, 2: 361, 3: 2024, 4: 567, 5: 4097, 6: 2479}
 COLUMNS = ['priority', 'key', 'english', 'chinese', 'do_not_translate', 'notes']
 
 # ── Terms the Russian kit keeps in Latin script, which Chinese says in Chinese ──────────────
