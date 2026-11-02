@@ -59,6 +59,7 @@ vi.mock('./api', async (importOriginal) => {
     logOperators: vi.fn(async () => []),
     logActivations: vi.fn(async () => []),
     radioLaunchInfo: vi.fn(async () => ({ showPicker: false })),
+    getKpForecast: vi.fn(async () => ({ points: [] })),
     uiStateLoad: vi.fn(async () => ({})),
     uiStateSave: vi.fn(async () => ({})),
     getAllSpots: vi.fn(async () => []),

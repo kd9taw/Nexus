@@ -1545,3 +1545,57 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     }
   }
 })
+
+// THE REGION'S COLUMN DIVIDERS NEVER PAINT OVER A TX SURFACE. A column divider
+// (components/panes/RegionColumnSeams: `.pane-splitter.cockpit-colseam`) is the full height of the
+// pane region. While the shell's deficit valve scrolls (CW at 1920×1080 pinned at 150 %), the sticky
+// dock parks over the bottom of the region and the sticky TX strip over its top, and whichever stacks
+// higher takes the click where they cross: with the divider at `.pane-splitter`'s level (styles.css)
+// above the dock's, F7's centre landed on the divider (measured in Chrome). Computed across BOTH
+// sheets, styles.css then cockpit-panes.css (main.tsx's import order), for every shell with a region
+// and on Phone's two stage states. The dock and strip must stack STRICTLY higher than every class set a
+// column divider renders with: at a tie, a strip (before the region in the DOM) would lose.
+describe('the pane region’s column dividers stack under the dock and the TX strip', () => {
+  const both = parseRules(
+    css + '\n' + readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+  )
+  const zOf = (chain: Array<Set<string>>): { value: number; selector: string } | null => {
+    let win: { value: number; selector: string; spec: number; order: number } | null = null
+    for (const r of both) {
+      if (r.media !== null || !matchesChain(r.selector, chain)) continue
+      let v: number | null = null
+      for (const d of r.body.split(';')) {
+        const m = /^\s*z-index\s*:\s*(-?\d+)\s*$/.exec(d)
+        if (m) v = Number(m[1])
+      }
+      if (v === null) continue
+      const spec = specificity(r.selector)
+      if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) win = { value: v, selector: r.selector, spec, order: r.order }
+    }
+    return win && { value: win.value, selector: win.selector }
+  }
+  // Every class set PaneSeam can render a column divider with (its three branches), at both places.
+  const SEAMS = ['2', '3'].flatMap((n) =>
+    [[], ['vertical-inline'], ['col-seam', 'seam']].map((extra) => new Set(['pane-splitter', 'cockpit-colseam', `cockpit-colseam-${n}`, ...extra])),
+  )
+  const HOSTS: Array<[string, Array<Set<string>>]> = [
+    ['CW', shellChain('cw-cockpit')],
+    ['JS8', shellChain('js8-cockpit')],
+    ['JTTY', shellChain('jtty-cockpit')],
+    ...PHONE_STAGES.map(([state, chain]): [string, Array<Set<string>>] => [`Phone (${state})`, chain]),
+  ]
+  for (const [name, host] of HOSTS) {
+    it(`${name}: the dock and the TX strip stack above every column divider`, () => {
+      const shell = host.slice(0, 3)
+      for (const surface of ['cockpit-txdock', 'cockpit-txstrip']) {
+        const tx = zOf([...(surface === 'cockpit-txdock' ? shell : host), new Set([surface])])
+        expect(tx, `.${surface}: no z-index — it stacks under any positioned divider`).not.toBeNull()
+        for (const seam of SEAMS) {
+          const z = zOf([...host, new Set(['cockpit-panes']), seam])
+          if (z === null) continue
+          expect(tx!.value, `.${surface} (${tx!.selector}: ${tx!.value}) vs the divider .${[...seam].join('.')} (${z.selector}: ${z.value})`).toBeGreaterThan(z.value)
+        }
+      }
+    })
+  }
+})

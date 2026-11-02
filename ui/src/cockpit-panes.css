@@ -409,7 +409,11 @@
    pane region, so no pane layout, stored or hand-edited, can move or hide it — this and
    the header are where THE STOP LINE above is made true, the surfaces that keep "the
    operator must never be unable to stop a transmission" true no matter what the ⊞ menu is
-   set to. A sender may live in a pane, and several do; the operator's last resort may not. */
+   set to. A sender may live in a pane, and several do; the operator's last resort may not.
+   Z-INDEX 4, ABOVE THE REGION'S COLUMN DIVIDERS (`.pane-splitter`, styles.css, 3). While the
+   deficit valve scrolls (CW at 1920×1080 pinned at 150 %) the parked dock covers the bottom of the
+   region, and a divider stacked above it took the click on F7's centre (measured in Chrome). The
+   TX strip below stands at the same level for the same reason. Guarded in cockpit-shells.test.ts. */
 /* THE SHORT-WINDOW TIER (the 1080p pass, 2026-11-01). Where the EFFECTIVE window height
    (`--vh-eff`, the zoom-corrected height useViewport publishes) is at most 1100 px — 1080p at 100 %,
    and at 125/150 % with the auto zoom — the chrome's own spacing tightens: the dock's and the TX
@@ -424,7 +428,7 @@
   flex: 0 0 auto;
   position: sticky;
   bottom: 0;
-  z-index: 2;
+  z-index: 4;
   display: flex;
   flex-direction: column;
   gap: max(var(--space-1), min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100));
@@ -434,13 +438,14 @@
 }
 /* …LIFTED WHILE A MACRO EDITOR STANDS ON IT. The keyboard docks' macro editor (`.rtty-macro-editor`,
    styles.css) is out of flow on the dock's top edge, over the bottom of the pane region, so it
-   paints at the dock's level (2), under the region's column dividers (`.pane-splitter`, 3): where
-   a divider crossed it, a 12 px strip of the editor took no click (measured in Chrome, CW at
-   1366×768: Send once's centre hit the divider). While the editor is open the dock is lifted over
-   them. That covers no stop control: the TX strip, at the dock's own level, already paints under
-   the dock, which comes after it in the shell. */
+   paints at the dock's level. When that level was 2, under the region's column dividers
+   (`.pane-splitter`, 3), a 12 px strip of the editor took no click where a divider crossed it
+   (measured in Chrome, CW at 1366×768: Send once's centre hit the divider). The dock itself now
+   stands above the dividers; while an editor is open it is still lifted one step over its own
+   level. That covers no stop control: the TX strip, at the dock's own level, already
+   paints under the dock, which comes after it in the shell. */
 .cockpit-txdock-editing {
-  z-index: 4;
+  z-index: 5;
 }
 
 /* THE MACRO BANK — a keyboard dock of 12 or 16 macro keys (Settings ▸ CW / RTTY / PSK ▸ Macro keys;
@@ -506,7 +511,9 @@
   position: sticky;
   top: 0;
   bottom: var(--cockpit-txstrip-bottom, 0px);
-  z-index: 2;
+  /* Above the region's column dividers, as the dock is: parked at the top of a scrolled shell the
+     strip covers the top of the region, and Stop TX must take its own click. */
+  z-index: 4;
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;

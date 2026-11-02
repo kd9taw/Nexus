@@ -57,6 +57,12 @@ vi.mock('../api', async (importOriginal) => {
     cwDecode: vi.fn(async () => decodeState),
     previewCw: vi.fn(async (t: string) => t),
     pointRotatorAtCall: vi.fn(async () => 0),
+    // The rotor strip's reads answer `null` when no rotator or satellite track is running, as the
+    // backend does (`Option` over the wire). An `{}` answer is truthy, passes the strip's `== null`
+    // guards and froze `NaN°T`, `rotate(NaN …)` and an unfilled `{{bird}}` into the golden.
+    readRotator: vi.fn(async () => null),
+    getSatTrackStatus: vi.fn(async () => null),
+    getSatTransponder: vi.fn(async () => null),
     // ⚠️ THE LIVE METER POLL IS A TIMER, so whether its first answer lands before the golden is
     // read depends on how loaded the box is. Answering with the bus's own resting reading makes
     // the document the same either way — an `{}` answer flipped the zero-beat indicator out of
@@ -146,6 +152,12 @@ const GOLDEN = resolve(process.cwd(), 'src/components/__fixtures__/CwCockpit.sin
 describe('⛔ a radio with ONE receiver is drawn exactly as it was', () => {
   it('the cockpit matches the golden captured before CW learned about a Sub', async () => {
     expect(await cockpitHtml(undefined)).toBe(readFileSync(GOLDEN, 'utf8'))
+  })
+
+  it('the golden holds no render a real backend cannot produce: no NaN, no unfilled {{placeholder}}', () => {
+    const golden = readFileSync(GOLDEN, 'utf8')
+    expect(golden).not.toContain('NaN')
+    expect(golden).not.toContain('{{')
   })
 
   it('every single-receiver shape of the snapshot draws that same document', async () => {
