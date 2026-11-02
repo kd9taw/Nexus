@@ -10572,7 +10572,7 @@ impl Engine {
     /// Today's band-dropdown default for (`band`, `om`) — mirrors what the pickers land on
     /// when no memory cell exists (`get_licensed_band_plan` for Phone/CW, the band-plan
     /// channel for Digital, the RTTY plan for RTTY). An empty cell must park EXACTLY where
-    /// the dropdown always did; `None` = no privilege / no channel → leave the dial put.
+    /// the dropdown always did; `None` = no channel → leave the dial put.
     fn band_pick_default(
         &self,
         band: &str,
@@ -10581,20 +10581,18 @@ impl Engine {
         use crate::settings::OperatingMode;
         let class = self.settings.license_class;
         match om {
-            // THE phone home, not the bare segment edge: on LSB the emission hangs BELOW the
-            // dial, so the edge itself is a dial the transmit gate refuses (see
-            // [`crate::privileges::phone_home`] — this arm is where an Extra picking 40 m
-            // landed on an unkeyable 7.1250).
-            OperatingMode::Phone => {
-                crate::privileges::phone_home(class, band).map(|(dial, sb)| (dial, sb.to_string()))
-            }
-            // CW parks in the activity window (14.030, not the dead 14.000 edge), clamped
-            // to the licensed segment start; sideband is inert for CW (the rig-mode
-            // policy commands CW) — "USB" matches the dropdown it mirrors.
-            OperatingMode::Cw => crate::privileges::segment_start(class, band, om).map(|lo| {
-                let dial = crate::bandplan::cw_activity_mhz(band).map_or(lo, |a| a.max(lo));
-                (dial, "USB".to_string())
-            }),
+            // THE ROW THE PHONE/CW PICKER LISTED, read from the same function that lists it
+            // (`bandplan::licensed_bands`), so a listed band always tunes. These arms used to
+            // recompute a segment start of their own and returned `None` where the class had
+            // none, which made a pick of a listed receive-only band (a General's 4 m, `Open`'s
+            // 30 m phone) do nothing at all. The row carries THE phone home (an LSB home lifted
+            // clear of the segment edge — the unkeyable 7.1250 an Extra once landed on) and the
+            // CW activity dial; a receive-only row carries the listening dial, where the
+            // transmit gate, which this does not consult, refuses the over as the row's lock says.
+            OperatingMode::Phone | OperatingMode::Cw => crate::bandplan::licensed_bands(class, om)
+                .into_iter()
+                .find(|c| c.band == band)
+                .map(|c| (c.dial_mhz, c.mode)),
             OperatingMode::Digital => self
                 .band_plan()
                 .into_iter()
@@ -10678,8 +10676,9 @@ impl Engine {
     ///
     /// `mode`: the cockpit's mode ("phone"/"cw"/…), passed explicitly for the same
     /// entry-race reason as `get_licensed_band_plan`; `None` = the engine's current
-    /// operating mode. No memory + no default = no-op — the dropdown only lists licensed
-    /// bands, and the TX lockout guards the air regardless.
+    /// operating mode. A Phone/CW pick of any band the dropdown lists always has a default (the
+    /// listed row); a band no picker lists is a no-op, and the TX lockout guards the air
+    /// regardless.
     pub fn pick_band(&mut self, band: &str, mode: Option<&str>) {
         self.pick_band_with_reset(band, mode, reset_ft8_a7_without_waiting);
     }
@@ -43009,6 +43008,100 @@ mod tests {
             e.settings().dial_mhz
         );
         assert!(e.tx_allowed());
+    }
+
+    /// EVERY BAND A PICKER LISTS TUNES. The Phone and CW pickers list a band whether or not the
+    /// class may transmit there (receiving needs no licence), but a pick used to read a segment
+    /// start of its own and did nothing when there was none: `Open` clicking 30 m in Phone, or
+    /// 9 cm, and a US General clicking 4 m, stayed where they were. The pick now lands on the
+    /// row the list published, and the transmit gate, which this does not touch, answers there
+    /// exactly as the row's lock said it would.
+    #[test]
+    fn every_band_a_picker_lists_tunes_and_locks_as_listed() {
+        let mut picks = 0;
+        for class in crate::privileges::US_CLASSES
+            .into_iter()
+            .chain([crate::settings::LicenseClass::Open])
+        {
+            for (om, name) in [
+                (crate::settings::OperatingMode::Phone, "phone"),
+                (crate::settings::OperatingMode::Cw, "cw"),
+            ] {
+                for row in crate::bandplan::licensed_bands(class, om) {
+                    let mut e = Engine::new("N0CALL", "EN52", 0);
+                    e.settings.license_class = class;
+                    e.set_operating_mode(name, false);
+                    e.pick_band(&row.band, Some(name));
+                    assert!(
+                        (e.settings().dial_mhz - row.dial_mhz).abs() < 1e-9
+                            && e.settings().band == row.band,
+                        "{class:?} {name} {}: the pick must land on the listed {} MHz, got {} {}",
+                        row.band,
+                        row.dial_mhz,
+                        e.settings().dial_mhz,
+                        e.settings().band
+                    );
+                    assert_eq!(
+                        e.tx_allowed(),
+                        row.tx,
+                        "{class:?} {name} {}: the gate must answer as the row's lock said",
+                        row.band
+                    );
+                    picks += 1;
+                }
+            }
+        }
+        assert!(
+            picks > 200,
+            "the sweep must cover every class, mode and band"
+        );
+    }
+
+    /// The cases that were silent no-ops, by name, with their controls.
+    #[test]
+    fn the_bands_that_used_to_do_nothing_now_tune() {
+        let pick = |class: &str, band: &str, mode: &str| {
+            let mut e = Engine::new("N0CALL", "EN52", 0);
+            e.set_license_class(class);
+            e.set_operating_mode(mode, false);
+            e.set_frequency(14.250, "20m", "USB");
+            e.pick_band(band, Some(mode));
+            e
+        };
+        // 30 m Phone for a non-US operator: 10.120 USB, and it keys.
+        let e = pick("open", "30m", "phone");
+        assert!((e.settings().dial_mhz - 10.120).abs() < 1e-9);
+        assert_eq!(e.settings().band, "30m");
+        assert!(e.tx_allowed());
+        // Control: a US General is taken to the same dial to listen, and stays locked there.
+        let e = pick("general", "30m", "phone");
+        assert!((e.settings().dial_mhz - 10.120).abs() < 1e-9);
+        assert!(!e.tx_allowed(), "no US class may use phone on 30 m");
+        // 9 cm for a non-US operator, both modes.
+        for mode in ["phone", "cw"] {
+            let e = pick("open", "9cm", mode);
+            assert!((e.settings().dial_mhz - 3400.0).abs() < 1e-9, "{mode}");
+            assert!(e.tx_allowed(), "{mode}");
+        }
+        // A US General clicking 4 m: it tunes, and it is receive-only, which is what the list says.
+        for mode in ["phone", "cw"] {
+            let e = pick("general", "4m", mode);
+            assert_eq!(e.settings().band, "4m", "{mode}");
+            assert!(!e.tx_allowed(), "{mode}: no US class may key 4 m");
+        }
+        // 60 m is in the pickers now. Open parks clear of the 5.357 FT8 dial.
+        let e = pick("open", "60m", "phone");
+        assert!((e.settings().dial_mhz - 5.363).abs() < 1e-9);
+        assert_eq!(e.settings().sideband, "USB");
+        assert!(e.tx_allowed());
+        // A US General parks in the same 5351.5-5366.5 kHz segment, where the rule lets it talk
+        // on upper sideband; a Technician holds no 60 m at all and stays locked.
+        let e = pick("general", "60m", "phone");
+        assert!((e.settings().dial_mhz - 5.363).abs() < 1e-9);
+        assert!(e.tx_allowed());
+        let e = pick("technician", "60m", "phone");
+        assert!((e.settings().dial_mhz - 5.363).abs() < 1e-9);
+        assert!(!e.tx_allowed());
     }
 
     #[test]

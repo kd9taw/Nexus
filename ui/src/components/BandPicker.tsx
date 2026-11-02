@@ -3,7 +3,8 @@
 // and the option VALUE here — the value is what `pickBand` sends the engine, so neither may move.
 //
 // The 🔒 chip is a READOUT of `txAllowed`, not a transmit control: it says the engine is already
-// blocking transmit here. Nothing on this surface keys, unkeys or stops a transmission.
+// blocking transmit here. Nothing on this surface keys, unkeys or stops a transmission. The amber
+// band-plan chip is advice and nothing more (`bandPlanAdvice.ts`): no transmit path reads it.
 import { useEffect, useState } from 'react'
 import type { AppSnapshot, BandChannel } from '../types'
 import { getLicensedBandPlan, pickBand } from '../api'
@@ -11,6 +12,7 @@ import { bandChipInk, bandColor } from '../bandColors'
 import { BandMenu } from './BandMenu'
 import { t } from '../i18n'
 import { showWhenDriving } from '../features/drivingRefusal'
+import { phoneOutsideBandPlan } from '../bandPlanAdvice'
 
 interface Props {
   snap: AppSnapshot
@@ -65,6 +67,14 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
   const splitTx =
     em != null && Math.abs(em - snap.radio.dialMhz) > 1e-6 ? em : null
 
+  // Phone outside the usual band plan (30 m phone, say): an amber note, never a block. Judged at
+  // the transmit carrier, and only while transmit is allowed — a locked station already has the
+  // 🔒 chip, which says more.
+  const offPlanBand =
+    mode === 'phone' && snap.radio.txAllowed
+      ? phoneOutsideBandPlan(splitTx ?? snap.radio.dialMhz, snap.radio.sideband ?? '')
+      : null
+
   return (
     <div className="band-picker">
       <span className="band-picker-dot" style={{ background: col }} aria-hidden="true" />
@@ -103,6 +113,11 @@ export function BandPicker({ snap, mode, onSnap }: Props) {
           }
         >
           {t('bandPicker.txLock.label')}
+        </span>
+      )}
+      {offPlanBand && (
+        <span className="band-plan-advice" title={t('bandPicker.planAdvice.title', { band: offPlanBand })}>
+          {t('bandPicker.planAdvice.label')}
         </span>
       )}
     </div>

@@ -776,7 +776,7 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
         mode: propagation::digital_hole_mode(freq_mhz)
             .map(str::to_string)
             .unwrap_or_else(|| {
-                propagation::classify_spot_mode(freq_mhz)
+                propagation::classify_spot_mode(freq_mhz, &sp.dx_call)
                     .label()
                     .to_string()
             }),
@@ -1827,7 +1827,7 @@ fn start_human_cluster_feed(
                 // the Phone pill green and hide a phone drought. Classify the same way the
                 // need-matcher does.
                 if matches!(
-                    propagation::classify_spot_mode(sp.freq_mhz()),
+                    propagation::classify_spot_mode(sp.freq_mhz(), &sp.dx_call),
                     propagation::ModeClass::Phone
                 ) {
                     hp.phone_cluster_last
@@ -8977,7 +8977,7 @@ async fn get_propagation(
                     // spot frequency. The mode is the band plan's call, NEVER the free-text
                     // comment (which holds QSY requests / chit-chat / times).
                     mode: Some(
-                        propagation::classify_spot_mode(cs.freq_mhz())
+                        propagation::classify_spot_mode(cs.freq_mhz(), &cs.dx_call)
                             .label()
                             .to_string(),
                     ),
@@ -30868,7 +30868,7 @@ fn program_spot_row(
     let (entity, zone) = propagation::dxcc::resolve(&spot.call)
         .map(|i| (i.entity.to_string(), i.cq_zone))
         .unwrap_or_default();
-    let mode_label = propagation::classify_spot_mode(freq).label();
+    let mode_label = propagation::classify_spot_mode(freq, &spot.call).label();
     let licensed = tempo_app::privileges::tx_allowed(
         class,
         freq,
@@ -31096,7 +31096,7 @@ fn read_spots_with(
             } else {
                 -1
             };
-            let mode_label = propagation::classify_spot_mode(freq).label();
+            let mode_label = propagation::classify_spot_mode(freq, &cs.dx_call).label();
             let licensed = tempo_app::privileges::tx_allowed(
                 class,
                 freq,
@@ -31298,7 +31298,7 @@ fn cluster_spot_heards(
             };
             voices = ordered;
         }
-        let class = propagation::classify_spot_mode(freq);
+        let class = propagation::classify_spot_mode(freq, &cs.dx_call);
         // PRIVILEGE GATE (operator 2026-07-22, "LU6HL on 7.140 shouldn't show"): a station
         // on a frequency the operator may not TRANSMIT to is not a need — the Needed board is
         // a "work these" list, and 7.140 SSB sits in the Extra-only 40 m phone segment a

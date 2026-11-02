@@ -160,7 +160,9 @@ fn band_selection_refuses_invalid_context_and_a_changed_memory_before_commit() {
         ("20m;T 1", "phone"),
         ("40m", "cw"),
         ("40m", "digital"),
-        ("60m", "phone"),
+        // A real band the Phone picker does not list. (60 m stood here until 60 m joined the
+        // Phone and CW pickers; a remote pick of it is now as valid as the desktop's.)
+        ("630m", "phone"),
     ] {
         assert!(queue(&mut s, band, mode).is_err());
         assert!(s.engine.take_remote_radio().is_none());

@@ -789,7 +789,7 @@ impl HuntedActivations {
 /// comment, the OTA feeds carry a STRUCTURED `mode` field, so `USB`/`LSB`/`FM`/`AM`/`DV`
 /// unambiguously mean voice here (whereas [`crate::model::classify_spot_mode`] must ignore
 /// them in prose). Empty/unknown ("Other") falls back to the band-plan segment.
-fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
+fn ota_mode_class(mode: &str, freq_mhz: f64, call: &str) -> ModeClass {
     match mode.trim().to_ascii_uppercase().as_str() {
         "CW" => ModeClass::Cw,
         "SSB" | "USB" | "LSB" | "PHONE" | "PH" | "AM" | "FM" | "DV" => ModeClass::Phone,
@@ -800,7 +800,7 @@ fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
         "FT8" | "FT4" | "FT2" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "Q65" | "FST4"
         | "RTTY" | "PSK" | "PSK31" | "PSK63" | "PSK125" | "QPSK31" | "JT65" | "JT9" | "JS8"
         | "JTTY" | "MFSK" | "MSK144" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
-        _ => crate::model::classify_spot_mode(freq_mhz),
+        _ => crate::model::classify_spot_mode(freq_mhz, call),
     }
 }
 
@@ -887,7 +887,7 @@ pub fn activation_alert(
 ) -> Option<NeedAlert> {
     let freq_mhz = spot.freq_khz / 1000.0;
     let band = Band::from_mhz(freq_mhz)?;
-    let mode = ota_mode_class(&spot.mode, freq_mhz);
+    let mode = ota_mode_class(&spot.mode, freq_mhz, &spot.activator);
     // The need is judged on the one mode the feed names, as every other row's is, and on the class
     // when the feed names only a class or nothing ([`feed_mode`]). The row keeps the class as its
     // label (below): the board drops an activation row that repeats a cluster row by call, band
@@ -3371,7 +3371,11 @@ mod tests {
             let class = ModeClass::from_adif(&key);
             // A CW, a phone and a data frequency: the class must not move with any of them.
             for mhz in [14.025, 14.250, 14.074] {
-                assert_eq!(ota_mode_class(token, mhz), class, "{token:?} at {mhz}");
+                assert_eq!(
+                    ota_mode_class(token, mhz, "W1AW"),
+                    class,
+                    "{token:?} at {mhz}"
+                );
             }
         }
         assert_eq!(

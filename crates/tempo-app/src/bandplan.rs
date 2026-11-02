@@ -693,6 +693,10 @@ pub fn cw_activity_mhz(band: &str) -> Option<f64> {
     Some(match band {
         "160m" => 1.810,
         "80m" => 3.550,
+        // 60 m: inside the IARU Region 1 plan's CW and narrow-mode slice, 5.3515-5.354 MHz.
+        // A US class's 60 m is channelised and has no segment start of its own; it parks here
+        // only as `licensed_bands`' listening dial, where the gate still decides keying.
+        "60m" => 5.3525,
         "40m" => 7.030,
         "30m" => 10.110,
         "20m" => 14.030,
@@ -856,7 +860,7 @@ mod tests {
     /// The other half of that pair: the operator the 4 m channels ARE for. Keying it is not
     /// enough — every picker has to be able to PARK on it, or 4 m is an FT-only band that
     /// disappears the moment its Region-1 owner switches to SSB or CW (#75). The homes come
-    /// from a Region-1 segment list `Open` alone carries; `extra()` must never gain it, or
+    /// from the parking list `Open` alone carries; `extra()` must never gain its 4 m rows, or
     /// the test above goes red on a US privilege that does not exist.
     #[test]
     fn the_region_1_operator_gets_a_4m_home_in_every_mode() {

@@ -440,16 +440,25 @@ fn is_digital_hole(freq_mhz: f64) -> bool {
 /// real mode field) is trusted on its OWN path — this fn serves only the comment-only cluster/
 /// RBN wire, where the number on the dial is the one thing we can believe.
 ///
-/// Known trade-off: on 40m/80m a DX SSB station parked BELOW the US phone edge (e.g. 7.085)
-/// falls in the RTTY/data window and reads as Digital — we accept that rather than trust a
-/// "SSB" comment token, because the same token is unreliable everywhere else.
-pub fn classify_spot_mode(freq_mhz: f64) -> ModeClass {
+/// WHOSE BAND PLAN: the spotted station's own. `dx_call` is the callsign spotted, and it picks
+/// the HF lines ([`hf_segment`]): a station in the US (the United States, Alaska, Hawaii) is
+/// read by the FCC sub-band edges, which bind it by law (no US station may talk below 7.125 MHz),
+/// and every other station by the IARU Region 1 HF band plan, whose phone starts lower (40 m
+/// phone from 7.053, 15 m from 21.151). One set of US edges for the whole world classed every
+/// European, African, Asian and Pacific SSB station between those lines as Digital: it fell out
+/// of the phone health pill and wore the wrong mode on the Needed board. The call is read
+/// through the DXCC resolver, never the comment; a call it cannot place gets the worldwide lines.
+pub fn classify_spot_mode(freq_mhz: f64, dx_call: &str) -> ModeClass {
     // 1. Exact FT8/FT4/MSK digital watering holes (they sit inside CW/SSB windows on VHF).
     if is_digital_hole(freq_mhz) {
         return ModeClass::Digital;
     }
-    // 2. HF band sections (CW / data-digital / phone).
-    if let Some(class) = hf_segment(freq_mhz) {
+    // 2. HF band sections (CW / data-digital / phone), by the station's own plan.
+    let us = crate::dxcc::resolve(dx_call)
+        .and_then(|i| i.dxcc)
+        .is_some_and(crate::dxcc::is_us_state_dxcc);
+    let lines = if us { HfLines::Fcc } else { HfLines::Iaru };
+    if let Some(class) = hf_segment(freq_mhz, lines) {
         return class;
     }
     // 3. VHF sections (6m/2m CW & SSB windows), else Digital.
@@ -471,22 +480,44 @@ fn vhf_segment(freq_mhz: f64) -> ModeClass {
     }
 }
 
+/// Which HF band plan [`hf_segment`] draws its lines from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HfLines {
+    /// The US FCC sub-band edges (47 CFR 97.305), for a station in the US.
+    Fcc,
+    /// The IARU Region 1 HF band plan (2023 revision), for every other station. Region 3's plan
+    /// draws the same CW and data lines on 80, 20, 17, 15 and 12 m and starts 40 m phone a
+    /// little lower; Region 1's are used for both, so a station is never read by US edges.
+    Iaru,
+}
+
 /// The HF band-plan SECTION for a frequency: `Cw` below the CW/data line, `Digital` in the
 /// RTTY/FT8 data middle, `Phone` at/above the phone line — or `None` when the frequency is off
 /// the HF plan (VHF/UHF, 60m, or a band gap), where [`classify_spot_mode`] falls through to
-/// [`vhf_segment`]. The lines are the US General edges.
-fn hf_segment(freq_mhz: f64) -> Option<ModeClass> {
-    // (cw_top, phone_bottom) MHz per HF band. 30m has no phone allocation (CW + data).
-    let (cw_top, phone_bottom) = match freq_mhz {
-        f if (1.8..2.0).contains(&f) => (1.810, 1.843), // CW < .810, data .810–.843 (FT8 1.840)
-        f if (3.5..4.0).contains(&f) => (3.570, 3.600),
-        f if (7.0..7.3).contains(&f) => (7.070, 7.125), // CW < .070 (DX window), data .070–.125 (FT4 7.0475 is a digital hole, matched first)
-        f if (10.1..10.15).contains(&f) => (10.130, 10.151), // CW < .130, data .130–.150
-        f if (14.0..14.35).contains(&f) => (14.070, 14.150),
-        f if (18.06..18.17).contains(&f) => (18.095, 18.110),
-        f if (21.0..21.45).contains(&f) => (21.070, 21.200),
-        f if (24.89..24.99).contains(&f) => (24.915, 24.930),
-        f if (28.0..29.7).contains(&f) => (28.070, 28.300),
+/// [`vhf_segment`]. 30 m has no phone in any plan.
+fn hf_segment(freq_mhz: f64, lines: HfLines) -> Option<ModeClass> {
+    // (cw_top, phone_bottom) MHz per HF band.
+    let (cw_top, phone_bottom) = match (lines, freq_mhz) {
+        (HfLines::Fcc, f) if (1.8..2.0).contains(&f) => (1.810, 1.843), // CW < .810, data .810–.843 (FT8 1.840)
+        (HfLines::Fcc, f) if (3.5..4.0).contains(&f) => (3.570, 3.600),
+        (HfLines::Fcc, f) if (7.0..7.3).contains(&f) => (7.070, 7.125), // CW < .070 (DX window), data .070–.125 (FT4 7.0475 is a digital hole, matched first)
+        (HfLines::Fcc, f) if (10.1..10.15).contains(&f) => (10.130, 10.151), // CW < .130, data .130–.150
+        (HfLines::Fcc, f) if (14.0..14.35).contains(&f) => (14.070, 14.150),
+        (HfLines::Fcc, f) if (18.06..18.17).contains(&f) => (18.095, 18.110),
+        (HfLines::Fcc, f) if (21.0..21.45).contains(&f) => (21.070, 21.200),
+        (HfLines::Fcc, f) if (24.89..24.99).contains(&f) => (24.915, 24.930),
+        (HfLines::Fcc, f) if (28.0..29.7).contains(&f) => (28.070, 28.300),
+        // IARU Region 1: CW to the first line; narrow data and beacons to the second; all modes,
+        // phone included, above it.
+        (HfLines::Iaru, f) if (1.8..2.0).contains(&f) => (1.838, 1.843),
+        (HfLines::Iaru, f) if (3.5..4.0).contains(&f) => (3.570, 3.600),
+        (HfLines::Iaru, f) if (7.0..7.3).contains(&f) => (7.040, 7.053),
+        (HfLines::Iaru, f) if (10.1..10.15).contains(&f) => (10.130, 10.151),
+        (HfLines::Iaru, f) if (14.0..14.35).contains(&f) => (14.070, 14.112),
+        (HfLines::Iaru, f) if (18.06..18.17).contains(&f) => (18.095, 18.111),
+        (HfLines::Iaru, f) if (21.0..21.45).contains(&f) => (21.070, 21.151),
+        (HfLines::Iaru, f) if (24.89..24.99).contains(&f) => (24.915, 24.931),
+        (HfLines::Iaru, f) if (28.0..29.7).contains(&f) => (28.070, 28.225),
         _ => return None, // off the HF plan (VHF/UHF, 60m, gaps) — the comment decides
     };
     Some(if freq_mhz < cw_top {
@@ -1160,10 +1191,10 @@ mod tests {
     /// routing and gating decision built on it behaves exactly as before.
     #[test]
     fn naming_the_mode_did_not_change_how_a_spot_is_classified() {
-        assert_eq!(classify_spot_mode(14.074), ModeClass::Digital);
-        assert_eq!(classify_spot_mode(14.080), ModeClass::Digital);
-        assert_eq!(classify_spot_mode(14.030), ModeClass::Cw);
-        assert_eq!(classify_spot_mode(14.250), ModeClass::Phone);
+        assert_eq!(classify_spot_mode(14.074, "W1AW"), ModeClass::Digital);
+        assert_eq!(classify_spot_mode(14.080, "W1AW"), ModeClass::Digital);
+        assert_eq!(classify_spot_mode(14.030, "W1AW"), ModeClass::Cw);
+        assert_eq!(classify_spot_mode(14.250, "W1AW"), ModeClass::Phone);
     }
     use super::*;
 
@@ -1251,36 +1282,115 @@ mod tests {
         // THE bug (both directions): the classifier must NOT read the comment. It no longer
         // takes one — a digital watering hole is Digital, a CW freq is CW, a voice freq is
         // Phone, period. 21.074 is FT8, so it can never route to the CW/phone cockpit again.
-        assert_eq!(classify_spot_mode(21.074), ModeClass::Digital); // 15m FT8
-        assert_eq!(classify_spot_mode(14.074), ModeClass::Digital); // 20m FT8
-        assert_eq!(classify_spot_mode(21.140), ModeClass::Digital); // 15m FT4 (sits above CW, below phone)
-                                                                    // Voice freq → Phone; CW freq → CW.
-        assert_eq!(classify_spot_mode(14.250), ModeClass::Phone); // 20m phone segment
-        assert_eq!(classify_spot_mode(14.025), ModeClass::Cw); // 20m CW segment
-        assert_eq!(classify_spot_mode(7.030), ModeClass::Cw); // 40m CW (below the data edge)
-                                                              // 40m CW DX window (7.040–7.070) — classic split-CW DXpedition territory. cw_top is
-                                                              // 7.070 (the x.070 pattern), so these are CW, not Digital. FT4 (7.0475) stays a hole.
-        assert_eq!(classify_spot_mode(7.055), ModeClass::Cw); // 40m CW DX window
-        assert_eq!(classify_spot_mode(7.045), ModeClass::Cw); // 40m CW DX window
-        assert_eq!(classify_spot_mode(7.0475), ModeClass::Digital); // FT4 hole stays Digital
+        assert_eq!(classify_spot_mode(21.074, "W1AW"), ModeClass::Digital); // 15m FT8
+        assert_eq!(classify_spot_mode(14.074, "W1AW"), ModeClass::Digital); // 20m FT8
+        assert_eq!(classify_spot_mode(21.140, "W1AW"), ModeClass::Digital); // 15m FT4 (sits above CW, below phone)
+                                                                            // Voice freq → Phone; CW freq → CW.
+        assert_eq!(classify_spot_mode(14.250, "W1AW"), ModeClass::Phone); // 20m phone segment
+        assert_eq!(classify_spot_mode(14.025, "W1AW"), ModeClass::Cw); // 20m CW segment
+        assert_eq!(classify_spot_mode(7.030, "W1AW"), ModeClass::Cw); // 40m CW (below the data edge)
+                                                                      // 40m CW DX window (7.040–7.070) — classic split-CW DXpedition territory. cw_top is
+                                                                      // 7.070 (the x.070 pattern), so these are CW, not Digital. FT4 (7.0475) stays a hole.
+        assert_eq!(classify_spot_mode(7.055, "W1AW"), ModeClass::Cw); // 40m CW DX window
+        assert_eq!(classify_spot_mode(7.045, "W1AW"), ModeClass::Cw); // 40m CW DX window
+        assert_eq!(classify_spot_mode(7.0475, "W1AW"), ModeClass::Digital); // FT4 hole stays Digital
+    }
+
+    /// A station outside the US is read by the IARU band plan, not by US edges: a European,
+    /// Australian or Japanese SSB station on 40 m between 7.053 and 7.125 is Phone, where the
+    /// US lines (which bind only a US station) made it Digital. The US station on the same
+    /// frequency keeps its own lines (the controls), and a digital watering hole is Digital for
+    /// everyone.
+    #[test]
+    fn a_spot_is_classified_by_the_spotted_stations_own_band_plan() {
+        for call in ["G4ABC", "VK2ABC", "JA1ABC", "DL1ABC", "ZS6ABC", ""] {
+            assert_eq!(
+                classify_spot_mode(7.090, call),
+                ModeClass::Phone,
+                "{call} 40 m SSB"
+            );
+            assert_eq!(classify_spot_mode(7.060, call), ModeClass::Phone, "{call}");
+            assert_eq!(
+                classify_spot_mode(14.130, call),
+                ModeClass::Phone,
+                "{call} 20 m"
+            );
+            assert_eq!(
+                classify_spot_mode(21.160, call),
+                ModeClass::Phone,
+                "{call} 15 m"
+            );
+            assert_eq!(
+                classify_spot_mode(28.250, call),
+                ModeClass::Phone,
+                "{call} 10 m"
+            );
+            // The narrow-data middle and the CW bottom stay what they are.
+            assert_eq!(
+                classify_spot_mode(7.045, call),
+                ModeClass::Digital,
+                "{call}"
+            );
+            assert_eq!(classify_spot_mode(7.020, call), ModeClass::Cw, "{call}");
+            assert_eq!(
+                classify_spot_mode(1.825, call),
+                ModeClass::Cw,
+                "{call} 160 m CW"
+            );
+            assert_eq!(
+                classify_spot_mode(14.100, call),
+                ModeClass::Digital,
+                "{call}"
+            );
+            // Holes first, and 30 m has no phone in any plan.
+            assert_eq!(
+                classify_spot_mode(7.074, call),
+                ModeClass::Digital,
+                "{call}"
+            );
+            assert_eq!(
+                classify_spot_mode(10.145, call),
+                ModeClass::Digital,
+                "{call}"
+            );
+        }
+        // Controls: a US station on the same frequencies is read by the FCC edges.
+        for call in ["W1AW", "KL7ABC", "KH6ABC"] {
+            assert_eq!(
+                classify_spot_mode(7.090, call),
+                ModeClass::Digital,
+                "{call}"
+            );
+            assert_eq!(
+                classify_spot_mode(14.130, call),
+                ModeClass::Digital,
+                "{call}"
+            );
+            assert_eq!(
+                classify_spot_mode(21.160, call),
+                ModeClass::Digital,
+                "{call}"
+            );
+            assert_eq!(classify_spot_mode(7.200, call), ModeClass::Phone, "{call}");
+        }
     }
 
     #[test]
     fn classify_spot_mode_hf_sections() {
-        assert_eq!(classify_spot_mode(14.080), ModeClass::Digital); // 20m FT4 hole
-        assert_eq!(classify_spot_mode(14.100), ModeClass::Digital); // 20m data middle (RTTY)
-        assert_eq!(classify_spot_mode(7.020), ModeClass::Cw); // 40m CW
-        assert_eq!(classify_spot_mode(7.200), ModeClass::Phone); // 40m phone
-        assert_eq!(classify_spot_mode(10.136), ModeClass::Digital); // 30m FT8 (no phone alloc)
-        assert_eq!(classify_spot_mode(3.510), ModeClass::Cw); // 80m CW
-        assert_eq!(classify_spot_mode(3.800), ModeClass::Phone); // 80m phone
-        assert_eq!(classify_spot_mode(1.805), ModeClass::Cw); // 160m CW
-        assert_eq!(classify_spot_mode(1.840), ModeClass::Digital); // 160m FT8 hole
-        assert_eq!(classify_spot_mode(28.320), ModeClass::Phone); // 10m phone
-        assert_eq!(classify_spot_mode(21.300), ModeClass::Phone); // 15m phone
-                                                                  // Accepted trade-off: 40m DX SSB parked below the US phone edge falls in the data
-                                                                  // window and reads Digital (we won't trust an "SSB" comment to rescue it).
-        assert_eq!(classify_spot_mode(7.085), ModeClass::Digital);
+        assert_eq!(classify_spot_mode(14.080, "W1AW"), ModeClass::Digital); // 20m FT4 hole
+        assert_eq!(classify_spot_mode(14.100, "W1AW"), ModeClass::Digital); // 20m data middle (RTTY)
+        assert_eq!(classify_spot_mode(7.020, "W1AW"), ModeClass::Cw); // 40m CW
+        assert_eq!(classify_spot_mode(7.200, "W1AW"), ModeClass::Phone); // 40m phone
+        assert_eq!(classify_spot_mode(10.136, "W1AW"), ModeClass::Digital); // 30m FT8 (no phone alloc)
+        assert_eq!(classify_spot_mode(3.510, "W1AW"), ModeClass::Cw); // 80m CW
+        assert_eq!(classify_spot_mode(3.800, "W1AW"), ModeClass::Phone); // 80m phone
+        assert_eq!(classify_spot_mode(1.805, "W1AW"), ModeClass::Cw); // 160m CW
+        assert_eq!(classify_spot_mode(1.840, "W1AW"), ModeClass::Digital); // 160m FT8 hole
+        assert_eq!(classify_spot_mode(28.320, "W1AW"), ModeClass::Phone); // 10m phone
+        assert_eq!(classify_spot_mode(21.300, "W1AW"), ModeClass::Phone); // 15m phone
+                                                                          // Accepted trade-off: 40m DX SSB parked below the US phone edge falls in the data
+                                                                          // window and reads Digital (we won't trust an "SSB" comment to rescue it).
+        assert_eq!(classify_spot_mode(7.085, "W1AW"), ModeClass::Digital);
     }
 
     #[test]
@@ -1288,15 +1398,15 @@ mod tests {
         // 6m/2m: FT8/MSK holes are Digital; the tight SSB calling windows are Phone; the low
         // CW sub-bands are CW; everything else (FM simplex/repeaters) is Digital (never a
         // fabricated voice need from a bare VHF frequency).
-        assert_eq!(classify_spot_mode(50.313), ModeClass::Digital); // 6m FT8 hole (inside no window)
-        assert_eq!(classify_spot_mode(50.260), ModeClass::Digital); // 6m MSK144 (inside the SSB window)
-        assert_eq!(classify_spot_mode(50.125), ModeClass::Phone); // 6m SSB calling
-        assert_eq!(classify_spot_mode(50.090), ModeClass::Cw); // 6m CW calling
-        assert_eq!(classify_spot_mode(144.174), ModeClass::Digital); // 2m FT8 hole
-        assert_eq!(classify_spot_mode(144.200), ModeClass::Phone); // 2m SSB calling
-        assert_eq!(classify_spot_mode(144.050), ModeClass::Cw); // 2m CW
-        assert_eq!(classify_spot_mode(146.520), ModeClass::Digital); // 2m FM simplex → not a voice need
-        assert_eq!(classify_spot_mode(5.350), ModeClass::Digital); // 60m, off the HF sections → safe default
+        assert_eq!(classify_spot_mode(50.313, "W1AW"), ModeClass::Digital); // 6m FT8 hole (inside no window)
+        assert_eq!(classify_spot_mode(50.260, "W1AW"), ModeClass::Digital); // 6m MSK144 (inside the SSB window)
+        assert_eq!(classify_spot_mode(50.125, "W1AW"), ModeClass::Phone); // 6m SSB calling
+        assert_eq!(classify_spot_mode(50.090, "W1AW"), ModeClass::Cw); // 6m CW calling
+        assert_eq!(classify_spot_mode(144.174, "W1AW"), ModeClass::Digital); // 2m FT8 hole
+        assert_eq!(classify_spot_mode(144.200, "W1AW"), ModeClass::Phone); // 2m SSB calling
+        assert_eq!(classify_spot_mode(144.050, "W1AW"), ModeClass::Cw); // 2m CW
+        assert_eq!(classify_spot_mode(146.520, "W1AW"), ModeClass::Digital); // 2m FM simplex → not a voice need
+        assert_eq!(classify_spot_mode(5.350, "W1AW"), ModeClass::Digital); // 60m, off the HF sections → safe default
     }
 
     #[test]

@@ -12428,6 +12428,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: var(--radius-sm);
   white-space: nowrap;
 }
+/* Band-plan advice beside the band: amber, display only, never a lock (bandPlanAdvice.ts). */
+.band-plan-advice {
+  padding: 2px var(--space-2);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 700;
+  color: var(--bg);
+  background: var(--state-warn);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
 .ph-ptt:disabled {
   opacity: 0.6;
   cursor: not-allowed;
