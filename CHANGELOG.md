@@ -5,6 +5,14 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **A better default size on a scaled Windows display.** On a screen Windows scales to 125% or 150% (most 1080p laptops), Nexus now opens at 80% or 70% instead of 90% or 75%. At the old size the top bar, the cockpit headers and the RTTY and PSK transmit areas wrapped onto extra rows and the decode panes shrank to a few lines; at the new size they sit on one row and the panes get the room back, and text stays at least as large as it would be with Windows scaling turned off. The first time this happens Nexus asks once whether to keep the new size or go back to the old one, and remembers your answer. Screens without scaling, a scale you set yourself in Settings ▸ Appearance, and pop-out windows are not changed, and the size follows the window when you drag it to a monitor with different scaling.
+
+### Fixed
+- **Settings ▸ Station: the State hint no longer runs into the Units label.** On narrower windows (a 1080p screen at 150% scaling, for example) the end of the State hint touched the UNITS heading below it; the Units row now has the same space above it as the rows of fields above it.
+
 ## [1.22.0] — 2026-11-01
 
 ### Added

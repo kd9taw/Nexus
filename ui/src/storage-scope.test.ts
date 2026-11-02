@@ -250,6 +250,9 @@ const SHARED = [
   'nexus-skin',
   'nexus-motion',
   'nexus-ui-scale-cap',
+  // The answer to the one-time scaled-display prompt (useScale.ts): about the station's screen
+  // and the eyes in front of it, like the cap; only the main window ever asks or reads it.
+  'nexus-ui-scale-fit-rule',
   'nexus.connect.chaseDefault.v1',
   'nexus.connect.mode',
   'nexus.cw.sensitivity',

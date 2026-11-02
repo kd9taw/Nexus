@@ -21,6 +21,10 @@ const MODE_KEY = 'nexus-ui-scale-mode'
 // SHARED (stays app-global): the cap is an eyesight preference set once in Settings
 // ("never shrink below this"), not a measurement of any one window.
 const CAP_KEY = 'nexus-ui-scale-cap'
+// SHARED: which auto-fit rule the MAIN window uses on a fractionally scaled display — see
+// `scaledFitScale`. Absent = never asked (the scaled rule applies and the one-time prompt may
+// show); 'classic' = the operator chose the old size; anything else = the scaled rule, asked.
+const FIT_RULE_KEY = 'nexus-ui-scale-fit-rule'
 
 /**
  * A surface's NATURAL FOOTPRINT: the smallest unzoomed CSS-px box in which that
@@ -269,6 +273,86 @@ export function fieldFitScale(
 }
 
 /**
+ * THE MAIN WINDOW'S FOOTPRINT ON A FRACTIONALLY SCALED DISPLAY (Windows 125/150/175%, Linux
+ * fractional scaling).
+ *
+ * The OS scales the CSS pixel there, so a 1080p panel at 125% hands the webview a 1536×824
+ * window. Fitted against `MAIN_NATURAL` that is 90%: an effective 1707×916 viewport, just under
+ * the ~1800–1920 px where the top bar, the cockpit headers and the RTTY/PSK docks stop wrapping
+ * (measured in real Chrome, 2026-11-01: at 90% the FT top bar is two rows and the CW decode
+ * pane four lines; at 80% one row and 292 px). This box asks for that unwrapped width instead,
+ * and for about the height a 1080p panel gives a maximized window at 100% scaling.
+ *
+ * A scaled CSS pixel is already physically bigger than an unscaled one, so shrinking it costs
+ * no readability against the same panel at 100% — and `SCALED_FLOOR` makes sure it never costs
+ * more than that.
+ */
+export const SCALED_NATURAL: Natural = { w: 1900, h: 1000 }
+
+/** The devicePixelRatio range treated as fractional scaling. The bottom is Windows' 125% with
+ *  room for a float that reports 1.2499…; the top stops short of 2 because an INTEGER ratio is
+ *  the HiDPI design (a Retina Mac, Windows at 200%), where the panel is ~220 dpi and the OS
+ *  already sized the CSS pixel for it: there the old fit is right, and this footprint would
+ *  shrink a 1512-wide MacBook window to 75%. */
+const SCALED_DPR_MIN = 1.24
+const SCALED_DPR_MAX = 1.95
+
+export function isFractionalScaling(dpr: number): boolean {
+  return Number.isFinite(dpr) && dpr >= SCALED_DPR_MIN && dpr < SCALED_DPR_MAX
+}
+
+/**
+ * The main window's auto-fit on a fractionally scaled display. Three bounds, in order:
+ *
+ *  1. fit against `SCALED_NATURAL` (the unwrapped width and the 1080p height);
+ *  2. but never below `100 / dpr` snapped UP to a step — one unscaled CSS pixel per device
+ *     pixel, i.e. never smaller than the same panel at 100% OS scaling (125% → 80, 150% → 70);
+ *  3. and never ABOVE the classic fit — this rule only ever makes the UI smaller, so a small
+ *     window on a scaled display keeps exactly what it had.
+ *
+ * At any ratio outside `isFractionalScaling` it IS the classic fit, so unscaled screens are
+ * untouched — and so it is under a RAISED cap: an operator who set the ceiling above the default
+ * (Settings ▸ Appearance, or the DPI seed) asked for a bigger UI, and this rule never argues with
+ * that. Pure + testable; `prev` is the same hysteresis as `fitScale`.
+ */
+export function scaledFitScale(
+  innerW: number,
+  innerH: number,
+  dpr: number,
+  cap: Scale = DEFAULT_CAP,
+  prev?: Scale,
+): Scale {
+  const classic = fitScale(innerW, innerH, cap, prev)
+  if (!isFractionalScaling(dpr) || cap > DEFAULT_CAP) return classic
+  const fit = fitScale(innerW, innerH, cap, prev, SCALED_NATURAL)
+  const floor = SCALE_STEPS.find((s) => s >= 100 / dpr - 1e-6) ?? Z_MIN
+  return Math.min(classic, Math.max(fit, floor)) as Scale
+}
+
+/** Which auto-fit rule the main window uses on a fractionally scaled display. */
+export type FitRule = 'scaled' | 'classic'
+
+/** The stored answer, or `null` when the operator was never asked. A value that is not
+ *  'classic' — including a corrupt one — reads as 'scaled', the default, so a damaged key can
+ *  neither re-ask nor shrink anything the default would not. Storage failure: not asked, which
+ *  only means the default rule applies (the prompt itself is gated on the write landing). */
+export function readFitRule(): FitRule | null {
+  try {
+    const raw = localStorage.getItem(FIT_RULE_KEY)
+    if (raw === null) return null
+    return raw === 'classic' ? 'classic' : 'scaled'
+  } catch {
+    return null
+  }
+}
+
+/** The one-time offer: the scaled rule moved the main window off the classic size. */
+export interface FitOffer {
+  scaled: Scale
+  classic: Scale
+}
+
+/**
  * Synchronous first-paint seed (no DOM measurement, no flash): fit against the default
  * cap using the current window. Kept as a named export because tests + `readInitial`
  * use it. Replaces the old coarse width-band table.
@@ -353,11 +437,18 @@ export interface ScaleControl {
   setMode: (m: ScaleMode) => void
   /** Set the auto-fit max cap. */
   setCap: (c: Scale) => void
+  /** Set while the main window, never asked, sits at a different auto-fit size than the
+   *  classic rule would give it (a fractionally scaled display) — the one-time prompt. */
+  fitOffer: FitOffer | null
+  /** Record the operator's answer (and with it, that they were asked). */
+  setFitRule: (r: FitRule) => void
 }
 
 export function useScale(field = false): ScaleControl {
   const [mode, setModeState] = useState<ScaleMode>(readMode)
   const [cap, setCapState] = useState<Scale>(readCap)
+  const [fitRule, setFitRuleState] = useState<FitRule | null>(readFitRule)
+  const [fitOffer, setFitOffer] = useState<FitOffer | null>(null)
   // The natural footprint is read from the URL HERE, not at module scope: a pop-out
   // knows which panel it is only from `?panel=`, and a module-level read would freeze
   // whatever URL loaded the module first (it also makes the hook testable per surface).
@@ -369,7 +460,9 @@ export function useScale(field = false): ScaleControl {
     return mode === 'auto'
       ? field
         ? fieldFitScale(window.innerWidth, window.innerHeight, undefined, nat)
-        : pickInitialZoom(window.innerWidth, window.innerHeight, nat)
+        : scaledRuleApplies(fitRule)
+          ? scaledFitScale(window.innerWidth, window.innerHeight, window.devicePixelRatio, DEFAULT_CAP)
+          : pickInitialZoom(window.innerWidth, window.innerHeight, nat)
       : capPinnedScale(mode, surfaceId() === 'main', window.innerWidth, window.innerHeight, nat)
   })
   // Latest applied scale, for hysteresis — read inside the resize handler without
@@ -414,12 +507,24 @@ export function useScale(field = false): ScaleControl {
       }
     }
     let raf = 0
+    const scaled = !field && scaledRuleApplies(fitRule)
     const apply = () => {
-      // Field mode swaps the fit's INPUTS (smaller natural, top cap) — see fieldFitScale.
+      const w = window.innerWidth
+      const h = window.innerHeight
+      // Field mode swaps the fit's INPUTS (smaller natural, top cap) — see fieldFitScale. The
+      // scaled rule reads the ratio LIVE: it changes when the window crosses to a monitor with
+      // a different scaling, and the answer must follow it.
       const z = field
-        ? fieldFitScale(window.innerWidth, window.innerHeight, scaleRef.current, nat)
-        : fitScale(window.innerWidth, window.innerHeight, cap, scaleRef.current, nat)
+        ? fieldFitScale(w, h, scaleRef.current, nat)
+        : scaled
+          ? scaledFitScale(w, h, window.devicePixelRatio, cap, scaleRef.current)
+          : fitScale(w, h, cap, scaleRef.current, nat)
       if (z !== scaleRef.current) setScaleState(z)
+      // Never asked, and the scaled rule moved us off the classic size: offer the choice. Not
+      // sticky — a window resized to where both rules agree has nothing to ask about.
+      const classic = fitScale(w, h, cap, undefined, nat)
+      const offer = scaled && fitRule === null && z !== classic ? { scaled: z, classic } : null
+      setFitOffer((o) => (o?.scaled === offer?.scaled && o?.classic === offer?.classic ? o : offer))
     }
     const onResize = () => {
       cancelAnimationFrame(raf)
@@ -427,11 +532,30 @@ export function useScale(field = false): ScaleControl {
     }
     raf = requestAnimationFrame(apply)
     window.addEventListener('resize', onResize)
+    // A move to a monitor with a different scaling need not fire `resize`: Windows keeps the
+    // window's logical size across a DPI change, so innerWidth/innerHeight can stay put while
+    // the ratio moves. The resolution media query is the platform's own signal for it; it
+    // matches one ratio, so it is re-armed at the new one after each change.
+    let dprQuery: MediaQueryList | null = null
+    const onDpr = () => {
+      armDpr()
+      onResize()
+    }
+    const armDpr = () => {
+      dprQuery?.removeEventListener('change', onDpr)
+      dprQuery =
+        scaled && typeof window.matchMedia === 'function'
+          ? window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+          : null
+      dprQuery?.addEventListener('change', onDpr)
+    }
+    armDpr()
     return () => {
       window.removeEventListener('resize', onResize)
+      dprQuery?.removeEventListener('change', onDpr)
       cancelAnimationFrame(raf)
     }
-  }, [mode, cap, field])
+  }, [mode, cap, field, fitRule])
 
   const setMode = useCallback((m: ScaleMode) => {
     setModeState(m)
@@ -447,5 +571,25 @@ export function useScale(field = false): ScaleControl {
     }
   }, [])
 
-  return { scale, mode, cap, setMode, setCap }
+  const setFitRule = useCallback((r: FitRule) => {
+    setFitRuleState(r)
+    try {
+      localStorage.setItem(FIT_RULE_KEY, r)
+    } catch {
+      /* storage blocked */
+    }
+  }, [])
+
+  // A pinned scale is the operator's own choice: nothing to offer while one is set.
+  return { scale, mode, cap, setMode, setCap, fitOffer: mode === 'auto' ? fitOffer : null, setFitRule }
+}
+
+/** The scaled rule is the MAIN window's (a pop-out keeps its own natural, untouched) and the
+ *  desktop app's: in a browser (Remote) the ratio is also the browser's own zoom, and an
+ *  operator who zoomed in to read must not be shrunk back out. The desktop app is Tauri's
+ *  bridge, which Tauri puts in each of its webviews before the page's first script (the same
+ *  test as useTheme.ts; not api.ts's `isTauri`, so this module stays free of the bridge).
+ *  'classic' is the operator's no. */
+function scaledRuleApplies(rule: FitRule | null): boolean {
+  return rule !== 'classic' && surfaceId() === 'main' && window.__TAURI_INTERNALS__ !== undefined
 }

@@ -10619,6 +10619,13 @@ export const EN = {
     'Fits the whole interface to the window so nothing is cut off (currently {{scale}}%). The waterfall stays sharp. Raise the max for big monitors.',
   'settings.workspace.scale.manual.hint':
     'Fixed scale. Switch to Auto to fit the interface to the window automatically.',
+  // The one-time prompt on a Windows display scaled to 125% or 150% (useScaleFitNotice.ts). Auto
+  // fit has already chosen {{scaled}}; {{classic}} is the size it gave this screen before. Both are
+  // percent numbers.
+  'settings.workspace.scale.fit.notice':
+    'Your display is scaled up, so Nexus now fits this screen at {{scaled}}%, where everything shows without crowding. Keep it?',
+  'settings.workspace.scale.fit.keep': 'Keep {{scaled}}%',
+  'settings.workspace.scale.fit.classic': 'Use {{classic}}%',
   // #215 text size: the ids are the persisted tokens (useTextSize.ts); the words are prose.
   'settings.workspace.textSize.label': 'Text size',
   'settings.workspace.textSize.normal': 'Normal',

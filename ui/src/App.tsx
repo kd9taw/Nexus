@@ -75,6 +75,7 @@ import { useSkin } from './useSkin'
 import { useNight } from './useNight'
 import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
+import { useScaleFitNotice } from './useScaleFitNotice'
 import { useViewport, useViewportClass } from './useViewport'
 import { useDensity } from './useDensity'
 import { useTextSize } from './useTextSize'
@@ -373,11 +374,22 @@ function App() {
   // The colour roles (Settings ▸ Appearance ▸ Colours): App is their one writer, and Settings is
   // handed the picks and the setter, the same way it gets the theme.
   const { palette, setPreset: setPalettePreset } = usePaletteRoles()
-  const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale(fieldMode)
+  const {
+    scale,
+    mode: scaleMode,
+    cap: scaleCap,
+    setMode: setScaleMode,
+    setCap: setScaleCap,
+    fitOffer: scaleFitOffer,
+    setFitRule: setScaleFitRule,
+  } = useScale(fieldMode)
   // First launch on a high-density display: raise the auto-fit ceiling so the UI can grow to
   // the panel. Once only, raise only, and nothing at all on an ordinary 96-dpi monitor or on
   // a platform whose OS already scales for us. See useDpiSeed.ts.
   useDpiScaleSeed(setScaleCap)
+  // A fractionally scaled display (Windows 125/150%) opens smaller than the classic fit; ask once
+  // whether to keep that. See useScaleFitNotice.ts.
+  useScaleFitNotice(scaleFitOffer, setScaleFitRule)
   // Publishes the zoom-aware `data-viewport` size class on <html> (live on resize
   // AND on scale change) so the layout adapts to the EFFECTIVE width.
   useViewport(scale)
