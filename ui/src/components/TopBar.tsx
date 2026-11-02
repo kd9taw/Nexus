@@ -402,6 +402,11 @@ export function TopBar({
   // md and lg (features/compactChrome): the eleven tier pills are one menu button, as they are on the
   // FT screens at the small size, so the bar is one row. xl keeps the pills, which fit there.
   const { fold } = useCompactChrome()
+  // THE Tx CYCLE'S SMALL CAPTIONS ("cycle", "even", "odd"), presentation only (FT presentation, the
+  // 1080p pass): at md and lg they are kept for the ear and taken off the screen (`.sr-only`), so the
+  // three buttons are their big words alone and each keeps its whole accessible name and tooltip. The
+  // buttons, their order, their handlers and what they set are untouched.
+  const cycleCaption = fold ? <small className="sr-only" /> : <small />
   const currentPill = TIER_PILLS.find((p) => p.tier === tier)
   const countdown = (radio.nextSlotMs / 1000).toFixed(1)
   const [version, setVersion] = useState('')
@@ -738,12 +743,12 @@ export function TopBar({
         >
           {radio.txCycleAuto ? (
             radio.txEven ? (
-              <T k="topbar.txCycle.auto.first" tags={{ s: <small /> }} />
+              <T k="topbar.txCycle.auto.first" tags={{ s: cycleCaption }} />
             ) : (
-              <T k="topbar.txCycle.auto.second" tags={{ s: <small /> }} />
+              <T k="topbar.txCycle.auto.second" tags={{ s: cycleCaption }} />
             )
           ) : (
-            <T k="topbar.txCycle.auto.idle" tags={{ s: <small /> }} />
+            <T k="topbar.txCycle.auto.idle" tags={{ s: cycleCaption }} />
           )}
         </button>
         {/* `derived`: the cycle auto-pick landed on this side (POTA field report — the
@@ -758,7 +763,7 @@ export function TopBar({
           onClick={() => onSetTxEven(true)}
           title={t('topbar.txCycle.first.title')}
         >
-          <T k="topbar.txCycle.first.label" tags={{ s: <small /> }} />
+          <T k="topbar.txCycle.first.label" tags={{ s: cycleCaption }} />
         </button>
         <button
           type="button"
@@ -767,7 +772,7 @@ export function TopBar({
           onClick={() => onSetTxEven(false)}
           title={t('topbar.txCycle.second.title')}
         >
-          <T k="topbar.txCycle.second.label" tags={{ s: <small /> }} />
+          <T k="topbar.txCycle.second.label" tags={{ s: cycleCaption }} />
         </button>
       </div>
       </>
