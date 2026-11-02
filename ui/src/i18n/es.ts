@@ -6115,6 +6115,7 @@ export const ES: PartialCatalog = {
   "radios.picker.auto.windows": "En {{seconds}} s se abrirá cada equipo en su propia ventana, como la última vez. Haga clic o pulse una tecla para elegir usted.",
   "radios.picker.auto.one": "En {{seconds}} s esta ventana arrancará con un solo equipo. Haga clic o pulse una tecla para elegir usted.",
   "radios.picker.failed": "No se pudo: {{reason}}",
+  "radios.openElsewhere": "Ese equipo está abierto en otra ventana de Nexus: pase a esa ventana.",
   "radios.picker.sub": "Tienes dos equipos en marcha a la vez. Elige el equipo que operará esta ventana — puedes abrir una segunda ventana para el otro. Comparten un mismo log.",
   "radios.picker.title": "¿Qué equipo?",
   "radios.switcher.active.title": "{{name}} — equipo activo ({{band}} · {{freq}} MHz)",

@@ -1123,6 +1123,7 @@ export const RU: PartialCatalog = {
   "radios.picker.auto.windows": "Через {{seconds}} с, как в прошлый раз, каждый трансивер откроется в своём окне. Щёлкните или нажмите клавишу, чтобы выбрать самому.",
   "radios.picker.auto.one": "Через {{seconds}} с это окно запустится с одним трансивером. Щёлкните или нажмите клавишу, чтобы выбрать самому.",
   "radios.picker.failed": "Не получилось: {{reason}}",
+  "radios.openElsewhere": "Этот трансивер открыт в другом окне Nexus — перейдите в то окно.",
   "radios.switcher.aria": "Активное радио",
   "radios.switcher.active.title": "{{name}} — активное радио ({{band}} · {{freq}} MHz)",
   "radios.switcher.switch.title": "Переключиться на {{name}} (последний на {{band}} · {{freq}} MHz)",

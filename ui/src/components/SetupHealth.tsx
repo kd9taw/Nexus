@@ -5,6 +5,7 @@
 // carrier, so it moves with the transmit-path batch, when the stop-line sweeps are re-run.
 // (Its CONFIRM moved on 2026-09-18 off the inert `window.confirm` — see the note at the button.
 // That was the mechanism only; these strings are still English, so this paragraph still holds.)
+import { localizeRefusal } from '../radioRefusal'
 import type { ReactNode } from 'react'
 import { confirmDialog } from '../confirm'
 import type { CatTestResult } from '../types'
@@ -72,7 +73,8 @@ export function SetupHealth({
   onGoTo?: (section: string) => void
 }) {
   const rigOk = catResult ? catResult.ok : radio?.catOk
-  const rigDetail = catResult ? catResult.detail : radio?.catDetail
+  const rawRigDetail = catResult ? catResult.detail : radio?.catDetail
+  const rigDetail = rawRigDetail && localizeRefusal(rawRigDetail)
   const rxDb = radio ? Math.round(rxLevelDb(radio.rxLevel)) : null
   // rxLevelDb is the WSJT-X-style 0..90 scale and returns 0 for silence — the old `> -60`
   // was a dBFS threshold that EVERY value on this scale passed, so the dot could never say

@@ -1,5 +1,6 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). Every operator-visible
 // string comes from the catalog; the radios' own profile names are interpolated as they are.
+import { isRadioRefusal, localizeRefusal } from '../radioRefusal'
 import { useEffect, useRef, useState } from 'react'
 import { Radio } from 'lucide-react'
 import type { RadioLaunchInfo } from '../api'
@@ -100,7 +101,7 @@ export function RadioPicker({
         )}
         {error && (
           <p className="radio-picker-error" role="alert">
-            {t('radios.picker.failed', { reason: error })}
+            {isRadioRefusal(error) ? localizeRefusal(error) : t('radios.picker.failed', { reason: error })}
           </p>
         )}
       </div>

@@ -82,11 +82,14 @@ it('a click cancels it too, and the click still chooses', () => {
   expect(onChoose).toHaveBeenCalledWith(0)
 })
 
-it('says why an answer was refused', () => {
+it('says why an answer was refused, in the operator\'s words', () => {
   picker(info(), 'That radio is open in another Nexus window — switch to that window.')
+  expect(screen.getByRole('alert').textContent).toBe(t('radios.openElsewhere'))
+})
+
+it('CONTROL: any other refusal is said with the backend\'s reason', () => {
+  picker(info(), 'the radio window could not start')
   expect(screen.getByRole('alert').textContent).toBe(
-    t('radios.picker.failed', {
-      reason: 'That radio is open in another Nexus window — switch to that window.',
-    }),
+    t('radios.picker.failed', { reason: 'the radio window could not start' }),
   )
 })

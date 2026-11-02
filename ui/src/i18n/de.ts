@@ -4294,6 +4294,7 @@ export const DE: PartialCatalog = {
   "radios.picker.auto.windows": "In {{seconds}} s öffnet sich jedes Funkgerät wie beim letzten Mal in einem eigenen Fenster. Klicken oder eine Taste drücken, um selbst zu wählen.",
   "radios.picker.auto.one": "In {{seconds}} s startet dieses Fenster mit einem Funkgerät. Klicken oder eine Taste drücken, um selbst zu wählen.",
   "radios.picker.failed": "Das ging nicht: {{reason}}",
+  "radios.openElsewhere": "Dieses Funkgerät ist in einem anderen Nexus-Fenster geöffnet — zu diesem Fenster wechseln.",
   "radios.switcher.aria": "Aktives Funkgerät",
   "radios.switcher.active.title": "{{name}} — aktives Funkgerät ({{band}} · {{freq}} MHz)",
   "radios.switcher.switch.title": "Zu {{name}} wechseln (zuletzt auf {{band}} · {{freq}} MHz)",

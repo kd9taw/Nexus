@@ -496,6 +496,15 @@ impl Request {
         self.permission.check(Instant::now())?;
         engine.remote_radio_idle()?;
         engine.remote_radio_link(self.connection)?;
+        // ONE RADIO, ONE WINDOW (`radio_claim`): a radio another live Nexus window drives is not
+        // this station's to select. Asked here, the loop's ready check, before anything is opened,
+        // unkeyed or retuned, and again by the commit. The browser is told the radio is not
+        // available: a reason every Remote page already knows.
+        if let Some(incoming) = self.incoming_profile() {
+            if crate::radio_claim::profile_held_elsewhere(incoming) {
+                return Err(Reason::HardwareUnavailable);
+            }
+        }
         if engine.pending_func.iter().any(Option::is_some)
             || engine.pending_passband.is_some()
             || engine.pending_atu_tune.is_some()
@@ -522,6 +531,15 @@ impl Request {
 
     pub fn refuse(&self, reason: Reason) {
         self.completion.refuse(reason);
+    }
+
+    /// The radio this selection moves the station to, when it moves it at all.
+    fn incoming_profile(&self) -> Option<&crate::settings::RadioProfile> {
+        if self.retains_connection() {
+            return None;
+        }
+        let id = self.settings().active_radio;
+        self.settings().radios.iter().find(|p| p.id == id)
     }
 
     /// Commit native selection and install the already-prepared connection
@@ -574,6 +592,16 @@ impl Request {
         } else {
             None
         };
+        // The claim moves to the incoming radio BEFORE anything is written: refused (another
+        // window took it since the ready check), nothing below runs, `install` included, so the
+        // engine, the loop, the settings and the browser all stay on the radio they were on.
+        // Taken here, the engine's own switch below finds it this window's and goes ahead.
+        if let Some(incoming) = self.incoming_profile() {
+            if crate::radio_claim::claim_profile(incoming).is_err() {
+                self.refuse(Reason::HardwareUnavailable);
+                return false;
+            }
+        }
         // Selection changes station state even when CAT setup was a no-op.
         // Never wait behind a decoder after crossing this boundary.
         if let Err(reason) = self.permission.begin_write(Instant::now()) {
@@ -1029,6 +1057,84 @@ mod tests {
                 "abandonment ends a request instead of leaving it queued"
             );
         }
+    }
+
+    /// ONE RADIO, ONE WINDOW, for a Remote selection: the radio a browser selects is driven by
+    /// another Nexus window. The selection is refused in its ready check, before the loop opens,
+    /// unkeys or retunes anything, and again at commit before anything is written, so `install`
+    /// never runs and the engine, the loop, the settings and the browser cannot disagree.
+    #[test]
+    fn a_selection_onto_a_radio_another_window_drives_is_refused_before_anything() {
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("nexus-claims-engine-{pid}"));
+        crate::radio_claim::init(dir.clone());
+        let (mut engine, incoming, connection) = station();
+        let port = format!("/dev/nexus-remote-select-{pid}");
+        let profile = engine
+            .settings
+            .radios
+            .iter_mut()
+            .find(|p| p.id == incoming)
+            .unwrap();
+        profile.rig_model = 1029;
+        profile.ptt_method = "cat".into();
+        profile.serial_port = port.clone();
+        let other_window = crate::radio_claim::Claims::new(dir.clone());
+        let endpoint = format!("serial:{port}");
+        let before = engine.settings.clone();
+        let authority = Revocation::default();
+
+        // The other window already drives it: admission refuses, nothing is queued.
+        other_window
+            .claim(&endpoint)
+            .expect("the other window drives it");
+        assert!(matches!(
+            engine.queue_remote_radio_selection(incoming, connection, permit(&authority)),
+            Err(Reason::HardwareUnavailable)
+        ));
+        assert!(engine.take_remote_radio_selection().is_none());
+
+        // The other window takes it AFTER admission: the loop's ready check (`configuration` →
+        // `validate`) refuses before any open, and the commit, had it been reached, installs
+        // nothing.
+        drop(other_window);
+        let other_window = crate::radio_claim::Claims::new(dir.clone());
+        let until = Instant::now() + Duration::from_secs(2);
+        while crate::radio_claim::claims()
+            .unwrap()
+            .held_elsewhere(&endpoint)
+            && Instant::now() < until
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let completion = engine
+            .queue_remote_radio_selection(incoming, connection, permit(&authority))
+            .unwrap();
+        let request = engine.take_remote_radio_selection().unwrap();
+        other_window
+            .claim(&endpoint)
+            .expect("the other window takes it now");
+        assert_eq!(
+            request.validate(&engine),
+            Err(Reason::HardwareUnavailable),
+            "refused in the ready check"
+        );
+        assert!(
+            request.configuration(&engine).is_err(),
+            "the loop's ready check refuses"
+        );
+        assert!(!commit(request, &mut engine, |_| panic!(
+            "install must never run for a refused selection"
+        )));
+        assert_eq!(engine.settings, before, "the station stayed on its radio");
+        assert_eq!(engine.settings.active_radio, 0);
+        assert!(matches!(
+            completion.outcome(),
+            Outcome::Rejected {
+                reason: Reason::HardwareUnavailable
+            }
+        ));
+        drop(other_window);
     }
 
     #[test]

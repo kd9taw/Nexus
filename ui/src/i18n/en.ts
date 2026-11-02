@@ -7856,6 +7856,7 @@ export const EN = {
   'radios.picker.auto.windows': 'Opening each radio in its own window, as last time, in {{seconds}} s. Click or press a key to choose yourself.',
   'radios.picker.auto.one': 'Starting this window on one radio in {{seconds}} s. Click or press a key to choose yourself.',
   'radios.picker.failed': 'Could not do that: {{reason}}',
+  'radios.openElsewhere': 'That radio is open in another Nexus window — switch to that window.',
 
   'radios.switcher.aria': 'Active radio',
   'radios.switcher.active.title': '{{name}} — active radio ({{band}} · {{freq}} MHz)',

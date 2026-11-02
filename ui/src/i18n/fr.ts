@@ -6115,6 +6115,7 @@ export const FR: PartialCatalog = {
   "radios.picker.auto.windows": "Dans {{seconds}} s, chaque radio s'ouvrira dans sa propre fenêtre, comme la dernière fois. Cliquez ou appuyez sur une touche pour choisir vous-même.",
   "radios.picker.auto.one": "Dans {{seconds}} s, cette fenêtre démarrera sur une seule radio. Cliquez ou appuyez sur une touche pour choisir vous-même.",
   "radios.picker.failed": "Impossible : {{reason}}",
+  "radios.openElsewhere": "Cette radio est ouverte dans une autre fenêtre Nexus : passez à cette fenêtre.",
   "radios.picker.sub": "Vous avez deux radios en marche en même temps. Choisissez celle que cette fenêtre pilotera — vous pouvez ouvrir une seconde fenêtre pour l'autre. Elles partagent le même journal.",
   "radios.picker.title": "Quelle radio ?",
   "radios.switcher.active.title": "{{name}} — radio active ({{band}} · {{freq}} MHz)",

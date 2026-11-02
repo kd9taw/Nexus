@@ -2894,6 +2894,11 @@ impl<T> RadioGate<T> {
         }
     }
 
+    /// Is something held, waiting for an answer?
+    fn is_held(&self) -> bool {
+        matches!(&*self.state(), GateState::Held(_))
+    }
+
     /// A quit: what was held never starts. True when something was held, i.e. nothing ran, and
     /// true again on every later call: the quit can run `stop_the_radio` twice (the held quit,
     /// then `quit_cleanup`), and the second must not wait on a loop that never ran either.
@@ -3328,6 +3333,21 @@ mod picker_radio_hold_tests {
     /// The held quit runs `stop_the_radio` twice (the logbook's held quit, then `quit_cleanup`).
     /// Both must know the held loop never ran, or the second waits 3 s on a loop that never
     /// existed.
+    /// What the refused-launch retry asks before it claims: is a loop still waiting?
+    #[test]
+    fn the_gate_says_whether_it_holds_a_loop() {
+        let gate = RadioGate::new();
+        assert!(!gate.is_held());
+        gate.hold_or_start(|| true, 7, |_| panic!("held"));
+        assert!(gate.is_held());
+        gate.release(|_| {});
+        assert!(!gate.is_held(), "released: the retry stops");
+        let gate: RadioGate<u32> = RadioGate::new();
+        gate.hold_or_start(|| true, 7, |_| panic!("held"));
+        gate.quit();
+        assert!(!gate.is_held(), "a quit: the retry stops");
+    }
+
     #[test]
     fn a_held_quit_says_never_ran_every_time_it_is_asked() {
         let gate: RadioGate<u32> = RadioGate::new();
@@ -3502,6 +3522,21 @@ mod picker_radio_hold_tests {
                 && at(switch, "return Err(tempo_app::radio_claim::REFUSAL")
                     < at(switch, "eng.set_active_radio(id)"),
             "refused, in the operator's words, before the engine is touched"
+        );
+
+        // A launch refused its radio asks again on a timer, and starts on the radio the settings
+        // name THEN (another window closed, or a save moved this window's radio to a free port).
+        assert!(
+            at(launch_gate, "eng.set_cat_status(Some(false), why)")
+                < at(launch_gate, "retry_the_refused_radio(retry_engine)")
+        );
+        let retry = body_of("fn retry_the_refused_radio(");
+        assert!(
+            at(retry, "PICKER_HELD_RADIO.is_held()") < at(retry, "claim_active_radio_of(&now)")
+                && at(retry, "claim_active_radio_of(&now)")
+                    // (rustfmt puts `.release(` on its own line after `PICKER_HELD_RADIO`)
+                    < at(retry, ".release(|(engine, cfg)|")
+                && retry.contains("radio_config_now(cfg, &now)")
         );
 
         // A settings save: refused before it is applied, and the claim moved after.
@@ -47121,6 +47156,35 @@ fn radio_loop_end(
     (tempo_app::dto::AudioErrorKind::EngineStopped, msg)
 }
 
+/// How often a window refused its launch radio asks again ([`retry_the_refused_radio`]).
+#[cfg(feature = "radio")]
+const REFUSED_RADIO_RETRY: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A launch refused its radio (another window drives it, `tempo_app::radio_claim`) waits with no
+/// radio loop. Ask again every [`REFUSED_RADIO_RETRY`] while it waits: once the other window has
+/// closed, or a Settings save has moved this window's radio to a free port, the claim succeeds and
+/// the loop starts on the radio as the settings now name it. A switch to a free radio starts it
+/// too, at once (`set_active_radio`); whichever comes first releases the gate, and the other then
+/// finds nothing held. Stops when the gate holds nothing more, and at a quit.
+#[cfg(feature = "radio")]
+fn retry_the_refused_radio(engine: SharedEngine) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(REFUSED_RADIO_RETRY);
+        if tempo_audio::service::SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed)
+            || !PICKER_HELD_RADIO.is_held()
+        {
+            return;
+        }
+        let now = engine_lock(&engine).settings().clone();
+        if claim_active_radio_of(&now).is_ok() {
+            tempo_core::applog::info("radio", "the radio is free again; starting it");
+            PICKER_HELD_RADIO
+                .release(|(engine, cfg)| start_radio_loop((engine, radio_config_now(cfg, &now))));
+            return;
+        }
+    });
+}
+
 /// `cfg`, held since the launch, brought up to `settings` now: every field the launch took from
 /// the settings is taken again; the two the launch set afterwards (the profile-change notifier and
 /// the version) are kept.
@@ -47958,6 +48022,7 @@ fn start_on_the_logbook(
         // (`tempo_app::radio_claim`): it says why and waits for a switch to a free one. Every other launch
         // claims its radio and starts its loop here, as always.
         let picker_engine = engine.clone();
+        let retry_engine = engine.clone();
         PICKER_HELD_RADIO.hold_or_start(
             move || {
                 let mut eng = engine_lock(&picker_engine);
@@ -47969,6 +48034,7 @@ fn start_on_the_logbook(
                     Err(why) => {
                         tempo_core::applog::warn("radio", &why);
                         eng.set_cat_status(Some(false), why);
+                        retry_the_refused_radio(retry_engine);
                         true
                     }
                 }

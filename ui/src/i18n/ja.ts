@@ -5047,6 +5047,7 @@ export const JA: PartialCatalog = {
   "radios.picker.auto.windows": "{{seconds}} 秒後、前回と同じく無線機ごとに別のウィンドウを開きます。自分で選ぶにはクリックするかキーを押してください。",
   "radios.picker.auto.one": "{{seconds}} 秒後、このウィンドウで無線機1台を起動します。自分で選ぶにはクリックするかキーを押してください。",
   "radios.picker.failed": "できませんでした: {{reason}}",
+  "radios.openElsewhere": "その無線機は別の Nexus ウィンドウで開いています。そのウィンドウに切り替えてください。",
   "radios.switcher.aria": "アクティブな無線機",
   "radios.switcher.active.title": "{{name}} — アクティブな無線機（{{band}}・{{freq}} MHz）",
   "radios.switcher.switch.title": "{{name}} に切り替え（前回: {{band}}・{{freq}} MHz）",
