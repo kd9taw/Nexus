@@ -7605,6 +7605,7 @@ export const JA: PartialCatalog = {
   "operate.strip.tune.radioTimeoutMin": "無線機の送信タイムアウト {{min}} 分",
   "operate.strip.tune.noRadioTimeout": "無線機の送信タイムアウトがオフです。チューン中にNexusまたはネットワークが故障すると、キャリアを止めるものがありません。SmartSDRで送信タイムアウトを設定してください。",
   "operate.strip.tune.radioRefused": "ここではTuneは何も送信しません。無線機自身のキャリアは、この周波数ではCWの運用範囲外になります。",
+  "operate.strip.tune.toneRefused": "ここではTuneは何も送信しません。1500 Hzのトーンは、この周波数ではライセンスの運用範囲外になります。",
   "operate.strip.atu.radioStatus": "無線機のATU: {{status}}",
   "operate.strip.atu.radioRefused": "ここではATUは何も送信しません。無線機自身のキャリアは、この周波数ではCWの運用範囲外になります。",
   "operate.strip.rigDiverge.label": "無線機: {{mode}}",

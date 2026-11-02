@@ -275,6 +275,7 @@ impl AppState {
                 flex_radio_has_mic: false,
                 flex_tune: None,
                 flex_tune_refused: false,
+                tune_tone_refused: false,
                 flex_atu: None,
                 flex_atu_refused: false,
                 flex_meter_stream: false,

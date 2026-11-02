@@ -11,15 +11,23 @@ import type { RadioStatus } from '../types'
  * start ("Warn only", the same day). When the licence refuses the radio's carrier here
  * (`flexTuneRefused`, `flexAtuRefused`) the note says so, since that control then keys nothing.
  * The ATU line follows: why the last press started no cycle, in the station's words, or else the
- * radio's own word for its cycle (`TUNE_SUCCESSFUL`, `TUNE_FAIL`, …), as data. Renders nothing on
- * every other station.
+ * radio's own word for its cycle (`TUNE_SUCCESSFUL`, `TUNE_FAIL`, …), as data. On every other
+ * station it renders only why Tune keys nothing when the licence refuses Nexus's own tune tone where
+ * it goes out (`tuneToneRefused`), and otherwise nothing.
  *
  * Drawn AFTER a strip's controls, never between them: Tune, ATU and Stop TX keep their places.
  */
 export function RadioTuneNote({ radio }: { radio: RadioStatus }) {
   const atu = radio.flexAtu
   const readouts = radio.flexTune ?? atu?.tune
-  if (!readouts) return null
+  if (!readouts) {
+    // Tune is Nexus's own tone, and the licence refuses it where the tone goes out.
+    return radio.tuneToneRefused ? (
+      <span className="radio-tune-note warn" role="note">
+        <span>{t('operate.strip.tune.toneRefused')}</span>
+      </span>
+    ) : null
+  }
   const timeoutMs = readouts.txTimeoutMs ?? 0
   return (
     <span className={`radio-tune-note${timeoutMs > 0 ? '' : ' warn'}`} role="note">

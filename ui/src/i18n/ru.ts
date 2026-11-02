@@ -2689,6 +2689,7 @@ export const RU: PartialCatalog = {
   "operate.strip.tune.radioTimeoutMin": "Таймаут TX трансивера {{min}} мин",
   "operate.strip.tune.noRadioTimeout": "Таймаут передачи на трансивере выключен. Если во время настройки откажет Nexus или сеть, несущую ничто не остановит. Задайте таймаут передачи в SmartSDR.",
   "operate.strip.tune.radioRefused": "«Настройка» здесь ничего не включает: собственная несущая трансивера оказалась бы вне ваших разрешений для CW на этой частоте.",
+  "operate.strip.tune.toneRefused": "«Настройка» здесь ничего не включает: её тон 1500 Гц оказался бы вне разрешений вашей лицензии на этой частоте.",
   "operate.strip.atu.radioStatus": "ATU трансивера: {{status}}",
   "operate.strip.atu.radioRefused": "ATU здесь ничего не включает: собственная несущая трансивера оказалась бы вне ваших разрешений для CW на этой частоте.",
   "operate.strip.rigDiverge.label": "трансивер: {{mode}}",

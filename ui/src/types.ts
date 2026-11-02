@@ -1961,6 +1961,10 @@ export interface RadioStatus {
    * (judged as CW there too) though it allows the mode's own emission: Tune keys nothing, and the
    * note beside it says why. Absent when false. */
   flexTuneRefused?: boolean
+  /** Tune is Nexus's own tone here, and the licence refuses it where the tone goes out (1500 Hz
+   * from the transmit dial) though it allows the mode's own emission: Tune keys nothing, and the
+   * note beside it says why. Absent when false. */
+  tuneToneRefused?: boolean
   /** While Nexus's own Flex client runs the radio's own ATU (Beta, off until a tester's bench)
    * and the radio reports a tuner fitted: the radio's tune power and transmit timeout, as beside
    * Tune, and the ATU line (a cycle's result, or why a press started none), shown beside the ATU

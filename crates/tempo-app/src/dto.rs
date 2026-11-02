@@ -2392,6 +2392,12 @@ pub struct RadioStatus {
     /// transmits on too. Tune then keys nothing, and the screen says why beside it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flex_tune_refused: bool,
+    /// While Tune is Nexus's own tone, the licence refuses it here though it allows the mode's own
+    /// emission: the tone goes out 1500 Hz from the transmit dial, outside the privileges there
+    /// (`Engine::tune_tone_allowed`). Tune then keys nothing, and the screen says why beside it.
+    /// Absent when false, so every other snapshot is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tune_tone_refused: bool,
     /// While Nexus's own Flex client runs the radio's own ATU (Beta, off until a tester's bench)
     /// and the radio reports a tuner fitted: what is shown beside the ATU, the radio's tune power
     /// and transmit timeout as beside Tune, and the ATU line. See `Engine::observe_flex_atu`.

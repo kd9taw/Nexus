@@ -67,6 +67,18 @@ describe('the note beside Tune', () => {
     expect(screen.getByRole('note').classList.contains('warn')).toBe(false)
   })
 
+  it('says why Tune keys nothing when the licence refuses Nexus’s own tune tone here', () => {
+    render(<RadioTuneNote radio={radio({ tuneToneRefused: true })} />)
+    const el = screen.getByRole('note')
+    expect(el.textContent).toBe(
+      'Tune keys nothing here: its 1500 Hz tone would be outside your license privileges on this frequency.',
+    )
+    expect(el.classList.contains('warn')).toBe(true)
+    cleanup()
+    // The control: not refused, nothing.
+    expect(note(radio({ tuneToneRefused: false }))).toBeNull()
+  })
+
   it('says why Tune keys nothing when the licence refuses the radio’s carrier here', () => {
     expect(
       note(radio({ flexTune: { powerPct: 10, txTimeoutMs: 30_000 }, flexTuneRefused: true })),

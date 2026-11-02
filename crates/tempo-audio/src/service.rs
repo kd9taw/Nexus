@@ -952,8 +952,9 @@ const PSK_FLUSH_SECS: f64 = 300.0;
 /// reports immediately regardless of this interval.
 const N3FJP_BAND_REPORT_MS: f64 = 60_000.0;
 
-/// Tune-carrier audio tone (Hz), the same f0 the FT1 modem centers on.
-const TUNE_FREQ_HZ: f32 = 1500.0;
+/// Tune-carrier audio tone (Hz): the engine's [`tempo_app::engine::TUNE_TONE_HZ`], the one number
+/// the licence gate judges the tune at, so the two cannot drift apart.
+const TUNE_FREQ_HZ: f32 = tempo_app::engine::TUNE_TONE_HZ;
 /// How much tune carrier to keep QUEUED AHEAD of the sound card, in ms — the carrier's LEAD.
 ///
 /// ⚠️ THE LEAD USED TO BE ONE TICK, AND THAT IS THE GAP (operator report: an auto-tuning
@@ -3786,6 +3787,10 @@ struct RadioLoop {
     /// A future slot path that forgets to stamp it fails SAFE (TX Off cuts, the old
     /// behavior), which is why the evidence lives here and not on `tx_enabled`.
     slot_tx_until_ms: f64,
+    /// The last key [`Self::key_over`] made was refused because Rig split could not be readied for
+    /// it ([`Self::split_ready_for_a_non_slot_key`]), whose own PTT line then stands: the caller's
+    /// report keeps it rather than the generic PTT advice ([`Self::report_ptt`] takes it).
+    key_refused_for_split: bool,
     /// When the FT8/FT4 slot over this loop last keyed stops its audio, and the PTT deadline that
     /// over holds: WSJT-X's window ends the audio 200 ms before PTT (`slot::wsjtx_over_end`). It
     /// fires only while that over is still the one held (`tx_until_ms` still its deadline), so a
@@ -4749,6 +4754,7 @@ impl RadioLoop {
             prev_slot_was_tx: false,
             tx_until_ms: None,
             slot_tx_until_ms: 0.0,
+            key_refused_for_split: false,
             slot_audio_stop: None,
             window_unkeyed: None,
             flex_voice_until_ms: None,
@@ -6330,7 +6336,13 @@ impl RadioLoop {
     /// is not called one ([`Self::report_key`]). Uses the err-owner arbitration so a PTT status
     /// never clobbers a device/mic error, and clears only its OWN status when keying succeeds
     /// again.
+    ///
+    /// A key [`Self::key_over`] refused for Split Operation keeps its own line
+    /// ([`PTT_SPLIT_NOT_READY`]), set where it was refused.
     fn report_ptt(&mut self, engine: &Arc<Mutex<Engine>>, failed: bool) {
+        if std::mem::take(&mut self.key_refused_for_split) && failed {
+            return;
+        }
         self.report_ptt_as(
             engine,
             failed.then_some((
@@ -6678,7 +6690,48 @@ impl RadioLoop {
         Some(why)
     }
 
-    fn key_over(&self, rig: &mut Rig, plain: bool) -> KeyUp {
+    /// [`Self::key_over`] keys every over that is not a slot over (`what` names it for the log).
+    ///
+    /// ⛔ SO IT READIES RIG SPLIT FIRST, FOR ALL OF THEM AT ONE SITE
+    /// ([`Self::split_ready_for_a_non_slot_key`]): VFO B back on the dial while a hold stands, a
+    /// hold that has ended let go of now, and no key at all while a release the radio has not taken
+    /// is still owed. RTTY, PSK, JTTY, the voice keyer, SSTV and the microphones key only here, on
+    /// the first tick after leaving the digital screens too, before the quiet point lets go of
+    /// split. A refusal is a [`KeyUp::Refused`]: nothing is played or sent, and the PTT line names
+    /// Split Operation ([`Self::report_ptt`]). The keys readied at their own site first (Tune, CW,
+    /// APRS) find nothing left to do here.
+    fn key_over(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        rig: &mut Rig,
+        plain: bool,
+        what: &str,
+    ) -> KeyUp {
+        match self.split_ready_for_key(engine, rig, what) {
+            Ok(()) => self.key_up(rig, plain),
+            Err(refused) => refused,
+        }
+    }
+
+    /// [`Self::key_over`]'s first half, for a site that must hold a borrow of the loop across the
+    /// key itself (Nexus's Flex client marking it as carrying Nexus's audio): ready Rig split
+    /// before that borrow, then key with [`Self::key_up`]. `Err` is the key's refusal.
+    fn split_ready_for_key(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        rig: &mut Rig,
+        what: &str,
+    ) -> Result<(), KeyUp> {
+        self.key_refused_for_split = false;
+        self.split_ready_for_a_non_slot_key(engine, rig, what)
+            .map_err(|why| {
+                self.key_refused_for_split = true;
+                KeyUp::Refused(why)
+            })
+    }
+
+    /// [`Self::key_over`]'s second half: the key itself, once Rig split is ready for it.
+    fn key_up(&self, rig: &mut Rig, plain: bool) -> KeyUp {
         let held = self.holds_tx();
         // Every over keyed here carries Nexus's own signal: on the TCI connection it never takes
         // the SDR program's microphone ([`Self::mark_tci_nexus_key`]).
@@ -6929,28 +6982,18 @@ impl RadioLoop {
         rig: &mut Rig,
         what: &str,
     ) -> Result<(), String> {
-        if !self.audio_rig_split || rig.keyed {
+        if rig.keyed {
             return Ok(());
         }
-        let (ends, cluster_active, dial) = {
-            let eng = engine_lock(engine);
-            (
-                self.rig_split_hold_ends(&eng),
-                eng.cluster_split_active(),
-                eng.settings().dial_hz(),
-            )
-        };
-        let ready = if ends {
-            self.let_go_of_rig_split(rig, cluster_active);
-            if rig.split_release_pending {
-                Err("the radio did not take the split release".to_string())
-            } else {
-                Ok(())
-            }
-        } else if rig.tx_split_held {
-            crate::slot::vfo_b_to_the_rx_dial(rig, dial).map_err(|e| e.to_string())
+        let ready = if rig.split_release_pending {
+            // ⛔ A RELEASE THE RADIO HAS NOT TAKEN IS STILL OWED (`let_go_of_rig_split`): the radio
+            // may still be in Nexus's split with VFO B on the last over's TX dial. No key until it
+            // is confirmed at a quiet point (`retry_rig_split_release`), as no slot over keys.
+            Err("the radio has not yet taken the split release".to_string())
+        } else if !self.audio_rig_split {
+            return Ok(());
         } else {
-            Ok(())
+            self.ready_held_rig_split(engine, rig)
         };
         if let Err(why) = &ready {
             tempo_core::applog::info(
@@ -6963,6 +7006,35 @@ impl RadioLoop {
             self.report_ptt_as(engine, Some(PTT_SPLIT_NOT_READY));
         }
         ready
+    }
+
+    /// [`Self::split_ready_for_a_non_slot_key`] for a Rig split this loop holds: let go of a hold
+    /// that has ended, or put VFO B back on the RX dial of one that stands.
+    fn ready_held_rig_split(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        rig: &mut Rig,
+    ) -> Result<(), String> {
+        let (ends, cluster_active, dial) = {
+            let eng = engine_lock(engine);
+            (
+                self.rig_split_hold_ends(&eng),
+                eng.cluster_split_active(),
+                eng.settings().dial_hz(),
+            )
+        };
+        if ends {
+            self.let_go_of_rig_split(rig, cluster_active);
+            if rig.split_release_pending {
+                Err("the radio did not take the split release".to_string())
+            } else {
+                Ok(())
+            }
+        } else if rig.tx_split_held {
+            crate::slot::vfo_b_to_the_rx_dial(rig, dial).map_err(|e| e.to_string())
+        } else {
+            Ok(())
+        }
     }
 
     /// Note that an over engaged Rig split, on `dial`: the band it was turned on for.
@@ -11672,7 +11744,7 @@ impl RadioLoop {
                             let continues = now < self.cw_keying_until;
                             self.ensure_commanded(rig); // read-only launch: assert before key
                             self.publish_tx_intent_now(); // before keying
-                            let key = self.key_over(rig, false);
+                            let key = self.key_over(engine, rig, false, "CW");
                             if key.sends() {
                                 backend.play(&buf);
                                 // One whole word: the silence after it is the word space.
@@ -12118,15 +12190,15 @@ impl RadioLoop {
                             let open_err = self.rtty_keyer.is_none();
                             let mut key = KeyUp::Keyed;
                             if !open_err && need_key {
-                                self.ensure_commanded(rig); // assert dial/mode before the key
+                                // Assert dial/mode before the key. Keyed with `ptt_plain`: FSK's
+                                // tones are the keyed line, not audio, so a Rear/Data radio (#381)
+                                // keys it as it always has. Keyed before the keyer is borrowed
+                                // below: `key_over` readies Rig split first, which needs the loop.
+                                self.ensure_commanded(rig);
+                                self.publish_tx_intent_now(); // before keying
+                                key = self.key_over(engine, rig, true, "RTTY");
                             }
                             if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
-                                if need_key {
-                                    // Keyed with `ptt_plain`: FSK's tones are the keyed line, not
-                                    // audio, so a Rear/Data radio (#381) keys it as it always has.
-                                    self.publish_tx_intent_now(); // before keying
-                                    key = self.key_over(rig, true);
-                                }
                                 // A stream the rig would not key sends nothing (`key_over`).
                                 if key.sends() {
                                     k.send(bits.clone(), baud);
@@ -12173,7 +12245,7 @@ impl RadioLoop {
                                 if need_key {
                                     self.ensure_commanded(rig); // assert before key
                                     self.publish_tx_intent_now(); // before keying
-                                    key = self.key_over(rig, false);
+                                    key = self.key_over(engine, rig, false, "RTTY");
                                 }
                                 // A stream the rig would not key is not played (`key_over`):
                                 // the latch goes, as on the FSK backend above.
@@ -12258,14 +12330,16 @@ impl RadioLoop {
                             // Hoisted out of the keyer borrow below (read-only launch):
                             // assert dial/mode BEFORE the key, same as every other site.
                             self.ensure_commanded(rig);
-                        }
-                        if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                             // PTT immediately before the bits start; the computed
                             // duration rides tx_until_ms so the existing expiry
                             // unkeys the moment the final stop bit ends (+ tail).
                             // `ptt_plain`, as on the streaming path: FSK is not audio (#381).
+                            // Hoisted with it: `key_over` readies Rig split first, which needs
+                            // the loop itself.
                             self.publish_tx_intent_now(); // before keying
-                            key = self.key_over(rig, true);
+                            key = self.key_over(engine, rig, true, "RTTY");
+                        }
+                        if let Some((_, _, k)) = self.rtty_keyer.as_ref() {
                             // An over the rig would not key sends nothing (`key_over`).
                             if key.sends() {
                                 k.send(bits.clone(), baud);
@@ -12328,7 +12402,7 @@ impl RadioLoop {
                         if !buf.is_empty() {
                             self.ensure_commanded(rig); // read-only launch: assert before key
                             self.publish_tx_intent_now(); // before keying
-                            let key = self.key_over(rig, false);
+                            let key = self.key_over(engine, rig, false, "RTTY");
                             // An over the rig would not key is not played (`key_over`).
                             if key.sends() {
                                 backend.play(&buf);
@@ -12507,7 +12581,7 @@ impl RadioLoop {
                         if need_key {
                             self.ensure_commanded(rig); // assert dial/mode before the key
                             self.publish_tx_intent_now(); // before keying
-                            key = self.key_over(rig, false);
+                            key = self.key_over(engine, rig, false, "PSK");
                         }
                         // A stream the rig would not key is not played (`key_over`): its latch
                         // goes, as RTTY's does.
@@ -12566,7 +12640,7 @@ impl RadioLoop {
                     self.psk_busy_until = now + total_ms + keyboard::PSK31.char_ms(psk_baud);
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying
-                    let key = self.key_over(rig, false);
+                    let key = self.key_over(engine, rig, false, "PSK");
                     // An over the rig would not key is not played (`key_over`).
                     if key.sends() {
                         backend.play(&buf);
@@ -12633,7 +12707,7 @@ impl RadioLoop {
                 if self.tx_until_ms.is_none() || now >= self.jtty_busy_until {
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying
-                    key = self.key_over(rig, false);
+                    key = self.key_over(engine, rig, false, "JTTY");
                 }
                 // A frame the rig would not key is not played (`key_over`), and a JTTY message
                 // cannot go on after a hole: the engine drops what it has going.
@@ -12672,7 +12746,7 @@ impl RadioLoop {
                 // receiving radio (`key_over`): say so, and never send the frame again into the
                 // same refusal. The engine's line says which frame went, and logs it.
                 let key = match split_ready {
-                    Ok(()) => self.key_over(rig, false),
+                    Ok(()) => self.key_over(engine, rig, false, "APRS beacon"),
                     Err(why) => KeyUp::Refused(why),
                 };
                 if key.sends() {
@@ -12872,6 +12946,8 @@ impl RadioLoop {
                     // much when the radio was already on DAX (a digital slice, a Remote operator's
                     // voice). Refused that way (the radio left DAX between the look and the key),
                     // it is the keyer's drop, and its lane says so in place of the PTT advice.
+                    // Rig split readied before the client is borrowed for the key (`key_over`).
+                    let split = self.split_ready_for_key(engine, rig, "voice keyer");
                     let (key, not_on_dax) = {
                         let flex = self
                             .rigctld_proc
@@ -12882,7 +12958,7 @@ impl RadioLoop {
                         if let Some(d) = flex {
                             d.set_voice_key(true);
                         }
-                        let key = self.key_over(rig, false);
+                        let key = split.err().unwrap_or_else(|| self.key_up(rig, false));
                         if let Some(d) = flex {
                             d.set_voice_key(false);
                         }
@@ -13076,7 +13152,7 @@ impl RadioLoop {
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                                                   // A NAK here would send the picture into a receiving rig: it is not sent
                                                   // (`key_over`, a dropped picture, never held), and the line says why.
-                    let key = self.key_over(rig, false);
+                    let key = self.key_over(engine, rig, false, "SSTV");
                     if key.sends() {
                         // Hold PTT for the WHOLE image via the precomputed duration; the
                         // tx_until_ms expiry below drops it even if every other mechanism fails.
@@ -13224,6 +13300,8 @@ impl RadioLoop {
                         // audio: the client keys it only while the radio takes Nexus's DAX, with
                         // no write of its own to that flag in flight. Refused that way, the client
                         // says why, and the page is told the station's audio is not ready.
+                        // Rig split readied before the client is borrowed for the key.
+                        let split = self.split_ready_for_key(engine, rig, "Remote microphone");
                         let marked = self
                             .rigctld_proc
                             .as_ref()
@@ -13233,7 +13311,7 @@ impl RadioLoop {
                         if let Some(d) = marked {
                             d.set_voice_key(true);
                         }
-                        let key = self.key_over(rig, false);
+                        let key = split.err().unwrap_or_else(|| self.key_up(rig, false));
                         if let Some(d) = marked {
                             d.set_voice_key(false);
                         }
@@ -13353,7 +13431,7 @@ impl RadioLoop {
                     MicTick::Key => {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying — the fail-safe must know
-                        let key = self.key_over(rig, false);
+                        let key = self.key_over(engine, rig, false, "TCI program's over");
                         self.report_key(engine, &key);
                         if let KeyUp::Refused(why) = &key {
                             // The rig did not key, so none of the program's audio may be played:
@@ -13488,11 +13566,13 @@ impl RadioLoop {
                         // the client keys only while the radio takes Nexus's DAX: the operator
                         // flipping the radio back to its mic between the look above and the key
                         // must not put the room on the air.
+                        // Rig split readied before the client is borrowed for the key.
+                        let split = self.split_ready_for_key(engine, rig, "computer microphone");
                         let marked = hold.and(self.rigctld_proc.as_ref().and_then(CatDaemon::flex));
                         if let Some(d) = marked {
                             d.set_voice_key(true);
                         }
-                        let key = self.key_over(rig, false);
+                        let key = split.err().unwrap_or_else(|| self.key_up(rig, false));
                         if let Some(d) = marked {
                             d.set_voice_key(false);
                         }
@@ -13592,6 +13672,9 @@ impl RadioLoop {
                     // key the radio refused: nothing keys and, as for any failed key, it is not
                     // tried again while it is held.
                     split_ready = self.split_ready_for_a_non_slot_key(engine, rig, "PTT");
+                    // Not keyed through `key_over`: an earlier key's refusal for the split is not
+                    // this press's, whose own report follows.
+                    self.key_refused_for_split = false;
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                 }
@@ -14688,7 +14771,7 @@ impl RadioLoop {
                     // plus its margin even if this loop stalls.
                     self.key_radio_tune(engine, max_ms as u64)
                 } else {
-                    let key = self.key_over(rig, false);
+                    let key = self.key_over(engine, rig, false, "tune");
                     // The tune's line, in the words the voice keyer gives a refused key.
                     self.report_key(engine, &key);
                     match key {
