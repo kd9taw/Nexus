@@ -1665,16 +1665,16 @@ export const EN = {
   // Contacts a LoTW upload signed with the Station Location in Settings because no station profile
   // told which TQSL Station Location signs them. TQSL and LoTW are names.
   'logbook.lotw.location.tie': {
-    one: '{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so it was signed with the Station Location in Settings ▸ Logging & Connectors.',
+    one: '{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so it was signed with the Station Location in Settings ▸ Services ▸ Confirmations.',
     other:
-      '{{count}} contacts fit two of your station profiles, and they name different TQSL Station Locations, so they were signed with the Station Location in Settings ▸ Logging & Connectors.',
+      '{{count}} contacts fit two of your station profiles, and they name different TQSL Station Locations, so they were signed with the Station Location in Settings ▸ Services ▸ Confirmations.',
   },
   'logbook.lotw.location.unmatched': {
-    one: '{{count}} contact fits none of your station profiles by its call and grid, so it was signed with the Station Location in Settings ▸ Logging & Connectors.',
+    one: '{{count}} contact fits none of your station profiles by its call and grid, so it was signed with the Station Location in Settings ▸ Services ▸ Confirmations.',
     other:
-      '{{count}} contacts fit none of your station profiles by their call and grid, so they were signed with the Station Location in Settings ▸ Logging & Connectors.',
+      '{{count}} contacts fit none of your station profiles by their call and grid, so they were signed with the Station Location in Settings ▸ Services ▸ Confirmations.',
   },
-  // The same two, when TQSL signs from the location in the ADIF (Settings ▸ Logging & Connectors):
+  // The same two, when TQSL signs from the location in the ADIF (Settings ▸ Services ▸ Confirmations):
   // no Station Location signs the contact; TQSL takes the call, grid and place fields it carries.
   'logbook.lotw.location.tieAdif': {
     one: "{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: it was signed from the call, grid, state, county, zones and IOTA it carries.",
@@ -8967,7 +8967,7 @@ export const EN = {
   'settings.stationProfiles.rig': 'Rig',
   'settings.stationProfiles.antenna': 'Antenna',
   'settings.stationProfiles.lotwLocation': 'TQSL Station Location',
-  'settings.stationProfiles.lotwLocation.hint': 'The Station Location in TQSL that signs this profile\'s contacts for LoTW. Leave blank to use the one in Settings ▸ Logging & Connectors.',
+  'settings.stationProfiles.lotwLocation.hint': 'The Station Location in TQSL that signs this profile\'s contacts for LoTW. Leave blank to use the one in Settings ▸ Services ▸ Confirmations.',
   'settings.station.experience.notSet': 'Not set',
   'settings.station.experience.hint': 'Picks which screens are on and how much of Settings opens at first. Changing it replaces the set in Settings ▸ App ▸ Features. Every setting stays reachable by search.',
   'settings.station.experience.failed': 'Could not save your experience',

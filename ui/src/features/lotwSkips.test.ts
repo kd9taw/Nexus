@@ -54,10 +54,10 @@ describe('the LoTW toast for contacts held back from TQSL', () => {
 describe('the LoTW toast for contacts signed with the Station Location in Settings', () => {
   it('counts a tie between station profiles and a contact no profile fits, and why', () => {
     expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationTie: 1 })).toBe(
-      '1 contact fits two of your station profiles, and they name different TQSL Station Locations, so it was signed with the Station Location in Settings ▸ Logging & Connectors.',
+      '1 contact fits two of your station profiles, and they name different TQSL Station Locations, so it was signed with the Station Location in Settings ▸ Services ▸ Confirmations.',
     )
     expect(lotwSkipNote({ dispatched: 3, outcome: 'pending', locationUnmatched: 2 })).toBe(
-      '2 contacts fit none of your station profiles by their call and grid, so they were signed with the Station Location in Settings ▸ Logging & Connectors.',
+      '2 contacts fit none of your station profiles by their call and grid, so they were signed with the Station Location in Settings ▸ Services ▸ Confirmations.',
     )
     const all = lotwSkipNote({ dispatched: 9, outcome: 'pending', heldMode: 1, locationTie: 2, locationUnmatched: 3 })
     expect(all).toMatch(/^1 JTTY contact was not sent: .* 2 contacts fit two of your station profiles.* 3 contacts fit none of/)

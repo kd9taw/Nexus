@@ -32,8 +32,8 @@ pub fn tqsl_args(station_location: Option<&str>, adif_path: &str) -> Result<Vec<
         if loc.trim_start().starts_with('-') {
             return Err(format!(
                 "The TQSL Station Location \"{loc}\" starts with \"-\", which TQSL would read as \
-                 an option. Rename it in TQSL, then in Nexus (Settings ▸ Logging & Connectors, or \
-                 the station profile that names it)."
+                 an option. Rename it in TQSL, then in Nexus (Settings ▸ Services ▸ Confirmations, \
+                 or the station profile that names it)."
             ));
         }
         args.push("-l".into());
