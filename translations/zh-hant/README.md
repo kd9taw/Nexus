@@ -15,10 +15,10 @@ Nexus 是給業餘無線電用的程式：CAT 控制、FT8/CW/SSB/RTTY 收發、
 
 | 檔案 | 用途 |
 |---|---|
-| `nexus-zh-hant-translation.csv` | 10,515 列，欄位與簡體套件相同，只填 `chinese` 欄 |
+| `nexus-zh-hant-translation.csv` | 10,812 列，欄位與簡體套件相同，只填 `chinese` 欄 |
 | `splash-zh-hant.json` | 啟動頁的 5 條文字，貼進 `ui/public/splashscreen.html` 的 `splash-strings` |
 
-`notes` 欄是空的：這份稿子是從已完成的簡體稿轉出來的，把 3,710 條英文註解搬過來只是雜訊。
+`notes` 欄大多是空的：這份稿子是從已完成的簡體稿轉出來的，把 3,710 條英文註解搬過來只是雜訊。維護者為新增文案補譯、等待譯者複核的 218 列，`notes` 欄寫著 “Filled by the maintainer, pending translator review.”。
 要對照原文時看 `english` 欄就夠。
 
 ## 重建
@@ -26,13 +26,15 @@ Nexus 是給業餘無線電用的程式：CAT 控制、FT8/CW/SSB/RTTY 收發、
 改完 CSV 之後：
 
 ```
-python3 translations/zh/verify-zh.py translations/zh-hant/nexus-zh-hant-translation.csv
 python3 translations/zh/csv-to-catalog.py translations/zh-hant/nexus-zh-hant-translation.csv \
     -o ui/src/i18n/zh-hant.ts --variant hant --splash-out translations/zh-hant/splash-zh-hant.json
 ```
 
-檢查程式與簡體套件共用一支：兩份 CSV 的 `key`、`english`、`do_not_translate` 三欄完全相同，
-所以同一組指紋對兩份都成立。
+轉換器與簡體套件共用一支（兩份 CSV 的 `key`、`english`、`do_not_translate` 三欄完全相同）。它會拒絕
+欄位不對、重複的 key、只填一半的複數或啟動頁文字；英文已改或已刪的列會被跳過並報出條數。接著在
+`ui/` 跑 `npx vitest run src/i18n/placeholders.test.ts src/i18n/splash.test.ts src/i18n/locale-switch.test.ts src/features/macroSets.test.ts`，
+檢查佔位符與標記、數字裡的逗號、啟動頁文字，以及每個 key 是否都有譯文。沒有程式逐列核對
+`do_not_translate` 欄，請人工對照。
 
 ## 轉換方式
 

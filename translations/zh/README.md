@@ -4,7 +4,7 @@ Nexus 是业余无线电的“一个窗口搞定全部”程序：CAT 控制电�
 
 程序目前支持英语、德语、西班牙语、法语、日语和俄语。加上简体中文，中文操作员就能用母语上机。
 
-**状态：已完成。** `nexus-zh-translation.csv` 的 **10,625 行全部译完（100%）**，对应 **9,966 条**界面文案 + 5 条启动页文字，`verify-zh.py` 报 0 问题。
+**状态：已完成。** `nexus-zh-translation.csv` 共 **10,812 行，全部填写（100%）**，对应 **10,131 条**界面文案 + 5 条启动页文字。其中 218 行是维护者为新增文案补的译文（`notes` 列写着 “Filled by the maintainer, pending translator review.”），等待译者复核。
 
 ---
 
@@ -64,7 +64,7 @@ logbook.import.imported::other,Imported {{count}} QSOs     → 已导入 {{count
 
 **中文四行写同一句**，一律带 `{{count}}`。`Intl.PluralRules('zh')` 对任何数字都只选 `other`，所以 `zh.ts` 里每条复数文案只是**一个字符串**（`ja.ts` 同一做法），转换器取 `other` 那一行。另外三行不是废行：后期维护者要改这条文案时，四行一起改才不会前后打架。
 
-四行都必须填满。只填一半，`verify-zh.py` 会报错——空着的那一行意味着没人看过的句子。
+四行都必须填满。只填一半，`csv-to-catalog.py` 会拒绝生成目录并报错——空着的那一行意味着没人看过的句子。
 
 ---
 
@@ -72,27 +72,31 @@ logbook.import.imported::other,Imported {{count}} QSOs     → 已导入 {{count
 
 | 级别 | 行数 | 内容 |
 |---:|---:|---|
-| **1** | **1,097** | 主框架：顶栏、连接状态、错误提示、频率/波段控制、QSO 表单、台站设置。 |
+| **1** | **1,117** | 主框架：顶栏、连接状态、错误提示、频率/波段控制、QSO 表单、台站设置。 |
 | 2 | 361 | 首次启动：向导、入门指引、启动页。 |
-| 3 | 2,024 | 操作面：FT8/FT4 界面、日志簿、spot 列表、Needed 面板、瀑布图。 |
-| 4 | 567 | 设置：音频、电台、连接、通知、备份。 |
-| 5 | 4,097 | CW、话音、RTTY、PSK、SSTV、APRS、JS8、卫星、奖项、地图。 |
-| 6 | 2,479 | 进阶：电台深度控制、旋转器、远程访问。 |
-| | **10,625** | 另含 5 行启动页文字（`splashscreen.` 前缀）。 |
+| 3 | 2,048 | 操作面：FT8/FT4 界面、日志簿、spot 列表、Needed 面板、瀑布图。 |
+| 4 | 573 | 设置：音频、电台、连接、通知、备份。 |
+| 5 | 4,164 | CW、话音、RTTY、PSK、SSTV、APRS、JS8、卫星、奖项、地图。 |
+| 6 | 2,549 | 进阶：电台深度控制、旋转器、远程访问。 |
+| | **10,812** | 另含 5 行启动页文字（`splashscreen.` 前缀）。 |
 
 ---
 
 ## 自动检查
 
-改完译文跑一次：
+改完译文，先重新生成目录（见下一节），再在 `ui/` 里跑目录测试：
 
 ```bash
-python3 verify-zh.py nexus-zh-translation.csv
+python3 translations/zh/csv-to-catalog.py translations/zh/nexus-zh-translation.csv \
+    -o ui/src/i18n/zh.ts --splash-out translations/zh/splash-zh.json
+cd ui && npx vitest run src/i18n/placeholders.test.ts src/i18n/splash.test.ts src/i18n/locale-switch.test.ts src/features/macroSets.test.ts
 ```
 
-它只查**机械层面**的东西：行数是否齐全、`english` 与 `do_not_translate` 两列是否被改动、占位符/标记/CW 宏有没有被改名或丢掉、技术数字有没有冒出逗号、复数的四行是否填满。它**不评价**中文好不好——那是人的事，程序看不出来。
+转换器 `csv-to-catalog.py` 会拒绝生成并说明原因：列名不对、文件不是 UTF-8、同一个 key 出现两次、复数四行只填了一部分或缺 `other`、启动页文字只填了一部分。英文已改动或已删除的行会被跳过（那句显示当前英文），输出里会报出条数。
 
-脚本顶部钉死了这套文件的指纹（行数、三列 SHA-256、各级条数），所以“不小心排序了”“筛选没关掉就保存”“少了一行”都会被立刻发现。
+`placeholders.test.ts` 逐条查：占位符 `{{...}}` 和格式标记与英文一致、技术数字没有冒出逗号、没有写成文字的 `\uXXXX`、复数没有被拼成两遍，以及英文的每个 key 在 `zh.ts` 里都有译文。`splash.test.ts` 查启动页文字齐全，`macroSets.test.ts` 查宏按钮的名字不会是“停止”这类词。
+
+这些检查都**不评价**中文好不好——那是人的事，程序看不出来。也没有程序逐行核对 `do_not_translate` 列，那一列请人工对照。
 
 ---
 
