@@ -82,6 +82,7 @@
 | Mode | 模式 | 297 |
 | Settings | 设置 | 443 |
 | Contact / QSO（叙述中） | 通联 | 471 |
+| Over（FT 时隙里的一次发射，不是一次通联） | 本次发射 / 该次发射（繁體：本次發射 / 該次發射） | — |
 | Logbook | 日志簿 | 89 |
 | Waterfall | 瀑布图 | 60 |
 | Panadapter | 全景 | 39 |
