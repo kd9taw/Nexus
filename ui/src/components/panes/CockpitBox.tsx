@@ -222,7 +222,7 @@ export function CockpitBox({ box, entry, source, selection, onScreen, onPick, on
       actions={<BoxPicker entry={entry} title={title} marked={marked} onPick={pick} />}
     >
       <div className={`box-body${stacked && fill ? ' box-body--stacked' : ''}`} data-box={entry}>
-        <BoxBody pane={shown.pane} source={source} selection={selection} />
+        <BoxBody pane={shown.pane} source={source} selection={selection} instance={box} />
       </div>
     </CockpitPaneFrame>
   )

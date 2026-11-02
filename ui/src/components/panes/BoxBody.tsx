@@ -18,7 +18,18 @@ import { resolveSelection, usePaneContext } from '../connect/usePaneContext'
 import type { PaneId } from '../../features/connectConfig'
 import type { BoxSelection, BoxSource } from './CockpitBox'
 
-export function BoxBody({ pane, source, selection }: { pane: PaneId; source: BoxSource; selection: BoxSelection }) {
+export function BoxBody({
+  pane,
+  source,
+  selection,
+  instance,
+}: {
+  pane: PaneId
+  source: BoxSource
+  selection: BoxSelection
+  /** The box's place (CockpitBox `box`), for a pane that keeps a choice per box. */
+  instance?: string
+}) {
   const { selectedCall, onSelectCall } = selection
   const resolved = useMemo(
     () => resolveSelection(selectedCall, source.stations, source.prop),
@@ -54,5 +65,5 @@ export function BoxBody({ pane, source, selection }: { pane: PaneId; source: Box
     activation: source.activation,
     entryCall: source.entryCall,
   })
-  return <PaneBody pane={pane} ctx={ctx} />
+  return <PaneBody pane={pane} ctx={ctx} instance={instance} />
 }

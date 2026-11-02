@@ -53,6 +53,7 @@ import { MiniSpectrum } from '../MiniSpectrum'
 import { ContestCalendarPane } from '../ContestCalendarPane'
 import { getContests } from '../../api'
 import { GetoutCompass } from '../prop/GetoutCompass'
+import { GetoutList } from './GetoutList'
 import { fmtSinceUtc, getoutSummary } from '../../features/getout'
 import { setGetoutSince, startGetoutFresh } from '../../features/getoutSince'
 import { fmtDistanceKm } from '../../units'
@@ -60,7 +61,6 @@ import { GreylineWindow } from '../prop/GreylineWindow'
 import { ScalesAnnunciator } from '../prop/ScalesAnnunciator'
 import { MeasuredMuf } from '../prop/MeasuredMuf'
 import { PotaSotaView } from '../PotaSotaView'
-import { ageLabel } from '../SpotsPanel'
 import { SpotsBox } from './SpotsBox'
 import { NeededBox } from './NeededBox'
 import { OperatorsBox } from '../ContestOperators'
@@ -123,8 +123,9 @@ export interface PaneDef {
   /** ONE plain sentence projected from ctx — also the empty/loading/offline hint. */
   basic: (c: PaneContext) => string
   /** Full panel: the unchanged existing JSX, reading c.*. Returns null when no data
-   *  (PaneFrame then falls back to basic(), so loading/offline needs no special case). */
-  expert: (c: PaneContext) => ReactNode
+   *  (PaneFrame then falls back to basic(), so loading/offline needs no special case). `instance` is
+   *  the box's place (PaneBody), for a pane that keeps a choice of its own per box (Getting Out's sort). */
+  expert: (c: PaneContext, instance?: string) => ReactNode
 }
 
 // ---- Expert renders: verbatim ConnectView panel JSX, locals → c.* ----
@@ -354,7 +355,7 @@ function renderOutlook(c: PaneContext): ReactNode {
   )
 }
 
-function renderGetout(c: PaneContext): ReactNode {
+function renderGetout(c: PaneContext, instance: string): ReactNode {
   const g = c.getout
   const since = c.getoutSince ?? null
   return (
@@ -406,27 +407,9 @@ function renderGetout(c: PaneContext): ReactNode {
             <GetoutCompass reports={g.reports} maxKm={g.maxKm} units={c.units} />
             <p className="getout-dir">{getoutSummary(g.reports, c.units)}</p>
           </div>
-          {/* THE FULL LIST: every receiver the station reports (`propagation::getting_out` — the
-              latest report per receiver over its window, most distant first), not the first six.
-              It scrolls inside the box's body; each row gains how long ago it heard you. */}
-          <ul className="getout-list">
-            {g.reports.map((r) => (
-              <li
-                key={r.call}
-                className="go-clickable"
-                onClick={() => c.onSelectCall(r.call)}
-                title={t('connect.getout.select.title', { call: r.call })}
-              >
-                <span className="go-call">{r.call}</span>
-                <span className="go-where">
-                  {r.octant} {fmtDistanceKm(r.km, c.units)}
-                </span>
-                <span className="go-band">{r.band}</span>
-                <span className="go-snr">{r.snr != null ? `${r.snr} ${DB_UNIT}` : ''}</span>
-                <span className="go-age">{ageLabel(r.ageSecs)}</span>
-              </li>
-            ))}
-          </ul>
+          {/* THE FULL LIST: every receiver the station reports, under its sort bar (GetoutList). It
+              scrolls inside the box's body; each row gains how long ago it heard you. */}
+          <GetoutList reports={g.reports} units={c.units} instance={instance} onSelectCall={c.onSelectCall} />
         </>
       )}
     </section>
@@ -578,7 +561,8 @@ export const PANES: PaneDef[] = [
     },
     category: 'activity',
     basic: getoutLine,
-    expert: (c) => renderGetout(c),
+    // The box's place keys its sort choice; a host that names none shares one record ('pane').
+    expert: (c, instance) => renderGetout(c, instance ?? 'pane'),
   },
   // ---- B2 Tier-1 panes (pickable; DEFAULT_SLOTS keeps the approved core layout) ----
   {

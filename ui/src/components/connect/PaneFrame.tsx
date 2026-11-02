@@ -261,7 +261,7 @@ export function PaneFrame<S extends string = SlotId>({
         {...(tabbed ? { role: 'tabpanel', id: panelId, 'aria-labelledby': tabId(paneId) } : {})}
         style={scale === 1 ? undefined : ({ '--box-text-scale': scale } as CSSProperties)}
       >
-        <PaneBody pane={paneId} ctx={ctx} />
+        <PaneBody pane={paneId} ctx={ctx} instance={slotId} />
       </div>
     </section>
   )
@@ -270,9 +270,10 @@ export function PaneFrame<S extends string = SlotId>({
 /** A box's body: the pane's full panel, or its one-line state while the panel has nothing to show
  *  (`expert` returns null → `basic`). The ONE renderer of a box's body, wherever the box stands — this
  *  frame on Conditions, in the dashboard window and in the rail, and any area that shows an entry of
- *  the shared list (features/sharedPanes) — so no surface can draw a box differently. */
-export function PaneBody({ pane, ctx }: { pane: PaneId; ctx: PaneContext }) {
+ *  the shared list (features/sharedPanes) — so no surface can draw a box differently. `instance` is the
+ *  box's place (a slot, or a cockpit's box), which a pane keeping a choice per box keys it by. */
+export function PaneBody({ pane, ctx, instance }: { pane: PaneId; ctx: PaneContext; instance?: string }) {
   const def = paneById(pane)
   if (!def) return null
-  return <>{def.expert(ctx) ?? <p className="pane-basic">{def.basic(ctx)}</p>}</>
+  return <>{def.expert(ctx, instance) ?? <p className="pane-basic">{def.basic(ctx)}</p>}</>
 }

@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Sort the stations hearing you.** The Getting Out box ("Am I getting out?") has a sort bar above its list: Distance (the most distant first, as before, and still the default), Call A–Z, Newest (the most recent report first) and SNR (the strongest first; a report without an SNR goes last). Stations that tie keep a steady order, by distance and then by call, so the list does not shuffle as new reports arrive. Each Getting Out box remembers its own choice, on Conditions, in the dashboard rail and beside a cockpit, and keeps it when Nexus restarts.
+
 ## [1.22.0] — 2026-11-01
 
 ### Added

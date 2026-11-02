@@ -11168,6 +11168,11 @@ export const EN = {
   'connect.getout.showAll': 'Show all',
   'connect.getout.showAll.title': 'Count every reception report again',
   'connect.getout.none.since': 'No reception reports since {{time}} yet — call CQ, then watch who hears you.',
+  'connect.getout.sort.aria': 'Sort the stations hearing you',
+  'connect.getout.sort.distance': 'Distance',
+  'connect.getout.sort.call': 'Call A–Z',
+  'connect.getout.sort.newest': 'Newest',
+  'connect.getout.sort.snr': 'SNR',
 
   // ── The Basic projections — one whole sentence per pane, per state ──────────────────
   // Every one of these was assembled from fragments. They are whole sentences now, with

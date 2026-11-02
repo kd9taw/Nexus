@@ -3816,6 +3816,41 @@ body.resizing-row {
   color: var(--band-open);
   font-family: var(--font-mono);
 }
+/* The list's sort bar (connect/GetoutList): a radio group drawn as one pill of chips, wrapping onto a
+   second line in a narrow box. Each chip is the label of a visually hidden native radio (`.sr-only`,
+   absolutely placed — the chip is its containing block), so the ring shows on the chip when the
+   keyboard has the group. */
+.getout-sort {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 0 0 var(--space-2);
+  padding: 2px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+}
+.getout-sort-opt {
+  position: relative;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.getout-sort-opt:hover {
+  background: var(--border-soft);
+}
+.getout-sort-opt.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.getout-sort-opt:has(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .getout-list {
   list-style: none;
   margin: 0;

@@ -51,6 +51,9 @@ export const PER_SURFACE = [
   // The Getting Out box's Start fresh time (features/getoutSince): an antenna test in THIS window. A
   // pop-out starts on the main window's and diverges at its first press; a restart keeps it.
   'nexus.connect.getout.since',
+  // The Getting Out list's sort, one record of every box's choice keyed by the box's place
+  // (features/getoutSort): what THIS window's boxes show, like the POTA/SOTA box's sort below.
+  'nexus.connect.getout.sort',
   'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',
   'nexus.connect.intent',
