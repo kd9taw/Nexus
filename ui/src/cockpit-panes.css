@@ -933,3 +933,22 @@
   top: 0;
   right: 0;
 }
+
+/* ── PHONE'S FREEDV PANE (receive only; components/FreedvPane) ─────────────────────────────────────
+   It stands in the feeds' wrapper (`.np-pane`, which takes the pane body and floors only in the
+   stacking flow), and its heard list holds up to 50 calls. The list is the pane's ONE scroller, as
+   Needed's grid is: the pane is a column flex with a ZERO basis so the status lines above keep their
+   height, and the list's zero basis lets it scroll under them instead of standing every call at full
+   height above the log form (an auto or percentage basis resolves to content height against an
+   indefinite box). No floor of its own: the wrapper carries the stacking flow's. */
+.freedv-pane {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.freedv-heard {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}

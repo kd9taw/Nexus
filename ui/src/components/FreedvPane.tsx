@@ -76,7 +76,7 @@ export function FreedvPane({ freedv, onPickCall, control, nowUnix }: FreedvPaneP
       ) : freedv && freedv.heard.length === 0 ? (
         <p className="dim">{t('phone.freedv.heard.empty')}</p>
       ) : (
-        <ul className="freedv-heard" aria-label={t('phone.freedv.heard.label')}>
+        <ul className="freedv-heard freedv-calls" aria-label={t('phone.freedv.heard.label')}>
           {freedv?.heard.map((h) => (
             <li key={h.call}>
               <button

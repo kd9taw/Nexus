@@ -245,7 +245,7 @@ describe('the fence: styles.css never names a structural class', () => {
   // size, from the sheet that has lost every one of these fights before.
   // The RF scope pane's modifier on FT's waterfall strip (2026-10-04) too: the strip's direction is
   // structure, and the styles.css `.panel` it overrides is exactly the kind of rule that wins a tie.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside', 'op-rail-floor', 'macro-bank', 'macro-bank-shared-12', 'macro-bank-shared-16', 'macro-quad']) {
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside', 'op-rail-floor', 'macro-bank', 'macro-bank-shared-12', 'macro-bank-shared-16', 'macro-quad', 'freedv-pane', 'freedv-heard']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -454,6 +454,25 @@ describe("FT'S STOCK RAIL WITH THE RECENT CONTACTS PANE: a scroller whose feeds 
     expect(classWinner('op-rail-floor', blockVar('--cockpit-fill-min'))?.value).toBe(
       classWinner('op-stack', blockVar('--cockpit-fill-min'))?.value,
     )
+  })
+})
+
+describe("PHONE'S FREEDV PANE: its heard list is the pane's one scroller, as Needed's grid is", () => {
+  // The pane sits in the feeds' wrapper (`.np-pane`, floored only in the stacking flow). Up to 50
+  // heard calls must scroll under the status lines rather than stand at full height above the log
+  // form, so each level is a column flex with a ZERO basis (a percentage or auto basis resolves to
+  // content height against an indefinite box) and the list is the scroller.
+  it('the pane is a column flex that takes the wrapper with a zero basis, and may shrink to it', () => {
+    expect(classWinner('freedv-pane', blockDecl('display'))?.value).toBe('flex')
+    expect(classWinner('freedv-pane', blockDecl('flex-direction'))?.value).toBe('column')
+    expect(classWinner('freedv-pane', blockDecl('flex'))?.value).toBe('1 1 0')
+    expect(classWinner('freedv-pane', blockDecl('min-height'))?.value).toBe('0')
+  })
+  it('the heard list scrolls inside itself, with a zero basis and no floor', () => {
+    const y = classWinner('freedv-heard', blockOverflowY)
+    expect(y && SCROLLS(y.value), `the heard list does not scroll: ${JSON.stringify(y)}`).toBe(true)
+    expect(classWinner('freedv-heard', blockDecl('flex'))?.value).toBe('1 1 0')
+    expect(classWinner('freedv-heard', blockDecl('min-height'))?.value).toBe('0')
   })
 })
 
