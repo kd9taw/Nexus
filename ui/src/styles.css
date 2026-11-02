@@ -30478,6 +30478,15 @@ button.sat-chip:disabled {
   color: var(--state-weak);
   border-color: var(--state-weak);
 }
+/* JTTY'S Esc/Stop STANDS IN THE SEND ROW (beside Send), not in a fixed row of keys as RTTY's and PSK's
+   do, so its height is the row's — and the row follows `--touch`, which the 1080p pass took from 44 to
+   30 px at Standard. A STOP CONTROL NEVER SHRINKS, so it keeps the floor it had before that pass: 44 px,
+   48 under Touch (`max(--touch, 44px)`, density by density exactly the old height). Measured in Chrome
+   at 1920×1040: 56×44 before the pass, 56×34 with the 30 px row, 56×44 with this floor.
+   cockpit-shells.test.ts pins it with every other stop and send control's floor. */
+.jtty-stop {
+  min-height: max(var(--touch), 44px);
+}
 /* SSTV Arm toggle (header) — armed state must read at a glance. */
 .sstv-arm {
   padding: 6px var(--space-4);

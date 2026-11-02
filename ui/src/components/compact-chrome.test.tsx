@@ -105,6 +105,22 @@ describe('the compact dock: every transmit and stop control stays in the dock or
     })
   }
 
+  it('the compose rows that follow --touch hold only the controls whose floors are pinned (rendered census)', async () => {
+    // `.cw-send` rows stretch their buttons to the row's height, and the row follows `--touch`; every button
+    // standing in one must be one whose floor cockpit-shells.test.ts pins (Send's width, JTTY's Esc Stop's
+    // height). A new stop or send control dropped into one would shrink unseen; this names it.
+    const PINNED = ['cw-send-btn', 'jtty-stop']
+    for (const c of [cw, rtty, psk, jtty]) {
+      at('lg')
+      await mount(c)
+      const btns = [...document.querySelectorAll('.cockpit-txdock .cw-send button')]
+      expect(btns.length, `${c.cockpit}: a send row with buttons`).toBeGreaterThan(0)
+      for (const b of btns)
+        expect(PINNED.some((k) => b.classList.contains(k)), `${c.cockpit}: "${b.textContent}" (${b.className}) has no pinned floor`).toBe(true)
+      cleanup()
+    }
+  })
+
   it.each(SIZES)('Phone and CW at %s: the read-only meters stand in the strip from md up, in the dock below', async (vp) => {
     for (const c of [phone, cw]) {
       at(vp)
