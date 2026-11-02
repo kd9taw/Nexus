@@ -6394,6 +6394,7 @@ export const DE: PartialCatalog = {
   "settings.transmit.freedv.log.label": "FreeDV-Verbindungen ins Log",
   "settings.transmit.freedv.log.hint": "Die FreeDV-App kann jede dort geloggte Verbindung an Nexus übergeben: In FreeDV QSO Logging einschalten und die hier angezeigte Adresse eintragen. Jede landet als FreeDV-Verbindung im Log, und nur unter Ihrem eigenen Stationsrufzeichen: Eine Verbindung, die FreeDV unter einem anderen Rufzeichen loggt, wird abgelehnt, und der Grund steht hier. Nur für diesen Computer und nur Empfang: Nichts, was FreeDV hierher sendet, kann das Funkgerät tasten oder abstimmen.",
   "settings.transmit.freedv.logPort.label": "FreeDV-Logging-Port",
+  "settings.transmit.freedv.logPort.off": "Nicht empfangsbereit: Port 0 schaltet es aus.",
   "settings.transmit.freedv.heard.label": "Von FreeDV gehörte Rufzeichen",
   "settings.transmit.freedv.heard.hint": "Listet die Rufzeichen, die FreeDV dekodiert (ab FreeDV 2.4), im FreeDV-Bereich des Phone-Bildschirms. Nur FreeDV auf diesem Computer wird gehört. Windows fragt eventuell einmal, ob Nexus das Netzwerk verwenden darf.",
   "settings.digital.legend": "Digital (FT8/FT4)",

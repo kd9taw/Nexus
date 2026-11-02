@@ -10815,3 +10815,4 @@ Click for internet feed controls.","{{detail}}
 "5","phone.freedv.heard.empty","No calls heard yet.","Позывных пока не принято.","",""
 "5","phone.freedv.heard.label","Calls FreeDV heard","Позывные, принятые FreeDV","FreeDV",""
 "5","phone.freedv.heard.pick","Put {{call}} in the log","Внести {{call}} в журнал","","Tooltip on a heard call: a click puts the call in the log strip's call field (it does not log by itself)."
+"4","settings.transmit.freedv.logPort.off","Not listening: port 0 turns it off.","Не слушает: порт 0 отключает приём.","","Shown in place of the address when the FreeDV logging port is 0, which switches the listener off."

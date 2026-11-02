@@ -8808,8 +8808,12 @@ export function SettingsPanel({
                 {(form.freedvLog ?? true) && freedv?.logError && (
                   <span className="rig-share-fault" role="alert">{freedv.logError}</span>
                 )}
-                {(form.freedvLog ?? true) && !freedv?.logError && (
-                  <code className="rig-share-addr mono">127.0.0.1:{form.freedvLogPort || 2239}</code>
+                {/* Port 0 is the listener switched off (the backend binds nothing): no address. */}
+                {(form.freedvLog ?? true) && !freedv?.logError && (form.freedvLogPort ?? 2239) === 0 && (
+                  <span className="settings-hint">{t('settings.transmit.freedv.logPort.off')}</span>
+                )}
+                {(form.freedvLog ?? true) && !freedv?.logError && (form.freedvLogPort ?? 2239) !== 0 && (
+                  <code className="rig-share-addr mono">127.0.0.1:{form.freedvLogPort ?? 2239}</code>
                 )}
               </div>
               <span className="settings-hint">{t('settings.transmit.freedv.log.hint')}</span>

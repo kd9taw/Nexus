@@ -5894,6 +5894,7 @@ export const JA: PartialCatalog = {
   "settings.transmit.freedv.log.label": "FreeDVの交信をログへ",
   "settings.transmit.freedv.log.hint": "FreeDVアプリで記録した交信をNexusへ渡せます。FreeDVでQSO Loggingをオンにし、ここに表示されたアドレスを設定してください。各交信はFreeDVの交信としてログに入り、自局のコールサインの下にだけ記録されます。FreeDVが別のコールサインで記録した交信は拒否され、理由がここに表示されます。このコンピューター専用で受信のみです。FreeDVがここへ送るものが無線機を送信状態にしたり同調させたりすることはありません。",
   "settings.transmit.freedv.logPort.label": "FreeDVのログ用ポート",
+  "settings.transmit.freedv.logPort.off": "待ち受けていません：ポート0でオフになります。",
   "settings.transmit.freedv.heard.label": "FreeDVが受信したコールサイン",
   "settings.transmit.freedv.heard.hint": "FreeDVがデコードしたコールサイン（FreeDV 2.4以降）をPhone画面のFreeDVペインに一覧表示します。このコンピューターのFreeDVだけを受信します。WindowsがNexusのネットワーク使用を一度確認することがあります。",
   "settings.digital.legend": "デジタル (FT8/FT4)",

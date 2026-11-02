@@ -10163,4 +10163,5 @@ export const RU: PartialCatalog = {
   "phone.freedv.heard.empty": "Позывных пока не принято.",
   "phone.freedv.heard.label": "Позывные, принятые FreeDV",
   "phone.freedv.heard.pick": "Внести {{call}} в журнал",
+  "settings.transmit.freedv.logPort.off": "Не слушает: порт 0 отключает приём.",
 }

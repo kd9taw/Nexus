@@ -8657,6 +8657,7 @@ export const ES: PartialCatalog = {
   "settings.transmit.freedv.log.label": "Contactos de FreeDV al log",
   "settings.transmit.freedv.log.hint": "La aplicación de FreeDV puede pasar a Nexus cada contacto que registre: en FreeDV, active QSO Logging y póngale la dirección que aparece aquí. Cada uno entra en el log como contacto FreeDV, y solo con su propio indicativo de estación: uno que FreeDV registre con otro indicativo se rechaza, y el motivo aparece aquí. Solo para este ordenador y solo recepción: nada de lo que FreeDV envíe aquí puede pasar el equipo a transmisión ni sintonizarlo.",
   "settings.transmit.freedv.logPort.label": "Puerto de registro de FreeDV",
+  "settings.transmit.freedv.logPort.off": "Sin escuchar: el puerto 0 lo desactiva.",
   "settings.transmit.freedv.heard.label": "Indicativos que oye FreeDV",
   "settings.transmit.freedv.heard.hint": "Muestra los indicativos que decodifica FreeDV (FreeDV 2.4 y posteriores) en el panel FreeDV de la pantalla Phone. Solo se escucha el FreeDV de este ordenador. Windows puede preguntar una vez si Nexus puede usar la red.",
   "settings.transmit.foreignPtt.label": "Otros programas pueden activar la transmisión",

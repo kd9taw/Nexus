@@ -9286,6 +9286,7 @@ export const EN = {
   'settings.transmit.freedv.log.hint':
     "FreeDV's own app can hand each contact you log in it to Nexus: in FreeDV, turn on QSO Logging and give it the address shown here. Each one lands in the log as a FreeDV contact, and only under your own station call: one FreeDV logs under another call is refused, and the reason shows here. Only for this computer, and receive only: nothing FreeDV sends here can key or tune the radio.",
   'settings.transmit.freedv.logPort.label': "FreeDV logging port",
+  'settings.transmit.freedv.logPort.off': "Not listening: port 0 turns it off.",
   'settings.transmit.freedv.heard.label': "Calls FreeDV hears",
   'settings.transmit.freedv.heard.hint':
     "Lists the calls FreeDV decodes (FreeDV 2.4 and later) in the Phone screen's FreeDV pane. Only the FreeDV on this computer is listened to. Windows may ask once whether Nexus may use the network.",
