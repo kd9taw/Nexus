@@ -2,7 +2,9 @@
 // what jsdom cannot see: `scripts/browser-probe --desktop txmeters`.
 //
 // The probe serves src/probe/txmeters.tsx with the app's own Vite config at 1024×768 (the supported
-// floor) and 1920×1080, in °C and in °F, and asserts, in Phone's dock and Operate's telemetry cell:
+// floor) and 1920×1080, in °C and in °F, and asserts, in Phone's dock, the TX strip's meters cell (the
+// compact dock, md and up; there the strip must also stay one line, no taller than its own buttons, with
+// Stop TX on top) and Operate's telemetry cell:
 //   · nothing scrolls sideways: the page, the panels and every meter row are no wider than they show;
 //   · the COMP row's level bar is a usable width beside its PROC and bandwidth chips, and the row is
 //     no taller than a meter row without them;
@@ -69,6 +71,16 @@ const MEASURE = `(() => {
     bw: comp?.querySelector('[data-ctl="txbw"]') ? box(comp.querySelector('[data-ctl="txbw"]')) : null,
     dockTemps: temps(dock),
     cellTemps: temps(cell),
+    // The strip host only: the strip's height against its own buttons. The meters must not raise it.
+    strip: (() => {
+      const s = document.querySelector('[data-probe="strip"]')
+      if (!s) return null
+      const stop = s.querySelector('.op-btn.stop').getBoundingClientRect()
+      const cs = getComputedStyle(s)
+      const chrome = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
+      const cluster = s.querySelector('.cq-txctl').getBoundingClientRect()
+      return { h: Math.round(s.getBoundingClientRect().height), button: Math.round(stop.height), cluster: Math.round(cluster.height), chrome: Math.round(chrome), stopOn: topmost(s.querySelector('.op-btn.stop')) }
+    })(),
   }
 })()`
 
@@ -84,7 +96,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure(w, h, units, control) {
+async function measure(w, h, units, control, host) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -93,7 +105,7 @@ async function measure(w, h, units, control) {
     return r.exceptionDetails ? { error: r.exceptionDetails.exception?.description ?? r.exceptionDetails.text } : r.result.value
   }
   await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
-  await call('Page.navigate', { url: `${origin}/probe/txmeters.html?units=${units}${control ? '&control=1' : ''}` })
+  await call('Page.navigate', { url: `${origin}/probe/txmeters.html?units=${units}${control ? '&control=1' : ''}${host === 'strip' ? '&host=strip' : ''}` })
   let last = null
   for (let i = 0; i < 80; i++) {
     await sleep(150)
@@ -135,6 +147,11 @@ function faults(m, units) {
   if (!m.bwOn) f.push('the bandwidth chip is not reachable')
   const unit = units === 'imperial' ? '°F' : '°C'
   const want = units === 'imperial' ? ['RIG 117°F', 'AMP 126°F'] : ['RIG 47°C', 'AMP 52°C']
+  if (m.strip) {
+    // One line: no taller than its own TX cluster and its padding and border, and Stop TX on top.
+    if (m.strip.h > m.strip.cluster + m.strip.chrome + 1) f.push(`the meters raise the TX strip to ${m.strip.h} px (its TX cluster ${m.strip.cluster} + ${m.strip.chrome})`)
+    if (!m.strip.stopOn) f.push('Stop TX in the strip is not reachable')
+  }
   for (const [where, list] of [['dock', m.dockTemps], ['cell', m.cellTemps]]) {
     const got = list.map((r) => `${r.label} ${r.value}`)
     if (JSON.stringify(got) !== JSON.stringify(want)) f.push(`the ${where} temperatures read ${JSON.stringify(got)}, not ${unit} ${JSON.stringify(want)}`)
@@ -145,9 +162,9 @@ function faults(m, units) {
 
 let code = 0
 try {
-  for (const { w, h, units } of SIZES) {
-    const { m, asked } = await measure(w, h, units, false)
-    console.log(`txmeters-probe: window ${w}×${h} ${units}: ${JSON.stringify(m)} asked: ${JSON.stringify(asked)}`)
+  for (const { w, h, units } of SIZES) for (const host of ['dock', 'strip']) {
+    const { m, asked } = await measure(w, h, units, false, host)
+    console.log(`txmeters-probe: window ${w}×${h} ${units} in the ${host}: ${JSON.stringify(m)} asked: ${JSON.stringify(asked)}`)
     if (!m || m.error) {
       console.error(`txmeters-probe: the meters never drew at ${w}×${h}`)
       code = 2
@@ -160,18 +177,18 @@ try {
     if (JSON.stringify(asked?.proc) !== '[false]') red.push(`PROC asked for ${JSON.stringify(asked?.proc)}`)
     if (JSON.stringify(asked?.bw) !== '["WIDE"]') red.push(`the chip asked for ${JSON.stringify(asked?.bw)}, not the next step`)
     if (red.length) {
-      console.error(`txmeters-probe: RED at ${w}×${h} — ${red.join('; ')}`)
+      console.error(`txmeters-probe: RED at ${w}×${h} in the ${host} — ${red.join('; ')}`)
       code = code || 1
     }
-    const c = await measure(w, h, units, true)
+    const c = await measure(w, h, units, true, host)
     const caught = c.m && !c.m.error ? faults(c.m, units) : []
-    console.log(`txmeters-probe: CONTROL window ${w}×${h}: caught ${JSON.stringify(caught)}`)
+    console.log(`txmeters-probe: CONTROL window ${w}×${h} in the ${host}: caught ${JSON.stringify(caught)}`)
     if (!caught.some((s) => s.includes('overflow') || s.includes('sideways') || s.includes('wider'))) {
-      console.error(`txmeters-probe: CONTROL FAILED at ${w}×${h} — the planted overflow was not seen; the check cannot fail`)
+      console.error(`txmeters-probe: CONTROL FAILED at ${w}×${h} in the ${host} — the planted overflow was not seen; the check cannot fail`)
       code = code || 1
     }
   }
-  if (code === 0) console.log(`txmeters-probe: PASS — level bar, PROC, bandwidth chip and both temperatures on screen with nothing sideways, drag and clicks reach the radio's verbs, at ${SIZES.map((s) => `${s.w}×${s.h} ${s.units}`).join(', ')}; each control caught`)
+  if (code === 0) console.log(`txmeters-probe: PASS — level bar, PROC, bandwidth chip and both temperatures on screen with nothing sideways, drag and clicks reach the radio's verbs, in the dock and in the TX strip (which they do not make taller), at ${SIZES.map((s) => `${s.w}×${s.h} ${s.units}`).join(', ')}; each control caught`)
   process.exitCode = code
 } finally {
   await browser.stop()

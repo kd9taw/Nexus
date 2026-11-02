@@ -1574,7 +1574,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           media keys, so each key's tooltip carries the cure there. */}
       <MacroBank
         label={t('rtty.macros.aria')}
-        gridClass="cw-macros rtty-macros"
+        gridClass="cw-macros rtty-macros dock-fkeys"
         bankClass={`cw-macros macro-bank macro-bank-shared-${slots.length}`}
         quadClass="rtty-macros"
       >

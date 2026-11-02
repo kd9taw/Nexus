@@ -11,7 +11,13 @@
     monospace;
   --radius: 12px;
   --radius-sm: 8px;
-  --touch: 44px;
+  /* The floor of a desktop control (form fields, the keyboard docks' send and key rows, Settings,
+     the Logbook toolbar). 30 px at Standard and Dense: a mouse target, WSJT-X's and a desktop form's
+     size, clear of the 24 px WCAG 2.2 minimum. Comfortable keeps the 44 px it always had, Touch 48
+     (the density blocks below). Set per density by the operator, 2026-11-01. */
+  --touch: 30px;
+  /* The Logbook row's vertical padding before `--density-scale` (`.log-row`): 4 px, 10 at Comfortable. */
+  --log-row-pad-y: 4px;
   --gap: 12px;
   --transition: 140ms ease;
   /* Workspace layout (overridden live by usePaneWidths / useScale; the
@@ -66,6 +72,10 @@
 /* Density (compactness) — distinct from --ui-zoom (magnification). */
 [data-density='guided'] {
   --density-scale: 1.18;
+  /* Comfortable: the roomy 44 px controls and 10 px Logbook rows Nexus shipped with until the 1080p
+     pass. */
+  --touch: 44px;
+  --log-row-pad-y: 10px;
 }
 [data-density='standard'] {
   --density-scale: 1;
@@ -77,8 +87,8 @@
 /* TOUCH — Settings ▸ Workspace ▸ Density ▸ Touch: Comfortable (useDensity also sets
    data-density='guided') plus targets sized for a finger. An explicit attribute, never
    `@media (pointer: coarse)` — a touchscreen laptop driven by a mouse reports `fine`, and the
-   responsive vocabulary forbids reaching for the device. The controls already floored at
-   --touch grow to 48px; the chip buttons the app renders (19–26px at Standard, measured in
+   responsive vocabulary forbids reaching for the device. The controls floored at --touch grow to
+   48px (from Comfortable's 44; this block comes after it, so it wins the tie); the chip buttons the app renders (19–26px at Standard, measured in
    a real browser) get a 36px floor and roomier padding. `:root` lifts these to (0,3,0) so
    they outrank every chip's own padding at any source position. */
 [data-touch] {
@@ -7374,8 +7384,9 @@ body.resizing {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 10px 14px;
+  /* 18 px and 10 px 14 px, tighter on a short window (cockpit-panes.css, the short-window tier). */
+  gap: var(--chrome-bar-gap, 18px);
+  padding: var(--chrome-bar-pad, 10px 14px);
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
@@ -9419,7 +9430,9 @@ select optgroup {
   font-weight: 700;
   font-size: calc(14px * var(--text-scale));
   padding: 0 var(--space-5);
-  min-height: var(--touch);
+  /* The Tempo composer's Send transmits: it keeps the 44 px it had when `--touch` dropped to 30 at
+     Standard (the 1080p pass), and still grows with Touch's 48. */
+  min-height: max(var(--touch), 44px);
   transition: var(--transition);
 }
 .send-btn:disabled {
@@ -10364,7 +10377,8 @@ select optgroup {
   color: var(--text-dim);
 }
 .cw-wpm input[type='range'] {
-  width: 160px;
+  /* 160 px; 80 where the header folds to one row (cockpit-panes.css `.cw-wpm-compact`). */
+  width: var(--cw-wpm-w, 160px);
 }
 /* CW pitch entry. Uses `input.cw-pitch` (0,1,1) deliberately: the element carries
    `settings-input cw-pitch`, and `.settings-input` (0,1,0) is declared LATER in this file, so
@@ -10955,6 +10969,11 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .cw-send-btn {
   padding: var(--space-2) 18px;
+  /* SEND KEEPS ITS HIT AREA when the send row drops from 44 to 30 px (`--touch` at Standard, the
+     1080p pass): measured at 1920×1040 it was 76×44 and is 76×33 at the new row height, so it is
+     widened to keep at least the area it had (76 × 44 / 33 ≈ 102). A wider target on a horizontal
+     row is the easier one for a mouse; the button stays the row's last, beside the text it sends. */
+  min-width: 104px;
   border-radius: var(--radius-sm);
   font-weight: 800;
   color: var(--accent-ink);
@@ -12982,6 +13001,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px var(--space-2);
   padding: 0;
+}
+/* The TX strip's cell (Phone and CW in the compact dock, `md` and up): AT MOST TWO ROWS, filled down
+   then across, so a rig with more readings (COMP's controls, a temperature) makes the cell wider and
+   never the strip taller — two compact rows are the height of the strip's own buttons. The cell's
+   box is cockpit-panes.css's (`.cockpit-txstrip-meters`); this is only how the meters sit in it. */
+.ph-txmeters.inline.strip {
+  grid-template-columns: none;
+  grid-template-rows: repeat(2, auto);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
 }
 /* The COMP row in Phone SETS the processor level as well as metering compression: the fill is
    the meter, the marker line is the level, and the track is the slider (drag / arrow keys).
@@ -15275,8 +15304,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   display: grid;
   grid-template-columns: 0.6fr 1fr 0.6fr 3fr;
   gap: 10px;
-  /* Density-aware row packing (see .decode-row) — ×1 at 'standard'. */
-  padding: calc(10px * var(--density-scale)) var(--space-4);
+  /* Density-aware row packing (see .decode-row) — ×1 at 'standard'. The base is `--log-row-pad-y`:
+     4 px at Standard and Dense (the 1080p pass: with the 32 px row buttons a row is 40 px, not 52, and
+     a 1080p window shows about half as many more contacts), 10 px at Comfortable, as before. */
+  padding: calc(var(--density-scale) * var(--log-row-pad-y)) var(--space-4);
   align-items: center;
   border-bottom: 1px solid var(--border-soft);
   font-size: calc(13px * var(--text-scale));
@@ -19827,7 +19858,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .cockpit-header {
   display: flex;
   align-items: center;
-  gap: var(--gap);
+  /* The stock gap, tighter on a short window (cockpit-panes.css, the short-window tier). */
+  gap: var(--chrome-head-gap, var(--gap));
   flex-wrap: wrap;
   min-width: 0;
   /* NO min-height HERE, and that is the whole safety mechanism — see `.ch-identity`
@@ -19928,7 +19960,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--chrome-extras-gap, var(--space-3));
   flex-wrap: wrap;
 }
 /* The band control + Tune as one unit: it wraps as a whole, so Tune stays beside the band
@@ -21571,10 +21603,12 @@ button.cq-skiptx1.on {
 }
 .cockpit-decodes-side {
   /* The full decode window dominates the rail; Rx Frequency keeps a slimmer share. Share is
-     drag-resizable via the seam (--pane-share, default 1.6); flex-grow so a sole survivor
-     auto-fills. NO px min-height floor (cockpit-floors guards this — px floors were the
-     root cause of the old vertical-clipping bug). */
-  flex: var(--pane-share, 1.6) 1 0;
+     drag-resizable via the seam (--pane-share, default 3 : Rx Frequency's 1 — it was 1.6 until the
+     1080p pass, which left Band Activity 8 rows at 1920×1040 under the callsign card while Rx
+     Frequency, a handful of lines, held a third of the rail); flex-grow so a sole survivor
+     auto-fills. A stored share (the seam's drag) still wins. NO px min-height floor (cockpit-floors
+     guards this — px floors were the root cause of the old vertical-clipping bug). */
+  flex: var(--pane-share, 3) 1 0;
   min-height: 0;
   display: flex;
   /* Scrolls rather than clips — see .cockpit-rxfreq. */
@@ -21679,6 +21713,34 @@ button.cq-skiptx1.on {
   font-size: 0.85rem;
   line-height: 1.2;
   min-height: 24px;
+}
+/* The CW and Phone headers' ⋯ (components/HeaderOverflow): the icon buttons' look, and what is on
+   behind it (REC, SPLIT) as small plates beside the glyph. */
+.ch-overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 7px;
+  min-height: 24px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1.2;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ch-overflow-btn:hover,
+.ch-overflow-btn.on {
+  border-color: var(--accent);
+}
+.ch-overflow-badge {
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 800;
+  color: var(--accent);
 }
 /* The 2D/3D map-mode toggle — groups to the right next to Pop-out. */
 /* 3D globe lazy-load placeholder (three.js chunk loading). */
@@ -29899,10 +29961,8 @@ button.sat-chip:disabled {
 .rtty-macros {
   grid-template-columns: repeat(8, minmax(0, 1fr));
 }
-.rtty-dock-keys > .rtty-macros {
-  flex: 999 1 76em;
-  min-width: 0;
-}
+/* (The keys' share of the line — `flex: 999 1 76em; min-width: 0` — lives in cockpit-panes.css as
+   `.dock-fkeys` since the 1080p pass, unchanged; the reasoning for 76em is the note above.) */
 .rtty-dock-keys > .rtty-dock-row {
   flex: 1 1 auto;
 }
@@ -30666,6 +30726,15 @@ button.sat-chip:disabled {
 .rtty-stop:not(:disabled) {
   color: var(--state-weak);
   border-color: var(--state-weak);
+}
+/* JTTY'S Esc/Stop STANDS IN THE SEND ROW (beside Send), not in a fixed row of keys as RTTY's and PSK's
+   do, so its height is the row's — and the row follows `--touch`, which the 1080p pass took from 44 to
+   30 px at Standard. A STOP CONTROL NEVER SHRINKS, so it keeps the floor it had before that pass: 44 px,
+   48 under Touch (`max(--touch, 44px)`, density by density exactly the old height). Measured in Chrome
+   at 1920×1040: 56×44 before the pass, 56×34 with the 30 px row, 56×44 with this floor.
+   cockpit-shells.test.ts pins it with every other stop and send control's floor. */
+.jtty-stop {
+  min-height: max(var(--touch), 44px);
 }
 /* SSTV Arm toggle (header) — armed state must read at a glance. */
 .sstv-arm {

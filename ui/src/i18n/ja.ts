@@ -9619,6 +9619,8 @@ export const JA: PartialCatalog = {
   "cockpit.header.bandEdge.down": "{{band}}のバンド端 {{edge}} MHzで停止しました — もう一度スクロールで下へ続行",
   "cockpit.header.power.label": "出力",
   "cockpit.header.power.title": "{{label}} — リグのALCがちょうどゼロになるよう調整してください",
+  "cockpit.header.more.label": "その他の操作",
+  "cockpit.header.more.title": "メモリー、ローテーター、スプリット、録音をこのボタンにまとめ、ヘッダーを1行に保ちます",
   "cockpit.header.cat.ok.title": "CATリンク正常",
   "cockpit.header.cat.bad.title": "CATリンクなし",
   "cockpit.txAlarm.lead.radio": "送信機アラーム、{{radio}}、{{time}} UTC:",

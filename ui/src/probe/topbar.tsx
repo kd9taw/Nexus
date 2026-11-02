@@ -4,7 +4,8 @@
 // (`?view=operate`) and on CW (`?view=cw`), inside the real `.app` with the real useViewport, so the size
 // class and the zoom are the app's own.
 //
-// `&lane=on` raises the slot-unkey-failed lane (the longest critical message the bar carries) through
+// From md to lg the bar carries the now-bar as App gives it there (features/compactChrome), with a busy
+// station's chips. `&lane=on` raises the slot-unkey-failed lane (the longest critical message the bar carries) through
 // the real status store, exactly as App does when the station reports it. `&zoom=<n>` sets the UI scale.
 import '../styles.css'
 import '../cockpit-panes.css'
@@ -12,7 +13,8 @@ import { createRoot } from 'react-dom/client'
 import { TopBar } from '../components/TopBar'
 import { setStatus } from '../status'
 import { slotUnkeyFailedLane } from '../features/slotUnkeyFailed'
-import { useViewport } from '../useViewport'
+import { useViewport, useViewportClass } from '../useViewport'
+import { foldedChrome } from '../features/compactChrome'
 import type { LinkState, RadioStatus } from '../types'
 
 const params = new URLSearchParams(location.search)
@@ -36,8 +38,20 @@ if (params.get('lane') === 'on') {
   setStatus('slotUnkeyFailed', slotUnkeyFailedLane({ at: 1761570000, why: 'the radio did not answer the unkey' }))
 }
 
+/** The now-bar App rides in the bar at md and lg (the 1080p pass): its frame and chips at the width a busy
+ *  station's bar has, so a message that re-wrapped it (a now-bar sharing the lane's room) shows here. */
+const NOW_BAR = (
+  <div className="now-bar now-bar-inbar" role="status">
+    <span className="nb-label">NOW</span>
+    {['Band 20m open', 'Out 14 spots', 'Need nothing workable now', 'PROP LIVE', 'Cluster live 12s', 'Dashboard'].map((c) => (
+      <span key={c} className="nb-chip">{c}</span>
+    ))}
+  </div>
+)
+
 function Probe() {
   useViewport(Number(params.get('zoom') ?? 1))
+  const vc = useViewportClass()
   const noop = () => {}
   return (
     <div className="app">
@@ -51,6 +65,7 @@ function Probe() {
         ftScreen={ft}
         tier="FT8" onTierChange={noop}
         onOpenGuide={noop} field={false} onFieldChange={noop}
+        nowBar={foldedChrome(vc) ? NOW_BAR : undefined}
       />
       <main className="probe-below" style={{ flex: 1 }} />
     </div>

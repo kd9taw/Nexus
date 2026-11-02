@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type RefObject } from 'react'
+import { useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react'
 import { t } from '../i18n'
 import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
@@ -32,6 +32,11 @@ export interface CockpitTxStripProps {
   onStopTx?: () => void
   /** Hold Tx, the slot modes' fifth control (Tempo; FT draws its own strip). */
   hold?: { on: boolean; onChange: (on: boolean) => void }
+  /** The READ-ONLY transmit meters, in the strip's empty right side (Phone and CW on a window of
+   *  `md` and up, the compact dock: Operate's QSO strip already carries its meters this way). A
+   *  readout and never a control that keys or stops anything: the screen's send area stays in its
+   *  dock. Omitted: the strip is exactly what it was. */
+  meters?: ReactNode
 }
 
 /**
@@ -53,7 +58,7 @@ export interface CockpitTxStripProps {
  * the header's did: in RTTY and SSTV the latch is a STOP (set_tx_enabled(false) arms the mode's
  * abort) and must stay a button through their overs, which `radio.transmitting` never marks.
  */
-export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold }: CockpitTxStripProps) {
+export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters }: CockpitTxStripProps) {
   const onAir = isOnAir(radio)
   // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
   // 2026-09-28; the sign moved here from the header with the rest of the strip). A streamed
@@ -193,6 +198,10 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
               ? t('operate.strip.state.receiving')
               : t('operate.strip.state.txOff')}
       </span>
+      {/* THE METERS' CELL, at the strip's right end (`.cockpit-txstrip-meters`): after the cluster and
+          the TX state, so nothing it shows can move a control. Two rows at most, the strip's own
+          height, and the same readings before and after a key-down (TxMeters `strip`). */}
+      {meters != null && <div className="cockpit-txstrip-meters">{meters}</div>}
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the controls or the TX state. */}
       {onTune && <RadioTuneNote radio={radio} />}

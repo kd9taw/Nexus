@@ -21,7 +21,7 @@
 // pick, so the root rule is held too.
 //
 // TOUCH (Settings ▸ Workspace ▸ Density ▸ Touch) is Comfortable plus finger-sized targets:
-// `--touch` 44 → 48 px and bigger chips. It is an explicit attribute (`data-touch`, written by
+// `--touch` 44 → 48 px (Standard is 30, Comfortable 44) and bigger chips. It is an explicit attribute (`data-touch`, written by
 // useDensity) and never `@media (pointer: coarse)`, which the responsive vocabulary forbids. The
 // chip half is checked on RENDERED chips through the testkit's winner computation, because the
 // chips carry their own paddings at several specificities and only the winner says whether
@@ -410,11 +410,24 @@ describe('#215 text size: components that size text inline follow the pick too',
 })
 
 describe('Touch density: finger-sized targets from an explicit attribute', () => {
-  it('--touch is 44px, and 48px only under data-touch', () => {
-    expect(rootTokens({ textSize: 'normal' }).get('--touch')).toBe('44px')
-    expect(rootTokens({ textSize: 'normal', density: 'guided', touch: true }).get('--touch')).toBe('48px')
-    // Comfortable alone does not change the target size: Touch is Comfortable PLUS it.
+  it('--touch per density: 30px at Standard and Dense, 44px at Comfortable, 48px under Touch', () => {
+    // The operator's values (2026-11-01, the 1080p pass): a desktop control is a mouse target at
+    // Standard (the default) and Dense; Comfortable keeps the 44 px Nexus shipped with; Touch is
+    // Comfortable PLUS finger-sized targets.
+    expect(rootTokens({ textSize: 'normal' }).get('--touch')).toBe('30px')
+    expect(rootTokens({ textSize: 'normal', density: 'standard' }).get('--touch')).toBe('30px')
+    expect(rootTokens({ textSize: 'normal', density: 'dense' }).get('--touch')).toBe('30px')
     expect(rootTokens({ textSize: 'normal', density: 'guided' }).get('--touch')).toBe('44px')
+    expect(rootTokens({ textSize: 'normal', density: 'guided', touch: true }).get('--touch')).toBe('48px')
+    // Every text size keeps the density's value: the floor is not a type size.
+    for (const textSize of SIZES) expect(rootTokens({ textSize }).get('--touch'), textSize).toBe('30px')
+  })
+
+  it('the Logbook row’s padding base follows the same densities: 4px, and Comfortable’s 10px', () => {
+    expect(rootTokens({ textSize: 'normal' }).get('--log-row-pad-y')).toBe('4px')
+    expect(rootTokens({ textSize: 'normal', density: 'dense' }).get('--log-row-pad-y')).toBe('4px')
+    expect(rootTokens({ textSize: 'normal', density: 'guided' }).get('--log-row-pad-y')).toBe('10px')
+    expect(rootTokens({ textSize: 'normal', density: 'guided', touch: true }).get('--log-row-pad-y')).toBe('10px')
   })
 
   it('Touch keeps Comfortable’s row spacing (it rides on data-density=guided)', () => {

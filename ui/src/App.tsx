@@ -78,6 +78,7 @@ import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
 import { useScaleFitNotice } from './useScaleFitNotice'
 import { useViewport, useViewportClass } from './useViewport'
+import { foldedChrome } from './features/compactChrome'
 import { useDensity } from './useDensity'
 import { useTextSize } from './useTextSize'
 import { useLocalClock } from './useLocalClock'
@@ -4154,6 +4155,33 @@ function App() {
       break
   }
 
+  // The now-bar's one element, drawn by one call in one of two places: the top bar's last group at md
+  // and lg, its own line under the bar otherwise (and on Connect, which has no top bar).
+  const nowBarInTopBar = foldedChrome(viewportClass) && effectiveView !== 'connect'
+  const nowBar = (inBar: boolean) => (
+    <NowBar
+      snap={snap}
+      prop={prop}
+      feedHealth={feedHealth}
+      connectEnabled={features.isOn('connect')}
+      dxpedEnabled={features.isOn('dxped')}
+      needsAvailable
+      onNavigate={handleView}
+      // Profile-declared chip emphasis (dangling since the profiles landed).
+      // A hand-blended feature set is tagged 'custom' (no profile) → default order.
+      emphasis={features.profile === 'custom' ? undefined : PROFILES[features.profile].nowBarEmphasis}
+      // The dashboard rail's switch: beside an operating cockpit, and only where the window can
+      // show the rail, so the bar never offers a press that changes nothing.
+      rail={
+        // Where the switch changes what is on screen: the rail beside the cockpit, or its boxes in the columns.
+        railSection && (railFits || railFoldsHere)
+          ? { on: railShown || railFolds, onToggle: () => setRailOn(railSection, !railIsOn(railSection)) }
+          : undefined
+      }
+      inBar={inBar}
+    />
+  )
+
   return (
     <div className="app">
       <ClientBanner />
@@ -4250,6 +4278,7 @@ function App() {
         onSetOperator={handleSetOperator}
         fdActive={settings?.fdActive ?? false}
         showLocalClock={localClock}
+        nowBar={nowBarInTopBar ? nowBar(true) : undefined}
       />}
 
       <UpdateBanner update={selfUpdate} />
@@ -4285,26 +4314,10 @@ function App() {
         />
       )}
 
-      <NowBar
-        snap={snap}
-        prop={prop}
-        feedHealth={feedHealth}
-        connectEnabled={features.isOn('connect')}
-        dxpedEnabled={features.isOn('dxped')}
-        needsAvailable
-        onNavigate={handleView}
-        // Profile-declared chip emphasis (dangling since the profiles landed).
-        // A hand-blended feature set is tagged 'custom' (no profile) → default order.
-        emphasis={features.profile === 'custom' ? undefined : PROFILES[features.profile].nowBarEmphasis}
-        // The dashboard rail's switch: beside an operating cockpit, and only where the window can
-        // show the rail, so the bar never offers a press that changes nothing.
-        rail={
-          // Where the switch changes what is on screen: the rail beside the cockpit, or its boxes in the columns.
-          railSection && (railFits || railFoldsHere)
-            ? { on: railShown || railFolds, onToggle: () => setRailOn(railSection, !railIsOn(railSection)) }
-            : undefined
-        }
-      />
+      {/* THE NOW-BAR: a line of its own under the top bar, except at md and lg, where it rides IN the
+          top bar instead (features/compactChrome) and gives its line back to the screen. On Connect,
+          which has no top bar, it is always its own line. */}
+      {!nowBarInTopBar && nowBar(false)}
 
       {/* `data-dash-rail` while the dashboard rail takes width beside the cockpit: Operate's QSO strip
           keeps its two-row arrangement then (styles.css `.cq-break`). */}

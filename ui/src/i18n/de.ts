@@ -9666,6 +9666,8 @@ export const DE: PartialCatalog = {
   "cockpit.header.bandEdge.down": "An der Bandgrenze von {{band}} gestoppt, {{edge}} MHz — erneut scrollen, um weiter nach unten abzustimmen",
   "cockpit.header.power.label": "Leistung",
   "cockpit.header.power.title": "{{label}} — so weit zurücknehmen, dass die ALC des Funkgeräts gerade eben null ist",
+  "cockpit.header.more.label": "Weitere Bedienelemente",
+  "cockpit.header.more.title": "Speicher, Rotor, Split und Aufnahme, hinter dieser Schaltfläche, damit die Kopfzeile einzeilig bleibt",
   "cockpit.header.cat.ok.title": "CAT-Verbindung OK",
   "cockpit.header.cat.bad.title": "Keine CAT-Verbindung",
   "cockpit.txAlarm.lead.radio": "Senderalarm, {{radio}}, {{time}} UTC:",

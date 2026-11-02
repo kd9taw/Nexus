@@ -879,6 +879,8 @@ export const RU: PartialCatalog = {
   "cockpit.header.bandEdge.down": "Остановлено на краю диапазона {{band}}, {{edge}} MHz — прокрутите еще раз, чтобы продолжить настройку вниз.",
   "cockpit.header.power.label": "Мощность",
   "cockpit.header.power.title": "{{label}} — подстройте так, чтобы ALC трансивера был едва на нуле",
+  "cockpit.header.more.label": "Другие элементы управления",
+  "cockpit.header.more.title": "Память, ротатор, сплит и запись — за этой кнопкой, чтобы заголовок помещался в одну строку",
   "cockpit.header.cat.ok.title": "Связь по CAT в порядке",
   "cockpit.header.cat.bad.title": "Нет связи по CAT",
   "cockpit.txAlarm.lead.radio": "Тревога передатчика, {{radio}}, {{time}} UTC:",

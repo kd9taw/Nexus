@@ -247,4 +247,28 @@ describe('responsive vocabulary', () => {
       `these beat .mode-btn.sub and undo its compact sizing — wrap the viewport key in :where():\n${offenders.join('\n')}`,
     ).toEqual([])
   })
+
+  it('the short-window tier (1080p pass) is a step on --vh-eff, never a size class or a size @media', () => {
+    // The tier tightens the chrome's spacing where the EFFECTIVE height is 1100 px or less. jsdom cannot
+    // lay it out, so the shape is held here: every rule that steps on the 1100 px threshold reads the
+    // zoom-corrected `--vh-eff`, sits in no @media and keys on no [data-viewport] — a height class would
+    // be a contract change, and a raw height query is zoom-blind (cockpit-panes.test.ts computes the
+    // values at both sides of the step).
+    const stepping = RULES.filter((r) => /-\s*1100px/.test(r.body))
+    expect(stepping.map((r) => r.selector), 'the tier is in the sheets: the dock, the strip, and the bar and header’s inputs on .app').toEqual(
+      expect.arrayContaining(['.cockpit-txdock', '.cockpit-txstrip', '.app']),
+    )
+    const offenders = stepping
+      .filter((r) => !/var\(\s*--vh-eff/.test(r.body) || r.media !== null || /\[data-viewport/.test(r.selector))
+      .map((r) => `${r.media ? r.media + ' ' : ''}${r.selector}`)
+    expect(offenders).toEqual([])
+  })
+
+  it('the compact chrome’s classes are never keyed on [data-viewport]: the folds are decided once, in JS', () => {
+    // features/compactChrome reads the size class and the components add these classes; a sheet rule
+    // that ALSO keyed one on [data-viewport] would be a second, disagreeing answer to "is it folded".
+    const FOLD = /\.(cockpit-txstrip-meters|dock-status-inrow|dock-fkeys|tier-menu-folded|topbar-now|now-bar-inbar|ch-overflow(-panel|-open)?|cw-wpm-compact)(?![a-z0-9-])/
+    const offenders = RULES.filter((r) => /\[data-viewport/.test(r.selector) && FOLD.test(r.selector)).map((r) => r.selector)
+    expect(offenders).toEqual([])
+  })
 })

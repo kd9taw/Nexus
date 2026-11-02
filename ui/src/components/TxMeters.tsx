@@ -156,7 +156,8 @@ type TempRow = { key: 'rigTemp' | 'ampTemp'; label: string; title: string; frac:
 export function TxMeters({
   radio,
   pinned = false,
-  inline = false,
+  inline: inlineProp = false,
+  strip = false,
   controls,
 }: {
   radio: RadioStatus
@@ -168,7 +169,11 @@ export function TxMeters({
    *  FIXED-WIDTH cell, so the TX cycle causes zero geometry change at zero
    *  vertical cost (the 722ef273 anti-bounce ruling without the dead row). */
   inline?: boolean
+  /** The TX strip's cell (Phone and CW, the compact dock): the inline variant's semantics, laid
+   *  out in at most two rows that grow sideways, so the strip is never taller than its buttons. */
+  strip?: boolean
 }) {
+  const inline = inlineProp || strip
   // Retain the last live readings so the pinned strip has something to show between overs.
   // A plain ref (not state): the poll re-renders us anyway, and retention must never
   // itself cause a render. Unconditional hook — declared before any early return.
@@ -430,7 +435,7 @@ export function TxMeters({
   // `inline` keeps the compact geometry THROUGH a key-down: that cell is fixed-width chrome
   // in the Operate strip and the anti-bounce ruling is that the TX cycle costs it nothing.
   const compact = inline || !live
-  const variant = `${compact ? ' pinned' : ''}${inline ? ' inline' : ''}`
+  const variant = `${compact ? ' pinned' : ''}${inline ? ' inline' : ''}${strip ? ' strip' : ''}`
   const shown = live || lastRows.current.length === 0 ? rows : lastRows.current
 
   // ⛔ THE FOUR-ROWS-ALWAYS CONTRACT IS THE DOCK'S, AND IT DOES NOT REACH THIS CELL.
@@ -453,7 +458,12 @@ export function TxMeters({
   // meters that had read, in an `auto-fit` grid: the poll reads one meter per 150 ms, so the
   // first over showed SWR alone and that one bar spanned the whole cell, then shrank to a third
   // as the others arrived. Four slots in two rows is the height a four-meter rig already had.
-  if (inline && !keyedOnce.current) {
+  // …EXCEPT IN THE TX STRIP (`strip`, Phone and CW from md up): there the meters are the dock's, moved,
+  // and Phone's COMP row carries the processor level, PROC and the TX bandwidth, which an operator sets
+  // BEFORE the first over. So the strip keeps the dock's four slots from the start, in the compact
+  // geometry, without the hint line (a cell of its own in the strip's two rows); the rows' dashes
+  // and their titles say the same until a reading arrives.
+  if (inline && !strip && !keyedOnce.current) {
     return (
       <div className={`ph-txmeters${variant} idle`} role="group" aria-label={t('meters.tx.aria')}>
         <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>

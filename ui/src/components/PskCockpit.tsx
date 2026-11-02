@@ -1045,7 +1045,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           media keys, so each key's tooltip carries the cure there. */}
       <MacroBank
         label={t('psk.macros.aria')}
-        gridClass="cw-macros rtty-macros psk-macros"
+        gridClass="cw-macros rtty-macros psk-macros dock-fkeys"
         bankClass={`cw-macros macro-bank macro-bank-shared-${slots.length} psk-macros`}
         quadClass="rtty-macros"
       >

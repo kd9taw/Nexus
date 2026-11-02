@@ -1396,6 +1396,8 @@ export const FR: PartialCatalog = {
   "cockpit.header.cat.ok.title": "Liaison CAT OK",
   "cockpit.header.power.label": "Puissance",
   "cockpit.header.power.title": "{{label}} — ajustez pour que l'ALC de votre radio soit tout juste à zéro",
+  "cockpit.header.more.label": "Plus de commandes",
+  "cockpit.header.more.title": "Mémoires, rotor, split et enregistrement, derrière ce bouton pour que l'en-tête tienne sur une ligne",
   "cockpit.header.readout.digitTune.title": "Molette sur un chiffre pour le régler",
   "cockpit.header.readout.wheelTune.title": "Molette pour régler",
   "cockpit.tuning.aria": "Accord",

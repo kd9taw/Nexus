@@ -12,8 +12,11 @@
 // bar runs past the window's edge.
 //
 // THE CONTROL, run every time: the same page with the lane's old sizing put back (its own text width,
-// no growing). There the bar must come back taller at 1920×1080 on the FT screen, the operator's report;
-// if it does not, the check cannot fail and the probe says so instead of passing.
+// no growing). There the bar must come back taller on the FT screen at the size whose bar had the LEAST
+// room left; if it does not, the check cannot fail and the probe says so instead of passing. (It was
+// 1920×1080, the operator's report, until the 1080p pass folded the eleven tier pills into one button
+// at md and lg (2026-11-01): that bar now has ~800 px to spare, so no lane sizing could wrap it there,
+// and the size with the least room is the one where a regression would show first.)
 //
 // exit: 0 every case holds · 1 a red, or a control that could not fail · 2 the page never drew the bar
 import { createServer } from 'vite'
@@ -97,6 +100,8 @@ async function measure({ w, h, z }, view, lane, css) {
 
 let code = 0
 const tookLine = []
+/** The FT screen's size with the least room left on the bar's line, without a message: the control's. */
+let tightest = null
 try {
   for (const s of SIZES) {
     for (const view of VIEWS) {
@@ -110,6 +115,7 @@ try {
         code = 2
         continue
       }
+      if (view === 'operate' && (!tightest || off.free < tightest.free)) tightest = { s, free: off.free }
       const reds = []
       // The flag's floor (styles.css `.status-lane` min-width: the 13 px icon, the chip's 2 × 8 px
       // padding and 2 px border, and the 10 px gap), in screen px at this zoom.
@@ -127,10 +133,10 @@ try {
       if (reds.length) code = code || 1
     }
   }
-  const s = SIZES[0]
+  const s = tightest?.s ?? SIZES[0]
   const off = await measure(s, 'operate', false, OLD_LANE)
   const on = await measure(s, 'operate', true, OLD_LANE)
-  console.log(`topbar-probe: CONTROL operate at ${s.w}×${s.h}, the lane's old sizing: without ${off?.h}px, with ${on?.h}px ${JSON.stringify(on?.groups)}`)
+  console.log(`topbar-probe: CONTROL operate at ${s.w}×${s.h} ${Math.round(s.z * 100)}% (the least room on the bar, ${tightest?.free}px), the lane's old sizing: without ${off?.h}px, with ${on?.h}px ${JSON.stringify(on?.groups)}`)
   if (!off || !on || on.h === off.h) {
     console.error('topbar-probe: CONTROL FAILED — with the old sizing the message did not make the bar taller; the check cannot fail')
     code = code || 1

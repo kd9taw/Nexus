@@ -907,6 +907,100 @@ describe('the dock rows that key the rig cannot shrink (winning flex-shrink is 0
   }
 })
 
+describe('the 1080p pass keeps every transmit control its full size (2026-11-01)', () => {
+  // The compact dock and the short-window tier take spacing and read-only rows out of the chrome; they
+  // may never take size out of a control that keys or stops the rig. These compute, from styles.css,
+  // the size each such control resolves to in its dock or strip — the same values as before the pass —
+  // and that the structural sheet, where the tier lives, names none of them at all.
+  const SIZE: Array<[name: string, chain: Array<Set<string>>, prop: string, want: string]> = [
+    ['Phone’s PTT (min-height)', [...shellChain('phone-cockpit'), new Set(['cockpit-txdock']), new Set(['ph-ptt-row']), new Set(['ph-ptt'])], 'min-height', '40px'],
+    ['Phone’s PTT (min-width)', [...shellChain('phone-cockpit'), new Set(['cockpit-txdock']), new Set(['ph-ptt-row']), new Set(['ph-ptt'])], 'min-width', '220px'],
+    ['the strip’s Stop TX (padding)', [...shellChain('cw-cockpit'), new Set(['cockpit-txstrip']), new Set(['op-controls', 'cq-txctl']), new Set(['op-btn', 'stop'])], 'padding', '6px var(--space-4)'],
+    // Send keeps its hit area at the 30 px Standard row (`--touch`, 2026-11-01): wider, 104 px, where it
+    // was 76×44; the Tempo composer's keeps its 44 px height.
+    ['the keyboard docks’ Send (min-width)', [...shellChain('cw-cockpit'), new Set(['cockpit-txdock']), new Set(['cw-send']), new Set(['cw-send-btn'])], 'min-width', '104px'],
+    ['the Tempo composer’s Send (min-height)', [new Set(['app']), new Set(['composer']), new Set(['send-btn'])], 'min-height', 'max(var(--touch), 44px)'],
+    ['a macro key (padding)', [...shellChain('rtty-cockpit'), new Set(['cockpit-txdock']), new Set(['rtty-dock-keys']), new Set(['cw-macros', 'rtty-macros', 'dock-fkeys']), new Set(['rtty-macro-slot']), new Set(['cw-macro'])], 'padding', '3px 9px'],
+  ]
+  for (const [name, chain, prop, want] of SIZE) {
+    it(`${name} resolves ${prop}: ${want}`, () => {
+      const decl = (body: string): string | null => {
+        let v: string | null = null
+        for (const d of body.split(';')) {
+          const m = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`).exec(d)
+          if (m) v = m[1].replace(/\s+/g, ' ')
+        }
+        return v
+      }
+      const win = winningValue(chain, decl)
+      expect(win?.value, `${name}: won by ${win?.selector}`).toBe(want)
+    })
+  }
+
+  it('the structural sheet names no transmit control: the tier there cannot reach one', () => {
+    const sheet = readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const selectors = [...sheet.matchAll(/([^{}]+)\{/g)].map((m) => m[1].trim())
+    const TX = /\.(ph-ptt|ph-lock|op-btn|cw-macro|rtty-stop|rtty-tx-latch|cq-txctl|op-controls|cw-send|cw-type)(?![a-z0-9-])/
+    expect(selectors.filter((sel) => TX.test(sel))).toEqual([])
+    // Control: the scan reads the sheet (it finds the dock it is about).
+    expect(selectors.some((sel) => sel === '.cockpit-txdock')).toBe(true)
+  })
+})
+
+describe('every stop and send control keeps its floor when --touch drops (computed, 1080p pass)', () => {
+  // `--touch` is 30 px at Standard (44 at Comfortable, 48 at Touch) since the 1080p pass. A control that
+  // stops or starts a transmission may never get a smaller hit area than it had at 44. Two ways a control
+  // can follow the token: its own min-height reads it, or it stands in a row whose fields read it and
+  // stretches to that row's height (`.cw-send`: the keyboard docks' compose rows). Each one is listed with
+  // the floor its winning declarations resolve to at each density, evaluated here; a control that is not
+  // listed does not read the token (measured base → tip in Chrome: PTT, Stop TX, TX On, Tune, RTTY/PSK
+  // Esc Stop, the F-keys, SSTV's Stop and Send, APRS's and the FT strip's controls are unchanged).
+  const evalLen = (v: string, touch: number): number => {
+    const js = v
+      .replace(/var\(--touch\)/g, `${touch}px`)
+      .replace(/(\d+(?:\.\d+)?)px/g, '$1')
+      .replace(/\bmax\(/g, 'Math.max(')
+      .replace(/\bmin\(/g, 'Math.min(')
+    if (!/^[\d\s.+\-*/(),Mathmaxin]*$/.test(js)) throw new Error(`unmodelled length ${v}`)
+    return Function(`return (${js})`)() as number
+  }
+  const decl = (prop: string) => (body: string): string | null => {
+    let v: string | null = null
+    for (const d of body.split(';')) {
+      const m = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`).exec(d)
+      if (m) v = m[1].replace(/\s+/g, ' ')
+    }
+    return v
+  }
+  const sendRow = (shell: string) => [...shellChain(shell), new Set(['cockpit-txdock']), new Set(['cw-send'])]
+  // [name, chain, property, floor at Standard (30), at Comfortable (44), at Touch (48)] — the pre-pass sizes.
+  const FLOORS: Array<[string, Array<Set<string>>, string, number, number, number]> = [
+    ['JTTY’s Esc Stop (in the send row)', [...sendRow('jtty-cockpit'), new Set(['cw-macro', 'rtty-stop', 'jtty-stop'])], 'min-height', 44, 44, 48],
+    // Send keeps its AREA instead (76×44 → ≥104 wide at the 30 px row; the operator's accepted trade).
+    ...(['cw-cockpit', 'rtty-cockpit', 'psk-cockpit', 'jtty-cockpit', 'js8-cockpit'] as const).map(
+      (shell): [string, Array<Set<string>>, string, number, number, number] => [
+        `${shell}’s Send (width, for its area)`, [...sendRow(shell), new Set(['cw-send-btn'])], 'min-width', 104, 104, 104,
+      ],
+    ),
+    ['the Tempo composer’s Send', [new Set(['app']), new Set(['composer']), new Set(['send-btn'])], 'min-height', 44, 44, 48],
+    ['Phone’s PTT', [...shellChain('phone-cockpit'), new Set(['cockpit-txdock']), new Set(['ph-ptt-row']), new Set(['ph-ptt'])], 'min-height', 40, 40, 40],
+  ]
+  for (const [name, chain, prop, std, comfy, touch] of FLOORS) {
+    it(`${name}: ${prop} ≥ ${std}/${comfy}/${touch} px at Standard/Comfortable/Touch`, () => {
+      const win = winningValue(chain, decl(prop))
+      expect(win, `${name}: no rule declares ${prop}`).not.toBeNull()
+      expect(evalLen(win!.value, 30), `${name} at Standard (${win!.selector}: ${win!.value})`).toBeGreaterThanOrEqual(std)
+      expect(evalLen(win!.value, 44), `${name} at Comfortable`).toBeGreaterThanOrEqual(comfy)
+      expect(evalLen(win!.value, 48), `${name} at Touch`).toBeGreaterThanOrEqual(touch)
+    })
+  }
+
+  it('the evaluator bites: the bare token would shrink a stop control (control)', () => {
+    expect(evalLen('var(--touch)', 30)).toBeLessThan(44)
+    expect(evalLen('max(var(--touch), 44px)', 30)).toBe(44)
+  })
+})
+
 describe('Journey cards win their row direction against .panel', () => {
   // `<div className="jy-marathon panel">` / `<section className="jy-hero panel">`
   // (JourneyView.tsx ~60/~124): `.panel { flex-direction: column }` also targets the

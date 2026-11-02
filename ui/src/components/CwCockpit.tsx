@@ -12,6 +12,8 @@ import type { AppSnapshot, CwTurn, FieldDayStatus, NeedTag, Settings, SpotRow } 
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
+import { useCompactChrome } from '../features/compactChrome'
+import { HeaderOverflow } from './HeaderOverflow'
 import { DraftNumberInput } from './DraftNumberInput'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
@@ -157,6 +159,8 @@ const BW = 'BW'
 const CAT = 'CAT'
 const WINKEYER = 'WinKeyer'
 const REC = 'REC'
+/** The split plate on the header's ⋯ while split is on — the radio's own word, as Phone's. */
+const SPLIT = 'SPLIT'
 /** The BW nudge and the AI decoder's audio window, as the tooltips print them — figures, so
  *  they are supplied to the message rather than written in it. */
 /** The SI unit symbol. A NAMED CONSTANT rather than inline text because this file is on the
@@ -524,6 +528,9 @@ export function CwCockpit({
   neededBoard,
   boxes,
 }: Props) {
+  // The compact chrome (features/compactChrome): md and up, the meters stand in the TX strip, and the
+  // header's occasional controls fold behind ⋯ at md and lg.
+  const chrome = useCompactChrome()
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -2251,7 +2258,66 @@ export function CwCockpit({
           .catch((e) => pushToast(String(e), 'error'))
       }
       onStopTx={abort}
+      // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
+      // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
+      meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip /> : undefined}
     />
+  )
+  // The header's occasional controls, drawn inline or behind its ⋯ (see the header below).
+  const occasional = (
+    <>
+      {onRecallMemory && (
+        <MemoryStrip
+          dialMhz={snap.radio.dialMhz}
+          mode="CW"
+          onRecall={onRecallMemory}
+          onManage={onOpenMemories}
+        />
+      )}
+      <RotorStrip
+        onOpenSettings={onOpenSettings}
+        targetCall={guide.workedCall}
+        onPointAt={rotorPointAt()}
+      />
+      {/* ⭐ A REAL SPLIT CONTROL, not a read-only plate. Until 2026-08-26 this header only
+          DISPLAYED that split was on; there was no way to set it from the CW cockpit at all.
+          A General working a DX in the Extra-only CW bottom — RX 14.015, TX 14.026, which is
+          simply how DX is worked — had to reach for the radio's front panel and then found
+          Nexus refusing to key, because the privilege gate had no way to learn where he was
+          transmitting. Fixing the gate without this left the fix unreachable by the operator
+          who reported it, and he was a CW operator.
+  
+          Gated on `catOk` like Phone's: with no CAT there is nothing to command, and the
+          header is width-critical at 1024 (see the density note above), so it costs nothing
+          when there is no radio to talk to. NOT a stop control — see SplitControl's header. */}
+      {catOk && (
+        <SplitControl
+          snap={snap}
+          onSnap={onSnap}
+          onError={(m) => pushToast(m, 'error')}
+        />
+      )}
+      {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
+          picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the rotator,
+          and its own density note records that width here is what wraps it at 1024, so this was
+          first built glyph-only to cost ~24px. That is exactly what made Phone's copy unfindable
+          (operator, 2026-08-08), so it carries the label and costs ~50px. The accessible name is
+          explicit rather than left to the glyph, and the glyph is aria-hidden so it is not read
+          twice. */}
+      <button
+        type="button"
+        className={`ph-rec${recording ? ' on' : ''}`}
+        onClick={toggleRecord}
+        disabled={recBusy}
+        aria-label={recording ? t('cw.record.stop.aria') : t('cw.record.start.aria')}
+        title={recording ? t('cw.record.on.title') : t('cw.record.off.title')}
+      >
+        <span className="ph-rec-dot" aria-hidden="true">
+          {recording ? '■' : '●'}
+        </span>
+        {REC}
+      </button>
+    </>
   )
   return (
     <main className="layout single cw-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
@@ -2308,7 +2374,8 @@ export function CwCockpit({
         }
       >
         <label
-          className="cw-wpm"
+          // The speed slider is shorter where the header folds to one row (`.cw-wpm-compact`).
+          className={`cw-wpm${chrome.fold ? ' cw-wpm-compact' : ''}`}
           // Compact Mac keyboards have no PgUp/PgDn keys — Fn+↑/↓ is what sends them, which is
           // a second statement rather than a tail on the first: one whole sentence each.
           title={IS_MAC ? t('cw.wpm.title.mac') : t('cw.wpm.title')}
@@ -2416,57 +2483,25 @@ export function CwCockpit({
             </button>
           </div>
         )}
-        {onRecallMemory && (
-          <MemoryStrip
-            dialMhz={snap.radio.dialMhz}
-            mode="CW"
-            onRecall={onRecallMemory}
-            onManage={onOpenMemories}
-          />
+        {/* THE OCCASIONAL CONTROLS — memories, the rotator, split and REC: inline at xl and below md,
+            behind the header's ⋯ at md and lg (components/HeaderOverflow, features/compactChrome),
+            so the header is one row on a 1080p window. None of them keys or stops a transmission. */}
+        {chrome.fold ? (
+          <HeaderOverflow
+            label={t('cockpit.header.more.label')}
+            title={t('cockpit.header.more.title')}
+            badges={
+              <>
+                {snap.radio.splitTxMhz != null && <span className="ch-overflow-badge">{SPLIT}</span>}
+                {recording && <span className="ch-overflow-badge">● {REC}</span>}
+              </>
+            }
+          >
+            {occasional}
+          </HeaderOverflow>
+        ) : (
+          occasional
         )}
-        <RotorStrip
-          onOpenSettings={onOpenSettings}
-          targetCall={guide.workedCall}
-          onPointAt={rotorPointAt()}
-        />
-        {/* ⭐ A REAL SPLIT CONTROL, not a read-only plate. Until 2026-08-26 this header only
-            DISPLAYED that split was on; there was no way to set it from the CW cockpit at all.
-            A General working a DX in the Extra-only CW bottom — RX 14.015, TX 14.026, which is
-            simply how DX is worked — had to reach for the radio's front panel and then found
-            Nexus refusing to key, because the privilege gate had no way to learn where he was
-            transmitting. Fixing the gate without this left the fix unreachable by the operator
-            who reported it, and he was a CW operator.
-
-            Gated on `catOk` like Phone's: with no CAT there is nothing to command, and the
-            header is width-critical at 1024 (see the density note above), so it costs nothing
-            when there is no radio to talk to. NOT a stop control — see SplitControl's header. */}
-        {catOk && (
-          <SplitControl
-            snap={snap}
-            onSnap={onSnap}
-            onError={(m) => pushToast(m, 'error')}
-          />
-        )}
-        {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
-            picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the rotator,
-            and its own density note records that width here is what wraps it at 1024, so this was
-            first built glyph-only to cost ~24px. That is exactly what made Phone's copy unfindable
-            (operator, 2026-08-08), so it carries the label and costs ~50px. The accessible name is
-            explicit rather than left to the glyph, and the glyph is aria-hidden so it is not read
-            twice. */}
-        <button
-          type="button"
-          className={`ph-rec${recording ? ' on' : ''}`}
-          onClick={toggleRecord}
-          disabled={recBusy}
-          aria-label={recording ? t('cw.record.stop.aria') : t('cw.record.start.aria')}
-          title={recording ? t('cw.record.on.title') : t('cw.record.off.title')}
-        >
-          <span className="ph-rec-dot" aria-hidden="true">
-            {recording ? '■' : '●'}
-          </span>
-          {REC}
-        </button>
       </CockpitHeader>
 
       {keyerError && (
@@ -2755,7 +2790,7 @@ export function CwCockpit({
             `pinned`, so the last send's readings stay on screen (dimmed) after the key is
             up. CW keys in short bursts: unpinned, the panel appeared and was gone before a
             reading could be read at all. See PhoneCockpit's dock for the full reasoning. */}
-        {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
+        {!chrome.wide && shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
 
         {/* The keys: the grid CW always drew at 8, groups of four that wrap by width at 12 or 16
             (Settings ▸ CW ▸ Macro keys, `MacroBank`). */}

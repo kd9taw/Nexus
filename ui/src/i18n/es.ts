@@ -1396,6 +1396,8 @@ export const ES: PartialCatalog = {
   "cockpit.header.cat.ok.title": "Enlace CAT OK",
   "cockpit.header.power.label": "Potencia",
   "cockpit.header.power.title": "{{label}} — ajústala hasta que el ALC de tu equipo quede justo a cero",
+  "cockpit.header.more.label": "Más controles",
+  "cockpit.header.more.title": "Memorias, rotor, split y grabación, tras este botón para que la cabecera quepa en una fila",
   "cockpit.header.readout.digitTune.title": "Gira sobre un dígito para sintonizarlo",
   "cockpit.header.readout.wheelTune.title": "Rueda para sintonizar",
   "cockpit.tuning.aria": "Sintonía",

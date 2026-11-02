@@ -32,6 +32,9 @@ interface Props {
    *  beside an operating cockpit and only where the window can show the rail (`lg` and up), so the
    *  bar never offers a button that changes nothing. Omitted = no button. */
   rail?: { on: boolean; onToggle: () => void }
+  /** Ridden inside the top bar (md and up, the 1080p pass): the bar draws the frame, so this one
+   *  draws none of its own (`.now-bar-inbar`, cockpit-panes.css). */
+  inBar?: boolean
 }
 
 /** Compact relative age, e.g. "12s" / "4m" / "2h". The unit letter rides inside the message
@@ -145,7 +148,7 @@ function NbChip({
 // English word in every language (operator, 2026-09-29), so there is no catalog entry for them.
 const BAND_CLASS: Record<string, string> = { 'var(--band-open)': 'good', 'var(--band-marginal)': 'ok' }
 
-export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true, rail }: Props) {
+export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true, rail, inBar = false }: Props) {
   const band = snap.radio.band
   const report = prop?.advisory.bands.find((b) => b.band === band) ?? null
   const condition = useBandConditions()(band)
@@ -258,7 +261,7 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
   }
 
   return (
-    <div className="now-bar" role="status" aria-label={t('nowbar.aria')}>
+    <div className={`now-bar${inBar ? ' now-bar-inbar' : ''}`} role="status" aria-label={t('nowbar.aria')}>
       <span className="nb-label">{t('nowbar.label')}</span>
       {order.map((k) => chips[k])}
 
