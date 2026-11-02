@@ -69,6 +69,29 @@ describe('the replay bar', () => {
     expect(r.container.querySelector('.flare-spark-cursor')).not.toBeNull()
   })
 
+  it('puts the way back to now right under the head', () => {
+    const r = bar()
+    const kids = [...r.container.querySelector('.replay-chip')!.children]
+    expect(kids[0].className).toBe('replay-chip-head')
+    expect(kids[1].classList.contains('replay-back')).toBe(true)
+  })
+
+  it('breaks the trace where a bucket is missing', () => {
+    const lo = WIN.loMs / 1000
+    const held: [number, number][] = [
+      [lo, 1e-6],
+      [lo + 300, 1e-6],
+      [lo + 900, 1e-6], // the bucket at lo + 600 is missing
+      [lo + 1200, 1e-6],
+    ]
+    const d = bar({ series: held }).container.querySelector('.flare-spark-line')!.getAttribute('d')!
+    expect(d.match(/M/g)!.length, d).toBe(2)
+    cleanup()
+    const whole: [number, number][] = [...held.slice(0, 2), [lo + 600, 1e-6], ...held.slice(2)]
+    const d2 = bar({ series: whole }).container.querySelector('.flare-spark-line')!.getAttribute('d')!
+    expect(d2.match(/M/g)!.length, 'CONTROL: an unbroken trace is one line').toBe(1)
+  })
+
   it('goes back to now', () => {
     const back = vi.fn()
     const r = bar({ onBack: back })

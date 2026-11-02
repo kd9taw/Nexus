@@ -25,6 +25,7 @@ import {
 } from '../../flareNow'
 import { agoLabel } from './SpaceWxGauges'
 import { devXrayOverride } from '../../flareAlert'
+import { bucketOf } from '../../replay'
 import type { SolarRegionsView } from '../../types'
 import { SunRegionsDisc } from './SunRegionsDisc'
 
@@ -178,11 +179,15 @@ export function FlareSparkline({
   series,
   phase,
   cursorAt = null,
+  breakAtMissingBuckets = false,
 }: {
   series: [number, number][]
   phase: { noaa: boolean; beginAt: number | null; peakAt: number | null }
   /** The replay bar's time (Unix seconds): a marker on the trace where the replay stands. */
   cursorAt?: number | null
+  /** Lift the pen across a missing 5-minute bucket (the replay's sparkline: a reading that was not
+   *  held is drawn as a gap, not a line). Off: every point is joined. */
+  breakAtMissingBuckets?: boolean
 }) {
   const t0 = series[0][0]
   const t1 = series[series.length - 1][0]
@@ -192,7 +197,12 @@ export function FlareSparkline({
     const l = Math.max(LOG_LO, Math.min(LOG_HI, Math.log10(flux)))
     return SPARK_H - ((l - LOG_LO) / (LOG_HI - LOG_LO)) * SPARK_H
   }
-  const d = series.map(([u, f], i) => `${i ? 'L' : 'M'}${x(u).toFixed(1)},${y(f).toFixed(1)}`).join('')
+  const d = series
+    .map(([u, f], i) => {
+      const gap = i > 0 && breakAtMissingBuckets && bucketOf(u) - bucketOf(series[i - 1][0]) > 1
+      return `${i && !gap ? 'L' : 'M'}${x(u).toFixed(1)},${y(f).toFixed(1)}`
+    })
+    .join('')
   const mark = (u: number | null) =>
     phase.noaa && u != null && u >= t0 && u <= t1 ? x(u).toFixed(1) : null
   const begin = mark(phase.beginAt)

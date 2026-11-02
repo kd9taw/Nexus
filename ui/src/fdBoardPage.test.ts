@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ARRL_SECTIONS_BY_DIVISION } from './features/arrlSections'
 import { BAND_COLOR, bandColor } from './bandColors'
+import { subsolarPoint } from './mapGeo'
 
 // The Field Day spectator scoreboard page, executed for real: the page keeps
 // all rendering in pure render(data, meta) functions behind the __fdboard test
@@ -568,9 +569,10 @@ describe('fd scoreboard page', () => {
     const eq = b.globe.subsolarPoint(Date.UTC(2026, 2, 21, 12, 0, 0))
     expect(Math.abs(eq.lat)).toBeLessThan(2)
     expect(Math.abs(eq.lon)).toBeLessThan(4)
-    // Six hours later the sun has moved 90° west.
+    // Six hours later the sun has moved 90° west — to within the equation of time's drift over
+    // those six hours (0.019° that day; the page's older sun held it fixed through each day).
     const later = b.globe.subsolarPoint(Date.UTC(2026, 2, 21, 18, 0, 0))
-    expect(later.lon).toBeCloseTo(eq.lon - 90, 3)
+    expect(later.lon).toBeCloseTo(eq.lon - 90, 1)
     // Northern solstice: overhead on the tropic of Cancer.
     const jun = b.globe.subsolarPoint(Date.UTC(2026, 5, 21, 12, 0, 0))
     expect(jun.lat).toBeGreaterThan(22)
@@ -581,6 +583,18 @@ describe('fd scoreboard page', () => {
     expect(ring.length).toBe(24)
     for (const p of ring) {
       expect(angularDeg(p, [jun.lat, jun.lon])).toBeCloseTo(90, 6)
+    }
+  })
+
+  it('stands on the map’s one sun (mapGeo sunAt), to the last digit', () => {
+    const b = boot()
+    // Spread over the years and seasons, including the 2026 solstices and equinoxes.
+    for (const iso of ['1970-01-01T00:00Z', '2026-03-20T14:46Z', '2026-06-21T08:24Z', '2026-09-23T00:05Z', '2026-12-21T20:50Z', '2050-01-01T00:00Z']) {
+      const ms = Date.parse(iso)
+      const page = b.globe.subsolarPoint(ms)
+      const map = subsolarPoint(ms)
+      expect(Math.abs(page.lat - map.lat), iso).toBeLessThan(1e-9)
+      expect(Math.abs(page.lon - map.lon), iso).toBeLessThan(1e-9)
     }
   })
 

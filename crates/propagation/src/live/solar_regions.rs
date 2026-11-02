@@ -17,15 +17,20 @@ const UA: &str = "nexus-propagation/0.1 (+ham radio sun disc)";
 /// Download and read NOAA's region list at `now`. `Err` on network or HTTP trouble, an answer
 /// past the size limit, or one that is not a list — the caller keeps the copy it holds.
 pub fn fetch_solar_regions(now: i64) -> Result<SolarRegions, String> {
-    let c = builder()
-        .https_only(true)
-        .build()
-        .map_err(|e| e.to_string())?;
-    let body = fetch_from(&c, REGIONS_URL)?;
+    let body = fetch_from(&client()?, REGIONS_URL)?;
     parse_solar_regions(&body, now)
 }
 
-/// The client: a timeout, and no redirect followed.
+/// The client the fetch uses: HTTPS only, on [`builder`]'s timeout and redirect policy.
+fn client() -> Result<reqwest::blocking::Client, String> {
+    builder()
+        .https_only(true)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// A timeout, and no redirect followed. The loopback tests build on this (plain HTTP); the
+/// fetch itself always goes through [`client`].
 fn builder() -> reqwest::blocking::ClientBuilder {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -100,11 +105,20 @@ mod tests {
         assert!(fetch_port(port).unwrap_err().contains("HTTP 503"));
     }
 
-    /// The real client refuses a plain-HTTP address outright: HTTPS only.
+    /// The client the fetch uses refuses a plain-HTTP address outright: HTTPS only. CONTROL: the
+    /// same server answers a client without the rule.
     #[test]
-    fn plain_http_is_refused() {
-        let c = builder().https_only(true).build().expect("client");
+    fn the_shipped_client_refuses_plain_http() {
         let port = serve(vec![ok_reply(LIVE.as_bytes())]);
-        assert!(fetch_from(&c, &format!("http://127.0.0.1:{port}/x")).is_err());
+        let err = fetch_from(
+            &client().expect("client"),
+            &format!("http://127.0.0.1:{port}/x"),
+        );
+        assert!(err.is_err(), "the shipped client spoke plain HTTP");
+        let port = serve(vec![ok_reply(LIVE.as_bytes())]);
+        assert!(
+            fetch_port(port).is_ok(),
+            "CONTROL: the server answers plain HTTP"
+        );
     }
 }

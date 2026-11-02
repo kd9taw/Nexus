@@ -5,7 +5,7 @@ import {
   replayWindow,
   REPLAY_SPAN_SECS,
   REPLAY_AHEAD_SECS,
-  REPLAY_MATCH_SECS,
+  REPLAY_BUCKET_SECS,
   replayStart,
 } from './replay'
 
@@ -75,18 +75,41 @@ describe('clampReplay', () => {
 describe('replayFlux: the reading at the replayed time, or none', () => {
   const s = series(6, (ago) => (ago === 7200 ? 5e-5 : 1e-6))
 
-  it('takes the bucket peak nearest the replayed time', () => {
+  it('takes the peak of the replayed time’s own bucket', () => {
     expect(replayFlux(s, NOW - 7200_000, NOW)).toEqual({ flux: 5e-5, at: NOW_S - 7200 })
-    expect(replayFlux(s, NOW - 7200_000 + 120_000, NOW)).toEqual({ flux: 5e-5, at: NOW_S - 7200 })
-    expect(replayFlux(s, NOW - 7200_000 + 180_000, NOW)?.flux).toBe(1e-6)
+    expect(replayFlux(s, NOW - 7200_000 + 299_000, NOW)).toEqual({ flux: 5e-5, at: NOW_S - 7200 })
+    expect(replayFlux(s, NOW - 7200_000 + 300_000, NOW)?.flux, 'the next bucket is its own').toBe(1e-6)
+    expect(replayFlux(s, NOW - 7200_000 - 1_000, NOW)?.flux, 'the bucket before is its own').toBe(1e-6)
+  })
+
+  it('reads a peak anywhere in its bucket, however far it sits from its neighbours', () => {
+    // The shack stamps each bucket's peak at its own minute: two adjacent buckets' peaks can be
+    // nearly ten minutes apart, and neither is a gap.
+    const b = Math.floor((NOW_S - 3600) / REPLAY_BUCKET_SECS) * REPLAY_BUCKET_SECS
+    const peaks: [number, number][] = [
+      [b + 5, 2e-5],
+      [b + 595, 3e-5],
+    ]
+    expect(replayFlux(peaks, (b + 290) * 1000, NOW)).toEqual({ flux: 2e-5, at: b + 5 })
+    expect(replayFlux(peaks, (b + 300) * 1000, NOW)).toEqual({ flux: 3e-5, at: b + 595 })
+    expect(replayFlux(peaks, (b + 600) * 1000, NOW), 'the bucket after holds no reading').toBeNull()
   })
 
   it('has no reading where the trace has a gap wider than one bucket', () => {
     const gap = s.filter(([t]) => t < NOW_S - 9000 || t > NOW_S - 5400)
     expect(replayFlux(gap, NOW - 7200_000, NOW)).toBeNull()
     // CONTROL: within one bucket of the last held sample before the gap it has one.
-    expect(replayFlux(gap, (NOW_S - 9300 + REPLAY_MATCH_SECS) * 1000, NOW)).not.toBeNull()
-    expect(replayFlux(gap, (NOW_S - 9300 + REPLAY_MATCH_SECS + 1) * 1000, NOW)).toBeNull()
+    expect(replayFlux(gap, (NOW_S - 9300 + REPLAY_BUCKET_SECS - 1) * 1000, NOW)).not.toBeNull()
+    expect(replayFlux(gap, (NOW_S - 9300 + REPLAY_BUCKET_SECS) * 1000, NOW)).toBeNull()
+  })
+
+  it('a single missing bucket draws nothing; the buckets either side still do', () => {
+    const missing = NOW_S - 7200
+    const one = s.filter(([t]) => t !== missing)
+    expect(one.length, 'CONTROL: exactly one bucket is gone').toBe(s.length - 1)
+    expect(replayFlux(one, missing * 1000, NOW), 'a neighbour’s peak bridged the gap').toBeNull()
+    expect(replayFlux(one, (missing - 300) * 1000, NOW)).toEqual({ flux: 1e-6, at: missing - 300 })
+    expect(replayFlux(one, (missing + 300) * 1000, NOW)).toEqual({ flux: 1e-6, at: missing + 300 })
   })
 
   it('never reads a sample dated ahead of the clock, undated, or not a flux', () => {

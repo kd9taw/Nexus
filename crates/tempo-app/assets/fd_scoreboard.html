@@ -996,24 +996,23 @@ function arcPoints(a, b, n) {
   return out;
 }
 
-/* MIRROR of ui/src/mapGeo.ts subsolarPoint, itself a mirror of the Rust
-   source of truth in crates/propagation/src/geo.rs (Cooper's declination +
-   the equation of time). This page is the THIRD mirror; if the physics
-   changes it changes in geo.rs first. Good to about half a degree, which is
-   far better than a TV globe needs. */
-function dayOfYearUtc(ms) {
-  var d = new Date(ms);
-  return Math.floor((ms - Date.UTC(d.getUTCFullYear(), 0, 1)) / 86400000) + 1;
-}
+/* MIRROR of ui/src/mapGeo.ts sunAt / subsolarPoint, itself the same arithmetic
+   as the Rust source of truth in crates/propagation/src/geo.rs (sun_at): the
+   Astronomical Almanac's low-precision Sun (about 0.01 deg) for the apparent
+   right ascension and declination, less IAU 1982 Greenwich mean sidereal
+   time. This page is the THIRD mirror; if the physics changes it changes in
+   geo.rs first, then mapGeo.ts, then here. Time is UT. */
+function norm360(deg) { return ((deg % 360) + 360) % 360; }
 function subsolarPoint(nowMs) {
-  var b = ((2 * Math.PI) / 365) * (dayOfYearUtc(nowMs) - 81);
-  var declDeg = 23.45 * Math.sin(b);
-  var eqMin = 9.87 * Math.sin(2 * b) - 7.53 * Math.cos(b) - 1.5 * Math.sin(b);
-  var d = new Date(nowMs);
-  var utcHours = d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600;
-  /* solar elevation uses hra = ((utcHours + eq/60 - 12)*15 + lon); the
-     subsolar longitude is where the hour angle is zero. */
-  return { lat: declDeg, lon: norm180(-(utcHours + eqMin / 60 - 12) * 15) };
+  var n = nowMs / 86400000 - 10957.5; /* days from J2000.0 */
+  var g = (357.528 + 0.9856003 * n) * DEG;
+  var lambda = (280.46 + 0.9856474 * n + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * DEG;
+  var eps = (23.439 - 0.0000004 * n) * DEG;
+  var ra = Math.atan2(Math.cos(eps) * Math.sin(lambda), Math.cos(lambda)) / DEG;
+  var dec = Math.asin(Math.sin(eps) * Math.sin(lambda)) / DEG;
+  /* Reduced before the subtraction: n days of sidereal time run to millions of degrees. */
+  var gmst = norm360(280.46061837 + 360.98564736629 * n);
+  return { lat: dec, lon: norm360(norm360(ra) - gmst + 540) - 180 };
 }
 
 /* The day/night line: the great circle 90 deg from the subsolar point — the

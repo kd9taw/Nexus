@@ -9,8 +9,9 @@
 //
 // FAIL CLOSED. A sample with no time, a time ahead of this clock (beyond the skew allowance), or a
 // flux that is not a positive number is never read. The replay never reaches before six hours ago
-// or past now. A replayed time with no held sample within one bucket has NO flux: nothing is drawn
-// for the flare, and the bar says so — never the nearest reading from further away.
+// or past now. A replayed time reads only its own 5-minute bucket's peak (the buckets the shack made
+// the trace from); with that bucket missing it has NO flux (a single missing bucket included):
+// nothing is drawn for the flare, and the bar says so — never a neighbouring bucket's reading.
 
 /** How far back a replay reaches. */
 export const REPLAY_SPAN_SECS = 6 * 3600
@@ -18,8 +19,10 @@ export const REPLAY_SPAN_SECS = 6 * 3600
 export const REPLAY_STEP_SECS = 300
 /** A sample may sit this far ahead of the clock and still be read (clock skew). */
 export const REPLAY_AHEAD_SECS = 120
-/** A bucket peak speaks for the replayed time within this distance (one bucket). */
-export const REPLAY_MATCH_SECS = 300
+/** The trace's bucket (the shack's `xray_series`: Unix time ÷ 300 s, each bucket's peak at its own
+ *  time). A replayed time reads ONLY the peak of its own bucket: a missing bucket draws nothing and
+ *  says so, never a neighbour's reading. */
+export const REPLAY_BUCKET_SECS = 300
 
 export interface ReplayWindow {
   loMs: number
@@ -59,16 +62,16 @@ export function clampReplay(atMs: number, w: ReplayWindow): number {
   return Math.min(w.hiMs, Math.max(w.loMs, atMs))
 }
 
-/** The flux at the replayed time: the usable bucket peak nearest it, within one bucket; else null. */
+/** The bucket a time falls in. */
+export const bucketOf = (unix: number) => Math.floor(unix / REPLAY_BUCKET_SECS)
+
+/** The flux at the replayed time: the usable peak of the replayed time's own bucket; else null. */
 export function replayFlux(series: Trace, atMs: number, nowMs: number): { flux: number; at: number } | null {
   const at = atMs / 1000
   if (at < nowMs / 1000 - REPLAY_SPAN_SECS) return null
-  let best: readonly [number, number] | null = null
-  for (const p of usable(series, nowMs)) {
-    const d = Math.abs(p[0] - at)
-    if (d <= REPLAY_MATCH_SECS && (best == null || d < Math.abs(best[0] - at))) best = p
-  }
-  return best ? { flux: best[1], at: best[0] } : null
+  const want = bucketOf(at)
+  const hit = usable(series, nowMs).find(([t]) => bucketOf(t) === want)
+  return hit ? { flux: hit[1], at: hit[0] } : null
 }
 
 /** Where a new replay starts: the time of the highest usable reading in the window (the moment

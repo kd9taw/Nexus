@@ -4229,7 +4229,7 @@ export const FR: PartialCatalog = {
   "map.replay.noFlux": "Aucune mesure X pour cette heure : aucune éruption dessinée",
   "map.replay.est": "Éruption estimée d'après GOES (la carte de la NOAA n'est pas conservée pour les heures passées)",
   "map.replay.slider.aria": "Heure du rejeu (UTC)",
-  "map.replay.live": "Seuls le Soleil, le côté nuit et l'éruption sont rejoués. Les stations, les spots et toutes les autres couches sont en direct.",
+  "map.replay.live": "Seuls le Soleil, la Lune, le côté nuit et l'éruption sont rejoués. Les stations, les spots et toutes les autres couches sont en direct.",
   "map.replay.back": "■ revenir à maintenant",
   "map.flare.preview.stop": "■ arrêt",
   "map.flare.preview.title": "Simule une éruption X2 sur la carte pendant 60 s — aperçu visuel seulement (aucune alerte). Sinon la couche ne dessine rien tant qu'il n'y a pas d'éruption de classe M réelle.",

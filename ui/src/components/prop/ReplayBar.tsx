@@ -6,7 +6,8 @@
 // in the replay ink with a dashed edge; the X-ray line names the GOES bucket peak it drew from and
 // its own time, or says there is no reading for that time (and nothing is drawn for the flare); the
 // footprint is always "estimated from GOES" (NOAA's grid is not kept for past times); and one line
-// says everything else on the map is live. "Back to now" ends it. Nothing about a replay is saved.
+// says everything else on the map is live. "Back to now", right under the head, ends it. Nothing
+// about a replay is saved.
 
 import { t } from '../../i18n'
 import { flareClass } from '../../mapGeo'
@@ -51,6 +52,10 @@ export function ReplayBar({
       <div className="replay-chip-head">
         {t('map.replay.head', { time: wxStampLabel(at), ago: agoLabel(Math.max(0, nowMs / 1000 - at)) })}
       </div>
+      {/* The way out sits at the top, so a short map cell (the stack scrolls) never hides it. */}
+      <button type="button" className="flare-preview replay-back" onClick={onBack}>
+        {t('map.replay.back')}
+      </button>
       <div className="flare-chip-line" data-flux={flux ? '' : undefined}>
         {flux ? t('map.replay.flux', { cls: flareClass(flux.flux), time: hm(flux.at) }) : t('map.replay.noFlux')}
       </div>
@@ -59,7 +64,15 @@ export function ReplayBar({
           {t('map.replay.est')}
         </div>
       )}
-      {series.length > 1 && <FlareSparkline series={series} phase={{ noaa: false, beginAt: null, peakAt: null }} cursorAt={at} />}
+      {series.length > 1 && (
+        // Broken where a bucket is missing: the line never suggests a reading that was not held.
+        <FlareSparkline
+          series={series}
+          phase={{ noaa: false, beginAt: null, peakAt: null }}
+          cursorAt={at}
+          breakAtMissingBuckets
+        />
+      )}
       {win && (
         <input
           type="range"
@@ -74,9 +87,6 @@ export function ReplayBar({
         />
       )}
       <div className="flare-chip-line flare-chip-dim">{t('map.replay.live')}</div>
-      <button type="button" className="flare-preview replay-back" onClick={onBack}>
-        {t('map.replay.back')}
-      </button>
     </div>
   )
 }

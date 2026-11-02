@@ -778,6 +778,94 @@ mod tests {
         }
     }
 
+    /// The sun at the 2026 equinoxes and solstices — at USNO's instant of each, and at 00Z and
+    /// 12Z that day — from an INDEPENDENT ephemeris: Meeus, Astronomical Algorithms (2nd ed.) ch.
+    /// 25's higher-accuracy solar position with nutation (the method NOAA's solar calculator uses),
+    /// apparent right ascension and declination, less Greenwich APPARENT sidereal time (ch. 12 with
+    /// the nutation in longitude). [Unix seconds, declination, sub-solar longitude]. The same rows
+    /// are in `ui/src/mapGeo.sky.test.ts`.
+    const SEASONS: [(i64, f64, f64); 12] = [
+        (1_774_017_960, 0.002267, -39.644153), // March equinox, 2026-03-20 14:46Z (USNO)
+        (1_773_964_800, -0.240961, -178.098777), // 2026-03-20 00Z
+        (1_774_008_000, -0.043298, 1.864364),  // 2026-03-20 12Z
+        (1_782_030_240, 23.438132, 54.448941), // June solstice, 2026-06-21 08:24Z (USNO)
+        (1_782_000_000, 23.437716, -179.570131), // 2026-06-21 00Z
+        (1_782_043_200, 23.438052, 0.457111),  // 2026-06-21 12Z
+        (1_790_121_900, 0.001272, 176.883929), // September equinox, 2026-09-23 00:05Z (USNO)
+        (1_790_121_600, 0.002624, 178.134234), // 2026-09-23 00Z
+        (1_790_164_800, -0.191993, -1.909660), // 2026-09-23 12Z
+        (1_797_886_200, -23.437838, -132.937534), // December solstice, 2026-12-21 20:50Z (USNO)
+        (1_797_811_200, -23.434888, 179.454675), // 2026-12-21 00Z
+        (1_797_854_400, -23.437309, -0.483256), // 2026-12-21 12Z
+    ];
+
+    #[test]
+    fn the_sun_at_the_equinoxes_and_solstices_agrees_with_an_independent_ephemeris() {
+        for (unix, dec, lon) in SEASONS {
+            let ss = subsolar_point(unix);
+            let e = separation(ss, (dec, lon));
+            assert!(e < 0.01, "{unix}: {e}° from the reference");
+        }
+        // USNO's instants: the declination crosses zero at an equinox, and peaks at a solstice.
+        for unix in [1_774_017_960, 1_790_121_900] {
+            assert!(solar_declination_deg(unix).abs() < 0.01, "equinox {unix}");
+        }
+        let june = 1_782_030_240;
+        let dec = solar_declination_deg(june);
+        assert!(
+            dec > 23.43 && dec < 23.445,
+            "June solstice declination {dec}"
+        );
+        for d in [-2, -1, 1, 2] {
+            assert!(
+                solar_declination_deg(june + d * 86_400) < dec,
+                "June solstice not a maximum"
+            );
+        }
+        let dec = solar_declination_deg(1_797_886_200);
+        assert!(
+            dec < -23.43 && dec > -23.445,
+            "December solstice declination {dec}"
+        );
+        for d in [-2, -1, 1, 2] {
+            assert!(solar_declination_deg(1_797_886_200 + d * 86_400) > dec);
+        }
+    }
+
+    #[test]
+    fn at_the_poles_the_suns_elevation_is_the_declination() {
+        for (unix, _, _) in SEASONS {
+            let dec = solar_declination_deg(unix);
+            for lon in [-180.0, -73.0, 0.0, 45.0, 179.0] {
+                assert!((solar_elevation_deg(90.0, lon, unix) - dec).abs() < 1e-9);
+                assert!((solar_elevation_deg(-90.0, lon, unix) + dec).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn near_the_poles_a_solstice_day_is_all_day_or_all_night() {
+        // Every 10 minutes through the solstice's UTC day, at every longitude in 30° steps.
+        for (day, north_up) in [
+            (days_from_civil(2026, 6, 21), true),
+            (days_from_civil(2026, 12, 21), false),
+        ] {
+            let mut n = 0;
+            for step in 0..144 {
+                let t = day * 86_400 + step * 600;
+                for k in 0..12 {
+                    let lon = -180.0 + 30.0 * k as f64;
+                    let north = solar_elevation_deg(89.9, lon, t);
+                    let south = solar_elevation_deg(-89.9, lon, t);
+                    assert_eq!(north > 0.0, north_up, "89.9N at {t}, {lon}: {north}");
+                    assert_eq!(south > 0.0, !north_up, "89.9S at {t}, {lon}: {south}");
+                    n += 1;
+                }
+            }
+            assert_eq!(n, 144 * 12, "CONTROL: the whole day was sampled");
+        }
+    }
+
     #[test]
     fn the_shared_sun_agrees_with_the_old_paths_within_their_own_error() {
         // A week and five hours apart over six years: every season, every hour of the day.

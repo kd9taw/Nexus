@@ -3982,7 +3982,7 @@ export const EN = {
   'map.replay.noFlux': 'No X-ray reading held for this time: no flare drawn',
   'map.replay.est': 'Flare estimated from GOES (NOAA’s map is not kept for past times)',
   'map.replay.slider.aria': 'Replay time (UTC)',
-  'map.replay.live': 'Only the sun, the night side and the flare are replayed. Stations, spots and every other layer are live.',
+  'map.replay.live': 'Only the sun, the moon, the night side and the flare are replayed. Stations, spots and every other layer are live.',
   'map.replay.back': '■ back to now',
 
   // The layer panel. The layer IDS are code; only these names are read.

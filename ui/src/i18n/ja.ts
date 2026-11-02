@@ -2697,7 +2697,7 @@ export const JA: PartialCatalog = {
   "map.replay.noFlux": "この時刻のX線データはありません：フレアは描画しません",
   "map.replay.est": "フレアはGOESからの推定（NOAAの地図は過去の時刻については保存していません）",
   "map.replay.slider.aria": "再生時刻（UTC）",
-  "map.replay.live": "再生しているのは太陽・夜側・フレアだけです。局、スポット、その他のレイヤーはすべてライブです。",
+  "map.replay.live": "再生しているのは太陽・月・夜側・フレアだけです。局、スポット、その他のレイヤーはすべてライブです。",
   "map.replay.back": "■ 現在に戻る",
   "map.layers.head": "レイヤー",
   "map.layers.toggle.title": "レイヤーパネルの表示/非表示",

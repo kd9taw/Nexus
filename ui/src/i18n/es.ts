@@ -4229,7 +4229,7 @@ export const ES: PartialCatalog = {
   "map.replay.noFlux": "No hay lectura de rayos X para esta hora: no se dibuja fulguración",
   "map.replay.est": "Fulguración estimada a partir de GOES (el mapa de NOAA no se guarda para horas pasadas)",
   "map.replay.slider.aria": "Hora de la repetición (UTC)",
-  "map.replay.live": "Solo se repiten el Sol, el lado nocturno y la fulguración. Las estaciones, los spots y todas las demás capas están en directo.",
+  "map.replay.live": "Solo se repiten el Sol, la Luna, el lado nocturno y la fulguración. Las estaciones, los spots y todas las demás capas están en directo.",
   "map.replay.back": "■ volver a ahora",
   "map.flare.preview.stop": "■ parar",
   "map.flare.preview.title": "Simula una fulguración X2 en el mapa durante 60 s — solo vista previa (sin alertas). Por lo demás, la capa no dibuja nada hasta que haya una fulguración real de clase M.",

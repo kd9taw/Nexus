@@ -5002,7 +5002,7 @@ body.resizing-row {
   pointer-events: auto;
 }
 .flare-preview.replay-back {
-  margin: 3px 0 0 1em;
+  margin: 2px 0 1px 1em;
   pointer-events: auto;
 }
 .flare-preview.replay-start[disabled] {

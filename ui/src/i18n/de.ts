@@ -4514,7 +4514,7 @@ export const DE: PartialCatalog = {
   "map.replay.noFlux": "Für diese Zeit kein Röntgenwert vorhanden: kein Flare gezeichnet",
   "map.replay.est": "Flare aus GOES geschätzt (die NOAA-Karte wird für vergangene Zeiten nicht aufbewahrt)",
   "map.replay.slider.aria": "Rückblickzeit (UTC)",
-  "map.replay.live": "Nur Sonne, Nachtseite und Flare werden zurückgespielt. Stationen, Spots und alle anderen Ebenen sind live.",
+  "map.replay.live": "Nur Sonne, Mond, Nachtseite und Flare werden zurückgespielt. Stationen, Spots und alle anderen Ebenen sind live.",
   "map.replay.back": "■ zurück zu jetzt",
   "map.layers.head": "Ebenen",
   "map.layers.toggle.title": "Ebenen-Panel ein-/ausblenden",

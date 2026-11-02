@@ -101,6 +101,78 @@ describe('the subsolar point (the sun marker, the terminator and the flare field
   })
 })
 
+/** The sun at the 2026 equinoxes and solstices — at USNO's instant of each, and at 00Z and 12Z
+ *  that day — from an INDEPENDENT ephemeris: Meeus, Astronomical Algorithms (2nd ed.) ch. 25's
+ *  higher-accuracy solar position with nutation (the method NOAA's solar calculator uses), apparent
+ *  RA and declination, less Greenwich APPARENT sidereal time. [Unix seconds, declination, sub-solar
+ *  longitude]; the same rows as geo.rs `SEASONS`. */
+const SEASONS: ReadonlyArray<readonly [number, number, number]> = [
+  [1_774_017_960, 0.002267, -39.644153], // March equinox, 2026-03-20 14:46Z (USNO)
+  [1_773_964_800, -0.240961, -178.098777],
+  [1_774_008_000, -0.043298, 1.864364],
+  [1_782_030_240, 23.438132, 54.448941], // June solstice, 2026-06-21 08:24Z (USNO)
+  [1_782_000_000, 23.437716, -179.570131],
+  [1_782_043_200, 23.438052, 0.457111],
+  [1_790_121_900, 0.001272, 176.883929], // September equinox, 2026-09-23 00:05Z (USNO)
+  [1_790_121_600, 0.002624, 178.134234],
+  [1_790_164_800, -0.191993, -1.90966],
+  [1_797_886_200, -23.437838, -132.937534], // December solstice, 2026-12-21 20:50Z (USNO)
+  [1_797_811_200, -23.434888, 179.454675],
+  [1_797_854_400, -23.437309, -0.483256],
+]
+const DAY = 86_400_000
+
+describe('the sun at the equinoxes, the solstices and the poles', () => {
+  it('agrees with an independent ephemeris at every equinox and solstice of 2026', () => {
+    for (const [unix, dec, lon] of SEASONS) {
+      const e = separation(subsolarPoint(unix * 1000), { lat: dec, lon })
+      expect(e, `${unix}`).toBeLessThan(0.01)
+    }
+  })
+
+  it('crosses the equator at USNO’s equinoxes and peaks at its solstices', () => {
+    for (const unix of [1_774_017_960, 1_790_121_900]) expect(Math.abs(sunAt(unix * 1000).declDeg)).toBeLessThan(0.01)
+    const june = 1_782_030_240 * 1000
+    const dec = sunAt(june).declDeg
+    expect(dec).toBeGreaterThan(23.43)
+    expect(dec).toBeLessThan(23.445)
+    for (const d of [-2, -1, 1, 2]) expect(sunAt(june + d * DAY).declDeg).toBeLessThan(dec)
+    const dec2 = sunAt(1_797_886_200 * 1000).declDeg
+    expect(dec2).toBeLessThan(-23.43)
+    expect(dec2).toBeGreaterThan(-23.445)
+    for (const d of [-2, -1, 1, 2]) expect(sunAt(1_797_886_200 * 1000 + d * DAY).declDeg).toBeGreaterThan(dec2)
+  })
+
+  it('at the poles the sun’s elevation is the declination', () => {
+    for (const [unix] of SEASONS) {
+      const dec = sunAt(unix * 1000).declDeg
+      for (const lon of [-180, -73, 0, 45, 179]) {
+        expect(solarElevationDeg(90, lon, unix * 1000)).toBeCloseTo(dec, 9)
+        expect(solarElevationDeg(-90, lon, unix * 1000)).toBeCloseTo(-dec, 9)
+      }
+    }
+  })
+
+  it('near the poles a solstice day is all day or all night', () => {
+    for (const [day, northUp] of [
+      [Date.UTC(2026, 5, 21), true],
+      [Date.UTC(2026, 11, 21), false],
+    ] as const) {
+      let n = 0
+      for (let step = 0; step < 144; step++) {
+        const t = day + step * 600_000
+        for (let k = 0; k < 12; k++) {
+          const lon = -180 + 30 * k
+          expect(solarElevationDeg(89.9, lon, t) > 0, `89.9N ${t} ${lon}`).toBe(northUp)
+          expect(solarElevationDeg(-89.9, lon, t) > 0, `89.9S ${t} ${lon}`).toBe(!northUp)
+          n++
+        }
+      }
+      expect(n, 'CONTROL: the whole day was sampled').toBe(144 * 12)
+    }
+  })
+})
+
 /** The shack's table (geo.rs `SHARED_SUN`), digit for digit: [Unix seconds, declination,
  *  sub-solar longitude]. Both sides compute these from one ephemeris; a change on either side
  *  breaks one of the two tests. */

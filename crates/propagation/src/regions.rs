@@ -293,7 +293,7 @@ mod tests {
             r#"{"observed_date":"29 Oct 2026","region":9,"latitude":1,"longitude":1}"#,
             r#"{"observed_date":"2026-13-40","region":10,"latitude":1,"longitude":1}"#,
             r#"{"observed_date":"2026-10-28","region":null,"latitude":1,"longitude":1}"#,
-            r#"{"observed_date":"2026-10-28","region":12,"latitude":"N10","longitude":1}"#,
+            r#"{"observed_date":"2026-10-28","region":12,"latitude":"north","longitude":1}"#,
             row("2026-10-27", 13, 95.0, 0.0),
         );
         // No row is usable: not a list.

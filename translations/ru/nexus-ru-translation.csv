@@ -4506,7 +4506,7 @@
 "5","map.replay.noFlux","No X-ray reading held for this time: no flare drawn","Для этого времени нет рентгеновских данных: вспышка не нарисована","","Replay chip: there is no X-ray reading for the replayed time."
 "5","map.replay.est","Flare estimated from GOES (NOAA’s map is not kept for past times)","Вспышка оценена по GOES (карта NOAA для прошедшего времени не сохраняется)","NOAA | GOES","Replay chip: the drawn flare is an estimate from GOES, never NOAA's map."
 "5","map.replay.slider.aria","Replay time (UTC)","Время повтора (UTC)","UTC","Screen-reader name of the replay time slider."
-"5","map.replay.live","Only the sun, the night side and the flare are replayed. Stations, spots and every other layer are live.","Повторяются только Солнце, ночная сторона и вспышка. Станции, споты и все остальные слои — в реальном времени.","","Replay chip: only these three things are replayed; the rest of the map is live."
+"5","map.replay.live","Only the sun, the moon, the night side and the flare are replayed. Stations, spots and every other layer are live.","Повторяются только Солнце, Луна, ночная сторона и вспышка. Станции, споты и все остальные слои — в реальном времени.","","Replay chip: only these three things are replayed; the rest of the map is live."
 "5","map.replay.back","■ back to now","■ вернуться к текущему","","Button in the replay chip: end the replay."
 "5","map.layers.head","Layers","Слои","","Short label on: map view. The same English text ""Layers"" is used by 2 different keys (e.g. globe.layers.head) — each can take a different Russian word, so choose the one that fits THIS screen."
 "5","map.layers.toggle.title","Show or hide the Layers panel","Показать или скрыть панель слоёв","",""
