@@ -14,7 +14,8 @@ import type { RadioStatus } from '../types'
  * radio's own word for its cycle (`TUNE_SUCCESSFUL`, `TUNE_FAIL`, …), as data. On every other
  * station it renders only why Tune keys nothing: the licence refuses Nexus's own tune tone where it
  * goes out (`tuneToneRefused`), or a press came while a slot over was on the air with Split
- * Operation on (`tuneOverRefused`); otherwise nothing. Both show beside the Flex readouts too, since
+ * Operation on (`tuneOverRefused`); and why an ATU press keys nothing when the licence refuses the
+ * radio's own ATU carrier at the dial on any CAT path (`atuCarrierRefusedMhz`); otherwise nothing. Both show beside the Flex readouts too, since
  * a Flex running only its ATU natively still tunes with Nexus's tone.
  *
  * Drawn AFTER a strip's controls, never between them: Tune, ATU and Stop TX keep their places.
@@ -27,6 +28,9 @@ export function RadioTuneNote({ radio }: { radio: RadioStatus }) {
   const tuneRefusals = [
     radio.tuneToneRefused && <span key="tone">{t('operate.strip.tune.toneRefused')}</span>,
     radio.tuneOverRefused && <span key="over">{t('operate.strip.tune.overRefused')}</span>,
+    radio.atuCarrierRefusedMhz != null && (
+      <span key="atu">{t('operate.strip.atu.carrierRefused', { mhz: radio.atuCarrierRefusedMhz.toFixed(4) })}</span>
+    ),
   ].filter(Boolean)
   if (!readouts) {
     return tuneRefusals.length > 0 ? (

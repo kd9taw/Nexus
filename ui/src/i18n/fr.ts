@@ -5089,6 +5089,7 @@ export const FR: PartialCatalog = {
   "operate.strip.tune.toneRefused": "Tune n'émet rien ici : sa tonalité de 1500 Hz sortirait des privilèges de votre licence sur cette fréquence.",
   "operate.strip.tune.overRefused": "Tune n'émet rien tant qu'une séquence FT est à l'antenne avec l'opération Split activée : le poste émet peut-être depuis une fréquence décalée. Appuyez à nouveau sur Tune après la séquence.",
   "operate.strip.atu.radioStatus": "ATU du poste : {{status}}",
+  "operate.strip.atu.carrierRefused": "ATU n'émet rien ici : la porteuse propre du poste sur votre fréquence affichée, {{mhz}} MHz, sortirait des privilèges de votre licence.",
   "operate.strip.atu.radioRefused": "ATU n'émet rien ici : la porteuse propre du poste sortirait de vos privilèges en CW sur cette fréquence.",
   "operate.strip.txControls.aria": "Commandes d'émission",
   "operate.strip.atu.switchOut": "Mettre la boîte d'accord hors circuit",

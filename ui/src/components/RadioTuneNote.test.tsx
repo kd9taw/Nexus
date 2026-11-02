@@ -144,6 +144,15 @@ describe('beside the ATU, while the ATU is the radio’s own', () => {
     )
   })
 
+  it('says why the ATU keys nothing on any CAT path, naming the radio’s carrier at the dial', () => {
+    render(<RadioTuneNote radio={radio({ atuCarrierRefusedMhz: 14.024 })} />)
+    expect(screen.getByRole('note').textContent).toBe(
+      "ATU keys nothing here: the radio's own carrier at your dial, 14.0240 MHz, would be outside your license privileges.",
+    )
+    cleanup()
+    expect(note(radio({ atuCarrierRefusedMhz: null }))).toBeNull()
+  })
+
   it('says why the ATU keys nothing when the licence refuses the radio’s carrier here', () => {
     expect(note(radio({ flexAtu: atu({}), flexAtuRefused: true }))).toBe(
       'Radio tune power 10 %Radio TX timeout 30 s' +

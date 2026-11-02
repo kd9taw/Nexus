@@ -5089,6 +5089,7 @@ export const ES: PartialCatalog = {
   "operate.strip.tune.toneRefused": "Tune no transmite aquí: su tono de 1500 Hz quedaría fuera de los privilegios de tu licencia en esta frecuencia.",
   "operate.strip.tune.overRefused": "Tune no transmite mientras haya un turno FT en el aire con la operación Split activada: el equipo puede estar transmitiendo desde una frecuencia desplazada. Pulsa Tune de nuevo tras el turno.",
   "operate.strip.atu.radioStatus": "ATU del equipo: {{status}}",
+  "operate.strip.atu.carrierRefused": "ATU no transmite aquí: la portadora propia del equipo en tu dial, {{mhz}} MHz, quedaría fuera de los privilegios de tu licencia.",
   "operate.strip.atu.radioRefused": "ATU no transmite aquí: la portadora propia del equipo quedaría fuera de tus privilegios de CW en esta frecuencia.",
   "operate.strip.txControls.aria": "Controles de transmisión",
   "operate.strip.atu.switchOut": "Desconectar el acoplador",

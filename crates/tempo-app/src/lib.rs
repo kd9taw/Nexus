@@ -277,6 +277,7 @@ impl AppState {
                 flex_tune_refused: false,
                 tune_tone_refused: false,
                 tune_over_refused: false,
+                atu_carrier_refused_mhz: None,
                 flex_atu: None,
                 flex_atu_refused: false,
                 flex_meter_stream: false,

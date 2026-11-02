@@ -7608,6 +7608,7 @@ export const JA: PartialCatalog = {
   "operate.strip.tune.toneRefused": "ここではTuneは何も送信しません。1500 Hzのトーンは、この周波数ではライセンスの運用範囲外になります。",
   "operate.strip.tune.overRefused": "Split OperationがオンでFTの送信中は、Tuneは何も送信しません。無線機はずらした周波数で送信している可能性があります。送信が終わってから、もう一度Tuneを押してください。",
   "operate.strip.atu.radioStatus": "無線機のATU: {{status}}",
+  "operate.strip.atu.carrierRefused": "ここではATUは何も送信しません。ダイヤル周波数 {{mhz}} MHz での無線機自身のキャリアは、ライセンスの運用範囲外になります。",
   "operate.strip.atu.radioRefused": "ここではATUは何も送信しません。無線機自身のキャリアは、この周波数ではCWの運用範囲外になります。",
   "operate.strip.rigDiverge.label": "無線機: {{mode}}",
   "operate.strip.rigDiverge.title": "無線機は {{rigMode}} ですが、Nexus は {{mode}} です。無線機側で何かが変更しました（SmartSDR、他のプログラム、またはモードつまみ）。送信とログには {{mode}} を使います — 無線機を合わせるか、ここでバンドを選び直してください。",

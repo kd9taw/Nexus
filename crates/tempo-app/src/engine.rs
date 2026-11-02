@@ -6038,6 +6038,10 @@ const SSTV_MAX_TX_SECS: f64 = 330.0;
 /// before the operator keyed the mic would fire when they unkeyed — see [`Engine::take_atu_tune`].
 /// Generous next to the ~750 ms poll it normally waits on, tight next to any real over.
 const ATU_REQUEST_MAX_AGE_SECS: u64 = 5;
+/// Why a voice-keyer message is refused where the section's own emission is allowed but a voice
+/// is not ([`Engine::send_voice`]): a phone emission outside the licence's phone privileges.
+const VOICE_OUTSIDE_PHONE: &str =
+    "TX locked — a voice message would be outside your phone privileges here";
 /// Why an ATU press keys nothing on any CAT path when the licence allows the section's emission
 /// but not the radio's own carrier at the transmit dial `mhz` ([`Engine::atu_tune_gate`]).
 fn atu_carrier_outside(mhz: f64) -> String {
@@ -14036,11 +14040,11 @@ impl Engine {
         if self.flex_atu.is_some() && !self.tx_allowed_as(crate::settings::OperatingMode::Cw) {
             return Err(FLEX_ATU_OUTSIDE_CW.to_string());
         }
-        // ⛔ …and on every CAT path the radio's own carrier where it transmits it, at the transmit
-        // dial ([`Self::tx_carrier_allowed`]): the section's emission model puts Digital's frame,
+        // ⛔ …and on every CAT path the radio's own carrier where it transmits it
+        // ([`Self::atu_carrier_allowed`]): the section's emission model puts Digital's frame,
         // RTTY's tones and Keyboard's signal an audio offset off that dial, where the ATU's carrier
         // is not. Only ever refuses more.
-        if !self.tx_carrier_allowed() {
+        if !self.atu_carrier_allowed() {
             return Err(atu_carrier_outside(self.tx_emission_mhz()));
         }
         if let Some(owner) = self.tx_owner() {
@@ -14371,12 +14375,21 @@ impl Engine {
             tempo_core::applog::info("tx", &format!("voice-keyer message refused: {why}"));
             return Err(why.to_string());
         }
-        if !self.voice_allowed() {
+        if !self.tx_allowed() {
             tempo_core::applog::info(
                 "tx",
                 "voice-keyer message refused: the dial is outside the licence's privileges",
             );
             return Err(self.licence_lock_text().to_string());
+        }
+        // The section allows its own emission here, but not a voice ([`Self::voice_allowed`]):
+        // the words say it is phone the licence does not allow, not the frequency.
+        if !self.voice_allowed() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer message refused: a voice is outside the licence's phone privileges here",
+            );
+            return Err(VOICE_OUTSIDE_PHONE.to_string());
         }
         if self.flex_radio_has_mic {
             // The pending message is the one this replaces, not something else transmitting.
@@ -14447,8 +14460,10 @@ impl Engine {
             Some("transmit is off")
         } else if let Some(why) = self.connection_tx_refusal() {
             Some(why)
-        } else if !self.voice_allowed() {
+        } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
+        } else if !self.voice_allowed() {
+            Some("a voice is outside the licence's phone privileges here")
         } else if self.pc_mic_armed() {
             // The operator's PTT on the computer's microphone, pressed after the message was
             // queued and before this tick (the press is refused while a message is pending, so
@@ -24557,6 +24572,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.every_tx_frequency(om, |mhz| crate::privileges::tx_allowed(class, mhz, om))
     }
 
+    /// Whether the licence allows the radio's own ATU carrier, on every CAT path: Flex's own rule
+    /// for its ATU cycle, the carrier at the transmit dial judged as the section's mode
+    /// ([`Self::tx_carrier_allowed`]) AND as CW ([`Self::tx_allowed_as`] CW), so CAT and Flex agree
+    /// everywhere, a 60 m channel's dial included (CW is legal there only at the channel centre).
+    fn atu_carrier_allowed(&self) -> bool {
+        self.tx_carrier_allowed() && self.tx_allowed_as(crate::settings::OperatingMode::Cw)
+    }
+
     /// Set the RX input audio level (0.0–1.0) shown in the UI meter. Driven by
     /// the radio loop from the backend's input meter.
     pub fn set_rx_level(&mut self, level: f32) {
@@ -30466,6 +30489,12 @@ contact yourself."
         s.radio.flex_atu_refused = self.flex_atu.is_some()
             && self.tx_allowed()
             && !self.tx_allowed_as(crate::settings::OperatingMode::Cw);
+        // The same refusal on any other path, with the dial: the note beside the ATU says why.
+        s.radio.atu_carrier_refused_mhz = (self.rig_tuner.is_some()
+            && !s.radio.flex_atu_refused
+            && self.tx_allowed()
+            && !self.atu_carrier_allowed())
+        .then(|| self.tx_emission_mhz());
         s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
@@ -41291,9 +41320,35 @@ mod tests {
             ),
             "the ATU's carrier at 14.024, in plain words"
         );
+        assert_eq!(
+            e.snapshot().radio.atu_carrier_refused_mhz,
+            Some(14.024),
+            "…and the note beside the ATU says so"
+        );
         e.set_frequency(14.0255, "20m", "USB");
         assert_eq!(e.atu_tune(), Ok(()), "CONTROL: at 14.0255");
         assert!(e.take_atu_tune(), "…and it goes to the radio");
+        assert_eq!(e.snapshot().radio.atu_carrier_refused_mhz, None, "no note");
+
+        // As Flex judges its ATU cycle: CW too. On a 60 m channel in Phone the dial, 5.3305, is the
+        // phone carrier the section allows, but CW there is legal only at the channel centre.
+        e.set_operating_mode("phone", false);
+        e.set_frequency(5.3305, "60m", "USB");
+        e.set_tx_enabled(true);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: USB phone on the 5.3320 channel"
+        );
+        assert_eq!(
+            e.atu_tune(),
+            Err(atu_carrier_outside(5.3305)),
+            "an unmodulated carrier at the phone dial of a 60 m channel"
+        );
+        e.set_operating_mode("cw", false);
+        e.set_frequency(5.332, "60m", "CW");
+        e.set_tx_enabled(true);
+        assert!(e.tx_allowed(), "scene guard: CW at the channel centre");
+        assert_eq!(e.atu_tune(), Ok(()), "CONTROL: at the channel centre");
     }
 
     /// ⛔ AN APRS PACKET'S FM CARRIER IS JUDGED AT THE TRANSMIT DIAL. From the Digital section the
@@ -41344,8 +41399,8 @@ mod tests {
         assert!(e.tx_allowed(), "scene guard: FT8 at 14.074 is a General's");
         assert_eq!(
             e.send_voice(vec![0.1; 1200]),
-            Err("TX locked — this frequency is outside your license privileges".to_string()),
-            "a voice in the 20 m data segment"
+            Err(VOICE_OUTSIDE_PHONE.to_string()),
+            "a voice in the 20 m data segment: it is phone the licence refuses"
         );
         assert!(e.poll_voice().is_none(), "nothing queued");
 

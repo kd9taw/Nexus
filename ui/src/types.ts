@@ -1968,6 +1968,10 @@ export interface RadioStatus {
   /** A Tune press was refused because a slot over was on the air with Split Operation Rig or Fake
    * It: shown beside Tune while that over is on the air. Absent when false. */
   tuneOverRefused?: boolean
+  /** The radio reports a tuner, and the licence refuses its own ATU carrier at the transmit dial
+   * (this MHz) though it allows the section's emission: an ATU press keys nothing, and the note
+   * beside it says why. Absent otherwise. */
+  atuCarrierRefusedMhz?: number | null
   /** While Nexus's own Flex client runs the radio's own ATU (Beta, off until a tester's bench)
    * and the radio reports a tuner fitted: the radio's tune power and transmit timeout, as beside
    * Tune, and the ATU line (a cycle's result, or why a press started none), shown beside the ATU
