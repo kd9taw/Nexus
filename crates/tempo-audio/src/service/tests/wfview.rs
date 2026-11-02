@@ -13,12 +13,11 @@
 //! Nexus is pointed at it with Rig Model NET rigctl and wfview's address. On this computer Nexus
 //! shares wfview's rigctld, whatever rigctld TCP Port says, for the operated radio, a monitored one
 //! and a Remote selection alike, and while nothing answers there it starts nothing and waits for
-//! it; and no radio's rigctld may be given wfview's port. On another computer Nexus talks to it
-//! through a Hamlib rigctld of its own (`-m 2`, on rigctld TCP Port), which needs a Hamlib `rigctld`
-//! here, and this machine's own address on its network to stand in for the other computer. An
-//! address on this computer whose port another radio's rigctld, or Nexus's own CAT broker, holds
-//! (a clash an older build could store) is refused by every opener, by name, until the port is
-//! changed.
+//! it; and no radio's rigctld may be given wfview's port. On another computer Nexus shares it
+//! directly too, never through a Hamlib rigctld of its own, with this machine's own address on its
+//! network standing in for the other computer. An address on this computer whose port another
+//! radio's rigctld, or Nexus's own CAT broker, holds (a clash an older build could store) is
+//! refused by every opener, by name, until the port is changed.
 use super::*;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -847,17 +846,13 @@ fn this_machine_on_its_network() -> Option<String> {
     ip.map(|ip| ip.to_string())
 }
 
-/// Nexus's own Hamlib rigctld in front of a wfview listening on `ip`, NET rigctl on a port of its
-/// own: whether the open read the radio, whether each key and unkey was taken (`T 1`, `T 0`, then
-/// Rear/Data's `T 3`, `T 0`), the PTT lines that reached wfview, and what the open said.
-fn through_hamlib(ip: &str, powered: bool) -> (Option<bool>, [bool; 4], Vec<String>, String) {
+/// The open of a wfview listening on `ip`, NET rigctl, rigctld TCP Port a number of its own: the
+/// open's verdict, whether each key and unkey was taken (`T 1`, `T 0`, then Rear/Data's `T 3`,
+/// `T 0`), the PTT lines that reached wfview, whether Nexus started a daemon of its own, and what
+/// the open said.
+fn opened_on(ip: &str, powered: bool) -> (Option<bool>, [bool; 4], Vec<String>, bool, String) {
     let wf = FakeWfview::start_on(ip, powered);
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let (_engine, settings) = station(&wf.addr, port);
+    let (_engine, settings) = station(&wf.addr, free_port());
     let (mut rig, daemon, probe) = open_cat(
         &Transport::from_settings(&settings),
         PttMode::Cat,
@@ -867,47 +862,99 @@ fn through_hamlib(ip: &str, powered: bool) -> (Option<bool>, [bool; 4], Vec<Stri
     let mic = [rig.ptt(true).is_ok(), rig.ptt(false).is_ok()];
     rig.set_ptt_mode(PttMode::CatData);
     let data = [rig.ptt(true).is_ok(), rig.ptt(false).is_ok()];
+    let started = daemon.is_some();
     drop(daemon);
     (
         probe.ok,
         [mic[0], mic[1], data[0], data[1]],
         wf.keyed_with(),
+        started,
         probe.detail,
     )
 }
 
-/// ⭐ THROUGH NEXUS'S OWN RIGCTLD, WFVIEW KEYS ONLY WHILE IT SAYS THE RADIO IS ON. wfview on
-/// another computer is not shared directly: Nexus starts Hamlib's rigctld (`-m 2`) and talks
-/// through it. Hamlib's rigctld asks `\get_powerstat` as it opens, and wfview answers from its
-/// power cache: `1` once the radio has answered it, `0` until then (and after it decides the radio
-/// is off). With `1` the chain opens and every key and unkey reaches wfview and is taken. With `0`
-/// Hamlib refuses Nexus's commands itself, before any reaches wfview: no `T` arrives there, and the
-/// open does not read the radio. (Hamlib 4.5.5 fails its own open and answers nothing; 4.7.1,
-/// which Nexus ships, opens and answers each command `RPRT -20`, "command not allowed when rig is
-/// powered off".) Sharing wfview's rigctld on this computer, above, asks no power state.
+/// ⭐ WFVIEW ON ANOTHER COMPUTER IS SHARED DIRECTLY, AS ON THIS ONE, WHATEVER ITS POWER CACHE SAYS.
+/// Nexus used to start Hamlib's rigctld (`-m 2`) in front of a NET rigctl address on another
+/// computer and talk through it. That rigctld asks `\get_powerstat` as it opens, and wfview answers
+/// from its power cache, `0` until the radio has answered it; with `0` Hamlib refused every command
+/// itself, keys included, and the open did not read the radio. Now Nexus talks to the address
+/// itself, as it does to wfview on this computer: it starts nothing, asks no power state, and every
+/// key and unkey reaches wfview and is taken.
 #[test]
-fn through_nexuss_own_rigctld_wfview_keys_only_while_it_says_the_radio_is_on() {
-    if !hamlib_rigctld_here() {
-        return;
-    }
+fn wfview_on_another_computer_is_shared_directly_whatever_its_power_cache_says() {
     let Some(ip) = this_machine_on_its_network() else {
         return;
     };
-    let (on, off) = (through_hamlib(&ip, true), through_hamlib(&ip, false));
-    eprintln!(
-        "two hops, wfview's power cache 1: {}\ntwo hops, wfview's power cache 0: {}",
-        on.3, off.3
-    );
-    assert_eq!(
-        ((on.0, on.1, on.2), (off.0, off.1, off.2)),
-        (
+    for powered in [true, false] {
+        let (ok, taken, keyed_with, started, detail) = opened_on(&ip, powered);
+        eprintln!(
+            "wfview at {ip}, power cache {}: {detail}",
+            u8::from(powered)
+        );
+        assert_eq!(
+            (ok, taken, keyed_with, started),
             (
                 Some(true),
                 [true; 4],
                 ["T 1", "T 0", "T 3", "T 0"].map(String::from).to_vec(),
+                false,
             ),
-            (Some(false), [false; 4], vec![]),
-        )
+            "power cache {}",
+            u8::from(powered)
+        );
+        assert!(
+            detail.starts_with(&format!("Sharing the rigctld at {ip}:")),
+            "{detail}"
+        );
+    }
+}
+
+/// ⛔ A MODE WRITE TO A RIGCTLD ON ANOTHER COMPUTER NEVER HOLDS THE KEY BEHIND IT (#429). Through
+/// a Hamlib rigctld of Nexus's in front of the address, every mode write made Hamlib's NET client
+/// ask `\get_lock_mode` and then wait for a second answer line, the `RPRT 0` Hamlib's own rigctld
+/// adds; a server that answers `0` alone (wfview, and the rigctld-compatible bridge in the report)
+/// held that read for Hamlib's whole timeout, under the one lock every command takes. The key sent next waited behind it, past Nexus's deadline, and reached the radio
+/// long after Nexus had given up on it. Shared directly, the mode write is one line, answered, and
+/// the key behind it is answered at once.
+#[test]
+fn a_mode_write_to_a_rigctld_on_another_computer_never_holds_the_key_behind_it() {
+    let Some(ip) = this_machine_on_its_network() else {
+        return;
+    };
+    let wf = FakeWfview::start_on(&ip, true);
+    let (_engine, settings) = station(&wf.addr, free_port());
+    let (mut rig, daemon, probe) = open_cat(
+        &Transport::from_settings(&settings),
+        PttMode::Cat,
+        true,
+        None,
+    );
+    assert_eq!(probe.ok, Some(true), "premise: the open read the radio");
+    let mode = rig.set_mode("USB", 2400);
+    let asked = std::time::Instant::now();
+    let key = rig.key_awaiting_answer(false);
+    let took = asked.elapsed();
+    let release = rig.ptt(false);
+    drop(daemon);
+    assert!(
+        mode.is_ok() && key.is_ok() && release.is_ok(),
+        "mode {mode:?}, key {key:?}, release {release:?}"
+    );
+    assert!(
+        took < Duration::from_millis(500),
+        "the key was answered {took:?} after it was sent"
+    );
+    let heard = wf.radio.lock().unwrap().heard.clone();
+    assert!(
+        !heard
+            .iter()
+            .any(|l| l == "\\get_lock_mode" || l == "\\get_powerstat"),
+        "a relay's own questions reached the address: {heard:?}"
+    );
+    assert_eq!(
+        wf.keyed_with(),
+        ["T 1", "T 0"].map(String::from).to_vec(),
+        "{heard:?}"
     );
 }
 
@@ -1349,7 +1396,7 @@ fn a_monitor_never_takes_nexuss_own_cat_broker_for_a_radio() {
     let seen = (
         (
             t.broker_self_port,
-            net_rigctld_on_this_machine(t).map(str::to_string),
+            net_rigctld_shared_directly(t).map(str::to_string),
         ),
         (daemon.is_none(), ok, rig.read_freq().ok()),
     );

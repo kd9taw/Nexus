@@ -704,29 +704,59 @@ fn cat_down_message(t: &Transport, err: &std::io::Error) -> String {
     )
 }
 
-/// The Network Address to share DIRECTLY: a NET rigctl radio's, when that address is on this
-/// machine (wfview's rigctld, or one the operator runs). `None` everywhere else.
+/// The Network Address to share DIRECTLY: a NET rigctl radio's, on this machine (wfview's
+/// rigctld, or one the operator runs) or on another one (a rigctld, or a rigctld-compatible
+/// bridge, on the LAN). `None` everywhere else.
 ///
-/// NET rigctl means "the rigctld at this address", and one on this computer needs nothing in
-/// between: Nexus talks to it itself, as the coexist branch has always done when rigctld TCP Port
-/// happened to be the same number. With any other number Nexus started a second rigctld (`-m 2`)
-/// in front of it, and that one is not a neutral relay. Hamlib's rigctld (4.7.1, the one Nexus
-/// ships) asks the rigctld behind it for the power state as each client connects, and while that
-/// says off it refuses every command, PTT included. wfview says off until its radio has answered
-/// it, and again whenever it decides the radio is off.
+/// NET rigctl means "the rigctld at this address", and it needs nothing in between: Nexus talks
+/// to it itself, as the coexist branch has always done when rigctld TCP Port happened to be the
+/// same number. Otherwise Nexus started a second rigctld (`-m 2`) in front of it, and that one is
+/// not a neutral relay. Hamlib's rigctld (4.7.1, the one Nexus ships) asks the rigctld behind it
+/// for the power state as each client connects, and while that says off it refuses every command,
+/// PTT included (wfview says off until its radio has answered it). And its NET client asks
+/// `\get_lock_mode` before every mode write and then reads a second line, the `RPRT 0` Hamlib's
+/// own rigctld adds; a server that answers the one line alone holds that read for Hamlib's whole
+/// timeout, under the one lock every client's command takes. A key queued behind it reached the
+/// radio tens of seconds late, after Nexus had given up on it (#429). Nexus's own client sends
+/// neither, and reads a refusal (`RPRT -11`) as a refusal, once.
 ///
-/// Not for:
-/// * an address on another machine, which is still reached through Nexus's own rigctld;
+/// Not for, on this computer only (no port of Nexus's own is on another machine):
 /// * rigctld TCP Port's own number, which the coexist probe asks already;
-/// * our own CAT broker's port, where Nexus would be talking to itself;
-/// * any other model, or any connection but Network (OmniRig and the Icom network client never
-///   are).
+/// * our own CAT broker's port, where Nexus would be talking to itself.
+///
+/// Nor for any other model, or any connection but Network (OmniRig and the Icom network client
+/// never are).
 ///
 /// Pure config: the caller probes the address and shares only a rigctld's answer.
-fn net_rigctld_on_this_machine(t: &Transport) -> Option<&str> {
-    let (addr, port) =
-        tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr)?;
-    (port != t.rigctld_port && t.broker_self_port != Some(port)).then_some(addr)
+fn net_rigctld_shared_directly(t: &Transport) -> Option<&str> {
+    let (addr, port) = tempo_app::settings::net_rigctl_addr(t.rig_model, &t.rig_conn, &t.rig_addr)?;
+    let here =
+        tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr).is_some();
+    (!here || (port != t.rigctld_port && t.broker_self_port != Some(port))).then_some(addr)
+}
+
+/// How long the probe of a NET rigctl address shared directly waits for its answer: 400 ms on
+/// this computer, where a rigctld answers at once, and the network window on another one, whose
+/// connect and answer are two round trips over a link that may be slow. Too short there and a
+/// remote rigctld that is up reads as nothing answering, and the radio waits for nothing.
+fn net_rigctl_probe_budget(t: &Transport) -> Duration {
+    if tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr).is_some() {
+        Duration::from_millis(400)
+    } else {
+        Duration::from_millis(2_500)
+    }
+}
+
+/// What the CAT status says when nothing answers at a NET rigctl address shared directly.
+fn nothing_answering_at(t: &Transport, direct: &str) -> String {
+    if tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr).is_some() {
+        format!("Nothing is answering at {direct} — start wfview (or your rigctld)")
+    } else {
+        format!(
+            "Nothing is answering at {direct} — check that the rigctld there is running and that \
+             this computer can reach it"
+        )
+    }
 }
 
 /// **Case (c).** A rigctld **we are about to spawn** cannot both bind this local port and
@@ -2640,13 +2670,15 @@ fn open_read_only(
     // (`tempo_app::settings::net_rigctl_port_here`). So it is shared directly, as the active open
     // shares it, whatever rigctld TCP Port says, and never fronted by a rigctld of ours: where
     // nothing answers yet, nothing is started, and the pool asks again on its backoff. Something
-    // that answers, but not as a rigctld, takes the spawn below, as the active open's does.
+    // that answers, but not as a rigctld, takes the spawn below, as the active open's does. A
+    // rigctld on ANOTHER computer is shared directly too, for the reason the active open shares it
+    // (`net_rigctld_shared_directly`): no daemon of Nexus's can be on that address at all.
     if let Some((direct, _)) =
-        tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr)
+        tempo_app::settings::net_rigctl_addr(t.rig_model, &t.rig_conn, &t.rig_addr)
     {
         // A network radio keys no line on a CAT port (`keys_on_the_cat_port`).
         debug_assert!(ptt_line.is_none());
-        match crate::rigctld_server::probe_cat_port(direct, Duration::from_millis(400)) {
+        match crate::rigctld_server::probe_cat_port(direct, net_rigctl_probe_budget(t)) {
             crate::rigctld_server::PortReply::Rigctld => {
                 let mut rig = Rig::with_control(Some(direct.to_string()), PttMode::Vox);
                 rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
@@ -2790,7 +2822,7 @@ fn monitor_want(
             let mut t = Transport::from_profile(p);
             t.control_lines = lines;
             // Our own CAT broker's port, as the active radio's transport carries it, so a monitor
-            // never takes Nexus itself for a radio (`net_rigctld_on_this_machine`, `open_read_only`).
+            // never takes Nexus itself for a radio (`net_rigctld_shared_directly`, `open_read_only`).
             t.broker_self_port = tempo_app::settings::sharing_self_port(s, serving);
             // …and our own TCI server's, so a monitor's TCI client never dials Nexus itself.
             t.tci_server_self_port = s.tci_server.then_some(s.tci_server_port);
@@ -3507,6 +3539,14 @@ const PTT_SPLIT_NOT_READY: (AudioErrorKind, &str) = (
     "Not keyed: Split Operation could not put the radio's TX VFO back on the dial — check the CAT \
      link, or set Split Operation to None.",
 );
+
+/// How late a key Nexus gave up on must reach the radio before the PTT line says so, in place of
+/// the line that already says the key was not confirmed: the window a key that works may take to
+/// be answered over a network chain (`rig::NETWORK_KEY_DEADLINE_MS`). A slower radio's key answered
+/// inside it is followed by its release at once; one past it is the late key a held rigctld
+/// delivered tens of seconds after the operator was told the radio had not keyed (#429). Either
+/// way the loop unkeys again and logs it.
+const LATE_KEY_SAID_AFTER: Duration = Duration::from_millis(2_500);
 
 /// The log's line for an over a refused key dropped ([`KeyUp::Refused`]), in the words the voice
 /// keyer's and APRS's refusals use: `<what>: the radio did not accept the key (<why>) (dropped)`.
@@ -5137,13 +5177,13 @@ impl RadioLoop {
         self.cat_dead_probes >= CAT_DEAD_PROBES_BEFORE_REBUILD && now >= self.cat_rebuild_at
     }
 
-    /// A NET rigctl radio WAITING for the rigctld at its Network Address on this computer: its
-    /// open found nothing there and started nothing in between (`open_cat`), so the loop holds no
+    /// A NET rigctl radio WAITING for the rigctld at its Network Address, on this computer or
+    /// another: its open found nothing there and started nothing in between (`open_cat`), so the loop holds no
     /// daemon and no link. Asking that address again is all a reopen does for it.
     fn waits_for_a_rigctld_here(&self, rig: &Rig) -> bool {
         self.rigctld_proc.is_none()
             && !rig.has_control()
-            && net_rigctld_on_this_machine(&self.applied).is_some()
+            && net_rigctld_shared_directly(&self.applied).is_some()
     }
 
     /// What the launch open said, where the loop must act on it. Every reopen hands the loop its
@@ -14704,8 +14744,10 @@ impl RadioLoop {
                         // go of Tune. The tune ends here as a refused one does; a late answer
                         // does not start it again, since an over that late is stale, and the
                         // release goes out behind the key on the same connection
-                        // (`Rig::command_lines`).
+                        // (`Rig::command_lines`). Given up on, so a key carried out after all is
+                        // unkeyed again at once and said (`Rig::take_late_key`, below).
                         KeyUp::NoAnswer => {
+                            rig.give_up_owed_keys();
                             let why = "the radio did not confirm the key in time".to_string();
                             note_refused_key("tune not keyed", &why);
                             Some(why)
@@ -14895,6 +14937,43 @@ impl RadioLoop {
         {
             crate::civ::diag::note("idle self-heal: rig still keyed but loop thinks RX → unkey");
             let _ = rig.ptt(false);
+        }
+
+        // ⛔ A KEY NEXUS GAVE UP ON THAT REACHED THE RADIO AFTER ALL IS UNKEYED AGAIN AT ONCE, AND
+        // SAID. Behind a rigctld held up for many seconds, a Tune key Nexus had reported as not
+        // keyed was carried out long after, with the operator told the radio was not keying
+        // (#429). Its release follows it on the same connection, so the radio is unkeyed again
+        // within that connection's next line; this is the fail-closed second unkey, and the
+        // operator is told their radio keyed when Nexus had said it would not. While this loop
+        // holds the transmitter for a new over or the operator's PTT, that key is not unkeyed
+        // here: the over's own end unkeys, as for any over.
+        if let Some(late) = rig.take_late_key() {
+            if self.tx_until_ms.is_none() && !self.tuning_keyed && !self.manual_ptt_applied {
+                let _ = rig.ptt(false);
+                let words = format!(
+                    "The radio keyed {:.1} s late, after Nexus had already let go of the key — \
+                     Nexus unkeyed it at once. Check the CAT link to the radio.",
+                    late.as_secs_f64()
+                );
+                tempo_core::applog::warn("tx", &words);
+                // A slow radio's key, inside the window a network chain gives a key that works,
+                // keeps the line that already says it was not confirmed: its release followed it.
+                if late > LATE_KEY_SAID_AFTER
+                    && matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt)
+                {
+                    eng.set_audio_error(Some((AudioErrorKind::Ptt, words)));
+                    self.err_owner = ErrOwner::Ptt;
+                }
+            } else {
+                tempo_core::applog::warn(
+                    "tx",
+                    &format!(
+                        "a key reached the radio {:.1} s after it was sent, while Nexus holds the \
+                         transmitter; that over's own end unkeys it",
+                        late.as_secs_f64()
+                    ),
+                );
+            }
         }
 
         // Inbound WSJT-X control (HaltTx / FreeText / Reply) from a logger / JTAlert.
@@ -18861,8 +18940,8 @@ fn open_cat(
     // The Icom network client never coexists either: whatever is on the port is not its daemon.
     // Nor the TCI client, for the same reason.
     let allow_coexist = allow_coexist && !t.is_omnirig() && !t.is_icom_lan() && !t.is_tci();
-    // NET rigctl to a rigctld on this computer: share THAT one, whatever rigctld TCP Port says,
-    // rather than start a second rigctld in front of it (`net_rigctld_on_this_machine`). Only a
+    // NET rigctl: share THAT rigctld, on this computer or another, whatever rigctld TCP Port says,
+    // rather than start a second rigctld in front of it (`net_rigctld_shared_directly`). Only a
     // rigctld's answer is taken. Where nothing answers, nothing is started either: the radio
     // waits for that rigctld (wfview not started yet), the CAT status says so, and the loop asks
     // the address again on the reopen backoff (`RadioLoop::waits_for_a_rigctld_here`), so the
@@ -18870,10 +18949,15 @@ fn open_cat(
     // rigctld, goes on exactly as before: a server this probe does not recognise may still work
     // through Hamlib's NET client, as wfview did before its `ChkVFO` answer was read. No
     // `foreign_daemon_refusal`: NET rigctl is exempt from it, as whatever serves the address is
-    // what the operator chose.
-    if allow_coexist {
-        if let Some(direct) = net_rigctld_on_this_machine(t) {
-            match crate::rigctld_server::probe_cat_port(direct, Duration::from_millis(400)) {
+    // what the operator chose. A switch that may not coexist (`allow_coexist_on_swap`) still
+    // shares an address on ANOTHER computer: the dying daemon it guards against is on this one.
+    let remote = tempo_app::settings::net_rigctl_addr(t.rig_model, &t.rig_conn, &t.rig_addr)
+        .is_some()
+        && tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr)
+            .is_none();
+    if allow_coexist || remote {
+        if let Some(direct) = net_rigctld_shared_directly(t) {
+            match crate::rigctld_server::probe_cat_port(direct, net_rigctl_probe_budget(t)) {
                 crate::rigctld_server::PortReply::Rigctld => {
                     let mut rig = Rig::with_control(Some(direct.to_string()), ptt_mode);
                     rig.set_slow_transport(t.is_network() || t.is_slow_serial_link());
@@ -18886,12 +18970,7 @@ fn open_cat(
                     return (
                         Rig::vox(),
                         None,
-                        CatProbe::status(
-                            Some(false),
-                            format!(
-                                "Nothing is answering at {direct} — start wfview (or your rigctld)"
-                            ),
-                        ),
+                        CatProbe::status(Some(false), nothing_answering_at(t, direct)),
                     );
                 }
                 crate::rigctld_server::PortReply::NotRigctld(_) => {}
@@ -39899,9 +39978,12 @@ mod tests {
     }
 
     /// Which NET rigctl stations are shared directly, by the address alone: a rigctld on this
-    /// computer, at any port but rigctld TCP Port's (the coexist probe's) and the CAT broker's.
+    /// computer, at any port but rigctld TCP Port's (the coexist probe's) and the CAT broker's, and
+    /// a rigctld on ANOTHER computer at any port at all. A remote one used to get a rigctld of
+    /// Nexus's in front of it, and a key queued behind that rigctld reached the radio tens of
+    /// seconds after Nexus had given up on it.
     #[test]
-    fn only_a_net_rigctl_address_on_this_computer_is_shared_directly() {
+    fn a_net_rigctl_address_is_shared_directly_on_this_computer_or_another() {
         let net = |addr: &str| {
             let mut t = cat_transport(4534, None);
             t.rig_model = 2; // NET rigctl
@@ -39920,8 +40002,26 @@ mod tests {
             ("IPv6 loopback", net("[::1]:4533"), Some("[::1]:4533")),
             ("127.0.1.1", net("127.0.1.1:4533"), Some("127.0.1.1:4533")),
             ("spaces", net(" 127.0.0.1:4533 "), Some("127.0.0.1:4533")),
-            ("another computer", net("192.168.1.50:4533"), None),
-            ("another computer by name", net("shack-pc:4533"), None),
+            (
+                "another computer",
+                net("192.168.1.50:4533"),
+                Some("192.168.1.50:4533"),
+            ),
+            (
+                "another computer by name",
+                net("shack-pc:4533"),
+                Some("shack-pc:4533"),
+            ),
+            (
+                "another computer, at rigctld TCP Port's number",
+                net("192.168.1.50:4534"),
+                Some("192.168.1.50:4534"),
+            ),
+            (
+                "another computer, at the CAT broker's number",
+                with("192.168.1.50:4532", &|t| t.broker_self_port = Some(4532)),
+                Some("192.168.1.50:4532"),
+            ),
             ("rigctld TCP Port's number", net("127.0.0.1:4534"), None),
             ("no port", net("127.0.0.1"), None),
             (
@@ -39963,7 +40063,7 @@ mod tests {
         ];
         assert_eq!(
             rows.iter()
-                .map(|(what, t, _)| (*what, net_rigctld_on_this_machine(t)))
+                .map(|(what, t, _)| (*what, net_rigctld_shared_directly(t)))
                 .collect::<Vec<_>>(),
             rows.iter()
                 .map(|(what, _, want)| (*what, *want))
