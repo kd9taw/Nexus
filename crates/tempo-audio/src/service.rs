@@ -1387,6 +1387,10 @@ const RIG_PTT_POLL_MS: f64 = 1_000.0;
 /// say so. A `t` that answers keyed while the loop holds nothing is that key, and is unkeyed.
 const KEY_WATCH: Duration = Duration::from_secs(10);
 const KEY_WATCH_POLL_MS: f64 = 250.0;
+/// How long after the last CW element a radio on semi break-in may still report its transmitter
+/// on (its hang time, which radios set up to about a second): inside it a keyed `t` in the watch is
+/// that, and is unkeyed without saying a late key was.
+const CW_HANG_MS: f64 = 1_000.0;
 /// The same poll WHILE A SATELLITE PASS IS ENGAGED — five times a second.
 ///
 /// A second of staleness is a display lag on a terrestrial band and a defect on
@@ -6437,6 +6441,14 @@ impl RadioLoop {
     /// Whether this loop already holds the transmitter: an over's PTT hold, or the operator's own
     /// PTT. A key that fails then is not a new key refused ([`KeyUp::Held`]); the slot overs ask
     /// the same question ([`crate::slot::key_slot_transmitter`]).
+    /// End the watch for a late key ([`KEY_WATCH`]), and drop one the rig has yet to hand over:
+    /// the radio is about to key at Nexus's own asking (its ATU tune-up), which the watch must
+    /// never take for a key Nexus let go of.
+    fn end_key_watch(&mut self, rig: &mut Rig) {
+        self.key_watch_until = None;
+        let _ = rig.take_key_watch();
+    }
+
     fn holds_tx(&self) -> bool {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
     }
@@ -7711,6 +7723,8 @@ impl RadioLoop {
         self.tuner_misses = 0;
         self.tuner_reprobe_at = None;
         self.atu_tune_started_at = None;
+        // A watch for a late key is the old radio's: the new one's own PTT is not its business.
+        self.key_watch_until = None;
         self.vfo_read_native = None; // the new rig answers `v` or not on its own account
         self.split_detect = None; // …and its split read is native or not on its own account
         self.level_supported = [None; N_LEVELS];
@@ -10656,6 +10670,9 @@ impl RadioLoop {
                                 // `may_key()` beside it — is not a tune-up either.
                                 FuncSet::Ok => {
                                     engine_lock(engine).note_atu_tune_started();
+                                    // The radio now keys itself for the tune-up, at Nexus's own
+                                    // asking: no watch for a late key may take it for one.
+                                    self.end_key_watch(rig);
                                     // The tuner is now in line: read it once the cycle is over (#344).
                                     self.atu_tune_started_at = Some(now);
                                     self.tuner_reprobe_at = Some(now + ATU_REPROBE_AFTER_TUNE_MS);
@@ -10682,6 +10699,7 @@ impl RadioLoop {
                                          because the rig may be tuning"
                                     ));
                                     engine_lock(engine).note_atu_tune_started();
+                                    self.end_key_watch(rig);
                                     self.atu_tune_started_at = Some(now);
                                     self.tuner_reprobe_at = Some(now + ATU_REPROBE_AFTER_TUNE_MS);
                                 }
@@ -14186,12 +14204,16 @@ impl RadioLoop {
                 let watching = self
                     .key_watch_until
                     .is_some_and(|until| Instant::now() < until);
-                let interval = if watching {
-                    KEY_WATCH_POLL_MS
-                } else if self.sat_pass_engaged {
+                let cadence = if self.sat_pass_engaged {
                     SAT_PASS_PTT_POLL_MS
                 } else {
                     RIG_PTT_POLL_MS
+                };
+                // The watch never slows the poll down (a satellite pass asks faster still).
+                let interval = if watching {
+                    cadence.min(KEY_WATCH_POLL_MS)
+                } else {
+                    cadence
                 };
                 if now - self.last_ptt_poll >= interval {
                     self.last_ptt_poll = now;
@@ -14203,10 +14225,15 @@ impl RadioLoop {
                     // and the operator is told. It only ever adds an unkey.
                     if watching && ptt_read == Some(true) {
                         let _ = rig.ptt(false);
-                        let words = "The radio was keyed after Nexus had let go of the key — \
-                                     Nexus unkeyed it. Check the CAT link to the radio.";
-                        tempo_core::applog::warn("tx", words);
-                        self.report_ptt_as(engine, Some((AudioErrorKind::Ptt, words)));
+                        // A radio on semi break-in holds its transmitter for its hang time after
+                        // the last CW element: keyed then is that, not a late key. The unkey is
+                        // harmless and stays; the line is not said.
+                        if now >= self.cw_keying_until + CW_HANG_MS {
+                            let words = "The radio was keyed after Nexus had let go of the key — \
+                                         Nexus unkeyed it. Check the CAT link to the radio.";
+                            tempo_core::applog::warn("tx", words);
+                            self.report_ptt_as(engine, Some((AudioErrorKind::Ptt, words)));
+                        }
                     }
                     engine_lock(engine).remote_observe_ptt(remote_read.as_ref(), ptt_read);
                     if let Some(on) = ptt_read {
@@ -14981,7 +15008,13 @@ impl RadioLoop {
         // holds the transmitter for a new over or the operator's PTT, that key is not unkeyed
         // here: the over's own end unkeys, as for any over.
         if let Some(late) = rig.take_late_key() {
-            if self.tx_until_ms.is_none() && !self.tuning_keyed && !self.manual_ptt_applied {
+            // Nor while the radio's own keyer sends a CW word of Nexus's (`cw_keying_until`): an
+            // unkey then would cut the word. The watch above covers the key once it is done.
+            if self.tx_until_ms.is_none()
+                && !self.tuning_keyed
+                && !self.manual_ptt_applied
+                && now >= self.cw_keying_until
+            {
                 let _ = rig.ptt(false);
                 let words = format!(
                     "The radio keyed {:.1} s late, after Nexus had already let go of the key — \
@@ -15018,6 +15051,11 @@ impl RadioLoop {
                         late.after.as_secs_f64()
                     ),
                 );
+                // A CW word on the radio's own keyer has no release of Nexus's behind it: the
+                // watch on the radio's PTT takes the key once the word is done.
+                if self.tx_until_ms.is_none() && !self.tuning_keyed && !self.manual_ptt_applied {
+                    self.key_watch_until = Some(Instant::now() + KEY_WATCH);
+                }
             }
         }
 

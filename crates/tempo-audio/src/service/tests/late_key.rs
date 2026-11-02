@@ -11,7 +11,8 @@
 //! What is checked: a late refusal is not said as a key that keyed; a late key read during a
 //! second Tune that keyed says nothing after that Tune; a key given up on, or left owed on a
 //! dropped connection, that the radio carries out after its release is unkeyed by the watch on the
-//! radio's own PTT, and said.
+//! radio's own PTT, and said. And the watch's negative controls: a key of Nexus's own inside it (the
+//! operator's PTT, the radio's ATU tune-up Nexus started) and a radio keyed after it stay keyed.
 
 use super::*;
 use std::io::{BufRead, BufReader, Write};
@@ -96,6 +97,12 @@ impl Radio {
                                 "RPRT 0\n".to_string()
                             }
                             "t" => format!("{}\n", u8::from(keyed.load(Ordering::SeqCst))),
+                            // A radio with a tuner, whose tune-up keys the radio itself.
+                            "u TUNER" => "1\n".to_string(),
+                            "U TUNER 2" => {
+                                keyed.store(true, Ordering::SeqCst);
+                                "RPRT 0\n".to_string()
+                            }
                             "f" => "14250000\n".to_string(),
                             _ => "RPRT 0\n".to_string(),
                         };
@@ -321,4 +328,83 @@ fn a_key_left_owed_on_a_dropped_connection_that_lands_later_is_unkeyed_by_the_pt
     );
     s.run_until(Duration::from_secs(10), |s| s.says_keyed_late());
     assert!(s.says_keyed_late(), "not said: {:?}", s.banner());
+}
+
+/// A Tune key given up on, refused late: the watch on the radio's PTT is armed.
+fn armed(n: usize) -> KeyAnswer {
+    match n {
+        0 => KeyAnswer {
+            after: Duration::from_millis(1_500),
+            reply: Some("RPRT -1\n"),
+            keys: false,
+            held_for_go: false,
+        },
+        _ => AT_ONCE,
+    }
+}
+
+/// Run until the first Tune has ended unconfirmed and its late refusal is in.
+fn past_the_give_up(s: &mut Scene) {
+    s.run_until(Duration::from_secs(5), |s| {
+        s.started.elapsed() > Duration::from_millis(2_000) && !s.engine.lock().unwrap().tuning()
+    });
+    assert!(
+        !s.engine.lock().unwrap().tuning(),
+        "premise: the Tune ended"
+    );
+}
+
+/// Negative control: the operator's own PTT, pressed inside the watch, keys the radio and stays
+/// keyed. The watch only acts while the loop holds nothing.
+#[test]
+fn the_operators_ptt_inside_the_watch_stays_keyed() {
+    let radio = Radio::start(armed, None);
+    let mut s = Scene::new(&radio, |e| e.set_tune(true));
+    past_the_give_up(&mut s);
+    s.engine.lock().unwrap().set_ptt(true);
+    let until = s.started.elapsed() + Duration::from_secs(3);
+    s.run_until(until, |_| false);
+    assert!(
+        radio.keyed.load(Ordering::SeqCst),
+        "the operator's PTT was unkeyed by the watch"
+    );
+    assert!(!s.says_keyed_late(), "{:?}", s.banner());
+}
+
+/// ⛔ Negative control: the radio's ATU tune-up that Nexus started inside the watch is never
+/// aborted by it. The radio keys itself for the tune-up and reports keyed; the watch ends when
+/// the tune-up is sent, so nothing unkeys it and nothing says a late key.
+#[test]
+fn an_atu_tune_up_nexus_started_inside_the_watch_is_never_aborted() {
+    let radio = Radio::start(armed, None);
+    let mut s = Scene::new(&radio, |e| e.set_tune(true));
+    past_the_give_up(&mut s);
+    let sent = |radio: &Radio| radio.log.lock().unwrap().iter().any(|l| l == "U TUNER 2");
+    let limit = s.started.elapsed() + Duration::from_secs(4);
+    s.run_until(limit, |s| {
+        let _ = s.engine.lock().unwrap().atu_tune();
+        sent(&radio)
+    });
+    assert!(sent(&radio), "premise: the tune-up was sent");
+    let until = s.started.elapsed() + Duration::from_secs(2);
+    s.run_until(until, |_| false);
+    assert!(
+        radio.keyed.load(Ordering::SeqCst),
+        "the watch aborted the tune-up Nexus started"
+    );
+    assert!(!s.says_keyed_late(), "{:?}", s.banner());
+}
+
+/// Negative control: once the watch's 10 s are over, a radio that keys (its own microphone, another
+/// program) is left keyed.
+#[test]
+fn a_radio_keyed_after_the_watch_stays_keyed() {
+    let radio = Radio::start(armed, Some(Duration::from_millis(13_500)));
+    let mut s = Scene::new(&radio, |e| e.set_tune(true));
+    s.run_until(Duration::from_millis(15_500), |_| false);
+    assert!(
+        radio.keyed.load(Ordering::SeqCst),
+        "a key after the watch was unkeyed"
+    );
+    assert!(!s.says_keyed_late(), "{:?}", s.banner());
 }
