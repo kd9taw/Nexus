@@ -35,6 +35,8 @@ import { PaneSeam } from './PaneSeam'
 import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
 import { LEFT_SIDE_MIN_VW, regionColsStyle } from '../features/paneColumns'
 import { useEffectiveWidthAtLeast } from '../useViewport'
+import { useCompactChrome } from '../features/compactChrome'
+import { HeaderOverflow } from './HeaderOverflow'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
 import { NeededPanel, type NeededPanelProps } from './NeededPanel'
 import type { ModeClass } from '../neededFilters'
@@ -653,6 +655,9 @@ const FLEX_SPANS = [
 const LEVEL_WHEEL_STEP = 2
 
 export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+  // The compact chrome (features/compactChrome): md and up, the meters stand in the TX strip and the
+  // dock is one row.
+  const chrome = useCompactChrome()
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -2723,8 +2728,185 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         void haltTx()
         esm.noteStop()
       }}
+      // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
+      // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
+      meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip controls={txMeterControls} /> : undefined}
     />
   )
+  // The header's occasional controls, each drawn once: inline, or behind its ⋯ (see the header).
+  const splitEl = (
+    <>
+      {/* ⭐ SPLIT IS NO LONGER GATED ON `catOk` (2026-09-20 ruling). It used to vanish with
+          the link, which told the operator nothing about whether this cockpit HAS a split
+          control — and split is the one thing a DX chaser looks for first. It stays and
+          says why it is dead; the reason rides INTO the control rather than sitting beside
+          it, so its three buttons are disabled by the same fact that prints the mark. */}
+      <SplitControl
+        snap={snap}
+        onSnap={onSnap}
+        onError={(m) => pushToast(m, 'error')}
+        unavailable={
+          catOk
+            ? undefined
+            : { mark: t('phone.unavail.mark'), title: t('phone.unavail.noCat', { plate: SPLIT }) }
+        }
+      />
+    </>
+  )
+  const memoryEl = (
+    <>
+      {onRecallMemory && (
+        // The ★-favorites quick-recall strip (bounded + wrapping — the old
+        // MemoryBank list grew the header unbounded). Recall is App-owned
+        // (recallMemory): settings patch + retune + cockpit auto-switch.
+        <MemoryStrip
+          dialMhz={snap.radio.dialMhz}
+          mode={commandedMode}
+          onRecall={onRecallMemory}
+          onManage={onOpenMemories}
+        />
+      )}
+    </>
+  )
+  const rotorEl = (
+    <>
+      {/* ⭐ THE BEAM BUTTON WAS NEVER MISSING FROM THE STRIP — it was missing from THIS HOST.
+          `RotorStrip` has rendered a one-click "→ CALL" slew since it was written, and CwCockpit
+          and OperateCockpit both pass `targetCall`/`onPointAt`. Phone did not, so the control
+          rendered as nothing (`{targetCall && onPointAt && …}`) and two testers reported the
+          feature as absent — one of them naming this tab specifically. Phone was the only
+          cockpit with no live worked-call to pass; `workedCall` above is that source. */}
+      <RotorStrip
+        onOpenSettings={onOpenSettings}
+        targetCall={workedCall || null}
+        onPointAt={rotorPointAt()}
+      />
+    </>
+  )
+  const recEl = (
+    <>
+      {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
+          '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
+          the glyph and the tooltip already say. The accessible name is explicit here rather
+          than left to the glyph — a screen reader must not be handed a bare bullet. */}
+      <button
+        type="button"
+        className={`ph-rec${recording ? ' on' : ''}`}
+        onClick={toggleRecord}
+        disabled={recBusy}
+        aria-label={recording ? t('phone.record.stop.aria') : t('phone.record.start.aria')}
+        title={recording ? t('phone.record.on.title') : t('phone.record.off.title')}
+      >
+        <span className="ph-rec-dot" aria-hidden="true">
+          {recording ? '■' : '●'}
+        </span>
+        {REC}
+      </button>
+    </>
+  )
+  // ⭐ THE TRANSMIT CONTRACT — "what goes out when I key?", in one line that is always there and
+  // never moves (operator, 2026-09-20). Drawn in one of two places, decided by the window's size
+  // class (features/compactChrome): its own line at the top of the dock below md, and inside the
+  // PTT row, after PTT and Lock, from md up (the one-row dock). See the dock below for why it is
+  // never BELOW the PTT row.
+  const txContract = (
+    <div className={`ph-txcontract${chrome.wide ? ' dock-status-inrow' : ''}`} role="group" aria-label={t('phone.txContract.aria')}>
+      <span className="ph-txc-cell" data-txc="freq" title={t('phone.txContract.freq.title')}>
+        <span className="ph-txc-lbl">{TX}<span aria-hidden="true">▸</span></span>
+        {txEmission == null || repeaterUnknown ? (
+          <>
+            <span className="ph-txc-val mono">—</span>
+            <TruthMark
+              kind="off"
+              word={repeaterUnknown ? t('phone.tx.repeaterMark') : undefined}
+              title={repeaterUnknown ? t('phone.txContract.repeaterShift.title') : t('phone.txContract.noEmission.title')}
+            />
+          </>
+        ) : (
+          <>
+            {/* The header's OWN formatter, so the dock and the readout can never print one
+                frequency two different ways. */}
+            <span className="ph-txc-val mono">{formatDialMhz(txEmission)}</span>
+            <TruthMark
+              kind={emissionRead ? 'rig' : 'cmd'}
+              title={emissionRead ? t('phone.prov.rig') : t('phone.txContract.freq.commanded.title')}
+            />
+          </>
+        )}
+      </span>
+      <span className="ph-txc-cell" data-txc="mode" title={t('phone.txContract.mode.title')}>
+        <span className="ph-txc-val">{observedMode}</span>
+        {/* The SAME read-back gate the log writes through (`rigReadPhoneMode`): catOk, a
+            non-empty rig mode, and a mode this cockpit can name. What the operator is told
+            here and what Nexus writes into the record cannot disagree. */}
+        <TruthMark
+          kind={rigReadPhoneMode != null ? 'rig' : 'cmd'}
+          title={rigReadPhoneMode != null ? t('phone.prov.rig') : t('phone.prov.cmd', { plate: observedMode })}
+        />
+      </span>
+      <span className="ph-txc-cell" data-txc="split" title={t('phone.txContract.split.title')}>
+        <span className="ph-txc-lbl">{SPLIT}</span>
+        {splitOffsetKhz == null ? (
+          <span className="ph-txc-val">{SIMPLEX}</span>
+        ) : (
+          <>
+            <span className="ph-txc-val mono">
+              {splitOffsetKhz >= 0 ? `+${splitOffsetKhz.toFixed(1)}` : splitOffsetKhz.toFixed(1)}
+            </span>
+            {/* ⚠️ ALWAYS `cmd`, AND THAT IS A GAP IN THE DTO rather than a judgement about
+                the radio. `Engine::tx_freq_verdict` DOES distinguish a split we commanded
+                and the rig acknowledged from one the rig merely reported, and refuses
+                outright when it cannot say where — but none of that reaches the snapshot:
+                `txEmissionMhz` collapses SplitUnverified onto the dial and the verdict
+                itself is not a field. Until it is, "Nexus commanded this" is the most this
+                strip may claim, and claiming more is the one thing it must never do. */}
+            <TruthMark kind="cmd" title={t('phone.txContract.split.commanded.title')} />
+          </>
+        )}
+      </span>
+      {/* No cell on a radio with no XIT (the IC-9700): its "+0 ⌁cmd" would stand for an
+          offset dialled on an XIT knob the radio does not have. */}
+      {!snap.radio.xitUnsupported && (
+        <span className="ph-txc-cell" data-txc="xit" title={t('phone.txContract.xit.title')}>
+          <span className="ph-txc-lbl">{XIT}</span>
+          <span className="ph-txc-val mono">{xitHz >= 0 ? `+${xitHz}` : String(xitHz)}</span>
+          {/* `cmd` EVEN AT ZERO. Write-only means Nexus cannot see an offset dialled at the
+              radio, so "+0" states what Nexus commanded and not where the transmitter is. */}
+          <TruthMark kind="cmd" title={t('phone.txContract.xit.commanded.title')} />
+        </span>
+      )}
+      <span className="ph-txc-cell" data-txc="power" title={t('phone.txContract.power.title')}>
+        <span className="ph-txc-val mono">{powerPct == null ? '—' : `${powerPct}%`}</span>
+        {/* NO MARK ON POWER, deliberately: `rfPower` is documented as the rig read-back
+            WHEN CAT REPORTS ONE and the last commanded value otherwise, and the snapshot
+            does not say which it is — so neither mark would be supportable. The measured
+            watts beside it are evidence of their own and need none. */}
+        {lastPoW.current != null && (
+          <span className="ph-txc-sub">{t('phone.tx.lastOver', { watts: Math.round(lastPoW.current) })}</span>
+        )}
+      </span>
+      {/* ⚠️ VOX IS A SAFETY LINE, not a status one, and it belongs on the contract because
+          it changes the answer to "what happens when I key": with VOX on the operator does
+          not key at all — the radio does, from the microphone. Stop TX halts what NEXUS is
+          doing and cannot unkey a transmitter the operator's own voice is holding up.
+          A KEYING-SOURCE fact, never a stop control: it is a readout here and the VOX
+          toggle itself lives in the transmit chain (THE STOP LINE, features/panelState.ts). */}
+      {snap.radio.vox === true && (
+        <span className="ph-txc-cell ph-txc-warn" data-txc="vox" title={t('phone.tx.voxWarn')}>
+          {VOX_ON}
+        </span>
+      )}
+      {/* WHO HOLDS THE TRANSMITTER, in the arbiter's own words — `tx_owner()` covers all
+          seven owners, and a second wording here could disagree with the one that really
+          holds the rig. Absent when nobody does: an idle transmitter is not news. */}
+      {snap.radio.txBusyReason && (
+        <span className="ph-txc-cell ph-txc-busy" data-txc="busy" title={snap.radio.txBusyReason}>
+          {snap.radio.txBusyReason}
+        </span>
+      )}
+    </div>
+  )
+
   return (
     <main className="layout single phone-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       <CockpitHeader
@@ -2854,21 +3036,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
             {t('phone.rigMismatch.chip', { mode: modeMismatch })}
           </span>
         )}
-        {/* ⭐ SPLIT IS NO LONGER GATED ON `catOk` (2026-09-20 ruling). It used to vanish with
-            the link, which told the operator nothing about whether this cockpit HAS a split
-            control — and split is the one thing a DX chaser looks for first. It stays and
-            says why it is dead; the reason rides INTO the control rather than sitting beside
-            it, so its three buttons are disabled by the same fact that prints the mark. */}
-        <SplitControl
-          snap={snap}
-          onSnap={onSnap}
-          onError={(m) => pushToast(m, 'error')}
-          unavailable={
-            catOk
-              ? undefined
-              : { mark: t('phone.unavail.mark'), title: t('phone.unavail.noCat', { plate: SPLIT }) }
-          }
-        />
+        {!chrome.fold && splitEl}
         {!catOk && (
           <span
             className="ph-nocat"
@@ -2877,28 +3045,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
             {t('phone.noCat.label')}
           </span>
         )}
-        {onRecallMemory && (
-          // The ★-favorites quick-recall strip (bounded + wrapping — the old
-          // MemoryBank list grew the header unbounded). Recall is App-owned
-          // (recallMemory): settings patch + retune + cockpit auto-switch.
-          <MemoryStrip
-            dialMhz={snap.radio.dialMhz}
-            mode={commandedMode}
-            onRecall={onRecallMemory}
-            onManage={onOpenMemories}
-          />
-        )}
-        {/* ⭐ THE BEAM BUTTON WAS NEVER MISSING FROM THE STRIP — it was missing from THIS HOST.
-            `RotorStrip` has rendered a one-click "→ CALL" slew since it was written, and CwCockpit
-            and OperateCockpit both pass `targetCall`/`onPointAt`. Phone did not, so the control
-            rendered as nothing (`{targetCall && onPointAt && …}`) and two testers reported the
-            feature as absent — one of them naming this tab specifically. Phone was the only
-            cockpit with no live worked-call to pass; `workedCall` above is that source. */}
-        <RotorStrip
-          onOpenSettings={onOpenSettings}
-          targetCall={workedCall || null}
-          onPointAt={rotorPointAt()}
-        />
+        {!chrome.fold && memoryEl}
+        {!chrome.fold && rotorEl}
         {/* The Spot button, as Operate's header has had it (OperateCockpit 📢): one click opens
             the reviewable cluster-spot popup (SpotDialog), seeded with the call being logged —
             empty when none is typed, exactly as Operate seeds from its worked/selected call.
@@ -2917,23 +3065,28 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         >
           📢
         </button>
-        {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
-            '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
-            the glyph and the tooltip already say. The accessible name is explicit here rather
-            than left to the glyph — a screen reader must not be handed a bare bullet. */}
-        <button
-          type="button"
-          className={`ph-rec${recording ? ' on' : ''}`}
-          onClick={toggleRecord}
-          disabled={recBusy}
-          aria-label={recording ? t('phone.record.stop.aria') : t('phone.record.start.aria')}
-          title={recording ? t('phone.record.on.title') : t('phone.record.off.title')}
-        >
-          <span className="ph-rec-dot" aria-hidden="true">
-            {recording ? '■' : '●'}
-          </span>
-          {REC}
-        </button>
+        {!chrome.fold && recEl}
+        {/* THE OCCASIONAL CONTROLS — split, memories, the rotator and REC: inline at xl and below md,
+            behind the header's ⋯ at md and lg (components/HeaderOverflow, features/compactChrome),
+            so the header is one row on a 1080p window. None of them keys or stops a transmission;
+            PTT and Lock are in the dock, Stop TX and Tune in the TX strip. */}
+        {chrome.fold && (
+          <HeaderOverflow
+            label={t('cockpit.header.more.label')}
+            title={t('cockpit.header.more.title')}
+            badges={
+              <>
+                {snap.radio.splitTxMhz != null && <span className="ch-overflow-badge">{SPLIT}</span>}
+                {recording && <span className="ch-overflow-badge">● {REC}</span>}
+              </>
+            }
+          >
+            {splitEl}
+            {memoryEl}
+            {rotorEl}
+            {recEl}
+          </HeaderOverflow>
+        )}
         {/* No visible 'RX': the meter is a role="meter" already named "RX audio level", and
             the label element keeps the same string as its tooltip. */}
         <label className="ph-rxmeter" title={t('phone.rxMeter.label')}>
@@ -3257,103 +3410,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
           ⚠️ NO ⊞ ID AND NO CONTROLS. It is a readout, so it is not in the vocabulary (nothing
           can hide it) and it holds nothing that could be mistaken for a way to stop or start
           a transmission — THE STOP LINE is untouched by it in both directions. */}
-      <div className="ph-txcontract" role="group" aria-label={t('phone.txContract.aria')}>
-        <span className="ph-txc-cell" data-txc="freq" title={t('phone.txContract.freq.title')}>
-          <span className="ph-txc-lbl">{TX}<span aria-hidden="true">▸</span></span>
-          {txEmission == null || repeaterUnknown ? (
-            <>
-              <span className="ph-txc-val mono">—</span>
-              <TruthMark
-                kind="off"
-                word={repeaterUnknown ? t('phone.tx.repeaterMark') : undefined}
-                title={repeaterUnknown ? t('phone.txContract.repeaterShift.title') : t('phone.txContract.noEmission.title')}
-              />
-            </>
-          ) : (
-            <>
-              {/* The header's OWN formatter, so the dock and the readout can never print one
-                  frequency two different ways. */}
-              <span className="ph-txc-val mono">{formatDialMhz(txEmission)}</span>
-              <TruthMark
-                kind={emissionRead ? 'rig' : 'cmd'}
-                title={emissionRead ? t('phone.prov.rig') : t('phone.txContract.freq.commanded.title')}
-              />
-            </>
-          )}
-        </span>
-        <span className="ph-txc-cell" data-txc="mode" title={t('phone.txContract.mode.title')}>
-          <span className="ph-txc-val">{observedMode}</span>
-          {/* The SAME read-back gate the log writes through (`rigReadPhoneMode`): catOk, a
-              non-empty rig mode, and a mode this cockpit can name. What the operator is told
-              here and what Nexus writes into the record cannot disagree. */}
-          <TruthMark
-            kind={rigReadPhoneMode != null ? 'rig' : 'cmd'}
-            title={rigReadPhoneMode != null ? t('phone.prov.rig') : t('phone.prov.cmd', { plate: observedMode })}
-          />
-        </span>
-        <span className="ph-txc-cell" data-txc="split" title={t('phone.txContract.split.title')}>
-          <span className="ph-txc-lbl">{SPLIT}</span>
-          {splitOffsetKhz == null ? (
-            <span className="ph-txc-val">{SIMPLEX}</span>
-          ) : (
-            <>
-              <span className="ph-txc-val mono">
-                {splitOffsetKhz >= 0 ? `+${splitOffsetKhz.toFixed(1)}` : splitOffsetKhz.toFixed(1)}
-              </span>
-              {/* ⚠️ ALWAYS `cmd`, AND THAT IS A GAP IN THE DTO rather than a judgement about
-                  the radio. `Engine::tx_freq_verdict` DOES distinguish a split we commanded
-                  and the rig acknowledged from one the rig merely reported, and refuses
-                  outright when it cannot say where — but none of that reaches the snapshot:
-                  `txEmissionMhz` collapses SplitUnverified onto the dial and the verdict
-                  itself is not a field. Until it is, "Nexus commanded this" is the most this
-                  strip may claim, and claiming more is the one thing it must never do. */}
-              <TruthMark kind="cmd" title={t('phone.txContract.split.commanded.title')} />
-            </>
-          )}
-        </span>
-        {/* No cell on a radio with no XIT (the IC-9700): its "+0 ⌁cmd" would stand for an
-            offset dialled on an XIT knob the radio does not have. */}
-        {!snap.radio.xitUnsupported && (
-          <span className="ph-txc-cell" data-txc="xit" title={t('phone.txContract.xit.title')}>
-            <span className="ph-txc-lbl">{XIT}</span>
-            <span className="ph-txc-val mono">{xitHz >= 0 ? `+${xitHz}` : String(xitHz)}</span>
-            {/* `cmd` EVEN AT ZERO. Write-only means Nexus cannot see an offset dialled at the
-                radio, so "+0" states what Nexus commanded and not where the transmitter is. */}
-            <TruthMark kind="cmd" title={t('phone.txContract.xit.commanded.title')} />
-          </span>
-        )}
-        <span className="ph-txc-cell" data-txc="power" title={t('phone.txContract.power.title')}>
-          <span className="ph-txc-val mono">{powerPct == null ? '—' : `${powerPct}%`}</span>
-          {/* NO MARK ON POWER, deliberately: `rfPower` is documented as the rig read-back
-              WHEN CAT REPORTS ONE and the last commanded value otherwise, and the snapshot
-              does not say which it is — so neither mark would be supportable. The measured
-              watts beside it are evidence of their own and need none. */}
-          {lastPoW.current != null && (
-            <span className="ph-txc-sub">{t('phone.tx.lastOver', { watts: Math.round(lastPoW.current) })}</span>
-          )}
-        </span>
-        {/* ⚠️ VOX IS A SAFETY LINE, not a status one, and it belongs on the contract because
-            it changes the answer to "what happens when I key": with VOX on the operator does
-            not key at all — the radio does, from the microphone. Stop TX halts what NEXUS is
-            doing and cannot unkey a transmitter the operator's own voice is holding up.
-            A KEYING-SOURCE fact, never a stop control: it is a readout here and the VOX
-            toggle itself lives in the transmit chain (THE STOP LINE, features/panelState.ts). */}
-        {snap.radio.vox === true && (
-          <span className="ph-txc-cell ph-txc-warn" data-txc="vox" title={t('phone.tx.voxWarn')}>
-            {VOX_ON}
-          </span>
-        )}
-        {/* WHO HOLDS THE TRANSMITTER, in the arbiter's own words — `tx_owner()` covers all
-            seven owners, and a second wording here could disagree with the one that really
-            holds the rig. Absent when nobody does: an idle transmitter is not news. */}
-        {snap.radio.txBusyReason && (
-          <span className="ph-txc-cell ph-txc-busy" data-txc="busy" title={snap.radio.txBusyReason}>
-            {snap.radio.txBusyReason}
-          </span>
-        )}
-      </div>
+      {!chrome.wide && txContract}
 
-      {shown('txmeters') && <TxMeters radio={snap.radio} pinned controls={txMeterControls} />}
+      {!chrome.wide && shown('txmeters') && <TxMeters radio={snap.radio} pinned controls={txMeterControls} />}
 
       {/* ⚠️ NOTHING IN THIS ROW IS MIGRATED, and that is the whole of why this file is on the
           i18n PARTIAL list. PTT is Phone's stop-line census (features/panelState.ts) and
@@ -3436,6 +3495,10 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
           <input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>
         </label>
+        {/* THE ONE-ROW DOCK (md and up): the transmit contract rides here, AFTER PTT and Lock, with a
+            zero basis (`.dock-status-inrow`), so it takes only the room left and can never wrap the
+            row or move PTT under a held pointer when the busy cell arrives on key-down. */}
+        {chrome.wide && txContract}
         {/* "STILL TALKING?" for a Lock from afar, after PTT and Lock so it never moves them under a
             pointer. Unanswered, the Lock ends at its cap. */}
         {driving && lock && keyed && !pressEnded && stillAsk !== null && (

@@ -14906,6 +14906,8 @@ export const EN = {
   // `{{label}}` is the slider's own name — `Power` below, or the cockpit's word for it.
   'cockpit.header.power.label': 'Power',
   'cockpit.header.power.title': "{{label}} — trim so your rig's ALC is just zero",
+  'cockpit.header.more.label': 'More controls',
+  'cockpit.header.more.title': 'Memories, the rotator, split and recording, folded behind this button so the header stays on one row',
   'cockpit.header.cat.ok.title': 'CAT link OK',
   'cockpit.header.cat.bad.title': 'No CAT link',
   // The transmitter alarm the CAT status cannot keep (TxAlarmBanner): {{radio}} is the station's

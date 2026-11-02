@@ -1565,7 +1565,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           every one — the rule is indifferent to senders, and none of them may be captioned as a
           stop (the editor refuses it). Default Mac keyboards eat bare F-keys as media keys, so
           each key's tooltip carries the cure there. */}
-      <div className="cw-macros rtty-macros" role="group" aria-label={t('rtty.macros.aria')}>
+      <div className="cw-macros rtty-macros dock-fkeys" role="group" aria-label={t('rtty.macros.aria')}>
         {slots.map((slot) => (
           <RttyMacroButton
             key={slot.key}

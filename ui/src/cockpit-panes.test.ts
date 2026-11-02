@@ -245,7 +245,12 @@ describe('the fence: styles.css never names a structural class', () => {
   // size, from the sheet that has lost every one of these fights before.
   // The RF scope pane's modifier on FT's waterfall strip (2026-10-04) too: the strip's direction is
   // structure, and the styles.css `.panel` it overrides is exactly the kind of rule that wins a tie.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside', 'op-rail-floor']) {
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside', 'op-rail-floor',
+    // The 1080p pass (2026-11-01): the compact dock's meters cell and in-row status, the keyboard docks'
+    // key floor, the folded top bar and now-bar, the header's ⋯ and the shorter CW speed slider. Each is a flat class a component adds; a styles.css rule naming
+    // one could undo the fold or the tier from the sheet that has lost these fights before.
+    'cockpit-txstrip-meters', 'dock-status-inrow', 'dock-fkeys', 'tier-menu-folded', 'topbar-now', 'now-bar-inbar',
+    'ch-overflow', 'ch-overflow-panel', 'ch-overflow-open', 'cw-wpm-compact']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -1176,5 +1181,218 @@ describe('a pane frame holds its own positioned content, without a backdrop blur
       const w = classWinner('pane-frame', blockDecl(prop))
       expect(w?.value ?? 'none', `${prop} on .pane-frame from ${w?.selector} in ${w?.sheet}`).toBe('none')
     }
+  })
+})
+
+
+// ── THE 1080p PASS (2026-11-01) ─────────────────────────────────────────────────────────────────────
+// The compact dock, the one-row top bar and header, and the short-window tier, COMPUTED: every rule
+// below is the cascade winner across BOTH sheets for an element modelled with the classes the
+// components give it (and its parent's, where a combinator could reach it), never a presence match.
+
+/** Right-to-left match of a class-only selector against an element modelled as a chain of class sets
+ *  (outermost → the element). Descendant and child combinators; a compound with anything but classes
+ *  (an attribute, a pseudo, a tag) does not match — a viewport or state rule is not the unconditional
+ *  cascade these tests compute, and the fold rules are deliberately keyed on no viewport at all. */
+function chainMatch(selector: string, chain: string[][]): boolean {
+  const parts = selector.split(/\s*(>)\s*|\s+/).filter((p): p is string => !!p)
+  const classes = (compound: string): string[] | null => {
+    const m = compound.match(/\.[a-zA-Z0-9_-]+/g)
+    return m && m.join('') === compound ? m.map((c) => c.slice(1)) : null
+  }
+  const subject = classes(parts[parts.length - 1] ?? '')
+  if (!subject || !subject.every((c) => chain[chain.length - 1].includes(c))) return false
+  let idx = chain.length - 2
+  for (let i = parts.length - 2; i >= 0; i--) {
+    const child = parts[i] === '>'
+    if (child) i--
+    const want = classes(parts[i] ?? '')
+    if (!want) return false
+    if (child) {
+      if (idx < 0 || !want.every((c) => chain[idx].includes(c))) return false
+      idx--
+    } else {
+      while (idx >= 0 && !want.every((c) => chain[idx].includes(c))) idx--
+      if (idx < 0) return false
+      idx--
+    }
+  }
+  return true
+}
+
+/** The cascade winner of one property for the LAST element of `chain`, across both sheets (styles.css
+ *  first, as main.tsx imports it), by specificity then order. */
+function chainWinner(chain: string[][], prop: string): { value: string; selector: string; sheet: string } | null {
+  const spec = (sel: string) => (sel.match(/\.[a-zA-Z0-9_-]+|\[[^\]]+\]|:[a-z-]+/g) ?? []).length
+  const candidates = [
+    ...STYLES_RULES.map((r) => ({ r, sheet: 'styles.css', key: r.order })),
+    ...RULES.map((r) => ({ r, sheet: 'cockpit-panes.css', key: 1e6 + r.order })),
+  ]
+  let win: { value: string; selector: string; sheet: string; spec: number; key: number } | null = null
+  for (const { r, sheet, key } of candidates) {
+    if (!chainMatch(r.selector, chain)) continue
+    const v = blockDecl(prop)(r.body)
+    if (v === null) continue
+    const sp = spec(r.selector)
+    if (!win || sp > win.spec || (sp === win.spec && key >= win.key)) win = { value: v, selector: r.selector, sheet, spec: sp, key }
+  }
+  return win && { value: win.value, selector: win.selector, sheet: win.sheet }
+}
+
+/** A length expression evaluated the way the browser resolves it at an effective window height:
+ *  `--vh-eff` (and its 100vh fallback) at `vhEff`, the spacing tokens at their stock sizes, then
+ *  max()/min() and the arithmetic. One number per top-level value (a padding shorthand has two). */
+const TOKENS: Record<string, number> = { '--space-1': 4, '--space-2': 8, '--space-3': 12, '--gap': 12 }
+/** `var(--name, fallback)` for the tier's own custom properties, resolved the way the cascade does for an
+ *  element inside `.app`: the winning declaration on `.app` (across both sheets), else the fallback. */
+function resolveChromeVars(value: string): string {
+  let out = value
+  for (;;) {
+    const at = out.search(/var\(\s*--chrome-/)
+    if (at < 0) return out
+    let depth = 0
+    let end = at
+    for (; end < out.length; end++) {
+      if (out[end] === '(') depth++
+      else if (out[end] === ')' && --depth === 0) break
+    }
+    const inner = out.slice(at + 4, end)
+    const comma = inner.indexOf(',')
+    const name = (comma < 0 ? inner : inner.slice(0, comma)).trim()
+    const fallback = comma < 0 ? '' : inner.slice(comma + 1).trim()
+    const onApp = chainWinner([['app']], name)
+    out = out.slice(0, at) + (onApp?.value ?? fallback) + out.slice(end + 1)
+  }
+}
+function lengthsAt(value: string, vhEff: number): number[] {
+  const subst = resolveChromeVars(value)
+    .replace(/var\(\s*--vh-eff\s*,\s*100vh\s*\)/g, `${vhEff}px`)
+    .replace(/var\(\s*(--[a-z0-9-]+)\s*\)/g, (_, name: string) => {
+      if (!(name in TOKENS)) throw new Error(`unmodelled token ${name} in ${value}`)
+      return `${TOKENS[name]}px`
+    })
+  const values: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const ch of subst) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) values.push(cur)
+      cur = ''
+    } else cur += ch
+  }
+  if (cur) values.push(cur)
+  return values.map((v) => {
+    const js = v.replace(/(\d+(?:\.\d+)?)px/g, '$1').replace(/\bmax\(/g, 'Math.max(').replace(/\bmin\(/g, 'Math.min(')
+    if (!/^[\d\s.+\-*/(),Mathmaxin]*$/.test(js)) throw new Error(`not a length expression: ${v}`)
+    return Function(`return (${js})`)() as number
+  })
+}
+
+describe('THE SHORT-WINDOW TIER (1080p pass): the chrome tightens at an effective height of 1100 px and below', () => {
+  // Each line: the element as the components build it, the property, its TIGHT value at 1100 and below,
+  // its STOCK value above. 1040 is 1080p at 100 % (the taskbar's window), 920 the same screen at 125 %
+  // with the auto zoom, 1440 the 4K reference, which must not move.
+  const CASES: Array<[name: string, chain: string[][], prop: string, tight: number[], stock: number[]]> = [
+    ['the TX dock', [['cockpit-txdock']], 'gap', [4], [8]],
+    ['the TX dock', [['cockpit-txdock']], 'padding', [4, 8], [8, 8]],
+    ['the TX strip', [['cockpit-txstrip']], 'padding', [1, 10], [3, 10]],
+    // The bar and the header keep their rules in styles.css and read the tier's custom properties from
+    // `.app` (cockpit-panes.css), so their winner is styles.css's and the value resolves through `.app`.
+    ['the top bar', [['app'], ['topbar', 'topbar--ft']], 'padding', [4, 14], [10, 14]],
+    ['the top bar', [['app'], ['topbar', 'topbar--ft']], 'gap', [12], [18]],
+    ['the cockpit header', [['app'], ['cockpit-header']], 'gap', [8], [12]],
+    ['the header’s mode controls', [['app'], ['cockpit-header'], ['ch-mode-extras']], 'gap', [8], [12]],
+  ]
+  it.each(CASES)('%s: %s steps from STOCK above 1100 to TIGHT at 1100 and below', (name, chain, prop, tight, stock) => {
+    const w = chainWinner(chain, prop)
+    expect(w, `nothing declares ${prop} on ${name}`).not.toBeNull()
+    expect(
+      w!.sheet === 'cockpit-panes.css' || /var\(--chrome-/.test(w!.value),
+      `${name}'s ${prop} is won by ${w!.selector} in ${w!.sheet} (${w!.value}) — neither the tier's rule nor a reader of its property`,
+    ).toBe(true)
+    for (const vh of [700, 920, 1040, 1100]) expect(lengthsAt(w!.value, vh), `${name} ${prop} at an effective ${vh} px`).toEqual(tight)
+    for (const vh of [1101, 1200, 1440, 2160]) expect(lengthsAt(w!.value, vh), `${name} ${prop} at an effective ${vh} px`).toEqual(stock)
+  })
+
+  it('outside `.app` (a probe page, a test) the bar and the header keep their stock spacing', () => {
+    const bar = chainWinner([['topbar']], 'padding')
+    expect(lengthsAt(bar!.value.replace(/var\(--chrome-bar-pad,\s*([^)]*)\)/, '$1'), 900)).toEqual([10, 14])
+  })
+
+  it('the evaluator bites: a stock-only value does not step (control)', () => {
+    expect(lengthsAt('var(--space-2)', 900)).toEqual([8])
+    expect(lengthsAt('max(var(--space-1), min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100))', 1100.5)).toEqual([8])
+    expect(() => lengthsAt('var(--unknown)', 900)).toThrow()
+  })
+})
+
+describe('THE COMPACT DOCK (1080p pass): the read-only meters stand in the TX strip, and nothing can wrap a keying row', () => {
+  it('the strip’s meters cell has a zero basis, so the strip’s line breaking can never put it on a second line', () => {
+    const chain = [['cockpit-txstrip'], ['cockpit-txstrip-meters']]
+    expect(chainWinner(chain, 'flex')?.value).toBe('1 1 0')
+    expect(chainWinner(chain, 'min-width')?.value).toBe('0')
+    expect(chainWinner(chain, 'max-width')?.value).toBe('30em')
+    expect(chainWinner(chain, 'margin-left')?.value, 'right-packed: after the cluster and the TX state').toBe('auto')
+    // …in a strip that still wraps as it did (a control: the cluster itself may wrap on a phone).
+    expect(chainWinner([['cockpit-txstrip']], 'flex-wrap')?.value).toBe('wrap')
+  })
+
+  it('Phone’s transmit contract in the PTT row takes only the room left: zero basis, clipped, one line', () => {
+    const chain = [['phone-cockpit'], ['cockpit-txdock'], ['ph-ptt-row'], ['ph-txcontract', 'dock-status-inrow']]
+    expect(chainWinner(chain, 'flex')?.value).toBe('1 1 0')
+    expect(chainWinner(chain, 'min-width')?.value).toBe('0')
+    expect(chainWinner(chain, 'overflow')?.value).toBe('hidden')
+    expect(chainWinner(chain, 'flex-wrap')?.value, 'the contract is still one line').toBe('nowrap')
+    // The row it joins still never shrinks (cockpit-shells.test.ts ROWS holds the same pin in styles.css).
+    expect(chainWinner([['phone-cockpit'], ['cockpit-txdock'], ['ph-ptt-row']], 'flex')?.value).toBe('0 0 auto')
+  })
+
+  it('the keyboard docks’ eight keys share the fixed row’s line on a 70em floor, never a 76em basis', () => {
+    for (const keys of [['cw-macros', 'rtty-macros', 'dock-fkeys'], ['cw-macros', 'rtty-macros', 'psk-macros', 'dock-fkeys'], ['cw-macros', 'rtty-macros', 'jtty-macros', 'dock-fkeys']]) {
+      const chain = [['cockpit-txdock'], ['rtty-dock-keys'], keys]
+      const flex = chainWinner(chain, 'flex')
+      expect(flex?.value, `${keys.join('.')}: flex from ${flex?.selector} (${flex?.sheet})`).toBe('999 1 0')
+      expect(chainWinner(chain, 'min-width')?.value, keys.join('.')).toBe('min(100%, 70em)')
+    }
+    // Control: without the class, the keys are the plain `.cw-macros` row (never a shrink victim).
+    expect(chainWinner([['cockpit-txdock'], ['rtty-dock-keys'], ['cw-macros', 'rtty-macros']], 'flex')?.value).toBe('0 0 auto')
+    expect(chainWinner([['cockpit-txdock'], ['rtty-dock-keys']], 'flex-wrap')?.value, 'the fold is a wrap').toBe('wrap')
+  })
+})
+
+describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and hide', () => {
+  it('the folded mode button is drawn (it beats styles.css’s `.tier-menu-btn { display: none }`), the bare one is not', () => {
+    expect(chainWinner([['topbar'], ['tier-toggle'], ['tier-btn', 'active', 'tier-menu-btn', 'tier-menu-folded']], 'display')?.value).toBe('inline-flex')
+    expect(chainWinner([['topbar'], ['tier-toggle'], ['tier-btn', 'active', 'tier-menu-btn']], 'display')?.value).toBe('none')
+  })
+
+  it('the now-bar in the bar is its own width and never grows (a message must not re-wrap it), and draws no frame', () => {
+    const slot = [['topbar'], ['topbar-now']]
+    expect(chainWinner(slot, 'flex')?.value, 'a grower would share the status lane’s room').toBe('0 1 auto')
+    expect(chainWinner(slot, 'min-width')?.value).toBe('min(100%, 18em)')
+    const bar = [['topbar'], ['topbar-now'], ['now-bar', 'now-bar-inbar']]
+    expect(chainWinner(bar, 'padding')?.value).toBe('0')
+    expect(chainWinner(bar, 'background')?.value).toBe('transparent')
+    expect(chainWinner(bar, 'border-bottom')?.value).toBe('0')
+    // Control: its own line keeps its frame.
+    expect(chainWinner([['now-bar']], 'border-bottom')?.value).toBe('1px solid var(--border)')
+  })
+
+  it('the header’s ⋯ group is not drawn while closed (out of the tab order too), and is a wrapping row while open', () => {
+    expect(chainWinner([['ch-overflow'], ['ch-overflow-panel']], 'display')?.value).toBe('none')
+    expect(chainWinner([['ch-overflow'], ['ch-overflow-panel', 'ch-overflow-open']], 'display')?.value).toBe('flex')
+    expect(chainWinner([['ch-overflow'], ['ch-overflow-panel', 'ch-overflow-open']], 'flex-wrap')?.value).toBe('wrap')
+    // Out of flow, so opening it moves no control in the header, the strip or the dock.
+    expect(chainWinner([['ch-overflow'], ['ch-overflow-panel']], 'position')?.value).toBe('absolute')
+    expect(chainWinner([['ch-overflow']], 'position')?.value).toBe('relative')
+  })
+
+  it('the CW speed slider is shorter only where the header folds: a placement input the stock rule reads', () => {
+    const stock = STYLES_RULES.find((r) => r.selector === ".cw-wpm input[type='range']")
+    expect(blockDecl('width')(stock!.body)).toBe('var(--cw-wpm-w, 160px)')
+    expect(chainWinner([['cw-wpm', 'cw-wpm-compact']], '--cw-wpm-w')?.value).toBe('80px')
+    expect(chainWinner([['cw-wpm']], '--cw-wpm-w'), 'nothing sets it on the stock label').toBeNull()
   })
 })

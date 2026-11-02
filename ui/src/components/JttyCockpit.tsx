@@ -1032,7 +1032,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           here, at the end of the compose row, is on the stop line too (THE STOP LINE). */}
       <div className="cockpit-txdock">
         <div className="rtty-dock-keys jtty-dock-keys">
-          <div className="cw-macros rtty-macros jtty-macros" role="group" aria-label={t('jtty.macros.aria')}>
+          <div className="cw-macros rtty-macros jtty-macros dock-fkeys" role="group" aria-label={t('jtty.macros.aria')}>
             {FKEY_NAMES.map((name, i) => {
               const template = fkeys[i] ?? ''
               return editingKeys ? (

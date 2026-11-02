@@ -7158,8 +7158,9 @@ body.resizing {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 10px 14px;
+  /* 18 px and 10 px 14 px, tighter on a short window (cockpit-panes.css, the short-window tier). */
+  gap: var(--chrome-bar-gap, 18px);
+  padding: var(--chrome-bar-pad, 10px 14px);
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
@@ -10133,7 +10134,8 @@ select optgroup {
   color: var(--text-dim);
 }
 .cw-wpm input[type='range'] {
-  width: 160px;
+  /* 160 px; 80 where the header folds to one row (cockpit-panes.css `.cw-wpm-compact`). */
+  width: var(--cw-wpm-w, 160px);
 }
 /* CW pitch entry. Uses `input.cw-pitch` (0,1,1) deliberately: the element carries
    `settings-input cw-pitch`, and `.settings-input` (0,1,0) is declared LATER in this file, so
@@ -12741,6 +12743,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px var(--space-2);
   padding: 0;
+}
+/* The TX strip's cell (Phone and CW in the compact dock, `md` and up): AT MOST TWO ROWS, filled down
+   then across, so a rig with more readings (COMP's controls, a temperature) makes the cell wider and
+   never the strip taller — two compact rows are the height of the strip's own buttons. The cell's
+   box is cockpit-panes.css's (`.cockpit-txstrip-meters`); this is only how the meters sit in it. */
+.ph-txmeters.inline.strip {
+  grid-template-columns: none;
+  grid-template-rows: repeat(2, auto);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
 }
 /* The COMP row in Phone SETS the processor level as well as metering compression: the fill is
    the meter, the marker line is the level, and the track is the slider (drag / arrow keys).
@@ -19578,7 +19590,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .cockpit-header {
   display: flex;
   align-items: center;
-  gap: var(--gap);
+  /* The stock gap, tighter on a short window (cockpit-panes.css, the short-window tier). */
+  gap: var(--chrome-head-gap, var(--gap));
   flex-wrap: wrap;
   min-width: 0;
   /* NO min-height HERE, and that is the whole safety mechanism — see `.ch-identity`
@@ -19679,7 +19692,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--chrome-extras-gap, var(--space-3));
   flex-wrap: wrap;
 }
 /* The band control + Tune as one unit: it wraps as a whole, so Tune stays beside the band
@@ -21430,6 +21443,34 @@ button.cq-skiptx1.on {
   font-size: 0.85rem;
   line-height: 1.2;
   min-height: 24px;
+}
+/* The CW and Phone headers' ⋯ (components/HeaderOverflow): the icon buttons' look, and what is on
+   behind it (REC, SPLIT) as small plates beside the glyph. */
+.ch-overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 7px;
+  min-height: 24px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1.2;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ch-overflow-btn:hover,
+.ch-overflow-btn.on {
+  border-color: var(--accent);
+}
+.ch-overflow-badge {
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 800;
+  color: var(--accent);
 }
 /* The 2D/3D map-mode toggle — groups to the right next to Pop-out. */
 /* 3D globe lazy-load placeholder (three.js chunk loading). */
@@ -29650,10 +29691,9 @@ button.sat-chip:disabled {
 .rtty-macros {
   grid-template-columns: repeat(8, minmax(0, 1fr));
 }
-.rtty-dock-keys > .rtty-macros {
-  flex: 999 1 76em;
-  min-width: 0;
-}
+/* (The keys' share of the line — `flex: 999 1 76em` here until the 1080p pass — is cockpit-panes.css
+   `.dock-fkeys` now: a zero basis with a 70em floor, so the fixed row shares the keys' line wherever
+   every built-in caption still fits its key, and folds under them only where one would not.) */
 .rtty-dock-keys > .rtty-dock-row {
   flex: 1 1 auto;
 }

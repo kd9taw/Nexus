@@ -8,7 +8,7 @@
 // The units rule lands on the BAR: every tier and mode name, the DT and clock readouts, the
 // slot countdown, the callsign and grid, and the four plates below are tokens and measurements
 // and stay in the code.
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { BandChannel, LinkState, RadioStatus, RadioSummary, Tier } from '../types'
 import { isOnAir, isRxOnly } from '../types'
@@ -24,6 +24,7 @@ import type { MessageKey } from '../i18n'
 import { T } from '../i18n/T'
 import { UtcClock } from './UtcClock'
 import { drivesAnotherStation } from '../features/durableStore'
+import { useCompactChrome } from '../features/compactChrome'
 
 /** The bar's own plates: the product name, the two directions of the TX/RX indicator, the
  *  operator prefix and the recording badge. Tokens, named so the catalog guard reads them as the
@@ -47,6 +48,9 @@ const REC = 'REC'
  *  The NAMES are the modes' and tiers' own — tokens, and they stay written here. The titles are
  *  prose and resolve through the catalog when the pill renders (a resolved constant would
  *  freeze the first locale loaded). */
+/** A pill's tooltip, read where it renders: the pill's own, and its item in the folded menu. */
+const tierTitle = (p: { titleKey: MessageKey }) => t(p.titleKey)
+
 const TIER_PILLS: {
   tier: Tier
   small?: string
@@ -132,6 +136,10 @@ interface Props {
   /** #253: show this computer's local time beside the UTC clock (Settings ▸ Workspace, a
    *  per-machine choice from `useLocalClock`). Off/absent ⇒ UTC alone, exactly as before. */
   showLocalClock?: boolean
+  /** The now-bar, ridden IN the bar at md and lg (features/compactChrome): App passes it here instead
+   *  of drawing it as a line of its own under the bar. It is the bar's last group. Absent ⇒ the bar is
+   *  exactly what it was. */
+  nowBar?: ReactNode
 }
 
 // The robust tier is TempoDeep — a non-coherent, fading-resilient 15 s mode that
@@ -389,7 +397,11 @@ export function TopBar({
   hideDigitalChrome,
   ftScreen = false,
   showLocalClock = false,
+  nowBar,
 }: Props) {
+  // md and lg (features/compactChrome): the eleven tier pills are one menu button, as they are on the
+  // FT screens at the small size, so the bar is one row. xl keeps the pills, which fit there.
+  const { fold } = useCompactChrome()
   const currentPill = TIER_PILLS.find((p) => p.tier === tier)
   const countdown = (radio.nextSlotMs / 1000).toFixed(1)
   const [version, setVersion] = useState('')
@@ -416,7 +428,7 @@ export function TopBar({
   const modeButton = (
     <button
       type="button"
-      className={`tier-btn active tier-menu-btn${currentPill?.rxOnly ? ' rx-only' : ''}`}
+      className={`tier-btn active tier-menu-btn${fold ? ' tier-menu-folded' : ''}${currentPill?.rxOnly ? ' rx-only' : ''}`}
       title={t('topbar.tier.aria')}
     >
       {currentPill?.small ? <small>{currentPill.small}</small> : null}
@@ -509,6 +521,8 @@ export function TopBar({
         )}
       </div>
   )
+
+  const nowSlot = nowBar != null ? <div className="topbar-now">{nowBar}</div> : null
 
   return (
     <header className={`topbar${hideFrequencyControl ? ' topbar--no-readout' : ''}${ftScreen ? ' topbar--ft' : ''}`}>
@@ -668,7 +682,7 @@ export function TopBar({
       {!hideDigitalChrome && (
       <>
       <div className="topbar-group tier-toggle" role="group" aria-label={t('topbar.tier.aria')}>
-        {TIER_PILLS.map((p) => (
+        {!fold && TIER_PILLS.map((p) => (
           <button
             key={p.tier}
             type="button"
@@ -677,7 +691,7 @@ export function TopBar({
             }`}
             aria-pressed={tier === p.tier}
             onClick={() => onTierChange(p.tier)}
-            title={t(p.titleKey)}
+            title={tierTitle(p)}
           >
             {p.small ? <small>{p.small}</small> : null}
             {p.name}
@@ -686,12 +700,17 @@ export function TopBar({
         {/* The FT screens' one mode button at the small size (2026-10-01): the mode in use,
             opening all eleven with their tags. Not drawn above sm (CSS), where the pills are.
             The group's LAST child, so every pill keeps its place among its siblings. */}
-        {ftScreen && (
+        {/* …AND EVERY SCREEN'S AT md AND lg (the 1080p pass, 2026-11-01): there the pills are not
+            drawn at all and this button stands in their place (`.tier-menu-folded`), so the bar is
+            one row. Each item keeps its pill's tooltip, the receive-only ones say so, and the
+            keyboard reaches all eleven (Enter or ↓ opens, arrows move, Esc returns to the button). */}
+        {(ftScreen || fold) && (
           <Menu
             trigger={modeButton}
             items={TIER_PILLS.map((p) => ({
               label: p.name,
               icon: p.small ? <small>{p.small}</small> : undefined,
+              title: tierTitle(p),
               onSelect: () => onTierChange(p.tier),
             }))}
           />
@@ -757,6 +776,12 @@ export function TopBar({
       {/* Views without the tier row (CW/Phone/RTTY/SSTV/APRS/Sats) keep the cluster at
           the bar's end — the release position. */}
       {hideDigitalChrome && chipCluster}
+
+      {/* THE NOW-BAR, IN THE BAR (md and lg): the bar's LAST group. Its own width and never growing
+          (`.topbar-now`, cockpit-panes.css): where the bar's line has room it stands at the end of it,
+          where it has not it takes a second line of the bar — so it can never push the clock, the TX
+          cluster or the Tx cycle off the first, and a status message can never re-wrap it. */}
+      {nowSlot}
 
     </header>
   )

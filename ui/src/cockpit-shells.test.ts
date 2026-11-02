@@ -907,6 +907,42 @@ describe('the dock rows that key the rig cannot shrink (winning flex-shrink is 0
   }
 })
 
+describe('the 1080p pass keeps every transmit control its full size (2026-11-01)', () => {
+  // The compact dock and the short-window tier take spacing and read-only rows out of the chrome; they
+  // may never take size out of a control that keys or stops the rig. These compute, from styles.css,
+  // the size each such control resolves to in its dock or strip — the same values as before the pass —
+  // and that the structural sheet, where the tier lives, names none of them at all.
+  const SIZE: Array<[name: string, chain: Array<Set<string>>, prop: string, want: string]> = [
+    ['Phone’s PTT (min-height)', [...shellChain('phone-cockpit'), new Set(['cockpit-txdock']), new Set(['ph-ptt-row']), new Set(['ph-ptt'])], 'min-height', '40px'],
+    ['Phone’s PTT (min-width)', [...shellChain('phone-cockpit'), new Set(['cockpit-txdock']), new Set(['ph-ptt-row']), new Set(['ph-ptt'])], 'min-width', '220px'],
+    ['the strip’s Stop TX (padding)', [...shellChain('cw-cockpit'), new Set(['cockpit-txstrip']), new Set(['op-controls', 'cq-txctl']), new Set(['op-btn', 'stop'])], 'padding', '6px var(--space-4)'],
+    ['a macro key (padding)', [...shellChain('rtty-cockpit'), new Set(['cockpit-txdock']), new Set(['rtty-dock-keys']), new Set(['cw-macros', 'rtty-macros', 'dock-fkeys']), new Set(['rtty-macro-slot']), new Set(['cw-macro'])], 'padding', '3px 9px'],
+  ]
+  for (const [name, chain, prop, want] of SIZE) {
+    it(`${name} resolves ${prop}: ${want}`, () => {
+      const decl = (body: string): string | null => {
+        let v: string | null = null
+        for (const d of body.split(';')) {
+          const m = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`).exec(d)
+          if (m) v = m[1].replace(/\s+/g, ' ')
+        }
+        return v
+      }
+      const win = winningValue(chain, decl)
+      expect(win?.value, `${name}: won by ${win?.selector}`).toBe(want)
+    })
+  }
+
+  it('the structural sheet names no transmit control: the tier there cannot reach one', () => {
+    const sheet = readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const selectors = [...sheet.matchAll(/([^{}]+)\{/g)].map((m) => m[1].trim())
+    const TX = /\.(ph-ptt|ph-lock|op-btn|cw-macro|rtty-stop|rtty-tx-latch|cq-txctl|op-controls|cw-send|cw-type)(?![a-z0-9-])/
+    expect(selectors.filter((sel) => TX.test(sel))).toEqual([])
+    // Control: the scan reads the sheet (it finds the dock it is about).
+    expect(selectors.some((sel) => sel === '.cockpit-txdock')).toBe(true)
+  })
+})
+
 describe('Journey cards win their row direction against .panel', () => {
   // `<div className="jy-marathon panel">` / `<section className="jy-hero panel">`
   // (JourneyView.tsx ~60/~124): `.panel { flex-direction: column }` also targets the

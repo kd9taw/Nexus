@@ -856,6 +856,8 @@
 "1","cockpit.header.bandEdge.down","Stopped at the {{band}} band edge, {{edge}} MHz — scroll again to keep tuning down","Остановлено на краю диапазона {{band}}, {{edge}} MHz — прокрутите еще раз, чтобы продолжить настройку вниз.","{{band}} | {{edge}} | MHz",""
 "1","cockpit.header.power.label","Power","Мощность","","Short label on: cockpit header & tuning strip. The same English text ""Power"" is used by 6 different keys (e.g. rtty.header.power.label, psk.header.power.label, sstv.header.power.label) — each can take a different Russian word, so choose the one that fits THIS screen."
 "1","cockpit.header.power.title","{{label}} — trim so your rig's ALC is just zero","{{label}} — подстройте так, чтобы ALC трансивера был едва на нуле","{{label}} | ALC",""
+"1","cockpit.header.more.label","More controls","Другие элементы управления","","Accessible name of the ⋯ button in the CW and Phone cockpit headers (shown where the header is folded to one row)."
+"1","cockpit.header.more.title","Memories, the rotator, split and recording, folded behind this button so the header stays on one row","Память, ротатор, сплит и запись — за этой кнопкой, чтобы заголовок помещался в одну строку","","Tooltip of the ⋯ button in the CW and Phone cockpit headers."
 "1","cockpit.header.cat.ok.title","CAT link OK","Связь по CAT в порядке","CAT",""
 "1","cockpit.header.cat.bad.title","No CAT link","Нет связи по CAT","CAT",""
 "1","cockpit.txAlarm.lead.radio","Transmitter alarm, {{radio}}, {{time}} UTC:","Тревога передатчика, {{radio}}, {{time}} UTC:","{{radio}} | {{time}} | UTC",""
