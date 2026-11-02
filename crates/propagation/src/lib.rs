@@ -58,6 +58,7 @@ pub mod pounce;
 pub mod predict;
 pub mod province;
 pub mod pskr_mqtt;
+pub mod regions;
 pub mod repeaters;
 pub mod route;
 pub mod sat;

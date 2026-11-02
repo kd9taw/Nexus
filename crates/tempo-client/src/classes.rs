@@ -270,6 +270,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_settings",                   RunsAtShack, "The shack's settings."),
     ("get_snapshot",                   RunsAtShack, "The shack's state."),
     ("get_solar_indices",              RunsAtShack, "The shack's propagation feeds."),
+    ("get_solar_regions",              RunsAtShack, "The shack's propagation feeds."),
     ("get_space_wx_scales",            RunsAtShack, "The shack's propagation feeds."),
     ("get_spectrum_row",               RunsAtShack, "The shack's waterfall."),
     ("get_sstv_state",                 RunsAtShack, "The shack's SSTV state."),

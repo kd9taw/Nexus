@@ -141,6 +141,8 @@ mod shack_files;
 /// and a build without it has none of it.
 #[cfg(test)]
 mod shipped_without_the_road_switch;
+/// `get_solar_regions`: NOAA's numbered active regions for the sun disc, held only while current.
+mod solar_regions;
 /// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
@@ -40857,6 +40859,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_xray_now" => ok(get_xray_now(app.state()).await),
             "get_aurora" => ok(get_aurora(app.state()).await),
             "get_pca" => ok(get_pca(app.state(), app.state()).await),
+            "get_solar_regions" => ok(solar_regions::get_solar_regions().await),
             "get_satellites" => ok(get_satellites(app.state()).await),
             "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
@@ -48763,6 +48766,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_ota_map_spots,
         get_kp_forecast,
         arrival_outlook::get_arrival_outlook,
+        solar_regions::get_solar_regions,
         get_solar_indices,
         connect_web_status,
         search_parks,
