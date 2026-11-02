@@ -688,9 +688,10 @@ jobs:
       # `ui/`'s build output IS the hosted browser application, and nothing audited it - while
       # remote/ has had this gate all along and Rust is covered by cargo-deny on both lockfiles.
       #
-      # BLOCKING on what actually ships. The dev tree currently carries 9 advisories (vitest, vite,
-      # esbuild, postcss, nanoid, browserslist, undici) and clearing them means major bumps of vite
-      # and vitest; production dependencies are clean today. A gate that is red the day it lands is
+      # BLOCKING on what actually ships. Since the vite 6 bump in ui/ (and puppeteer-core 25 in
+      # scripts/), `npm audit` reports 0 advisories in both trees, dev dependencies included; the
+      # dev tree is still not gated, because an advisory there cannot reach an operator and new
+      # ones land without any change of ours. A gate that is red the day an advisory lands is
       # a gate somebody deletes, so the enforced one is the honest boundary - a vulnerability in a
       # package that reaches an operator's browser fails the build.
       #
@@ -698,8 +699,8 @@ jobs:
       # ignores `continue-on-error` (it can only hide a failure, never invent one), so such a step
       # would make the LOCAL gate permanently red over something CI tolerates; and writing
       # `|| true` to dodge that is the piped-green-hides-the-exit-code bug this project has already
-      # shipped once. The dev-tree count belongs in a deliberate decision about bumping vite and
-      # vitest, not in a step nobody can act on.
+      # shipped once. A dev-tree advisory belongs in a deliberate dependency bump, not in a step
+      # nobody can act on.
       - name: UI dependency advisories (shipped dependencies)
         run: npm --prefix ui audit --omit=dev --audit-level=moderate
 
