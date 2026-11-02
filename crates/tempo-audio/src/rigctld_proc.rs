@@ -520,7 +520,15 @@ pub fn rigctld_args(
             args.push("-C".to_string());
             args.push(format!("serial_handshake={h}"));
         }
-        if ptt_line != Some(crate::rig::SerialLine::Rts) {
+        // A declared Hardware handshake makes RTS the flow-control line, and Hamlib refuses ANY
+        // `rts_state` with it — `rig_open` tests the runtime handshake (4.7.1 `src/rig.c:1241`:
+        // `rts_state != RIG_SIGNAL_UNSET && handshake == RIG_HANDSHAKE_HARDWARE` → "cannot set
+        // RTS with hardware handshake", `-RIG_ECONF`), and rigctld stays up serving a rig it never
+        // opened. The dump cannot warn us: a backend whose caps say `None` (TS-480) reports RTS
+        // settable, so the hold-low default rode along with the operator's Hardware (#432). Same
+        // for the keying-line override below — it is the same refusal.
+        let rts_is_flow_control = lines.handshake == Handshake::Hardware;
+        if ptt_line != Some(crate::rig::SerialLine::Rts) && !rts_is_flow_control {
             if let Some(v) = lines.rts.value() {
                 args.push("-C".to_string());
                 args.push(format!("rts_state={v}"));
@@ -536,7 +544,9 @@ pub fn rigctld_args(
         // ONLY on an explicit declaration — `Untouched` is the default and says nothing, which
         // is what every release up to now did. See [`ControlLines::keying_line`] for the
         // NEEDS-BENCH warning: Hamlib refuses this on the line it keys with, silently.
-        if let Some(line) = ptt_line {
+        if let Some(line) =
+            ptt_line.filter(|l| !(rts_is_flow_control && *l == crate::rig::SerialLine::Rts))
+        {
             if let Some(v) = lines.keying_line.value() {
                 args.push("-C".to_string());
                 args.push(format!("{}_state={v}", line_state_param(line)));
@@ -2499,6 +2509,126 @@ mod tests {
         for junk in ["", "  ", "AUTO", "yes please"] {
             assert_eq!(Handshake::from_setting(junk), Handshake::Auto, "{junk:?}");
         }
+    }
+
+    /// ⭐ A declared Hardware handshake never travels with an `rts_state`, whatever the backend
+    /// says about its own handshake. Hamlib's `rig_open` (4.7.1 `src/rig.c:1241-1249`) checks
+    /// the RUNTIME handshake, so `-C serial_handshake=Hardware` together with any
+    /// `-C rts_state=…` is `cannot set RTS with hardware handshake` and `-RIG_ECONF`: rigctld
+    /// stays up serving a rig it never opened. A TS-480 declares `RIG_HANDSHAKE_NONE` in its
+    /// caps (`rigs/kenwood/ts480.c:1338`), so the dump calls RTS settable and the shipped
+    /// hold-low default used to ride along with the operator's Hardware declaration — CAT that
+    /// connects and does nothing, on a radio that needs RTS/CTS.
+    ///
+    /// The table: a Kenwood (backend handshake None), a Yaesu (backend Hardware) and an Icom
+    /// (backend None), each under the three declarations, plus `Auto` as the control. DTR is
+    /// not flow control and keeps its hold in every row.
+    #[test]
+    fn a_declared_hardware_handshake_never_travels_with_an_rts_state() {
+        // (model, what the backend itself declares)
+        let rigs = [(2028, "None"), (1042, "Hardware"), (3073, "None")];
+        for (model, backend) in rigs {
+            let settable = parse_settable_lines(&show_conf("RIG", Some(backend)));
+            for (declared, token, rts_held) in [
+                (Handshake::None, "None", true),
+                (Handshake::XonXoff, "XONXOFF", true),
+                (Handshake::Hardware, "Hardware", false),
+            ] {
+                let want = ControlLines {
+                    handshake: declared,
+                    ..ControlLines::hold_low()
+                };
+                // A bare rig on its own USB port: no keying cable, no serial keying line.
+                let lines = resolve_lines(settable, want, false);
+                let args = rigctld_args(model, "COM5", 115200, 4532, false, None, lines);
+                let hs: Vec<&String> = args
+                    .iter()
+                    .filter(|a| a.starts_with("serial_handshake="))
+                    .collect();
+                assert_eq!(
+                    hs,
+                    [&format!("serial_handshake={token}")],
+                    "model {model} ({backend}), declared {declared:?}: {args:?}"
+                );
+                if rts_held {
+                    assert!(
+                        holds(&args, "rts", "OFF"),
+                        "model {model}, {declared:?}: RTS is free, the hold applies: {args:?}"
+                    );
+                } else {
+                    assert!(
+                        says_nothing_about(&args, "rts"),
+                        "model {model} ({backend}): Hamlib refuses rts_state with a hardware \
+                         handshake and CAT never opens: {args:?}"
+                    );
+                }
+                assert!(
+                    holds(&args, "dtr", "OFF"),
+                    "model {model}, {declared:?}: DTR is not flow control: {args:?}"
+                );
+            }
+        }
+
+        // Controls on `Auto`, unchanged: the TS-480 keeps the hold-low default with no handshake
+        // said, and the Yaesu keeps its own hardware handshake untouched (its factory CAT RTS =
+        // ENABLE gates replies on RTS — the bench regression pinned above).
+        for (model, backend, rts_held) in [(2028, "None", true), (1042, "Hardware", false)] {
+            let settable = parse_settable_lines(&show_conf("RIG", Some(backend)));
+            let lines = resolve_lines(settable, ControlLines::hold_low(), false);
+            let args = rigctld_args(model, "COM5", 115200, 4532, false, None, lines);
+            assert!(
+                !args.iter().any(|a| a.starts_with("serial_handshake")),
+                "{model}: {args:?}"
+            );
+            assert_eq!(
+                holds(&args, "rts", "OFF"),
+                rts_held,
+                "{model} ({backend}): {args:?}"
+            );
+            assert_eq!(says_nothing_about(&args, "rts"), !rts_held, "{args:?}");
+        }
+
+        // The operator's explicit HIGH wish and the keying-line override hit the same refusal:
+        // with Hardware declared, neither may reach Hamlib as an `rts_state`.
+        let settable = parse_settable_lines(&show_conf("RIG", Some("None")));
+        let high = resolve_lines(
+            settable,
+            ControlLines {
+                handshake: Handshake::Hardware,
+                ..high_both()
+            },
+            true,
+        );
+        let args = rigctld_args(2028, "COM5", 115200, 4532, false, None, high);
+        assert!(says_nothing_about(&args, "rts"), "{args:?}");
+        assert!(holds(&args, "dtr", "ON"), "{args:?}");
+        let keyed = ControlLines {
+            handshake: Handshake::Hardware,
+            keying_line: LineState::Low,
+            ..ControlLines::hold_low()
+        };
+        let args = rigctld_args(
+            2028,
+            "COM5",
+            115200,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Rts),
+            keyed,
+        );
+        assert!(says_nothing_about(&args, "rts"), "{args:?}");
+        // Positive control: a DTR keying line is not flow control and is still stated.
+        let args = rigctld_args(
+            2028,
+            "COM5",
+            115200,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Dtr),
+            keyed,
+        );
+        assert!(holds(&args, "dtr", "OFF"), "{args:?}");
+        assert!(says_nothing_about(&args, "rts"), "{args:?}");
     }
 
     /// The keying line's idle state: emitted only for the line we are actually keying with,
