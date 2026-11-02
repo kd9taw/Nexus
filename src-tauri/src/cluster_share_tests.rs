@@ -766,6 +766,49 @@ fn a_follower_without_a_reachable_relay_knocks_once_per_retry() {
     drop(held);
 }
 
+/// A lock error in a window that already follows never puts it on the air beside the holder.
+#[cfg(unix)]
+#[test]
+fn a_follower_never_logs_in_beside_a_held_lease_on_a_lock_error() {
+    let dir = scratch("broken-follow");
+    let Lease::Held(held) = try_lease(&dir, "W1AW") else {
+        panic!("the other window's lease");
+    };
+    let n = FakeNode::start();
+    let b = Window::open(&dir, "W1AW", &[&n]);
+    assert_eq!(b.claim, Claim::Follow);
+    // The lock file can no longer be opened (a folder where it was), while the lease stays held.
+    std::fs::remove_file(lock_path(&dir, "W1AW")).unwrap();
+    std::fs::create_dir(lock_path(&dir, "W1AW")).unwrap();
+    std::thread::sleep(RETRY * 2 + Duration::from_secs(1));
+    assert_eq!(n.logins.load(Ordering::SeqCst), 0, "no second login");
+    assert!(b.share.following().is_some(), "it still follows");
+    assert_eq!(b.hooks.feeds_started.load(Ordering::SeqCst), 0);
+    b.close();
+    drop(held);
+}
+
+#[test]
+fn a_silent_connection_gives_its_handshake_slot_back_within_a_second() {
+    let dir = scratch("silent");
+    let n = FakeNode::start();
+    let a = Window::open(&dir, "W1AW", &[&n]);
+    assert!(until(Duration::from_secs(10), || n
+        .logins
+        .load(Ordering::SeqCst)
+        == 1));
+    let (port, _) = read_relay(&dir, "W1AW").unwrap();
+    let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    let opened = Instant::now();
+    assert!(closed_within(&mut s, Duration::from_secs(3)));
+    let took = opened.elapsed();
+    assert!(
+        took < FIRST_LINE_DEADLINE + Duration::from_millis(600),
+        "cut off after {took:?}"
+    );
+    a.close();
+}
+
 #[test]
 fn a_lease_that_cannot_be_made_fails_open() {
     // The lock path is a folder: no lock can be opened there. Like the profile lock, this window
@@ -795,8 +838,8 @@ fn a_holder_that_lets_go_hands_over_and_takes_its_file_with_it() {
         == 1));
     assert!(relay_path(&dir, "W1AW").exists());
     a.close();
-    assert!(until(Duration::from_secs(2), || !relay_path(&dir, "W1AW")
-        .exists()));
+    // At once, before the lease dropped: no successor's file can be the one removed.
+    assert!(!relay_path(&dir, "W1AW").exists());
     // Its feed is done before the next window opens (in a real process exit, at once).
     assert!(until(Duration::from_secs(5), || n
         .live
@@ -856,6 +899,12 @@ fn only_a_dx_spot_passes_the_relay() {
         checked_post("POST DX 7025 VP8/G4XXX\n").as_deref(),
         Some("DX 7025 VP8/G4XXX\r\n")
     );
+    // The ends of the range: 1 kHz and 300 GHz.
+    assert!(checked_post("POST DX 1 K1ABC\n").is_some());
+    assert_eq!(
+        checked_post("POST DX 300000000 K1ABC\n").as_deref(),
+        Some("DX 300000000 K1ABC\r\n")
+    );
     for bad in [
         "POST SET/NAME evil\n",
         "POST DX 14025\n",
@@ -869,6 +918,14 @@ fn only_a_dx_spot_passes_the_relay() {
         "POST DX 14025 BY\n",
         "POST DX 14025 K1-ABC\n",
         "POST DX 14025 K1ABC a\u{7}b\n",
+        "POST DX 1e300 K1ABC\n",
+        "POST DX 1e-300 K1ABC\n",
+        "POST DX 0.5 K1ABC\n",
+        "POST DX 300000001 K1ABC\n",
+        "POST DX 14025 K1ABC tnx\u{202E}37\n",
+        "POST DX 14025 K1ABC tnx\u{2066}x\n",
+        "POST DX 14025 K1ABC t\u{200B}nx\n",
+        "POST DX 14025 K1ABC \u{FEFF}tnx\n",
         &format!("POST DX 14025 K1ABC {}\n", "x".repeat(300)),
     ] {
         assert_eq!(checked_post(bad), None, "{bad:?}");

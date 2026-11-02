@@ -9,7 +9,8 @@
 //! lock a radio window holds on its profile (`hold_profile_lock`), and it fails OPEN the same way:
 //! only "another process holds it" makes a window follow. A lock that cannot be made at all (an
 //! unwritable folder, a filesystem without locks) leaves the window logging in for itself, as
-//! before this existed. The holder runs every cluster feed, human nodes and RBN alike, under ITS
+//! before this existed. A window already following does not fail open: it has seen a holder, which
+//! may still be up, so on a lock error it keeps following and tries again. The holder runs every cluster feed, human nodes and RBN alike, under ITS
 //! settings: its node list and its SSID. The lock is keyed by the bare callsign, so windows set up
 //! for different calls stay independent. It lives in the base config dir, never in the shared data
 //! dir: that one can be a network folder for a multi-PC shack, and each computer there logs in for
@@ -18,8 +19,8 @@
 //! **The relay.** The holder listens on `127.0.0.1:<ephemeral>` and writes the port and a fresh
 //! secret to `cluster-<CALL>.relay` beside the lock: owner-only on unix, the per-user config dir
 //! on Windows. Only the lease holder writes the file. It removes whatever an earlier holder left
-//! before it starts its relay (so a start that fails leaves no file naming a dead port), and the
-//! relay removes the file when it stops, if the file still names it. Every window that finds the
+//! before it starts its relay (so a start that fails leaves no file naming a dead port), and takes
+//! its own file away when it lets the lease go, before the lock drops. Every window that finds the
 //! lock taken follows: it connects, the two prove to each other that they know the secret, and
 //! from then on the follower:
 //! - takes each spot the holder's feeds parse (`P` lines), through the same intake it would use
@@ -80,6 +81,8 @@ const STATUS_EVERY: Duration = Duration::from_secs(2);
 const STATUS_SILENCE: Duration = Duration::from_secs(7);
 /// How long a connection has, in all, to finish the handshake.
 const HELLO_DEADLINE: Duration = Duration::from_secs(3);
+/// How long a new connection has to send its first handshake line.
+const FIRST_LINE_DEADLINE: Duration = Duration::from_secs(1);
 /// Connections being authenticated at once; more are closed on accept.
 const MAX_HANDSHAKES: usize = 16;
 /// The longest handshake line. The longest real one, `OK <64 hex> <64 hex>`, is 132 bytes.
@@ -211,6 +214,23 @@ struct Current {
     role: Role,
     /// Stops the role's threads: the follower loop, or the relay.
     stop: Arc<AtomicBool>,
+}
+
+impl Current {
+    /// Stop this part. A holder's relay takes its file away FIRST, while the lease is still held:
+    /// only a lease holder writes that file, so nothing can replace it between the read and the
+    /// remove, and a successor (which can take the lease only after this returns and the lock
+    /// file closes) never has its file removed by this one.
+    fn end(self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Role::Holder {
+            relay: Some(relay), ..
+        } = &self.role
+        {
+            relay.retire();
+        }
+        // `self` drops here: the lease goes last.
+    }
 }
 
 /// One window's part in the share. Cheap to clone; the clones are the same window.
@@ -480,7 +500,7 @@ impl Share {
             }
         }
         if let Some(old) = cur.take() {
-            old.stop.store(true, Ordering::SeqCst);
+            old.end();
         }
         let stop = Arc::new(AtomicBool::new(false));
         let lease = match try_lease(&self.dir, &key) {
@@ -563,7 +583,7 @@ impl Share {
     pub(crate) fn release(&self) {
         let ended = lock(&self.current).take();
         if let Some(c) = ended {
-            c.stop.store(true, Ordering::SeqCst);
+            c.end();
         }
     }
 
@@ -578,19 +598,11 @@ impl Share {
                         self.take_over(key, stop, Some(file));
                         return;
                     }
-                    // As in `claim`: a lock that cannot be tried any more fails open.
-                    Lease::Broken(why) => {
-                        tempo_core::applog::warn(
-                            "cluster",
-                            &format!(
-                                "the cluster lease can no longer be tried ({why}); this window \
-                                 logs in for itself"
-                            ),
-                        );
-                        self.take_over(key, stop, None);
-                        return;
-                    }
-                    Lease::Taken => {
+                    // Unlike `claim`, a lock error here does NOT fail open: this window has seen
+                    // another hold the lease, which may still be up. A login of its own beside
+                    // that holder is the very thing the lease exists to stop, so it keeps
+                    // following and tries again.
+                    Lease::Taken | Lease::Broken(_) => {
                         if let Some((port, secret)) = read_relay(&self.dir, key) {
                             self.session(port, &secret, stop, following);
                             following.up.store(false, Ordering::SeqCst);
@@ -743,11 +755,14 @@ type Followers = Arc<Mutex<Vec<(u64, SyncSender<String>)>>>;
 /// The holder's loopback listener and the followers it feeds.
 struct Relay {
     outs: Followers,
+    /// The relay file, and what this relay wrote there.
+    path: PathBuf,
+    written: String,
 }
 
 impl Relay {
     /// Listen on loopback, write the port and a new secret beside the lock, and serve until
-    /// `stop`; then remove the file, if it is still this relay's.
+    /// `stop`. The file goes with [`Self::retire`].
     fn start(
         dir: &Path,
         key: &str,
@@ -766,8 +781,12 @@ impl Relay {
         })?;
         let written = format!("{port} {secret}\n");
         write_owner_only(&path, &written)?;
-        let outs: Followers = Arc::default();
-        let accepting = outs.clone();
+        let me = Self {
+            outs: Arc::default(),
+            path,
+            written,
+        };
+        let accepting = me.outs.clone();
         let handshakes = Arc::new(AtomicUsize::new(0));
         let ids = Arc::new(AtomicU64::new(0));
         std::thread::spawn(move || {
@@ -801,11 +820,18 @@ impl Relay {
                     Err(_) => std::thread::sleep(Duration::from_millis(100)),
                 }
             }
-            if std::fs::read_to_string(&path).is_ok_and(|t| t == written) {
-                let _ = std::fs::remove_file(&path);
-            }
         });
-        Ok(Self { outs })
+        Ok(me)
+    }
+
+    /// Take the relay file away if it is still this relay's. Called with the lease held
+    /// ([`Current::end`]), so no other process can write the file between the read and the remove.
+    /// A process that ends without it leaves the file behind; the next holder removes it before
+    /// its own relay starts, and a follower that dials the dead port in between gets no proof.
+    fn retire(&self) {
+        if std::fs::read_to_string(&self.path).is_ok_and(|t| t == self.written) {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 
     fn send(&self, source: Source, spot: &ClusterSpot) {
@@ -826,6 +852,14 @@ impl Relay {
     }
 }
 
+/// The frequencies a spot may name, in kHz: 1 kHz to 300 GHz. (A NaN is in no range.)
+const SPOT_KHZ: std::ops::RangeInclusive<f64> = 1.0..=300_000_000.0;
+
+/// A Unicode bidi or invisible format character, which can make a line read other than it is.
+fn hidden_format(c: char) -> bool {
+    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
 /// A callsign's shape: letters, digits and `/`, with at least one of each of the first two.
 fn callsign_shaped(call: &str) -> bool {
     (3..=16).contains(&call.len())
@@ -834,12 +868,13 @@ fn callsign_shaped(call: &str) -> bool {
         && call.bytes().any(|b| b.is_ascii_alphabetic())
 }
 
-/// A follower's spot post, if it is a DX spot: `DX <kHz> <call> [comment]`, a real frequency and
-/// a callsign-shaped DX call, a sane length, no control characters. Rebuilt here by the same
+/// A follower's spot post, if it is a DX spot: `DX <kHz> <call> [comment]`, a frequency in
+/// [`SPOT_KHZ`] and a callsign-shaped DX call, a sane length, no control characters and no bidi or
+/// invisible format characters. Rebuilt here by the same
 /// formatter the window's own spots use, so nothing but a spot can reach a node through it.
 fn checked_post(line: &str) -> Option<String> {
     let post = line.strip_prefix("POST ")?.trim_end_matches(['\r', '\n']);
-    if post.len() > MAX_POST || post.chars().any(char::is_control) {
+    if post.len() > MAX_POST || post.chars().any(|c| c.is_control() || hidden_format(c)) {
         return None;
     }
     let mut words = post.split_whitespace();
@@ -847,7 +882,7 @@ fn checked_post(line: &str) -> Option<String> {
         return None;
     }
     let khz: f64 = words.next()?.parse().ok()?;
-    if !khz.is_finite() || khz <= 0.0 {
+    if !SPOT_KHZ.contains(&khz) {
         return None;
     }
     let call = words.next()?;
@@ -890,7 +925,10 @@ impl Drop for Listed<'_> {
 /// The holder's half of the handshake: the follower's nonce in, our proof out, theirs checked.
 fn authenticate_follower(stream: &mut TcpStream, secret: &str) -> bool {
     let deadline = Instant::now() + HELLO_DEADLINE;
-    let Some(hello) = handshake_line(stream, deadline) else {
+    // A follower sends its hello the moment it connects: a peer that has not within a second
+    // gives its handshake slot back sooner.
+    let Some(hello) = handshake_line(stream, deadline.min(Instant::now() + FIRST_LINE_DEADLINE))
+    else {
         return false;
     };
     let Some(theirs) = hello.strip_prefix("HELLO ").filter(|n| is_nonce(n)) else {
