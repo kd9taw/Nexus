@@ -2,7 +2,7 @@
 // broken hardware — the symptom always appears far from the cause, which is why they are worth
 // catching at the one moment the operator is looking at the setting.
 import { describe, it, expect } from 'vitest'
-import { checkRigForm, blocks, type RigFormFacts } from './rigFormChecks'
+import { checkRigForm, blocks, icomScopeCure, nativeCivBlockedReason, type RigFormFacts } from './rigFormChecks'
 
 const PORTS = ['/dev/cu.usbserial-A', '/dev/tty.usbserial-A', 'COM5']
 
@@ -262,5 +262,15 @@ describe('checkRigForm — USB topology (additive, warnings only)', () => {
       output: [],
     })
     expect(empty.some((c) => /of this device|inside the radio/.test(c.message))).toBe(false)
+  })
+})
+
+describe('the native CI-V engine refuses a TCI connection, as the engine does', () => {
+  it('names TCI as the reason, and offers no Icom scope cure there', () => {
+    expect(nativeCivBlockedReason(3073, 'tci')).toBe('tci')
+    expect(icomScopeCure({ rigModel: 3073, rigConn: 'tci', icomNativeCat: false, baud: 115200 })).toBeNull()
+    // Control: the same radio on USB is the engine's to drive.
+    expect(nativeCivBlockedReason(3073, 'serial')).toBeNull()
+    expect(icomScopeCure({ rigModel: 3073, rigConn: 'serial', icomNativeCat: false, baud: 115200 })).toBe('native-off')
   })
 })

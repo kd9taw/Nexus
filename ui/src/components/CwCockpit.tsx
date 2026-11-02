@@ -112,6 +112,7 @@ import {
   getCatCwUnprovenRigModels,
 } from '../api'
 import { patchSettings } from '../settings/patch'
+import { icomScopeCure } from '../rigFormChecks'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
 import { pollSingleFlight } from '../singleFlight'
@@ -905,7 +906,9 @@ export function CwCockpit({
     return () => {
       alive = false
     }
-  }, [active])
+    // Re-read on a radio switch too: the flat rig fields (model, connection, baud, CI-V switch) are
+    // the ACTIVE radio's, and the scope toolbar's Icom hint reads them (`icomScopeCure`).
+  }, [active, snap.activeRadioId])
   const profileMacros = profiles[activeProfile]?.macros
   // Typed as CwMacro[] so the row renderer reads ONE shape: a profile macro's label is the
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
@@ -1119,16 +1122,15 @@ export function CwCockpit({
   // whatever pitch the operator runs (it used to be a fixed 300–1100, centered on 600 only).
   // That is the Filter chip, and the default; Std and Full show the band as the waterfalls do.
   const [audioSpan, setAudioSpan] = useState<CwAudioSpan>(() => coerceCwAudioSpan(surfaceGet(CW_SCOPE_SPAN_KEY)))
-  // A radio with its own scope (`yaesuScope`) hides the chips; when its rows fall back to sound-card
-  // audio that view is Filter, never a span picked elsewhere that the operator can neither see nor change.
-  const shownSpan: CwAudioSpan = yaesuScope ? 'filter' : audioSpan
-  const cwView = cwAudioView(shownSpan, pitch, filterHz)
+  const cwView = cwAudioView(audioSpan, pitch, filterHz)
   // The audio view's span: Filter (round the pitch, the default), or the waterfalls' Std and Full
   // views. Display only: the click maps through whichever window is shown. They stand at the start of
   // the scope's own toolbar strip: a row of their own took its height out of the picture, which sits at
-  // the panel's floor at 1024x768. Hidden on a native RF row and on a radio with its own scope.
+  // the panel's floor at 1024x768. Hidden on a native RF row only, where an audio span means nothing. A
+  // radio with its own scope whose rows are the sound card's (an FT-710 without its SCU-LAN10 link)
+  // draws audio like any other radio, so the operator can widen it there too.
   const audioSpanChips =
-    !nativeRf && !yaesuScope ? (
+    !nativeRf ? (
       <div className="ph-span" role="group" aria-label={t('cw.scope.span.aria')}>
         {CW_AUDIO_SPANS.map((id) => (
           <button
@@ -1157,6 +1159,40 @@ export function CwCockpit({
         ))}
       </div>
     ) : null
+  // The audio is what came through the RADIO's filter, so in Std and Full, where the window is wider
+  // than that filter, the rest of the window is the filter's stopband and can never show a signal.
+  // Say so, or a 500 Hz filter reads as a scope that will not zoom out. Never in Filter: that view
+  // frames the filter by design, and saying so there would be noise.
+  const filterLimits =
+    !nativeRf && audioSpan !== 'filter' && filterHz != null && filterHz > 0 && filterHz < cwView.hiHz - cwView.loHz
+  // An Icom whose own wide scope is one setting away (`icomScopeCure`): the audio view is all an
+  // operator on Hamlib ever sees, with nothing saying the radio's panadapter can be drawn here.
+  const scopeCure = !nativeRf && cwSettings ? icomScopeCure(cwSettings) : null
+  const settingsLink = (where: string) =>
+    onOpenSettings ? (
+      <button type="button" className="settings-linkbtn" onClick={() => onOpenSettings(where)} />
+    ) : (
+      <strong />
+    )
+  const scopeToolbar = (
+    <>
+      {audioSpanChips}
+      {filterLimits && (
+        <span className="ph-scope-sub" role="status">
+          {t('cw.scope.filterLimit', { hz: filterHz })}
+        </span>
+      )}
+      {scopeCure && (
+        <span className="ph-scope-sub">
+          {scopeCure === 'native-off' ? (
+            <T k="cw.scope.nativeHint.civOff" tags={{ link: settingsLink('rig-advanced') }} />
+          ) : (
+            <T k="cw.scope.nativeHint.baud" tags={{ link: settingsLink('rig-control') }} />
+          )}
+        </span>
+      )}
+    </>
+  )
   const changePitch = (v: number) => {
     const p = Math.max(300, Math.min(1200, Math.round(v)))
     setPitch(p)
@@ -2552,10 +2588,10 @@ export function CwCockpit({
             title={
               nativeRf
                 ? t('cw.scope.nativeRf.title')
-                : shownSpan === 'filter'
+                : audioSpan === 'filter'
                   ? t('cw.scope.audio.title', { lo: cwView.loHz, hi: cwView.hiHz })
                   // Std and Full are not centred on the pitch, so the title says what they are.
-                  : shownSpan === 'std'
+                  : audioSpan === 'std'
                     ? t('cw.scope.span.std.title', { lo: cwView.loHz, hi: cwView.hiHz })
                     : t('cw.scope.span.full.title', { lo: cwView.loHz, hi: cwView.hiHz })
             }
@@ -2654,7 +2690,7 @@ export function CwCockpit({
           transmitting={snap.radio.transmitting}
           theme={theme}
           smeterDb={smeterDb}
-          toolbarStart={audioSpanChips}
+          toolbarStart={scopeToolbar}
           viewLoHz={yaesuRf ? -1e9 : nativeRf ? rfSpan.lo : cwView.loHz}
           viewHiHz={yaesuRf ? 1e9 : nativeRf ? rfSpan.hi : cwView.hiHz}
           markerHz={nativeRf ? undefined : pitch}

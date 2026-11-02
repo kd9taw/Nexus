@@ -25,7 +25,11 @@ const decodeState = {
   name: null as string | null,
 }
 
-const { setCwKeyer } = vi.hoisted(() => ({ setCwKeyer: vi.fn(async (..._a: unknown[]) => null) }))
+const { setCwKeyer, settingsNow } = vi.hoisted(() => ({
+  setCwKeyer: vi.fn(async (..._a: unknown[]) => null),
+  // The settings the cockpit reads on open: the active radio's model, connection, baud and CI-V switch.
+  settingsNow: { value: {} as Record<string, unknown> },
+}))
 
 vi.mock('../api', async (importOriginal) => {
   // ⭐ DERIVED FROM THE REAL MODULE, not a hand-kept list. A hand-kept mock omits any export
@@ -46,7 +50,7 @@ vi.mock('../api', async (importOriginal) => {
     // Hand-kept mock: an export CwCockpit calls but this list omits makes it THROW ON MOUNT,
     // which reads as a behaviour regression rather than the stale mock it actually is.
     getCatCwUnprovenRigModels: vi.fn(async () => []),
-    getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 } })),
+    getSettings: vi.fn(async () => ({ macros: { cwProfiles: [], activeCwProfile: 0 }, ...settingsNow.value })),
     setSettings: vi.fn(async () => ({})),
     sendCw: vi.fn(async () => {}),
     setCwKeyer,
@@ -93,7 +97,10 @@ vi.mock('./BandStrip', () => ({ BandStrip: () => <div data-testid="bandstrip-stu
 vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
 vi.mock('./SpotDialog', () => ({ SpotDialog: () => null }))
 
-beforeEach(() => localStorage.clear())
+beforeEach(() => {
+  localStorage.clear()
+  settingsNow.value = {}
+})
 afterEach(() => {
   cleanup()
   setCwKeyer.mockClear()
@@ -129,9 +136,9 @@ function makeSnap(over: Record<string, unknown> = {}): AppSnapshot {
   } as unknown as AppSnapshot
 }
 
-async function renderCw(over: Record<string, unknown> = {}) {
+async function renderCw(over: Record<string, unknown> = {}, onOpenSettings?: (where: string) => void) {
   const r = render(
-    <CwCockpit snap={makeSnap(over)} theme="dark" onWorkSpot={() => {}} spots={[]} />,
+    <CwCockpit snap={makeSnap(over)} theme="dark" onWorkSpot={() => {}} spots={[]} onOpenSettings={onOpenSettings} />,
   )
   await act(async () => {
     await Promise.resolve()
@@ -192,16 +199,151 @@ describe('the CW audio scope span', () => {
     expect(container.querySelector('.ph-scope-panel > .ph-span')).toBeNull()
   })
 
-  it('a radio with its own scope hides the chips, and a stored span is not applied behind them', async () => {
-    // Its rows fall back to sound-card audio (no RF feed), so the audio view is drawn — at Filter,
-    // the one view the operator can see the reason for, whatever was picked elsewhere.
+  it('a radio with its own scope shows the chips while its rows are sound-card audio, and applies the pick', async () => {
+    // The FT-710 without its SCU-LAN10 link: the radio has a scope Nexus talks to (the span and
+    // position selects), but the rows are the sound card's. That view is audio like any other, so
+    // the operator can widen it, and a span picked before is the one drawn.
     localStorage.setItem('nexus.cw.scope.span', 'std')
     await renderCw({ scopeModeCode: 0x34 })
+    expect(group()).toBeTruthy()
+    expect(chip('Std').getAttribute('aria-pressed')).toBe('true')
+    expect(view()).toEqual({ lo: 200, hi: 3000 })
+    fireEvent.click(chip('Full'))
+    expect(view()).toEqual({ lo: 200, hi: 4000 })
+    expect(localStorage.getItem('nexus.cw.scope.span')).toBe('full')
+    // The radio's own selects stay beside them.
+    expect(screen.getByLabelText('Panadapter span (sets the radio)')).toBeTruthy()
+  })
+
+  it('the radio\'s own RF rows take the chips away: an audio span means nothing on them', async () => {
+    await renderCw({ scopeModeCode: 0x34 })
+    expect(group()).toBeTruthy()
+    const onFeed = scopeProps[scopeProps.length - 1].onFeed as (s: string, lo: number, hi: number) => void
+    act(() => onFeed('yaesu', 14_000_000, 14_100_000))
     expect(screen.queryByRole('group', { name: 'Audio scope span' })).toBeNull()
-    expect(view()).toEqual({ lo: 288, hi: 913 })
-    // Positive control: the same stored pick on a radio without its own scope is applied.
+    // And on an Icom CI-V feed the RF zoom chips stand in their place.
     cleanup()
     await renderCw()
-    expect(view()).toEqual({ lo: 200, hi: 3000 })
+    const onFeed2 = scopeProps[scopeProps.length - 1].onFeed as (s: string, lo: number, hi: number) => void
+    act(() => onFeed2('civ', 14_000_000, 14_100_000))
+    expect(screen.queryByRole('group', { name: 'Audio scope span' })).toBeNull()
+    expect(screen.getByRole('group', { name: 'Panadapter zoom' })).toBeTruthy()
+  })
+})
+
+describe('the CW audio scope says when the radio\'s filter is what limits it', () => {
+  const note = () => screen.queryByText(/widen it on the radio to see more/)
+
+  it('names the filter in Std and Full, where the window is wider than it', async () => {
+    await renderCw({ filterWidthHz: 500 })
+    fireEvent.click(chip('Std'))
+    expect(note()?.textContent).toBe("Showing your radio's 500 Hz filter — widen it on the radio to see more.")
+    fireEvent.click(chip('Full'))
+    expect(note()).not.toBeNull()
+    // A 1 kHz filter still leaves most of Std's 2800 Hz dark.
+    cleanup()
+    await renderCw({ filterWidthHz: 1000 })
+    fireEvent.click(chip('Std'))
+    expect(note()?.textContent).toBe("Showing your radio's 1000 Hz filter — widen it on the radio to see more.")
+  })
+
+  it('never in Filter, which frames the filter by design', async () => {
+    await renderCw({ filterWidthHz: 500 })
+    expect(chip('Filter').getAttribute('aria-pressed')).toBe('true')
+    expect(note()).toBeNull()
+    // Positive control on the same render: Std names it, and back to Filter it goes.
+    fireEvent.click(chip('Std'))
+    expect(note()).not.toBeNull()
+    fireEvent.click(chip('Filter'))
+    expect(note()).toBeNull()
+  })
+
+  it('says nothing when the filter is wider than the window, unknown, or the feed is RF', async () => {
+    localStorage.setItem('nexus.cw.scope.span', 'std')
+    // A 3 kHz filter (the soundcard keyer's data mode) covers Std's 200–3000 Hz.
+    await renderCw({ filterWidthHz: 3000 })
+    expect(note()).toBeNull()
+    cleanup()
+    await renderCw({ filterWidthHz: null })
+    expect(note()).toBeNull()
+    cleanup()
+    await renderCw({ filterWidthHz: 500 })
+    expect(note()).not.toBeNull()
+    const onFeed = scopeProps[scopeProps.length - 1].onFeed as (s: string, lo: number, hi: number) => void
+    act(() => onFeed('civ', 14_000_000, 14_100_000))
+    expect(note()).toBeNull()
+  })
+})
+
+describe('the CW scope points an Icom at its own wide scope', () => {
+  const icomOff = { rigModel: 3073, rigConn: 'serial', icomNativeCat: false, baud: 115200 }
+  const hint = () => screen.queryByText(/can show its own wide scope/)
+  const baudHint = () => screen.queryByText(/needs 115,200 baud/)
+
+  it('on an IC-7300 over Hamlib: says so, and the link opens the switch', async () => {
+    settingsNow.value = icomOff
+    const open = vi.fn()
+    await renderCw({}, open)
+    expect(hint()).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Native Icom CI-V/ }))
+    expect(open).toHaveBeenCalledWith('rig-advanced')
+  })
+
+  it('with the switch on below 115,200 baud: says the baud is why', async () => {
+    settingsNow.value = { ...icomOff, icomNativeCat: true, baud: 38400 }
+    const open = vi.fn()
+    await renderCw({}, open)
+    expect(hint()).toBeNull()
+    expect(baudHint()).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Rig & CAT/ }))
+    expect(open).toHaveBeenCalledWith('rig-control')
+  })
+
+  it('says nothing where no setting would bring the scope', async () => {
+    // Switch on at the right baud: the scope is Nexus's to stream.
+    settingsNow.value = { ...icomOff, icomNativeCat: true }
+    await renderCw({}, vi.fn())
+    expect(hint()).toBeNull()
+    expect(baudHint()).toBeNull()
+    // The Icom network connection streams it already.
+    for (const s of [
+      { ...icomOff, rigConn: 'icomlan' },
+      // A radio the CI-V engine does not drive.
+      { ...icomOff, rigModel: 1035 },
+      // The operator picked the sound card's waterfall for this radio.
+      { ...icomOff, nativeScope: 'audio' },
+    ]) {
+      cleanup()
+      settingsNow.value = s
+      await renderCw({}, vi.fn())
+      expect(hint()).toBeNull()
+      expect(baudHint()).toBeNull()
+    }
+  })
+
+  it('goes once the radio\'s own scope is streaming', async () => {
+    settingsNow.value = icomOff
+    await renderCw({}, vi.fn())
+    expect(hint()).not.toBeNull()
+    const onFeed = scopeProps[scopeProps.length - 1].onFeed as (s: string, lo: number, hi: number) => void
+    act(() => onFeed('civ', 14_000_000, 14_100_000))
+    expect(hint()).toBeNull()
+  })
+
+  it('a radio switch re-reads the settings: an Icom-to-Yaesu switch clears the Icom hint', async () => {
+    settingsNow.value = icomOff
+    const r = await renderCw({}, vi.fn())
+    // Same radio re-rendered: still the Icom.
+    expect(hint()).not.toBeNull()
+    settingsNow.value = { rigModel: 1035, rigConn: 'serial', icomNativeCat: false, baud: 38400 }
+    r.rerender(
+      <CwCockpit snap={{ ...makeSnap(), activeRadioId: 2 } as AppSnapshot} theme="dark" onWorkSpot={() => {}} spots={[]} onOpenSettings={vi.fn()} />,
+    )
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(hint()).toBeNull()
+    expect(baudHint()).toBeNull()
   })
 })

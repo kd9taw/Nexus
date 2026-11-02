@@ -13494,6 +13494,13 @@ export const EN = {
   'cw.rfZoom.band.label': 'Band',
   'cw.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
   'cw.rfZoom.band.partial': 'Your scope sweeps only part of this band',
+  // The CW audio scope's toolbar notes. `{{hz}}` is the radio's filter width. The <link> runs open
+  // Settings at the place they name.
+  'cw.scope.filterLimit': "Showing your radio's {{hz}} Hz filter — widen it on the radio to see more.",
+  'cw.scope.nativeHint.civOff':
+    'Your Icom can show its own wide scope here: turn on <link>Native Icom CI-V in Settings ▸ Radio ▸ Rig & CAT ▸ Advanced</link>.',
+  'cw.scope.nativeHint.baud':
+    "Your Icom's own wide scope needs 115,200 baud: set it in <link>Settings ▸ Radio ▸ Rig & CAT</link>, and the radio's CI-V USB Baud Rate to match.",
 
   // ── CW ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ──────────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an
