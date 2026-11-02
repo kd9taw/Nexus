@@ -46,6 +46,8 @@ const PAN = 'Flex native panadapter (Beta)'
 const CLIENT_AND_AUDIO = ['Flex native DAX audio (Beta)', 'Flex native client (Beta)']
 const LABELS = [PAN, ...CLIENT_AND_AUDIO]
 const NOTE = 'Needs Connection: Network.'
+const UNBENCHED = 'Let Nexus send CW, Tune and ATU through the native Flex client (not yet bench-tested)'
+const NOT_HERE = "The Flex native client doesn't run on OmniRig or TCI."
 
 /** A FLEX-6400 on a serial (COM) connection: the reporter's setup. */
 const FLEX_SERIAL = {
@@ -210,5 +212,56 @@ describe('the Flex native switches on a Flex that is not on the network', () => 
     await renderAdvanced({ ...FLEX_SERIAL, name: 'FTDX10', rigModel: 1042, rigModelName: 'Yaesu FTDX10' })
     for (const label of LABELS) expect(switchFor(label), label).toBeNull()
     expect(screen.queryByText(NOTE)).toBeNull()
+  })
+})
+
+// OmniRig and TCI hand CAT to another program: the CAT daemon starts that connection's own driver
+// before it ever asks for the Flex client (`spawn_cat_daemon`), so the client, its DAX audio and
+// its CW/Tune/ATU setting do nothing there. They show with a note saying so, refuse to turn ON, and
+// still turn OFF — a setting left on from another connection must never be stuck on.
+describe('the Flex client switches on OmniRig and TCI', () => {
+  const noteOn = (label: string) =>
+    [...(screen.queryByText(label)?.closest('label')?.querySelectorAll('.settings-hint') ?? [])].some(
+      (h) => h.textContent === NOT_HERE,
+    )
+
+  it.each(['omnirig', 'tci'])('on %s, an off client and DAX audio say why and do not turn on', async (conn) => {
+    await renderAdvanced({ ...FLEX_SERIAL, rigConn: conn, flexRadioIp: '192.0.2.77' })
+    for (const label of CLIENT_AND_AUDIO) {
+      const sw = switchFor(label)
+      expect(sw, `${label} is shown`).not.toBeNull()
+      expect(noteOn(label), `${label} says why`).toBe(true)
+      expect(sw!.disabled, `${label} refuses to turn on`).toBe(true)
+      fireEvent.click(sw!)
+      expect(sw!.getAttribute('aria-checked')).toBe('false')
+    }
+  })
+
+  it.each(['omnirig', 'tci'])('on %s, switches left on say why and turn off', async (conn) => {
+    await renderAdvanced({
+      ...FLEX_SERIAL,
+      rigConn: conn,
+      flexRadioIp: '192.0.2.77',
+      flexNativeCat: true,
+      flexNativeAudio: true,
+      flexNativeUnbenched: true,
+    } as typeof FLEX_SERIAL)
+    // The CW/Tune/ATU setting first: it shows only while the client is on.
+    for (const label of [UNBENCHED, ...CLIENT_AND_AUDIO]) {
+      const sw = switchFor(label)
+      expect(sw, `${label} is shown`).not.toBeNull()
+      expect(noteOn(label), `${label} says why`).toBe(true)
+      expect(sw!.disabled, `${label} can still be turned off`).toBe(false)
+      fireEvent.click(sw!)
+      expect(switchFor(label)?.getAttribute('aria-checked') ?? 'false', `${label} turns off`).toBe('false')
+    }
+  })
+
+  it('on Serial and on the network the client switches carry no such note', async () => {
+    for (const radio of [FLEX_SERIAL, { ...FLEX_SERIAL, rigConn: 'network', rigAddr: '127.0.0.1:5002' }]) {
+      await renderAdvanced({ ...radio, flexRadioIp: '192.0.2.77' })
+      expect(screen.queryByText(NOT_HERE)).toBeNull()
+      cleanup()
+    }
   })
 })

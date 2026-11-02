@@ -4378,6 +4378,12 @@ export function SettingsPanel({
   // connection it shows disabled with a note saying so, rather than vanishing without a word. The
   // native client and DAX audio do not depend on the connection (`flex_client_reachable`).
   const flexPanNeedsNetwork = [2036, 23005].includes(form.rigModel) && form.rigConn !== 'network'
+  // A Flex model on OmniRig or TCI: those connections hand CAT to another program, and the CAT
+  // daemon starts that connection's own driver before it ever asks for the Flex client
+  // (`spawn_cat_daemon`), so the client, its DAX audio and its CW/Tune/ATU setting do nothing
+  // there. Their switches say so and refuse to turn ON, but one left on still turns OFF.
+  const flexClientNotHere =
+    [2036, 23005].includes(form.rigModel) && (form.rigConn === 'omnirig' || form.rigConn === 'tci')
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
   // …and WHY it isn't known, when the reason is that ARRL retired it. A saved `MAR`
@@ -7179,12 +7185,16 @@ export function SettingsPanel({
                     <button
                       type="button"
                       role="switch"
+                      disabled={flexClientNotHere && !form.flexNativeAudio}
                       aria-checked={form.flexNativeAudio ?? false}
                       className={`toggle${form.flexNativeAudio ? ' on' : ''}`}
                       onClick={() => updateBool('flexNativeAudio', !form.flexNativeAudio)}
                     >
                       <span className="toggle-knob" />
                     </button>
+                    {flexClientNotHere && (
+                      <span className="settings-hint">{t('settings.rigControl.flexClientNotHere')}</span>
+                    )}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexAudio.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -7203,12 +7213,16 @@ export function SettingsPanel({
                   <button
                     type="button"
                     role="switch"
+                    disabled={flexClientNotHere && !form.flexNativeCat}
                     aria-checked={form.flexNativeCat ?? false}
                     className={`toggle${form.flexNativeCat ? ' on' : ''}`}
                     onClick={() => updateBool('flexNativeCat', !form.flexNativeCat)}
                   >
                     <span className="toggle-knob" />
                   </button>
+                  {flexClientNotHere && (
+                    <span className="settings-hint">{t('settings.rigControl.flexClientNotHere')}</span>
+                  )}
                   <span className="settings-hint">
                     <T k="settings.rigControl.flexClient.hint" tags={{ b: <strong /> }} />
                   </span>
@@ -7229,7 +7243,9 @@ export function SettingsPanel({
                     <span className="settings-label">
                       {t('settings.rigControl.flexUnbenched.label')}
                     </span>
-                    <button disabled={locked('flexNativeUnbenched')} data-setting="flexNativeUnbenched"
+                    <button
+                      disabled={locked('flexNativeUnbenched') || (flexClientNotHere && !form.flexNativeUnbenched)}
+                      data-setting="flexNativeUnbenched"
                       type="button"
                       role="switch"
                       aria-checked={form.flexNativeUnbenched ?? false}
@@ -7246,6 +7262,9 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                     {setAtStation('flexNativeUnbenched')}
+                    {flexClientNotHere && (
+                      <span className="settings-hint">{t('settings.rigControl.flexClientNotHere')}</span>
+                    )}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexUnbenched.hint" tags={{ b: <strong /> }} />
                     </span>

@@ -8571,6 +8571,9 @@ export const EN = {
     "Nexus connects to the radio itself, at the <b>Flex radio IP</b>, as one of its SmartSDR clients, and runs CAT and PTT on a slice of its own. Beta and <b>unverified on hardware</b>: try transmit into a dummy load first. If Nexus cannot connect, it falls back to SmartSDR CAT. Save to apply.",
   // Under a Flex switch shown disabled because the radio is not on the network connection.
   'settings.rigControl.flexNeedsNetwork': 'Needs Connection: Network.',
+  // Under the Flex native client, DAX audio and CW/Tune/ATU switches on a Flex whose Connection is
+  // OmniRig or TCI, where the client never starts.
+  'settings.rigControl.flexClientNotHere': "The Flex native client doesn't run on OmniRig or TCI.",
   'settings.rigControl.flexUnbenched.label':
     'Let Nexus send CW, Tune and ATU through the native Flex client (not yet bench-tested)',
   'settings.rigControl.flexUnbenched.hint':

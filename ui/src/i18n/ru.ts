@@ -9046,6 +9046,7 @@ export const RU: PartialCatalog = {
   "settings.rigControl.flexClient.label": "Собственный клиент Flex (бета)",
   "settings.rigControl.flexClient.hint": "Nexus сам подключается к трансиверу по <b>IP трансивера Flex</b> как один из его клиентов SmartSDR и ведёт CAT и PTT на собственном слайсе. Бета, <b>не проверено на оборудовании</b>: сначала попробуйте передачу на эквивалент нагрузки. Если Nexus не может подключиться, он возвращается к SmartSDR CAT. Сохраните, чтобы применить.",
   "settings.rigControl.flexNeedsNetwork": "Требуется «Подключение: Сеть».",
+  "settings.rigControl.flexClientNotHere": "Собственный клиент Flex не работает с OmniRig и TCI.",
   "settings.rigControl.flexUnbenched.label": "Разрешить Nexus передавать CW, «Настройку» и ATU через собственный клиент Flex (ещё не проверено на стенде)",
   "settings.rigControl.flexUnbenched.hint": "<b>Ещё не проверено на настоящем Flex:</b> сначала попробуйте CW, «Настройка» и ATU на эквивалент нагрузки. По умолчанию выключено. Сохраните, чтобы применить; Nexus переподключится к трансиверу.",
   "settings.rigControl.civLog.label": "Журнал диагностики шины CI-V",

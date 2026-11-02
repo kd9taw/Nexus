@@ -8335,6 +8335,7 @@ export const FR: PartialCatalog = {
   "settings.rigControl.flexAudio.label": "Audio DAX Flex natif (bêta)",
   "settings.rigControl.flexClient.hint": "Nexus se connecte lui-même à la radio, à l'<b>IP de la radio Flex</b>, comme l'un de ses clients SmartSDR, et pilote le CAT et le PTT sur une slice à lui. Bêta et <b>non vérifié sur matériel</b> : essayez d'abord l'émission sur une charge fictive. Si Nexus ne peut pas se connecter, il revient à SmartSDR CAT. Enregistrez pour appliquer.",
   "settings.rigControl.flexNeedsNetwork": "Nécessite Connexion : Réseau.",
+  "settings.rigControl.flexClientNotHere": "Le client Flex natif ne fonctionne pas avec OmniRig ni TCI.",
   "settings.rigControl.flexClient.label": "Client Flex natif (bêta)",
   // The Flex client's Beta setting for CW, Tune and the ATU: MACHINE TRANSLATION, for a native speaker to check.
   "settings.rigControl.flexUnbenched.label": "Laisser Nexus envoyer le CW, Tune et l'ATU via le client Flex natif (pas encore testé au banc)",

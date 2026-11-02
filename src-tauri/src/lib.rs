@@ -55817,22 +55817,6 @@ mod tests {
         assert_eq!(out[0].time, t - 60);
     }
 
-    /// REGRESSION (the same tier-switch defect, SECOND consumer): the fix above landed
-    /// on the opening detector's arm and not on the Needed board's — the same two
-    /// fields, off the same roster, in the same file, one `last_heard_slot` grep apart.
-    ///
-    /// `get_need_alerts`' own-decode arm is the board's STRONGEST claim — "decoded by
-    /// YOUR radio on this band" outranks every second-hand PSKR/cluster row — and it
-    /// aged `last_heard_slot` with a bare `saturating_sub`, which floors to 0 whenever
-    /// the entry was numbered under a SHORTER period than the one now running. The
-    /// operator's measured case: `VE3ABC` decoded on FT4 at 17:00, tier switched to FT8
-    /// at 18:00. `Engine::set_tier` flushes the decode context but not the roster, so
-    /// the hour-old entry survives with its FT4 number — far AHEAD of the FT8 slot
-    /// index — and the 2-minute freshness gate read it as zero seconds old.
-    ///
-    /// Both clocks are the real [`SlotClock`](tempo_core::timing::SlotClock) at the two
-    /// real wall-clock instants: the renumbering is the whole mechanism, and a
-    /// hand-computed slot delta would assume it.
     /// A station decoded here WITHOUT a grid scores the grid its contact would be credited with
     /// (`Engine::credited_grid`): worked on 40 m from FN42 and logged with it, it is a new grid on
     /// 20 m, and a 20 m contact would log FN42 — so the own-decode record carries FN42 and the
@@ -55888,6 +55872,22 @@ mod tests {
         assert_eq!(own[0].grid.as_deref(), Some("EN37"));
     }
 
+    /// REGRESSION (the same tier-switch defect, SECOND consumer): the fix above landed
+    /// on the opening detector's arm and not on the Needed board's — the same two
+    /// fields, off the same roster, in the same file, one `last_heard_slot` grep apart.
+    ///
+    /// `get_need_alerts`' own-decode arm is the board's STRONGEST claim — "decoded by
+    /// YOUR radio on this band" outranks every second-hand PSKR/cluster row — and it
+    /// aged `last_heard_slot` with a bare `saturating_sub`, which floors to 0 whenever
+    /// the entry was numbered under a SHORTER period than the one now running. The
+    /// operator's measured case: `VE3ABC` decoded on FT4 at 17:00, tier switched to FT8
+    /// at 18:00. `Engine::set_tier` flushes the decode context but not the roster, so
+    /// the hour-old entry survives with its FT4 number — far AHEAD of the FT8 slot
+    /// index — and the 2-minute freshness gate read it as zero seconds old.
+    ///
+    /// Both clocks are the real [`SlotClock`](tempo_core::timing::SlotClock) at the two
+    /// real wall-clock instants: the renumbering is the whole mechanism, and a
+    /// hand-computed slot delta would assume it.
     #[test]
     fn a_tier_switch_does_not_make_an_hour_old_decode_the_needed_boards_freshest_evidence() {
         use tempo_core::timing::SlotClock;
