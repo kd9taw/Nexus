@@ -182,6 +182,18 @@ const SIXTY: &[Seg] = &[
     sixty_cw(5.4050),                      // ch 5.4050 CW, at the centre
 ];
 
+// 2200 m and 630 m (General, Advanced and Extra): 135.7–137.8 kHz and 472–479 kHz, every
+// emission, per 47 CFR 97.301(b)–(d) and 97.305(c)
+// (https://www.ecfr.gov/current/title-47/chapter-I/subchapter-D/part-97/subpart-D). A Technician
+// and a Novice hold neither (97.301(e)). ⚠️ NOT MODELLED, as no power cap is: the 1 W EIRP
+// (2200 m) and 5 W EIRP (630 m) limits of 97.313(k)/(l), and the 97.303(g) duty to notify the
+// Utilities Technology Council at least 30 days before first transmitting. Those stay the
+// operator's.
+const LF_MF: &[Seg] = &[
+    s(0.1357, 0.1378, true, true, true), // 2200 m all-mode
+    s(0.472, 0.479, true, true, true),   // 630 m all-mode
+];
+
 /// 60 m's 5.3515–5.3665 MHz segment, all-mode. Every other [`SIXTY`] row is a channel's.
 const SIXTY_SEGMENT: Seg = s(5.3515, 5.3665, true, true, true);
 
@@ -290,6 +302,7 @@ fn advanced() -> Vec<Seg> {
         s(28.000, 28.300, true, true, false), // 10 m CW/data
         s(28.300, 29.700, true, false, true), // 10 m phone
     ];
+    v.extend_from_slice(LF_MF);
     v.extend_from_slice(SIXTY);
     v.extend_from_slice(VHF);
     v
@@ -314,6 +327,7 @@ fn general() -> Vec<Seg> {
         s(28.000, 28.300, true, true, false), // 10 m CW/data
         s(28.300, 29.700, true, false, true), // 10 m phone
     ];
+    v.extend_from_slice(LF_MF);
     v.extend_from_slice(SIXTY);
     v.extend_from_slice(VHF);
     v
@@ -338,6 +352,7 @@ fn extra() -> Vec<Seg> {
         s(28.000, 28.300, true, true, false), // 10 m CW/data
         s(28.300, 29.700, true, false, true), // 10 m phone
     ];
+    v.extend_from_slice(LF_MF);
     v.extend_from_slice(SIXTY);
     v.extend_from_slice(VHF);
     v
@@ -848,6 +863,65 @@ mod tests {
             2 * COMMON.len(),
             "every band is listed in both modes"
         );
+    }
+
+    /// 2200 m (135.7-137.8 kHz) and 630 m (472-479 kHz) belong to a US General, Advanced and
+    /// Extra, all emissions: 47 CFR 97.301(b)-(d) and 97.305(c). They read TX LOCKED on legal
+    /// spectrum while the tables had no rows. A Technician and a Novice hold neither (97.301(e)),
+    /// and both edges are half-open like every segment.
+    #[test]
+    fn us_general_advanced_and_extra_hold_2200m_and_630m() {
+        for class in [General, Advanced, Extra] {
+            for mode in [Cw, Digital, Rtty, Keyboard, Phone] {
+                for f in [0.1357, 0.1360, 0.13779, 0.472, 0.4742, 0.47899] {
+                    assert!(tx_allowed(class, f, mode), "{class:?} {mode:?} at {f}");
+                }
+                for f in [0.13569, 0.1378, 0.47199, 0.479, 0.502] {
+                    assert!(!tx_allowed(class, f, mode), "{class:?} {mode:?} at {f}");
+                }
+            }
+        }
+        // CONTROLS: Technician and Novice stay locked on both bands, every mode.
+        for class in [Technician, Novice] {
+            for mode in [Cw, Digital, Rtty, Keyboard, Phone] {
+                for f in [0.1357, 0.1360, 0.472, 0.4742] {
+                    assert!(!tx_allowed(class, f, mode), "{class:?} {mode:?} at {f}");
+                }
+            }
+        }
+    }
+
+    /// ⛔ NAMING MORE BANDS NEVER WIDENS A US PRIVILEGE. The band table now names 60 m from 5.06
+    /// MHz, 8 m and 5 m; no US class holds any of that spectrum, and its gate, its spans and its
+    /// sideband rules must say so at every point. On 60 m below the US segment, LSB and wide phone
+    /// are refused too (the 60 m rule now sees it), which only ever adds a refusal.
+    #[test]
+    fn the_newly_named_spectrum_grants_no_us_class_anything() {
+        let mut points = Vec::new();
+        for (lo, hi) in [(5.06, 5.3305), (40.0, 45.0), (54.0, 69.9)] {
+            let mut f = lo;
+            while f < hi {
+                points.push(f);
+                f += (hi - lo) / 500.0;
+            }
+        }
+        for class in US_CLASSES {
+            for &f in &points {
+                for mode in [Cw, Digital, Rtty, Keyboard, Phone] {
+                    assert!(!tx_allowed(class, f, mode), "{class:?} {mode:?} at {f:.4}");
+                    assert!(
+                        !tx_span_allowed(class, f, f + SSB_BW_MHZ, mode),
+                        "{class:?} {mode:?} span at {f:.4}"
+                    );
+                }
+                if f < 5.5 {
+                    assert!(!lsb_phone_allowed(class, f), "{class:?} LSB at {f:.4}");
+                    assert!(!wide_phone_allowed(class, f), "{class:?} AM/FM at {f:.4}");
+                }
+            }
+        }
+        // Open is trusted there as everywhere.
+        assert!(tx_allowed(Open, 5.2585, Phone) && lsb_phone_allowed(Open, 5.2585));
     }
 
     #[test]
@@ -1553,6 +1627,9 @@ mod tests {
     /// deliberate change to a shipped class is a new golden AND a sentence in its commit saying
     /// why. One row has moved so: `Technician 28.4 … wide false`, AM and FM refused to a
     /// Technician from 28.3 to 28.5 MHz by 47 CFR 97.307(f)(10) ([`cw_and_ssb_voice_only`]).
+    /// And ten rows grew, General's and Extra's `spans` in every section: each gained 2200 m
+    /// (0.1357–0.1378) and 630 m (0.472–0.479), 47 CFR 97.301(b)/(d) ([`LF_MF`]); nothing else
+    /// on those rows moved.
     #[test]
     fn the_shipped_classes_answer_byte_for_byte_as_before() {
         let path = concat!(

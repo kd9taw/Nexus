@@ -189,7 +189,8 @@ fn invalid_busy_and_routed_repeater_tunes_are_refused_without_mutation() {
         (146.94, "minus", 600_000, 59.9),
         (146.94, "minus", 600_000, f32::NAN),
         (f64::NAN, "minus", 600_000, 0.0),
-        (60.0, "minus", 600_000, 0.0),
+        // Off every band. (60.0 stood here until the band table took ADIF's 5 m, 54-69.9 MHz.)
+        (47.0, "minus", 600_000, 0.0),
     ] {
         assert!(
             matches!(

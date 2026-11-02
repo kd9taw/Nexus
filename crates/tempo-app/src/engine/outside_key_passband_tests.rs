@@ -610,6 +610,41 @@ fn on_a_60m_channel_dial_only_an_upper_sideband_read_back_keys() {
     assert!(wrong.is_empty(), "60 m dial read-backs: {wrong:#?}");
 }
 
+/// ⛔ THE 60 M CHANNEL READ-BACK RULE IS A US ONE. 47 CFR 97.303(h) channelises 60 m for a US
+/// station; `Open` (every non-US operator, whose 60 m differs country by country, and the UK's
+/// blocks include 5.3715 and 5.4035) is trusted there, as the gate trusts it everywhere. An
+/// outside key from `Open` on a US channel dial keys whatever the radio reads back. CONTROLS: a
+/// US General, Advanced or Extra on the same dials is still refused an LSB, AM or FM read-back,
+/// and keys a USB one.
+#[test]
+fn the_60m_channel_read_back_rule_binds_us_classes_only() {
+    let mut wrong = Vec::new();
+    for dial in SIXTY_CHANNEL_DIALS {
+        for rb in ["PKTLSB", "LSB", "AM", "FM", "USB"] {
+            let mut e = armed("open", "digital", "60m", "USB", dial);
+            e.observe_rig_mode(rb.into());
+            if !(e.outside_key_passband_allowed() && broker_keys(&mut e)) {
+                wrong.push(format!("open at {dial} on {rb}: refused"));
+            }
+            if e.outside_key_passband_refusal().is_some() {
+                wrong.push(format!("open at {dial} on {rb}: a refusal reason"));
+            }
+            for class in ["general", "advanced", "extra"] {
+                let mut e = armed(class, "digital", "60m", "USB", dial);
+                e.observe_rig_mode(rb.into());
+                let want = rb == "USB";
+                if e.outside_key_passband_allowed() != want || broker_keys(&mut e) != want {
+                    wrong.push(format!("{class} at {dial} on {rb}: want {want}"));
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "60 m channel read-back by class: {wrong:#?}"
+    );
+}
+
 /// ⛔ A RETUNE NEXUS COMMANDS DOES NOT CLEAR THE READ-BACK THE GATE JUDGES. A Technician in the CW
 /// section at 7.030 whose radio reports USB is refused; Nexus retunes to 7.031 and the loop clears
 /// the displayed read-back until its next poll: a broker key in that window is still refused, on
