@@ -32773,7 +32773,7 @@ fn read_need_alerts(
     // of wall clock. The conversion (and the tier-switch refusal it carries) is
     // `own_decode_heards` → `roster_spot_age_secs`.
     const OWN_DECODE_MAX_AGE_SECS: i64 = 120;
-    let mut heard: Vec<propagation::Heard> = own_decode_heards(
+    let own_decodes: Vec<propagation::Heard> = own_decode_heards(
         &snap.stations,
         snap.radio.slot,
         snap.radio.tr_period_secs,
@@ -32781,6 +32781,7 @@ fn read_need_alerts(
         &tier_mode,
         OWN_DECODE_MAX_AGE_SECS,
     );
+    let mut heard = own_decodes.clone();
     heard.extend(jtty_heards(&jtty_heard));
     // The real value (empirical evidence, not a model): two complementary signals
     // over the PSK Reporter firehose + near-region feed —
@@ -32859,6 +32860,9 @@ fn read_need_alerts(
             license_class,
         ));
     }
+    // A station this radio is decoding scores the grid it sent on the air (or none), never a PSK
+    // Reporter locator: that is the grid its contact will be credited with.
+    propagation::grids_from_own_decodes(&mut heard, &own_decodes);
     // Each heard station's US state, for the New State need: a live activator's park's, any other
     // station's own (see `place_heards`). Live as the decoration pass below reads it.
     let live_spots: Vec<propagation::OtaSpot> = ota_cache

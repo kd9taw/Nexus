@@ -253,6 +253,27 @@ pub struct NeedAlert {
     pub iota: Option<String>,
 }
 
+/// For a station YOUR radio is decoding, the grid it sent on the air is the grid every other
+/// record of it on that band scores with: each record in `heard` on the band and call of a
+/// record in `own` takes that record's grid, `None` included.
+///
+/// Why: a contact is credited with the grid the station sent on the air. A callbook's grid on a
+/// gridless contact counts for the map and the distance only, and so would a third party's. A PSK
+/// Reporter record carries the DX's locator as the reporter had it, and [`rank`] keeps only the
+/// best record per call and band — so a DXpedition that never sends a grid, decoded here with
+/// none, wore "New grid" off a PSK Reporter locator, and the contact then logged without one.
+/// Stations your radio is not decoding keep their records' grids (a lead to go and find).
+pub fn grids_from_own_decodes(heard: &mut [Heard], own: &[Heard]) {
+    for h in heard.iter_mut() {
+        if let Some(o) = own
+            .iter()
+            .find(|o| o.band == h.band && o.call.eq_ignore_ascii_case(&h.call))
+        {
+            h.grid = o.grid.clone();
+        }
+    }
+}
+
 /// Build a [`Heard`] from a spot frequency (MHz) — maps the frequency to a band
 /// label so cluster/RBN spots (which carry a frequency, not a band) can be
 /// scored. `None` if the frequency isn't on a known band.
@@ -2198,6 +2219,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A grid-less DXpedition your radio is decoding wears no "New grid" off a PSK Reporter
+    /// locator, because the contact would log without that grid. Controls: a grid it DID send
+    /// still scores, and a station you are not decoding keeps its report's grid.
+    #[test]
+    fn a_decoded_station_scores_the_grid_it_sent_not_a_reports() {
+        let n = LogNeeds::new();
+        let (z, g, s) = (HashSet::new(), HashSet::new(), HashSet::new());
+        let on_20 = |call: &str, grid: Option<&str>| Heard {
+            grid: grid.map(str::to_string),
+            freq_mhz: None,
+            ..heard_from_freq(call, 14.074, "FT8").unwrap()
+        };
+        let grid_need = |heard: &[Heard], call: &str| {
+            rank(heard, &n, &slots(&z, &g, &s))
+                .iter()
+                .any(|a| a.call == call && a.tags.contains(&NeedTag::NewGrid))
+        };
+
+        // Decoded with no grid; PSK Reporter has one.
+        let own = vec![on_20("KH8X", None)];
+        let mut heard = own.clone();
+        heard.push(on_20("KH8X", Some("AH45")));
+        assert!(grid_need(&heard, "KH8X"), "the report alone scores a grid");
+        grids_from_own_decodes(&mut heard, &own);
+        assert!(
+            !grid_need(&heard, "KH8X"),
+            "decoded without a grid, so the log will credit none"
+        );
+
+        // Decoded WITH a grid: that grid scores, whatever the report says.
+        let own = vec![on_20("K1ABC", Some("FN42"))];
+        let mut heard = own.clone();
+        heard.push(on_20("K1ABC", Some("EM10")));
+        grids_from_own_decodes(&mut heard, &own);
+        assert!(heard.iter().all(|h| h.grid.as_deref() == Some("FN42")));
+        assert!(grid_need(&heard, "K1ABC"));
+
+        // Not decoded here (another call, or the same call on another band): untouched.
+        let own = vec![on_20("K1ABC", None)];
+        let mut heard = vec![
+            on_20("DL1XYZ", Some("JO62")),
+            Heard {
+                grid: Some("FN42".into()),
+                ..heard_from_freq("K1ABC", 21.074, "FT8").unwrap()
+            },
+        ];
+        grids_from_own_decodes(&mut heard, &own);
+        assert_eq!(heard[0].grid.as_deref(), Some("JO62"));
+        assert_eq!(heard[1].grid.as_deref(), Some("FN42"));
     }
 
     /// A ROW CARRIES THE GRID ITS EVIDENCE CARRIED, for the station's watch-list match (operator
