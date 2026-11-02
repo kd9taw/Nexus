@@ -13339,6 +13339,16 @@ impl Engine {
             .and_then(|h| h.grid.as_deref())
     }
 
+    /// The grid a contact with `call` would be credited with if the exchange carried none: the
+    /// roster's decoded grid, else the grid it sent on the air this session (any band, within
+    /// 24 hours), else the grid on its newest logged contact — [`Self::dx_grid_resolved`] exactly,
+    /// and never a callbook's (that one counts for the map and distance only). The Needed board
+    /// scores a station this radio is decoding with this grid, so "New grid" promises only a grid
+    /// the log will credit.
+    pub fn credited_grid(&self, call: &str) -> Option<String> {
+        self.dx_grid_resolved(call, None)
+    }
+
     /// The grid this station's newest logged contact carries, if that row has one — the log's
     /// half of [`Self::dx_grid_resolved`], for a caller outside a QSO (the rotator's
     /// point-at-call). A lookup keyed on the call, never a guess.
@@ -51757,6 +51767,26 @@ mod tests {
             "a gridless QSO must reuse the grid we already logged for that call, or the grid \
              can never be credited and NewGrid fires forever"
         );
+    }
+
+    /// The grid the Needed board scores a decoded station with is the grid logging would credit:
+    /// the session roster's, else one the station sent on another band this session, else one
+    /// logged before. Never invented.
+    #[test]
+    fn a_decoded_stations_credited_grid_is_the_one_logging_takes() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        // Logged before, on another band, with the grid it sent then.
+        let mut first = e.qso_record("W9XYZ".into(), Some("EN37".into()), None);
+        first.grid = Some("EN37".into());
+        first.band = "40m".into();
+        e.log_qso(first);
+        assert_eq!(e.credited_grid("W9XYZ").as_deref(), Some("EN37"));
+        // Sent on the air this session, then the roster forgot it at a band change: still that.
+        e.ingest_decodes_for_test(&[dec_snr("CQ K1ABC FN42", -7)], 1);
+        e.app.inbox.roster.clear();
+        assert_eq!(e.credited_grid("K1ABC").as_deref(), Some("FN42"));
+        // Negative control: a station never heard with a grid and never logged has none.
+        assert_eq!(e.credited_grid("DL1XYZ"), None);
     }
 
     /// A SATELLITE QSO's grid must not mute the terrestrial per-band NEW GRID decode badge.
