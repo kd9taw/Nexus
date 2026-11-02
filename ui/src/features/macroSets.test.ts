@@ -48,6 +48,8 @@ const REFUSED: Record<string, string[]> = {
   fr: ['Arrêter', 'ARRÊTER', 'ARRETER', 'Arrête !', 'Arrêt', "Arrêt d'urgence", 'Interrompre', 'Abandonner', 'Annuler', 'Échap'],
   ja: ['停止', '送信停止', 'TX停止', '停波', '中止', '中断', '止めて', '止まれ', 'ストップ', 'ｽﾄｯﾌﾟ', 'キャンセル', '取り消し', '終了', 'エスケープ', 'Stopボタン', 'ＥＳＣ'],
   ru: ['Стоп', 'СТОП', 'Стоп TX', 'Остановить', 'Остановка', 'Прервать', 'Отменить', 'Отмена', 'Выключить', 'Завершить', 'Остановить передачу'],
+  zh: ['停止', '停止发射', 'Stop TX（停止发射）', '中止', '中断', '终止', '终止发射', '放弃', '结束', '结束发射', '急停', '退出', '取消', '■ 停止'],
+  'zh-hant': ['停止', '停止發射', 'Stop TX（停止發射）', '中止', '中斷', '終止', '終止發射', '放棄', '結束', '結束發射', '急停', '退出', '取消', '■ 停止'],
 }
 
 /** On-air shorthand is the same in every language — an invariant token, never translated — and
@@ -63,6 +65,9 @@ const ALLOWED: Record<string, string[]> = {
   fr: ['Répondre', 'Échange', 'Mon IND.', 'Appel', 'Merci 73', 'Répéter', 'Encore', 'Nom', 'Bonjour', 'Au revoir', 'Fin'],
   ja: ['応答', 'ナンバー', '自局コール', '相手コール', '呼出', 'ありがとう', '再送', 'もう一度', '名前', '挨拶', 'コンテスト', '最後'],
   ru: ['Ответ', 'Обмен', 'Мой позывной', 'Вызов', 'Спасибо 73', 'Повторить', 'Ещё раз', 'Имя', 'Привет', 'До связи', 'Стоповый', 'Отменённый'],
+  // 暂停/暫停 is pause: the reason no bare 停 is on the lists.
+  zh: ['应答', '交换', '我的呼号', '对方呼号', '呼叫', '谢谢 73', '重发', '再来一次', '姓名', '问候', '暂停', '暂停接收'],
+  'zh-hant': ['應答', '交換', '我的呼號', '對方呼號', '呼叫', '謝謝 73', '重發', '再來一次', '姓名', '問候', '暫停', '暫停接收'],
 }
 
 /** The catalogs' own captions for a stop. Chosen by English words, not by the function under

@@ -198,7 +198,7 @@ export function macroEditShortcut(key: string): string {
  *  catalog. Reviewed 2026-10-04 against each catalog's own captions for a stop, which
  *  `macroSets.test.ts` holds them to: German says "beenden" as often as "stoppen"
  *  ("Mithören beenden" is Stop listening), Japanese uses 終了 for a Stop, and Russian
- *  «Выключить»/«Завершить» (reviewed 2026-10-27). */
+ *  «Выключить»/«Завершить» (reviewed 2026-10-27), and Chinese 终止/中斷 (reviewed 2026-11-02). */
 export const STOP_WORDS: Record<string, readonly string[]> = {
   en: ['stop', 'halt', 'abort', 'cancel', 'esc', 'escape'],
   de: ['stopp', 'stoppen', 'halt', 'anhalten', 'abbrechen', 'abbruch', 'beenden'],
@@ -208,6 +208,11 @@ export const STOP_WORDS: Record<string, readonly string[]> = {
   // Russian inflects, and a word here must match whole, so each form a caption takes is listed.
   // The catalog says «Выключить будильник» for Stop alarm and «Завершить» for a Stop that ends.
   ru: ['стоп', 'остановить', 'остановите', 'останови', 'остановка', 'остановки', 'прервать', 'прервите', 'прерви', 'отменить', 'отмените', 'отмена', 'выключить', 'завершить', 'эскейп'],
+  // Chinese, in each script, since the Remote page has no catalog to give them: abort and
+  // interrupt (终止/終止, 中断/中斷), give up (放弃/放棄), end (结束/結束), emergency stop (急停)
+  // and quit (退出). Never a bare 停: 暂停/暫停 is pause, an ordinary caption (reviewed 2026-11-02).
+  zh: ['停止', '中止', '中断', '终止', '放弃', '结束', '急停', '退出', '取消'],
+  'zh-hant': ['停止', '中止', '中斷', '終止', '放棄', '結束', '急停', '退出', '取消'],
 }
 
 /** For matching only: lower case, one space between words, compatibility forms folded (full-width
