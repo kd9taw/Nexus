@@ -8,6 +8,7 @@ import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/re
 import { getSettings, setSettings } from '../api'
 import { FreedvPane } from './FreedvPane'
 import type { FreedvState } from '../types'
+import { dismissToast, subscribeToasts, type Toast } from '../toast'
 
 vi.mock('../api', () => ({
   getSettings: vi.fn(() => Promise.resolve({ mycall: 'K2DEF', freedvHeard: false })),
@@ -99,6 +100,24 @@ describe('FreedvPane', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Listen for them' }))
     await waitFor(() => expect(setSettings).toHaveBeenCalledTimes(1))
     expect(vi.mocked(setSettings).mock.calls[0][0]).toEqual({ mycall: 'K2DEF', freedvHeard: true })
+  })
+
+  it('a listener switch that cannot be saved says so, and writes only its own field', async () => {
+    let toasts: Toast[] = []
+    const off = subscribeToasts((now) => {
+      toasts = now
+    })
+    vi.mocked(setSettings).mockRejectedValueOnce(new Error('disk full'))
+    render(<FreedvPane freedv={state()} control onPickCall={() => {}} nowUnix={NOW} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Listen for them' }))
+    await waitFor(() => expect(toasts.map((x) => x.kind)).toContain('error'))
+    const said = toasts.find((x) => x.kind === 'error')!
+    expect(said.message).toMatch(/^Could not save settings\./)
+    expect(said.message).toContain('disk full')
+    // Its one field over the settings read at save time; nothing else from this window.
+    expect(vi.mocked(setSettings).mock.calls[0][0]).toEqual({ mycall: 'K2DEF', freedvHeard: true })
+    toasts.forEach((x) => dismissToast(x.id))
+    off()
   })
 
   it('offers no settings change on a screen without control, and says when nothing listens', () => {

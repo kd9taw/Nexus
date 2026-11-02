@@ -11,8 +11,9 @@
 // tokens: they are the same characters in every language, and numbers go through
 // `invariantNumber`.
 
-import { getSettings, setSettings } from '../api'
 import { invariantNumber, t } from '../i18n'
+import { patchSettings } from '../settings/patch'
+import { withErrorToast } from '../toast'
 import type { FreedvState } from '../types'
 
 export interface FreedvPaneProps {
@@ -29,10 +30,10 @@ export interface FreedvPaneProps {
 /** FreeDV counts as connected for this long after its last datagram: its heartbeat is periodic. */
 const ALIVE_SECS = 120
 
-/** Turn on the heard-call listener: the settings as stored now, with that one field changed. */
-async function listenForHeardCalls(): Promise<void> {
-  const s = await getSettings()
-  await setSettings({ ...s, freedvHeard: true })
+/** Turn on the heard-call listener: that one field, over the settings the station holds when it is
+ *  saved (`patchSettings`), never a copy this window kept. A save that fails says so. */
+function listenForHeardCalls(): void {
+  void withErrorToast(() => patchSettings(() => ({ freedvHeard: true })), t('settings.save.failed'))
 }
 
 export function FreedvPane({ freedv, onPickCall, control, nowUnix }: FreedvPaneProps) {
@@ -68,7 +69,7 @@ export function FreedvPane({ freedv, onPickCall, control, nowUnix }: FreedvPaneP
         <p className="dim">
           {t('phone.freedv.heard.off')}{' '}
           {control && (
-            <button type="button" className="settings-linkbtn" onClick={() => void listenForHeardCalls().catch(() => {})}>
+            <button type="button" className="settings-linkbtn" onClick={listenForHeardCalls}>
               {t('phone.freedv.heard.listen')}
             </button>
           )}
