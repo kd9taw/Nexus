@@ -290,15 +290,7 @@ struct Net(reqwest::blocking::Client);
 
 impl Source for Net {
     fn ng3k(&self) -> Result<Vec<DxpeditionPlan>, String> {
-        let html = self
-            .0
-            .get(NG3K_URL)
-            .send()
-            .map_err(|e| e.to_string())?
-            .error_for_status()
-            .map_err(|e| e.to_string())?
-            .text()
-            .map_err(|e| e.to_string())?;
+        let html = get_text(&self.0, NG3K_URL, "NG3K")?;
         Ok(parse_adxo(&html))
     }
     fn active(&self) -> Result<HashSet<String>, String> {
@@ -440,12 +432,44 @@ pub fn set_cache_dir(dir: &Path) {
 /// and most-wanted ranks. Each source is asked only when its schedule says so (see the module
 /// header); otherwise this is lock-only. `Err` only while NG3K has never answered.
 pub fn fetch_plans() -> Result<Vec<DxpeditionPlan>, String> {
-    let c = reqwest::blocking::Client::builder()
+    FEEDS.plans(&Net(client()?), now_unix())
+}
+
+/// The most any of the three answers is read to: on 2026-11-02 NG3K's page was 40 KB, ClubLog's
+/// expeditions 33 KB and its most-wanted list 4 KB.
+const DXPED_REPLY_BYTES: u64 = 1024 * 1024;
+
+/// The client every source here is asked with: HTTPS only, on [`builder`]'s timeout and
+/// redirect policy.
+fn client() -> Result<reqwest::blocking::Client, String> {
+    builder()
+        .https_only(true)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// A timeout, and no redirect followed (NG3K and ClubLog serve each answer at its own address,
+/// so a redirect is a fault, not a move). The loopback tests build on this (plain HTTP); the
+/// fetches themselves always go through [`client`].
+fn builder() -> reqwest::blocking::ClientBuilder {
+    reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent(UA)
-        .build()
-        .map_err(|e| e.to_string())?;
-    FEEDS.plans(&Net(c), now_unix())
+        .redirect(reqwest::redirect::Policy::none())
+}
+
+/// A successful answer's text, at most [`DXPED_REPLY_BYTES`].
+fn get_text(c: &reqwest::blocking::Client, url: &str, who: &str) -> Result<String, String> {
+    let resp = c.get(url).send().map_err(|e| e.to_string())?;
+    super::body::read_ok(resp, DXPED_REPLY_BYTES, who)
+}
+
+/// ClubLog's answer as JSON, at most [`DXPED_REPLY_BYTES`]. Whatever the status: ClubLog reports
+/// a refusal in the body, which the callers read.
+fn get_clublog_json(c: &reqwest::blocking::Client, url: &str) -> Result<serde_json::Value, String> {
+    let resp = c.get(url).send().map_err(|e| e.to_string())?;
+    let body = super::body::read_capped(resp, DXPED_REPLY_BYTES, "ClubLog")?;
+    serde_json::from_str(&body).map_err(|e| e.to_string())
 }
 
 /// The currently-active expedition calls from the CACHED plan list (no network) —
@@ -486,12 +510,7 @@ fn most_wanted_error_breadcrumb(v: &serde_json::Value) -> Option<&'static str> {
 /// actual callsign. An error body or a list that resolves to nothing is a failure, so the
 /// schedule backs off and the last good list is kept.
 fn most_wanted(c: &reqwest::blocking::Client) -> Result<HashMap<String, u32>, String> {
-    let v: serde_json::Value = c
-        .get(MOST_WANTED_URL)
-        .send()
-        .map_err(|e| e.to_string())?
-        .json()
-        .map_err(|e| e.to_string())?;
+    let v = get_clublog_json(c, MOST_WANTED_URL)?;
     // ClubLog reports problems as {"error": "..."} with HTTP 200 — say so rather than
     // silently behaving like an empty list.
     //
@@ -540,12 +559,7 @@ fn parse_most_wanted(v: &serde_json::Value) -> Result<HashMap<String, u32>, Stri
 /// ClubLog's active-expeditions set (uppercased callsigns). An empty array is a real answer
 /// (nobody on the air); any other shape is a failure, so the last good set is kept.
 fn fetch_active(c: &reqwest::blocking::Client) -> Result<HashSet<String>, String> {
-    let v: serde_json::Value = c
-        .get(EXPEDITIONS_URL)
-        .send()
-        .map_err(|e| e.to_string())?
-        .json()
-        .map_err(|e| e.to_string())?;
+    let v = get_clublog_json(c, EXPEDITIONS_URL)?;
     let Some(arr) = v.as_array() else {
         // Schema drift must be visible in the log, not a silent empty set.
         eprintln!("propagation: ClubLog expeditions.php unexpected JSON shape");
@@ -875,6 +889,41 @@ mod tests {
     use super::*;
 
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// NG3K's page is read through `get_text` on `client`: HTTPS only, no redirect followed, at
+    /// most `DXPED_REPLY_BYTES`.
+    #[test]
+    fn the_wire_keeps_its_limits() {
+        super::super::body::assert_wire_limits(
+            builder,
+            client,
+            |c, u| get_text(c, u, "NG3K"),
+            DXPED_REPLY_BYTES,
+            "NG3K",
+        );
+    }
+
+    /// ClubLog's answers keep the same limit: past it, refused before it is parsed; a redirect
+    /// is not followed (its empty body is not a list). CONTROL: a list of a normal size reads.
+    #[test]
+    fn clublog_answers_keep_the_limit_and_follow_no_redirect() {
+        use super::super::body::{ok_reply, redirect_reply, serve};
+        let plain = builder().build().expect("client");
+        let url = |port: u16| format!("http://127.0.0.1:{port}/expeditions.php");
+        let huge = vec![b' '; DXPED_REPLY_BYTES as usize + 1];
+        let err = get_clublog_json(&plain, &url(serve(vec![ok_reply(&huge)]))).unwrap_err();
+        assert!(
+            err.starts_with("ClubLog: ") && err.contains("larger than"),
+            "{err}"
+        );
+        let port = serve(vec![redirect_reply(), ok_reply(br#"[["3Y0J"]]"#)]);
+        assert!(get_clublog_json(&plain, &url(port)).is_err());
+        let port = serve(vec![ok_reply(br#"[["3Y0J"]]"#)]);
+        assert_eq!(
+            get_clublog_json(&plain, &url(port)),
+            Ok(serde_json::json!([["3Y0J"]]))
+        );
+    }
 
     const H: i64 = 3600;
     const DAY: i64 = 86_400;

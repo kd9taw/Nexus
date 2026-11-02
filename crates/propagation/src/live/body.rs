@@ -27,6 +27,19 @@ pub(crate) fn read_capped(body: impl Read, limit: u64, who: &str) -> Result<Stri
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// A successful reply's body through [`read_capped`]. Any other status — a redirect the client
+/// did not follow among them — is `Err` with a sentence prefixed `who`, and its body is not read.
+pub(crate) fn read_ok(
+    resp: reqwest::blocking::Response,
+    limit: u64,
+    who: &str,
+) -> Result<String, String> {
+    if !resp.status().is_success() {
+        return Err(format!("{who}: answered HTTP {}", resp.status().as_u16()));
+    }
+    read_capped(resp, limit, who)
+}
+
 /// A loopback HTTP server that answers each connection, in turn, with the next of `replies`
 /// (whole responses, head and body) and closes it. Its port.
 #[cfg(test)]
@@ -59,6 +72,66 @@ pub(crate) fn ok_reply(body: &[u8]) -> Vec<u8> {
     .into_bytes();
     r.extend_from_slice(body);
     r
+}
+
+/// The limits a capped fetcher keeps, checked on a loopback server through the fetcher's OWN
+/// client functions, so loosening one in the module turns its test red:
+/// - `fetch` (a GET with a given client) reads a body of exactly `limit` bytes whole and refuses
+///   one byte more with a sentence prefixed `who`;
+/// - a redirect is an error, not followed (the server's second answer is what following it
+///   would have fetched);
+/// - `client`, the one the fetcher ships with, refuses plain HTTP outright, while a client from
+///   `builder` (the same timeout and redirect policy, without the HTTPS rule) reads that server.
+#[cfg(test)]
+pub(crate) fn assert_wire_limits(
+    builder: fn() -> reqwest::blocking::ClientBuilder,
+    client: fn() -> Result<reqwest::blocking::Client, String>,
+    fetch: impl Fn(&reqwest::blocking::Client, &str) -> Result<String, String>,
+    limit: u64,
+    who: &str,
+) {
+    let plain = builder().build().expect("client");
+    let url = |port: u16| format!("http://127.0.0.1:{port}/product");
+
+    let edge = vec![b' '; limit as usize];
+    let port = serve(vec![ok_reply(&edge)]);
+    assert_eq!(
+        fetch(&plain, &url(port)).map(|s| s.len()),
+        Ok(edge.len()),
+        "a body at the limit is read whole"
+    );
+    let huge = vec![b' '; limit as usize + 1];
+    let err = fetch(&plain, &url(serve(vec![ok_reply(&huge)]))).unwrap_err();
+    assert!(
+        err.starts_with(&format!("{who}: ")) && err.contains("larger than"),
+        "a body past the limit must be refused: {err}"
+    );
+
+    let port = serve(vec![redirect_reply(), ok_reply(b"followed")]);
+    let err = fetch(&plain, &url(port)).unwrap_err();
+    assert!(
+        err.contains("302"),
+        "a redirect must not be followed: {err}"
+    );
+
+    let port = serve(vec![ok_reply(b"plain")]);
+    assert!(
+        fetch(&client().expect("client"), &url(port)).is_err(),
+        "the shipped client spoke plain HTTP"
+    );
+    let port = serve(vec![ok_reply(b"plain")]);
+    assert_eq!(
+        fetch(&plain, &url(port)).as_deref(),
+        Ok("plain"),
+        "CONTROL: the server answers plain HTTP"
+    );
+}
+
+/// A `302 Found` response pointing at `/elsewhere`: a client that follows it asks again.
+#[cfg(test)]
+pub(crate) fn redirect_reply() -> Vec<u8> {
+    b"HTTP/1.1 302 Found\r\nLocation: /elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        .to_vec()
 }
 
 #[cfg(test)]

@@ -28,32 +28,36 @@ const XRAY_URL: &str = "https://services.swpc.noaa.gov/json/goes/primary/xrays-6
 /// Daily Geomagnetic Data (DGD.txt): thirty days of daily A and K, issued 00:30 UT.
 const DGD_URL: &str = "https://services.swpc.noaa.gov/text/daily-geomagnetic-indices.txt";
 
+/// The most any of this module's products is read to. The largest, the six-hour X-ray file, was
+/// 163 KB on 2026-11-02 (the 1-minute Kp 28 KB, D-RAP 42 KB, the rest under 25 KB): 1 MB is
+/// about six times the biggest, and a server that sends more is refused, never read to the end.
+const SWPC_REPLY_BYTES: u64 = 1024 * 1024;
+
+/// The client every fetch here uses: HTTPS only, on [`builder`]'s timeout and redirect policy.
 fn client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .user_agent(UA)
+    builder()
+        .https_only(true)
         .build()
         .map_err(|e| e.to_string())
 }
 
+/// A timeout, and no redirect followed (SWPC serves each product at its own address, so a
+/// redirect is a fault, not a move). The loopback tests build on this (plain HTTP); the fetches
+/// themselves always go through [`client`].
+fn builder() -> reqwest::blocking::ClientBuilder {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(UA)
+        .redirect(reqwest::redirect::Policy::none())
+}
+
 fn get_json(c: &reqwest::blocking::Client, url: &str) -> Result<Value, String> {
-    c.get(url)
-        .send()
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json::<Value>()
-        .map_err(|e| e.to_string())
+    serde_json::from_str(&get_text(c, url)?).map_err(|e| e.to_string())
 }
 
 fn get_text(c: &reqwest::blocking::Client, url: &str) -> Result<String, String> {
-    c.get(url)
-        .send()
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
-        .map_err(|e| e.to_string())
+    let resp = c.get(url).send().map_err(|e| e.to_string())?;
+    super::body::read_ok(resp, SWPC_REPLY_BYTES, "NOAA SWPC")
 }
 
 /// One measured value and the product's own time for it (Unix seconds, UTC).
@@ -268,15 +272,10 @@ pub fn kp_to_ap(kp: f32) -> f32 {
 /// forward). See [`crate::kpforecast`] for what the samples mean; this is only the
 /// wire.
 pub fn fetch_kp_forecast() -> Result<crate::kpforecast::KpForecast, String> {
-    let c = client()?;
-    let body = c
-        .get("https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json")
-        .send()
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
-        .map_err(|e| e.to_string())?;
+    let body = get_text(
+        &client()?,
+        "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json",
+    )?;
     Ok(crate::kpforecast::parse_kp_forecast(&body))
 }
 
@@ -287,15 +286,10 @@ pub fn fetch_kp_forecast() -> Result<crate::kpforecast::KpForecast, String> {
 /// this returns `Ok`, so an error page served with a 200 cannot replace thirty real days with
 /// nothing, and the last good copy keeps being served with its own dates on it.
 pub fn fetch_daily_solar_indices() -> Result<crate::solar_indices::DailySolarIndices, String> {
-    let c = client()?;
-    let body = c
-        .get("https://services.swpc.noaa.gov/text/daily-solar-indices.txt")
-        .send()
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
-        .map_err(|e| e.to_string())?;
+    let body = get_text(
+        &client()?,
+        "https://services.swpc.noaa.gov/text/daily-solar-indices.txt",
+    )?;
     crate::solar_indices::parse_daily_solar_indices(&body)
         .ok_or_else(|| "daily solar indices: no dated row in the response".to_string())
 }
@@ -450,6 +444,19 @@ mod tests {
         assert_eq!(kp_to_ap(5.0), 48.0);
         assert_eq!(kp_to_ap(9.0), 400.0);
         assert!((kp_to_ap(2.5) - 11.0).abs() < 1e-6);
+    }
+
+    /// Every product here is read through `get_text` (`get_json` included) on `client`: HTTPS
+    /// only, no redirect followed, at most `SWPC_REPLY_BYTES`.
+    #[test]
+    fn the_wire_keeps_its_limits() {
+        super::super::body::assert_wire_limits(
+            builder,
+            client,
+            get_text,
+            SWPC_REPLY_BYTES,
+            "NOAA SWPC",
+        );
     }
 
     // ---- Network test: `#[ignore]`d, run on demand with
