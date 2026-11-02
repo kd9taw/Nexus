@@ -7860,6 +7860,8 @@ export const EN = {
   // ⚠️ CAT is the rig-control protocol's own name, here and in the two entries below it.
   'radios.switcher.catDead.title':
     'Switch to {{name}} — ⚠ CAT not responding (check its rig, cable, and COM port)',
+  'radios.switcher.catRefused.title':
+    "{{name}} is not connected — RTS keys its transmitter on its port, so Serial handshake can't be Hardware. Set it to Auto or None.",
   'radios.switcher.catDead.aria': 'CAT not responding',
   'radios.switcher.catDead.band': 'no CAT',
   'radios.peg.on.label': '🔒 Pegged',

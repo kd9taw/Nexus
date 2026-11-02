@@ -1139,6 +1139,7 @@
 "2","radios.switcher.active.title","{{name}} — active radio ({{band}} · {{freq}} MHz)","{{name}} — активное радио ({{band}} · {{freq}} MHz)","{{name}} | {{band}} | {{freq}} | MHz",""
 "2","radios.switcher.switch.title","Switch to {{name}} (last on {{band}} · {{freq}} MHz)","Переключиться на {{name}} (последний на {{band}} · {{freq}} MHz)","{{name}} | {{band}} | {{freq}} | MHz",""
 "2","radios.switcher.catDead.title","Switch to {{name}} — ⚠ CAT not responding (check its rig, cable, and COM port)","Переключиться на {{name}} — ⚠ CAT не отвечает (проверьте трансивер, кабель и COM-порт)","{{name}} | CAT",""
+"2","radios.switcher.catRefused.title","{{name}} is not connected — RTS keys its transmitter on its port, so Serial handshake can't be Hardware. Set it to Auto or None.","{{name}} не подключён — на его порту RTS включает передачу, поэтому квитирование порта не может быть «Аппаратным». Выберите «Авто» или «Нет».","{{name}} | RTS","Tooltip on a radio's switcher pill: Nexus refused to start that radio's CAT because the RTS line on its port keys the transmitter and Hardware flow control would hold it up. Name the choices as the Serial handshake menu does."
 "2","radios.switcher.catDead.aria","CAT not responding","CAT не отвечает","CAT",""
 "2","radios.switcher.catDead.band","no CAT","нет CAT","CAT",""
 "2","radios.peg.on.label","🔒 Pegged","🔒 Привязано","",""

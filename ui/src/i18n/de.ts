@@ -4296,6 +4296,7 @@ export const DE: PartialCatalog = {
   "radios.switcher.active.title": "{{name}} — aktives Funkgerät ({{band}} · {{freq}} MHz)",
   "radios.switcher.switch.title": "Zu {{name}} wechseln (zuletzt auf {{band}} · {{freq}} MHz)",
   "radios.switcher.catDead.title": "Zu {{name}} wechseln — ⚠ CAT antwortet nicht (Gerät, Kabel und COM-Port prüfen)",
+  "radios.switcher.catRefused.title": "{{name}} ist nicht verbunden — RTS tastet an seinem Port den Sender, daher kann „Serielles Handshake“ nicht Hardware sein. Stellen Sie es auf Automatisch oder Keines.",
   "radios.switcher.catDead.aria": "CAT antwortet nicht",
   "radios.switcher.catDead.band": "kein CAT",
   "radios.peg.on.label": "🔒 Fixiert",

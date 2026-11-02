@@ -5048,6 +5048,7 @@ export const JA: PartialCatalog = {
   "radios.switcher.active.title": "{{name}} — アクティブな無線機（{{band}}・{{freq}} MHz）",
   "radios.switcher.switch.title": "{{name}} に切り替え（前回: {{band}}・{{freq}} MHz）",
   "radios.switcher.catDead.title": "{{name}} に切り替え — ⚠ CATが応答しません（無線機・ケーブル・COMポートを確認してください）",
+  "radios.switcher.catRefused.title": "{{name}} は未接続です — このポートではRTSが送信機をキーイングするため、シリアルハンドシェイクを「ハードウェア」にはできません。「自動」か「なし」に設定してください。",
   "radios.switcher.catDead.aria": "CATが応答しません",
   "radios.switcher.catDead.band": "CATなし",
   "radios.peg.on.label": "🔒 固定中",

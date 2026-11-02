@@ -1380,6 +1380,9 @@ pub struct RadioLive {
     pub sideband: Option<String>,
     pub smeter_db: Option<i32>,
     pub cat_ok: Option<bool>,
+    /// Nexus refused to start this radio's CAT itself: a declared Hardware serial handshake on a
+    /// port where RTS keys a transmitter. Its pill says why, not just "not answering".
+    pub cat_refused: bool,
 }
 
 /// How many CONSECUTIVE failed amplifier polls before the link indicator goes down.
@@ -10162,6 +10165,12 @@ impl Engine {
     pub fn observe_radio_cat(&mut self, id: u32, ok: Option<bool>) {
         self.radio_live.entry(id).or_default().cat_ok = ok;
         *self.monitor_reads.entry(id).or_default() += 1;
+    }
+
+    /// Record whether a non-active radio's CAT open was refused by Nexus itself
+    /// ([`RadioLive::cat_refused`]), so its switcher pill can give the reason.
+    pub fn observe_radio_cat_refused(&mut self, id: u32, refused: bool) {
+        self.radio_live.entry(id).or_default().cat_refused = refused;
     }
 
     /// Drop a radio's live cache (it left the monitor pool — became active, was removed, or
@@ -30556,6 +30565,8 @@ contact yourself."
                             sideband: s.radio.sideband.clone(),
                             is_active: true,
                             cat_ok: self.cat_status.0,
+                            // The active radio's refusal is its own CAT status line.
+                            cat_refused: false,
                             smeter_db: self.rig_smeter_db,
                             transmitting: s.radio.transmitting,
                             bands: p.bands.clone(),
@@ -30577,6 +30588,7 @@ contact yourself."
                                 .unwrap_or_else(|| p.last_sideband.clone()),
                             is_active: false,
                             cat_ok: live.and_then(|l| l.cat_ok),
+                            cat_refused: live.is_some_and(|l| l.cat_refused),
                             smeter_db: live.and_then(|l| l.smeter_db),
                             transmitting: false,
                             bands: p.bands.clone(),

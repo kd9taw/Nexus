@@ -118,3 +118,124 @@ fn the_rts_keys_declaration_refuses_a_monitor_without_moving_its_auto_handshake(
     );
     assert!(!keying_facts(&t, None).rts_declared);
 }
+
+/// ⛔ Cross-port, direction 1: the ACTIVE radio keys PTT on RTS of a dedicated port, and that port
+/// is a MONITORED radio's CAT port. The monitor's daemon would raise RTS under flow control and key
+/// the active radio's transmitter: the monitor is refused.
+#[test]
+fn a_monitor_whose_cat_port_is_the_active_radios_rts_ptt_port_is_refused() {
+    let mut s = station("cat");
+    s.radios[0].ptt_method = "rts".to_string();
+    s.radios[0].ptt_serial_port = "COM99".to_string();
+    s.ptt_method = "rts".to_string();
+    s.ptt_serial_port = "COM99".to_string();
+    assert_refused(&monitored(&s), "monitor on the active radio's RTS PTT port");
+    // Control: the active radio's PTT port elsewhere leaves the monitor alone.
+    s.radios[0].ptt_serial_port = "COM7".to_string();
+    s.ptt_serial_port = "COM7".to_string();
+    assert!(!hamlib_launch_refused(&monitored(&s)));
+}
+
+/// ⛔ Cross-port, direction 2: a MONITORED radio keys PTT on RTS of a dedicated port, and that port
+/// is the ACTIVE radio's CAT port. The active radio's daemon would key the monitored radio: the
+/// active launch is refused.
+#[test]
+fn the_active_radio_whose_cat_port_is_a_monitored_radios_rts_ptt_port_is_refused() {
+    let mut s = station("rts");
+    s.radios[1].ptt_serial_port = "COM98".to_string();
+    s.serial_port = "COM98".to_string();
+    s.rig_model = 2028;
+    s.ptt_method = "cat".to_string();
+    assert_refused(
+        &Transport::from_settings(&s),
+        "active on a monitored radio's RTS PTT port",
+    );
+    // Control: a DISABLED radio keys nothing.
+    s.radios[1].enabled = false;
+    assert!(!hamlib_launch_refused(&Transport::from_settings(&s)));
+}
+
+/// No spelling of the same port escapes the fact: a CW keyline stored as the Win32 device path,
+/// another radio's PTT port in another case, the active radio's own PTT port as an alias of its CAT
+/// port, and a mac tty.*/cu.* pair — read the same at the startup seed (healed port) and live
+/// (stored port).
+#[test]
+fn no_spelling_of_the_same_port_escapes_the_rts_fact() {
+    let mut s = station("cat");
+    s.cw_keyer = tempo_app::settings::CwKeyerBackend::Serial;
+    s.cw_key_line = "RTS".to_string();
+    s.cw_key_port = "\\\\.\\com99".to_string();
+    assert_refused(&monitored(&s), "CW keyline as \\\\.\\com99");
+
+    let mut s = station("cat");
+    s.radios[0].ptt_method = "rts".to_string();
+    s.radios[0].ptt_serial_port = "com99".to_string();
+    assert_refused(&monitored(&s), "another radio's PTT port in another case");
+
+    let mut s = station("cat");
+    s.serial_port = "COM98".to_string();
+    s.rig_model = 2028;
+    s.ptt_method = "rts".to_string();
+    s.ptt_serial_port = "\\\\.\\COM98".to_string();
+    assert_refused(
+        &Transport::from_settings(&s),
+        "own RTS PTT on an alias of the CAT port",
+    );
+
+    // The mac pair: the seed compares the healed transport port, the live path the stored one.
+    let mut s = station("cat");
+    s.cw_keyer = tempo_app::settings::CwKeyerBackend::Serial;
+    s.cw_key_line = "rts".to_string();
+    s.cw_key_port = "/dev/tty.usbserial-1".to_string();
+    assert!(
+        settings_key_rts_on(&s, "/dev/cu.usbserial-1"),
+        "seed: healed cu.*"
+    );
+    assert!(
+        settings_key_rts_on(&s, "/dev/tty.usbserial-1"),
+        "live: stored tty.*"
+    );
+    let mut seeded = Transport::from_settings(&s);
+    seeded.serial_port = "/dev/cu.usbserial-1".to_string();
+    seeded.rts_keys_cat_port = false;
+    seed_line_declarations(&mut seeded, &s);
+    assert!(seeded.rts_keys_cat_port, "the startup seed sees it too");
+}
+
+/// A refused monitor's pill says why: the monitor open records the refusal, and the snapshot
+/// carries it on that radio's summary — never on the active radio's, whose CAT line says it.
+#[test]
+fn a_refused_monitor_carries_its_reason_to_the_switcher() {
+    let s = station("rts");
+    let t = monitored(&s);
+    let (rig, _, ok) = open_monitor(&t);
+    let mut e = Engine::with_settings(s);
+    e.observe_radio_cat(1, ok);
+    e.observe_radio_cat_refused(1, !rig.has_control() && hamlib_launch_refused(&t));
+    let radios = e.snapshot().radios;
+    let summary = |id: u32| {
+        radios
+            .iter()
+            .find(|r| r.id == id)
+            .expect("radio in the switcher")
+    };
+    assert!(
+        summary(1).cat_refused,
+        "the monitored radio's pill gives the reason"
+    );
+    assert_eq!(summary(1).cat_ok, Some(false));
+    assert!(!summary(0).cat_refused);
+}
+
+/// A radio with no CAT configured is never reported refused: its status says "no CAT".
+#[test]
+fn a_radio_with_no_cat_is_never_reported_refused() {
+    let s = station("rts");
+    let mut t = monitored(&s);
+    assert!(
+        hamlib_launch_refused(&t),
+        "the premise: with a rig model it is refused"
+    );
+    t.rig_model = 0;
+    assert!(!hamlib_launch_refused(&t));
+}

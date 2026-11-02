@@ -1124,6 +1124,7 @@ export const RU: PartialCatalog = {
   "radios.switcher.active.title": "{{name}} — активное радио ({{band}} · {{freq}} MHz)",
   "radios.switcher.switch.title": "Переключиться на {{name}} (последний на {{band}} · {{freq}} MHz)",
   "radios.switcher.catDead.title": "Переключиться на {{name}} — ⚠ CAT не отвечает (проверьте трансивер, кабель и COM-порт)",
+  "radios.switcher.catRefused.title": "{{name}} не подключён — на его порту RTS включает передачу, поэтому квитирование порта не может быть «Аппаратным». Выберите «Авто» или «Нет».",
   "radios.switcher.catDead.aria": "CAT не отвечает",
   "radios.switcher.catDead.band": "нет CAT",
   "radios.peg.on.label": "🔒 Привязано",

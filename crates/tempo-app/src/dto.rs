@@ -1083,6 +1083,11 @@ pub struct RadioSummary {
     pub is_active: bool,
     /// Live CAT health for the active radio; `None` for a not-connected radio.
     pub cat_ok: Option<bool>,
+    /// A NON-active radio whose CAT Nexus refused to start: a declared Hardware serial handshake
+    /// on a port where RTS keys a transmitter. The switcher pill gives that reason. ABSENT when
+    /// false, so every snapshot without a refusal is byte-identical.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cat_refused: bool,
     /// Live S-meter (dB rel S9) for the active radio; `None` otherwise.
     pub smeter_db: Option<i32>,
     pub transmitting: bool,

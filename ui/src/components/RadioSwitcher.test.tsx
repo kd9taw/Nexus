@@ -104,5 +104,27 @@ describe('RadioSwitcher', () => {
     // The healthy ACTIVE radio must NOT be flagged (catOk is only a monitor concern here).
     expect(screen.getByText('FTDX10').closest('button')!.className).not.toContain('cat-dead')
   })
+
+  it('a background radio Nexus refused to connect says why on its pill, not just that CAT is down', () => {
+    render(
+      <RadioSwitcher
+        radios={[
+          radio({ id: 0, name: 'FTDX10', isActive: true, catOk: true }),
+          radio({ id: 1, name: 'TS-480', catOk: false, catRefused: true }),
+          radio({ id: 2, name: 'IC-7300', catOk: false }),
+        ]}
+        pegged={false}
+        onSwitch={() => {}}
+        onTogglePeg={() => {}}
+      />,
+    )
+    const refused = screen.getByText('TS-480').closest('button')!
+    expect(refused.className).toContain('cat-dead')
+    expect(refused.getAttribute('title')).toBe(
+      "TS-480 is not connected — RTS keys its transmitter on its port, so Serial handshake can't be Hardware. Set it to Auto or None.",
+    )
+    // A radio that simply is not answering keeps the old wording.
+    expect(screen.getByText('IC-7300').closest('button')!.getAttribute('title')).toContain('not responding')
+  })
 })
 

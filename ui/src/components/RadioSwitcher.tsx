@@ -38,13 +38,15 @@ export function RadioSwitcher({ radios, pegged, onSwitch, onTogglePeg }: Props) 
             title={
               r.isActive
                 ? t('radios.switcher.active.title', { name: r.name, band: r.band, freq })
-                : catDead
-                  ? t('radios.switcher.catDead.title', { name: r.name })
-                  : t('radios.switcher.switch.title', {
-                      name: r.name,
-                      band: r.band || '—',
-                      freq,
-                    })
+                : catDead && r.catRefused
+                  ? t('radios.switcher.catRefused.title', { name: r.name })
+                  : catDead
+                    ? t('radios.switcher.catDead.title', { name: r.name })
+                    : t('radios.switcher.switch.title', {
+                        name: r.name,
+                        band: r.band || '—',
+                        freq,
+                      })
             }
           >
             <span className="radio-pill-name">

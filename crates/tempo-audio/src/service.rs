@@ -277,14 +277,23 @@ fn cat_port_ptt_line(t: &Transport) -> Option<SerialLine> {
 /// Do the SETTINGS say RTS on `cat_port` keys a transmitter? The station-wide "Interface keys RTS
 /// on the CAT port" declaration, or the CW serial keyline on this very port's RTS (a separate
 /// port by design, warned about by `cw_key_port_conflict` when it is not — but if it is, RTS on
-/// this port is the key line).
+/// this port is the key line), or ANY radio's PTT on RTS of a dedicated port that is this one
+/// (another radio's keying wired to this port's RTS: under hardware flow control this radio's
+/// daemon raises that line and keys the other radio, in either direction — the active radio's
+/// PTT port as a monitor's CAT port, or a monitored radio's PTT port as the active one's).
+/// Every comparison goes through [`crate::ports::same_port`], so no spelling of the same port
+/// escapes it, and the startup seed (healed port) and the live path (stored port) agree.
 pub fn settings_key_rts_on(s: &Settings, cat_port: &str) -> bool {
-    let port = cat_port.trim();
+    use crate::ports::same_port;
+    let rts = |method: &str| method.trim().eq_ignore_ascii_case("rts");
     s.cat_rts_keys_ptt
         || (s.cw_keyer == tempo_app::settings::CwKeyerBackend::Serial
-            && s.cw_key_line.trim().eq_ignore_ascii_case("rts")
-            && !port.is_empty()
-            && s.cw_key_port.trim().eq_ignore_ascii_case(port))
+            && rts(&s.cw_key_line)
+            && same_port(&s.cw_key_port, cat_port))
+        || (rts(&s.ptt_method) && same_port(&s.ptt_serial_port, cat_port))
+        || s.radios
+            .iter()
+            .any(|p| p.enabled && rts(&p.ptt_method) && same_port(&p.ptt_serial_port, cat_port))
 }
 
 /// Does RTS on this radio's CAT port key its transmitter — decided from the RADIO, never from
@@ -293,8 +302,16 @@ pub fn settings_key_rts_on(s: &Settings, cat_port: &str) -> bool {
 /// port opens, with nothing to un-key it. Its own PTT on RTS here ([`cat_port_ptt_line`]), the
 /// declaration, or the CW keyline on this port's RTS ([`Transport::rts_keys_cat_port`]). A
 /// recognised keying cable is added by `rigctld_proc::rts_keys_transmitter`, which sees the port.
+///
+/// The PTT term is read twice on purpose: [`cat_port_ptt_line`] (exact spelling — it also routes
+/// keying, which this fact must not move), and [`crate::ports::same_port`] for a dedicated PTT
+/// port that is the CAT port under another spelling, which keys the same RTS pin.
 fn radio_keys_rts(t: &Transport) -> bool {
-    cat_port_ptt_line(t) == Some(SerialLine::Rts) || t.cat_rts_keys_ptt || t.rts_keys_cat_port
+    cat_port_ptt_line(t) == Some(SerialLine::Rts)
+        || (t.ptt_method.trim().eq_ignore_ascii_case("rts")
+            && crate::ports::same_port(t.ptt_port(), &t.serial_port))
+        || t.cat_rts_keys_ptt
+        || t.rts_keys_cat_port
 }
 
 /// What the daemon for `t` is told about this port's keying: the `-P` line it keys
@@ -313,7 +330,9 @@ fn keying_facts(t: &Transport, ptt_line: Option<SerialLine>) -> crate::rigctld_p
 /// "the control channel didn't open". Only a Hamlib launch is ever refused, so the transports
 /// that never spawn one are excluded, as `keys_on_the_cat_port` excludes them.
 fn hamlib_launch_refused(t: &Transport) -> bool {
-    !t.is_network()
+    // A radio with no CAT configured never launches a daemon: its status says so, not this.
+    t.cat_available()
+        && !t.is_network()
         && !t.is_omnirig()
         && !t.is_icom_lan()
         && !t.is_tci()
@@ -2966,6 +2985,9 @@ fn reconcile_pool_with_open(
         {
             let mut e = engine_lock(engine);
             e.observe_radio_cat(id, ok);
+            // Refused by Nexus itself (a Hardware handshake where RTS keys this radio): its pill
+            // says so, rather than only "not answering".
+            e.observe_radio_cat_refused(id, !rig.has_control() && hamlib_launch_refused(&t));
         }
         // Exponential backoff on a failed open: 1 s, 2 s, 4 s … capped at 60 s, so
         // an unreachable radio settles to one probe a minute instead of one every

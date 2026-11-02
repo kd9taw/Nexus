@@ -6119,6 +6119,7 @@ export const FR: PartialCatalog = {
   "radios.switcher.catDead.aria": "Le CAT ne répond pas",
   "radios.switcher.catDead.band": "pas de CAT",
   "radios.switcher.catDead.title": "Basculer sur {{name}} — ⚠ le CAT ne répond pas (vérifiez la radio, le câble et le port COM)",
+  "radios.switcher.catRefused.title": "{{name}} n'est pas connecté — sur son port, RTS met l'émetteur en émission, donc le contrôle de flux série ne peut pas être Matériel. Réglez-le sur Automatique ou Aucun.",
   "radios.switcher.switch.title": "Basculer sur {{name}} (dernière fois sur {{band}} · {{freq}} MHz)",
   "recall.confirmed.title": "{{confirmed}} QSO confirmés sur {{count}} précédents",
   "recall.dupe.label": "Doublon {{band}}",

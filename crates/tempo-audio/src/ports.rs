@@ -285,6 +285,30 @@ pub fn heal_tty_twin_with(port: &str, cu_twin_exists: impl Fn(&str) -> bool) -> 
     cu_twin_exists(&cu).then_some(cu)
 }
 
+/// Do two stored port names name the SAME serial port, whatever their spelling? For the keying
+/// decisions that must not be escaped by a spelling: the Hardware-handshake refusal's "RTS keys
+/// this radio" fact compares a CAT port with a CW keyline port and with other radios' PTT ports,
+/// and the same port may be stored as `com5`/`COM5`, `\\.\COM5` (the Win32 device path), or a
+/// mac `/dev/tty.*` and its `/dev/cu.*` callout twin (one is healed at open, the other is not).
+/// Case-insensitive, as every port comparison in Nexus already is; an empty name matches nothing.
+/// Over-matching is the safe direction here: it can only refuse a launch, never key one.
+pub fn same_port(a: &str, b: &str) -> bool {
+    fn norm(p: &str) -> String {
+        let p = p.trim();
+        let p = match p.get(..4) {
+            Some(head) if head.eq_ignore_ascii_case("\\\\.\\") => &p[4..],
+            _ => p,
+        };
+        let p = p.to_ascii_lowercase();
+        match p.strip_prefix("/dev/tty.") {
+            Some(rest) => format!("/dev/cu.{rest}"),
+            None => p,
+        }
+    }
+    let (a, b) = (norm(a), norm(b));
+    !a.is_empty() && a == b
+}
+
 /// The open-time heal for a STORED serial-port name: on macOS, substitute the `/dev/cu.*`
 /// twin for a saved `/dev/tty.*` when the twin is present ([`heal_tty_twin_with`]); identity
 /// everywhere else and for every other name. Called where the stored value is about to be
@@ -500,6 +524,24 @@ pub fn available_usb_ports() -> Vec<UsbPort> {
 
 #[cfg(test)]
 mod tests {
+    /// Every spelling of one port is that port; different ports never are; empty is nothing.
+    #[test]
+    fn same_port_sees_through_case_the_win32_prefix_and_the_mac_tty_twin() {
+        assert!(same_port("COM5", "com5"));
+        assert!(same_port("\\\\.\\COM5", " com5 "));
+        assert!(same_port("\\\\.\\com12", "\\\\.\\COM12"));
+        assert!(same_port(
+            "/dev/tty.usbserial-1410",
+            "/dev/cu.usbserial-1410"
+        ));
+        assert!(same_port("/dev/ttyUSB0", "/dev/ttyusb0"));
+        assert!(!same_port("COM5", "COM15"));
+        assert!(!same_port("/dev/tty.usbserial-1", "/dev/cu.usbserial-2"));
+        assert!(!same_port("", ""));
+        assert!(!same_port("  ", "COM5"));
+        // A non-ASCII name cannot panic the prefix check.
+        assert!(same_port("ポート", "ポート"));
+    }
 
     /// THE SIBLING COLLAPSE, driven by injected maps — which is all CI can do here, and enough:
     /// the ranking and the keep/drop decision are the whole of the logic. Measured case (ON8ST,
