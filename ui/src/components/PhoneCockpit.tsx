@@ -132,6 +132,7 @@ import {
 } from '../spectrum/rfSpan'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
+import { catDetailText } from '../features/catDetail'
 import { SplitControl } from './SplitControl'
 import type { MessageKey } from '../i18n'
 
@@ -2873,7 +2874,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         {!catOk && (
           <span
             className="ph-nocat"
-            title={snap.radio.catDetail || t('phone.noCat.title')}
+            title={(snap.radio.catDetail && catDetailText(snap.radio.catDetail)) || t('phone.noCat.title')}
           >
             {t('phone.noCat.label')}
           </span>

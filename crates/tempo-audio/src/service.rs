@@ -274,6 +274,57 @@ fn cat_port_ptt_line(t: &Transport) -> Option<SerialLine> {
     })
 }
 
+/// Do the SETTINGS say RTS on `cat_port` keys a transmitter? The station-wide "Interface keys RTS
+/// on the CAT port" declaration, or the CW serial keyline on this very port's RTS (a separate
+/// port by design, warned about by `cw_key_port_conflict` when it is not — but if it is, RTS on
+/// this port is the key line).
+fn settings_key_rts_on(s: &Settings, cat_port: &str) -> bool {
+    let port = cat_port.trim();
+    s.cat_rts_keys_ptt
+        || (s.cw_keyer == tempo_app::settings::CwKeyerBackend::Serial
+            && s.cw_key_line.trim().eq_ignore_ascii_case("rts")
+            && !port.is_empty()
+            && s.cw_key_port.trim().eq_ignore_ascii_case(port))
+}
+
+/// Does RTS on this radio's CAT port key its transmitter — decided from the RADIO, never from
+/// the `-P` its daemon is told? A monitor's daemon gets no `-P` (it is read-only), yet a monitored
+/// radio whose PTT is RTS on its CAT port is keyed by hardware flow control from the moment the
+/// port opens, with nothing to un-key it. Its own PTT on RTS here ([`cat_port_ptt_line`]), the
+/// declaration, or the CW keyline on this port's RTS ([`Transport::rts_keys_cat_port`]). A
+/// recognised keying cable is added by `rigctld_proc::rts_keys_transmitter`, which sees the port.
+fn radio_keys_rts(t: &Transport) -> bool {
+    cat_port_ptt_line(t) == Some(SerialLine::Rts) || t.cat_rts_keys_ptt || t.rts_keys_cat_port
+}
+
+/// What the daemon for `t` is told about this port's keying: the `-P` line it keys
+/// (`ptt_line`, `None` for a read-only monitor), the declaration, and [`radio_keys_rts`].
+fn keying_facts(t: &Transport, ptt_line: Option<SerialLine>) -> crate::rigctld_proc::KeyingFacts {
+    crate::rigctld_proc::KeyingFacts {
+        ptt_line,
+        rts_declared: t.cat_rts_keys_ptt,
+        rts_keys: radio_keys_rts(t),
+    }
+}
+
+/// Is `t`'s rigctld launch refused under a declared Hardware handshake
+/// ([`crate::rigctld_proc::launch_refused`])? For the radio loop's Test CAT answer on a radio
+/// whose open was refused: the reprobe has no daemon to ask, and must say why rather than
+/// "the control channel didn't open". Only a Hamlib launch is ever refused, so the transports
+/// that never spawn one are excluded, as `keys_on_the_cat_port` excludes them.
+fn hamlib_launch_refused(t: &Transport) -> bool {
+    !t.is_network()
+        && !t.is_omnirig()
+        && !t.is_icom_lan()
+        && !t.is_tci()
+        && crate::rigctld_proc::launch_refused(
+            t.serial_port.trim(),
+            false,
+            &keying_facts(t, cat_port_ptt_line(t)),
+            &t.control_lines,
+        )
+}
+
 /// Start the CAT daemon for `t` on its rigctld port: the native CI-V daemon when opted
 /// in (falling back to rigctld if the port/serial open fails), else Hamlib's rigctld.
 /// The second field of the `Ok` tuple is the native daemon's start error when it fell
@@ -399,10 +450,7 @@ fn spawn_cat_daemon(
         t.baud,
         t.rigctld_port,
         network,
-        crate::rigctld_proc::KeyingFacts {
-            ptt_line,
-            rts_declared: t.cat_rts_keys_ptt,
-        },
+        keying_facts(t, ptt_line),
         t.control_lines,
     )
     .map(|p| (CatDaemon::Spawned(p), native_fallback))
@@ -427,6 +475,9 @@ fn seed_line_declarations(t: &mut Transport, s: &tempo_app::settings::Settings) 
         crate::rigctld_proc::Handshake::from_setting(&s.cat_serial_handshake);
     t.control_lines.keying_line =
         crate::rigctld_proc::LineState::from_keying_setting(&s.cat_ptt_line_state);
+    // …and whether RTS on this port keys a transmitter, which the first launch's
+    // Hardware-handshake refusal needs as much as it needs the handshake itself.
+    t.rts_keys_cat_port = settings_key_rts_on(s, &t.serial_port);
 }
 
 /// The transport the launch opens: the startup seed ([`Transport::from_cfg`]) with what the first
@@ -2568,6 +2619,8 @@ impl Transport {
             // A monitor radio is read-only and never keys, so there is no keying cable to
             // declare — and dropping its handshake could only cost it CAT.
             cat_rts_keys_ptt: false,
+            // Set from the settings by `monitor_want`, which has them.
+            rts_keys_cat_port: false,
             baud: p.baud,
             rig_conn: p.rig_conn.clone(),
             rig_addr: p.rig_addr.clone(),
@@ -2791,6 +2844,10 @@ fn monitor_want(
         .map(|p| {
             let mut t = Transport::from_profile(p);
             t.control_lines = lines;
+            // A monitor's daemon is read-only and keys nothing, but under a Hardware handshake
+            // an RTS-keyed port is keyed by the flow control itself: its launch must be refused
+            // as the active radio's is (`radio_keys_rts`).
+            t.rts_keys_cat_port = settings_key_rts_on(s, &t.serial_port);
             // Our own CAT broker's port, as the active radio's transport carries it, so a monitor
             // never takes Nexus itself for a radio (`net_rigctld_on_this_machine`, `open_read_only`).
             t.broker_self_port = tempo_app::settings::sharing_self_port(s, serving);
@@ -8409,7 +8466,7 @@ impl RadioLoop {
                 self.remote_connection = None;
                 self.remote_radio_id = Some(remote_want_radio);
                 let (new_rig, proc, probe) = reopen_rig(&open_want, allow_coexist);
-                let (ok, detail) = (probe.ok, probe.detail);
+                let (ok, detail, refused) = (probe.ok, probe.detail, probe.refused);
                 let detail = if suspect_rebuild && !daemon_died && !linkless {
                     format!("the CAT link stayed silent — the port was reopened. {detail}")
                         .trim_end()
@@ -8499,13 +8556,22 @@ impl RadioLoop {
                 {
                     let mut eng = engine_lock(engine);
                     if reprobe_req {
-                        eng.answer_cat_reprobe(ok, detail);
+                        eng.answer_cat_reprobe(ok, detail, refused);
                     } else {
                         eng.set_cat_status(ok, detail);
                     }
                 }
             } else if reprobe_req {
-                let (ok, mut detail) = reprobe(rig, &want);
+                let (mut ok, mut detail) = reprobe(rig, &want);
+                // A radio whose launch Nexus refused has no daemon to probe. Say why, typed, rather
+                // than "the control channel didn't open" — and so Test CAT never sweeps its port.
+                let refused = !rig.has_control() && hamlib_launch_refused(&want);
+                if refused {
+                    (ok, detail) = (
+                        Some(false),
+                        crate::rigctld_proc::HARDWARE_HANDSHAKE_RTS_KEYS.to_string(),
+                    );
+                }
                 // Attribution only when the CAT channel itself was probed (the branches of
                 // `reprobe` that call probe_cat_or_explain) — a serial-PTT line test
                 // ("Serial RTS PTT on COM5") or a VOX result has no backend to name.
@@ -8532,7 +8598,7 @@ impl RadioLoop {
                     }
                 }
                 self.cat_ok = ok;
-                engine_lock(engine).answer_cat_reprobe(ok, detail);
+                engine_lock(engine).answer_cat_reprobe(ok, detail, refused);
             }
             let mut audio_rebuilt = false;
             // A stream the OS KILLED can only re-enter the loop here. Nothing in `want` changed
@@ -17758,6 +17824,13 @@ struct Transport {
     /// (`Settings::cat_rts_keys_ptt`). Part of the transport for the same reason as
     /// `control_lines`: it changes rigctld's command line, so it needs a relaunch.
     cat_rts_keys_ptt: bool,
+    /// The SETTINGS say RTS on this radio's CAT port keys a transmitter
+    /// ([`settings_key_rts_on`]): the station-wide "interface keys RTS" declaration, or the CW
+    /// serial keyline on this port's RTS. Read only by [`radio_keys_rts`], the Hardware-handshake
+    /// refusal's fact — never by `rts_is_deliberate`, so it cannot move the Auto handshake
+    /// override. Unlike `cat_rts_keys_ptt` it is set on a MONITOR too ([`monitor_want`]): a
+    /// read-only daemon keys nothing, but flow control on an RTS-keyed port keys the radio anyway.
+    rts_keys_cat_port: bool,
     baud: u32,
     /// "network" → rigctld talks to `rig_addr` over TCP (Flex/SmartSDR); else serial.
     rig_conn: String,
@@ -17859,6 +17932,9 @@ impl Transport {
             // session, and it is the launch itself that keys the rig on an undeclared cable —
             // waiting for the first settings tick would be too late to help issue #44.
             cat_rts_keys_ptt: c.cat_rts_keys_ptt,
+            // The startup seed has no settings: `seed_line_declarations` sets it before the
+            // first open.
+            rts_keys_cat_port: false,
             baud: c.baud,
             rig_conn: c.rig_conn.clone(),
             rig_addr: c.rig_addr.clone(),
@@ -17943,6 +18019,7 @@ impl Transport {
                 rts_keys: false,
             },
             cat_rts_keys_ptt: s.cat_rts_keys_ptt,
+            rts_keys_cat_port: settings_key_rts_on(s, &s.serial_port),
             baud: s.baud,
             icom_native_cat: s.icom_native_cat,
             flex_native_cat: s.flex_native_cat,
@@ -18000,6 +18077,9 @@ impl Transport {
             || self.serial_port != o.serial_port
             || self.ptt_serial_port != o.ptt_serial_port
             || self.control_lines != o.control_lines
+            // Whether the settings say RTS keys this port decides whether its launch is refused
+            // under a Hardware handshake, so a change re-decides it.
+            || self.rts_keys_cat_port != o.rts_keys_cat_port
             || self.baud != o.baud
             || self.rig_conn != o.rig_conn
             || self.rig_addr != o.rig_addr
@@ -18596,6 +18676,10 @@ struct CatProbe {
     detail: String,
     freq_hz: Option<u64>,
     mode: Option<String>,
+    /// Nexus refused this launch itself — a declared Hardware handshake on a port where RTS keys
+    /// the transmitter ([`crate::rigctld_proc::HandshakeRefused`]). Typed, so Test CAT never
+    /// sweeps the port the refusal kept shut, whatever the detail's words become.
+    refused: bool,
 }
 
 impl CatProbe {
@@ -18606,6 +18690,7 @@ impl CatProbe {
             detail: detail.into(),
             freq_hz: None,
             mode: None,
+            refused: false,
         }
     }
 }
@@ -19054,7 +19139,10 @@ fn open_cat(
         Err(e) => (
             Rig::vox(),
             None,
-            CatProbe::status(Some(false), rigctld_launch_failed(&e)),
+            CatProbe {
+                refused: crate::rigctld_proc::is_handshake_refusal(&e),
+                ..CatProbe::status(Some(false), rigctld_launch_failed(&e))
+            },
         ),
     }
 }
@@ -19114,9 +19202,8 @@ fn rigctld_launch_failed(e: &std::io::Error) -> String {
 fn rigctld_launch_failed_for(mac: bool, e: &std::io::Error) -> String {
     // A launch Nexus refused itself (a declared Hardware handshake on a port where RTS keys the
     // transmitter) is already the operator's sentence: Hamlib never ran, so no Hamlib prefix.
-    let refused = crate::rigctld_proc::HARDWARE_HANDSHAKE_RTS_KEYS;
-    if e.to_string() == refused {
-        return refused.to_string();
+    if crate::rigctld_proc::is_handshake_refusal(e) {
+        return e.to_string();
     }
     crate::rigctld_proc::hamlib_missing_for(mac, "rigctld", e)
 }
@@ -19154,6 +19241,7 @@ fn probe_cat(rig: &mut Rig, t: &Transport) -> CatProbe {
             // read-only-launch seed), not cosmetic. Display-only downstream; Hamlib's
             // cached-mode caveat (rig.rs read_mode docs) is acceptable for display.
             mode: rig.read_mode(),
+            refused: false,
         },
         // The address the rig dials: 127.0.0.1 at rigctld TCP Port, except for a rigctld shared
         // at a NET rigctl Network Address, where naming rigctld TCP Port would send the operator
@@ -19298,6 +19386,7 @@ mod tests {
     mod ft_residual;
     mod ft_streaming;
     mod ft_window;
+    mod hw_handshake_monitor;
     mod ic905_ten_ghz;
     mod icom_lan;
     mod js8_frames;
@@ -22156,12 +22245,20 @@ mod tests {
         // A launch Nexus refused itself reaches the CAT status as the plain sentence, with no
         // Hamlib prefix — the UI translates that exact sentence, and Test CAT recognises it.
         let refused = crate::rigctld_proc::HARDWARE_HANDSHAKE_RTS_KEYS;
+        let typed = || {
+            Error::new(
+                ErrorKind::InvalidInput,
+                crate::rigctld_proc::HandshakeRefused,
+            )
+        };
         for mac in [false, true] {
-            assert_eq!(
-                rigctld_launch_failed_for(mac, &Error::new(ErrorKind::InvalidInput, refused)),
-                refused
-            );
+            assert_eq!(rigctld_launch_failed_for(mac, &typed()), refused);
         }
+        // Recognised by type, not by its words: the same sentence as plain text is any error.
+        assert!(
+            rigctld_launch_failed(&Error::new(ErrorKind::InvalidInput, refused))
+                .starts_with("Could not launch rigctld")
+        );
     }
 
     /// THE NAVIGATOR REPORT, second half. A WinKeyer whose port will not open was
@@ -38992,6 +39089,7 @@ mod tests {
             serial_port: "/dev/ttyUSB0".to_string(),
             ptt_serial_port: String::new(),
             cat_rts_keys_ptt: false,
+            rts_keys_cat_port: false,
             control_lines: crate::rigctld_proc::ControlLines::hold_low(),
             baud: 38400,
             icom_native_cat: false,

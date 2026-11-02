@@ -136,6 +136,7 @@ import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { coerceCwAudioSpan, cwAudioView, cwScopeSideSign, CW_AUDIO_SPANS, isRfScopeSource, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON, WF_F_MAX, WF_F_MIN, WF_STD_HI, type CwAudioSpan } from '../waterfall'
 import { t } from '../i18n'
+import { catDetailText } from '../features/catDetail'
 import { showWhenDriving } from '../features/drivingRefusal'
 import { drivesAnotherStation } from '../features/durableStore'
 import { T } from '../i18n/T'
@@ -2259,7 +2260,7 @@ export function CwCockpit({
         snap={snap}
         onSnap={onSnap}
         modeIndicator={
-          <span className="cw-mode-badge" title={snap.radio.catDetail || t('cw.header.mode.title')}>
+          <span className="cw-mode-badge" title={(snap.radio.catDetail && catDetailText(snap.radio.catDetail)) || t('cw.header.mode.title')}>
             {CW}
           </span>
         }
