@@ -246,9 +246,12 @@ pub fn mode_key(mode: &str) -> String {
 /// `DATA`, `DIGI`, a voice `DV`), a family (`PSK`, a bare `MFSK`), a retired name (`FT1`, `DX1`), a
 /// beacon nobody works (`WSPR`, `FST4W`), and another program's own name for something no contact
 /// here is logged as — PSK Reporter passes on whatever the reporting program calls its mode
-/// (`VARAC`, `FREEDV`, `SAFECOM`). A mode the log can hold that is not named here (the rarer PSK
+/// (`VARAC`, `SAFECOM`). A mode the log can hold that is not named here (the rarer PSK
 /// submodes) is judged by its class as well. `JTTY` is a mode of its own: a JTTY contact is stored
-/// as JTTY, whether its log spelled it as a bare `MODE=JTTY` or `MODE=MFSK SUBMODE=JTTY`.
+/// as JTTY, whether its log spelled it as a bare `MODE=JTTY` or `MODE=MFSK SUBMODE=JTTY`. `FREEDV`
+/// is named too: Nexus logs FreeDV contacts under that name (FreeDV's own app hands them over, and
+/// an imported `DIGITALVOICE`/`FREEDV` row is stored as it), and PSK Reporter's FreeDV reports say
+/// `FREEDV`, so both sides meet in one key.
 fn names_a_contact_mode(name: &str) -> bool {
     matches!(
         name,
@@ -276,6 +279,7 @@ fn names_a_contact_mode(name: &str) -> bool {
             | "MSK144"
             | "OLIVIA"
             | "SSTV"
+            | "FREEDV"
     )
 }
 

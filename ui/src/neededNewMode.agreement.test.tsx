@@ -12,7 +12,9 @@
 // engine judged every name PSK Reporter passes on as a mode of its own, so each WSPR beacon, VarAC
 // and FreeDV station of the two countries was a "new mode" no contact could clear, and the radio's own
 // WSPR decodes were too. JTTY is a mode contacts are logged in (MODE=MFSK SUBMODE=JTTY), so a station
-// heard in it is a real new mode until one is worked, as a JS8 station is.
+// heard in it is a real new mode until one is worked, as a JS8 station is. FreeDV is a mode of its own
+// again since Nexus logs FreeDV contacts (FreeDV's app hands them over), so the FreeDV station of the
+// United States is a new mode until one is logged.
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -129,11 +131,12 @@ function bandActivityModeChips(calls: string[], tier: Tier): string[] {
 }
 
 describe('the New mode need, on the report’s log and the stations heard near EN52', () => {
-  it('the Needed board with New mode on lists Germany in FT8 and the United States in JS8 and JTTY, nothing the log holds', () => {
+  it('the Needed board with New mode on lists Germany in FT8 and the United States in JS8, JTTY and FreeDV, nothing the log holds', () => {
     expect(newModeBoard()).toEqual([
       'DL1ABC, Fed. Rep. of Germany, 20m FT8, needed NewMode | New mode — FT8 Fed. Rep. of Germany (any band)',
       'K1JSE, United States, 20m Digital, needed NewMode | New mode — JS8 United States (any band)',
       'K4JTY, United States, 20m JTTY, needed NewMode | New mode — JTTY United States (any band)',
+      'W5FDV, United States, 20m Phone, needed NewMode | New mode — FREEDV United States (any band)',
     ])
   })
 
@@ -158,6 +161,7 @@ describe('the New mode need, on the report’s log and the stations heard near E
       ['DL1ABC', 'NewMode'],
       ['K1JSE', 'NewMode'],
       ['K4JTY', 'NewMode'],
+      ['W5FDV', 'NewMode'],
     ])
   })
 })

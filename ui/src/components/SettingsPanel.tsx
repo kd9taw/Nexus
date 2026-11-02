@@ -247,7 +247,7 @@ import { ShackFilesSave } from './ShackFilesSave'
 import { getCloudlogStations, type CloudlogStation } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { sayExportLacks } from '../features/exportLacks'
-import type { AssistanceEvent, ClubFirewall, ClubLink, ConnEvent, CredStatus, FieldDayStatus, ParsecPresence } from '../types'
+import type { AssistanceEvent, ClubFirewall, ClubLink, ConnEvent, CredStatus, FieldDayStatus, FreedvState, ParsecPresence } from '../types'
 import { parsecStatusText, parsecSwitchPlacement } from '../features/parsecPresence'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
 import { cloudlogLocationMismatch } from '../settings/cloudlogLocation'
@@ -368,6 +368,9 @@ interface Props {
    *  call, grid, state and power reload when it changes, so a form left open across a switch shows
    *  the profile the station is on. Absent from tests, the wizard and a station with no profiles. */
   activeStationProfile?: string
+  /** FreeDV's listeners as the station reports them (`snap.freedv`), for the readout under their
+   *  switches. Absent while neither listens, from tests and from an older station. */
+  freedv?: FreedvState | null
   /** The live active radio id (dual-radio). The form reloads when this changes so a switch made from
    * the always-visible TopBar pills while Settings is open can't leave the Rig form stale. */
   activeRadioId?: number
@@ -484,7 +487,7 @@ const CTCSS_TONES = [
   167.9, 173.8, 179.9, 186.2, 192.8, 203.5, 210.7, 218.1, 225.7, 233.6, 241.8, 250.3,
 ]
 
-const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'ratedWatts', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm', 'aprsStationTtlMin', 'contestCqZone', 'contestItuZone']
+const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'ratedWatts', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'freedvLogPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm', 'aprsStationTtlMin', 'contestCqZone', 'contestItuZone']
 
 /** Clamp a typed zone to `0..=max`, as the STRING `update` takes (0 = not set).
  *
@@ -1167,6 +1170,7 @@ export function SettingsPanel({
   parsecPresence,
   stationProfileLocked,
   activeStationProfile,
+  freedv,
   activeRadioId,
   onProveTx,
   scale,
@@ -8783,6 +8787,67 @@ export function SettingsPanel({
               locked={locked}
               setAtStation={setAtStation}
             />
+            {/* FreeDV's own app beside Nexus, RECEIVE ONLY (`tempo_app::freedv`): the contacts it
+                logs land in the log, and the calls it hears are listed in the Phone FreeDV pane.
+                Its rig control is the share block above; these are its two hand-offs back. The
+                address and port numbers are invariant tokens. Like the share block, a bind the
+                system refused replaces the address with the sentence saying why. */}
+            <div className="settings-field" data-testid="freedv-settings">
+              <span className="settings-label">{t('settings.transmit.freedv.log.label')}</span>
+              <div className="rig-share-row">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.freedvLog ?? true}
+                  aria-label={t('settings.transmit.freedv.log.label')}
+                  className={`toggle${(form.freedvLog ?? true) ? ' on' : ''}`}
+                  onClick={() => updateBool('freedvLog', !(form.freedvLog ?? true))}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                {(form.freedvLog ?? true) && freedv?.logError && (
+                  <span className="rig-share-fault" role="alert">{freedv.logError}</span>
+                )}
+                {(form.freedvLog ?? true) && !freedv?.logError && (
+                  <code className="rig-share-addr mono">127.0.0.1:{form.freedvLogPort || 2239}</code>
+                )}
+              </div>
+              <span className="settings-hint">{t('settings.transmit.freedv.log.hint')}</span>
+              {(form.freedvLog ?? true) && freedv?.notice && (
+                <span className="settings-hint" role="status">{freedv.notice}</span>
+              )}
+              {(form.freedvLog ?? true) && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.transmit.freedv.logPort.label')}</span>
+                  <input
+                    className="settings-input"
+                    type="number"
+                    inputMode="numeric"
+                    value={String(form.freedvLogPort ?? 2239)}
+                    placeholder="2239"
+                    onChange={(e) => update('freedvLogPort', e.target.value)}
+                    autoComplete="off"
+                  />
+                </label>
+              )}
+              <span className="settings-label">{t('settings.transmit.freedv.heard.label')}</span>
+              <div className="rig-share-row">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.freedvHeard ?? false}
+                  aria-label={t('settings.transmit.freedv.heard.label')}
+                  className={`toggle${form.freedvHeard ? ' on' : ''}`}
+                  onClick={() => updateBool('freedvHeard', !form.freedvHeard)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                {form.freedvHeard && freedv?.heardError && (
+                  <span className="rig-share-fault" role="alert">{freedv.heardError}</span>
+                )}
+              </div>
+              <span className="settings-hint">{t('settings.transmit.freedv.heard.hint')}</span>
+            </div>
           </fieldset>
           </>
           )}

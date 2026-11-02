@@ -187,21 +187,22 @@ fn a_station_heard_only_by_class_is_judged_by_class() {
 /// A STATION HEARD IN A MODE NO CONTACT IS LOGGED IN IS JUDGED BY ITS CLASS. PSK Reporter names a
 /// station's mode in the words of the program that reported it; one capture of reports near EN52
 /// (2026-10-12) named FT8, WSPR, FT4, CW, VARAC, JS8, FT2, SAFECOM, PSK31, JTTY, JT65 and FREEDV.
-/// Nobody works a WSPR beacon, and no contact is logged as VARAC, FREEDV or SAFECOM, so judged as
-/// modes of their own each one was a "new mode" no contact could ever clear: the 1.17.1 test
-/// builds listed every WSPR beacon in the United States and Canada as one, against a log holding
-/// hundreds of FT8 contacts with both. The radio's own WSPR and FST4W decodes did the same. Each
-/// mode a contact IS logged in stays a mode of its own — JTTY among them since JTTY contacts are
-/// logged (as `MODE=MFSK SUBMODE=JTTY`, and read from an older log's bare `MODE=JTTY`).
+/// Nobody works a WSPR beacon, and no contact is logged as VARAC or SAFECOM, so judged as modes of
+/// their own each one was a "new mode" no contact could ever clear: the 1.17.1 test builds listed
+/// every WSPR beacon in the United States and Canada as one, against a log holding hundreds of FT8
+/// contacts with both. The radio's own WSPR and FST4W decodes did the same. Each mode a contact IS
+/// logged in stays a mode of its own — JTTY among them since JTTY contacts are logged (as
+/// `MODE=MFSK SUBMODE=JTTY`, and read from an older log's bare `MODE=JTTY`), and FREEDV since
+/// Nexus logs FreeDV contacts itself (FreeDV's own app hands them over, and an imported
+/// DIGITALVOICE/FREEDV row is stored as FREEDV), so a FreeDV station is "New mode — FREEDV" until
+/// a FreeDV contact clears it.
 #[test]
 fn a_station_heard_in_a_mode_no_contact_is_logged_in_is_judged_by_its_class() {
     let mut n = LogNeeds::new();
     // The United States on 20 m, in FT8 and on SSB, both confirmed; K1XYZ is heard in its zone.
     n.add("K1ABC", "20m", "FT8", None, None, true);
     n.add("W1AW", "20m", "SSB", None, None, true);
-    for token in [
-        "WSPR", "FST4W", "VARAC", "FREEDV", "SAFECOM", "OTHER", "MFSK", "PSK",
-    ] {
+    for token in ["WSPR", "FST4W", "VARAC", "SAFECOM", "OTHER", "MFSK", "PSK"] {
         let a = heard(&n, "K1XYZ", "20m", token);
         assert!(
             !is_new_mode(&a),
@@ -225,6 +226,8 @@ fn a_station_heard_in_a_mode_no_contact_is_logged_in_is_judged_by_its_class() {
         "AM",
         "FM",
         "TempoFast",
+        "FREEDV",
+        "FreeDV",
     ] {
         let a = heard(&n, "K1XYZ", "20m", mode).unwrap_or_else(|| panic!("{mode}: no row"));
         assert_eq!(a.tags, vec![NeedTag::NewMode], "{mode}");
@@ -451,10 +454,10 @@ fn the_reports_board() -> (LogNeeds, Vec<NeedAlert>) {
 /// THE REPORT, BY VALUE: "seeing a ton of ft8 neededs when "mode" is turned on, but I have already
 /// gotten those countries on the ft8 mode. Countries like usa and canada where I have hundreds of
 /// contacts already". "Mode" is the board's New mode chip, which lists the rows tagged NewMode. On
-/// this log it lists three: Germany in FT8 (worked on CW alone), and the United States in JS8 and in
-/// JTTY (never worked in either, and contacts are logged in both), and no station of the United
-/// States or Canada in FT8, WSPR, VarAC, FreeDV or SAFECOM. The radio's own FT8 decodes of both
-/// countries, and its WSPR decodes, are no need.
+/// this log it lists four: Germany in FT8 (worked on CW alone), and the United States in JS8, in
+/// JTTY and in FreeDV (never worked in any of them, and contacts are logged in each), and no station
+/// of the United States or Canada in FT8, WSPR, VarAC or SAFECOM. The radio's own FT8 decodes of
+/// both countries, and its WSPR decodes, are no need.
 #[cfg(feature = "live")]
 #[test]
 fn the_new_mode_rows_are_the_modes_the_log_does_not_hold() {
@@ -479,6 +482,7 @@ fn the_new_mode_rows_are_the_modes_the_log_does_not_hold() {
             "DL1ABC 20m New mode — FT8 Fed. Rep. of Germany (any band)",
             "K1JSE 20m New mode — JS8 United States (any band)",
             "K4JTY 20m New mode — JTTY United States (any band)",
+            "W5FDV 20m New mode — FREEDV United States (any band)",
         ],
         "the rows the New mode chip lists"
     );

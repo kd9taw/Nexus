@@ -5559,6 +5559,16 @@ export interface Settings {
   sdrconnectPort?: number
   /** How the SDR's centre follows the rig's dial: `centre` (default) or `scroll`. */
   sdrconnectFollow?: string
+  /** Listen on 127.0.0.1:`freedvLogPort` for the contacts FreeDV's own app logs, and put each
+   *  in the log as a FreeDV contact (`tempo_app::freedv`). ON by default; receive only. */
+  freedvLog?: boolean
+  /** UDP port for FreeDV's logged contacts (2239; 2237 is Nexus's own telemetry). */
+  freedvLogPort?: number
+  /** List the calls FreeDV hears (its callsign broadcast) in the Phone FreeDV pane. OFF by
+   *  default: it joins FreeDV's group, so Windows may ask once about the network. */
+  freedvHeard?: boolean
+  /** UDP port of FreeDV's callsign broadcast (FreeDV's default 7177). */
+  freedvHeardPort?: number
   /** The rig's serial HANDSHAKE as the operator DECLARES it (`cat_serial_handshake`):
    *  `auto` | `none` | `hardware` | `xonxoff`. `auto` (the default) is today's behaviour to the
    *  byte — Nexus infers it exactly as before. Anything else REPLACES that inference.
@@ -6587,6 +6597,39 @@ export interface AppSnapshot {
    *  its direction to that Running. Absent everywhere else, from the Remote, and from an older
    *  station. */
   contestCqTyped?: boolean
+  /** FreeDV's own app beside Nexus (`tempo_app::freedv`): its two listeners, the last contact it
+   *  logged, the last refusal and the calls it heard. Absent while neither listener is wanted,
+   *  from the Remote, and from an older station. */
+  freedv?: FreedvState
+}
+
+/** What the screens show of FreeDV's app beside Nexus (`FreedvDto`). */
+export interface FreedvState {
+  /** The port the contact listener is bound to on 127.0.0.1, while it is. */
+  logPort: number | null
+  /** Why the contact listener is not listening, when its bind was refused. */
+  logError: string | null
+  /** When FreeDV last sent anything on the contact port (Unix seconds). */
+  aliveUnix: number | null
+  /** The last contact FreeDV logged, as the screen names it. */
+  lastContact: string | null
+  lastContactUnix: number | null
+  /** The last contact refused, and why. */
+  notice: string | null
+  heardPort: number | null
+  heardError: string | null
+  /** The calls FreeDV heard this session, newest first. */
+  heard: FreedvHeard[]
+}
+
+/** One call FreeDV heard. */
+export interface FreedvHeard {
+  call: string
+  /** FreeDV's mode name (RADEV1); empty when it did not say. */
+  mode: string
+  snr: number | null
+  frequencyHz: number | null
+  heardUnix: number
 }
 
 /** The contest strip's contact in progress, shared by the main window and the contest logger

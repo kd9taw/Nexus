@@ -209,8 +209,12 @@ function bandForMhz(mhz: number): string {
  * TempoFast-style parent cascade. BPSK31 is not listed: it is the same waveform under a
  * logger's spelling, and both the importer and `modeKey` fold it to PSK31, so offering it
  * would let one mode be logged under two names.
+ * FREEDV is the one entry that is not an ADIF Mode: it is DIGITALVOICE's submode, and the logbook
+ * writes it `MODE=DIGITALVOICE SUBMODE=FREEDV` (`adif_submode`), the TempoFast cascade. Spelled as
+ * `modeKey` folds it, so the select opens on it, and as FreeDV contacts handed over by FreeDV's own
+ * app are stored.
  * The cockpits only ever pass SSB/FM/CW/PSK31/QPSK31 as the default, all present here. */
-const LOG_MODES = ['SSB', 'FM', 'AM', 'CW', 'RTTY', 'PSK31', 'QPSK31', 'FT8', 'FT4'] as const
+const LOG_MODES = ['SSB', 'FM', 'AM', 'CW', 'RTTY', 'PSK31', 'QPSK31', 'FT8', 'FT4', 'FREEDV'] as const
 
 /** The `LOG_MODES` entry that covers `m` — what the override's `<select>` opens on.
  *

@@ -36,6 +36,7 @@ const PHONE_LABELS: Record<PhonePanelId, string> = {
   needed: 'Needed',
   recent: 'Recent contacts',
   stats: 'Stats',
+  freedv: 'FreeDV',
   ...boxLabels({}),
 }
 const FT_LABELS = { bandActivity: 'Band Activity', rxfreq: 'Rx Frequency', txmsgs: 'Tx messages', stations: 'Stations', callRoster: 'Call Roster', recall: 'Callsign card' } as Record<OperatePanelId, string>

@@ -25,6 +25,7 @@ Nexus is a free, GPLv3, all-mode amateur radio operations center: FT8/FT4 digita
 | [Operate — FT8/FT4](Operate-FT8-FT4.md) | Double-click to work, auto-sequencer, Classic/Roster layout, Band Activity, Tx1–6 panel, Hound mode, split, F-keys, UDP ecosystem |
 | [CW](CW.md) | CAT and soundcard keyer back-ends, F1–F8 macros, speed/pitch controls, zero-beat scope, free-text send, Esc abort |
 | [Phone](Phone.md) | SSB cockpit, push-to-talk (button / `Space` / Lock), bandscope, voice keyer record/import/playback, QSO recording |
+| [FreeDV](FreeDV.md) | Run FreeDV's own app beside Nexus: rig sharing, its contacts into the Nexus log, the calls it hears, FreeDV's channels |
 
 ### Hunting and events
 

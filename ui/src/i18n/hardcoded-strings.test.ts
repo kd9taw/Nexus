@@ -316,6 +316,9 @@ const MIGRATED = [
   'components/SpotsPanel.tsx',
   // The worked window's picker, out of SpotsPanel so the Call Roster can share it.
   'components/WorkedWindowSelect.tsx',
+  // The Phone FreeDV pane (2026-10-14) — born migrated: calls, mode names, SNRs, frequencies and the
+  // address are tokens.
+  'components/FreedvPane.tsx',
   'components/SpotDialog.tsx',
   'components/ParkStateReview.tsx',
   // Check confirmations (2026-10-07) — born migrated: LoTW, calls, bands, modes and credit codes
