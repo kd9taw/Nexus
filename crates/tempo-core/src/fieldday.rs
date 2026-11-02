@@ -4421,25 +4421,18 @@ impl FieldDayStation {
             .is_some_and(|dx| crate::message::same_call(dx, de))
     }
 
-    /// Addressed to my call in Field Day's messages: exactly, as always, or — my call being
-    /// nonstandard — hashed. Field Day's message carries each call in a 28-bit field, which
-    /// holds a nonstandard call only as its hash (`pack28`), so a reply to my exchange names it
+    /// Addressed to my call in a NEW caller's Field Day exchange: exactly, as always, or — my
+    /// call being nonstandard — hashed. Field Day's message carries each call in a 28-bit field,
+    /// which holds a nonstandard call only as its hash (`pack28`), so a caller names it
     /// `<K1ABC/QRP>`. A standard call is matched exactly, as before.
+    ///
+    /// Exactly, not by base call: WSJT-X 3.0.2 answers a caller to its CQ only when the call it
+    /// names is its own whole call (`for_us`, mainwindow.cpp 7276-7285, which turns a caller to
+    /// the same base call with another prefix or suffix away; CQ: First, 7021). The partner's
+    /// replies inside a contact are taken by base call ([`to_me`](Self::to_me)).
     fn to_my_call(&self, to: &str) -> bool {
         let me = self.mycall();
         to == me || (!crate::message::is_std_call(me) && crate::message::unhash_call(to) == me)
-    }
-
-    /// Addressed to my call in a caller's RR73, RRR or 73: whole, or hashed whatever my call.
-    /// A caller whose call is nonstandard closes with mine hashed and its own whole, as WSJT-X
-    /// 3.0.2 writes it, `<K1ABC> W9XYZ/M RR73` (`genStdMsgs`, mainwindow.cpp 9702 and 9710), and
-    /// WSJT-X takes that as its own: the decoder prints its own call's hash as `<K1ABC>`
-    /// (`unpack77`, packjt77.f90 644-651, `n12.eq.hashmy12`), `DecodedText` drops the brackets
-    /// (decodedtext.cpp 66), and `auto_sequence` and `processMessage` ask whether that word holds
-    /// its call (7546, 9108). The exchanges still take a standard call of mine only whole
-    /// ([`to_my_call`](Self::to_my_call)).
-    fn closes_to_me(&self, to: &str) -> bool {
-        crate::message::unhash_call(to) == self.mycall()
     }
 
     /// The caller `de` of a first call with no grid, as my report names it: WSJT-X's Tx2 to it
@@ -4694,6 +4687,10 @@ impl FieldDayStation {
                 // `processMessage`, 9107-9110: the sender must be the DX call). A rogered exchange
                 // to us from anyone else logs nothing and sends nothing back, and the station
                 // called keeps getting our exchange.
+                //
+                // ⭐ Addressed to us by our base call ([`to_me`](Self::to_me)), as WSJT-X takes its
+                // partner's reply (7546, 9050-9054), so one to the call before a change of My
+                // Call with the same base (K1ABC → K1ABC/P) still completes the contact.
                 (
                     FdState::AwaitExchange,
                     Msg::FieldDay {
@@ -4703,7 +4700,7 @@ impl FieldDayStation {
                         class,
                         section,
                     },
-                ) if self.to_my_call(to) && self.from_dx(de) => {
+                ) if self.to_me(to) && self.from_dx(de) => {
                     self.log_field_day(de, class, section, slot);
                     self.pending = Some(self.rr73(de));
                     self.state = FdState::Done;
@@ -4726,13 +4723,20 @@ impl FieldDayStation {
                 // 9210-9215); the 73 goes once and the run calls CQ again. A bare 73, and every
                 // other Field Day station, close as they always have, with nothing sent back.
                 //
-                // ⭐ A caller whose call is nonstandard closes with my call hashed
-                // ([`closes_to_me`](Self::closes_to_me)), and is answered with WSJT-X's 73 to it
+                // ⭐ Addressed to us by our base call ([`to_me`](Self::to_me)), as WSJT-X takes its
+                // partner's close (`auto_sequence`, mainwindow.cpp 7546; `processMessage`,
+                // 9050-9054), so one to the call before a change of My Call with the same base
+                // (K1ABC → K1ABC/P) still closes the contact. That takes my call hashed too: a
+                // caller whose call is nonstandard closes with it so, `<K1ABC> W9XYZ/M RR73`, as
+                // WSJT-X 3.0.2 writes it (`genStdMsgs`, 9702 and 9710), and WSJT-X takes that as
+                // its own: the decoder prints its own call's hash as `<K1ABC>` (`unpack77`,
+                // packjt77.f90 644-651, `n12.eq.hashmy12`) and `DecodedText` drops the brackets
+                // (decodedtext.cpp 66). Such a caller is answered with WSJT-X's 73 to it
                 // ([`closing_calls`](Self::closing_calls)).
                 (FdState::AwaitConfirm, Msg::Rr73 { to, de })
                 | (FdState::AwaitConfirm, Msg::Rrr { to, de })
                 | (FdState::AwaitConfirm, Msg::Bye73 { to, de })
-                    if self.closes_to_me(to) && self.from_dx(de) =>
+                    if self.to_me(to) && self.from_dx(de) =>
                 {
                     if let Some((call, class, section)) = self.peer_exch.take() {
                         self.log_field_day(&call, &class, &section, slot);
@@ -7758,6 +7762,180 @@ mod tests {
             );
             assert!(run.log.qsos().is_empty(), "{what}: nothing logged");
         }
+    }
+
+    /// Field Day's S&P waiting for the runner's rogered exchange: W9XYZ's CQ picked under `was`
+    /// and our exchange on the air, then the station's call changed to `now` ([`sign_as`], what a
+    /// Settings save does) and `heard` decoded. The state, the next over and the rows logged.
+    ///
+    /// [`sign_as`]: FieldDayStation::sign_as
+    fn fd_sp_after_a_call_change(was: &str, now: &str, heard: &str) -> (FdState, String, usize) {
+        let mut sp = contest_station(was, "arrlfd", false);
+        click(&mut sp, "CQ FD W9XYZ EN37");
+        assert_eq!(next(&sp), format!("W9XYZ {was} 2B EMA"), "premise");
+        sp.after_tx();
+        if now != was {
+            sp.sign_as(now);
+        }
+        sp.observe(&[dec(heard)], 3);
+        (sp.state, next(&sp), sp.log.qsos().len())
+    }
+
+    /// Field Day's run waiting for its caller's close: W9XYZ's exchange to `was` rogered with ours
+    /// and on the air, then the station's call changed to `now` and `heard` decoded. The state,
+    /// the next over and the rows logged.
+    fn fd_run_after_a_call_change(was: &str, now: &str, heard: &str) -> (FdState, String, usize) {
+        let mut run = contest_station(was, "arrlfd", true);
+        run.observe(&[dec(&format!("{was} W9XYZ 1D WI"))], 1);
+        assert_eq!(next(&run), format!("W9XYZ {was} R 2B EMA"), "premise");
+        run.after_tx();
+        if now != was {
+            run.sign_as(now);
+        }
+        run.observe(&[dec(heard)], 3);
+        (run.state, next(&run), run.log.qsos().len())
+    }
+
+    /// ⭐ A REPLY FROM THE STATION BEING WORKED IS TAKEN BY ITS BASE CALL, AS WSJT-X 3.0.2 TAKES IT.
+    /// Once in a contact, WSJT-X acts on its partner's message when the word it is addressed to
+    /// holds its base call (`auto_sequence`, mainwindow.cpp 7546-7549) and `processMessage` reads
+    /// it as its own by that base call alone (9050-9054: ` K1ABC `, `/K1ABC `, ` K1ABC/`), and
+    /// My Call changed in Settings moves only that base call (3567-3568). So a call changed from
+    /// K1ABC to K1ABC/P mid-contact, or back, still completes the contact on the partner's
+    /// rogered exchange or RR73 to the old call, logged once, and the next over goes out under
+    /// the new call. CONTROL: the call unchanged, the same.
+    #[test]
+    fn field_day_takes_the_partners_reply_to_the_old_call_after_a_portable_change() {
+        for (was, now) in [
+            ("K1ABC", "K1ABC/P"),
+            ("K1ABC/P", "K1ABC"),
+            ("K1ABC", "K1ABC"),
+        ] {
+            assert_eq!(
+                fd_sp_after_a_call_change(was, now, &format!("{was} W9XYZ R 1D WI")),
+                (FdState::Done, format!("W9XYZ {now} RR73"), 1),
+                "S&P {was} → {now}"
+            );
+            for (close, answer) in [
+                ("RR73", format!("W9XYZ {now} 73")),
+                ("RRR", format!("W9XYZ {now} 73")),
+                ("73", String::new()),
+            ] {
+                assert_eq!(
+                    fd_run_after_a_call_change(was, now, &format!("{was} W9XYZ {close}")),
+                    (FdState::Done, answer, 1),
+                    "run {was} → {now}, {close}"
+                );
+            }
+        }
+    }
+
+    /// ⭐ The same for a reply to the BASE call: a portable station (K1ABC/P) whose partner
+    /// addresses it as K1ABC completes the contact, as WSJT-X does (` K1ABC ` holds its base call,
+    /// mainwindow.cpp 9050), whether or not the call changed on the way.
+    #[test]
+    fn field_day_takes_the_partners_reply_to_the_base_call() {
+        for (was, now) in [("K1ABC/P", "K1ABC/P"), ("K1ABC", "K1ABC/P")] {
+            assert_eq!(
+                fd_sp_after_a_call_change(was, now, "K1ABC W9XYZ R 1D WI"),
+                (FdState::Done, format!("W9XYZ {now} RR73"), 1),
+                "S&P {was} → {now}"
+            );
+            assert_eq!(
+                fd_run_after_a_call_change(was, now, "K1ABC W9XYZ RR73"),
+                (FdState::Done, format!("W9XYZ {now} 73"), 1),
+                "run {was} → {now}"
+            );
+        }
+    }
+
+    /// The controls for the base-call reply: nothing is taken that WSJT-X would not take.
+    /// - To another call, or to the old call after a change to ANOTHER base call (WSJT-X's base
+    ///   call moves with My Call, mainwindow.cpp 3568), or from a station other than the partner
+    ///   (7546-7549: the sender must hold the DX call), nothing is completed or logged and the
+    ///   over waiting goes out again.
+    /// - A reply from the partner to a call with my base and another prefix or suffix
+    ///   (K1ABC/M, W1/K1ABC) IS taken, as WSJT-X takes it: `auto_sequence` asks only whether the
+    ///   word holds the base call (7546) and `processMessage` matches `/K1ABC ` and ` K1ABC/`
+    ///   (9053-9054).
+    /// - A NEW caller is still answered only on my call exactly: WSJT-X answers a caller to its
+    ///   CQ only when the call it names is its own whole call (`for_us`, 7276-7285, "Same base
+    ///   call as ours but different prefix or suffix ... for_us = false"; CQ: First, 7021,
+    ///   `" " + my_callsign() + " "`), so a caller to K1ABC/M, or to the old call after a change,
+    ///   is not answered.
+    #[test]
+    fn field_day_takes_by_base_call_only_what_wsjtx_takes() {
+        for (was, now, heard, what) in [
+            ("K1ABC", "K1ABC/P", "K2DEF W9XYZ R 1D WI", "to another call"),
+            (
+                "K1ABC",
+                "W9ABC",
+                "K1ABC W9XYZ R 1D WI",
+                "old call, new base",
+            ),
+            (
+                "K1ABC",
+                "K1ABC/P",
+                "K1ABC N0ABC R 1D WI",
+                "from another station",
+            ),
+        ] {
+            assert_eq!(
+                fd_sp_after_a_call_change(was, now, heard),
+                (FdState::AwaitExchange, format!("W9XYZ {now} 2B EMA"), 0),
+                "S&P: {what}"
+            );
+        }
+        for (was, now, heard, what) in [
+            ("K1ABC", "K1ABC/P", "K2DEF W9XYZ RR73", "to another call"),
+            ("K1ABC", "W9ABC", "K1ABC W9XYZ RR73", "old call, new base"),
+            (
+                "K1ABC",
+                "K1ABC/P",
+                "K1ABC N0ABC RR73",
+                "from another station",
+            ),
+        ] {
+            assert_eq!(
+                fd_run_after_a_call_change(was, now, heard),
+                (FdState::AwaitConfirm, format!("W9XYZ {now} R 2B EMA"), 0),
+                "run: {what}"
+            );
+        }
+        for to in ["K1ABC/M", "<W1/K1ABC>"] {
+            assert_eq!(
+                fd_sp_after_a_call_change("K1ABC", "K1ABC", &format!("{to} W9XYZ R 1D WI")),
+                (FdState::Done, "W9XYZ K1ABC RR73".to_string(), 1),
+                "S&P: the partner's reply to {to}"
+            );
+            assert_eq!(
+                fd_run_after_a_call_change("K1ABC", "K1ABC", &format!("{to} W9XYZ RR73")),
+                (FdState::Done, "W9XYZ K1ABC 73".to_string(), 1),
+                "run: the partner's close to {to}"
+            );
+        }
+        for (me, heard, what) in [
+            ("K1ABC", "K1ABC/M W9XYZ 1D WI", "to another suffix"),
+            ("K1ABC/P", "K1ABC W9XYZ 1D WI", "to my base call"),
+            (
+                "K1ABC",
+                "K1ABC W9XYZ R 1D WI",
+                "CONTROL: to my call, rogered early",
+            ),
+        ] {
+            let mut run = contest_station(me, "arrlfd", true);
+            run.observe(&[dec(heard)], 1);
+            let answered = run.state != FdState::CallingCq;
+            assert_eq!(answered, what.starts_with("CONTROL"), "new caller {what}");
+        }
+        let mut run = contest_station("K1ABC", "arrlfd", true);
+        run.sign_as("K1ABC/P");
+        run.observe(&[dec("K1ABC W9XYZ 1D WI")], 1);
+        assert_eq!(
+            (run.state, next(&run)),
+            (FdState::CallingCq, "CQ FD K1ABC/P FN42".to_string()),
+            "a new caller to the old call is not answered"
+        );
     }
 
     /// ⭐ FIELD DAY'S MESSAGES PASS BY A CALL THE DECODER COULD NOT RESOLVE, as WSJT-X's Field Day
