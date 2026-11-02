@@ -14544,6 +14544,10 @@ export const EN = {
   // The optional host/detail a pill carries. One entry owns the parenthesis and the space, so
   // no caller ever glues them on.
   'nowbar.feed.title.detail': '{{title}} ({{detail}})',
+  // A window following another window's cluster logins says so on the Cluster and Phone pills.
+  'nowbar.feed.via.value': '{{value}} · other window',
+  'nowbar.feed.via.title':
+    "{{title}}. Through the other Nexus window, which holds this callsign's cluster logins; its cluster list and SSID apply here too.",
 
   // ── The Tempo cockpit header ────────────────────────────────────────────────────────
   // The tier NAMES (TempoFast/TempoDeep and their Fast/Deep slots) are the modes' own.

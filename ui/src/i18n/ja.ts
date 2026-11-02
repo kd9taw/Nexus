@@ -9270,6 +9270,8 @@ export const JA: PartialCatalog = {
   "nowbar.feed.idle.title": "{{name}}:接続済み、{{age}}データなし(静かなバンドなら正常です)",
   "nowbar.feed.unknown.title": "{{name}}:{{state}}",
   "nowbar.feed.title.detail": "{{title}}({{detail}})",
+  "nowbar.feed.via.value": "{{value}}・別ウィンドウ経由",
+  "nowbar.feed.via.title": "{{title}}。このコールサインのクラスターログインを保持している別のNexusウィンドウ経由です。そのウィンドウのクラスター一覧とSSIDがここにも適用されます。",
   "tempo.header.tier.aria": "Tempoティア",
   "tempo.header.tier.fast.title": "TempoFast — 高速会話ティア",
   "tempo.header.tier.deep.title": "TempoDeep — 微弱信号に強いティア(15 s)",

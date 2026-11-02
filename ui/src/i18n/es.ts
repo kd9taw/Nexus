@@ -4826,6 +4826,8 @@ export const ES: PartialCatalog = {
   "nowbar.feed.reconnecting.title.age": "{{name}}: se cayó la conexión — reintentando (último evento hace {{age}})",
   "nowbar.feed.reconnecting.value": "reconectando…",
   "nowbar.feed.title.detail": "{{title}} ({{detail}})",
+  "nowbar.feed.via.value": "{{value}} · otra ventana",
+  "nowbar.feed.via.title": "{{title}}. A través de la otra ventana de Nexus, que mantiene las conexiones al clúster de este indicativo; su lista de clústeres y su SSID se aplican también aquí.",
   "nowbar.feed.unknown.title": "{{name}}: {{state}}",
   "nowbar.label": "AHORA",
   "nowbar.need.label": "Falta",

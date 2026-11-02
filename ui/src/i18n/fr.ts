@@ -4826,6 +4826,8 @@ export const FR: PartialCatalog = {
   "nowbar.feed.reconnecting.title.age": "{{name}} : connexion perdue — nouvelle tentative (dernier événement il y a {{age}})",
   "nowbar.feed.reconnecting.value": "reconnexion…",
   "nowbar.feed.title.detail": "{{title}} ({{detail}})",
+  "nowbar.feed.via.value": "{{value}} · autre fenêtre",
+  "nowbar.feed.via.title": "{{title}}. Par l'autre fenêtre Nexus, qui détient les connexions au cluster de cet indicatif ; sa liste de clusters et son SSID s'appliquent aussi ici.",
   "nowbar.feed.unknown.title": "{{name}} : {{state}}",
   "nowbar.label": "ACTUEL",
   "nowbar.need.label": "Manque",

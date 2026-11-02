@@ -3922,6 +3922,10 @@ export interface FeedHealth {
    * "N SSB spots" diagnostic (0 = SSB not arriving; >0 with no phone rows = arriving but
    * not a need). */
   phoneSpotsSeen: number
+  /** This window holds no cluster login of its own: another Nexus window on this computer holds
+   * them for this callsign, under its own cluster list and SSID, and relays its spots here.
+   * `cluster` and `phoneCluster` then say what reaches THIS window. */
+  clusterViaOtherWindow?: boolean
 }
 
 /** Worked All States progress (50 US states; LoTW/paper confirmed). */

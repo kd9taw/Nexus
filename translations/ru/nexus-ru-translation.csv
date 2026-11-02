@@ -805,6 +805,8 @@
 "1","nowbar.feed.idle.title","{{name}}: connected, no data for {{age}} (a quiet band is normal)","{{name}}: подключено, нет данных уже {{age}} (тихий диапазон — это нормально)","{{name}} | {{age}}",""
 "1","nowbar.feed.unknown.title","{{name}}: {{state}}","{{name}}: {{state}}","{{name}} | {{state}}",""
 "1","nowbar.feed.title.detail","{{title}} ({{detail}})","{{title}} ({{detail}})","{{title}} | {{detail}}",""
+"1","nowbar.feed.via.value","{{value}} · other window","{{value}} · через другое окно","{{value}}","The Cluster/Phone pill's state word ({{value}}, e.g. ""connected"") when this window gets its spots through another Nexus window's cluster logins. Keep it short: it sits on the Now bar."
+"1","nowbar.feed.via.title","{{title}}. Through the other Nexus window, which holds this callsign's cluster logins; its cluster list and SSID apply here too.","{{title}}. Через другое окно Nexus, которое держит подключения к кластерам для этого позывного; его список кластеров и SSID действуют и здесь.","{{title}} | Nexus | SSID","Tooltip of the same pill; {{title}} is the pill's own sentence."
 "1","panels.button","⊞ Panels","⊞ Панели","",""
 "1","panels.button.hidden","⊞ Panels · {{count}} hidden","⊞ Панели · {{count}} скрыто","{{count}}",""
 "1","panels.button.title","Show or hide the panels on this screen — untick one and its neighbours expand into the space it leaves","Показать или скрыть панели на этом экране — снимите флажок с одной из них, и ее соседи расширятся на оставленное ею пространство.","",""

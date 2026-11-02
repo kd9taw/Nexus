@@ -793,6 +793,8 @@ export const RU: PartialCatalog = {
   "nowbar.feed.idle.title": "{{name}}: подключено, нет данных уже {{age}} (тихий диапазон — это нормально)",
   "nowbar.feed.unknown.title": "{{name}}: {{state}}",
   "nowbar.feed.title.detail": "{{title}} ({{detail}})",
+  "nowbar.feed.via.value": "{{value}} · через другое окно",
+  "nowbar.feed.via.title": "{{title}}. Через другое окно Nexus, которое держит подключения к кластерам для этого позывного; его список кластеров и SSID действуют и здесь.",
   "panels.button": "⊞ Панели",
   "panels.button.hidden": "⊞ Панели · {{count}} скрыто",
   "panels.button.title": "Показать или скрыть панели на этом экране — снимите флажок с одной из них, и ее соседи расширятся на оставленное ею пространство.",

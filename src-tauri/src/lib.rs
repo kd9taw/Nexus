@@ -63,6 +63,7 @@ mod client_mode;
 mod club_key;
 /// The human DX-cluster node feeds: which run, which should, and how each node is doing.
 mod cluster_nodes;
+mod cluster_share;
 /// Where each command runs when another computer drives this station: at the shack, here,
 /// refused here, starts TX or stops TX.
 mod command_classes;
@@ -1143,6 +1144,13 @@ fn start_cluster_feeds(
     health: &SharedHealth,
     restarting: bool,
 ) {
+    // One login per call on this computer: when another Nexus window holds this call's cluster
+    // logins, this one follows them through the relay and starts no feed of its own.
+    if is_real_call(mycall)
+        && cluster_share_of(spots, health).claim(mycall) == cluster_share::Claim::Follow
+    {
+        return;
+    }
     start_cluster_feed(
         spots,
         RBN_CW_HOST,
@@ -1160,6 +1168,97 @@ fn start_cluster_feeds(
         &RBN_DIGITAL_STARTED,
     );
     cluster_nodes::reconcile(spots, health, restarting);
+}
+
+/// This window's part in sharing the cluster logins with the other Nexus windows on this computer
+/// ([`cluster_share`]). Made on the first start of the cluster feeds, whose buffer and health are
+/// the process's one pair.
+static CLUSTER_SHARE: std::sync::OnceLock<cluster_share::Share> = std::sync::OnceLock::new();
+
+fn cluster_share_of(spots: &SharedSpots, health: &SharedHealth) -> &'static cluster_share::Share {
+    CLUSTER_SHARE.get_or_init(|| {
+        cluster_share::Share::new(
+            config_dir_for(None),
+            Arc::new(DesktopShare {
+                spots: spots.clone(),
+                health: health.clone(),
+            }),
+        )
+    })
+}
+
+/// Hand a spot this window's feed parsed to the windows following it. Nothing before the share
+/// exists, or while no window follows.
+fn share_relay(source: cluster_share::Source, spot: &tempo_net::cluster::ClusterSpot) {
+    if let Some(share) = CLUSTER_SHARE.get() {
+        share.relay(source, spot);
+    }
+}
+
+/// While this window follows another's cluster logins: whether the relay is up, and what the
+/// other window is logged into. `None` when this window holds its own logins (or has none).
+fn cluster_following() -> Option<(bool, cluster_share::HolderStatus)> {
+    CLUSTER_SHARE
+        .get()
+        .and_then(cluster_share::Share::following)
+}
+
+/// The desktop window's side of the share: its spot buffer, health and outbox.
+struct DesktopShare {
+    spots: SharedSpots,
+    health: SharedHealth,
+}
+
+/// This window wants the cluster now: its switch is on, it is not Unassisted, and it has a real
+/// call.
+fn cluster_wanted() -> bool {
+    let c = cluster_nodes::config();
+    c.active && is_real_call(&c.mycall)
+}
+
+impl cluster_share::Hooks for DesktopShare {
+    fn active(&self) -> bool {
+        cluster_wanted()
+    }
+
+    fn status(&self) -> cluster_share::HolderStatus {
+        let feeds = cluster_nodes::feeds();
+        cluster_share::HolderStatus {
+            rbn_connected: self
+                .health
+                .cluster_connected
+                .load(std::sync::atomic::Ordering::Relaxed),
+            nodes_running: !feeds.is_empty(),
+            nodes_connected: feeds.any_connected(),
+            nodes_label: feeds.label(),
+        }
+    }
+
+    fn post(&self, line: String) {
+        CLUSTER_OUTBOX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(line);
+    }
+
+    fn take(&self, source: cluster_share::Source, spot: &tempo_net::cluster::ClusterSpot) {
+        match source {
+            cluster_share::Source::Rbn => take_rbn_spot(&self.spots, &self.health, spot),
+            cluster_share::Source::Node => take_node_spot(&self.spots, &self.health, spot),
+        }
+    }
+
+    fn next_post(&self) -> Option<String> {
+        CLUSTER_OUTBOX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop_front()
+    }
+
+    fn promote(&self) {
+        let c = cluster_nodes::config();
+        start_cluster_feeds(&self.spots, &c.mycall, &c.ssid, &self.health, false);
+    }
 }
 
 /// Spawn one RBN skimmer telnet feed (CW or digital). Once-latched via `started`; each parsed
@@ -1194,29 +1293,10 @@ fn start_cluster_feed(
             &host,
             &call,
             |sp| {
-                // UNASSISTED mode: drop the spot at the door, before the health stamp, the
-                // buffer and Pounce. Checked here rather than only at the start gate so a
-                // mid-event flip takes effect on the very next packet without waiting for a
-                // socket teardown. The feed intentionally stays connected and simply
-                // discards — reconnecting later is what would cost the operator spots.
-                if unassisted() {
-                    return;
-                }
-                hp.cluster_last
-                    .store(now_unix(), std::sync::atomic::Ordering::Relaxed);
-                if let Ok(mut b) = buf.lock() {
-                    // Mark the skimmer origin so a leading "RTTY" comment token can
-                    // UPGRADE the display label (is_rbn_rtty) — trusted only here, on
-                    // the machine-generated RBN wire, never on the human-node path.
-                    let mut s = sp.clone();
-                    s.rbn = true;
-                    pounce_offer(&s);
-                    note_spot_iota(&s);
-                    // RANKED, never plain `push`: the buffer's corroborator cap has to
-                    // choose which voices a re-spotted row keeps, and the Needed board
-                    // admits the row on whether a NEAR voice is among them.
-                    b.push_ranked(s, spotter_evidence_rank);
-                }
+                // Other windows following this one's logins get it first, whatever this
+                // window's own Unassisted switch says: theirs decides for them.
+                share_relay(cluster_share::Source::Rbn, sp);
+                take_rbn_spot(&buf, &hp, sp);
             },
             &CLUSTER_STOP,
             &hp_conn.cluster_connected,
@@ -1789,6 +1869,65 @@ mod aprs_is_session_tests {
     }
 }
 
+/// Take one spot an RBN skimmer feed parsed — this window's own feed, or the holder's through
+/// the relay ([`cluster_share`]): the buffer, Pounce and the health stamps.
+fn take_rbn_spot(buf: &SharedSpots, hp: &SharedHealth, sp: &tempo_net::cluster::ClusterSpot) {
+    // UNASSISTED mode: drop the spot at the door, before the health stamp, the
+    // buffer and Pounce. Checked here rather than only at the start gate so a
+    // mid-event flip takes effect on the very next packet without waiting for a
+    // socket teardown. The feed intentionally stays connected and simply
+    // discards — reconnecting later is what would cost the operator spots.
+    if unassisted() {
+        return;
+    }
+    hp.cluster_last
+        .store(now_unix(), std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut b) = buf.lock() {
+        // Mark the skimmer origin so a leading "RTTY" comment token can
+        // UPGRADE the display label (is_rbn_rtty) — trusted only here, on
+        // the machine-generated RBN wire, never on the human-node path.
+        let mut s = sp.clone();
+        s.rbn = true;
+        pounce_offer(&s);
+        note_spot_iota(&s);
+        // RANKED, never plain `push`: the buffer's corroborator cap has to
+        // choose which voices a re-spotted row keeps, and the Needed board
+        // admits the row on whether a NEAR voice is among them.
+        b.push_ranked(s, spotter_evidence_rank);
+    }
+}
+
+/// Take one spot a human DX-cluster node parsed — this window's own feed, or the holder's
+/// through the relay ([`cluster_share`]).
+fn take_node_spot(buf: &SharedSpots, hp: &SharedHealth, sp: &tempo_net::cluster::ClusterSpot) {
+    // UNASSISTED mode: drop at the door — see `take_rbn_spot`.
+    if unassisted() {
+        return;
+    }
+    let ts = now_unix();
+    hp.cluster_last
+        .store(ts, std::sync::atomic::Ordering::Relaxed);
+    // Only a PHONE-classed spot proves SSB is actually reaching us — a human
+    // node's feed is mostly CW (RBN relay + human CW), which would otherwise keep
+    // the Phone pill green and hide a phone drought. Classify the same way the
+    // need-matcher does.
+    if matches!(
+        propagation::classify_spot_mode(sp.freq_mhz(), &sp.dx_call),
+        propagation::ModeClass::Phone
+    ) {
+        hp.phone_cluster_last
+            .store(ts, std::sync::atomic::Ordering::Relaxed);
+        hp.phone_spots_seen
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Ok(mut b) = buf.lock() {
+        pounce_offer(sp);
+        note_spot_iota(sp);
+        // Ranked — see `take_rbn_spot`.
+        b.push_ranked(sp.clone(), spotter_evidence_rank);
+    }
+}
+
 /// Start the thread for ONE human DX-cluster node feed (an SSB/phone source), on the flags of
 /// its `cluster_nodes::Feed` — the registry entry that starts, stops and counts it. `call` is the
 /// login identity. Each parsed spot stamps BOTH the aggregate `cluster_last` AND
@@ -1817,32 +1956,9 @@ fn start_human_cluster_feed(
             &host,
             &call,
             |sp| {
-                // UNASSISTED mode: drop at the door — see the RBN callback above.
-                if unassisted() {
-                    return;
-                }
-                let ts = now_unix();
-                hp.cluster_last
-                    .store(ts, std::sync::atomic::Ordering::Relaxed);
-                // Only a PHONE-classed spot proves SSB is actually reaching us — a human
-                // node's feed is mostly CW (RBN relay + human CW), which would otherwise keep
-                // the Phone pill green and hide a phone drought. Classify the same way the
-                // need-matcher does.
-                if matches!(
-                    propagation::classify_spot_mode(sp.freq_mhz(), &sp.dx_call),
-                    propagation::ModeClass::Phone
-                ) {
-                    hp.phone_cluster_last
-                        .store(ts, std::sync::atomic::Ordering::Relaxed);
-                    hp.phone_spots_seen
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                if let Ok(mut b) = buf.lock() {
-                    pounce_offer(sp);
-                    note_spot_iota(sp);
-                    // Ranked — see the RBN callback above.
-                    b.push_ranked(sp.clone(), spotter_evidence_rank);
-                }
+                // Followers first — see the RBN callback above.
+                share_relay(cluster_share::Source::Node, sp);
+                take_node_spot(&buf, &hp, sp);
             },
             &stop,
             &conn,
@@ -2254,6 +2370,10 @@ struct FeedHealth {
     /// board show "N SSB spots", splitting "SSB isn't arriving" (0) from "arriving but not a
     /// need" (>0 with no phone rows).
     phone_spots_seen: i64,
+    /// This window holds no cluster login of its own: another Nexus window on this computer
+    /// holds them for this call, under its own node list and SSID, and relays its spots here
+    /// ([`cluster_share`]). `cluster` and `phone_cluster` then say what reaches THIS window.
+    cluster_via_other_window: bool,
 }
 
 fn feed_status(started: bool, connected: bool, last: i64, now: i64) -> FeedStatus {
@@ -2320,6 +2440,25 @@ fn get_cluster_nodes() -> cluster_nodes::NodesView {
 fn read_feed_health(health: &SharedHealth) -> FeedHealth {
     use std::sync::atomic::Ordering::Relaxed;
     let now = now_unix();
+    if let Some((relay_up, holder)) = cluster_following() {
+        return FeedHealth {
+            pskr: feed_status(
+                PSKR_STARTED.load(Relaxed),
+                health.pskr_connected.load(Relaxed),
+                health.pskr_last_event.load(Relaxed),
+                now,
+            ),
+            ..followed_feed_health(
+                cluster_wanted(),
+                relay_up,
+                &holder,
+                health.cluster_last.load(Relaxed),
+                health.phone_cluster_last.load(Relaxed),
+                health.phone_spots_seen.load(Relaxed),
+                now,
+            )
+        };
+    }
     // The human DX-cluster nodes (the SSB/phone aggregator): the running feeds drive the
     // started flag, "connected" = ANY node's session up, and the label names only nodes that
     // are — never a started node that is down beside one that is up.
@@ -2351,6 +2490,48 @@ fn read_feed_health(health: &SharedHealth) -> FeedHealth {
         ),
         phone_cluster_host: phone_label,
         phone_spots_seen: health.phone_spots_seen.load(Relaxed),
+        cluster_via_other_window: false,
+    }
+}
+
+/// The cluster pills of a window that follows another window's logins ([`cluster_share`]). They
+/// claim a connection only while the relay is up AND the other window says it is logged in: a
+/// follower holds no session, so its own flags prove nothing. Spot ages are this window's own,
+/// as the relay stamps them on arrival. `pskr` is left off (`off`) for the caller to fill.
+/// `wanted` is this window's own cluster switch (with Unassisted folded in): off, nothing reaches
+/// it, and both pills are off as they are in a window with no cluster at all.
+fn followed_feed_health(
+    wanted: bool,
+    relay_up: bool,
+    holder: &cluster_share::HolderStatus,
+    cluster_last: i64,
+    phone_last: i64,
+    phone_seen: i64,
+    now: i64,
+) -> FeedHealth {
+    FeedHealth {
+        cluster: feed_status(
+            wanted,
+            relay_up && (holder.rbn_connected || holder.nodes_connected),
+            cluster_last,
+            now,
+        ),
+        pskr: feed_status(false, false, 0, now),
+        // While the relay is down nothing is known about the other window's nodes: the pill
+        // stays up, unconnected, rather than vanish as "no node configured".
+        phone_cluster: feed_status(
+            wanted && (!relay_up || holder.nodes_running),
+            relay_up && holder.nodes_connected,
+            phone_last,
+            now,
+        ),
+        phone_cluster_host: if relay_up {
+            holder.nodes_label.clone()
+        } else {
+            None
+        },
+        phone_spots_seen: phone_seen,
+        cluster_via_other_window: true,
     }
 }
 
@@ -12483,8 +12664,11 @@ fn queue_spot(freq_mhz: f64, call: String, comment: String) -> Result<(), String
     if !is_real_call(&call) {
         return Err("enter a valid callsign to spot".into());
     }
-    // Only a node still in the registry counts: one being stopped has left it already.
-    if !cluster_nodes::feeds().any_connected() {
+    // Only a node still in the registry counts: one being stopped has left it already. A window
+    // following another's logins posts through it, while it says a node there is logged in.
+    let through_other_window =
+        cluster_following().is_some_and(|(up, status)| up && status.nodes_connected);
+    if !cluster_nodes::feeds().any_connected() && !through_other_window {
         return Err("no DX cluster connected — set a cluster host in Settings".into());
     }
     let line = tempo_net::cluster::format_dx_spot(freq_mhz * 1000.0, &call, &comment);
@@ -56102,7 +56286,19 @@ mod tests {
             let len = src[start..].find("\n}\n").expect("its end");
             &src[start..start + len]
         };
-        for feed in ["start_cluster_feed", "start_human_cluster_feed"] {
+        // Each feed hands its spots to an intake, which a window following another's cluster
+        // logins also takes the relayed ones through (`cluster_share`)…
+        for (feed, intake) in [
+            ("start_cluster_feed", "take_rbn_spot("),
+            ("start_human_cluster_feed", "take_node_spot("),
+        ] {
+            assert!(
+                body(feed).contains(intake),
+                "{feed} takes its spots via {intake}"
+            );
+        }
+        // …and the intake gates, notes and keeps each one.
+        for feed in ["take_rbn_spot", "take_node_spot"] {
             let b = body(feed);
             let gate = b
                 .find("if unassisted() {")

@@ -72,6 +72,11 @@ pub(crate) fn set_config(config: NodeConfig) {
     *lock(&CONFIG) = config;
 }
 
+/// The settings the node feeds run under now.
+pub(crate) fn config() -> NodeConfig {
+    lock(&CONFIG).clone()
+}
+
 /// A poisoned lock still holds a usable registry; a panic elsewhere must not strand the feeds.
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())

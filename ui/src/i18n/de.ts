@@ -9588,6 +9588,8 @@ export const DE: PartialCatalog = {
   "nowbar.feed.idle.title": "{{name}}: verbunden, seit {{age}} keine Daten (ein ruhiges Band ist normal)",
   "nowbar.feed.unknown.title": "{{name}}: {{state}}",
   "nowbar.feed.title.detail": "{{title}} ({{detail}})",
+  "nowbar.feed.via.value": "{{value}} · anderes Fenster",
+  "nowbar.feed.via.title": "{{title}}. Über das andere Nexus-Fenster, das die Cluster-Anmeldungen dieses Rufzeichens hält; dessen Cluster-Liste und SSID gelten auch hier.",
   "scope.smeter.aria": "S-meter",
   "scope.smeter.title": "S-Meter {{reading}} ({{db}} dB rel S9, über CAT)",
   "scope.smeter.title.tx": "S-Meter beim Senden angehalten",
