@@ -1674,9 +1674,10 @@ fn a_tune_whose_vfo_b_write_is_refused_or_late_keys_nothing() {
 #[test]
 fn an_aprs_beacon_and_an_atu_tune_up_with_rig_split_held_go_out_with_vfo_b_on_the_rx_dial() {
     type Press = fn(&mut Engine);
+    type Keys = fn(&str) -> bool;
     // What is pressed, how, what its key looks like on the wire, and how many keys the run sees
     // (the beacon's PTT is one; the tune-up is the radio's own and keys no PTT).
-    let cases: [(&str, Press, fn(&str) -> bool, usize); 2] = [
+    let cases: [(&str, Press, Keys, usize); 2] = [
         (
             "APRS beacon",
             |e| {

@@ -566,6 +566,7 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
 /// answer it, or answered after [`SPLIT_WRITES_BUDGET_MS`], so the key is never late by more than
 /// one split write's budget. The TX mode the radio confirmed stays confirmed (this writes only the
 /// frequency); the next slot over writes its own TX dial again.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
 pub(crate) fn vfo_b_to_the_rx_dial(rig: &mut Rig, dial: u64) -> std::io::Result<()> {
     let mut confirmed = rig
         .take_split_confirmed()
