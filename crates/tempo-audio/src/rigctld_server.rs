@@ -1202,21 +1202,27 @@ pub fn served_rig_model(addr: &str, timeout: std::time::Duration) -> Option<u32>
 
 pub fn probe_cat_port(addr: &str, timeout: std::time::Duration) -> PortReply {
     use std::io::Read;
-    use std::net::ToSocketAddrs;
-    let Ok(mut addrs) = addr.to_socket_addrs() else {
+    // `timeout` is the WHOLE probe's budget: the name lookup, the connect, the question and its
+    // answer. Each step gets only what is left, so a host that takes the connect and never answers
+    // (or a name that takes long to resolve) costs the caller `timeout`, never a multiple of it.
+    let deadline = std::time::Instant::now() + timeout;
+    let left = || deadline.saturating_duration_since(std::time::Instant::now());
+    let Some(sa) = resolve_within(addr, timeout) else {
         return PortReply::Silent;
     };
-    let Some(sa) = addrs.next() else {
+    if left().is_zero() {
+        return PortReply::Silent;
+    }
+    let Ok(mut stream) = TcpStream::connect_timeout(&sa, left()) else {
         return PortReply::Silent;
     };
-    let Ok(mut stream) = TcpStream::connect_timeout(&sa, timeout) else {
+    if left() < std::time::Duration::from_millis(1) {
         return PortReply::Silent;
-    };
-    let _ = stream.set_write_timeout(Some(timeout));
+    }
+    let _ = stream.set_write_timeout(Some(left()));
     if stream.write_all(b"\\chk_vfo\n").is_err() {
         return PortReply::Silent;
     }
-    let deadline = std::time::Instant::now() + timeout;
     let mut buf: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 256];
     while buf.len() < REPLY_SNIPPET_MAX * 2 {
@@ -1238,6 +1244,27 @@ pub fn probe_cat_port(addr: &str, timeout: std::time::Duration) -> PortReply {
         }
     }
     classify_probe_reply(&buf)
+}
+
+/// The first address `addr` names, found within `budget`. A literal `ip:port` needs no lookup. A
+/// host name is looked up on a thread of its own, since the system resolver takes no timeout, and
+/// one that has not answered within `budget` is `None`, as a name that resolves to nothing is (the
+/// lookup is left to finish on its own).
+fn resolve_within(addr: &str, budget: std::time::Duration) -> Option<std::net::SocketAddr> {
+    use std::net::ToSocketAddrs;
+    if let Ok(sa) = addr.trim().parse::<std::net::SocketAddr>() {
+        return Some(sa);
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let name = addr.to_string();
+    std::thread::Builder::new()
+        .name("probe-resolve".into())
+        .spawn(move || {
+            let first = name.to_socket_addrs().ok().and_then(|mut a| a.next());
+            let _ = tx.send(first);
+        })
+        .ok()?;
+    rx.recv_timeout(budget).ok().flatten()
 }
 
 /// Probe whether a rigctld (or compatible broker — maybe another Nexus) is already
@@ -2394,6 +2421,24 @@ pub(crate) mod tests {
                 }
                 Err(e) => panic!("the port is released for a rebind: {e}"),
             }
+        }
+    }
+
+    /// The probe's budget is its whole time: a port that takes the connect and never answers is
+    /// Silent once the budget is spent, never after a connect timeout and a read timeout on top.
+    #[test]
+    fn a_probe_ends_within_its_whole_budget() {
+        let quiet = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = quiet.local_addr().unwrap().to_string();
+        for at in [addr.clone(), addr.replace("127.0.0.1", "localhost")] {
+            let started = std::time::Instant::now();
+            let reply = probe_cat_port(&at, std::time::Duration::from_millis(300));
+            let took = started.elapsed();
+            assert_eq!(reply, PortReply::Silent, "{at}");
+            assert!(
+                took < std::time::Duration::from_millis(450),
+                "{at}: took {took:?} on a 300 ms budget"
+            );
         }
     }
 

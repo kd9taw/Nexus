@@ -735,10 +735,12 @@ fn net_rigctld_shared_directly(t: &Transport) -> Option<&str> {
     (!here || (port != t.rigctld_port && t.broker_self_port != Some(port))).then_some(addr)
 }
 
-/// How long the probe of a NET rigctl address shared directly waits for its answer: 400 ms on
-/// this computer, where a rigctld answers at once, and the network window on another one, whose
-/// connect and answer are two round trips over a link that may be slow. Too short there and a
-/// remote rigctld that is up reads as nothing answering, and the radio waits for nothing.
+/// The whole budget of the probe of a NET rigctl address shared directly (name lookup, connect,
+/// question and answer: `rigctld_server::probe_cat_port` holds it to this in total): 400 ms on this
+/// computer, where a rigctld answers at once, and the network window on another one, whose connect
+/// and answer are two round trips over a link that may be slow. Too short there and a remote
+/// rigctld that is up reads as nothing answering, and the radio waits for nothing. The probe runs
+/// on the radio loop's open, which a reopen repeats only on its backoff (10 s, growing to 300 s).
 fn net_rigctl_probe_budget(t: &Transport) -> Duration {
     if tempo_app::settings::net_rigctl_addr_here(t.rig_model, &t.rig_conn, &t.rig_addr).is_some() {
         Duration::from_millis(400)
@@ -1377,6 +1379,14 @@ const NO_RF_NOTE: &str = "the radio is keyed but reporting ZERO forward power �
 /// the TX-meter poll too, so the operator gets SWR/Po for a mic-keyed over. NEEDS-BENCH:
 /// class-wide serial change — verified on real rigs before release.
 const RIG_PTT_POLL_MS: f64 = 1_000.0;
+/// How long the radio loop watches the radio's own PTT after a key it gave up on, or a key left
+/// owed on a dropped connection (`Rig::take_key_watch`), and how often it asks meanwhile. Such a
+/// key can still reach the radio after its release, on a rigctld that does not serve its
+/// connections in order (Hamlib's does not: one lock, taken in no set order, and a mode write
+/// queued ahead that waits out Hamlib's timeout holds it for seconds), with nothing on the link to
+/// say so. A `t` that answers keyed while the loop holds nothing is that key, and is unkeyed.
+const KEY_WATCH: Duration = Duration::from_secs(10);
+const KEY_WATCH_POLL_MS: f64 = 250.0;
 /// The same poll WHILE A SATELLITE PASS IS ENGAGED — five times a second.
 ///
 /// A second of staleness is a display lag on a terrestrial band and a defect on
@@ -4453,6 +4463,9 @@ struct RadioLoop {
     sat_pass_engaged: bool,
     /// Last `t` poll (ms); 0.0 forces an immediate first read on going idle.
     last_ptt_poll: f64,
+    /// Until when the `t` poll watches for a key this loop let go of reaching the radio after its
+    /// release ([`KEY_WATCH`]).
+    key_watch_until: Option<Instant>,
     /// Last time we ran the FAST dial-only read-back (ms). The dial is mirrored on a much shorter
     /// cadence than the heavy reads so a manual VFO-knob turn tracks in ~⅕ s, not the
     /// 750 ms health poll — the heavy reads (S-meter/mode/funcs) stay slow to bound CAT traffic.
@@ -4943,6 +4956,7 @@ impl RadioLoop {
             sat_inferred_keyed: false,
             sat_pass_engaged: false,
             last_ptt_poll: 0.0,
+            key_watch_until: None,
             tx_meter_idx: 0,
             last_freq_poll: now_unix_ms(),
             last_smeter_poll: 0.0,
@@ -14166,7 +14180,15 @@ impl RadioLoop {
                 // The engaged state is this tick's mirror of the engine's, which the
                 // track loop pushes at its own cadence — so the cadence follows the
                 // pass without this loop knowing anything about satellites.
-                let interval = if self.sat_pass_engaged {
+                if rig.take_key_watch() {
+                    self.key_watch_until = Some(Instant::now() + KEY_WATCH);
+                }
+                let watching = self
+                    .key_watch_until
+                    .is_some_and(|until| Instant::now() < until);
+                let interval = if watching {
+                    KEY_WATCH_POLL_MS
+                } else if self.sat_pass_engaged {
                     SAT_PASS_PTT_POLL_MS
                 } else {
                     RIG_PTT_POLL_MS
@@ -14175,6 +14197,17 @@ impl RadioLoop {
                     self.last_ptt_poll = now;
                     let remote_read = self.remote_read(engine);
                     let ptt_read = rig.read_ptt();
+                    // ⛔ A KEY THIS LOOP LET GO OF, ON THE AIR AFTER ITS RELEASE. Inside the watch
+                    // a radio that says it is keyed while the loop holds nothing (this branch is
+                    // only reached with nothing held: no over, no tune, no PTT, no CW) is unkeyed,
+                    // and the operator is told. It only ever adds an unkey.
+                    if watching && ptt_read == Some(true) {
+                        let _ = rig.ptt(false);
+                        let words = "The radio was keyed after Nexus had let go of the key — \
+                                     Nexus unkeyed it. Check the CAT link to the radio.";
+                        tempo_core::applog::warn("tx", words);
+                        self.report_ptt_as(engine, Some((AudioErrorKind::Ptt, words)));
+                    }
                     engine_lock(engine).remote_observe_ptt(remote_read.as_ref(), ptt_read);
                     if let Some(on) = ptt_read {
                         // Two different facts, two different verbs, and the
@@ -14953,12 +14986,24 @@ impl RadioLoop {
                 let words = format!(
                     "The radio keyed {:.1} s late, after Nexus had already let go of the key — \
                      Nexus unkeyed it at once. Check the CAT link to the radio.",
-                    late.as_secs_f64()
+                    late.after.as_secs_f64()
                 );
-                tempo_core::applog::warn("tx", &words);
-                // A slow radio's key, inside the window a network chain gives a key that works,
-                // keeps the line that already says it was not confirmed: its release followed it.
-                if late > LATE_KEY_SAID_AFTER
+                tempo_core::applog::warn(
+                    "tx",
+                    &format!(
+                        "a key given up on was answered {:.1} s after it was sent ({}{}); unkeyed again",
+                        late.after.as_secs_f64(),
+                        if late.accepted { "accepted" } else { "not accepted" },
+                        if late.superseded { ", a later key confirmed behind it" } else { "" }
+                    ),
+                );
+                // Said only for a key the radio ACCEPTED (a late refusal keyed nothing), with no
+                // later key confirmed behind it (a second Tune that keyed is what the radio held),
+                // and past the window a network chain gives a key that works: a slower radio's key
+                // inside it keeps the line that already says it was not confirmed.
+                if late.accepted
+                    && !late.superseded
+                    && late.after > LATE_KEY_SAID_AFTER
                     && matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt)
                 {
                     eng.set_audio_error(Some((AudioErrorKind::Ptt, words)));
@@ -14970,7 +15015,7 @@ impl RadioLoop {
                     &format!(
                         "a key reached the radio {:.1} s after it was sent, while Nexus holds the \
                          transmitter; that over's own end unkeys it",
-                        late.as_secs_f64()
+                        late.after.as_secs_f64()
                     ),
                 );
             }
@@ -19374,6 +19419,7 @@ mod tests {
     mod js8_tx_delay;
     mod jtty_status;
     mod jtty_transmit;
+    mod late_key;
     mod omnirig_coverage;
     mod pc_mic;
     mod readback_coverage;
