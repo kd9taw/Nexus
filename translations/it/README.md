@@ -117,7 +117,7 @@ you like.
 <!-- make-kit:tiers -->
 | Tier | Rows | What it covers |
 |---:|---:|---|
-| **1** | **770** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
+| **1** | **769** | The frame the operator never stops looking at: the navigation bar, the top bar, panes and pop-outs, connection status, errors and toasts, band and frequency controls, the log-entry form, and Settings ▸ Station. |
 | **2** | 320 | First run: the setup wizard, the Getting Started guide and the splash page. The first thing a new operator meets. |
 | **3** | 1,116 | The daily operating surfaces: the FT8/FT4 cockpit, the logbook, the station roster, spots, the Needed panel, the waterfall and band map. |
 | **4** | 479 | The settings people actually open: audio, radios, connections, alerts, transmit limits, integrations, backup, colours. |
@@ -125,9 +125,9 @@ you like.
 | **6** | 1,356 | The deep end: rig-control detail, confirmation-service setup, rotator and routing, the pages of the remote browser station, and the long tail. |
 <!-- /make-kit:tiers -->
 
-Tier 1 alone is <!-- make-kit:tier1 -->770<!-- /make-kit --> rows, about <!-- make-kit:tier1chars -->33,000<!-- /make-kit --> characters, roughly <!-- make-kit:tier1pct -->9<!-- /make-kit -->% of the text, and it covers
+Tier 1 alone is <!-- make-kit:tier1 -->769<!-- /make-kit --> rows, about <!-- make-kit:tier1chars -->33,000<!-- /make-kit --> characters, roughly <!-- make-kit:tier1pct -->9<!-- /make-kit -->% of the text, and it covers
 the menus, buttons, status messages and log form an operator sees all day. Tiers 1 and 2 together
-(<!-- make-kit:tier12 -->1,090<!-- /make-kit --> rows) add what a new operator meets in the first hour: the setup wizard and the
+(<!-- make-kit:tier12 -->1,089<!-- /make-kit --> rows) add what a new operator meets in the first hour: the setup wizard and the
 Getting Started guide.
 
 ## Check your work before you send it
