@@ -3905,6 +3905,9 @@ export interface ClusterNodes {
   /** The SAVED choice — the form may hold an unsaved one. */
   auto: boolean
   nodes: ClusterNode[]
+  /** Another Nexus window on this computer holds this callsign's cluster logins: its node list
+   * and SSID are the ones in use, and this window logs into no node. */
+  viaOtherWindow?: boolean
 }
 
 /** Liveness of the background live feeds (DX cluster/RBN + PSK Reporter MQTT). */

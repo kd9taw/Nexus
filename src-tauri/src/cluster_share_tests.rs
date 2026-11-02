@@ -208,7 +208,7 @@ impl Window {
 
     /// The window's process ends.
     fn close(&self) {
-        self.share.close();
+        self.share.release();
         self.hooks.feeds_stop.store(true, Ordering::SeqCst);
     }
 
@@ -422,6 +422,19 @@ fn windows_on_different_calls_each_hold_their_own() {
     b.close();
 }
 
+/// The holder's side of a handshake, done by hand: `(stream, proof line)` after a HELLO.
+fn hello(port: u16, nonce: &str) -> (TcpStream, String) {
+    let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(6))).unwrap();
+    s.write_all(format!("HELLO {nonce}\n").as_bytes()).unwrap();
+    let mut line = Vec::new();
+    let mut b = [0u8; 1];
+    while s.read(&mut b).unwrap_or(0) == 1 && b[0] != b'\n' {
+        line.push(b[0]);
+    }
+    (s, String::from_utf8_lossy(&line).into_owned())
+}
+
 #[test]
 fn a_stranger_without_the_secret_gets_nothing_and_posts_nothing() {
     let dir = scratch("stranger");
@@ -442,27 +455,39 @@ fn a_stranger_without_the_secret_gets_nothing_and_posts_nothing() {
             .mode();
         assert_eq!(mode & 0o777, 0o600, "owner-only");
     }
-    let wrong = "0".repeat(64);
-    for hello in [
-        format!("HELLO {wrong}\n"),
-        "POST DX 14025 K1XX evil\n".to_string(),
-    ] {
-        let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
-        s.set_read_timeout(Some(Duration::from_secs(6))).unwrap();
-        s.write_all(hello.as_bytes()).unwrap();
-        let _ = s.write_all(b"POST DX 14025 K1XX evil\n");
-        let mut got = Vec::new();
-        let _ = s.read_to_end(&mut got);
-        assert!(
-            got.is_empty(),
-            "no status, no spot: {:?}",
-            String::from_utf8_lossy(&got)
-        );
-    }
-    // CONTROL: the right secret is served.
+    // A stranger gets the holder's proof over ITS nonce, never the secret, and nothing after a
+    // wrong answer: no status, no spot, and its post goes nowhere.
+    let theirs = "a".repeat(64);
+    let (mut s, proof) = hello(port, &theirs);
+    assert!(proof.starts_with("PROOF "), "{proof}");
+    assert!(
+        !proof.contains(&secret),
+        "the secret never goes on the wire"
+    );
+    s.write_all(format!("AUTH {}\nPOST DX 14025 K1XX evil\n", "0".repeat(64)).as_bytes())
+        .unwrap();
+    let mut got = Vec::new();
+    let _ = s.read_to_end(&mut got);
+    assert!(got.is_empty(), "{:?}", String::from_utf8_lossy(&got));
+    // No hello at all: not even a proof.
     let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
-    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    s.write_all(format!("HELLO {secret}\n").as_bytes()).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(6))).unwrap();
+    s.write_all(b"POST DX 14025 K1XX evil\n").unwrap();
+    let mut got = Vec::new();
+    let _ = s.read_to_end(&mut got);
+    assert!(got.is_empty(), "{:?}", String::from_utf8_lossy(&got));
+    // CONTROL: one that knows the secret checks the holder's proof and is served.
+    let mine = "b".repeat(64);
+    let (mut s, proof) = hello(port, &mine);
+    let words: Vec<&str> = proof.split(' ').collect();
+    assert_eq!(words.len(), 3, "{proof}");
+    assert!(proven(&secret, Side::Holder, &mine, words[1], words[2]));
+    assert!(
+        !proven(&secret, Side::Follower, &mine, words[1], words[2]),
+        "a holder's proof is no follower's"
+    );
+    let auth = prove(&secret, Side::Follower, &mine, words[1]);
+    s.write_all(format!("AUTH {auth}\n").as_bytes()).unwrap();
     let mut first = String::new();
     BufReader::new(s).read_line(&mut first).unwrap();
     assert!(first.starts_with("S {"), "{first}");
@@ -472,10 +497,128 @@ fn a_stranger_without_the_secret_gets_nothing_and_posts_nothing() {
 }
 
 #[test]
+fn trickling_strangers_hold_nothing_past_the_handshake_deadline() {
+    let dir = scratch("trickle");
+    let n = FakeNode::start();
+    let a = Window::open(&dir, "W1AW", &[&n]);
+    assert!(until(Duration::from_secs(10), || n
+        .logins
+        .load(Ordering::SeqCst)
+        == 1));
+    let (port, _) = read_relay(&dir, "W1AW").unwrap();
+    let started = Instant::now();
+    let closed: Arc<Mutex<Vec<Duration>>> = Arc::default();
+    let tricklers: Vec<_> = (0..50)
+        .map(|_| {
+            let closed = closed.clone();
+            std::thread::spawn(move || {
+                let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+                s.set_read_timeout(Some(Duration::from_millis(500)))
+                    .unwrap();
+                let mut b = [0u8; 64];
+                // One byte of a hello every half second, never a newline.
+                while started.elapsed() < Duration::from_secs(20) {
+                    if s.write_all(b"H").is_err() {
+                        break;
+                    }
+                    match s.read(&mut b) {
+                        Ok(0) => break,
+                        Ok(_) => {}
+                        Err(e)
+                            if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                        Err(_) => break,
+                    }
+                }
+                lock(&closed).push(started.elapsed());
+            })
+        })
+        .collect();
+    // A real follower arriving among them still gets in, at worst on its next knock.
+    let b = Window::open(&dir, "W1AW", &[&n]);
+    for t in tricklers {
+        t.join().unwrap();
+    }
+    let closed = lock(&closed).clone();
+    let worst = closed.iter().max().copied().unwrap();
+    assert_eq!(closed.len(), 50);
+    assert!(
+        worst <= HELLO_DEADLINE + Duration::from_secs(2),
+        "every trickler is cut off by the handshake deadline: {worst:?}"
+    );
+    assert!(until(
+        RETRY + HELLO_DEADLINE + Duration::from_secs(5),
+        || { following_connected(&b) }
+    ));
+    a.close();
+    b.close();
+}
+
+#[test]
+fn a_listener_without_the_secret_is_never_believed() {
+    // Another window holds the lease, and the relay file names a port someone else now listens
+    // on: it answers with a made-up proof, a status and a spot.
+    let dir = scratch("squat");
+    let Lease::Held(held) = try_lease(&dir, "W1AW") else {
+        panic!("the other window's lease");
+    };
+    let squat = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = squat.local_addr().unwrap().port();
+    let secret = "1".repeat(64);
+    write_owner_only(&relay_path(&dir, "W1AW"), &format!("{port} {secret}\n")).unwrap();
+    let heard: Arc<Mutex<Vec<u8>>> = Arc::default();
+    let h = heard.clone();
+    std::thread::spawn(move || {
+        for mut s in squat.incoming().flatten() {
+            let fake = format!(
+                "PROOF {} {}\nS {{\"rbnConnected\":true,\"nodesRunning\":true,\"nodesConnected\":true}}\n\
+                 P {{\"src\":\"node\",\"spotter\":\"W9TST\",\"dx\":\"K1FAKE\",\"khz\":14025.0,\"comment\":\"\"}}\n",
+                "c".repeat(64),
+                "d".repeat(64)
+            );
+            let _ = s.write_all(fake.as_bytes());
+            s.set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut buf = [0u8; 512];
+            while let Ok(k) = s.read(&mut buf) {
+                if k == 0 {
+                    break;
+                }
+                lock(&h).extend_from_slice(&buf[..k]);
+            }
+        }
+    });
+    let n = FakeNode::start();
+    let b = Window::open(&dir, "W1AW", &[&n]);
+    b.post("DX 14025 K1ABC must not leave\r\n");
+    std::thread::sleep(RETRY + Duration::from_secs(2));
+    assert!(b
+        .share
+        .following()
+        .is_some_and(|(up, s)| !up && !s.nodes_connected));
+    assert_eq!(b.relayed("K1FAKE"), 0, "no spot taken");
+    let heard = String::from_utf8_lossy(&lock(&heard)).into_owned();
+    assert!(heard.starts_with("HELLO "), "{heard}");
+    assert!(!heard.contains(&secret), "the secret never went out");
+    assert!(
+        !heard.contains("AUTH") && !heard.contains("POST"),
+        "{heard}"
+    );
+    assert_eq!(
+        lock(&b.hooks.outbox).len(),
+        1,
+        "the post waits in this window"
+    );
+    b.close();
+    drop(held);
+}
+
+#[test]
 fn a_follower_without_a_reachable_relay_knocks_once_per_retry() {
     // Another window holds the lease, but its relay is not answering this window: no storm.
     let dir = scratch("storm");
-    let held = try_lease(&dir, "W1AW").expect("the other window's lease");
+    let Lease::Held(held) = try_lease(&dir, "W1AW") else {
+        panic!("the other window's lease");
+    };
     let knock = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = knock.local_addr().unwrap().port();
     write_owner_only(
@@ -488,7 +631,7 @@ fn a_follower_without_a_reachable_relay_knocks_once_per_retry() {
     std::thread::spawn(move || {
         for s in knock.incoming().flatten() {
             k.fetch_add(1, Ordering::SeqCst);
-            drop(s); // refuses at once, as a relay does a wrong secret
+            drop(s); // refuses at once
         }
     });
     let n = FakeNode::start();
@@ -510,37 +653,107 @@ fn a_follower_without_a_reachable_relay_knocks_once_per_retry() {
 }
 
 #[test]
-fn a_window_that_does_not_want_the_cluster_neither_holds_nor_follows() {
-    let dir = scratch("inactive");
+fn a_lease_that_cannot_be_made_fails_open() {
+    // The lock path is a folder: no lock can be opened there. Like the profile lock, this window
+    // then logs in for itself rather than wait for a holder that does not exist.
+    let dir = scratch("broken");
+    std::fs::create_dir_all(lock_path(&dir, "W1AW")).unwrap();
     let n = FakeNode::start();
     let a = Window::open(&dir, "W1AW", &[&n]);
-    let b = Window::open(&dir, "W1AW", &[&n]);
-    b.hooks.active.store(false, Ordering::SeqCst);
+    assert_eq!(a.claim, Claim::Hold);
+    assert!(a.share.following().is_none());
     assert!(until(Duration::from_secs(10), || n
         .logins
         .load(Ordering::SeqCst)
         == 1));
     a.close();
-    std::thread::sleep(RETRY + Duration::from_secs(2));
-    assert_eq!(
-        n.logins.load(Ordering::SeqCst),
-        1,
-        "only the first window ever logged in"
-    );
-    assert_eq!(b.hooks.feeds_started.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_holder_that_lets_go_hands_over_and_takes_its_file_with_it() {
+    let dir = scratch("let-go");
+    let n = FakeNode::start();
+    let a = Window::open(&dir, "W1AW", &[&n]);
+    // Alone: letting go removes the relay file, so nobody dials a dead port.
+    assert!(until(Duration::from_secs(10), || n
+        .logins
+        .load(Ordering::SeqCst)
+        == 1));
+    assert!(relay_path(&dir, "W1AW").exists());
+    a.close();
+    assert!(until(Duration::from_secs(2), || !relay_path(&dir, "W1AW")
+        .exists()));
+    // Its feed is done before the next window opens (in a real process exit, at once).
+    assert!(until(Duration::from_secs(5), || n
+        .live
+        .load(Ordering::SeqCst)
+        == 0));
+    // With a follower: it takes over once, and the window that let go follows it on its next claim.
+    let a = Window::open(&dir, "W1AW", &[&n]);
+    let b = Window::open(&dir, "W1AW", &[&n]);
+    assert!(until(Duration::from_secs(10), || following_connected(&b)));
+    a.close();
+    assert!(until(RETRY * 2 + Duration::from_secs(5), || n
+        .logins
+        .load(Ordering::SeqCst)
+        == 3));
+    assert_eq!(n.max_live.load(Ordering::SeqCst), 1, "never two at once");
+    assert_eq!(a.share.claim("W1AW"), Claim::Follow);
+    a.close();
     b.close();
 }
 
 #[test]
-fn only_a_single_dx_line_passes_the_relay() {
+fn closed_followers_never_hold_a_place() {
+    // Eight followers come and go while no spot flows; a ninth still gets in.
+    let dir = scratch("places");
+    let n = FakeNode::start();
+    let a = Window::open(&dir, "W1AW", &[&n]);
+    let gone: Vec<Window> = (0..MAX_FOLLOWERS)
+        .map(|_| Window::open(&dir, "W1AW", &[&n]))
+        .collect();
+    for w in &gone {
+        assert!(until(Duration::from_secs(15), || following_connected(w)));
+    }
+    for w in &gone {
+        w.close();
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    let ninth = Window::open(&dir, "W1AW", &[&n]);
+    assert!(until(Duration::from_secs(10), || following_connected(
+        &ninth
+    )));
+    a.close();
+    ninth.close();
+}
+
+#[test]
+fn only_a_dx_spot_passes_the_relay() {
     assert_eq!(
         checked_post("POST DX 14025 K1ABC tnx\r\n").as_deref(),
         Some("DX 14025 K1ABC tnx\r\n")
+    );
+    assert_eq!(
+        checked_post("POST DX 14025.5 k1abc  tnx  73\n").as_deref(),
+        Some("DX 14025.5 K1ABC tnx 73\r\n"),
+        "rebuilt by the window's own formatter"
+    );
+    assert_eq!(
+        checked_post("POST DX 7025 VP8/G4XXX\n").as_deref(),
+        Some("DX 7025 VP8/G4XXX\r\n")
     );
     for bad in [
         "POST SET/NAME evil\n",
         "POST DX 14025\n",
         "DX 14025 K1ABC\n",
+        "POST DX BY W1XYZ 14025 K1ABC hi\n",
+        "POST DX hello world\n",
+        "POST DX 0 K1ABC\n",
+        "POST DX -7 K1ABC\n",
+        "POST DX NaN K1ABC\n",
+        "POST DX inf K1ABC\n",
+        "POST DX 14025 BY\n",
+        "POST DX 14025 K1-ABC\n",
         "POST DX 14025 K1ABC a\u{7}b\n",
         &format!("POST DX 14025 K1ABC {}\n", "x".repeat(300)),
     ] {
@@ -552,6 +765,37 @@ fn only_a_single_dx_line_passes_the_relay() {
 fn the_lease_key_names_a_file_for_any_call() {
     assert_eq!(lease_key(" kd9taw/p "), "KD9TAW_P");
     assert_eq!(lease_key("W1AW"), "W1AW");
+}
+
+/// The desktop's wiring, which the windows above stand in for, read from its source: where a
+/// window lets go, and the follower's intake.
+#[test]
+fn the_desktop_lets_go_where_its_feeds_stop_and_takes_relayed_spots_through_its_intakes() {
+    let src = include_str!("lib.rs");
+    let body = |head: &str| -> &str {
+        let start = src.find(head).unwrap_or_else(|| panic!("no {head}"));
+        let len = src[start..].find("\n}\n").expect("its end");
+        &src[start..start + len]
+    };
+    let start = body("\nfn start_cluster_feeds(");
+    let release = start
+        .find("release_cluster_share();")
+        .expect("a call with no real call lets go");
+    assert!(release < start.find(".claim(mycall)").expect("the claim"));
+    let drain = body("\nfn restart_live_feeds(");
+    let restart = drain
+        .find("start_cluster_feeds(&spots")
+        .expect("the restart");
+    let let_go = drain
+        .find("release_cluster_share();")
+        .expect("the drain lets go");
+    assert!(
+        restart < let_go,
+        "in the branch that does not restart the cluster"
+    );
+    let take = body("impl cluster_share::Hooks for DesktopShare");
+    assert!(take.contains("take_rbn_spot(&self.spots, &self.health, spot)"));
+    assert!(take.contains("take_node_spot(&self.spots, &self.health, spot)"));
 }
 
 #[test]

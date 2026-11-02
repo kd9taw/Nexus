@@ -1146,9 +1146,10 @@ fn start_cluster_feeds(
 ) {
     // One login per call on this computer: when another Nexus window holds this call's cluster
     // logins, this one follows them through the relay and starts no feed of its own.
-    if is_real_call(mycall)
-        && cluster_share_of(spots, health).claim(mycall) == cluster_share::Claim::Follow
-    {
+    if !is_real_call(mycall) {
+        // No feed starts under this call, so no lease is held for it either.
+        release_cluster_share();
+    } else if cluster_share_of(spots, health).claim(mycall) == cluster_share::Claim::Follow {
         return;
     }
     start_cluster_feed(
@@ -1185,6 +1186,14 @@ fn cluster_share_of(spots: &SharedSpots, health: &SharedHealth) -> &'static clus
             }),
         )
     })
+}
+
+/// Let go of this window's part in the share: its feeds have stopped and will not start again,
+/// so a window following it takes the logins over rather than wait on a holder with none.
+fn release_cluster_share() {
+    if let Some(share) = CLUSTER_SHARE.get() {
+        share.release();
+    }
 }
 
 /// Hand a spot this window's feed parsed to the windows following it. Nothing before the share
@@ -20782,6 +20791,10 @@ fn restart_live_feeds(
         cluster_nodes::set_config(node_config);
         if cluster_active {
             start_cluster_feeds(&spots, &mycall, &cluster_ssid, &health, true);
+        } else {
+            // Every cluster feed stopped above and none restarts: a lease held for the old call
+            // would strand the windows following it.
+            release_cluster_share();
         }
         start_pskr_feed(&live_paths, &mycall, &health);
         start_wspr_feed(&live_paths, &mycall);

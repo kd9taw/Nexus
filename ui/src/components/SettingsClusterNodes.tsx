@@ -121,6 +121,12 @@ export function SettingsClusterNodes({
       <span className="settings-label" id="cluster-nodes-label">
         {t('settings.integrations.clusterNodes.label')}
       </span>
+      {/* Another window holds this call's cluster logins: what is set here waits until this one does. */}
+      {standings?.viaOtherWindow && (
+        <span className="settings-hint cluster-node-via">
+          {t('settings.integrations.clusterNodes.viaOtherWindow')}
+        </span>
+      )}
       <div className="cluster-node-mode" role="radiogroup" aria-labelledby="cluster-nodes-label">
         <label>
           <input

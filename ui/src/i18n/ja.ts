@@ -6480,6 +6480,7 @@ export const JA: PartialCatalog = {
   "settings.integrations.clusterNodes.hint": "リストのすべてのノードに接続し、人によるSSB/フォーンのスポットを統合します — ノードが多いほどフォーンのカバレッジが広がります（RBNのCW + デジタルは自動接続。RBNのエンドポイントをここに書いても無視されます）。Nexusがこのリストを勝手に変えることはありません。追加したノードは次回の保存で接続され、削除したノードは次回の保存で切断されます。",
   "settings.integrations.clusterNodes.mode.auto": "動作しているノードを自動で選ぶ（推奨）",
   "settings.integrations.clusterNodes.mode.manual": "自分のリストを使う",
+  "settings.integrations.clusterNodes.viaOtherWindow": "このコンピューター上の別のNexusウィンドウがこのコールサインのクラスターログインを保持しており、このウィンドウはそのウィンドウ経由でスポットを受け取っています。その間は、そのウィンドウのノード一覧とクラスターログインSSIDが使われます。ここでの設定は、このウィンドウがログインを保持したときに有効になります。",
   "settings.integrations.clusterNodes.autoHint": "NexusはSSB/フォーンのスポット用にこれらのノードのうち2つに接続し、利用者をノード間に分散させます。ほかのスポットソースが動いているのに5分間応答しないノードは1日スキップされ、別のノードに切り替わります。静かなバンドがノードの評価を下げることはありません。RBNのCW + デジタルはどちらの場合も自動接続です。次回の保存で反映されます。",
   "settings.integrations.clusterNodes.status.inUse": "使用中",
   "settings.integrations.clusterNodes.status.connecting": "接続中…",

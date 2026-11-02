@@ -7768,6 +7768,7 @@ export const ES: PartialCatalog = {
   "settings.integrations.clusterNodes.hint": "Nos conectamos a TODOS los nodos listados y unimos sus spots humanos de SSB/fonía — más nodos = más cobertura de fonía (RBN CW + digitales se conectan solos; aquí se ignoran los endpoints de RBN). Nexus nunca cambia esta lista por su cuenta. Un nodo añadido se conecta, y uno quitado se desconecta, al siguiente Guardar.",
   "settings.integrations.clusterNodes.mode.auto": "Elegir automáticamente nodos que funcionen (recomendado)",
   "settings.integrations.clusterNodes.mode.manual": "Usar mi lista",
+  "settings.integrations.clusterNodes.viaOtherWindow": "Otra ventana de Nexus en este equipo mantiene las conexiones al clúster de este indicativo, y esta ventana recibe los spots a través de ella. Mientras sea así, se usan su lista de nodos y su SSID de conexión al clúster: lo que configure aquí se aplicará cuando esta ventana mantenga las conexiones.",
   "settings.integrations.clusterNodes.autoHint": "Nexus mantiene conectados dos de estos nodos para los spots de SSB/fonía y reparte a los operadores entre ellos. Un nodo que deja de responder durante cinco minutos, mientras tus otras fuentes de spots funcionan, se omite durante un día y otro ocupa su lugar. Una banda tranquila nunca cuenta en contra de un nodo. RBN CW + digitales se conectan solos en cualquier caso. Efectivo al siguiente Guardar.",
   "settings.integrations.clusterNodes.status.inUse": "En uso",
   "settings.integrations.clusterNodes.status.connecting": "Conectando…",
