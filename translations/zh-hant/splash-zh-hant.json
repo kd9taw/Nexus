@@ -1,0 +1,7 @@
+{
+  "title": "正在將你的日誌簿移入新資料庫",
+  "once": "這只會發生一次。完成後 Nexus 會自動開啟。",
+  "count": "{{done}} / {{total}} 筆通聯",
+  "finishing": "正在收尾…",
+  "opening": "正在開啟 Nexus…"
+}
