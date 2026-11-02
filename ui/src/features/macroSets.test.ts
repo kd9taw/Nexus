@@ -21,11 +21,13 @@ import { resolvePskSet } from './pskMacros'
 import { resolveRttySet } from './rttyMacros'
 
 /** Every UI catalog in the tree, by locale — found, not listed, so a new one (Portuguese's pt.ts,
- *  as its kit writes it) is checked the moment it exists. */
+ *  as its kit writes it) is checked the moment it exists. A region (`pt-BR`) or a script, lower
+ *  case as the locale ids are (`zh-hant`), is part of the name. */
 const CATALOGS: [string, PartialCatalog][] = Object.entries(
-  import.meta.glob<Record<string, unknown>>(['../i18n/[a-z][a-z].ts', '../i18n/[a-z][a-z]-[A-Z][A-Z].ts'], {
-    eager: true,
-  }),
+  import.meta.glob<Record<string, unknown>>(
+    ['../i18n/[a-z][a-z].ts', '../i18n/[a-z][a-z]-[A-Z][A-Z].ts', '../i18n/[a-z][a-z]-[a-z][a-z][a-z][a-z].ts'],
+    { eager: true },
+  ),
 ).map(([path, module]) => {
   const catalogs = Object.values(module).filter((value) => typeof value === 'object' && value !== null)
   if (catalogs.length !== 1) throw new Error(`${path} should export one catalog, not ${catalogs.length}`)

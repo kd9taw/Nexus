@@ -155,6 +155,20 @@
           "count": "{{done}} из {{total}} связей",
           "finishing": "Завершаем…",
           "opening": "Открытие Nexus…"
+        },
+        "zh": {
+          "title": "正在将你的日志簿移入新数据库",
+          "once": "这只会发生一次。完成后 Nexus 会自动打开。",
+          "count": "{{done}} / {{total}} 个通联",
+          "finishing": "正在收尾…",
+          "opening": "正在打开 Nexus…"
+        },
+        "zh-hant": {
+          "title": "正在將你的日誌簿移入新資料庫",
+          "once": "這只會發生一次。完成後 Nexus 會自動開啟。",
+          "count": "{{done}} / {{total}} 筆通聯",
+          "finishing": "正在收尾…",
+          "opening": "正在開啟 Nexus…"
         }
       }
     </script>
@@ -181,6 +195,10 @@
           const os = navigator.language || ''
           if (STRINGS[os]) return os
           const lang = os.split('-')[0]
+          // zh-TW would land on the Simplified catalog; the script decides.
+          if (STRINGS[lang + '-hant'] && (/hant/i.test(os) || /^zh-(tw|hk|mo)$/i.test(os))) {
+            return lang + '-hant'
+          }
           return STRINGS[lang] ? lang : 'en'
         }
 
