@@ -45,7 +45,7 @@ vi.mock('../api', () => {
     editQsoById: vi.fn(async () => ({})),
     logOperators: vi.fn(async () => [] as string[]), exportLogForOperator: noop(),
     logActivations: vi.fn(async () => []), exportLogForActivation: noop(),
-    // The real table LoTW accepts is the backend's (Engine::LOTW_SAT_NAMES); three of its
+    // The real table LoTW accepts is the backend's (Engine::LOTW_ACCEPTED_SATS); three of its
     // names are enough to prove the picker offers what the backend hands it.
     lotwSatNames: vi.fn(async () => ['AO-91', 'ARISS', 'SO-50']),
     setSatTagById: vi.fn(async () => ({})),

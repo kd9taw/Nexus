@@ -17381,32 +17381,58 @@ impl Engine {
         is_designator(name).then(|| name.to_string())
     }
 
-    /// The satellite names LoTW accepts, keyed by what OUR OWN catalog calls the bird (#296).
+    /// Every satellite name LoTW accepts in `SAT_NAME`, exactly as LoTW spells it — the list the
+    /// operator's picker offers and the gate on what an operator edit may store.
     ///
-    /// ⚠️ MEASURED 2026-09-14, and it needs review as new birds appear. Against LoTW's
-    /// accepted-satellite list (as TQSL 11.34 carries it) and the bundled SatNOGS catalog: of the
-    /// 38 designators the catalog can produce, **11 are on that list**. The other 27 are not —
-    /// real designators LoTW has never listed (GO-32, AO-95, IO-26, CO-55, LO-74, OO-38…) and
-    /// names that merely match the designator SHAPE without being one (CUBY-1…5, TOM-1…3, UWE-3/4,
-    /// CANX-4/5, JACK-002). The last rows are the birds LoTW does list under a different spelling
-    /// than the catalog's.
+    /// SOURCE: LoTW's own published list, "What satellites are supported by LoTW?" in the LoTW
+    /// FAQ (https://lotw.arrl.org/lotw-help/frequently-asked-questions/), read 2026-11-02: 110
+    /// IDs (the page lists SO-50 twice). Copied as LoTW prints the ID column, sorted; recheck it
+    /// when LoTW adds a bird, since a name missing here cannot be picked.
+    const LOTW_ACCEPTED_SATS: &[&str] = &[
+        "AISAT1", "AO-10", "AO-109", "AO-123", "AO-13", "AO-16", "AO-21", "AO-24", "AO-27", "AO-3",
+        "AO-4", "AO-40", "AO-51", "AO-6", "AO-7", "AO-73", "AO-8", "AO-85", "AO-91", "AO-92",
+        "ARISS", "BO-102", "BY70-1", "CAS-3H", "CAS-4A", "CAS-4B", "DO-64", "EO-79", "EO-88",
+        "ESEO", "FO-12", "FO-20", "FO-29", "FO-99", "FS-3", "HO-107", "HO-113", "HO-68", "INSPR7",
+        "IO-117", "IO-86", "JO-97", "KEDR", "LEDSAT", "LO-19", "LO-78", "LO-87", "LO-90", "MAYA-3",
+        "MAYA-4", "MIREX", "MO-112", "MO-122", "NO-103", "NO-104", "NO-44", "NO-83", "NO-84",
+        "PO-101", "QO-100", "RS-1", "RS-10", "RS-11", "RS-12", "RS-13", "RS-15", "RS-2", "RS-44",
+        "RS-5", "RS-6", "RS-7", "RS-8", "RS95S", "SAREX", "SO-121", "SO-124", "SO-125", "SO-35",
+        "SO-41", "SO-50", "SONATE", "TAURUS", "TEV2-1", "TEV2-2", "TEV2-3", "TEV2-4", "TEV2-5",
+        "TEV2-6", "TEV2-7", "TEV2-8", "TEV2-9", "TEVEL1", "TEVEL2", "TEVEL3", "TEVEL4", "TEVEL5",
+        "TEVEL6", "TEVEL7", "TEVEL8", "TO-108", "UKUBE1", "UO-14", "UVSQ", "VO-52", "XW-2A",
+        "XW-2B", "XW-2C", "XW-2D", "XW-2E", "XW-2F",
+    ];
+
+    /// The LoTW name to stamp AUTOMATICALLY on a satellite contact, keyed by what OUR OWN catalog
+    /// calls the bird (#296). Every value is on [`Self::LOTW_ACCEPTED_SATS`] (a test holds that).
     ///
-    /// This table is OURS, hand-kept, deliberately not a copy of anyone's file, and the reason it
-    /// may be short: a bird missing here is stamped with NOTHING, which costs a satellite credit
-    /// the operator can still add by hand, while a WRONG name is refused by TQSL and — through the
-    /// `-a compliant` funnel — can take a whole signed batch with it. Unknown fails closed.
+    /// ⚠️ MEASURED 2026-11-02 against LoTW's list above and the bundled catalog
+    /// (`src-tauri/resources/tles/tles.json`), and it needs review as new birds appear: of the
+    /// 45 designators the catalog can produce, **13 are on LoTW's list**. The rest are not — real
+    /// designators LoTW has never listed (GO-32, AO-95, IO-26, CO-55, LO-74, OO-38…) and names
+    /// that merely match the designator SHAPE without being one (CUBY-1…5, TOM-1…3, UWE-3/4,
+    /// CANX-4/5, JACK-002). The later rows are birds the catalog names differently from LoTW,
+    /// each matched on LoTW's own description of the bird (QO-100 is "Es'hail-2", IO-86 is
+    /// "LAPAN-ORARI", i.e. LAPAN-A2) or on the designator inside the catalog name.
     ///
-    /// Left out on purpose, as UNCONFIRMED: the catalog's `AISAT`, `UKUBE 1` and `BY70-4` resemble
-    /// LoTW's `AISAT1`, `UKUBE1` and `BY70-1`, but they were not verified to be the same bird, and
-    /// a guess here is exactly what this table exists to stop.
+    /// The automatic stamp is narrower than the picker on purpose: a bird missing here is
+    /// stamped with NOTHING, which costs a satellite credit the operator can still add from the
+    /// picker, while a WRONG name is refused by TQSL and — through the `-a compliant` funnel —
+    /// can take a whole signed batch with it. Unknown fails closed.
+    ///
+    /// Left out on purpose, as UNCONFIRMED: the catalog's `AISAT` resembles LoTW's `AISAT1`, and
+    /// `LAPAN-A3`/`NEXSAT-1` resemble IO-86/FO-99, but none was verified to be the same bird.
     const LOTW_SAT_NAMES: &[(&str, &str)] = &[
         // On LoTW's list under the designator the catalog already yields.
+        ("AO-7", "AO-7"),
         ("AO-10", "AO-10"),
         ("AO-16", "AO-16"),
         ("AO-27", "AO-27"),
         ("AO-40", "AO-40"),
+        ("AO-73", "AO-73"),
         ("AO-91", "AO-91"),
         ("AO-123", "AO-123"),
+        ("FO-29", "FO-29"),
         ("JO-97", "JO-97"),
         ("LO-19", "LO-19"),
         ("NO-44", "NO-44"),
@@ -17425,6 +17451,17 @@ impl Engine {
         ("TEVEL2-7", "TEV2-7"),
         ("TEVEL2-8", "TEV2-8"),
         ("TEVEL2-9", "TEV2-9"),
+        ("RS-44 & BREEZE-KM R/B", "RS-44"),
+        ("RADIO ROSTO (RS15)", "RS-15"),
+        ("ES'HAIL 2", "QO-100"),
+        ("LAPAN-A2", "IO-86"),
+        ("GREENCUBE", "IO-117"),
+        ("FOX-1A", "AO-85"),
+        ("RADFXSAT (FOX-1B)", "AO-91"),
+        ("LILACSAT-2", "CAS-3H"),
+        ("MESAT1", "MO-122"),
+        ("UKUBE-1", "UKUBE1"),
+        ("ESEO", "ESEO"),
     ];
 
     /// #296: the name LoTW ACCEPTS for the bird this catalog label names, or `None` when we
@@ -17443,8 +17480,9 @@ impl Engine {
     }
 
     /// The satellite names LoTW accepts, sorted — what the operator's "tag this contact"
-    /// picker offers, read straight off [`Self::LOTW_SAT_NAMES`] so the list they can choose
-    /// from and the list [`Self::log_qso`] stamps from cannot drift apart.
+    /// picker offers, read straight off [`Self::LOTW_ACCEPTED_SATS`], the same list
+    /// [`Self::is_lotw_sat_name`] gates on, so the list they choose from cannot drift from the
+    /// list the writer accepts.
     ///
     /// A PICKER AND NOT A TEXT BOX, deliberately. TQSL matches `SAT_NAME` against its own
     /// designator list and rejects anything else ("AO7 instead of AO-7 → rejected"), and
@@ -17453,10 +17491,8 @@ impl Engine {
     /// The cost is the table's own: a bird missing from it still cannot be named from inside
     /// Nexus — the same fail-closed trade the stamp already makes.
     pub fn lotw_accepted_sat_names() -> Vec<&'static str> {
-        let mut names: Vec<&'static str> = Self::LOTW_SAT_NAMES.iter().map(|(_, n)| *n).collect();
+        let mut names = Self::LOTW_ACCEPTED_SATS.to_vec();
         names.sort_unstable();
-        // The table is keyed by OUR catalog name, so two catalog spellings of one bird would
-        // otherwise offer the operator the same LoTW name twice.
         names.dedup();
         names
     }
@@ -17466,9 +17502,9 @@ impl Engine {
     /// else, so a caller that gets the list wrong cannot write a name TQSL will reject.
     pub fn is_lotw_sat_name(name: &str) -> bool {
         let name = name.trim();
-        Self::LOTW_SAT_NAMES
+        Self::LOTW_ACCEPTED_SATS
             .iter()
-            .any(|(_, lotw)| lotw.eq_ignore_ascii_case(name))
+            .any(|lotw| lotw.eq_ignore_ascii_case(name))
     }
 
     /// The station callsign to stamp on a contact: the operator's current `mycall`, ADIF-cased
@@ -70759,6 +70795,62 @@ mod tests {
         assert!(!Engine::is_lotw_sat_name("   "));
         // Case and surrounding space are the operator's typing, not a different bird.
         assert!(Engine::is_lotw_sat_name(" so-50 "));
+    }
+
+    /// The linear-transponder and geostationary birds people actually work are on LoTW's list,
+    /// so the picker must offer them — before this the picker held only the handful of names
+    /// the pass-prediction catalog happened to share with LoTW, and RS-44 could not be picked.
+    #[test]
+    fn the_satellite_picker_offers_the_birds_lotw_lists() {
+        let offered = Engine::lotw_accepted_sat_names();
+        for name in [
+            "RS-44", "AO-7", "FO-29", "IO-86", "QO-100", "AO-73", "CAS-4A", "XW-2A", "IO-117",
+            "SO-124", "UKUBE1",
+        ] {
+            assert!(offered.contains(&name), "{name} missing from the picker");
+            assert!(Engine::is_lotw_sat_name(name), "{name} refused by the gate");
+        }
+        // The whole of LoTW's published list, no more and no less.
+        assert_eq!(offered.len(), 110);
+    }
+
+    /// Every name the automatic stamp can write is one the picker offers and the gate accepts,
+    /// so the stamp can never put a name on a record that TQSL would reject.
+    #[test]
+    fn every_automatic_satellite_stamp_is_on_lotws_list() {
+        for (ours, lotw) in Engine::LOTW_SAT_NAMES {
+            assert!(
+                Engine::is_lotw_sat_name(lotw),
+                "{ours} stamps {lotw}, which LoTW does not list"
+            );
+        }
+    }
+
+    /// The catalog's names for the popular birds now stamp LoTW's designator on their own,
+    /// whether the designator is in the name or the catalog calls the bird something else.
+    #[test]
+    fn the_popular_birds_stamp_their_lotw_names_from_the_catalog() {
+        for (label, want) in [
+            ("OSCAR 7 (AO-7)|Mode B", "AO-7"),
+            ("JAS-2 (FO-29)|linear", "FO-29"),
+            ("FUNCUBE-1 (AO-73)|linear", "AO-73"),
+            ("RS-44 & BREEZE-KM R/B|linear", "RS-44"),
+            ("ES'HAIL 2|NB transponder", "QO-100"),
+            ("LAPAN-A2|FM", "IO-86"),
+            ("GREENCUBE|digipeater", "IO-117"),
+            ("FOX-1A|FM", "AO-85"),
+            ("RADFXSAT (FOX-1B)|FM", "AO-91"),
+            ("LILACSAT-2|FM", "CAS-3H"),
+            ("MESAT1|linear", "MO-122"),
+            ("UKUBE-1|linear", "UKUBE1"),
+            ("ESEO|FM", "ESEO"),
+        ] {
+            assert_eq!(Engine::lotw_sat_name(label), Some(want), "{label}");
+        }
+        // Negative controls: a near-name that is a different bird still stamps nothing.
+        assert_eq!(Engine::lotw_sat_name("LAPAN-A3|FM"), None);
+        assert_eq!(Engine::lotw_sat_name("NEXSAT-1|FM"), None);
+        assert_eq!(Engine::lotw_sat_name("AISAT|FM"), None);
     }
 
     /// The repair the guide used to send an operator to a text editor for, end to end through

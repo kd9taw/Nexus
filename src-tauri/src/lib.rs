@@ -30262,7 +30262,7 @@ async fn set_sat_tag(
 }
 
 /// The satellite names LoTW accepts, for the Logbook row's tag picker — the backend owns the
-/// table (`Engine::LOTW_SAT_NAMES`), so the UI offers exactly what the writer will accept and
+/// table (`Engine::LOTW_ACCEPTED_SATS`), so the UI offers exactly what the writer will accept and
 /// the two cannot drift. Same arrangement as [`dxcc_entity_names`].
 #[tauri::command]
 fn lotw_sat_names() -> Vec<String> {
