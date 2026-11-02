@@ -2397,6 +2397,22 @@ pub struct RadioStatus {
     /// transmits on too. Tune then keys nothing, and the screen says why beside it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flex_tune_refused: bool,
+    /// While Tune is Nexus's own tone, the licence refuses it here though it allows the mode's own
+    /// emission: the tone goes out 1500 Hz from the transmit dial, outside the privileges there
+    /// (`Engine::tune_tone_allowed`). Tune then keys nothing, and the screen says why beside it.
+    /// Absent when false, so every other snapshot is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tune_tone_refused: bool,
+    /// A Tune press was refused because a slot over (FT8, FT4, JS8…) was on the air with Split
+    /// Operation Rig or Fake It, which may have moved the TX dial for it: shown beside Tune for the
+    /// rest of that over's period (`Engine::set_tune_for`). Absent when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tune_over_refused: bool,
+    /// While the radio reports a tuner and the licence refuses the radio's own ATU carrier at the
+    /// transmit dial (this MHz) though it allows the section's emission (`Engine::atu_tune_gate`):
+    /// an ATU press keys nothing, and the note beside the ATU says why. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atu_carrier_refused_mhz: Option<f64>,
     /// While Nexus's own Flex client runs the radio's own ATU (Beta, off until a tester's bench)
     /// and the radio reports a tuner fitted: what is shown beside the ATU, the radio's tune power
     /// and transmit timeout as beside Tune, and the ATU line. See `Engine::observe_flex_atu`.

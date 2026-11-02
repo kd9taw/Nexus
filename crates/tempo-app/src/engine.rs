@@ -3775,6 +3775,11 @@ pub struct Engine {
     /// beside Tune. It also makes the tune judged as CW where the radio puts the carrier; see
     /// [`Self::observe_flex_tune`].
     flex_tune: Option<crate::dto::FlexTune>,
+    /// When a Tune press was last refused because a slot over was on the air with Split Operation
+    /// on ([`Self::set_tune_for`]): the note beside Tune says why for the rest of that over's
+    /// period, at most [`TUNE_OVER_REFUSED_SECS`] (`RadioStatus::tune_over_refused`). The next
+    /// slot boundary ends it ([`Self::plan_tx`]).
+    tune_over_refused_at: Option<Instant>,
     /// While Nexus's own Flex client runs the radio's own ATU: what is shown beside it. It also
     /// makes an ATU press judged as CW where the radio puts the carrier; see
     /// [`Self::observe_flex_atu`].
@@ -6044,6 +6049,26 @@ const SSTV_MAX_TX_SECS: f64 = 330.0;
 /// before the operator keyed the mic would fire when they unkeyed — see [`Engine::take_atu_tune`].
 /// Generous next to the ~750 ms poll it normally waits on, tight next to any real over.
 const ATU_REQUEST_MAX_AGE_SECS: u64 = 5;
+/// Why a voice-keyer message is refused where the section's own emission is allowed but a voice
+/// is not ([`Engine::send_voice`]): a phone emission outside the licence's phone privileges.
+const VOICE_OUTSIDE_PHONE: &str =
+    "TX locked — a voice message would be outside your phone privileges here";
+/// Why an ATU press keys nothing on any CAT path when the licence allows the section's emission
+/// but not the radio's own carrier at the transmit dial `mhz` ([`Engine::atu_tune_gate`]).
+fn atu_carrier_outside(mhz: f64) -> String {
+    format!(
+        "ATU keys nothing here: the radio's own carrier at your dial, {mhz:.4} MHz, would be \
+         outside your license privileges"
+    )
+}
+/// The audio tone Nexus's own Tune carrier plays (Hz), the same f0 the FT1 modem centers on. The
+/// radio loop plays it; the licence gate judges it where it goes out, this far from the transmit
+/// dial on the side the transmitting VFO's mode word names ([`Engine::tune_allowed`]). One number
+/// for both, so the gate cannot judge a tone the loop does not play.
+pub const TUNE_TONE_HZ: f32 = 1500.0;
+/// The longest a refused Tune press during a slot over is shown beside Tune (seconds): an FT8
+/// period. The note goes sooner, with the over ([`Engine::set_tune_for`]).
+const TUNE_OVER_REFUSED_SECS: u64 = 15;
 /// Why an ATU press keys nothing while Nexus's own Flex client runs the radio's ATU and the
 /// licence allows the section's emission but not CW where the radio transmits
 /// ([`Engine::atu_tune_gate`]).
@@ -7221,6 +7246,7 @@ impl Engine {
             flex_dax_tx: false,
             flex_radio_has_mic: false,
             flex_tune: None,
+            tune_over_refused_at: None,
             flex_atu: None,
             flex_meter_stream: false,
             last_dx_tier: None,
@@ -14043,6 +14069,13 @@ impl Engine {
         if self.flex_atu.is_some() && !self.tx_allowed_as(crate::settings::OperatingMode::Cw) {
             return Err(FLEX_ATU_OUTSIDE_CW.to_string());
         }
+        // ⛔ …and on every CAT path the radio's own carrier where it transmits it
+        // ([`Self::atu_carrier_allowed`]): the section's emission model puts Digital's frame,
+        // RTTY's tones and Keyboard's signal an audio offset off that dial, where the ATU's carrier
+        // is not. Only ever refuses more.
+        if !self.atu_carrier_allowed() {
+            return Err(atu_carrier_outside(self.tx_emission_mhz()));
+        }
         if let Some(owner) = self.tx_owner() {
             return Err(owner.busy_reason());
         }
@@ -14278,6 +14311,33 @@ impl Engine {
 
     // ----- Phone voice keyer — play recorded WAVs + record, via the radio loop -----
 
+    /// Whether the licence allows a voice-keyer message here: [`Self::tx_allowed`], and the
+    /// message judged as the phone emission it is ([`Self::tx_allowed_as`] Phone: the passband of
+    /// the mode the transmitting VFO is commanded). Its cockpit is Phone's, where the two are one
+    /// judgement; from any other section the section's own model judges a narrow signal an audio
+    /// offset off the dial (Digital's frame, RTTY's tones), not a voice across the whole passband.
+    /// Not while the transmitting VFO is in a mode that takes no audio at all
+    /// ([`Self::tx_mode_keys_no_audio`]: the radio's own CW or RTTY): no voice goes out there, and
+    /// the section's own judgement of its carrier stands. Only ever refuses more.
+    fn voice_allowed(&self) -> bool {
+        self.tx_allowed()
+            && (self.tx_mode_keys_no_audio()
+                || self.tx_allowed_as(crate::settings::OperatingMode::Phone))
+    }
+
+    /// Whether the transmitting VFO is commanded a mode that takes no audio: the radio's own CW or
+    /// RTTY (FSK), where the radio keys its own carrier and audio played into it does not reach the
+    /// air. Both the dial's word and, on a satellite pass, the uplink's own must say so.
+    fn tx_mode_keys_no_audio(&self) -> bool {
+        let keyed = |word: &str| {
+            matches!(
+                word.trim().to_ascii_uppercase().as_str(),
+                "CW" | "CWR" | "RTTY" | "RTTYR"
+            )
+        };
+        keyed(&self.tx_mode_effective()) && self.sat_uplink_word().is_none_or(|w| keyed(&w))
+    }
+
     /// Queue 12 kHz mono samples (a decoded voice-keyer WAV) for transmission. REFUSED while
     /// TX is disabled (Monitor) or the dial is outside the licence's privileges, so a stray F-key
     /// never keys unexpectedly: nothing is queued, the log says why, and so does the `Err`, which
@@ -14351,6 +14411,15 @@ impl Engine {
             );
             return Err(self.licence_lock_text().to_string());
         }
+        // The section allows its own emission here, but not a voice ([`Self::voice_allowed`]):
+        // the words say it is phone the licence does not allow, not the frequency.
+        if !self.voice_allowed() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer message refused: a voice is outside the licence's phone privileges here",
+            );
+            return Err(VOICE_OUTSIDE_PHONE.to_string());
+        }
         if self.flex_radio_has_mic {
             // The pending message is the one this replaces, not something else transmitting.
             if let Some(owner) = self.tx_owner_beside_voice() {
@@ -14422,6 +14491,8 @@ impl Engine {
             Some(why)
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
+        } else if !self.voice_allowed() {
+            Some("a voice is outside the licence's phone privileges here")
         } else if self.pc_mic_armed() {
             // The operator's PTT on the computer's microphone, pressed after the message was
             // queued and before this tick (the press is refused while a message is pending, so
@@ -24397,6 +24468,25 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if on && !self.tuning && self.cw_sending() {
             return;
         }
+        // ⛔ Nor onto a slot over on the air (FT8, FT4, JS8 and the other timed-slot modes: the TX
+        // indicator, [`TxOwner::Slot`]) while Split Operation can move the TX dial for an over (Rig
+        // split's VFO B, Fake It's VFO A). The radio loop never writes a VFO under a carrier, so a
+        // tune keyed over such an over went out from that over's TX dial, a frequency the gate
+        // judged for no tune. Refused and changes nothing, as onto a CW word; stopping a tune is
+        // never refused. With Split Operation None nothing moves, and Tune takes precedence over
+        // the over as WSJT-X's does (`mainwindow.cpp`: "Tune" takes precedence).
+        if on
+            && !self.tuning
+            && self.app.radio.transmitting
+            && self.settings.split_mode != crate::settings::SplitMode::None
+        {
+            tempo_core::applog::info(
+                "tx",
+                "tune not keyed: an over is on the air from a TX dial Split Operation moved",
+            );
+            self.tune_over_refused_at = Some(Instant::now());
+            return;
+        }
         // A tune toggle invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.remote_actuation.revoke();
@@ -24404,6 +24494,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
         self.tuning = on && self.tune_allowed();
+        if on {
+            self.tune_over_refused_at = None; // a press that got past the over answers anew
+        }
+        if on && !self.tuning && self.tx_allowed() && !self.tune_tone_allowed() {
+            // The cockpit says so beside Tune for as long as it holds (`tune_tone_refused`).
+            tempo_core::applog::info(
+                "tx",
+                "tune not keyed: its tone would go out outside the licence's privileges",
+            );
+        }
         self.note_tci_tune(program);
         if self.tuning {
             // Holding Tune is an operator action and restarts the idle clock — WSJT-X does the
@@ -24473,9 +24573,76 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// makes it at its transmit slice, which the section's own model (FT's signal an audio offset
     /// above the dial, Phone's passband) does not place; where on the slice it lands in each mode is
     /// for a tester's bench. Both must allow it, so this only ever refuses more.
+    ///
+    /// ⛔ AND NEXUS'S OWN TUNE TONE WHERE IT GOES OUT ([`Self::tune_tone_allowed`]). The loop
+    /// plays a fixed [`TUNE_TONE_HZ`] tone, not the section's emission: in Digital the gate judged
+    /// the frame at the TX offset while the carrier went out 1500 Hz from the dial, so a General at
+    /// 14.0230 MHz with the TX offset at 2000 Hz had the frame judged at 14.0250 and the carrier
+    /// sent at 14.0245, below the class's edge.
     fn tune_allowed(&self) -> bool {
         self.tx_allowed()
             && (self.flex_tune.is_none() || self.tx_allowed_as(crate::settings::OperatingMode::Cw))
+            && self.tune_tone_allowed()
+    }
+
+    /// Whether the licence allows Nexus's own tune tone ([`TUNE_TONE_HZ`]) where it goes out: that
+    /// far from each frequency the transmitter is judged on ([`Self::every_tx_frequency`]: the
+    /// transmit dial with split, XIT and a repeater shift), on the side the transmitting VFO's
+    /// mode word names, as the section judges its own emission. In Digital that is a frame of no
+    /// width at the tone ([`Self::tx_allowed_for`], every term of the gate, the stored sideband's
+    /// side included). A word that names no side (FM, CW, the rig's own RTTY, AM's two) adds
+    /// nothing: there the gate already judges the carrier or the passband the tone sits in.
+    ///
+    /// Not while Tune is the radio's own carrier, which plays no tone of Nexus's: Nexus's Flex
+    /// client tuning natively ([`Self::observe_flex_tune`], judged as CW instead) and every TCI
+    /// connection, whose Tune is the SDR program's own carrier.
+    ///
+    /// Only ever refuses more: [`Self::tune_allowed`] ANDs it with the section's own judgement.
+    fn tune_tone_allowed(&self) -> bool {
+        use crate::settings::OperatingMode;
+        if self.flex_tune.is_some() || crate::settings::rig_conn_is_tci(&self.settings.rig_conn) {
+            return true;
+        }
+        let om = self.settings.operating_mode;
+        if om == OperatingMode::Digital {
+            return self.tx_allowed_for(DataFrame {
+                f0_hz: f64::from(TUNE_TONE_HZ),
+                bw_hz: 0.0,
+            });
+        }
+        let tone = f64::from(TUNE_TONE_HZ) / 1_000_000.0;
+        let class = self.settings.license_class;
+        let at = |carrier: f64, word: &str| match Self::side_is_lsb(word) {
+            Some(lsb) => {
+                let f = if lsb { carrier - tone } else { carrier + tone };
+                crate::privileges::tx_span_allowed(class, f, f, om)
+            }
+            None => true,
+        };
+        self.every_tx_frequency(om, |mhz| {
+            at(mhz, &self.tx_mode_effective())
+                && self.sat_uplink_word().is_none_or(|word| at(mhz, &word))
+        })
+    }
+
+    /// Whether the licence allows a carrier at each frequency the transmitter is judged on
+    /// ([`Self::every_tx_frequency`]: the transmit dial with split, XIT and a repeater shift), as
+    /// the section the station is in: where the radio's own ATU carrier and an APRS packet's FM
+    /// carrier go out. The section's own model puts Digital's frame, RTTY's tones and Keyboard's
+    /// signal an audio offset off that dial, so it never judged the dial itself. Only ever refuses
+    /// more: each caller ANDs it with [`Self::tx_allowed`].
+    fn tx_carrier_allowed(&self) -> bool {
+        let om = self.settings.operating_mode;
+        let class = self.settings.license_class;
+        self.every_tx_frequency(om, |mhz| crate::privileges::tx_allowed(class, mhz, om))
+    }
+
+    /// Whether the licence allows the radio's own ATU carrier, on every CAT path: Flex's own rule
+    /// for its ATU cycle, the carrier at the transmit dial judged as the section's mode
+    /// ([`Self::tx_carrier_allowed`]) AND as CW ([`Self::tx_allowed_as`] CW), so CAT and Flex agree
+    /// everywhere, a 60 m channel's dial included (CW is legal there only at the channel centre).
+    fn atu_carrier_allowed(&self) -> bool {
+        self.tx_carrier_allowed() && self.tx_allowed_as(crate::settings::OperatingMode::Cw)
     }
 
     /// Set the RX input audio level (0.0–1.0) shown in the UI meter. Driven by
@@ -25311,7 +25478,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if let Some(why) = self.connection_tx_refusal() {
             return Err(why.to_string());
         }
-        if !self.tx_allowed() {
+        // …and the FM carrier the packet rides, at the transmit dial ([`Self::tx_carrier_allowed`]).
+        if !self.tx_allowed() || !self.tx_carrier_allowed() {
             return Err(
                 "TX locked — this frequency is outside your license privileges".to_string(),
             );
@@ -25686,7 +25854,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(("transmit is off", APRS_REFUSED_TX_OFF))
         } else if let Some(why) = self.connection_tx_refusal() {
             Some((why, why))
-        } else if !self.tx_allowed() {
+        } else if !self.tx_allowed() || !self.tx_carrier_allowed() {
+            // The section's model, and the FM carrier the packet rides at the transmit dial
+            // ([`Self::tx_carrier_allowed`]): Digital's model judges a frame an audio offset off
+            // the dial, where an FM carrier is not.
             Some((
                 "the dial is outside the licence's privileges",
                 APRS_REFUSED_PRIVILEGES,
@@ -30387,10 +30558,21 @@ contact yourself."
         s.radio.flex_tune = self.flex_tune;
         s.radio.flex_tune_refused =
             self.flex_tune.is_some() && self.tx_allowed() && !self.tune_allowed();
+        s.radio.tune_tone_refused = self.tx_allowed() && !self.tune_tone_allowed();
+        s.radio.tune_over_refused = self.app.radio.transmitting
+            && self
+                .tune_over_refused_at
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(TUNE_OVER_REFUSED_SECS));
         s.radio.flex_atu = self.flex_atu.clone();
         s.radio.flex_atu_refused = self.flex_atu.is_some()
             && self.tx_allowed()
             && !self.tx_allowed_as(crate::settings::OperatingMode::Cw);
+        // The same refusal on any other path, with the dial: the note beside the ATU says why.
+        s.radio.atu_carrier_refused_mhz = (self.rig_tuner.is_some()
+            && !s.radio.flex_atu_refused
+            && self.tx_allowed()
+            && !self.atu_carrier_allowed())
+        .then(|| self.tx_emission_mhz());
         s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
@@ -31211,6 +31393,9 @@ contact yourself."
 
     pub fn plan_tx(&mut self, slot: u64) -> Option<TxPlan> {
         self.poll_remote_transmit(std::time::Instant::now());
+        // A Tune refused during the last period's over is that period's: its note goes at the
+        // boundary, and the next over (FT4's 7.5 s on, the next JS8 frame) never shows it again.
+        self.tune_over_refused_at = None;
         // Coordinated QSY: execute a scheduled move the moment it comes due,
         // regardless of TX/RX/mute state (no-op while the feature is disabled).
         self.qsy_execute_due(slot);
@@ -40932,8 +41117,8 @@ mod tests {
     /// ATU (`observe_flex_atu`), a cycle is the radio's carrier at its transmit slice, so a press
     /// needs CW privileges there as well as the section's, as the radio's tune carrier does. A
     /// General in DIGU at 14.024 MHz may send FT8 1.5 kHz up but holds no CW privilege at 14.024:
-    /// the ATU of any other CAT path runs there, the client's does not and the press says why, a
-    /// press made before the client said so is dropped at the wire, and the snapshot says why
+    /// the ATU of any other CAT path is refused there for its carrier at the dial, the client's for
+    /// CW and the press says why, nothing is left to go to the wire, and the snapshot says why
     /// beside the ATU. At 14.030 both are allowed. In Phone at 14.100 the licence's own lock
     /// refuses it first, as before, and the CW judgement adds nothing there.
     #[test]
@@ -40950,7 +41135,13 @@ mod tests {
             "scene guard: FT8 1.5 kHz above 14.024 is a General's, and TX is on"
         );
         let press = |e: &mut Engine| (e.atu_tune(), e.snapshot().radio.flex_atu_refused);
-        assert_eq!(press(&mut e), (Ok(()), false), "another CAT path's ATU");
+        // Another CAT path's ATU is refused here too: its carrier at the transmit dial, 14.024,
+        // is judged on every path now (`an_atu_tune_up_is_judged_at_the_transmit_dial`).
+        assert_eq!(
+            press(&mut e),
+            (Err(atu_carrier_outside(14.024)), false),
+            "another CAT path's ATU"
+        );
 
         let atu = crate::dto::FlexAtu {
             tune: crate::dto::FlexTune {
@@ -40995,6 +41186,352 @@ mod tests {
         e.observe_flex_atu(None);
         let s = e.snapshot();
         assert_eq!((s.radio.flex_atu, s.radio.flex_atu_refused), (None, false));
+    }
+
+    /// Press Tune, read what came of it (the engine's own answer, the snapshot's, and the note
+    /// beside Tune), and let go again.
+    fn press_tune(e: &mut Engine) -> (bool, bool, bool) {
+        e.set_tune(true);
+        let s = e.snapshot();
+        let seen = (e.tuning(), s.radio.tuning, s.radio.tune_tone_refused);
+        e.set_tune(false);
+        seen
+    }
+
+    /// ⛔ NEXUS'S TUNE TONE IS JUDGED WHERE IT GOES OUT. The radio loop plays a fixed
+    /// [`TUNE_TONE_HZ`] tone, so in Digital the carrier is 1500 Hz above the dial whatever the TX
+    /// offset, while the gate judged the FT8 frame at the TX offset. A General at 14.0230 MHz with
+    /// the TX offset at 2000 Hz had the frame judged at 14.0250, inside, and the carrier sent at
+    /// 14.0245, below a General's 14.025 edge. Tune is refused there now, and the note beside Tune
+    /// says why. Controls: 1 kHz up the tone is inside and Tune keys; the section's own judgement
+    /// still stands beside it (a frame outside the privileges refuses Tune as it did, with the
+    /// licence's own lock, not the note); and a TX offset that moves the frame out leaves the tone
+    /// where it is, so a tone inside still needs the frame inside too.
+    #[test]
+    fn a_tune_tone_outside_the_privileges_is_refused_though_the_frame_is_inside() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.023, "20m", "USB");
+        e.set_tx_offset(2000.0);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: the FT8 frame 2 kHz above 14.0230 is a General's"
+        );
+        assert_eq!(
+            press_tune(&mut e),
+            (false, false, true),
+            "the tone would go out at 14.0245, below a General's 14.025 edge"
+        );
+
+        // CONTROL: 1 kHz up, the tone at 14.0255 is inside.
+        e.set_frequency(14.024, "20m", "USB");
+        assert_eq!(
+            press_tune(&mut e),
+            (true, true, false),
+            "a tone inside keys"
+        );
+
+        // CONTROL: a tune already up is refused on the read once the tone leaves (the loop's
+        // question every tick), as the section's own lock is.
+        e.set_tune(true);
+        assert!(e.tuning(), "scene guard: the tune is up");
+        e.set_tx_offset(2000.0);
+        e.observe_rig_freq(14_023_000);
+        assert!(
+            e.tx_allowed() && !e.tuning(),
+            "the tone left the privileges under a held tune"
+        );
+        e.set_tune(false);
+
+        // CONTROL: the section's own judgement is kept, and its lock says why, not the note.
+        e.set_frequency(14.0236, "20m", "USB");
+        e.set_tx_offset(0.0);
+        assert!(
+            !e.tx_allowed(),
+            "scene guard: the frame at the dial, 14.0236, is outside"
+        );
+        assert_eq!(
+            press_tune(&mut e),
+            (false, false, false),
+            "the frame outside refuses Tune though the tone at 14.0251 is inside"
+        );
+    }
+
+    /// The same tone outside the other soundcard sections, on the side the transmitting VFO's
+    /// word names. RTTY's AFSK keys the radio in LSB: its mark/space pair sits 2125-2295 Hz under
+    /// the dial, and the tune tone 1500 Hz under it, nearer the dial. A General at 14.1520 MHz
+    /// sends the pair at 14.1497-14.1499, inside the data segment, and the tone at 14.1505, in the
+    /// phone segment: refused. At 14.1514 the tone, at 14.1499, is inside. Phone is unchanged: its
+    /// passband holds the tone (a General at 14.2260 USB tunes as before).
+    #[test]
+    fn a_tune_tone_is_judged_on_the_side_the_transmitting_word_names() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("rtty", false);
+        e.set_frequency(14.152, "20m", "LSB");
+        assert!(
+            e.tx_allowed(),
+            "scene guard: the RTTY pair under 14.1520 is a General's"
+        );
+        assert_eq!(
+            press_tune(&mut e),
+            (false, false, true),
+            "the tone at 14.1505 is in the phone segment"
+        );
+        e.set_frequency(14.1514, "20m", "LSB");
+        assert_eq!(
+            press_tune(&mut e),
+            (true, true, false),
+            "the tone at 14.1499"
+        );
+
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.226, "20m", "USB");
+        assert!(e.tx_allowed(), "scene guard: 14.2260 USB is a General's");
+        assert_eq!(
+            press_tune(&mut e),
+            (true, true, false),
+            "Phone tunes as before"
+        );
+    }
+
+    /// The tone is Nexus's only where Nexus plays it. On a TCI connection Tune is the SDR
+    /// program's own carrier, and while Nexus's Flex client tunes with the radio's carrier that
+    /// carrier is judged as CW instead: neither is refused for a tone that does not go out.
+    #[test]
+    fn a_tune_that_is_the_radios_own_carrier_is_not_judged_as_the_tone() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.026, "20m", "USB");
+        e.set_tx_offset(2000.0);
+        e.settings.rig_conn = "tci".to_string();
+        assert!(e.tx_allowed(), "scene guard: the frame at 14.0280");
+        assert_eq!(
+            press_tune(&mut e),
+            (true, true, false),
+            "TCI: the program's carrier"
+        );
+        e.set_frequency(14.023, "20m", "USB");
+        assert_eq!(
+            press_tune(&mut e),
+            (true, true, false),
+            "TCI: no tone of Nexus's at 14.0245 to refuse"
+        );
+        e.settings.rig_conn = String::new();
+        assert_eq!(
+            press_tune(&mut e),
+            (false, false, true),
+            "CONTROL: Nexus's tone is refused there"
+        );
+    }
+
+    /// ⛔ TUNE IS REFUSED WHILE A SLOT OVER IS ON THE AIR WITH SPLIT OPERATION ON. Its radio may
+    /// transmit from a TX dial moved for that over (Rig split's VFO B, Fake It's VFO A), which
+    /// nothing writes under a carrier, so a tune keyed over it went out from that dial. Refused and
+    /// nothing changes, as onto a CW word: the over stays planned. Controls: once the over is off
+    /// the air Tune keys; a tune already up is never dropped by it, nor is stopping one refused;
+    /// and with Split Operation None, where no dial moves, Tune takes precedence as in WSJT-X.
+    #[test]
+    fn tune_is_refused_while_a_slot_over_is_on_the_air() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        let mut s = e.settings().clone();
+        s.split_mode = crate::settings::SplitMode::Rig;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.app.set_transmitting(true); // an FT8 over on the air
+        let gen = e.tx_gate_gen;
+        e.set_tune(true);
+        assert!(!e.tuning(), "a tune keyed over the over");
+        assert_eq!(
+            e.tx_gate_gen, gen,
+            "…and the planned over was not invalidated"
+        );
+        assert!(e.tx_enabled(), "…nor the sequencer stood down");
+        assert!(
+            e.snapshot().radio.tune_over_refused,
+            "the note beside Tune says why"
+        );
+        // The next slot boundary ends that period: the next over (FT4 7.5 s on) does not say it.
+        let _ = e.plan_tx(1);
+        e.app.set_transmitting(true);
+        assert!(
+            !e.snapshot().radio.tune_over_refused,
+            "the note came back with the next period's over"
+        );
+        e.app.set_transmitting(false);
+        e.set_tune(false);
+        e.app.set_transmitting(true);
+        e.set_tune(true);
+        assert!(
+            e.snapshot().radio.tune_over_refused,
+            "premise: refused again in this period"
+        );
+
+        e.app.set_transmitting(false);
+        assert!(
+            !e.snapshot().radio.tune_over_refused,
+            "…for as long as the over is on the air"
+        );
+        e.set_tune(true);
+        assert!(e.tuning(), "CONTROL: off the air, Tune keys");
+        e.app.set_transmitting(true);
+        assert!(e.tuning(), "a tune already up is not dropped");
+        e.set_tune(false);
+        assert!(!e.tuning(), "and stopping it is never refused");
+
+        for split in [
+            crate::settings::SplitMode::FakeIt,
+            crate::settings::SplitMode::None,
+        ] {
+            let mut s = e.settings().clone();
+            s.split_mode = split;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            e.app.set_transmitting(true);
+            e.set_tune(true);
+            assert_eq!(
+                e.tuning(),
+                split == crate::settings::SplitMode::None,
+                "{split:?}: a tune pressed over the over"
+            );
+            e.set_tune(false);
+        }
+    }
+
+    /// ⛔ THE RADIO'S OWN ATU CARRIER IS JUDGED AT THE TRANSMIT DIAL, on every CAT path. A General
+    /// in DIGU at 14.024 MHz may send FT8 1.5 kHz up, but the ATU's carrier goes out from the
+    /// radio near its dial, 14.024, below the General edge: refused, and the press says so in
+    /// plain words with the dial. At 14.0255 it runs.
+    #[test]
+    fn an_atu_tune_up_is_judged_at_the_transmit_dial() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.024, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_enabled(true);
+        e.observe_rig_tuner(Some(false), true);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: FT8 1.5 kHz above 14.024 is a General's"
+        );
+        assert_eq!(
+            e.atu_tune(),
+            Err(
+                "ATU keys nothing here: the radio's own carrier at your dial, 14.0240 MHz, would \
+                 be outside your license privileges"
+                    .to_string()
+            ),
+            "the ATU's carrier at 14.024, in plain words"
+        );
+        assert_eq!(
+            e.snapshot().radio.atu_carrier_refused_mhz,
+            Some(14.024),
+            "…and the note beside the ATU says so"
+        );
+        e.set_frequency(14.0255, "20m", "USB");
+        assert_eq!(e.atu_tune(), Ok(()), "CONTROL: at 14.0255");
+        assert!(e.take_atu_tune(), "…and it goes to the radio");
+        assert_eq!(e.snapshot().radio.atu_carrier_refused_mhz, None, "no note");
+
+        // As Flex judges its ATU cycle: CW too. On a 60 m channel in Phone the dial, 5.3305, is the
+        // phone carrier the section allows, but CW there is legal only at the channel centre.
+        e.set_operating_mode("phone", false);
+        e.set_frequency(5.3305, "60m", "USB");
+        e.set_tx_enabled(true);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: USB phone on the 5.3320 channel"
+        );
+        assert_eq!(
+            e.atu_tune(),
+            Err(atu_carrier_outside(5.3305)),
+            "an unmodulated carrier at the phone dial of a 60 m channel"
+        );
+        e.set_operating_mode("cw", false);
+        e.set_frequency(5.332, "60m", "CW");
+        e.set_tx_enabled(true);
+        assert!(e.tx_allowed(), "scene guard: CW at the channel centre");
+        assert_eq!(e.atu_tune(), Ok(()), "CONTROL: at the channel centre");
+    }
+
+    /// ⛔ AN APRS PACKET'S FM CARRIER IS JUDGED AT THE TRANSMIT DIAL. From the Digital section the
+    /// gate judged a data frame an audio offset above the dial, where an FM carrier is not: a
+    /// General at 144.0995 MHz had the frame judged at 144.1010, inside, and the carrier sent in
+    /// the 2 m CW-only segment. Refused now; at 144.1005 it is sent.
+    #[test]
+    fn an_aprs_carrier_is_judged_at_the_transmit_dial() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
+        e.set_frequency(144.0995, "2m", "USB");
+        e.set_tx_offset(1500.0);
+        e.set_tx_enabled(true);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: a data frame 1.5 kHz above 144.0995 is a General's"
+        );
+        assert!(
+            e.aprs_beacon(41.9, -87.6, '/', '>', "test", &[]).is_err(),
+            "the carrier at 144.0995 is in the CW-only segment"
+        );
+        e.set_frequency(144.1005, "2m", "USB");
+        e.set_tx_enabled(true);
+        assert_eq!(
+            e.aprs_beacon(41.9, -87.6, '/', '>', "test", &[]),
+            Ok(()),
+            "CONTROL: at 144.1005"
+        );
+        // …and judged again at the key: the dial moved back down under a queued beacon.
+        e.set_frequency(144.0995, "2m", "USB");
+        e.set_tx_enabled(true);
+        assert!(e.poll_aprs_tx().is_none(), "the queued beacon is dropped");
+        assert_eq!(e.aprs_tx_notice(), Some(APRS_REFUSED_PRIVILEGES));
+    }
+
+    /// ⛔ A VOICE-KEYER MESSAGE IS JUDGED AS THE PHONE EMISSION IT IS, from any section. From the
+    /// Digital section the gate judged a narrow data frame at the TX offset: a General at 14.074 MHz
+    /// queued a voice message into the data segment, where a General has no phone. Refused at the
+    /// send, and dropped at the key when the licence changes under a queued one. Controls: in Phone
+    /// at 14.2300 it queues and plays; on the CW screen with the radio's own keyer (the radio in
+    /// CW, which takes no audio) it is judged as before.
+    #[test]
+    fn a_voice_keyer_message_is_judged_as_phone_from_any_section() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tx_enabled(true);
+        assert!(e.tx_allowed(), "scene guard: FT8 at 14.074 is a General's");
+        assert_eq!(
+            e.send_voice(vec![0.1; 1200]),
+            Err(VOICE_OUTSIDE_PHONE.to_string()),
+            "a voice in the 20 m data segment: it is phone the licence refuses"
+        );
+        assert!(e.poll_voice().is_none(), "nothing queued");
+
+        // Queued under an Open licence, then the class is declared before the key.
+        e.set_license_class("open");
+        assert_eq!(e.send_voice(vec![0.1; 1200]), Ok(()), "scene guard: Open");
+        e.set_license_class("general");
+        assert!(e.tx_allowed(), "scene guard: the frame still a General's");
+        assert!(e.poll_voice().is_none(), "dropped at the key");
+
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.230, "20m", "USB");
+        assert_eq!(
+            e.send_voice(vec![0.1; 1200]),
+            Ok(()),
+            "CONTROL: Phone at 14.2300"
+        );
+        assert!(e.poll_voice().is_some(), "…and it plays");
+
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "CW");
+        assert!(e.tx_allowed(), "scene guard: CW at 14.030 is a General's");
+        assert_eq!(
+            e.send_voice(vec![0.1; 1200]),
+            Ok(()),
+            "CONTROL: the radio in CW puts no voice on the air"
+        );
     }
 
     #[test]

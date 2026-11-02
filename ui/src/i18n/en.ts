@@ -12010,7 +12010,13 @@ export const EN = {
     "The radio's transmit timeout is off. If Nexus or the network fails during a tune, nothing will end the carrier. Set a transmit timeout in SmartSDR.",
   'operate.strip.tune.radioRefused':
     "Tune keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
+  'operate.strip.tune.overRefused':
+    "Tune keys nothing while a transmit period is on the air with Split Operation on: the radio may be transmitting from a moved frequency. Press Tune again after it.",
+  'operate.strip.tune.toneRefused':
+    "Tune keys nothing here: its 1500 Hz tone would be outside your license privileges on this frequency.",
   'operate.strip.atu.radioStatus': 'Radio ATU: {{status}}',
+  'operate.strip.atu.carrierRefused':
+    "ATU keys nothing here: the radio's own carrier at your dial, {{mhz}} MHz, would be outside your license privileges.",
   'operate.strip.atu.radioRefused':
     "ATU keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
 

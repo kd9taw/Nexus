@@ -18,6 +18,11 @@ const SIGNED_WARNING =
   "The radio's transmit timeout is off. If Nexus or the network fails during a tune, nothing will " +
   'end the carrier. Set a transmit timeout in SmartSDR.'
 
+/** Why a Tune press during a split FT over keyed nothing, word for word. */
+const OVER_REFUSED =
+  'Tune keys nothing while a transmit period is on the air with Split Operation on: the radio may be ' +
+  'transmitting from a moved frequency. Press Tune again after it.'
+
 /** Not keyed, TX armed (the strips' own tests' fixture), with `extra`. */
 function radio(extra: Partial<RadioStatus>): RadioStatus {
   return {
@@ -67,6 +72,25 @@ describe('the note beside Tune', () => {
     expect(screen.getByRole('note').classList.contains('warn')).toBe(false)
   })
 
+  it('says why Tune keys nothing when the licence refuses Nexus’s own tune tone here', () => {
+    render(<RadioTuneNote radio={radio({ tuneToneRefused: true })} />)
+    const el = screen.getByRole('note')
+    expect(el.textContent).toBe(
+      'Tune keys nothing here: its 1500 Hz tone would be outside your license privileges on this frequency.',
+    )
+    expect(el.classList.contains('warn')).toBe(true)
+    cleanup()
+    // The control: not refused, nothing.
+    expect(note(radio({ tuneToneRefused: false }))).toBeNull()
+  })
+
+  it('says why Tune keys nothing when it was pressed during a transmit period with Split Operation on', () => {
+    render(<RadioTuneNote radio={radio({ tuneOverRefused: true })} />)
+    expect(screen.getByRole('note').textContent).toBe(OVER_REFUSED)
+    cleanup()
+    expect(note(radio({ tuneOverRefused: false }))).toBeNull()
+  })
+
   it('says why Tune keys nothing when the licence refuses the radio’s carrier here', () => {
     expect(
       note(radio({ flexTune: { powerPct: 10, txTimeoutMs: 30_000 }, flexTuneRefused: true })),
@@ -108,6 +132,25 @@ describe('beside the ATU, while the ATU is the radio’s own', () => {
     expect(note(radio({ flexAtu: atu({ status: 'TUNE_SUCCESSFUL', refused: why }) }))).toBe(
       `Radio tune power 10 %Radio TX timeout 30 s${why}`,
     )
+  })
+
+  it('still says why Tune keys nothing when Tune is Nexus’s own tone beside the radio’s own ATU', () => {
+    expect(note(radio({ flexAtu: atu({}), tuneToneRefused: true }))).toBe(
+      'Radio tune power 10 %Radio TX timeout 30 s' +
+        'Tune keys nothing here: its 1500 Hz tone would be outside your license privileges on this frequency.',
+    )
+    expect(note(radio({ flexAtu: atu({}), tuneOverRefused: true }))).toBe(
+      'Radio tune power 10 %Radio TX timeout 30 s' + OVER_REFUSED,
+    )
+  })
+
+  it('says why the ATU keys nothing on any CAT path, naming the radio’s carrier at the dial', () => {
+    render(<RadioTuneNote radio={radio({ atuCarrierRefusedMhz: 14.024 })} />)
+    expect(screen.getByRole('note').textContent).toBe(
+      "ATU keys nothing here: the radio's own carrier at your dial, 14.0240 MHz, would be outside your license privileges.",
+    )
+    cleanup()
+    expect(note(radio({ atuCarrierRefusedMhz: null }))).toBeNull()
   })
 
   it('says why the ATU keys nothing when the licence refuses the radio’s carrier here', () => {

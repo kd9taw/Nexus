@@ -1807,6 +1807,322 @@ fn a_tune_after_tx_is_turned_off_keys_after_the_split_is_let_go() {
     assert!(!b.radio.vfos.lock().unwrap().split, "still in split");
 }
 
+/// What a key that is not a slot over finds on the first tick after the hold ends, before the quiet
+/// point lets go of split later in that tick: the operator's PTT (readied at its own site) and an
+/// RTTY over (keyed through `key_over`, the one site every such key passes), each pressed on the
+/// tick the station leaves the digital screens. The licence is Open, so phone at the FT8 dial is
+/// not refused before it reaches the radio loop.
+type FirstTickKey = (&'static str, &'static str, fn(&mut Engine));
+const FIRST_TICK_KEYS: [FirstTickKey; 2] = [
+    ("PTT", "phone", |e| e.set_ptt(true)),
+    ("RTTY", "rtty", |e| {
+        e.rtty_send_text("CQ").expect("the RTTY over is queued");
+    }),
+];
+
+/// ⛔ A HOLD THAT HAS ENDED IS LET GO BEFORE THE KEY, IN THE SAME TICK. The station leaves the
+/// digital screens with Rig split held and keys at once: `S 0 VFOA` first, then the key, from
+/// VFO A. Before the guard covered every key, the RTTY over keyed out of VFO B on the last over's
+/// shifted TX dial, and the quiet point let go only after it.
+#[test]
+fn a_key_on_the_first_tick_after_leaving_digital_lets_go_of_the_split_first() {
+    for (what, section, press) in FIRST_TICK_KEYS {
+        let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+        let _ = b.overs(1);
+        assert_eq!(
+            b.radio.vfos.lock().unwrap().b,
+            SHIFTED_TX_DIAL,
+            "{what}: premise, VFO B on the over's TX dial"
+        );
+        {
+            let mut e = b.engine.lock().unwrap();
+            e.set_license_class("open");
+            e.set_operating_mode(section, false);
+            assert!(e.tx_enabled(), "{what}: premise, TX on in {section}");
+            press(&mut e);
+        }
+        let writes = b.ticks(3);
+        let sent = split_and_keys(&writes);
+        assert_eq!(
+            sent.first(),
+            Some(&"S 0 VFOA"),
+            "{what}: split not let go before the key: {writes:?}"
+        );
+        assert!(
+            sent.get(1).is_some_and(|l| is_key(l)),
+            "{what}: did not key after the release: {writes:?}"
+        );
+        assert!(
+            !b.radio.vfos.lock().unwrap().split,
+            "{what}: still in split"
+        );
+    }
+}
+
+/// ⛔ …AND A RELEASE THE RADIO REFUSES KEYS NOTHING, and keeps refusing every key while it is owed.
+/// The same first tick, the radio answering `S 0` with `RPRT -9`: nothing keys, the PTT line names
+/// Split Operation, the release is owed. Pressed again while it is owed (released and pressed, or
+/// another over queued), still nothing keys. Once the radio takes the release at a quiet point, the
+/// next press keys, from VFO A.
+#[test]
+fn a_key_whose_split_release_the_radio_refuses_keys_nothing_until_the_release_is_taken() {
+    for (what, section, press) in FIRST_TICK_KEYS {
+        let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+        let _ = b.overs(1);
+        b.radio.vfos.lock().unwrap().refuse_split_off = true;
+        {
+            let mut e = b.engine.lock().unwrap();
+            e.set_license_class("open");
+            e.set_operating_mode(section, false);
+            press(&mut e);
+        }
+        let writes = b.ticks(3);
+        assert!(
+            !writes.iter().any(|l| is_key(l)),
+            "{what}: keyed with the release refused: {writes:?}"
+        );
+        assert_eq!(
+            split_and_keys(&writes).first(),
+            Some(&"S 0 VFOA"),
+            "{what}: premise, the release was sent: {writes:?}"
+        );
+        assert!(b.rig.split_release_pending, "{what}: premise, owed");
+        let line = b.engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            line.as_deref()
+                .is_some_and(|w| w.contains("Split Operation")),
+            "{what}: nothing says why: {line:?}"
+        );
+
+        // Owed: pressed again (the PTT let go first), still nothing keys.
+        {
+            let mut e = b.engine.lock().unwrap();
+            e.set_ptt(false);
+        }
+        let _ = b.ticks(2);
+        {
+            let mut e = b.engine.lock().unwrap();
+            e.set_tx_enabled(true);
+            press(&mut e);
+        }
+        let owed = b.ticks(3);
+        assert!(
+            !owed.iter().any(|l| is_key(l)),
+            "{what}: keyed while the release is owed: {owed:?}"
+        );
+
+        // The radio takes it at a quiet point; then a press keys.
+        {
+            let mut e = b.engine.lock().unwrap();
+            e.set_ptt(false);
+        }
+        b.radio.vfos.lock().unwrap().refuse_split_off = false;
+        let _ = b.ticks(150);
+        assert!(!b.rig.split_release_pending, "{what}: premise, taken");
+        {
+            let mut e = b.engine.lock().unwrap();
+            e.set_tx_enabled(true);
+            press(&mut e);
+        }
+        let after = b.ticks(3);
+        assert!(
+            after.iter().any(|l| is_key(l)),
+            "CONTROL {what}: the release taken, the press keys: {after:?}"
+        );
+        assert!(
+            !after.iter().any(|l| l.starts_with("I ")),
+            "{what}: VFO B written after the release: {after:?}"
+        );
+    }
+}
+
+/// ⛔ A RELEASE STILL OWED REFUSES A TUNE TOO. TX turned off after a held over, the radio refusing
+/// `S 0`: the release is owed, split may still be on with VFO B on the shifted TX dial. A tune
+/// (the one key that needs no TX latch) keys nothing while it is owed and its line names Split
+/// Operation; it used to key out of VFO B. The control: once the radio takes the release, a tune
+/// keys from VFO A.
+#[test]
+fn a_tune_while_a_split_release_is_owed_keys_nothing() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    b.radio.vfos.lock().unwrap().refuse_split_off = true;
+    b.engine.lock().unwrap().set_tx_enabled(false);
+    let first = b.ticks(3);
+    assert_eq!(first, ["S 0 VFOA"], "premise: the release, refused");
+    assert!(b.rig.split_release_pending, "premise: owed");
+    b.engine.lock().unwrap().set_tune(true);
+    let writes = b.ticks(5);
+    assert!(
+        !writes.iter().any(|l| is_key(l)),
+        "a tune keyed while the release is owed: {writes:?}"
+    );
+    {
+        let e = b.engine.lock().unwrap();
+        assert!(!e.tuning(), "the refused tune is still asked for");
+        let line = e.snapshot().radio.audio_error;
+        assert!(
+            line.as_deref()
+                .is_some_and(|w| w.contains("Split Operation")),
+            "nothing says why: {line:?}"
+        );
+    }
+    b.radio.vfos.lock().unwrap().refuse_split_off = false;
+    let _ = b.ticks(150);
+    assert!(!b.rig.split_release_pending, "premise: taken");
+    b.engine.lock().unwrap().set_tune(true);
+    let after = b.ticks(3);
+    assert!(
+        after.iter().any(|l| is_key(l)),
+        "CONTROL: the release taken, the tune keys: {after:?}"
+    );
+}
+
+/// ⛔ A KEY THAT ONLY `key_over` READIES, WITH THE HOLD STANDING: a voice-keyer message in the
+/// Digital section (the Engine has no section backstop for it; an Open licence allows it there).
+/// VFO B goes back on the RX dial before its key, as for the keys readied at their own site.
+#[test]
+fn a_voice_keyer_message_with_rig_split_held_keys_with_vfo_b_back_on_the_rx_dial() {
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    assert_eq!(b.radio.vfos.lock().unwrap().b, SHIFTED_TX_DIAL, "premise");
+    {
+        let mut e = b.engine.lock().unwrap();
+        e.set_license_class("open");
+        e.send_voice(vec![0.1; 2_400])
+            .expect("the message is queued");
+    }
+    let writes = b.ticks(3);
+    let sent = split_and_keys(&writes);
+    assert_eq!(
+        sent.first(),
+        Some(&"I 14074000"),
+        "VFO B not put back before the voice key: {writes:?}"
+    );
+    assert!(
+        sent.get(1).is_some_and(|l| is_key(l)),
+        "the message did not key: {writes:?}"
+    );
+    let v = b.radio.vfos.lock().unwrap();
+    assert_eq!(
+        (v.split, v.b),
+        (true, FT8_DIAL),
+        "split held, VFO B on the dial"
+    );
+    drop(v);
+
+    // VFO B's write refused: the message keys nothing, and the PTT line names Split Operation,
+    // not the generic PTT advice the voice keyer's own report would put over it.
+    let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
+    let _ = b.overs(1);
+    b.radio.vfos.lock().unwrap().refuse_i = true;
+    {
+        let mut e = b.engine.lock().unwrap();
+        e.set_license_class("open");
+        e.send_voice(vec![0.1; 2_400])
+            .expect("the message is queued");
+    }
+    let writes = b.ticks(3);
+    assert!(
+        !writes.iter().any(|l| is_key(l)),
+        "keyed with VFO B's write refused: {writes:?}"
+    );
+    let line = b.engine.lock().unwrap().snapshot().radio.audio_error;
+    assert!(
+        line.as_deref()
+            .is_some_and(|w| w.contains("Split Operation")),
+        "the line does not name the split: {line:?}"
+    );
+}
+
+/// ⛔ A CW ID INSIDE THE FAKE IT WRITE-BACK'S WAIT GOES OUT FROM THE DIAL. After a Fake It over
+/// the write-back waits 100 ms, as WSJT-X waits after PTT off, and the CW ID after 73 lands in
+/// exactly that wait. It used to key from VFO A still on the over's TX dial (14.0735 at a 1441 Hz
+/// offset): the soundcard keyer's `T 1` and the radio's own keyer's word with no `F` before them,
+/// 500 Hz from where the gate judged it. Now the write-back goes ahead of any keyer, as it does for
+/// a tune.
+#[test]
+fn a_cw_id_inside_the_fake_it_write_back_wait_keys_after_the_write_back() {
+    use tempo_app::settings::CwKeyerBackend;
+    for keyer in [CwKeyerBackend::Soundcard, CwKeyerBackend::Cat] {
+        let engine = cq_engine(SplitMode::FakeIt, 1441.0, |s| s.cw_keyer = keyer);
+        let mut b = hamlib_bench_on(engine, FT8_DIAL, None);
+        let _ = b.overs(1);
+        // The write-back owed and its wait running, as the unkey leaves it.
+        b.state.fake_it_restore = Some(FT8_DIAL);
+        b.state.fake_it_tx_dial = Some(SHIFTED_TX_DIAL);
+        b.state.fake_it_restore_tries = 0;
+        b.state.fake_it_restore_at = Some(b.t + 100.0);
+        b.state.last_freq_poll = b.t + 10_000.0;
+        b.state.last_rig_poll = b.t + 10_000.0;
+        let from = b.radio.peer.lines.lock().unwrap().len();
+        {
+            let mut e = b.engine.lock().unwrap();
+            let mycall = e.settings().mycall.clone();
+            e.send_cw(&mycall);
+        }
+        let _ = b.ticks(2);
+        let raw: Vec<String> = b.radio.peer.lines.lock().unwrap()[from..].to_vec();
+        let keyed = raw
+            .iter()
+            .position(|l| is_key(l) || l.starts_with("b "))
+            .unwrap_or_else(|| panic!("{keyer:?}: the CW ID was not keyed: {raw:?}"));
+        assert!(
+            raw[..keyed].iter().any(|l| l == "F 14074000"),
+            "{keyer:?}: keyed from the over's TX dial, no write-back first: {raw:?}"
+        );
+    }
+}
+
+/// ⛔ THE FAKE IT COUNTERPART OF AN OWED RELEASE. A Fake It over moved VFO A to its TX dial
+/// (14.0735 at a 1441 Hz offset); the write-back after it was refused and is still owed, the radio
+/// refusing every dial write meanwhile. A tune then used to key from the shifted VFO A, its tone
+/// 500 Hz below where the gate judged it (`fake_it_write_back_before_key` leaves a refused try to
+/// the teardown): it keys nothing now, the tune ends and the line names Split Operation. The
+/// control: the same write-back owed but not yet tried goes out ahead of the tune's key, as before.
+/// (Inside the over's own period the engine already refuses the press; this is the key that comes
+/// after it, and any other key that is not a slot over takes the same guard.)
+#[test]
+fn a_tune_while_a_refused_fake_it_write_back_is_owed_keys_nothing() {
+    for (what, tried, keys) in [
+        ("a refused try owed", 1, false),
+        ("control: not yet tried", 0, true),
+    ] {
+        let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
+        let _ = b.overs(1);
+        // The write-back owed, as the teardown leaves it after a refused try, VFO A still on the
+        // over's TX dial as far as anyone knows.
+        b.state.fake_it_restore = Some(FT8_DIAL);
+        b.state.fake_it_tx_dial = Some(SHIFTED_TX_DIAL);
+        b.state.fake_it_restore_tries = tried;
+        b.state.fake_it_restore_at = None;
+        // No dial read in these few ticks: one would find where the radio really is and settle it.
+        b.state.last_freq_poll = b.t + 10_000.0;
+        b.state.last_rig_poll = b.t + 10_000.0;
+        b.radio.vfos.lock().unwrap().refuse_f = if keys { 0 } else { 10 };
+        b.engine.lock().unwrap().set_tune(true);
+        let writes = b.ticks(3);
+        let keyed = writes.iter().any(|l| is_key(l));
+        assert_eq!(keyed, keys, "{what}: keyed: {writes:?}");
+        if keys {
+            let f = writes.iter().position(|l| l == "F 14074000");
+            let k = writes.iter().position(|l| is_key(l));
+            assert!(
+                f < k && f.is_some(),
+                "{what}: the write-back before the key: {writes:?}"
+            );
+        } else {
+            let e = b.engine.lock().unwrap();
+            assert!(!e.tuning(), "{what}: the refused tune is still asked for");
+            let line = e.snapshot().radio.audio_error;
+            assert!(
+                line.as_deref()
+                    .is_some_and(|w| w.contains("Split Operation")),
+                "{what}: nothing says why: {line:?}"
+            );
+        }
+    }
+}
+
 impl<R: Radio> Bench<R> {
     /// [`Self::ticks`], a rebuilt link reopening through `addr` (the same radio, a new connection).
     fn ticks_reopening(&mut self, n: usize, addr: &str) -> Vec<String> {
