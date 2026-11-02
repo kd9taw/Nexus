@@ -15,10 +15,11 @@
 //! dir: that one can be a network folder for a multi-PC shack, and each computer there logs in for
 //! itself.
 //!
-//! **The relay.** The holder listens on `127.0.0.1:<ephemeral>` and writes the port, a fresh
-//! secret and its process id to `cluster-<CALL>.relay` beside the lock: owner-only on unix, the
-//! per-user config dir on Windows. Only the lease holder writes the file, after removing whatever
-//! an earlier holder left; it removes it again when its relay stops. Every window that finds the
+//! **The relay.** The holder listens on `127.0.0.1:<ephemeral>` and writes the port and a fresh
+//! secret to `cluster-<CALL>.relay` beside the lock: owner-only on unix, the per-user config dir
+//! on Windows. Only the lease holder writes the file. It removes whatever an earlier holder left
+//! before it starts its relay (so a start that fails leaves no file naming a dead port), and the
+//! relay removes the file when it stops, if the file still names it. Every window that finds the
 //! lock taken follows: it connects, the two prove to each other that they know the secret, and
 //! from then on the follower:
 //! - takes each spot the holder's feeds parse (`P` lines), through the same intake it would use
@@ -33,9 +34,10 @@
 //! user or program on the computer can connect to 127.0.0.1. Without the secret, one could post DX
 //! spots under the operator's callsign through the holder's login, or, holding a port a dead
 //! holder's file still names, feed a follower spots and a false "connected". So the secret is
-//! never sent. The follower opens with a random nonce; the holder answers with its own nonce and
-//! an HMAC-SHA256 of both under the secret, which the follower checks before it says anything
-//! else; the follower then answers with an HMAC the other way round. A listener that does not know
+//! never sent. The follower opens with `HELLO <nonce_f>`; the holder answers
+//! `OK <proof> <nonce_h>`, its proof an HMAC-SHA256 under the secret over its label and both
+//! nonces, which the follower checks (`ring::hmac::verify`) before it believes a line or sends one;
+//! the follower then answers `AUTH <proof>`, the same over its own label. A listener that does not know
 //! the secret learns nothing it could replay, and gets no post. The secret is 32 random bytes per
 //! holder and is never logged.
 //!
@@ -80,7 +82,7 @@ const STATUS_SILENCE: Duration = Duration::from_secs(7);
 const HELLO_DEADLINE: Duration = Duration::from_secs(3);
 /// Connections being authenticated at once; more are closed on accept.
 const MAX_HANDSHAKES: usize = 16;
-/// The longest handshake line. The longest real one, `PROOF <64 hex> <64 hex>`, is 136 bytes.
+/// The longest handshake line. The longest real one, `OK <64 hex> <64 hex>`, is 132 bytes.
 const MAX_HANDSHAKE_LINE: usize = 160;
 /// Spots queued for one follower before newer ones are dropped. A follower that cannot keep up
 /// loses spots; it never slows the holder's cluster sockets.
@@ -699,7 +701,7 @@ impl Share {
             return false;
         };
         let mut words = answer.split(' ');
-        let (Some("PROOF"), Some(theirs), Some(proof), None) =
+        let (Some("OK"), Some(proof), Some(theirs), None) =
             (words.next(), words.next(), words.next(), words.next())
         else {
             return false;
@@ -762,7 +764,7 @@ impl Relay {
         let secret = random_hex().ok_or_else(|| {
             std::io::Error::other("the operating system gave no random bytes for the secret")
         })?;
-        let written = format!("{port} {secret} {}\n", std::process::id());
+        let written = format!("{port} {secret}\n");
         write_owner_only(&path, &written)?;
         let outs: Followers = Arc::default();
         let accepting = outs.clone();
@@ -899,7 +901,7 @@ fn authenticate_follower(stream: &mut TcpStream, secret: &str) -> bool {
     };
     let proof = prove(secret, Side::Holder, theirs, &mine);
     if stream
-        .write_all(format!("PROOF {mine} {proof}\n").as_bytes())
+        .write_all(format!("OK {proof} {mine}\n").as_bytes())
         .is_err()
     {
         return false;

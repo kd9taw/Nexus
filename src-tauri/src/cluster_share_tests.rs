@@ -459,7 +459,7 @@ fn a_stranger_without_the_secret_gets_nothing_and_posts_nothing() {
     // wrong answer: no status, no spot, and its post goes nowhere.
     let theirs = "a".repeat(64);
     let (mut s, proof) = hello(port, &theirs);
-    assert!(proof.starts_with("PROOF "), "{proof}");
+    assert!(proof.starts_with("OK "), "{proof}");
     assert!(
         !proof.contains(&secret),
         "the secret never goes on the wire"
@@ -481,12 +481,12 @@ fn a_stranger_without_the_secret_gets_nothing_and_posts_nothing() {
     let (mut s, proof) = hello(port, &mine);
     let words: Vec<&str> = proof.split(' ').collect();
     assert_eq!(words.len(), 3, "{proof}");
-    assert!(proven(&secret, Side::Holder, &mine, words[1], words[2]));
+    assert!(proven(&secret, Side::Holder, &mine, words[2], words[1]));
     assert!(
-        !proven(&secret, Side::Follower, &mine, words[1], words[2]),
+        !proven(&secret, Side::Follower, &mine, words[2], words[1]),
         "a holder's proof is no follower's"
     );
-    let auth = prove(&secret, Side::Follower, &mine, words[1]);
+    let auth = prove(&secret, Side::Follower, &mine, words[2]);
     s.write_all(format!("AUTH {auth}\n").as_bytes()).unwrap();
     let mut first = String::new();
     BufReader::new(s).read_line(&mut first).unwrap();
@@ -494,6 +494,120 @@ fn a_stranger_without_the_secret_gets_nothing_and_posts_nothing() {
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(n.heard("DX 14025 K1XX evil"), 0);
     a.close();
+}
+
+/// Send a megabyte with no newline in it, as far as the other side lets it go.
+fn megabyte_without_a_newline(s: &mut TcpStream) {
+    let chunk = vec![b'x'; 64 * 1024];
+    for _ in 0..16 {
+        if s.write_all(&chunk).is_err() {
+            return;
+        }
+    }
+}
+
+/// Whether the other side closes `s` within `within`, reading and dropping whatever it sends.
+fn closed_within(s: &mut TcpStream, within: Duration) -> bool {
+    let end = Instant::now() + within;
+    s.set_read_timeout(Some(Duration::from_millis(100)))
+        .unwrap();
+    let mut buf = [0u8; 4096];
+    while Instant::now() < end {
+        match s.read(&mut buf) {
+            Ok(0) => return true,
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+            Err(_) => return true,
+        }
+    }
+    false
+}
+
+#[test]
+fn a_megabyte_with_no_newline_ends_the_connection_on_the_holder_side() {
+    let dir = scratch("mb-holder");
+    let n = FakeNode::start();
+    let a = Window::open(&dir, "W1AW", &[&n]);
+    assert!(until(Duration::from_secs(10), || n
+        .logins
+        .load(Ordering::SeqCst)
+        == 1));
+    let (port, secret) = read_relay(&dir, "W1AW").unwrap();
+    // Before the handshake: cut off at the handshake line's cap.
+    let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    megabyte_without_a_newline(&mut s);
+    assert!(
+        closed_within(&mut s, Duration::from_secs(3)),
+        "a stranger's flood"
+    );
+    // After it: cut off at the line cap, not buffered.
+    let mine = "e".repeat(64);
+    let (mut s, ok) = hello(port, &mine);
+    let words: Vec<&str> = ok.split(' ').collect();
+    let auth = prove(&secret, Side::Follower, &mine, words[2]);
+    s.write_all(format!("AUTH {auth}\n").as_bytes()).unwrap();
+    megabyte_without_a_newline(&mut s);
+    assert!(
+        closed_within(&mut s, Duration::from_secs(3)),
+        "a follower's flood"
+    );
+    // CONTROL: the relay still serves.
+    let b = Window::open(&dir, "W1AW", &[&n]);
+    assert!(until(Duration::from_secs(10), || following_connected(&b)));
+    a.close();
+    b.close();
+}
+
+#[test]
+fn a_megabyte_with_no_newline_ends_the_connection_on_the_follower_side() {
+    // Another window holds the lease; on the port its file names, something that floods: once in
+    // place of the handshake, once after a handshake made with the right secret.
+    let dir = scratch("mb-follower");
+    let Lease::Held(held) = try_lease(&dir, "W1AW") else {
+        panic!("the other window's lease");
+    };
+    let flood = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = flood.local_addr().unwrap().port();
+    let secret = "2".repeat(64);
+    write_owner_only(&relay_path(&dir, "W1AW"), &format!("{port} {secret}\n")).unwrap();
+    let cut_off: Arc<Mutex<Vec<bool>>> = Arc::default();
+    let c = cut_off.clone();
+    let k = secret.clone();
+    std::thread::spawn(move || {
+        for (round, s) in flood.incoming().flatten().enumerate().take(2) {
+            let mut s = s;
+            s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut hello = String::new();
+            let mut reader = BufReader::new(s.try_clone().unwrap());
+            if reader.read_line(&mut hello).is_err() {
+                continue;
+            }
+            if round == 1 {
+                let theirs = hello.trim_end().strip_prefix("HELLO ").unwrap().to_string();
+                let mine = "f".repeat(64);
+                let proof = prove(&k, Side::Holder, &theirs, &mine);
+                s.write_all(format!("OK {proof} {mine}\n").as_bytes())
+                    .unwrap();
+                let mut auth = String::new();
+                let _ = reader.read_line(&mut auth);
+            }
+            megabyte_without_a_newline(&mut s);
+            lock(&c).push(closed_within(&mut s, Duration::from_secs(3)));
+        }
+    });
+    let n = FakeNode::start();
+    let b = Window::open(&dir, "W1AW", &[&n]);
+    assert!(until(RETRY + Duration::from_secs(10), || lock(&cut_off)
+        .len()
+        == 2));
+    assert_eq!(
+        *lock(&cut_off),
+        [true, true],
+        "the follower drops both floods"
+    );
+    assert!(b.share.following().is_some_and(|(up, _)| !up));
+    b.close();
+    drop(held);
 }
 
 #[test]
@@ -570,7 +684,7 @@ fn a_listener_without_the_secret_is_never_believed() {
     std::thread::spawn(move || {
         for mut s in squat.incoming().flatten() {
             let fake = format!(
-                "PROOF {} {}\nS {{\"rbnConnected\":true,\"nodesRunning\":true,\"nodesConnected\":true}}\n\
+                "OK {} {}\nS {{\"rbnConnected\":true,\"nodesRunning\":true,\"nodesConnected\":true}}\n\
                  P {{\"src\":\"node\",\"spotter\":\"W9TST\",\"dx\":\"K1FAKE\",\"khz\":14025.0,\"comment\":\"\"}}\n",
                 "c".repeat(64),
                 "d".repeat(64)
