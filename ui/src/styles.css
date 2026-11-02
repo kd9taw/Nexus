@@ -5012,6 +5012,54 @@ body.resizing-row {
 .flare-spark-mark.peak {
   stroke: #ff8c3a;
 }
+/* Where the replay stands on the six-hour trace (ReplayBar). */
+.flare-spark-cursor {
+  stroke: #60a5fa;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+/* THE REPLAY BAR (ReplayBar.tsx) heads the chip stack while a replay is on. It must never read as
+   now: its own blue edge, DASHED where every live chip's is solid, and a bold head in capitals.
+   Two classes: `.flare-chip`'s border shorthand comes earlier in this sheet, so this one wins. */
+.flare-chip.replay-chip {
+  border: 1px dashed #60a5fa;
+  border-left: 3px dashed #60a5fa;
+}
+.replay-chip-head {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+/* Only the slider and the back button take the pointer (the stack lets it through elsewhere). */
+.replay-slider {
+  display: block;
+  width: calc(100% - 1em);
+  margin: 2px 0 0 1em;
+  pointer-events: auto;
+}
+.flare-preview.replay-back {
+  margin: 2px 0 1px 1em;
+  pointer-events: auto;
+}
+.flare-preview.replay-start[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The sun disc with NOAA's active regions, in the unfolded flare chip (SunRegionsDisc.tsx). */
+.sun-regions-disc {
+  display: block;
+  width: 84px;
+  height: 84px;
+  margin: 2px 0;
+  pointer-events: auto;
+}
+.sun-regions-face {
+  fill: rgba(255, 200, 80, 0.18);
+  stroke: #ffb347;
+  stroke-width: 1;
+}
+.sun-regions-dot {
+  fill: #ff8c3a;
+}
 .muf-legend-bar {
   height: 6px;
   border-radius: 2px;

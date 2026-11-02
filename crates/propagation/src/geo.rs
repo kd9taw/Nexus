@@ -292,41 +292,74 @@ pub fn day_of_year(unix: i64) -> i64 {
     z - days_from_civil(y, 1, 1) + 1
 }
 
-/// Solar declination (degrees) — Cooper's form, ±0.5°.
+// ── THE SUN: one ephemeris for the shack and the map ─────────────────────────────────────────
+// The Astronomical Almanac's low-precision Sun (The Astronomical Almanac for the Year 2010, p. C5:
+// about 0.01° from 1950 to 2050) for the apparent right ascension and declination, and IAU 1982
+// Greenwich mean sidereal time (Meeus, Astronomical Algorithms, 2nd ed., eq. 12.4) for where on
+// Earth that is overhead. `ui/src/mapGeo.ts sunAt` is the same arithmetic, line for line, and the
+// two are held to one table of values (tests here and in `mapGeo.sky.test.ts`), so the
+// terminator, the greyline pane, the path classifier, the flare footprint and the sun on the map
+// all stand on one sun. Measured against JPL Horizons (DE441) it is 0.0063° worst over September
+// 2026; the Cooper declination and day-of-year equation of time it replaces were 1.08° off near
+// the equinox. P.533 keeps the ITU reference implementation's own sun (`p533::solar`): that is a
+// port held to the reference for parity, and it models the 15th of the month.
+
+/// The sun at a UTC instant, as seen from the Earth's centre.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SunPosition {
+    /// Apparent declination (degrees): the latitude where the sun is overhead.
+    pub decl_deg: f64,
+    /// The longitude (−180..180) where the sun is overhead: its right ascension less Greenwich
+    /// sidereal time.
+    pub subsolar_lon_deg: f64,
+    /// Apparent ecliptic longitude of date (0..360).
+    pub ecliptic_lon_deg: f64,
+}
+
+/// The sun at `unix` (UTC seconds). Time is UT throughout: the minute or so between UT and the
+/// dynamical time the series asks for moves the sun about 0.0007°.
+pub fn sun_at(unix: i64) -> SunPosition {
+    // Days from J2000.0 (2000-01-01 12:00 UT).
+    let n = unix as f64 / 86_400.0 - 10_957.5;
+    let mean_lon = 280.460 + 0.985_647_4 * n;
+    let g = (357.528 + 0.985_600_3 * n).to_radians();
+    let lambda = (mean_lon + 1.915 * g.sin() + 0.020 * (2.0 * g).sin()).to_radians();
+    let eps = (23.439 - 0.000_000_4 * n).to_radians();
+    let ra = (eps.cos() * lambda.sin()).atan2(lambda.cos()).to_degrees();
+    let decl = (eps.sin() * lambda.sin()).asin().to_degrees();
+    // Reduced before the subtraction: n days of sidereal time run to millions of degrees.
+    let gmst = (280.460_618_37 + 360.985_647_366_29 * n).rem_euclid(360.0);
+    SunPosition {
+        decl_deg: decl,
+        subsolar_lon_deg: (ra.rem_euclid(360.0) - gmst + 540.0).rem_euclid(360.0) - 180.0,
+        ecliptic_lon_deg: lambda.to_degrees().rem_euclid(360.0),
+    }
+}
+
+/// Solar declination (degrees) at a UTC instant: [`sun_at`]'s.
 pub fn solar_declination_deg(unix: i64) -> f64 {
-    let d = day_of_year(unix) as f64;
-    23.45 * (2.0 * PI / 365.0 * (d - 81.0)).sin()
+    sun_at(unix).decl_deg
 }
 
-/// Equation of time (minutes).
-fn equation_of_time_min(unix: i64) -> f64 {
-    let b = 2.0 * PI / 365.0 * (day_of_year(unix) as f64 - 81.0);
-    9.87 * (2.0 * b).sin() - 7.53 * b.cos() - 1.5 * b.sin()
-}
-
-/// Solar elevation angle (degrees, −90..+90) at (lat, lon) for a UTC instant.
+/// Solar elevation angle (degrees, −90..+90) at (lat, lon) for a UTC instant: 90° less the
+/// great-circle distance to the sub-solar point.
 /// `> 0` = sun up (day); near 0 = greyline/terminator; `cos(zenith) = sin(elev)`.
 pub fn solar_elevation_deg(lat: f64, lon: f64, unix: i64) -> f64 {
-    let utc_hours = (unix.rem_euclid(86_400) as f64) / 3600.0;
-    let hra = ((utc_hours + equation_of_time_min(unix) / 60.0 - 12.0) * 15.0 + lon).to_radians();
-    let decl = solar_declination_deg(unix).to_radians();
+    let s = sun_at(unix);
+    let decl = s.decl_deg.to_radians();
     let latr = lat.to_radians();
-    (latr.sin() * decl.sin() + latr.cos() * decl.cos() * hra.cos())
+    let dlon = (lon - s.subsolar_lon_deg).to_radians();
+    (latr.sin() * decl.sin() + latr.cos() * decl.cos() * dlon.cos())
         .clamp(-1.0, 1.0)
         .asin()
         .to_degrees()
 }
 
-/// The sub-solar point (lat, lon degrees) at a UTC instant: where [`solar_elevation_deg`] is 90°
-/// (the declination, and the longitude where its hour angle is zero). The map's `subsolarPoint`
-/// is the same formula.
+/// The sub-solar point (lat, lon degrees) at a UTC instant: where [`solar_elevation_deg`] is 90°.
+/// The map's `subsolarPoint` is the same ephemeris.
 pub fn subsolar_point(unix: i64) -> (f64, f64) {
-    let utc_hours = (unix.rem_euclid(86_400) as f64) / 3600.0;
-    let lon = -(utc_hours + equation_of_time_min(unix) / 60.0 - 12.0) * 15.0;
-    (
-        solar_declination_deg(unix),
-        (lon + 540.0).rem_euclid(360.0) - 180.0,
-    )
+    let s = sun_at(unix);
+    (s.decl_deg, s.subsolar_lon_deg)
 }
 
 /// Point at great-circle fraction `f` (0=a, 1=b) between two (lat, lon) — used to
@@ -630,5 +663,255 @@ mod tests {
         assert!(!grid("IN52TL").within(&sub));
         // A position has no area: nothing lies inside one.
         assert!(!grid("IN52TK").within(&StationFix::Position(42.4, -8.4)));
+    }
+
+    // ── THE ONE SUN: the shared ephemeris, checked against references it did not compute ──
+
+    /// JPL Horizons DE441 (the table `ui/src/mapGeo.sky.test.ts` documents, queried 2026-09-29):
+    /// [Unix seconds, the Sun's apparent RA (deg), apparent Dec (deg), Greenwich apparent sidereal
+    /// time (h)]. The point with the sun overhead is (Dec, RA − GAST).
+    const JPL_SUN: [(i64, f64, f64, f64); 30] = [
+        (1_788_220_800, 160.217158964, 8.347657795, 22.6783640111),
+        (1_788_310_800, 161.160737075, 7.969398240, 23.7468104918),
+        (1_788_400_800, 162.103118471, 7.588775901, 0.8152581793),
+        (1_788_490_800, 163.044393274, 7.205888661, 1.8837070681),
+        (1_788_580_800, 163.984643790, 6.820838505, 2.9521568025),
+        (1_788_670_800, 164.923944839, 6.433731239, 4.0206067478),
+        (1_788_760_800, 165.862365751, 6.044675668, 5.0890561991),
+        (1_788_850_800, 166.799973553, 5.653782435, 6.1575045823),
+        (1_788_940_800, 167.736836422, 5.261162838, 7.2259516211),
+        (1_789_030_800, 168.673026201, 4.866927983, 8.2943974125),
+        (1_789_120_800, 169.608619176, 4.471188482, 9.3628423911),
+        (1_789_210_800, 170.543695251, 4.074054543, 10.4312871360),
+        (1_789_300_800, 171.478336449, 3.675636195, 11.4997321770),
+        (1_789_390_800, 172.412625724, 3.276043345, 12.5681779092),
+        (1_789_480_800, 173.346646544, 2.875385648, 13.6366245077),
+        (1_789_570_800, 174.280483101, 2.473772271, 14.7050719299),
+        (1_789_660_800, 175.214220791, 2.071311685, 15.7735200127),
+        (1_789_750_800, 176.147946668, 1.668111542, 16.8419684885),
+        (1_789_840_800, 177.081749800, 1.264278611, 17.9104170425),
+        (1_789_930_800, 178.015721595, 0.859918731, 18.9788653666),
+        (1_790_020_800, 178.949956228, 0.455136697, 20.0473131762),
+        (1_790_110_800, 179.884551285, 0.050036064, 21.1157602399),
+        (1_790_200_800, 180.819608650, -0.355281158, 22.1842064337),
+        (1_790_290_800, 181.755235452, -0.760714822, 23.2526517995),
+        (1_790_380_800, 182.691544722, -1.166166828, 0.3210965700),
+        (1_790_470_800, 183.628655086, -1.571540928, 1.3895411780),
+        (1_790_560_800, 184.566689000, -1.976741914, 2.4579861951),
+        (1_790_650_800, 185.505769494, -2.381674198, 3.5264321569),
+        (1_790_740_800, 186.446016152, -2.786240006, 4.5948793879),
+        (1_790_830_800, 187.387541674, -3.190337758, 5.6633278908),
+    ];
+
+    fn norm180(x: f64) -> f64 {
+        (x + 540.0).rem_euclid(360.0) - 180.0
+    }
+
+    /// Great-circle angle between two (lat, lon) points, degrees.
+    fn separation(a: (f64, f64), b: (f64, f64)) -> f64 {
+        let c = a.0.to_radians().sin() * b.0.to_radians().sin()
+            + a.0.to_radians().cos() * b.0.to_radians().cos() * (a.1 - b.1).to_radians().cos();
+        c.clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
+    /// The old sun this module carried (Cooper's declination, a 365-day year, the day-of-year
+    /// equation of time), kept here only to show the new one moves nothing by more than the old
+    /// one's own error.
+    fn cooper_subsolar(unix: i64) -> (f64, f64) {
+        let b = 2.0 * PI / 365.0 * (day_of_year(unix) as f64 - 81.0);
+        let eq = 9.87 * (2.0 * b).sin() - 7.53 * b.cos() - 1.5 * b.sin();
+        let utc_hours = (unix.rem_euclid(86_400) as f64) / 3600.0;
+        (
+            23.45 * b.sin(),
+            norm180(-(utc_hours + eq / 60.0 - 12.0) * 15.0),
+        )
+    }
+
+    #[test]
+    fn the_sun_stands_within_two_hundredths_of_a_degree_of_jpl_horizons() {
+        // The Almanac's low-precision Sun measures 0.0063° worst over these rows; Cooper's
+        // declination measured 1.08°. A sign slip in any term is degrees off.
+        let mut worst = 0.0f64;
+        for (unix, ra, dec, gast) in JPL_SUN {
+            let jpl = (dec, norm180(ra - gast * 15.0));
+            let ss = subsolar_point(unix);
+            worst = worst.max(separation(ss, jpl));
+            assert!(
+                (solar_declination_deg(unix) - dec).abs() < 0.02,
+                "declination at {unix}"
+            );
+            assert!(
+                solar_elevation_deg(jpl.0, jpl.1, unix) > 89.98,
+                "the sun is overhead where JPL puts it, at {unix}"
+            );
+        }
+        assert!(worst < 0.02, "worst {worst}°");
+    }
+
+    /// The map (`ui/src/mapGeo.ts sunAt`) carries the SAME table in `mapGeo.sky.test.ts`: both
+    /// surfaces compute one ephemeris, to the last printed digit.
+    pub(crate) const SHARED_SUN: [(i64, f64, f64); 8] = [
+        (0, -23.054805878, -179.183587912),
+        (946_728_000, -23.033428611, 0.825221470),
+        (1_709_277_634, -7.362601813, 72.922484035),
+        (1_774_224_000, 0.943719206, -178.320408714),
+        (1_792_886_400, -12.023247005, 176.030833367),
+        (1_801_051_234, -18.441072019, 3.027696348),
+        (2_524_608_000, -22.997010267, -179.160260504),
+        (1_718_886_000, 23.434995885, -4.571993163),
+    ];
+
+    #[test]
+    fn the_shack_and_the_map_compute_one_sun() {
+        for (unix, dec, lon) in SHARED_SUN {
+            let (lat, l) = subsolar_point(unix);
+            assert!(
+                (lat - dec).abs() < 1e-8,
+                "declination at {unix}: {lat} vs {dec}"
+            );
+            assert!((l - lon).abs() < 1e-8, "longitude at {unix}: {l} vs {lon}");
+            assert_eq!(
+                solar_declination_deg(unix),
+                lat,
+                "one declination at {unix}"
+            );
+        }
+    }
+
+    /// The sun at the 2026 equinoxes and solstices — at USNO's instant of each, and at 00Z and
+    /// 12Z that day — from an INDEPENDENT ephemeris: Meeus, Astronomical Algorithms (2nd ed.) ch.
+    /// 25's higher-accuracy solar position with nutation (the method NOAA's solar calculator uses),
+    /// apparent right ascension and declination, less Greenwich APPARENT sidereal time (ch. 12 with
+    /// the nutation in longitude). [Unix seconds, declination, sub-solar longitude]. The same rows
+    /// are in `ui/src/mapGeo.sky.test.ts`.
+    const SEASONS: [(i64, f64, f64); 12] = [
+        (1_774_017_960, 0.002267, -39.644153), // March equinox, 2026-03-20 14:46Z (USNO)
+        (1_773_964_800, -0.240961, -178.098777), // 2026-03-20 00Z
+        (1_774_008_000, -0.043298, 1.864364),  // 2026-03-20 12Z
+        (1_782_030_240, 23.438132, 54.448941), // June solstice, 2026-06-21 08:24Z (USNO)
+        (1_782_000_000, 23.437716, -179.570131), // 2026-06-21 00Z
+        (1_782_043_200, 23.438052, 0.457111),  // 2026-06-21 12Z
+        (1_790_121_900, 0.001272, 176.883929), // September equinox, 2026-09-23 00:05Z (USNO)
+        (1_790_121_600, 0.002624, 178.134234), // 2026-09-23 00Z
+        (1_790_164_800, -0.191993, -1.909660), // 2026-09-23 12Z
+        (1_797_886_200, -23.437838, -132.937534), // December solstice, 2026-12-21 20:50Z (USNO)
+        (1_797_811_200, -23.434888, 179.454675), // 2026-12-21 00Z
+        (1_797_854_400, -23.437309, -0.483256), // 2026-12-21 12Z
+    ];
+
+    #[test]
+    fn the_sun_at_the_equinoxes_and_solstices_agrees_with_an_independent_ephemeris() {
+        for (unix, dec, lon) in SEASONS {
+            let ss = subsolar_point(unix);
+            let e = separation(ss, (dec, lon));
+            assert!(e < 0.01, "{unix}: {e}° from the reference");
+        }
+        // USNO's instants: the declination crosses zero at an equinox, and peaks at a solstice.
+        for unix in [1_774_017_960, 1_790_121_900] {
+            assert!(solar_declination_deg(unix).abs() < 0.01, "equinox {unix}");
+        }
+        let june = 1_782_030_240;
+        let dec = solar_declination_deg(june);
+        assert!(
+            dec > 23.43 && dec < 23.445,
+            "June solstice declination {dec}"
+        );
+        for d in [-2, -1, 1, 2] {
+            assert!(
+                solar_declination_deg(june + d * 86_400) < dec,
+                "June solstice not a maximum"
+            );
+        }
+        let dec = solar_declination_deg(1_797_886_200);
+        assert!(
+            dec < -23.43 && dec > -23.445,
+            "December solstice declination {dec}"
+        );
+        for d in [-2, -1, 1, 2] {
+            assert!(solar_declination_deg(1_797_886_200 + d * 86_400) > dec);
+        }
+    }
+
+    #[test]
+    fn at_the_poles_the_suns_elevation_is_the_declination() {
+        for (unix, _, _) in SEASONS {
+            let dec = solar_declination_deg(unix);
+            for lon in [-180.0, -73.0, 0.0, 45.0, 179.0] {
+                assert!((solar_elevation_deg(90.0, lon, unix) - dec).abs() < 1e-9);
+                assert!((solar_elevation_deg(-90.0, lon, unix) + dec).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn near_the_poles_a_solstice_day_is_all_day_or_all_night() {
+        // Every 10 minutes through the solstice's UTC day, at every longitude in 30° steps.
+        for (day, north_up) in [
+            (days_from_civil(2026, 6, 21), true),
+            (days_from_civil(2026, 12, 21), false),
+        ] {
+            let mut n = 0;
+            for step in 0..144 {
+                let t = day * 86_400 + step * 600;
+                for k in 0..12 {
+                    let lon = -180.0 + 30.0 * k as f64;
+                    let north = solar_elevation_deg(89.9, lon, t);
+                    let south = solar_elevation_deg(-89.9, lon, t);
+                    assert_eq!(north > 0.0, north_up, "89.9N at {t}, {lon}: {north}");
+                    assert_eq!(south > 0.0, !north_up, "89.9S at {t}, {lon}: {south}");
+                    n += 1;
+                }
+            }
+            assert_eq!(n, 144 * 12, "CONTROL: the whole day was sampled");
+        }
+    }
+
+    #[test]
+    fn the_shared_sun_agrees_with_the_old_paths_within_their_own_error() {
+        // A week and five hours apart over six years: every season, every hour of the day.
+        let mut worst = 0.0f64;
+        let mut t = days_from_civil(2024, 1, 1) * 86_400;
+        let end = days_from_civil(2030, 1, 1) * 86_400;
+        let mut n = 0;
+        while t < end {
+            let new = subsolar_point(t);
+            worst = worst.max(separation(new, cooper_subsolar(t)));
+            // Elevation and the subsolar point are one sun: overhead at the point, 90° away
+            // from it on the terminator.
+            assert!(solar_elevation_deg(new.0, new.1, t) > 89.999);
+            let anti = (-new.0, norm180(new.1 + 180.0));
+            assert!(solar_elevation_deg(anti.0, anti.1, t) < -89.999);
+            t += 7 * 86_400 + 5 * 3600;
+            n += 1;
+        }
+        assert!(n > 300, "CONTROL: the sweep ran ({n})");
+        // The old sun's own error: 1.08° against JPL in September 2026, 1.33° worst over these six
+        // years (its 365-day year drifts a quarter day each year between leap days). Nothing
+        // moves further than that error.
+        assert!(worst < 1.4, "worst {worst}°");
+        assert!(
+            worst > 0.2,
+            "CONTROL: the old path really is the old one ({worst}°)"
+        );
+    }
+
+    #[test]
+    fn the_p533_reference_sun_stays_its_own_and_agrees_on_the_fifteenth() {
+        // P.533 keeps the ITU reference implementation's sun (its own monthly-median recipe on
+        // the 15th, ported for parity), so its numbers never move. It still agrees with the
+        // shared sun on the day it models.
+        let loc = crate::p533::geometry::Location::new(0.0, 0.0);
+        for month0 in 0..12usize {
+            // Slot 11 = UT hour 12 in the reference's hour convention.
+            let p = crate::p533::solar::solar_parameters(loc, month0, 11.0);
+            let unix = days_from_civil(2026, month0 as u32 + 1, 15) * 86_400 + 12 * 3600;
+            let d = (p.decl.to_degrees() - solar_declination_deg(unix)).abs();
+            assert!(
+                d < 0.6,
+                "month {month0}: P.533 {} vs {}",
+                p.decl.to_degrees(),
+                solar_declination_deg(unix)
+            );
+        }
     }
 }

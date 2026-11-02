@@ -273,6 +273,9 @@ const MIGRATED = [
   'components/prop/ArrivalChip.tsx',
   // The polar-cap and aurora chips on the map and globe (caps and ovals).
   'components/prop/CapsChips.tsx',
+  // The six-hour replay bar and its Layers-panel button, and the sun disc with NOAA's active regions.
+  'components/prop/ReplayBar.tsx',
+  'components/prop/SunRegionsDisc.tsx',
   'components/prop/DxpedCalendar.tsx',
   'components/prop/DxpedDigest.tsx',
   'components/prop/DxpedMonth.tsx',

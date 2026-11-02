@@ -40,6 +40,7 @@ import {
   getPathOutlook,
   getPathRegions,
   getSolarIndices,
+  getSolarRegions,
   getSpaceWxScales,
   getXrayNow,
 } from '../api'
@@ -55,6 +56,7 @@ import type {
   OtaSpot,
   PathPrediction,
   PathRegions,
+  SolarRegionsView,
   XrayNow,
 } from '../types'
 import { t } from '../i18n'
@@ -123,6 +125,9 @@ export const KP_FORECAST: Feed<KpForecast> = { name: 'kpForecast', load: () => g
  *  cache and backoff, so five minutes asks only what is due. App's watch toast, the map's
  *  countdown chip and the Kp outlook's rationale hover. */
 export const ARRIVAL_OUTLOOK: Feed<ArrivalOutlook> = { name: 'arrivalOutlook', load: () => getArrivalOutlook(), everyMs: 300_000 }
+/** NOAA's active regions for the sun disc: the shack asks NOAA at most hourly (a daily file), so
+ *  ten minutes only picks up a new day. Polled only while a map shows the sun or the flare layer. */
+export const SOLAR_REGIONS: Feed<SolarRegionsView> = { name: 'solarRegions', load: () => getSolarRegions(), everyMs: 600_000 }
 /** The ten DX regions' path over the day: the shack keeps the model six hours, so this poll only
  *  picks up the hours' Kp as the outlook moves (SWPC republishes every 30 minutes). */
 export const PATH_REGIONS: Feed<PathRegions> = { name: 'pathRegions', load: () => getPathRegions(), everyMs: 900_000 }

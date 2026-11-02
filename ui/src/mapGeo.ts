@@ -248,34 +248,49 @@ export function greatCircle(a: LatLon, b: LatLon): GeoPermissibleObjects {
 }
 
 // ── Day/night terminator (greyline) ───────────────────────────────────────────
-// The subsolar point + twilight bands. Formulas MIRROR the Rust source of truth
-// in crates/propagation/src/geo.rs (Cooper's declination + equation of time), so
-// the map's terminator and the engine's solar elevation never disagree.
+// The subsolar point + twilight bands, from ONE sun (`sunAt`): the same ephemeris, line for line,
+// as the Rust source of truth (crates/propagation/src/geo.rs `sun_at`), held to one table of values
+// on both sides, so the map's terminator and the engine's solar elevation never disagree.
 
 const norm180 = (deg: number) => ((deg + 540) % 360) - 180
 
-/** Day-of-year (1–366) in UTC. */
-function dayOfYearUtc(ms: number): number {
-  const d = new Date(ms)
-  const start = Date.UTC(d.getUTCFullYear(), 0, 1)
-  return Math.floor((ms - start) / 86_400_000) + 1
+/** The sun at an instant, as seen from the Earth's centre. */
+export interface SunPosition {
+  /** Apparent declination (deg): the latitude where the sun is overhead. */
+  declDeg: number
+  /** The longitude (−180..180) where the sun is overhead: right ascension less Greenwich sidereal time. */
+  subsolarLonDeg: number
+  /** Apparent ecliptic longitude of date (0..360). */
+  eclipticLonDeg: number
 }
 
 /**
- * The subsolar point (sun directly overhead) at `nowMs` — latitude = solar
- * declination, longitude where the hour angle is zero. ±~0.5° (plenty for a map).
- * Mirrors geo.rs `solar_declination_deg` + `equation_of_time_min`.
+ * The sun at `nowMs`: the Astronomical Almanac's low-precision Sun (The Astronomical Almanac for
+ * the Year 2010, p. C5: about 0.01° from 1950 to 2050) for its apparent RA and declination, and IAU
+ * 1982 GMST (Meeus, Astronomical Algorithms, 2nd ed., eq. 12.4) for where on Earth that is overhead.
+ * mapGeo.sky.test.ts holds it to JPL Horizons (0.0063° worst) and to the shack's table. Time is UT.
  */
+export function sunAt(nowMs: number): SunPosition {
+  const n = nowMs / 86_400_000 - 10_957.5 // days from J2000.0 (2000-01-01 12:00 UT)
+  const meanLon = 280.46 + 0.985_647_4 * n
+  const g = (357.528 + 0.985_600_3 * n) * DEG
+  const lambda = (meanLon + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * DEG
+  const eps = (23.439 - 0.000_000_4 * n) * DEG
+  const ra = Math.atan2(Math.cos(eps) * Math.sin(lambda), Math.cos(lambda)) / DEG
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lambda)) / DEG
+  // Reduced before the subtraction: n days of sidereal time run to millions of degrees.
+  const gmst = norm360(280.460_618_37 + 360.985_647_366_29 * n)
+  return {
+    declDeg: dec,
+    subsolarLonDeg: norm360(norm360(ra) - gmst + 540) - 180,
+    eclipticLonDeg: norm360(lambda / DEG),
+  }
+}
+
+/** The subsolar point (sun directly overhead) at `nowMs` — `sunAt`'s declination and longitude. */
 export function subsolarPoint(nowMs: number): LatLon {
-  const b = ((2 * Math.PI) / 365) * (dayOfYearUtc(nowMs) - 81)
-  const declDeg = 23.45 * Math.sin(b)
-  const eqMin = 9.87 * Math.sin(2 * b) - 7.53 * Math.cos(b) - 1.5 * Math.sin(b)
-  const d = new Date(nowMs)
-  const utcHours = d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600
-  // solar elevation uses hra = ((utcHours + eq/60 − 12)·15 + lon); subsolar lon
-  // is where hra = 0.
-  const lon = norm180(-(utcHours + eqMin / 60 - 12) * 15)
-  return { lat: declDeg, lon }
+  const s = sunAt(nowMs)
+  return { lat: s.declDeg, lon: s.subsolarLonDeg }
 }
 
 /** A twilight band of the night side, as a great-circle cap around the
@@ -455,9 +470,8 @@ export function moonAt(nowMs: number): Moon {
   // Reduced before the subtraction: n days of sidereal time run to millions of degrees, and
   // `norm180` only folds a few turns.
   const gmst = norm360(280.460_618_37 + 360.985_647_366_29 * n)
-  const g = 357.528 + 0.985_600_3 * n // the Sun's mean anomaly
-  const sunLon = 280.46 + 0.985_647_4 * n + 1.915 * sinDeg(g) + 0.02 * sinDeg(2 * g)
-  const elongation = lon - sunLon
+  // The Sun's ecliptic longitude: the one sun's (`sunAt`), not a second copy of it.
+  const elongation = lon - sunAt(nowMs).eclipticLonDeg
   return {
     sublunar: { lat: dec, lon: norm180(norm360(ra) - gmst) },
     eclipticLonDeg: norm360(lon),

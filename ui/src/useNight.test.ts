@@ -20,12 +20,15 @@ const elevation = (grid: string, iso: string) => {
   return solarElevationDeg(ll.lat, ll.lon, at(iso))
 }
 
-// EN52 (42.5° N, 89° W), the evening of 2026-03-20 local — 00:34Z the next day is the last
-// minute above −6°, 00:35Z the first below it. And the next morning's civil dawn.
-const DUSK_BEFORE = '2026-03-21T00:34:00Z'
-const DUSK_AFTER = '2026-03-21T00:35:00Z'
-const DAWN_BEFORE = '2026-03-21T11:32:00Z'
-const DAWN_AFTER = '2026-03-21T11:33:00Z'
+// EN52 (42.5° N, 89° W), the evening of 2026-03-20 local — 00:36Z the next day is the last
+// minute above −6°, 00:37Z the first below it. And the next morning's civil dawn (11:29Z below,
+// 11:30Z above). These are the minutes of the map's one sun (mapGeo `sunAt`), and an independent
+// almanac (Meeus's solar position, as NOAA's solar calculator computes it) gives the same minutes;
+// the older sun this map carried put dusk two minutes early and dawn three minutes late.
+const DUSK_BEFORE = '2026-03-21T00:36:00Z'
+const DUSK_AFTER = '2026-03-21T00:37:00Z'
+const DAWN_BEFORE = '2026-03-21T11:29:00Z'
+const DAWN_AFTER = '2026-03-21T11:30:00Z'
 const LOCAL_MIDNIGHT = '2026-03-21T06:00:00Z'
 const LOCAL_NOON = '2026-03-20T18:00:00Z'
 
@@ -148,17 +151,17 @@ describe('useNight — Auto, by the sun at the station', () => {
   })
 
   it('comes on at civil dusk, looked at again each minute', () => {
-    atTime('2026-03-21T00:30:00Z')
+    atTime('2026-03-21T00:32:00Z')
     localStorage.setItem(NIGHT_STORAGE_KEY, 'auto')
     const { result } = renderHook(() => useNight('EN52'))
     expect(result.current.gridKnown).toBe(true)
     expect(result.current.active).toBe(false)
-    // 00:31 … 00:34: the sun is still above −6°.
+    // 00:33 … 00:36: the sun is still above −6°.
     act(() => void vi.advanceTimersByTime(4 * NIGHT_TICK_MS))
     expect(Date.now()).toBe(at(DUSK_BEFORE))
     expect(result.current.active).toBe(false)
     expect(root().getAttribute('data-night')).toBeNull()
-    // 00:35: below it.
+    // 00:37: below it.
     act(() => void vi.advanceTimersByTime(NIGHT_TICK_MS))
     expect(Date.now()).toBe(at(DUSK_AFTER))
     expect(result.current.active).toBe(true)

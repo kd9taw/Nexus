@@ -31,6 +31,7 @@ pub mod repeaterbook;
 pub mod rsgb;
 pub mod satnogs;
 pub mod solar_cycle;
+pub mod solar_regions;
 pub mod solar_wind;
 pub mod swpc;
 pub mod swpc_scales;

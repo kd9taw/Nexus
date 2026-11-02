@@ -3,7 +3,8 @@
 // Folded it is two lines: what the flare is (class, R-scale, how high HF is absorbed under the
 // sun) and where it is (NOAA's began / peak / ended, or the GOES trace's direction marked estimated), then
 // what the picture is drawn from and when. Unfolded it adds the bands out and weakened under the
-// sun and at the operator's QTH, how long until HF recovers, and the six-hour X-ray sparkline.
+// sun and at the operator's QTH, how long until HF recovers, the six-hour X-ray sparkline, and the
+// sun disc with NOAA's numbered active regions (where on the sun the flare can come from).
 //
 // Every number carries its source and time: the class is GOES at its sample time, the footprint
 // is NOAA's D-RAP grid at its valid time or "estimated from GOES", the recovery is NOAA's own or
@@ -24,6 +25,9 @@ import {
 } from '../../flareNow'
 import { agoLabel } from './SpaceWxGauges'
 import { devXrayOverride } from '../../flareAlert'
+import { bucketOf } from '../../replay'
+import type { SolarRegionsView } from '../../types'
+import { SunRegionsDisc } from './SunRegionsDisc'
 
 /** `HH:MMZ` — chip times are always today's or the last few hours'. */
 function hm(unix: number): string {
@@ -39,6 +43,7 @@ export function FlareChip({
   nowMs,
   snapAt = null,
   preview = false,
+  regions,
 }: {
   xrayLong: number
   foot: FlareFootprint
@@ -52,6 +57,9 @@ export function FlareChip({
   /** Simulated flux from the Layers-panel Preview button — labelled so simulated data can never
    *  be mistaken for a real event. */
   preview?: boolean
+  /** NOAA's active regions as the shack serves them (the unfolded chip's sun disc). Absent: no
+   *  disc and no line (a surface that does not poll them). */
+  regions?: SolarRegionsView | null
 }) {
   const [open, setOpen] = useState(false)
   const head = t('map.flare.chip', {
@@ -152,6 +160,7 @@ export function FlareChip({
           )}
           <div className="flare-chip-line flare-chip-dim">{t('map.flare.rings.legend')}</div>
           {noaa && noaa.series.length > 1 && <FlareSparkline series={noaa.series} phase={phase} />}
+          {regions !== undefined && <SunRegionsDisc view={regions} nowMs={nowMs} />}
         </>
       )}
     </div>
@@ -169,9 +178,16 @@ const LOG_HI = -3 // X10
 export function FlareSparkline({
   series,
   phase,
+  cursorAt = null,
+  breakAtMissingBuckets = false,
 }: {
   series: [number, number][]
   phase: { noaa: boolean; beginAt: number | null; peakAt: number | null }
+  /** The replay bar's time (Unix seconds): a marker on the trace where the replay stands. */
+  cursorAt?: number | null
+  /** Lift the pen across a missing 5-minute bucket (the replay's sparkline: a reading that was not
+   *  held is drawn as a gap, not a line). Off: every point is joined. */
+  breakAtMissingBuckets?: boolean
 }) {
   const t0 = series[0][0]
   const t1 = series[series.length - 1][0]
@@ -181,11 +197,17 @@ export function FlareSparkline({
     const l = Math.max(LOG_LO, Math.min(LOG_HI, Math.log10(flux)))
     return SPARK_H - ((l - LOG_LO) / (LOG_HI - LOG_LO)) * SPARK_H
   }
-  const d = series.map(([u, f], i) => `${i ? 'L' : 'M'}${x(u).toFixed(1)},${y(f).toFixed(1)}`).join('')
+  const d = series
+    .map(([u, f], i) => {
+      const gap = i > 0 && breakAtMissingBuckets && bucketOf(u) - bucketOf(series[i - 1][0]) > 1
+      return `${i && !gap ? 'L' : 'M'}${x(u).toFixed(1)},${y(f).toFixed(1)}`
+    })
+    .join('')
   const mark = (u: number | null) =>
     phase.noaa && u != null && u >= t0 && u <= t1 ? x(u).toFixed(1) : null
   const begin = mark(phase.beginAt)
   const peak = mark(phase.peakAt)
+  const cursor = cursorAt != null && cursorAt >= t0 && cursorAt <= t1 ? x(cursorAt).toFixed(1) : null
   return (
     <svg
       className="flare-spark"
@@ -200,6 +222,7 @@ export function FlareSparkline({
       {begin && <line className="flare-spark-mark" x1={begin} x2={begin} y1={0} y2={SPARK_H} />}
       {peak && <line className="flare-spark-mark peak" x1={peak} x2={peak} y1={0} y2={SPARK_H} />}
       <path className="flare-spark-line" d={d} />
+      {cursor && <line className="flare-spark-cursor" x1={cursor} x2={cursor} y1={0} y2={SPARK_H} />}
     </svg>
   )
 }

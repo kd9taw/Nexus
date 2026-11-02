@@ -209,6 +209,7 @@ pub const RPC_ALLOWLIST: &[&str] = &[
     "get_ota_map_spots",   // POTA activators (map layer)
     "get_kp_forecast",     // the three-day outlook pane
     "get_solar_indices",   // NOAA daily SFI + sunspot number (Space Wx pane's trends)
+    "get_solar_regions",   // NOAA's numbered active regions (the flare chip's sun disc)
     "get_band_outlook",    // per-band outlook pane
     "get_path_outlook",    // outlook for a clicked spot
     "get_path_regions",    // path over the day to the ten DX regions

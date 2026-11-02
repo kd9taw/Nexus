@@ -69,7 +69,7 @@ pub(crate) struct Slot<T> {
 }
 
 impl<T> Slot<T> {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             value: None,
             fetched_at: None,
@@ -92,6 +92,11 @@ impl<T> Slot<T> {
         self.fetched_at = Some(now);
         self.failures = 0;
         self.next_try = now + ttl;
+    }
+
+    /// The last good value and when it came, however old (the caller decides what it may serve).
+    pub(crate) fn kept(&self) -> Option<(&T, i64)> {
+        Some((self.value.as_ref()?, self.fetched_at?))
     }
 
     /// A failure keeps the last good value and retries 60 s, 120 s, 240 s … later, never later

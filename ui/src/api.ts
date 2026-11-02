@@ -5254,6 +5254,12 @@ export async function getArrivalOutlook(): Promise<import('./types').ArrivalOutl
   return invoke<import('./types').ArrivalOutlook>('get_arrival_outlook')
 }
 
+/** NOAA's numbered active regions for the sun disc: asked of NOAA at most hourly, and served only
+ *  while the list is current on the shack's clock (`held`). */
+export async function getSolarRegions(): Promise<import('./types').SolarRegionsView> {
+  return invoke<import('./types').SolarRegionsView>('get_solar_regions')
+}
+
 /** NOAA's daily solar indices: the last thirty days of SFI and sunspot number. Cached an hour
  *  server-side, and the last good copy is served when a fetch fails — every row carries its own
  *  date, so the caller can say how old the newest day is. EMPTY = never had the file. */
