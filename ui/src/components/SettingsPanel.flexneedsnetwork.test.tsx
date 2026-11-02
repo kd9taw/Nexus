@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
 //
-// THE FLEX SWITCHES SAY WHY THEY CANNOT BE USED, INSTEAD OF VANISHING. The Flex native panadapter,
-// DAX audio and client work only over the network connection. On a Flex model (2036 / 23005) with
-// Connection = Serial they used to be hidden without a word, so an operator told to "turn on Flex
-// native panadapter" could not find it. Pinned here: on a Flex off the network the three show,
-// disabled, each with "Needs Connection: Network."; a click changes nothing. On the network they
-// are live with no note; a radio that is not a Flex shows none of them.
+// THE FLEX SWITCHES NO LONGER VANISH ON A SERIAL CONNECTION. On a Flex model (2036 / 23005) with
+// Connection = Serial, Settings hid the Flex native panadapter, DAX audio and client without a
+// word, so an operator told to "turn on Flex native panadapter" could not find it.
+//
+// Only the PANADAPTER needs Connection: Network (`native_spectrum_kind` serves the Flex stream on
+// the network alone). The native client and its DAX audio talk to the radio at its own address
+// whatever the CAT connection is (`flex_client_reachable`), so they work on Serial. Pinned here: on
+// a Flex off the network the panadapter shows disabled with "Needs Connection: Network." and a
+// click changes nothing, while the client and DAX audio show live, with no note, and turn on and
+// off. On the network all three are live with no note; a radio that is not a Flex shows none.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
@@ -38,7 +42,9 @@ vi.mock('../toast', () => ({
   withErrorToast: vi.fn(async (fn: () => Promise<unknown>) => fn()),
 }))
 
-const LABELS = ['Flex native panadapter (Beta)', 'Flex native DAX audio (Beta)', 'Flex native client (Beta)']
+const PAN = 'Flex native panadapter (Beta)'
+const CLIENT_AND_AUDIO = ['Flex native DAX audio (Beta)', 'Flex native client (Beta)']
+const LABELS = [PAN, ...CLIENT_AND_AUDIO]
 const NOTE = 'Needs Connection: Network.'
 
 /** A FLEX-6400 on a serial (COM) connection: the reporter's setup. */
@@ -151,16 +157,41 @@ describe('the Flex native switches on a Flex that is not on the network', () => 
   it.each([
     ['FLEX-6xxx (2036) on Serial', FLEX_SERIAL],
     ['the other Flex model (23005) on Serial', { ...FLEX_SERIAL, rigModel: 23005 }],
-  ])('%s: all three show, disabled, saying they need the network connection', async (_name, radio) => {
+  ])('%s: the panadapter shows disabled, saying it needs the network connection', async (_name, radio) => {
     await renderAdvanced(radio)
-    for (const label of LABELS) {
+    const sw = switchFor(PAN)
+    expect(sw, 'the panadapter is shown').not.toBeNull()
+    expect(sw!.disabled, 'the panadapter is disabled').toBe(true)
+    expect(noteFor(PAN), 'the panadapter says why').toBe(true)
+    // A click on a disabled switch changes nothing.
+    fireEvent.click(sw!)
+    expect(sw!.getAttribute('aria-checked')).toBe('false')
+    // The note is the panadapter's alone.
+    expect(screen.getAllByText(NOTE)).toHaveLength(1)
+  })
+
+  it.each([
+    ['FLEX-6xxx (2036) on Serial', FLEX_SERIAL],
+    ['the other Flex model (23005) on Serial', { ...FLEX_SERIAL, rigModel: 23005 }],
+  ])('%s: the client and DAX audio are live, with no note, and turn on', async (_name, radio) => {
+    await renderAdvanced(radio)
+    for (const label of CLIENT_AND_AUDIO) {
       const sw = switchFor(label)
       expect(sw, `${label} is shown`).not.toBeNull()
-      expect(sw!.disabled, `${label} is disabled`).toBe(true)
-      expect(noteFor(label), `${label} says why`).toBe(true)
-      // A click on a disabled switch changes nothing.
+      expect(sw!.disabled, `${label} is live`).toBe(false)
+      expect(noteFor(label), `${label} carries no note`).toBe(false)
       fireEvent.click(sw!)
-      expect(sw!.getAttribute('aria-checked')).toBe('false')
+      expect(sw!.getAttribute('aria-checked'), `${label} turns on`).toBe('true')
+    }
+  })
+
+  it('a client switched on earlier can be turned off on Serial', async () => {
+    await renderAdvanced({ ...FLEX_SERIAL, flexNativeCat: true, flexNativeAudio: true, flexRadioIp: '192.0.2.77' })
+    for (const label of CLIENT_AND_AUDIO) {
+      const sw = switchFor(label)!
+      expect(sw.getAttribute('aria-checked')).toBe('true')
+      fireEvent.click(sw)
+      expect(sw.getAttribute('aria-checked'), `${label} turns off`).toBe('false')
     }
   })
 
