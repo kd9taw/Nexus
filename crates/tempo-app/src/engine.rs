@@ -9378,6 +9378,25 @@ impl Engine {
     /// The radios and the broker a form save of `s` would leave, folded as `apply_settings_inner`
     /// folds them: the live roster, with the form's flat rig fields in the radio the form
     /// describes, then the port repair. Only those are read from it.
+    /// One radio, one window, for a settings save ([`crate::radio_claim::save_refusal`]): the
+    /// refusal when the save would put this window's active radio on a port (or address) another
+    /// live Nexus window drives. A form save is read as `apply_settings` will apply it (the live
+    /// roster and active radio, the form's CAT fields for that radio); a restore or reset as the
+    /// settings it hands in. Refused whole, before anything is applied, like
+    /// [`Self::port_clash_a_save_introduces`].
+    pub fn radio_claim_a_save_refuses(
+        &self,
+        s: &Settings,
+        replaces_station: bool,
+    ) -> Option<String> {
+        let after = if replaces_station {
+            s.clone()
+        } else {
+            self.roster_after_form_save(s)
+        };
+        crate::radio_claim::save_refusal(&self.settings, &after, crate::radio_claim::claims())
+    }
+
     fn roster_after_form_save(&self, s: &Settings) -> Settings {
         let live_active = self.settings.active_radio;
         let form_active = if s.radios.is_empty() {

@@ -209,3 +209,35 @@ fn a_switch_to_a_radio_another_window_drives_is_refused_and_said() {
     // (That the claim moves with a switch is `radio_claim`'s own test: this process's claims are
     // shared by every engine test running beside this one, so which one holds last is theirs.)
 }
+
+/// ONE RADIO, ONE WINDOW, for a Settings save: the operator edits the active radio's CAT port (the
+/// flat form the active radio is saved through) to the port another window's radio is on. The save
+/// is refused whole, before it is applied. A free port is not refused.
+#[test]
+fn a_save_that_moves_the_active_radio_onto_another_windows_port_is_refused() {
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("nexus-claims-engine-{pid}"));
+    crate::radio_claim::init(dir.clone());
+    let (mut e, _vhf) = two_radios();
+    let taken = format!("/dev/nexus-save-taken-{pid}");
+    let free = format!("/dev/nexus-save-free-{pid}");
+    e.settings.rig_model = 1029;
+    e.settings.ptt_method = "cat".into();
+    e.settings.serial_port = format!("/dev/nexus-save-mine-{pid}");
+    e.settings.sync_active_from_flat();
+    let other_window = crate::radio_claim::Claims::new(dir.clone());
+    other_window
+        .claim(&format!("serial:{taken}"))
+        .expect("the other window drives the radio on that port");
+
+    let mut form = e.settings().clone();
+    form.serial_port = taken.clone();
+    assert_eq!(
+        e.radio_claim_a_save_refuses(&form, false).as_deref(),
+        Some(crate::radio_claim::REFUSAL)
+    );
+    // CONTROL: a free port saves.
+    form.serial_port = free;
+    assert_eq!(e.radio_claim_a_save_refuses(&form, false), None);
+    drop(other_window);
+}

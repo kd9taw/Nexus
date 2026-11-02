@@ -306,6 +306,29 @@ pub fn claim_profile(p: &RadioProfile) -> Result<(), String> {
     }
 }
 
+/// A settings save that would put this window's active radio on an endpoint another live window
+/// drives (the operator edited its COM port, or its network address, to the other window's
+/// radio) is refused whole, with [`REFUSAL`], and the window keeps the radio it has. `live` is
+/// the settings now, `after` the settings the save would leave. `None` when the endpoint does not
+/// change, when nothing else holds the new one, and with no claims.
+pub fn save_refusal(
+    live: &crate::settings::Settings,
+    after: &crate::settings::Settings,
+    claims: Option<&Claims>,
+) -> Option<String> {
+    let active = |s: &crate::settings::Settings| {
+        s.radios
+            .iter()
+            .find(|r| r.id == s.active_radio)
+            .and_then(cat_endpoint)
+    };
+    let now = active(after)?;
+    if active(live).as_ref() == Some(&now) {
+        return None; // the save leaves the radio where it is
+    }
+    claims?.held_elsewhere(&now).then(|| REFUSAL.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +486,53 @@ mod tests {
             !driver.wait_unwatched("serial:COM9", Duration::ZERO),
             "another's watch"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Settings whose active radio (id 0) is on `port`, with a second radio on COM9.
+    fn station(port: &str) -> crate::settings::Settings {
+        crate::settings::Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    ..radio("serial", port, "")
+                },
+                RadioProfile {
+                    id: 1,
+                    ..radio("serial", "COM9", "")
+                },
+            ],
+            active_radio: 0,
+            ..crate::settings::Settings::default()
+        }
+    }
+
+    /// The operator edits the active radio's port, in Settings, to the port another window's
+    /// radio is on: the save is refused, in the operator's words. Saving it onto a free port, or
+    /// saving without touching the port, is not.
+    #[test]
+    fn a_save_that_moves_the_radio_onto_another_windows_port_is_refused() {
+        let dir = temp_dir("save");
+        let here = Claims::new(dir.clone());
+        let other_window = Claims::new(dir.clone());
+        other_window.claim("serial:COM8").unwrap();
+        here.claim("serial:COM4").unwrap();
+        let live = station("COM4");
+
+        assert_eq!(
+            save_refusal(&live, &station("COM8"), Some(&here)).as_deref(),
+            Some(REFUSAL),
+            "COM8 is the other window's"
+        );
+        // A different spelling of that port is that port.
+        assert_eq!(
+            save_refusal(&live, &station(r"\\.\com8"), Some(&here)).as_deref(),
+            Some(REFUSAL)
+        );
+        // CONTROLS: a free port, an unchanged port, and no claims set up.
+        assert_eq!(save_refusal(&live, &station("COM6"), Some(&here)), None);
+        assert_eq!(save_refusal(&live, &station("COM4"), Some(&here)), None);
+        assert_eq!(save_refusal(&live, &station("COM8"), None), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -3504,6 +3504,14 @@ mod picker_radio_hold_tests {
             "refused, in the operator's words, before the engine is touched"
         );
 
+        // A settings save: refused before it is applied, and the claim moved after.
+        let save = body_of("fn save_and_publish(");
+        assert!(
+            at(save, "eng.radio_claim_a_save_refuses(") < at(save, "eng.apply_settings(settings)")
+                && at(save, "eng.apply_settings(settings)")
+                    < at(save, "claim_active_radio_of(eng.settings())")
+        );
+
         let stop = body_of("fn stop_the_radio() {");
         assert!(
             at(stop, "SHUTDOWN.store(true") < at(stop, "PICKER_HELD_RADIO.quit()")
@@ -17441,6 +17449,11 @@ fn save_and_publish(
                     return Err(refusal);
                 }
             }
+            // ⛔ ONE RADIO, ONE WINDOW: a save that moves this window's radio onto a port another
+            // live Nexus window drives is refused whole, and the window keeps its radio.
+            if let Some(refusal) = eng.radio_claim_a_save_refuses(&settings, authoritative_roster) {
+                return Err(refusal);
+            }
             // ⛔ A reset replaces the station's profiles and call: not while a run, a contact or an
             // over is under way on a station with profiles (a form save keeps the call instead).
             if authoritative_roster {
@@ -17489,6 +17502,12 @@ fn save_and_publish(
                 eng.apply_restored_settings(settings);
             } else {
                 eng.apply_settings(settings);
+            }
+            // The claim follows the radio's port: a save that moved it lets go of the old port and
+            // takes the new one (refused above if another window had it). Under the same hold of
+            // the lock as the check, so no other save of this window comes between.
+            if let Err(why) = claim_active_radio_of(eng.settings()) {
+                tempo_core::applog::warn("radio", &why);
             }
             if let Some(rows) = rows {
                 eng.open_session_from(rows);
