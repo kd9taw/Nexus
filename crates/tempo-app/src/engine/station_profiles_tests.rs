@@ -3257,3 +3257,169 @@ fn the_snapshot_names_the_entry_call_and_a_call_edit_does_not_move_it() {
     settings_call_edit(&mut e, "KD9TAW/P");
     assert_eq!(entry(&e).as_deref(), Some(ME));
 }
+
+// --- A reply to the old or the base call completes a contest contact, as WSJT-X takes it ----------
+
+/// No profiles, Field Day S&P: the operator double-clicks W1AW's CQ and our exchange keys under
+/// KD9TAW; the call is saved as `edit` when given; then W1AW's rogered exchange to `to` arrives.
+fn fd_sp_at_their_reply(edit: Option<&str>, to: &str) -> Engine {
+    let mut e = plain_ft8();
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_class = "3A".into();
+    s.fd_section = "WI".into();
+    s.tx_even = true;
+    e.apply_settings(s);
+    e.set_mode("fieldday-sp").unwrap();
+    e.set_tx_enabled(true);
+    e.ingest_decodes_for_test(&[dec_snr("CQ FD W1AW EN37", -7)], 0);
+    e.work_station(
+        "W1AW",
+        Some("EN37"),
+        Some("CQ FD W1AW EN37"),
+        Some(-7),
+        None,
+    )
+    .expect("premise: the double-click is taken");
+    assert_eq!(
+        key_over(&mut e, 0).as_deref(),
+        Some("W1AW KD9TAW 3A WI"),
+        "premise: our exchange"
+    );
+    if let Some(call) = edit {
+        settings_call_edit(&mut e, call);
+    }
+    e.ingest_decodes_for_test(&[dec_snr(&format!("{to} W1AW R 2B EMA"), -7)], 1);
+    e
+}
+
+/// No profiles, a Field Day run: W1AW answers our CQ, our roger and exchange key under KD9TAW;
+/// the call is saved as `edit` when given; then W1AW's RR73 to `to` arrives.
+fn fd_run_at_their_close(edit: Option<&str>, to: &str) -> Engine {
+    let mut e = plain_field_day_run();
+    e.set_tx_enabled(true);
+    assert_eq!(key_over(&mut e, 0).as_deref(), Some("CQ FD KD9TAW EN52"));
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW 2B EMA", -7)], 1);
+    assert_eq!(
+        key_over(&mut e, 2).as_deref(),
+        Some("W1AW KD9TAW R 3A WI"),
+        "premise: our roger"
+    );
+    if let Some(call) = edit {
+        settings_call_edit(&mut e, call);
+    }
+    e.ingest_decodes_for_test(&[dec_snr(&format!("{to} W1AW RR73"), -7)], 3);
+    e
+}
+
+/// The contest's rows: each call worked, with the call the entry logs it under (the Cabrillo
+/// `CALLSIGN:`, which a call edit does not move).
+fn contest_logged(e: &Engine) -> Vec<(String, String)> {
+    match &e.mode {
+        Mode::FieldDay { station, .. } => station
+            .log
+            .qsos()
+            .iter()
+            .map(|q| (q.call.clone(), station.log.mycall.clone()))
+            .collect(),
+        _ => vec![],
+    }
+}
+
+/// What a contest contact did at the reply: the next over keyed and the contest's rows.
+fn contest_reply_outcome(e: &mut Engine, slot: u64) -> (Option<String>, Vec<(String, String)>) {
+    (key_over(e, slot), contest_logged(e))
+}
+
+/// ⛔ Field Day, S&P and run: our overs went out as KD9TAW, the call is saved as KD9TAW/P, and
+/// W1AW's reply is addressed to KD9TAW, the call before the save. WSJT-X takes a reply by its base
+/// call, which a portable change leaves as it was, so the contact completes: logged once, under
+/// KD9TAW, the call its overs went out with, and our closing over goes out under KD9TAW/P.
+/// CONTROL: the call unchanged, the same under KD9TAW.
+#[test]
+fn a_field_day_reply_to_the_old_call_after_a_portable_edit_completes_the_contact() {
+    let w1aw = vec![("W1AW".to_string(), ME.to_string())];
+    for (edit, now) in [(None, ME), (Some("KD9TAW/P"), "KD9TAW/P")] {
+        assert_eq!(
+            contest_reply_outcome(&mut fd_sp_at_their_reply(edit, ME), 2),
+            (Some(format!("W1AW {now} RR73")), w1aw.clone()),
+            "S&P, edit={edit:?}"
+        );
+        let mut run = fd_run_at_their_close(edit, ME);
+        assert_eq!(
+            contest_reply_outcome(&mut run, 4),
+            (Some(format!("W1AW {now} 73")), w1aw.clone()),
+            "run, edit={edit:?}"
+        );
+        e_logged_once(&mut run);
+    }
+}
+
+/// The contact is logged once: later slots log nothing more.
+fn e_logged_once(e: &mut Engine) {
+    for slot in 6u64..10 {
+        e.poll_tx(slot);
+        e.ingest_decodes_for_test(&[], slot);
+    }
+    assert_eq!(contest_logged(e).len(), 1, "logged once");
+}
+
+/// ⛔ The same for a reply to the base call: the call saved as KD9TAW/P, W1AW's reply to KD9TAW
+/// completes the contact, and so does one to KD9TAW/P, the call in use.
+#[test]
+fn a_field_day_reply_to_the_base_call_completes_the_contact() {
+    for to in ["KD9TAW", "KD9TAW/P"] {
+        let mut sp = fd_sp_at_their_reply(Some("KD9TAW/P"), to);
+        assert_eq!(
+            key_over(&mut sp, 2).as_deref(),
+            Some("W1AW KD9TAW/P RR73"),
+            "S&P, to {to}"
+        );
+        e_logged_once(&mut sp);
+    }
+}
+
+/// CONTROLS: a reply to another call, or to KD9TAW after the call is saved as another base call
+/// (W9XYZ), completes nothing and logs nothing: our exchange goes out again, under the call in use.
+#[test]
+fn a_field_day_reply_to_another_call_or_an_old_base_completes_nothing() {
+    for (edit, to, now) in [
+        (None, "K2DEF", ME),
+        (Some("KD9TAW/P"), "K2DEF", "KD9TAW/P"),
+        (Some("W9XYZ"), ME, "W9XYZ"),
+    ] {
+        let mut sp = fd_sp_at_their_reply(edit, to);
+        assert_eq!(
+            contest_reply_outcome(&mut sp, 2),
+            (Some(format!("W1AW {now} 3A WI")), vec![]),
+            "S&P, edit={edit:?}, to {to}"
+        );
+    }
+}
+
+/// Outside contests the sequencer already reads a reply by its base call, as WSJT-X does: a
+/// portable station (KD9TAW/P) whose S&P partner closes with an RR73 to KD9TAW, the base call,
+/// completes the contact and logs it once under KD9TAW/P, the call its overs carried; an RR73 to
+/// another call (K2DEF) completes nothing.
+#[test]
+fn outside_contests_an_rr73_to_the_base_call_completes_the_contact() {
+    for (to, logged) in [
+        (
+            "KD9TAW",
+            vec![("W1AW".to_string(), Some("KD9TAW/P".to_string()))],
+        ),
+        ("K2DEF", vec![]),
+    ] {
+        let mut e = plain_ft8();
+        settings_call_edit(&mut e, "KD9TAW/P");
+        e.call_station("W1AW");
+        assert_eq!(keyed(&mut e, 0..2), vec!["W1AW KD9TAW/P EN52".to_string()]);
+        e.ingest_decodes_for_test(&[dec_snr("KD9TAW/P W1AW -10", -7)], 2);
+        assert_eq!(keyed(&mut e, 2..4), vec!["W1AW KD9TAW/P R-07".to_string()]);
+        e.ingest_decodes_for_test(&[dec_snr(&format!("{to} W1AW RR73"), -7)], 4);
+        for slot in 4u64..8 {
+            e.poll_tx(slot);
+        }
+        assert_eq!(logged_calls(&e), logged, "RR73 to {to}");
+    }
+}
