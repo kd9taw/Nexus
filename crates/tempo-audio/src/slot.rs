@@ -556,6 +556,42 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
     }
 }
 
+/// Put VFO B back on the RX dial `dial` for a key that is NOT a slot over, while Nexus holds Rig
+/// split (`RadioLoop::split_ready_for_a_non_slot_key`): the TX dial WSJT-X writes for `XIT` 0
+/// (`MainWindow::setXIT`: `m_freqTxNominal = base + m_XIT`), ahead of the key as it writes the TX
+/// frequency ahead of every key with split on (`TransceiverBase.cpp`, "or about to tx split").
+/// Nothing is written when the radio already confirmed VFO B on this dial ([`Rig::split_confirmed`]).
+///
+/// ⛔ `Err` keys nothing, as for a slot over's split writes: the radio refused the write, did not
+/// answer it, or answered after [`SPLIT_WRITES_BUDGET_MS`], so the key is never late by more than
+/// one split write's budget. The TX mode the radio confirmed stays confirmed (this writes only the
+/// frequency); the next slot over writes its own TX dial again.
+pub(crate) fn vfo_b_to_the_rx_dial(rig: &mut Rig, dial: u64) -> std::io::Result<()> {
+    let mut confirmed = rig
+        .take_split_confirmed()
+        .filter(|c| c.rx_dial == dial)
+        .unwrap_or(SplitConfirmed {
+            rx_dial: dial,
+            tx_hz: None,
+            tx_mode: None,
+        });
+    if confirmed.tx_hz == Some(dial) {
+        rig.split_confirmed = Some(confirmed);
+        return Ok(());
+    }
+    let drops = rig.connection_drops();
+    let started = std::time::Instant::now();
+    rig.set_split_freq(dial)?;
+    within_split_budget(started, split_writes_budget_ms(rig))?;
+    // A write on a connection renewed since the take: the mode confirmed on the old one is not
+    // kept as confirmed.
+    if rig.connection_drops() == drops {
+        confirmed.tx_hz = Some(dial);
+        rig.split_confirmed = Some(confirmed);
+    }
+    Ok(())
+}
+
 /// The total time (ms) Split Operation's writes before one over may take, from the first sent to
 /// the last confirmed, before the over is refused rather than keyed late ([`apply_tx_dial_shift`]).
 pub(crate) const SPLIT_WRITES_BUDGET_MS: u64 = 500;

@@ -3500,6 +3500,14 @@ const PTT_UNCONFIRMED: (AudioErrorKind, &str) = (
     "The rig did not answer the PTT key in time — check the CAT link to the radio.",
 );
 
+/// The PTT line for a key that is not a slot over, refused because Split Operation could not put
+/// the radio's TX VFO back on the dial first (`RadioLoop::split_ready_for_a_non_slot_key`).
+const PTT_SPLIT_NOT_READY: (AudioErrorKind, &str) = (
+    AudioErrorKind::Ptt,
+    "Not keyed: Split Operation could not put the radio's TX VFO back on the dial — check the CAT \
+     link, or set Split Operation to None.",
+);
+
 /// The log's line for an over a refused key dropped ([`KeyUp::Refused`]), in the words the voice
 /// keyer's and APRS's refusals use: `<what>: the radio did not accept the key (<why>) (dropped)`.
 fn note_refused_key(what: &str, why: &str) {
@@ -6890,6 +6898,71 @@ impl RadioLoop {
             || !eng.tx_enabled()
             || s.operating_mode != OperatingMode::Digital
             || !same_named_band(self.rig_split_dial, s.dial_hz())
+    }
+
+    /// ⛔ A KEY THAT IS NOT A SLOT OVER NEVER GOES OUT OF VFO B ON THE LAST OVER'S TX DIAL.
+    ///
+    /// Split Operation = Rig holds split between overs, and VFO B keeps the last over's TX dial: the
+    /// RX dial plus the 500 Hz step that moved that over's audio into 1500-2000 Hz. Only a slot over
+    /// writes VFO B (`slot::apply_tx_dial_shift`). A tune, a CW word (the CW ID after 73 among
+    /// them), the operator's or a Remote's PTT, an APRS beacon and the radio's ATU tune-up key
+    /// without one, so they went out of VFO B at that shifted dial plus their own audio: a
+    /// frequency the licence gate never judged, since it judges each of them from the RX dial.
+    /// Near the bottom of a class's segment that is outside its privileges.
+    ///
+    /// So, before such a key: a hold that has ended (`Self::rig_split_hold_ends`; the quiet point
+    /// lets go of it only later in the tick) is let go of now; a hold that stands gets VFO B back on
+    /// the RX dial ([`crate::slot::vfo_b_to_the_rx_dial`]), the TX dial WSJT-X writes for `XIT` 0,
+    /// split kept on as WSJT-X keeps it. Either way the key goes out where it goes with no split
+    /// at all, which is where the gate judged it, and the next slot over writes its own TX dial.
+    ///
+    /// Nothing is written under a carrier already up (`rig.keyed`): a VFO write while keyed is a
+    /// synthesiser re-lock on the air, and nothing but a slot over moves VFO B, so a key already up
+    /// was readied when it went up. One exception stays as it was: a tune that supersedes a slot
+    /// over still on the air keys over that over's TX dial, as with Fake It.
+    ///
+    /// `Err` keys nothing: the release is owed, or VFO B's write was refused, unanswered or late.
+    /// The refusal goes on the PTT line and in the log as `what`'s; the caller drops its key.
+    fn split_ready_for_a_non_slot_key(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        rig: &mut Rig,
+        what: &str,
+    ) -> Result<(), String> {
+        if !self.audio_rig_split || rig.keyed {
+            return Ok(());
+        }
+        let (ends, cluster_active, dial) = {
+            let eng = engine_lock(engine);
+            (
+                self.rig_split_hold_ends(&eng),
+                eng.cluster_split_active(),
+                eng.settings().dial_hz(),
+            )
+        };
+        let ready = if ends {
+            self.let_go_of_rig_split(rig, cluster_active);
+            if rig.split_release_pending {
+                Err("the radio did not take the split release".to_string())
+            } else {
+                Ok(())
+            }
+        } else if rig.tx_split_held {
+            crate::slot::vfo_b_to_the_rx_dial(rig, dial).map_err(|e| e.to_string())
+        } else {
+            Ok(())
+        };
+        if let Err(why) = &ready {
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "{what} not keyed: Split Operation could not put the radio's TX VFO back on \
+                     the dial ({why}) (dropped)"
+                ),
+            );
+            self.report_ptt_as(engine, Some(PTT_SPLIT_NOT_READY));
+        }
+        ready
     }
 
     /// Note that an over engaged Rig split, on `dial`: the band it was turned on for.
@@ -10497,7 +10570,14 @@ impl RadioLoop {
                         // exception: its 2 is unused and its start is 3, so the value comes
                         // from the model (`rigmodels::hamlib_atu_start_tune_value`).
                         let fire_atu = engine_lock(engine).take_atu_tune();
-                        if fire_atu && self.may_key() {
+                        // ⛔ The radio's carrier comes out of its TX VFO: never VFO B on the last
+                        // over's TX dial. A refusal drops the press, as `may_key` does.
+                        if fire_atu
+                            && self.may_key()
+                            && self
+                                .split_ready_for_a_non_slot_key(engine, rig, "ATU tune-up")
+                                .is_ok()
+                        {
                             crate::civ::diag::note("ATU: operator asked the rig to tune up");
                             // ⭐⭐ THREE OUTCOMES, NOT TWO (transmit review R1, 2026-09-19).
                             //
@@ -11473,6 +11553,23 @@ impl RadioLoop {
                 }
                 self.cat_wpm_matched = false;
             }
+            // ⛔ Never out of VFO B on the last over's TX dial (the CW ID after 73 keys here), before
+            // ANY keyer has the word: the radio's own keyer, a WinKeyer and a keyline transmit from
+            // the TX VFO as surely as the soundcard's PTT. Once per message, at its first word: the
+            // radio's keyer may still be sending the word before, and only a slot over moves VFO B,
+            // which never keys while CW is sending. A refusal drops the message, as a refused key does.
+            let word = match word {
+                Some(_)
+                    if starts
+                        && self
+                            .split_ready_for_a_non_slot_key(engine, rig, "CW")
+                            .is_err() =>
+                {
+                    engine_lock(engine).cw_key_refused();
+                    None
+                }
+                word => word,
+            };
             if let Some(text) = word {
                 // Hold the next word until this one finishes keying + a word space (7 dits),
                 // so only ONE word is buffered in the rig at a time.
@@ -12566,13 +12663,18 @@ impl RadioLoop {
         if self.tx_until_ms.is_none() && !self.manual_ptt_applied && self.may_key() {
             let beacon = Some(engine_lock(engine)).and_then(|mut e| e.poll_aprs_tx());
             if let Some(buf) = beacon.filter(|b| !b.is_empty()) {
+                // ⛔ Never out of VFO B on the last over's TX dial: a refusal is the key's.
+                let split_ready = self.split_ready_for_a_non_slot_key(engine, rig, "APRS beacon");
                 self.ensure_commanded(rig); // read-only launch: assert before key
                 self.publish_tx_intent_now();
                 // A key the radio refused sends nothing (Nexus's Flex client refuses one while the
                 // radio is still letting go of the last over), so the frame is not played into the
                 // receiving radio (`key_over`): say so, and never send the frame again into the
                 // same refusal. The engine's line says which frame went, and logs it.
-                let key = self.key_over(rig, false);
+                let key = match split_ready {
+                    Ok(()) => self.key_over(rig, false),
+                    Err(why) => KeyUp::Refused(why),
+                };
                 if key.sends() {
                     backend.play(&buf);
                     backend.mark_unit_end();
@@ -13484,7 +13586,12 @@ impl RadioLoop {
             // held mic keys FOR REAL on the first tick the loop owns the right rig. An UNKEY
             // is never gated — it must always reach the radio.
             if ptt != self.manual_ptt_applied && (!ptt || self.may_key()) {
+                let mut split_ready = Ok(());
                 if ptt {
+                    // ⛔ Never out of VFO B on the last over's TX dial. A press refused for it is a
+                    // key the radio refused: nothing keys and, as for any failed key, it is not
+                    // tried again while it is held.
+                    split_ready = self.split_ready_for_a_non_slot_key(engine, rig, "PTT");
                     self.ensure_commanded(rig); // read-only launch: assert before key
                     self.publish_tx_intent_now(); // before keying — the fail-safe must already know
                 }
@@ -13496,7 +13603,10 @@ impl RadioLoop {
                 // always has, `T 1`, where every transmission whose audio Nexus plays keys DATA.
                 let asked = Instant::now();
                 let keyed = if ptt {
-                    rig.key_awaiting_answer(true)
+                    split_ready
+                        .clone()
+                        .map_err(std::io::Error::other)
+                        .and_then(|()| rig.key_awaiting_answer(true))
                 } else {
                     rig.ptt_plain(false)
                 };
@@ -13518,7 +13628,9 @@ impl RadioLoop {
                     // the radio's microphone), so a key with no answer in time changes only the
                     // words: not confirmed, never "not accepted". Its release follows it on the
                     // same connection (`Rig::command_lines`).
-                    if keyed.as_ref().is_err_and(crate::rig::no_answer_in_time) {
+                    if split_ready.is_err() {
+                        // Its own line, said where it was refused.
+                    } else if keyed.as_ref().is_err_and(crate::rig::no_answer_in_time) {
                         self.report_ptt_as(engine, Some(PTT_UNCONFIRMED));
                     } else {
                         self.report_ptt(engine, ptt_failed && mic_not_back.is_none());
@@ -14515,6 +14627,9 @@ impl RadioLoop {
                 .flatten();
             if keying {
                 self.fake_it_write_back_before_key(rig, now);
+                // ⛔ Never out of VFO B on the last over's TX dial: a refusal ends the tune below,
+                // as a refused key does, and asserts no PTT.
+                let split_ready = self.split_ready_for_a_non_slot_key(engine, rig, "tune");
                 // Icom-native only: a plain-USB/LSB Icom takes TX audio from the MIC, so
                 // a keyed tune tone via the USB codec radiates ZERO RF ("red light, no
                 // signal"). Flip DATA mode on for the tune (this exact sequence — set DATA,
@@ -14563,8 +14678,12 @@ impl RadioLoop {
                 // PTT is asserted here, once per Tune: in WSPR it flips a compound call's
                 // alternation whatever the radio answers, as WSJT-X's Tune does
                 // ([`Engine::note_tune_ptt_asserted`]).
-                engine_lock(engine).note_tune_ptt_asserted();
-                let refused = if native {
+                if split_ready.is_ok() {
+                    engine_lock(engine).note_tune_ptt_asserted();
+                }
+                let refused = if let Err(why) = split_ready {
+                    Some(why)
+                } else if native {
                     // Held at most the auto-release's time: the client's session ends it at that
                     // plus its margin even if this loop stalls.
                     self.key_radio_tune(engine, max_ms as u64)
