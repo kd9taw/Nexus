@@ -625,7 +625,7 @@
    and REC behind one button, so the header is one row. Its group stands OUT OF FLOW under the button,
    right-aligned to it, over the scope: opening it moves no control in the header, the TX strip or the
    dock, and covers none of them but the scope's top edge (the strip is below the scope). Opaque, and
-   over the strip's sticky level (2) and the region's dividers (3). It wraps its controls rather than
+   over the strip's sticky level (4) and the region's dividers (3). It wraps its controls rather than
    run past the window (`--vw-eff`, never a raw vw). Hidden while closed (`display: none`, so it is out
    of the tab order too); `.ch-overflow-open`, later in this sheet, shows it. Nothing that keys or stops
    a transmission is ever in it. */
