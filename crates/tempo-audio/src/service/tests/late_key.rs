@@ -372,8 +372,9 @@ fn the_operators_ptt_inside_the_watch_stays_keyed() {
 }
 
 /// ⛔ Negative control: the radio's ATU tune-up that Nexus started inside the watch is never
-/// aborted by it. The radio keys itself for the tune-up and reports keyed; the watch ends when
-/// the tune-up is sent, so nothing unkeys it and nothing says a late key.
+/// aborted by it. The radio keys itself for the tune-up and reports keyed; the watch is put past
+/// the tune-up's cycle when it is sent, so nothing unkeys it through the cycle and nothing says a
+/// late key.
 #[test]
 fn an_atu_tune_up_nexus_started_inside_the_watch_is_never_aborted() {
     let radio = Radio::start(armed, None);
@@ -386,8 +387,16 @@ fn an_atu_tune_up_nexus_started_inside_the_watch_is_never_aborted() {
         sent(&radio)
     });
     assert!(sent(&radio), "premise: the tune-up was sent");
-    let until = s.started.elapsed() + Duration::from_secs(2);
-    s.run_until(until, |_| false);
+    // Through the tune-up's cycle (the watch takes a radio still keyed past it, as a late key).
+    let until = s.t + ATU_REPROBE_AFTER_TUNE_MS - 1_000.0;
+    step_to(
+        &s.engine,
+        &mut s.state,
+        &mut s.backend,
+        &mut s.rig,
+        &mut s.t,
+        until,
+    );
     assert!(
         radio.keyed.load(Ordering::SeqCst),
         "the watch aborted the tune-up Nexus started"
@@ -407,4 +416,79 @@ fn a_radio_keyed_after_the_watch_stays_keyed() {
         "a key after the watch was unkeyed"
     );
     assert!(!s.says_keyed_late(), "{:?}", s.banner());
+}
+
+/// ⛔ A LATE KEY READ IN THE TICK THAT STARTS AN ATU TUNE-UP NEVER ABORTS IT. A given-up key's late
+/// answer can be read by any command of the tick that sends the radio's tune-up (`U TUNER 2`), up to
+/// and including that command's own wait for owed answers; the late-key block, later in the same
+/// tick, used to send its `T 0` behind the tune-up, which aborts it on most radios. The unkey now
+/// waits: the tune-up runs out its cycle keyed, and the watch on the radio's PTT then takes the key.
+#[test]
+fn a_late_key_read_in_the_tick_that_starts_an_atu_tune_up_never_aborts_it() {
+    let radio = Radio::start(|_| AT_ONCE, None);
+    let mut s = Scene::new(&radio, |_| {});
+    // The heavy poll asks for the tuner, so the ATU can be pressed.
+    s.run_until(Duration::from_secs(5), |s| {
+        s.engine.lock().unwrap().atu_tune_gate().is_ok()
+    });
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("premise: the ATU press is taken");
+    // One tick: the heavy poll is due, so it sends the tune-up, and the late key is read in it.
+    s.state.last_rig_poll = s.t - RIG_POLL_MS - 1.0;
+    s.rig.land_late_key_for_test(Duration::from_secs(4));
+    let started = s.t;
+    let next = s.t + 20.0;
+    step_to(
+        &s.engine,
+        &mut s.state,
+        &mut s.backend,
+        &mut s.rig,
+        &mut s.t,
+        next,
+    );
+    let log = radio.log.lock().unwrap().clone();
+    let tune = log
+        .iter()
+        .position(|l| l == "U TUNER 2")
+        .expect("premise: the tune-up was sent in that tick");
+    assert!(
+        !log[tune..].iter().any(|l| l == "T 0"),
+        "a T 0 went out behind the tune-up: {log:?}"
+    );
+    assert!(
+        radio.keyed.load(Ordering::SeqCst),
+        "the tune-up was aborted"
+    );
+    // The cycle runs out keyed…
+    let mid = started + ATU_REPROBE_AFTER_TUNE_MS - 500.0;
+    step_to(
+        &s.engine,
+        &mut s.state,
+        &mut s.backend,
+        &mut s.rig,
+        &mut s.t,
+        mid,
+    );
+    assert!(
+        radio.keyed.load(Ordering::SeqCst),
+        "the tune-up was cut inside its cycle"
+    );
+    // …and past it the watch takes the key, and says so.
+    let after = started + ATU_REPROBE_AFTER_TUNE_MS + 3_000.0;
+    step_to(
+        &s.engine,
+        &mut s.state,
+        &mut s.backend,
+        &mut s.rig,
+        &mut s.t,
+        after,
+    );
+    assert!(
+        !radio.keyed.load(Ordering::SeqCst),
+        "the key was left on the air after the tune-up"
+    );
+    assert!(s.says_keyed_late(), "not said: {:?}", s.banner());
 }

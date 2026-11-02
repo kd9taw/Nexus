@@ -1349,6 +1349,17 @@ impl Rig {
         self.late_key.take()
     }
 
+    /// A key given up on landing late, accepted, `after` it was sent: the radio loop's scenes put
+    /// one in a tick of their choosing (the radio loop is built with the `device` feature only).
+    #[cfg(all(test, feature = "device"))]
+    pub(crate) fn land_late_key_for_test(&mut self, after: Duration) {
+        self.late_key = Some(LateKey {
+            after,
+            accepted: true,
+            superseded: false,
+        });
+    }
+
     /// Whether a key-down whose answer was owed has been given up on, or left owed on a dropped
     /// connection, since this was last asked; once. Its key may still reach the radio after its
     /// release, on a rigctld that does not serve its connections in order, with nothing on this
