@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FreeDV is a mode of its own on the Needed board**, as FT8, JS8 and PSK31 are. This reverses the 1.18.0 note that judged FreeDV stations by their kind (phone): a FreeDV station is now "New mode" for a country until you log a FreeDV contact with it. A `MODE=DIGITALVOICE SUBMODE=FREEDV` contact imported from another logger is stored as FreeDV and written back exactly as it came.
 - **FreeDV in the log strip's mode list**, for a FreeDV contact logged by hand.
 - **FreeDV's channels** (1.870 to 28.720 MHz, from FreeDV's own list, each on FreeDV's sideband; 5.3685 is not offered to a US station) are in the band plan, and the SSTV channel on 14.236 now says it is FreeDV's 20 m centre.
+- **Nexus in Chinese, Simplified and Traditional.** 简体中文 and 繁體中文. Pick one in Settings ▸ Appearance ▸
+  Language, or Nexus picks it up from a Chinese system language: a Taiwan, Hong Kong or Macau system, or one set to
+  Traditional script, gets Traditional Chinese with Taiwan wording, and any other Chinese system gets Simplified.
+  Translated by BG5EQA; completed for this release, so every screen is in Chinese. Frequencies, callsigns, reports,
+  band and mode names stay exactly as they are in every language. On Linux, Chinese needs a CJK font installed (for
+  example `fonts-noto-cjk`); Windows and macOS have one. The kits for corrections are in `translations/zh/` and
+  `translations/zh-hant/`.
 
 ### Changed
 - **FT8, FT4 and the other FT modes: a station answering your CQ is worked only when it calls your exact call.** As in WSJT-X, a new caller is answered only when its call to you names the callsign you are using, letter for letter: while you are KD9TAW, a station calling KD9TAW/M or W1/KD9TAW is not answered, and once you change to KD9TAW/P, one still calling plain KD9TAW is not answered either. Nexus used to answer any of them, since they share your base call; at a multi-station special event that could be a call meant for another station. This holds when calling CQ outside contests, in contests that use the standard or ARRL VHF messages (as it already did in Field Day), and for the best-caller choice, so a stronger station calling another form of your call no longer hides one calling you. A hashed form of your own call (a station shown as calling `<KD9TAW>`) is still your call. Once a contact is under way, nothing changes: the replies of the station you are working are still taken when they carry your base call.

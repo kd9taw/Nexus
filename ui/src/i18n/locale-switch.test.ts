@@ -102,12 +102,61 @@ describe('startup', () => {
     vi.restoreAllMocks()
   })
 
+  it('reads the script when one language ships in two, rather than the language alone', () => {
+    // zh-CN and zh-TW both reduce to `zh`, so the language-only rule above would hand a
+    // Traditional system the Simplified catalog.
+    installCatalog('zh', { 'reveal.notNow': 'zh-notnow' })
+    installCatalog('zh-hant', { 'reveal.notNow': 'zh-hant-notnow' })
+    const pick = (tag: string) => {
+      vi.spyOn(navigator, 'language', 'get').mockReturnValue(tag)
+      initLocale()
+      return getLocale()
+    }
+    for (const tag of ['zh-TW', 'zh-HK', 'zh-MO', 'zh-Hant', 'zh-Hant-HK'])
+      expect(pick(tag), tag).toBe('zh-hant')
+    // The negative control: every other Chinese tag stays Simplified.
+    for (const tag of ['zh-CN', 'zh-SG', 'zh-Hans', 'zh-Hans-HK', 'zh'])
+      expect(pick(tag), tag).toBe('zh')
+    vi.restoreAllMocks()
+  })
+
   it('prefers a stored choice OVER the OS language', () => {
     localStorage.setItem(LOCALE_KEY, 'zz')
     vi.spyOn(navigator, 'language', 'get').mockReturnValue('de-DE')
     installCatalog('de', { 'reveal.notNow': 'de-notnow' })
     initLocale()
     expect(getLocale(), 'an explicit choice outranks the machine').toBe('zz')
+    vi.restoreAllMocks()
+  })
+})
+
+describe('the page says which language it is in', () => {
+  // The browser picks fonts by the page's lang. Han characters are shared by Chinese and Japanese
+  // but drawn differently, and Simplified and Traditional want different fonts, so a Chinese
+  // screen under lang="en" can come out in Japanese glyph shapes, or without a CJK font at all
+  // where the system has several. The tag must follow every switch, startup included.
+  it('follows the startup choice and every switch, with the script for Chinese', () => {
+    installCatalog('zh', { 'reveal.notNow': 'zh-notnow' })
+    installCatalog('zh-hant', { 'reveal.notNow': 'zh-hant-notnow' })
+    installCatalog('ja', { 'reveal.notNow': 'ja-notnow' })
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('zh-TW')
+    initLocale()
+    expect(document.documentElement.lang).toBe('zh-Hant')
+    setLocale('zh')
+    expect(document.documentElement.lang).toBe('zh-Hans')
+    setLocale('ja')
+    expect(document.documentElement.lang).toBe('ja')
+    setLocale('en')
+    expect(document.documentElement.lang).toBe('en')
+    vi.restoreAllMocks()
+  })
+
+  it('says English when startup finds no catalog for the OS language (control)', () => {
+    document.documentElement.lang = 'xx'
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('pt-BR')
+    initLocale()
+    expect(getLocale()).toBe('en')
+    expect(document.documentElement.lang).toBe('en')
     vi.restoreAllMocks()
   })
 })

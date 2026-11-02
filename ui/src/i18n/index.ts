@@ -136,6 +136,7 @@ export const LOCALE_KEY = 'nexus.locale'
 export function setLocale(locale: string): void {
   if (!catalogs.has(locale) || locale === active) return
   active = locale
+  applyDocumentLang()
   try {
     localStorage.setItem(LOCALE_KEY, locale)
   } catch {
@@ -151,9 +152,34 @@ export function setLocale(locale: string): void {
  * Called once before first paint. The OS default is deliberate — an operator running a German
  * Windows gets a German Nexus without being asked, which is the "works without being configured"
  * premise — and it is matched by LANGUAGE ONLY (`de-AT` → `de`): a region-specific catalog we do
- * not ship must not silently fall back to English when the language one exists.
+ * not ship must not silently fall back to English when the language one exists. The one exception
+ * is a language shipped in two scripts: Chinese. `zh-TW` and `zh-CN` both reduce to `zh`, so a
+ * Traditional-script tag (`zh-Hant…`) or a Taiwan, Hong Kong or Macau system gets `zh-hant`, and
+ * every other Chinese tag gets the Simplified `zh`.
  */
 export function initLocale(): void {
+  pickInitialLocale()
+  applyDocumentLang()
+}
+
+/**
+ * The BCP 47 tag for `<html lang>`. The browser picks fonts by it: Han characters are shared by
+ * Chinese and Japanese but drawn differently, and Simplified and Traditional want different
+ * fonts, so a Chinese screen left at `lang="en"` can come out in Japanese glyph shapes. Our ids
+ * are lower case and name Chinese by script alone (`zh`, `zh-hant`); the tag says it in full.
+ */
+export function documentLang(locale: string): string {
+  if (locale === 'zh') return 'zh-Hans'
+  if (locale === 'zh-hant') return 'zh-Hant'
+  return locale
+}
+
+/** Keep `<html lang>` on the active locale: at startup and on every switch. */
+function applyDocumentLang(): void {
+  if (typeof document !== 'undefined') document.documentElement.lang = documentLang(active)
+}
+
+function pickInitialLocale(): void {
   let stored: string | null = null
   try {
     stored = localStorage.getItem(LOCALE_KEY)
@@ -171,7 +197,13 @@ export function initLocale(): void {
     return
   }
   const lang = os.split('-')[0]
-  if (lang && catalogs.has(lang)) active = lang
+  if (!lang) return
+  // A Traditional system reports zh-TW; the language alone would pick the Simplified catalog.
+  if (catalogs.has(lang + '-hant') && (/hant/i.test(os) || /^zh-(tw|hk|mo)$/i.test(os))) {
+    active = lang + '-hant'
+    return
+  }
+  if (catalogs.has(lang)) active = lang
 }
 
 /** The active prose locale. Never consult this to format a number — see the rule above. */
