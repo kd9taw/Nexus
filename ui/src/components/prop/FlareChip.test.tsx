@@ -402,3 +402,43 @@ describe('FlareChip: the direction word reads the raw GOES minutes, not the buck
     expect(text).not.toContain(t('map.flare.est.rising'))
   })
 })
+
+describe('FlareChip: where on the sun (NOAA’s active regions)', () => {
+  const DAY = Date.UTC(2026, 9, 29) / 1000
+  const regions = {
+    held: true,
+    why: 'held',
+    observedDay: DAY,
+    until: DAY + 3 * 86_400,
+    regions: [
+      {
+        region: 4564,
+        latDeg: 5,
+        lonDeg: 68,
+        location: 'N05E68',
+        magClass: 'A',
+        spotClass: 'Axx',
+        area: 10,
+        numberSpots: 1,
+        mFlareProbability: 1,
+        xFlareProbability: 1,
+      },
+    ],
+  }
+  const foot = flareFootprint(NOW, M5, null)!
+
+  it('the unfolded chip carries the sun disc with the held regions', () => {
+    const r = render(<FlareChip xrayLong={M5} foot={foot} noaa={noaa()} qth={null} nowMs={NOW} regions={regions} />)
+    expect(r.container.querySelector('.sun-regions'), 'CONTROL: folded, no disc').toBeNull()
+    fireEvent.click(r.container.querySelector('.flare-chip-head')!)
+    expect(r.container.querySelector('[data-region="4564"]')).not.toBeNull()
+  })
+
+  it('a stale list puts no region on the disc, and says so', () => {
+    const stale = { ...regions, held: false, why: 'stale', until: null, regions: [] }
+    const r = render(<FlareChip xrayLong={M5} foot={foot} noaa={noaa()} qth={null} nowMs={NOW} regions={stale} />)
+    fireEvent.click(r.container.querySelector('.flare-chip-head')!)
+    expect(r.container.querySelector('[data-region]')).toBeNull()
+    expect(r.container.querySelector('.sun-regions-none')!.getAttribute('data-why')).toBe('stale')
+  })
+})

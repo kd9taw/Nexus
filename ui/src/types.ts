@@ -1406,6 +1406,34 @@ export interface ArrivalL1 {
     btAfter: number | null
   } | null
 }
+/** One of NOAA's numbered active regions on the visible disc (the shack's `get_solar_regions`). */
+export interface SolarRegion {
+  region: number
+  /** Heliographic latitude, degrees (positive north). */
+  latDeg: number
+  /** Heliographic longitude from the central meridian, degrees (positive EAST, as NOAA gives it). */
+  lonDeg: number
+  location: string | null
+  magClass: string | null
+  spotClass: string | null
+  area: number | null
+  numberSpots: number | null
+  mFlareProbability: number | null
+  xFlareProbability: number | null
+}
+
+/** NOAA's region list as the shack judges it on its own clock: regions only while `held`. */
+export interface SolarRegionsView {
+  held: boolean
+  /** `held`, `stale`, `ahead`, or `none` (no list held). */
+  why: 'held' | 'stale' | 'ahead' | 'none' | string
+  /** The observed day, Unix seconds of its 00:00 UTC. */
+  observedDay: number | null
+  /** Until when a held list is drawn (Unix seconds); present exactly when `held` is. */
+  until: number | null
+  regions: SolarRegion[]
+}
+
 export interface ArrivalOutlook {
   watch: ArrivalWatch | null
   model: ArrivalModel | null

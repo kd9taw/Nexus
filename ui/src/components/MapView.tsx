@@ -118,7 +118,11 @@ import { bandRings, flareFootprint, sunWarmth, warmSunInk, XRAY_LIVE_SECS, type 
 import { FlareChip } from './prop/FlareChip'
 import { AuroraChip, PcaChip } from './prop/CapsChips'
 import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, heldUntil, kpAlert, setAuroraDismissal, useAuroraDismissal, useWakeAt } from '../capsNow'
-import { ARRIVAL_OUTLOOK, KP_FORECAST, useFeed } from '../features/connectFeeds'
+import { ARRIVAL_OUTLOOK, KP_FORECAST, SOLAR_REGIONS, useFeed } from '../features/connectFeeds'
+import { clampReplay, replayFlux, replayStart, replayWindow, REPLAY_SPAN_SECS } from '../replay'
+import { regionsShown, regionsDayLabel, regionsUntil } from '../sunRegions'
+import { ReplayBar, ReplayButton } from './prop/ReplayBar'
+import { regionWithLimb } from './prop/SunRegionsDisc'
 import { useViewportClass } from '../useViewport'
 // The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
 // laid over the World view's land (Natural Earth's hillshade, public domain). See basemap.ts.
@@ -1153,9 +1157,26 @@ export function MapView({
     const id = setInterval(() => setNowMs(Date.now()), 60_000)
     return () => clearInterval(id)
   }, [])
-  // The sky's time: now, or the hour the path-over-the-day strip is scrubbed to (terminator, sun,
-  // moon and ribbon move together; live layers such as the flare stay at now).
-  const skyMs = scrubMs ?? nowMs
+  // THE REPLAY (replay.ts): the last six hours of the sun, the night side and the flare, from the
+  // GOES trace the fast lane already holds. Never saved; a remount is back at now. While it is on, the
+  // flare is the analytic field from the replayed flux at the replayed sun (never NOAA's grid, which
+  // is kept only for now), nothing breathes, and the replay bar heads the chip stack.
+  const [replayMs, setReplayMs] = useState<number | null>(null)
+  const replayWin = useMemo(() => replayWindow(flareNoaa?.series, nowMs), [flareNoaa, nowMs])
+  // Held inside the window; with the trace gone mid-replay, inside the last six hours (the sky alone).
+  const replayAt =
+    replayMs == null ? null : clampReplay(replayMs, replayWin ?? { loMs: nowMs - REPLAY_SPAN_SECS * 1000, hiMs: nowMs })
+  const replayX = useMemo(
+    () => (replayAt == null ? null : replayFlux(flareNoaa?.series, replayAt, nowMs)),
+    [replayAt, flareNoaa, nowMs],
+  )
+  // The sky's time: the replay's, else the hour the path-over-the-day strip is scrubbed to, else now
+  // (terminator, sun and moon move together; on a scrubbed hour live layers such as the flare stay at
+  // now, on a replay the flare is replayed too).
+  const skyMs = replayAt ?? scrubMs ?? nowMs
+  const skyScrubbed = replayAt != null || scrubMs != null
+  // The flux the flare layer draws: the replayed reading (or none), else now's.
+  const flareFlux = replayAt != null ? (replayX?.flux ?? null) : xrayEff
   // D-RAP flare state. The visualization gates at M1 (R1) — the SAME onset as
   // the flare insight and toast, so the map never announces a "blackout" the
   // rest of the app calls quiet. (C-class flux is routine background at solar
@@ -1163,10 +1184,13 @@ export function MapView({
   // the pulse tick + fx canvas running near-continuously; below M1 only the
   // sun disc warms.) The footprint is NOAA's D-RAP grid while it is current,
   // else the analytic field from the GOES flux (flareNow.ts says which).
-  const flareFoot = useMemo(() => flareFootprint(nowMs, xrayEff, noaaNow?.drap), [nowMs, xrayEff, noaaNow])
+  const flareFoot = useMemo(
+    () => (replayAt != null ? flareFootprint(replayAt, flareFlux, null) : flareFootprint(nowMs, xrayEff, noaaNow?.drap)),
+    [replayAt, flareFlux, nowMs, xrayEff, noaaNow],
+  )
   const flareHafNow = flareFoot?.hafSub ?? 0
   const flareActive = flareFoot != null
-  const flareRings = useMemo(() => (flareFoot ? bandRings(flareFoot, nowMs) : []), [flareFoot, nowMs])
+  const flareRings = useMemo(() => (flareFoot ? bandRings(flareFoot, replayAt ?? nowMs) : []), [flareFoot, replayAt, nowMs])
   // Ring labels only where there is room for them (md and up).
   const viewport = useViewportClass()
   const ringLabels = viewport === 'md' || viewport === 'lg' || viewport === 'xl'
@@ -1245,7 +1269,7 @@ export function MapView({
   // A GOES sample older than XRAY_LIVE_SECS freezes the footprint: still drawn, no longer breathing,
   // and the chip says how old it is.
   const xrayLive = noaaNow == null || nowMs / 1000 - noaaNow.xrayAt < XRAY_LIVE_SECS
-  const flarePulsing = flareShown && xrayLive
+  const flarePulsing = flareShown && xrayLive && replayAt == null
   const satsMoving = layers.sats.visible && sats != null && sats.birds.length > 0
   useEffect(() => {
     if (!heatPulsing && !openingsPulsing && !flarePulsing && !satsMoving) return
@@ -1678,6 +1702,10 @@ export function MapView({
   // The cap goes at the moment its event stops being held (the shack's `protonEventUntil`), not at
   // the next 60 s tick: one timer wakes the clock then (capsNow `useWakeAt`).
   useWakeAt(heldUntil(pca), setNowMs)
+  // NOAA's active regions (sunRegions.ts): polled only while this map shows the sun or the flare,
+  // drawn only while the shack holds the list, and dropped at its own `until` with no poll needed.
+  const solarRegions = useFeed(SOLAR_REGIONS, !embedded && (layers.sunMoon.visible || layers.flare.visible)).value ?? null
+  useWakeAt(regionsUntil(solarRegions), setNowMs)
   const capPic = useMemo(
     () => (pcaOn ? capPicture(pca, noaaNow?.drap, noaaNow ? xrayLong ?? null : null, nowMs) : null),
     [pcaOn, pca, noaaNow, xrayLong, nowMs],
@@ -2607,7 +2635,7 @@ export function MapView({
     // breathes on the 1 s pulse tick (faster = stronger flare). The animated
     // sun + rays live on the separate fx canvas (below). Drawn over the night
     // shading, under spots/stations, so real activity stays legible.
-    if (flareShown && flareFoot && xrayEff) {
+    if (flareShown && flareFoot && flareFlux) {
       const hw = Math.max(1, Math.floor(w / 3))
       const hh = Math.max(1, Math.floor(h / 3))
       const off =
@@ -2618,7 +2646,7 @@ export function MapView({
       if (fctx) {
         fctx.clearRect(0, 0, hw, hh)
         fctx.globalCompositeOperation = 'lighter'
-        const r = Math.max(1, flareRScale(xrayEff))
+        const r = Math.max(1, flareRScale(flareFlux))
         // Live time like the heat pulse — the 1 s pulseTick forces the redraws. Frozen (an old GOES
         // sample): no breath.
         const pulse = flarePulsing ? 0.8 + 0.2 * Math.sin((Date.now() * 2 * Math.PI) / flarePulsePeriodMs(r)) : 1
@@ -2697,7 +2725,7 @@ export function MapView({
       // Below the flare gate a C-class flare warms the disc toward orange (flareNow `sunWarmth`); its
       // class is on the disc's hover. A flare-layer visual: with that layer off the sun stays the
       // theme's, as it does on a scrubbed sky (another hour's).
-      const sunInk = warmSunInk(skyInk('--map-sun'), layers.flare.visible && scrubMs == null ? sunWarmth(xrayEff) : 0)
+      const sunInk = warmSunInk(skyInk('--map-sun'), layers.flare.visible && !skyScrubbed ? sunWarmth(xrayEff) : 0)
       if (sp) drawSun(ctx, sp[0], sp[1], SUN_DISC * ms, sunInk, MARKER_HALO)
       // The moon, in its phase, lit as it looks from the operator's hemisphere: a waxing moon is lit
       // on the right in the north and on the left in the south. A flare leaves it alone.
@@ -3619,9 +3647,10 @@ export function MapView({
       }
       if (best) return best
     }
-    // The sun disc: its hover carries the X-ray class it is warmed by (info only, like a sonde). Not
-    // on a scrubbed sky (another hour's sun) and not for the simulated Preview flux.
-    if (layers.sunMoon.visible && scrubMs == null && !flarePreview && size.w > 0) {
+    // The sun disc: its hover carries the X-ray class it is warmed by and NOAA's active regions (info
+    // only, like a sonde). Not on a scrubbed or replayed sky (another hour's sun) and not for the
+    // simulated Preview flux.
+    if (layers.sunMoon.visible && !skyScrubbed && !flarePreview && size.w > 0) {
       const proj = projectionFor(size.w, size.h)
       const ss = subsolarPoint(nowMs)
       const p = proj && inView(kind, proj, ss) ? project(proj, ss) : null
@@ -3689,9 +3718,19 @@ export function MapView({
     if (hit.kind === 'sun') {
       // The class with the GOES sample's own time: the fast lane's, else the snapshot's.
       const at = noaaNow?.xrayAt ?? prop?.spaceWx?.xrayAt ?? null
-      return xrayEff != null && at != null
-        ? t('map.hover.sun', { cls: flareClass(xrayEff), time: wxStampLabel(at) })
-        : t('map.hover.sun.none')
+      const xline =
+        xrayEff != null && at != null
+          ? t('map.hover.sun', { cls: flareClass(xrayEff), time: wxStampLabel(at) })
+          : t('map.hover.sun.none')
+      // NOAA's active regions, with the day they are from — only while the list is held.
+      const shown = regionsShown(solarRegions, nowMs)
+      if (shown == null || solarRegions?.observedDay == null) return xline
+      const day = regionsDayLabel(solarRegions.observedDay)
+      return `${xline}\n${
+        shown.length > 0
+          ? t('map.hover.sunRegions', { day, list: shown.map(regionWithLimb).join(', ') })
+          : t('map.sun.regions.empty', { day })
+      }`
     }
     if (hit.kind === 'aprs') {
       const a = aprs?.find((x) => x.call === hit.name)
@@ -4281,14 +4320,29 @@ export function MapView({
                     // The layer is event-driven (nothing draws below an M1 flare), so
                     // give the operator a way to SEE it on a quiet sun: a 60 s
                     // simulated X2, map visuals only, chip labeled PREVIEW.
-                    <button
-                      type="button"
-                      className={`flare-preview${flarePreview ? ' active' : ''}`}
-                      onClick={() => setFlarePreview((p) => !p)}
-                      title={t('map.flare.preview.title')}
-                    >
-                      {flarePreview ? t('map.flare.preview.stop') : t('map.flare.preview.start')}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className={`flare-preview${flarePreview ? ' active' : ''}`}
+                        onClick={() => {
+                          setReplayMs(null)
+                          setFlarePreview((p) => !p)
+                        }}
+                        title={t('map.flare.preview.title')}
+                      >
+                        {flarePreview ? t('map.flare.preview.stop') : t('map.flare.preview.start')}
+                      </button>
+                      <ReplayButton
+                        on={replayAt != null}
+                        win={replayWin}
+                        startMs={replayStart(flareNoaa?.series, nowMs)}
+                        onStart={(ms) => {
+                          setFlarePreview(false)
+                          setReplayMs(ms)
+                        }}
+                        onStop={() => setReplayMs(null)}
+                      />
+                    </>
                   )}
                   {k === 'sats' && layers.sats.visible && (
                     // The ★/All chip, ON the surface it filters. The Passes pane
@@ -4344,7 +4398,19 @@ export function MapView({
               Always rendered: the storm-watch chip decides for itself whether it shows, and an empty
               stack lets the pointer through and takes no room. */}
           <div className="wx-chip-stack">
-            {flareShown && flareFoot && xrayEff != null && (
+            {replayAt != null && (
+              <ReplayBar
+                atMs={replayAt}
+                win={replayWin}
+                nowMs={nowMs}
+                series={flareNoaa?.series ?? []}
+                flux={replayX}
+                footDrawn={flareShown}
+                onScrub={setReplayMs}
+                onBack={() => setReplayMs(null)}
+              />
+            )}
+            {replayAt == null && flareShown && flareFoot && xrayEff != null && (
               <FlareChip
                 xrayLong={xrayEff}
                 foot={flareFoot}
@@ -4353,6 +4419,7 @@ export function MapView({
                 nowMs={nowMs}
                 snapAt={prop?.spaceWx?.xrayAt ?? null}
                 preview={flarePreview}
+                regions={solarRegions}
               />
             )}
             {pcaChip && pca && capPic && <PcaChip pca={pca} pic={capPic} nowMs={nowMs} />}
