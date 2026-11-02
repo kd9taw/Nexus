@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **LoTW, signing from the location in the ADIF: a contact goes with its own grid and place.** With "sign from ADIF location" on, a contact whose grid Nexus filled in (a portable contact, say) was uploaded with whatever grid your station had at upload time, and the state, county, CQ and ITU zones and IOTA Nexus filled in were left out. It now goes with the grid, state, county, zones and IOTA stored on the contact; only a contact with no grid of its own takes your current one, and a contact with none of the others goes without them, as before.
+- **A pane divider no longer sits on a macro key.** On CW at a large zoom (1920×1080 at 150 %), when the screen scrolled, the divider between the decode and log columns stood over the middle of F7, so a click there grabbed the divider instead of sending the macro. The macro keys and the Stop TX row now stay on top of the pane dividers in every mode that has them.
 
 ## [1.22.0] — 2026-11-01
 
