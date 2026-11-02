@@ -11994,7 +11994,7 @@ export const EN = {
   'operate.strip.tune.radioRefused':
     "Tune keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
   'operate.strip.tune.overRefused':
-    "Tune keys nothing while an FT over is on the air with Split Operation on: the radio may be transmitting from a moved frequency. Press Tune again after the over.",
+    "Tune keys nothing while a transmit period is on the air with Split Operation on: the radio may be transmitting from a moved frequency. Press Tune again after it.",
   'operate.strip.tune.toneRefused':
     "Tune keys nothing here: its 1500 Hz tone would be outside your license privileges on this frequency.",
   'operate.strip.atu.radioStatus': 'Radio ATU: {{status}}',

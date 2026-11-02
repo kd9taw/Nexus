@@ -3791,6 +3791,9 @@ struct RadioLoop {
     /// it ([`Self::split_ready_for_a_non_slot_key`]), whose own PTT line then stands: the caller's
     /// report keeps it rather than the generic PTT advice ([`Self::report_ptt`] takes it).
     key_refused_for_split: bool,
+    /// The loop clock of the tick in progress (`step`'s `now`), for what a key readies before it
+    /// goes out ([`Self::split_ready_for_a_non_slot_key`]'s Fake It write-back).
+    tick_now: f64,
     /// When the FT8/FT4 slot over this loop last keyed stops its audio, and the PTT deadline that
     /// over holds: WSJT-X's window ends the audio 200 ms before PTT (`slot::wsjtx_over_end`). It
     /// fires only while that over is still the one held (`tx_until_ms` still its deadline), so a
@@ -4755,6 +4758,7 @@ impl RadioLoop {
             tx_until_ms: None,
             slot_tx_until_ms: 0.0,
             key_refused_for_split: false,
+            tick_now: 0.0,
             slot_audio_stop: None,
             window_unkeyed: None,
             flex_voice_until_ms: None,
@@ -6986,6 +6990,10 @@ impl RadioLoop {
         if rig.keyed {
             return Ok(());
         }
+        // A Fake It write-back still waiting out its 100 ms goes now, ahead of this key, as it does
+        // for a tune and a slot over: the CW ID after 73 lands in exactly that wait. One the radio
+        // refuses is then owed, and the check below holds the key for it.
+        self.fake_it_write_back_before_key(rig, self.tick_now);
         let ready = if rig.split_release_pending {
             // ⛔ A RELEASE THE RADIO HAS NOT TAKEN IS STILL OWED (`let_go_of_rig_split`): the radio
             // may still be in Nexus's split with VFO B on the last over's TX dial. No key until it
@@ -7508,7 +7516,9 @@ impl RadioLoop {
     /// dial. Only a write-back not yet tried, and only with no carrier up, on the teardown's own
     /// test: a tune that supersedes an over in flight (`tx_until_ms` is still set when it keys)
     /// keys over that over's TX dial as it always did, and the write-back waits for the tune to
-    /// end. A try the radio does not take is the teardown's to repeat.
+    /// end. A try the radio does not take is the teardown's to repeat, and while it is owed no key
+    /// that is not a slot over goes out ([`Self::split_ready_for_a_non_slot_key`], which sends this
+    /// first for every such key: a CW word, a PTT press, APRS, the ATU and every `key_over` key).
     fn fake_it_write_back_before_key(&mut self, rig: &mut Rig, now: f64) {
         let Some(hz) = self.fake_it_restore else {
             return;
@@ -7774,6 +7784,7 @@ impl RadioLoop {
         // When this tick began, so its END can be placed on the slot clock (the Flex client's
         // transmit audio source is written only at a quiet point at the end of a tick).
         let tick_started = Instant::now();
+        self.tick_now = now;
         // ── DID THE OS STEP THE CLOCK UNDER US? ──────────────────────────────
         //
         // Windows restores the system clock from the RTC on resume from sleep or

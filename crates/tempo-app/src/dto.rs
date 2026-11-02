@@ -2399,8 +2399,8 @@ pub struct RadioStatus {
     #[serde(default, skip_serializing_if = "is_false")]
     pub tune_tone_refused: bool,
     /// A Tune press was refused because a slot over (FT8, FT4, JS8…) was on the air with Split
-    /// Operation Rig or Fake It, which may have moved the TX dial for it: shown beside Tune while
-    /// that over is on the air (`Engine::set_tune_for`). Absent when false.
+    /// Operation Rig or Fake It, which may have moved the TX dial for it: shown beside Tune for the
+    /// rest of that over's period (`Engine::set_tune_for`). Absent when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub tune_over_refused: bool,
     /// While the radio reports a tuner and the licence refuses the radio's own ATU carrier at the

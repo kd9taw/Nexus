@@ -3773,8 +3773,9 @@ pub struct Engine {
     /// [`Self::observe_flex_tune`].
     flex_tune: Option<crate::dto::FlexTune>,
     /// When a Tune press was last refused because a slot over was on the air with Split Operation
-    /// on ([`Self::set_tune_for`]): the note beside Tune says why for as long as that over stays
-    /// on the air, at most [`TUNE_OVER_REFUSED_SECS`] (`RadioStatus::tune_over_refused`).
+    /// on ([`Self::set_tune_for`]): the note beside Tune says why for the rest of that over's
+    /// period, at most [`TUNE_OVER_REFUSED_SECS`] (`RadioStatus::tune_over_refused`). The next
+    /// slot boundary ends it ([`Self::plan_tx`]).
     tune_over_refused_at: Option<Instant>,
     /// While Nexus's own Flex client runs the radio's own ATU: what is shown beside it. It also
     /// makes an ATU press judged as CW where the radio puts the carrier; see
@@ -31311,6 +31312,9 @@ contact yourself."
 
     pub fn plan_tx(&mut self, slot: u64) -> Option<TxPlan> {
         self.poll_remote_transmit(std::time::Instant::now());
+        // A Tune refused during the last period's over is that period's: its note goes at the
+        // boundary, and the next over (FT4's 7.5 s on, the next JS8 frame) never shows it again.
+        self.tune_over_refused_at = None;
         // Coordinated QSY: execute a scheduled move the moment it comes due,
         // regardless of TX/RX/mute state (no-op while the feature is disabled).
         self.qsy_execute_due(slot);
@@ -41261,6 +41265,21 @@ mod tests {
         assert!(
             e.snapshot().radio.tune_over_refused,
             "the note beside Tune says why"
+        );
+        // The next slot boundary ends that period: the next over (FT4 7.5 s on) does not say it.
+        let _ = e.plan_tx(1);
+        e.app.set_transmitting(true);
+        assert!(
+            !e.snapshot().radio.tune_over_refused,
+            "the note came back with the next period's over"
+        );
+        e.app.set_transmitting(false);
+        e.set_tune(false);
+        e.app.set_transmitting(true);
+        e.set_tune(true);
+        assert!(
+            e.snapshot().radio.tune_over_refused,
+            "premise: refused again in this period"
         );
 
         e.app.set_transmitting(false);

@@ -15,8 +15,9 @@ import type { RadioStatus } from '../types'
  * station it renders only why Tune keys nothing: the licence refuses Nexus's own tune tone where it
  * goes out (`tuneToneRefused`), or a press came while a slot over was on the air with Split
  * Operation on (`tuneOverRefused`); and why an ATU press keys nothing when the licence refuses the
- * radio's own ATU carrier at the dial on any CAT path (`atuCarrierRefusedMhz`); otherwise nothing. Both show beside the Flex readouts too, since
- * a Flex running only its ATU natively still tunes with Nexus's tone.
+ * radio's own ATU carrier at the dial on any CAT path (`atuCarrierRefusedMhz`); otherwise nothing.
+ * All three show beside the Flex readouts too, since a Flex running only its ATU natively still
+ * tunes with Nexus's tone and still runs the CAT path's ATU judgement.
  *
  * Drawn AFTER a strip's controls, never between them: Tune, ATU and Stop TX keep their places.
  */

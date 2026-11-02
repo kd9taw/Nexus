@@ -2034,6 +2034,45 @@ fn a_voice_keyer_message_with_rig_split_held_keys_with_vfo_b_back_on_the_rx_dial
     );
 }
 
+/// ⛔ A CW ID INSIDE THE FAKE IT WRITE-BACK'S WAIT GOES OUT FROM THE DIAL. After a Fake It over
+/// the write-back waits 100 ms, as WSJT-X waits after PTT off, and the CW ID after 73 lands in
+/// exactly that wait. It used to key from VFO A still on the over's TX dial (14.0735 at a 1441 Hz
+/// offset): the soundcard keyer's `T 1` and the radio's own keyer's word with no `F` before them,
+/// 500 Hz from where the gate judged it. Now the write-back goes ahead of any keyer, as it does for
+/// a tune.
+#[test]
+fn a_cw_id_inside_the_fake_it_write_back_wait_keys_after_the_write_back() {
+    use tempo_app::settings::CwKeyerBackend;
+    for keyer in [CwKeyerBackend::Soundcard, CwKeyerBackend::Cat] {
+        let engine = cq_engine(SplitMode::FakeIt, 1441.0, |s| s.cw_keyer = keyer);
+        let mut b = hamlib_bench_on(engine, FT8_DIAL, None);
+        let _ = b.overs(1);
+        // The write-back owed and its wait running, as the unkey leaves it.
+        b.state.fake_it_restore = Some(FT8_DIAL);
+        b.state.fake_it_tx_dial = Some(SHIFTED_TX_DIAL);
+        b.state.fake_it_restore_tries = 0;
+        b.state.fake_it_restore_at = Some(b.t + 100.0);
+        b.state.last_freq_poll = b.t + 10_000.0;
+        b.state.last_rig_poll = b.t + 10_000.0;
+        let from = b.radio.peer.lines.lock().unwrap().len();
+        {
+            let mut e = b.engine.lock().unwrap();
+            let mycall = e.settings().mycall.clone();
+            e.send_cw(&mycall);
+        }
+        let _ = b.ticks(2);
+        let raw: Vec<String> = b.radio.peer.lines.lock().unwrap()[from..].to_vec();
+        let keyed = raw
+            .iter()
+            .position(|l| is_key(l) || l.starts_with("b "))
+            .unwrap_or_else(|| panic!("{keyer:?}: the CW ID was not keyed: {raw:?}"));
+        assert!(
+            raw[..keyed].iter().any(|l| l == "F 14074000"),
+            "{keyer:?}: keyed from the over's TX dial, no write-back first: {raw:?}"
+        );
+    }
+}
+
 /// ⛔ THE FAKE IT COUNTERPART OF AN OWED RELEASE. A Fake It over moved VFO A to its TX dial
 /// (14.0735 at a 1441 Hz offset); the write-back after it was refused and is still owed, the radio
 /// refusing every dial write meanwhile. A tune then used to key from the shifted VFO A, its tone

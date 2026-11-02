@@ -20,8 +20,8 @@ const SIGNED_WARNING =
 
 /** Why a Tune press during a split FT over keyed nothing, word for word. */
 const OVER_REFUSED =
-  'Tune keys nothing while an FT over is on the air with Split Operation on: the radio may be ' +
-  'transmitting from a moved frequency. Press Tune again after the over.'
+  'Tune keys nothing while a transmit period is on the air with Split Operation on: the radio may be ' +
+  'transmitting from a moved frequency. Press Tune again after it.'
 
 /** Not keyed, TX armed (the strips' own tests' fixture), with `extra`. */
 function radio(extra: Partial<RadioStatus>): RadioStatus {
@@ -84,7 +84,7 @@ describe('the note beside Tune', () => {
     expect(note(radio({ tuneToneRefused: false }))).toBeNull()
   })
 
-  it('says why Tune keys nothing when it was pressed while a split FT over was on the air', () => {
+  it('says why Tune keys nothing when it was pressed during a transmit period with Split Operation on', () => {
     render(<RadioTuneNote radio={radio({ tuneOverRefused: true })} />)
     expect(screen.getByRole('note').textContent).toBe(OVER_REFUSED)
     cleanup()
