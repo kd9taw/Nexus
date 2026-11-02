@@ -2804,6 +2804,17 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
       </button>
     </>
   )
+  // VOX on the transmit contract — see the cell's own note where it stands. One element, drawn first in
+  // the PTT row (md and up) and in its old place, after power, on the contract's own line below md.
+  const voxCell = (
+    <>
+      {snap.radio.vox === true && (
+        <span className="ph-txc-cell ph-txc-warn" data-txc="vox" title={t('phone.tx.voxWarn')}>
+          {VOX_ON}
+        </span>
+      )}
+    </>
+  )
   // ⭐ THE TRANSMIT CONTRACT — "what goes out when I key?", in one line that is always there and
   // never moves (operator, 2026-09-20). Drawn in one of two places, decided by the window's size
   // class (features/compactChrome): its own line at the top of the dock below md, and inside the
@@ -2811,6 +2822,11 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // never BELOW the PTT row.
   const txContract = (
     <div className={`ph-txcontract${chrome.wide ? ' dock-status-inrow' : ''}`} role="group" aria-label={t('phone.txContract.aria')}>
+      {/* IN THE PTT ROW (md and up) VOX COMES FIRST. The row's contract takes only the room left and clips
+          at its end (`.dock-status-inrow`), so whatever is last is what a narrow window or a long busy
+          reason cuts first — and VOX is a safety line, not a status one (below). First, it is the one cell
+          that is never cut; the busy cell, the elastic one, shrinks before anything is clipped. */}
+      {chrome.wide && voxCell}
       <span className="ph-txc-cell" data-txc="freq" title={t('phone.txContract.freq.title')}>
         <span className="ph-txc-lbl">{TX}<span aria-hidden="true">▸</span></span>
         {txEmission == null || repeaterUnknown ? (
@@ -2891,11 +2907,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
           doing and cannot unkey a transmitter the operator's own voice is holding up.
           A KEYING-SOURCE fact, never a stop control: it is a readout here and the VOX
           toggle itself lives in the transmit chain (THE STOP LINE, features/panelState.ts). */}
-      {snap.radio.vox === true && (
-        <span className="ph-txc-cell ph-txc-warn" data-txc="vox" title={t('phone.tx.voxWarn')}>
-          {VOX_ON}
-        </span>
-      )}
+      {!chrome.wide && voxCell}
       {/* WHO HOLDS THE TRANSMITTER, in the arbiter's own words — `tx_owner()` covers all
           seven owners, and a second wording here could disagree with the one that really
           holds the rig. Absent when nobody does: an idle transmitter is not news. */}

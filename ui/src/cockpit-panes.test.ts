@@ -1339,6 +1339,16 @@ describe('THE COMPACT DOCK (1080p pass): the read-only meters stand in the TX st
     expect(chainWinner([['cockpit-txstrip']], 'flex-wrap')?.value).toBe('wrap')
   })
 
+  it('in the row the contract clips only at its end, the busy cell shrinks first, and VOX never shrinks (it is drawn first)', () => {
+    const row = [['phone-cockpit'], ['cockpit-txdock'], ['ph-ptt-row'], ['ph-txcontract', 'dock-status-inrow']]
+    const busy = chainWinner([...row, ['ph-txc-cell', 'ph-txc-busy']], 'min-width')
+    expect(busy?.value, 'the busy cell may shrink to nothing before anything is clipped').toBe('0')
+    expect(chainWinner([...row, ['ph-txc-cell', 'ph-txc-busy']], 'overflow')?.value).toBe('hidden')
+    // VOX: a whole cell or none, never part of one — nowrap at the flex default minimum (its own text).
+    expect(chainWinner([...row, ['ph-txc-cell', 'ph-txc-warn']], 'white-space')?.value).toBe('nowrap')
+    expect(chainWinner([...row, ['ph-txc-cell', 'ph-txc-warn']], 'min-width'), 'nothing lets VOX shrink').toBeNull()
+  })
+
   it('Phone’s transmit contract in the PTT row takes only the room left: zero basis, clipped, one line', () => {
     const chain = [['phone-cockpit'], ['cockpit-txdock'], ['ph-ptt-row'], ['ph-txcontract', 'dock-status-inrow']]
     expect(chainWinner(chain, 'flex')?.value).toBe('1 1 0')
@@ -1349,14 +1359,54 @@ describe('THE COMPACT DOCK (1080p pass): the read-only meters stand in the TX st
     expect(chainWinner([['phone-cockpit'], ['cockpit-txdock'], ['ph-ptt-row']], 'flex')?.value).toBe('0 0 auto')
   })
 
-  it('the keyboard docks’ eight keys share the fixed row’s line on a 70em floor, never a 76em basis', () => {
-    for (const keys of [['cw-macros', 'rtty-macros', 'dock-fkeys'], ['cw-macros', 'rtty-macros', 'psk-macros', 'dock-fkeys'], ['cw-macros', 'rtty-macros', 'jtty-macros', 'dock-fkeys']]) {
-      const chain = [['cockpit-txdock'], ['rtty-dock-keys'], keys]
-      const flex = chainWinner(chain, 'flex')
-      expect(flex?.value, `${keys.join('.')}: flex from ${flex?.selector} (${flex?.sheet})`).toBe('999 1 0')
-      expect(chainWinner(chain, 'min-width')?.value, keys.join('.')).toBe('min(100%, 70em)')
-    }
-    // Control: without the class, the keys are the plain `.cw-macros` row (never a shrink victim).
+  // THE KEYS' WIDTH, COMPUTED AT EVERY DOCK WIDTH. The keys are one-click senders, and no key may be
+  // narrower than the pre-1080p rule (`flex: 999 1 76em; min-width: 0`) made it, at any window. A flex
+  // line is modelled from the WINNING declarations: the keys' group and the fixed row share the line when
+  // the keys' hypothetical size (basis, floored by min-width) plus the gap plus the row fit, and then grow
+  // 999 : 1; otherwise the row folds and the keys take the whole line. Eight tracks, 4 px gaps, 14 px em.
+  const KEYS = [['cockpit-txdock'], ['rtty-dock-keys'], ['cw-macros', 'rtty-macros', 'dock-fkeys']]
+  const EM = 14
+  const lengthPx = (v: string, line: number): number => {
+    const em = /^([\d.]+)em$/.exec(v)
+    if (em) return Number(em[1]) * EM
+    const px = /^([\d.]+)px$/.exec(v)
+    if (px) return Number(px[1])
+    if (v === '0' || v === 'auto') return 0
+    const mn = /^min\(100%,\s*([\d.]+)em\)$/.exec(v)
+    if (mn) return Math.min(line, Number(mn[1]) * EM)
+    throw new Error(`unmodelled length ${v}`)
+  }
+  const keyWidth = (flex: string, minWidth: string, line: number, row: number): number => {
+    const [grow, , basis] = flex.split(/\s+/)
+    const hyp = Math.max(lengthPx(basis, line), lengthPx(minWidth, line))
+    const shared = hyp + 8 + row <= line
+    const keys = shared ? hyp + ((line - hyp - 8 - row) * Number(grow)) / (Number(grow) + 1) : line
+    return (keys - 7 * 4) / 8
+  }
+  it('every F-key is at least as wide as the pre-1080p rule made it, at every dock width (computed)', () => {
+    const flex = chainWinner(KEYS, 'flex')
+    const minW = chainWinner(KEYS, 'min-width')
+    expect(flex, 'the keys have a flex rule (a group without one falls back to 0 1 auto)').not.toBeNull()
+    const bad: string[] = []
+    // Fixed rows measured in Chrome: 551 px in English, wider in other catalogs and with a contest's plate.
+    for (const row of [400, 551, 700, 900])
+      for (let line = 600; line <= 3000; line++) {
+        const now = keyWidth(flex!.value, minW?.value ?? 'auto', line, row)
+        const before = keyWidth('999 1 76em', '0', line, row)
+        if (now < before - 0.01) bad.push(`dock ${line} px, row ${row} px: key ${now.toFixed(1)} < ${before.toFixed(1)}`)
+      }
+    expect(bad.slice(0, 5), `${bad.length} widths where a key got narrower`).toEqual([])
+  })
+
+  it('the key-width guard bites: the zero-basis 70em floor tried in the 1080p pass fails it (control)', () => {
+    // 1080p at 125 %: a ~1580 px dock with the 551 px English row. The floor shared the line and made each
+    // key 120 px of CSS; the basis folds the row there and gives each key the whole line.
+    expect(keyWidth('999 1 0', 'min(100%, 70em)', 1580, 551)).toBeLessThan(keyWidth('999 1 76em', '0', 1580, 551))
+    expect(keyWidth('999 1 76em', '0', 1580, 551)).toBeCloseTo((1580 - 28) / 8, 6)
+    expect(keyWidth('999 1 76em', '0', 1800, 551), 'at 1920 the row shares the line, as it always did').toBeLessThan(200)
+  })
+
+  it('the keys group stays the plain row without the class (control: the class is what carries the rule)', () => {
     expect(chainWinner([['cockpit-txdock'], ['rtty-dock-keys'], ['cw-macros', 'rtty-macros']], 'flex')?.value).toBe('0 0 auto')
     expect(chainWinner([['cockpit-txdock'], ['rtty-dock-keys']], 'flex-wrap')?.value, 'the fold is a wrap').toBe('wrap')
   })

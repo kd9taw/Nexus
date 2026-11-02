@@ -488,23 +488,20 @@
   max-width: 30em;
   margin-left: auto;
 }
-/* THE KEYBOARD DOCKS' EIGHT KEYS (RTTY, PSK, JTTY: `.rtty-dock-keys`, styles.css) SHARE THEIR LINE
-   WITH THE FIXED ROW wherever every built-in caption still fits its key, and fold the row under them
-   only where one would not. Said as a FLOOR on the keys, not a BASIS: the 76em basis this replaces
-   folded the row whenever 76em of keys did not fit beside it, so at 1080p with Windows at 125 % (an
-   effective ~1700 px) the dock went to two rows and 141 px tall with every caption fitting at the
-   width it had. The floor is 70em at the row's own 14 px — eight keys of 119 px plus the gaps —
-   because the longest built-in caption in five of the six catalogs needs 116 (measured in Chrome,
-   2026-11-01: Spanish "Intercambio" 96 px of text, Japanese "S&P ナンバー" 95, plus the key's 20 px of
-   padding and border). Russian's contest set ("Мой позывной", 137) needs more, and its wider fixed row
-   folds the dock before the keys get that narrow, as it did before. An operator's own longer caption
-   ellipsizes in its key and keeps its tooltip, as it always has. The floor yields to the dock
-   (min(100%, …)), so on a line of their own the keys fill it and nothing overflows; there they take
-   all the room (grow 999). Esc/Stop and the TX latch are in the fixed row, unchanged; the keys are
-   senders. */
+/* THE KEYBOARD DOCKS' EIGHT KEYS (RTTY, PSK, JTTY: `.rtty-dock-keys`, styles.css) share their line with
+   the fixed row (Call box, set switch, TX latch, Esc/Stop) only where 76em of keys fit beside it, and fold
+   the row under the keys everywhere else, so the keys then take the whole line. A BASIS, deliberately, not
+   a floor: the keys are one-click senders, and NO KEY MAY BE NARROWER THAN THE OLD RULE MADE IT AT ANY
+   WIDTH (the measured 2026-09-17 note in styles.css, the "RTTY DOCK" block). The 1080p pass tried a zero
+   basis with a 70em floor, which kept the fixed row beside the keys at 1080p with Windows at 125 % and
+   saved a dock row there — and took each key from 174 to 111 px wide on that screen, 36 % of its hit
+   area. Reverted to the basis; the pass keeps its other dock savings (the 30 px `--touch` rows and the
+   short-window padding). This rule moved here from styles.css (`.rtty-dock-keys > .rtty-macros`) so
+   the keys' share of the line has one home; cockpit-shells.test.ts COMPUTES each key's width at every
+   dock width against the old rule. Esc/Stop and the TX latch are in the fixed row, unchanged. */
 .dock-fkeys {
-  flex: 999 1 0;
-  min-width: min(100%, 70em);
+  flex: 999 1 76em;
+  min-width: 0;
 }
 /* PHONE'S ONE-ROW DOCK (md and up): the transmit contract (`.ph-txcontract`) stands in the PTT row,
    after PTT and Lock. The same zero basis, for the reason the contract is one line at all: the dock is

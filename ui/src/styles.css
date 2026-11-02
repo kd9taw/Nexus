@@ -29712,9 +29712,8 @@ button.sat-chip:disabled {
 .rtty-macros {
   grid-template-columns: repeat(8, minmax(0, 1fr));
 }
-/* (The keys' share of the line — `flex: 999 1 76em` here until the 1080p pass — is cockpit-panes.css
-   `.dock-fkeys` now: a zero basis with a 70em floor, so the fixed row shares the keys' line wherever
-   every built-in caption still fits its key, and folds under them only where one would not.) */
+/* (The keys' share of the line — `flex: 999 1 76em; min-width: 0` — lives in cockpit-panes.css as
+   `.dock-fkeys` since the 1080p pass, unchanged; the reasoning for 76em is the note above.) */
 .rtty-dock-keys > .rtty-dock-row {
   flex: 1 1 auto;
 }

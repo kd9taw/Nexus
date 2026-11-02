@@ -76,6 +76,12 @@ export function HeaderOverflow({
         title={title}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={(e) => {
+          // Esc on the button itself closes an open group too (opened by the mouse, focus stays here).
+          // Not swallowed, for the reason the group's own Esc is not.
+          if (open && e.key === 'Escape') {
+            setOpen(false)
+            return
+          }
           // A keyboard open goes INTO the group; a click leaves focus where the pointer put it.
           if (!open && (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown')) {
             focusFirst.current = true

@@ -16,9 +16,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { TopBar } from './TopBar'
 import { HeaderOverflow } from './HeaderOverflow'
-import { t } from '../i18n'
+import { installCatalog, setLocale, t } from '../i18n'
+import { RU } from '../i18n/ru'
+import { PhoneCockpit } from './PhoneCockpit'
 import type { RadioStatus, Tier } from '../types'
-import { cw, jtty, panelsWith, phone, psk, rtty, settle, stopsOnScreen, type Case } from './stop-line.testkit'
+import { cw, jtty, panelsWith, phone, psk, rtty, settle, snap, stopsOnScreen, type Case } from './stop-line.testkit'
 
 // The api answers the stop-line sweeps share (stop-line.api.testkit.ts says why).
 // …plus the version the top bar prints beside its name (the shared answers have none for it).
@@ -124,6 +126,33 @@ describe('the compact dock: every transmit and stop control stays in the dock or
     expect(meters.querySelector('.ph-txmeters-hint'), 'no hint line: it would be a third row').toBeNull()
   })
 
+  it.each(SIZES)('Phone at %s with VOX on, a long busy reason and Russian: VOX is the cell nothing can clip first', async (vp) => {
+    // The row's contract clips at its END (`.dock-status-inrow`), so in the row VOX — a safety line —
+    // stands FIRST; below md the contract is a line of its own and VOX keeps its old place after power.
+    installCatalog('ru', RU)
+    setLocale('ru')
+    try {
+      at(vp)
+      const radio = {
+        ...(snap as unknown as { radio: Record<string, unknown> }).radio,
+        vox: true,
+        txBusyReason: 'Передатчик занят: голосовой манипулятор передаёт сообщение F1 — '.repeat(4),
+      }
+      render(<PhoneCockpit snap={{ ...snap, radio } as typeof snap} theme="dark" onWorkSpot={() => {}} spots={[]} panels={panelsWith<string>([]) as never} />)
+      await settle()
+      const contract = document.querySelector('.ph-txcontract')!
+      const cells = [...contract.querySelectorAll(':scope > .ph-txc-cell')]
+      const vox = contract.querySelector('[data-txc="vox"]')!
+      expect(vox, `${vp}: VOX drawn`).not.toBeNull()
+      expect(contract.querySelector('[data-txc="busy"]'), `${vp}: the busy cell drawn`).not.toBeNull()
+      if (WIDE.has(vp)) expect(cells.indexOf(vox), `${vp}: VOX first in the row`).toBe(0)
+      else expect(cells.indexOf(vox), `${vp}: VOX after power, as before`).toBe(cells.indexOf(contract.querySelector('[data-txc="power"]')!) + 1)
+      expect(cells[cells.length - 1].getAttribute('data-txc'), `${vp}: the elastic busy cell is last`).toBe('busy')
+    } finally {
+      setLocale('en')
+    }
+  })
+
   it.each(SIZES)('Phone at %s: the transmit contract joins the PTT row from md up, after PTT and Lock', async (vp) => {
     at(vp)
     await mount(phone)
@@ -216,6 +245,23 @@ describe('HeaderOverflow: the keyboard reaches everything it holds, and Esc stil
     expect(trigger().getAttribute('aria-expanded')).toBe('false')
     expect(document.activeElement).toBe(trigger())
     expect(seen, 'Esc is not swallowed: CW’s window handler stops a transmission on it').toEqual(['Escape'])
+  })
+
+  it('Escape on the button closes a group the mouse opened, and still reaches the window', () => {
+    host()
+    trigger().focus()
+    fireEvent.click(trigger())
+    expect(trigger().getAttribute('aria-expanded')).toBe('true')
+    const seen: string[] = []
+    const onWindow = (e: KeyboardEvent) => seen.push(e.key)
+    window.addEventListener('keydown', onWindow)
+    try {
+      fireEvent.keyDown(trigger(), { key: 'Escape' })
+    } finally {
+      window.removeEventListener('keydown', onWindow)
+    }
+    expect(trigger().getAttribute('aria-expanded')).toBe('false')
+    expect(seen).toEqual(['Escape'])
   })
 
   it('ArrowDown opens it too; a pointer click opens it without moving the keyboard', async () => {

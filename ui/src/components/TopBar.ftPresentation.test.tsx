@@ -40,7 +40,7 @@ const TIERS: Array<[Tier, string]> = [
   ['Q65', 'Q65'], ['MSK144', 'MSK144'], ['JT65', 'JT65'], ['FST4', 'FST4'], ['FST4W', 'FST4W'],
 ]
 
-function bar(radio: Partial<RadioStatus>, calls: string[]) {
+function bar(radio: Partial<RadioStatus>, calls: string[], ft = false) {
   const r = {
     dialMhz: 14.074, band: '20m', sideband: 'USB', rigMode: 'USB', rigConfirmed: true, nextSlotMs: 0,
     txEven: true, txCycleAuto: false, txEnabled: false, txAllowed: true, transmitting: false, tuning: false,
@@ -54,8 +54,8 @@ function bar(radio: Partial<RadioStatus>, calls: string[]) {
         onSetFrequency={log('setFrequency')} onSetTxEnabled={log('setTxEnabled')} onSetTune={log('setTune')}
         onHaltTx={() => calls.push('haltTx')} onSetTxEven={log('setTxEven')} onSetTxCycleAuto={log('setTxCycleAuto')}
         onSetHoldTxFreq={log('setHoldTxFreq')} tier="FT8" onTierChange={log('tier')} onOpenGuide={() => {}}
-        field={false} onFieldChange={() => {}} fdActive hideTxControls={false} hideFrequencyControl={false}
-        hideDigitalChrome={false} ftScreen={false}
+        field={false} onFieldChange={() => {}} fdActive hideTxControls={ft} hideFrequencyControl={ft}
+        hideDigitalChrome={false} ftScreen={ft}
       />
     </div>,
   )
@@ -80,6 +80,19 @@ describe('FT presentation: the Tx cycle is the same three controls at every size
       expect(s.classList.contains('sr-only'), `${vp}: caption`).toBe(FOLDS.has(vp))
     // State: Tx 1st is the operator's lock here.
     expect(btns.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'true', 'false'])
+    btns.forEach((b) => fireEvent.click(b))
+    expect(calls).toEqual(['setTxCycleAuto(true)', 'setTxEven(true)', 'setTxEven(false)'])
+  })
+
+  it.each(SIZES)('on the FT screen (the bar operators use with Operate) at %s: the same three, the same calls', (vp) => {
+    document.documentElement.dataset.viewport = vp
+    const calls: string[] = []
+    const { container } = bar({ txCycleAuto: false, txEven: false }, calls, true)
+    expect(container.querySelector('header.topbar')!.classList.contains('topbar--ft')).toBe(true)
+    const btns = cycle(container)
+    expect(names(btns)).toEqual(['Auto cycle', 'Tx 1st even', 'Tx 2nd odd'])
+    for (const name of ['Auto cycle', 'Tx 1st even', 'Tx 2nd odd']) expect(screen.getByRole('button', { name }), `${vp}: ${name}`).toBeTruthy()
+    expect(btns.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'true'])
     btns.forEach((b) => fireEvent.click(b))
     expect(calls).toEqual(['setTxCycleAuto(true)', 'setTxEven(true)', 'setTxEven(false)'])
   })
