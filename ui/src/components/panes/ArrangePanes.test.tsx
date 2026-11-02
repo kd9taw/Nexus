@@ -31,6 +31,7 @@ const LABELS: Record<PhonePanelId, string> = {
   needed: 'Needed',
   recent: 'Recent contacts',
   stats: 'Stats',
+  freedv: 'FreeDV',
   ...boxLabels({}),
 }
 // Phone's region with Spots, Needed and the rig scope strip hidden, as on a stock screen with no
@@ -89,13 +90,13 @@ describe('⊞ Arrange', () => {
     render(<Host />)
     fireEvent.click(btn('Move Receiver to the column on the left'))
     // At the column's foot: after the boxes too, which stand hidden at the foot of column 1.
-    expect(cols().a).toEqual(['bandActivity', 'voiceKeyer', 'spots', ...BOX_IDS, 'receiver'])
+    expect(cols().a).toEqual(['bandActivity', 'voiceKeyer', 'spots', 'freedv', ...BOX_IDS, 'receiver'])
     expect(within(group('Column 1')).getByText('Receiver')).toBeTruthy()
     fireEvent.click(btn('Undo'))
     expect(api!.layout.place).toBeUndefined()
     fireEvent.click(btn('Move Transmitter up'))
     fireEvent.click(btn('Move Band Activity down'))
-    expect(cols().a).toEqual(['voiceKeyer', 'bandActivity', 'spots', ...BOX_IDS])
+    expect(cols().a).toEqual(['voiceKeyer', 'bandActivity', 'spots', 'freedv', ...BOX_IDS])
     fireEvent.click(btn('Reset'))
     expect(api!.layout.place).toBeUndefined()
   })

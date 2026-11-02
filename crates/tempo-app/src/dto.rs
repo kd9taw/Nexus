@@ -5401,6 +5401,12 @@ pub struct AppSnapshot {
     /// receives this field.
     #[serde(default, skip_serializing_if = "is_false")]
     pub contest_cq_typed: bool,
+    /// FreeDV's own app beside Nexus ([`crate::freedv`]): its two listeners, the last contact it
+    /// logged and the calls it heard. `None`, and then not sent at all, while neither listener is
+    /// wanted, so every other snapshot is the one it always was. For the screens on this
+    /// computer: the Remote never receives this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freedv: Option<crate::freedv::FreedvDto>,
 }
 
 /// A transmitter alarm, on screen until the operator dismisses it — see

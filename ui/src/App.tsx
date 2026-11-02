@@ -3624,6 +3624,8 @@ function App() {
       panels={phonePanels}
       theme={theme}
       pendingWork={pendingWork?.view === 'phone' ? pendingWork : null}
+      // FreeDV's listeners are the station computer's own, and this is its window.
+      freedvPane
       onConsumeWork={() => setPendingWork(null)}
       onSnap={setSnap}
       fieldDay={snap.fieldDay}
@@ -3853,6 +3855,7 @@ function App() {
             parsecPresence={snap.parsecPresence}
             stationProfileLocked={snap.stationProfileLocked}
             activeStationProfile={snap.activeStationProfile}
+            freedv={snap.freedv}
             activeRadioId={snap.activeRadioId}
             onProveTx={handleProveTx}
             scale={scale}

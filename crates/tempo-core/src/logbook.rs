@@ -3647,7 +3647,7 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     // re-exported as `<MODE:0>`: a present-but-zero-length ENUMERATION field, which is
     // exactly the malformed shape the two guards above exist to avoid. Omitting it is both
     // honest and safer; a reader that needs a mode can see there is none.
-    match adif_submode(&r.mode) {
+    match adif_submode(&r.mode).filter(|_| freedv_parent(r).is_none()) {
         Some((parent, sub)) => {
             out.push_str(&field("MODE", parent));
             out.push_str(&field("SUBMODE", sub));
@@ -4309,11 +4309,25 @@ fn psk_parent(r: &QsoRecord) -> Option<&'static str> {
 /// passthrough SUBMODE asks for, or the stored mode itself — or `None` when the row has no mode
 /// (an empty MODE is omitted, never written as `<MODE:0>`).
 pub(crate) fn adif_mode(r: &QsoRecord) -> Option<&str> {
-    match adif_submode(&r.mode) {
+    match adif_submode(&r.mode).filter(|_| freedv_parent(r).is_none()) {
         Some((parent, _)) => Some(parent),
         None if r.mode.trim().is_empty() => None,
-        None => Some(psk_parent(r).unwrap_or(&r.mode)),
+        None => Some(
+            psk_parent(r)
+                .or_else(|| freedv_parent(r))
+                .unwrap_or(&r.mode),
+        ),
     }
+}
+
+/// `DIGITALVOICE` for a FreeDV row read as `MODE=DIGITALVOICE SUBMODE=FREEDV` from another
+/// logger: stored as FREEDV with that SUBMODE kept, and written back under its parent as it came,
+/// the SUBMODE among the passthrough fields where it always was. A FreeDV row of Nexus's own (no
+/// SUBMODE kept) takes the ordinary pair and its APP_TEMPO_MODE.
+fn freedv_parent(r: &QsoRecord) -> Option<&'static str> {
+    let (_, sub) = r.extra.iter().find(|(k, _)| k == "SUBMODE")?;
+    (r.mode.trim().eq_ignore_ascii_case("FREEDV") && sub.trim().eq_ignore_ascii_case("FREEDV"))
+        .then_some("DIGITALVOICE")
 }
 
 /// The sideband of an SSB contact — the `USB` or `LSB` the log holds as its SUBMODE
@@ -5223,6 +5237,16 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     let app_mode = f.remove("APP_TEMPO_MODE");
     let submode = f.remove("SUBMODE");
     let mode_field = f.remove("MODE");
+    // FreeDV as other loggers write it: `MODE=DIGITALVOICE SUBMODE=FREEDV`, with no
+    // APP_TEMPO_MODE of ours. Stored as FREEDV, the mode it is, with the SUBMODE kept so the
+    // row is written back exactly as it came ([`freedv_parent`]) — fldigi's PSK precedent.
+    let freedv_import = app_mode.is_none()
+        && mode_field
+            .as_deref()
+            .is_some_and(|m| m.trim().eq_ignore_ascii_case("DIGITALVOICE"))
+        && submode
+            .as_deref()
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case("FREEDV"));
     let mode = app_mode
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty())
@@ -5243,6 +5267,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
                 .and_then(psk_submode)
                 .map(str::to_string)
         })
+        .or_else(|| freedv_import.then(|| "FREEDV".to_string()))
         .or_else(|| mode_field.clone())
         .unwrap_or_default();
     // #68 (rogerloxton): "the writer re-derives them" is only true for a submode the
@@ -5253,8 +5278,9 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     // resolved mode; a foreign one (Log4OM's SSB+USB, an imported VarAC row whose MODE
     // we keep as DYNAMIC) is untouched and still round-trips verbatim.
     if let Some(sub) = submode.filter(|s| {
-        promoted_submode(s).is_none()
-            && !adif_submode(&mode).is_some_and(|(_, w)| w.eq_ignore_ascii_case(s.trim()))
+        freedv_import
+            || (promoted_submode(s).is_none()
+                && !adif_submode(&mode).is_some_and(|(_, w)| w.eq_ignore_ascii_case(s.trim())))
     }) {
         f.insert("SUBMODE".to_string(), sub);
     }
@@ -6847,6 +6873,60 @@ mod tests {
                 assert_eq!(adif_record_own_log(&back[0]), adif_record_own_log(&got[0]));
             }
         }
+    }
+
+    /// ⭐ A FREEDV CONTACT ANOTHER LOGGER WROTE IS STORED AS FREEDV, AND WRITTEN BACK AS IT CAME.
+    /// The ADIF form is `<MODE:12>DIGITALVOICE <SUBMODE:6>FREEDV` (ADIF 3.1.4+). The reader kept
+    /// only the DIGITALVOICE, so a FreeDV station on the Needed board could never be cleared by a
+    /// FreeDV contact imported from another logger. Stored as FREEDV now (fldigi's PSK
+    /// precedent), the row leaves in exactly the bytes it left in while it was stored as
+    /// DIGITALVOICE: the same MODE and SUBMODE once each, and no APP_TEMPO_MODE it never had.
+    #[test]
+    fn an_imported_digitalvoice_freedv_contact_is_freedv_and_written_back_as_it_came() {
+        for (mode, sub) in [("DIGITALVOICE", "FREEDV"), ("digitalvoice", "FreeDV")] {
+            let src = format!(
+                "<CALL:5>W5FDV<QSO_DATE:8>20261014<TIME_ON:6>010203<BAND:3>20m\
+                 <MODE:{}>{mode}<SUBMODE:{}>{sub}<EOR>",
+                mode.len(),
+                sub.len()
+            );
+            let got = parse_adif(&(adif_header() + &src));
+            assert_eq!(got.len(), 1, "{src}");
+            assert_eq!(got[0].mode, "FREEDV", "stored as FreeDV: {src}");
+            // What the same row wrote while it was stored under its parent.
+            let mut before = got[0].clone();
+            before.mode = mode.to_string();
+            for (out, was) in [
+                (adif_record(&got[0]), adif_record(&before)),
+                (adif_record_own_log(&got[0]), adif_record_own_log(&before)),
+            ] {
+                // Byte-identical for the registered spelling. A lower-case source's MODE leaves in
+                // the registered spelling, as fldigi's lower-case `psk` does (`psk_parent`); every
+                // other byte is the same.
+                if mode == "DIGITALVOICE" {
+                    assert_eq!(out, was, "byte-identical to the DIGITALVOICE row");
+                } else {
+                    assert_eq!(out, was.replace(mode, "DIGITALVOICE"), "only MODE's case");
+                }
+                assert_eq!(out.matches("<MODE:").count(), 1, "{out}");
+                assert_eq!(out.matches("<SUBMODE:").count(), 1, "{out}");
+                assert!(!out.contains("APP_TEMPO_MODE"), "{out}");
+                let back = parse_adif(&(adif_header() + &out));
+                assert_eq!(back[0].mode, "FREEDV", "{out}");
+                assert_eq!(adif_record_own_log(&back[0]), out_own(&got[0]));
+            }
+        }
+        // Another DIGITALVOICE submode is not FreeDV, and stays as it was.
+        let dmr = parse_adif(
+            &(adif_header()
+                + "<CALL:5>W1DMR<QSO_DATE:8>20261014<TIME_ON:6>010203<BAND:2>2m\
+                   <MODE:12>DIGITALVOICE<SUBMODE:3>DMR<EOR>"),
+        );
+        assert_eq!(dmr[0].mode, "DIGITALVOICE");
+    }
+
+    fn out_own(r: &QsoRecord) -> String {
+        adif_record_own_log(r)
     }
 
     /// ⭐ THE WSJT-X FAMILY ROUND-TRIPS, AND THE EXPORT IS THE HALF THAT WAS BROKEN.

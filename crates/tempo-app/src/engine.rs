@@ -4942,6 +4942,9 @@ pub struct Engine {
     tci_spots: tci_spots::PanadapterSpots,
     /// The spots programs on Nexus's TCI server sent, for the band map. See [`tci_spots`].
     tci_program_spots: tci_spots::ProgramSpots,
+    /// FreeDV's own app beside Nexus: its listeners, last contact, notice and heard calls
+    /// ([`crate::freedv`]). Written by the FreeDV listeners; read by the snapshot.
+    freedv: crate::freedv::FreedvDto,
     scope_error: Option<String>,
     /// See `RadioStatus::scope_span_refused`.
     scope_span_refused: Option<String>,
@@ -7503,6 +7506,7 @@ impl Engine {
             tci_server: None,
             tci_spots: tci_spots::PanadapterSpots::default(),
             tci_program_spots: tci_spots::ProgramSpots::default(),
+            freedv: crate::freedv::FreedvDto::default(),
             scope_error: None,
             scope_span_refused: None,
             scope_mode_code: None,
@@ -28308,6 +28312,11 @@ contact yourself."
         self.audio_error = err;
     }
 
+    /// FreeDV's state for the screens ([`crate::freedv`]), for its listeners to write.
+    pub fn freedv_mut(&mut self) -> &mut crate::freedv::FreedvDto {
+        &mut self.freedv
+    }
+
     /// Record why this station is not sharing its radio, or clear it (#165).
     ///
     /// ⚠️ **Written on EVERY broker decision, in both directions, and that is the whole
@@ -30966,6 +30975,7 @@ contact yourself."
         s.contest_entry = self.contest_entry_dto();
         s.contest_cq = self.contest_running_cq();
         s.contest_cq_typed = self.contest_cq_typed();
+        s.freedv = self.freedv.is_shown().then(|| self.freedv.clone());
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;

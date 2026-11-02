@@ -22149,6 +22149,23 @@ button.cq-skiptx1.on {
 .sp-grid .np-row {
   grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(48px, 1fr) minmax(86px, 1.6fr) 32px;
 }
+/* Phone's FreeDV pane, its content (components/FreedvPane): the heard list reads as rows, not a
+   bulleted list, and a refusal or bind failure (role="alert") carries the theme's warning colour.
+   Its size and its scroller are structural and live in cockpit-panes.css (`.freedv-pane`,
+   `.freedv-heard`), which this sheet never names. */
+.freedv-calls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.freedv-calls > li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.freedv-notice {
+  color: var(--state-warn);
+}
 /* ── THE TWO BOARDS AS PHONE AND CW PANES (#345) ──────────────────────────────────────────
    The Spots and Needed boards render inside a CockpitPaneFrame on the Phone and CW cockpits, as
    fill panes. This is the content half of that, in the sanctioned place (`.pane-body >
