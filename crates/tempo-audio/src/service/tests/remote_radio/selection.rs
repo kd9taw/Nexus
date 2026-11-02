@@ -2144,7 +2144,7 @@ fn a_remote_selection_knows_nexuss_own_cat_broker() {
         |t| {
             handed.replace(Some((
                 t.broker_self_port,
-                net_rigctld_on_this_machine(t).map(str::to_string),
+                net_rigctld_shared_directly(t).map(str::to_string),
             )));
             (Rig::rigctld(&incoming.address), None, Some(true))
         },

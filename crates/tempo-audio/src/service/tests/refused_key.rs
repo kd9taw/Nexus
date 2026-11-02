@@ -41,6 +41,8 @@ pub(super) enum Key {
     RefusesASecond,
     /// `RPRT 0`, after [`LATE`]: a slow radio that keyed, answering past the PTT deadline.
     AnswersLate,
+    /// `RPRT 0`, after [`HELD`]: a key a held-up rigctld carried out long after it was sent.
+    AnswersHeld,
     /// `RPRT <code>`, always: the code Hamlib gives for the radio behind rigctld.
     Answers(i32),
 }
@@ -53,6 +55,10 @@ const NO_ANSWER: [i32; 4] = [-5, -6, -13, -14];
 /// rig reads in 500 ms windows and looks at the deadline only between them, so an answer inside
 /// the first second is still taken; this one comes well after that.
 const LATE: Duration = Duration::from_millis(1_500);
+
+/// How long [`Key::AnswersHeld`] takes to answer the key: past the window a key that works may take
+/// over a network chain (2.5 s).
+const HELD: Duration = Duration::from_millis(4_000);
 
 /// A rigctld answering the key as `key`, `f` with a 20 m dial and everything else `RPRT 0`,
 /// logging every line it was sent.
@@ -90,8 +96,11 @@ fn rigctld_on(key: Key, dial_hz: u64) -> (String, Arc<Mutex<Vec<String>>>) {
                         if key == Key::AnswersLate {
                             std::thread::sleep(LATE);
                         }
+                        if key == Key::AnswersHeld {
+                            std::thread::sleep(HELD);
+                        }
                         let code = match key {
-                            Key::Accepts | Key::AnswersLate => 0,
+                            Key::Accepts | Key::AnswersLate | Key::AnswersHeld => 0,
                             Key::Refuses => -1,
                             Key::RefusesASecond if held => -1,
                             Key::RefusesASecond => 0,
@@ -623,6 +632,42 @@ fn a_tune_whose_key_is_answered_late_plays_no_carrier_and_ends() {
     assert!(
         log[key..].iter().any(|l| l == "T 0"),
         "the release did not follow the key: {log:?}"
+    );
+}
+
+/// ⛔ A TUNE KEY NEXUS GAVE UP ON THAT REACHES THE RADIO AFTER ALL IS UNKEYED AGAIN AND SAID.
+/// Behind a held-up rigctld the key of a Tune that had ended unconfirmed reached the radio seconds
+/// later, and the operator, told it had not keyed, was told nothing more. Once the late answer is
+/// in, the loop sends one more release behind it, and the line says the radio keyed late and was
+/// unkeyed. A key answered inside a network chain's window keeps the line that says it was not
+/// confirmed (`a_tune_whose_key_is_answered_late_plays_no_carrier_and_ends`), and is unkeyed again
+/// all the same.
+#[test]
+fn a_tune_key_given_up_on_that_lands_late_is_unkeyed_again_and_said() {
+    let mut s = Scene::new(Key::AnswersHeld, |e| {
+        phone(e);
+        e.set_tune(true);
+    });
+    let started = std::time::Instant::now();
+    let said = |s: &Scene| {
+        s.banner()
+            .is_some_and(|b| b.starts_with("The radio keyed ") && b.contains("Nexus unkeyed it"))
+    };
+    while !said(&s) && started.elapsed() < Duration::from_secs(10) {
+        let next = s.t + 100.0;
+        s.run_to(next);
+    }
+    assert!(said(&s), "the late key was not said: {:?}", s.banner());
+    assert_eq!(s.kind(), "ptt");
+    assert!(s.backend.played.is_empty(), "a carrier went into the key");
+    assert_eq!(s.keys(), 1, "the tune keyed again");
+    let next = s.t + 100.0;
+    s.run_to(next);
+    let log = s.log.lock().unwrap().clone();
+    let key = log.iter().position(|l| l == "T 1").unwrap();
+    assert!(
+        log[key..].iter().filter(|l| *l == "T 0").count() >= 2,
+        "no second release behind the tune's own: {log:?}"
     );
 }
 

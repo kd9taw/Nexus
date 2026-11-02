@@ -5620,11 +5620,16 @@ pub fn host_is_this_machine(host: &str) -> bool {
         || h.starts_with("127.")
 }
 
-/// A NET rigctl radio's Network Address, trimmed, and its port, when the address is on this
-/// computer: the rigctld the operator runs here (wfview's, or their own), which Nexus shares rather
-/// than starts. `None` for any other radio. The one rule the port bookkeeping below and the openers
-/// that share the address (in `tempo-audio`'s service) both read.
-pub fn net_rigctl_addr_here<'a>(
+/// A NET rigctl radio's Network Address, trimmed, and its port, on this computer or on another
+/// one: the rigctld-compatible server the operator points Nexus at, which Nexus talks to directly
+/// rather than through a rigctld of its own. `None` for any other radio, and for an address with
+/// no port. The openers that share the address (in `tempo-audio`'s service) read this.
+///
+/// A rigctld of Nexus's in front of a remote one is not a neutral relay: Hamlib's NET client waits
+/// out its whole timeout, holding the one lock every command takes, on an answer shape it does not
+/// expect (`\get_lock_mode` without the `RPRT 0` line Hamlib's own rigctld adds, asked before every
+/// mode write). A key queued behind that reached the radio tens of seconds late (#429).
+pub fn net_rigctl_addr<'a>(
     rig_model: u32,
     rig_conn: &str,
     rig_addr: &'a str,
@@ -5633,8 +5638,21 @@ pub fn net_rigctl_addr_here<'a>(
     if rig_model != 2 || !rig_conn_is_network(rig_conn, rig_addr) {
         return None;
     }
-    let (host, port) = split_host_port(rig_addr)?;
-    host_is_this_machine(host).then(|| (rig_addr.trim(), port))
+    let (_, port) = split_host_port(rig_addr)?;
+    Some((rig_addr.trim(), port))
+}
+
+/// [`net_rigctl_addr`], when the address is on this computer: the rigctld the operator runs here
+/// (wfview's, or their own). `None` for any other radio. The rule the port bookkeeping below reads:
+/// only an address on this computer shares a port space with Nexus's own listeners.
+pub fn net_rigctl_addr_here<'a>(
+    rig_model: u32,
+    rig_conn: &str,
+    rig_addr: &'a str,
+) -> Option<(&'a str, u16)> {
+    let (addr, port) = net_rigctl_addr(rig_model, rig_conn, rig_addr)?;
+    let (host, _) = split_host_port(addr)?;
+    host_is_this_machine(host).then_some((addr, port))
 }
 
 /// The port of `p`'s Network Address on this computer, when `p` is NET rigctl
@@ -8760,6 +8778,47 @@ mod tests {
             s.ports_the_operators_rigctld_holds(&[]),
             vec![4532, 4540, 4541]
         );
+    }
+
+    /// A NET rigctl Network Address is the server Nexus talks to, wherever it runs; only one on
+    /// this computer counts for the port bookkeeping. Every other radio, and an address with no
+    /// port, names none.
+    #[test]
+    fn a_net_rigctl_address_is_named_on_any_computer_and_here_only_on_this_one() {
+        let rows = [
+            (
+                2,
+                "network",
+                "127.0.0.1:4532",
+                Some(("127.0.0.1:4532", 4532)),
+                true,
+            ),
+            (
+                2,
+                "network",
+                " 192.168.1.235:4532 ",
+                Some(("192.168.1.235:4532", 4532)),
+                false,
+            ),
+            (
+                2,
+                "network",
+                "shack-pi:4533",
+                Some(("shack-pi:4533", 4533)),
+                false,
+            ),
+            (2, "network", "192.168.1.235", None, false),
+            (3073, "network", "192.168.1.235:4532", None, false),
+            (2, "serial", "192.168.1.235:4532", None, false),
+        ];
+        for (model, conn, addr, any, here) in rows {
+            assert_eq!(net_rigctl_addr(model, conn, addr), any, "{addr}");
+            assert_eq!(
+                net_rigctl_addr_here(model, conn, addr),
+                any.filter(|_| here),
+                "{addr}"
+            );
+        }
     }
 
     /// A scratch settings directory no CONCURRENT test process can reach.

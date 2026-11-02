@@ -702,6 +702,19 @@ pub struct Rig {
     /// Whether the last key line written on `stream` was a key-DOWN: its release is not queued
     /// behind it yet, so the connection must not be given up ([`OWED_ANSWER_BOUND`]).
     owed_key_down: bool,
+    /// The key-downs among the owed answers ([`OwedKey`]), oldest first, so the moment each one's
+    /// answer is read is known ([`Self::late_key`]). Empty whenever `stream` is `None`.
+    owed_keys: std::collections::VecDeque<OwedKey>,
+    /// A key-down the caller had given up on ([`Self::give_up_owed_keys`]) whose answer came in
+    /// after all ([`Self::take_late_key`]). `None` until one does.
+    late_key: Option<LateKey>,
+    /// The bytes read so far toward the next owed answer, when a read ended inside one. Empty
+    /// whenever `stream` is `None`.
+    owed_buf: Vec<u8>,
+    /// Whether a key-down whose answer is owed was given up on, or left owed on a connection that
+    /// was dropped, since [`Self::take_key_watch`] last said so: its key may reach the radio after
+    /// its release, which nothing on this connection would then report.
+    key_watch: bool,
     /// [`OWED_ANSWER_BOUND`]; a field so a test can shorten it.
     owed_bound: Duration,
     /// How many times the connection has been dropped ([`Self::drop_connection`]), so an over can
@@ -728,6 +741,39 @@ pub struct Rig {
     /// [`Self::take_split_confirmed`]'s own look at it and the over's first split write.
     #[cfg(test)]
     pub(crate) test_debt_lapses_after_split_take: bool,
+}
+
+/// The owed answers one command reads ([`Rig::command_lines`]): how many are still owed, the bytes
+/// read toward the next one, and each whole one read, oldest first.
+#[derive(Default)]
+struct OwedRead {
+    count: usize,
+    pending: Vec<u8>,
+    answers: Vec<Vec<u8>>,
+}
+
+/// A key given up on whose answer came in after all ([`Rig::take_late_key`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LateKey {
+    /// How long after it was sent its answer came.
+    pub after: Duration,
+    /// Whether the answer accepted the key (`RPRT 0`): the radio keyed late. A refusal, or
+    /// Hamlib's own "the rig did not answer", says nothing of the kind, and is not said as one.
+    pub accepted: bool,
+    /// Whether a later key was confirmed after it on the same connection (a second Tune that
+    /// keyed): the radio is keyed now because of that key, and nothing late is worth saying.
+    pub superseded: bool,
+}
+
+/// A key-down whose answer is owed ([`Rig::owed_keys`]).
+#[derive(Clone, Copy, Debug)]
+struct OwedKey {
+    /// How many owed answers come before this one's.
+    ahead: usize,
+    /// When the key line was written.
+    sent: std::time::Instant,
+    /// Whether the caller has given up on it ([`Rig::give_up_owed_keys`]).
+    given_up: bool,
 }
 
 /// What [`Rig::split_confirmed`] holds: the RX dial the radio was on when it confirmed, and the
@@ -866,6 +912,10 @@ impl Rig {
             owed_replies: 0,
             owed_since: None,
             owed_key_down: false,
+            owed_keys: std::collections::VecDeque::new(),
+            late_key: None,
+            owed_buf: Vec::new(),
+            key_watch: false,
             owed_bound: OWED_ANSWER_BOUND,
             connection_drops: 0,
             never_send: &[],
@@ -966,6 +1016,8 @@ impl Rig {
         if self.stream.is_none() {
             self.owed_replies = 0; // owed on a connection that is gone
             self.owed_since = None;
+            self.owed_keys.clear();
+            self.owed_buf.clear();
             if let Some(addr) = &self.control {
                 let s = connect_cat(addr)?;
                 s.set_read_timeout(Some(Duration::from_millis(500)))?;
@@ -1000,6 +1052,11 @@ impl Rig {
         self.owed_since = None;
         // A key-down owed on this connection holds only this one ([`Self::give_up_a_stale_debt`]).
         self.owed_key_down = false;
+        // A key-down still owed goes with the connection, unanswered: whether it reaches the radio
+        // after the release the next connection sends is for the radio's own PTT to say.
+        self.key_watch |= !self.owed_keys.is_empty();
+        self.owed_keys.clear();
+        self.owed_buf.clear();
         self.split_confirmed = None;
         self.connection_drops += 1;
     }
@@ -1118,18 +1175,35 @@ impl Rig {
             l if l.starts_with("T ") => Some(true),
             _ => None,
         };
-        let mut owed = std::mem::take(&mut self.owed_replies);
-        let owed_before = owed;
-        match self.command_inner(
+        let mut read = OwedRead {
+            count: std::mem::take(&mut self.owed_replies),
+            pending: std::mem::take(&mut self.owed_buf),
+            answers: Vec::new(),
+        };
+        let owed_before = read.count;
+        let sent = std::time::Instant::now();
+        let result = self.command_inner(
             line,
             deadline_ms,
             permission,
             expected_lines,
             end_by_deadline,
-            &mut owed,
-        ) {
+            &mut read,
+        );
+        let owed = read.count;
+        self.owed_answers_read(&read.answers);
+        if owed > 0 {
+            self.owed_buf = read.pending; // the start of the next owed answer
+        }
+        match result {
             Ok(reply) => {
                 self.owed_since = None;
+                // A key confirmed behind a late one is the key the radio holds now.
+                if key_down == Some(true) {
+                    if let Some(late) = self.late_key.as_mut() {
+                        late.superseded = true;
+                    }
+                }
                 Ok(reply)
             }
             Err(e) if ordered && deadline_passed(&e) && self.stream.is_some() => {
@@ -1148,6 +1222,13 @@ impl Rig {
                 }
                 if let Some(down) = key_down {
                     self.owed_key_down = down;
+                }
+                if key_down == Some(true) {
+                    self.owed_keys.push_back(OwedKey {
+                        ahead: owed,
+                        sent,
+                        given_up: false,
+                    });
                 }
                 self.owed_replies = owed + 1;
                 Err(e)
@@ -1188,13 +1269,92 @@ impl Rig {
         }
         // Read what has arrived first, so the close is an orderly one and not a reset that could
         // cost rigctld the lines still queued on it.
+        let mut arrived = Vec::new();
         if let Some(stream) = self.stream.as_mut() {
             let mut scratch = [0u8; 256];
             if stream.set_nonblocking(true).is_ok() {
-                while matches!(stream.read(&mut scratch), Ok(n) if n > 0) {}
+                while let Ok(n @ 1..) = stream.read(&mut scratch) {
+                    arrived.extend_from_slice(&scratch[..n]);
+                }
             }
         }
+        // A late key's answer read here is one like any other (`late_key`).
+        let mut answers = self.owed_answers_in(&arrived);
+        answers.truncate(self.owed_replies);
+        self.owed_answers_read(&answers);
         self.drop_connection();
+    }
+
+    /// `read` owed answers have just been read, oldest first. A key-down among them the caller had
+    /// given up on ([`Self::give_up_owed_keys`]) was carried out after that: the radio keyed late,
+    /// however briefly, and [`Self::take_late_key`] says so once.
+    fn owed_answers_read(&mut self, answers: &[Vec<u8>]) {
+        let read = answers.len();
+        if read == 0 {
+            return;
+        }
+        while self.owed_keys.front().is_some_and(|key| key.ahead < read) {
+            let Some(key) = self.owed_keys.pop_front() else {
+                break;
+            };
+            if key.given_up {
+                let after = key.sent.elapsed();
+                let answer = String::from_utf8_lossy(&answers[key.ahead]).to_string();
+                let accepted = ptt_reply(&answer).is_ok();
+                if crate::civ::diag::is_enabled() {
+                    crate::civ::diag::note(&format!(
+                        "Rig: a key-down given up on was answered {after:?} after it was sent ({:?})",
+                        answer.trim()
+                    ));
+                }
+                self.late_key = Some(LateKey {
+                    after,
+                    accepted,
+                    superseded: false,
+                });
+            }
+        }
+        for key in &mut self.owed_keys {
+            key.ahead -= read;
+        }
+    }
+
+    /// The whole owed answers in `bytes`, read after what an earlier read left of one
+    /// ([`Self::owed_buf`]), oldest first; what is left of the next one is kept for the next read.
+    fn owed_answers_in(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
+        self.owed_buf.extend_from_slice(bytes);
+        let mut answers = Vec::new();
+        while let Some(end) = self.owed_buf.iter().position(|&b| ends_an_answer(b)) {
+            answers.push(self.owed_buf.drain(..=end).collect());
+        }
+        answers
+    }
+
+    /// Give up on every key-down whose answer is still owed: the caller has told the operator the
+    /// radio did not key, and plays nothing into it (the Tune). The line went out and cannot be
+    /// called back, and rigctld carries out a connection's lines in order, so the release the
+    /// caller sends next follows it on this connection; if the key is carried out after all, its
+    /// answer, when read, is a late key ([`Self::take_late_key`]).
+    pub fn give_up_owed_keys(&mut self) {
+        self.key_watch |= !self.owed_keys.is_empty();
+        for key in &mut self.owed_keys {
+            key.given_up = true;
+        }
+    }
+
+    /// A key given up on ([`Self::give_up_owed_keys`]) whose answer came in after all; once, and
+    /// `None` otherwise. The radio loop unkeys again at once, and says the radio keyed late when
+    /// the answer accepted the key and no later key was confirmed behind it.
+    pub fn take_late_key(&mut self) -> Option<LateKey> {
+        self.late_key.take()
+    }
+
+    /// Whether a key-down whose answer was owed has been given up on, or left owed on a dropped
+    /// connection, since this was last asked; once. Its key may still reach the radio after its
+    /// release, on a rigctld that does not serve its connections in order, with nothing on this
+    /// link to say so: the radio loop then watches the radio's own PTT for a while.
+    pub fn take_key_watch(&mut self) -> bool {
+        std::mem::take(&mut self.key_watch)
     }
 
     /// [`Self::split_confirmed`], taken for an over's split writes. A connection whose owed answers
@@ -1260,8 +1420,10 @@ impl Rig {
                 // Nothing but owed answers is in flight on this connection, so every terminator
                 // read here ends one of them.
                 Ok(n) => {
-                    let answers = buf[..n].iter().filter(|&&b| ends_an_answer(b)).count();
-                    self.owed_replies = self.owed_replies.saturating_sub(answers);
+                    let mut answers = self.owed_answers_in(&buf[..n]);
+                    answers.truncate(self.owed_replies);
+                    self.owed_replies -= answers.len();
+                    self.owed_answers_read(&answers);
                     if self.owed_replies == 0 {
                         self.owed_since = None;
                     }
@@ -1283,7 +1445,7 @@ impl Rig {
         permission: Option<&WritePermission>,
         expected_lines: usize,
         end_by_deadline: bool,
-        owed: &mut usize,
+        owed: &mut OwedRead,
     ) -> std::io::Result<String> {
         if let Some(permission) = permission {
             permission
@@ -1301,7 +1463,9 @@ impl Rig {
             None
         };
         if self.stream.is_none() {
-            *owed = 0; // a connection opened now owes nothing
+            // A connection opened now owes nothing.
+            owed.count = 0;
+            owed.pending.clear();
         }
         let stream = self.ensure_connected()?;
         // Discard any STALE bytes left in the socket by a prior MULTI-LINE reply — `m` (get_mode)
@@ -1310,7 +1474,7 @@ impl Rig {
         // command's answer and desync every command after it (the exact hazard the drop-on-failure
         // guards, but a successful multi-line reply slips past that). Non-blocking → free when clean.
         // Not while late keys' answers are owed: those bytes are counted below, never discarded.
-        if *owed == 0 {
+        if owed.count == 0 {
             stream.set_nonblocking(true)?;
             let mut scratch = [0u8; 256];
             while let Ok(n) = stream.read(&mut scratch) {
@@ -1354,7 +1518,13 @@ impl Rig {
         // rigctld and both of Nexus's own impersonators send both lines).
         const MULTILINE_TAIL_MS: u64 = 100;
         let mut tail_deadline: Option<std::time::Instant> = None;
-        let mut out = Vec::with_capacity(64);
+        // `out` starts with what an earlier read left of an owed answer, and owed answers are
+        // taken off its front whole, into `answers`, for `command_lines` to judge.
+        let OwedRead {
+            count: owed,
+            pending: out,
+            answers,
+        } = owed;
         let mut buf = [0u8; 256];
         let too_late = |out: &[u8]| {
             std::io::Error::new(
@@ -1373,7 +1543,7 @@ impl Rig {
             if end_by_deadline {
                 let left = deadline.saturating_duration_since(std::time::Instant::now());
                 if left.is_zero() {
-                    return Err(too_late(&out));
+                    return Err(too_late(out));
                 }
                 let window = if tail_deadline.is_some() {
                     MULTILINE_TAIL_MS
@@ -1397,7 +1567,7 @@ impl Rig {
                         let Some(end) = out.iter().position(|&b| ends_an_answer(b)) else {
                             break;
                         };
-                        out.drain(..=end);
+                        answers.push(out.drain(..=end).collect());
                         *owed -= 1;
                     }
                     // Short of the expected line count: give the rest a brief window, and
@@ -1405,7 +1575,7 @@ impl Rig {
                     if expected_lines > 1
                         && tail_deadline.is_none()
                         && out.ends_with(b"\n")
-                        && !reply_complete(&out, expected_lines)
+                        && !reply_complete(out, expected_lines)
                     {
                         tail_deadline = Some(
                             std::time::Instant::now() + Duration::from_millis(MULTILINE_TAIL_MS),
@@ -1420,8 +1590,8 @@ impl Rig {
                     // every raw-CAT read failed silently and forced a reconnect. Accepting either
                     // terminator is version-agnostic: a daemon that does append a newline still
                     // matches the first arm, and no ordinary reply contains a NUL.
-                    if out.ends_with(b"\0") || reply_complete(&out, expected_lines) {
-                        return Ok(String::from_utf8_lossy(&out).to_string());
+                    if out.ends_with(b"\0") || reply_complete(out, expected_lines) {
+                        return Ok(String::from_utf8_lossy(out).to_string());
                     }
                 }
                 Err(ref e) if read_should_retry(e.kind()) => {} // nothing read — wait out the deadline
@@ -1431,10 +1601,10 @@ impl Rig {
             // this function did before it counted lines at all, so a short multi-line reply can
             // never become an error it was not already.
             if tail_deadline.is_some_and(|t| std::time::Instant::now() >= t) {
-                break String::from_utf8_lossy(&out).to_string();
+                break String::from_utf8_lossy(out).to_string();
             }
             if std::time::Instant::now() >= deadline {
-                return Err(too_late(&out));
+                return Err(too_late(out));
             }
         };
         // ⚠️ THE REPLY IS SALVAGEABLE; THE CONNECTION IS NOT. The line we stopped waiting for is
@@ -1512,7 +1682,15 @@ impl Rig {
         // it is still mid-dump when our patience ran out, so the rest of the dump lands in the
         // socket and becomes the next command's answer — the desync `command`'s header calls a
         // TX-safety invariant. Keep what we parsed, drop the connection.
-        if still_talking {
+        //
+        // On a slow transport (a rigctld on another computer, shared directly) a quiet window can
+        // also fall in the MIDDLE of a dump: a gap on the network longer than it ends the read
+        // early, and the rest arrives behind the next command's write, where the pre-write drain
+        // cannot see it yet. Nothing in a dump says where it ends (`\dump_caps` has no terminator,
+        // and `\dump_state`'s `done` is protocol-dependent), so the connection is never kept past
+        // one there: the next command opens a clean one. A dump is asked at open and on a
+        // reconnect, so this costs one reconnect each, never one per poll.
+        if still_talking || self.slow_transport {
             self.drop_connection();
         }
         Ok(String::from_utf8_lossy(&out).to_string())
@@ -3560,6 +3738,226 @@ mod tests {
             wait_for_lines(&log, 2),
             vec![(0, "T 1".to_string()), (0, "T 0".to_string())],
             "the key and its release on one connection, the key carried out first"
+        );
+    }
+
+    /// ⛔ A KEY GIVEN UP ON THAT IS CARRIED OUT AFTER ALL IS SAID, ONCE. Behind a rigctld held up
+    /// for many seconds a key-down Nexus had given up on (a Tune that ended unconfirmed) reached
+    /// the radio long after, and nothing said so: the late answer was set aside like any owed one.
+    /// Its answer is now a late key, with how long after it was sent; the radio loop unkeys again
+    /// and tells the operator.
+    #[test]
+    fn a_key_given_up_on_and_answered_later_is_a_late_key_said_once() {
+        let (addr, _log) = mock_rigctld_paced(|line| {
+            let delay = if line == "T 1" { 1_500 } else { 0 };
+            Some((Duration::from_millis(delay), "RPRT 0\n".to_string()))
+        });
+        let mut rig = Rig::rigctld(&addr);
+        assert!(
+            rig.ptt(true).is_err_and(|e| deadline_passed(&e)),
+            "premise: the key's answer is late"
+        );
+        rig.give_up_owed_keys();
+        assert_eq!(rig.take_late_key(), None, "nothing has landed yet");
+        assert_eq!(rig.ptt(false).map_err(|e| e.to_string()), Ok(()));
+        let late = rig.take_late_key();
+        assert!(
+            late.is_some_and(|l| l.after >= Duration::from_millis(1_400)
+                && l.accepted
+                && !l.superseded),
+            "the key given up on landed: {late:?}"
+        );
+        assert_eq!(rig.take_late_key(), None, "said once");
+    }
+
+    /// A late answer that REFUSES the key given up on is no key the radio carried out: it is
+    /// reported (the loop still unkeys once more, fail-closed) but as not accepted, so nothing says
+    /// the radio keyed. Hamlib's own "the rig did not answer" is not an acceptance either. Each
+    /// answer is judged whole, however the reads split it.
+    #[test]
+    fn a_late_refusal_of_a_key_given_up_on_is_not_a_key_that_keyed() {
+        for answer in ["RPRT -1\n", "RPRT -11\n", "RPRT -5\n"] {
+            let (addr, _log) = mock_rigctld_paced(move |line| {
+                let delay = if line == "T 1" { 1_500 } else { 0 };
+                let reply = if line == "T 1" { answer } else { "RPRT 0\n" };
+                Some((Duration::from_millis(delay), reply.to_string()))
+            });
+            let mut rig = Rig::rigctld(&addr);
+            assert!(rig.ptt(true).is_err(), "{answer:?}: premise, late");
+            rig.give_up_owed_keys();
+            let _ = rig.ptt(false);
+            let late = rig.take_late_key();
+            assert!(late.is_some_and(|l| !l.accepted), "{answer:?}: {late:?}");
+        }
+    }
+
+    /// ⛔ A KEY CONFIRMED BEHIND A LATE ONE SUPERSEDES IT. A second Tune keyed while the first
+    /// one's key (given up on) was still owed reads that late answer first and then its own: the
+    /// radio is keyed by the second, confirmed key, so the late one is reported as superseded and
+    /// nothing says the radio keyed late after a Tune that worked.
+    #[test]
+    fn a_key_confirmed_behind_a_late_one_supersedes_it() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let first = Arc::new(AtomicBool::new(true));
+        let (addr, _log) = mock_rigctld_paced(move |line| {
+            let held = line == "T 1" && first.swap(false, Ordering::SeqCst);
+            let delay = if held { 1_500 } else { 0 };
+            Some((Duration::from_millis(delay), "RPRT 0\n".to_string()))
+        });
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_network_chain(true);
+        assert!(rig.ptt(true).is_err(), "premise: the first key is late");
+        rig.give_up_owed_keys();
+        assert!(
+            rig.key_awaiting_answer(false).is_ok(),
+            "premise: the second key is confirmed"
+        );
+        let late = rig.take_late_key();
+        assert!(late.is_some_and(|l| l.superseded), "{late:?}");
+    }
+
+    /// ⛔ A KEY GIVEN UP ON, OR LEFT OWED ON A DROPPED CONNECTION, ASKS FOR A WATCH ON THE RADIO'S
+    /// PTT. Its key can still reach the radio after the release, on a rigctld that does not serve
+    /// its connections in order, and nothing on the link would say so. Once each; a key answered in
+    /// time asks for none.
+    #[test]
+    fn a_key_given_up_on_or_left_on_a_dropped_connection_asks_for_a_ptt_watch() {
+        let (addr, _log) = mock_rigctld_paced(|line| {
+            let delay = if line == "T 1" { 1_500 } else { 0 };
+            Some((Duration::from_millis(delay), "RPRT 0\n".to_string()))
+        });
+        let mut given_up = Rig::rigctld(&addr);
+        assert!(given_up.ptt(true).is_err());
+        assert!(!given_up.take_key_watch(), "owed, not yet given up");
+        given_up.give_up_owed_keys();
+        assert!(given_up.take_key_watch(), "given up");
+        assert!(!given_up.take_key_watch(), "once");
+
+        let mut dropped = Rig::rigctld(&addr);
+        assert!(dropped.ptt(true).is_err());
+        dropped.reconnect_for_test();
+        assert!(
+            dropped.take_key_watch(),
+            "left owed on a dropped connection"
+        );
+
+        let (addr, _log) = mock_rigctld_paced(|_| Some((Duration::ZERO, "RPRT 0\n".to_string())));
+        let mut on_time = Rig::rigctld(&addr);
+        assert!(on_time.ptt(true).is_ok());
+        on_time.give_up_owed_keys();
+        on_time.reconnect_for_test();
+        assert!(!on_time.take_key_watch(), "a key answered in time");
+    }
+
+    /// The controls: a key answered in time, a late key nobody gave up on (the over it keyed still
+    /// went out, as a slot over on a late key does), and a key given up on once its answer was
+    /// already in, are no late key.
+    #[test]
+    fn a_key_answered_in_time_or_not_given_up_on_is_no_late_key() {
+        let (addr, _log) = mock_rigctld_paced(|line| {
+            Some(match line {
+                "f" => (Duration::ZERO, "14074000\n".to_string()),
+                _ => (Duration::ZERO, "RPRT 0\n".to_string()),
+            })
+        });
+        let mut on_time = Rig::rigctld(&addr);
+        assert!(on_time.ptt(true).is_ok());
+        assert!(on_time.ptt(false).is_ok());
+        assert_eq!(on_time.take_late_key(), None, "a key answered in time");
+
+        let (addr, _log) = mock_rigctld_paced(|line| {
+            Some(match line {
+                "T 1" => (Duration::from_millis(1_500), "RPRT 0\n".to_string()),
+                "f" => (Duration::ZERO, "14074000\n".to_string()),
+                _ => (Duration::ZERO, "RPRT 0\n".to_string()),
+            })
+        });
+        let mut held = Rig::rigctld(&addr);
+        assert!(held.ptt(true).is_err(), "premise: the key's answer is late");
+        std::thread::sleep(Duration::from_millis(1_600));
+        assert_eq!(held.read_freq().map_err(|e| e.to_string()), Ok(14_074_000));
+        assert_eq!(held.take_late_key(), None, "nobody gave up on it");
+        held.give_up_owed_keys();
+        assert!(held.ptt(false).is_ok());
+        assert_eq!(held.take_late_key(), None, "its answer was in before");
+        assert!(
+            held.ptt(true).is_err(),
+            "premise: the next key's answer is late"
+        );
+        assert_eq!(held.ptt(false).map_err(|e| e.to_string()), Ok(()));
+        assert_eq!(held.take_late_key(), None, "released, never given up on");
+    }
+
+    /// A rigctld-compatible server answers a verb it does not implement with `RPRT -11`. That is a
+    /// refusal, answered at once: the read fails as one (never as no answer in time), it is asked
+    /// once, and the connection stays, so the next command goes out on it and is answered.
+    #[test]
+    fn a_verb_the_server_does_not_implement_is_refused_once_on_a_kept_connection() {
+        let (addr, log) = mock_rigctld_paced(|line| {
+            Some(match line {
+                "f" => (Duration::ZERO, "14074000\n".to_string()),
+                _ => (Duration::ZERO, "RPRT -11\n".to_string()),
+            })
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let level = rig.read_level("KEYSPD");
+        assert!(
+            level.as_ref().is_err_and(|e| !no_answer_in_time(e)),
+            "a refusal, not a silent link: {level:?}"
+        );
+        assert_eq!(rig.read_freq().map_err(|e| e.to_string()), Ok(14_074_000));
+        assert_eq!(
+            wait_for_lines(&log, 2),
+            vec![(0, "l KEYSPD".to_string()), (0, "f".to_string())],
+            "asked once, and the connection kept"
+        );
+    }
+
+    /// ⛔ A DUMP CUT SHORT BY A GAP ON THE NETWORK NEVER ANSWERS THE NEXT COMMAND. A rigctld on
+    /// another computer is shared directly now, so `\dump_state` crosses the network. A gap in the
+    /// middle of it longer than the quiet window ended the read early with the connection kept;
+    /// the rest of the dump came in behind the next command's write and was read as its answer
+    /// (here a dial read took a line of the dump for the dial). On a slow transport the
+    /// connection is not kept past a dump, so the next command reads its own answer.
+    #[test]
+    fn a_dump_cut_short_by_a_network_gap_never_answers_the_next_command() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    let Ok(reader) = stream.try_clone() else {
+                        return;
+                    };
+                    for line in std::io::BufReader::new(reader).lines() {
+                        let Ok(line) = line else { return };
+                        let ok = if line == "\\dump_state" {
+                            // The first half, a gap longer than the quiet window, the rest.
+                            stream.write_all(b"1\n2\n0\n").is_ok() && {
+                                std::thread::sleep(Duration::from_millis(600));
+                                stream.write_all(b"7100000\n").is_ok()
+                            }
+                        } else if line == "f" {
+                            stream.write_all(b"14074000\n").is_ok()
+                        } else {
+                            stream.write_all(b"RPRT 0\n").is_ok()
+                        };
+                        if !ok {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_slow_transport(true);
+        let _ = rig.read_rx_ranges();
+        assert_eq!(
+            rig.read_freq().map_err(|e| e.to_string()),
+            Ok(14_074_000),
+            "the dial read took the dump's tail for its answer"
         );
     }
 
