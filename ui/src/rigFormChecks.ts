@@ -353,6 +353,27 @@ export function nativeCivBlockedReason(rigModel: number, rigConn: string): strin
 }
 
 /**
+ * The one setting that would bring this Icom's own scope onto Nexus's scopes, or `null` when no
+ * setting would: `'native-off'` = the Native Icom CI-V switch is off (Hamlib has no scope stream),
+ * `'baud'` = it is on but below 115,200 baud, where the stream never starts. The engine's two
+ * gates, asked from the settings: `native_civ_model` (`nativeCivBlockedReason` above) and
+ * `link_carries_the_scope` in crates/tempo-audio/src/service.rs, which needs 115,200 on a serial
+ * link because the radio refuses wave output below it. `null` too where the operator picked the
+ * sound card's waterfall for this radio (`nativeScope: 'audio'`): that is a choice, not a gap.
+ */
+export function icomScopeCure(s: {
+  rigModel: number
+  rigConn: string
+  icomNativeCat: boolean
+  baud: number
+  nativeScope?: string
+}): 'native-off' | 'baud' | null {
+  if (nativeCivBlockedReason(s.rigModel, s.rigConn) !== null || s.nativeScope === 'audio') return null
+  if (!s.icomNativeCat) return 'native-off'
+  return s.baud < 115_200 ? 'baud' : null
+}
+
+/**
  * Icoms with more than ONE data mode, where `1A 06`'s first byte selects D1/D2/D3. Each radio's own
  * CI-V reference, "Data mode with filter width settings" (`1A 06`), first data byte:
  *
