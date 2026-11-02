@@ -28312,6 +28312,11 @@ contact yourself."
         self.audio_error = err;
     }
 
+    /// FreeDV's state for the screens ([`crate::freedv`]), for its listeners to write.
+    pub fn freedv_mut(&mut self) -> &mut crate::freedv::FreedvDto {
+        &mut self.freedv
+    }
+
     /// Record why this station is not sharing its radio, or clear it (#165).
     ///
     /// ⚠️ **Written on EVERY broker decision, in both directions, and that is the whole
@@ -28319,11 +28324,6 @@ contact yourself."
     /// off, clear it. A setter that were only ever called on failure would leave an operator who
     /// fixed the collision staring at the complaint about it — which is the same defect as the
     /// stale address this replaced, pointing the other way.
-    /// FreeDV's state for the screens ([`crate::freedv`]), for its listeners to write.
-    pub fn freedv_mut(&mut self) -> &mut crate::freedv::FreedvDto {
-        &mut self.freedv
-    }
-
     pub fn set_cat_share_error(&mut self, err: Option<String>) {
         self.cat_share_error = err;
     }

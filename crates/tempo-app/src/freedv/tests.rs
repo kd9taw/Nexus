@@ -248,9 +248,14 @@ fn the_contact_listener_is_bound_to_this_computer_alone() {
 }
 
 /// A datagram one byte past the bound is dropped whole by the listener, and one at the bound is
-/// read: the buffer is one byte longer than the bound so the two can be told apart.
+/// read: the buffer is one byte longer than the bound so the two can be told apart. The loop runs
+/// with a bound under the loopback MTU (`serve_log_within`), since some hosts' loopback drops a
+/// 4 KB UDP datagram before the socket sees it; the shipped bound itself is the reader's
+/// (`tempo_net::freedv`'s own test of a datagram one byte past `MAX_DATAGRAM`), and
+/// `serve_log_until` hands the loop exactly that bound.
 #[test]
 fn the_listener_drops_a_datagram_past_the_bound() {
+    const BOUND: usize = 1024;
     let sock = bind_log(0).unwrap();
     let port = sock.local_addr().unwrap().port();
     let seen = Arc::new(AtomicUsize::new(0));
@@ -262,13 +267,13 @@ fn the_listener_drops_a_datagram_past_the_bound() {
         s2.fetch_add(1, Ordering::Relaxed);
     });
     let (e2, sd) = (Arc::clone(&e), Arc::clone(&shutdown));
-    let served = std::thread::spawn(move || serve_log_until(sock, e2, sd, note));
+    let served = std::thread::spawn(move || serve_log_within(sock, e2, sd, note, BOUND));
     let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let mut long = datagram("FreeDV", "K2DEF", "W1BIG");
-    long.resize(MAX_DATAGRAM + 1, b' ');
+    long.resize(BOUND + 1, b' ');
     sender.send_to(&long, (Ipv4Addr::LOCALHOST, port)).unwrap();
     let mut fits = datagram("FreeDV", "K2DEF", "W5FDV");
-    fits.resize(MAX_DATAGRAM, b' ');
+    fits.resize(BOUND, b' ');
     sender.send_to(&fits, (Ipv4Addr::LOCALHOST, port)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
     while seen.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {

@@ -302,15 +302,29 @@ pub fn serve_log_until(
     shutdown: Arc<AtomicBool>,
     note: Note,
 ) {
+    serve_log_within(sock, engine, shutdown, note, MAX_DATAGRAM);
+}
+
+/// [`serve_log_until`] with its byte bound as a parameter. The buffer is one byte longer than
+/// `bound`, so a datagram past the bound is told apart from one at it and dropped whole. A test
+/// passes a bound under the loopback MTU: some hosts' loopback drops a UDP datagram of
+/// [`MAX_DATAGRAM`] bytes before it arrives, which would prove nothing about this loop.
+pub(crate) fn serve_log_within(
+    sock: UdpSocket,
+    engine: Arc<Mutex<Engine>>,
+    shutdown: Arc<AtomicBool>,
+    note: Note,
+    bound: usize,
+) {
     let _ = sock.set_read_timeout(Some(Duration::from_millis(250)));
-    let mut buf = vec![0u8; MAX_DATAGRAM + 1];
+    let mut buf = vec![0u8; bound + 1];
     while !shutdown.load(Ordering::Relaxed) {
         let Ok((n, from)) = sock.recv_from(&mut buf) else {
             continue;
         };
         // Bound to 127.0.0.1, so only this computer can reach it; said again here so a change to
         // the bind cannot quietly open it.
-        if n > MAX_DATAGRAM || !from.ip().is_loopback() {
+        if n > bound || !from.ip().is_loopback() {
             continue;
         }
         take_log_datagram(&engine, &buf[..n], &note);
