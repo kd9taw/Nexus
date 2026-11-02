@@ -149,3 +149,63 @@ fn a_form_save_cannot_move_the_switch_policy() {
         "a stale form moved it"
     );
 }
+
+/// ONE RADIO, ONE WINDOW: the radio the routing (or the operator) picks is driven by another
+/// Nexus window. The station stays on its radio, the notice says the switch was refused, and once
+/// the other window lets go, the same tune takes the radio.
+#[test]
+fn a_switch_to_a_radio_another_window_drives_is_refused_and_said() {
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("nexus-claims-engine-{pid}"));
+    crate::radio_claim::init(dir.clone());
+    let (mut e, vhf) = two_radios();
+    let (hf_port, vhf_port) = (
+        format!("/dev/nexus-route-hf-{pid}"),
+        format!("/dev/nexus-route-vhf-{pid}"),
+    );
+    for p in e.settings.radios.iter_mut() {
+        p.rig_model = 1029;
+        p.ptt_method = "cat".into();
+        p.serial_port = if p.id == vhf {
+            vhf_port.clone()
+        } else {
+            hf_port.clone()
+        };
+    }
+    let vhf_endpoint = format!("serial:{vhf_port}");
+    let other_window = crate::radio_claim::Claims::new(dir.clone());
+    other_window
+        .claim(&vhf_endpoint)
+        .expect("the other window drives the VHF radio");
+
+    e.set_frequency(144.174, "2m", "USB");
+    assert_eq!(
+        e.settings.active_radio, 0,
+        "the station stayed on its radio"
+    );
+    let note = e.snapshot().auto_radio_switch.expect("the refusal is said");
+    assert!(note.refused);
+    assert_eq!(
+        (note.from_id, note.to_id, note.band.as_str()),
+        (0, vhf, "2m")
+    );
+    // The operator's own pick (and Remote's) goes through the same door.
+    e.set_active_radio(vhf);
+    assert_eq!(e.settings.active_radio, 0, "a pick is refused too");
+
+    // The other window closes. (A child another test forks at that instant can hold a copy of the
+    // handle until its exec, a few ms.)
+    drop(other_window);
+    let claims = crate::radio_claim::claims().expect("set up above");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while claims.held_elsewhere(&vhf_endpoint) && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    e.set_frequency(14.074, "20m", "USB");
+    e.set_frequency(144.174, "2m", "USB");
+    assert_eq!(e.settings.active_radio, vhf, "now the routing takes it");
+    let note = e.snapshot().auto_radio_switch.expect("recorded");
+    assert!(!note.refused);
+    // (That the claim moves with a switch is `radio_claim`'s own test: this process's claims are
+    // shared by every engine test running beside this one, so which one holds last is theirs.)
+}

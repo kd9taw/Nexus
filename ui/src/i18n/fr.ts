@@ -10070,6 +10070,7 @@ export const FR: PartialCatalog = {
   "radioSwitch.why": "Pourquoi ?",
   "radioSwitch.undo.onAir": "Pas pendant l'émission : appuyez de nouveau sur Annuler après le passage",
   "radioSwitch.undo.unavailable": "{{radio}} n'est pas disponible, la radio n'a pas changé",
+  "radioSwitch.refused": "{{radio}} est ouverte dans une autre fenêtre Nexus, la radio n'a donc pas changé : passez à cette fenêtre.",
   "settings.radios.setup.action": "Configurer les radios…",
   "settings.radios.setup.title": "Pas à pas, quelle radio fait quoi : bandes, modes sur une bande partagée, changements, audio et une vérification. Rien n’est enregistré avant Terminer.",
   "setup.rig.second.radioSetup": "Choisir quelle radio fait quoi…",

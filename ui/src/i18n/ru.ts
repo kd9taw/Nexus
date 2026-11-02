@@ -10019,6 +10019,7 @@ export const RU: PartialCatalog = {
   "radioSwitch.why": "Почему?",
   "radioSwitch.undo.onAir": "Не во время передачи: нажмите «Отменить» ещё раз после окончания передачи",
   "radioSwitch.undo.unavailable": "{{radio}} недоступен, поэтому трансивер не сменился",
+  "radioSwitch.refused": "{{radio}} открыт в другом окне Nexus, поэтому трансивер не переключился — перейдите в то окно.",
   "radioSetup.title": "Настройка трансиверов",
   "radioSetup.steps.aria": "Шаг {{n}} из {{total}}: {{title}}",
   "radioSetup.step.radios": "Ваши трансиверы",

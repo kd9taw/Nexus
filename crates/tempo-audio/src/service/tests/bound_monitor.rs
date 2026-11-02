@@ -104,3 +104,70 @@ fn the_monitor_thread_is_spawned_with_and_reads_through_the_process_scope() {
         "the monitor's want-list goes through its scope"
     );
 }
+
+/// ONE RADIO, ONE WINDOW, for the monitor too: a radio another live Nexus window drives (by its
+/// port) is never watched here, so this window never starts a rigctld for it, the daemon the
+/// other window could adopt and then lose (the field crash class). Once that window lets go, the
+/// radio is watched again.
+#[test]
+fn the_monitor_skips_a_radio_another_window_drives() {
+    let dir = std::env::temp_dir().join(format!("nexus-monitor-claims-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let here = tempo_app::radio_claim::Claims::new(dir.clone());
+    let other_window = tempo_app::radio_claim::Claims::new(dir.clone());
+    let s = three_radios();
+    other_window
+        .claim("serial:COM5")
+        .expect("the other window drives radio 1, on COM5");
+
+    let (_, want) = monitor_want(&s, None, None);
+    assert_eq!(
+        ids(&want),
+        vec![1, 2],
+        "premise: unbound, both others wanted"
+    );
+    let want = watch_only_free(want, Some(&here));
+    assert_eq!(
+        ids(&want),
+        vec![2],
+        "COM5 is the other window's: not watched"
+    );
+
+    // CONTROL: with no claims set up, nothing changes.
+    let (_, want) = monitor_want(&s, None, None);
+    assert_eq!(ids(&watch_only_free(want, None)), vec![1, 2]);
+
+    // The other window closes: COM5 is free to watch again. (A child another test forks at that
+    // instant can hold a copy of the handle until its exec, a few ms.)
+    drop(other_window);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while here.held_elsewhere("serial:COM5") && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let (_, want) = monitor_want(&s, None, None);
+    assert_eq!(ids(&watch_only_free(want, Some(&here))), vec![1, 2]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The order that makes the monitor's hand-off safe, source-scanned because what is under test is
+/// the order the loop calls things in: the monitor drops a radio another window drives BEFORE it
+/// reconciles (so the pool closes that daemon), lets go of the watch only AFTER (so a window
+/// waiting on the watch never finds the daemon still on the port), and every open waits for other
+/// windows' watches before it looks at the port at all.
+#[test]
+fn the_monitor_lets_go_only_after_closing_and_every_open_waits_for_it() {
+    fn body_of<'a>(src: &'a str, sig: &str) -> &'a str {
+        let rest = &src[src.find(&format!("\n{sig}")).expect(sig) + 1..];
+        &rest[..rest.find("\n}\n").expect("the end of the function")]
+    }
+    let at = |hay: &str, needle: &str| hay.find(needle).unwrap_or_else(|| panic!("{needle}"));
+    let src = include_str!("../../service.rs");
+    let monitor = body_of(src, "fn monitor_loop(");
+    assert!(at(monitor, "watch_only_free(want, claims)") < at(monitor, "reconcile_pool("));
+    assert!(at(monitor, "reconcile_pool(") < at(monitor, "unwatch_all_but("));
+    let open = body_of(src, "fn open_rig(");
+    assert!(
+        at(open, "wait_unwatched(&endpoint, MONITOR_LET_GO)")
+            < at(open, "keys_through_the_tci_client(t)")
+    );
+}

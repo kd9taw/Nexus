@@ -10070,6 +10070,7 @@ export const ES: PartialCatalog = {
   "radioSwitch.why": "¿Por qué?",
   "radioSwitch.undo.onAir": "No mientras se transmite: pulse Deshacer de nuevo al terminar el cambio",
   "radioSwitch.undo.unavailable": "{{radio}} no está disponible, así que la radio no cambió",
+  "radioSwitch.refused": "{{radio}} está abierto en otra ventana de Nexus, así que el equipo no cambió: pase a esa ventana.",
   "settings.radios.setup.action": "Configurar radios…",
   "settings.radios.setup.title": "Paso a paso, qué radio hace qué: bandas, modos en una banda compartida, cambios, audio y una comprobación. No se guarda nada hasta Terminar.",
   "setup.rig.second.radioSetup": "Decidir qué radio hace qué…",

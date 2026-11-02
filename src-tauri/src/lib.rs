@@ -126,9 +126,6 @@ mod profile_sync;
 /// The quit when the logbook still has changes on their way to disk: the window is held while
 /// they are saved, with the radio stopped FIRST — see the module header for the order.
 mod quit;
-/// One radio, one Nexus window: the claim a window holds on the radio it drives, which switching,
-/// a hand-named profile and "Use one radio" respect — see the module header.
-mod radio_claim;
 mod remote_monitor;
 mod remote_service;
 /// The Stations on this network window: the Connect to my station… window, on the PC an operator
@@ -2826,7 +2823,7 @@ fn opens_on_the_radio_picker(s: &Settings, profile: Option<&str>) -> bool {
 /// timeout when it repeats that choice ([`radio_picker_timed_out`]) or a picker that could not be
 /// asked at all ([`radio_picker_unavailable`]). A pick never starts it, and a quit takes it so
 /// nothing can ([`stop_the_radio`]). A launch that does not open on the picker starts its loop
-/// exactly as before, unless its radio is open in another Nexus window ([`radio_claim`]): then the
+/// exactly as before, unless its radio is open in another Nexus window ([`tempo_app::radio_claim`]): then the
 /// loop waits here too, and switching this window to a free radio ([`set_active_radio`]) starts it.
 #[cfg(feature = "radio")]
 static PICKER_HELD_RADIO: RadioGate<(SharedEngine, tempo_audio::service::RadioConfig)> =
@@ -3080,11 +3077,18 @@ fn use_single_radio(state: State<'_, SharedEngine>) -> Result<(), String> {
     Ok(())
 }
 
-/// Claim this window's active radio ([`radio_claim`]): `Err` with the operator's words when
-/// another live Nexus window runs it.
+/// Claim this window's active radio ([`tempo_app::radio_claim`], by its port): `Err` with the
+/// operator's words when another live Nexus window runs it.
 fn claim_active_radio(engine: &SharedEngine) -> Result<(), String> {
-    let id = engine_lock(engine).settings().active_radio;
-    radio_claim::claims().claim(id)
+    claim_active_radio_of(engine_lock(engine).settings())
+}
+
+/// [`claim_active_radio`] on settings already in hand.
+fn claim_active_radio_of(s: &Settings) -> Result<(), String> {
+    match s.radios.iter().find(|r| r.id == s.active_radio) {
+        Some(p) => tempo_app::radio_claim::claim_profile(p),
+        None => Ok(()),
+    }
 }
 
 /// Start the held radio loop as this window's station, its radio claimed first. The picker's
@@ -3116,17 +3120,18 @@ fn radio_picker_timed_out(
                 "radio picker: no answer in time; opening each radio in its own window, as last time",
             );
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            let ids: Vec<u32> = engine_lock(&state)
+            // A radio another window drives (by its port) is already open: not opened twice.
+            let ids: Vec<(u32, bool)> = engine_lock(&state)
                 .settings()
                 .radios
                 .iter()
                 .filter(|r| r.enabled)
-                .map(|r| r.id)
+                .map(|r| (r.id, tempo_app::radio_claim::profile_held_elsewhere(r)))
                 .collect();
             flush_settings();
-            for id in ids {
+            for (id, held_elsewhere) in ids {
                 let key = radio_profile_key(id);
-                if profile_in_use(&key) || radio_claim::claims().held_elsewhere(id) {
+                if profile_in_use(&key) || held_elsewhere {
                     continue; // already open in another window
                 }
                 tempo_core::process::command(&exe)
@@ -3487,13 +3492,16 @@ mod picker_radio_hold_tests {
         // the engine is touched.
         let launch_gate = &launch[at(launch, "PICKER_HELD_RADIO.hold_or_start(")..];
         assert!(
-            at(launch_gate, "radio_claim::claims().claim(id)")
+            at(launch_gate, "claim_active_radio_of(eng.settings())")
                 < at(launch_gate, "start_radio_loop")
         );
         let switch = body_of("fn set_active_radio(");
         assert!(
-            at(switch, "claims.held_elsewhere(id)") < at(switch, "eng.set_active_radio(id)")
-                && at(switch, "claims.claim(id)?") < at(switch, "eng.set_active_radio(id)")
+            at(switch, "profile_held_elsewhere")
+                < at(switch, "return Err(tempo_app::radio_claim::REFUSAL")
+                && at(switch, "return Err(tempo_app::radio_claim::REFUSAL")
+                    < at(switch, "eng.set_active_radio(id)"),
+            "refused, in the operator's words, before the engine is touched"
         );
 
         let stop = body_of("fn stop_the_radio() {");
@@ -27102,15 +27110,22 @@ fn set_rx_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot,
 /// `apply_settings`). Persisted so the active radio survives a restart. Returns the snapshot.
 #[tauri::command(async)]
 fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
-    // One radio, one window: a radio another live Nexus window runs is refused, and this window
-    // stays on the radio it had. A window that drives a radio (not the picker) claims the new one.
-    let claims = radio_claim::claims();
-    if claims.held_elsewhere(id) {
-        return Err(radio_claim::REFUSAL.to_string());
-    }
-    let station = !opens_on_the_radio_picker(engine_lock(&state).settings(), active_profile());
-    if station {
-        claims.claim(id)?;
+    // One radio, one window: a radio another live Nexus window runs (by its port) is refused with
+    // the operator's words, and this window stays on the radio it had. The engine's switch itself
+    // claims the new radio and refuses one taken in the meantime (`Engine::set_active_radio`).
+    let (held_elsewhere, station) = {
+        let eng = engine_lock(&state);
+        let s = eng.settings();
+        (
+            s.radios
+                .iter()
+                .find(|r| r.id == id)
+                .is_some_and(tempo_app::radio_claim::profile_held_elsewhere),
+            !opens_on_the_radio_picker(s, active_profile()),
+        )
+    };
+    if held_elsewhere {
+        return Err(tempo_app::radio_claim::REFUSAL.to_string());
     }
     let snap = {
         let mut eng = engine_lock(&state);
@@ -46499,6 +46514,9 @@ pub fn run() {
             active_profile()
         );
     }
+    // One radio, one window: every window's claims live in the BASE profile's folder, so any
+    // window sees any other's (`tempo_app::radio_claim`). Before anything can claim or switch.
+    tempo_app::radio_claim::init(config_dir_for(None).join("radio-claims"));
 
     // First launch of a radio profile: seed its per-instance settings from the default (shared)
     // profile so the new window inherits the radios list + all prefs — otherwise it would boot on
@@ -47918,7 +47936,7 @@ fn start_on_the_logbook(
         }));
         // A window that opens on the radio picker drives no radio until the operator answers it
         // (see `PICKER_HELD_RADIO`), and no window drives a radio another Nexus window runs
-        // (`radio_claim`): it says why and waits for a switch to a free one. Every other launch
+        // (`tempo_app::radio_claim`): it says why and waits for a switch to a free one. Every other launch
         // claims its radio and starts its loop here, as always.
         let picker_engine = engine.clone();
         PICKER_HELD_RADIO.hold_or_start(
@@ -47927,8 +47945,7 @@ fn start_on_the_logbook(
                 if opens_on_the_radio_picker(eng.settings(), active_profile()) {
                     return true;
                 }
-                let id = eng.settings().active_radio;
-                match radio_claim::claims().claim(id) {
+                match claim_active_radio_of(eng.settings()) {
                     Ok(()) => false,
                     Err(why) => {
                         tempo_core::applog::warn("radio", &why);

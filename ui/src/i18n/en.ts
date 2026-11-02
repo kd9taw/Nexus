@@ -15301,6 +15301,8 @@ export const EN = {
   'radioSwitch.why': 'Why?',
   'radioSwitch.undo.onAir': 'Not while transmitting: press Undo again after the over',
   'radioSwitch.undo.unavailable': '{{radio}} is not available, so the radio did not change',
+  'radioSwitch.refused':
+    '{{radio}} is open in another Nexus window, so the radio did not change — switch to that window.',
 
   // ── The radio setup (RadioSetupWizard.tsx): Settings ▸ Radio ▸ Radios ▸ Set up radios…, and the
   // first-run setup once a second radio is added. `{{radio}}`, `{{band}}`, `{{bands}}`, `{{model}}`,

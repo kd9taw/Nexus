@@ -67,6 +67,13 @@ export function useRadioSwitchNotice({ snap, policy, selectRadio, openSettingsAt
     }
     if (seq === null || seq === seen.current || !sw) return
     seen.current = seq
+    // The routing chose a radio another Nexus window runs, and the station stayed put. Said
+    // whatever the policy: the band asked for is not on the radio the operator may expect.
+    if (sw.refused) {
+      const radio = snap?.radios?.find((r) => r.id === sw.toId)?.name ?? t('radioSwitch.radio', { id: sw.toId })
+      pushToast(t('radioSwitch.refused', { radio }), 'error', RADIO_SWITCH_NOTICE_MS)
+      return
+    }
     if (policy !== 'tell') return
     // Already moved on (another pick between two snapshots): nothing left to tell or undo.
     if (snap?.activeRadioId !== sw.toId) return

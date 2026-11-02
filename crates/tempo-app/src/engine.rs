@@ -9051,6 +9051,16 @@ impl Engine {
         {
             return;
         }
+        // ONE RADIO, ONE WINDOW (`radio_claim`): a radio another live Nexus window drives is
+        // refused, and this window stays on the one it has. Every switch comes through here (the
+        // operator's pick, Remote's, the band→radio routing), so none can put two windows on one
+        // radio's rigctld. Otherwise the claim moves to the new radio's port with the switch. A
+        // process that never set up claims (tests, headless tools) claims and refuses nothing.
+        if let Some(p) = self.settings.radios.iter().find(|p| p.id == id) {
+            if crate::radio_claim::claim_profile(p).is_err() {
+                return;
+            }
+        }
         self.remote_readings.invalidate();
         // Where the dial was, for a contact a handoff onto another band ends (`on_band_change`).
         let made_on = self.made_on_now();
@@ -9606,10 +9616,22 @@ impl Engine {
                 }
             }) {
                 let from = self.settings.active_radio;
-                self.set_active_radio_with_reset(id, &mut reset);
+                // The radio the routing chose is another Nexus window's: the station stays where
+                // it is, and the screen says why (always, whatever the switch-notice policy).
+                let refused = id != from
+                    && self
+                        .settings
+                        .radios
+                        .iter()
+                        .find(|p| p.id == id)
+                        .is_some_and(crate::radio_claim::profile_held_elsewhere);
+                if !refused {
+                    self.set_active_radio_with_reset(id, &mut reset);
+                }
                 // Said on screen when the policy asks for it (the switch notice). Recorded only
-                // when the switch really happened (it refuses a disabled radio).
-                if self.settings.active_radio != from {
+                // when the switch really happened (it refuses a disabled radio), or was refused
+                // for being another window's.
+                if refused || self.settings.active_radio != from {
                     let seq = self.auto_radio_switch.as_ref().map_or(0, |n| n.seq) + 1;
                     self.auto_radio_switch = Some(crate::dto::AutoRadioSwitch {
                         seq,
@@ -9617,6 +9639,7 @@ impl Engine {
                         to_id: id,
                         band: band.to_string(),
                         mode: route_mode,
+                        refused,
                     });
                 }
             }

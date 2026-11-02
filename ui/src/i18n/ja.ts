@@ -10053,6 +10053,7 @@ export const JA: PartialCatalog = {
   "radioSwitch.why": "理由",
   "radioSwitch.undo.onAir": "送信中は元に戻せません。送信が終わってから「元に戻す」をもう一度押してください",
   "radioSwitch.undo.unavailable": "{{radio}} は使用できないため、無線機は切り替わっていません",
+  "radioSwitch.refused": "{{radio}} は別の Nexus ウィンドウで開いているため、無線機は切り替わりませんでした。そのウィンドウに切り替えてください。",
   "settings.radios.setup.action": "無線機を設定…",
   "settings.radios.setup.title": "どの無線機に何をさせるかを順に決めます：バンド、共有バンドでのモード、切り替え、オーディオ、確認。「完了」を押すまで何も保存されません。",
   "setup.rig.second.radioSetup": "どの無線機に何をさせるか設定…",

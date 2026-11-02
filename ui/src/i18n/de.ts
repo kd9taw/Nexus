@@ -10060,6 +10060,7 @@ export const DE: PartialCatalog = {
   "radioSwitch.why": "Warum?",
   "radioSwitch.undo.onAir": "Nicht während des Sendens: nach dem Durchgang erneut Rückgängig drücken",
   "radioSwitch.undo.unavailable": "{{radio}} ist nicht verfügbar, das Funkgerät wurde nicht gewechselt",
+  "radioSwitch.refused": "{{radio}} ist in einem anderen Nexus-Fenster geöffnet, daher wurde das Funkgerät nicht gewechselt — zu diesem Fenster wechseln.",
   "settings.radios.setup.action": "Funkgeräte einrichten…",
   "settings.radios.setup.title": "Schritt für Schritt festlegen, welches Funkgerät was macht: Bänder, Betriebsarten auf einem geteilten Band, Umschalten, Audio und eine Prüfung. Gespeichert wird erst mit Fertig.",
   "setup.rig.second.radioSetup": "Festlegen, welches Funkgerät was macht…",
