@@ -18,9 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **The Kp says whether it was measured or estimated.** The dashboard bar's Kp now shows NOAA's measured three-hour Kp while its period ended within the last three hours, with that period ("Kp 5 21Z–00Z"), and otherwise NOAA's one-minute estimate, marked "est."; hover it for which it is. The geomagnetic storm notification (and the aurora layer turning itself on) goes by whichever of the two is higher, so a storm that has just begun is not held back until NOAA's next three-hour figure, and it says which one it used: "Kp 6.3 est. 22:36Z" or "Kp 5.7 measured 21–00Z".
+- **A better default size on a scaled Windows display.** On a screen Windows scales to 125% or 150% (most 1080p laptops), Nexus now opens at 80% or 70% instead of 90% or 75%. At the old size the top bar, the cockpit headers and the RTTY and PSK transmit areas wrapped onto extra rows and the decode panes shrank to a few lines; at the new size they sit on one row and the panes get the room back, and text stays at least as large as it would be with Windows scaling turned off. The first time this happens Nexus asks once whether to keep the new size or go back to the old one, and remembers your answer. Screens without scaling, a scale you set yourself in Settings ▸ Appearance, and pop-out windows are not changed, and the size follows the window when you drag it to a monitor with different scaling.
 
 ### Fixed
 - **LoTW, signing from the location in the ADIF: a contact goes with its own grid and place.** With "sign from ADIF location" on, a contact whose grid Nexus filled in (a portable contact, say) was uploaded with whatever grid your station had at upload time, and the state, county, CQ and ITU zones and IOTA Nexus filled in were left out. It now goes with the grid, state, county, zones and IOTA stored on the contact; only a contact with no grid of its own takes your current one, and a contact with none of the others goes without them, as before.
+- **Settings ▸ Station: the State hint no longer runs into the Units label.** On narrower windows (a 1080p screen at 150% scaling, for example) the end of the State hint touched the UNITS heading below it; the Units row now has the same space above it as the rows of fields above it.
 
 ## [1.22.0] — 2026-11-01
 

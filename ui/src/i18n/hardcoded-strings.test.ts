@@ -357,6 +357,8 @@ const MIGRATED = [
   // The radio switch notice (2026-10-27): born migrated. The radio name, the band and the routing
   // mode name in it are data.
   'useRadioSwitchNotice.ts',
+  // The one-time UI-scale prompt on a scaled display: born migrated. The percentages are data.
+  'useScaleFitNotice.ts',
   // The first-contact walk-through and the experience answers (2026-10-27): born migrated. The TX
   // buttons' names in the walk are the strip's own untranslated labels, quoted as data.
   'components/FirstContactWalk.tsx',

@@ -15665,6 +15665,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .settings-grid--lone {
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
 }
+/* A grid that CONTINUES the fields of a disabling group above it (Station: Units after the
+   station fields) keeps their row gap. Grid `gap` only separates items inside one grid, so the
+   split left 0 between the two, and at 1080p/150% the State hint ran into the UNITS label
+   (SettingsStation.spacing.test.tsx). On the grid, not on `.settings-fieldgroup`, which must
+   carry no box of its own. */
+.settings-fieldgroup + .settings-grid {
+  margin-top: var(--space-4);
+}
 /* `auto-fit` IS A TRAP ONCE THE PANEL IS UNBOUND (2026-08-12, with the md+ widening).
    auto-fit collapses the tracks that ended up empty and hands the freed space to the
    `1fr` tracks that survive, so a track's width is (container ÷ number of ITEMS), not
