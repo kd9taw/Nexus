@@ -1493,6 +1493,7 @@ export function OperateCockpit({
         return entry != null && boxes && isBoxId(id) ? (
           <CockpitBox
             box={id}
+            cockpit="operate"
             entry={entry}
             source={boxes}
             selection={boxSel}

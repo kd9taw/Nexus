@@ -503,6 +503,8 @@ const MIGRATED = [
   // Connect's Spots box, born migrated: its one status line is the Phone pane's own.
   'components/connect/SpotsBox.tsx',
   'components/connect/NeededBox.tsx',
+  // The Getting Out list and its sort bar, born migrated: every chip a catalog key.
+  'components/connect/GetoutList.tsx',
   'components/Conversation.tsx',
   'components/Composer.tsx',
   'components/MessageBubble.tsx',

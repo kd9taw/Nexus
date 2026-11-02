@@ -2667,6 +2667,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
     paneEls[b] = (
       <CockpitBox
         box={b}
+        cockpit="phone"
         entry={entry}
         source={boxes}
         selection={boxSel}

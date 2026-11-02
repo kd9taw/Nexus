@@ -2174,6 +2174,7 @@ export function CwCockpit({
     paneEls[b] = (
       <CockpitBox
         box={b}
+        cockpit="cw"
         entry={entry}
         source={boxes}
         selection={boxSel}
