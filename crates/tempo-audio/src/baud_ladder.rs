@@ -383,33 +383,41 @@ pub struct LadderGate {
 pub const SWEEP_REFUSED_RTS_KEYS: &str = "Nexus did not try other baud rates: RTS keys your \
      transmitter on this port, and a baud sweep could not hold it unkeyed.";
 
-/// Should the sweep be refused? Only where RTS keys the radio ([`LadderGate::rts_keys`]) and a
-/// rung cannot hold it down: a rung names ONE keying line to Hamlib (`-P`), so with DTR named
-/// RTS keeps the driver's open-time level; and with RTS named, a backend whose serial handshake
-/// is hardware hands RTS to flow control, which asserts it from port-open (on Windows Hamlib's
-/// un-key is then refused and reported as success — the mechanism in
-/// [`crate::rigctld_proc::SettableLines::keying_rts_on_hardware_handshake`]). `settable` is that
-/// backend's answer, asked of Hamlib with `-P RTS` ([`sweep_refusal`] asks it).
+/// Should the sweep be refused? Wherever RTS keys the radio ([`LadderGate::rts_keys`]) and it is
+/// not PROVEN that a rung holds it down. A rung names ONE keying line to Hamlib (`-P`), so with
+/// DTR named RTS keeps the driver's open-time level: refused. With RTS named, `rig_open` lowers
+/// it only if the backend's serial handshake leaves RTS free; a hardware handshake hands it to
+/// flow control, which asserts it from port-open (on Windows Hamlib's un-key is then refused and
+/// reported as success — the mechanism in
+/// [`crate::rigctld_proc::SettableLines::keying_rts_on_hardware_handshake`]). So the sweep runs
+/// only when the backend's `-L` dump (`dump`, asked with `-P RTS` by [`sweep_refusal`]) proves the
+/// handshake is `None` or `XONXOFF` ([`crate::rigctld_proc::dump_proves_rts_free`]); an unreadable
+/// dump or a token we do not recognise refuses. Fail closed: a refused sweep costs a diagnosis, a
+/// wrong one keys a transmitter. A radio with nothing on RTS never asks.
 fn sweep_refusal_given(
     gate: LadderGate,
-    settable: impl FnOnce() -> crate::rigctld_proc::SettableLines,
+    dump: impl FnOnce() -> Option<String>,
 ) -> Option<&'static str> {
     if !gate.rts_keys {
         return None;
     }
-    match gate.keying {
-        Some(crate::rig::SerialLine::Rts) => settable()
-            .keying_rts_on_hardware_handshake
-            .then_some(SWEEP_REFUSED_RTS_KEYS),
-        _ => Some(SWEEP_REFUSED_RTS_KEYS),
-    }
+    let held_down = gate.keying == Some(crate::rig::SerialLine::Rts)
+        && dump().is_some_and(|d| crate::rigctld_proc::dump_proves_rts_free(&d));
+    (!held_down).then_some(SWEEP_REFUSED_RTS_KEYS)
 }
 
 /// [`sweep_refusal_given`], asking the operator's own Hamlib about `rig_model` (a one-shot
 /// `rigctld -L` dump: it opens no port). Blocking; Test CAT calls it before taking the port.
 pub fn sweep_refusal(rig_model: u32, gate: LadderGate) -> Option<&'static str> {
     sweep_refusal_given(gate, || {
-        crate::rigctld_proc::settable_lines_for(rig_model, Some(crate::rig::SerialLine::Rts))
+        let model = rig_model.to_string();
+        crate::rigctld_proc::daemon_dump(&[
+            "-m",
+            &model,
+            "-L",
+            "-P",
+            crate::rigctld_proc::ptt_type_token(crate::rig::SerialLine::Rts),
+        ])
     })
 }
 
@@ -1848,11 +1856,14 @@ mod tests {
             [("rts", false)],
             "a CI-V rung lowers RTS, and only RTS"
         );
-        // A backend that leaves RTS to the rung (caps handshake None): the sweep runs.
-        assert_eq!(
-            sweep_refusal_given(gate, crate::rigctld_proc::SettableLines::default),
-            None
-        );
+        // A backend whose dump proves its handshake leaves RTS to the rung: the sweep runs.
+        for free in ["None", "XONXOFF"] {
+            assert_eq!(
+                sweep_refusal_given(gate, || Some(handshake_dump(free))),
+                None,
+                "{free}"
+            );
+        }
     }
 
     /// The control: a CAT-keyed radio with nothing on RTS sweeps exactly as before — no `-P`,
@@ -1892,6 +1903,19 @@ mod tests {
         );
     }
 
+    /// A `rigctld -L` dump's `serial_handshake` block, in the bundled 4.7.1's exact shape, with
+    /// the value and the vocabulary substituted.
+    fn handshake_dump_with(value: &str, combo: &str) -> String {
+        format!(
+            "serial_handshake: \"Serial port handshake\"\n\
+             \tDefault: None, Value: {value}\n\
+             \tCombo: {combo}\n"
+        )
+    }
+    fn handshake_dump(value: &str) -> String {
+        handshake_dump_with(value, "None, XONXOFF, Hardware")
+    }
+
     /// ⛔ Where a rung cannot hold RTS down, the sweep is refused with a plain reason: DTR keying
     /// on the port names DTR to Hamlib, so RTS keeps the driver's level; and a backend whose
     /// serial handshake is hardware hands RTS to flow control, which holds it up from the open.
@@ -1899,22 +1923,68 @@ mod tests {
     fn a_sweep_that_cannot_hold_rts_down_is_refused() {
         let dtr = ladder_applies(false, 2028, "COM4", "dtr", "", true).expect("gate");
         assert_eq!(
-            sweep_refusal_given(dtr, crate::rigctld_proc::SettableLines::default),
+            sweep_refusal_given(dtr, || Some(handshake_dump("None"))),
             Some(SWEEP_REFUSED_RTS_KEYS)
         );
         let rts = ladder_applies(false, 2014, "COM4", "rts", "", false).expect("gate");
-        let hardware = || crate::rigctld_proc::SettableLines {
-            keying_rts_on_hardware_handshake: true,
-            ..crate::rigctld_proc::SettableLines::default()
-        };
         assert_eq!(
-            sweep_refusal_given(rts, hardware),
+            sweep_refusal_given(rts, || Some(handshake_dump("Hardware"))),
             Some(SWEEP_REFUSED_RTS_KEYS)
         );
-        // DTR keying with nothing on RTS: the rung's `-P DTR` holds the only keying line.
+        // DTR keying with nothing on RTS: the rung's `-P DTR` holds the only keying line, and
+        // Hamlib is not asked.
         let dtr_only = ladder_applies(false, 2028, "COM4", "dtr", "", false).expect("gate");
         assert_eq!(
-            sweep_refusal_given(dtr_only, crate::rigctld_proc::SettableLines::default),
+            sweep_refusal_given(dtr_only, || panic!("nothing on RTS: nothing to ask")),
+            None
+        );
+    }
+
+    /// ⛔ FAIL CLOSED: on a port where RTS keys, the sweep runs only on PROOF that the backend's
+    /// handshake leaves RTS free. A dump that could not be read, one with no handshake in it, a
+    /// value we do not recognise, or a vocabulary that has grown proves nothing, and refuses.
+    #[test]
+    fn an_unreadable_or_unrecognised_handshake_refuses_the_sweep() {
+        let rts = ladder_applies(false, 2028, "COM4", "cat", "", true).expect("gate");
+        let refused = Some(SWEEP_REFUSED_RTS_KEYS);
+        assert_eq!(
+            sweep_refusal_given(rts, || None),
+            refused,
+            "the dump did not run"
+        );
+        assert_eq!(
+            sweep_refusal_given(rts, || Some(String::new())),
+            refused,
+            "empty dump"
+        );
+        assert_eq!(
+            sweep_refusal_given(rts, || Some("ptt_type: \"x\"\n".to_string())),
+            refused,
+            "no handshake in the dump"
+        );
+        assert_eq!(
+            sweep_refusal_given(rts, || Some(handshake_dump("RtsCtsPlus"))),
+            refused,
+            "an unknown value"
+        );
+        assert_eq!(
+            sweep_refusal_given(rts, || {
+                Some(handshake_dump_with(
+                    "None",
+                    "None, XONXOFF, Hardware, RtsCtsPlus",
+                ))
+            }),
+            refused,
+            "a vocabulary that has grown proves nothing, even with the value None"
+        );
+        assert_eq!(
+            sweep_refusal_given(rts, || Some(handshake_dump_with("None", ""))),
+            refused,
+            "no vocabulary printed"
+        );
+        // The positive control: proof of None runs the sweep.
+        assert_eq!(
+            sweep_refusal_given(rts, || Some(handshake_dump("None"))),
             None
         );
     }

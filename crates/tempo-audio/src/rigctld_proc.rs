@@ -1280,10 +1280,7 @@ const HANDSHAKE_RTS_TAKEN: [&str; 1] = ["Hardware"];
 /// (`rig.c:1241-1249` tests `rts_state`) — but it means "unreadable" is a per-line question,
 /// not a whole-dump one. What is guaranteed is the direction: no `true` is ever produced
 /// without the specific evidence that line needs.
-pub(crate) fn settable_lines_for(
-    model: u32,
-    ptt_line: Option<crate::rig::SerialLine>,
-) -> SettableLines {
+fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> SettableLines {
     let model = model.to_string();
     let mut args = vec!["-m", model.as_str(), "-L"];
     // Ask with the SAME keying override we are about to launch with, so the answer is the
@@ -1381,6 +1378,20 @@ fn known_conf_value<'a>(dump: &'a str, name: &str, vocabulary: &[&str]) -> Optio
         return None;
     }
     vocabulary.contains(&value).then_some(value)
+}
+
+/// Does a `rigctld -L` dump PROVE the backend's serial handshake leaves RTS free — `None` or
+/// `XONXOFF`, read through the pinned vocabulary ([`known_conf_value`])? An unreadable dump, a
+/// missing parameter, an unrecognised value or a vocabulary that has grown all prove nothing,
+/// so they are `false`: the caller that needs RTS held down fails closed on them.
+pub(crate) fn dump_proves_rts_free(show_conf: &str) -> bool {
+    let vocabulary: Vec<&str> = HANDSHAKE_RTS_FREE
+        .iter()
+        .chain(HANDSHAKE_RTS_TAKEN.iter())
+        .copied()
+        .collect();
+    known_conf_value(show_conf, "serial_handshake", &vocabulary)
+        .is_some_and(|h| HANDSHAKE_RTS_FREE.contains(&h))
 }
 
 /// Read a `rigctld --show-conf` dump: which lines Hamlib will accept a `<line>_state` for.
