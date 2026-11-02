@@ -2398,6 +2398,11 @@ pub struct RadioStatus {
     /// Absent when false, so every other snapshot is byte for byte what it was.
     #[serde(default, skip_serializing_if = "is_false")]
     pub tune_tone_refused: bool,
+    /// A Tune press was refused because a slot over (FT8, FT4, JS8…) was on the air with Split
+    /// Operation Rig or Fake It, which may have moved the TX dial for it: shown beside Tune while
+    /// that over is on the air (`Engine::set_tune_for`). Absent when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tune_over_refused: bool,
     /// While Nexus's own Flex client runs the radio's own ATU (Beta, off until a tester's bench)
     /// and the radio reports a tuner fitted: what is shown beside the ATU, the radio's tune power
     /// and transmit timeout as beside Tune, and the ATU line. See `Engine::observe_flex_atu`.

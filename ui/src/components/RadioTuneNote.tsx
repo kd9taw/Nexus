@@ -12,19 +12,26 @@ import type { RadioStatus } from '../types'
  * (`flexTuneRefused`, `flexAtuRefused`) the note says so, since that control then keys nothing.
  * The ATU line follows: why the last press started no cycle, in the station's words, or else the
  * radio's own word for its cycle (`TUNE_SUCCESSFUL`, `TUNE_FAIL`, …), as data. On every other
- * station it renders only why Tune keys nothing when the licence refuses Nexus's own tune tone where
- * it goes out (`tuneToneRefused`), and otherwise nothing.
+ * station it renders only why Tune keys nothing: the licence refuses Nexus's own tune tone where it
+ * goes out (`tuneToneRefused`), or a press came while a slot over was on the air with Split
+ * Operation on (`tuneOverRefused`); otherwise nothing. Both show beside the Flex readouts too, since
+ * a Flex running only its ATU natively still tunes with Nexus's tone.
  *
  * Drawn AFTER a strip's controls, never between them: Tune, ATU and Stop TX keep their places.
  */
 export function RadioTuneNote({ radio }: { radio: RadioStatus }) {
   const atu = radio.flexAtu
   const readouts = radio.flexTune ?? atu?.tune
+  // Why Tune keys nothing, on any station: the licence refuses Nexus's own tone where it goes out,
+  // or a press came while a slot over was on the air with Split Operation on.
+  const tuneRefusals = [
+    radio.tuneToneRefused && <span key="tone">{t('operate.strip.tune.toneRefused')}</span>,
+    radio.tuneOverRefused && <span key="over">{t('operate.strip.tune.overRefused')}</span>,
+  ].filter(Boolean)
   if (!readouts) {
-    // Tune is Nexus's own tone, and the licence refuses it where the tone goes out.
-    return radio.tuneToneRefused ? (
+    return tuneRefusals.length > 0 ? (
       <span className="radio-tune-note warn" role="note">
-        <span>{t('operate.strip.tune.toneRefused')}</span>
+        {tuneRefusals}
       </span>
     ) : null
   }
@@ -34,6 +41,7 @@ export function RadioTuneNote({ radio }: { radio: RadioStatus }) {
       {readouts.powerPct != null && <span>{t('operate.strip.tune.radioPower', { pct: readouts.powerPct })}</span>}
       <span>{timeoutMs > 0 ? timeoutWords(timeoutMs) : t('operate.strip.tune.noRadioTimeout')}</span>
       {radio.flexTuneRefused && <span>{t('operate.strip.tune.radioRefused')}</span>}
+      {tuneRefusals}
       {radio.flexAtuRefused && <span>{t('operate.strip.atu.radioRefused')}</span>}
       {atu?.refused ? (
         <span>{atu.refused}</span>

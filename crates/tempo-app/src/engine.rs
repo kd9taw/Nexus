@@ -3772,6 +3772,10 @@ pub struct Engine {
     /// beside Tune. It also makes the tune judged as CW where the radio puts the carrier; see
     /// [`Self::observe_flex_tune`].
     flex_tune: Option<crate::dto::FlexTune>,
+    /// When a Tune press was last refused because a slot over was on the air with Split Operation
+    /// on ([`Self::set_tune_for`]): the note beside Tune says why for as long as that over stays
+    /// on the air, at most [`TUNE_OVER_REFUSED_SECS`] (`RadioStatus::tune_over_refused`).
+    tune_over_refused_at: Option<Instant>,
     /// While Nexus's own Flex client runs the radio's own ATU: what is shown beside it. It also
     /// makes an ATU press judged as CW where the radio puts the carrier; see
     /// [`Self::observe_flex_atu`].
@@ -6047,6 +6051,9 @@ fn atu_carrier_outside(mhz: f64) -> String {
 /// dial on the side the transmitting VFO's mode word names ([`Engine::tune_allowed`]). One number
 /// for both, so the gate cannot judge a tone the loop does not play.
 pub const TUNE_TONE_HZ: f32 = 1500.0;
+/// The longest a refused Tune press during a slot over is shown beside Tune (seconds): an FT8
+/// period. The note goes sooner, with the over ([`Engine::set_tune_for`]).
+const TUNE_OVER_REFUSED_SECS: u64 = 15;
 /// Why an ATU press keys nothing while Nexus's own Flex client runs the radio's ATU and the
 /// licence allows the section's emission but not CW where the radio transmits
 /// ([`Engine::atu_tune_gate`]).
@@ -7224,6 +7231,7 @@ impl Engine {
             flex_dax_tx: false,
             flex_radio_has_mic: false,
             flex_tune: None,
+            tune_over_refused_at: None,
             flex_atu: None,
             flex_meter_stream: false,
             last_dx_tier: None,
@@ -24396,6 +24404,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 "tx",
                 "tune not keyed: an over is on the air from a TX dial Split Operation moved",
             );
+            self.tune_over_refused_at = Some(Instant::now());
             return;
         }
         // A tune toggle invalidates any planned over (commit_tx checks the generation).
@@ -24405,6 +24414,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
         self.tuning = on && self.tune_allowed();
+        if on {
+            self.tune_over_refused_at = None; // a press that got past the over answers anew
+        }
         if on && !self.tuning && self.tx_allowed() && !self.tune_tone_allowed() {
             // The cockpit says so beside Tune for as long as it holds (`tune_tone_refused`).
             tempo_core::applog::info(
@@ -30446,6 +30458,10 @@ contact yourself."
         s.radio.flex_tune_refused =
             self.flex_tune.is_some() && self.tx_allowed() && !self.tune_allowed();
         s.radio.tune_tone_refused = self.tx_allowed() && !self.tune_tone_allowed();
+        s.radio.tune_over_refused = self.app.radio.transmitting
+            && self
+                .tune_over_refused_at
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(TUNE_OVER_REFUSED_SECS));
         s.radio.flex_atu = self.flex_atu.clone();
         s.radio.flex_atu_refused = self.flex_atu.is_some()
             && self.tx_allowed()
@@ -41213,8 +41229,16 @@ mod tests {
             "…and the planned over was not invalidated"
         );
         assert!(e.tx_enabled(), "…nor the sequencer stood down");
+        assert!(
+            e.snapshot().radio.tune_over_refused,
+            "the note beside Tune says why"
+        );
 
         e.app.set_transmitting(false);
+        assert!(
+            !e.snapshot().radio.tune_over_refused,
+            "…for as long as the over is on the air"
+        );
         e.set_tune(true);
         assert!(e.tuning(), "CONTROL: off the air, Tune keys");
         e.app.set_transmitting(true);

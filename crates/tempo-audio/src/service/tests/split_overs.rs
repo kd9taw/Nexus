@@ -2034,6 +2034,56 @@ fn a_voice_keyer_message_with_rig_split_held_keys_with_vfo_b_back_on_the_rx_dial
     );
 }
 
+/// ⛔ THE FAKE IT COUNTERPART OF AN OWED RELEASE. A Fake It over moved VFO A to its TX dial
+/// (14.0735 at a 1441 Hz offset); the write-back after it was refused and is still owed, the radio
+/// refusing every dial write meanwhile. A tune then used to key from the shifted VFO A, its tone
+/// 500 Hz below where the gate judged it (`fake_it_write_back_before_key` leaves a refused try to
+/// the teardown): it keys nothing now, the tune ends and the line names Split Operation. The
+/// control: the same write-back owed but not yet tried goes out ahead of the tune's key, as before.
+/// (Inside the over's own period the engine already refuses the press; this is the key that comes
+/// after it, and any other key that is not a slot over takes the same guard.)
+#[test]
+fn a_tune_while_a_refused_fake_it_write_back_is_owed_keys_nothing() {
+    for (what, tried, keys) in [
+        ("a refused try owed", 1, false),
+        ("control: not yet tried", 0, true),
+    ] {
+        let mut b = hamlib_bench(SplitMode::FakeIt, 1441.0, None);
+        let _ = b.overs(1);
+        // The write-back owed, as the teardown leaves it after a refused try, VFO A still on the
+        // over's TX dial as far as anyone knows.
+        b.state.fake_it_restore = Some(FT8_DIAL);
+        b.state.fake_it_tx_dial = Some(SHIFTED_TX_DIAL);
+        b.state.fake_it_restore_tries = tried;
+        b.state.fake_it_restore_at = None;
+        // No dial read in these few ticks: one would find where the radio really is and settle it.
+        b.state.last_freq_poll = b.t + 10_000.0;
+        b.state.last_rig_poll = b.t + 10_000.0;
+        b.radio.vfos.lock().unwrap().refuse_f = if keys { 0 } else { 10 };
+        b.engine.lock().unwrap().set_tune(true);
+        let writes = b.ticks(3);
+        let keyed = writes.iter().any(|l| is_key(l));
+        assert_eq!(keyed, keys, "{what}: keyed: {writes:?}");
+        if keys {
+            let f = writes.iter().position(|l| l == "F 14074000");
+            let k = writes.iter().position(|l| is_key(l));
+            assert!(
+                f < k && f.is_some(),
+                "{what}: the write-back before the key: {writes:?}"
+            );
+        } else {
+            let e = b.engine.lock().unwrap();
+            assert!(!e.tuning(), "{what}: the refused tune is still asked for");
+            let line = e.snapshot().radio.audio_error;
+            assert!(
+                line.as_deref()
+                    .is_some_and(|w| w.contains("Split Operation")),
+                "{what}: nothing says why: {line:?}"
+            );
+        }
+    }
+}
+
 impl<R: Radio> Bench<R> {
     /// [`Self::ticks`], a rebuilt link reopening through `addr` (the same radio, a new connection).
     fn ticks_reopening(&mut self, n: usize, addr: &str) -> Vec<String> {

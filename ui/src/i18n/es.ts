@@ -5087,6 +5087,7 @@ export const ES: PartialCatalog = {
   "operate.strip.tune.noRadioTimeout": "El límite de tiempo de transmisión del equipo está desactivado. Si Nexus o la red fallan durante una sintonía, nada cortará la portadora. Configura un límite de tiempo de transmisión en SmartSDR.",
   "operate.strip.tune.radioRefused": "Tune no transmite aquí: la portadora propia del equipo quedaría fuera de tus privilegios de CW en esta frecuencia.",
   "operate.strip.tune.toneRefused": "Tune no transmite aquí: su tono de 1500 Hz quedaría fuera de los privilegios de tu licencia en esta frecuencia.",
+  "operate.strip.tune.overRefused": "Tune no transmite mientras haya un turno FT en el aire con la operación Split activada: el equipo puede estar transmitiendo desde una frecuencia desplazada. Pulsa Tune de nuevo tras el turno.",
   "operate.strip.atu.radioStatus": "ATU del equipo: {{status}}",
   "operate.strip.atu.radioRefused": "ATU no transmite aquí: la portadora propia del equipo quedaría fuera de tus privilegios de CW en esta frecuencia.",
   "operate.strip.txControls.aria": "Controles de transmisión",

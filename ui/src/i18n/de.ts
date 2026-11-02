@@ -7007,6 +7007,7 @@ export const DE: PartialCatalog = {
   "operate.strip.tune.noRadioTimeout": "Das Sendezeitlimit des Funkgeräts ist aus. Fallen Nexus oder das Netzwerk während des Abstimmens aus, beendet nichts den Träger. Stellen Sie in SmartSDR ein Sendezeitlimit ein.",
   "operate.strip.tune.radioRefused": "Tune sendet hier nichts: Der eigene Träger des Funkgeräts läge auf dieser Frequenz außerhalb Ihrer CW-Berechtigung.",
   "operate.strip.tune.toneRefused": "Tune sendet hier nichts: Sein 1500-Hz-Ton läge auf dieser Frequenz außerhalb Ihrer Lizenzberechtigung.",
+  "operate.strip.tune.overRefused": "Tune sendet nichts, solange ein FT-Durchgang mit eingeschaltetem Split-Betrieb läuft: Das Funkgerät sendet womöglich auf einer verschobenen Frequenz. Drücken Sie Tune nach dem Durchgang erneut.",
   "operate.strip.atu.radioStatus": "ATU des Funkgeräts: {{status}}",
   "operate.strip.atu.radioRefused": "ATU sendet hier nichts: Der eigene Träger des Funkgeräts läge auf dieser Frequenz außerhalb Ihrer CW-Berechtigung.",
   "operate.strip.rigDiverge.label": "Rig: {{mode}}",

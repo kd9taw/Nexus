@@ -6974,7 +6974,8 @@ impl RadioLoop {
     /// was readied when it went up. One exception stays as it was: a tune that supersedes a slot
     /// over still on the air keys over that over's TX dial, as with Fake It.
     ///
-    /// `Err` keys nothing: the release is owed, or VFO B's write was refused, unanswered or late.
+    /// `Err` keys nothing: the release is owed, a Fake It write-back the radio refused is owed, or
+    /// VFO B's write was refused, unanswered or late.
     /// The refusal goes on the PTT line and in the log as `what`'s; the caller drops its key.
     fn split_ready_for_a_non_slot_key(
         &mut self,
@@ -6990,6 +6991,12 @@ impl RadioLoop {
             // may still be in Nexus's split with VFO B on the last over's TX dial. No key until it
             // is confirmed at a quiet point (`retry_rig_split_release`), as no slot over keys.
             Err("the radio has not yet taken the split release".to_string())
+        } else if self.fake_it_restore.is_some() && self.fake_it_restore_tries > 0 {
+            // ⛔ …AND THE FAKE IT COUNTERPART: a write-back the radio refused is still owed, so VFO A
+            // may still be on the last over's TX dial (`fake_it_write_back_before_key` leaves a
+            // refused try to the teardown). No key until the radio has gone back to the dial, or
+            // the teardown has given up and said so.
+            Err("the radio has not yet gone back to the dial after the Fake It over".to_string())
         } else if !self.audio_rig_split {
             return Ok(());
         } else {

@@ -18,6 +18,11 @@ const SIGNED_WARNING =
   "The radio's transmit timeout is off. If Nexus or the network fails during a tune, nothing will " +
   'end the carrier. Set a transmit timeout in SmartSDR.'
 
+/** Why a Tune press during a split FT over keyed nothing, word for word. */
+const OVER_REFUSED =
+  'Tune keys nothing while an FT over is on the air with Split Operation on: the radio may be ' +
+  'transmitting from a moved frequency. Press Tune again after the over.'
+
 /** Not keyed, TX armed (the strips' own tests' fixture), with `extra`. */
 function radio(extra: Partial<RadioStatus>): RadioStatus {
   return {
@@ -79,6 +84,13 @@ describe('the note beside Tune', () => {
     expect(note(radio({ tuneToneRefused: false }))).toBeNull()
   })
 
+  it('says why Tune keys nothing when it was pressed while a split FT over was on the air', () => {
+    render(<RadioTuneNote radio={radio({ tuneOverRefused: true })} />)
+    expect(screen.getByRole('note').textContent).toBe(OVER_REFUSED)
+    cleanup()
+    expect(note(radio({ tuneOverRefused: false }))).toBeNull()
+  })
+
   it('says why Tune keys nothing when the licence refuses the radio’s carrier here', () => {
     expect(
       note(radio({ flexTune: { powerPct: 10, txTimeoutMs: 30_000 }, flexTuneRefused: true })),
@@ -119,6 +131,16 @@ describe('beside the ATU, while the ATU is the radio’s own', () => {
     const why = 'ATU not started: the radio refused it (0x5000002C).'
     expect(note(radio({ flexAtu: atu({ status: 'TUNE_SUCCESSFUL', refused: why }) }))).toBe(
       `Radio tune power 10 %Radio TX timeout 30 s${why}`,
+    )
+  })
+
+  it('still says why Tune keys nothing when Tune is Nexus’s own tone beside the radio’s own ATU', () => {
+    expect(note(radio({ flexAtu: atu({}), tuneToneRefused: true }))).toBe(
+      'Radio tune power 10 %Radio TX timeout 30 s' +
+        'Tune keys nothing here: its 1500 Hz tone would be outside your license privileges on this frequency.',
+    )
+    expect(note(radio({ flexAtu: atu({}), tuneOverRefused: true }))).toBe(
+      'Radio tune power 10 %Radio TX timeout 30 s' + OVER_REFUSED,
     )
   })
 

@@ -276,6 +276,7 @@ impl AppState {
                 flex_tune: None,
                 flex_tune_refused: false,
                 tune_tone_refused: false,
+                tune_over_refused: false,
                 flex_atu: None,
                 flex_atu_refused: false,
                 flex_meter_stream: false,
