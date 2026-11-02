@@ -7217,11 +7217,12 @@ export function SettingsPanel({
 
               {/* The client's Beta setting for CW, Tune and the ATU, which no bench has confirmed yet
                   (operator ruling, 2026-10-14, "A Beta setting, off by default"). Per radio, and
-                  shown only where Nexus's own Flex client is this radio's connection, the one place
-                  it means anything (`flex_client_reachable` and the opt-in above). Only at the
-                  shack: a press that comes through the Remote stream changes nothing. */}
-              {form.rigConn === 'network' &&
-                [2036, 23005].includes(form.rigModel) &&
+                  shown wherever Nexus's own Flex client can run, the one place it means anything
+                  (`flex_client_reachable` and the opt-in above). That is any CAT connection, Serial
+                  included: the client talks to the radio at its own address and honours this
+                  there, so hiding it off the network left a setting no one could turn off. Only at
+                  the shack: a press that comes through the Remote stream changes nothing. */}
+              {[2036, 23005].includes(form.rigModel) &&
                 form.flexNativeCat &&
                 (form.flexRadioIp ?? '').trim() !== '' && (
                   <label className="settings-field">

@@ -4,9 +4,9 @@
 // setting, off by default"). Nexus's own Flex client refuses those three starts until a tester's
 // bench confirms them; this per-radio switch lets the operator turn them on before then.
 //
-// What the panel owes it, pinned here: the switch shows only where the client is the radio's
-// connection (a Flex profile on the network, the client switched on, the radio's address set) and
-// is hidden everywhere else; it reads off for a radio that has never stated it; a click turns it on
+// What the panel owes it, pinned here: the switch shows wherever the client can run (a Flex
+// profile, the client switched on, the radio's address set — on any CAT connection, Serial
+// included, since the client talks to the radio at its own address) and is hidden everywhere else; it reads off for a radio that has never stated it; a click turns it on
 // and Save sends it, for the radio in use and for one being edited; and it is changed only at the
 // shack, never by a press that comes through the Remote stream. The presses through the stream come
 // from the REAL stream dispatcher, as LanStation's test makes them, each paired with the same press
@@ -206,10 +206,23 @@ describe("the Flex client's Beta setting for CW, Tune and the ATU", () => {
     ],
     ['a Flex on SmartSDR CAT (the client off)', { ...FLEX, flexNativeCat: false }, 1],
     ['a Flex with the client on and no radio address', { ...FLEX, flexRadioIp: '  ' }, 1],
-    ['a Flex profile not on the network', { ...FLEX, rigConn: 'serial' }, 1],
+    ['a Flex on Serial with the client off', { ...FLEX, rigConn: 'serial', flexNativeCat: false }, 1],
   ])('is hidden on %s', async (_name, radio, id) => {
     await renderAdvanced(settingsWith(radio as typeof FLEX), id as number)
     expect(theSwitch()).toBeNull()
+  })
+
+  // The client runs on a Serial (SmartSDR CAT COM port) profile too, and honours this setting
+  // there (`flex_client_unbenched` has no connection term). Hidden, a setting turned on over the
+  // network could never be turned off again from Serial.
+  it('shows on a Flex on Serial where the client runs, and turns off there', async () => {
+    await renderAdvanced(settingsWith({ ...FLEX, rigConn: 'serial', rigAddr: '', flexNativeUnbenched: true } as typeof FLEX), 1)
+    const sw = theSwitch()
+    expect(sw, 'shown on a Flex on Serial with the client on').not.toBeNull()
+    expect(sw!.disabled).toBe(false)
+    expect(sw!.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(sw!)
+    expect(theSwitch()!.getAttribute('aria-checked')).toBe('false')
   })
 
   it('a click at the shack turns it on, and Save sends it for the radio in use', async () => {
