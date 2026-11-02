@@ -278,7 +278,7 @@ fn cat_port_ptt_line(t: &Transport) -> Option<SerialLine> {
 /// on the CAT port" declaration, or the CW serial keyline on this very port's RTS (a separate
 /// port by design, warned about by `cw_key_port_conflict` when it is not — but if it is, RTS on
 /// this port is the key line).
-fn settings_key_rts_on(s: &Settings, cat_port: &str) -> bool {
+pub fn settings_key_rts_on(s: &Settings, cat_port: &str) -> bool {
     let port = cat_port.trim();
     s.cat_rts_keys_ptt
         || (s.cw_keyer == tempo_app::settings::CwKeyerBackend::Serial

@@ -1280,7 +1280,10 @@ const HANDSHAKE_RTS_TAKEN: [&str; 1] = ["Hardware"];
 /// (`rig.c:1241-1249` tests `rts_state`) — but it means "unreadable" is a per-line question,
 /// not a whole-dump one. What is guaranteed is the direction: no `true` is ever produced
 /// without the specific evidence that line needs.
-fn settable_lines_for(model: u32, ptt_line: Option<crate::rig::SerialLine>) -> SettableLines {
+pub(crate) fn settable_lines_for(
+    model: u32,
+    ptt_line: Option<crate::rig::SerialLine>,
+) -> SettableLines {
     let model = model.to_string();
     let mut args = vec!["-m", model.as_str(), "-L"];
     // Ask with the SAME keying override we are about to launch with, so the answer is the
