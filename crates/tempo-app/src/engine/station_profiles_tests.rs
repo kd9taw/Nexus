@@ -3423,3 +3423,60 @@ fn outside_contests_an_rr73_to_the_base_call_completes_the_contact() {
         assert_eq!(logged_calls(&e), logged, "RR73 to {to}");
     }
 }
+
+/// ⭐ A CQ run answers a NEW caller only when it names the whole call, as WSJT-X 3.0.2 answers a
+/// caller to its CQ (CQ: First, mainwindow.cpp 7021; CQ: Max Dist, 7041; `for_us`, 7276-7285): a
+/// caller to KD9TAW/P while the station is KD9TAW is not answered, and once the call is saved as
+/// KD9TAW/P a caller to KD9TAW is not. CONTROL: a caller to the call in use is.
+#[test]
+fn a_cq_run_answers_only_a_caller_to_the_whole_call() {
+    let mut e = plain_ft8_run();
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW/P W1AW FN31", -7)], 1);
+    assert_eq!(
+        (e.qso_dxcall(), tx_now(&e)),
+        (None, "CQ KD9TAW EN52".to_string()),
+        "to KD9TAW/P while KD9TAW"
+    );
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW FN31", -7)], 3);
+    assert_eq!(
+        (e.qso_dxcall(), tx_now(&e)),
+        (Some("W1AW"), "W1AW KD9TAW -07".to_string()),
+        "CONTROL: to KD9TAW"
+    );
+
+    let mut e = plain_ft8_run();
+    settings_call_edit(&mut e, "KD9TAW/P");
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW W1AW FN31", -7)], 1);
+    assert_eq!(
+        (e.qso_dxcall(), tx_now(&e)),
+        (None, "CQ KD9TAW/P EN52".to_string()),
+        "to the old call after the save"
+    );
+    e.ingest_decodes_for_test(&[dec_snr("KD9TAW/P W1AW FN31", -7)], 3);
+    assert_eq!(
+        (e.qso_dxcall(), tx_now(&e)),
+        (Some("W1AW"), "W1AW KD9TAW/P -07".to_string()),
+        "CONTROL: to the call in use"
+    );
+}
+
+/// ⭐ The best-caller pick weighs only the callers the run would answer: a stronger caller to
+/// KD9TAW/P while the station is KD9TAW is no candidate, so it never crowds out K9XYZ's call to
+/// KD9TAW, which is answered.
+#[test]
+fn the_best_caller_pick_weighs_only_callers_to_the_whole_call() {
+    let mut e = plain_ft8();
+    e.settings.best_caller = "strongest".into();
+    e.start_cq(None).unwrap();
+    e.ingest_decodes_for_test(
+        &[
+            dec_snr("KD9TAW/P W1AW FN31", -2),
+            dec_snr("KD9TAW K9XYZ EN52", -11),
+        ],
+        1,
+    );
+    assert_eq!(
+        (e.qso_dxcall(), tx_now(&e)),
+        (Some("K9XYZ"), "K9XYZ KD9TAW -11".to_string())
+    );
+}

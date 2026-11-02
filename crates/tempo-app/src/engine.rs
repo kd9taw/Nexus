@@ -1403,7 +1403,7 @@ pub struct AmpLive {
 }
 use modes::{NativeSource, SignalSource, WsjtxUdpSource};
 use std::sync::{Arc, Mutex};
-use tempo_core::message::{same_call, Msg};
+use tempo_core::message::{names_whole_call, same_call, Msg};
 
 /// The decoder ([`SignalSource`]) behind its OWN lock, independent of the engine
 /// mutex. The heavy per-slot decode runs on a persistent worker thread that locks
@@ -36304,17 +36304,21 @@ fn best_caller_decodes(
         .collect();
     // Distill the stations answering MY CQ this slot: a grid reply or a bare
     // report addressed to me — the two forms the sequencer auto-answers from
-    // CallingCq. A BLOCKED caller's answer is still an ANSWER (it must be
-    // dropped from the slice so the sequencer's first-heard lock can't seize
-    // it) but never a CANDIDATE — the operator said never to work them.
+    // CallingCq, and by the sequencer's own test, my WHOLE call
+    // (`names_whole_call`, as WSJT-X answers a caller to its CQ): a caller to my
+    // base call with another prefix or suffix is not an answer, so it can neither
+    // win the pick nor crowd out a caller the sequencer would take. A BLOCKED
+    // caller's answer is still an ANSWER (it must be dropped from the slice so
+    // the sequencer's first-heard lock can't seize it) but never a CANDIDATE —
+    // the operator said never to work them.
     let mut callers = Vec::new();
     let mut answers: Vec<usize> = Vec::new();
     for (idx, d) in decodes.iter().enumerate() {
         let (de, grid) = match Msg::parse(&d.message) {
-            Msg::Grid { to, de, grid } if same_call(&to, mycall) => {
+            Msg::Grid { to, de, grid } if names_whole_call(&to, mycall) => {
                 (de, (!grid.is_empty()).then_some(grid))
             }
-            Msg::Report { to, de, .. } if same_call(&to, mycall) => (de, None),
+            Msg::Report { to, de, .. } if names_whole_call(&to, mycall) => (de, None),
             _ => continue,
         };
         answers.push(idx);
