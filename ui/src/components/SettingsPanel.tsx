@@ -4373,6 +4373,9 @@ export function SettingsPanel({
   // network connection; over a cable only through the native switch, asked the way the switch asks it
   // (`civBlocked`): never on Network or through OmniRig, where a switch left on does nothing.
   const civAppliesDataMode = form.rigConn === 'icomlan' || (civBlocked === null && !!form.icomNativeCat)
+  // A Flex model off the network connection: the Flex native switches below work only over the
+  // network, so they show disabled with a note saying so rather than vanishing without a word.
+  const flexNeedsNetwork = [2036, 23005].includes(form.rigModel) && form.rigConn !== 'network'
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
   // …and WHY it isn't known, when the reason is that ARRL retired it. A saved `MAR`
@@ -7112,8 +7115,9 @@ export function SettingsPanel({
                   A name-sniff for "flex" also matched the PowerSDR entry, offering an ANAN/HL2
                   operator a SmartSDR VITA-49 stream that radio cannot serve. `native_spectrum_kind`
                   in Rust has always gated on 2036|23005; this is the UI catching up. */}
-              {form.rigConn === 'network' &&
-                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
+              {((form.rigConn === 'network' &&
+                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '')) ||
+                flexNeedsNetwork) && (
                   <label className="settings-field">
                     <span className="settings-label">
                       {t('settings.rigControl.flexPan.label')}
@@ -7121,12 +7125,16 @@ export function SettingsPanel({
                     <button
                       type="button"
                       role="switch"
+                      disabled={flexNeedsNetwork}
                       aria-checked={form.flexNativePan ?? false}
                       className={`toggle${form.flexNativePan ? ' on' : ''}`}
                       onClick={() => updateBool('flexNativePan', !form.flexNativePan)}
                     >
                       <span className="toggle-knob" />
                     </button>
+                    {flexNeedsNetwork && (
+                      <span className="settings-hint">{t('settings.rigControl.flexNeedsNetwork')}</span>
+                    )}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexPan.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -7157,8 +7165,9 @@ export function SettingsPanel({
               )}
 
               {/* Same model-number gate as the panadapter above — see the note there. */}
-              {form.rigConn === 'network' &&
-                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
+              {((form.rigConn === 'network' &&
+                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '')) ||
+                flexNeedsNetwork) && (
                   <label className="settings-field">
                     <span className="settings-label">
                       {t('settings.rigControl.flexAudio.label')}
@@ -7166,12 +7175,16 @@ export function SettingsPanel({
                     <button
                       type="button"
                       role="switch"
+                      disabled={flexNeedsNetwork}
                       aria-checked={form.flexNativeAudio ?? false}
                       className={`toggle${form.flexNativeAudio ? ' on' : ''}`}
                       onClick={() => updateBool('flexNativeAudio', !form.flexNativeAudio)}
                     >
                       <span className="toggle-knob" />
                     </button>
+                    {flexNeedsNetwork && (
+                      <span className="settings-hint">{t('settings.rigControl.flexNeedsNetwork')}</span>
+                    )}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexAudio.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -7182,7 +7195,7 @@ export function SettingsPanel({
                   ruling, 2026-10-03), with SmartSDR CAT the default and the fallback. The Rust
                   side serves it only on these two model numbers and with the radio's own address
                   set (`flex_client_reachable`), so the toggle shows on the models alone. */}
-              {form.rigConn === 'network' && [2036, 23005].includes(form.rigModel) && (
+              {[2036, 23005].includes(form.rigModel) && (
                 <label className="settings-field">
                   <span className="settings-label">
                     {t('settings.rigControl.flexClient.label')}
@@ -7190,12 +7203,16 @@ export function SettingsPanel({
                   <button
                     type="button"
                     role="switch"
+                    disabled={flexNeedsNetwork}
                     aria-checked={form.flexNativeCat ?? false}
                     className={`toggle${form.flexNativeCat ? ' on' : ''}`}
                     onClick={() => updateBool('flexNativeCat', !form.flexNativeCat)}
                   >
                     <span className="toggle-knob" />
                   </button>
+                  {flexNeedsNetwork && (
+                    <span className="settings-hint">{t('settings.rigControl.flexNeedsNetwork')}</span>
+                  )}
                   <span className="settings-hint">
                     <T k="settings.rigControl.flexClient.hint" tags={{ b: <strong /> }} />
                   </span>

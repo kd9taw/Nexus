@@ -8569,6 +8569,8 @@ export const EN = {
   'settings.rigControl.flexClient.label': 'Flex native client (Beta)',
   'settings.rigControl.flexClient.hint':
     "Nexus connects to the radio itself, at the <b>Flex radio IP</b>, as one of its SmartSDR clients, and runs CAT and PTT on a slice of its own. Beta and <b>unverified on hardware</b>: try transmit into a dummy load first. If Nexus cannot connect, it falls back to SmartSDR CAT. Save to apply.",
+  // Under a Flex switch shown disabled because the radio is not on the network connection.
+  'settings.rigControl.flexNeedsNetwork': 'Needs Connection: Network.',
   'settings.rigControl.flexUnbenched.label':
     'Let Nexus send CW, Tune and ATU through the native Flex client (not yet bench-tested)',
   'settings.rigControl.flexUnbenched.hint':

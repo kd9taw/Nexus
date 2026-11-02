@@ -5457,6 +5457,7 @@ export const JA: PartialCatalog = {
   "settings.rigControl.flexUnbenched.label": "NexusにFlexネイティブクライアント経由でCW・Tune・ATUを送らせる（実機ベンチ未検証）",
   "settings.rigControl.flexUnbenched.hint": "<b>実機のFlexではまだ確認されていません：</b>CW・Tune・ATUはまずダミーロードで試してください。既定ではオフです。保存で適用され、Nexusは無線機に再接続します。",
   "settings.rigControl.flexClient.hint": "Nexusは<b>FlexのIP</b>で無線機に直接接続し、SmartSDRクライアントの一つとして自身のスライスでCATとPTTを扱います。ベータ版で<b>実機では未検証</b>です。送信はまずダミーロードで試してください。Nexusが接続できない場合はSmartSDR CATに戻ります。保存で適用されます。",
+  "settings.rigControl.flexNeedsNetwork": "接続を「ネットワーク」にする必要があります。",
   "settings.rigControl.civLog.label": "CI-Vバス診断ログ",
   "settings.rigControl.civLog.failed": "CI-V診断ログを切り替えられませんでした",
   "settings.rigControl.civLog.recording": "<code>{{path}}</code>に<b>記録中</b>です。他の画面を開いている間も記録は続くので、今すぐFT8またはPhoneコックピットへ移動して問題を再現してください（チューンまたは送信）。終わったらここに戻ってオフにし、そのファイルを送ってください。障害発生時にバス上を流れた内容がそのまま記録されています。",
