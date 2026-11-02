@@ -121,6 +121,19 @@ pub fn same_call(a: &str, b: &str) -> bool {
     base_call(a) == base_call(b)
 }
 
+/// `to` names `mycall` WHOLE: letter for letter, case ignored, a hashed form's brackets dropped
+/// (`<PJ4/K1ABC>` is PJ4/K1ABC, `<K1ABC>` is K1ABC) and never reduced to a base call, so
+/// `K1ABC/P` is not K1ABC. Never the unresolved `<...>`.
+///
+/// ⚠️ The test for a NEW caller to my CQ, not for a reply inside a contact ([`same_call`]).
+/// WSJT-X 3.0.2 answers a caller to its CQ only when the decode, brackets dropped
+/// (`mainwindow.cpp` 6415), holds `" " + my_callsign() + " "` (CQ: First, 7021; CQ: Max Dist,
+/// 7041), and `for_us` (7276-7285) turns away a caller to "the same base call as ours but
+/// different prefix or suffix". Its partner's replies it takes by base call (7546, 9048-9055).
+pub fn names_whole_call(to: &str, mycall: &str) -> bool {
+    unhash_call(to).eq_ignore_ascii_case(mycall.trim())
+}
+
 /// A valid WSJT-X directed-CQ token: 1–4 letters ("DX", "NA", "POTA", "TEST")
 /// or exactly 3 digits (a kHz QSY like "CQ 040 …").
 fn is_cq_dir(s: &str) -> bool {

@@ -4435,6 +4435,17 @@ impl FieldDayStation {
         to == me || (!crate::message::is_std_call(me) && crate::message::unhash_call(to) == me)
     }
 
+    /// Addressed to my call in a NEW caller's first message in the standard and ARRL VHF message
+    /// sets: whole, or hashed ([`names_whole_call`](crate::message::names_whole_call)), never by
+    /// base call, as WSJT-X 3.0.2 answers a caller to its CQ (CQ: First, mainwindow.cpp 7021; CQ:
+    /// Max Dist, 7041; `for_us`, 7276-7285). Those messages name my standard call hashed beside a
+    /// nonstandard caller (`<K1ABC> W9XYZ/M`), which WSJT-X reads with the brackets dropped
+    /// (6415). The partner's replies inside a contact are taken by base call
+    /// ([`to_me`](Self::to_me)).
+    fn to_my_whole_call(&self, to: &str) -> bool {
+        crate::message::names_whole_call(to, self.mycall())
+    }
+
     /// The caller `de` of a first call with no grid, as my report names it: WSJT-X's Tx2 to it
     /// (`genStdMsgs`, mainwindow.cpp), its call hashed where it is nonstandard (`t0a`, 9596,
     /// 9629-9631) and whole otherwise, beside my call as [`my_call_beside`](Self::my_call_beside)
@@ -4773,8 +4784,9 @@ impl FieldDayStation {
                 // Running: a caller's grid → roger it and send mine. Not a caller from `<...>`,
                 // which names nobody: WSJT-X's messages go to the call in its DX call box
                 // (`genStdMsgs`, mainwindow.cpp 9567-9577), which takes only a callsign (9402).
+                // Only a caller to my whole call ([`to_my_whole_call`](Self::to_my_whole_call)).
                 (FdState::CallingCq, Msg::Grid { to, de, grid })
-                    if self.to_me(to) && !grid.is_empty() && !de.contains("<...>") =>
+                    if self.to_my_whole_call(to) && !grid.is_empty() && !de.contains("<...>") =>
                 {
                     self.engage(de);
                     self.peer_grid = Some(grid.clone());
@@ -4825,9 +4837,10 @@ impl FieldDayStation {
                 // starts one by double-clicking a CQ, or a logger replies to one, through
                 // [`answer_cq`](Self::answer_cq).
                 // Running: a caller's grid → my report. Not a caller from `<...>`, as in the ARRL
-                // VHF contests.
+                // VHF contests. Every caller arm here takes only a caller to my whole call
+                // ([`to_my_whole_call`](Self::to_my_whole_call)).
                 (FdState::CallingCq, Msg::Grid { to, de, grid })
-                    if self.to_me(to) && !grid.is_empty() && !de.contains("<...>") =>
+                    if self.to_my_whole_call(to) && !grid.is_empty() && !de.contains("<...>") =>
                 {
                     self.engage(de);
                     self.peer_grid = Some(grid.clone());
@@ -4845,7 +4858,7 @@ impl FieldDayStation {
                 // nonstandard sends its first call that way, `<K1ABC> W9XYZ/M` (`msgtype(t0a,
                 // ui->tx1)`, 9627). The report's calls: [`gridless_caller`](Self::gridless_caller).
                 (FdState::CallingCq, Msg::Grid { to, de, grid })
-                    if self.to_me(to) && grid.is_empty() =>
+                    if self.to_my_whole_call(to) && grid.is_empty() =>
                 {
                     let Some(his) = self.gridless_caller(de) else {
                         continue;
@@ -4864,7 +4877,7 @@ impl FieldDayStation {
                 // Running: a caller that sent its report without its grid → R and mine. Not a
                 // caller from `<...>`.
                 (FdState::CallingCq, Msg::Report { to, de, .. })
-                    if self.to_me(to) && !de.contains("<...>") =>
+                    if self.to_my_whole_call(to) && !de.contains("<...>") =>
                 {
                     self.engage(de);
                     self.pending = Some(Msg::RReport {
@@ -7936,6 +7949,106 @@ mod tests {
             (FdState::CallingCq, "CQ FD K1ABC/P FN42".to_string()),
             "a new caller to the old call is not answered"
         );
+    }
+
+    /// ⭐ A NEW caller to the run is answered only when it names my WHOLE call, in the standard
+    /// and ARRL VHF message sets as in Field Day's, as WSJT-X 3.0.2 answers a caller to its CQ
+    /// (CQ: First and CQ: Max Dist, mainwindow.cpp 7021 and 7041: `" " + my_callsign() + " "` in
+    /// the decode with its brackets dropped, 6415; `for_us`, 7276-7285, which turns away "the same
+    /// base call as ours but different prefix or suffix"). A hashed form of my call is my call.
+    /// After a change of My Call the old call is no longer mine. CONTROL: the partner's replies
+    /// inside a contact are still taken by base call ([`to_me`](FieldDayStation::to_me)).
+    #[test]
+    fn a_new_caller_is_answered_only_to_my_whole_call_in_every_message_set() {
+        let not_mine = [
+            ("K1ABC", "K1ABC/P W9XYZ EN37", "to my base with /P"),
+            (
+                "K1ABC",
+                "<K1ABC/M> W9XYZ EN37",
+                "to my base with /M, hashed",
+            ),
+            (
+                "K1ABC",
+                "<W1/K1ABC> W9XYZ",
+                "to my base with a prefix, hashed",
+            ),
+            ("K1ABC/P", "K1ABC W9XYZ EN37", "to my base call"),
+            ("PJ4/K1ABC", "<K1ABC> W9XYZ EN37", "to my base, hashed"),
+            (
+                "K1ABC",
+                "<...> W9XYZ EN37",
+                "to a call the decoder could not resolve",
+            ),
+        ];
+        let mine = [
+            ("K1ABC", "K1ABC W9XYZ EN37", "to my call"),
+            (
+                "K1ABC/P",
+                "K1ABC/P W9XYZ EN37",
+                "to my call with its suffix",
+            ),
+            (
+                "PJ4/K1ABC",
+                "<PJ4/K1ABC> W9XYZ EN37",
+                "to my nonstandard call, hashed",
+            ),
+        ];
+        for event in ["arrlvhf_jun", "txqp"] {
+            for (me, heard, what) in not_mine {
+                let mut run = contest_station(me, event, true);
+                run.observe(&[dec(heard)], 1);
+                assert_eq!(run.state, FdState::CallingCq, "{event} as {me}: {what}");
+                assert!(run.log.qsos().is_empty(), "{event} as {me}: {what}");
+            }
+            for (me, heard, what) in mine {
+                let mut run = contest_station(me, event, true);
+                run.observe(&[dec(heard)], 1);
+                assert_ne!(run.state, FdState::CallingCq, "{event} as {me}: {what}");
+            }
+            let mut run = contest_station("K1ABC", event, true);
+            run.sign_as("K1ABC/P");
+            run.observe(&[dec("K1ABC W9XYZ EN37")], 1);
+            assert_eq!(
+                run.state,
+                FdState::CallingCq,
+                "{event}: a new caller to the old call after a change to /P"
+            );
+            run.observe(&[dec("K1ABC/P W9XYZ EN37")], 3);
+            assert_ne!(
+                run.state,
+                FdState::CallingCq,
+                "{event}: CONTROL, to the call in use"
+            );
+        }
+        // The standard messages' answers that carry no grid: a nonstandard caller's first call
+        // names my standard call hashed (`<K1ABC> W9XYZ/M`), and a caller may skip to its report.
+        for (me, heard, answered) in [
+            ("K1ABC", "<K1ABC> W9XYZ/M", true),
+            ("K1ABC", "<K1ABC/P> W9XYZ/M", false),
+            ("K1ABC", "K1ABC W9XYZ -07", true),
+            ("K1ABC", "K1ABC/P W9XYZ -07", false),
+            ("K1ABC/P", "K1ABC W9XYZ -07", false),
+        ] {
+            let mut run = contest_station(me, "txqp", true);
+            run.observe(&[dec(heard)], 1);
+            assert_eq!(
+                run.state != FdState::CallingCq,
+                answered,
+                "standard, as {me}: {heard}"
+            );
+        }
+        // CONTROL: inside the contact, the partner's reply to my base call is still taken.
+        for (event, reply) in [
+            ("arrlvhf_jun", "K1ABC/P W9XYZ RR73"),
+            ("txqp", "K1ABC/P W9XYZ R-07"),
+        ] {
+            let mut run = contest_station("K1ABC", event, true);
+            run.observe(&[dec("K1ABC W9XYZ EN37")], 1);
+            run.after_tx();
+            run.observe(&[dec(reply)], 3);
+            assert_eq!(run.state, FdState::Done, "{event}: {reply}");
+            assert_eq!(run.log.qsos().len(), 1, "{event}: {reply}");
+        }
     }
 
     /// ⭐ FIELD DAY'S MESSAGES PASS BY A CALL THE DECODER COULD NOT RESOLVE, as WSJT-X's Field Day

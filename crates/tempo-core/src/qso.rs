@@ -897,8 +897,16 @@ impl Station {
                 // callsign (`Radio::is_callsign`, 9402), and the caller's call word
                 // (`deCallAndGrid`, `Decoder/decodedtext.cpp` 212-224) cannot be `...`. The run
                 // keeps calling CQ, and the next caller in the period is answered.
+                //
+                // ⭐ Only a caller to my WHOLE call ([`names_whole_call`]), as WSJT-X answers a
+                // caller to its CQ (CQ: First, 7021; CQ: Max Dist, 7041; `for_us`, 7276-7285):
+                // a caller to KD9TAW/M while I am KD9TAW, or to KD9TAW once I am KD9TAW/P, is
+                // not answered. The partner's replies below are read by base call.
+                //
+                // [`names_whole_call`]: crate::message::names_whole_call
                 (State::CallingCq, Msg::Grid { to, de, grid })
-                    if crate::message::same_call(to, &self.mycall) && !de.contains("<...>") =>
+                    if crate::message::names_whole_call(to, &self.mycall)
+                        && !de.contains("<...>") =>
                 {
                     // `de` is already unhashed: `observe` runs every parsed message through
                     // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` (an
@@ -1104,9 +1112,10 @@ impl Station {
                 }
                 // We're calling CQ and a station answers with a bare report (grid skipped):
                 // lock onto them, capture the report, and roger with R + our report. Never
-                // `<...>`, as the grid's arm above.
+                // `<...>`, and only to my whole call, as the grid's arm above.
                 (State::CallingCq, Msg::Report { to, de, snr })
-                    if crate::message::same_call(to, &self.mycall) && !de.contains("<...>") =>
+                    if crate::message::names_whole_call(to, &self.mycall)
+                        && !de.contains("<...>") =>
                 {
                     // `de` is already unhashed: `observe` runs every parsed message through
                     // `Msg::unhashed`, so a `<W9XYZ>` sender arrives here as `W9XYZ` (an
@@ -1679,6 +1688,62 @@ mod start_context_tests {
         let s = Station::start("KD9TAW/P", MY_GRID, DX, Some((&m, -11)), false, false);
         assert_eq!(s.state, State::AwaitRr73);
         assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW/P R-11"));
+    }
+
+    /// ⭐ Calling CQ, a NEW caller is answered only when it names my WHOLE call, as WSJT-X 3.0.2
+    /// answers a caller to its CQ: CQ: First and CQ: Max Dist (mainwindow.cpp 7021 and 7041)
+    /// look for `" " + my_callsign() + " "` in the decode with its brackets dropped (6415), and
+    /// `for_us` (7276-7285) turns away "the same base call as ours but different prefix or
+    /// suffix". A hashed form of my call is my call; after a change of My Call the old call is
+    /// not. CONTROL: the partner's replies inside the contact are still read by base call.
+    #[test]
+    fn calling_cq_answers_only_a_caller_to_my_whole_call() {
+        for (me, heard, answered) in [
+            ("KD9TAW", "KD9TAW/P W9XYZ EN37", false),
+            ("KD9TAW", "<KD9TAW/M> W9XYZ EN37", false),
+            ("KD9TAW", "<W1/KD9TAW> W9XYZ", false),
+            ("KD9TAW", "KD9TAW/P W9XYZ -07", false),
+            ("KD9TAW/P", "KD9TAW W9XYZ EN37", false),
+            ("KD9TAW/P", "KD9TAW W9XYZ -07", false),
+            ("PJ4/K1ABC", "<K1ABC> W9XYZ EN37", false),
+            ("KD9TAW", "<...> W9XYZ EN37", false),
+            ("KD9TAW", "KD9TAW W9XYZ EN37", true),
+            ("KD9TAW", "KD9TAW W9XYZ -07", true),
+            ("KD9TAW", "<KD9TAW> W9XYZ/M", true),
+            ("KD9TAW/P", "KD9TAW/P W9XYZ EN37", true),
+            ("KD9TAW/P", "<KD9TAW/P> F4CYH/R", true),
+            ("PJ4/K1ABC", "<PJ4/K1ABC> W9XYZ EN37", true),
+        ] {
+            let mut s = Station::calling_cq(me, MY_GRID);
+            s.observe(&[dec(heard, -7)]);
+            assert_eq!(s.state != State::CallingCq, answered, "as {me}: {heard}");
+            assert_eq!(s.dxcall.is_some(), answered, "as {me}: {heard}");
+        }
+        let mut s = Station::calling_cq("KD9TAW", MY_GRID);
+        s.sign_as("KD9TAW/P");
+        s.observe(&[dec("KD9TAW W9XYZ EN37", -7)]);
+        assert_eq!(
+            s.state,
+            State::CallingCq,
+            "the old call after a change to /P"
+        );
+        assert_eq!(s.pending_text().as_deref(), Some("CQ KD9TAW/P EN61"));
+        s.observe(&[dec("KD9TAW/P W9XYZ EN37", -7)]);
+        assert_eq!(
+            s.pending_text().as_deref(),
+            Some("W9XYZ KD9TAW/P -07"),
+            "CONTROL: the call in use"
+        );
+        // CONTROL: inside the contact the partner's roger to my base with /P is taken.
+        let mut s = Station::calling_cq(ME, MY_GRID);
+        s.observe(&[dec("KD9TAW W9XYZ EN37", -7)]);
+        s.observe(&[dec("KD9TAW/P W9XYZ R-05", -7)]);
+        assert_eq!(
+            s.state,
+            State::Confirming,
+            "the partner's roger to KD9TAW/P"
+        );
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW RR73"));
     }
 
     #[test]
