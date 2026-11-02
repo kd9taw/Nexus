@@ -296,6 +296,8 @@ impl P533Engine {
                 long_path: None,
                 routes: None,
                 day: None,
+                overlay: None,
+                space_now: None,
             };
         };
 
@@ -381,6 +383,8 @@ impl P533Engine {
             long_path: None,
             routes: None,
             day: None,
+            overlay: None,
+            space_now: None,
         }
     }
 }

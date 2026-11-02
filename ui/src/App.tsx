@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
-import type { AppSnapshot, BandChannel, ExperienceLevel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
+import type { AppSnapshot, ArrivalOutlook, BandChannel, ExperienceLevel, KpForecast, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { isOnAir } from './types'
 import { rigModeTransition, RIG_MODE_BY_VIEW, type RigMode } from './rigModeForView'
 import {
@@ -190,8 +190,9 @@ import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { processFlare, effectiveXray, flareToastGrid } from './flareAlert'
-import { snapXray, wxUsable, xrayFastFresh } from './propViz'
+import { snapXray, xrayFastFresh } from './propViz'
 import { processStorm, processStormForecast } from './stormAlert'
+import { auroraStorm, kpAlert, setAuroraDismissal } from './capsNow'
 import { processArrivalWatch } from './arrivalAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
@@ -997,6 +998,10 @@ function App() {
   // Latest MEASURED Kp, so the forecast watcher below can tell a heads-up from a
   // storm already in progress.
   const kpNowRef = useRef<number | null>(null)
+  // The Kp outlook's last answer: its observed rows are the measured Kp the storm toast prefers.
+  const kpFcRef = useRef<KpForecast | null>(null)
+  // NOAA's storm-watch outlook's last answer: a G watch in force keeps the storm (and its untick) on.
+  const arrivalRef = useRef<ArrivalOutlook | null>(null)
   // Freshest fast-lane X-ray reading (60 s poller below) — merged with each prop
   // snapshot so the flare heads-up fires app-wide, whatever view is open.
   const xrayFastRef = useRef<number | null>(null)
@@ -1033,9 +1038,14 @@ function App() {
           // reached the operator only if they had the Space Weather pane in front of
           // them, which is backwards: a flare is minutes, a storm is days. A stand-in Kp
           // or one past its cadence raises nothing and is not "the Kp now".
-          const kpNow = wxUsable(p.spaceWx, 'kp', nowMs) ? p.spaceWx.kp : null
-          processStorm(kpNow)
-          kpNowRef.current = kpNow
+          // The higher of NOAA's recent measured 3-hour Kp and the usable 1-minute estimate, else
+          // none (capsNow `kpAlert`); the toast says which one it is.
+          const kn = kpAlert(p.spaceWx, kpFcRef.current, nowMs)
+          processStorm(kn)
+          kpNowRef.current = kn?.kp ?? null
+          // The storm is over: the aurora untick it carried goes with it, on every map, whether or
+          // not one is on screen (capsNow `setAuroraDismissal`).
+          if (!auroraStorm(kn, arrivalRef.current)) setAuroraDismissal(false)
           // Chased-expedition window alerts (dxpedChase.ts owns the dedup).
           processDxpedAlerts(
             p.dxpeditions.workableNow,
@@ -1220,10 +1230,24 @@ function App() {
   // Storm FORECAST heads-up, app-wide: an alert that only fired while the Kp box is open would not
   // be an alert. stormAlert.ts dedups by the predicted onset time, so this announces once per
   // forecast event however often it is asked.
-  useEffect(() => watchFeed(KP_FORECAST, (f) => processStormForecast(f, kpNowRef.current)), [])
+  useEffect(
+    () =>
+      watchFeed(KP_FORECAST, (f) => {
+        kpFcRef.current = f
+        processStormForecast(f, kpNowRef.current)
+      }),
+    [],
+  )
   // NOAA storm WATCH heads-up, app-wide, once per watch serial (arrivalAlert.ts keeps the serials
   // across restarts); the map's countdown chip reads the same feed.
-  useEffect(() => watchFeed(ARRIVAL_OUTLOOK, (o) => processArrivalWatch(o)), [])
+  useEffect(
+    () =>
+      watchFeed(ARRIVAL_OUTLOOK, (o) => {
+        arrivalRef.current = o
+        processArrivalWatch(o)
+      }),
+    [],
+  )
   // X-ray fast lane (60 s): flare ONSET reaches the operator in ~1 min instead of
   // the 5-min prop-snapshot cadence. Best-effort — a failed fetch just leaves the
   // snapshot's slower value driving the watcher.

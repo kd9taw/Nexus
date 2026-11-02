@@ -30,6 +30,7 @@ import {
 } from '../../features/pathDay'
 import { ROUTE_LP, ROUTE_SP } from '../../features/pathRibbon'
 import { POLAR_CAP_DEG, utcHourLabel } from '../../features/pathWhy'
+import { nowHit, nowHitKind } from '../../features/pathNow'
 
 /** The hour a strip is scrubbed to: its UTC hour and the middle of that hour (ms) for the map. */
 export interface DayScrub {
@@ -151,6 +152,23 @@ interface Row {
   band: PathDay['bands'][number]
   /** This band's index in its day (for the MUF ceiling). */
   index: number
+  /** The current hour hit NOW by a flare or a proton event on the route shown (the shack's
+   * overlay): its hatch and hover. The modelled colour underneath is left as it is. */
+  now?: { kind: 'flare' | 'pca'; title: string } | null
+}
+
+/** Each band's "now" mark for the route its current-hour cell shows: the short path's overlay,
+ * the long path's, or (Best) the route the model favours in that cell. */
+function nowMarks(pred: PathPrediction, day: PathDay, mode: DayMode): Map<string, Row['now']> {
+  const marks = new Map<string, Row['now']>()
+  for (const b of day.bands) {
+    const longShown = mode === 'long' || (mode === 'best' && b.cells[day.nowHour]?.verdict === 'long')
+    const o = longShown ? pred.longPath?.overlay : pred.overlay
+    const kind = o ? nowHitKind(o, b.band) : null
+    const title = o ? nowHit(o, b.band, o.unix) : null
+    if (kind && title) marks.set(b.band, { kind, title })
+  }
+  return marks
 }
 
 function Grid({
@@ -205,12 +223,14 @@ function Grid({
             const v = cellView(c, r.day.hours[h], mode)
             const ceil = ceilings.get(r.day)?.[h]
             const aboveMuf = ceil == null || r.index < ceil
+            const hit = h === nowHour ? r.now : null
+            const title = cellTitle(r.day, r.band.band, h, c, r.day.hours[h], mode, aboveMuf)
             return (
               <span
                 key={h}
-                className={`pd-cell${col(h)}${v.polar ? ' polar' : ''}${ceil === r.index ? ' ceil' : ''}${v.pct == null ? ' none' : ''}`}
+                className={`pd-cell${col(h)}${v.polar ? ' polar' : ''}${ceil === r.index ? ' ceil' : ''}${v.pct == null ? ' none' : ''}${hit ? ` now-hit now-${hit.kind}` : ''}`}
                 style={v.pct == null ? undefined : ({ background: heatColor(v.pct / 100) } as CSSProperties)}
-                title={cellTitle(r.day, r.band.band, h, c, r.day.hours[h], mode, aboveMuf)}
+                title={hit ? `${title}\n${hit.title}` : title}
                 onClick={() => pick(h)}
               >
                 {v.glyph}
@@ -281,9 +301,14 @@ function ModeToggle({ mode, onMode, hasLong }: { mode: DayMode; onMode: (m: DayM
   )
 }
 
-function Legend({ hasLong, showLong }: { hasLong: boolean; showLong: boolean }) {
+function Legend({ hasLong, showLong, now }: { hasLong: boolean; showLong: boolean; now?: 'flare' | 'pca' | null }) {
   return (
     <div className="pd-legend">
+      {now && (
+        <span>
+          <i className={`pd-swatch now-${now}`} /> {t('pathNow.legend')}
+        </span>
+      )}
       {hasLong && (
         <>
           <span>
@@ -336,10 +361,12 @@ export function PathDayPane({
   const day = pred?.day
   const hasLong = day?.mufLong != null
   const shown: DayMode = hasLong ? mode : 'short'
-  const rows = useMemo<Row[]>(
-    () => (day ? day.bands.map((band, index) => ({ key: band.band, label: band.band, day, band, index })) : []),
-    [day],
-  )
+  const rows = useMemo<Row[]>(() => {
+    if (!day || !pred) return []
+    const marks = nowMarks(pred, day, shown)
+    return day.bands.map((band, index) => ({ key: band.band, label: band.band, day, band, index, now: marks.get(band.band) }))
+  }, [day, pred, shown])
+  const nowKind = rows.find((r) => r.now)?.now?.kind ?? null
   if (!day || rows.length === 0) return <div className="pane-basic">{t('connect.pane.pathDay.basic')}</div>
   return (
     <div className="path-day">
@@ -348,7 +375,7 @@ export function PathDayPane({
         <ModeToggle mode={shown} onMode={setMode} hasLong={hasLong} />
       </div>
       <Grid rows={rows} hours={day.hours} nowHour={day.nowHour} mode={shown} scrub={scrub} onScrub={onScrub} />
-      <Legend hasLong={hasLong} showLong={hasLong && shown !== 'short'} />
+      <Legend hasLong={hasLong} showLong={hasLong && shown !== 'short'} now={nowKind} />
     </div>
   )
 }

@@ -54,6 +54,16 @@ pub struct PathPrediction {
     /// path-over-the-day strip draws. Attached by the per-path caller; absent, the key is omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub day: Option<crate::pathday::PathDay>,
+    /// What a flare or a proton event does to this route NOW, band by band
+    /// ([`crate::pathnow::path_overlay`]): display only, laid over the model's current hour and
+    /// never folded into its numbers. Attached by the per-path caller after the card is kept for
+    /// contact grading, so it never travels with a contact; absent, the key is omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<crate::pathnow::PathHourOverlay>,
+    /// The "now" line beside the climatology ([`crate::pathnow::space_now`]): a flare, a proton
+    /// event, a NOAA watch. Attached by the outlook callers; absent when nothing is happening.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_now: Option<crate::pathnow::SpaceNow>,
 }
 
 impl PathPrediction {
@@ -180,6 +190,8 @@ impl PathPredictor for HeuristicEngine {
             long_path: None,
             routes: None,
             day: None,
+            overlay: None,
+            space_now: None,
         }
     }
 }
@@ -315,6 +327,8 @@ pub fn band_outlook_ring(
         long_path: None,
         routes: None,
         day: None,
+        overlay: None,
+        space_now: None,
     }
 }
 

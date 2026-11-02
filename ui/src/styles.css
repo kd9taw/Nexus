@@ -1811,6 +1811,19 @@ button.nb-chip:hover {
 .flare-chip.pca-chip {
   border-left-color: #a855f7;
 }
+/* The aurora chip (CapsChips.tsx) — the aurora layer's green, the same two-class weight. */
+.flare-chip.aurora-chip {
+  border-left-color: #34d399;
+}
+/* The cap and aurora chips' head line takes the pointer (for their hover), as the flare chip's does;
+   the rest of the chip lets it through to the Layers rows under the stack. */
+.caps-chip-head {
+  pointer-events: auto;
+}
+/* A proton sample past its cadence: the chip says how old and dims, as the gauges dim an old reading. */
+.flare-chip[data-stale] .caps-chip-head {
+  color: var(--text-dim);
+}
 /* Per-mode workable-now chips on path/outlook band rows (P.533 only). */
 .cp-modes {
   display: inline-flex;
@@ -3547,6 +3560,44 @@ body.resizing-row {
 .pd-swatch.ceil {
   background: var(--text);
 }
+/* The current hour's cell hit NOW by a flare or a proton event (the shack's overlay, an estimate):
+   hatched over the modelled colour, which stays as it is. */
+.pd-cell.now-hit {
+  position: relative;
+}
+.pd-cell.now-hit::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(-45deg, var(--now-hatch) 0 2px, transparent 2px 5px);
+}
+.pd-cell.now-flare,
+.pd-swatch.now-flare {
+  --now-hatch: var(--route-flare-out);
+}
+.pd-cell.now-pca,
+.pd-swatch.now-pca {
+  --now-hatch: var(--route-pca);
+}
+.pd-swatch.now-flare,
+.pd-swatch.now-pca {
+  height: 8px;
+  background: repeating-linear-gradient(-45deg, var(--now-hatch) 0 2px, transparent 2px 5px);
+}
+/* The band outlook's and the band-condition strip's "now" line (features/pathNow spaceNowLines):
+   what is happening that the modelled climatology below it does not include. */
+.space-now {
+  margin: 0;
+  padding: 0 0 0 var(--space-1);
+  list-style: none;
+  border-left: 2px solid var(--state-warn);
+  color: var(--text);
+  font-size: var(--fs-micro);
+}
+.space-now li + li {
+  margin-top: 2px;
+}
 .pd-modelled {
   font-style: italic;
 }
@@ -5102,6 +5153,12 @@ body.resizing-row {
   --band-closed: #747b81;
   --route-polar: #c77dff; /* the map's aurora violet: a path stretch inside the polar cap */
   --route-grey: rgba(255, 200, 110, 0.95); /* the terminator's gold: a path stretch on the grey line */
+  /* A path stretch hit NOW (features/pathNow): under a flare, the band weakened (≥ 1 dB) / out
+     (≥ 10 dB) on a vertical pass — the map's flare rings; inside a proton event's polar-cap
+     absorption. Drawn over the polar / grey stretches. */
+  --route-flare-weak: #ffa64d;
+  --route-flare-out: #ff4d4d;
+  --route-pca: #ff5ce1;
   --alert-critical: #ff6100;
   --alert-warning: #f7c243;
   --alert-info: #79c0f1;
@@ -5221,6 +5278,9 @@ body.resizing-row {
   --band-closed: #80878d;
   --route-polar: #7c44c3;
   --route-grey: #e08a00;
+  --route-flare-weak: #b85c00;
+  --route-flare-out: #c4001a;
+  --route-pca: #a3168c;
   --alert-critical: #9c0000;
   --alert-warning: #a76d00;
   --alert-info: #0070a6;

@@ -12,8 +12,9 @@
 // Every number comes from a field; nothing is prose-only.
 
 import { t } from '../i18n'
-import type { PathGeometry, PathPrediction, RouteCall } from '../types'
+import type { PathGeometry, PathHourOverlay, PathPrediction, PathSegmentNow, RouteCall } from '../types'
 import { kpSourceWords, pathWhyFacts, utcHourLabel } from './pathWhy'
+import { overlaySegments } from './pathNow'
 
 export type RouteName = 'short' | 'long'
 
@@ -186,7 +187,9 @@ export type RibbonInk = 'open' | 'marginal' | 'closed'
 export interface RibbonRoute {
   /** Modelled reliability on the hint's band this hour; null = the engine gave no figure. */
   ink: RibbonInk | null
-  segments: NonNullable<PathGeometry['segmentsNow']>
+  /** The polar / grey stretches, then (now only, never on a scrubbed hour) the stretches a flare
+   * or a proton event hits on the band drawn (the shack's overlay, features/pathNow). */
+  segments: PathSegmentNow[]
   brgDeg: number
 }
 
@@ -221,11 +224,17 @@ export function ribbonRoutes(
   const scrubbed = hour != null && hour !== sp.nowHour
   const calls = scrubbed ? callsAt(p, hour) : p.routes
   const c = calls ? pickCall(calls, focusBand) : null
-  const segs = (g: PathGeometry) => (scrubbed ? (g.hours[hour]?.segments ?? []) : (g.segmentsNow ?? []))
+  // The overlay is NOW: a scrubbed hour draws the geometry alone. Its band is the one the ribbon is
+  // inked for (the call's), else the band in focus.
+  const band = c?.band ?? focusBand ?? null
+  const segs = (g: PathGeometry, o: PathHourOverlay | undefined): PathSegmentNow[] =>
+    scrubbed
+      ? (g.hours[hour]?.segments ?? [])
+      : [...(g.segmentsNow ?? []), ...overlaySegments(o, band)]
   return {
-    short: { ink: c ? ink(c.shortBcr) : null, segments: segs(sp), brgDeg: Math.round(sp.bearingDeg) },
+    short: { ink: c ? ink(c.shortBcr) : null, segments: segs(sp, p.overlay), brgDeg: Math.round(sp.bearingDeg) },
     long: lp
-      ? { ink: c ? ink(c.longBcr) : null, segments: segs(lp), brgDeg: Math.round(lp.bearingDeg) }
+      ? { ink: c ? ink(c.longBcr) : null, segments: segs(lp, p.longPath?.overlay), brgDeg: Math.round(lp.bearingDeg) }
       : null,
     favoured: c?.verdict === 'long' ? 'long' : c?.verdict === 'short' ? 'short' : null,
   }

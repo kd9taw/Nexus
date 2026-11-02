@@ -5,7 +5,7 @@
 // them onto the sphere; neither re-derives the route.
 import { haversineKm, type LatLon } from '../grid'
 import { destinationPoint } from '../mapGeo'
-import type { PathPrediction } from '../types'
+import type { PathPrediction, PathSegmentNow } from '../types'
 import { ribbonRoutes, type RibbonInk, type RibbonRoute, type RouteName } from './pathRoute'
 
 /** The on-air abbreviations — invariant tokens, like the map path card's buttons. */
@@ -25,7 +25,8 @@ export interface RibbonLine {
   ink: RibbonInk | null
   /** Me → them along this route. */
   points: LatLon[]
-  stretches: { kind: 'polar' | 'grey'; points: LatLon[] }[]
+  /** Polar / grey stretches, then the stretches a flare or proton event hits now (drawn on top). */
+  stretches: { kind: PathSegmentNow['kind']; points: LatLon[] }[]
   label: string
   labelAt: LatLon
 }

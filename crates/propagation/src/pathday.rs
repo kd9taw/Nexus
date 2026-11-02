@@ -384,6 +384,8 @@ mod tests {
             long_path: None,
             routes: None,
             day: None,
+            overlay: None,
+            space_now: None,
         }
     }
 

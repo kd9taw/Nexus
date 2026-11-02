@@ -175,9 +175,9 @@ describe('the dashboard bar reads in every theme and mode', () => {
     const words: Word[] = []
     for (const host of HOSTS) for (const pressed of [false, true]) words.push(...(await wordsOn(host, pressed)))
     // The census cannot silently empty out: call, grid, two clocks with their labels, six
-    // indices with their names and SSN's date, the provenance chip and the toggle, in each of four
-    // renders.
-    expect(words.length, 'words found').toBe(4 * (2 + 4 + 13 + 1 + 1))
+    // indices with their names, SSN's date and Kp's "est." word, the provenance chip and the toggle,
+    // in each of four renders.
+    expect(words.length, 'words found').toBe(4 * (2 + 4 + 14 + 1 + 1))
     expect(unreadable(RULES, distinct(words))).toEqual([])
     // Every mode × every shape through the resolver: seconds, not the default five.
   }, 60_000)
