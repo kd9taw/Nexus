@@ -107,6 +107,28 @@ describe('the choice each box keeps', () => {
     expect(loadGetoutSort('0')).toBe('distance')
   })
 
+  it("two cockpits' boxes at the same place keep different choices", () => {
+    saveGetoutSort('operate.box2', 'call')
+    saveGetoutSort('cw.box2', 'snr')
+    expect(loadGetoutSort('operate.box2')).toBe('call')
+    expect(loadGetoutSort('cw.box2')).toBe('snr')
+    expect(loadGetoutSort('phone.box2')).toBe('distance')
+  })
+
+  it("a choice saved by the box's place alone (before boxes were told apart by cockpit) still loads, until the cockpit's own", () => {
+    localStorage.setItem(KEY, JSON.stringify({ box2: 'newest' }))
+    expect(loadGetoutSort('operate.box2')).toBe('newest')
+    expect(loadGetoutSort('cw.box2')).toBe('newest')
+    saveGetoutSort('cw.box2', 'call')
+    expect(loadGetoutSort('cw.box2')).toBe('call')
+    expect(loadGetoutSort('operate.box2')).toBe('newest')
+  })
+
+  it('an unknown value under the cockpit\'s own name reads as Distance, never as the old shared choice', () => {
+    localStorage.setItem(KEY, JSON.stringify({ box2: 'newest', 'cw.box2': 'loudest' }))
+    expect(loadGetoutSort('cw.box2')).toBe('distance')
+  })
+
   it('a name inherited from the object prototype is not a choice', () => {
     expect(loadGetoutSort('toString')).toBe('distance')
     expect(loadGetoutSort('__proto__')).toBe('distance')

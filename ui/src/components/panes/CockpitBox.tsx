@@ -140,6 +140,10 @@ export function boxLabels(entries: Partial<Record<BoxId, string>>): Record<BoxId
 export interface CockpitBoxProps {
   /** The box (its vocabulary id): the frame's `data-pane`. */
   box: string
+  /** The cockpit it stands in (its panel record's section: `operate`, `cw`, `phone`, `js8`). With the box
+   *  it names the box for what a pane keeps per box (Getting Out's sort), so two cockpits' `box2` keep
+   *  their own. Absent for the dashboard rail's boxes folded into a cockpit: they are the rail's slots. */
+  cockpit?: string
   /** The entry of the shared list it shows. */
   entry: string
   source: BoxSource
@@ -197,7 +201,7 @@ const BoxPicker = memo(function BoxPicker({
   )
 })
 
-export function CockpitBox({ box, entry, source, selection, onScreen, onPick, onRemove, stacked }: CockpitBoxProps) {
+export function CockpitBox({ box, cockpit, entry, source, selection, onScreen, onPick, onRemove, stacked }: CockpitBoxProps) {
   // The cockpit hands a new `onPick` on every render; the picker gets one that never changes.
   const pickNow = useRef(onPick)
   useEffect(() => {
@@ -222,7 +226,7 @@ export function CockpitBox({ box, entry, source, selection, onScreen, onPick, on
       actions={<BoxPicker entry={entry} title={title} marked={marked} onPick={pick} />}
     >
       <div className={`box-body${stacked && fill ? ' box-body--stacked' : ''}`} data-box={entry}>
-        <BoxBody pane={shown.pane} source={source} selection={selection} instance={box} />
+        <BoxBody pane={shown.pane} source={source} selection={selection} instance={cockpit ? `${cockpit}.${box}` : box} />
       </div>
     </CockpitPaneFrame>
   )

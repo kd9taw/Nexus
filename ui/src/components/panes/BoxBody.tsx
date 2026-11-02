@@ -27,7 +27,7 @@ export function BoxBody({
   pane: PaneId
   source: BoxSource
   selection: BoxSelection
-  /** The box's place (CockpitBox `box`), for a pane that keeps a choice per box. */
+  /** The box's name for what a pane keeps per box (CockpitBox: its cockpit and place, `cw.box2`). */
   instance?: string
 }) {
   const { selectedCall, onSelectCall } = selection

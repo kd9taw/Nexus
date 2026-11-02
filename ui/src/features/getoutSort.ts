@@ -9,10 +9,14 @@
 //
 // THE CHOICE IS KEPT PER BOX AND ACROSS A RESTART: one record per window (features/windowScope, like
 // the box's Start fresh time), keyed by the box's place — a Conditions slot (`left1`…), a dashboard rail
-// slot (`rail1`…) or a cockpit's box (`box1`…). A cockpit's box is named by its place in that
-// cockpit's panel record, so two cockpits' `box2` share a choice. A pop-out starts on the main window's
-// record and diverges at its first pick. The record is VALIDATED ON LOAD: a value this build does not
-// know, a record that does not parse, or a name the object prototype carries reads as Distance.
+// slot (`rail1`…) or a cockpit's box, named by its cockpit and its place there (`operate.box2`,
+// `cw.box2`…), so the FT8 cockpit's box2 and CW's keep separate choices. A pop-out starts on the main
+// window's record and diverges at its first pick. The record is VALIDATED ON LOAD: a value this build
+// does not know, a record that does not parse, or a name the object prototype carries reads as Distance.
+//
+// THE CHOICE SAVED BEFORE COCKPITS WERE TOLD APART was keyed by the place alone (`box2`). A cockpit's box
+// that has no choice of its own yet reads that one, so an existing choice still opens in every cockpit;
+// the box's first pick is saved under its own name and wins from then on. The old entry is left as is.
 import type { HeardMe } from '../types'
 import { surfaceGet, surfaceSet } from './windowScope'
 
@@ -68,7 +72,10 @@ function readRecord(): Record<string, unknown> {
 /** The order the box at `instance` keeps; Distance when it has none this build knows. */
 export function loadGetoutSort(instance: string): GetoutSort {
   const rec = readRecord()
-  const v = Object.prototype.hasOwnProperty.call(rec, instance) ? rec[instance] : undefined
+  const own = (name: string) => (Object.prototype.hasOwnProperty.call(rec, name) ? rec[name] : undefined)
+  const dot = instance.lastIndexOf('.')
+  // A cockpit's box with no entry of its own reads the one saved under its place alone (the header).
+  const v = own(instance) ?? (dot > 0 ? own(instance.slice(dot + 1)) : undefined)
   return isSort(v) ? v : 'distance'
 }
 

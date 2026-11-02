@@ -1546,6 +1546,7 @@ export function Js8Cockpit({
       entry != null && boxes && panels ? (
         <CockpitBox
           box={b}
+          cockpit="js8"
           entry={entry}
           source={boxes}
           selection={boxSel}

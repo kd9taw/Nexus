@@ -18,6 +18,14 @@ vi.mock('../../api', async (importOriginal) => {
     readRotatorState: vi.fn(async () => null),
     getOpeningsLog: vi.fn(async () => []),
     getContests: vi.fn(async () => []),
+    getGettingOut: vi.fn(async () => ({
+      count: 2,
+      maxKm: 9000,
+      reports: [
+        { call: 'VK4DD', grid: null, band: '20m', snr: -18, bearingDeg: 0, km: 9000, octant: 'N', ageSecs: 30 },
+        { call: 'DL2BB', grid: null, band: '20m', snr: -3, bearingDeg: 0, km: 7000, octant: 'N', ageSecs: 60 },
+      ],
+    })),
   }
 })
 
@@ -125,5 +133,33 @@ describe('⛔ a click in a box never changes the station the cockpit is working'
     expect(result.current.focusBand).toBe('20m')
     act(() => result.current.toggleFocusBand('20m'))
     expect(result.current.focusBand).toBeNull()
+  })
+})
+
+describe("a Getting Out box keeps its own sort choice in each cockpit", () => {
+  const calls = () => [...document.querySelectorAll('.getout-list .go-call')].map((c) => c.textContent)
+  const checked = () => (document.querySelector('.getout-sort input:checked') as HTMLInputElement | null)?.value
+
+  it("the FT8 cockpit's box2 and the CW cockpit's box2 save separately", async () => {
+    localStorage.clear()
+    await box('getout', { box: 'box2', cockpit: 'operate' })
+    await screen.findByRole('radiogroup')
+    fireEvent.click(screen.getByRole('radio', { name: t('connect.getout.sort.call') }))
+    expect(calls()).toEqual(['DL2BB', 'VK4DD'])
+    cleanup()
+    await box('getout', { box: 'box2', cockpit: 'cw' })
+    await screen.findByRole('radiogroup')
+    expect(checked(), 'CW never took the FT8 box’s choice').toBe('distance')
+    fireEvent.click(screen.getByRole('radio', { name: t('connect.getout.sort.snr') }))
+    cleanup()
+    // A restart: each cockpit's box2 opens on its own choice.
+    await box('getout', { box: 'box2', cockpit: 'operate' })
+    await screen.findByRole('radiogroup')
+    expect(checked()).toBe('call')
+    cleanup()
+    await box('getout', { box: 'box2', cockpit: 'cw' })
+    await screen.findByRole('radiogroup')
+    expect(checked()).toBe('snr')
+    expect(calls()).toEqual(['DL2BB', 'VK4DD'])
   })
 })

@@ -9,7 +9,7 @@
 // one per box (`useId`), so the browser gives it one Tab stop and the arrows choose — the input itself is
 // visually hidden and its label is the chip.
 //
-// THE CHOICE IS THE BOX'S (`instance`, its place: a Conditions or rail slot, or a cockpit's box), kept
+// THE CHOICE IS THE BOX'S (`instance`: a Conditions or rail slot, or a cockpit's box by cockpit and place), kept
 // across a restart and read back validated. A live update re-sorts the new answer in the chosen order
 // with stable ties; the list does not auto-follow, so the body's scroll stays where the operator left it.
 //
