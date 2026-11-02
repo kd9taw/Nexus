@@ -243,6 +243,21 @@ pub struct ControlLines {
     /// non-serial PTT keeps the 1.0.5 keyed-on-connect hazard — the narrow price of not
     /// killing factory-default CAT on ~50 backends.
     pub handshake_none: bool,
+    /// RTS at this port KEYS THE TRANSMITTER — see [`rts_keys_transmitter`]. Not an operator
+    /// wish and never read from settings: [`spawn_rigctld`] sets it from the [`KeyingFacts`]
+    /// and the port.
+    ///
+    /// ⚠️ It decides what a declared Hardware handshake may do (#432). Where RTS does not key,
+    /// [`rigctld_args`] leaves RTS to the flow control and says no `rts_state` (Hamlib refuses
+    /// the pair). Where it does, the pair is a contradiction that keys the rig: on Windows
+    /// hardware flow control asserts RTS from port-open and refuses the un-key (the #200
+    /// mechanism, [`SettableLines::keying_rts_on_hardware_handshake`]). [`spawn_rigctld`]
+    /// refuses that launch ([`launch_refused`]) and that refusal is the guard. The argument
+    /// builder keeps an `rts_state` too, but only where one would be emitted at all: an
+    /// `Untouched` wish, an RTS line `resolve_lines` narrowed away (a backend that itself
+    /// declares Hardware), or an RTS keying line on its default state emit none, and there the
+    /// spawn refusal is the ONLY guard.
+    pub rts_keys: bool,
 }
 
 impl ControlLines {
@@ -254,6 +269,7 @@ impl ControlLines {
             handshake: Handshake::Auto,
             keying_line: LineState::Untouched,
             handshake_none: false,
+            rts_keys: false,
         }
     }
 }
@@ -355,6 +371,73 @@ pub(crate) fn rts_is_deliberate(
     ptt_line.is_some() || declared || crate::usbrig::port_is_keying_interface(addr)
 }
 
+/// Does RTS at this port key the transmitter? What the CALLER knows of the radio
+/// ([`KeyingFacts::rts_keys`]: its own PTT on RTS here, the "interface keys RTS" declaration, a
+/// CW keyline on this port's RTS — whether or not the daemon is told to key it), the daemon's
+/// own RTS keying line, the declaration, or a recognised keying cable (the Digirig class keys
+/// on RTS). A DTR keying line makes RTS deliberate ([`rts_is_deliberate`]) but keys nothing on it.
+pub(crate) fn rts_keys_transmitter(keying: &KeyingFacts, addr: &str) -> bool {
+    keying.rts_keys
+        || keying.ptt_line == Some(crate::rig::SerialLine::Rts)
+        || keying.rts_declared
+        || crate::usbrig::port_is_keying_interface(addr)
+}
+
+/// The operator-facing refusal for a declared Hardware handshake on a port where RTS keys the
+/// transmitter. ⚠️ The UI matches this exact sentence to show it in the operator's language
+/// (`ui/src/features/catDetail.ts`, whose test reads this constant) — change both together.
+pub const HARDWARE_HANDSHAKE_RTS_KEYS: &str =
+    "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.";
+
+/// The error [`spawn_rigctld`] returns for a launch it refused ([`launch_refused`]), so a caller
+/// can tell the refusal from every other launch failure by TYPE ([`is_handshake_refusal`]), not
+/// by matching the sentence. Displays as [`HARDWARE_HANDSHAKE_RTS_KEYS`].
+#[derive(Debug)]
+pub struct HandshakeRefused;
+
+impl std::fmt::Display for HandshakeRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(HARDWARE_HANDSHAKE_RTS_KEYS)
+    }
+}
+
+impl std::error::Error for HandshakeRefused {}
+
+/// Is this launch error the handshake refusal ([`HandshakeRefused`])?
+pub fn is_handshake_refusal(e: &std::io::Error) -> bool {
+    e.get_ref()
+        .is_some_and(|inner| inner.is::<HandshakeRefused>())
+}
+
+/// Would [`spawn_rigctld`] refuse this launch? A serial port (not a network transport, not an
+/// empty address), a declared Hardware handshake, and RTS keying the transmitter
+/// ([`rts_keys_transmitter`]). The one predicate: the spawn refusal and the radio loop's Test CAT
+/// answer for a refused radio both ask it.
+pub fn launch_refused(
+    addr: &str,
+    network: bool,
+    keying: &KeyingFacts,
+    want: &ControlLines,
+) -> bool {
+    !network
+        && !addr.is_empty()
+        && want.handshake == Handshake::Hardware
+        && rts_keys_transmitter(keying, addr)
+}
+
+/// Refuse a launch whose declared handshake contradicts the port's keying (#432 review).
+///
+/// Hardware (RTS/CTS) flow control hands RTS to the serial driver, which asserts it from the
+/// moment the port opens; on Windows it also refuses the `CLRRTS` that is Hamlib's un-key, and
+/// Hamlib's termios shim reports success anyway (the #200 mechanism). Where RTS keys the
+/// transmitter that is the rig keyed from connect, with PTT unable to drop it. No argument
+/// vector makes the pair safe, so the daemon is not started at all: fail closed, and say why.
+/// Covers serial RTS PTT whatever the keying-line setting (including the default, which said
+/// nothing and was already keyed from connect), and the RTS-keying interfaces with any PTT.
+pub(crate) fn handshake_refusal(lines: &ControlLines) -> Option<HandshakeRefused> {
+    (lines.handshake == Handshake::Hardware && lines.rts_keys).then_some(HandshakeRefused)
+}
+
 /// What is known about how this port is KEYED — as distinct from [`ControlLines`], which is what
 /// the operator wants the lines HELD AT. Two different kinds of fact about the same two pins, and
 /// keeping them apart is what makes `rts_is_deliberate` readable at the call sites.
@@ -366,6 +449,12 @@ pub struct KeyingFacts {
     /// (`Settings::cat_rts_keys_ptt`) — the fact no autodetection can supply. See
     /// [`rts_is_deliberate`].
     pub rts_declared: bool,
+    /// RTS at this port keys THIS RADIO's transmitter, as the caller knows the radio — not as
+    /// the daemon is told: a monitor's daemon gets no `-P` (it is read-only), yet a radio whose
+    /// PTT is RTS on its CAT port is keyed by hardware flow control all the same. Feeds only
+    /// [`rts_keys_transmitter`] (the Hardware-handshake refusal and `rts_state` omission), never
+    /// [`rts_is_deliberate`], so it cannot move the Auto handshake override.
+    pub rts_keys: bool,
 }
 
 fn resolve_lines(
@@ -420,6 +509,7 @@ fn resolve_lines(
         handshake: want.handshake,
         keying_line: want.keying_line,
         handshake_none: free_rts && want.handshake == Handshake::Auto,
+        rts_keys: want.rts_keys,
     }
 }
 
@@ -520,7 +610,24 @@ pub fn rigctld_args(
             args.push("-C".to_string());
             args.push(format!("serial_handshake={h}"));
         }
-        if ptt_line != Some(crate::rig::SerialLine::Rts) {
+        // A declared Hardware handshake makes RTS the flow-control line, and Hamlib refuses ANY
+        // `rts_state` with it — `rig_open` tests the runtime handshake (4.7.1 `src/rig.c:1241`:
+        // `rts_state != RIG_SIGNAL_UNSET && handshake == RIG_HANDSHAKE_HARDWARE` → "cannot set
+        // RTS with hardware handshake", `-RIG_ECONF`), and rigctld stays up serving a rig it never
+        // opened. The dump cannot warn us: a backend whose caps say `None` (TS-480) reports RTS
+        // settable, so the hold-low default rode along with the operator's Hardware (#432).
+        //
+        // ⚠️ ONLY where RTS keys nothing. Where it keys the transmitter (`rts_keys`, or a serial
+        // RTS keying line here — rechecked from `ptt_line`, the same belt-and-braces as below)
+        // the pair is a contradiction that keys the rig from connect, and [`spawn_rigctld`]
+        // refuses it ([`launch_refused`]) — that refusal is the guard. Where an `rts_state`
+        // would be emitted it also stays, so Hamlib refuses the open too; where none would be
+        // (an `Untouched` wish, RTS narrowed away, an RTS keying line on its default) the spawn
+        // refusal is the only guard. The keying-line override below is untouched.
+        let rts_is_flow_control = lines.handshake == Handshake::Hardware
+            && !lines.rts_keys
+            && ptt_line != Some(crate::rig::SerialLine::Rts);
+        if ptt_line != Some(crate::rig::SerialLine::Rts) && !rts_is_flow_control {
             if let Some(v) = lines.rts.value() {
                 args.push("-C".to_string());
                 args.push(format!("rts_state={v}"));
@@ -1273,6 +1380,20 @@ fn known_conf_value<'a>(dump: &'a str, name: &str, vocabulary: &[&str]) -> Optio
     vocabulary.contains(&value).then_some(value)
 }
 
+/// Does a `rigctld -L` dump PROVE the backend's serial handshake leaves RTS free — `None` or
+/// `XONXOFF`, read through the pinned vocabulary ([`known_conf_value`])? An unreadable dump, a
+/// missing parameter, an unrecognised value or a vocabulary that has grown all prove nothing,
+/// so they are `false`: the caller that needs RTS held down fails closed on them.
+pub(crate) fn dump_proves_rts_free(show_conf: &str) -> bool {
+    let vocabulary: Vec<&str> = HANDSHAKE_RTS_FREE
+        .iter()
+        .chain(HANDSHAKE_RTS_TAKEN.iter())
+        .copied()
+        .collect();
+    known_conf_value(show_conf, "serial_handshake", &vocabulary)
+        .is_some_and(|h| HANDSHAKE_RTS_FREE.contains(&h))
+}
+
 /// Read a `rigctld --show-conf` dump: which lines Hamlib will accept a `<line>_state` for.
 ///
 /// Every `true` here is positive proof from the dump; everything else — a missing parameter, an
@@ -1459,6 +1580,18 @@ pub fn spawn_rigctld(
         // Is RTS at this port a deliberate thing? A serial keying line declared here, or
         // the port enumerating as a recognised keying-interface cable (Digirig class).
         let deliberate = rts_is_deliberate(ptt_line, keying.rts_declared, addr);
+        let want = ControlLines {
+            rts_keys: rts_keys_transmitter(&keying, addr),
+            ..want
+        };
+        // Before any daemon runs: the refusal is a fact about the settings and the port.
+        debug_assert_eq!(
+            handshake_refusal(&want).is_some(),
+            launch_refused(addr, network, &keying, &want)
+        );
+        if let Some(why) = handshake_refusal(&want) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, why));
+        }
         resolve_lines(settable_lines_for(model, ptt_line), want, deliberate)
     };
     let args = rigctld_args(model, addr, baud, tcp_port, network, ptt_line, lines);
@@ -2499,6 +2632,262 @@ mod tests {
         for junk in ["", "  ", "AUTO", "yes please"] {
             assert_eq!(Handshake::from_setting(junk), Handshake::Auto, "{junk:?}");
         }
+    }
+
+    /// ⭐ A declared Hardware handshake never travels with an `rts_state`, whatever the backend
+    /// says about its own handshake. Hamlib's `rig_open` (4.7.1 `src/rig.c:1241-1249`) checks
+    /// the RUNTIME handshake, so `-C serial_handshake=Hardware` together with any
+    /// `-C rts_state=…` is `cannot set RTS with hardware handshake` and `-RIG_ECONF`: rigctld
+    /// stays up serving a rig it never opened. A TS-480 declares `RIG_HANDSHAKE_NONE` in its
+    /// caps (`rigs/kenwood/ts480.c:1338`), so the dump calls RTS settable and the shipped
+    /// hold-low default used to ride along with the operator's Hardware declaration — CAT that
+    /// connects and does nothing, on a radio that needs RTS/CTS.
+    ///
+    /// The table: a Kenwood (backend handshake None), a Yaesu (backend Hardware) and an Icom
+    /// (backend None), each under the three declarations, plus `Auto` as the control. DTR is
+    /// not flow control and keeps its hold in every row.
+    #[test]
+    fn a_declared_hardware_handshake_never_travels_with_an_rts_state() {
+        // (model, what the backend itself declares)
+        let rigs = [(2028, "None"), (1042, "Hardware"), (3073, "None")];
+        for (model, backend) in rigs {
+            let settable = parse_settable_lines(&show_conf("RIG", Some(backend)));
+            for (declared, token, rts_held) in [
+                (Handshake::None, "None", true),
+                (Handshake::XonXoff, "XONXOFF", true),
+                (Handshake::Hardware, "Hardware", false),
+            ] {
+                let want = ControlLines {
+                    handshake: declared,
+                    ..ControlLines::hold_low()
+                };
+                // A bare rig on its own USB port: no keying cable, no serial keying line.
+                let lines = resolve_lines(settable, want, false);
+                let args = rigctld_args(model, "COM5", 115200, 4532, false, None, lines);
+                let hs: Vec<&String> = args
+                    .iter()
+                    .filter(|a| a.starts_with("serial_handshake="))
+                    .collect();
+                assert_eq!(
+                    hs,
+                    [&format!("serial_handshake={token}")],
+                    "model {model} ({backend}), declared {declared:?}: {args:?}"
+                );
+                if rts_held {
+                    assert!(
+                        holds(&args, "rts", "OFF"),
+                        "model {model}, {declared:?}: RTS is free, the hold applies: {args:?}"
+                    );
+                } else {
+                    assert!(
+                        says_nothing_about(&args, "rts"),
+                        "model {model} ({backend}): Hamlib refuses rts_state with a hardware \
+                         handshake and CAT never opens: {args:?}"
+                    );
+                }
+                assert!(
+                    holds(&args, "dtr", "OFF"),
+                    "model {model}, {declared:?}: DTR is not flow control: {args:?}"
+                );
+            }
+        }
+
+        // Controls on `Auto`, unchanged: the TS-480 keeps the hold-low default with no handshake
+        // said, and the Yaesu keeps its own hardware handshake untouched (its factory CAT RTS =
+        // ENABLE gates replies on RTS — the bench regression pinned above).
+        for (model, backend, rts_held) in [(2028, "None", true), (1042, "Hardware", false)] {
+            let settable = parse_settable_lines(&show_conf("RIG", Some(backend)));
+            let lines = resolve_lines(settable, ControlLines::hold_low(), false);
+            let args = rigctld_args(model, "COM5", 115200, 4532, false, None, lines);
+            assert!(
+                !args.iter().any(|a| a.starts_with("serial_handshake")),
+                "{model}: {args:?}"
+            );
+            assert_eq!(
+                holds(&args, "rts", "OFF"),
+                rts_held,
+                "{model} ({backend}): {args:?}"
+            );
+            assert_eq!(says_nothing_about(&args, "rts"), !rts_held, "{args:?}");
+        }
+
+        // The operator's explicit HIGH wish on a port where RTS keys nothing: still no
+        // `rts_state`, and DTR takes the wish.
+        let settable = parse_settable_lines(&show_conf("RIG", Some("None")));
+        let high = resolve_lines(
+            settable,
+            ControlLines {
+                handshake: Handshake::Hardware,
+                ..high_both()
+            },
+            true,
+        );
+        let args = rigctld_args(2028, "COM5", 115200, 4532, false, None, high);
+        assert!(says_nothing_about(&args, "rts"), "{args:?}");
+        assert!(holds(&args, "dtr", "ON"), "{args:?}");
+        // A DTR keying line is not flow control and is still stated; RTS keys nothing here.
+        let keyed = ControlLines {
+            handshake: Handshake::Hardware,
+            keying_line: LineState::Low,
+            ..ControlLines::hold_low()
+        };
+        let args = rigctld_args(
+            2028,
+            "COM5",
+            115200,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Dtr),
+            keyed,
+        );
+        assert!(holds(&args, "dtr", "OFF"), "{args:?}");
+        assert!(says_nothing_about(&args, "rts"), "{args:?}");
+    }
+
+    /// ⛔ A declared Hardware handshake on a port where RTS KEYS THE TRANSMITTER must never
+    /// produce an argument vector that opens the port. Hardware flow control asserts RTS from
+    /// port-open, and on Windows the un-key is refused and reported as success (the #200
+    /// mechanism), so an opened port is the rig keyed from connect with PTT unable to drop it.
+    /// The `rts_state` stays in these two cases, so Hamlib refuses the open (`rig.c:1241`):
+    /// - (a) the interface keys on RTS (declared, or a recognised keying cable), PTT not RTS;
+    /// - (b) PTT = RTS on the CAT port with an explicit keying-line state — here built by hand
+    ///   WITHOUT `rts_keys`, so the `ptt_line` recheck in the builder is what holds.
+    #[test]
+    fn a_hardware_handshake_where_rts_keys_the_transmitter_keeps_its_rts_state() {
+        let settable = parse_settable_lines(&show_conf("RIG", Some("None")));
+        // (a)
+        let a = resolve_lines(
+            settable,
+            ControlLines {
+                handshake: Handshake::Hardware,
+                rts_keys: true,
+                ..ControlLines::hold_low()
+            },
+            true,
+        );
+        assert!(a.rts_keys, "resolve_lines carries the keying fact through");
+        let args = rigctld_args(2028, "COM5", 115200, 4532, false, None, a);
+        assert!(
+            holds(&args, "rts", "OFF"),
+            "RTS keys the rig: the pair must stay refused, never an opened port: {args:?}"
+        );
+        // (b)
+        let b = ControlLines {
+            handshake: Handshake::Hardware,
+            keying_line: LineState::Low,
+            ..ControlLines::hold_low()
+        };
+        let args = rigctld_args(
+            2028,
+            "COM5",
+            115200,
+            4532,
+            false,
+            Some(crate::rig::SerialLine::Rts),
+            b,
+        );
+        assert!(
+            holds(&args, "rts", "OFF"),
+            "the keying line's own state stays, so Hamlib refuses the open: {args:?}"
+        );
+    }
+
+    /// ⛔ …and the launch itself is refused, before any daemon runs, with a sentence the operator
+    /// can act on — (a), (b), and (b'): PTT = RTS on the CAT port with the keying line left on
+    /// its default, which says no `rts_state` at all and so was keyed from connect even before
+    /// the #432 fix. Negative controls: the reporter's plain cable, and every other handshake.
+    #[test]
+    fn spawn_refuses_a_hardware_handshake_where_rts_keys_the_transmitter() {
+        let hw = ControlLines {
+            handshake: Handshake::Hardware,
+            ..ControlLines::hold_low()
+        };
+        let rts = Some(crate::rig::SerialLine::Rts);
+        let facts = |ptt_line, rts_declared, rts_keys| KeyingFacts {
+            ptt_line,
+            rts_declared,
+            rts_keys,
+        };
+        let cases = [
+            ("(a) interface keys RTS", facts(None, true, false), hw),
+            (
+                "(b) RTS PTT, explicit keying line",
+                facts(rts, false, false),
+                ControlLines {
+                    keying_line: LineState::Low,
+                    ..hw
+                },
+            ),
+            (
+                "(b') RTS PTT, keying line on its default",
+                facts(rts, false, false),
+                hw,
+            ),
+            // A monitor: the daemon gets no `-P` (read-only), but the RADIO keys on RTS — its
+            // PTT, or a CW keyline on this port's RTS — and flow control would key it.
+            (
+                "(c) monitor whose radio keys on RTS, no -P",
+                facts(None, false, true),
+                hw,
+            ),
+        ];
+        for (name, keying, want) in cases {
+            assert!(launch_refused("COM99", false, &keying, &want), "{name}");
+            match spawn_rigctld(2028, "COM99", 115200, 45_432, false, keying, want) {
+                Err(e) => {
+                    assert!(is_handshake_refusal(&e), "{name}: refused by type: {e}");
+                    assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{name}: {e}");
+                    assert_eq!(e.to_string(), HARDWARE_HANDSHAKE_RTS_KEYS, "{name}");
+                }
+                Ok(_) => panic!("{name}: a daemon was launched on a port it would key"),
+            }
+        }
+        // Any other launch error is not the refusal.
+        assert!(!is_handshake_refusal(&std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            HARDWARE_HANDSHAKE_RTS_KEYS
+        )));
+
+        // Negative controls: the reporter (Hardware, RTS keys nothing) launches; RTS keying with
+        // any other handshake launches as before; a network transport has no RTS pin.
+        assert!(
+            handshake_refusal(&hw).is_none(),
+            "the #432 reporter's own setup"
+        );
+        assert!(!launch_refused(
+            "COM99",
+            false,
+            &facts(None, false, false),
+            &hw
+        ));
+        assert!(!launch_refused(
+            "192.168.1.5:4532",
+            true,
+            &facts(rts, true, true),
+            &hw
+        ));
+        for h in [Handshake::Auto, Handshake::None, Handshake::XonXoff] {
+            let lines = ControlLines {
+                handshake: h,
+                rts_keys: true,
+                ..ControlLines::hold_low()
+            };
+            assert!(handshake_refusal(&lines).is_none(), "{h:?}");
+            assert!(!launch_refused(
+                "COM99",
+                false,
+                &facts(rts, true, true),
+                &lines
+            ));
+        }
+        // A DTR keying line does not make RTS key anything.
+        assert!(!rts_keys_transmitter(
+            &facts(Some(crate::rig::SerialLine::Dtr), false, false),
+            "COM99"
+        ));
+        assert!(rts_keys_transmitter(&facts(rts, false, false), "COM99"));
+        assert!(rts_keys_transmitter(&facts(None, true, false), "COM99"));
+        assert!(rts_keys_transmitter(&facts(None, false, true), "COM99"));
     }
 
     /// The keying line's idle state: emitted only for the line we are actually keying with,

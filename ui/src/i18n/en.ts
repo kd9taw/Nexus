@@ -7860,6 +7860,8 @@ export const EN = {
   // ⚠️ CAT is the rig-control protocol's own name, here and in the two entries below it.
   'radios.switcher.catDead.title':
     'Switch to {{name}} — ⚠ CAT not responding (check its rig, cable, and COM port)',
+  'radios.switcher.catRefused.title':
+    "{{name}} is not connected — RTS keys its transmitter on its port, so Serial handshake can't be Hardware. Set it to Auto or None.",
   'radios.switcher.catDead.aria': 'CAT not responding',
   'radios.switcher.catDead.band': 'no CAT',
   'radios.peg.on.label': '🔒 Pegged',
@@ -8516,6 +8518,8 @@ export const EN = {
   'settings.rigControl.serialHandshake.xonxoff': 'XON/XOFF (software)',
   'settings.rigControl.serialHandshake.hint':
     "Tells Nexus what your cable actually does, instead of letting it guess. Leave it on Auto unless you have a rig that keys at launch — Auto changes nothing about how your station works today. If you change it and CAT stops working, put it back on Auto: on some rigs Hamlib quietly refuses the setting and then answers without ever having opened the radio, so you get a CAT light and a rig that ignores you.",
+  'settings.rigControl.serialHandshake.rtsKeys':
+    "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.",
   'settings.rigControl.pttLineState.label': 'Keying line at startup',
   'settings.rigControl.pttLineState.auto': 'Auto (recommended)',
   'settings.rigControl.pttLineState.untouched': 'Never touch it',

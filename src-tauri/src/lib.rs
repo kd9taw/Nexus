@@ -27273,12 +27273,16 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
         let mut answer = None;
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
-            answer = engine_lock(&state).cat_reprobe_answer(asked);
+            let eng = engine_lock(&state);
+            // The refusal flag under the same lock as the answer it belongs to.
+            answer = eng
+                .cat_reprobe_answer(asked)
+                .map(|(ok, detail)| (ok, detail, eng.cat_reprobe_refused()));
             if answer.is_some() {
                 break;
             }
         }
-        let Some((ok, mut detail)) = answer else {
+        let Some((ok, mut detail, refused)) = answer else {
             // The loop never published our probe. Either it is wedged/slow (stale status
             // exists) or it never ran at all this session (status empty — the radio engine
             // died before its first probe, classically because the audio open failed at
@@ -27311,6 +27315,9 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                 &s.serial_port,
                 &s.ptt_method,
                 &s.ptt_serial_port,
+                // RTS on the CAT port keys a transmitter whatever PTT says: every rung must
+                // hold it down, or the sweep is refused (`sweep_refusal` below).
+                tempo_audio::service::settings_key_rts_on(s, &s.serial_port),
             )
             .map(|gate| {
                 (
@@ -27329,8 +27336,19 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             });
             ladder
         };
-        if ok == Some(false) {
-            if let Some((port, baud, rig_model, gate, model_name, native)) = ladder {
+        // A launch Nexus REFUSED (a declared Hardware handshake on a port where RTS keys the
+        // transmitter) is not a fault to sweep: the refusal is the answer, and a sweep would
+        // open the very port the refusal kept shut, then replace the sentence with a verdict.
+        // `refused` is the radio loop's typed flag, never a match on the words.
+        if ok == Some(false) && !refused {
+            // A sweep whose rungs could not hold RTS unkeyed on an RTS-keyed port is not run:
+            // the probe's own failure stands, with the reason. Asked before the port is taken.
+            let sweep_refused = ladder.as_ref().and_then(|(_, _, rig_model, gate, _, _)| {
+                tempo_audio::baud_ladder::sweep_refusal(*rig_model, *gate)
+            });
+            if let Some(why) = sweep_refused {
+                detail = format!("{detail} {why}");
+            } else if let Some((port, baud, rig_model, gate, model_name, native)) = ladder {
                 // Ask the loop to release the serial port (our own daemon holds it even
                 // when the rig is mute), wait for the ack, then probe. Always release —
                 // the loop rebuilds CAT at the configured settings either way, and the
@@ -27357,7 +27375,7 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                         use tempo_audio::baud_ladder::{self as bl, LadderKind};
                         match bl::ladder_kind(rig_model) {
                             LadderKind::Civ { addr } => bl::compose_ladder_message(
-                                &bl::run(&port, baud, addr),
+                                &bl::run(&port, baud, addr, gate),
                                 &model_name,
                                 addr,
                                 native,

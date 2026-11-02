@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { useFocusReturn } from '../focusReturn'
 import { t } from '../i18n'
+import { catDetailText } from '../features/catDetail'
 import { T } from '../i18n/T'
 import type { MessageKey } from '../i18n'
 import type { ProfileId } from '../features/profiles'
@@ -1377,7 +1378,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             {catResult && (
               <span className={`wizard-field-hint${catResult.ok ? '' : ' bad'}`}>
                 {catResult.ok ? '✓ ' : '✗ '}
-                {catResult.detail}
+                {catResult.detail && catDetailText(catResult.detail)}
               </span>
             )}
           </div>

@@ -144,6 +144,7 @@ import {
 // QSO-management surface, and they move in the transmit-path batch with the stop-line sweeps
 // re-run. The comment beside them says so at the call site.
 import { setLocale, t, type MessageKey } from '../i18n'
+import { catDetailText } from '../features/catDetail'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
 import { CONTESTS, CONTESTS_SENDING_POWER, clubSyncRefusalText, contestClubRefusal, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
@@ -7433,7 +7434,7 @@ export function SettingsPanel({
                 return (
                   <span className={`cat-result ${cls}`} role="status">
                     {mark}
-                    {detail}
+                    {catDetailText(detail)}
                   </span>
                 )
               })()}

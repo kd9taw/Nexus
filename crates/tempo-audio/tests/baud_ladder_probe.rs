@@ -98,7 +98,16 @@ fn ft847_caps() -> RigCaps {
 
 fn sweep_report(port: &str) -> tempo_audio::baud_ladder::LadderReport {
     install_standin();
-    run_hamlib(port, 9600, 1001, LadderGate { keying: None }, &ft847_caps())
+    run_hamlib(
+        port,
+        9600,
+        1001,
+        LadderGate {
+            keying: None,
+            rts_keys: false,
+        },
+        &ft847_caps(),
+    )
 }
 
 fn sweep(port: &str) -> Vec<(u32, BaudProbe)> {

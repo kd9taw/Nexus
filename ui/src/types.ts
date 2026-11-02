@@ -6409,6 +6409,9 @@ export interface RadioSummary {
   isActive: boolean
   /** Live CAT health for the active radio; null for a not-connected radio. */
   catOk: boolean | null
+  /** A non-active radio whose CAT Nexus refused to start (Hardware handshake where RTS keys a
+   * transmitter). Absent when false. */
+  catRefused?: boolean
   /** Live S-meter (dB rel S9) for the active radio; null otherwise. */
   smeterDb: number | null
   transmitting: boolean

@@ -366,7 +366,71 @@ pub struct LadderGate {
     /// opening the port. Every rung hands Hamlib the SAME `-P <line> -p <port>` the live daemon
     /// gets, so a rung opens the port exactly the way the daemon that just failed did — parity,
     /// not new behaviour, and a sweep of five rungs is not five transmissions.
+    ///
+    /// ⚠️ It counts RTS keying the radio even where PTT does not say so ([`Self::rts_keys`]):
+    /// an interface that keys on RTS with PTT = CAT/VOX gets `Some(Rts)` here, so every rung's
+    /// `rig_open` lowers RTS (the CI-V rungs lower it themselves). Without that a failed Test CAT
+    /// opened five rungs with RTS left wherever the driver put it — high — on any `ptt_method`.
     pub keying: Option<crate::rig::SerialLine>,
+    /// RTS on this port keys the radio: PTT on RTS here, the "interface keys RTS" declaration,
+    /// the CW keyline on this port's RTS, or a recognised keying cable. Where a rung cannot hold
+    /// RTS down — the DTR line already named by `-P`, or a backend whose hardware handshake
+    /// holds RTS up — the sweep is refused ([`sweep_refusal`]).
+    pub rts_keys: bool,
+}
+
+/// Why a baud sweep on this port is NOT run, when a rung could not hold RTS unkeyed.
+pub const SWEEP_REFUSED_RTS_KEYS: &str = "Nexus did not try other baud rates: RTS keys your \
+     transmitter on this port, and a baud sweep could not hold it unkeyed.";
+
+/// Should the sweep be refused? Wherever RTS keys the radio ([`LadderGate::rts_keys`]) and it is
+/// not PROVEN that a rung holds it down. A rung names ONE keying line to Hamlib (`-P`), so with
+/// DTR named RTS keeps the driver's open-time level: refused. With RTS named, `rig_open` lowers
+/// it only if the backend's serial handshake leaves RTS free; a hardware handshake hands it to
+/// flow control, which asserts it from port-open (on Windows Hamlib's un-key is then refused and
+/// reported as success — the mechanism in
+/// [`crate::rigctld_proc::SettableLines::keying_rts_on_hardware_handshake`]). So the sweep runs
+/// only when the backend's `-L` dump (`dump`, asked with `-P RTS` by [`sweep_refusal`]) proves the
+/// handshake is `None` or `XONXOFF` ([`crate::rigctld_proc::dump_proves_rts_free`]); an unreadable
+/// dump or a token we do not recognise refuses. Fail closed: a refused sweep costs a diagnosis, a
+/// wrong one keys a transmitter. A radio with nothing on RTS never asks.
+fn sweep_refusal_given(
+    gate: LadderGate,
+    dump: impl FnOnce() -> Option<String>,
+) -> Option<&'static str> {
+    if !gate.rts_keys {
+        return None;
+    }
+    let held_down = gate.keying == Some(crate::rig::SerialLine::Rts)
+        && dump().is_some_and(|d| crate::rigctld_proc::dump_proves_rts_free(&d));
+    (!held_down).then_some(SWEEP_REFUSED_RTS_KEYS)
+}
+
+/// [`sweep_refusal_given`], asking the operator's own Hamlib about `rig_model` (a one-shot
+/// `rigctld -L` dump: it opens no port). Blocking; Test CAT calls it before taking the port.
+pub fn sweep_refusal(rig_model: u32, gate: LadderGate) -> Option<&'static str> {
+    sweep_refusal_given(gate, || {
+        let model = rig_model.to_string();
+        crate::rigctld_proc::daemon_dump(&[
+            "-m",
+            &model,
+            "-L",
+            "-P",
+            crate::rigctld_proc::ptt_type_token(crate::rig::SerialLine::Rts),
+        ])
+    })
+}
+
+/// Hold the port's keying lines at their unkeyed level right after a CI-V rung opens it: a
+/// serial driver raises RTS and DTR on open, and nothing else on this raw path would lower them.
+#[cfg(feature = "serial")]
+fn hold_unkeyed<P: crate::control_line::ControlLinePins + ?Sized>(port: &mut P, gate: LadderGate) {
+    if gate.rts_keys || gate.keying == Some(crate::rig::SerialLine::Rts) {
+        let _ = port.set_rts(false);
+    }
+    if gate.keying == Some(crate::rig::SerialLine::Dtr) {
+        let _ = port.set_dtr(false);
+    }
 }
 
 /// Should a failed Test CAT run a ladder at all?
@@ -386,12 +450,17 @@ pub struct LadderGate {
 /// Kenwoods, seven older Icoms and four Xiegus. The rigs the deletions strand were exactly the
 /// rigs the ladder could not reach. It is now a question about the PORT, not about the model;
 /// which ladder the rig then gets is [`ladder_kind`]'s job, asked of Hamlib.
+///
+/// `rts_keys`: the settings say RTS on this port keys a transmitter whatever `ptt_method` says
+/// (the "interface keys RTS" declaration, or the CW keyline on this port's RTS); a recognised
+/// keying cable is added here. See [`LadderGate::rts_keys`].
 pub fn ladder_applies(
     is_network: bool,
     rig_model: u32,
     serial_port: &str,
     ptt_method: &str,
     ptt_serial_port: &str,
+    rts_keys: bool,
 ) -> Option<LadderGate> {
     if is_network || serial_port.trim().is_empty() || rig_model == 0 {
         return None;
@@ -411,7 +480,15 @@ pub fn ladder_applies(
         }
         _ => return None,
     };
-    Some(LadderGate { keying })
+    let rts_keys = rts_keys
+        || keying == Some(crate::rig::SerialLine::Rts)
+        || crate::usbrig::port_is_keying_interface(serial_port.trim());
+    // RTS keys the radio although PTT does not name it: name it, so every rung lowers it.
+    let keying = match keying {
+        None if rts_keys => Some(crate::rig::SerialLine::Rts),
+        k => k,
+    };
+    Some(LadderGate { keying, rts_keys })
 }
 
 /// The rates to try, in order: the configured rate first (re-checked directly, without
@@ -1440,7 +1517,7 @@ pub fn run_hamlib(
 /// One real (port, baud) probe: open, send a single read-only CI-V `read_freq`, gather
 /// whatever comes back for ~600 ms, classify.
 #[cfg(feature = "serial")]
-fn probe_port_baud(port: &str, baud: u32, civ_addr: u8) -> BaudProbe {
+fn probe_port_baud(port: &str, baud: u32, civ_addr: u8, gate: LadderGate) -> BaudProbe {
     use std::io::Read;
     use std::time::{Duration, Instant};
     let mut sp = match serialport::new(port, baud)
@@ -1450,6 +1527,8 @@ fn probe_port_baud(port: &str, baud: u32, civ_addr: u8) -> BaudProbe {
         Ok(sp) => sp,
         Err(e) => return BaudProbe::OpenFailed(e.to_string()),
     };
+    // Before a byte goes out: the open raised the keying lines, and a rung is no transmission.
+    hold_unkeyed(&mut sp, gate);
     let query = crate::civ::commands::read_freq(civ_addr).to_bytes();
     if let Err(e) = std::io::Write::write_all(&mut sp, &query).and_then(|()| sp.flush()) {
         return BaudProbe::OpenFailed(e.to_string());
@@ -1487,9 +1566,9 @@ fn probe_port_baud(port: &str, baud: u32, civ_addr: u8) -> BaudProbe {
 /// up to ~3 s — call from the `test_cat` command (off the radio loop), with the loop's
 /// CAT port hold acknowledged.
 #[cfg(feature = "serial")]
-pub fn run(port: &str, configured_baud: u32, civ_addr: u8) -> LadderReport {
+pub fn run(port: &str, configured_baud: u32, civ_addr: u8, gate: LadderGate) -> LadderReport {
     run_ladder(port, configured_baud, |baud| {
-        probe_port_baud(port, baud, civ_addr)
+        probe_port_baud(port, baud, civ_addr, gate)
     })
 }
 
@@ -1651,7 +1730,7 @@ mod tests {
             3013u32, 3023, 3046, 3057, 3044, 3060, 3070, 3076, 3087, 3089, 3091,
         ] {
             assert!(
-                ladder_applies(false, model, "COM4", "cat", "").is_some(),
+                ladder_applies(false, model, "COM4", "cat", "", false).is_some(),
                 "model {model} speaks CI-V and lost its baud row — it needs the ladder"
             );
         }
@@ -1660,7 +1739,7 @@ mod tests {
             1001u32, 2001, 2002, 2003, 2004, 2005, 2010, 2011, 2016, 2025,
         ] {
             assert!(
-                ladder_applies(false, model, "COM4", "cat", "").is_some(),
+                ladder_applies(false, model, "COM4", "cat", "", false).is_some(),
                 "model {model} lost its baud row and has no CI-V — it needs the ladder"
             );
         }
@@ -1669,37 +1748,245 @@ mod tests {
     /// The gate is about the PORT, not the model — the model only has to be set at all.
     #[test]
     fn ladder_applies_to_any_rig_on_a_real_serial_port() {
-        let cat = |m| ladder_applies(false, m, "COM4", "cat", "");
-        assert_eq!(cat(3078), Some(LadderGate { keying: None })); // IC-7610
-        assert_eq!(cat(1042), Some(LadderGate { keying: None })); // FTDX-10 — no CI-V, still laddered
-        assert_eq!(ladder_applies(true, 3078, "COM4", "cat", ""), None); // network rig
+        let cat = |m| ladder_applies(false, m, "COM4", "cat", "", false);
+        let none = Some(LadderGate {
+            keying: None,
+            rts_keys: false,
+        });
+        assert_eq!(cat(3078), none); // IC-7610
+        assert_eq!(cat(1042), none); // FTDX-10 — no CI-V, still laddered
+        assert_eq!(ladder_applies(true, 3078, "COM4", "cat", "", false), None); // network rig
         assert_eq!(cat(0), None); // no model picked
-        assert_eq!(ladder_applies(false, 3078, "  ", "cat", ""), None); // no port
+        assert_eq!(ladder_applies(false, 3078, "  ", "cat", "", false), None); // no port
     }
 
     #[test]
     fn the_ladder_only_runs_when_the_failed_probe_was_a_cat_probe() {
-        let none = Some(LadderGate { keying: None });
+        let none = Some(LadderGate {
+            keying: None,
+            rts_keys: false,
+        });
         // "cat" and "vox" probe the CAT channel → ladder applies, nothing keys the port.
-        assert_eq!(ladder_applies(false, 3078, "COM4", "cat", ""), none);
-        assert_eq!(ladder_applies(false, 3078, "COM4", "vox", ""), none);
+        assert_eq!(ladder_applies(false, 3078, "COM4", "cat", "", false), none);
+        assert_eq!(ladder_applies(false, 3078, "COM4", "vox", "", false), none);
         // Dedicated-port RTS/DTR keying: reprobe tested only the PTT line — its failure
         // says nothing about the CAT port, and a ladder run would bury the real
         // "Could not open serial port COM5" error under a bogus backend verdict.
-        assert_eq!(ladder_applies(false, 3078, "COM4", "rts", "COM5"), None);
-        assert_eq!(ladder_applies(false, 3078, "COM4", "dtr", "COM5"), None);
+        assert_eq!(
+            ladder_applies(false, 3078, "COM4", "rts", "COM5", false),
+            None
+        );
+        assert_eq!(
+            ladder_applies(false, 3078, "COM4", "dtr", "COM5", false),
+            None
+        );
         // Shared-port keying (dedicated port empty, or equal ignoring case): rigctld owns
         // the CAT port and the reprobe DID probe it → ladder applies — and the gate must
         // carry WHICH line keys it, or a rung would open the port and leave the rig keyed.
         let rts = Some(LadderGate {
             keying: Some(crate::rig::SerialLine::Rts),
+            rts_keys: true,
         });
         let dtr = Some(LadderGate {
             keying: Some(crate::rig::SerialLine::Dtr),
+            rts_keys: false,
         });
-        assert_eq!(ladder_applies(false, 3078, "COM4", "rts", ""), rts);
-        assert_eq!(ladder_applies(false, 3078, "COM4", "dtr", "com4"), dtr);
-        assert_eq!(ladder_applies(false, 3078, "COM4", "rts", " COM4 "), rts);
+        assert_eq!(ladder_applies(false, 3078, "COM4", "rts", "", false), rts);
+        assert_eq!(
+            ladder_applies(false, 3078, "COM4", "dtr", "com4", false),
+            dtr
+        );
+        assert_eq!(
+            ladder_applies(false, 3078, "COM4", "rts", " COM4 ", false),
+            rts
+        );
+    }
+
+    // ---- A sweep never keys an RTS-keyed interface ----
+
+    /// Records which control lines a rung drove, and to what.
+    #[cfg(feature = "serial")]
+    #[derive(Default)]
+    struct Pins(Vec<(&'static str, bool)>);
+    #[cfg(feature = "serial")]
+    impl crate::control_line::ControlLinePins for Pins {
+        fn set_dtr(&mut self, on: bool) -> std::io::Result<()> {
+            self.0.push(("dtr", on));
+            Ok(())
+        }
+        fn set_rts(&mut self, on: bool) -> std::io::Result<()> {
+            self.0.push(("rts", on));
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "serial")]
+    fn names_rts_keying(args: &[String], port: &str) -> bool {
+        args.windows(4)
+            .any(|w| w[0] == "-P" && w[1] == "RTS" && w[2] == "-p" && w[3] == port)
+    }
+
+    /// ⛔ An interface that keys on RTS (the operator's "interface keys RTS" declaration) with
+    /// PTT = CAT, handshake on Auto: a failed Test CAT's sweep holds RTS down on EVERY rung.
+    /// A Hamlib rung names RTS as the keying line, so `rig_open` lowers it; a CI-V rung lowers it
+    /// itself right after the open. A serial driver raises RTS on open, so a rung that did
+    /// neither keyed the interface — five rungs, five transmissions.
+    #[test]
+    #[cfg(feature = "serial")]
+    fn a_declared_rts_keyed_interface_with_cat_ptt_sweeps_with_rts_held_low_on_every_rung() {
+        let gate = ladder_applies(false, 2028, "COM4", "cat", "", true).expect("the sweep runs");
+        assert_eq!(
+            gate,
+            LadderGate {
+                keying: Some(crate::rig::SerialLine::Rts),
+                rts_keys: true,
+            }
+        );
+        for baud in ladder_bauds(9600) {
+            let args = probe_args("COM4", baud, 2028, gate.keying, &["f"]);
+            assert!(
+                names_rts_keying(&args, "COM4"),
+                "rung {baud}: RTS must be the line rig_open lowers: {args:?}"
+            );
+        }
+        let mut pins = Pins::default();
+        hold_unkeyed(&mut pins, gate);
+        assert_eq!(
+            pins.0,
+            [("rts", false)],
+            "a CI-V rung lowers RTS, and only RTS"
+        );
+        // A backend whose dump proves its handshake leaves RTS to the rung: the sweep runs.
+        for free in ["None", "XONXOFF"] {
+            assert_eq!(
+                sweep_refusal_given(gate, || Some(handshake_dump(free))),
+                None,
+                "{free}"
+            );
+        }
+    }
+
+    /// The control: a CAT-keyed radio with nothing on RTS sweeps exactly as before — no `-P`,
+    /// no line touched, nothing refused, and Hamlib is not even asked.
+    #[test]
+    #[cfg(feature = "serial")]
+    fn a_cat_keyed_radio_with_nothing_on_rts_sweeps_as_before() {
+        let gate = ladder_applies(false, 2028, "COM4", "cat", "", false).expect("the sweep runs");
+        assert_eq!(
+            gate,
+            LadderGate {
+                keying: None,
+                rts_keys: false,
+            }
+        );
+        for baud in ladder_bauds(9600) {
+            assert_eq!(
+                probe_args("COM4", baud, 2028, gate.keying, &["f"]),
+                [
+                    "-vvv",
+                    "-m",
+                    "2028",
+                    "-r",
+                    "COM4",
+                    "-s",
+                    &baud.to_string(),
+                    "f"
+                ]
+            );
+        }
+        let mut pins = Pins::default();
+        hold_unkeyed(&mut pins, gate);
+        assert!(pins.0.is_empty());
+        assert_eq!(
+            sweep_refusal_given(gate, || panic!("no RTS keying: nothing to ask Hamlib")),
+            None
+        );
+    }
+
+    /// A `rigctld -L` dump's `serial_handshake` block, in the bundled 4.7.1's exact shape, with
+    /// the value and the vocabulary substituted.
+    fn handshake_dump_with(value: &str, combo: &str) -> String {
+        format!(
+            "serial_handshake: \"Serial port handshake\"\n\
+             \tDefault: None, Value: {value}\n\
+             \tCombo: {combo}\n"
+        )
+    }
+    fn handshake_dump(value: &str) -> String {
+        handshake_dump_with(value, "None, XONXOFF, Hardware")
+    }
+
+    /// ⛔ Where a rung cannot hold RTS down, the sweep is refused with a plain reason: DTR keying
+    /// on the port names DTR to Hamlib, so RTS keeps the driver's level; and a backend whose
+    /// serial handshake is hardware hands RTS to flow control, which holds it up from the open.
+    #[test]
+    fn a_sweep_that_cannot_hold_rts_down_is_refused() {
+        let dtr = ladder_applies(false, 2028, "COM4", "dtr", "", true).expect("gate");
+        assert_eq!(
+            sweep_refusal_given(dtr, || Some(handshake_dump("None"))),
+            Some(SWEEP_REFUSED_RTS_KEYS)
+        );
+        let rts = ladder_applies(false, 2014, "COM4", "rts", "", false).expect("gate");
+        assert_eq!(
+            sweep_refusal_given(rts, || Some(handshake_dump("Hardware"))),
+            Some(SWEEP_REFUSED_RTS_KEYS)
+        );
+        // DTR keying with nothing on RTS: the rung's `-P DTR` holds the only keying line, and
+        // Hamlib is not asked.
+        let dtr_only = ladder_applies(false, 2028, "COM4", "dtr", "", false).expect("gate");
+        assert_eq!(
+            sweep_refusal_given(dtr_only, || panic!("nothing on RTS: nothing to ask")),
+            None
+        );
+    }
+
+    /// ⛔ FAIL CLOSED: on a port where RTS keys, the sweep runs only on PROOF that the backend's
+    /// handshake leaves RTS free. A dump that could not be read, one with no handshake in it, a
+    /// value we do not recognise, or a vocabulary that has grown proves nothing, and refuses.
+    #[test]
+    fn an_unreadable_or_unrecognised_handshake_refuses_the_sweep() {
+        let rts = ladder_applies(false, 2028, "COM4", "cat", "", true).expect("gate");
+        let refused = Some(SWEEP_REFUSED_RTS_KEYS);
+        assert_eq!(
+            sweep_refusal_given(rts, || None),
+            refused,
+            "the dump did not run"
+        );
+        assert_eq!(
+            sweep_refusal_given(rts, || Some(String::new())),
+            refused,
+            "empty dump"
+        );
+        assert_eq!(
+            sweep_refusal_given(rts, || Some("ptt_type: \"x\"\n".to_string())),
+            refused,
+            "no handshake in the dump"
+        );
+        assert_eq!(
+            sweep_refusal_given(rts, || Some(handshake_dump("RtsCtsPlus"))),
+            refused,
+            "an unknown value"
+        );
+        assert_eq!(
+            sweep_refusal_given(rts, || {
+                Some(handshake_dump_with(
+                    "None",
+                    "None, XONXOFF, Hardware, RtsCtsPlus",
+                ))
+            }),
+            refused,
+            "a vocabulary that has grown proves nothing, even with the value None"
+        );
+        assert_eq!(
+            sweep_refusal_given(rts, || Some(handshake_dump_with("None", ""))),
+            refused,
+            "no vocabulary printed"
+        );
+        // The positive control: proof of None runs the sweep.
+        assert_eq!(
+            sweep_refusal_given(rts, || Some(handshake_dump("None"))),
+            None
+        );
     }
 
     // ---- B1: the CI-V address, asked of Hamlib instead of tabulated ----

@@ -1380,6 +1380,9 @@ pub struct RadioLive {
     pub sideband: Option<String>,
     pub smeter_db: Option<i32>,
     pub cat_ok: Option<bool>,
+    /// Nexus refused to start this radio's CAT itself: a declared Hardware serial handshake on a
+    /// port where RTS keys a transmitter. Its pill says why, not just "not answering".
+    pub cat_refused: bool,
 }
 
 /// How many CONSECUTIVE failed amplifier polls before the link indicator goes down.
@@ -4917,6 +4920,10 @@ pub struct Engine {
     /// instead of sleeping a fixed guess, and a dial note or any other CAT status published
     /// while it waits is not taken as its result.
     cat_reprobe_answer: (u64, Option<bool>, String),
+    /// Whether the latest Test CAT answer is a launch Nexus REFUSED itself (a declared Hardware
+    /// serial handshake on a port where RTS keys the transmitter). Typed, so `test_cat` skips its
+    /// baud sweep on it — a sweep would open the port the refusal kept shut.
+    cat_reprobe_refused: bool,
     /// While `Some(deadline)`, the radio loop must NOT own the CAT serial port: Test
     /// CAT's baud-ladder probe needs to open it at other rates itself (serial ports are
     /// exclusive-open). The deadline is a crash guard — if the prober never calls
@@ -7494,6 +7501,7 @@ impl Engine {
             remote_readings: Default::default(),
             cat_probe_gen: 0,
             cat_reprobe_answer: (0, None, String::new()),
+            cat_reprobe_refused: false,
             cat_port_hold_until: None,
             cat_port_released: false,
             radio_live: std::collections::HashMap::new(),
@@ -10161,6 +10169,12 @@ impl Engine {
     pub fn observe_radio_cat(&mut self, id: u32, ok: Option<bool>) {
         self.radio_live.entry(id).or_default().cat_ok = ok;
         *self.monitor_reads.entry(id).or_default() += 1;
+    }
+
+    /// Record whether a non-active radio's CAT open was refused by Nexus itself
+    /// ([`RadioLive::cat_refused`]), so its switcher pill can give the reason.
+    pub fn observe_radio_cat_refused(&mut self, id: u32, refused: bool) {
+        self.radio_live.entry(id).or_default().cat_refused = refused;
     }
 
     /// Drop a radio's live cache (it left the monitor pool — became active, was removed, or
@@ -28250,9 +28264,11 @@ contact yourself."
 
     /// Publish the result of the probe a [`Self::request_cat_reprobe`] asked for: the CAT
     /// status, and Test CAT's answer.
-    pub fn answer_cat_reprobe(&mut self, ok: Option<bool>, detail: String) {
+    /// `refused`: the launch was refused by Nexus itself ([`Self::cat_reprobe_refused`]).
+    pub fn answer_cat_reprobe(&mut self, ok: Option<bool>, detail: String, refused: bool) {
         let n = self.cat_reprobe_answer.0.wrapping_add(1);
         self.cat_reprobe_answer = (n, ok, detail.clone());
+        self.cat_reprobe_refused = refused;
         self.set_cat_status(ok, detail);
     }
 
@@ -28260,6 +28276,12 @@ contact yourself."
     pub fn cat_reprobe_answer(&self, asked: u64) -> Option<(Option<bool>, String)> {
         let (n, ok, detail) = &self.cat_reprobe_answer;
         (*n != asked).then(|| (*ok, detail.clone()))
+    }
+
+    /// Whether the latest Test CAT answer ([`Self::cat_reprobe_answer`]) is a launch Nexus
+    /// refused itself. Read under the same lock as the answer.
+    pub fn cat_reprobe_refused(&self) -> bool {
+        self.cat_reprobe_refused
     }
 
     /// Consume a pending re-probe request (returns true once per request).
@@ -30598,6 +30620,8 @@ contact yourself."
                             sideband: s.radio.sideband.clone(),
                             is_active: true,
                             cat_ok: self.cat_status.0,
+                            // The active radio's refusal is its own CAT status line.
+                            cat_refused: false,
                             smeter_db: self.rig_smeter_db,
                             transmitting: s.radio.transmitting,
                             bands: p.bands.clone(),
@@ -30619,6 +30643,7 @@ contact yourself."
                                 .unwrap_or_else(|| p.last_sideband.clone()),
                             is_active: false,
                             cat_ok: live.and_then(|l| l.cat_ok),
+                            cat_refused: live.is_some_and(|l| l.cat_refused),
                             smeter_db: live.and_then(|l| l.smeter_db),
                             transmitting: false,
                             bands: p.bands.clone(),
