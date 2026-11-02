@@ -57985,7 +57985,11 @@ mod tests {
             ("12m", 24.915, true),
             // AO-7 mode A comes down here — a metre band that DOES take it.
             ("10m", 29.450, true),
+            // ADIF's 8 m and 5 m: a few countries' allocations, no DXCC `Band` variant, so
+            // their grids are label-keyed like 1.25 m's.
+            ("8m", 40.680, false),
             ("6m", 50.313, true),
+            ("5m", 60.000, false),
             ("4m", 70.154, true),
             // Every U/V bird's downlink — the ordinary wrong-credit case.
             ("2m", 145.960, true),

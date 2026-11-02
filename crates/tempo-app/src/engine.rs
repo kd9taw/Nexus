@@ -28845,11 +28845,19 @@ contact yourself."
         }
     }
 
-    /// On a 60 m channel dial, may an outside key go with the radio's read-back? Only with none,
-    /// or an upper-sideband one (`USB`, `PKTUSB`, `DATA-U`): a channel's dial is its upper
-    /// sideband's carrier, and any other emission leaves the channel.
+    /// On a 60 m channel dial, may an outside key go with the radio's read-back? For a US class,
+    /// only with none, or an upper-sideband one (`USB`, `PKTUSB`, `DATA-U`): a channel's dial is
+    /// its upper sideband's carrier, and any other emission leaves the channel. The channels are
+    /// the US rule's (47 CFR 97.303(h)); `Open`, every non-US operator, is trusted on them as
+    /// [`crate::privileges::lsb_phone_allowed`] and [`crate::privileges::wide_phone_allowed`]
+    /// trust it (the UK's 60 m blocks take in 5.3715 and 5.4035, where this check used to refuse
+    /// a UK operator's LSB or AM from an outside program).
     fn sixty_dial_readback_allowed(&self) -> bool {
-        self.gate_rig_mode.is_none() || self.readback_emission() == Some(Readback::Side(false))
+        matches!(
+            self.settings.license_class,
+            crate::settings::LicenseClass::Open
+        ) || self.gate_rig_mode.is_none()
+            || self.readback_emission() == Some(Readback::Side(false))
     }
 
     /// Is `word` a CW mode, the rig's normal or reverse CW in any spelling (`CW`, `CWR`, `CW-R`,
@@ -42045,6 +42053,69 @@ mod tests {
             !e.tx_allowed(),
             "control: a declared US class has no 5 MHz segment and fails closed"
         );
+    }
+
+    /// ⛔ THE OFF-BAND HALT SEES THE ADIF BAND EDGES. A non-US operator on their own 60 m below
+    /// 5.3 MHz (the UK's starts at 5.2585), or on 630 m or 2200 m, is on a ham band: the knob
+    /// moving there keeps the over and names the band. CONTROLS: the knob leaving every band
+    /// (WWV at 5 MHz, 5.0599 just under the new 60 m bottom) still cuts transmit; and a US
+    /// General tuned to 5.2585 is refused by its licence, whose 60 m is the channels and the
+    /// 5351.5-5366.5 kHz segment and nothing else.
+    #[test]
+    fn the_off_band_halt_knows_the_adif_bands() {
+        for (from, from_band, hz, band) in [
+            (5.357, "60m", 5_258_500, "60m"),
+            (5.357, "60m", 5_060_000, "60m"),
+            (0.4742, "630m", 475_000, "630m"),
+            (0.1360, "2200m", 136_500, "2200m"),
+            (40.660, "8m", 40_680_000, "8m"),
+        ] {
+            let mut e = Engine::new("N0CALL", "EN61", 0);
+            e.set_frequency(from, from_band, "USB");
+            e.set_tx_enabled(true);
+            e.observe_rig_freq(hz);
+            assert!(e.tx_enabled, "{hz} Hz is on {band}: the over is not cut");
+            assert_eq!(e.settings().band, band, "{hz} Hz names {band}");
+        }
+        for hz in [5_000_000, 5_059_900] {
+            let mut e = Engine::new("N0CALL", "EN61", 0);
+            e.set_frequency(5.357, "60m", "USB");
+            e.set_tx_enabled(true);
+            e.observe_rig_freq(hz);
+            assert!(
+                !e.tx_enabled,
+                "{hz} Hz is off every band: the halt still cuts"
+            );
+        }
+        let mut e = Engine::new("N0CALL", "EN61", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(5.2585, "60m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "a US General holds no 60 m below the channels"
+        );
+    }
+
+    /// The WSPR and FST4 plans tune 2200 m and 630 m; a US General now keys there, a Technician
+    /// still does not.
+    #[test]
+    fn a_us_general_keys_wspr_on_2200m_and_630m_and_a_technician_does_not() {
+        for (class, keys) in [
+            ("general", true),
+            ("advanced", true),
+            ("extra", true),
+            ("technician", false),
+            ("novice", false),
+        ] {
+            for (dial, band) in [(0.136, "2200m"), (0.4742, "630m")] {
+                let mut e = Engine::new("N0CALL", "EN61", 0);
+                e.set_license_class(class);
+                e.set_operating_mode("digital", false);
+                e.set_frequency(dial, band, "USB");
+                assert_eq!(e.tx_allowed(), keys, "{class} on {band}");
+            }
+        }
     }
 
     #[test]

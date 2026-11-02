@@ -734,11 +734,28 @@ pub fn channel_for_dial(dial_mhz: f64) -> Option<BandChannel> {
 /// The amateur band label for an ARBITRARY dial frequency (MHz) — for live VFO read-back,
 /// where the operator may tune anywhere on a band, not just the band-plan watering holes.
 /// `None` if the frequency is off any ham band.
+///
+/// ⛔ TRANSMIT PATH. This table feeds the off-band halt (`Engine::observe_rig_freq` cuts an over
+/// when the knob leaves every band named here) and the 60 m sideband rules
+/// (`privileges::lsb_phone_allowed` / `wide_phone_allowed` test `== Some("60m")`). Its edges are
+/// the ADIF 3.1 "Band" enumeration's, so a non-US operator's own band is a band: 2200 m, 630 m,
+/// 60 m from 5.06 MHz (the UK's 60 m starts at 5.2585; the table used to start at 5.3, which cut
+/// that operator's over and blanked the label), 8 m and 5 m. An edge the table already had wider
+/// than ADIF's (17 m from 18.06, 60 m to 5.5) is kept: narrowing one would start cutting overs
+/// that run today. ADIF's 560 m (501–504 kHz) is left out: no amateur allocation sits there.
+/// Naming a band grants no US privilege: a US class keys only where `privileges.rs` gives it a
+/// segment, and `the_newly_named_spectrum_grants_no_us_class_anything` holds that.
+///
+/// ADIF calls the 135.7–137.8 kHz band "2190m"; it is "2200m" here because that is the name the
+/// WSPR and FST4 plans tune it by and the UI colours it by, and a read-back that renamed the band
+/// a plan pick had just set would read as a band change and halt the over.
 pub fn band_for_dial(dial_mhz: f64) -> Option<&'static str> {
     let b = match dial_mhz {
+        f if (0.1357..0.1378).contains(&f) => "2200m",
+        f if (0.472..0.479).contains(&f) => "630m",
         f if (1.8..2.0).contains(&f) => "160m",
         f if (3.5..4.0).contains(&f) => "80m",
-        f if (5.3..5.5).contains(&f) => "60m",
+        f if (5.06..5.5).contains(&f) => "60m",
         f if (7.0..7.3).contains(&f) => "40m",
         f if (10.1..10.15).contains(&f) => "30m",
         f if (14.0..14.35).contains(&f) => "20m",
@@ -746,7 +763,9 @@ pub fn band_for_dial(dial_mhz: f64) -> Option<&'static str> {
         f if (21.0..21.45).contains(&f) => "15m",
         f if (24.89..24.99).contains(&f) => "12m",
         f if (28.0..29.7).contains(&f) => "10m",
+        f if (40.0..45.0).contains(&f) => "8m",
         f if (50.0..54.0).contains(&f) => "6m",
+        f if (54.0..69.9).contains(&f) => "5m",
         f if (70.0..71.0).contains(&f) => "4m",
         f if (144.0..148.0).contains(&f) => "2m",
         f if (222.0..225.0).contains(&f) => "1.25m",
@@ -891,6 +910,47 @@ mod tests {
         for f in [phone_home(Open, "4m").unwrap().0, cw.unwrap()] {
             assert_eq!(band_for_dial(f), Some("4m"), "{f} MHz");
         }
+    }
+
+    /// ⛔ THE BAND TABLE REACHES THE ADIF EDGES (ADIF 3.1 "Band" enumeration). It feeds the
+    /// off-band transmit halt and the 60 m sideband rules, and it used to stop 60 m at 5.3 MHz and
+    /// name no 2200 m, 630 m, 8 m or 5 m at all: a UK operator on their own 60 m at 5.2585 MHz, or
+    /// anyone on 630 m, had transmit cut and the band label blanked. An existing edge is never
+    /// narrowed, and the 2200 m band keeps the name the WSPR and FST4 plans tune it by.
+    #[test]
+    fn the_band_table_reaches_the_adif_band_edges() {
+        for (mhz, band) in [
+            (0.1357, "2200m"),
+            (0.1360, "2200m"),
+            (0.13779, "2200m"),
+            (0.472, "630m"),
+            (0.4742, "630m"),
+            (0.47899, "630m"),
+            (5.06, "60m"),
+            (5.2585, "60m"),
+            (5.2999, "60m"),
+            (5.4999, "60m"), // the old top, kept
+            (40.0, "8m"),
+            (40.68, "8m"),
+            (44.999, "8m"),
+            (54.0, "5m"),
+            (60.0, "5m"),
+            (69.899, "5m"),
+            (70.0, "4m"),
+            (70.999, "4m"),
+            (18.061, "17m"), // the old 17 m edges, wider than ADIF's, kept
+        ] {
+            assert_eq!(band_for_dial(mhz), Some(band), "{mhz} MHz");
+        }
+        // Outside them, still nothing: the halt keeps cutting an over there.
+        for mhz in [
+            0.1356, 0.1378, 0.4719, 0.479, 0.502, 1.0, 5.0, 5.0599, 39.99, 45.0, 69.9, 69.95, 71.0,
+        ] {
+            assert_eq!(band_for_dial(mhz), None, "{mhz} MHz");
+        }
+        // 60 m is upper sideband from its new bottom too.
+        assert!(!phone_is_lsb(5.2585));
+        assert!(phone_is_lsb(3.8));
     }
 
     #[test]
