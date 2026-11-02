@@ -23,6 +23,7 @@ import { pushToast, setPopupMinSeconds, setPopupNotifications, withErrorToast } 
 import { announceMarkersChanged, entryCall, markHere, markerRefusal, MARKERS_CHANGED_KEY } from './features/freqMarkers'
 import { pollSingleFlight } from './singleFlight'
 import { WSPR_WATERFALL_WINDOW, markerWidthHz } from './waterfall'
+import { isOnAir } from './types'
 import type {
   AppSnapshot,
   BandChannel,
@@ -834,6 +835,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           onWorkSpot={onWorkSpot}
           needAlerts={gatedAlerts}
           amp={snap?.radio.amp ?? null}
+          radioOnAir={snap ? isOnAir(snap.radio) : false}
           rigBand={snap?.radio.band ?? null}
           fieldDay={snap?.fieldDay ?? null}
           activation={snap ? { act: snap.activation ?? null, logTick: snap.logTick } : undefined}

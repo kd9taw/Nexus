@@ -133,7 +133,9 @@ import {
   type Case,
 } from './stop-line.testkit'
 import { rttyState } from './stop-line.api.testkit'
-import type { RttyState } from '../types'
+import { AmpPane } from './prop/AmpPane'
+import { AmpStrip } from './AmpStrip'
+import type { AmpStatus, RttyState } from '../types'
 
 // THE BUDGET (2026-10-09). The slowest case without a budget of its own, "the RF scope pane is on screen with nothing
 // hidden in…", takes 0.27 s and 0.22 s on one core (two runs); a loaded full suite on this box has run cases up to 20
@@ -558,5 +560,45 @@ describe('Esc is a stop on every operating screen and on Satellites', () => {
         `${view}: the wiring census does not press Esc on it`,
       ).toBe(true)
     }
+  })
+})
+
+// THE AMPLIFIER'S OPERATE/STANDBY IS ON NO STOP LINE. Putting an amplifier in standby does not end a
+// transmission — the exciter keeps keying and the drive passes straight through — so neither the cockpit
+// header's strip (AmpStrip) nor the Amplifier box's big button (prop/AmpPane) may answer to any case's
+// `stopControls`. If one ever did, the sweeps would start demanding an amplifier control be on screen in
+// cockpits that have no amplifier, and an operator would be told a non-stop is a stop.
+describe('the amplifier’s Operate/Standby is not a stop control', () => {
+  const amp = (over: Partial<AmpStatus> = {}): AmpStatus => ({
+    family: 'spe', model: '15K', linked: true, reason: '', operate: true, transmitting: false, outputWatts: 0,
+    swr: 1.1, swrAtu: 1.0, volts: 48, amps: 0, temp: 30, tempCelsius: false, alarm: 'none', alarmRaised: false,
+    warning: 'none', warningRaised: false, kpaFault: null, ...over,
+  })
+  const everyStop = CASES.flatMap((c) => c.stopControls.map(([label, name]) => [`${c.cockpit}: ${label}`, name] as [string, RegExp]))
+
+  it('no case’s stop controls match the box’s button or the strip’s, in any state', () => {
+    for (const a of [amp({ operate: true }), amp({ operate: false }), amp({ operate: null }), amp({ linked: false, reason: 'noAnswer' })]) {
+      for (const onAir of [false, true]) {
+        render(
+          <>
+            <AmpPane amp={a} radioOnAir={onAir} />
+            <AmpStrip amp={a} radioTransmitting={onAir} />
+          </>,
+        )
+        const hits = [...stopsOnScreen(everyStop)].filter(([, els]) => els.length > 0).map(([label]) => label)
+        expect(hits, `operate ${a.operate}, linked ${a.linked}, on air ${onAir}`).toEqual([])
+        cleanup()
+      }
+    }
+  })
+
+  it('CONTROL: the same matchers do find a real stop beside them, so the check above is reading names', () => {
+    render(
+      <>
+        <AmpPane amp={amp()} radioOnAir={false} />
+        <button type="button">Stop TX</button>
+      </>,
+    )
+    expect([...stopsOnScreen(everyStop).values()].some((els) => els.length > 0)).toBe(true)
   })
 })

@@ -758,7 +758,7 @@ built not to have.
 
 **Where the three controls are.** Not here. They are a compact strip in every
 cockpit header once an amplifier is configured — Standby/Operate, band ◀ ▶ and
-power out — described under
+power out — and a big Operate/Standby button in the Amplifier box, both described under
 [Conditions ▸ The Amplifier pane](connect.md#the-amplifier-pane). The only control
 on *this* page that moves the amplifier is **Follow the radio's band** below,
 and it is the only one that acts without being asked.

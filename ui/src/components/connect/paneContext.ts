@@ -94,8 +94,12 @@ export interface PaneContext {
   focusBand: string | null
   /** The active radio's amplifier, straight off the snapshot App already polls at 300 ms —
    * NOT a poll of its own. `null`/absent = no amplifier configured, which is what makes the
-   * Amplifier pane draw only its one line, no readout. Display-only: it gates and stops nothing. */
+   * Amplifier pane draw only its one line, no readout. It gates and stops nothing; the pane's one
+   * control is Operate/Standby. */
   amp: AmpStatus | null
+  /** The radio's ON AIR answer (types.ts `isOnAir`), off the same snapshot: the Amplifier pane's
+   *  Operate/Standby button is dead while it is true, as the cockpit header's strip is. */
+  radioOnAir: boolean
   /** The band the active radio is on, off the same snapshot (the band tiles ring it). Null when
    *  unknown — the Remote browser, the wall display. Display-only. */
   rigBand: string | null

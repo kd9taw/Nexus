@@ -14884,6 +14884,12 @@ export const EN = {
   'amp.link.up': 'Linked',
   'amp.operate': 'Operate',
   'amp.standby': 'Standby',
+  // The Amplifier box's Operate/Standby button (prop/AmpPane): its second word, and the warning
+  // every one of its titles ends on.
+  'amp.op.active': 'Active',
+  'amp.op.notActive': 'Not active',
+  'amp.op.notStop': 'Standby does NOT stop a transmission — the exciter keeps keying and the drive passes straight through.',
+  'amp.op.waiting': 'Sent — waiting for the amplifier',
   'amp.k.power': 'Power out',
   'amp.k.temp': 'PA temp',
   'amp.k.current': 'Current',

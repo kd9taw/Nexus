@@ -67,6 +67,7 @@ export type BoxSource = Pick<
   | 'needByCall'
   | 'needAlerts'
   | 'amp'
+  | 'radioOnAir'
   | 'rigBand'
   | 'onWorkSpot'
   | 'onPoint'

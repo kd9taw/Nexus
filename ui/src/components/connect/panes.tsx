@@ -738,15 +738,16 @@ export const PANES: PaneDef[] = [
       return t('connect.pane.amp.title')
     },
     category: 'station',
-    // Read-only station-device readout, the rotor's site-for-site shape. The Basic hint is
+    // Station-device readout, the rotor's site-for-site shape. The Basic hint is
     // STATIC and names where the amplifier is configured, because the pane draws it (and no
     // readout) only when none is — a configured amplifier that has gone quiet keeps the pane, with '—'.
     //
-    // ⛔ It renders no control of any kind and stops nothing: an amplifier in standby does not
+    // ⛔ Its one control, Operate/Standby, stops nothing: an amplifier in standby does not
     // stop an over (the exciter keeps keying and the drive passes straight through). This pane
-    // must never appear in any cockpit vocabulary or any sweep's `stopControls`.
+    // must never appear in any cockpit vocabulary or any sweep's `stopControls`. The button locks
+    // on the radio's ON AIR answer (`radioOnAir`) as the cockpit header's strip does.
     basic: () => t('connect.pane.amp.basic'),
-    expert: (c) => <AmpPane amp={c.amp} />,
+    expert: (c) => <AmpPane amp={c.amp} radioOnAir={c.radioOnAir} />,
   },
   {
     id: 'scope',

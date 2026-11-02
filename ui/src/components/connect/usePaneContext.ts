@@ -130,6 +130,9 @@ export interface PaneContextInput {
   needByCall: Map<string, NeedTag>
   needAlerts?: NeedAlert[]
   amp?: AmpStatus | null
+  /** PaneContext `radioOnAir`. ABSENT IS READ AS ON AIR: a host that lends an amplifier and does not
+   *  say whether the radio is keyed gets a dead Operate/Standby button, never a live one while keyed. */
+  radioOnAir?: boolean
   rigBand: string | null
   selectedCall: string | null
   selection: Selection
@@ -181,6 +184,7 @@ export function usePaneContext(i: PaneContextInput): {
     needByCall: i.needByCall,
     needAlerts: i.needAlerts ?? [],
     amp: i.amp ?? null,
+    radioOnAir: i.radioOnAir ?? true,
     rigBand: i.rigBand,
     selectedCall: i.selectedCall,
     selStation,

@@ -45,7 +45,7 @@ const big = (c: HTMLElement) =>
 
 describe('the Amplifier box draws power out and SWR as its big readings', () => {
   it('as SVG text sized by its cell, in a viewBox that holds six characters and half of one more', () => {
-    const { container } = render(<AmpPane amp={live()} />)
+    const { container } = render(<AmpPane amp={live()} radioOnAir={false} />)
     // Each character is held to 60 of the viewBox's units (0.6 of the 100-unit font): "1500 W" fills six.
     expect(big(container)).toEqual([
       { text: '1500 W', viewBox: '0 0 390 80', length: '360' },
@@ -56,7 +56,7 @@ describe('the Amplifier box draws power out and SWR as its big readings', () => 
   })
 
   it('draws a dead link’s two big readings as the em dash, the same size as a reading', () => {
-    const { container } = render(<AmpPane amp={live({ linked: false, reason: 'noAnswer' })} />)
+    const { container } = render(<AmpPane amp={live({ linked: false, reason: 'noAnswer' })} radioOnAir={false} />)
     expect(big(container)).toEqual([
       { text: '—', viewBox: '0 0 390 80', length: '60' },
       { text: '—', viewBox: '0 0 390 80', length: '60' },
@@ -64,12 +64,12 @@ describe('the Amplifier box draws power out and SWR as its big readings', () => 
   })
 
   it('widens the viewBox of a reading longer than six characters rather than run it past its cell', () => {
-    const { container } = render(<AmpPane amp={live({ outputWatts: 12000 })} />)
+    const { container } = render(<AmpPane amp={live({ outputWatts: 12000 })} radioOnAir={false} />)
     expect(big(container)[0]).toEqual({ text: '12000 W', viewBox: '0 0 450 80', length: '420' })
   })
 
   it('sizes the drawing by the cell’s width, capped at 40 px times Text size as the Clock’s local time is', () => {
-    const { container } = render(<AmpPane amp={live()} />)
+    const { container } = render(<AmpPane amp={live()} radioOnAir={false} />)
     const svg = container.querySelector<SVGSVGElement>('.amp-big svg')
     expect(svg, 'power out is not drawn as a big reading').not.toBeNull()
     if (!svg) return
@@ -84,7 +84,7 @@ describe('the Amplifier box draws power out and SWR as its big readings', () => 
 
 describe('the other readings are a step larger than the body text', () => {
   it('pre-ATU SWR, PA temp, Vdc and current at the title size, 18 px at Normal (14 before)', () => {
-    const { container } = render(<AmpPane amp={live()} />)
+    const { container } = render(<AmpPane amp={live()} radioOnAir={false} />)
     const small = [...container.querySelectorAll<HTMLElement>('.amp-grid .amp-v')]
     for (const v of small.filter((s) => !s.querySelector('svg'))) expect(pxOf(v, 'font-size'), v.textContent ?? '').toBe(18)
     expect(small.map((v) => v.textContent), 'the small readings').toEqual(['1.1:1', '77°', '45.9 V', '32.5 A'])
