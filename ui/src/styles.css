@@ -13053,6 +13053,36 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
 }
+/* #446: OPERATE'S CELL OPENS LARGER (TxMetersCell). The opener is the cell's own block wrapper, so
+   the fixed-width cell keeps its geometry; its focus ring is drawn INSIDE, since the cell clips.
+   The dialog (`ui/Dialog`, its box the default .ui-dialog) shows the same meters one per row at
+   full size. Declared after the pinned/inline rules at the same specificity, so source order is
+   what carries them, and scoped to `.txmeters-large`, which only the dialog renders. */
+.txmeters-open {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.txmeters-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.txmeters-large .ph-txmeters {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+.txmeters-large .ph-txmeters .ph-txmeter-track {
+  height: 22px;
+  border-radius: 6px;
+}
+.txmeters-large .ph-txmeters .ph-txmeter-label {
+  font-size: calc(16px * var(--text-scale));
+  min-width: 3.6em;
+}
+.txmeters-large .ph-txmeters .ph-txmeter-value {
+  font-size: calc(18px * var(--text-scale));
+  min-width: 4.5em;
+}
 /* The COMP row in Phone SETS the processor level as well as metering compression: the fill is
    the meter, the marker line is the level, and the track is the slider (drag / arrow keys).
    `touch-action: none` keeps a finger drag on a touch screen from scrolling the dock instead. */

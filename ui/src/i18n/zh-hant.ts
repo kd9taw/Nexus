@@ -10233,4 +10233,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.alerts.popupCorner.topRight": "右上角",
   "settings.alerts.popupCorner.topLeft": "左上角",
   "settings.alerts.popupCorner.hint": "彈窗出現在視窗的哪個角落。右下角是它們一直以來的位置。",
+  "meters.tx.enlarge.aria": "放大顯示發射表",
+  "meters.tx.enlarge.title": "發射表",
+  "meters.tx.enlarge.desc": "與 TX 列相同的即時讀數，放大顯示。按 Esc 關閉。",
 }

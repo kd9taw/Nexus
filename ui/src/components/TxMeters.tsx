@@ -10,6 +10,8 @@ import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { t } from '../i18n'
 import { fmtTempC, useUnits } from '../units'
+import { useFocusReturn } from '../focusReturn'
+import { Dialog } from './ui/Dialog'
 
 /** The rig's own meter names, as they are printed on a radio's front panel — technical tokens
  *  exactly as a mode name is, gathered here so the catalog guard reads them as the deliberate
@@ -541,5 +543,54 @@ export function TxMeters({
         <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>
       )}
     </div>
+  )
+}
+
+/** #446: OPERATE'S TELEMETRY CELL, WHICH OPENS LARGER. The cell (`.cq-telemetry`) is fixed-width
+ *  chrome, so its bars are small; a click on it, or Enter or Space with it focused, opens a dialog
+ *  with the same live meters at full size, from the same `radio` on every poll. Escape closes it,
+ *  and the keyboard goes back to the cell (`useFocusReturn`).
+ *
+ *  A READOUT, like the cell: the dialog's meters take no `controls`, so nothing in it keys, stops
+ *  or sets anything, and the cell keeps its id-free place in the strip (no pane vocabulary). The
+ *  opener is the cell's own wrapper — a block filling the cell, so the cell's geometry is what it
+ *  was. The dialog box is `ui/Dialog`'s own (its portaled box is the sanctioned raw-unit exception);
+ *  only how the meters sit inside it is styled here (`.txmeters-large`).
+ *
+ *  The dialog's panel is its own TxMeters: it keeps the cell's readings while keyed, and between
+ *  overs shows what the radio reports now (the cell's held last readings stay in the cell). */
+export function TxMetersCell({ radio }: { radio: RadioStatus }) {
+  const [open, setOpen] = useState(false)
+  const returnFocus = useFocusReturn(open)
+  return (
+    <>
+      <div
+        className="txmeters-open"
+        role="button"
+        tabIndex={0}
+        aria-haspopup="dialog"
+        aria-label={t('meters.tx.enlarge.aria')}
+        title={t('meters.tx.enlarge.aria')}
+        onClick={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          e.preventDefault()
+          setOpen(true)
+        }}
+      >
+        <TxMeters radio={radio} inline />
+      </div>
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+        title={t('meters.tx.enlarge.title')}
+        description={t('meters.tx.enlarge.desc')}
+        onCloseAutoFocus={returnFocus}
+      >
+        <div className="txmeters-large">
+          <TxMeters radio={radio} pinned />
+        </div>
+      </Dialog>
+    </>
   )
 }

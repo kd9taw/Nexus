@@ -10240,4 +10240,7 @@ export const RU: PartialCatalog = {
   "settings.alerts.popupCorner.topRight": "Справа вверху",
   "settings.alerts.popupCorner.topLeft": "Слева вверху",
   "settings.alerts.popupCorner.hint": "В каком углу окна появляются всплывающие уведомления. Справа внизу — там, где они были всегда.",
+  "meters.tx.enlarge.aria": "Показать индикаторы передачи крупнее",
+  "meters.tx.enlarge.title": "Индикаторы передачи",
+  "meters.tx.enlarge.desc": "Те же текущие показания, что и в полосе TX, только крупнее. Escape закрывает окно.",
 }

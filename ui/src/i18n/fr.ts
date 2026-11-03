@@ -10277,4 +10277,7 @@ export const FR: PartialCatalog = {
   "settings.alerts.popupCorner.topRight": "En haut à droite",
   "settings.alerts.popupCorner.topLeft": "En haut à gauche",
   "settings.alerts.popupCorner.hint": "Dans quel coin de la fenêtre apparaissent les notifications. En bas à droite, c’est là où elles ont toujours été.",
+  "meters.tx.enlarge.aria": "Afficher les mesures d’émission en plus grand",
+  "meters.tx.enlarge.title": "Mesures d’émission",
+  "meters.tx.enlarge.desc": "Les mêmes mesures en direct que la bande TX, en plus grand. Échap ferme cette fenêtre.",
 }

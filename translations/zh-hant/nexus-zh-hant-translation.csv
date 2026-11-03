@@ -10893,3 +10893,6 @@ Click for internet feed controls.","{{detail}}
 "4","settings.alerts.popupCorner.topRight","Top right","右上角","","Filled by the maintainer, pending translator review."
 "4","settings.alerts.popupCorner.topLeft","Top left","左上角","","Filled by the maintainer, pending translator review."
 "4","settings.alerts.popupCorner.hint","Which corner of the window the pop-ups appear in. Bottom right is where they have always been.","彈窗出現在視窗的哪個角落。右下角是它們一直以來的位置。","","Filled by the maintainer, pending translator review."
+"3","meters.tx.enlarge.aria","Show the transmit meters larger","放大顯示發射表","","Filled by the maintainer, pending translator review."
+"3","meters.tx.enlarge.title","Transmit meters","發射表","","Filled by the maintainer, pending translator review."
+"3","meters.tx.enlarge.desc","The same live readings as the TX strip, larger. Escape closes this.","與 TX 列相同的即時讀數，放大顯示。按 Esc 關閉。","","Filled by the maintainer, pending translator review."

@@ -10267,4 +10267,7 @@ export const DE: PartialCatalog = {
   "settings.alerts.popupCorner.topRight": "Oben rechts",
   "settings.alerts.popupCorner.topLeft": "Oben links",
   "settings.alerts.popupCorner.hint": "In welcher Fensterecke die Pop-ups erscheinen. Unten rechts ist, wo sie schon immer waren.",
+  "meters.tx.enlarge.aria": "Sendeanzeigen größer anzeigen",
+  "meters.tx.enlarge.title": "Sendeanzeigen",
+  "meters.tx.enlarge.desc": "Dieselben Live-Werte wie in der TX-Leiste, größer. Escape schließt dieses Fenster.",
 }

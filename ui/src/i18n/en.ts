@@ -15010,6 +15010,9 @@ export const EN = {
   // `{{when}}` is `TX_METERS_WHEN`, the one string the ⊞ Panels menu shows for this panel —
   // interpolated rather than repeated so the panel and the menu cannot drift. It is still
   // written in `TxMeters.tsx`; see the note there for why it has not moved yet.
+  'meters.tx.enlarge.aria': 'Show the transmit meters larger',
+  'meters.tx.enlarge.title': 'Transmit meters',
+  'meters.tx.enlarge.desc': 'The same live readings as the TX strip, larger. Escape closes this.',
   'meters.tx.idle': 'TX meters — {{when}}',
   // A meter the radio stayed silent about THROUGH an over — so it is one this radio does not
   // report, as against the blank rows before the first over, which the line above answers.
