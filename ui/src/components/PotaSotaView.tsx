@@ -4,7 +4,7 @@
  * tag the next logged QSO with the park/summit reference.
  */
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { TreePine, Mountain, RefreshCw, X } from 'lucide-react'
+import { TreePine, Mountain, Leaf, RefreshCw, X } from 'lucide-react'
 import type { AppSnapshot, OtaSpot, Activation } from '../types'
 import {
   clearHuntTarget,
@@ -45,28 +45,32 @@ import { activationParks, isLegacyUsRef, mixedCallsNote, parkProgress } from '..
 import { ActivationOverDialog } from './ActivationOverDialog'
 import { stationProfileName } from './StationProfiles'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
-import { POTA_SPOTS, SOTA_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../features/connectFeeds'
+import { POTA_SPOTS, SOTA_SPOTS, WWFF_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../features/connectFeeds'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { upperTyped } from '../typedInput'
 import { parksChanged } from '../features/parkNames'
 
-type Program = 'POTA' | 'SOTA' | 'Both'
+/** 'Both' is every programme the board has, a stored value kept from when there were two: POTA,
+ *  SOTA and WWFF here, POTA and SOTA on an observed station's board, whose feed carries no WWFF. */
+type Program = 'POTA' | 'SOTA' | 'WWFF' | 'Both'
 
 /**
  * ⚠️ INVARIANT TOKENS — never translated, never in the catalog.
  *
- * POTA and SOTA are the programmes' own names, so the view's title and the activation
- * picker's two options print them as they are (a translated programme name names nothing).
- * The sources are websites.
- * Only "Both" — an English word, not a programme — is prose, and it has a catalog entry.
+ * POTA, SOTA and WWFF are the programmes' own names, so the view's title, its tabs and the
+ * activation picker's two options print them as they are (a translated programme name names
+ * nothing). The sources are websites.
+ * Only the every-programme tab ("All", or "Both" on an observed board) is prose, with catalog entries.
  */
 const OTA_TITLE = 'POTA / SOTA'
 const ACT_PROGRAMS = ['POTA', 'SOTA'] as const
 const SOURCES: Record<Program, string> = {
   POTA: 'pota.app',
   SOTA: 'SOTAwatch',
-  Both: 'pota.app + SOTAwatch',
+  // WWFF's own spot service (spots.wwff.co); its terms are cited in propagation::live::wwff.
+  WWFF: 'WWFF Spotline',
+  Both: 'pota.app + SOTAwatch + WWFF Spotline',
 }
 
 /** A spot stands on the air after a press when either target took it now or had it already. */
@@ -228,18 +232,25 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   // showing. A POTA board beside a SOTA board is the multi-window payoff.
   const [program, setProgram] = useState<Program>(() => {
     const raw = surfaceGet(keys.program)
-    return raw === 'POTA' || raw === 'SOTA' || raw === 'Both' ? raw : 'POTA'
+    // An observed station's board has no WWFF tab (its feed carries none).
+    return raw === 'POTA' || raw === 'SOTA' || raw === 'Both' || (raw === 'WWFF' && !observed) ? raw : 'POTA'
   })
-  // THE TWO PROGRAMMES' LISTS ARE WINDOW FEEDS (features/connectFeeds): every board in this window
+  // THE PROGRAMMES' LISTS ARE WINDOW FEEDS (features/connectFeeds): every board in this window
   // that shows a programme shares its poll — the view, a Conditions box and the rail's box ask once a
   // minute between them, not once each, and show the same answer. Each answer carries its own time.
-  const wantPota = !observed && program !== 'SOTA'
-  const wantSota = !observed && program !== 'POTA'
+  const wantPota = !observed && (program === 'POTA' || program === 'Both')
+  const wantSota = !observed && (program === 'SOTA' || program === 'Both')
+  const wantWwff = !observed && (program === 'WWFF' || program === 'Both')
   const pota = useFeed(POTA_SPOTS, wantPota).value
   const sota = useFeed(SOTA_SPOTS, wantSota).value
+  const wwff = useFeed(WWFF_SPOTS, wantWwff).value
   const potaAsking = useFeedAsking(wantPota ? POTA_SPOTS : null)
   const sotaAsking = useFeedAsking(wantSota ? SOTA_SPOTS : null)
-  const fetched = useMemo(() => [...(pota?.spots ?? []), ...(sota?.spots ?? [])], [pota, sota])
+  const wwffAsking = useFeedAsking(wantWwff ? WWFF_SPOTS : null)
+  const fetched = useMemo(
+    () => [...(pota?.spots ?? []), ...(sota?.spots ?? []), ...(wwff?.spots ?? [])],
+    [pota, sota, wwff],
+  )
   // A log change re-reads THIS board's rows from the station's cache (below), over the answer it was
   // read against; the next answer replaces it.
   const [reread, setReread] = useState<{ over: OtaSpot[]; spots: OtaSpot[] } | null>(null)
@@ -248,8 +259,8 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     : reread && reread.over === fetched
       ? reread.spots
       : fetched
-  const loading = potaAsking || sotaAsking
-  const answeredAt = Math.max(pota?.at ?? 0, sota?.at ?? 0)
+  const loading = potaAsking || sotaAsking || wwffAsking
+  const answeredAt = Math.max(pota?.at ?? 0, sota?.at ?? 0, wwff?.at ?? 0)
   const lastUpdated = answeredAt > 0 ? new Date(answeredAt) : null
   // Band filter — set of band strings; empty = All.
   const [bandFilter, setBandFilter] = useState<string[]>(() => {
@@ -309,6 +320,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
   const refresh = () => {
     if (wantPota) void refreshFeed(POTA_SPOTS)
     if (wantSota) void refreshFeed(SOTA_SPOTS)
+    if (wantWwff) void refreshFeed(WWFF_SPOTS)
   }
 
   // Re-derive what the LOG says over the rows already fetched, when the log changes. A contact
@@ -323,7 +335,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     if (observed || logTick === lastLogTick.current) return
     lastLogTick.current = logTick
     const over = fetched
-    const programs: Program[] = program === 'Both' ? ['POTA', 'SOTA'] : [program]
+    const programs: Program[] = program === 'Both' ? ['POTA', 'SOTA', 'WWFF'] : [program]
     Promise.all(programs.map((x) => getOtaSpots(x, true))).then(
       (parts) => {
         if (parts.every(Array.isArray)) setReread({ over, spots: parts.flat() })
@@ -666,6 +678,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
 
   const progIcon = (p: Program) => {
     if (p === 'SOTA') return <Mountain size={13} aria-hidden="true" />
+    if (p === 'WWFF') return <Leaf size={13} aria-hidden="true" />
     if (p === 'Both') return <><TreePine size={13} aria-hidden="true" /><Mountain size={13} aria-hidden="true" /></>
     return <TreePine size={13} aria-hidden="true" />
   }
@@ -944,7 +957,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
         <div className="pota-controls-row">
           {/* Program tabs */}
           <div className="filter-row" role="tablist" aria-label={t('ota.program.aria')}>
-            {(['POTA', 'SOTA', 'Both'] as Program[]).map((p) => (
+            {((observed ? ['POTA', 'SOTA', 'Both'] : ['POTA', 'SOTA', 'WWFF', 'Both']) as Program[]).map((p) => (
               <button
                 key={p}
                 type="button"
@@ -953,8 +966,9 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
                 className={`filter-chip${program === p ? ' active' : ''}`}
                 onClick={() => setProgram(p)}
               >
-                {/* The tab VALUE is the programme (or 'Both'); only 'Both' is a word. */}
-                {p === 'Both' ? t('ota.program.both') : p}
+                {/* The tab VALUE is the programme (or 'Both'); only 'Both' is a word: "Both" of an
+                    observed board's two, "All" of this board's three. */}
+                {p === 'Both' ? (observed ? t('ota.program.both') : t('ota.program.all')) : p}
               </button>
             ))}
           </div>
@@ -1104,7 +1118,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
             : bandFilter.length > 0 || modeFilter !== 'All'
               ? t('ota.empty.filtered')
               : t('ota.empty', {
-                  program: program === 'Both' ? t('ota.programs.both') : program,
+                  program: program !== 'Both' ? program : observed ? t('ota.programs.both') : t('ota.programs.all'),
                 })}
         </p>
       ) : (

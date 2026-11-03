@@ -23,7 +23,7 @@ import { modeKey } from './callHistory'
  * The gradient: a call the operator asked for by name > a new entity > new zone > new state
  * > new grid > new band (entity worked, this band not) > new mode (band worked, this mode
  * class not) > a park/summit not yet worked in the activation running now >
- * worked-but-unconfirmed. Dxped/Pota/Sota are never a primary tier — the
+ * worked-but-unconfirmed. Dxped/Pota/Sota/Wwff are never a primary tier — the
  * backend appends them onto an existing award need and expresses their pull as a priority
  * bump instead, so they weigh 0 here exactly as they do there.
  *
@@ -51,6 +51,7 @@ export const NEED_TIER: Record<NeedTag, number> = {
   Dxped: 0,
   Pota: 0,
   Sota: 0,
+  Wwff: 0,
 }
 
 /**
@@ -118,7 +119,7 @@ export function activityTypeByCall(alerts: NeedAlert[]): Map<string, 'Pota' | 'S
  * a DXpedition is not something you can need. It is already drawn separately as an activity
  * badge, so it was saying it twice, once wrongly.
  */
-const ACTIVITY_TAGS: ReadonlySet<string> = new Set(['Dxped', 'Pota', 'Sota'])
+const ACTIVITY_TAGS: ReadonlySet<string> = new Set(['Dxped', 'Pota', 'Sota', 'Wwff'])
 
 /** True for a tag that only LABELS the station, rather than giving a reason to work it. */
 export function isActivityTag(tag: NeedTag | null | undefined): boolean {
@@ -412,6 +413,7 @@ const BAND_AGNOSTIC_TAGS: ReadonlySet<NeedTag> = new Set<NeedTag>([
   'Dxped',
   'Pota',
   'Sota',
+  'Wwff',
   'Wanted',
 ])
 

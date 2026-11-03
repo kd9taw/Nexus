@@ -1,6 +1,6 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). The chip and badge
 // WORDS come from the catalog; the CSS class, the icon and the precedence order are code.
-// POTA and SOTA are the programmes' own names — invariant tokens, kept below as constants
+// POTA, SOTA and WWFF are the programmes' own names — invariant tokens, kept below as constants
 // (the rule is in `i18n/index.ts`).
 //
 // THE WORDS RESOLVE LAZILY, through getters. These two records are module constants that a
@@ -19,15 +19,17 @@ import {
   MailQuestion,
   TreePine,
   Mountain,
+  Leaf,
   Star,
   TreePalm,
   type LucideIcon,
 } from 'lucide-react'
 import { t, type MessageKey } from '../i18n'
 
-/** The programmes' own names — the same four letters in every language. */
+/** The programmes' own names — the same letters in every language. */
 const POTA_PROGRAM = 'POTA'
 const SOTA_PROGRAM = 'SOTA'
+const WWFF_PROGRAM = 'WWFF'
 
 /** A reason a heard station is worth working, in one vocabulary shared by the Needed
  * panel and the band-activity decode feed so the two views read as one system. */
@@ -47,6 +49,8 @@ export type NeedCat =
   | 'park'
   | 'pota'
   | 'sota'
+  /** A live WWFF activator: an activity badge in POTA's palette (flora & fauna areas are parks). */
+  | 'wwff'
   | 'wanted'
 
 export interface NeedVisual {
@@ -117,6 +121,15 @@ export const NEED_VISUALS: Record<NeedCat, NeedVisual> = {
     },
     iconOnly: true,
   },
+  wwff: {
+    cls: 'need-pota',
+    Icon: Leaf,
+    label: WWFF_PROGRAM,
+    get title() {
+      return t('need.badge.wwff.title')
+    },
+    iconOnly: true,
+  },
   // A station on the watch list: the WATCH tile's own lime and word (`WatchTile`), so the feed marks
   // a watched station the way the Call Roster, the Stations list and Spots do (operator, 2026-09-25:
   // "Lime WATCH everywhere").
@@ -144,6 +157,7 @@ export const NEED_PRECEDENCE: NeedCat[] = [
   'confirm',
   'pota',
   'sota',
+  'wwff',
 ]
 
 /** The need-chip vocabulary — the ONE source for chip text/class/tooltip per
@@ -258,6 +272,15 @@ export const NEED_CHIP: Record<import('../types').NeedTag, NeedChip> = {
     cls: 'sota',
     get title() {
       return t('need.chip.sota.title')
+    },
+  },
+  // WWFF in POTA's colours: its areas are parks and reserves, and a new colour buys nothing.
+  Wwff: {
+    label: WWFF_PROGRAM,
+    short: WWFF_PROGRAM,
+    cls: 'pota',
+    get title() {
+      return t('need.chip.wwff.title')
     },
   },
   // A station on the watch list: EXACTLY the WATCH tile the Call Roster, the Stations list and Spots

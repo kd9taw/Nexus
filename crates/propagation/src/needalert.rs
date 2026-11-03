@@ -51,6 +51,8 @@ pub enum NeedTag {
     Pota,
     /// The call is a live SOTA activator right now (appended, like Dxped).
     Sota,
+    /// The call is a live WWFF activator right now (appended, like Dxped).
+    Wwff,
     /// The call belongs to an ACTIVE announced DXpedition — a limited-time window
     /// (appended alongside the award tags; never the primary row color).
     Dxped,
@@ -77,6 +79,7 @@ impl NeedTag {
             NeedTag::Dxped => "DXpedition",
             NeedTag::Pota => "POTA",
             NeedTag::Sota => "SOTA",
+            NeedTag::Wwff => "WWFF",
             NeedTag::Wanted => "Wanted",
         }
     }
@@ -111,7 +114,7 @@ impl NeedTag {
             // award need; its priority effect is the explicit bump applied there.
             NeedTag::Dxped => 0,
             // Appended program chips (live activator) — same rule as Dxped.
-            NeedTag::Pota | NeedTag::Sota => 0,
+            NeedTag::Pota | NeedTag::Sota | NeedTag::Wwff => 0,
         }
     }
 }
@@ -182,7 +185,7 @@ pub enum StateSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParkRef {
-    /// "POTA" | "SOTA" — the programme, as the hunt target is set with it.
+    /// "POTA" | "SOTA" | "WWFF" — the programme, as the hunt target is set with it.
     pub program: String,
     /// The reference itself: "US-0001", "W7A/MN-001".
     pub reference: String,
@@ -641,6 +644,7 @@ pub fn score_heard(
         NeedTag::Dxped => format!("Active DXpedition — {}", info.entity),
         NeedTag::Pota => format!("POTA activator — {}", info.entity),
         NeedTag::Sota => format!("SOTA activator — {}", info.entity),
+        NeedTag::Wwff => format!("WWFF activator — {}", info.entity),
         // Wanted is applied by [`mark_watched`] (which owns its headline), never by
         // score(); this arm exists only for match exhaustiveness.
         NeedTag::Wanted => format!("Wanted — {}", info.entity),
@@ -907,7 +911,19 @@ pub fn activator_state<'a>(
         .or_else(|| states().min())
 }
 
-/// Build a Needed-board alert for a LIVE POTA/SOTA activator. Unlike [`score`] (which
+/// The chip and the programme CODE (what a hunt target is set with) for a hunter-feed spot's
+/// programme: SOTA and WWFF are their own, and anything else is POTA, as it always was.
+pub fn program_chip(program: &str) -> (NeedTag, &'static str) {
+    if program.eq_ignore_ascii_case("SOTA") {
+        (NeedTag::Sota, "SOTA")
+    } else if program.eq_ignore_ascii_case("WWFF") {
+        (NeedTag::Wwff, "WWFF")
+    } else {
+        (NeedTag::Pota, "POTA")
+    }
+}
+
+/// Build a Needed-board alert for a LIVE POTA/SOTA/WWFF activator. Unlike [`score`] (which
 /// returns `None` unless the station advances a DXCC/zone/grid award), an active
 /// park/summit is ITSELF the opportunity a chaser wants — so this ALWAYS yields an alert
 /// (when the frequency is on a band), carrying the program tag PLUS any award the
@@ -942,13 +958,7 @@ pub fn activation_alert(
     // label (below): the board drops an activation row that repeats a cluster row by call, band
     // and that label.
     let heard = feed_mode(&spot.mode).unwrap_or_else(|| mode.label().to_string());
-    let is_sota = spot.program.eq_ignore_ascii_case("SOTA");
-    let program_tag = if is_sota {
-        NeedTag::Sota
-    } else {
-        NeedTag::Pota
-    };
-    let prog = if is_sota { "SOTA" } else { "POTA" };
+    let (program_tag, prog) = program_chip(&spot.program);
 
     // Any award this activator ALSO satisfies (ATNO / new band / zone / grid / state). The state
     // is the park's or summit's, which is the one a contact hunted there logs.
@@ -3441,6 +3451,26 @@ mod tests {
         .unwrap();
         assert!(s.tags.contains(&NeedTag::Sota), "SOTA chip: {:?}", s.tags);
         assert_eq!(s.mode, "CW");
+        // A WWFF activation is WWFF's, never filed as a POTA park: its own chip, its own
+        // programme on the row's park (what a Work from the board hunts with) and headline.
+        let w = activation_alert(
+            &ota("WWFF", "KFF-1234", "K1ABC", 14_244.0, "SSB"),
+            &needs,
+            &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
+            true,
+            true,
+        )
+        .unwrap();
+        assert!(w.tags.contains(&NeedTag::Wwff), "WWFF chip: {:?}", w.tags);
+        assert!(!w.tags.contains(&NeedTag::Pota), "{:?}", w.tags);
+        assert_eq!(
+            w.park,
+            Some(ParkRef {
+                program: "WWFF".into(),
+                reference: "KFF-1234".into()
+            })
+        );
+        assert!(w.headline.contains("WWFF KFF-1234"), "{}", w.headline);
         // 2.5 MHz is off the amateur band plan → no alert (never a bogus row).
         assert!(activation_alert(
             &ota("POTA", "K-1", "K1ABC", 2_500.0, "SSB"),

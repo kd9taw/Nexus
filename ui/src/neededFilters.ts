@@ -20,6 +20,7 @@ export type NeedTypeFilter =
   | 'dxped'
   | 'pota'
   | 'sota'
+  | 'wwff'
 
 /** The operating-mode classes a need can carry. */
 export type ModeClass = 'Digital' | 'CW' | 'Phone'
@@ -66,13 +67,14 @@ const TAG_TO_BUCKET: Record<NeedTag, NeedTypeFilter> = {
   Dxped:     'dxped',
   Pota:      'pota',
   Sota:      'sota',
+  Wwff:      'wwff',
 }
 
 /** The valid persisted values — localStorage may hold a stale/renamed bucket
  * from an older build; an unknown value must fall back to 'all', not silently
  * empty the board with no active chip. */
 export const NEED_TYPE_VALUES: readonly NeedTypeFilter[] = [
-  'all', 'wanted', 'atno', 'newBand', 'newMode', 'newZone', 'newGrid', 'newState', 'newIota', 'newPark', 'confirm', 'dxped', 'pota', 'sota',
+  'all', 'wanted', 'atno', 'newBand', 'newMode', 'newZone', 'newGrid', 'newState', 'newIota', 'newPark', 'confirm', 'dxped', 'pota', 'sota', 'wwff',
 ]
 
 /** True when the alert matches the given filter set (all filters AND together). `query` is the

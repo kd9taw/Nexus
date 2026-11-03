@@ -6,6 +6,11 @@
 //! `SIG_INFO`, SOTA → `SOTA_REF`), so the program is tracked alongside the reference.
 //! Live activator-spot parsing + fetch live in the `propagation` crate (it has the
 //! JSON + HTTP deps); this module is the dependency-free reference core.
+//!
+//! WWFF (World Wide Flora & Fauna) is a third programme a HUNTER can tag a contact with
+//! ([`normalize_wwff_ref`]; ADIF `SIG`=WWFF/`SIG_INFO` plus the dedicated `WWFF_REF`). It is not
+//! an [`OtaProgram`]: those are the programmes an activation runs under, with its park directory,
+//! self-spot and per-park export, none of which WWFF has here.
 
 /// An on-the-air program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +66,20 @@ pub fn normalize_sota_ref(s: &str) -> Option<String> {
         (1..=2).contains(&region.len()) && region.bytes().all(|b| b.is_ascii_alphabetic());
     let number_ok = number.len() == 3 && number.bytes().all(|b| b.is_ascii_digit());
     (assoc_ok && region_ok && number_ok).then_some(t)
+}
+
+/// Validate + normalize a WWFF reference (e.g. `" dlff-0001 "` → `"DLFF-0001"`): a 1–4 character
+/// alphanumeric programme prefix, `FF-`, then 4 digits, the shape every published reference has
+/// (`KFF-1234`, `DLFF-0001`, `VKFF-0123`). The same rule as `propagation::wwff::valid_wwff_ref`,
+/// which counts the award; this crate cannot reach that one. Returns `None` if it doesn't match.
+pub fn normalize_wwff_ref(s: &str) -> Option<String> {
+    let r = s.trim().to_ascii_uppercase();
+    let (head, num) = r.split_once("FF-")?;
+    let ok = (1..=4).contains(&head.len())
+        && head.bytes().all(|b| b.is_ascii_alphanumeric())
+        && num.len() == 4
+        && num.bytes().all(|b| b.is_ascii_digit());
+    ok.then_some(r)
 }
 
 /// Validate + normalize a reference for the given program.
@@ -282,6 +301,30 @@ mod tests {
         assert_eq!(OtaProgram::from_code(" SOTA "), Some(OtaProgram::Sota));
         assert_eq!(OtaProgram::Pota.code(), "POTA");
         assert_eq!(OtaProgram::from_code("WWFF"), None);
+    }
+
+    /// The WWFF shape, the same answers as the award count's own check gives.
+    #[test]
+    fn wwff_refs_validate_and_normalize() {
+        assert_eq!(
+            normalize_wwff_ref(" dlff-0001 ").as_deref(),
+            Some("DLFF-0001")
+        );
+        assert_eq!(normalize_wwff_ref("KFF-1234").as_deref(), Some("KFF-1234"));
+        assert_eq!(
+            normalize_wwff_ref("VKFF-0123").as_deref(),
+            Some("VKFF-0123")
+        );
+        for junk in [
+            "",
+            "K-1234",
+            "KFF-123",
+            "KFF-12345",
+            "ABCDEFF-0001",
+            "FF-0001",
+        ] {
+            assert_eq!(normalize_wwff_ref(junk), None, "{junk:?}");
+        }
     }
 
     #[test]

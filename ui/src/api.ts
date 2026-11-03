@@ -5249,7 +5249,7 @@ export async function detectRigs(): Promise<DetectedRig[]> {
   return invoke<DetectedRig[]>('detect_rigs')
 }
 
-/** Activators on the air now for the program ("POTA" | "SOTA") — the hunter feed. */
+/** Activators on the air now for the program ("POTA" | "SOTA" | "WWFF") — the hunter feed. */
 export async function getOtaSpots(program: string, cached = false): Promise<OtaSpot[]> {
   // `cached`: re-derive what the LOG says over the rows the last fetch left in the shared cache,
   // instead of fetching. The board asks for that when the log changes — which is several times

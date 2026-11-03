@@ -141,11 +141,11 @@ export interface OtaAnswer {
   readonly spots: OtaSpot[]
   readonly at: number
 }
-/** pota.app's or SOTAwatch's list, a plain minute (the board's own timer before it was a feed); one feed
+/** pota.app's, SOTAwatch's or WWFF Spotline's list, a plain minute (the board's own timer before it was a feed); one feed
  *  per programme, so a board on Both and a board on POTA share the POTA poll. A failed fetch says so in a
  *  toast, once a window, and answers an EMPTY list: what the board has always shown after one, so this
  *  feed answers where the others keep their last value. */
-function otaSpots(program: 'POTA' | 'SOTA'): Feed<OtaAnswer> {
+function otaSpots(program: 'POTA' | 'SOTA' | 'WWFF'): Feed<OtaAnswer> {
   return {
     name: `otaSpots:${program}`,
     load: async () => ({
@@ -157,6 +157,7 @@ function otaSpots(program: 'POTA' | 'SOTA'): Feed<OtaAnswer> {
 }
 export const POTA_SPOTS = otaSpots('POTA')
 export const SOTA_SPOTS = otaSpots('SOTA')
+export const WWFF_SPOTS = otaSpots('WWFF')
 
 interface Entry<T> {
   held: Held<T>

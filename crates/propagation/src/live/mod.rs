@@ -38,6 +38,7 @@ pub mod swpc_scales;
 pub mod tle;
 pub mod wrl;
 pub mod wspr;
+pub mod wwff;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

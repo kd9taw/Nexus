@@ -6,7 +6,7 @@ The Needed board ranks every station currently on the air by what it is worth to
 
 ## What the Board Ranks
 
-Thirteen need tags are recognized. Each carries a fixed numeric priority tier that determines row
+Fourteen need tags are recognized. Each carries a fixed numeric priority tier that determines row
 sort order and color (`ui/src/features/needs.ts`, `NEED_TIER`):
 
 | Need tag | Priority |
@@ -24,20 +24,21 @@ sort order and color (`ui/src/features/needs.ts`, `NEED_TIER`):
 | `Dxped` — active DXpedition chip | 0 |
 | `Pota` — POTA activator chip | 0 |
 | `Sota` — SOTA activator chip | 0 |
+| `Wwff` — WWFF (World Wide Flora & Fauna) activator chip | 0 |
 
 The chips at 0 do not rank a row on their own; the award tag alongside them does.
 
 `NewIota` fires only when the station's island group is known: a DX-cluster spot whose comment names exactly one reference (`IOTA EU-131`, `OC-146 QSL via …`), or a callbook lookup made this session for exactly that call (never a stroked call such as `W1ABC/P`, whose callbook entry is the licensee's home). A comment naming two different groups names neither. The IOTA award counts each group once, so a group worked on any band clears the need, and one worked but confirmed by neither card nor LoTW raises a Confirm instead. IOTA Ltd's island-group list ships with Nexus by IOTA Ltd's permission, so each group's name shows beside a reference, with IOTA Ltd's credit, from the first launch; while **Settings ▸ Logbook ▸ IOTA island list** is on (the default), Nexus checks iota-world.org for a newer list at most monthly.
 
-DXpedition, POTA, and SOTA are chips appended to a row that already has an award tier; the chip itself is priority-neutral. The +15 DXpedition bump *can* cross a tier boundary where adjacent tiers sit only 10 points apart — a DXpedition-bumped New band (50 + 15 = 65) outranks a plain New grid (60).
+DXpedition, POTA, SOTA and WWFF are chips appended to a row that already has an award tier; the chip itself is priority-neutral. The +15 DXpedition bump *can* cross a tier boundary where adjacent tiers sit only 10 points apart — a DXpedition-bumped New band (50 + 15 = 65) outranks a plain New grid (60).
 
 `NewPark` is not one of those chips and is easy to confuse with them. `Pota` and `Sota` say a station is activating; `NewPark` says you have something to gain by working it — the log holds no contact with that reference, from that activator, on today's UTC day. POTA credits a reference once per activator per Zulu day, and the activation export already slices the log on that same boundary, so an activator who returns to a park tomorrow is a fresh opportunity while the one you logged an hour ago is not. A park worked in the activation that is running now keeps only its programme chip and drops to priority 0, so it stops competing with real needs without vanishing from the POTA/SOTA filter.
 
 The reference comes from the hunter side of the log (ADIF `SIG_INFO` / `SOTA_REF`), so a hunt made in a mode that never exchanges the reference — CW, typically — is invisible to this and the park keeps reading as needed. The imported "Hunted Parks.CSV" cannot help here: it carries no dates, so it cannot say which activation a hunt belonged to. It still answers the all-time question behind the hunter panel's NEW PARK badge.
 
-Beyond the chip, every live POTA/SOTA activator also generates its own standalone board row when it carries no award tier of its own, floored at priority 20 (above Confirmation, below New mode) while the park is still needed, as long as the activator cache is fresh and the spot is under an hour old.
+Beyond the chip, every live POTA/SOTA/WWFF activator also generates its own standalone board row when it carries no award tier of its own, floored at priority 20 (above Confirmation, below New mode) while the park is still needed, as long as the activator cache is fresh and the spot is under an hour old.
 
-POTA and SOTA chips appear only when the activator-spot cache is no older than 10 minutes (600 seconds). An expired cache suppresses the chip; the underlying award tier row still appears if propagation evidence passes the admission gates.
+POTA, SOTA and WWFF chips appear only when the activator-spot cache is no older than 10 minutes (600 seconds). An expired cache suppresses the chip; the underlying award tier row still appears if propagation evidence passes the admission gates.
 
 Secondary tiebreak within the same priority score is alphabetical by callsign.
 
@@ -98,7 +99,7 @@ Deduplication key is `(call, band, mode-class)`. The same station on 20 m CW and
 
 Three independent filter dimensions are ANDed together:
 
-- **Need type** — All / ATNO / New Band / New Mode / New Grid / DXped / POTA / SOTA
+- **Need type** — All / ATNO / New Band / New Mode / New Grid / DXped / POTA / SOTA / WWFF
 - **Band** — multi-select; common HF bands 160 m through 6 m are always present; additional bands appended from active alert data
 - **Mode** — All / Digital / CW / Phone
 

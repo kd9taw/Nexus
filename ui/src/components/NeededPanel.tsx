@@ -207,11 +207,13 @@ const NEED_TYPE_OPTS: NeedTypeFilter[] = [
   'dxped',
   'pota',
   'sota',
+  'wwff',
 ]
 
-/** The programmes' own names — the same four letters in every language. */
+/** The programmes' own names — the same letters in every language. */
 const POTA_PROGRAM = 'POTA'
 const SOTA_PROGRAM = 'SOTA'
+const WWFF_PROGRAM = 'WWFF'
 /** The awards' own names, the same three letters in every language. */
 const WPX_AWARD = 'WPX'
 const WAE_AWARD = 'WAE'
@@ -267,6 +269,8 @@ function needTypeLabel(value: NeedTypeFilter): string {
       return POTA_PROGRAM
     case 'sota':
       return SOTA_PROGRAM
+    case 'wwff':
+      return WWFF_PROGRAM
   }
 }
 
