@@ -31,7 +31,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -46,7 +46,7 @@ use crate::settings::Settings;
 /// The app-defined ADIF field naming the program a contact came in from ("WSJT-X", "N1MM", the
 /// S.A.T.'s address). In the record's passthrough fields, so it is written to `log.adi` and read
 /// back with it; shown in the contact's detail as "via <program>".
-pub const VIA_FIELD: &str = "APP_NEXUS_VIA";
+pub const VIA_FIELD: &str = tempo_core::logbook::VIA_FIELD;
 
 /// What a computer driving the station reads in place of the program of a contact from a device
 /// that gave no name of its own (named at the shack by the address it sent from): the address
@@ -54,11 +54,58 @@ pub const VIA_FIELD: &str = "APP_NEXUS_VIA";
 pub const FROM_A_NETWORK_DEVICE: &str = "@network";
 /// …for one from this computer (a loopback address).
 pub const FROM_THIS_COMPUTER: &str = "@local";
-/// The words a refusal read from afar says in place of a network device's address. The refusal
-/// sentences are the station's own, in English, so these are too.
+/// ⛔ The name a contact from a device that gave no program name of its own is logged under
+/// ([`VIA_FIELD`]) and refused under: never its address, which would be kept in the log and its
+/// files. Only the connection log line, on this computer, says the address ([`Sender`]). A
+/// refusal read from afar says the same in place of any address it quotes. In English, as the
+/// refusal sentences are.
 pub const NETWORK_DEVICE_WORDS: &str = "A device on your network";
-/// …in place of a loopback address.
+/// …for one from this computer (a loopback address).
 pub const THIS_COMPUTER_WORDS: &str = "This computer";
+
+/// Who sent a contact, by the three names it goes by: `name`, the one stored in the log
+/// ([`VIA_FIELD`]) and said beside the switch; `screen`, the one the screen words (the same, or
+/// [`FROM_A_NETWORK_DEVICE`] / [`FROM_THIS_COMPUTER`]); `log`, the one the connection log line on
+/// this computer says, the only one with an address in it.
+#[derive(Debug, Clone, PartialEq)]
+struct Sender {
+    name: String,
+    screen: String,
+    log: String,
+}
+
+impl Sender {
+    /// The program's own name for itself, or, when it gave none, what it is from `ip`.
+    fn of(program: Option<String>, ip: IpAddr) -> Self {
+        if let Some(p) = program {
+            return Self {
+                name: p.clone(),
+                screen: p.clone(),
+                log: p,
+            };
+        }
+        let ip = canonical(ip);
+        let (name, screen) = if ip.is_loopback() {
+            (THIS_COMPUTER_WORDS, FROM_THIS_COMPUTER)
+        } else {
+            (NETWORK_DEVICE_WORDS, FROM_A_NETWORK_DEVICE)
+        };
+        Self {
+            name: name.into(),
+            screen: screen.into(),
+            log: format!("{name} ({ip})"),
+        }
+    }
+
+    /// `line`, which opens with [`Self::name`], as the connection log says it.
+    fn said(&self, line: &str) -> String {
+        if self.log == self.name {
+            line.to_string()
+        } else {
+            line.replacen(&self.name, &self.log, 1)
+        }
+    }
+}
 
 /// Whether `rec` came in from another program ([`VIA_FIELD`]): the upload worker sends such a
 /// contact to the services and not to DXKeeper, which may be the program that sent it.
@@ -443,10 +490,10 @@ const SAID_KEPT: usize = 64;
 /// not, the type 5 is logged as it is.
 pub const HOLD: Duration = Duration::from_secs(2);
 
-/// A checked type 5 waiting for its type 12: the program, the contact's identity
+/// A checked type 5 waiting for its type 12: who sent it, the contact's identity
 /// ([`contact_key`]), the record, and when it came.
 struct Held {
-    program: String,
+    sender: Sender,
     key: Option<ContactKey>,
     checked: Checked,
     at: Instant,
@@ -579,18 +626,31 @@ pub fn take_datagram(
             );
             return;
         }
+        Intake::Unreadable { program } => {
+            let who = program.unwrap_or_else(|| ip.to_string());
+            gate.once(
+                format!("unreadable {ip}"),
+                note,
+                format!(
+                    "{who} ({ip}) sent a contact Nexus could not read (its time is not in UTC, \
+                     or the datagram is damaged), so it was not logged"
+                ),
+            );
+            return;
+        }
         Intake::Own | Intake::Ignored => return,
     };
     gate.clear(&size_key);
-    // The program's own name for itself, or where it is when it gave none.
-    let program = program.unwrap_or_else(|| canonical(ip).to_string());
+    gate.clear(&format!("unreadable {ip}"));
+    // The program's own name for itself, or what it is when it gave none: never its address.
+    let sender = Sender::of(program, ip);
     for fields in records {
         if !gate.limit.take(ip, now) {
             gate.once(rate_key.clone(), note, rate_line(ip));
             return;
         }
         gate.clear(&rate_key);
-        take_contact(engine, &fields, &program, format, gate, note, now);
+        take_contact(engine, &fields, &sender, format, gate, note, now);
     }
 }
 
@@ -604,7 +664,7 @@ pub fn flush_held(engine: &Mutex<Engine>, gate: &mut Gate, note: &Note, now: Ins
         .is_some_and(|h| now.saturating_duration_since(h.at) >= HOLD)
     {
         let h = gate.held.take().expect("checked above");
-        log_checked(engine, h.checked, &h.program, gate, note, now);
+        log_checked(engine, h.checked, &h.sender, gate, note, now);
     }
 }
 
@@ -619,7 +679,7 @@ fn rate_line(ip: IpAddr) -> String {
 fn take_contact(
     engine: &Mutex<Engine>,
     fields: &Fields,
-    program: &str,
+    sender: &Sender,
     format: tempo_net::log_intake::Format,
     gate: &mut Gate,
     note: &Note,
@@ -627,12 +687,13 @@ fn take_contact(
 ) {
     use tempo_net::log_intake::Format;
     let station = engine_lock(engine).settings().mycall.clone();
-    let checked = match contact_adif(fields, program, &station) {
+    let checked = match contact_adif(fields, &sender.name, &station) {
         Ok(c) => c,
         Err(why) => {
             engine_lock(engine).freedv_mut().notice = Some(why.clone());
+            // The diagnostic log, a file the operator may send, names no address.
             tempo_core::applog::warn("log-intake", &why);
-            note("error", why);
+            note("error", sender.said(&why));
             return;
         }
     };
@@ -640,10 +701,10 @@ fn take_contact(
         // A type 5 waits for its type 12 (a held one before it goes now, not lost).
         Format::Wsjtx => {
             if let Some(h) = gate.held.take() {
-                log_checked(engine, h.checked, &h.program, gate, note, now);
+                log_checked(engine, h.checked, &h.sender, gate, note, now);
             }
             gate.held = Some(Held {
-                program: program.to_string(),
+                sender: sender.clone(),
                 key: contact_key(&checked.adif),
                 checked,
                 at: now,
@@ -657,25 +718,26 @@ fn take_contact(
                 && gate
                     .held
                     .as_ref()
-                    .is_some_and(|h| h.program == program && h.key == key)
+                    .is_some_and(|h| h.sender.name == sender.name && h.key == key)
             {
                 gate.held = None;
             }
         }
         Format::Adif | Format::N1mm => {}
     }
-    log_checked(engine, checked, program, gate, note, now);
+    log_checked(engine, checked, sender, gate, note, now);
 }
 
 /// One checked contact `program` logged: imported, and said.
 fn log_checked(
     engine: &Mutex<Engine>,
     checked: Checked,
-    program: &str,
+    sender: &Sender,
     gate: &mut Gate,
     note: &Note,
     now: Instant,
 ) {
+    let program = sender.name.as_str();
     let (made, _durable) = crate::logwrite::intake_contact(engine, &checked.adif);
     let named = match checked.mhz {
         Some(mhz) => format!("{} · {mhz:.3} MHz", checked.call),
@@ -700,7 +762,7 @@ fn log_checked(
         let f = e.freedv_mut();
         match &made {
             Ok(IntakeOutcome::Added) => {
-                f.note_intake(program, &checked.call, now_unix());
+                f.note_intake(&sender.screen, &checked.call, now_unix());
                 f.notice = None;
             }
             Ok(IntakeOutcome::InLog) => {}
@@ -710,11 +772,12 @@ fn log_checked(
     if matches!(made, Ok(IntakeOutcome::Added)) {
         gate.last_added = Some((program.to_string(), checked.call.clone(), now));
     }
+    let said = sender.said(&line);
     if made.is_err() {
         tempo_core::applog::error("log-intake", &line);
-        note("error", line);
+        note("error", said);
     } else {
-        note("info", line);
+        note("info", said);
     }
 }
 
@@ -762,9 +825,9 @@ pub fn take_companion_adif(
         .collect()
 }
 
-/// Serve the contact port until `shutdown`: each datagram at most `bound` bytes (a longer one is
-/// dropped whole: the buffer is one byte longer than the bound so the two can be told apart)
-/// goes to [`take_datagram`].
+/// Serve the contact port until `shutdown`, or a quit ([`stop_for_quit`]): each datagram at most
+/// `bound` bytes (a longer one is dropped whole: the buffer is one byte longer than the bound so
+/// the two can be told apart) goes to [`take_datagram`].
 pub fn serve_within(
     sock: UdpSocket,
     engine: Arc<Mutex<Engine>>,
@@ -773,10 +836,66 @@ pub fn serve_within(
     note: Note,
     bound: usize,
 ) {
+    serve_with(
+        sock,
+        engine,
+        shutdown,
+        freedv_note,
+        note,
+        bound,
+        &QUITTING,
+        &SERVING,
+    );
+}
+
+/// The app is quitting: every contact listener stops ([`stop_for_quit`]).
+static QUITTING: AtomicBool = AtomicBool::new(false);
+/// How many contact listeners are running, the final flush included.
+static SERVING: AtomicUsize = AtomicUsize::new(0);
+
+/// ★ A quit stops every contact listener and waits, at most `wait`, until each has logged what it
+/// holds (a type 5 still in its [`HOLD`]) and let go: called by the quit before the log's last
+/// flush, so a contact logged in WSJT-X a moment before the quit is in the log the quit writes.
+/// `true` when every listener let go in time.
+pub fn stop_for_quit(wait: Duration) -> bool {
+    stop_listeners(&QUITTING, &SERVING, wait)
+}
+
+/// [`stop_for_quit`] on a quit flag and a count of its own (a test's).
+pub(crate) fn stop_listeners(quit: &AtomicBool, serving: &AtomicUsize, wait: Duration) -> bool {
+    quit.store(true, Ordering::SeqCst);
+    let until = Instant::now() + wait;
+    while serving.load(Ordering::SeqCst) > 0 && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    serving.load(Ordering::SeqCst) == 0
+}
+
+/// [`serve_within`] on a quit flag and a count of its own (a test's).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn serve_with(
+    sock: UdpSocket,
+    engine: Arc<Mutex<Engine>>,
+    shutdown: Arc<AtomicBool>,
+    freedv_note: Note,
+    note: Note,
+    bound: usize,
+    quit: &AtomicBool,
+    serving: &AtomicUsize,
+) {
+    /// Counts this listener as running until it has let go, its last flush included.
+    struct Serving<'a>(&'a AtomicUsize);
+    impl Drop for Serving<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    serving.fetch_add(1, Ordering::SeqCst);
+    let _serving = Serving(serving);
     let _ = sock.set_read_timeout(Some(Duration::from_millis(250)));
     let mut buf = vec![0u8; bound + 1];
     let mut gate = Gate::new();
-    while !shutdown.load(Ordering::Relaxed) {
+    while !shutdown.load(Ordering::Relaxed) && !quit.load(Ordering::SeqCst) {
         let Ok((n, from)) = sock.recv_from(&mut buf) else {
             flush_held(&engine, &mut gate, &note, Instant::now());
             continue;
@@ -786,8 +905,8 @@ pub fn serve_within(
         }
         take_datagram(&engine, &buf[..n], from, &mut gate, &freedv_note, &note);
     }
-    // Stopped (a port change, the switch off, the app closing): a held contact is logged, not
-    // lost.
+    // Stopped (a port change, the switch off, a LAN rebind) or quitting ([`stop_for_quit`], which
+    // waits for this): a held contact is logged, not lost.
     flush_held(&engine, &mut gate, &note, Instant::now() + HOLD);
 }
 

@@ -233,8 +233,8 @@ fn a_sat_shaped_adif_keeps_sat_name_prop_mode_freq_rx_and_gets_its_bands() {
     let adif = tempo_core::logbook::adif_record_own_log(r);
     assert!(adif.contains("<FREQ_RX:10>436.795000"), "{adif}");
     assert!(adif.contains("<BAND_RX:4>70cm"), "{adif}");
-    // No program name: where it came from.
-    assert_eq!(via(r), Some("127.0.0.1"));
+    // No program name: this computer, never its address.
+    assert_eq!(via(r), Some(THIS_COMPUTER_WORDS));
 }
 
 #[test]
@@ -289,7 +289,7 @@ fn a_contact_the_operator_logged_two_minutes_earlier_is_a_duplicate() {
     assert_eq!(st.calls(), ["K1ABC"], "one contact");
     assert_eq!(
         st.lines()[0].1,
-        "127.0.0.1 logged K1ABC · 14.075 MHz: already in the log"
+        "This computer (127.0.0.1) logged K1ABC · 14.075 MHz: already in the log"
     );
     assert!(engine_lock(&st.e).take_pending_uploads().is_empty());
     // Control: ten minutes on it is a contact of its own.
@@ -840,4 +840,175 @@ fn the_manager_binds_loopback_while_the_network_is_off_and_every_adapter_while_o
         .clone()
         .is_some_and(|m| m.contains("cannot use port")));
     set(&|s| s.freedv_log = false);
+}
+
+/// ⛔ A device that gives no program name of its own (the S.A.T. tracker's raw ADIF) is never
+/// stored, shown or sent under its network address: the contact is logged via "A device on your
+/// network" (or "This computer"), the screen names it in its own words, and only the connection
+/// log line, on this computer, says the address.
+#[test]
+fn a_device_with_no_program_name_is_stored_under_no_address() {
+    let mut st = Station::new();
+    st.settings(|s| s.log_intake_lan = true);
+    st.send_from(
+        "192.168.1.40:5000",
+        b"<CALL:5>W1ABC<QSO_DATE:8>20261014<TIME_ON:4>0102<MODE:2>FM<FREQ:7>145.850<EOR>",
+    );
+    let log = st.e.stored_log();
+    assert_eq!(log.len(), 1, "{:?}", st.lines());
+    assert_eq!(via(&log[0]), Some(NETWORK_DEVICE_WORDS));
+    let own = tempo_core::logbook::adif_record_own_log(&log[0]);
+    assert!(!own.contains("192.168"), "the log's own file: {own}");
+    let f = engine_lock(&st.e).freedv_mut().clone();
+    assert_eq!(f.intake_program.as_deref(), Some(FROM_A_NETWORK_DEVICE));
+    let queued = engine_lock(&st.e).take_pending_uploads();
+    let sent = tempo_core::logbook::adif_record(&queued[0].rec);
+    assert!(
+        !sent.contains("192.168") && !sent.contains(VIA_FIELD),
+        "{sent}"
+    );
+    assert_eq!(
+        st.lines(),
+        [(
+            "info".to_string(),
+            "A device on your network (192.168.1.40) logged W1ABC · 145.850 MHz: in the log"
+                .to_string()
+        )],
+        "the address, in the connection log alone"
+    );
+    // A refusal shown beside the switch names no address either; its log line does.
+    st.send_from(
+        "192.168.1.40:5000",
+        b"<CALL:5>W1ABC<QSO_DATE:8>20261014<TIME_ON:4>0102<STATION_CALLSIGN:4>W1AW<EOR>",
+    );
+    let notice = engine_lock(&st.e).freedv_mut().notice.clone().unwrap();
+    assert!(!notice.contains("192.168"), "{notice}");
+    assert!(
+        st.lines()[1].1.contains("(192.168.1.40)"),
+        "{:?}",
+        st.lines()
+    );
+}
+
+/// A type 5 the listener could not read (its time not in UTC, a damaged datagram) is said once
+/// in the connection log, never dropped in silence.
+#[test]
+fn an_unreadable_contact_is_said_once() {
+    let mut st = Station::new();
+    let mut cut = encode_qso_logged("WSJT-X", &qso("K2DEF", "K1ABC"));
+    cut.truncate(40);
+    st.send(&cut);
+    st.send(&cut);
+    assert!(st.calls().is_empty());
+    assert_eq!(st.lines().len(), 1, "{:?}", st.lines());
+    assert!(
+        st.lines()[0].1.contains("could not read"),
+        "{:?}",
+        st.lines()
+    );
+}
+
+/// A lone QSO Logged as JTDX sends it, for the hold.
+fn lone(call: &str) -> QsoLogged<'_> {
+    let mut q = qso("K2DEF", call);
+    q.time_on = WHEN;
+    q
+}
+
+/// (Second review.) WSJT-X's real pair, for each upstream sender id: the type 12 takes the held
+/// type 5's place AT ONCE, the row is the type 12's, with one upload and one line, and a later
+/// flush adds nothing.
+#[test]
+fn the_pair_supersedes_at_once_and_counts_once() {
+    for id in ["WSJT-X", "JTDX", "MSHV", "WSJT-X - IC9700"] {
+        let mut st = Station::new();
+        let five = stock_type5_sat("K1ABC");
+        // The same datagram under this sender id.
+        let five = [
+            &five[..12],
+            &(id.len() as u32).to_be_bytes()[..],
+            id.as_bytes(),
+            &five[12 + 4 + "WSJT-X".len()..],
+        ]
+        .concat();
+        st.send(&five);
+        assert!(st.gate.held.is_some(), "{id}: held");
+        assert!(st.calls().is_empty());
+        st.send(&encode_logged_adif(
+            id,
+            "<call:5>K1ABC<mode:4>MFSK<submode:3>FT4<band:2>2m<freq:10>145.900000\
+             <qso_date:8>20261014<time_on:6>010203<station_callsign:5>K2DEF\
+             <prop_mode:3>SAT<sat_name:5>RS-44<EOR>",
+        ));
+        assert!(st.gate.held.is_none(), "{id}: superseded at once");
+        assert_eq!(st.e.stored_log()[0].sat_name.as_deref(), Some("RS-44"));
+        st.settle();
+        assert_eq!(st.calls(), ["K1ABC"]);
+        assert_eq!(engine_lock(&st.e).take_pending_uploads().len(), 1, "{id}");
+        assert_eq!(st.lines().len(), 1, "{id}: {:?}", st.lines());
+    }
+}
+
+/// (Second review.) The real listener on a socket: a lone type 5 is logged by the quiet tick with
+/// no other traffic; one held when the listener stops is logged by the stop; and one held at a
+/// quit is logged before the quit lets go of the listener ([`stop_listeners`]).
+#[test]
+fn the_listener_flushes_on_its_quiet_tick_on_stop_and_at_a_quit() {
+    use std::sync::atomic::AtomicUsize;
+    #[derive(PartialEq)]
+    enum End {
+        Quiet,
+        Stop,
+        Quit,
+    }
+    let run = |end: End| {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = sock.local_addr().unwrap();
+        let e = Arc::new(Mutex::new(Engine::new("K2DEF", "FN31", 0)));
+        let sd = Arc::new(AtomicBool::new(false));
+        let quit = Arc::new(AtomicBool::new(false));
+        let serving = Arc::new(AtomicUsize::new(0));
+        let n: Note = Arc::new(|_, _| {});
+        let t = {
+            let (e, sd, quit, serving, n1, n2) = (
+                Arc::clone(&e),
+                Arc::clone(&sd),
+                Arc::clone(&quit),
+                Arc::clone(&serving),
+                Arc::clone(&n),
+                Arc::clone(&n),
+            );
+            std::thread::spawn(move || serve_with(sock, e, sd, n1, n2, 4096, &quit, &serving))
+        };
+        let until = Instant::now() + Duration::from_secs(5);
+        while serving.load(Ordering::SeqCst) == 0 && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let tx = UdpSocket::bind("127.0.0.1:0").unwrap();
+        tx.send_to(&encode_qso_logged("JTDX", &lone("K1ABC")), addr)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        match end {
+            End::Quiet => std::thread::sleep(HOLD + Duration::from_millis(900)),
+            End::Stop => {
+                assert!(e.stored_log().is_empty(), "still held");
+                sd.store(true, Ordering::Relaxed);
+                t.join().unwrap();
+            }
+            End::Quit => {
+                assert!(e.stored_log().is_empty(), "still held");
+                assert!(
+                    stop_listeners(&quit, &serving, Duration::from_secs(5)),
+                    "the listener let go in time"
+                );
+                assert_eq!(e.stored_log().len(), 1, "logged before the quit goes on");
+            }
+        }
+        let logged = e.stored_log().len();
+        sd.store(true, Ordering::Relaxed);
+        logged
+    };
+    assert_eq!(run(End::Quiet), 1, "the quiet tick flushes");
+    assert_eq!(run(End::Stop), 1, "the stop flushes");
+    assert_eq!(run(End::Quit), 1, "the quit flushes");
 }

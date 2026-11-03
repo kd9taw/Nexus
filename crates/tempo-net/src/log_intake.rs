@@ -142,6 +142,10 @@ pub enum Intake {
     /// A datagram with more than [`MAX_RECORDS`] contacts, or a record with more than
     /// [`MAX_FIELDS`] fields: refused whole.
     TooBig,
+    /// A WSJT-X contact (type 5 or 12) whose header reads but whose body does not: a time not
+    /// in UTC or an offset from it (Qt's local time or time zone), or a damaged datagram. Not
+    /// read wrong, and not dropped in silence: the listener says it once.
+    Unreadable { program: Option<String> },
     /// Anything else: not a logged contact (a heartbeat, a status, a decode, an N1MM edit),
     /// not one of the three forms, too long.
     Ignored,
@@ -194,8 +198,27 @@ fn read_wsjtx(bytes: &[u8]) -> Intake {
         Some(Inbound::LoggedAdif { id, adif }) => {
             read_adif_text(&adif, Format::WsjtxAdif, program_name(&id))
         }
-        _ => Intake::Ignored,
+        Some(_) => Intake::Ignored,
+        None => match contact_header(bytes) {
+            Some(id) if id == NEXUS_WSJTX_ID => Intake::Own,
+            Some(id) => Intake::Unreadable {
+                program: program_name(&id),
+            },
+            None => Intake::Ignored,
+        },
     }
+}
+
+/// The sender id of a datagram whose WSJT-X header says it is a contact (type 5 or 12), when its
+/// body did not read.
+fn contact_header(bytes: &[u8]) -> Option<String> {
+    let mut r = crate::qds::QdsReader::new(bytes);
+    if r.read_u32()? != MAGIC {
+        return None;
+    }
+    let _schema = r.read_u32()?;
+    matches!(r.read_u32()?, 5 | 12).then_some(())?;
+    Some(r.read_utf8()?.unwrap_or_default())
 }
 
 /// A sender's name for itself, cleaned and at most 32 characters; `None` when it is blank.

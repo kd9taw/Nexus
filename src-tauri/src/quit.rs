@@ -710,6 +710,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⛔ A quit lets the contact port's listeners log what they hold before the log's last flush
+    /// (`tempo_app::log_intake::stop_for_quit`, whose own test holds the flush on a real socket):
+    /// source-scanned, as the order of the steps is what is under test.
+    #[test]
+    fn quit_cleanup_stops_the_contact_listeners_before_the_log_flush() {
+        let lib = include_str!("lib.rs");
+        let cleanup = body_of(lib, "fn quit_cleanup(");
+        let at = |needle: &str| {
+            cleanup
+                .find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` is there"))
+        };
+        let stops = at("log_intake::stop_for_quit(");
+        assert!(at("stop_the_radio();") < stops, "the radio first");
+        for after in ["persist_journals(", "flush_logbook("] {
+            assert!(stops < at(after), "the listeners stop before `{after}`");
+        }
+    }
+
     /// The wiring the test above cannot see, source-scanned because what is under test is which
     /// function each quit path calls, and in what order — no type sees that.
     ///

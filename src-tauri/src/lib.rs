@@ -39562,11 +39562,6 @@ mod upload_record_tests {
         &src[start..start + len]
     }
 
-    /// Every service push sends the contact `upload_record` makes of its row, and the DXKeeper
-    /// push the contact `log_queries::sent` makes, so each names `COUNTRY` by the DXCC number; and
-    /// the launch wires the station's resolver of that country. These reach the keychain, the
-    /// network or the whole launch, which no test drives, so the source is read: what is checked
-    /// is that no push is left serialising the row another way. `upload_record` and `sent`
     /// ⛔ A contact another program logged into Nexus (its `APP_NEXUS_VIA` mark) is pushed to no
     /// DXKeeper, which may be the program that sent it; the operator's own contact is, while the
     /// push is on, and nothing is while it is off.
@@ -39590,6 +39585,11 @@ mod upload_record_tests {
         assert_eq!(crate::dxkeeper_target_for(Some(&dxk), &mine), None);
     }
 
+    /// Every service push sends the contact `upload_record` makes of its row, and the DXKeeper
+    /// push the contact `log_queries::sent` makes, so each names `COUNTRY` by the DXCC number; and
+    /// the launch wires the station's resolver of that country. These reach the keychain, the
+    /// network or the whole launch, which no test drives, so the source is read: what is checked
+    /// is that no push is left serialising the row another way. `upload_record` and `sent`
     /// themselves are held to their answers by value (`log_by_id`'s tests).
     #[test]
     fn every_push_and_the_launch_follow_the_dxcc_number_for_country() {
@@ -46576,6 +46576,16 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     // held has already done it, before it waited on anything; the second run finds the loop gone
     // and returns at once, and sweeps any daemon started since.
     stop_the_radio();
+    // The contact port's listeners log what they hold (a contact another program logged, still
+    // in its 2 s wait for the fuller second message) and let go: before the log's last flush
+    // below, so it is in the log the quit writes. Bounded: a listener lets go within a quarter
+    // second.
+    if !tempo_app::log_intake::stop_for_quit(std::time::Duration::from_secs(2)) {
+        tempo_core::applog::warn(
+            "log-intake",
+            "a contact listener did not stop in time at the quit",
+        );
+    }
     // Programs on JS8Call's API hear that the station is closing, as JS8Call tells them. After the
     // unkey, and bounded: it never delays taking the transmitter off the air.
     js8_api::closing();

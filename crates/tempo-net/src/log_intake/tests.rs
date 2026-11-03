@@ -332,3 +332,90 @@ fn adif_time_is_utc_from_2000_to_2099() {
     assert_eq!(adif_time(0), None);
     assert_eq!(adif_time(i64::MAX), None);
 }
+
+/// A type 5 whose times carry Qt timespec `spec` (2 with an offset in seconds from UTC).
+fn type5_with_timespec(spec: u8, offset: i32) -> Vec<u8> {
+    use crate::qds::QdsWriter;
+    let jd = |unix: i64| unix.div_euclid(86_400) + 2_440_588;
+    let ms = |unix: i64| (unix.rem_euclid(86_400) * 1000) as u32;
+    let time = |w: &mut QdsWriter, unix: i64| {
+        // The local wall time the offset makes of the UTC instant.
+        let local = unix + i64::from(offset);
+        w.put_i64(jd(local)).put_u32(ms(local)).put_u8(spec);
+        if spec == 2 {
+            w.put_i32(offset);
+        }
+    };
+    let mut w = QdsWriter::new();
+    w.put_u32(crate::wsjtx::MAGIC)
+        .put_u32(3)
+        .put_u32(5)
+        .put_utf8(Some("SomeLogger"));
+    time(&mut w, WHEN + 30);
+    w.put_utf8(Some("K1ABC"))
+        .put_utf8(Some("FN42"))
+        .put_u64(14_074_000)
+        .put_utf8(Some("FT8"))
+        .put_utf8(Some("-10"))
+        .put_utf8(Some("-12"))
+        .put_utf8(Some(""))
+        .put_utf8(Some(""))
+        .put_utf8(Some(""));
+    time(&mut w, WHEN);
+    w.put_utf8(Some(""))
+        .put_utf8(Some("K2DEF"))
+        .put_utf8(Some("FN31"))
+        .put_utf8(Some(""))
+        .put_utf8(Some(""))
+        .put_utf8(Some(""));
+    w.into_bytes()
+}
+
+/// Qt's timespec 2 (an offset from UTC) carries the offset after the time: it is read, and the
+/// time taken back to UTC. CONTROL: timespec 1 (UTC), as WSJT-X sends it.
+#[test]
+fn a_type5_with_an_offset_from_utc_is_read_in_utc() {
+    for (spec, offset) in [(2u8, 3600), (2, -18_000), (1, 0)] {
+        let (_, program, f) = one(read_datagram(&type5_with_timespec(spec, offset)));
+        assert_eq!(program.as_deref(), Some("SomeLogger"));
+        assert_eq!(
+            field(&f, "CALL"),
+            Some("K1ABC"),
+            "spec {spec} offset {offset}"
+        );
+        assert_eq!(field(&f, "QSO_DATE"), Some("20261014"));
+        assert_eq!(
+            field(&f, "TIME_ON"),
+            Some("010203"),
+            "spec {spec} offset {offset}"
+        );
+    }
+}
+
+/// A type 5 whose header reads but whose body does not (local time, a time zone, a damaged
+/// datagram) is said to be unreadable, under the sender's name, never read wrong.
+#[test]
+fn a_type5_in_local_time_or_a_time_zone_is_unreadable_not_read_wrong() {
+    for spec in [0u8, 3] {
+        assert_eq!(
+            read_datagram(&type5_with_timespec(spec, 0)),
+            Intake::Unreadable {
+                program: Some("SomeLogger".into())
+            },
+            "spec {spec}"
+        );
+    }
+    let mut cut = encode_qso_logged("WSJT-X", &qso("K1ABC"));
+    cut.truncate(40);
+    assert_eq!(
+        read_datagram(&cut),
+        Intake::Unreadable {
+            program: Some("WSJT-X".into())
+        }
+    );
+    // Not a contact's header: nothing to say.
+    assert_eq!(
+        read_datagram(&encode_heartbeat("WSJT-X", 3, "2.7.0", "")),
+        Intake::Ignored
+    );
+}

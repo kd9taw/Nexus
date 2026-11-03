@@ -389,14 +389,21 @@ pub enum Inbound {
 
 /// Decode a `QDateTime` (as [`QdsWriter::put_qdatetime`] wrote it) back to a
 /// Unix timestamp in whole seconds (UTC). Wire layout: `qint64` Julian day,
-/// `quint32` ms-of-day, `qint8` time-spec. WSJT-X always sends UTC (spec `1`)
-/// for QSO times, so the spec byte is consumed but not interpreted.
+/// `quint32` ms-of-day, `qint8` time-spec, and for spec 2 (an offset from UTC) a
+/// `qint32` offset in seconds, which takes the wall time back to UTC. WSJT-X and
+/// JTDX send UTC (spec `1`). A time in local time (spec 0) or in a named time zone
+/// (spec 3) cannot be put in UTC here, and is no time: `None`, so the contact is
+/// refused rather than logged at the wrong time.
 fn read_qdatetime(r: &mut QdsReader<'_>) -> Option<i64> {
     const JD_UNIX_EPOCH: i64 = 2_440_588;
     const SECS_PER_DAY: i64 = 86_400;
     let jd = r.read_i64()?;
     let ms_of_day = r.read_u32()?;
-    let _spec = r.read_i8()?;
+    let offset = match r.read_i8()? {
+        1 => 0,
+        2 => i64::from(r.read_i32()?),
+        _ => return None,
+    };
     // Saturating math: a hostile/garbage Julian-day value must never panic the
     // inbound poll loop (debug builds have overflow-checks on). An out-of-range
     // jd just yields a clamped timestamp — harmless, since a bad datagram is
@@ -404,7 +411,8 @@ fn read_qdatetime(r: &mut QdsReader<'_>) -> Option<i64> {
     Some(
         jd.saturating_sub(JD_UNIX_EPOCH)
             .saturating_mul(SECS_PER_DAY)
-            .saturating_add((ms_of_day / 1000) as i64),
+            .saturating_add((ms_of_day / 1000) as i64)
+            .saturating_sub(offset),
     )
 }
 
