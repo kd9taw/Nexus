@@ -831,6 +831,49 @@ const THE_TCI_SERVER: &[Change] = &[
     }),
 ];
 
+/// ⛔ The contact port (`tempo_app::log_intake`), set at the shack only: whether it takes contacts,
+/// its port, "Accept from devices on my network" and the one network address allowed. A computer
+/// driving the station must not open a network port at the station.
+const THE_CONTACT_PORT: &[Change] = &[
+    ("freedv_log", |s| s.freedv_log = !s.freedv_log),
+    ("freedv_log_port", |s| s.freedv_log_port = 2240),
+    ("log_intake_lan", |s| s.log_intake_lan = !s.log_intake_lan),
+    ("log_intake_peer", |s| {
+        s.log_intake_peer = "192.168.1.40".into()
+    }),
+];
+
+/// ⛔ A settings save from afar cannot switch the contact port, move it, let in the station's
+/// network or name the address allowed to send contacts: for each, the save from afar comes out as
+/// the shack's settings exactly, and the same save from the shack's own screen takes it.
+#[test]
+fn a_settings_save_from_afar_cannot_open_the_contact_port() {
+    let shack = tempo_app::settings::Settings::default();
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
+    for (name, change) in THE_CONTACT_PORT {
+        let mut asked = shack.clone();
+        change(&mut asked);
+        assert!(!moved(&asked, &shack).is_empty(), "premise: {name} moved");
+        let mut save = asked.clone();
+        keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+        assert_eq!(
+            moved(&save, &shack),
+            Vec::<String>::new(),
+            "from afar, {name} changed"
+        );
+        let mut save = asked.clone();
+        keep_the_shacks_settings(&shack, &mut save, None);
+        assert_eq!(
+            moved(&save, &asked),
+            Vec::<String>::new(),
+            "CONTROL: at the shack, {name}"
+        );
+    }
+}
+
 /// What neither starts a transmission nor guards one, among them the fields beside the guards that
 /// read most like one: a save from afar takes each.
 const NEITHER: &[Change] = &[

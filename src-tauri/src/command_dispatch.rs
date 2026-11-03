@@ -461,8 +461,9 @@ pub(crate) fn keep_the_shacks_secret_settings(
 /// Every keep a whole settings save from afar goes through ([`SETTINGS_FROM_AFAR`]): the transmit
 /// settings and guards ([`keep_the_shacks_transmit_settings`]), the addresses the shack sends a
 /// stored key or password to ([`keep_the_shacks_credential_addresses`]) and the stored keys
-/// themselves ([`keep_the_shacks_secret_settings`]). From the shack's own screen (`None`) the save
-/// is taken as it came.
+/// themselves ([`keep_the_shacks_secret_settings`]), and the contact port
+/// ([`keep_the_shacks_contact_port`]). From the shack's own screen (`None`) the save is taken as it
+/// came.
 pub(crate) fn keep_the_shacks_settings(
     shack: &tempo_app::settings::Settings,
     save: &mut tempo_app::settings::Settings,
@@ -472,6 +473,26 @@ pub(crate) fn keep_the_shacks_settings(
     keep_the_shacks_credential_addresses(shack, save, afar);
     keep_the_shacks_secret_settings(shack, save, afar);
     keep_the_shacks_profile_call(shack, save, afar);
+    keep_the_shacks_contact_port(shack, save, afar);
+}
+
+/// ⛔ What a settings save from afar may not change of the contact port (`tempo_app::log_intake`):
+/// whether it takes the contacts other programs log, its port, "Accept from devices on my network"
+/// and the one network address allowed, each put back as the shack has it. A computer driving the
+/// station cannot open a network port at the station. From the shack's own screen (`None`) the save
+/// is taken as it came.
+pub(crate) fn keep_the_shacks_contact_port(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    afar: Option<&Afar>,
+) {
+    if afar.is_none() {
+        return;
+    }
+    save.freedv_log = shack.freedv_log;
+    save.freedv_log_port = shack.freedv_log_port;
+    save.log_intake_lan = shack.log_intake_lan;
+    save.log_intake_peer.clone_from(&shack.log_intake_peer);
 }
 
 /// ⛔ With "My station" profiles, the call is the one the shack's profile transmits under, and a
@@ -499,7 +520,7 @@ pub(crate) const PROFILE_CALL_SETTING: &str = "mycall";
 /// ([`keep_the_shacks_transmit_settings`]), then the addresses the shack sends a stored key or
 /// password to ([`keep_the_shacks_credential_addresses`]). A test changes each setting alone in a save from
 /// afar and holds this list to exactly the ones that come back.
-pub(crate) const STATION_ONLY_SETTINGS: [&str; 58] = [
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 62] = [
     "js8AprsRelay",
     "beaconTxPercent",
     "cqPauseSecs",
@@ -558,6 +579,11 @@ pub(crate) const STATION_ONLY_SETTINGS: [&str; 58] = [
     "fdJoinAddr",
     "icomLanHost",
     "icomLanPort",
+    // The contact port ([`keep_the_shacks_contact_port`]).
+    "freedvLog",
+    "freedvLogPort",
+    "logIntakeLan",
+    "logIntakePeer",
 ];
 
 /// The name a settings read from afar carries, beside the settings, of every setting the save

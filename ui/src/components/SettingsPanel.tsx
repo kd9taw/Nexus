@@ -8877,7 +8877,7 @@ export function SettingsPanel({
             <div className="settings-field" data-testid="freedv-settings">
               <span className="settings-label">{t('settings.transmit.freedv.log.label')}</span>
               <div className="rig-share-row">
-                <button
+                <button disabled={locked('freedvLog')} data-setting="freedvLog"
                   type="button"
                   role="switch"
                   aria-checked={form.freedvLog ?? true}
@@ -8898,6 +8898,7 @@ export function SettingsPanel({
                   <code className="rig-share-addr mono">{form.logIntakeLan ? '0.0.0.0' : '127.0.0.1'}:{form.freedvLogPort ?? 2239}</code>
                 )}
               </div>
+              {setAtStation('freedvLog')}
               <span className="settings-hint">{t('settings.transmit.freedv.log.hint')}</span>
               {(form.freedvLog ?? true) && freedv?.intakeProgram && freedv.intakeUnix != null && (
                 <span className="settings-hint" role="status" data-testid="intake-last">
@@ -8914,7 +8915,7 @@ export function SettingsPanel({
               {(form.freedvLog ?? true) && (
                 <label className="settings-field">
                   <span className="settings-label">{t('settings.transmit.freedv.logPort.label')}</span>
-                  <input
+                  <input disabled={locked('freedvLogPort')} data-setting="freedvLogPort"
                     className="settings-input"
                     type="number"
                     inputMode="numeric"
@@ -8923,6 +8924,7 @@ export function SettingsPanel({
                     onChange={(e) => update('freedvLogPort', e.target.value)}
                     autoComplete="off"
                   />
+                  {setAtStation('freedvLogPort')}
                 </label>
               )}
               {/* Off by default: the port is this computer's alone until the operator lets in the
@@ -8931,7 +8933,7 @@ export function SettingsPanel({
                 <>
                   <span className="settings-label">{t('settings.transmit.freedv.lan.label')}</span>
                   <div className="rig-share-row">
-                    <button
+                    <button disabled={locked('logIntakeLan')} data-setting="logIntakeLan"
                       type="button"
                       role="switch"
                       aria-checked={form.logIntakeLan ?? false}
@@ -8942,11 +8944,12 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                   </div>
+                  {setAtStation('logIntakeLan')}
                   <span className="settings-hint">{t('settings.transmit.freedv.lan.hint')}</span>
                   {form.logIntakeLan && (
                     <label className="settings-field">
                       <span className="settings-label">{t('settings.transmit.freedv.peer.label')}</span>
-                      <input
+                      <input disabled={locked('logIntakePeer')} data-setting="logIntakePeer"
                         className="settings-input mono"
                         type="text"
                         value={form.logIntakePeer ?? ''}
@@ -8955,6 +8958,7 @@ export function SettingsPanel({
                         autoComplete="off"
                         spellCheck={false}
                       />
+                      {setAtStation('logIntakePeer')}
                       <span className="settings-hint">{t('settings.transmit.freedv.peer.hint')}</span>
                     </label>
                   )}
