@@ -6563,17 +6563,38 @@ impl RadioLoop {
         }
     }
 
+    /// Put the watch for a late key ([`KEY_WATCH`]) past the ATU tune-up Nexus is about to start,
+    /// taking over one the rig has yet to hand over: the radio keys itself for the tune-up, at
+    /// Nexus's own asking, which the watch must never take for a key Nexus let go of
+    /// ([`Self::atu_cycle_left`] holds its unkey off meanwhile). A key from a dropped connection that
+    /// lands after the tune-up is still watched for once the cycle is over.
+    fn end_key_watch(&mut self, rig: &mut Rig) {
+        let pending = rig.take_key_watch();
+        let active = self
+            .key_watch_until
+            .is_some_and(|until| Instant::now() < until);
+        if pending || active {
+            self.key_watch_until = Some(
+                Instant::now()
+                    + Duration::from_millis(ATU_REPROBE_AFTER_TUNE_MS as u64)
+                    + KEY_WATCH,
+            );
+        }
+    }
+
+    /// How much is left of the ATU tune-up Nexus started (the cycle [`ATU_REPROBE_AFTER_TUNE_MS`]
+    /// waits out before it reads the tuner again), or `None` when none is running. The radio keys
+    /// itself for it, so neither the watch for a late key nor the late-key block unkeys it.
+    fn atu_cycle_left(&self, now: f64) -> Option<Duration> {
+        self.atu_tune_started_at
+            .map(|t| t + ATU_REPROBE_AFTER_TUNE_MS - now)
+            .filter(|ms| *ms > 0.0)
+            .map(|ms| Duration::from_millis(ms as u64))
+    }
+
     /// Whether this loop already holds the transmitter: an over's PTT hold, or the operator's own
     /// PTT. A key that fails then is not a new key refused ([`KeyUp::Held`]); the slot overs ask
     /// the same question ([`crate::slot::key_slot_transmitter`]).
-    /// End the watch for a late key ([`KEY_WATCH`]), and drop one the rig has yet to hand over:
-    /// the radio is about to key at Nexus's own asking (its ATU tune-up), which the watch must
-    /// never take for a key Nexus let go of.
-    fn end_key_watch(&mut self, rig: &mut Rig) {
-        self.key_watch_until = None;
-        let _ = rig.take_key_watch();
-    }
-
     fn holds_tx(&self) -> bool {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
     }
@@ -14442,7 +14463,7 @@ impl RadioLoop {
                     // a radio that says it is keyed while the loop holds nothing (this branch is
                     // only reached with nothing held: no over, no tune, no PTT, no CW) is unkeyed,
                     // and the operator is told. It only ever adds an unkey.
-                    if watching && ptt_read == Some(true) {
+                    if watching && ptt_read == Some(true) && self.atu_cycle_left(now).is_none() {
                         let _ = rig.ptt(false);
                         // A radio on semi break-in holds its transmitter for its hang time after
                         // the last CW element: keyed then is that, not a late key. The unkey is
@@ -15228,11 +15249,15 @@ impl RadioLoop {
         // here: the over's own end unkeys, as for any over.
         if let Some(late) = rig.take_late_key() {
             // Nor while the radio's own keyer sends a CW word of Nexus's (`cw_keying_until`): an
-            // unkey then would cut the word. The watch above covers the key once it is done.
+            // unkey then would cut the word. Nor while an ATU tune-up Nexus started runs (the late
+            // answer can be read by the very command that sends it, `set_func_value`'s wait for
+            // owed answers, and a `T 0` behind `U TUNER 2` aborts it). The watch takes the key once
+            // either is over.
             if self.tx_until_ms.is_none()
                 && !self.tuning_keyed
                 && !self.manual_ptt_applied
                 && now >= self.cw_keying_until
+                && self.atu_cycle_left(now).is_none()
             {
                 let _ = rig.ptt(false);
                 let words = format!(
@@ -15270,10 +15295,12 @@ impl RadioLoop {
                         late.after.as_secs_f64()
                     ),
                 );
-                // A CW word on the radio's own keyer has no release of Nexus's behind it: the
-                // watch on the radio's PTT takes the key once the word is done.
+                // A CW word on the radio's own keyer, or an ATU tune-up, has no release of Nexus's
+                // behind it: the watch on the radio's PTT takes the key once it is over (past the
+                // rest of the tune-up's cycle, which the watch's unkey waits out too).
                 if self.tx_until_ms.is_none() && !self.tuning_keyed && !self.manual_ptt_applied {
-                    self.key_watch_until = Some(Instant::now() + KEY_WATCH);
+                    let atu_left = self.atu_cycle_left(now).unwrap_or_default();
+                    self.key_watch_until = Some(Instant::now() + atu_left + KEY_WATCH);
                 }
             }
         }
