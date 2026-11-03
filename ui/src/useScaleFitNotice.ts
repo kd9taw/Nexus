@@ -9,8 +9,9 @@
 // DPI seed uses (`capNeverChosen`), where the absence of the key is the only "not yet".
 //
 // Keep confirms; the second button records 'classic', and auto-fit goes back to the size it
-// always gave this screen. Either answer is changeable afterwards in Settings ▸ Appearance by
-// pinning a scale, which the scaled rule never overrides.
+// always gave this screen. Either answer is shown and changeable afterwards in Settings ▸
+// Appearance ▸ Workspace ▸ UI scale (Auto / Off, the same `setFitRule`), and pinning a scale
+// there still overrides both.
 import { useEffect, useRef } from 'react'
 import { t } from './i18n'
 import { pushToast } from './toast'

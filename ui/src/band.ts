@@ -11,10 +11,19 @@ interface BandRange {
 }
 
 // Ordered low -> high. Ranges are generous within each amateur allocation.
+//
+// THE EDGES ARE THE ENGINE'S (`bandplan::band_for_dial`, the ADIF band enumeration), so a dial
+// the engine names a band is named the same band here; `band-tables.test.ts` parses the Rust
+// table and holds every arm. That includes 2200 m (ADIF's "2190m", named as the WSPR/FST4 plans
+// tune it), 630 m, 60 m from 5.06 (the UK's 60 m starts at 5.2585), 8 m and 5 m. The one edge
+// drawn narrower is 17 m, ADIF's 18.068–18.168 inside the engine's 18.06–18.17. A label is a
+// band name, never a licence claim: whether a station may transmit is the engine's gate.
 const BAND_RANGES: BandRange[] = [
+  { lo: 0.1357, hi: 0.1378, label: '2200m' },
+  { lo: 0.472, hi: 0.479, label: '630m' },
   { lo: 1.8, hi: 2.0, label: '160m' },
   { lo: 3.5, hi: 4.0, label: '80m' },
-  { lo: 5.3, hi: 5.41, label: '60m' },
+  { lo: 5.06, hi: 5.5, label: '60m' },
   { lo: 7.0, hi: 7.3, label: '40m' },
   { lo: 10.1, hi: 10.15, label: '30m' },
   { lo: 14.0, hi: 14.35, label: '20m' },
@@ -22,7 +31,10 @@ const BAND_RANGES: BandRange[] = [
   { lo: 21.0, hi: 21.45, label: '15m' },
   { lo: 24.89, hi: 24.99, label: '12m' },
   { lo: 28.0, hi: 29.7, label: '10m' },
+  { lo: 40.0, hi: 45.0, label: '8m' },
   { lo: 50.0, hi: 54.0, label: '6m' },
+  // Ranges are inclusive and the first match wins, so 54.000 itself reads as 6 m.
+  { lo: 54.0, hi: 69.9, label: '5m' },
   // IARU Region 1 only (CEPT secondary, footnote ECA9) — the backend band plan has it.
   // 70.0–71.0 is the ADIF Band Enumeration, WSJT-X's models/Bands.cpp and `band_for_dial`'s
   // own arm; this used to stop at 70.5, so a UK NoV holder above it read as no band at all

@@ -442,6 +442,10 @@ export interface ScaleControl {
   fitOffer: FitOffer | null
   /** Record the operator's answer (and with it, that they were asked). */
   setFitRule: (r: FitRule) => void
+  /** The answer in force, for Settings to show and change: 'scaled' until the operator says
+   *  otherwise (never asked included, since the scaled rule is the default). Undefined where the
+   *  rule can never apply — a pop-out, or a browser — so there is nothing to offer there. */
+  fitRule: FitRule | undefined
 }
 
 export function useScale(field = false): ScaleControl {
@@ -581,7 +585,16 @@ export function useScale(field = false): ScaleControl {
   }, [])
 
   // A pinned scale is the operator's own choice: nothing to offer while one is set.
-  return { scale, mode, cap, setMode, setCap, fitOffer: mode === 'auto' ? fitOffer : null, setFitRule }
+  return {
+    scale,
+    mode,
+    cap,
+    setMode,
+    setCap,
+    fitOffer: mode === 'auto' ? fitOffer : null,
+    setFitRule,
+    fitRule: scaledRuleApplies(null) ? (fitRule ?? 'scaled') : undefined,
+  }
 }
 
 /** The scaled rule is the MAIN window's (a pop-out keeps its own natural, untouched) and the

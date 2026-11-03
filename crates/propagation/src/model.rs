@@ -147,11 +147,17 @@ impl Band {
     }
 
     /// Map a frequency (MHz) to its band.
+    ///
+    /// Wherever the engine's `bandplan::band_for_dial` names a band this enum has, this names the
+    /// same one (src-tauri's `the_award_band_table_names_every_band_the_engine_does` sweeps it):
+    /// 60 m is the ADIF 5.06–5.5, so a UK 60 m spot (5.2585 up) is a 60 m spot. Some arms are
+    /// wider than the engine's, which only labels a spot. The bands the enum does not count
+    /// (2200 m, 630 m, 8 m, 5 m, 1.25 m and the microwaves) stay `None` here.
     pub fn from_mhz(f: f64) -> Option<Band> {
         let b = match f {
             x if (1.8..2.0).contains(&x) => Band::B160,
             x if (3.5..4.0).contains(&x) => Band::B80,
-            x if (5.25..5.45).contains(&x) => Band::B60,
+            x if (5.06..5.5).contains(&x) => Band::B60,
             x if (7.0..7.3).contains(&x) => Band::B40,
             x if (10.1..10.15).contains(&x) => Band::B30,
             x if (14.0..14.35).contains(&x) => Band::B20,
@@ -1208,6 +1214,18 @@ mod tests {
         assert_eq!(Band::from_mhz(14.074), Some(Band::B20));
         assert_eq!(Band::from_mhz(144.174), Some(Band::B2));
         assert_eq!(Band::from_mhz(5.0), None);
+    }
+
+    /// 60 m is the engine's band (`bandplan::band_for_dial`, the ADIF edges): from 5.06 MHz,
+    /// where the UK's 60 m (5.2585 up) sits, to 5.5. A spot there is a 60 m spot.
+    #[test]
+    fn sixty_metres_has_the_engine_edges() {
+        for f in [5.06, 5.2585, 5.2999, 5.357, 5.45, 5.4999] {
+            assert_eq!(Band::from_mhz(f), Some(Band::B60), "{f} MHz");
+        }
+        for f in [5.0599, 5.5] {
+            assert_eq!(Band::from_mhz(f), None, "{f} MHz");
+        }
     }
 
     #[test]

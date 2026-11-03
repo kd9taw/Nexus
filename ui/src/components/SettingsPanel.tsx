@@ -292,7 +292,7 @@ import { FSK_ID_SECONDS_LABEL, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvMode
 // The APRS channel list and the grid→channel derivation, shared with the APRS cockpit so the
 // picker's options and the derived default can never name different numbers.
 import { APRS_FREQS, BEACON_SYMBOLS, NORTH_AMERICA, aprsChannelForGrid } from '../aprsBeacon'
-import type { Scale, ScaleMode } from '../useScale'
+import type { FitRule, Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { TextSize } from '../useTextSize'
@@ -385,6 +385,11 @@ interface Props {
   scaleCap: Scale
   onScaleModeChange: (m: ScaleMode) => void
   onScaleCapChange: (c: Scale) => void
+  /** The answer to the one-time scaled-display prompt (useScaleFitNotice.ts), shown and changed
+   *  under Auto: 'scaled' = the smaller fit, 'classic' = the size Nexus used before. Undefined
+   *  where the rule cannot apply (a pop-out, a browser), and with no setter, no row. */
+  scaleFitRule?: FitRule
+  onScaleFitRuleChange?: (r: FitRule) => void
   density: Density
   onDensityChange: (d: Density) => void
   /** #215: text size, Normal / Large / Larger (`useTextSize`). Optional so hosts/tests that do
@@ -1180,6 +1185,8 @@ export function SettingsPanel({
   scaleCap,
   onScaleModeChange,
   onScaleCapChange,
+  scaleFitRule,
+  onScaleFitRuleChange,
   density,
   onDensityChange,
   textSize,
@@ -4630,6 +4637,42 @@ export function SettingsPanel({
                             })
                           : t('settings.workspace.scale.auto.hint.full', { scale })}
                     </span>
+                    {/* The answer to the scaled-display prompt (useScaleFitNotice.ts), which asks
+                        once: here it is seen and changed afterwards, applied live by useScale.
+                        Under Auto only, because a pinned scale is never touched by it. Its label
+                        is a hint, like the cap's, so the row keeps one settings-label. */}
+                    {scaleFitRule && onScaleFitRuleChange && (
+                      <>
+                        <span className="settings-hint">
+                          {t('settings.workspace.scale.fit.label')}
+                        </span>
+                        <div
+                          className="theme-switcher"
+                          role="group"
+                          aria-label={t('settings.workspace.scale.fit.aria')}
+                        >
+                          {(
+                            [
+                              ['scaled', t('settings.workspace.scale.fit.auto')],
+                              ['classic', t('settings.workspace.scale.fit.off')],
+                            ] as const
+                          ).map(([rule, label]) => (
+                            <button
+                              key={rule}
+                              type="button"
+                              className={`theme-chip${scaleFitRule === rule ? ' active' : ''}`}
+                              aria-pressed={scaleFitRule === rule}
+                              onClick={() => onScaleFitRuleChange(rule)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <span className="settings-hint">
+                          {t('settings.workspace.scale.fit.hint')}
+                        </span>
+                      </>
+                    )}
                   </>
                 ) : (
                   <>

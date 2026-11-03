@@ -387,6 +387,7 @@ function App() {
     setCap: setScaleCap,
     fitOffer: scaleFitOffer,
     setFitRule: setScaleFitRule,
+    fitRule: scaleFitRule,
   } = useScale(fieldMode)
   // First launch on a high-density display: raise the auto-fit ceiling so the UI can grow to
   // the panel. Once only, raise only, and nothing at all on an ordinary 96-dpi monitor or on
@@ -3870,6 +3871,8 @@ function App() {
             scaleCap={scaleCap}
             onScaleModeChange={setScaleMode}
             onScaleCapChange={setScaleCap}
+            scaleFitRule={scaleFitRule}
+            onScaleFitRuleChange={setScaleFitRule}
             density={density}
             onDensityChange={setDensity}
             textSize={textSize}

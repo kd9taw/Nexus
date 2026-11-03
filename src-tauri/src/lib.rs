@@ -59312,6 +59312,33 @@ mod tests {
         );
     }
 
+    /// The spot and award side names a band by `propagation::Band::from_mhz`; the engine names
+    /// it by `band_for_dial`. Wherever the engine names a band that the award side knows, both
+    /// must name the same one, or a UK 60 m spot at 5.2585 MHz is "60m" on the dial and no band
+    /// on the board. The award side may be wider at an edge (it labels spots, never cuts an
+    /// over); it has no 2200 m, 630 m, 8 m, 5 m or 1.25 m, which it does not count, so those
+    /// stay unnamed there.
+    #[test]
+    fn the_award_band_table_names_every_band_the_engine_does() {
+        use propagation::model::Band;
+        // Every 0.1 kHz to 30 MHz, then every 1 kHz to 1300 MHz: each edge of both tables is hit.
+        let points = (1..=300_000)
+            .map(|i| i as f64 / 10_000.0)
+            .chain((30_000..=1_300_000).map(|i| i as f64 / 1_000.0));
+        let mut checked = 0;
+        for mhz in points {
+            let Some(label) = tempo_app::bandplan::band_for_dial(mhz) else {
+                continue;
+            };
+            let Some(band) = Band::from_label(label) else {
+                continue;
+            };
+            assert_eq!(Band::from_mhz(mhz), Some(band), "{mhz} MHz is {label}");
+            checked += 1;
+        }
+        assert!(checked > 100_000, "the sweep reached the bands ({checked})");
+    }
+
     /// THE PASSBAND GATE, censused across every band label the app can produce
     /// (2026-08-10, tagging live): a logged contact whose dial sits in the held
     /// bird's downlink passband is stamped and credited to the SATELLITE

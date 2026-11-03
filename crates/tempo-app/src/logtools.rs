@@ -1050,6 +1050,22 @@ fn grid_fix(g: &str) -> Option<Option<String>> {
     Some(cut)
 }
 
+/// Is the logged band `logged` the band [`band_for_dial`](crate::bandplan::band_for_dial) names
+/// `by_freq`? Case aside, yes when they are spelled alike, and also for ADIF's `2190m`, which is
+/// the band Nexus calls `2200m` (the name its WSPR and FST4 plans tune it by). An imported
+/// LoTW/ADIF contact on 136 kHz is on the right band, and offering to "fix" it to the other
+/// spelling would trade ADIF's own name for a non-ADIF one.
+fn same_band(by_freq: &str, logged: &str) -> bool {
+    let canon = |b: &str| {
+        if b.eq_ignore_ascii_case("2190m") {
+            "2200m".to_string()
+        } else {
+            b.to_ascii_lowercase()
+        }
+    };
+    canon(by_freq) == canon(logged)
+}
+
 /// ★ The problems of one contact. `dxcc_mismatch` answers, for a call and the DXCC number the
 /// contact carries, whether the country file places the call in a different entity (`None` when
 /// they agree or either is unknown) and, when it does, the number to propose — `None` inside where
@@ -1107,7 +1123,7 @@ pub fn problems_of(
                 Some(Field::Band),
                 by_freq.map(|b| Some(b.to_string())),
             );
-        } else if let Some(b) = by_freq.filter(|b| !b.eq_ignore_ascii_case(r.band.trim())) {
+        } else if let Some(b) = by_freq.filter(|b| !same_band(b, r.band.trim())) {
             add(
                 ProblemKind::BandFreq,
                 Some(Field::Band),

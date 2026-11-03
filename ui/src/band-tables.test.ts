@@ -131,3 +131,57 @@ describe('band.ts agrees with bandplan.rs on 4 m', () => {
     for (const r of fourM) expect(bandLabelForMhz(r.mhz), `${r.mhz} MHz`).toBe('4m')
   })
 })
+
+describe('band.ts names every band band_for_dial does, with the same edges', () => {
+  // The engine's `band_for_dial` reaches the ADIF band edges: 2200 m, 630 m, 60 m from 5.06
+  // (the UK starts at 5.2585), 8 m and 5 m. The UI table labelled none of them and stopped 60 m
+  // at 5.41, so a UK operator on their own 60 m saw a band in the engine and a blank on screen.
+  // Parsed from the Rust source, never restated.
+  const ARMS = [
+    ...fnBody(BANDPLAN_RS, 'band_for_dial').matchAll(
+      /\(([\d._]+)\.\.([\d._]+)\)\.contains\(&f\) => "([^"]+)"/g,
+    ),
+  ].map((m) => ({
+    label: m[3],
+    lo: Number(m[1].replace(/_/g, '')),
+    hi: Number(m[2].replace(/_/g, '')),
+  }))
+  // 17 m: the engine kept its old 18.06–18.17 so no over that runs today is cut; the UI draws
+  // ADIF's 18.068–18.168, which the band strip shades as the band. Inside the engine's, so every
+  // dial the UI labels 17 m the engine does too.
+  const NARROWER: Record<string, { lo: number; hi: number }> = {
+    '17m': { lo: 18.068, hi: 18.168 },
+  }
+
+  it('parsed the Rust table', () => {
+    expect(ARMS.map((a) => a.label)).toEqual(expect.arrayContaining(['2200m', '630m', '60m', '8m', '5m']))
+    expect(ARMS.length).toBeGreaterThan(20)
+  })
+
+  it.each(['2200m', '630m', '60m', '8m', '5m'])('%s has the engine edges', (label) => {
+    const arm = ARMS.find((a) => a.label === label)!
+    expect(bandRangeForLabel(label)).toEqual({ lo: arm.lo, hi: arm.hi })
+  })
+
+  it('every arm', () => {
+    for (const a of ARMS) {
+      expect(bandRangeForLabel(a.label), a.label).toEqual(NARROWER[a.label] ?? { lo: a.lo, hi: a.hi })
+    }
+  })
+
+  it('labels a dial inside each arm as the engine does', () => {
+    for (const a of ARMS) {
+      const r = NARROWER[a.label] ?? a
+      for (const f of [r.lo + 1e-6, (r.lo + r.hi) / 2, r.hi - 1e-6]) {
+        expect(bandLabelForMhz(f), `${f} MHz`).toBe(a.label)
+      }
+    }
+    // The UK 60 m channel, and the old 5.41 top that used to blank 5.41–5.5.
+    expect(bandLabelForMhz(5.2585)).toBe('60m')
+    expect(bandLabelForMhz(5.45)).toBe('60m')
+    // Controls: still no band below 60 m, between 8 m and 6 m, or between 5 m and 4 m.
+    for (const f of [5.0599, 39.99, 45.5, 69.95, 0.4719, 0.1356]) {
+      expect(bandLabelForMhz(f), `${f} MHz`).toBe('')
+    }
+  })
+})
