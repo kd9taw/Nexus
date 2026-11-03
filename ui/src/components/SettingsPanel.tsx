@@ -3414,16 +3414,18 @@ export function SettingsPanel({
     // it again. Edit loads a radio from this copy and `withActiveRadioConfig` writes the operating
     // radio back from it: left stale, a saved baud, port or sound card came back on the radio
     // re-opened for Edit, and the operating radio's went back at the next save of the other one.
-    const { radios } = await getSettings()
-    setForm((prev) => (prev ? { ...prev, radios } : prev))
+    // The station's record of the TX cards, too: the "" a pick put there asked for one read, at this
+    // Save, and must not ride a later save, when the cards may have been renumbered since.
+    const { radios, txCardModels } = await getSettings()
+    setForm((prev) => (prev ? { ...prev, radios, txCardModels } : prev))
     // The baseline the next Save is diffed against (`saveForm`) holds the radio fields as the form
     // now holds them: the radio on the form, whichever it is, so only the operator's next edit of it
     // reads as a change. (The station-wide save of a form showing another radio leaves the radio
     // fields out, so the radio in use's drive and gain, moved in the cockpit since, are not sent.)
     // Test CAT and Auto-test save through here too, so the radio fields move here for every caller;
     // `commitSave` then takes the whole of what this returns.
-    const saved = { ...next, radios }
-    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(saved), radios }
+    const saved = { ...next, radios, txCardModels }
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(saved), radios, txCardModels }
     return saved
   }
 
@@ -4362,16 +4364,30 @@ export function SettingsPanel({
     audio[kind].includes(name)
       ? (audioLabels[kind][name] ?? name)
       : t('settings.audio.device.notInList', { device: showHiddenSpaces(name) })
+  // The operator chose a TX device from the list: the station reads the sound card it is on at the
+  // Save, even when it is the device already saved (picked away and back), by the "" the form names
+  // it with (`tx_card_models_after`, notify_sound.rs). That is how a TX device saved before the
+  // card was recorded gets its card recorded.
+  const pickTxDevice = (device: string) => {
+    update('audioOut', device)
+    if (device.trim()) {
+      setForm((prev) => (prev ? { ...prev, txCardModels: { ...(prev.txCardModels ?? {}), [device]: '' } } : prev))
+    }
+  }
   // A saved RX / TX device not in the list, and the ONE offered device that is it but for the number
   // Windows puts in front and the spacing (#425): offered as a button, never switched to.
+  // The station's other radios' devices in that direction are never offered: on a two-radio station
+  // they are the other radio's codec.
   const useInstead = (key: 'audioIn' | 'audioOut', kind: 'input' | 'output') => {
-    const twin = renumberedTwin(form[key], audio[kind])
+    const here = editingRadioId ?? form.activeRadio
+    const taken = (form.radios ?? []).filter((r) => r.id !== here).map((r) => r[key])
+    const twin = renumberedTwin(form[key], audio[kind], taken)
     return twin === null ? null : (
       <button
         type="button"
         className="settings-refresh"
         data-testid={`use-instead-${key}`}
-        onClick={() => update(key, twin)}
+        onClick={() => (key === 'audioOut' ? pickTxDevice(twin) : update(key, twin))}
         title={t('settings.audio.device.useInsteadHint')}
       >
         {t('settings.audio.device.useInstead', {
@@ -4404,7 +4420,8 @@ export function SettingsPanel({
   // A Flex model off the network connection. Only the native PANADAPTER needs Connection: Network
   // (`native_spectrum_kind` serves the Flex stream on the network alone), so on any other
   // connection it shows disabled with a note saying so, rather than vanishing without a word. The
-  // native client and DAX audio do not depend on the connection (`flex_client_reachable`).
+  // native client and DAX audio run on Serial and Network alike, but not on OmniRig, the Icom
+  // network connection or TCI (`flex_client_reachable`; `flexClientNotHere` below).
   const flexPanNeedsNetwork = [2036, 23005].includes(form.rigModel) && form.rigConn !== 'network'
   // A Flex model on OmniRig or TCI: those connections hand CAT to another program, and the CAT
   // daemon starts that connection's own driver before it ever asks for the Flex client
@@ -7232,7 +7249,9 @@ export function SettingsPanel({
               {/* Nexus's own Flex client as this radio's CAT: Beta, opt-in per radio (operator
                   ruling, 2026-10-03), with SmartSDR CAT the default and the fallback. The Rust
                   side serves it only on these two model numbers and with the radio's own address
-                  set (`flex_client_reachable`), so the toggle shows on the models alone. */}
+                  set, on any connection but OmniRig, the Icom network connection and TCI
+                  (`flex_client_reachable`), so the toggle shows on the models alone and says so
+                  there (`flexClientNotHere`). */}
               {[2036, 23005].includes(form.rigModel) && (
                 <label className="settings-field">
                   <span className="settings-label">
@@ -7260,9 +7279,10 @@ export function SettingsPanel({
               {/* The client's Beta setting for CW, Tune and the ATU, which no bench has confirmed yet
                   (operator ruling, 2026-10-14, "A Beta setting, off by default"). Per radio, and
                   shown wherever Nexus's own Flex client can run, the one place it means anything
-                  (`flex_client_reachable` and the opt-in above). That is any CAT connection, Serial
-                  included: the client talks to the radio at its own address and honours this
-                  there, so hiding it off the network left a setting no one could turn off. Only at
+                  (`flex_client_reachable` and the opt-in above). That is Serial as well as Network,
+                  though not OmniRig, the Icom network connection or TCI: the client talks to the
+                  radio at its own address and honours this there, so hiding it off the network left
+                  a setting no one could turn off. Only at
                   the shack: a press that comes through the Remote stream changes nothing. */}
               {[2036, 23005].includes(form.rigModel) &&
                 form.flexNativeCat &&
@@ -7524,7 +7544,7 @@ export function SettingsPanel({
                 <select
                   className="settings-input"
                   value={form.audioOut}
-                  onChange={(e) => update('audioOut', e.target.value)}
+                  onChange={(e) => pickTxDevice(e.target.value)}
                 >
                   <option value="">{t('settings.audio.device.systemDefault')}</option>
                   {audioOutOptions.map((d) => (

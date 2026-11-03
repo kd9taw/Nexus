@@ -27,6 +27,22 @@ describe('renumberedTwin', () => {
     expect(renumberedTwin('Speakers (USB AUDIO CODEC)', ['Speakers (Realtek)'])).toBeNull()
     // A second codec's " #2" never points at the first codec.
     expect(renumberedTwin('Speakers (USB AUDIO CODEC) #2', ['Speakers (USB AUDIO CODEC)'])).toBeNull()
+    // Two identical codecs: the list names the second "… #2". Neither is offered, whichever one
+    // the look-alike base matches (the backend's raw list names both alike and offers nothing).
+    expect(renumberedTwin('USB Audio CODEC', ['USB Audio CODEC ', 'USB Audio CODEC  #2'])).toBeNull()
+    expect(
+      renumberedTwin('Speakers (USB AUDIO CODEC)', [
+        'Speakers (2- USB AUDIO CODEC)',
+        'Speakers (2- USB AUDIO CODEC) #2',
+      ]),
+    ).toBeNull()
+    // Another radio's device in that direction is never offered.
+    expect(
+      renumberedTwin('Speakers (USB AUDIO CODEC)', ['Speakers (2- USB AUDIO CODEC)'], ['Speakers (2- USB AUDIO CODEC)']),
+    ).toBeNull()
+    expect(
+      renumberedTwin('Speakers (USB AUDIO CODEC)', ['Speakers (2- USB AUDIO CODEC)'], ['Speakers (Realtek)']),
+    ).toBe('Speakers (2- USB AUDIO CODEC)')
     // Offered as saved, or nothing saved: nothing to offer.
     expect(renumberedTwin('Speakers (Realtek)', ['Speakers (Realtek)'])).toBeNull()
     expect(renumberedTwin('', ['Speakers (Realtek)'])).toBeNull()

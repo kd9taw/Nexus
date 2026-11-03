@@ -3063,7 +3063,9 @@ pub struct Settings {
     /// app's sounds would be let onto the radio's codec. The guard refuses every card of this model
     /// as well (`tempo_audio::notify_sound::tx_audio_device_owners`). Written only by
     /// `tempo_audio::notify_sound::tx_card_models_after` when a save chooses a TX device, never
-    /// from a form, so a later save can never record the swapped card as the radio's.
+    /// from a form's values, so a later save can never record the swapped card as the radio's. A
+    /// form can only name a device the operator picked in it with "", asking for its card to be
+    /// read at that save, as any pick is.
     #[serde(default)]
     pub tx_card_models: std::collections::BTreeMap<String, String>,
     /// Microphone device for RECORDING voice-keyer messages. Empty (default) = keep

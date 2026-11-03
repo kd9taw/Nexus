@@ -5,8 +5,9 @@
 // word, so an operator told to "turn on Flex native panadapter" could not find it.
 //
 // Only the PANADAPTER needs Connection: Network (`native_spectrum_kind` serves the Flex stream on
-// the network alone). The native client and its DAX audio talk to the radio at its own address
-// whatever the CAT connection is (`flex_client_reachable`), so they work on Serial. Pinned here: on
+// the network alone). The native client and its DAX audio talk to the radio at its own address on
+// Serial as well as Network (`flex_client_reachable`; OmniRig, the Icom network connection and TCI
+// take the radio first), so they work on Serial. Pinned here: on
 // a Flex off the network the panadapter shows disabled with "Needs Connection: Network." and a
 // click changes nothing, while the client and DAX audio show live, with no note, and turn on and
 // off. On the network all three are live with no note; a radio that is not a Flex shows none.

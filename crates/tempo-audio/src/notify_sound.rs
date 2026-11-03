@@ -138,8 +138,11 @@ fn tx_audio_device_owners_as(
 /// already named as a TX device keeps what `before` recorded for it (nothing, in settings from
 /// before this existed): the card is read only when a TX device is CHOSEN, never again later, when
 /// a reboot may have handed its id to another card. One newly chosen is read now, on Linux, from
-/// the card its name points at, and recorded when that is a USB card. What `after` itself carries
-/// is ignored, so no form can write it. Devices no longer named are dropped.
+/// the card its name points at, and recorded when that is a USB card. So is one `after` names with
+/// an EMPTY record: the operator picked it from the list in this save, perhaps the device already
+/// saved (picked away and back), which is how a TX device saved before the record existed gets one.
+/// Any other value `after` carries is ignored, so a form can ask for its choice to be read, never
+/// write a model. Devices no longer named are dropped.
 pub fn tx_card_models_after(
     before: &Settings,
     after: &Settings,
@@ -163,7 +166,11 @@ fn tx_card_models_after_as(
     let was_named = named(before);
     let mut models = std::collections::BTreeMap::new();
     for device in named(after) {
-        let model = if was_named.contains(&device) {
+        let picked_now = after
+            .tx_card_models
+            .get(&device)
+            .is_some_and(String::is_empty);
+        let model = if was_named.contains(&device) && !picked_now {
             before.tx_card_models.get(&device).cloned()
         } else if naming == Naming::Alsa {
             match route(&device, naming, cards) {
@@ -1410,6 +1417,19 @@ mod tests {
             rec(&chosen, &chosen, &AS_CHOSEN),
             want(&[]),
             "settings from before the record are left as they were"
+        );
+        // Picked from the list in this save (the form names it with ""), the device already saved
+        // included: read now. That is how a device saved before the record gets one.
+        let picked = codec_station(&[("plughw:CARD=CODEC,DEV=0", "")]);
+        assert_eq!(
+            rec(&chosen, &picked, &AS_CHOSEN),
+            want(&[("plughw:CARD=CODEC,DEV=0", RADIO)]),
+            "re-picked: read now"
+        );
+        assert_eq!(
+            rec(&recorded, &picked, &SWAPPED),
+            want(&[("plughw:CARD=CODEC,DEV=0", "08bb:2902")]),
+            "re-picked: the card it points at now, as any pick is"
         );
         let forged = codec_station(&[("plughw:CARD=CODEC,DEV=0", "ffff:ffff")]);
         assert_eq!(

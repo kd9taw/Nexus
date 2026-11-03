@@ -22,15 +22,36 @@ function looseKey(name: string): string {
   return withoutInstanceNumbers(name.split(/\s+/).filter(Boolean).join(' '))
 }
 
+/** `name` split into its base and the " #N" (N ≥ 2) a device list adds to the second and later of
+ *  identically named devices; a name without one is the first. The backend's `split_device_ordinal`
+ *  (crates/tempo-audio/src/audiodev.rs). */
+function splitOrdinal(name: string): [string, number] {
+  const at = name.lastIndexOf(' #')
+  if (at >= 0) {
+    const rest = name.slice(at + 2)
+    const n = /^\+?\d+$/.test(rest) ? Number(rest) : NaN
+    if (n >= 2) return [name.slice(0, at), n]
+  }
+  return [name, 1]
+}
+
 /** The ONE offered device that is `saved` but for the Windows number and the spacing, or null when
- *  none is, or more than one is (an ambiguous list offers nothing). The " #N" a list adds to a
- *  second identically named codec still counts, so a second radio's codec never points at the
- *  first's. Null as well when `saved` is offered as it is. */
-export function renumberedTwin(saved: string, offered: readonly string[]): string | null {
+ *  none is, or when it is not the only one: two such devices, or one of two identically named
+ *  codecs (the list names the second "… #2", the backend's raw list names both alike, and which
+ *  radio's codec is which is not for the picker to guess). The saved name's own " #N" still
+ *  counts, so a second codec's saved name never points at the first. `taken` is what the station's
+ *  other radios use in the same direction: never offered, so a two-radio station is never pointed
+ *  at the other radio's codec. Null as well when `saved` is offered as it is. */
+export function renumberedTwin(
+  saved: string,
+  offered: readonly string[],
+  taken: readonly string[] = [],
+): string | null {
   if (!saved.trim() || offered.includes(saved)) return null
   const want = looseKey(saved)
-  const twins = offered.filter((d) => looseKey(d) === want)
-  return twins.length === 1 ? twins[0] : null
+  const twins = offered.filter((d) => looseKey(splitOrdinal(d)[0]) === want)
+  if (twins.length !== 1 || splitOrdinal(twins[0])[1] !== 1) return null
+  return taken.includes(twins[0]) ? null : twins[0]
 }
 
 /** `name` with the whitespace a reader cannot see shown as ␣: at its ends, and every run of more

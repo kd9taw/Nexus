@@ -18,7 +18,7 @@
 // maps merged into one → 1 red; the "— not detected" branch removed → 1 red; the option
 // VALUE switched to the label (a label reaching settings) → 2 red.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { SettingsPanel } from './SettingsPanel'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
@@ -310,6 +310,57 @@ describe('#425: a saved device Windows renumbered or respaced', () => {
     expect(screen.queryByTestId('use-instead-audioOut')).toBeNull()
     cleanup()
     api.get('getAudioDevices').mockImplementation(() => Promise.resolve(WINDOWS))
+    renderPanel()
+    await openRadioTab()
+    await picker('Output Device (TX)')
+    expect(screen.queryByTestId('use-instead-audioOut')).toBeNull()
+  })
+})
+
+describe("a radio's TX device picked from the list", () => {
+  /** The footer Save (`type="submit"`). */
+  const clickSave = () =>
+    fireEvent.click(
+      screen.getAllByRole('button', { name: 'Save' }).find((b) => (b as HTMLButtonElement).type === 'submit')!,
+    )
+  const saved = () => {
+    const calls = api.get('setSettings').mock.calls
+    return calls[calls.length - 1]?.[0] as Record<string, unknown> | undefined
+  }
+
+  it('asks the station to read its sound card, the device already saved included', async () => {
+    // Picked away and back to the device already saved: the station reads its card at this Save
+    // (the "" names it), which is how a TX device saved before the card was recorded gets one.
+    settings = { ...settings, audioOut: 'Speakers (USB Audio CODEC)', txCardModels: {} }
+    api.get('getAudioDevices').mockImplementation(() => Promise.resolve(WINDOWS))
+    api.get('setSettings').mockImplementation((s: unknown) => Promise.resolve({ settings: s } as never))
+    renderPanel()
+    await openRadioTab()
+    const tx = await picker('Output Device (TX)')
+    fireEvent.change(tx, { target: { value: 'Speakers (Realtek(R) Audio)' } })
+    fireEvent.change(tx, { target: { value: 'Speakers (USB Audio CODEC)' } })
+    clickSave()
+    await waitFor(() => expect(saved()).toBeTruthy())
+    expect(saved()!.audioOut).toBe('Speakers (USB Audio CODEC)')
+    expect((saved()!.txCardModels as Record<string, string>)['Speakers (USB Audio CODEC)']).toBe('')
+  })
+
+  it("never offers another radio's device", async () => {
+    settings = {
+      ...settings,
+      audioOut: 'Speakers (USB AUDIO CODEC)',
+      activeRadio: 0,
+      radios: [
+        { ...(settings.radios as Record<string, unknown>[] | undefined)?.[0], id: 0, name: 'FTDX10', audioOut: 'Speakers (USB AUDIO CODEC)' },
+        { ...(settings.radios as Record<string, unknown>[] | undefined)?.[0], id: 1, name: 'IC-7300', audioOut: 'Speakers (2- USB AUDIO CODEC)' },
+      ],
+    }
+    api.get('getAudioDevices').mockImplementation(() =>
+      Promise.resolve({
+        input: [],
+        output: [{ name: 'Speakers (2- USB AUDIO CODEC)', label: 'Speakers (2- USB AUDIO CODEC)' }],
+      }),
+    )
     renderPanel()
     await openRadioTab()
     await picker('Output Device (TX)')
