@@ -616,6 +616,9 @@ export function LogEntry({
   }, [logCall])
   /** Start (#438): the contact in the line starts now. The same record the first keystroke made,
    *  so a draft keeps it and Log reads it exactly as it reads an entered call's. */
+  // The Start button's label as shown, and the timed one that sizes it (a placeholder time until a press).
+  const startTimed = t('logEntry.start.setLabel', { time: restartedUnix == null ? '00:00' : utcHhMm(restartedUnix) })
+  const startShown = restartedUnix == null ? t('logEntry.start.label') : startTimed
   const restartContact = () => {
     const c = logCall.trim().toUpperCase()
     if (!c) return
@@ -1617,6 +1620,9 @@ export function LogEntry({
     setLogCall(l.call)
     callEnteredRef.current =
       l.call.trim() && l.enteredUnix != null ? { call: l.call.trim().toUpperCase(), unix: l.enteredUnix } : null
+    // Set directly, so the call-change effect sees no new contact: the Start time shown belongs to the
+    // line that gave way, never to this one (#438).
+    setRestartedUnix(null)
     setLogRstSent(l.rstSent)
     setLogRstRcvd(l.rstRcvd)
     setLogName(l.name)
@@ -3600,10 +3606,19 @@ export function LogEntry({
                 ? t('logEntry.start.title')
                 : t('logEntry.start.setTitle', { time: utcHhMm(restartedUnix) })
             }
+            aria-label={startShown}
           >
-            {restartedUnix == null
-              ? t('logEntry.start.label')
-              : t('logEntry.start.setLabel', { time: utcHhMm(restartedUnix) })}
+            {/* BOTH LABELS, IN ONE GRID CELL (styles.css .le-start-label): the wider one sizes the button
+                from the start, so the press that adds the time widens nothing and wraps nothing after
+                it (Card went to the next line in Russian at 1024 px). The one not shown keeps its room,
+                unseen and unread. */}
+            <span className="le-start-label">
+              {[t('logEntry.start.label'), startTimed].map((label) => (
+                <span key={label} {...(label === startShown ? {} : { 'data-off': '', 'aria-hidden': true })}>
+                  {label}
+                </span>
+              ))}
+            </span>
           </button>
         )}
         {/* The call's station card (CallCard.tsx). Never in the tab order and never takes focus on a

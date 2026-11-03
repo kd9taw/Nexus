@@ -11649,6 +11649,21 @@ input.cw-pitch::-webkit-inner-spin-button {
 .le-lookup:hover:not(:disabled) {
   color: var(--text);
 }
+/* #438: Start's two labels ("Start", "Start 14:33") share one grid cell, so the wider sizes the
+   button from the start and a press widens nothing after it; tabular digits keep every time as wide
+   as the placeholder's 00:00. The label not shown keeps its room, unseen (LogEntry.tsx). */
+.le-start {
+  font-variant-numeric: tabular-nums;
+}
+.le-start-label {
+  display: inline-grid;
+}
+.le-start-label > * {
+  grid-area: 1 / 1;
+}
+.le-start-label > [data-off] {
+  visibility: hidden;
+}
 .le-log-btn {
   flex: 0 0 auto;
   padding: var(--space-2) 18px;
