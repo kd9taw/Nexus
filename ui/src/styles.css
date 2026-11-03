@@ -18665,6 +18665,18 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.radio-picker-auto {
+  margin: var(--space-3) 0 0;
+  color: var(--text-dim);
+  font-size: calc(13px * var(--text-scale));
+  text-align: center;
+}
+.radio-picker-error {
+  margin: var(--space-3) 0 0;
+  color: var(--state-bad);
+  font-size: calc(13px * var(--text-scale));
+  text-align: center;
+}
 .radio-picker-tag {
   font-size: calc(12px * var(--text-scale));
   font-weight: 600;

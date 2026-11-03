@@ -422,6 +422,8 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("qsy_stop",                       RunsAtShack, "Ends coordinated QSY and returns home; not a transmit stop."),
     ("queue_qsl_card_by_id",           RunsAtShack, "Marks one contact in the shack's logbook."),
     ("radio_launch_info",              RunsAtShack, "The shack's radio roster."),
+    ("radio_picker_timed_out",         RefusedHere, "The shack's launch picker repeating its last answer, a choice made as the station starts."),
+    ("radio_picker_unavailable",       RefusedHere, "The shack's launch picker failing toward its old start, a choice made as the station starts."),
     ("radioprog_delete_project",       RunsAtShack, "The shack's radio-programming projects."),
     ("radioprog_file_notice",          RunsAtShack, "The shack's radio-programming projects."),
     ("radioprog_list_projects",        RunsAtShack, "The shack's radio-programming projects."),

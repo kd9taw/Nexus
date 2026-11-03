@@ -2717,6 +2717,11 @@ fn monitor_loop(
             let e = engine_lock(&engine);
             scope.want(e.settings(), e.cat_share_port())
         };
+        // …less any radio another Nexus window drives: never watched here, and one this monitor
+        // held is closed below (`reconcile_pool`) and only then let go of, so that window's open,
+        // which waits for the watch, never finds this monitor's daemon on the port.
+        let claims = tempo_app::radio_claim::claims();
+        let want = watch_only_free(want, claims);
         // A switch is mid-flight: stay off the pool entirely so the handoff's try_lock wins
         // on its next 20 ms tick (a monitor poll can hold the lock for whole read bursts).
         if pending.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2724,6 +2729,9 @@ fn monitor_loop(
             continue;
         }
         reconcile_pool(&pool, &want, active, &engine, now_unix_ms());
+        if let Some(c) = claims {
+            c.unwatch_all_but(&watched_endpoints(&want));
+        }
         poll_monitors(&pool, active, &engine, &pending);
         std::thread::sleep(Duration::from_millis(150));
     }
@@ -2749,6 +2757,26 @@ impl MonitorScope {
     fn want(self, s: &Settings, serving: Option<u16>) -> (u32, Vec<(u32, Transport)>) {
         monitor_want(s, serving, self.bound)
     }
+}
+
+/// The monitor's set without any radio another live Nexus window drives (by its port), and a watch
+/// taken on each one kept, so a window about to open one of them waits for this monitor to let go
+/// ([`tempo_app::radio_claim`]). With no claims (tests, headless tools) the set is unchanged.
+fn watch_only_free(
+    want: Vec<(u32, Transport)>,
+    claims: Option<&tempo_app::radio_claim::Claims>,
+) -> Vec<(u32, Transport)> {
+    let Some(claims) = claims else {
+        return want;
+    };
+    want.into_iter()
+        .filter(|(_, t)| t.endpoint().is_none_or(|e| claims.watch(&e)))
+        .collect()
+}
+
+/// The endpoints a monitor set watches, for [`tempo_app::radio_claim::Claims::unwatch_all_but`].
+fn watched_endpoints(want: &[(u32, Transport)]) -> Vec<String> {
+    want.iter().filter_map(|(_, t)| t.endpoint()).collect()
 }
 
 /// The monitor's desired set: the active radio, and `(id, transport)` for every enabled, non-active
@@ -18112,6 +18140,23 @@ impl Transport {
         tempo_app::settings::rig_conn_is_network(&self.rig_conn, &self.rig_addr)
     }
 
+    /// The radio's physical CAT endpoint, the key two Nexus windows conflict on
+    /// ([`tempo_app::radio_claim::cat_endpoint`], from the same fields a profile has).
+    fn endpoint(&self) -> Option<String> {
+        tempo_app::radio_claim::endpoint_of(&tempo_app::radio_claim::EndpointParts {
+            rig_model: self.rig_model,
+            ptt_method: &self.ptt_method,
+            rig_conn: &self.rig_conn,
+            serial_port: &self.serial_port,
+            rig_addr: &self.rig_addr,
+            icom_lan_host: &self.icom_lan_host,
+            icom_lan_port: self.icom_lan_port,
+            tci_host: &self.tci_host,
+            tci_port: self.tci_port,
+            omnirig_slot: self.omnirig_slot,
+        })
+    }
+
     /// Is CAT for this radio served by **OmniRig** — VE3NEA's Windows COM server — instead
     /// of by a rigctld Nexus launches? The rule lives in tempo-app
     /// ([`tempo_app::settings::rig_conn_is_omnirig`]) for the same reason [`Self::is_network`]
@@ -18673,11 +18718,27 @@ fn cat_ptt_mode(t: &Transport) -> PttMode {
     }
 }
 
+/// How long an open waits for another window's monitor to let go of the radio (`open_rig`): the
+/// monitor's pass is 150 ms, and closing its daemon is a kill and a reap.
+const MONITOR_LET_GO: Duration = Duration::from_secs(3);
+
 /// Build the [`Rig`] for a transport and report its connection status. For CAT,
 /// launches the bundled `rigctld`, sets the dial/mode, and probes by reading the
 /// frequency back; for serial PTT it opens the control line; for VOX `cat_ok` is
 /// `None` (not applicable). Mirrors WSJT-X's Test CAT.
 fn open_rig(t: &Transport, allow_coexist: bool) -> RigOpen {
+    // ONE RADIO, ONE WINDOW (`tempo_app::radio_claim`): this window has claimed the radio, and
+    // another window's monitor that still holds a connection to it lets go within a pass or two.
+    // Wait for that, bounded, before anything here looks at the port: otherwise the open could
+    // find that monitor's rigctld answering, share it, and lose it a moment later. Immediate when
+    // no other window watches the radio, which is every single-window station.
+    if let (Some(claims), Some(endpoint)) = (tempo_app::radio_claim::claims(), t.endpoint()) {
+        if !claims.wait_unwatched(&endpoint, MONITOR_LET_GO) {
+            crate::civ::diag::note(
+                "open: another window's monitor still watches this radio; opening anyway",
+            );
+        }
+    }
     if keys_through_the_tci_client(t) {
         return open_cat(t, PttMode::Cat, allow_coexist, None);
     }

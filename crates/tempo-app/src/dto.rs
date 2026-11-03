@@ -5174,6 +5174,10 @@ pub struct AutoRadioSwitch {
     pub band: String,
     /// The mode class the routing decided on.
     pub mode: crate::settings::RouteMode,
+    /// The routing chose `to_id`, but another Nexus window is running that radio, so the station
+    /// stayed on `from_id` ([`crate::radio_claim`]). The screen says so instead of "switched".
+    #[serde(default)]
+    pub refused: bool,
 }
 
 /// One "My station" profile as the top bar offers it.

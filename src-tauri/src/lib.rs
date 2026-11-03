@@ -2928,6 +2928,180 @@ struct RadioLaunchInfo {
     /// launched without a profile (a fresh chooser launch, not an already-bound relaunch).
     show_picker: bool,
     radios: Vec<RadioLaunchOption>,
+    /// What the picker does when nobody answers it within `auto_seconds`: `"windows"` (open each
+    /// radio in its own window) or `"one"` (this window runs one radio). The operator's last
+    /// answer; `"one"` before there is one, the behaviour before the picker held its radio.
+    auto_choice: &'static str,
+    /// How long the picker waits for an answer before repeating the last one.
+    auto_seconds: u32,
+}
+
+/// How long the radio picker waits before repeating the operator's last answer, so a launch at
+/// sign-in, or one nobody is in the shack for (Remote), still becomes a station.
+const PICKER_AUTO_SECONDS: u32 = 30;
+
+/// The operator's last answer to the radio picker, which its timeout repeats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickerChoice {
+    /// "Use one radio": this window, one band-following radio.
+    OneRadio,
+    /// A radio picked: radios in their own windows.
+    Windows,
+}
+
+/// Where the last answer is kept: a one-word file in the BASE profile's folder, which only the
+/// picker reads. Not a setting: nothing in Settings shows or edits it.
+fn picker_choice_path(base_dir: &Path) -> PathBuf {
+    base_dir.join("radio-picker-choice")
+}
+
+/// The last answer, or `None` before the first (or for a file this build cannot read).
+fn read_picker_choice(base_dir: &Path) -> Option<PickerChoice> {
+    match std::fs::read_to_string(picker_choice_path(base_dir))
+        .ok()?
+        .trim()
+    {
+        "one" => Some(PickerChoice::OneRadio),
+        "windows" => Some(PickerChoice::Windows),
+        _ => None,
+    }
+}
+
+/// Keep `choice` as the last answer. Best-effort: a failure only means the timeout repeats an
+/// older answer.
+fn write_picker_choice(base_dir: &Path, choice: PickerChoice) {
+    let word = match choice {
+        PickerChoice::OneRadio => "one",
+        PickerChoice::Windows => "windows",
+    };
+    let _ = std::fs::create_dir_all(base_dir);
+    if let Err(e) = std::fs::write(picker_choice_path(base_dir), word) {
+        eprintln!("tempo: couldn't keep the radio picker's answer: {e}");
+    }
+}
+
+/// What the picker's timeout does for `last`: only a remembered "windows" opens windows; "one
+/// radio", and no answer yet, start this window's radio as the window before the picker held it.
+fn picker_auto_choice(last: Option<PickerChoice>) -> PickerChoice {
+    last.unwrap_or(PickerChoice::OneRadio)
+}
+
+/// Does a launch with these settings, under `profile`, open on the radio picker? Simultaneous radios
+/// on, at least two radios enabled, and no profile on the command line: a fresh launch, not a radio
+/// window the picker already relaunched. The ONE rule, read by the picker itself
+/// ([`radio_launch_info`]) and by the launch's radio start ([`PICKER_HELD_RADIO`]), so the window
+/// that shows the picker is exactly the window whose radio loop waits for it.
+fn opens_on_the_radio_picker(s: &Settings, profile: Option<&str>) -> bool {
+    s.simultaneous_radios && s.radios.iter().filter(|r| r.enabled).count() >= 2 && profile.is_none()
+}
+
+/// The radio loop of a launch that opens on the radio picker, held until the operator answers it.
+///
+/// ⛔ THE PICKER WINDOW DRIVES NO RADIO. It is a chooser on screen for a few seconds; what the
+/// operator picks there is relaunched as its own `--profile r<id>` window ([`choose_radio`]) and this
+/// process exits. Before this hold it ran the whole radio loop meanwhile, unbound: it opened the
+/// base profile's active radio (sharing, or spawning, the rigctld for it) and its monitor spawned a
+/// rigctld for EVERY other radio. The radio window it relaunched then started while those daemons
+/// were still alive, found its own radio's rigctld already answering on its port, and shared it —
+/// a daemon the exiting picker took with it a moment later (on Windows its Job Object kills it with
+/// the process; elsewhere its `Drop`). That window's CAT went silent until the silence watch rebuilt
+/// it minutes later, halting transmit on the way (field log, two radios in two windows). A radio
+/// window already open was touched too: the picker attached to its daemon as one more client.
+///
+/// So the loop starts only when the window becomes a station: "use one radio" ([`use_single_radio`])
+/// releases it, as the single band-following window it always was, and so does the picker's
+/// timeout when it repeats that choice ([`radio_picker_timed_out`]) or a picker that could not be
+/// asked at all ([`radio_picker_unavailable`]). A pick never starts it, and a quit takes it so
+/// nothing can ([`stop_the_radio`]). A launch that does not open on the picker starts its loop
+/// exactly as before, unless its radio is open in another Nexus window ([`tempo_app::radio_claim`]): then the
+/// loop waits here too, and switching this window to a free radio ([`set_active_radio`]) starts it.
+#[cfg(feature = "radio")]
+static PICKER_HELD_RADIO: RadioGate<(SharedEngine, tempo_audio::service::RadioConfig)> =
+    RadioGate::new();
+
+/// Where a [`RadioGate`] is.
+#[cfg(any(feature = "radio", test))]
+enum GateState<T> {
+    /// The launch has not reached its radio start, and nobody has answered.
+    Waiting,
+    /// The launch's radio, waiting for an answer.
+    Held(T),
+    /// Answered: started, or to start the moment the launch gets there.
+    Released,
+    /// The process is quitting. `held`: what was held then never ran.
+    Quit { held: bool },
+}
+
+/// A start that may wait for an answer: [`PICKER_HELD_RADIO`]'s mechanism, generic so its order of
+/// events is tested without a radio.
+#[cfg(any(feature = "radio", test))]
+struct RadioGate<T>(Mutex<GateState<T>>);
+
+#[cfg(any(feature = "radio", test))]
+impl<T> RadioGate<T> {
+    const fn new() -> Self {
+        Self(Mutex::new(GateState::Waiting))
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, GateState<T>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The launch's start: hold `item` while `must_wait()` says so (the picker is up, or the radio
+    /// is another window's), else `start` it now. A release that landed before the launch got here
+    /// is an answer already given: the launch starts, never waits for a second one. After a quit,
+    /// a launch that would have waited starts nothing; one that would not starts as it always did.
+    fn hold_or_start(&self, must_wait: impl FnOnce() -> bool, item: T, start: impl FnOnce(T)) {
+        let mut state = self.state();
+        let go = match &*state {
+            GateState::Released => true,
+            GateState::Quit { .. } => !must_wait(),
+            GateState::Waiting | GateState::Held(_) => {
+                if must_wait() {
+                    *state = GateState::Held(item);
+                    return;
+                }
+                true
+            }
+        };
+        drop(state);
+        if go {
+            start(item);
+        }
+    }
+
+    /// The answer: start what was held, once. Before the launch gets here, the answer is kept and
+    /// the launch starts on arrival. A second answer, or one after a quit, starts nothing.
+    fn release(&self, start: impl FnOnce(T)) {
+        let mut state = self.state();
+        match std::mem::replace(&mut *state, GateState::Released) {
+            GateState::Held(item) => {
+                drop(state);
+                start(item);
+            }
+            GateState::Waiting | GateState::Released => {}
+            quit @ GateState::Quit { .. } => *state = quit,
+        }
+    }
+
+    /// Is something held, waiting for an answer?
+    fn is_held(&self) -> bool {
+        matches!(&*self.state(), GateState::Held(_))
+    }
+
+    /// A quit: what was held never starts. True when something was held, i.e. nothing ran, and
+    /// true again on every later call: the quit can run `stop_the_radio` twice (the held quit,
+    /// then `quit_cleanup`), and the second must not wait on a loop that never ran either.
+    fn quit(&self) -> bool {
+        let mut state = self.state();
+        let held = match &*state {
+            GateState::Held(_) => true,
+            GateState::Quit { held } => *held,
+            GateState::Waiting | GateState::Released => false,
+        };
+        *state = GateState::Quit { held };
+        held
+    }
 }
 
 /// Tell the frontend whether to show the launch picker, and the radios to offer. Single-radio
@@ -2937,7 +3111,7 @@ fn radio_launch_info(state: State<'_, SharedEngine>) -> Result<RadioLaunchInfo, 
     let eng = engine_lock(&state);
     let s = eng.settings();
     let enabled: Vec<_> = s.radios.iter().filter(|r| r.enabled).collect();
-    let show_picker = s.simultaneous_radios && enabled.len() >= 2 && active_profile().is_none();
+    let show_picker = opens_on_the_radio_picker(s, active_profile());
     let radios = enabled
         .iter()
         .map(|r| RadioLaunchOption {
@@ -2946,9 +3120,15 @@ fn radio_launch_info(state: State<'_, SharedEngine>) -> Result<RadioLaunchInfo, 
             in_use: profile_in_use(&radio_profile_key(r.id)),
         })
         .collect();
+    let auto_choice = match picker_auto_choice(read_picker_choice(&config_dir_for(None))) {
+        PickerChoice::Windows => "windows",
+        PickerChoice::OneRadio => "one",
+    };
     Ok(RadioLaunchInfo {
         show_picker,
         radios,
+        auto_choice,
+        auto_seconds: PICKER_AUTO_SECONDS,
     })
 }
 
@@ -2967,6 +3147,8 @@ fn choose_radio(app: tauri::AppHandle, radio_id: u32) -> Result<(), String> {
         .arg(radio_profile_key(radio_id))
         .spawn()
         .map_err(|e| e.to_string())?;
+    // The answer the picker's timeout repeats next time: radios in their own windows.
+    write_picker_choice(&config_dir_for(None), PickerChoice::Windows);
     // The window on screen right now is the radio picker, not a box the operator sized —
     // `quit_cleanup` must not persist it over the base profile's real geometry (see
     // QUIT_SKIP_GEOMETRY). This exit path never captured geometry before the Cmd+Q fix
@@ -3074,12 +3256,125 @@ fn persist_routing_to_base(live: &Settings) {
 /// behavior. Frontend dismisses the picker after this resolves.
 #[tauri::command(async)]
 fn use_single_radio(state: State<'_, SharedEngine>) -> Result<(), String> {
+    // A radio another Nexus window runs is refused before anything changes: the picker stays, and
+    // so does the operator's simultaneous-radios setting.
+    claim_active_radio(&state)?;
     use_one_radio(
         &state,
         &settings_path(),
         &config_dir_for(None).join("settings.json"),
     );
+    write_picker_choice(&config_dir_for(None), PickerChoice::OneRadio);
+    // The window is a station now: its radio loop, held while the picker was up, starts (or, if
+    // the launch has not reached its radio start yet, starts the moment it does).
+    #[cfg(feature = "radio")]
+    PICKER_HELD_RADIO.release(start_radio_loop);
     Ok(())
+}
+
+/// Claim this window's active radio ([`tempo_app::radio_claim`], by its port): `Err` with the
+/// operator's words when another live Nexus window runs it.
+///
+/// Patient, and OFF the engine lock: the radio is read under the lock, the claim (which may wait a
+/// moment for another window's peek) is made after it is released.
+fn claim_active_radio(engine: &SharedEngine) -> Result<(), String> {
+    let active = {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        s.radios.iter().find(|r| r.id == s.active_radio).cloned()
+    };
+    match active {
+        Some(p) => tempo_app::radio_claim::claim_profile_patiently(&p),
+        None => Ok(()),
+    }
+}
+
+/// [`claim_active_radio`] on settings already in hand, at once: for a caller that holds the engine
+/// lock (the launch's radio start, a settings save), which must not sleep.
+fn claim_active_radio_of(s: &Settings) -> Result<(), String> {
+    match s.radios.iter().find(|r| r.id == s.active_radio) {
+        Some(p) => tempo_app::radio_claim::claim_profile(p),
+        None => Ok(()),
+    }
+}
+
+/// Start the held radio loop as this window's station, its radio claimed first. The picker's
+/// timeout and a picker that could not be asked end here; "use one radio" does the same, plus
+/// turning simultaneous radios off.
+fn release_as_station(engine: &SharedEngine) -> Result<(), String> {
+    claim_active_radio(engine)?;
+    #[cfg(feature = "radio")]
+    PICKER_HELD_RADIO.release(start_radio_loop);
+    Ok(())
+}
+
+/// Nobody answered the radio picker within [`PICKER_AUTO_SECONDS`]: repeat the last answer and get
+/// out of the way, so a launch at sign-in, or one Remote is waiting on, becomes a station without a
+/// click. "Windows" opens a window for every enabled radio no other window has, then this one
+/// exits (if every radio is open already, it only exits). "One radio", and a station that never
+/// answered the picker, start this window's radio as one window, as the window before the picker
+/// held it did; simultaneous radios stays on, because nobody chose to turn it off.
+#[tauri::command(async)]
+fn radio_picker_timed_out(
+    app: tauri::AppHandle,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
+    let base = config_dir_for(None);
+    match picker_auto_choice(read_picker_choice(&base)) {
+        PickerChoice::Windows => {
+            tempo_core::applog::info(
+                "startup",
+                "radio picker: no answer in time; opening each radio in its own window, as last time",
+            );
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            // A radio another window drives (by its port) is already open: not opened twice.
+            let ids: Vec<(u32, bool)> = engine_lock(&state)
+                .settings()
+                .radios
+                .iter()
+                .filter(|r| r.enabled)
+                .map(|r| (r.id, tempo_app::radio_claim::profile_held_elsewhere(r)))
+                .collect();
+            flush_settings();
+            for (id, held_elsewhere) in ids {
+                let key = radio_profile_key(id);
+                if profile_in_use(&key) || held_elsewhere {
+                    continue; // already open in another window
+                }
+                tempo_core::process::command(&exe)
+                    .arg("--profile")
+                    .arg(key)
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
+            }
+            QUIT_SKIP_GEOMETRY.store(true, std::sync::atomic::Ordering::SeqCst);
+            app.exit(0);
+            Ok(())
+        }
+        PickerChoice::OneRadio => {
+            tempo_core::applog::info(
+                "startup",
+                "radio picker: no answer in time; this window runs one radio, as last time",
+            );
+            release_as_station(&state)
+        }
+    }
+}
+
+/// The window could not ask whether to show the radio picker. Fail toward what the window did
+/// before the picker held its radio: start this window's radio. Logged, because the operator saw
+/// no picker and may wonder why.
+#[tauri::command(async)]
+fn radio_picker_unavailable(state: State<'_, SharedEngine>) -> Result<(), String> {
+    tempo_core::applog::warn(
+        "startup",
+        "radio picker: could not ask whether to show it; starting this window's radio as one window",
+    );
+    let started = release_as_station(&state);
+    if let Err(why) = &started {
+        engine_lock(&state).set_cat_status(Some(false), why.clone());
+    }
+    started
 }
 
 /// "Use one radio", with the files named: this window's settings.json (`own`) and the base config
@@ -3147,6 +3442,329 @@ mod single_radio_tests {
             "and this window's Engine agrees with its file"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The picker window drives no radio until it becomes a station ([`PICKER_HELD_RADIO`]).
+#[cfg(test)]
+mod picker_radio_hold_tests {
+    use super::*;
+
+    /// Two enabled radios, simultaneous radios as given.
+    fn two_radios(simultaneous: bool) -> Settings {
+        let mut s = Settings {
+            simultaneous_radios: simultaneous,
+            ..Settings::default()
+        };
+        s.ensure_radio_profiles();
+        s.add_radio_profile();
+        assert_eq!(s.radios.iter().filter(|r| r.enabled).count(), 2);
+        s
+    }
+
+    /// The rule the picker shows by, and therefore the rule the radio loop waits by.
+    #[test]
+    fn only_a_fresh_launch_with_two_radios_side_by_side_opens_on_the_picker() {
+        assert!(opens_on_the_radio_picker(&two_radios(true), None));
+        // CONTROLS: a radio window the picker relaunched, a hand-named profile, one window that
+        // follows the band, and a station with one radio all start their radio at once.
+        assert!(!opens_on_the_radio_picker(&two_radios(true), Some("r1")));
+        assert!(!opens_on_the_radio_picker(&two_radios(true), Some("hf")));
+        assert!(!opens_on_the_radio_picker(&two_radios(false), None));
+        let mut one = two_radios(true);
+        one.radios.truncate(1);
+        assert!(!opens_on_the_radio_picker(&one, None));
+        // A disabled second radio is not a second radio.
+        let mut off = two_radios(true);
+        off.radios[1].enabled = false;
+        assert!(!opens_on_the_radio_picker(&off, None));
+    }
+
+    /// The field bug: the picker window's radio loop opened radios (and spawned a rigctld for each
+    /// one it monitored) while the operator was choosing; the radio window it relaunched shared one
+    /// of those daemons and lost CAT when the picker exited. The loop must not start until the
+    /// window becomes a station.
+    #[test]
+    fn the_picker_window_starts_no_radio_until_the_operator_answers() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        gate.hold_or_start(|| true, 7, |i| started.lock().unwrap().push(i));
+        assert!(
+            started.lock().unwrap().is_empty(),
+            "the picker is on screen: no radio loop, no rigctld"
+        );
+        // "Use one radio": the window is the single band-following station now.
+        gate.release(|i| started.lock().unwrap().push(i));
+        assert_eq!(*started.lock().unwrap(), vec![7]);
+        // Once: a second press starts nothing more.
+        gate.release(|i| started.lock().unwrap().push(i));
+        assert_eq!(*started.lock().unwrap(), vec![7]);
+    }
+
+    /// Picking a radio relaunches it as its own window and quits this one: the held loop never
+    /// starts, and the quit knows nothing ran (so it does not wait on an unkey from a loop that
+    /// does not exist).
+    #[test]
+    fn a_pick_quits_with_the_radio_never_started() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        gate.hold_or_start(|| true, 7, |i| started.lock().unwrap().push(i));
+        assert!(gate.quit(), "the quit took the held loop");
+        gate.release(|i| started.lock().unwrap().push(i));
+        assert!(
+            started.lock().unwrap().is_empty(),
+            "nothing starts a radio after the quit"
+        );
+    }
+
+    /// CONTROL — every launch that does not open on the picker (one window, a radio window, one
+    /// radio) starts its loop at once, exactly as before, and its quit waits for the unkey.
+    #[test]
+    fn a_launch_without_the_picker_starts_its_radio_at_once() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        gate.hold_or_start(|| false, 7, |i| started.lock().unwrap().push(i));
+        assert_eq!(*started.lock().unwrap(), vec![7]);
+        assert!(
+            !gate.quit(),
+            "a running loop is not held: the quit waits for its unkey"
+        );
+        assert!(!gate.quit(), "and still waits the second time");
+    }
+
+    /// The held quit runs `stop_the_radio` twice (the logbook's held quit, then `quit_cleanup`).
+    /// Both must know the held loop never ran, or the second waits 3 s on a loop that never
+    /// existed.
+    /// What the refused-launch retry asks before it claims: is a loop still waiting?
+    #[test]
+    fn the_gate_says_whether_it_holds_a_loop() {
+        let gate = RadioGate::new();
+        assert!(!gate.is_held());
+        gate.hold_or_start(|| true, 7, |_| panic!("held"));
+        assert!(gate.is_held());
+        gate.release(|_| {});
+        assert!(!gate.is_held(), "released: the retry stops");
+        let gate: RadioGate<u32> = RadioGate::new();
+        gate.hold_or_start(|| true, 7, |_| panic!("held"));
+        gate.quit();
+        assert!(!gate.is_held(), "a quit: the retry stops");
+    }
+
+    #[test]
+    fn a_held_quit_says_never_ran_every_time_it_is_asked() {
+        let gate: RadioGate<u32> = RadioGate::new();
+        gate.hold_or_start(|| true, 7, |_| panic!("held"));
+        assert!(gate.quit());
+        assert!(
+            gate.quit(),
+            "sticky: the second stop_the_radio skips the wait too"
+        );
+        assert!(gate.quit());
+    }
+
+    /// The picker's timeout, or a picker the window could not ask, answering before the launch
+    /// reached its radio start (the logbook still opening): neither changes the picker rule, so the
+    /// gate keeps the answer, and the launch starts on arrival instead of waiting for a second one.
+    #[test]
+    fn an_answer_before_the_launch_reaches_its_radio_is_kept() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        gate.release(|i| started.lock().unwrap().push(i));
+        gate.hold_or_start(|| true, 7, |i| started.lock().unwrap().push(i));
+        assert_eq!(*started.lock().unwrap(), vec![7]);
+    }
+
+    /// A quit before the launch's radio start: a launch that would wait starts nothing; one that
+    /// would not starts as it always did (and the loop sees SHUTDOWN at once).
+    #[test]
+    fn after_a_quit_a_waiting_launch_starts_nothing() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        assert!(!gate.quit());
+        gate.hold_or_start(|| true, 7, |i| started.lock().unwrap().push(i));
+        gate.release(|i| started.lock().unwrap().push(i));
+        assert!(started.lock().unwrap().is_empty());
+        let gate = RadioGate::new();
+        assert!(!gate.quit());
+        gate.hold_or_start(|| false, 8, |i| started.lock().unwrap().push(i));
+        assert_eq!(*started.lock().unwrap(), vec![8]);
+    }
+
+    /// A window refused its launch radio (another window runs it) waits; switching it to a free
+    /// radio starts the loop on THAT radio. The config held since the launch named the refused
+    /// one, and its loop would have opened that radio's daemon (the other window's) first.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn a_held_loop_started_by_a_switch_opens_the_radio_switched_to() {
+        let mut launch = two_radios(false);
+        launch.radios[0].serial_port = "COM4".into();
+        launch.radios[0].rig_model = 1029;
+        launch.radios[1].serial_port = "COM8".into();
+        launch.radios[1].rig_model = 16008;
+        launch.active_radio = launch.radios[0].id;
+        launch.sync_flat_from_active();
+        let mut held = radio_config_for(
+            &launch,
+            &tempo_app::engine::SpectrumFeed::default(),
+            &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+            &tempo_app::engine::MeterFeed::default(),
+        );
+        held.app_version = "9.9.9".into();
+        held.on_active_profile_change = Some(std::sync::Arc::new(|| {}));
+        assert_eq!((held.serial_port.as_str(), held.rig_model), ("COM4", 1029));
+
+        let mut switched = launch.clone();
+        switched.active_radio = switched.radios[1].id;
+        switched.sync_flat_from_active();
+        let now = radio_config_now(held, &switched);
+        assert_eq!((now.serial_port.as_str(), now.rig_model), ("COM8", 16008));
+        assert_eq!(now.radio_id, switched.radios[1].id);
+        assert_eq!(now.capture_radio_id, Some(switched.radios[1].id));
+        assert_eq!(
+            now.app_version, "9.9.9",
+            "what the launch set afterwards is kept"
+        );
+        assert!(now.on_active_profile_change.is_some());
+    }
+
+    /// The picker's timeout repeats the last answer: windows only when that was the answer; one
+    /// radio otherwise, including a station that never answered (the old start).
+    #[test]
+    fn the_picker_timeout_repeats_the_last_answer() {
+        let dir = std::env::temp_dir().join(format!("nexus-picker-choice-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(read_picker_choice(&dir), None, "never answered");
+        assert_eq!(
+            picker_auto_choice(read_picker_choice(&dir)),
+            PickerChoice::OneRadio
+        );
+        write_picker_choice(&dir, PickerChoice::Windows);
+        assert_eq!(read_picker_choice(&dir), Some(PickerChoice::Windows));
+        assert_eq!(
+            picker_auto_choice(read_picker_choice(&dir)),
+            PickerChoice::Windows
+        );
+        write_picker_choice(&dir, PickerChoice::OneRadio);
+        assert_eq!(
+            picker_auto_choice(read_picker_choice(&dir)),
+            PickerChoice::OneRadio
+        );
+        std::fs::write(picker_choice_path(&dir), "both, please").unwrap();
+        assert_eq!(
+            read_picker_choice(&dir),
+            None,
+            "an unreadable answer is no answer"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// "Use one radio" pressed before the launch reached its radio start (the logbook still
+    /// opening): the launch reads the answer, the flag already off, and starts at once. The release
+    /// found nothing to start, so the loop runs exactly once.
+    #[test]
+    fn use_one_radio_before_the_launch_reaches_its_radio_is_not_lost() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        let mut settings = two_radios(true);
+        settings.simultaneous_radios = false; // what "use one radio" wrote first
+        gate.release(|i| started.lock().unwrap().push(i));
+        gate.hold_or_start(
+            || opens_on_the_radio_picker(&settings, None),
+            7,
+            |i| started.lock().unwrap().push(i),
+        );
+        assert_eq!(*started.lock().unwrap(), vec![7]);
+    }
+
+    /// The wiring no type sees, source-scanned as `quit.rs` scans the same functions: the launch
+    /// starts its radio only through the gate, "use one radio" releases it after the flag is off,
+    /// and the quit takes it before the unkey wait (which it skips only for a loop that never ran).
+    #[test]
+    fn the_launch_the_escape_and_the_quit_all_go_through_the_gate() {
+        let lib = include_str!("lib.rs");
+        let body_of = |sig: &str| {
+            let rest = &lib[lib.find(&format!("\n{sig}")).expect(sig) + 1..];
+            &rest[..rest.find("\n}\n").expect("the end of the function")]
+        };
+        let at = |hay: &str, needle: &str| hay.find(needle).unwrap_or_else(|| panic!("{needle}"));
+
+        let launch = body_of("fn start_on_the_logbook(");
+        assert!(launch.contains("PICKER_HELD_RADIO.hold_or_start("));
+        assert!(
+            !launch.contains("run_radio("),
+            "the launch never starts the loop around the gate"
+        );
+        assert!(body_of("fn start_radio_loop(").contains("run_radio("));
+
+        let escape = body_of("fn use_single_radio(");
+        assert!(
+            at(escape, "claim_active_radio(&state)?") < at(escape, "use_one_radio(")
+                && at(escape, "use_one_radio(") < at(escape, "PICKER_HELD_RADIO.release("),
+            "the refusal comes before anything changes; the release after the flag is off"
+        );
+        let station = body_of("fn release_as_station(");
+        assert!(
+            at(station, "claim_active_radio(engine)?") < at(station, "PICKER_HELD_RADIO.release(")
+        );
+        let timed_out = body_of("fn radio_picker_timed_out(");
+        assert!(timed_out.contains("release_as_station(&state)"));
+        assert!(body_of("fn radio_picker_unavailable(").contains("release_as_station(&state)"));
+
+        // The guard: the launch claims its radio before it starts, and a switch is refused before
+        // the engine is touched.
+        let launch_gate = &launch[at(launch, "PICKER_HELD_RADIO.hold_or_start(")..];
+        assert!(
+            at(launch_gate, "claim_active_radio_of(eng.settings())")
+                < at(launch_gate, "start_radio_loop")
+        );
+        let switch = body_of("fn set_active_radio(");
+        assert!(
+            at(switch, "profile_held_elsewhere")
+                < at(switch, "return Err(tempo_app::radio_claim::REFUSAL")
+                && at(switch, "return Err(tempo_app::radio_claim::REFUSAL")
+                    < at(switch, "eng.set_active_radio(id)"),
+            "refused, in the operator's words, before the engine is touched"
+        );
+
+        // A launch refused its radio asks again on a timer, and starts on the radio the settings
+        // name THEN (another window closed, or a save moved this window's radio to a free port).
+        assert!(
+            at(launch_gate, "eng.set_cat_status(Some(false), why)")
+                < at(launch_gate, "retry_the_refused_radio(retry_engine)")
+        );
+        let retry = body_of("fn retry_the_refused_radio(");
+        assert!(
+            at(retry, "PICKER_HELD_RADIO.is_held()") < at(retry, "claim_active_radio(&engine)")
+                && at(retry, "claim_active_radio(&engine)") < at(retry, ".release(|(engine, cfg)|")
+        );
+        // N2: the settings the loop starts on are read inside the release, not before it.
+        let release_closure = &retry[at(retry, ".release(|(engine, cfg)|")..];
+        assert!(
+            at(release_closure, "engine_lock(&engine).settings().clone()")
+                < at(release_closure, "radio_config_now(cfg, &now)")
+        );
+        // N5 / M1: the switch reserves the radio off the lock and moves the claim right before
+        // the engine switches.
+        assert!(
+            at(switch, "tentative_profile(p, true)?")
+                < at(switch, "let mut eng = engine_lock(&state);")
+                && at(switch, "commit_if_switching(reserved, eng.settings(), id)")
+                    < at(switch, "eng.set_active_radio(id)")
+        );
+
+        // A settings save: refused before it is applied, and the claim moved after.
+        let save = body_of("fn save_and_publish(");
+        assert!(
+            at(save, "eng.radio_claim_a_save_refuses(") < at(save, "eng.apply_settings(settings)")
+                && at(save, "eng.apply_settings(settings)")
+                    < at(save, "claim_active_radio_of(eng.settings())")
+        );
+
+        let stop = body_of("fn stop_the_radio() {");
+        assert!(
+            at(stop, "SHUTDOWN.store(true") < at(stop, "PICKER_HELD_RADIO.quit()")
+                && at(stop, "PICKER_HELD_RADIO.quit()") < at(stop, "SHUTDOWN_DONE.load(")
+        );
     }
 }
 
@@ -5433,8 +6051,12 @@ mod logbook_startup_tests {
             !held.contains("drop(eng)") && !held.contains("\n    }\n"),
             "and held until it: the attach is in the same block, with nothing releasing it"
         );
+        // The radio loop's only start in the launch is the picker gate: `run_radio(` lives in
+        // `start_radio_loop`, which the gate calls from here or later from "use one radio". A loop
+        // is held only from inside `hold_or_start`, which runs after the attach, so no release can
+        // start one before the attach either.
         let writers = [
-            "run_radio(",
+            "PICKER_HELD_RADIO.hold_or_start(",
             "resume_field_day(",
             "set_source(SourceKind::Companion)",
             "sync_qrz_since(",
@@ -5455,7 +6077,7 @@ mod logbook_startup_tests {
             assert!(attach < at(start, w), "`{w}` starts after the attach");
         }
         assert!(
-            at(start, "resume_field_day(") < at(start, "run_radio("),
+            at(start, "resume_field_day(") < at(start, "PICKER_HELD_RADIO.hold_or_start("),
             "Field Day is resumed, or given up, before the radio loop starts"
         );
         let finish = body_of(src, "fn finish_launch(");
@@ -16978,6 +17600,11 @@ fn apply_and_persist(
     // the feeds bind to are the station's after the save, not the form's: with station profiles a
     // form loaded before a switch carries the call the station has left (`save_and_publish`).
     let (snap, mycall, mygrid) = save_and_publish(&state, settings, authoritative_roster)?;
+    // The claim moved under the save's lock, at once; if a peek of another window's refused that
+    // instant, it is taken now, patiently, off the lock. Already this window's: nothing to do.
+    if let Err(why) = claim_active_radio(&state) {
+        tempo_core::applog::warn("radio", &why);
+    }
     // Resolve the authoritative merged profile after the Engine commit.
     sync_rotctld(&state);
 
@@ -17078,6 +17705,11 @@ fn save_and_publish(
                     return Err(refusal);
                 }
             }
+            // ⛔ ONE RADIO, ONE WINDOW: a save that moves this window's radio onto a port another
+            // live Nexus window drives is refused whole, and the window keeps its radio.
+            if let Some(refusal) = eng.radio_claim_a_save_refuses(&settings, authoritative_roster) {
+                return Err(refusal);
+            }
             // ⛔ A reset replaces the station's profiles and call: not while a run, a contact or an
             // over is under way on a station with profiles (a form save keeps the call instead).
             if authoritative_roster {
@@ -17126,6 +17758,12 @@ fn save_and_publish(
                 eng.apply_restored_settings(settings);
             } else {
                 eng.apply_settings(settings);
+            }
+            // The claim follows the radio's port: a save that moved it lets go of the old port and
+            // takes the new one (refused above if another window had it). Under the same hold of
+            // the lock as the check, so no other save of this window comes between.
+            if let Err(why) = claim_active_radio_of(eng.settings()) {
+                tempo_core::applog::warn("radio", &why);
             }
             if let Some(rows) = rows {
                 eng.open_session_from(rows);
@@ -26751,9 +27389,54 @@ fn set_rx_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot,
 /// `apply_settings`). Persisted so the active radio survives a restart. Returns the snapshot.
 #[tauri::command(async)]
 fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
+    // One radio, one window: a radio another live Nexus window runs (by its port) is refused with
+    // the operator's words, and this window stays on the radio it had.
+    let (held_elsewhere, station, target) = {
+        let eng = engine_lock(&state);
+        let s = eng.settings();
+        let target = s.radios.iter().find(|r| r.id == id).cloned();
+        (
+            target
+                .as_ref()
+                .is_some_and(tempo_app::radio_claim::profile_held_elsewhere),
+            !opens_on_the_radio_picker(s, active_profile()),
+            // A real switch (an enabled radio, not the one already active) is the only one that
+            // moves the claim; the engine leaves every other pick alone.
+            target.filter(|r| r.enabled && r.id != s.active_radio),
+        )
+    };
+    if held_elsewhere {
+        return Err(tempo_app::radio_claim::REFUSAL.to_string());
+    }
+    // The new radio is RESERVED here, patiently and off the engine lock (a peek of another
+    // window's must not refuse it, and the engine lock must not wait on one), and the claim moves
+    // under the lock right before the engine switches, so the window never drives a radio it does
+    // not hold. The engine's own claim in the switch then finds it this window's.
+    let reserved = match &target {
+        Some(p) if station => tempo_app::radio_claim::tentative_profile(p, true)?,
+        _ => None,
+    };
     let snap = {
         let mut eng = engine_lock(&state);
+        // Committed only for a switch the engine is about to make, as the settings stand NOW
+        // (a save may have disabled the target or moved its port since the reservation). Else it
+        // drops, and the claim stays on the radio this window still drives.
+        if let Some(reserved) = reserved {
+            tempo_app::radio_claim::commit_if_switching(reserved, eng.settings(), id);
+        }
         eng.set_active_radio(id);
+        // The engine refused the switch because the target's port (moved by such a save) is
+        // another window's: say so, as for any other radio another window runs.
+        if eng.settings().active_radio != id
+            && eng
+                .settings()
+                .radios
+                .iter()
+                .find(|r| r.id == id)
+                .is_some_and(tempo_app::radio_claim::profile_held_elsewhere)
+        {
+            return Err(tempo_app::radio_claim::REFUSAL.to_string());
+        }
         persist_settings(eng.settings().clone(), |e| {
             eprintln!("tempo: set_active_radio save failed: {e}")
         });
@@ -26763,6 +27446,16 @@ fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapsh
        // rotator config (mirrors set_settings). The rig loop swaps CAT/audio on its own via the flat
        // mirror, but the rotator daemon only follows an explicit sync.
     sync_rotctld(&state);
+    // A window whose launch radio was another window's waits with no radio loop; a free radio
+    // starts it, on the radio switched to: the config held since the launch named the refused
+    // one, whose daemon (the other window's) the loop would otherwise open first. A running loop
+    // is untouched: it follows the switch on its next tick.
+    #[cfg(feature = "radio")]
+    if station {
+        let switched = engine_lock(&state).settings().clone();
+        PICKER_HELD_RADIO
+            .release(|(engine, cfg)| start_radio_loop((engine, radio_config_now(cfg, &switched))));
+    }
     Ok(snap)
 }
 
@@ -45681,6 +46374,10 @@ fn stop_the_radio() {
     {
         use std::sync::atomic::Ordering;
         tempo_audio::service::SHUTDOWN.store(true, Ordering::Relaxed);
+        // A radio picker's quit (a pick relaunches the radio as its own window): its loop was
+        // held and never ran, so nothing was keyed and nothing will answer the wait below. Taking
+        // it also means nothing can start it now.
+        let never_ran = PICKER_HELD_RADIO.quit();
         // Wait until the loop has actually unkeyed (SHUTDOWN_DONE),
         // not a fixed sleep: the loop only reaches the un-key after
         // its current step() returns, and a step can be blocked in a
@@ -45688,7 +46385,8 @@ fn stop_the_radio() {
         // in tens of ms while the worst case still flushes the
         // un-key before we let the process exit.
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(3_000);
-        while !tempo_audio::service::SHUTDOWN_DONE.load(Ordering::Relaxed)
+        while !never_ran
+            && !tempo_audio::service::SHUTDOWN_DONE.load(Ordering::Relaxed)
             && std::time::Instant::now() < deadline
         {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -46123,6 +46821,9 @@ pub fn run() {
             active_profile()
         );
     }
+    // One radio, one window: every window's claims live in the BASE profile's folder, so any
+    // window sees any other's (`tempo_app::radio_claim`). Before anything can claim or switch.
+    tempo_app::radio_claim::init(config_dir_for(None).join("radio-claims"));
 
     // First launch of a radio profile: seed its per-instance settings from the default (shared)
     // profile so the new window inherits the radios list + all prefs — otherwise it would boot on
@@ -46706,6 +47407,93 @@ fn radio_loop_end(
         Err(_) => "RADIO ENGINE CRASHED — TX/RX is dead until you restart Nexus.".to_string(),
     };
     (tempo_app::dto::AudioErrorKind::EngineStopped, msg)
+}
+
+/// How often a window refused its launch radio asks again ([`retry_the_refused_radio`]).
+#[cfg(feature = "radio")]
+const REFUSED_RADIO_RETRY: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A launch refused its radio (another window drives it, `tempo_app::radio_claim`) waits with no
+/// radio loop. Ask again every [`REFUSED_RADIO_RETRY`] while it waits: once the other window has
+/// closed, or a Settings save has moved this window's radio to a free port, the claim succeeds and
+/// the loop starts on the radio as the settings now name it. A switch to a free radio starts it
+/// too, at once (`set_active_radio`); whichever comes first releases the gate, and the other then
+/// finds nothing held. Stops when the gate holds nothing more, and at a quit.
+#[cfg(feature = "radio")]
+fn retry_the_refused_radio(engine: SharedEngine) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(REFUSED_RADIO_RETRY);
+        if tempo_audio::service::SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed)
+            || !PICKER_HELD_RADIO.is_held()
+        {
+            return;
+        }
+        // Patient, off the engine lock.
+        if claim_active_radio(&engine).is_ok() {
+            tempo_core::applog::info("radio", "the radio is free again; starting it");
+            // The settings are read again INSIDE the release, just as it starts the loop, so the
+            // loop starts on the radio the station is on now, not the one the claim above asked
+            // about: a switch in between moved the claim itself. `release` has already let go of
+            // the gate's mutex by then, so a switch can still land in the microseconds between
+            // this read and the start; the loop then follows it on its first tick, as it follows
+            // any switch.
+            PICKER_HELD_RADIO.release(|(engine, cfg)| {
+                let now = engine_lock(&engine).settings().clone();
+                start_radio_loop((engine, radio_config_now(cfg, &now)))
+            });
+            return;
+        }
+    });
+}
+
+/// `cfg`, held since the launch, brought up to `settings` now: every field the launch took from
+/// the settings is taken again; the two the launch set afterwards (the profile-change notifier and
+/// the version) are kept.
+#[cfg(feature = "radio")]
+fn radio_config_now(
+    cfg: tempo_audio::service::RadioConfig,
+    settings: &tempo_app::settings::Settings,
+) -> tempo_audio::service::RadioConfig {
+    let mut now = radio_config_for(settings, &cfg.spectrum_feed, &cfg.rx_tap, &cfg.meter_feed);
+    now.on_active_profile_change = cfg.on_active_profile_change;
+    now.app_version = cfg.app_version;
+    now
+}
+
+/// Start the radio loop on its own thread: at the launch, or when the radio picker's "use one radio"
+/// releases it ([`PICKER_HELD_RADIO`]).
+#[cfg(feature = "radio")]
+fn start_radio_loop((radio_engine, radio_cfg): (SharedEngine, tempo_audio::service::RadioConfig)) {
+    std::thread::spawn(move || {
+        // The radio loop is the heartbeat — if it dies (error OR panic), TX/RX
+        // is silently dead. Surface it loudly in the UI (the audio_error lane
+        // renders as a persistent banner) instead of an invisible eprintln.
+        let eng_for_report = radio_engine.clone();
+        let eng_for_loop = radio_engine;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            tempo_audio::service::run_radio(eng_for_loop, radio_cfg)
+        }));
+        // The loop returns `Ok(())` only when a quit told it to stop, having unkeyed: that is the
+        // quit, not a fault, and the file says so. Logged as "stopped unexpectedly", it read as a
+        // radio engine that died the moment a second window started, in the very log a field
+        // report hands us.
+        if matches!(result, Ok(Ok(())))
+            && tempo_audio::service::SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            tempo_core::applog::info("radio", "radio loop stopped for the quit");
+            return;
+        }
+        let (kind, msg) = radio_loop_end(result);
+        eprintln!("tempo: {msg}");
+        tempo_core::applog::error("radio", &msg);
+        // `unwrap_or_else(into_inner)`, NOT `.map` on the Result: the one case
+        // this banner exists for — the loop died from a panic under the engine
+        // guard — is exactly the case where the lock is POISONED, and the old
+        // form silently skipped the write then.
+        engine_lock_result(&eng_for_report)
+            .unwrap_or_else(|e| e.into_inner())
+            .set_audio_error(Some((kind, msg)));
+    });
 }
 
 /// The launch from the logbook on: [`finish_launch`] calls it once the splash is on screen and the
@@ -47490,27 +48278,31 @@ fn start_on_the_logbook(
         tempo_audio::icomlan::set_credential_source(std::sync::Arc::new(move |radio_id| {
             icom_lan_password_for_login(&login_engine, &OsKeychain, radio_id)
         }));
-        let radio_engine = engine.clone();
-        std::thread::spawn(move || {
-            // The radio loop is the heartbeat — if it dies (error OR panic), TX/RX
-            // is silently dead. Surface it loudly in the UI (the audio_error lane
-            // renders as a persistent banner) instead of an invisible eprintln.
-            let eng_for_report = radio_engine.clone();
-            let eng_for_loop = radio_engine;
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                tempo_audio::service::run_radio(eng_for_loop, radio_cfg)
-            }));
-            let (kind, msg) = radio_loop_end(result);
-            eprintln!("tempo: {msg}");
-            tempo_core::applog::error("radio", &msg);
-            // `unwrap_or_else(into_inner)`, NOT `.map` on the Result: the one case
-            // this banner exists for — the loop died from a panic under the engine
-            // guard — is exactly the case where the lock is POISONED, and the old
-            // form silently skipped the write then.
-            engine_lock_result(&eng_for_report)
-                .unwrap_or_else(|e| e.into_inner())
-                .set_audio_error(Some((kind, msg)));
-        });
+        // A window that opens on the radio picker drives no radio until the operator answers it
+        // (see `PICKER_HELD_RADIO`), and no window drives a radio another Nexus window runs
+        // (`tempo_app::radio_claim`): it says why and waits for a switch to a free one. Every other launch
+        // claims its radio and starts its loop here, as always.
+        let picker_engine = engine.clone();
+        let retry_engine = engine.clone();
+        PICKER_HELD_RADIO.hold_or_start(
+            move || {
+                let mut eng = engine_lock(&picker_engine);
+                if opens_on_the_radio_picker(eng.settings(), active_profile()) {
+                    return true;
+                }
+                match claim_active_radio_of(eng.settings()) {
+                    Ok(()) => false,
+                    Err(why) => {
+                        tempo_core::applog::warn("radio", &why);
+                        eng.set_cat_status(Some(false), why);
+                        retry_the_refused_radio(retry_engine);
+                        true
+                    }
+                }
+            },
+            (engine.clone(), radio_cfg),
+            start_radio_loop,
+        );
     }
 
     // AI CW decoder (beta) is started in the Tauri `.setup()` below, where the app's
@@ -48519,6 +49311,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         radio_launch_info,
         choose_radio,
         use_single_radio,
+        radio_picker_timed_out,
+        radio_picker_unavailable,
         import_pota_log,
         set_skip_tx1,
         civ_diagnostic_status,

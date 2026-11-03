@@ -57,6 +57,22 @@ describe('the radio switch notice', () => {
     expect(openSettingsAt).toHaveBeenCalledWith('radios')
   })
 
+  it('a switch refused because another Nexus window runs the radio is said, whatever the policy, with no Undo', () => {
+    for (const policy of ['tell', 'act'] as const) {
+      const { next } = mount(policy)
+      // The station stayed on the radio it was on (fromId 0).
+      next({ ...sw(1), refused: true }, policy, { activeRadioId: 0 })
+      expect(toasts).toHaveLength(1)
+      const [n] = toasts
+      expect(n.message).toBe(
+        'IC-9700 is open in another Nexus window, so the radio did not change — switch to that window.',
+      )
+      expect(n.kind).toBe('error')
+      expect(n.action).toBeUndefined()
+      dismissToast(n.id)
+    }
+  })
+
   it('a switch made before the window opened is not news', () => {
     const { next } = mount('tell', sw(4))
     expect(toasts).toHaveLength(0)

@@ -6,6 +6,7 @@
 // Everything else in the header is migrated under `cockpit.header.*`: the wheel-tune tooltips,
 // the band-edge toast, the power slider (a CONFIGURATION control on the transmit path, which
 // moves exactly as PTT Method and the drive slider did) and the CAT pill's two states.
+import { localizeRefusal } from '../radioRefusal'
 import { useRef } from 'react'
 import { AmpStrip } from './AmpStrip'
 import { TxAlarmBanner } from './TxAlarmBanner'
@@ -273,7 +274,7 @@ export function CockpitHeader({
               className={`cockpit-cat ${catOk ? 'ok' : 'bad'}`}
               // `catDetail` is the backend's own report and passes through verbatim.
               title={
-                radio.catDetail ||
+                (radio.catDetail && localizeRefusal(radio.catDetail)) ||
                 (catOk ? t('cockpit.header.cat.ok.title') : t('cockpit.header.cat.bad.title'))
               }
             >
