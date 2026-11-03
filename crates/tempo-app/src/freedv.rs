@@ -11,7 +11,7 @@
 //!   because 2237 is where Nexus SENDS its WSJT-X telemetry and where GridTracker and JTAlert
 //!   listen. Bound to loopback, so nothing on the network can reach it. Each contact becomes one
 //!   ADIF record ([`contact_adif`]) handed to the same import the companion mode's contacts use
-//!   ([`crate::logwrite::import_logged_contact`]): the same duplicate check, worked-before marks
+//!   ([`crate::logwrite::intake_contact`]): the same duplicate check, worked-before marks
 //!   and durable write. No new write path.
 //! - **The calls it hears**, FreeDV 2.4's callsign broadcast (JSON to `224.0.0.1:7177` by
 //!   default). OFF by default (`freedv_heard`); the Phone screen's FreeDV pane turns it on. Bound

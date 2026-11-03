@@ -165,6 +165,16 @@ pub fn read_datagram(bytes: &[u8]) -> Intake {
     Intake::Ignored
 }
 
+/// The ADIF text of a WSJT-X Logged ADIF (type 12) already taken off its datagram (the companion
+/// socket's, [`crate::wsjtx::Inbound::LoggedAdif`]): read as the contact port reads one, with
+/// `program` (the sender id, when the caller still has it) over the envelope's `PROGRAMID`.
+pub fn read_logged_adif(text: &str, program: Option<&str>) -> Intake {
+    if text.len() > MAX_DATAGRAM {
+        return Intake::Ignored;
+    }
+    read_adif_text(text, Format::Wsjtx, program.and_then(program_name))
+}
+
 fn read_wsjtx(bytes: &[u8]) -> Intake {
     match parse_inbound(bytes) {
         Some(Inbound::QsoLogged { id, .. } | Inbound::LoggedAdif { id, .. })

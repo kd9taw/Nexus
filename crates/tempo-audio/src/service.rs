@@ -24927,12 +24927,13 @@ mod tests {
             "the same contact sent again is the one already there"
         );
 
-        // The record the import has always written: the same text through an import of its own.
+        // The record the import has always written: the same text through an import of its own,
+        // with the one field the contact port's road adds (`tempo_app::log_intake`): the program
+        // the contact came in from.
         let (other_dir, reference) = on_store("reference");
-        reference
-            .lock()
-            .unwrap()
-            .import_adif(&(adif_header() + ADIF));
+        reference.lock().unwrap().import_adif(
+            &(adif_header() + &ADIF.replace("<EOR>", "<APP_NEXUS_VIA:6>WSJT-X <EOR>")),
+        );
         reference
             .lock()
             .unwrap()

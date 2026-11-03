@@ -592,6 +592,50 @@ fn take_contact(
     }
 }
 
+/// ★ A contact WSJT-X logged in companion mode (its Logged ADIF, type 12, off the companion or
+/// the sink socket, whose own trust rules the caller applied: this computer only, never Nexus's
+/// own id, which decides what is Nexus's own here) into the log by the contact port's road ([`contact_adif`],
+/// [`crate::logwrite::intake_contact`]): the same station-call check, the funnel's 300 s
+/// duplicate check, "import new only", the service uploads, no local forward, and the via mark.
+/// The program is the envelope's `PROGRAMID` (WSJT-X, JTDX and MSHV each write their own name
+/// there), or "WSJT-X" when it names none. What became of each contact; an `Err` is a refusal or
+/// an import that failed, in a sentence.
+///
+/// The same contact arriving on the contact port as well is one contact: the second meets the
+/// duplicate check.
+pub fn take_companion_adif(
+    engine: &Mutex<Engine>,
+    adif: &str,
+) -> Vec<Result<IntakeOutcome, String>> {
+    // Nexus's own record is kept out upstream, by its sender id (the companion socket and the
+    // sink keep no Logged ADIF under it). A record whose envelope names Nexus under another
+    // program's id is that program's, as the companion import always took it.
+    let read = match tempo_net::log_intake::read_logged_adif(adif, None) {
+        Intake::Own => tempo_net::log_intake::read_logged_adif(adif, Some("WSJT-X")),
+        read => read,
+    };
+    let (program, records) = match read {
+        Intake::Contacts {
+            program, records, ..
+        } => (program.unwrap_or_else(|| "WSJT-X".into()), records),
+        _ => return Vec::new(),
+    };
+    let station = engine_lock(engine).settings().mycall.clone();
+    records
+        .iter()
+        .map(|fields| {
+            let checked = contact_adif(fields, &program, &station)?;
+            let (made, _durable) = crate::logwrite::intake_contact(engine, &checked.adif);
+            if matches!(made, Ok(IntakeOutcome::Added)) {
+                engine_lock(engine)
+                    .freedv_mut()
+                    .note_intake(&program, &checked.call, now_unix());
+            }
+            made
+        })
+        .collect()
+}
+
 /// Serve the contact port until `shutdown`: each datagram at most `bound` bytes (a longer one is
 /// dropped whole: the buffer is one byte longer than the bound so the two can be told apart)
 /// goes to [`take_datagram`].

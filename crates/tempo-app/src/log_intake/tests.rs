@@ -510,3 +510,95 @@ fn private_means_private() {
         assert_eq!(is_private(ip.parse().unwrap()), private, "{ip}");
     }
 }
+
+/// A WSJT-X Logged ADIF (type 12) as WSJT-X frames it (`MessageClient::logged_ADIF`): a header
+/// naming the program, `<EOH>`, the record, ` <EOR>`.
+fn wsjtx_envelope(record: &str) -> String {
+    format!("\n<adif_ver:5>3.1.0\n<programid:6>WSJT-X\n<EOH>\n{record} <EOR>")
+}
+
+const COMPANION_RECORD: &str = "<call:5>W1ABC <gridsquare:4>FN42 <mode:3>FT8 <rst_sent:3>-10 \
+    <rst_rcvd:3>-12 <qso_date:8>20261014 <time_on:6>010203 <band:3>20m <freq:9>14.075500 \
+    <station_callsign:5>K2DEF";
+
+/// A contact WSJT-X logs in companion mode (its type 12 off the companion socket) goes the
+/// contact port's road: queued for the uploads exactly as one that arrives on 2239, via WSJT-X,
+/// and sent to no local logger.
+#[test]
+fn a_companion_type12_is_queued_for_the_uploads_like_a_contact_port_one() {
+    let companion = Station::new();
+    {
+        let mut e = engine_lock(&companion.e);
+        let mut s = e.settings().clone();
+        s.wsjtx_udp = true;
+        s.hrd_logging = true;
+        e.apply_settings(s);
+    }
+    let made = take_companion_adif(&companion.e, &wsjtx_envelope(COMPANION_RECORD));
+    assert_eq!(made, [Ok(IntakeOutcome::Added)]);
+    let mut port = Station::new();
+    port.send(&encode_logged_adif("WSJT-X", COMPANION_RECORD));
+    let queued = |st: &Station| {
+        let mut e = engine_lock(&st.e);
+        let q: Vec<_> = e
+            .take_pending_uploads()
+            .into_iter()
+            .map(|p| {
+                (
+                    p.rec.call.clone(),
+                    p.legs,
+                    p.origin,
+                    via(&p.rec).map(String::from),
+                )
+            })
+            .collect();
+        q
+    };
+    let (by_companion, by_port) = (queued(&companion), queued(&port));
+    assert_eq!(by_companion.len(), 1);
+    assert_eq!(by_companion, by_port, "queued exactly alike");
+    assert_eq!(by_companion[0].3.as_deref(), Some("WSJT-X"));
+    let mut e = engine_lock(&companion.e);
+    assert!(
+        e.take_pending_udp_qsos().is_empty(),
+        "no WSJT-X UDP forward"
+    );
+    assert!(e.take_hrd_pending().is_empty(), "no HRD forward");
+    assert_eq!(e.freedv_mut().intake_tick, 1, "the toast");
+}
+
+/// The same contact arriving on both roads, either one first, is one contact.
+#[test]
+fn a_contact_on_the_companion_socket_and_the_contact_port_is_imported_once() {
+    let mut st = Station::new();
+    take_companion_adif(&st.e, &wsjtx_envelope(COMPANION_RECORD));
+    st.send(&encode_logged_adif("WSJT-X", COMPANION_RECORD));
+    assert_eq!(st.calls(), ["W1ABC"]);
+    assert_eq!(engine_lock(&st.e).take_pending_uploads().len(), 1);
+
+    let mut st = Station::new();
+    st.send(&encode_logged_adif("WSJT-X", COMPANION_RECORD));
+    let made = take_companion_adif(&st.e, &wsjtx_envelope(COMPANION_RECORD));
+    assert_eq!(made, [Ok(IntakeOutcome::InLog)]);
+    assert_eq!(st.calls(), ["W1ABC"]);
+    assert_eq!(engine_lock(&st.e).take_pending_uploads().len(), 1);
+}
+
+/// The companion road keeps the contact port's station-call refusal: another station call is not
+/// written. (Nexus's own record is kept out upstream, by its sender id.)
+#[test]
+fn the_companion_road_refuses_another_station_call() {
+    let st = Station::new();
+    let theirs = COMPANION_RECORD.replace("<station_callsign:5>K2DEF", "<station_callsign:4>W1AW");
+    let made = take_companion_adif(&st.e, &wsjtx_envelope(&theirs));
+    assert!(
+        matches!(&made[..], [Err(why)] if why.contains("this station is K2DEF")),
+        "{made:?}"
+    );
+    assert!(st.calls().is_empty());
+    // Control: under ours it is written.
+    assert_eq!(
+        take_companion_adif(&st.e, &wsjtx_envelope(COMPANION_RECORD)),
+        [Ok(IntakeOutcome::Added)]
+    );
+}
