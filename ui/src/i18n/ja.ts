@@ -9681,6 +9681,7 @@ export const JA: PartialCatalog = {
   "rotor.pane.hint": "コンパスローズをクリックか方位を入力・方位はすべて真方位",
   "rotor.pane.hint.noPosition": "このローテーターから方位情報なし — 方向指定と停止は可能",
   "rotor.pane.notAnswering": "ローテーターのコントローラーが応答しません。電源が入っていて接続されているか確認してください。Nexusは接続を試み続けます。",
+  "rotor.pane.stale": "前回の読み取り値です。ローテーターが直近の問い合わせに応答しませんでした。Nexusは問い合わせを続けます。",
   "rotor.pane.slew.failed": "ローテーター:{{error}}",
   "rotor.pane.el.title": "水平線からの仰角・このローテーターは{{min}}〜{{max}}°まで",
   "rotor.pane.commandedEl.title": "指示仰角 — アンテナが移動中です",

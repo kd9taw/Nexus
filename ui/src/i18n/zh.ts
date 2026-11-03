@@ -7311,6 +7311,7 @@ export const ZH: PartialCatalog = {
   "rotor.pane.hint": "点击罗盘或输入方位 · 方位均为真方位",
   "rotor.pane.hint.noPosition": "该旋转器不报告位置 — 指向与 STOP 仍可用",
   "rotor.pane.notAnswering": "旋转器控制器没有响应。它是否已开机并接好线？Nexus 会持续尝试连接。",
+  "rotor.pane.stale": "上次读数：旋转器没有回应最近一次查询。Nexus 会继续查询。",
   "rotor.pane.slew.failed": "旋转器：{{error}}",
   "rotor.pane.el.title": "相对地平线的仰角 · 该旋转器可达 {{min}}–{{max}}°",
   "rotor.pane.commandedEl.title": "已下发的仰角 — 天线正在转过去",

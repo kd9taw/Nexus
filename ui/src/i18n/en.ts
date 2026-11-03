@@ -15186,6 +15186,8 @@ export const EN = {
   // running (a tester read "Error 61" here). Shown as the hint and as the readout's tooltip.
   'rotor.pane.notAnswering':
     "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.",
+  'rotor.pane.stale':
+    'Last reading: the rotator did not answer the latest poll. Nexus keeps asking.',
   'rotor.pane.slew.failed': 'Rotator: {{error}}',
   // The elevation, on a rotator whose backend declares an elevation axis (the Yaesu G-5500 on a
   // GS-232B: 0–180°). `{{min}}` and `{{max}}` are the range that backend declares, in degrees.

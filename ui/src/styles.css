@@ -1386,6 +1386,14 @@ button.nb-chip:hover {
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
+/* A stale reading (features/rotorLiveness): the last bearing the rotator reported, kept through a missed
+   poll or two, drawn in the dim ink so it does not read as live. */
+.rotor-needle.stale {
+  stroke: var(--text-dim);
+}
+.rotor-az.stale {
+  color: var(--text-dim);
+}
 /* The station's bearing (line 2's call; RotorPane's header): told from the needle and the dashed target
    needle by its shape, dotted with a bug on the rim, and by its colour, the amber role in either theme.
    Drawn under both needles, and never a click's target, so a click on it slews as the rose does.

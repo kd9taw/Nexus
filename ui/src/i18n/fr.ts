@@ -6298,6 +6298,7 @@ export const FR: PartialCatalog = {
   "rotor.pane.hint": "cliquez la rose ou tapez un azimut · les caps sont VRAIS",
   "rotor.pane.hint.noPosition": "pas de position depuis ce rotor — le pointage et STOP fonctionnent quand même",
   "rotor.pane.notAnswering": "Le contrôleur du rotor ne répond pas. Est-il allumé et branché ? Nexus continue d'essayer.",
+  "rotor.pane.stale": "Dernière lecture : le rotor n'a pas répondu à la dernière interrogation. Nexus continue de demander.",
   "rotor.pane.rose.aria": "Rotor à {{deg}} degrés — cliquez pour l'orienter",
   "rotor.pane.rose.aria.unknown": "Rotor — position non renvoyée ; cliquez pour l'orienter",
   "rotor.pane.slew.failed": "Rotor : {{error}}",

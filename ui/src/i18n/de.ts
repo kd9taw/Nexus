@@ -9598,6 +9598,7 @@ export const DE: PartialCatalog = {
   "rotor.pane.hint": "Kompassrose anklicken oder Peilung eingeben · Winkel sind RECHTWEISEND",
   "rotor.pane.hint.noPosition": "keine Positionsmeldung von diesem Rotor — Ausrichten und STOPP funktionieren trotzdem",
   "rotor.pane.notAnswering": "Die Rotorsteuerung antwortet nicht. Ist sie eingeschaltet und angeschlossen? Nexus versucht es weiter.",
+  "rotor.pane.stale": "Letzter Messwert: Der Rotor hat auf die letzte Abfrage nicht geantwortet. Nexus fragt weiter nach.",
   "rotor.pane.slew.failed": "Rotor: {{error}}",
   "rotor.pane.el.title": "Elevation über dem Horizont · dieser Rotor erreicht {{min}}–{{max}}°",
   "rotor.pane.commandedEl.title": "Kommandierte Elevation — die Antenne ist unterwegs",

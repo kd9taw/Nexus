@@ -6298,6 +6298,7 @@ export const ES: PartialCatalog = {
   "rotor.pane.hint": "pulsa la rosa o escribe un rumbo · los rumbos son VERDADEROS",
   "rotor.pane.hint.noPosition": "este rotor no da posición — apuntar y PARAR siguen funcionando",
   "rotor.pane.notAnswering": "El controlador del rotor no responde. ¿Está encendido y conectado? Nexus sigue intentándolo.",
+  "rotor.pane.stale": "Última lectura: el rotor no respondió a la última consulta. Nexus sigue preguntando.",
   "rotor.pane.rose.aria": "Rotor a {{deg}} grados — pulsa para girar",
   "rotor.pane.rose.aria.unknown": "Rotor — no informa de la posición; pulsa para girar",
   "rotor.pane.slew.failed": "Rotor: {{error}}",

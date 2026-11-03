@@ -15755,14 +15755,19 @@ fn send_rot_step(
             // Elevation REFUSED — the daemon answered and said no (`RPRT -1` from the
             // frontend's min_el/max_el check on a mount with no elevation axis). If plain
             // azimuth then lands, this is an az-only rotator, or a transient the driver
-            // re-probes for.
+            // re-probes for; the driver takes two in a row to believe it.
             //
             // ⚠️ Only on an answered refusal. Silence is not a refusal: retrying azimuth
             // after a timeout doubles the wait on a tick that has a satellite to keep up
             // with, and a rotator that answers nothing is not an az-only rotator — it is
             // gone. Before the rotctld client told the truth about replies this could not
             // be asked, because a timeout arrived here as `Ok(())`.
-            Err(e) if e.kind() == std::io::ErrorKind::Other => {
+            //
+            // ⚠️ Nor is Hamlib's own `RPRT -5` (its serial timeout) or `RPRT -6` (an I/O
+            // error): rotctld answered, but only to say the CONTROLLER did not. This arm
+            // used to take every answered non-zero `RPRT`, so on a G-5500 reached over the
+            // internet one slow round trip dropped the elevation for a minute of the pass.
+            Err(e) if tempo_audio::rotator::says_unsupported(&e) => {
                 if tempo_audio::rotator::point(addr, az).is_ok() {
                     RotOutcome::AzOnly
                 } else {
@@ -16401,6 +16406,34 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
             ending = SatTrackLoss::BirdSet;
             break;
         }
+        // ⭐ A MAST GIVEN UP ON IS ASKED AGAIN (2026-11-03, a tester's G-5500 reached over the
+        // internet). The give-up used to hold for the rest of the pass, so a 15 s hiccup on the
+        // link cost the whole pass after the link was back. Every `REPROBE_AFTER_TICKS` ticks
+        // the loop reads the rotator's position — which moves nothing — and an answer gives the
+        // pass its mast back, said once on the Connections log. A rotator with no position to
+        // give (the DCU-1's `RPRT -11`) is not taken back: that answer comes from rotctld, not
+        // from the controller, so it is no evidence the controller is there.
+        if rotor_lost && driver.reprobe_due() {
+            if let Some(a) = addr.as_deref() {
+                if tempo_audio::rotator::read_position(a).is_ok() {
+                    driver.answered();
+                    lag = tempo_core::rotator::LagWatch::default();
+                    rotor_lost = false;
+                    conn_log(
+                        "Rotator",
+                        "info",
+                        format!(
+                            "the rotator is answering again — the {name} pass has taken the \
+                             mast back and is pointing it."
+                        ),
+                    );
+                    tempo_core::applog::info(
+                        "rotator",
+                        &format!("the {name} pass took the mast back: the rotator answered again"),
+                    );
+                }
+            }
+        }
         let mast = if rotor_lost { None } else { addr.as_deref() };
         // The per-tick honesty label (+ the declared TX-leg sideband).
         // The rotor half is the live mast above — fixed at arm time except
@@ -16679,7 +16712,16 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
                         format!(
                             "the rotator stopped answering during the {name} pass \
                              ({} commands in a row) — the track let the mast go and \
-                             kept the dial. Point the antenna yourself.",
+                             kept the dial. Point the antenna yourself: Nexus asks the \
+                             rotator again every {} s and takes the mast back when it answers.",
+                            tempo_core::rotator::MISS_LIMIT,
+                            tempo_core::rotator::REPROBE_AFTER_TICKS * 3
+                        ),
+                    );
+                    tempo_core::applog::warn(
+                        "rotator",
+                        &format!(
+                            "the {name} pass let the mast go: {} commands in a row unanswered",
                             tempo_core::rotator::MISS_LIMIT
                         ),
                     );
@@ -23437,10 +23479,15 @@ struct RotctldOwner {
     /// episode, however many times [`rotctld_tick`] tries again. Cleared when a daemon comes up
     /// or the rotator is unconfigured; a change of params is a new episode.
     failing: Option<RotctldParams>,
+    /// The External rotctld address last written to the diagnostic log, so a save says when it
+    /// starts and stops being used and is quiet otherwise. That rotctld is not Nexus's process,
+    /// so these two lines are its whole lifecycle as far as this log can see.
+    external: Option<String>,
 }
 static ROTCTLD: Mutex<RotctldOwner> = Mutex::new(RotctldOwner {
     daemon: None,
     failing: None,
+    external: None,
 });
 
 /// What one reconcile of the integrated rotctld did — so the supervisor's rules can be held to
@@ -23619,6 +23666,21 @@ fn absent_serial_port(port: &str, present: impl FnOnce() -> Vec<String>) -> Opti
     ))
 }
 
+/// The diagnostic log's line when the External rotctld starts or stops being the rotator, or
+/// `None` when nothing changed. Its address is written the way the link watch writes it
+/// (`tempo_audio::rotator::link_label`): a host off this computer is not named.
+fn external_rotctld_note(was: Option<&str>, now: Option<&str>) -> Option<String> {
+    match (was, now) {
+        (a, b) if a == b => None,
+        (_, Some(addr)) => Some(format!(
+            "using an External rotctld: {}",
+            tempo_audio::rotator::link_label(addr)
+        )),
+        (Some(_), None) => Some("no longer using an External rotctld".to_string()),
+        (None, None) => None,
+    }
+}
+
 /// The reconcile itself, with the spawn handed in so a test can count its attempts.
 fn reconcile_rotctld(
     owner: &mut RotctldOwner,
@@ -23626,6 +23688,15 @@ fn reconcile_rotctld(
     spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<RotDaemon>,
 ) -> RotctldSync {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
+    let external = Some(st.rotator_host.trim())
+        .filter(|h| !h.is_empty())
+        .map(str::to_string);
+    if owner.external != external {
+        if let Some(line) = external_rotctld_note(owner.external.as_deref(), external.as_deref()) {
+            tempo_core::applog::info("rotator", &line);
+        }
+        owner.external = external;
+    }
     let params = (
         st.rotator_model,
         st.rotator_port.trim().to_string(),
@@ -23646,15 +23717,20 @@ fn reconcile_rotctld(
         (Some((true, true)), true) => RotctldSync::Running, // running, with the right params
         (was, true) => {
             if let (Some((_, false)), Some((proc, _))) = (was, g.as_mut()) {
-                conn_log(
-                    "Rotator",
-                    "error",
-                    tempo_audio::service::with_daemon_error(
-                        "rotctld exited — the rotator is not under control. Restarting it."
-                            .to_string(),
-                        &proc.said(),
-                    ),
+                let line = tempo_audio::service::with_daemon_error(
+                    "rotctld exited — the rotator is not under control. Restarting it.".to_string(),
+                    &proc.said(),
                 );
+                // The diagnostic log's copy, at most once a minute: a daemon that comes up and
+                // dies on every 5 s retry is one line and a count there, not a line per retry.
+                tempo_core::applog::throttled(
+                    tempo_core::applog::Level::Warn,
+                    "rotator",
+                    "rotctld-exited",
+                    std::time::Duration::from_secs(60),
+                    &line,
+                );
+                conn_log("Rotator", "error", line);
             }
             let slot = &mut *g;
             *slot = None; // kill-on-drop reaps a stale daemon first
@@ -23698,6 +23774,13 @@ fn reconcile_rotctld(
                                 params.2
                             )
                         };
+                        tempo_core::applog::throttled(
+                            tempo_core::applog::Level::Info,
+                            "rotator",
+                            "rotctld-started",
+                            std::time::Duration::from_secs(60),
+                            &what,
+                        );
                         conn_log("Rotator", "info", what);
                         *slot = Some((proc, params));
                         owner.failing = None;
@@ -23708,28 +23791,27 @@ fn reconcile_rotctld(
                         // there, port already open, a `-C` value it will not parse — and every
                         // one of them was being discarded.
                         if report {
-                            conn_log(
-                                "Rotator",
-                                "error",
-                                tempo_audio::service::with_daemon_error(
-                                    format!(
-                                        "rotctld could not start for model {} on {} @ {} — the \
-                                         rotator will not answer. Is the controller switched on \
-                                         and plugged in? Nexus keeps trying every {} s. If it \
-                                         is, check the port and that the baud matches what this \
-                                         model needs.",
-                                        params.0,
-                                        if params.1.is_empty() {
-                                            "(no port set)"
-                                        } else {
-                                            &params.1
-                                        },
-                                        params.2,
-                                        ROTCTLD_RETRY.as_secs()
-                                    ),
-                                    &proc.said(),
+                            let line = tempo_audio::service::with_daemon_error(
+                                format!(
+                                    "rotctld could not start for model {} on {} @ {} — the \
+                                     rotator will not answer. Is the controller switched on \
+                                     and plugged in? Nexus keeps trying every {} s. If it \
+                                     is, check the port and that the baud matches what this \
+                                     model needs.",
+                                    params.0,
+                                    if params.1.is_empty() {
+                                        "(no port set)"
+                                    } else {
+                                        &params.1
+                                    },
+                                    params.2,
+                                    ROTCTLD_RETRY.as_secs()
                                 ),
+                                &proc.said(),
                             );
+                            // Once per episode, as on the Connections log.
+                            tempo_core::applog::warn("rotator", &line);
+                            conn_log("Rotator", "error", line);
                         }
                         owner.failing = Some(params);
                         RotctldSync::StartFailed { reported: report }
@@ -23780,6 +23862,7 @@ fn reconcile_rotctld(
             } else {
                 "rotctld stopped (rotator unconfigured)"
             };
+            tempo_core::applog::info("rotator", why);
             conn_log("Rotator", "info", why);
             *g = None;
             owner.failing = None;
@@ -23849,7 +23932,34 @@ mod rotctld_supervisor_tests {
         RotctldOwner {
             daemon: None,
             failing: None,
+            external: None,
         }
+    }
+
+    #[test]
+    fn the_external_rotctld_is_logged_when_it_starts_and_stops_being_the_rotator() {
+        assert_eq!(external_rotctld_note(None, None), None);
+        assert_eq!(
+            external_rotctld_note(Some("10.0.0.5:4533"), Some("10.0.0.5:4533")),
+            None
+        );
+        let on = external_rotctld_note(None, Some("203.0.113.9:4533")).expect("a line");
+        assert_eq!(
+            on,
+            "using an External rotctld: the rotator (a remote rotctld, port 4533)"
+        );
+        assert!(
+            !on.contains("203.0.113.9"),
+            "the host is the operator's: {on}"
+        );
+        assert_eq!(
+            external_rotctld_note(Some("203.0.113.9:4533"), None).as_deref(),
+            Some("no longer using an External rotctld")
+        );
+        // On this computer it is named, as the integrated daemon's port is.
+        assert!(external_rotctld_note(None, Some("127.0.0.1:4533"))
+            .expect("a line")
+            .contains("127.0.0.1:4533"));
     }
 
     #[test]
@@ -24182,7 +24292,9 @@ mod rotctld_supervisor_tests {
                 let _ = sock.write_all(answer(line.trim_end()).as_bytes());
                 held.push(sock);
             }
-            std::thread::sleep(std::time::Duration::from_secs(3));
+            // Held well past the client's read deadline (3 s, `tempo_audio::rotator`), so a
+            // silence meets the deadline and never a hang-up, which means something else.
+            std::thread::sleep(std::time::Duration::from_secs(6));
         });
         addr
     }
@@ -59672,6 +59784,24 @@ mod tests {
 
     impl FakeRotctld {
         fn start(ok_points: usize) -> FakeRotctld {
+            let mut points = 0usize;
+            FakeRotctld::serve(move |cmd| {
+                // `P` is a pointing command; `S` is the halt.
+                let pointing = cmd.starts_with('P');
+                if pointing {
+                    points += 1;
+                }
+                if pointing && points > ok_points {
+                    "RPRT -6\n"
+                } else {
+                    "RPRT 0\n"
+                }
+                .to_string()
+            })
+        }
+
+        /// A rotctld that answers each command line with `answer(line)`.
+        fn serve(mut answer: impl FnMut(&str) -> String + Send + 'static) -> FakeRotctld {
             let listener =
                 std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port for rotctld");
             let addr = listener.local_addr().expect("bound address").to_string();
@@ -59680,7 +59810,6 @@ mod tests {
             let (log, halt) = (seen.clone(), stop.clone());
             let thread = std::thread::spawn(move || {
                 use std::io::{BufRead, BufReader, Write};
-                let mut points = 0usize;
                 for conn in listener.incoming() {
                     if halt.load(std::sync::atomic::Ordering::SeqCst) {
                         break;
@@ -59695,17 +59824,8 @@ mod tests {
                     if cmd.is_empty() {
                         continue;
                     }
-                    // `P` is a pointing command; `S` is the halt.
-                    let pointing = cmd.starts_with('P');
-                    if pointing {
-                        points += 1;
-                    }
+                    let reply = answer(&cmd);
                     log.lock().expect("rotctld log").push(cmd);
-                    let reply = if pointing && points > ok_points {
-                        "RPRT -6\n"
-                    } else {
-                        "RPRT 0\n"
-                    };
                     let _ = sock.write_all(reply.as_bytes());
                 }
             });
@@ -59940,15 +60060,17 @@ mod tests {
             "the pass ended — the dial is the operator's again"
         );
 
-        // THE WIRE. Every failed pointing command costs two connections
-        // (`send_rot_step` retries azimuth-only), and after the give-up the
-        // loop stops writing to the mast entirely — no hammering a dead
-        // controller for the rest of the pass.
+        // THE WIRE. Every failed pointing command costs ONE connection — `RPRT -6` is the
+        // daemon's I/O error, not a mount refusing the elevation, so `send_rot_step` does not
+        // retry azimuth-only (it used to, and a single slow round trip on a G-5500 then dropped
+        // the elevation for a minute) — and after the give-up the loop stops writing to the mast
+        // entirely: what it sends a rotator it gave up on is a position READ now and then,
+        // which moves nothing, never a command.
         let cmds = rot.commands();
         let points = cmds.iter().filter(|c| c.starts_with('P')).count();
         assert_eq!(
             points,
-            GOOD + 2 * MISS_LIMIT as usize,
+            GOOD + MISS_LIMIT as usize,
             "the loop stopped commanding once it gave up: {cmds:?}"
         );
         // The halt IS attempted on a rotator that gave up — it can only remove
@@ -59984,6 +60106,72 @@ mod tests {
             .map(String::as_str)
             .collect();
         assert_eq!(tail, vec!["S", "P 180.0 0.0"], "{cmds:?}");
+
+        // ── A ROTATOR THAT COMES BACK MID-PASS ───────────────────────────────
+        // ⭐ The give-up used to hold for the rest of the pass, so a hiccup on an internet link
+        // cost the whole pass after the link was back. Now the loop asks again (a position
+        // read every REPROBE_AFTER_TICKS ticks) and an answer gives the pass its mast back.
+        // This controller misses MISS_LIMIT commands, fails the first re-probe, and answers the
+        // second.
+        let (mut points, mut dead_reads, mut back) = (0usize, 0usize, false);
+        let rot = FakeRotctld::serve(move |cmd| {
+            let dead = !back && points >= GOOD;
+            match cmd.chars().next() {
+                Some('P') => {
+                    points += 1;
+                    if dead { "RPRT -6\n" } else { "RPRT 0\n" }.to_string()
+                }
+                Some('p') if dead && points >= GOOD + MISS_LIMIT as usize => {
+                    dead_reads += 1;
+                    back = dead_reads >= 2;
+                    if back { "100.0\n20.0\n" } else { "RPRT -5\n" }.to_string()
+                }
+                Some('p') if dead => "RPRT -5\n".to_string(),
+                Some('p') => "100.0\n20.0\n".to_string(),
+                _ => "RPRT 0\n".to_string(),
+            }
+        });
+        let eng = sat_station();
+        let badges = run_simulated_pass(&eng, Some(rot.addr.clone()), cfg);
+        let lost = badges
+            .iter()
+            .position(|b| b.rotor_lost)
+            .expect("the loop gave the mast up");
+        let back_at = badges
+            .iter()
+            .skip(lost)
+            .position(|b| !b.rotor_lost)
+            .map(|i| i + lost)
+            .expect("…and took it back when the rotator answered again");
+        // Two re-probes: one unanswered, one answered, REPROBE_AFTER_TICKS ticks apart.
+        let gap = back_at - lost;
+        let every = tempo_core::rotator::REPROBE_AFTER_TICKS as usize;
+        assert!(
+            (2 * every - 1..=2 * every + 1).contains(&gap),
+            "taken back {gap} ticks after the give-up"
+        );
+        let retaken = &badges[back_at];
+        assert_eq!(
+            retaken.mode, "rotor+doppler",
+            "the track claims the mast again"
+        );
+        assert!(retaken.az_deg.is_some(), "…because it commanded it again");
+        assert!(
+            badges[back_at..].iter().all(|b| !b.rotor_lost),
+            "and keeps it to LOS"
+        );
+        let cmds = rot.commands();
+        let after_give_up: Vec<&String> = cmds
+            .iter()
+            .filter(|c| c.starts_with('P'))
+            .skip(GOOD + MISS_LIMIT as usize)
+            .collect();
+        assert!(
+            !after_give_up.is_empty(),
+            "the mast was commanded again after it answered: {cmds:?}"
+        );
+        // The operator's pick stood through all of it.
+        assert!(badges.iter().all(|b| b.doppler_downlink));
 
         // EVERY EXIT, CLASSIFIED. Only the two that end the PASS release the
         // dial: the bird setting (above), and a propagation that diverged — the

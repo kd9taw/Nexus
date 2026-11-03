@@ -129,6 +129,29 @@ describe('a controller that is switched off (a tester read "Error 61" on every c
     expect(container.querySelectorAll('.rotor-needle:not(.target)').length).toBe(0)
   })
 
+  it('one missed poll keeps the last bearing, dimmed, and only a run of misses says "not answering"', async () => {
+    // ⭐ A rotator over the internet "lost connection" on every dropped reply: one missed poll
+    // turned the pane to "isn't answering". Now it keeps the last reading, shown as stale.
+    let n = 0
+    api.readRotatorState.mockImplementation(() =>
+      Promise.resolve(n++ === 0 ? { azDeg: 213, reading: 'position' } : { azDeg: null, reading: 'notAnswering' }),
+    )
+    const { container } = render(<RotorPane />)
+    await waitFor(() => expect(screen.queryByText(/213°T/)).not.toBeNull())
+    // The second poll misses: the bearing stays, marked stale, and the pane does not cry wolf.
+    await waitFor(() => expect(container.querySelector('.rotor-az.stale')).not.toBeNull(), { timeout: 4_000 })
+    expect(screen.queryByText(/213°T/)).not.toBeNull()
+    expect(container.querySelector('.rotor-needle.stale')).not.toBeNull()
+    expect(screen.queryByText(t('rotor.pane.stale'))).not.toBeNull()
+    expect(screen.queryByText(t('rotor.pane.notAnswering'))).toBeNull()
+    // Misses in a row: now it is not answering, and the needle goes.
+    await waitFor(() => expect(screen.queryByText(t('rotor.pane.notAnswering'))).not.toBeNull(), {
+      timeout: 8_000,
+    })
+    expect(screen.queryByText(/213°T/)).toBeNull()
+    expect(container.querySelectorAll('.rotor-needle:not(.target)').length).toBe(0)
+  }, 15_000)
+
   it('the DCU-1, which answers with no position, keeps its own words', async () => {
     render(<RotorPane />)
     await waitFor(() => expect(screen.queryByText(t('rotor.pane.hint.noPosition'))).not.toBeNull())

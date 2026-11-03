@@ -7929,6 +7929,7 @@ Click for internet feed controls.","{{detail}}
 "5","rotor.pane.hint","click the rose or type a bearing · headings are TRUE","點選羅盤或輸入方位 · 方位均為真方位","",""
 "5","rotor.pane.hint.noPosition","no position from this rotator — pointing and STOP still work","該旋轉器不報告位置 — 指向與 STOP 仍可用","",""
 "5","rotor.pane.notAnswering","The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.","旋轉器控制器沒有響應。它是否已開機並接好線？Nexus 會持續嘗試連線。","Nexus",""
+"5","rotor.pane.stale","Last reading: the rotator did not answer the latest poll. Nexus keeps asking.","上次讀數：旋轉器沒有回應最近一次查詢。Nexus 會繼續查詢。","Nexus","Filled by the maintainer, pending translator review."
 "5","rotor.pane.slew.failed","Rotator: {{error}}","旋轉器：{{error}}","{{error}}",""
 "5","rotor.pane.el.title","Elevation above the horizon · this rotator reaches {{min}}–{{max}}°","相對地平線的仰角 · 該旋轉器可達 {{min}}–{{max}}°","{{min}} | {{max}}",""
 "5","rotor.pane.commandedEl.title","Commanded elevation — the antenna is on its way","已下發的仰角 — 天線正在轉過去","",""

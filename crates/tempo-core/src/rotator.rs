@@ -193,6 +193,17 @@ pub enum RotOutcome {
 const PROBE_AFTER_TICKS: u32 = 20;
 /// Consecutive failures before a pass gives up on the rotator.
 pub const MISS_LIMIT: u32 = 5;
+/// Elevation refusals in a row before a mount is taken to have no elevation axis.
+///
+/// ⚠️ **It was one, and "refusal" was any answer but `RPRT 0`** — Hamlib's own `RPRT -5` timeout
+/// included. On a G-5500 reached over the internet, one slow round trip flattened the elevation
+/// for about a minute of the pass. A refusal is now only an ANSWER that the mount does not take
+/// the elevation (`tempo_audio::rotator::says_unsupported`), and it takes two in a row: a mount
+/// with no elevation axis refuses every time, so the second costs it one extra command.
+pub const EL_REFUSALS_TO_LEARN: u32 = 2;
+/// How often a pass asks a rotator it gave up on whether it is answering again: ~15 s at the
+/// loop's 3 s cadence. A position read, which moves nothing.
+pub const REPROBE_AFTER_TICKS: u32 = 5;
 
 /// The per-tick tracking policy: deadband, az-only fallback and its recovery
 /// probe, and the miss counter.
@@ -216,10 +227,14 @@ pub struct TrackDriver {
     /// sky dome draws in, which is the controller frame minus the calibration
     /// trim. Kept alongside rather than derived so the two can never drift.
     last_aim: Option<(f64, f64)>,
-    /// False once the rotator has refused an elevation.
+    /// False once the rotator has refused an elevation [`EL_REFUSALS_TO_LEARN`] times in a row.
     azel_ok: bool,
+    /// Elevation refusals in a row (an accepted elevation resets it).
+    el_refusals: u32,
     az_only_ticks: u32,
     misses: u32,
+    /// Ticks since the give-up, for [`Self::reprobe_due`].
+    lost_ticks: u32,
 }
 
 impl TrackDriver {
@@ -232,8 +247,10 @@ impl TrackDriver {
             last_cmd: None,
             last_aim: None,
             azel_ok: true,
+            el_refusals: 0,
             az_only_ticks: 0,
             misses: 0,
+            lost_ticks: 0,
         }
     }
 
@@ -277,6 +294,31 @@ impl TrackDriver {
         self.misses >= MISS_LIMIT
     }
 
+    /// On a tick after the give-up: is it time to ask the rotator again? True every
+    /// [`REPROBE_AFTER_TICKS`] ticks while [`Self::gave_up`], never otherwise.
+    ///
+    /// ⭐ **A pass used to give up on the mast for good** (2026-11-03, a tester's G-5500 over the
+    /// internet). Five misses in a row released it for the rest of the pass and nothing ever
+    /// asked again, so a 15 s hiccup on the link cost the whole pass after the link was back.
+    pub fn reprobe_due(&mut self) -> bool {
+        if !self.gave_up() {
+            self.lost_ticks = 0;
+            return false;
+        }
+        self.lost_ticks += 1;
+        self.lost_ticks.is_multiple_of(REPROBE_AFTER_TICKS)
+    }
+
+    /// The rotator answered a re-probe: the pass has its mast back. The misses are forgiven, and
+    /// nothing commanded before the give-up is assumed to still hold — the operator may have
+    /// turned the mast by hand meanwhile — so the next tick commands afresh.
+    pub fn answered(&mut self) {
+        self.misses = 0;
+        self.lost_ticks = 0;
+        self.last_cmd = None;
+        self.last_aim = None;
+    }
+
     /// Decide this tick from the bird's boresight look angle.
     pub fn step(&mut self, look_az: f64, look_el: f64) -> RotStep {
         let (az, el) = point_for(look_az, look_el, &self.cfg, self.flip_ref);
@@ -315,12 +357,19 @@ impl TrackDriver {
                 self.misses += 1;
                 return;
             }
-            RotOutcome::AzElOk => self.azel_ok = true,
+            RotOutcome::AzElOk => {
+                self.azel_ok = true;
+                self.el_refusals = 0;
+            }
             RotOutcome::AzOnly => {
-                // Learned just now that elevation is refused. Restart the probe
-                // window so the next retry is a full interval away.
-                self.azel_ok = false;
-                self.az_only_ticks = 0;
+                // Refused again, in a row: learned that elevation is refused. Restart the
+                // probe window so the next retry is a full interval away. One refusal alone
+                // keeps the elevation, and the next tick offers it again.
+                self.el_refusals += 1;
+                if self.el_refusals >= EL_REFUSALS_TO_LEARN {
+                    self.azel_ok = false;
+                    self.az_only_ticks = 0;
+                }
             }
             RotOutcome::AzOk => {}
         }
@@ -690,7 +739,8 @@ mod tests {
     fn an_az_only_rotator_is_learned_and_then_re_probed() {
         let mut d = TrackDriver::new(RotatorConfig::default());
         let s = d.step(10.0, 20.0);
-        // The wire refused elevation but took azimuth.
+        // The wire refused elevation but took azimuth — twice in a row (EL_REFUSALS_TO_LEARN).
+        d.record(s, RotOutcome::AzOnly, 10.0, 20.0);
         d.record(s, RotOutcome::AzOnly, 10.0, 20.0);
         assert!(!d.azel_ok(), "elevation is off the table for now");
 
@@ -721,6 +771,7 @@ mod tests {
         let mut d = TrackDriver::new(RotatorConfig::default());
         let s = d.step(10.0, 20.0);
         d.record(s, RotOutcome::AzOnly, 10.0, 20.0);
+        d.record(s, RotOutcome::AzOnly, 10.0, 20.0);
 
         // 100 ticks of sub-deadband drift: all held, none counted.
         for i in 0..100 {
@@ -747,6 +798,7 @@ mod tests {
         // exists to prevent.
         let mut d = TrackDriver::new(RotatorConfig::default());
         let s = d.step(10.0, 20.0);
+        d.record(s, RotOutcome::AzOnly, 10.0, 20.0);
         d.record(s, RotOutcome::AzOnly, 10.0, 20.0);
         // Elevation climbs 20° with azimuth unchanged. Nothing was ever sent to
         // an elevation axis, so the stored elevation must not have followed it.
@@ -786,6 +838,81 @@ mod tests {
             d.record(s, RotOutcome::Failed, 90.0 + i as f64 * 5.0, 20.0);
             assert!(!d.gave_up(), "the counter restarted at the success");
         }
+    }
+
+    #[test]
+    fn one_refused_elevation_does_not_flatten_the_pass() {
+        // ⭐ A G-5500 over the internet: one slow round trip used to drop its elevation for a
+        // minute. One refusal keeps the elevation, and the next tick offers it again.
+        let mut d = TrackDriver::new(RotatorConfig::default());
+        let s = d.step(10.0, 20.0);
+        d.record(s, RotOutcome::AzOnly, 10.0, 20.0);
+        assert!(d.azel_ok(), "one refusal is not an az-only mount");
+        assert_eq!(
+            d.step(15.0, 25.0),
+            RotStep::PointAzEl { az: 15.0, el: 25.0 },
+            "the next command still carries the elevation"
+        );
+        // An elevation accepted in between starts the count again.
+        d.record(
+            RotStep::PointAzEl { az: 15.0, el: 25.0 },
+            RotOutcome::AzElOk,
+            15.0,
+            25.0,
+        );
+        let s = d.step(20.0, 30.0);
+        d.record(s, RotOutcome::AzOnly, 20.0, 30.0);
+        assert!(d.azel_ok(), "refusals in a row, not refusals in a pass");
+        // The control: refused twice in a row, the mount is az-only.
+        let s = d.step(25.0, 35.0);
+        d.record(s, RotOutcome::AzOnly, 25.0, 35.0);
+        assert!(!d.azel_ok());
+        assert_eq!(d.step(30.0, 40.0), RotStep::PointAz { az: 30.0 });
+    }
+
+    #[test]
+    fn a_rotator_given_up_on_is_asked_again_and_taken_back_when_it_answers() {
+        let mut d = TrackDriver::new(RotatorConfig::default());
+        let s = d.step(10.0, 20.0);
+        d.record(s, RotOutcome::AzElOk, 10.0, 20.0);
+        // Not given up: never a re-probe.
+        for _ in 0..(3 * REPROBE_AFTER_TICKS) {
+            assert!(!d.reprobe_due());
+        }
+        for i in 1..=MISS_LIMIT {
+            let s = d.step(10.0 + i as f64 * 5.0, 20.0);
+            d.record(s, RotOutcome::Failed, 10.0 + i as f64 * 5.0, 20.0);
+        }
+        assert!(d.gave_up());
+        // Asked again every REPROBE_AFTER_TICKS ticks, not every tick: a dead controller is not
+        // hammered.
+        let due: Vec<bool> = (0..(2 * REPROBE_AFTER_TICKS))
+            .map(|_| d.reprobe_due())
+            .collect();
+        let at: Vec<usize> = due
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| **d)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            at,
+            [
+                REPROBE_AFTER_TICKS as usize - 1,
+                2 * REPROBE_AFTER_TICKS as usize - 1
+            ]
+        );
+        // It answered: the mast is the pass's again, and the next tick commands it even where
+        // the last command before the give-up would have held — the mast may have been turned
+        // by hand since.
+        d.answered();
+        assert!(!d.gave_up());
+        assert_eq!(d.last_aim(), None, "nothing commanded since the give-up");
+        assert_eq!(
+            d.step(10.0, 20.0),
+            RotStep::PointAzEl { az: 10.0, el: 20.0 }
+        );
+        assert!(!d.reprobe_due());
     }
 
     #[test]

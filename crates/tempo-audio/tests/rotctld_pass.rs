@@ -200,13 +200,16 @@ fn send(addr: &str, step: RotStep) -> RotOutcome {
         RotStep::Hold => RotOutcome::AzOk,
         RotStep::PointAzEl { az, el } => match tempo_audio::rotator::point_azel(addr, az, el) {
             Ok(()) => RotOutcome::AzElOk,
-            Err(_) => {
+            // Only an ANSWER that the mount does not take the elevation; silence, Hamlib's own
+            // timeout and its I/O error are a rotator that did not answer.
+            Err(e) if tempo_audio::rotator::says_unsupported(&e) => {
                 if tempo_audio::rotator::point(addr, az).is_ok() {
                     RotOutcome::AzOnly
                 } else {
                     RotOutcome::Failed
                 }
             }
+            Err(_) => RotOutcome::Failed,
         },
         RotStep::PointAz { az } => {
             if tempo_audio::rotator::point(addr, az).is_ok() {
@@ -345,8 +348,10 @@ fn an_az_only_rotator_still_tracks_the_whole_pass() {
     let pass = a_real_pass();
 
     let mut driver = TrackDriver::new(RotatorConfig::default());
-    // Teach the driver this rotator refuses elevation, then fly the real pass.
+    // Teach the driver this rotator refuses elevation (twice in a row, as an az-only mount
+    // does: `EL_REFUSALS_TO_LEARN`), then fly the real pass.
     let first = driver.step(0.0, 0.0);
+    driver.record(first, RotOutcome::AzOnly, 0.0, 0.0);
     driver.record(first, RotOutcome::AzOnly, 0.0, 0.0);
     assert!(!driver.azel_ok());
 

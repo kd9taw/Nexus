@@ -7313,6 +7313,7 @@ export const ZH_HANT: PartialCatalog = {
   "rotor.pane.hint": "點選羅盤或輸入方位 · 方位均為真方位",
   "rotor.pane.hint.noPosition": "該旋轉器不報告位置 — 指向與 STOP 仍可用",
   "rotor.pane.notAnswering": "旋轉器控制器沒有響應。它是否已開機並接好線？Nexus 會持續嘗試連線。",
+  "rotor.pane.stale": "上次讀數：旋轉器沒有回應最近一次查詢。Nexus 會繼續查詢。",
   "rotor.pane.slew.failed": "旋轉器：{{error}}",
   "rotor.pane.el.title": "相對地平線的仰角 · 該旋轉器可達 {{min}}–{{max}}°",
   "rotor.pane.commandedEl.title": "已下發的仰角 — 天線正在轉過去",

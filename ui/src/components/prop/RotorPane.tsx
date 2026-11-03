@@ -62,6 +62,7 @@ import { pushToast } from '../../toast'
 import { t } from '../../i18n'
 import { pollSingleFlight } from '../../singleFlight'
 import { follow, gap, pending, ROTATOR_POLL_MS, type Pending } from '../../features/rotorTargets'
+import { FRESH, observe, shown as liveView, type Liveness } from '../../features/rotorLiveness'
 import { fmtDistanceKm, useUnits } from '../../units'
 import { pointedTo, rotorPointAt } from '../rotorPointAt'
 import { useRotorFit } from './rotorFit'
@@ -124,6 +125,10 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
   // controller that is switched off answers nothing, and "pointing still works" is then untrue
   // (a tester read "Error 61" on every command).
   const [reading, setReading] = useState<RotatorState['reading'] | null>(null)
+  // The grace (features/rotorLiveness): a rotator that has answered keeps its last reading, drawn
+  // as stale, until it has missed a few polls in a row, so one lost reply is not a lost rotator.
+  const live = useRef<Liveness>(FRESH)
+  const [stale, setStale] = useState(false)
   const alive = useRef(true)
   const units = useUnits()
   // LINE 2's call: the desktop's only (see the header).
@@ -147,20 +152,29 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
       Promise.allSettled([
         readRotatorState().then((st) => {
           if (!owns()) return
-          setAz(st?.azDeg ?? null)
-          setReading(st?.reading ?? null)
-          setEl(st?.elDeg ?? null)
+          live.current = observe(live.current, st)
+          const v = liveView(live.current)
+          setStale(v.stale)
+          setAz(v.state?.azDeg ?? null)
+          setReading(v.state?.reading ?? null)
+          setEl(v.state?.elDeg ?? null)
           // Absent: rotctld did not answer what the rotator can do this time, so what was
           // known stands. No rotator at all is null.
           if (st == null) setElRange(null)
           else if (st.elRange !== undefined) setElRange(st.elRange)
-          pendingAz.current = follow(pendingAz.current, st?.azDeg ?? null, true)
-          pendingEl.current = follow(pendingEl.current, st?.elDeg ?? null, false)
+          // A stale reading is the last one again: it says nothing new about where a slew got to.
+          if (!v.stale) {
+            pendingAz.current = follow(pendingAz.current, v.state?.azDeg ?? null, true)
+            pendingEl.current = follow(pendingEl.current, v.state?.elDeg ?? null, false)
+          }
         }).catch(() => {
           if (!owns()) return
-          setAz(null)
-          setReading(null)
-          setEl(null)
+          live.current = observe(live.current, 'failed')
+          const v = liveView(live.current)
+          setStale(v.stale)
+          setAz(v.state?.azDeg ?? null)
+          setReading(v.state?.reading ?? null)
+          setEl(v.state?.elDeg ?? null)
         }),
         getSatTrackStatus().then((t) => {
           if (!owns()) return
@@ -341,14 +355,24 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
               className="rotor-needle target"
             />
           )}
-          {cur && <line x1={SIZE / 2} y1={SIZE / 2} x2={cur.x} y2={cur.y} className="rotor-needle" />}
+          {cur && (
+            <line
+              x1={SIZE / 2}
+              y1={SIZE / 2}
+              x2={cur.x}
+              y2={cur.y}
+              className={stale ? 'rotor-needle stale' : 'rotor-needle'}
+            />
+          )}
           <circle cx={SIZE / 2} cy={SIZE / 2} r={3} className="rotor-hub" />
         </svg>
         <div className="rotor-side">
           <div
-            className="rotor-az mono"
+            className={stale ? 'rotor-az mono stale' : 'rotor-az mono'}
             title={
-              az == null
+              stale
+                ? t('rotor.pane.stale')
+                : az == null
                 ? silent
                   ? t('rotor.pane.notAnswering')
                   : t('rotor.pane.az.title.unknown')
@@ -498,7 +522,9 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
             </div>
           )}
           <p className="rotor-hint">
-            {az != null
+            {stale
+              ? t('rotor.pane.stale')
+              : az != null
               ? elRange
                 ? t('rotor.pane.hint.azel')
                 : t('rotor.pane.hint')
