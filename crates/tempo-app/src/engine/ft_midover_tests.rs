@@ -656,6 +656,28 @@ fn after_our_rr73_the_partners_73_rr73_or_rrr_changes_nothing() {
     }
 }
 
+/// #416, the first and only RR73 (default settings): W1AW's 73, RR73 or RRR heard while it is on
+/// the air does not switch or cut it, nothing follows it at the next key, and the contact is
+/// logged once. WSJT-X turned Enable Tx off as this RR73 keyed (:8125-8141), so nothing it hears
+/// now is processed (:7537-7541). CONTROL: W1AW repeating its R-12 mid-over does not switch the
+/// over either (it is already our RR73), and the contact is still logged once.
+#[test]
+fn the_partners_closing_during_our_only_rr73_changes_nothing() {
+    for heard in [BYE73_TO_US, RR73_TO_US, RRR_TO_US, "KD9TAW W1AW R-12"] {
+        let mut e = station();
+        work(&mut e, "KD9TAW W1AW R-12", -10, 100);
+        assert_eq!(key(&mut e, 100).as_deref(), Some(RR73), "{heard}: premise");
+        hear(&mut e, heard, -21, 100);
+        let mut route = Route::new(80_000);
+        assert_eq!(route.switch(&mut e, 100, at(100, 2_500.0)), None, "{heard}");
+        assert!(route.handed.is_none(), "{heard}");
+        if heard != "KD9TAW W1AW R-12" {
+            assert_eq!(key(&mut e, 102), None, "{heard}: nothing after it");
+        }
+        assert_eq!(e.stored_log().len(), 1, "{heard}: logged once");
+    }
+}
+
 /// ⛔ #236: only W1AW's own roger to us answers our
 /// RRR with 73. A bystander's RR73 to us, W1AW's RR73 to another station and a Fox's multiplex
 /// whose sender-less first half is addressed to us never key a 73, mid-over or at the next key.

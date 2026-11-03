@@ -34279,8 +34279,9 @@ contact yourself."
     /// `now - (m_ntx-2)*int(T/R) - int(fmod(seconds of the minute, T/R))`, with `m_ntx` the Tx
     /// message selected then (`mainwindow_slots.cpp:496-500`, `on_logQSOButton_clicked`). Our
     /// queued over gives that number, a contact at Done whose 73 has gone gives Tx5, and one
-    /// still `Confirming` whose RR73 has gone (#416, `after_tx`) gives Tx4, as it did while the
-    /// RR73 stayed queued. Tx1 is
+    /// still `Confirming` with nothing queued because its RR73 has gone (#416, `after_tx`) gives
+    /// Tx4, as it did while the RR73 stayed queued; one with a free-text over queued gives now,
+    /// as before. Tx1 is
     /// counted as Tx2, the period's own start, where WSJT-X's formula would put the start AFTER
     /// now. With no contact with `dxcall` in the sequencer (a contact rescued after the run left
     /// it), the start is now, as before.
@@ -34295,7 +34296,7 @@ contact yourself."
             {
                 wsjtx_tx_number(station.pending.as_ref()).or(match station.state {
                     QsoState::Done => Some(5),
-                    QsoState::Confirming => Some(4),
+                    QsoState::Confirming if station.pending.is_none() => Some(4),
                     _ => None,
                 })
             }
