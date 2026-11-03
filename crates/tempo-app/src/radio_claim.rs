@@ -173,6 +173,11 @@ pub struct Tentative<'a> {
 }
 
 impl Tentative<'_> {
+    /// The endpoint this reservation is for (`None`: a radio with no endpoint).
+    pub fn endpoint(&self) -> Option<&str> {
+        self.endpoint.as_deref()
+    }
+
     /// The switch went through: the new radio is this window's, and the old one is let go of,
     /// still watched for a while to cover its daemon.
     pub fn commit(self) {
@@ -524,6 +529,26 @@ pub fn tentative_profile(
         Some(c) => c.tentative(cat_endpoint(p).as_deref(), patience).map(Some),
         None => Ok(None),
     }
+}
+
+/// Commit `reserved` (made for radio `id` before the engine lock was taken) only if the engine is
+/// about to switch to that radio, as `s` stands NOW, under the lock: `id` is not already active,
+/// still exists, is enabled, and its endpoint is still the one reserved. Otherwise the reservation
+/// drops (the engine will not switch, or will switch to a different port, whose own at-once claim
+/// then decides), and the claim stays on the radio this window still drives. True when committed.
+pub fn commit_if_switching(
+    reserved: Tentative<'_>,
+    s: &crate::settings::Settings,
+    id: u32,
+) -> bool {
+    let still = s.active_radio != id
+        && s.radios
+            .iter()
+            .any(|r| r.id == id && r.enabled && cat_endpoint(r).as_deref() == reserved.endpoint());
+    if still {
+        reserved.commit();
+    }
+    still
 }
 
 /// A settings save that would put this window's active radio on an endpoint another live window

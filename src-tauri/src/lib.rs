@@ -3558,7 +3558,8 @@ mod picker_radio_hold_tests {
         assert!(
             at(switch, "tentative_profile(p, true)?")
                 < at(switch, "let mut eng = engine_lock(&state);")
-                && at(switch, "reserved.commit()") < at(switch, "eng.set_active_radio(id)")
+                && at(switch, "commit_if_switching(reserved, eng.settings(), id)")
+                    < at(switch, "eng.set_active_radio(id)")
         );
 
         // A settings save: refused before it is applied, and the claim moved after.
@@ -27220,10 +27221,25 @@ fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapsh
     };
     let snap = {
         let mut eng = engine_lock(&state);
+        // Committed only for a switch the engine is about to make, as the settings stand NOW
+        // (a save may have disabled the target or moved its port since the reservation). Else it
+        // drops, and the claim stays on the radio this window still drives.
         if let Some(reserved) = reserved {
-            reserved.commit();
+            tempo_app::radio_claim::commit_if_switching(reserved, eng.settings(), id);
         }
         eng.set_active_radio(id);
+        // The engine refused the switch because the target's port (moved by such a save) is
+        // another window's: say so, as for any other radio another window runs.
+        if eng.settings().active_radio != id
+            && eng
+                .settings()
+                .radios
+                .iter()
+                .find(|r| r.id == id)
+                .is_some_and(tempo_app::radio_claim::profile_held_elsewhere)
+        {
+            return Err(tempo_app::radio_claim::REFUSAL.to_string());
+        }
         persist_settings(eng.settings().clone(), |e| {
             eprintln!("tempo: set_active_radio save failed: {e}")
         });
@@ -47218,9 +47234,12 @@ fn retry_the_refused_radio(engine: SharedEngine) {
         // Patient, off the engine lock.
         if claim_active_radio(&engine).is_ok() {
             tempo_core::applog::info("radio", "the radio is free again; starting it");
-            // The settings are read again INSIDE the release, under the gate's lock: a switch
-            // between the claim and here moved the claim itself, and the loop must start on the
-            // radio the station is on now, not the one asked about a moment ago.
+            // The settings are read again INSIDE the release, just as it starts the loop, so the
+            // loop starts on the radio the station is on now, not the one the claim above asked
+            // about: a switch in between moved the claim itself. `release` has already let go of
+            // the gate's mutex by then, so a switch can still land in the microseconds between
+            // this read and the start; the loop then follows it on its first tick, as it follows
+            // any switch.
             PICKER_HELD_RADIO.release(|(engine, cfg)| {
                 let now = engine_lock(&engine).settings().clone();
                 start_radio_loop((engine, radio_config_now(cfg, &now)))

@@ -607,6 +607,13 @@ impl Request {
             },
             None => None,
         };
+        // TESTS: the instant before the write boundary, where a refusal must leave the claim alone.
+        #[cfg(test)]
+        tests::BEFORE_WRITE.with(|hook| {
+            if let Some(hook) = hook.take() {
+                hook();
+            }
+        });
         // Selection changes station state even when CAT setup was a no-op.
         // Never wait behind a decoder after crossing this boundary.
         if let Err(reason) = self.permission.begin_write(Instant::now()) {
@@ -1211,6 +1218,72 @@ mod tests {
             !claims.holds(&in_ep),
             "and not move to the radio never switched to"
         );
+    }
+
+    thread_local! {
+        /// Run once, on this thread, just before `commit_with_install`'s `begin_write`.
+        pub(super) static BEFORE_WRITE: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+            const { std::cell::Cell::new(None) };
+    }
+
+    /// Review 4's probe P1, at the real write boundary: the incoming radio is reserved (another
+    /// window sees it held), then the browser's authority is revoked at the very instant before
+    /// `begin_write`. The selection is refused there, the claim stays on the radio still driven,
+    /// and the reservation is let go of.
+    #[test]
+    fn a_refusal_at_begin_write_itself_leaves_the_claim_on_the_driven_radio() {
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("nexus-claims-p1-{pid}"));
+        let claims = crate::radio_claim::claims_for_this_thread(dir.clone());
+        let (mut engine, incoming, connection) = station();
+        let in_port = format!("/dev/nexus-p1-in-{pid}");
+        let old_port = format!("/dev/nexus-p1-old-{pid}");
+        for p in engine.settings.radios.iter_mut() {
+            p.rig_model = 1029;
+            p.ptt_method = "cat".into();
+            p.serial_port = if p.id == incoming {
+                in_port.clone()
+            } else {
+                old_port.clone()
+            };
+        }
+        let in_ep = format!("serial:{in_port}");
+        let old_ep = format!("serial:{old_port}");
+        claims.claim(&old_ep).unwrap();
+        let authority = Revocation::default();
+        let _completion = engine
+            .queue_remote_radio_selection(incoming, connection, permit(&authority))
+            .unwrap();
+        let request = engine.take_remote_radio_selection().unwrap();
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (a, ran_in, dir_in, in_ep_in) =
+            (authority.clone(), ran.clone(), dir.clone(), in_ep.clone());
+        BEFORE_WRITE.with(|hook| {
+            hook.set(Some(Box::new(move || {
+                let other = crate::radio_claim::Claims::new(dir_in);
+                assert!(
+                    other.held_elsewhere(&in_ep_in),
+                    "premise: the incoming radio is reserved at the boundary"
+                );
+                a.revoke();
+                ran_in.store(true, std::sync::atomic::Ordering::SeqCst);
+            })))
+        });
+        assert!(!commit(request, &mut engine, |_| panic!("no install")));
+        assert!(
+            ran.load(std::sync::atomic::Ordering::SeqCst),
+            "the boundary was reached"
+        );
+        assert_eq!(engine.settings.active_radio, 0);
+        assert!(claims.holds(&old_ep), "the claim stays on the driven radio");
+        assert!(!claims.holds(&in_ep));
+        let third = crate::radio_claim::Claims::new(dir.clone());
+        assert_eq!(third.claim(&in_ep), Ok(()), "the reservation was let go of");
+        assert!(
+            third.held_elsewhere(&old_ep),
+            "the old radio still reads as held"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The order the write boundary depends on, source-scanned because a refusal AT
