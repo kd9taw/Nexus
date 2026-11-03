@@ -8668,6 +8668,21 @@ impl RadioLoop {
                 // that confirms its SPLIT is off, so the radio chosen again after it owes nothing.
                 let release_owed =
                     rig.split_release_pending && want.rig_model == self.applied.rig_model;
+                // ⛔ SO DO THE WATCH FOR A LATE KEY AND A TUNE-UP'S CYCLE, which the handoff resets
+                // too (`reset_for_handoff`). A rebuild onto another model, or onto another of the
+                // operator's radios (the active radio is not the one this link served), is another
+                // radio: a key left late on the old one is not this one's, and this one's own PTT
+                // (its microphone) is not the watch's business. The same radio reconnected keeps
+                // both: a key owed on the dropped link can still reach it after the release
+                // (#429). A loop that has served no radio yet keeps them: the watch only unkeys.
+                let same_radio = want.rig_model == self.applied.rig_model
+                    && self
+                        .remote_radio_id
+                        .is_none_or(|served| served == remote_want_radio);
+                if !same_radio {
+                    self.key_watch_until = None;
+                    self.atu_tune_started_at = None;
+                }
                 // Whether `reopen_rig` may auto-coexist onto a rigctld ALREADY listening on the new
                 // port (see `allow_coexist_on_swap`). We must NOT coexist onto our OWN daemon that
                 // we're about to kill — its corpse would keep commanding the OLD radio (the dual-radio

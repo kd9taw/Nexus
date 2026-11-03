@@ -53882,8 +53882,24 @@ mod tests {
     /// rigctld could never start there and the radio was refused as Nexus itself. Now sharing
     /// serves on the next free port and P stays free: the operator's rigctld binds it, and a
     /// client on P reaches that rigctld, not Nexus. Real sockets, the station's own lists.
+    ///
+    /// P has to be free with nothing listening on it (the operator's rigctld is not running yet),
+    /// so it is a port the system handed out and let go of. A test running alongside can be handed
+    /// the same port in between and hold it when the operator's rigctld binds; that run is not
+    /// about sharing (sharing is already proved off P by then), so it starts over on a fresh port.
     #[test]
     fn sharing_leaves_the_operators_rigctld_port_free_when_nothing_is_on_it_yet() {
+        for _ in 0..20 {
+            if operators_rigctld_binds_its_port_beside_sharing() {
+                return;
+            }
+        }
+        panic!("another program took the operator's rigctld port on every try");
+    }
+
+    /// One run of the test above on a fresh port: `false` when something outside the test took the
+    /// port before the operator's rigctld could bind it.
+    fn operators_rigctld_binds_its_port_beside_sharing() -> bool {
         use std::io::{Read, Write};
         let probe = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = probe.local_addr().unwrap().port();
@@ -53904,14 +53920,19 @@ mod tests {
         assert_ne!(got, port, "sharing took the operator's rigctld port");
         assert!(got > port && got <= port.saturating_add(super::BROKER_MOVE_SPAN));
         // The operator starts their rigctld now: its port is free, and a client reaches it.
-        let rigctld = std::net::TcpListener::bind(("127.0.0.1", port))
-            .expect("the operator's rigctld can bind its port");
+        let rigctld = match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => l,
+            // Sharing is on `got`, not P (asserted above): whatever holds P is outside the test.
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return false,
+            Err(e) => panic!("the operator's rigctld could not bind its port: {e}"),
+        };
         let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
         c.write_all(b"f\n").unwrap();
         let (mut srv, _) = rigctld.accept().unwrap();
         let mut buf = [0u8; 2];
         srv.read_exact(&mut buf).unwrap();
         assert_eq!(&buf, b"f\n");
+        true
     }
 
     /// The reserved port is never even tried, and never moved onto; a port no radio expects

@@ -492,3 +492,215 @@ fn a_late_key_read_in_the_tick_that_starts_an_atu_tune_up_never_aborts_it() {
     );
     assert!(s.says_keyed_late(), "not said: {:?}", s.banner());
 }
+
+/// Rebuild the CAT link onto the rigctld at `addr`, after the settings change `change` (one tick
+/// of the loop, the rebuild's own).
+fn rebuild_onto(
+    s: &mut Scene,
+    addr: &str,
+    change: impl FnOnce(&mut tempo_app::settings::Settings),
+) {
+    {
+        let mut e = s.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        change(&mut settings);
+        e.apply_settings(settings);
+    }
+    let addr = addr.to_string();
+    let mut reopen = move |_t: &Transport, _coexist: bool| -> RigOpen {
+        (
+            Rig::rigctld(&addr),
+            None,
+            CatProbe::status(Some(true), String::new()),
+        )
+    };
+    let (sinks, mut ra) = (no_sinks(), mock_reopen_audio());
+    let mut station = StationSinks::new();
+    s.state
+        .step(
+            &s.engine,
+            &mut s.backend,
+            &mut s.rig,
+            &sinks,
+            s.t,
+            &mut ra,
+            &mut reopen,
+            &mut station,
+        )
+        .unwrap();
+    s.t += 20.0;
+}
+
+/// A change the operator saves in Settings.
+type SettingsChange = fn(&mut tempo_app::settings::Settings);
+
+/// The ways a rebuild lands on ANOTHER radio: another model, or another of the operator's radios of
+/// the same model (the active radio is not the one the link served). Each is (what, the change, the
+/// radio the link served before it).
+const ANOTHER_RADIO: [(&str, SettingsChange, u32); 2] = [
+    ("another model", |s| s.rig_model += 1, 0),
+    ("another radio of the same model", |s| s.baud = 19_200, 1),
+];
+
+/// ⛔ A REBUILD ONTO ANOTHER RADIO ENDS THE WATCH FOR A LATE KEY, as a handoff does. A Tune key on
+/// radio A is given up on, so the loop watches A's PTT; the operator then picks another radio, and
+/// the CAT link is rebuilt onto it. That radio's own microphone keys it inside what was A's watch:
+/// it stays keyed, and nothing says a late key.
+#[test]
+fn a_rebuild_onto_another_radio_ends_the_watch_for_a_late_key() {
+    for (what, change, served) in ANOTHER_RADIO {
+        let a = Radio::start(armed, None);
+        let b = Radio::start(|_| AT_ONCE, None);
+        let mut s = Scene::new(&a, |e| e.set_tune(true));
+        s.state.remote_radio_id = Some(served);
+        past_the_give_up(&mut s);
+        let until = s.t + 200.0;
+        step_to(
+            &s.engine,
+            &mut s.state,
+            &mut s.backend,
+            &mut s.rig,
+            &mut s.t,
+            until,
+        );
+        assert!(
+            s.state
+                .key_watch_until
+                .is_some_and(|until| Instant::now() < until),
+            "{what}: premise: A's watch is on"
+        );
+        rebuild_onto(&mut s, &b.addr, change);
+        assert!(
+            b.log.lock().unwrap().iter().any(|l| l == "T 0"),
+            "{what}: premise: the link is B's now"
+        );
+        // B's own microphone.
+        b.keyed.store(true, Ordering::SeqCst);
+        let until = s.t + 3_000.0;
+        step_to(
+            &s.engine,
+            &mut s.state,
+            &mut s.backend,
+            &mut s.rig,
+            &mut s.t,
+            until,
+        );
+        assert!(
+            b.keyed.load(Ordering::SeqCst),
+            "{what}: A's watch unkeyed B's microphone"
+        );
+        assert!(!s.says_keyed_late(), "{what}: {:?}", s.banner());
+    }
+}
+
+/// Negative control: a rebuild onto the SAME radio (the link reconnected: a baud change on the
+/// radio the link served) keeps the watch. A Tune key given up on that reaches the radio after the
+/// rebuild is unkeyed by it, and said.
+#[test]
+fn a_rebuild_onto_the_same_radio_keeps_the_watch_for_a_late_key() {
+    let a = Radio::start(armed, Some(Duration::from_millis(4_000)));
+    let mut s = Scene::new(&a, |e| e.set_tune(true));
+    s.state.remote_radio_id = Some(0);
+    past_the_give_up(&mut s);
+    rebuild_onto(&mut s, &a.addr, |s| s.baud = 19_200);
+    s.run_until(Duration::from_secs(9), |s| {
+        s.started.elapsed() > Duration::from_millis(4_100) && !a.keyed.load(Ordering::SeqCst)
+    });
+    assert!(
+        !a.keyed.load(Ordering::SeqCst),
+        "the late key was left on the air after a same-radio rebuild"
+    );
+    s.run_until(Duration::from_secs(10), |s| s.says_keyed_late());
+    assert!(s.says_keyed_late(), "not said: {:?}", s.banner());
+}
+
+/// Start the radio's ATU tune-up on radio A (the heavy poll asks for the tuner first).
+fn tune_up_on(s: &mut Scene, a: &Radio) {
+    s.run_until(Duration::from_secs(5), |s| {
+        s.engine.lock().unwrap().atu_tune_gate().is_ok()
+    });
+    s.engine
+        .lock()
+        .unwrap()
+        .atu_tune()
+        .expect("premise: the ATU press is taken");
+    let sent = |a: &Radio| a.log.lock().unwrap().iter().any(|l| l == "U TUNER 2");
+    let limit = s.started.elapsed() + Duration::from_secs(4);
+    s.run_until(limit, |_| sent(a));
+    assert!(sent(a), "premise: the tune-up was sent");
+}
+
+/// ⛔ A REBUILD ONTO ANOTHER RADIO ENDS THE TUNE-UP'S CYCLE, as a handoff does. Nexus starts radio
+/// A's tune-up, and the operator picks another radio inside its cycle. A key that radio carries out
+/// late, after Nexus let go of it, is unkeyed at once: A's tune-up holds nothing off on it.
+#[test]
+fn a_rebuild_onto_another_radio_ends_the_tune_up_cycle() {
+    for (what, change, served) in ANOTHER_RADIO {
+        let a = Radio::start(|_| AT_ONCE, None);
+        let b = Radio::start(|_| AT_ONCE, None);
+        let mut s = Scene::new(&a, |_| {});
+        s.state.remote_radio_id = Some(served);
+        tune_up_on(&mut s, &a);
+        rebuild_onto(&mut s, &b.addr, change);
+        let sent_t0 = b.log.lock().unwrap().len();
+        // A key of Nexus's B carries out late.
+        b.keyed.store(true, Ordering::SeqCst);
+        s.rig.land_late_key_for_test(Duration::from_secs(4));
+        let next = s.t;
+        step_to(
+            &s.engine,
+            &mut s.state,
+            &mut s.backend,
+            &mut s.rig,
+            &mut s.t,
+            next,
+        );
+        assert!(
+            !b.keyed.load(Ordering::SeqCst),
+            "{what}: B's late key was held off for A's tune-up: {:?}",
+            &b.log.lock().unwrap()[sent_t0..]
+        );
+    }
+}
+
+/// Negative control: a rebuild onto the SAME radio keeps the tune-up's cycle. A late key read on
+/// the reconnected link inside it is held off (a `T 0` aborts a tune-up on most radios), and the
+/// watch takes it once the cycle is over.
+#[test]
+fn a_rebuild_onto_the_same_radio_keeps_the_tune_up_cycle() {
+    let a = Radio::start(|_| AT_ONCE, None);
+    let mut s = Scene::new(&a, |_| {});
+    s.state.remote_radio_id = Some(0);
+    tune_up_on(&mut s, &a);
+    let started = s.t;
+    rebuild_onto(&mut s, &a.addr, |s| s.baud = 19_200);
+    // The radio tuning again (or still) on the reconnected link, and a late key read on it.
+    a.keyed.store(true, Ordering::SeqCst);
+    s.rig.land_late_key_for_test(Duration::from_secs(4));
+    let mid = started + ATU_REPROBE_AFTER_TUNE_MS - 1_000.0;
+    step_to(
+        &s.engine,
+        &mut s.state,
+        &mut s.backend,
+        &mut s.rig,
+        &mut s.t,
+        mid,
+    );
+    assert!(
+        a.keyed.load(Ordering::SeqCst),
+        "the late key was unkeyed inside the tune-up's cycle"
+    );
+    let after = started + ATU_REPROBE_AFTER_TUNE_MS + 3_000.0;
+    step_to(
+        &s.engine,
+        &mut s.state,
+        &mut s.backend,
+        &mut s.rig,
+        &mut s.t,
+        after,
+    );
+    assert!(
+        !a.keyed.load(Ordering::SeqCst),
+        "the key was left on the air after the cycle"
+    );
+}
