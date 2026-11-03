@@ -9955,7 +9955,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.audio.pcMic.title": "電腦麥克風（話音）",
   "settings.audio.pcMic.label": "使用這台電腦的麥克風",
   "settings.audio.pcMic.hint": "開啟：在話音模式下按住 PTT 時，Nexus 會把這台電腦的麥克風，經該電台的發射音訊（上方所選輸出裝置，或 TCI 電台的 TCI 音訊）送入電台，並用電腦音訊為該電台鍵控。關閉（預設）：PTT 鍵控電台自帶的麥克風，與從前一樣。僅限話音模式；數字模式從不使用。Stop TX（停止發射）或 TX Off（關閉 TX）會立即切斷；鬆開 PTT 會讓你最後一個字的尾音播完（最長 0.2 秒），隨後解除鍵控。",
-  "settings.audio.pcMic.radioInput": "在話音模式下，電台也必須發射從其 USB 或後面板輸入送來的音訊。若 CAT PTT 鍵控的是電台的麥克風輸入（發射音訊來源為「前面板/麥克風」，或電台沒有這個選項），請在電台上設定，例如把 Yaesu FTDX10 的 SSB MOD SOURCE 設為 REAR；否則 PTT 會鍵控電台，但發出去的是電台自己的麥克風，而不是這支麥克風。",
+  "settings.audio.pcMic.radioInput": "在 Yaesu FTDX10 這類電台上，只有電台的 SSB MOD SOURCE 選單設為 REAR（USB）時，這支麥克風才會被發射出去。PTT 讓電台在 USB 或 LSB 下發射；若 SSB MOD SOURCE 為 MIC（出廠設定），電台發射的是它自己的麥克風，而不是這支麥克風。Nexus 不會更改電台的選單。",
   "settings.audio.pcMic.device.label": "麥克風",
   "settings.audio.pcMic.device.none": "選擇麥克風…",
   "settings.audio.pcMic.device.hint": "絕不要用系統預設裝置，也絕不要用該電台的接收輸入。若發射過程中麥克風消失，電台會解除鍵控。",

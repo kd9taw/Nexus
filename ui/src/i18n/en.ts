@@ -8650,7 +8650,7 @@ export const EN = {
   'settings.audio.pcMic.hint':
     'On: while you hold PTT in Phone, Nexus sends this computer\'s microphone to this radio through its transmit audio (the output device above, or TCI audio on a TCI radio) and keys the radio for computer audio. Off (the default): PTT keys the radio\'s own microphone, as before. Phone only; the digital modes never use it. Stop TX or TX Off cuts it at once; releasing PTT lets the end of your last word finish (at most 0.2 s), then unkeys.',
   'settings.audio.pcMic.radioInput':
-    'The radio must transmit the audio arriving on its USB or rear input in voice modes too. Where CAT PTT keys its microphone input (Transmit audio source Front/Mic, or a radio without that choice), set that on the radio, for example SSB MOD SOURCE to REAR on a Yaesu FTDX10; otherwise PTT keys the radio and its own microphone goes out, not this one.',
+    'On radios like the Yaesu FTDX10, this microphone goes out only if the radio\'s SSB MOD SOURCE menu is set to REAR (USB). PTT keys the radio in USB or LSB, and with SSB MOD SOURCE on MIC, the factory setting, the radio transmits its own microphone instead of this one. Nexus does not change the radio\'s menus.',
   'settings.audio.pcMic.device.label': 'Microphone',
   'settings.audio.pcMic.device.none': 'Choose a microphone…',
   'settings.audio.pcMic.device.hint':

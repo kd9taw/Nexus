@@ -5508,7 +5508,7 @@ export const JA: PartialCatalog = {
   "settings.audio.pcMic.title": "このコンピューターのマイク（Phone）",
   "settings.audio.pcMic.label": "このコンピューターのマイクを使う",
   "settings.audio.pcMic.hint": "オン：PhoneでPTTを押している間、Nexusはこのコンピューターのマイクを送信オーディオ（上の出力デバイス、TCI無線機ではTCIオーディオ）でこの無線機に送り、コンピューター音声用に送信状態にします。オフ（既定）：PTTはこれまでどおり無線機自身のマイクで送信します。Phoneのみで、デジタルモードでは使いません。Stop TX、TX Offで即座に止まります。PTTを離すと、最後の言葉の終わり（最大 0.2 秒）を送ってから送信を止めます。",
-  "settings.audio.pcMic.radioInput": "無線機は音声モードでも、USB端子または背面入力に届くオーディオを送信する必要があります。CAT PTTがマイク入力で送信する無線機（送信音声ソースが前面/マイク、またはその選択肢がない無線機）では、無線機側で設定してください。例：Yaesu FTDX10ではSSB MOD SOURCEをREARにします。設定しないと、PTTで無線機は送信しますが、このマイクではなく無線機自身のマイクの音声が出ます。",
+  "settings.audio.pcMic.radioInput": "Yaesu FTDX10のような無線機では、無線機のSSB MOD SOURCEメニューがREAR（USB）に設定されている場合にのみ、このマイクの音声が送信されます。PTTは無線機をUSBまたはLSBで送信状態にし、SSB MOD SOURCEがMIC（工場出荷時の設定）のままだと、このマイクではなく無線機自身のマイクの音声が送信されます。Nexusは無線機のメニューを変更しません。",
   "settings.audio.pcMic.device.label": "マイク",
   "settings.audio.pcMic.device.none": "マイクを選択…",
   "settings.audio.pcMic.device.hint": "システムの既定デバイスやこの無線機の受信入力は使いません。送信中にマイクが外れると、無線機は受信に戻ります。",
