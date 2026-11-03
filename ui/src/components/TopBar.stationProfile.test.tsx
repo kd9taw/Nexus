@@ -58,6 +58,38 @@ describe('the My station picker', () => {
     expect(onSwitch).toHaveBeenCalledWith('p1')
   })
 
+  it('is the callsign block itself, so it adds nothing to the bar’s line', () => {
+    const { container } = renderBar({ stationProfiles: both, activeStationProfile: 'home', onSwitchStationProfile: vi.fn() })
+    const id = container.querySelector('header.topbar .brand > .mycall')
+    expect(id?.classList.contains('mycall-picker')).toBe(true)
+    expect(id?.querySelector('select.station-profile-picker'), 'the select stands inside the callsign block').toBe(screen.getByLabelText('Station profile'))
+    expect(container.querySelector('.brand > select'), 'no select of its own in the bar’s line').toBeNull()
+    cleanup()
+    // Control: no profiles, the plain callsign block.
+    const plain = renderBar({ stationProfiles: undefined }).container.querySelector('.brand > .mycall')
+    expect(plain?.classList.contains('mycall-picker')).toBe(false)
+    expect(plain?.querySelector('select')).toBeNull()
+  })
+
+  it('names the profile in use in its tooltip, so two with one call and grid are told apart', () => {
+    const twins: StationProfileChoice[] = [
+      { id: 'home', name: '', call: 'KD9TAW' },
+      { id: 'p1', name: 'Portable', call: 'KD9TAW/P' },
+      { id: 'p2', name: "Devil's Lake State Park", call: 'KD9TAW/P' },
+    ]
+    renderBar({ stationProfiles: twins, activeStationProfile: 'p2', onSwitchStationProfile: vi.fn() })
+    const picker = screen.getByLabelText('Station profile') as HTMLSelectElement
+    expect(picker.title.split('\n')[0]).toBe("Profile: Devil's Lake State Park")
+    expect(picker.title.split('\n')[1]).toMatch(/^My station profile:/)
+    cleanup()
+    renderBar({ stationProfiles: twins, activeStationProfile: 'p1', onSwitchStationProfile: vi.fn() })
+    expect((screen.getByLabelText('Station profile') as HTMLSelectElement).title.split('\n')[0]).toBe('Profile: Portable')
+    cleanup()
+    // Control: an active id no profile has names none, and the why-text stands alone.
+    renderBar({ stationProfiles: twins, activeStationProfile: 'gone', onSwitchStationProfile: vi.fn() })
+    expect((screen.getByLabelText('Station profile') as HTMLSelectElement).title).toMatch(/^My station profile:/)
+  })
+
   it('waits, saying why, while a run, a contact or an over is under way', () => {
     const onSwitch = vi.fn()
     renderBar({
@@ -65,7 +97,7 @@ describe('the My station picker', () => {
     })
     const picker = screen.getByLabelText('Station profile') as HTMLSelectElement
     expect(picker.disabled).toBe(true)
-    expect(picker.title).toBe('Waits for the run or contact to end: stop transmitting and press S&P, then switch.')
+    expect(picker.title).toBe('Profile: Home\nWaits for the run or contact to end: stop transmitting and press S&P, then switch.')
     cleanup()
     renderBar({
       stationProfiles: both, activeStationProfile: 'home', stationProfileLocked: false, onSwitchStationProfile: onSwitch,
@@ -78,6 +110,6 @@ describe('the My station picker', () => {
     renderBar({ stationProfiles: both, activeStationProfile: 'home', onSwitchStationProfile: vi.fn() })
     const picker = screen.getByLabelText('Station profile') as HTMLSelectElement
     expect(picker.disabled).toBe(true)
-    expect(picker.title).toBe('Switched at the station only.')
+    expect(picker.title).toBe('Profile: Home\nSwitched at the station only.')
   })
 })

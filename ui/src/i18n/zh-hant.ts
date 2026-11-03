@@ -10231,6 +10231,7 @@ export const ZH_HANT: PartialCatalog = {
   "amp.op.waiting": "已傳送 — 正在等待功放",
   "topbar.stationProfile.label": "台站設定檔",
   "topbar.stationProfile.title": "我的台站設定檔：其呼號、網格與位置會寫入新通聯。在 設定 ▸ 本台 中設定。",
+  "topbar.stationProfile.active": "設定檔：{{name}}",
   "topbar.stationProfile.atStation": "只能在台站處切換。",
   "topbar.stationProfile.busy": "需等這一輪呼叫或通聯結束：停止發射並按 S&P，然後再切換。",
 }

@@ -9752,6 +9752,7 @@ export const FR: PartialCatalog = {
   "topbar.field.label": "Field",
   "topbar.stationProfile.label": "Profil de station",
   "topbar.stationProfile.title": "Mon profil de station : son indicatif, son locator et son lieu vont sur les nouveaux contacts. À régler dans Réglages ▸ Station.",
+  "topbar.stationProfile.active": "Profil : {{name}}",
   "topbar.stationProfile.atStation": "Se change à la station uniquement.",
   "topbar.stationProfile.busy": "Attend la fin du run ou du contact : arrêtez d’émettre et appuyez sur S&P, puis changez.",
   "topbar.field.off.title": "Mode Field pour trafiquer dehors : caractères plus grands, contraste maximal",

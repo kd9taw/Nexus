@@ -607,6 +607,37 @@
   background: transparent;
   border-bottom: 0;
 }
+/* THE "MY STATION" PICKER (components/TopBar, shown with two or more station profiles) is the CALLSIGN
+   BLOCK ITSELF: the select stands over the call and grid, out of the bar's line, with its own text
+   transparent (the call and grid under it are what reads). Its box reaches 10 px past them, into the
+   brand group's 10 px gap, and its arrow (every select's, styles.css `select`) is moved into that
+   overhang — `!important` only because that arrow's placement is. So showing it changes no width in
+   the bar. A 9.5em select in the line wrapped the now-bar to a second line at 1920×1080 on Operate
+   (the bar has a few px of slack there) and pushed the Logbook's TX cluster 113 px along
+   (profiles-probe). Each profile's full name is in the open list. The keyboard focus ring is the
+   select's own outline, which a transparent text colour leaves drawn. */
+.mycall-picker {
+  position: relative;
+}
+.station-profile-picker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(100% + 10px);
+  height: 100%;
+  min-width: 0;
+  max-width: none;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background-color: transparent;
+  background-position: right 5px center, right 0 center !important;
+  color: transparent;
+  /* High Contrast forces a select's colour to CanvasText, which drew its own text over the call. */
+  forced-color-adjust: none;
+  font-size: inherit;
+  cursor: pointer;
+}
 /* …and the SHORT-WINDOW TIER's step (see `.cockpit-txdock`) on the top bar's padding and gap and on the
    cockpit header's gaps: TIGHT at an effective height of 1100 px and below, STOCK above. Spacing only.
    Published as CUSTOM PROPERTIES on `.app`, which the bar's and the header's own rules in styles.css read

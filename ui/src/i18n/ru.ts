@@ -930,6 +930,7 @@ export const RU: PartialCatalog = {
   "topbar.field.label": "Полевой",
   "topbar.stationProfile.label": "Профиль станции",
   "topbar.stationProfile.title": "Профиль моей станции: его позывной, локатор и место попадают в новые связи. Настройка: Настройки ▸ Станция.",
+  "topbar.stationProfile.active": "Профиль: {{name}}",
   "topbar.stationProfile.atStation": "Переключается только на станции.",
   "topbar.stationProfile.busy": "Ждёт окончания серии или связи: остановите передачу и нажмите S&P, затем переключите.",
   "topbar.field.on.title": "Полевой режим включён: крупный шрифт, максимальная контрастность. Щёлкните, чтобы выключить.",

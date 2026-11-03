@@ -539,6 +539,10 @@ export function TopBar({
       </div>
   )
 
+  const showStationPicker = stationProfiles != null && stationProfiles.length > 1
+  // The bar draws only the call and grid, so the tooltip names the profile: two with one call and grid
+  // are told apart there.
+  const activeProfile = stationProfiles?.find((p) => p.id === activeStationProfile)
   const nowSlot = nowBar != null ? <div className="topbar-now">{nowBar}</div> : null
 
   return (
@@ -548,30 +552,36 @@ export function TopBar({
           <span className="logo">{NEXUS}</span>
           {version && <span className="app-version">v{version}</span>}
         </span>
-        <span className="mycall">
+        {/* With two or more "My station" profiles the callsign block IS the picker: the select stands
+            over the call and grid (its arrow just past them), out of the bar's line, so showing it
+            never widens the bar — a wrap there moved the TX cluster (cockpit-panes.css). */}
+        <span className={`mycall${showStationPicker ? ' mycall-picker' : ''}`}>
           {mycall}
           <span className="mygrid">{mygrid}</span>
+          {showStationPicker && (
+            <select
+              className="station-profile-picker"
+              aria-label={t('topbar.stationProfile.label')}
+              title={[
+                activeProfile && t('topbar.stationProfile.active', { name: stationProfileName(activeProfile) }),
+                drivesAnotherStation()
+                  ? t('topbar.stationProfile.atStation')
+                  : stationProfileLocked
+                    ? t('topbar.stationProfile.busy')
+                    : t('topbar.stationProfile.title'),
+              ].filter(Boolean).join('\n')}
+              disabled={drivesAnotherStation() || stationProfileLocked || !onSwitchStationProfile}
+              value={activeStationProfile ?? ''}
+              onChange={(e) => onSwitchStationProfile?.(e.target.value)}
+            >
+              {stationProfiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {stationProfileName(p)} · {p.call}
+                </option>
+              ))}
+            </select>
+          )}
         </span>
-        {stationProfiles && stationProfiles.length > 1 && (
-          <select
-            className="station-profile-picker"
-            aria-label={t('topbar.stationProfile.label')}
-            title={drivesAnotherStation()
-              ? t('topbar.stationProfile.atStation')
-              : stationProfileLocked
-                ? t('topbar.stationProfile.busy')
-                : t('topbar.stationProfile.title')}
-            disabled={drivesAnotherStation() || stationProfileLocked || !onSwitchStationProfile}
-            value={activeStationProfile ?? ''}
-            onChange={(e) => onSwitchStationProfile?.(e.target.value)}
-          >
-            {stationProfiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {stationProfileName(p)} · {p.call}
-              </option>
-            ))}
-          </select>
-        )}
         {radios && radios.length > 1 && (
           <RadioSwitcher
             radios={radios}

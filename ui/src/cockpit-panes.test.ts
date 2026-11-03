@@ -250,7 +250,10 @@ describe('the fence: styles.css never names a structural class', () => {
     // key floor, the folded top bar and now-bar, the header's ⋯ and the shorter CW speed slider. Each is a flat class a component adds; a styles.css rule naming
     // one could undo the fold or the tier from the sheet that has lost these fights before.
     'cockpit-txstrip-meters', 'dock-status-inrow', 'dock-fkeys', 'tier-menu-folded', 'topbar-now', 'now-bar-inbar',
-    'ch-overflow', 'ch-overflow-panel', 'ch-overflow-open', 'cw-wpm-compact']) {
+    'ch-overflow', 'ch-overflow-panel', 'ch-overflow-open', 'cw-wpm-compact',
+    // The My station picker in the top bar (2026-11-03): it stands over the callsign, out of the bar's
+    // line; a styles.css margin or width on it would put it back in the line and wrap the bar.
+    'mycall-picker', 'station-profile-picker']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -1575,6 +1578,28 @@ describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and h
     expect(classChainWinner(bar, 'border-bottom')?.value).toBe('0')
     // Control: its own line keeps its frame.
     expect(classChainWinner([['now-bar']], 'border-bottom')?.value).toBe('1px solid var(--border)')
+  })
+
+  it('the My station picker adds no width to the bar’s line: it stands over the callsign, out of flow', () => {
+    // The bar is one flex-wrap line with a few px of slack at 1920×1080 on Operate. A picker in the line
+    // (its old 9.5em beside the callsign) wrapped the now-bar to a second line there and, on the Logbook,
+    // pushed Stop TX and Tune 113 px along. So the callsign block IS the picker: the select covers it.
+    const id = [['topbar'], ['topbar-group', 'brand'], ['mycall', 'mycall-picker']]
+    expect(classChainWinner(id, 'position')?.value, 'the callsign block is the picker’s containing block').toBe('relative')
+    const sel = [...id, ['station-profile-picker']]
+    expect(classChainWinner(sel, 'position')?.value, 'out of the bar’s line').toBe('absolute')
+    expect(classChainWinner(sel, 'margin-left'), 'no margin in the line').toBeNull()
+    expect(classChainWinner(sel, 'height')?.value).toBe('100%')
+    // It reaches 10 px past the call, the brand group's own gap, and draws its arrow there, clear of the call.
+    expect(classChainWinner([['topbar-group']], 'gap')?.value, 'the overhang is the gap').toBe('10px')
+    expect(classChainWinner(sel, 'width')?.value).toBe('calc(100% + 10px)')
+    expect(classChainWinner(sel, 'background-position')?.value).toBe('right 5px center, right 0 center !important')
+    expect(classChainWinner(sel, 'max-width')?.value, 'nothing caps it short of the callsign').toBe('none')
+    // High Contrast forces a select's text to CanvasText; with its own text drawn, it covers the call.
+    expect(classChainWinner(sel, 'forced-color-adjust')?.value).toBe('none')
+    expect(classChainWinner(sel, 'color')?.value).toBe('transparent')
+    // Control: the callsign block without profiles is the plain block, no containing block of its own.
+    expect(classChainWinner([['topbar'], ['topbar-group', 'brand'], ['mycall']], 'position')).toBeNull()
   })
 
   it('the header’s ⋯ group is not drawn while closed (out of the tab order too), and is a wrapping row while open', () => {
