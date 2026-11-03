@@ -7330,6 +7330,10 @@ body.resizing {
   gap: var(--space-1);
   width: 100%;
   min-height: var(--touch);
+  /* Never squeezed below its icon + label when the section list overflows: a declared
+     min-height replaces the flex item's content minimum, so at --touch 30 px Phone and CW
+     (the bare buttons atop the scroller) shrank and spilled past its top edge. */
+  flex-shrink: 0;
   padding: var(--space-2) var(--space-1);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
