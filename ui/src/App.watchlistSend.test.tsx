@@ -107,15 +107,15 @@ beforeEach(() => {
 afterEach(cleanup)
 
 // The first entry carries everything an entry can besides its identity — the alert's gates, a label
-// and the operator's own note (#390). The gates and the label reach the station, which raises the
-// alert; the note is the Settings manager's alone and never does.
+// and the operator's own note (#390) and colour (#299). The gates and the label reach the station, which
+// raises the alert; the note and the colour are the desktop's alone and never do.
 const LAUNCH = [
-  newWatchFilter('call', 'VP8*', { cqOnly: true, minSnr: -10, label: 'Falklands', notes: 'Falklands DXp, until 10/15' }),
+  newWatchFilter('call', 'VP8*', { cqOnly: true, minSnr: -10, label: 'Falklands', notes: 'Falklands DXp, until 10/15', color: 'pink' }),
   newWatchFilter('grid', 'EM7*'),
 ]
 
 describe('the desktop sends the station its watch list', () => {
-  it('on launch, with the alert gates and label but never the note, and reads the board after it', async () => {
+  it('on launch, with the alert gates and label but never the note or the colour, and reads the board after it', async () => {
     saveWatchlist(LAUNCH)
     render(<App />)
     const sent = `list ${JSON.stringify([

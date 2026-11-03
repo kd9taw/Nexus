@@ -11,7 +11,7 @@
 // Persisted in localStorage (like the chase star) so there's no backend/settings change;
 // the matcher is pure so it's fully unit-tested.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { durableGet, durableSet } from './features/durableStore'
 
 export type WatchKind = 'call' | 'dxcc' | 'grid'
@@ -36,6 +36,26 @@ export interface WatchFilter {
    *  matches or gates on it, and the station is never sent it (App sends every other field).
    *  Absent when there is none, never an empty string. */
   notes?: string
+  /** #299 — the colour the operator picked for this entry, one of `WATCH_COLORS`, so a watched call
+   *  they care about most stands out from the rest. Every list that marks a watched station paints
+   *  it in this colour instead of the default lime. Display only: the station is never sent it.
+   *  Absent = the default lime. */
+  color?: WatchColor
+}
+
+/** #299 — the colours a watch entry can wear. A small fixed palette rather than a free picker: each
+ *  one is defined twice in styles.css (`--watch-<name>`), a bright value for the dark themes and a
+ *  dark ink for the light ones, so it reads in every theme — a free colour could only read in one. */
+export const WATCH_COLORS = ['pink', 'red', 'orange', 'yellow', 'cyan', 'violet'] as const
+export type WatchColor = (typeof WATCH_COLORS)[number]
+
+/** The inline style that paints a watch entry's mark in the entry's colour: it re-points
+ *  `--need-watch`, the one token every watch mark draws with (the tile, the Band Activity row), on
+ *  that element. No colour = no style, so the mark keeps the theme's lime. */
+export function watchColorStyle(c: WatchColor | null | undefined): CSSProperties | undefined {
+  return c && (WATCH_COLORS as readonly string[]).includes(c)
+    ? ({ '--need-watch': `var(--watch-${c})` } as CSSProperties)
+    : undefined
 }
 
 const STORAGE_KEY = 'nexus.watchlist'
@@ -178,9 +198,13 @@ export function loadWatchlist(): WatchFilter[] {
         // A note that is not text (a hand-edited or damaged file) is dropped, and never the entry
         // it rides on: that is still a station the operator asked to watch. Any other entry comes
         // back as the very object that was stored.
-        if (f.notes === undefined || typeof f.notes === 'string') return f
+        // The same for a colour that is not one of the palette's.
+        const badNotes = f.notes !== undefined && typeof f.notes !== 'string'
+        const badColor = f.color !== undefined && !(WATCH_COLORS as readonly unknown[]).includes(f.color)
+        if (!badNotes && !badColor) return f
         const kept = { ...f }
-        delete kept.notes
+        if (badNotes) delete kept.notes
+        if (badColor) delete kept.color
         return kept
       })
   } catch {
@@ -195,6 +219,36 @@ export function saveWatchlist(filters: WatchFilter[]): void {
   } catch {
     // storage full / unavailable — non-fatal; the list just isn't remembered
   }
+}
+
+/** Save the list whole and announce it, the way the Settings manager does, so every reader
+ *  (App's copy for the station, the lists' marks, an open manager) picks it up. */
+function commitWatchlist(next: WatchFilter[]): void {
+  saveWatchlist(next)
+  window.dispatchEvent(new Event(WATCHLIST_CHANGED))
+}
+
+/** #346 — the entry that names exactly this call (not a wildcard, entity or grid), or null: the one
+ *  a row's menu can take off the list without taking anyone else with it. */
+export function exactCallEntry(list: readonly WatchFilter[], call: string): WatchFilter | null {
+  const c = call.trim().toUpperCase()
+  return list.find((f) => f.kind === 'call' && f.value.trim().toUpperCase() === c) ?? null
+}
+
+/** #346 — put one call on the watch list from a row's menu. Read from storage at the moment of the
+ *  edit, so an entry another writer just added is kept. A call already on it by name is left alone. */
+export function addCallToWatchlist(call: string): void {
+  const list = loadWatchlist()
+  const c = call.trim().toUpperCase()
+  if (!c || exactCallEntry(list, c)) return
+  commitWatchlist([...list, newWatchFilter('call', c)])
+}
+
+/** #346 — take one entry off the watch list by its id; every other entry is kept as stored. */
+export function removeWatchEntry(id: string): void {
+  const list = loadWatchlist()
+  const next = list.filter((f) => f.id !== id)
+  if (next.length !== list.length) commitWatchlist(next)
 }
 
 /** Make a new filter with a unique-enough id (no crypto dependency). */

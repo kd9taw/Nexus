@@ -21,7 +21,9 @@ export type Js8MenuEntry =
   | { kind: 'sep' }
   | { kind: 'heading'; label: string }
 
-function Entries({ entries }: { entries: readonly Js8MenuEntry[] }) {
+/** The entries of a menu, drawn. Shared with the Call Roster's and Band Activity's row menu
+ *  (CallRowMenu), which opens on a row rather than on a ⋯. */
+export function Entries({ entries }: { entries: readonly Js8MenuEntry[] }) {
   return (
     <>
       {entries.map((e, i) => {

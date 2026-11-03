@@ -215,6 +215,9 @@ const SHARED = [
   'nexus.locale',
   // Wildcard call-hide: a standing display preference across windows (features/hideCalls).
   'nexus.decodes.hideCalls',
+  // The row menu's narrower call hides (#346: one band, or for a while), beside the list above and
+  // shared on the same ruling: hiding a call in one window's roster hides it in every window's.
+  'nexus.decodes.hideCallsScoped',
   // Arbitrary-entity country excludes, stored beside the curated keys (F4MQS).
   'nexus.decodes.countryExclude.entities',
   // Whole continents hidden from band activity (#229), stored beside the entity picks and

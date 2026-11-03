@@ -4779,6 +4779,15 @@ export const EN = {
   // #390 — an entry's own note, edited in place on its row. `{{value}}` as above.
   'watchlist.item.notes.aria': 'Notes for {{value}}',
   'watchlist.item.notes.placeholder': 'Add a note',
+  'watchlist.item.color.aria': 'Colour for {{value}}',
+  'watchlist.item.color.title': 'The colour this entry’s stations are marked in on the Call Roster, Band Activity, the Stations list and Spots',
+  'watchlist.color.default': 'Lime (default)',
+  'watchlist.color.pink': 'Pink',
+  'watchlist.color.red': 'Red',
+  'watchlist.color.orange': 'Orange',
+  'watchlist.color.yellow': 'Yellow',
+  'watchlist.color.cyan': 'Cyan',
+  'watchlist.color.violet': 'Violet',
   'watchlist.add.kind.aria': 'Watch kind',
   // The <option> VALUES ('call', 'dxcc', 'grid') are persisted tokens and stay in the code.
   'watchlist.add.kind.call': 'Call / prefix',
@@ -4817,6 +4826,22 @@ export const EN = {
   'hideCalls.head': 'Hide these callsigns',
   'hideCalls.note':
     'Space-separated. A trailing <code>*</code> is a prefix ("VP8*" hides every VP8). A view filter only — the stations you are working and those calling you always show. To stop your auto-CQ from answering a call, Alt-double-click it instead.',
+  'callMenu.aria': 'Actions for {{call}}',
+  'callMenu.watch.add': 'Add to watch list',
+  'callMenu.watch.remove': 'Remove from watch list',
+  'callMenu.hide.band': 'Hide on {{band}}',
+  'callMenu.hide.allBands': 'Hide on every band',
+  'callMenu.hide.hour': 'For 1 hour',
+  'callMenu.hide.twoHours': 'For 2 hours',
+  'callMenu.hide.today': 'Rest of today (UTC)',
+  'callMenu.hide.always': 'Until I bring it back',
+  'callMenu.hide.country': 'Hide every station in {{country}}',
+  'hideCalls.scoped.head': 'Hidden from a row’s menu',
+  'hideCalls.scoped.band': '{{call}} on {{band}}',
+  'hideCalls.scoped.allBands': '{{call}} on every band',
+  'hideCalls.scoped.until': 'until {{time}} UTC',
+  'hideCalls.scoped.always': 'until you bring it back',
+  'hideCalls.scoped.remove': 'Show {{call}} again',
 
   'hideCountries.chip.label': 'Countries',
   // What the chip says instead of the count while the ticks are kept but nothing is hidden.
@@ -12244,6 +12269,10 @@ export const EN = {
   'operate.roster.col.calling.title':
     'Sort by who each station is calling (CQ = calling nobody)',
   'operate.roster.col.need': 'Need',
+  'operate.roster.col.park': 'Park',
+  'operate.roster.col.park.title': 'Sort by the park or summit each station is activating (from a POTA or SOTA spot, or its CQ POTA). The parks stay on top either way.',
+  'operate.roster.park.title.spot': 'Activating {{park}} (from a spot)',
+  'operate.roster.park.title.cq': 'Calling CQ {{program}}. No spot names the park yet.',
   'operate.roster.col.country': 'Country',
   'operate.roster.col.state': 'State',
   'operate.roster.col.state.title':
@@ -12254,11 +12283,12 @@ export const EN = {
   'operate.roster.col.age': 'Age',
 
   'operate.roster.empty': 'No stations heard yet — decoded stations appear here as they arrive.',
-  // The row, read aloud — five optional clauses, each interpolated whole with its own
+  // The row, read aloud — six optional clauses, each interpolated whole with its own
   // separator. `{{need}}` is a need TAG (NewMode, Confirm…), a token like a band name; the
   // watch clause's `{{what}}` is the watch-list entry that matched, as on the WATCH tile.
-  'operate.roster.row.aria': '{{call}}{{grid}}{{need}}{{watch}}{{worked}}{{working}}',
+  'operate.roster.row.aria': '{{call}}{{grid}}{{park}}{{need}}{{watch}}{{worked}}{{working}}',
   'operate.roster.row.aria.grid': ', grid {{grid}}',
+  'operate.roster.row.aria.park': ', at {{park}}',
   'operate.roster.row.aria.need': ', needed {{need}}',
   'operate.roster.row.aria.watch': ', on your watch list: {{what}}',
   'operate.roster.row.aria.worked': ', worked',

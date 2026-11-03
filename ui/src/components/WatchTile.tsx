@@ -9,12 +9,19 @@
 //
 // Each host puts it FIRST among its chips. The roster's Need cell clips what does not fit and a
 // spot's comment cell ellipsizes, so first is the one place the tile can never be cut off.
+//
+// #299 — an entry the operator gave a colour paints its tile in that colour instead of the lime
+// (`watchColorStyle` re-points --need-watch on the tile alone), on every list that draws it.
 import { t } from '../i18n'
-import { watchLabel, type WatchFilter } from '../watchlist'
+import { watchColorStyle, watchLabel, type WatchFilter } from '../watchlist'
 
 export function WatchTile({ entry }: { entry: WatchFilter }) {
   return (
-    <span className="need-chip need-watch" title={t('watchlist.tile.title', { what: watchLabel(entry) })}>
+    <span
+      className="need-chip need-watch"
+      style={watchColorStyle(entry.color)}
+      title={t('watchlist.tile.title', { what: watchLabel(entry) })}
+    >
       {t('watchlist.tile.label')}
     </span>
   )
