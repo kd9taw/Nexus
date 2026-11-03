@@ -493,13 +493,33 @@ fn a_late_key_read_in_the_tick_that_starts_an_atu_tune_up_never_aborts_it() {
     assert!(s.says_keyed_late(), "not said: {:?}", s.banner());
 }
 
+/// Whose rigctld the link being rebuilt goes through.
+#[derive(Clone, Copy, PartialEq)]
+enum OldLink {
+    /// Nexus's own daemon, which the rebuild kills: a key queued in it dies with it.
+    NexusDaemon,
+    /// A rigctld Nexus does not own (NET rigctl), which outlives the rebuild with its queue.
+    ExternalRigctld,
+}
+
 /// Rebuild the CAT link onto the rigctld at `addr`, after the settings change `change` (one tick
-/// of the loop, the rebuild's own).
+/// of the loop, the rebuild's own). `old` says whose rigctld the old link went through.
 fn rebuild_onto(
     s: &mut Scene,
     addr: &str,
+    old: OldLink,
     change: impl FnOnce(&mut tempo_app::settings::Settings),
 ) {
+    if old == OldLink::NexusDaemon {
+        // An alive child stands in for the daemon (`is_alive` says healthy); the rebuild drops it.
+        let alive = std::process::Command::new("sleep")
+            .arg("300")
+            .spawn()
+            .unwrap();
+        s.state.rigctld_proc = Some(CatDaemon::Spawned(
+            crate::rigctld_proc::RigctldProc::from_child_for_test(alive),
+        ));
+    }
     {
         let mut e = s.engine.lock().unwrap();
         let mut settings = e.settings().clone();
@@ -544,8 +564,9 @@ const ANOTHER_RADIO: [(&str, SettingsChange, u32); 2] = [
 
 /// ⛔ A REBUILD ONTO ANOTHER RADIO ENDS THE WATCH FOR A LATE KEY, as a handoff does. A Tune key on
 /// radio A is given up on, so the loop watches A's PTT; the operator then picks another radio, and
-/// the CAT link is rebuilt onto it. That radio's own microphone keys it inside what was A's watch:
-/// it stays keyed, and nothing says a late key.
+/// the CAT link (through Nexus's own daemon, whose queue dies with it) is rebuilt onto it. That
+/// radio's own microphone keys it inside what was A's watch: it stays keyed, and nothing says a
+/// late key. A watch A's link still owed when it went is not carried over either.
 #[test]
 fn a_rebuild_onto_another_radio_ends_the_watch_for_a_late_key() {
     for (what, change, served) in ANOTHER_RADIO {
@@ -569,7 +590,9 @@ fn a_rebuild_onto_another_radio_ends_the_watch_for_a_late_key() {
                 .is_some_and(|until| Instant::now() < until),
             "{what}: premise: A's watch is on"
         );
-        rebuild_onto(&mut s, &b.addr, change);
+        // …and a watch still owed on the old link, which goes with it too.
+        s.rig.arm_key_watch_for_test();
+        rebuild_onto(&mut s, &b.addr, OldLink::NexusDaemon, change);
         assert!(
             b.log.lock().unwrap().iter().any(|l| l == "T 0"),
             "{what}: premise: the link is B's now"
@@ -594,23 +617,77 @@ fn a_rebuild_onto_another_radio_ends_the_watch_for_a_late_key() {
 }
 
 /// Negative control: a rebuild onto the SAME radio (the link reconnected: a baud change on the
-/// radio the link served) keeps the watch. A Tune key given up on that reaches the radio after the
-/// rebuild is unkeyed by it, and said.
+/// radio the link served) keeps the watch, also through Nexus's own daemon, and also when the loop
+/// has served no radio yet (which counts as the same radio). A Tune key given up on that reaches
+/// the radio after the rebuild is unkeyed by it, and said.
 #[test]
 fn a_rebuild_onto_the_same_radio_keeps_the_watch_for_a_late_key() {
+    for served in [Some(0), None] {
+        let a = Radio::start(armed, Some(Duration::from_millis(4_000)));
+        let mut s = Scene::new(&a, |e| e.set_tune(true));
+        s.state.remote_radio_id = served;
+        past_the_give_up(&mut s);
+        rebuild_onto(&mut s, &a.addr, OldLink::NexusDaemon, |s| s.baud = 19_200);
+        s.run_until(Duration::from_secs(9), |s| {
+            s.started.elapsed() > Duration::from_millis(4_100) && !a.keyed.load(Ordering::SeqCst)
+        });
+        assert!(
+            !a.keyed.load(Ordering::SeqCst),
+            "served {served:?}: the late key was left on the air after a same-radio rebuild"
+        );
+        s.run_until(Duration::from_secs(10), |s| s.says_keyed_late());
+        assert!(
+            s.says_keyed_late(),
+            "served {served:?}: not said: {:?}",
+            s.banner()
+        );
+    }
+}
+
+/// ⛔ A REBUILD THROUGH A RIGCTLD NEXUS DOES NOT OWN KEEPS THE WATCH, even onto another model: that
+/// rigctld outlives the rebuild with the key still queued in it, and the new model may be the same
+/// radio behind it (the operator correcting the model they picked). A Tune key given up on that
+/// the radio carries out after the rebuild is unkeyed by the watch, and said.
+#[test]
+fn a_rebuild_through_a_rigctld_nexus_does_not_own_keeps_the_watch_for_a_late_key() {
     let a = Radio::start(armed, Some(Duration::from_millis(4_000)));
     let mut s = Scene::new(&a, |e| e.set_tune(true));
     s.state.remote_radio_id = Some(0);
     past_the_give_up(&mut s);
-    rebuild_onto(&mut s, &a.addr, |s| s.baud = 19_200);
+    rebuild_onto(&mut s, &a.addr, OldLink::ExternalRigctld, |s| {
+        s.rig_model += 1
+    });
     s.run_until(Duration::from_secs(9), |s| {
         s.started.elapsed() > Duration::from_millis(4_100) && !a.keyed.load(Ordering::SeqCst)
     });
     assert!(
         !a.keyed.load(Ordering::SeqCst),
-        "the late key was left on the air after a same-radio rebuild"
+        "the late key was left on the air after a model change through an outside rigctld"
     );
     s.run_until(Duration::from_secs(10), |s| s.says_keyed_late());
+    assert!(s.says_keyed_late(), "not said: {:?}", s.banner());
+}
+
+/// ⛔ A WATCH THE OLD LINK STILL OWED CARRIES OVER A SAME-RADIO REBUILD. A key given up on, or left
+/// owed on a dropped connection, is taken into the watch by the idle poll, which does not run while
+/// the link reads as down: exactly when a dead daemon or a silent link is rebuilt. Rebuilt onto the
+/// same radio, that owed watch is started, and a key reaching the radio after it is unkeyed, and
+/// said.
+#[test]
+fn a_watch_the_old_link_still_owed_carries_over_a_same_radio_rebuild() {
+    let a = Radio::start(|_| AT_ONCE, Some(Duration::from_millis(1_500)));
+    let mut s = Scene::new(&a, |_| {});
+    s.state.remote_radio_id = Some(0);
+    s.rig.arm_key_watch_for_test();
+    rebuild_onto(&mut s, &a.addr, OldLink::NexusDaemon, |s| s.baud = 19_200);
+    s.run_until(Duration::from_secs(5), |s| {
+        s.started.elapsed() > Duration::from_millis(1_600) && !a.keyed.load(Ordering::SeqCst)
+    });
+    assert!(
+        !a.keyed.load(Ordering::SeqCst),
+        "a key owed on the old link was left on the air after a same-radio rebuild"
+    );
+    s.run_until(Duration::from_secs(6), |s| s.says_keyed_late());
     assert!(s.says_keyed_late(), "not said: {:?}", s.banner());
 }
 
@@ -641,7 +718,7 @@ fn a_rebuild_onto_another_radio_ends_the_tune_up_cycle() {
         let mut s = Scene::new(&a, |_| {});
         s.state.remote_radio_id = Some(served);
         tune_up_on(&mut s, &a);
-        rebuild_onto(&mut s, &b.addr, change);
+        rebuild_onto(&mut s, &b.addr, OldLink::NexusDaemon, change);
         let sent_t0 = b.log.lock().unwrap().len();
         // A key of Nexus's B carries out late.
         b.keyed.store(true, Ordering::SeqCst);
@@ -673,7 +750,7 @@ fn a_rebuild_onto_the_same_radio_keeps_the_tune_up_cycle() {
     s.state.remote_radio_id = Some(0);
     tune_up_on(&mut s, &a);
     let started = s.t;
-    rebuild_onto(&mut s, &a.addr, |s| s.baud = 19_200);
+    rebuild_onto(&mut s, &a.addr, OldLink::NexusDaemon, |s| s.baud = 19_200);
     // The radio tuning again (or still) on the reconnected link, and a late key read on it.
     a.keyed.store(true, Ordering::SeqCst);
     s.rig.land_late_key_for_test(Duration::from_secs(4));

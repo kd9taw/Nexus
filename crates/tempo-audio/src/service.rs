@@ -8675,11 +8675,15 @@ impl RadioLoop {
                 // (its microphone) is not the watch's business. The same radio reconnected keeps
                 // both: a key owed on the dropped link can still reach it after the release
                 // (#429). A loop that has served no radio yet keeps them: the watch only unkeys.
+                // So does a link through a rigctld Nexus does not own, whatever the radio: that
+                // rigctld outlives the rebuild with a late key still queued in it, and "another
+                // model" may be the same radio behind it. Only Nexus's own daemon (`rigctld_proc`,
+                // still the old one here) takes its queue with it.
                 let same_radio = want.rig_model == self.applied.rig_model
                     && self
                         .remote_radio_id
                         .is_none_or(|served| served == remote_want_radio);
-                if !same_radio {
+                if !same_radio && self.rigctld_proc.is_some() {
                     self.key_watch_until = None;
                     self.atu_tune_started_at = None;
                 }
@@ -8742,6 +8746,17 @@ impl RadioLoop {
                     }
                     None => detail,
                 };
+                // ⛔ A WATCH THE OLD LINK STILL OWES GOES WITH THE RADIO, NOT THE LINK. The idle
+                // poll takes it into the watch only while the link reads as up, and a dead daemon
+                // or a silent link is rebuilt exactly when it does not, so on the same radio it is
+                // started here rather than dropped with the old `Rig`. It only ever adds an unkey,
+                // under the poll's own guard (nothing of Nexus's keyed), and never shortens a
+                // watch already running (one put past an ATU tune-up's cycle).
+                if same_radio && rig.take_key_watch() {
+                    let until = Instant::now() + KEY_WATCH;
+                    self.key_watch_until =
+                        Some(self.key_watch_until.map_or(until, |u| u.max(until)));
+                }
                 self.rig_asserted = false; // fresh rig: unclaimed caches make the retune re-assert this tick
                 *rig = new_rig;
                 // Carry the keyed belief onto the fresh rig so the idle self-heal stays armed if the

@@ -1360,6 +1360,14 @@ impl Rig {
         });
     }
 
+    /// A key given up on, or left owed on a dropped connection, that the radio loop has not taken
+    /// yet ([`Self::take_key_watch`]): the radio loop's scenes put one in before a tick of their
+    /// choosing (the idle poll takes it only while the CAT link reads as up).
+    #[cfg(all(test, feature = "device"))]
+    pub(crate) fn arm_key_watch_for_test(&mut self) {
+        self.key_watch = true;
+    }
+
     /// Whether a key-down whose answer was owed has been given up on, or left owed on a dropped
     /// connection, since this was last asked; once. Its key may still reach the radio after its
     /// release, on a rigctld that does not serve its connections in order, with nothing on this
