@@ -44,8 +44,6 @@ function why(cause: PcMicCause): string {
       return t('shell.lane.pcMic.keyRefused')
     case 'txAudio':
       return t('shell.lane.pcMic.txAudio')
-    case 'dataMode':
-      return t('shell.lane.pcMic.dataMode')
     case 'unsure':
       return t('shell.lane.pcMic.unsure')
   }

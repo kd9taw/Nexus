@@ -1057,12 +1057,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // in Phone a rig stuck in PKTUSB / DATA-U (rear-jack audio → dead mic) vs a commanded USB is a
   // REAL operational mismatch worth flagging, not a cosmetic naming variant.
   const rigFamily = /^W?FM/.test(rigMode) ? 'FM' : rigMode
-  // …except the ONE data form Nexus commands itself: while PTT is held with "Use this computer's
-  // microphone" on, the radio is put in the data form of the pick (PKTUSB for USB) so it transmits
-  // the USB audio the computer's voice arrives on (engine `rig_mode_effective`), and back after.
-  const ownDataForm = keyed && rigMode === `PKT${commandedMode}`
-  const modeMismatch =
-    catOk && rigMode !== '' && rigFamily !== commandedMode && !ownDataForm ? rigMode : null
+  const modeMismatch = catOk && rigMode !== '' && rigFamily !== commandedMode ? rigMode : null
 
   // ⭐ WHAT THE RIG IS ACTUALLY ON — and the mode the QSO is LOGGED as.
   //

@@ -8650,7 +8650,7 @@ export const EN = {
   'settings.audio.pcMic.hint':
     'On: while you hold PTT in Phone, Nexus sends this computer\'s microphone to this radio through its transmit audio (the output device above, or TCI audio on a TCI radio) and keys the radio for computer audio. Off (the default): PTT keys the radio\'s own microphone, as before. Phone only; the digital modes never use it. Stop TX or TX Off cuts it at once; releasing PTT lets the end of your last word finish (at most 0.2 s), then unkeys.',
   'settings.audio.pcMic.radioInput':
-    'While you hold PTT, Nexus puts the radio in its data mode (USB-D, DATA-U), which transmits the USB audio this microphone arrives on, and back to USB or LSB when you let go. The radio\'s data mode must take its audio from USB or its rear input: on a Yaesu FTDX10, DATA MOD SOURCE = REAR, the factory setting.',
+    'The radio must transmit the audio arriving on its USB or rear input in voice modes too. Where CAT PTT keys its microphone input (Transmit audio source Front/Mic, or a radio without that choice), set that on the radio, for example SSB MOD SOURCE to REAR on a Yaesu FTDX10; otherwise PTT keys the radio and its own microphone goes out, not this one.',
   'settings.audio.pcMic.device.label': 'Microphone',
   'settings.audio.pcMic.device.none': 'Choose a microphone…',
   'settings.audio.pcMic.device.hint':
@@ -14247,8 +14247,6 @@ export const EN = {
     'the radio did not accept the key, so nothing was sent.',
   'shell.lane.pcMic.txAudio':
     'the radio\'s transmit audio output would not open, so the radio was not keyed: it would have gone on the air with no audio. Check that the radio is on with its USB audio connected, and that its TX audio device in Settings ▸ Radio ▸ Audio is the radio\'s.',
-  'shell.lane.pcMic.dataMode':
-    'the radio did not take its data mode (USB-D, DATA-U), which transmits the USB audio this computer\'s microphone arrives on, so it was not keyed: in plain USB or LSB it would have sent its own microphone.',
   'shell.lane.pcMic.unsure':
     'the chosen microphone cannot be told apart from an input that may carry the band (a sound server\'s default input such as default, pulse or pipewire, receive set to the system default, or an input named in a sound configuration file), so nothing was sent: that could put the band on the air. Pick the microphone by its own sound card, and give this radio\'s receive input its own card, in Settings ▸ Radio ▸ Audio.',
   // A voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone at the
