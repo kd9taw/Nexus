@@ -1,3 +1,4 @@
+import { localizeRefusal } from '../radioRefusal'
 import { useEscStop } from '../useEscStop'
 // ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): every
 // operator-visible string in it is in the catalog under `cw.*`. Nothing was deferred —
@@ -2362,7 +2363,7 @@ export function CwCockpit({
         snap={snap}
         onSnap={onSnap}
         modeIndicator={
-          <span className="cw-mode-badge" title={(snap.radio.catDetail && catDetailText(snap.radio.catDetail)) || t('cw.header.mode.title')}>
+          <span className="cw-mode-badge" title={(snap.radio.catDetail && catDetailText(localizeRefusal(snap.radio.catDetail))) || t('cw.header.mode.title')}>
             {CW}
           </span>
         }

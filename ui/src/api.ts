@@ -2865,6 +2865,10 @@ export interface RadioLaunchOption {
 export interface RadioLaunchInfo {
   showPicker: boolean
   radios: RadioLaunchOption[]
+  /** What the picker does when nobody answers within `autoSeconds`: the operator's last answer,
+   *  'windows' (each radio in its own window) or 'one' (this window runs one radio). */
+  autoChoice: 'windows' | 'one'
+  autoSeconds: number
 }
 /** Ask the backend whether this window should show the radio picker (simultaneous-radios on,
  *  ≥2 radios, launched without a profile). Single-radio stations get showPicker=false. */
@@ -2880,6 +2884,19 @@ export async function chooseRadio(radioId: number): Promise<void> {
  *  as the single band-following window — the pre-picker behavior. */
 export async function useSingleRadio(): Promise<void> {
   await invoke('use_single_radio')
+}
+
+/** Nobody answered the picker in time: the backend repeats the last answer (opening the radio
+ *  windows and exiting, or starting this window's radio). Rejects with the reason when the radio is
+ *  open in another Nexus window. */
+export async function radioPickerTimedOut(): Promise<void> {
+  await invoke('radio_picker_timed_out')
+}
+
+/** This window could not ask whether to show the picker: the backend starts this window's radio, as
+ *  the window did before the picker held it, and logs why. */
+export async function radioPickerUnavailable(): Promise<void> {
+  await invoke('radio_picker_unavailable')
 }
 
 /** Reveal ALL.TXT (or its folder) in the OS file manager. */

@@ -39,6 +39,7 @@ pub mod needed_alert;
 pub mod pota_exports;
 pub mod presence;
 pub mod privileges;
+pub mod radio_claim;
 pub mod remote_control;
 pub mod remote_monitor;
 pub mod scp;

@@ -6289,6 +6289,9 @@ export interface AutoRadioSwitch {
   /** The band asked for ("2m"); empty for a dial off the band plan. */
   band: string
   mode: RouteMode
+  /** The routing chose `toId`, but another Nexus window runs that radio: the station stayed on
+   *  `fromId`. Said always, whatever the switch-notice policy. */
+  refused?: boolean
 }
 
 /** Non-mode context a routing rule can be DESIGNATED for instead of a mode class: satellite work.

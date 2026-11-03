@@ -1,3 +1,4 @@
+import { localizeRefusal } from '../radioRefusal'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { ConnectEntry } from '../lan/ConnectEntry'
@@ -7427,8 +7428,9 @@ export function SettingsPanel({
               {(() => {
                 // Show the just-run test result, else the live CAT status from the snapshot.
                 const ok = catResult ? catResult.ok : radio?.catOk
-                const detail = catResult ? catResult.detail : radio?.catDetail
-                if (detail == null || detail === '') return null
+                const raw = catResult ? catResult.detail : radio?.catDetail
+                if (raw == null || raw === '') return null
+                const detail = localizeRefusal(raw)
                 const cls = ok === true ? 'ok' : ok === false ? 'fail' : 'na'
                 const mark = ok === true ? '✓ ' : ok === false ? '✗ ' : ''
                 return (

@@ -149,3 +149,198 @@ fn a_form_save_cannot_move_the_switch_policy() {
         "a stale form moved it"
     );
 }
+
+/// ONE RADIO, ONE WINDOW: the radio the routing (or the operator) picks is driven by another
+/// Nexus window. The station stays on its radio, the notice says the switch was refused, and once
+/// the other window lets go, the same tune takes the radio.
+#[test]
+fn a_switch_to_a_radio_another_window_drives_is_refused_and_said() {
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("nexus-claims-engine-{pid}"));
+    crate::radio_claim::claims_for_this_thread(dir.clone());
+    let (mut e, vhf) = two_radios();
+    let (hf_port, vhf_port) = (
+        format!("/dev/nexus-route-hf-{pid}"),
+        format!("/dev/nexus-route-vhf-{pid}"),
+    );
+    for p in e.settings.radios.iter_mut() {
+        p.rig_model = 1029;
+        p.ptt_method = "cat".into();
+        p.serial_port = if p.id == vhf {
+            vhf_port.clone()
+        } else {
+            hf_port.clone()
+        };
+    }
+    let vhf_endpoint = format!("serial:{vhf_port}");
+    let other_window = crate::radio_claim::Claims::new(dir.clone());
+    other_window
+        .claim(&vhf_endpoint)
+        .expect("the other window drives the VHF radio");
+
+    e.set_frequency(144.174, "2m", "USB");
+    assert_eq!(
+        e.settings.active_radio, 0,
+        "the station stayed on its radio"
+    );
+    let note = e.snapshot().auto_radio_switch.expect("the refusal is said");
+    assert!(note.refused);
+    assert_eq!(
+        (note.from_id, note.to_id, note.band.as_str()),
+        (0, vhf, "2m")
+    );
+    // The operator's own pick (and Remote's) goes through the same door.
+    e.set_active_radio(vhf);
+    assert_eq!(e.settings.active_radio, 0, "a pick is refused too");
+
+    // The other window closes. (A child another test forks at that instant can hold a copy of the
+    // handle until its exec, a few ms.)
+    drop(other_window);
+    let claims = crate::radio_claim::claims().expect("set up above");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while claims.held_elsewhere(&vhf_endpoint) && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    e.set_frequency(14.074, "20m", "USB");
+    e.set_frequency(144.174, "2m", "USB");
+    assert_eq!(e.settings.active_radio, vhf, "now the routing takes it");
+    let note = e.snapshot().auto_radio_switch.expect("recorded");
+    assert!(!note.refused);
+    assert!(
+        claims.holds(&vhf_endpoint),
+        "and this window's claim moved to it (this test's own claims: no other test moves them)"
+    );
+}
+
+/// ONE RADIO, ONE WINDOW, for a Settings save: the operator edits the active radio's CAT port (the
+/// flat form the active radio is saved through) to the port another window's radio is on. The save
+/// is refused whole, before it is applied. A free port is not refused.
+#[test]
+fn a_save_that_moves_the_active_radio_onto_another_windows_port_is_refused() {
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("nexus-claims-engine-{pid}"));
+    crate::radio_claim::claims_for_this_thread(dir.clone());
+    let (mut e, _vhf) = two_radios();
+    let taken = format!("/dev/nexus-save-taken-{pid}");
+    let free = format!("/dev/nexus-save-free-{pid}");
+    e.settings.rig_model = 1029;
+    e.settings.ptt_method = "cat".into();
+    e.settings.serial_port = format!("/dev/nexus-save-mine-{pid}");
+    e.settings.sync_active_from_flat();
+    let other_window = crate::radio_claim::Claims::new(dir.clone());
+    other_window
+        .claim(&format!("serial:{taken}"))
+        .expect("the other window drives the radio on that port");
+
+    let mut form = e.settings().clone();
+    form.serial_port = taken.clone();
+    assert_eq!(
+        e.radio_claim_a_save_refuses(&form, false).as_deref(),
+        Some(crate::radio_claim::REFUSAL)
+    );
+    // CONTROL: a free port saves.
+    form.serial_port = free;
+    assert_eq!(e.radio_claim_a_save_refuses(&form, false), None);
+    drop(other_window);
+}
+
+/// Review 4's probe P2: the operator's switch command reserves the target off the engine lock; a
+/// settings save then disables it (or moves its port) before the command takes the lock. The
+/// reservation must not be committed for a switch the engine will not make: the radio this window
+/// still drives and keys keeps its claim.
+#[test]
+fn a_reservation_for_a_switch_the_engine_will_not_make_is_never_committed() {
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("nexus-claims-p2-{pid}"));
+    let claims = crate::radio_claim::claims_for_this_thread(dir.clone());
+    let (mut e, vhf) = two_radios();
+    let (hf_port, vhf_port, moved_port) = (
+        format!("/dev/nexus-p2-hf-{pid}"),
+        format!("/dev/nexus-p2-vhf-{pid}"),
+        format!("/dev/nexus-p2-moved-{pid}"),
+    );
+    for p in e.settings.radios.iter_mut() {
+        p.rig_model = 1029;
+        p.ptt_method = "cat".into();
+        p.serial_port = if p.id == vhf {
+            vhf_port.clone()
+        } else {
+            hf_port.clone()
+        };
+    }
+    let hf_ep = format!("serial:{hf_port}");
+    claims.claim(&hf_ep).unwrap();
+    let target = |e: &Engine| {
+        e.settings
+            .radios
+            .iter()
+            .find(|r| r.id == vhf)
+            .unwrap()
+            .clone()
+    };
+
+    // The target is disabled between the reservation and the commit.
+    let reserved = crate::radio_claim::tentative_profile(&target(&e), true)
+        .unwrap()
+        .unwrap();
+    e.settings
+        .radios
+        .iter_mut()
+        .find(|r| r.id == vhf)
+        .unwrap()
+        .enabled = false;
+    assert!(!crate::radio_claim::commit_if_switching(
+        reserved,
+        &e.settings,
+        vhf
+    ));
+    e.set_active_radio(vhf);
+    assert_eq!(e.settings.active_radio, 0, "the engine did not switch");
+    assert!(
+        claims.holds(&hf_ep),
+        "the HF radio this window still drives must stay claimed"
+    );
+
+    // The target's port is moved between the reservation and the commit.
+    e.settings
+        .radios
+        .iter_mut()
+        .find(|r| r.id == vhf)
+        .unwrap()
+        .enabled = true;
+    let reserved = crate::radio_claim::tentative_profile(&target(&e), true)
+        .unwrap()
+        .unwrap();
+    e.settings
+        .radios
+        .iter_mut()
+        .find(|r| r.id == vhf)
+        .unwrap()
+        .serial_port = moved_port;
+    assert!(!crate::radio_claim::commit_if_switching(
+        reserved,
+        &e.settings,
+        vhf
+    ));
+    assert!(claims.holds(&hf_ep), "still on the HF radio's port");
+
+    // CONTROL: nothing changed in between, so it commits and the engine switches.
+    e.settings
+        .radios
+        .iter_mut()
+        .find(|r| r.id == vhf)
+        .unwrap()
+        .serial_port = vhf_port.clone();
+    let reserved = crate::radio_claim::tentative_profile(&target(&e), true)
+        .unwrap()
+        .unwrap();
+    assert!(crate::radio_claim::commit_if_switching(
+        reserved,
+        &e.settings,
+        vhf
+    ));
+    e.set_active_radio(vhf);
+    assert_eq!(e.settings.active_radio, vhf);
+    assert!(claims.holds(&format!("serial:{vhf_port}")));
+    let _ = std::fs::remove_dir_all(&dir);
+}

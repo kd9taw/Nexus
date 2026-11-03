@@ -10,6 +10,7 @@
 // reading, split offset, filter and scope width, reference level, percentage, band and mode
 // name and the rig's own group plates (DSP, NR, AGC, BW, REC, SPLIT) are invariant tokens
 // and stay in the code.
+import { localizeRefusal } from '../radioRefusal'
 import { Fragment, useEffect, useMemo, useState, useRef } from 'react'
 import { BOX_IDS, PHONE_PANEL_IDS, PHONE_PANELS, boxEntries, isBoxId, type BoxId, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
@@ -3079,7 +3080,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         {!catOk && (
           <span
             className="ph-nocat"
-            title={(snap.radio.catDetail && catDetailText(snap.radio.catDetail)) || t('phone.noCat.title')}
+            title={(snap.radio.catDetail && catDetailText(localizeRefusal(snap.radio.catDetail))) || t('phone.noCat.title')}
           >
             {t('phone.noCat.label')}
           </span>

@@ -2,7 +2,10 @@
 //
 // Dependency-free: components subscribe to receive the current toast list and
 // any code path (e.g. an api-call wrapper) can `pushToast(...)` a brief message.
-// Used to surface friendly errors instead of failing silently.
+// Used to surface friendly errors instead of failing silently. (Its one import puts the
+// one-window radio refusal into the operator's language: `failureText`.)
+
+import { isRadioRefusal, localizeRefusal } from './radioRefusal'
 
 export type ToastKind = 'error' | 'info' | 'success'
 
@@ -174,7 +177,10 @@ export function keepToast(id: number, note?: string): void {
 
 /** A failure in words: `fallback`, and what `err` said, if anything. */
 export function failureText(fallback: string, err: unknown): string {
-  const detail = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+  const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+  // The one-window refusal is said whole, in the operator's language, without the fallback.
+  if (isRadioRefusal(raw)) return localizeRefusal(raw)
+  const detail = raw
   return detail ? `${fallback}: ${detail}` : fallback
 }
 

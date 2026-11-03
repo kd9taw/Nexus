@@ -7853,6 +7853,10 @@ export const EN = {
   'radios.picker.inUse.tag': 'in use',
   'radios.picker.choose.title': 'Operate {{name}}',
   'radios.picker.single': 'Use one radio (follow bands on a single window)',
+  'radios.picker.auto.windows': 'Opening each radio in its own window, as last time, in {{seconds}} s. Click or press a key to choose yourself.',
+  'radios.picker.auto.one': 'Starting this window on one radio in {{seconds}} s. Click or press a key to choose yourself.',
+  'radios.picker.failed': 'Could not do that: {{reason}}',
+  'radios.openElsewhere': 'That radio is open in another Nexus window — switch to that window.',
 
   'radios.switcher.aria': 'Active radio',
   'radios.switcher.active.title': '{{name}} — active radio ({{band}} · {{freq}} MHz)',
@@ -15344,6 +15348,8 @@ export const EN = {
   'radioSwitch.why': 'Why?',
   'radioSwitch.undo.onAir': 'Not while transmitting: press Undo again after the over',
   'radioSwitch.undo.unavailable': '{{radio}} is not available, so the radio did not change',
+  'radioSwitch.refused':
+    '{{radio}} is open in another Nexus window, so the radio did not change — switch to that window.',
 
   // ── The radio setup (RadioSetupWizard.tsx): Settings ▸ Radio ▸ Radios ▸ Set up radios…, and the
   // first-run setup once a second radio is added. `{{radio}}`, `{{band}}`, `{{bands}}`, `{{model}}`,

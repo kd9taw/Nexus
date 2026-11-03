@@ -9089,6 +9089,16 @@ impl Engine {
         {
             return;
         }
+        // ONE RADIO, ONE WINDOW (`radio_claim`): a radio another live Nexus window drives is
+        // refused, and this window stays on the one it has. Every switch comes through here (the
+        // operator's pick, Remote's, the band→radio routing), so none can put two windows on one
+        // radio's rigctld. Otherwise the claim moves to the new radio's port with the switch. A
+        // process that never set up claims (tests, headless tools) claims and refuses nothing.
+        if let Some(p) = self.settings.radios.iter().find(|p| p.id == id) {
+            if crate::radio_claim::claim_profile(p).is_err() {
+                return;
+            }
+        }
         self.remote_readings.invalidate();
         // Where the dial was, for a contact a handoff onto another band ends (`on_band_change`).
         let made_on = self.made_on_now();
@@ -9406,6 +9416,25 @@ impl Engine {
     /// The radios and the broker a form save of `s` would leave, folded as `apply_settings_inner`
     /// folds them: the live roster, with the form's flat rig fields in the radio the form
     /// describes, then the port repair. Only those are read from it.
+    /// One radio, one window, for a settings save ([`crate::radio_claim::save_refusal`]): the
+    /// refusal when the save would put this window's active radio on a port (or address) another
+    /// live Nexus window drives. A form save is read as `apply_settings` will apply it (the live
+    /// roster and active radio, the form's CAT fields for that radio); a restore or reset as the
+    /// settings it hands in. Refused whole, before anything is applied, like
+    /// [`Self::port_clash_a_save_introduces`].
+    pub fn radio_claim_a_save_refuses(
+        &self,
+        s: &Settings,
+        replaces_station: bool,
+    ) -> Option<String> {
+        let after = if replaces_station {
+            s.clone()
+        } else {
+            self.roster_after_form_save(s)
+        };
+        crate::radio_claim::save_refusal(&self.settings, &after, crate::radio_claim::claims())
+    }
+
     fn roster_after_form_save(&self, s: &Settings) -> Settings {
         let live_active = self.settings.active_radio;
         let form_active = if s.radios.is_empty() {
@@ -9644,10 +9673,22 @@ impl Engine {
                 }
             }) {
                 let from = self.settings.active_radio;
-                self.set_active_radio_with_reset(id, &mut reset);
+                // The radio the routing chose is another Nexus window's: the station stays where
+                // it is, and the screen says why (always, whatever the switch-notice policy).
+                let refused = id != from
+                    && self
+                        .settings
+                        .radios
+                        .iter()
+                        .find(|p| p.id == id)
+                        .is_some_and(crate::radio_claim::profile_held_elsewhere);
+                if !refused {
+                    self.set_active_radio_with_reset(id, &mut reset);
+                }
                 // Said on screen when the policy asks for it (the switch notice). Recorded only
-                // when the switch really happened (it refuses a disabled radio).
-                if self.settings.active_radio != from {
+                // when the switch really happened (it refuses a disabled radio), or was refused
+                // for being another window's.
+                if refused || self.settings.active_radio != from {
                     let seq = self.auto_radio_switch.as_ref().map_or(0, |n| n.seq) + 1;
                     self.auto_radio_switch = Some(crate::dto::AutoRadioSwitch {
                         seq,
@@ -9655,6 +9696,7 @@ impl Engine {
                         to_id: id,
                         band: band.to_string(),
                         mode: route_mode,
+                        refused,
                     });
                 }
             }
