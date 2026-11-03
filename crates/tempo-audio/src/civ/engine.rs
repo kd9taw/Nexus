@@ -885,6 +885,19 @@ pub(crate) mod tests_support {
                 };
                 Some((0x26, vec![0x00, m, u8::from(r.data_mode), r.fil]))
             }
+            // …and the WRITE, `26 00 <mode> <data> <filter>`: the same VFO's mode, DATA flag and
+            // filter in one frame (IC-7300 Full Manual A7292-4EX-12 p. 19-11). A skipped DATA
+            // byte is DATA OFF and a skipped filter the mode's default, as in the by-name arm.
+            (0x26, Some(0x00)) => {
+                if r.sel_sub && !r.band_mode_main_only {
+                    r.sub_mode = data[1];
+                } else {
+                    r.main_mode = data[1];
+                }
+                r.data_mode = data.get(2).is_some_and(|&d| d != 0);
+                r.fil = data.get(3).copied().unwrap_or(DEFAULT_FIL);
+                None // ack
+            }
             // The unselected VFO of the CURRENT band — write-only here.
             (0x25, Some(0x01)) if data.len() >= 6 => {
                 r.unselected_hz = bcd_to_freq(&data[1..]);

@@ -43953,6 +43953,72 @@ mod tests {
         );
     }
 
+    /// ⛔ #417's FT → Phone fix lives in Nexus's own CI-V daemon, and ONLY there. Over Hamlib the
+    /// mode change already carries the filter across (4.7.1 `icom_set_mode_x26` sends the FIL it
+    /// read in the old mode), and rigctld gives no filter NUMBER to remember, so the radio loop's
+    /// `M` lines stay exactly what they were for every Hamlib radio: an Icom, a Yaesu, a Kenwood
+    /// and a Flex over SmartSDR CAT, through Phone → FT → Phone → CW. Byte for byte, width
+    /// included: a width here would be a filter Nexus forced.
+    #[test]
+    fn a_hamlib_radio_is_sent_the_same_mode_lines_from_ft_back_to_phone() {
+        for model in [3073u32, 1035, 2031, 2036] {
+            // IC-7300, FT-991A, TS-590S, FLEX-6xxx (SmartSDR CAT)
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                e.set_license_class("extra");
+                let mut s = e.settings().clone();
+                s.rig_model = model;
+                e.apply_settings(s);
+                e.set_operating_mode("phone", true);
+                e.set_frequency(14.250, "20m", "USB");
+            }
+            let (addr, log) = mock_stateful_rigctld(14_250_000, false);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let mut t = 0.0;
+            let mut step = |state: &mut RadioLoop, rig: &mut Rig, t: f64| {
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &sinks,
+                        t,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            };
+            step(&mut state, &mut rig, t);
+            for (op, mhz) in [("digital", 14.074), ("phone", 14.250), ("cw", 14.030)] {
+                t += 20.0;
+                {
+                    let mut e = engine.lock().unwrap();
+                    e.set_operating_mode(op, true);
+                    e.set_frequency(mhz, "20m", "USB");
+                }
+                step(&mut state, &mut rig, t);
+            }
+            let modes: Vec<String> = log
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.starts_with("M "))
+                .cloned()
+                .collect();
+            assert_eq!(
+                modes,
+                ["M USB -1", "M PKTUSB -1", "M USB -1", "M CW -1"], // settle, FT, Phone, CW
+                "rig model {model}: the mode lines from FT back to Phone and CW"
+            );
+        }
+    }
+
     // ---- APRS Tune vs a running FT8 session (operator report, 0.21.1) ----
     //
     // "I clicked APRS Tune while FT8 was running and the radio did not move. No error." The

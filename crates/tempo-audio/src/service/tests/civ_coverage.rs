@@ -636,9 +636,12 @@ fn a_mode_given_up(ng: bool) -> (Vec<String>, bool, usize, Option<String>, (u8, 
         note(&s);
         std::thread::sleep(Duration::from_millis(20));
     }
+    // A mode write is an `06`, or the one `26 00 <mode> <data> <fil>` frame that names a filter
+    // the radio last had in that mode (#417) — the NG fallback to plain USB is one, with LSB's
+    // filter read on the way in. `26 00` READS (no mode byte) are not writes.
     let mode_writes = s.regs.lock().unwrap().wire[n..]
         .iter()
-        .filter(|f| f.get(4) == Some(&0x06))
+        .filter(|f| f.get(4) == Some(&0x06) || (f.get(4) == Some(&0x26) && f.len() > 7))
         .count();
     let r = s.regs.lock().unwrap();
     let radio = (r.main_mode, r.data_mode);
