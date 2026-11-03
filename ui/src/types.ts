@@ -7096,6 +7096,7 @@ export type PcMicCause =
   | 'gateDown'
   | 'interrupted'
   | 'keyRefused'
+  | 'txAudio'
   | 'unsure'
 
 export interface PcMicEnded {

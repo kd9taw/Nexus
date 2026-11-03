@@ -110,6 +110,11 @@ pub(crate) struct PcMicState {
     /// When the over armed (the press): a release of an over that never keyed says why only when
     /// PTT was held [`SILENT_PRESS`] or more.
     armed_at: Option<Instant>,
+    /// What this over has handed the transmitter: samples, and the loudest of them (full scale 1.0),
+    /// for the diagnostic log's line at its end. A "PTT keys but no audio goes out" report reads
+    /// there whether any voice reached the sound card, and how loud.
+    sent: usize,
+    peak: f32,
 }
 
 impl Default for PcMicState {
@@ -131,6 +136,8 @@ impl Default for PcMicState {
             dax_hold: None,
             on_dax: false,
             armed_at: None,
+            sent: 0,
+            peak: 0.0,
         }
     }
 }
@@ -183,14 +190,24 @@ impl Engine {
             // arms, on its own capture, as a quick re-press always has.
             self.drop_pc_mic();
         }
-        if !self.pc_mic_wanted()
-            || !self.tx_enabled
-            || !self.tx_allowed()
-            || self.tuning
-            || self.clock_repair_holds_tx()
-            || self.remote_transmit_held()
-            || self.connection_tx_refusal().is_some()
-        {
+        let gate = if !self.pc_mic_wanted() {
+            Some("not in Phone with the switch on")
+        } else if !self.tx_enabled {
+            Some("TX is off")
+        } else if !self.tx_allowed() {
+            Some("transmit is not allowed here (licence or connection)")
+        } else if self.tuning {
+            Some("a tune is running")
+        } else if self.clock_repair_holds_tx() {
+            Some("a clock repair holds transmit")
+        } else if self.remote_transmit_held() {
+            Some("a newly signed-in device holds transmit")
+        } else {
+            self.connection_tx_refusal()
+        };
+        if let Some(gate) = gate {
+            // The cockpit says each of these on screen at the press; the log keeps it too.
+            tempo_core::applog::info("tx", &format!("{} over not armed: {gate}", PC_MIC.name));
             return false;
         }
         // Something else holds the transmitter (a voice-keyer message queued or playing among
@@ -229,6 +246,18 @@ impl Engine {
         // as long as PTT is held, and keys nothing until the radio reports it (module header).
         self.pc_mic.dax_hold = self.flex_radio_has_mic.then(Instant::now);
         self.pc_mic.armed_at = Some(Instant::now());
+        self.pc_mic.sent = 0;
+        self.pc_mic.peak = 0.0;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} over armed: microphone {:?}, gain {:+.1} dB, TX audio level {:.2}",
+                PC_MIC.name,
+                self.pc_mic.device,
+                self.settings.pc_mic_gain_db,
+                self.settings.tx_level
+            ),
+        );
         self.pc_mic.on_dax = false;
         // A press is an operator action: the unattended-transmit clock restarts here.
         self.reset_tx_watchdog();
@@ -294,6 +323,23 @@ impl Engine {
     /// End the computer-microphone over NOW: the ONE kill path. The feed closes first, so nothing
     /// captured for this over can reach the next; the abort is armed only when the radio was keyed.
     pub fn drop_pc_mic(&mut self) {
+        if self.pc_mic.over.active() {
+            // What this over put on the transmitter, for a "keys but no audio" report.
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "{} over closed: {}, {} ms of audio sent, peak {}",
+                    PC_MIC.name,
+                    if self.pc_mic.over.keyed() {
+                        "keyed"
+                    } else {
+                        "never keyed"
+                    },
+                    self.pc_mic.sent as u64 * 1000 / u64::from(PC_MIC.rate_hz),
+                    dbfs(self.pc_mic.peak)
+                ),
+            );
+        }
         self.pc_mic.feed.close();
         self.pc_mic.partial.clear();
         self.pc_mic.held.clear();
@@ -621,10 +667,28 @@ impl Engine {
             }
             tempo_core::applog::info("tx", &format!("{} over ended: {why:?}", PC_MIC.name));
         }
-        if res.tick == MicTick::Key {
-            self.pc_mic.ended = None; // this over keyed: the last one's reason is old news
+        match &res.tick {
+            MicTick::Key => {
+                self.pc_mic.ended = None; // this over keyed: the last one's reason is old news
+                tempo_core::applog::info("tx", &format!("{} over keying", PC_MIC.name));
+            }
+            MicTick::Samples(buf) => {
+                self.pc_mic.sent += buf.len();
+                let loudest = buf.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+                self.pc_mic.peak = self.pc_mic.peak.max(loudest);
+            }
+            _ => {}
         }
         res.tick
+    }
+}
+
+/// A level for the diagnostic log, in dBFS ("silent" for exact zero).
+fn dbfs(peak: f32) -> String {
+    if peak > 0.0 {
+        format!("{:.1} dBFS", 20.0 * peak.log10())
+    } else {
+        "silent".to_string()
     }
 }
 

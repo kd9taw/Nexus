@@ -13737,7 +13737,27 @@ impl RadioLoop {
                 self.pc_mic_keyed = false;
                 self.pc_mic_busy_until = 0.0;
             } else {
+                // ⛔ NEVER KEY WITH NO AUDIO (the slot overs' rule, `slot::key_slot_transmitter`):
+                // the output was opened when the microphone was; asked again here, as the slot key
+                // asks, so an output lost since keys nothing and says so.
+                let tx_audio = match tick {
+                    MicTick::Key => backend.prepare_tx(),
+                    _ => Ok(()),
+                };
                 match tick {
+                    MicTick::Key if tx_audio.is_err() => {
+                        let why = tx_audio.err().unwrap_or_default();
+                        tempo_core::applog::warn(
+                            "tx",
+                            &format!(
+                                "computer microphone over not keyed: the TX audio output would not \
+                                 open ({why})"
+                            ),
+                        );
+                        let mut eng = engine_lock(engine);
+                        eng.pc_mic_refused(tempo_app::dto::PcMicCause::TxAudio);
+                        let _ = eng.take_pc_mic_abort();
+                    }
                     MicTick::Key => {
                         self.ensure_commanded(rig); // read-only launch: assert before key
                         self.publish_tx_intent_now(); // before keying — the fail-safe must know
@@ -13814,8 +13834,25 @@ impl RadioLoop {
                     opened_receive.as_deref(),
                     &crate::notify_sound::same_input,
                 );
+                // ⛔ …and no microphone for an over whose voice has no way out: the transmit audio
+                // output opens (or is tried again after a failure) now, before anything keys, as
+                // arming slot TX opens it. An output that will not open keys nothing, and says why.
+                let tx_audio = if refused.is_none() {
+                    backend.prepare_tx()
+                } else {
+                    Ok(())
+                };
                 if let Some(cause) = refused {
                     engine_lock(engine).pc_mic_refused(cause);
+                } else if let Err(why) = tx_audio {
+                    tempo_core::applog::warn(
+                        "tx",
+                        &format!(
+                            "computer microphone over not armed: the TX audio output would not \
+                             open ({why})"
+                        ),
+                    );
+                    engine_lock(engine).pc_mic_refused(tempo_app::dto::PcMicCause::TxAudio);
                 } else {
                     match backend.set_pc_mic(Some(&device)) {
                         Ok(()) => self.pc_mic_open = Some((device, gen)),

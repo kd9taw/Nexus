@@ -10004,6 +10004,7 @@ export const ZH: PartialCatalog = {
   "shell.lane.pcMic.gateDown": "发射过程中不再允许发射（TX 关闭、超出执照范围、调谐、离开话音模式，或切换到其他电台、麦克风或音频通路），因此 Nexus 解除了电台键控。",
   "shell.lane.pcMic.interrupted": "发射过程中电台被解除键控或被接管（切换电台、CAT 保持，或其他来源的解除键控），因此 Nexus 结束了本次发射。请再次按 PTT。",
   "shell.lane.pcMic.keyRefused": "电台没有接受键控，因此没有发送任何内容。",
+  "shell.lane.pcMic.txAudio": "电台的发射音频输出无法打开，因此电台没有被键控：否则会在没有音频的情况下发射。请检查电台已开机且 USB 音频已连接，并检查“设置 ▸ 电台 ▸ 音频”中的 TX 音频设备是该电台的。",
   "shell.lane.pcMic.unsure": "所选麦克风无法与可能承载波段信号的输入区分开（例如 default、pulse、pipewire 等声音服务器的默认输入，接收设为系统默认，或声音配置文件中指定的输入），因此没有发送任何内容：那可能把波段送上空中。请在设置 ▸ 电台 ▸ 音频中，按麦克风自身的声卡选择，并给该电台的接收输入单独的声卡。",
   "settings.transmit.freedv.log.label": "FreeDV 通联写入日志",
   "settings.transmit.freedv.log.hint": "FreeDV 自身的程序可将你在其中记录的每次通联交给 Nexus：在 FreeDV 中开启 QSO Logging，并填入此处显示的地址。每次通联都会作为 FreeDV 通联记入日志，且只记在你本台的呼号下：FreeDV 以其他呼号记录的通联会被拒绝，原因显示在此处。仅限本电脑，且仅接收：FreeDV 发到这里的任何内容都无法让电台发射或调谐。",

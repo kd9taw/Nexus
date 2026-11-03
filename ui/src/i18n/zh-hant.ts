@@ -10006,6 +10006,7 @@ export const ZH_HANT: PartialCatalog = {
   "shell.lane.pcMic.gateDown": "發射過程中不再允許發射（TX 關閉、超出執照範圍、調諧、離開話音模式，或切換到其他電台、麥克風或音訊通路），因此 Nexus 解除了電台鍵控。",
   "shell.lane.pcMic.interrupted": "發射過程中電台被解除鍵控或被接管（切換電台、CAT 保持，或其他來源的解除鍵控），因此 Nexus 結束了本次發射。請再次按 PTT。",
   "shell.lane.pcMic.keyRefused": "電台沒有接受鍵控，因此沒有傳送任何內容。",
+  "shell.lane.pcMic.txAudio": "電台的發射音訊輸出無法開啟，因此電台沒有被鍵控：否則會在沒有音訊的情況下發射。請檢查電台已開機且 USB 音訊已連接，並檢查「設定 ▸ 電台 ▸ 音訊」中的 TX 音訊裝置是該電台的。",
   "shell.lane.pcMic.unsure": "所選麥克風無法與可能承載波段訊號的輸入區分開（例如 default、pulse、pipewire 等聲音伺服器的預設輸入，接收設為系統預設，或聲音配置檔案中指定的輸入），因此沒有傳送任何內容：那可能把波段送上空中。請在設定 ▸ 電台 ▸ 音訊中，按麥克風自身的音效卡選擇，並給該電台的接收輸入單獨的音效卡。",
   "settings.transmit.freedv.log.label": "FreeDV 通聯寫入日誌",
   "settings.transmit.freedv.log.hint": "FreeDV 自身的程式可將你在其中記錄的每次通聯交給 Nexus：在 FreeDV 中開啟 QSO Logging，並填入此處顯示的地址。每次通聯都會作為 FreeDV 通聯記入日誌，且只記在你本台的呼號下：FreeDV 以其他呼號記錄的通聯會被拒絕，原因顯示在此處。僅限本電腦，且僅接收：FreeDV 傳到這裡的任何內容都無法讓電台發射或調諧。",

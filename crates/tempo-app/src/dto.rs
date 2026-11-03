@@ -1684,6 +1684,9 @@ pub enum PcMicCause {
     Interrupted,
     /// The radio did not accept the key.
     KeyRefused,
+    /// The radio's transmit audio output (the sound card that carries the voice to the radio)
+    /// would not open, so the radio was not keyed: it would have gone on the air with no audio.
+    TxAudio,
     /// The chosen microphone cannot be told apart from an input that may carry the band (a sound
     /// server's default input, receive on the system default, an input routed by a sound
     /// configuration file, or a card by a number this computer cannot resolve).
