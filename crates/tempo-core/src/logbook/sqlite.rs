@@ -1605,6 +1605,9 @@ impl LogDb {
             }
             // A history-only tag an older build left in the passthrough goes back where it belongs.
             super::history::heal_history_only(&mut rec);
+            // A `WWFF_REF` twin of its WWFF side, kept by an import from before the field was
+            // modelled, goes ([`super::heal_wwff_twin`]).
+            super::heal_wwff_twin(&mut rec);
             // The same emptiness test `parse_contest` applies, for the same reason: a `Some`
             // here is a claim that this contact belonged to a contest, and an all-empty block
             // would make that claim of every ordinary QSO.
@@ -2866,6 +2869,49 @@ mod tests {
 
         let actual: String = adif_header() + &back.iter().map(adif_record).collect::<String>();
         (expected, actual, records.len())
+    }
+
+    /// A row stored before Nexus knew `WWFF_REF` holds the side as WWFF AND the logger's own
+    /// `WWFF_REF` (the same reference) parked in its passthrough. Read back, the parked twin is
+    /// gone, so nothing shows or writes it twice; one that disagrees with the side stays.
+    #[test]
+    fn a_stored_wwff_ref_twin_of_its_side_is_healed_on_load() {
+        let mut r = parse_adif(
+            "<CALL:6>DL0XYZ<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20261022<TIME_ON:6>120000<EOR>",
+        )
+        .remove(0);
+        r.id = Some(RecordId::Provisional {
+            hash: 1,
+            ordinal: 0,
+        });
+        r.ota.their_program = Some("WWFF".into());
+        r.ota.their_ref = Some("DLFF-0001".into());
+        r.ota.my_program = Some("WWFF".into());
+        r.ota.my_ref = Some("KFF-1234".into());
+        r.extra = vec![
+            ("MY_WWFF_REF".into(), "kff-1234".into()),
+            ("WWFF_REF".into(), "DLFF-0001".into()),
+        ];
+        let mut other = r.clone();
+        other.id = Some(RecordId::Provisional {
+            hash: 2,
+            ordinal: 0,
+        });
+        other.extra = vec![("WWFF_REF".into(), "DLFF-0002".into())];
+        let mut db = LogDb::open_in_memory().expect("open");
+        db.insert_all([&r, &other].into_iter().map(|r| (r, Resolved::default())))
+            .expect("insert");
+        let back = db.load_all().expect("load");
+        let by_hash = |h: u64| {
+            back.iter()
+                .find(|b| matches!(b.id, Some(RecordId::Provisional { hash, .. }) if hash == h))
+                .expect("row")
+        };
+        assert!(by_hash(1).extra.is_empty(), "{:?}", by_hash(1).extra);
+        assert_eq!(
+            by_hash(2).extra,
+            vec![("WWFF_REF".to_string(), "DLFF-0002".to_string())]
+        );
     }
 
     /// Every field the log funnel now fills — the own-station fields and which of them

@@ -27,6 +27,8 @@ Three feeds are supported, selectable via program toggle chips at the top of the
 
 The POTA and SOTA requests carry a `nexus-pota/0.1 (+ham radio parks/summits on the air)` User-Agent and a 15-second timeout. No credentials are required for any feed. WWFF Spotline publishes its spot list for other programs to read, asking that each feed be fetched no more than once every 30 seconds and that the User-Agent name the program and a contact ([spots.wwff.co/info](https://spots.wwff.co/info)); Nexus asks Spotline at most once per 30 seconds however many boards show it, with a User-Agent naming Nexus, its version and its project page (`Nexus/<version> (+https://github.com/kd9taw/Nexus)`), never your callsign or email. A board polls WWFF only while it shows the WWFF or All tab, once a minute; the background poller for the Needed board asks every three minutes.
 
+Spotline's list keeps each activator's latest spot for about a day, so the WWFF tab lists only activators spotted within the last hour, the window the Needed board uses for park and summit activations.
+
 **Poll cadence:** the view auto-refreshes every **60 seconds**. A manual **Refresh** button is always available. After each successful fetch, a `HH:MM:SS` last-updated timestamp appears next to the Refresh button so you know exactly how stale the data is.
 
 When you log a contact (or anything else changes your log), the board updates its badges and its hidden rows from the spots it already has — it does **not** fetch the feeds again for that, because your log also changes each time an upload to QRZ, ClubLog or LoTW is recorded.

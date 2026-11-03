@@ -3880,6 +3880,13 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         if r.qsl_sent.sent && k == QSL_QUEUE_FIELD {
             continue;
         }
+        // Nor a `WWFF_REF` / `MY_WWFF_REF` a WWFF side already wrote ([`ota_fields`]): a row
+        // imported before Nexus knew the field holds the logger's copy here beside its side, and
+        // one that disagrees with the side ([`take_ota_side`] keeps it). The file carries one,
+        // the side's; the other stays in the store, as a contest tag the exchange wrote does.
+        if wwff_side_writes(r, k) {
+            continue;
+        }
         out.push_str(&field(k, v));
     }
     out.push_str("<EOR>\n");
@@ -4056,6 +4063,46 @@ pub fn adif_record_with_station(r: &QsoRecord, station_call: &str, my_grid: &str
         Some(pos) => format!("{}{}{}", &base[..pos], extra, &base[pos..]),
         None => format!("{base}{extra}"),
     }
+}
+
+/// Whether [`ota_fields`] writes `tag` (`WWFF_REF` or `MY_WWFF_REF`) for its side itself: the
+/// side is WWFF and names a reference.
+fn wwff_side_writes(r: &QsoRecord, tag: &str) -> bool {
+    let (program, reference) = match tag {
+        "WWFF_REF" => (&r.ota.their_program, &r.ota.their_ref),
+        "MY_WWFF_REF" => (&r.ota.my_program, &r.ota.my_ref),
+        _ => return false,
+    };
+    program
+        .as_deref()
+        .is_some_and(|p| p.eq_ignore_ascii_case("WWFF"))
+        && reference.as_deref().is_some_and(|r| !r.is_empty())
+}
+
+/// A `WWFF_REF` / `MY_WWFF_REF` in the passthrough that only repeats its WWFF side's reference
+/// is taken out: a row imported before Nexus knew the field kept the logger's copy there, and the
+/// store hands it back as it was. A value that differs from the side stays (see
+/// [`take_ota_side`]); the writer skips it either way ([`wwff_side_writes`]).
+pub(crate) fn heal_wwff_twin(r: &mut QsoRecord) {
+    let their = r
+        .ota
+        .their_ref
+        .clone()
+        .filter(|_| wwff_side_writes(r, "WWFF_REF"));
+    let mine = r
+        .ota
+        .my_ref
+        .clone()
+        .filter(|_| wwff_side_writes(r, "MY_WWFF_REF"));
+    let twin = |side: &Option<String>, v: &str| {
+        side.as_deref()
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case(v.trim()))
+    };
+    r.extra.retain(|(k, v)| match k.as_str() {
+        "WWFF_REF" => !twin(&their, v),
+        "MY_WWFF_REF" => !twin(&mine, v),
+        _ => true,
+    });
 }
 
 /// One OTA side's ADIF tags: `SIG`, `SIG_INFO`, the dedicated `SOTA_REF`, `POTA_REF` and
@@ -5054,8 +5101,10 @@ fn take_upload(f: &mut std::collections::HashMap<String, String>, k: &str) -> Op
 /// agrees with it; else a SIG=POTA/WWFF pair; else a lone POTA_REF (what pota.app's
 /// exports carry — may hold a comma list, verbatim); else a lone WWFF_REF.
 ///
-/// On a WWFF side its `WWFF_REF` is consumed with it ([`ota_fields`] writes it back); beside
-/// any other programme it is left in the map like the other programmes' tags below.
+/// On a WWFF side a `WWFF_REF` that agrees with it is consumed ([`ota_fields`] writes it back);
+/// one that disagrees, and one beside any other programme, is left in the map like the other
+/// programmes' tags below (a parked one beside a WWFF side is kept, never written: see
+/// [`wwff_side_writes`]).
 ///
 /// ⛔ **A TWO-FER'S LIST IS IN `POTA_REF`, SO THAT IS WHERE IT IS READ** (the read half of
 /// operator-review finding A2). [`ota_fields`] names ONE park in `SIG_INFO` and keeps the whole
@@ -5124,10 +5173,15 @@ fn take_ota_side(
         if !pota_side {
             park(pota, pota_v);
         }
-        // On a WWFF side the dedicated field is the side's own and is consumed, `SIG_INFO`
-        // winning a disagreement as it does over `POTA_REF` on a POTA side: parked, it would be
-        // written as a second `WWFF_REF`. Beside any other programme it rides along.
-        if !p.trim().eq_ignore_ascii_case("WWFF") {
+        // On a WWFF side the dedicated field is the side's own and is consumed when it agrees.
+        // `SIG_INFO` wins a disagreement, as it does over `POTA_REF` on a POTA side, and the
+        // other value is KEPT, parked, never dropped: the writer skips a parked one beside a WWFF
+        // side ([`wwff_side_writes`]), so the file still carries one. Beside any other programme
+        // it rides along.
+        let agrees = wwff_v
+            .as_deref()
+            .is_some_and(|w| w.trim().eq_ignore_ascii_case(r.trim()));
+        if !(p.trim().eq_ignore_ascii_case("WWFF") && agrees) {
             park(wwff, wwff_v);
         }
         (Some(p.to_ascii_uppercase()), Some(r.to_ascii_uppercase()))
@@ -7279,6 +7333,56 @@ mod tests {
             vec![("WWFF_REF".to_string(), "KFF-1234".to_string())]
         );
         assert_eq!(adif_record(rec).matches("<WWFF_REF:").count(), 1);
+    }
+
+    /// ⭐ A ROW IMPORTED BEFORE NEXUS KNEW `WWFF_REF` IS WRITTEN WITH ONE. Such an import stored the
+    /// side as WWFF and parked the logger's own `WWFF_REF` in `extra` beside it, and the store keeps
+    /// that row as it was. The side writes its own `WWFF_REF` now, so the parked copy is skipped:
+    /// the same value would be a duplicate, and a different one a second reference in the file. As
+    /// with a contest tag the exchange already wrote, the side's is the one written and the other
+    /// stays in the store, where the contact card shows it. The `MY_` side the same way. Beside a
+    /// POTA side the parked `WWFF_REF` is the only one, and is written (the control).
+    #[test]
+    fn a_parked_wwff_ref_beside_a_wwff_side_is_not_written_twice() {
+        let mut r = rec("DL0XYZ", "20m", 1_790_000_000);
+        r.ota.their_program = Some("WWFF".into());
+        r.ota.their_ref = Some("DLFF-0001".into());
+        r.ota.my_program = Some("WWFF".into());
+        r.ota.my_ref = Some("KFF-1234".into());
+        r.extra = vec![
+            ("MY_WWFF_REF".into(), "KFF-1234".into()),
+            ("WWFF_REF".into(), "DLFF-0001".into()),
+        ];
+        let out = adif_record(&r);
+        assert_eq!(out.matches("<WWFF_REF:").count(), 1, "{out}");
+        assert_eq!(out.matches("<MY_WWFF_REF:").count(), 1, "{out}");
+        // A parked value that disagrees with the side is not written either: the side's is.
+        r.extra = vec![("WWFF_REF".into(), "DLFF-0002".into())];
+        let out = adif_record(&r);
+        assert_eq!(out.matches("<WWFF_REF:").count(), 1, "{out}");
+        assert!(out.contains("<WWFF_REF:9>DLFF-0001"), "{out}");
+        // CONTROL: beside a POTA side it is the only WWFF_REF, and goes out.
+        r.ota.their_program = Some("POTA".into());
+        r.ota.their_ref = Some("US-1234".into());
+        assert!(adif_record(&r).contains("<WWFF_REF:9>DLFF-0002"));
+    }
+
+    /// A `WWFF_REF` that disagrees with the `SIG_INFO` of a WWFF side is KEPT, in `extra`, not
+    /// dropped: `SIG_INFO` names the side (as it wins over `POTA_REF` on a POTA side), and the
+    /// other value stays on the contact for the operator to see. It is written once, the side's.
+    #[test]
+    fn a_disagreeing_wwff_ref_on_a_wwff_side_is_kept_not_dropped() {
+        let text = "<CALL:6>DL0XYZ<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <SIG:4>WWFF<SIG_INFO:9>DLFF-0001<WWFF_REF:9>DLFF-0002<EOR>\n";
+        let r = &parse_adif(text)[0];
+        assert_eq!(r.ota.their_ref.as_deref(), Some("DLFF-0001"));
+        assert_eq!(
+            r.extra,
+            vec![("WWFF_REF".to_string(), "DLFF-0002".to_string())]
+        );
+        let out = adif_record(r);
+        assert_eq!(out.matches("<WWFF_REF:").count(), 1, "{out}");
+        assert!(out.contains("<WWFF_REF:9>DLFF-0001"), "{out}");
     }
 
     /// An edit that moves a side to WWFF takes along a `WWFF_REF` the side carried beside its old

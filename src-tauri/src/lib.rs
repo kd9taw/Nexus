@@ -41619,6 +41619,29 @@ fn cached_ota_spots(
         .ok_or_else(|| format!("No {program} spots cached yet."))
 }
 
+/// The rows the hunter board lists for `program`: every one, except that WWFF's are only the
+/// activations on the air now. WWFF Spotline's `spots.json` keeps the latest spot of every
+/// activator over about the last day (49 rows, 8 under an hour old, on 2026-11-03), and the board
+/// lists "activators on the air now", so a WWFF row is kept only while its spot is under
+/// [`OTA_ACTIVE_SECS`] old, the window the Needed board's activation rows use. A row with no spot
+/// time is kept, as there. The cache keeps the whole list; its readers apply their own window.
+fn ota_board_rows(
+    program: &str,
+    spots: Vec<propagation::OtaSpot>,
+    now: i64,
+) -> Vec<propagation::OtaSpot> {
+    if !program.eq_ignore_ascii_case("WWFF") {
+        return spots;
+    }
+    spots
+        .into_iter()
+        .filter(|sp| {
+            sp.spot_time_unix
+                .is_none_or(|t| now.saturating_sub(t) <= OTA_ACTIVE_SECS)
+        })
+        .collect()
+}
+
 /// `cached`: re-derive the log's flags over the cached rows instead of fetching — see
 /// [`cached_ota_spots`]. Absent or false is the poll and the Refresh button, which fetch.
 #[tauri::command]
@@ -41670,6 +41693,7 @@ async fn get_ota_spots(
         spots
     };
     let now = now_unix();
+    let spots = ota_board_rows(&program, spots, now);
     // The needs model every reader shares ([`NeedsKept`]), for the states a row would add to WAS.
     let kept = tallies.needs.clone();
     let (mycall, capture, needs) = {
@@ -64275,6 +64299,32 @@ mod tests {
         sp.program = program.into();
         sp.spot_time_unix = Some(crate::now_unix() - age_secs);
         sp
+    }
+
+    /// ⭐ THE WWFF TAB LISTS WHO IS ON THE AIR NOW. Spotline's list keeps every activator's latest
+    /// spot for about a day; one spotted two hours ago went QRT and is no row to HUNT. A WWFF row is
+    /// kept under the hour (`OTA_ACTIVE_SECS`), and one with no spot time is kept. The other
+    /// programmes' rows are left as their feeds send them (the control).
+    #[test]
+    fn the_wwff_board_lists_only_activations_on_the_air_now() {
+        let now = crate::now_unix();
+        let mut untimed = live_spot("WWFF", "G0XYZ", "GFF-0001", 0);
+        untimed.spot_time_unix = None;
+        let rows = |program: &str, spots: Vec<propagation::OtaSpot>| -> Vec<String> {
+            crate::ota_board_rows(program, spots, now)
+                .into_iter()
+                .map(|sp| sp.activator)
+                .collect()
+        };
+        let wwff = vec![
+            live_spot("WWFF", "DL0XYZ", "DLFF-0001", 600),
+            live_spot("WWFF", "K1ABC", "KFF-1234", 7_200),
+            live_spot("WWFF", "VK9ZZZ", "VKFF-0001", 3_600),
+            untimed,
+        ];
+        assert_eq!(rows("WWFF", wwff), ["DL0XYZ", "VK9ZZZ", "G0XYZ"]);
+        let sota = vec![live_spot("SOTA", "W7A", "W7A/MN-001", 7_200)];
+        assert_eq!(rows("SOTA", sota), ["W7A"]);
     }
 
     /// The Needed board through the REAL `read_need_alerts`: `cluster` calls arrive as 20 m CW
