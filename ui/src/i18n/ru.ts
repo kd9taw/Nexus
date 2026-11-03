@@ -10230,4 +10230,8 @@ export const RU: PartialCatalog = {
   "phone.freedv.heard.label": "Позывные, принятые FreeDV",
   "phone.freedv.heard.pick": "Внести {{call}} в журнал",
   "settings.transmit.freedv.logPort.off": "Не слушает: порт 0 отключает приём.",
+  "logEntry.start.label": "Начало",
+  "logEntry.start.title": "Начать эту связь сейчас: время её начала (TIME_ON) станет текущим. Для долгой связи, позывной которой внесён заранее. Время окончания по-прежнему ставит «Записать».",
+  "logEntry.start.setLabel": "Начало {{time}}",
+  "logEntry.start.setTitle": "Эта связь теперь начинается в {{time}} UTC. Нажмите ещё раз, чтобы начать заново.",
 }

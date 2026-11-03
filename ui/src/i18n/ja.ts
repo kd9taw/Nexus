@@ -10250,4 +10250,8 @@ export const JA: PartialCatalog = {
   "logbook.row.qslQueue.remove": "送付待ちカードから外す",
   "logbook.qsl.queued": "{{call}}のカードを送付待ちにしました",
   "logbook.qsl.unqueued": "{{call}}のカードを送付待ちから外しました",
+  "logEntry.start.label": "開始",
+  "logEntry.start.title": "この交信を今から開始します。開始時刻（TIME_ON）が現在時刻になります。コールサインを早めに入力した長い交信向けです。終了時刻は「記録」で引き続き入ります。",
+  "logEntry.start.setLabel": "開始 {{time}}",
+  "logEntry.start.setTitle": "この交信の開始時刻は {{time}} UTC になりました。もう一度押すとやり直します。",
 }

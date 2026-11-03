@@ -510,6 +510,14 @@ interface Props {
    * for edit is set aside as the edit closes. Absent (Satellites): nothing clears.
    */
   clearCallOnBandChange?: boolean
+  /**
+   * CW AND PHONE (#438): the rag-chew Start control beside the call, while a call is in the line.
+   * The contact's start (TIME_ON) is when its call was entered; a long contact whose call went in
+   * early — a rag-chew, a net check-in that turned into a QSO — is restarted at now by one press.
+   * The time it set is on the control. It changes nothing else: Log still stamps the end
+   * (TIME_OFF), and the other-radio override's typed time still wins (Start is not offered then).
+   */
+  startButton?: boolean
 }
 
 /**
@@ -555,6 +563,7 @@ export function LogEntry({
   draft,
   onResumeContest,
   clearCallOnBandChange = false,
+  startButton = false,
 }: Props) {
   const remoteMode = remote != null
   type DraftContext = { band: string; freqMhz: number; mode: string }
@@ -591,14 +600,29 @@ export function LogEntry({
       ? { call: kept.call.trim().toUpperCase(), unix: kept.enteredUnix }
       : null,
   )
+  // The start the rag-chew Start control set for the contact in the line (`startButton`), shown on
+  // the control; null until it is pressed, and again once another contact (or none) is in the line.
+  const [restartedUnix, setRestartedUnix] = useState<number | null>(null)
   useEffect(() => {
     const c = logCall.trim().toUpperCase()
     const prev = callEnteredRef.current
-    if (!c) callEnteredRef.current = null
-    else if (!prev || !(c.startsWith(prev.call) || prev.call.startsWith(c))) {
+    if (!c) {
+      callEnteredRef.current = null
+      setRestartedUnix(null)
+    } else if (!prev || !(c.startsWith(prev.call) || prev.call.startsWith(c))) {
       callEnteredRef.current = { call: c, unix: Math.floor(Date.now() / 1000) }
+      setRestartedUnix(null)
     } else if (prev.call !== c) callEnteredRef.current = { call: c, unix: prev.unix }
   }, [logCall])
+  /** Start (#438): the contact in the line starts now. The same record the first keystroke made,
+   *  so a draft keeps it and Log reads it exactly as it reads an entered call's. */
+  const restartContact = () => {
+    const c = logCall.trim().toUpperCase()
+    if (!c) return
+    const unix = Math.floor(Date.now() / 1000)
+    callEnteredRef.current = { call: c, unix }
+    setRestartedUnix(unix)
+  }
   // The two reports as set for THIS contact (typed, or the CW decoder's read of theirs), or null for
   // a box nobody has touched, which shows the report of the mode the strip logs under NOW, as a
   // contest strip's report box does (`fdValue`). One strip lives across a mode change (the Satellites
@@ -3563,6 +3587,25 @@ export function LogEntry({
         >
           {qrzBusy ? '…' : t('logEntry.lookup.label')}
         </button>
+        {/* Drawn with the call field, as Lookup and Card are, so typing the first letter of a call
+            moves nothing in the row; it works once a call is in the line. */}
+        {startButton && !fdActive && !overrideOpen && (
+          <button
+            type="button"
+            className="le-qrz le-lookup le-start"
+            onClick={restartContact}
+            disabled={!logCall.trim()}
+            title={
+              restartedUnix == null
+                ? t('logEntry.start.title')
+                : t('logEntry.start.setTitle', { time: utcHhMm(restartedUnix) })
+            }
+          >
+            {restartedUnix == null
+              ? t('logEntry.start.label')
+              : t('logEntry.start.setLabel', { time: utcHhMm(restartedUnix) })}
+          </button>
+        )}
         {/* The call's station card (CallCard.tsx). Never in the tab order and never takes focus on a
             press, so typing in the call field is never interrupted; this strip has no ESM, and the
             contest strip has no such button. Never an F-key: F1–F12 are the transmit macros. */}

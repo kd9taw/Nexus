@@ -10267,4 +10267,8 @@ export const FR: PartialCatalog = {
   "logbook.row.qslQueue.remove": "Retirer des cartes à envoyer",
   "logbook.qsl.queued": "Carte en attente pour {{call}}",
   "logbook.qsl.unqueued": "Carte plus en attente pour {{call}}",
+  "logEntry.start.label": "Début",
+  "logEntry.start.title": "Commencer ce contact maintenant : son heure de début (TIME_ON) devient l’heure actuelle. Pour un long contact dont l’indicatif a été saisi tôt. « Enregistrer » note toujours l’heure de fin.",
+  "logEntry.start.setLabel": "Début {{time}}",
+  "logEntry.start.setTitle": "Ce contact commence maintenant à {{time}} UTC. Appuyez à nouveau pour le recommencer.",
 }

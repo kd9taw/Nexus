@@ -10257,4 +10257,8 @@ export const DE: PartialCatalog = {
   "logbook.row.qslQueue.remove": "Aus den zu sendenden Karten entfernen",
   "logbook.qsl.queued": "Karte für {{call}} vorgemerkt",
   "logbook.qsl.unqueued": "Karte für {{call}} nicht mehr vorgemerkt",
+  "logEntry.start.label": "Start",
+  "logEntry.start.title": "Diese Verbindung jetzt beginnen: ihre Startzeit (TIME_ON) wird die aktuelle Zeit. Für eine lange Verbindung, deren Rufzeichen früh eingetragen wurde. „Loggen“ setzt weiterhin die Endzeit.",
+  "logEntry.start.setLabel": "Start {{time}}",
+  "logEntry.start.setTitle": "Diese Verbindung beginnt jetzt um {{time}} UTC. Erneut drücken, um sie neu zu beginnen.",
 }

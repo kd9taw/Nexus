@@ -10223,4 +10223,8 @@ export const ZH_HANT: PartialCatalog = {
   "topbar.stationProfile.title": "我的台站設定檔：其呼號、網格與位置會寫入新通聯。在 設定 ▸ 本台 中設定。",
   "topbar.stationProfile.atStation": "只能在台站處切換。",
   "topbar.stationProfile.busy": "需等這一輪呼叫或通聯結束：停止發射並按 S&P，然後再切換。",
+  "logEntry.start.label": "開始",
+  "logEntry.start.title": "現在開始這次通聯：其開始時間（TIME_ON）改為目前時間。用於呼號早已填入的長時間通聯。結束時間仍由「記錄」寫入。",
+  "logEntry.start.setLabel": "開始 {{time}}",
+  "logEntry.start.setTitle": "這次通聯的開始時間現為 {{time}} UTC。再按一次可重新開始。",
 }

@@ -10221,4 +10221,8 @@ export const ZH: PartialCatalog = {
   "topbar.stationProfile.title": "我的台站配置：其呼号、网格与位置会写入新通联。在 设置 ▸ 本台 中设置。",
   "topbar.stationProfile.atStation": "只能在台站处切换。",
   "topbar.stationProfile.busy": "需等这一轮呼叫或通联结束：停止发射并按 S&P，然后再切换。",
+  "logEntry.start.label": "开始",
+  "logEntry.start.title": "现在开始这次通联：其开始时间（TIME_ON）改为当前时间。用于呼号早已填入的长时间通联。结束时间仍由“记录”写入。",
+  "logEntry.start.setLabel": "开始 {{time}}",
+  "logEntry.start.setTitle": "这次通联的开始时间现为 {{time}} UTC。再按一次可重新开始。",
 }

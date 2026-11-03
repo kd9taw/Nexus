@@ -2645,6 +2645,10 @@ export const EN = {
   'logEntry.lookup.label': 'Lookup',
   'logEntry.lookup.title':
     'Look up name + QTH in the callbook — QRZ first, then HamQTH (grid/state need a QRZ subscription)',
+  'logEntry.start.label': 'Start',
+  'logEntry.start.title': 'Start this contact now: its start time (TIME_ON) becomes the current time. For a long contact whose call went in early. Log still stamps the end time.',
+  'logEntry.start.setLabel': 'Start {{time}}',
+  'logEntry.start.setTitle': 'This contact now starts at {{time}} UTC. Press again to restart it.',
   'logEntry.rstSent.label': 'Sent',
   'logEntry.rstSent.title': 'Signal report you SENT them',
   'logEntry.rstRcvd.label': 'Rcvd',
