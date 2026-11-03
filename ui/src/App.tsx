@@ -60,6 +60,7 @@ import { setPopupCorner } from './features/popupCorner'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
 import { flexVoiceNeedsDax } from './features/flexDaxNote'
+import { phoneTuneNeedsRearSource } from './features/yaesuTuneNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
@@ -3630,6 +3631,7 @@ function App() {
     <PhoneCockpit
       esmSetting={esmSettingFor('phone')}
       flexDaxNote={settings ? flexVoiceNeedsDax(settings) : false}
+      yaesuTuneNote={settings ? phoneTuneNeedsRearSource(settings) : false}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}

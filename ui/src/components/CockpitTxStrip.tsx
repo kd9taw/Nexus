@@ -37,6 +37,9 @@ export interface CockpitTxStripProps {
    *  readout and never a control that keys or stops anything: the screen's send area stays in its
    *  dock. Omitted: the strip is exactly what it was. */
   meters?: ReactNode
+  /** A screen's own line beside Tune (Phone's newcat Yaesu note, #441): text only, drawn last and
+   *  only where Tune is, after RadioTuneNote, so it never moves a control or the TX state. */
+  tuneNote?: ReactNode
 }
 
 /**
@@ -58,7 +61,7 @@ export interface CockpitTxStripProps {
  * the header's did: in RTTY and SSTV the latch is a STOP (set_tx_enabled(false) arms the mode's
  * abort) and must stay a button through their overs, which `radio.transmitting` never marks.
  */
-export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters }: CockpitTxStripProps) {
+export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtuBypass, onStopTx, hold, meters, tuneNote }: CockpitTxStripProps) {
   const onAir = isOnAir(radio)
   // THE SIGN WAITS WITH AN ARMED OVER (the operator's pick "Header ON AIR waits too",
   // 2026-09-28; the sign moved here from the header with the rest of the strip). A streamed
@@ -205,6 +208,7 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the controls or the TX state. */}
       {onTune && <RadioTuneNote radio={radio} />}
+      {onTune && tuneNote}
     </div>
   )
 }

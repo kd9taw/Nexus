@@ -10243,4 +10243,5 @@ export const RU: PartialCatalog = {
   "meters.tx.enlarge.aria": "Показать индикаторы передачи крупнее",
   "meters.tx.enlarge.title": "Индикаторы передачи",
   "meters.tx.enlarge.desc": "Те же текущие показания, что и в полосе TX, только крупнее. Escape закрывает окно.",
+  "phone.tune.usbAudioNote": "Tune подаёт тон через звук USB. Если трансивер переходит на передачу без мощности, установите в его меню SSB MOD SOURCE значение REAR (USB).",
 }

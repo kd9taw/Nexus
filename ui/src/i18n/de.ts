@@ -10270,4 +10270,5 @@ export const DE: PartialCatalog = {
   "meters.tx.enlarge.aria": "Sendeanzeigen größer anzeigen",
   "meters.tx.enlarge.title": "Sendeanzeigen",
   "meters.tx.enlarge.desc": "Dieselben Live-Werte wie in der TX-Leiste, größer. Escape schließt dieses Fenster.",
+  "phone.tune.usbAudioNote": "Tune sendet seinen Ton über USB-Audio. Wenn das Funkgerät ohne Leistung sendet, stellen Sie sein Menü SSB MOD SOURCE auf REAR (USB).",
 }

@@ -281,6 +281,10 @@ interface Props {
   /** The active radio is a Flex on SmartSDR CAT or Hamlib (App, from Settings): the voice keyer
    *  notes once that SSB goes out only with DAX on for voice. Absent on the hosted page. */
   flexDaxNote?: boolean
+  /** The active radio is a Yaesu on Hamlib's newcat backend (App, from Settings; #441): a line beside
+   *  Tune says its tone goes over USB audio, so the radio's SSB modulation source must be REAR (USB).
+   *  Text only. Absent on the hosted page. */
+  yaesuTuneNote?: boolean
   /** Contest mode is on but this station is out of the contest (App's: the switch on, the session not):
    *  the log line says so, with Resume, which re-enters the contest in S&P. Absent otherwise. */
   onResumeContest?: () => void
@@ -661,7 +665,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active = true, snap, theme, pendingWork, freedvPane, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeContest, active = true, snap, theme, pendingWork, freedvPane, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   // The compact chrome (features/compactChrome): md and up, the meters stand in the TX strip and the
   // dock is one row.
   const chrome = useCompactChrome()
@@ -2761,6 +2765,15 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
       // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
       // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
       meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip controls={txMeterControls} /> : undefined}
+      // #441: Phone keys plain USB/LSB, so a newcat Yaesu takes its audio from its SSB modulation
+      // source menu; on MIC, Tune's USB-audio tone keys the radio with no RF. Nexus changes no menu.
+      tuneNote={
+        yaesuTuneNote ? (
+          <span className="radio-tune-note" role="note">
+            {t('phone.tune.usbAudioNote')}
+          </span>
+        ) : undefined
+      }
     />
   )
   // The header's occasional controls, each drawn once: inline, or behind its ⋯ (see the header).

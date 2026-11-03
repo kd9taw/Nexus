@@ -10263,4 +10263,5 @@ export const JA: PartialCatalog = {
   "meters.tx.enlarge.aria": "送信メーターを大きく表示",
   "meters.tx.enlarge.title": "送信メーター",
   "meters.tx.enlarge.desc": "送信ストリップと同じリアルタイムの値を大きく表示します。Escで閉じます。",
+  "phone.tune.usbAudioNote": "TuneはトーンをUSBオーディオで送ります。無線機が送信状態になっても出力が出ない場合は、無線機のSSB MOD SOURCEメニューをREAR（USB）にしてください。",
 }

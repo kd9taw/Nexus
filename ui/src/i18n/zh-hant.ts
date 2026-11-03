@@ -10236,4 +10236,5 @@ export const ZH_HANT: PartialCatalog = {
   "meters.tx.enlarge.aria": "放大顯示發射表",
   "meters.tx.enlarge.title": "發射表",
   "meters.tx.enlarge.desc": "與 TX 列相同的即時讀數，放大顯示。按 Esc 關閉。",
+  "phone.tune.usbAudioNote": "Tune（調諧發射）透過 USB 音訊送出音調。如果電台進入發射卻沒有功率輸出，請把電台的 SSB MOD SOURCE 選單設為 REAR（USB）。",
 }
