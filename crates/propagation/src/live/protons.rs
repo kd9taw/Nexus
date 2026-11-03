@@ -12,6 +12,8 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
+/// The most the day of proton flux is read to. It was 242 KB on 2026-11-03.
+const PROTONS_REPLY_BYTES: u64 = 8 * 1024 * 1024;
 const PROTONS_URL: &str =
     "https://services.swpc.noaa.gov/json/goes/primary/integral-protons-1-day.json";
 const UA: &str = "nexus-propagation/0.1 (+ham radio PCA overlay)";
@@ -70,14 +72,18 @@ pub fn fetch_protons() -> Result<ProtonFlux, String> {
         .user_agent(UA)
         .build()
         .map_err(|e| e.to_string())?;
-    let v = c
+    let resp = c
         .get(PROTONS_URL)
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json::<Value>()
         .map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_str(&super::body::read_capped(
+        resp,
+        PROTONS_REPLY_BYTES,
+        "NOAA SWPC",
+    )?)
+    .map_err(|e| e.to_string())?;
     parse_protons(&v).ok_or_else(|| "no proton channels in SWPC payload".to_string())
 }
 

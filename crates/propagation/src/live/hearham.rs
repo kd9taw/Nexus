@@ -26,9 +26,11 @@ pub fn fetch_all() -> Result<String, String> {
     if !status.is_success() {
         return Err(format!("hearham: server returned HTTP {}", status.as_u16()));
     }
-    resp.text()
-        .map_err(|_| "hearham: could not read the response body".to_string())
+    super::body::read_capped(resp, DIRECTORY_REPLY_BYTES, "hearham")
 }
+
+/// The most the directory is read to. It was 9.6 MB on 2026-11-03 and only grows.
+const DIRECTORY_REPLY_BYTES: u64 = 64 * 1024 * 1024;
 
 fn redact(e: reqwest::Error) -> String {
     neterr::redact_following_redirects("hearham", &e)

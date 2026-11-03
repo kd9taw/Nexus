@@ -107,9 +107,23 @@ fn fetch_report_with(url: &str, idle: Duration, total: Duration) -> Result<Strin
 /// `Display`/`source` can echo the password-bearing URL, so every message on this path is built
 /// from boolean predicates and a byte count, never from the error's own text.
 fn body_text(
+    resp: reqwest::blocking::Response,
+    idle: Duration,
+    total: Duration,
+) -> Result<String, String> {
+    body_text_capped(resp, idle, total, REPORT_REPLY_BYTES)
+}
+
+/// The most one report is read to: the same ceiling as a QRZ logbook download. A report is the
+/// operator's own confirmations, a few hundred bytes each, so this is several hundred thousand.
+const REPORT_REPLY_BYTES: u64 = 256 * 1024 * 1024;
+
+/// [`body_text`] with its byte ceiling supplied, so a test can reach it without sending 256 MB.
+fn body_text_capped(
     mut resp: reqwest::blocking::Response,
     idle: Duration,
     total: Duration,
+    limit: u64,
 ) -> Result<String, String> {
     let deadline = Instant::now() + total;
     let mut body: Vec<u8> = Vec::new();
@@ -120,7 +134,12 @@ fn body_text(
         }
         match resp.read(&mut chunk) {
             Ok(0) => break,
-            Ok(n) => body.extend_from_slice(&chunk[..n]),
+            Ok(n) => {
+                body.extend_from_slice(&chunk[..n]);
+                if body.len() as u64 > limit {
+                    return Err(super::body::too_large(limit, "LoTW"));
+                }
+            }
             Err(e) => return Err(read_error_message(&e, body.len(), idle)),
         }
     }
@@ -301,6 +320,22 @@ mod tests {
             .expect("headers must arrive — only the body is under test");
         assert!(resp.status().is_success(), "the body must follow a 2xx");
         resp
+    }
+
+    /// A report past the byte ceiling is refused, in a sentence that names no URL; one at the
+    /// ceiling is read whole.
+    #[test]
+    fn a_report_past_the_byte_limit_is_refused() {
+        let idle = Duration::from_secs(5);
+        let total = Duration::from_secs(10);
+        let port = body_server(4, 1024, Duration::ZERO, true);
+        let body = body_text_capped(stalled_response(port, idle), idle, total, 4096)
+            .expect("a report at the limit is read whole");
+        assert_eq!(body.len(), 4096);
+        let port = body_server(4, 1024, Duration::ZERO, true);
+        let err = body_text_capped(stalled_response(port, idle), idle, total, 4095).unwrap_err();
+        assert_redacted(&err);
+        assert!(err.contains("larger than"), "{err}");
     }
 
     /// Nothing on this path may echo the password-bearing URL.

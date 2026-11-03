@@ -717,7 +717,7 @@ pub fn upload(
             }
         })?;
     let status = resp.status();
-    let text = resp.text().unwrap_or_default();
+    let text = read_reply(resp);
     classify(status.as_u16(), &text, key)
 }
 
@@ -1026,8 +1026,17 @@ pub fn fetch_station_info(
         }
     })?;
     let status = resp.status().as_u16();
-    let text = resp.text().unwrap_or_default();
+    let text = read_reply(resp);
     classify_station_info(status, &text)
+}
+
+/// The most a Cloudlog/Wavelog answer is read to: a short JSON result or the station list.
+const REPLY_BYTES: u64 = 1024 * 1024;
+
+/// An answer's body, or empty when it cannot be read or is longer than [`REPLY_BYTES`] — the
+/// status then decides, as it always did for a body that could not be read.
+fn read_reply(resp: reqwest::blocking::Response) -> String {
+    super::body::read_capped(resp, REPLY_BYTES, "Cloudlog").unwrap_or_default()
 }
 
 #[cfg(test)]

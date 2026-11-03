@@ -22,6 +22,9 @@ use crate::model::{Band, PathSpot};
 const WSPR_URL: &str = "https://db1.wspr.live/";
 const UA: &str = "nexus-propagation/0.1 (+ham radio getting-out evidence)";
 
+/// The most a WSPR answer is read to: the query asks for at most 200 rows, well under 100 KB.
+const WSPR_REPLY_BYTES: u64 = 4 * 1024 * 1024;
+
 /// The bounded query: who heard `mycall`'s WSPR transmissions in the last hour.
 fn query_for(mycall: &str) -> String {
     // Callsign is embedded in SQL — strip anything outside the callsign
@@ -110,14 +113,14 @@ pub fn fetch_wspr(mycall: &str) -> Result<Vec<PathSpot>, String> {
         .user_agent(UA)
         .build()
         .map_err(|e| e.to_string())?;
-    let v = c
+    let resp = c
         .get(WSPR_URL)
         .query(&[("query", query_for(mycall))])
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json::<Value>()
+        .map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_str(&super::body::read_capped(resp, WSPR_REPLY_BYTES, "WSPR")?)
         .map_err(|e| e.to_string())?;
     Ok(parse_wspr(
         &v,

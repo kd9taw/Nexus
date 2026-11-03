@@ -729,6 +729,11 @@ jobs:
       - name: Test the TLE mirror generator
         run: node --test scripts/gen-tles.test.mjs
 
+      # The release's IOTA staging step leans on this script's retry of a 202/5xx or a network
+      # failure; a regression would ship installers without the island list.
+      - name: Test the IOTA list download retry
+        run: node --test scripts/gen-iota-groups.test.mjs
+
       # Same argument for the street map's host: street-maps.yml copies and deletes unattended,
       # and the index it publishes is what every street-map download reads. Its rules are tested
       # here too, and here, after `npm ci`, the test can also hold the icons the hosting job

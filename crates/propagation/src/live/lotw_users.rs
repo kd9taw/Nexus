@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// The most the user-activity list is read to. It was 6.4 MB on 2026-11-03 and only grows.
+const USERS_REPLY_BYTES: u64 = 64 * 1024 * 1024;
 const LOTW_USERS_URL: &str = "https://lotw.arrl.org/lotw-user-activity.csv";
 const UA: &str = "nexus-propagation/0.1 (+ham radio LoTW-user highlighting)";
 
@@ -96,7 +98,7 @@ pub fn fetch_user_activity(
         .get(reqwest::header::LAST_MODIFIED)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    let csv = resp.text().map_err(|e| e.to_string())?;
+    let csv = super::body::read_capped(resp, USERS_REPLY_BYTES, "LoTW user list")?;
     Ok(LotwUsersFetch::Fresh {
         csv,
         etag,

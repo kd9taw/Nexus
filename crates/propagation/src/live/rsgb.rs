@@ -54,9 +54,11 @@ pub fn fetch_square(square: &str) -> Result<String, String> {
     if !status.is_success() {
         return Err(format!("RSGB: server returned HTTP {}", status.as_u16()));
     }
-    resp.text()
-        .map_err(|_| "RSGB: could not read the response body".to_string())
+    super::body::read_capped(resp, SQUARE_REPLY_BYTES, "RSGB")
 }
+
+/// The most one square's answer is read to. IO83 was 53 KB on 2026-11-03.
+const SQUARE_REPLY_BYTES: u64 = 4 * 1024 * 1024;
 
 #[cfg(test)]
 mod tests {

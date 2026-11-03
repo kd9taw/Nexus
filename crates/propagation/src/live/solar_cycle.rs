@@ -8,6 +8,8 @@ use serde_json::Value;
 
 use crate::solar_cycle::parse_predicted_ssn;
 
+/// The most the predicted cycle is read to. It was 3 KB on 2026-11-03.
+const CYCLE_REPLY_BYTES: u64 = 1024 * 1024;
 const URL: &str = "https://services.swpc.noaa.gov/json/solar-cycle/predicted-solar-cycle.json";
 const UA: &str = "nexus-propagation/0.1 (+ham radio space weather)";
 
@@ -18,14 +20,18 @@ pub fn fetch_predicted_ssn(year: i64, month1: u32) -> Result<f32, String> {
         .user_agent(UA)
         .build()
         .map_err(|e| e.to_string())?;
-    let doc: Value = c
+    let resp = c
         .get(URL)
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json()
         .map_err(|e| e.to_string())?;
+    let doc: Value = serde_json::from_str(&super::body::read_capped(
+        resp,
+        CYCLE_REPLY_BYTES,
+        "NOAA SWPC",
+    )?)
+    .map_err(|e| e.to_string())?;
     parse_predicted_ssn(&doc, year, month1)
         .ok_or_else(|| format!("no predicted SSN for {year:04}-{month1:02}"))
 }

@@ -19,6 +19,9 @@ use crate::model::{Band, PathSpot};
 // behavior — a project contact, never an end-user's personal address (this ships
 // in every binary). Use the public project repo.
 const APPCONTACT: &str = "https://github.com/kd9taw/nexus";
+/// The most a reception-report answer is read to: XML rows of about 300 bytes each, so this is
+/// roughly a hundred thousand reports, well past a busy station's window.
+const REPORTS_REPLY_BYTES: u64 = 32 * 1024 * 1024;
 const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
 
 /// Fetch the operator's reception reports from the last `window_secs` seconds.
@@ -51,9 +54,7 @@ pub fn fetch_paths(mycall: &str, window_secs: i64) -> Result<Vec<PathSpot>, Stri
             resp.status().as_u16()
         ));
     }
-    let xml = resp
-        .text()
-        .map_err(|_| "PSK Reporter: response read failed".to_string())?;
+    let xml = super::body::read_capped(resp, REPORTS_REPLY_BYTES, "PSK Reporter")?;
     Ok(parse_reports(&xml))
 }
 

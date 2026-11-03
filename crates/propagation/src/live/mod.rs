@@ -7,7 +7,7 @@
 
 pub mod arrival;
 pub mod aurora;
-mod body;
+pub mod body;
 pub mod callook;
 pub mod cloudlog;
 pub mod clublog;

@@ -46,13 +46,20 @@ pub fn fetch(url: &str) -> Result<String, String> {
         .https_only(true)
         .build()
         .map_err(|e| e.to_string())?;
-    c.get(url)
+    let resp = c
+        .get(url)
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    read_body(resp)
+}
+
+/// The most the calendar feed is read to. It was 11 KB on 2026-11-03.
+const RSS_REPLY_BYTES: u64 = 4 * 1024 * 1024;
+
+fn read_body(resp: reqwest::blocking::Response) -> Result<String, String> {
+    super::body::read_capped(resp, RSS_REPLY_BYTES, "Contest calendar")
 }
 
 /// Parse the WA7BNM RSS body into upcoming contests. Malformed XML yields the
@@ -319,6 +326,11 @@ fn month_num(m: &str) -> Option<u32> {
 mod tests {
     use super::*;
     use crate::geo::days_from_civil;
+
+    #[test]
+    fn the_calendar_is_read_only_up_to_its_limit() {
+        crate::live::body::assert_body_capped(read_body, RSS_REPLY_BYTES, "Contest calendar");
+    }
 
     const SAMPLE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
