@@ -788,6 +788,50 @@ fn the_log_button_on_a_contact_never_on_tx2_or_tx3_logs_wsjtx_start_estimate() {
     );
 }
 
+/// #416: the Log button after our RR73 has gone (nothing queued, still `Confirming`) keeps the
+/// Tx4 estimate it gave while the RR73 stayed queued. CONTROL: a free-text over queued at
+/// `Confirming` has no Tx number, and its contact logs at now, as before the RR73 cleared.
+#[test]
+fn the_log_button_after_our_rr73_keeps_tx4_and_a_free_text_over_keeps_now() {
+    let fresh = || {
+        let mut e = ft8();
+        e.settings.auto_log = false;
+        e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU R-15", -9)], 21);
+        e.call_station(DX);
+        key_once(&mut e, 22);
+        e.ingest_decodes_for_test(&[], 25);
+        e
+    };
+    let mut gone = fresh();
+    let Mode::Qso { station, .. } = &gone.mode else {
+        panic!("premise: a QSO");
+    };
+    assert_eq!(station.state, QsoState::Confirming, "premise");
+    assert_eq!(station.pending, None, "premise: the RR73 went once");
+    let before = now_unix_secs();
+    assert!(gone.log_current_qso());
+    let after = now_unix_secs();
+    let on = gone.stored_log()[0].when_unix;
+    assert!(
+        (wsjtx_qso_on(before, 4, 15.0)..=wsjtx_qso_on(after, 4, 15.0)).contains(&on),
+        "RR73 gone: Tx4, TIME_ON {on}"
+    );
+
+    let mut free = fresh();
+    let Mode::Qso { station, .. } = &mut free.mode else {
+        panic!("premise: a QSO");
+    };
+    station.pending = Some(Msg::Other("7P8RU TNX 73 GL".into()));
+    let before = now_unix_secs();
+    assert!(free.log_current_qso());
+    let after = now_unix_secs();
+    let on = free.stored_log()[0].when_unix;
+    assert!(
+        (before..=after).contains(&on),
+        "free text queued: now, TIME_ON {on}"
+    );
+}
+
 /// (3) Field Day: WSJT-X's `clearDX` is the same in its Field Day activity, so the clear ends the
 /// contact there too. The sequencer goes back to listening for its next station, as after a
 /// contact, Enable Tx goes off, and nothing more goes to the station.

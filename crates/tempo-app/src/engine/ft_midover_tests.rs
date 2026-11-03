@@ -173,16 +173,14 @@ fn an_r_report_folded_while_the_report_is_on_the_air_switches_the_over_to_rr73()
         panic!("premise: a QSO");
     };
     assert_eq!(station.tx_count, 1, "the RR73 counted as sent once");
-    assert_eq!(
-        tx_now(&e).as_deref(),
-        Some(RR73),
-        "the next over repeats it"
-    );
-    assert_eq!(
-        key(&mut e, 104).as_deref(),
-        Some(RR73),
-        "as WSJT-X repeats Tx4"
-    );
+    // #416: an RR73 is a 73 message (`message_is_73`, :315-321), and the regenerated over runs
+    // the same key-time block as a boundary key (`if((g_iptt==1 && m_iptt0==0) || m_restart)`,
+    // :7880), where auto-sequencing turns Enable Tx off (:8105-8141). So it goes once, and
+    // "Disable Tx after sending 73" follows it as it follows a switch to 73.
+    assert_eq!(tx_now(&e), None, "the RR73 goes once");
+    assert!(e.take_pending_tx_disable(), "Disable Tx after 73: armed");
+    assert!(!e.take_pending_tx_disable(), "…once");
+    assert_eq!(key(&mut e, 104), None, "nothing left to send");
 }
 
 /// RR73 folded while our R+report is on the air: WSJT-X goes to 73 (`m_ntx=5`). After the 73,
@@ -637,20 +635,45 @@ fn the_partners_roger_to_our_rrr_heard_before_the_key_is_answered_with_73() {
 
 /// ⛔ RULING 541: after OUR RR73, nothing new. At the RR73's key WSJT-X turns Enable Tx off
 /// (:8105-8139), so W1AW's 73, RR73 or RRR is never processed: the RR73 Nexus sends again is not
-/// cut, and nothing follows it.
+/// cut, and nothing follows it. Our RR73 goes again only when W1AW asks again with its report
+/// (#416: at a silent station it goes once), with "Disable Tx after sending 73" off so Enable Tx
+/// is still on for it.
 #[test]
 fn after_our_rr73_the_partners_73_rr73_or_rrr_changes_nothing() {
     for heard in [BYE73_TO_US, RR73_TO_US, RRR_TO_US] {
         let mut e = station();
+        e.settings.disable_tx_after_73 = false;
         work(&mut e, "KD9TAW W1AW R-12", -10, 100);
         assert_eq!(key(&mut e, 100).as_deref(), Some(RR73), "{heard}: premise");
-        hear(&mut e, "CQ K1ABC FN42", -5, 100);
+        hear(&mut e, "KD9TAW W1AW R-12", -10, 100);
         assert_eq!(key(&mut e, 102).as_deref(), Some(RR73), "{heard}: premise");
         hear(&mut e, heard, -21, 102);
         let mut route = Route::new(80_000);
         assert_eq!(route.switch(&mut e, 102, at(102, 2_500.0)), None, "{heard}");
         assert!(route.handed.is_none(), "{heard}");
         assert_eq!(key(&mut e, 104), None, "{heard}: nothing after it");
+        assert_eq!(e.stored_log().len(), 1, "{heard}: logged once");
+    }
+}
+
+/// #416, the first and only RR73 (default settings): W1AW's 73, RR73 or RRR heard while it is on
+/// the air does not switch or cut it, nothing follows it at the next key, and the contact is
+/// logged once. WSJT-X turned Enable Tx off as this RR73 keyed (:8125-8141), so nothing it hears
+/// now is processed (:7537-7541). CONTROL: W1AW repeating its R-12 mid-over does not switch the
+/// over either (it is already our RR73), and the contact is still logged once.
+#[test]
+fn the_partners_closing_during_our_only_rr73_changes_nothing() {
+    for heard in [BYE73_TO_US, RR73_TO_US, RRR_TO_US, "KD9TAW W1AW R-12"] {
+        let mut e = station();
+        work(&mut e, "KD9TAW W1AW R-12", -10, 100);
+        assert_eq!(key(&mut e, 100).as_deref(), Some(RR73), "{heard}: premise");
+        hear(&mut e, heard, -21, 100);
+        let mut route = Route::new(80_000);
+        assert_eq!(route.switch(&mut e, 100, at(100, 2_500.0)), None, "{heard}");
+        assert!(route.handed.is_none(), "{heard}");
+        if heard != "KD9TAW W1AW R-12" {
+            assert_eq!(key(&mut e, 102), None, "{heard}: nothing after it");
+        }
         assert_eq!(e.stored_log().len(), 1, "{heard}: logged once");
     }
 }
