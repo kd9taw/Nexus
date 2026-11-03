@@ -5,8 +5,8 @@
 // enum: anything this build does not know reads as bottom right. The swipe that dismisses a toast
 // and the way it slides in follow the corner's side. Placement is COMPUTED from the real sheets'
 // cascade (cssCascade.testkit) on the rendered column, never matched by regex.
-import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
-import { render, cleanup, act } from '@testing-library/react'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
+import { render, cleanup, act, waitFor } from '@testing-library/react'
 import { Toasts } from './Toasts'
 import { dismissToast, pushToast, subscribeToasts, type Toast } from '../toast'
 import { popupCornerOf, setPopupCorner, type PopupCorner } from '../features/popupCorner'
@@ -142,7 +142,10 @@ describe('the column takes its measured room, clear of the TX surfaces (#445)', 
       for (const banner of [false, true]) {
         const { viewport } = mount(corner, { banner })
         const at = atToken('--toast-inset', '123px', () => atToken('--toast-max-h', '456px', () => [css(viewport, edge), css(viewport, 'max-height')]))
-        expect(at, `${corner}${banner ? ' with the banner' : ''}`).toEqual(['123px', '456px'])
+        // With the banner up, a bottom corner never stands lower than the banner's own lift: a banner
+        // that arrives after the last measure cannot lose to it.
+        const want = banner && edge === 'bottom' ? 'max(123px, calc(16px + 72px))' : '123px'
+        expect(at, `${corner}${banner ? ' with the banner' : ''}`).toEqual([want, '456px'])
         cleanup()
       }
     }
@@ -174,5 +177,87 @@ describe('the column takes its measured room, clear of the TX surfaces (#445)', 
       Object.defineProperty(window, 'innerWidth', { value: was[0], configurable: true })
       Object.defineProperty(window, 'innerHeight', { value: was[1], configurable: true })
     }
+  })
+
+  // The surfaces change under a column that is already up: a screen's first visit mounts its TX strip
+  // after the toasts (PSK, JTTY), a notice above a strip moves it without resizing it, a banner
+  // arrives late. Each is a change in the app's tree, and the column re-measures on it (one frame
+  // later), observing every surface it now finds for size changes too.
+  describe('re-measures when the surfaces change under it', () => {
+    let rects: Map<string, Box>
+    let observed: Set<Element>
+    let spy: { mockRestore(): void }
+    const was = [window.innerWidth, window.innerHeight, globalThis.ResizeObserver] as const
+    beforeEach(() => {
+      rects = new Map<string, Box>([['ui-toast-viewport', { left: 16, top: 600, right: 356, bottom: 752 }]])
+      observed = new Set()
+      spy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const k = [...rects.keys()].find((c) => this.classList.contains(c))
+        const r = k ? rects.get(k)! : { left: 0, top: 0, right: 0, bottom: 0 }
+        return { ...r, x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top, toJSON: () => r } as DOMRect
+      })
+      Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true })
+      globalThis.ResizeObserver = class {
+        observe(el: Element) {
+          observed.add(el)
+        }
+        unobserve() {}
+        disconnect() {
+          observed.clear()
+        }
+      } as unknown as typeof ResizeObserver
+    })
+    afterEach(() => {
+      spy.mockRestore()
+      Object.defineProperty(window, 'innerWidth', { value: was[0], configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: was[1], configurable: true })
+      globalThis.ResizeObserver = was[2]
+    })
+    const inset = (vp: HTMLElement) => vp.style.getPropertyValue('--toast-inset')
+
+    it('a TX strip mounted after the toasts (a first visit) is measured, and observed', async () => {
+      const { viewport } = mount('bottom-left')
+      expect(inset(viewport), 'nothing to keep off yet').toBe('16px')
+      rects.set('cockpit-txstrip', { left: 0, top: 375, right: 1024, bottom: 415 })
+      rects.set('cockpit-txdock', { left: 0, top: 700, right: 1024, bottom: 768 })
+      const strip = document.createElement('div')
+      strip.className = 'cockpit-txstrip'
+      const dock = document.createElement('div')
+      dock.className = 'cockpit-txdock'
+      act(() => {
+        viewport.closest('.app')!.append(strip, dock)
+      })
+      await waitFor(() => expect(inset(viewport), 'the new screen was never measured').toBe(`${768 - (700 - 16)}px`))
+      expect(viewport.style.getPropertyValue('--toast-max-h')).toBe(`${700 - 16 - (415 + 16)}px`)
+      expect(observed.has(strip) && observed.has(dock), 'the new surfaces are not watched for size').toBe(true)
+    })
+
+    it('a strip that moves without resizing is followed', async () => {
+      rects.set('cockpit-txstrip', { left: 0, top: 375, right: 1024, bottom: 415 })
+      const strip = document.createElement('div')
+      strip.className = 'cockpit-txstrip'
+      const { viewport } = mount('top-left')
+      act(() => {
+        viewport.closest('.app')!.append(strip)
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-max-h')).toBe(`${375 - 16 - 16}px`))
+      // A notice above it pushes it down 132 px; its own size is unchanged.
+      rects.set('cockpit-txstrip', { left: 0, top: 507, right: 1024, bottom: 547 })
+      act(() => {
+        viewport.closest('.app')!.prepend(document.createElement('p'))
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-max-h'), 'the column kept the old room').toBe(`${507 - 16 - 16}px`))
+    })
+
+    it('its own writes do not set it measuring again', async () => {
+      const { viewport } = mount('bottom-left')
+      const calls = () => spy as unknown as { mock: { calls: unknown[] } }
+      await new Promise((r) => setTimeout(r, 60))
+      const before = calls().mock.calls.length
+      await new Promise((r) => setTimeout(r, 120))
+      expect(calls().mock.calls.length, 'the column measures itself in a loop').toBe(before)
+      void viewport
+    })
   })
 })

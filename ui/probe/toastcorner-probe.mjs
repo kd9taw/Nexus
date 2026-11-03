@@ -16,6 +16,7 @@
 //      window's transmit surfaces (`TX_AVOID`: the TX strip, the TX dock, FT's QSO strip, the top bar's
 //      cluster, any Stop button);
 //   2. the column is inside the window, and stands in the corner chosen.
+// Then the first visits: FT with a burst of twenty up, switched to PSK and to JTTY, in each corner at both sizes.
 // THE CONTROL, at one page: Phone, 1024×768, bottom left, one toast, with the column forced back to the bare
 // corner (16 px, no height cap). The probe must see the toast over PTT; if it does not, the check cannot
 // fail and the probe says so instead of passing.
@@ -39,13 +40,13 @@ const CORNERS = ['bottom-right', 'bottom-left', 'top-right', 'top-left']
 const BURSTS = (process.env.PROBE_BURSTS ?? '9').split(',').map(Number)
 // The pinned zooms the UI offers at its ends (65 % and 175 %), on the two screens whose dock a bottom
 // corner meets (Phone's PTT, CW's Send): the column's room is window px divided by the zoom, and a wrong
-// division is exactly a toast on PTT at 65 %. PROBE_SET=base or =zoom runs one half (a loaded box's
-// foreground budget); unset, both.
+// division is exactly a toast on PTT at 65 %. PROBE_SET=base, =zoom or =switch runs one part (a loaded
+// box's foreground budget); unset, all three.
 const ZOOMED = [[[1024, 768], '65'], [[1920, 1080], '65'], [[1024, 768], '175'], [[1366, 768], '175']]
 const SET = process.env.PROBE_SET ?? 'all'
 const PAGES = [
-  ...(SET === 'zoom' ? [] : SIZES.map((size) => [size, 'auto', SCREENS])),
-  ...(SET === 'base' ? [] : ZOOMED.map(([size, scale]) => [size, scale, ['phone', 'cw']])),
+  ...(SET === 'all' || SET === 'base' ? SIZES.map((size) => [size, 'auto', SCREENS]) : []),
+  ...(SET === 'all' || SET === 'zoom' ? ZOOMED.map(([size, scale]) => [size, scale, ['phone', 'cw']]) : []),
 ]
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -57,11 +58,17 @@ if (!TX_AVOID) {
   process.exit(1)
 }
 
-const MEASURE = (n, control) => `(async () => {
+// \`then\`: a mode button to press once the toasts are up (a screen's first visit, its TX strip mounted
+// after the column was placed), or null.
+const MEASURE = (n, control, then = null) => `(async () => {
   const T = await import('/src/toast.ts')
   ${control ? `const s = document.createElement('style'); s.textContent = '.ui-toast-viewport { bottom: 16px !important; top: auto !important; max-height: none !important; }'; document.head.appendChild(s);` : ''}
   for (let i = 0; i < ${n}; i++) T.pushToast('Toast ' + i + ': W1AW is calling you on 20m at -05 dB', 'info', 0, { action: () => {}, actionLabel: 'Work' })
   await new Promise((r) => setTimeout(r, 900))
+  ${then ? `const go = [...document.querySelectorAll('.mode-btn')].find((b) => b.textContent.trim() === ${JSON.stringify(then)})
+  if (!go) return { error: 'no ${then} mode button' }
+  go.click()
+  await new Promise((r) => setTimeout(r, 1500))` : ''}
   const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom] }
   const meet = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
   const vp = document.querySelector('.ui-toast-viewport')
@@ -125,7 +132,7 @@ const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { js8: true, jtty: true, rtty: true, psk: true, sstv: true } })
 
-async function run(screen, [W, H], corner, n, control, scale = 'auto') {
+async function run(screen, [W, H], corner, n, control, scale = 'auto', then = null) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -159,7 +166,7 @@ async function run(screen, [W, H], corner, n, control, scale = 'auto') {
     const drew = await until(`document.querySelector('.app') != null && document.querySelector('.cockpit-txstrip, .cockpit-qso') != null`)
     if (!drew) return { error: 'the app never drew' }
     await sleep(1200)
-    return await evaluate(MEASURE(n, control))
+    return await evaluate(MEASURE(n, control, then))
   } finally {
     await browser.call('Target.closeTarget', { targetId }).catch(() => {})
   }
@@ -181,6 +188,26 @@ try {
           }
           const faults = []
           if (m.corner !== corner) faults.push(`the column stands in ${m.corner}, not ${corner}`)
+          if (!m.inside) faults.push(`the column is not inside the window (${m.column})`)
+          if (m.controls === 0) faults.push('no transmit control found on the page (the probe would see nothing)')
+          for (const c of m.covered) faults.push(`a toast covers ${c}`)
+          if (faults.length) red++
+          console.log(`${faults.length ? 'RED ' : 'ok  '} ${at}: column ${m.column}, ${m.shown} toast(s) shown, ${m.controls} TX controls${faults.length ? '\n     ' + faults.join('\n     ') : ''}`)
+        }
+  // A FIRST VISIT WITH A BURST UP: FT, then PSK or JTTY, whose TX strip mounts after the column was
+  // placed. The column must re-measure on that (it once kept FT's room and lay over PSK's Tune and Stop TX).
+  if (SET === 'all' || SET === 'switch')
+    for (const size of SIZES)
+      for (const then of ['PSK', 'JTTY'])
+        for (const corner of CORNERS) {
+          const at = `operate → ${then} ${size.join('×')} ${corner} ×20`
+          const m = await run('operate', size, corner, 20, false, 'auto', then)
+          if (m.error) {
+            undrawn++
+            console.log(`NOT DRAWN ${at}: ${m.error}`)
+            continue
+          }
+          const faults = []
           if (!m.inside) faults.push(`the column is not inside the window (${m.column})`)
           if (m.controls === 0) faults.push('no transmit control found on the page (the probe would see nothing)')
           for (const c of m.covered) faults.push(`a toast covers ${c}`)

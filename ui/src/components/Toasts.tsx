@@ -10,7 +10,7 @@ import * as RToast from '@radix-ui/react-toast'
 import { t } from '../i18n'
 import { dismissToast, keepToast, subscribePopups, type Toast, type ToastKind } from '../toast'
 import { getPopupCorner, subscribePopupCorner, type PopupCorner } from '../features/popupCorner'
-import { toastRoom, type Box } from '../features/toastRoom'
+import { TOAST_MIN_ROOM, toastRoom, type Box } from '../features/toastRoom'
 import { TX_AVOID } from '../features/txSurfaces'
 
 /** #445: a toast swipes away toward the side of the window its corner is on. (The body is
@@ -32,39 +32,72 @@ const GAP_PX = 16
 /** #445: measure the window's transmit surfaces and give the column the room of its corner that
  *  touches none of them, as `--toast-inset` and `--toast-max-h` on the column (styles.css reads
  *  both, in every corner). In the column's own CSS px: `.app` is zoomed, and a fixed box's insets
- *  are scaled by that zoom, so window px are divided by it (read off the column itself). Again on
- *  a resize, a scroll anywhere (a sticky strip moves), and whenever a surface or the column changes
- *  size — a keep-alive cockpit hidden is a surface gone to 0×0. Only while a toast is up. */
+ *  are scaled by that zoom, so window px are divided by it (read off the column itself), and the
+ *  least room a toast needs is scaled up by it.
+ *
+ *  Again whenever the surfaces may have changed, only while a toast is up:
+ *  · a window resize, and a scroll anywhere (a sticky strip moves);
+ *  · a size change of the column or of ANY surface now in the window — every measure observes the
+ *    surfaces it finds (observing is idempotent), so a strip mounted later is watched too;
+ *  · any change in the app's tree (a screen's first visit mounting its TX strip after the toasts, a
+ *    notice that moves a strip without resizing it, a late update banner): a MutationObserver on
+ *    `.app`, coalesced to one measure per frame. The column's own subtree is ignored, and a measure
+ *    writes only what changed, so measuring never sets itself off again. */
 function useToastRoom(viewport: RefObject<HTMLOListElement | null>, corner: PopupCorner, shown: boolean) {
   useLayoutEffect(() => {
     const vp = viewport.current
     if (!vp || !shown) return
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => place()) : null
+    const write = (name: string, value: string | null) => {
+      if (value === null) {
+        if (vp.style.getPropertyValue(name) !== '') vp.style.removeProperty(name)
+      } else if (vp.style.getPropertyValue(name) !== value) vp.style.setProperty(name, value)
+    }
     const place = () => {
       const r = vp.getBoundingClientRect()
       const zoom = vp.offsetWidth > 0 && r.width > 0 ? r.width / vp.offsetWidth : 1
       const avoid: Box[] = []
       for (const el of document.querySelectorAll(TOAST_AVOID)) {
         if (vp.contains(el)) continue
+        ro?.observe(el)
         const b = el.getBoundingClientRect()
         if (b.width > 0 && b.height > 0) avoid.push({ left: b.left, top: b.top, right: b.right, bottom: b.bottom })
       }
-      const room = r.width > 0 ? toastRoom(corner, { w: window.innerWidth, h: window.innerHeight }, r.width, avoid, GAP_PX * zoom) : null
-      if (room) {
-        vp.style.setProperty('--toast-inset', `${room.inset / zoom}px`)
-        vp.style.setProperty('--toast-max-h', `${room.maxHeight / zoom}px`)
-      } else {
-        vp.style.removeProperty('--toast-inset')
-        vp.style.removeProperty('--toast-max-h')
-      }
+      const room =
+        r.width > 0
+          ? toastRoom(corner, { w: window.innerWidth, h: window.innerHeight }, r.width, avoid, GAP_PX * zoom, TOAST_MIN_ROOM * zoom)
+          : null
+      write('--toast-inset', room ? `${room.inset / zoom}px` : null)
+      write('--toast-max-h', room ? `${room.maxHeight / zoom}px` : null)
+    }
+    let frame = 0
+    const later = () => {
+      if (frame) return
+      frame = window.requestAnimationFrame(() => {
+        frame = 0
+        place()
+      })
     }
     place()
-    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(place) : null
     ro?.observe(vp)
-    for (const el of document.querySelectorAll(TOAST_AVOID)) ro?.observe(el)
+    const mo =
+      typeof MutationObserver === 'function'
+        ? new MutationObserver((records) => {
+            if (records.some((m) => !vp.contains(m.target))) later()
+          })
+        : null
+    mo?.observe(vp.closest('.app') ?? document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['hidden', 'style', 'class'],
+    })
     window.addEventListener('resize', place)
     window.addEventListener('scroll', place, true)
     return () => {
       ro?.disconnect()
+      mo?.disconnect()
+      if (frame) window.cancelAnimationFrame(frame)
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }

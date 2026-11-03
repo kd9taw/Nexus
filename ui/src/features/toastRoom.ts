@@ -33,7 +33,7 @@ export const TOAST_MIN_ROOM = 64
 /**
  * The column's room in a `view` window for a column `width` wide standing `gap` from the corner's
  * side edge, touching none of `avoid` (kept `gap` clear of each). A bottom corner takes the lowest
- * free stretch at least `TOAST_MIN_ROOM` tall, a top corner the highest; where none is that tall,
+ * free stretch at least `minRoom` tall (`TOAST_MIN_ROOM` at the window's zoom: a toast scales with it), a top corner the highest; where none is that tall,
  * the tallest there is. Null when the column's side of the window has no free stretch at all: then
  * the stylesheet's own corner stands.
  */
@@ -43,6 +43,7 @@ export function toastRoom(
   width: number,
   avoid: readonly Box[],
   gap: number,
+  minRoom = TOAST_MIN_ROOM,
 ): ToastRoom | null {
   const left = corner.endsWith('left') ? gap : view.w - gap - width
   const right = left + width
@@ -60,7 +61,7 @@ export function toastRoom(
   const usable = free.filter(([a, b]) => b - a > 0)
   if (usable.length === 0) return null
   const ordered = corner.startsWith('bottom') ? [...usable].reverse() : usable
-  const pick = ordered.find(([a, b]) => b - a >= TOAST_MIN_ROOM) ?? [...usable].sort((x, y) => y[1] - y[0] - (x[1] - x[0]))[0]
+  const pick = ordered.find(([a, b]) => b - a >= minRoom) ?? [...usable].sort((x, y) => y[1] - y[0] - (x[1] - x[0]))[0]
   const [a, b] = pick
   return { inset: corner.startsWith('bottom') ? view.h - b : a, maxHeight: b - a }
 }

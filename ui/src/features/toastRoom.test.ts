@@ -66,3 +66,16 @@ describe('toastRoom (#445)', () => {
     expect(toastRoom('bottom-left', VIEW, W, [box(0, 0, 1024, 768)], GAP)).toBeNull()
   })
 })
+
+describe('toastRoom at a zoom (#445)', () => {
+  it('the least room is a toast\'s height at the window\'s zoom: at 175 % a 72 px stretch is too short', () => {
+    // A 72 px stretch between the strip and the dock: room for a toast at 100 %, not at 175 %, where
+    // the column goes up to the stretch above the strip instead.
+    const strip = box(0, 300, 1024, 600)
+    const dock = box(0, 704, 1024, 768)
+    const at100 = toastRoom('bottom-right', VIEW, W, [strip, dock], GAP)!
+    expect(at100).toEqual({ inset: 768 - (704 - GAP), maxHeight: 704 - GAP - (600 + GAP) })
+    const at175 = toastRoom('bottom-right', VIEW, W, [strip, dock], GAP, TOAST_MIN_ROOM * 1.75)!
+    expect(at175, 'a toast at 175 % was clipped into the 72 px stretch').toEqual({ inset: 768 - (300 - GAP), maxHeight: 300 - GAP - GAP })
+  })
+})

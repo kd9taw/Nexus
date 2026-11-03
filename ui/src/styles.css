@@ -295,7 +295,9 @@ html {
    Lift the whole toast stack above the banner's ~60px + a gap for that window; both live
    inside `.app`, so :has() sees the banner directly. */
 .app:has(.update-banner) .ui-toast-viewport:not([data-corner^='top']) {
-  bottom: var(--toast-inset, calc(var(--space-4) + 72px));
+  /* Never lower than the banner's own lift: the measured room (which keeps off the banner too) may
+     date from before a banner that has just arrived. */
+  bottom: max(var(--toast-inset, var(--space-4)), calc(var(--space-4) + 72px));
 }
 /* #445: THE POP-UP CORNER (Settings ▸ Spots & Alerts ▸ Alerts ▸ Pop-up corner, `data-corner` from
    Toasts.tsx). Bottom right is the rule above, as it always was; each other corner moves the column's

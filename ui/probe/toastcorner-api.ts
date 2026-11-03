@@ -11,7 +11,7 @@ if (over.rigModel != null) settings.radios = settings.radios.map((r: any, i: num
 const keyed = localStorage.getItem('probe.keyed') === '1'
 const phone = location.hash.includes('phone')
 let snapshot: any = {
-  mycall: 'KD9TAW', mygrid: 'EN52', mode: 'Normal',
+  mycall: 'KD9TAW', mygrid: 'EN52', mode: 'Normal', audio: {},
   radio: { dialMhz: phone ? 14.25 : 14.074, band: '20m', catOk: true, sideband: 'USB', transmitting: keyed, rigKeyed: keyed, txEnabled: keyed, txAllowed: true,
     rxOffsetHz: 1500, txOffsetHz: 1500, txLevel: 0.5, slot: 0, operatingMode: phone ? 'USB' : 'DIGU',
     txSwr: 1.3, txAlc: 0.4, txPoW: 87, ratedWatts: 100, swrScaleVerified: true },
