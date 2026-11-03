@@ -50,6 +50,7 @@ fn result(e: &Engine, messages: &[&str], pass: DecodePass, slot: u64) -> DecodeR
         epoch: e.decode_epoch,
         heard_on: None,
         failed: false,
+        logged_adif: Vec::new(),
     }
 }
 

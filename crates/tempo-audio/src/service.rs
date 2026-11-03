@@ -2120,7 +2120,9 @@ fn parse_wsjtx_targets(addr: &str) -> Vec<std::net::SocketAddr> {
 /// saw the callsign from Status but never the contact.
 ///
 /// No self-import: the sink's socket is bound to an ephemeral port and every datagram goes to
-/// the configured targets, so the companion handler's `LoggedAdif` import cannot receive this.
+/// the configured targets, so the sink's own `LoggedAdif` handler cannot receive this. A target
+/// may be the companion socket (the stock addresses are both 127.0.0.1:2237), which hears it, but
+/// that socket keeps no `LoggedAdif` under Nexus's own id (`modes::WsjtxUdpSource`).
 fn send_logged_contact(server: &WsjtxServer, qso: &WsjtxQso, adif_record: &str) {
     let _ = server.send_qso_logged(qso);
     let _ = server.send_logged_adif(adif_record);
@@ -15766,7 +15768,7 @@ impl RadioLoop {
         // fold in this tick — another decode, or its pass's end — would be one that did not.
         let mut ft_restart = false;
         while let Some(out) = self.decode.try_recv() {
-            let result = match out {
+            let mut result = match out {
                 WorkerOut::Found(found) => {
                     let live = self.clock.slot_index(now);
                     let next_before = (found.slot() == live).then(|| eng.ft_next_over(live));
@@ -15789,6 +15791,12 @@ impl RadioLoop {
                 WorkerOut::Done(result) => result,
             };
             self.decode_in_flight = false;
+            // Companion mode: the contacts WSJT-X logged reach this loop with the decode that
+            // drained the companion socket (the address WSJT-X sends everything to). They go to
+            // the same import as the sink socket's, whatever becomes of the decode below.
+            for adif in result.take_logged_adif() {
+                self.import_companion(engine, adif);
+            }
             let live = self.clock.slot_index(now);
             let next_before = (result.slot() == live).then(|| eng.ft_next_over(live));
             let applied = eng.apply_decode_result(result);
@@ -24958,6 +24966,147 @@ mod tests {
         drop(state);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&other_dir);
+    }
+
+    /// ★ A CONTACT WSJT-X LOGS IN COMPANION MODE REACHES THE LOG. WSJT-X sends every datagram —
+    /// its Decodes and its Logged ADIF (type 12) alike — to the one UDP server it is set up with,
+    /// which in companion mode is the address Nexus listens on for its decodes
+    /// (`Settings::companion_addr`). It never learns the sink's ephemeral port, so the type-12
+    /// handler on the sink's socket (the test above) is not where a real WSJT-X's contact lands:
+    /// it lands on the companion socket, which used to keep Decodes and drop the rest.
+    ///
+    /// The datagram is built by hand from WSJT-X's `Network/NetworkMessage.hpp` (schema 3), not by
+    /// our encoder: magic, schema, type 12, the id, then the ADIF text as `MessageClient::
+    /// logged_ADIF` frames it — a header, `<EOH>`, the record, ` <EOR>`. A type 12 under Nexus's
+    /// own id (`tempo_net::APP_ID`) is Nexus's own sink heard back — with the stock addresses the
+    /// sink sends to the very port companion mode listens on — and is not imported again.
+    #[test]
+    fn a_contact_wsjtx_logs_to_the_companion_address_reaches_the_log() {
+        use tempo_core::logbook::{adif_header, sqlite::LogDb};
+        fn utf8(out: &mut Vec<u8>, s: &str) {
+            out.extend_from_slice(&(s.len() as u32).to_be_bytes());
+            out.extend_from_slice(s.as_bytes());
+        }
+        fn logged_adif(id: &str, record: &str) -> Vec<u8> {
+            let mut out = Vec::new();
+            out.extend_from_slice(&0xadbc_cbdau32.to_be_bytes());
+            out.extend_from_slice(&3u32.to_be_bytes());
+            out.extend_from_slice(&12u32.to_be_bytes());
+            utf8(&mut out, id);
+            utf8(
+                &mut out,
+                &format!("\n<adif_ver:5>3.1.0\n<programid:6>WSJT-X\n<EOH>\n{record} <EOR>"),
+            );
+            out
+        }
+        const W1ABC: &str = "<call:5>W1ABC <gridsquare:4>FN42 <mode:3>FT8 <rst_sent:3>-10 \
+            <rst_rcvd:3>-12 <qso_date:8>20260923 <time_on:6>120015 <qso_date_off:8>20260923 \
+            <time_off:6>120115 <band:3>20m <freq:9>14.075512 <station_callsign:5>K2DEF \
+            <my_gridsquare:4>FN31 <tx_pwr:3>100";
+        const OWN_ECHO: &str = "<call:5>W9OWN <gridsquare:4>EN52 <mode:3>FT8 <rst_sent:3>-05 \
+            <rst_rcvd:3>-07 <qso_date:8>20260923 <time_on:6>121015 <qso_date_off:8>20260923 \
+            <time_off:6>121115 <band:3>20m <freq:9>14.075900 <station_callsign:5>K2DEF";
+
+        // A free loopback port for the companion socket, as WSJT-X's "UDP Server" names it.
+        let companion = std::net::UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("nexus-companion-addr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("log.adi");
+        std::fs::write(&log, adif_header()).unwrap();
+        let opened = tempo_app::logstore::open(
+            &log,
+            Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+            None,
+        )
+        .expect("the store opens");
+        let mut e = Engine::with_settings(tempo_app::settings::Settings {
+            mycall: "K2DEF".into(),
+            mygrid: "FN31".into(),
+            companion_addr: companion.to_string(),
+            ..tempo_app::settings::Settings::default()
+        });
+        e.attach_log_store(opened);
+        e.set_tier(Tier::Ft8);
+        e.set_source(tempo_app::dto::SourceKind::Companion)
+            .expect("the companion socket binds");
+        let engine = Arc::new(Mutex::new(e));
+        let calls = || -> Vec<String> {
+            LogDb::open(&tempo_core::logbook::migrate::database_path(&log))
+                .and_then(|d| d.load_all())
+                .expect("the store reads")
+                .into_iter()
+                .map(|r| r.call)
+                .collect()
+        };
+
+        let wsjtx = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let send = |id: &str, record: &str| {
+            wsjtx.send_to(&logged_adif(id, record), companion).unwrap();
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let sinks = no_sinks();
+        let (mut ra, mut reopen) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        // Each tick captures its 250 ms of (silent) receive audio: a companion decode drains the
+        // socket at a boundary whose period was captured, as every decode does.
+        let mut tick = |now: f64| {
+            backend.queue_capture(vec![0.0; 3_000]);
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    now,
+                    &mut ra,
+                    &mut reopen,
+                    &mut station,
+                )
+                .unwrap();
+        };
+        // Tick from `now` (ms) across FT8 boundaries, 250 ms a tick, for up to 10 s of real time,
+        // until `done(now)`.
+        let mut run_until = |mut now: f64, what: &str, done: &dyn Fn(f64) -> bool| -> f64 {
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !done(now) {
+                assert!(std::time::Instant::now() < until, "{what}");
+                tick(now);
+                now += 250.0;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            now
+        };
+
+        send(tempo_net::APP_ID, OWN_ECHO);
+        send("WSJT-X", W1ABC);
+        let now = run_until(
+            100_000.0,
+            "the contact WSJT-X logged reaches the log",
+            &|_| !calls().is_empty(),
+        );
+        // Past two more boundaries, so the echo had every chance to land too.
+        let end = now + 30_000.0;
+        let now = run_until(now, "two more FT8 periods pass", &|t| t >= end);
+        assert_eq!(
+            calls(),
+            vec!["W1ABC".to_string()],
+            "WSJT-X's contact, once; Nexus's own sink heard back is not imported"
+        );
+
+        // The same contact logged again (a second datagram, as a WSJT-X re-log or a second
+        // forwarder sends) is the one already in the log.
+        send("WSJT-X", W1ABC);
+        let end = now + 30_000.0;
+        run_until(now, "two more FT8 periods pass", &|t| t >= end);
+        assert_eq!(calls(), vec!["W1ABC".to_string()], "not a second copy");
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A DEAD rigctld IS NOTICED AND REBUILT (2026-08-17 Flex audit, wave-1 #44).

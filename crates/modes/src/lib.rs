@@ -528,6 +528,153 @@ mod tests {
         );
     }
 
+    /// ★ NEXUS'S SINK HEARD BACK IS NOT DECODED AGAIN. In companion mode with the WSJT-X UDP API
+    /// on, both at their stock address (127.0.0.1:2237), the sink re-sends every folded decode to
+    /// its target — the companion socket itself — and the source took them in again: each period
+    /// brought back every decode since the start ([1, 2, 3, 4, 5]), stale lines the sequencer saw
+    /// as new. A real `WsjtxServer` built as the sink is (`new_multi`, a heartbeat first) aims at a
+    /// real bound source and a stand-in GridTracker; the upstream WSJT-X sends one CQ a period, and
+    /// each period's decodes are re-sent through the sink as `emit_rx_decodes` does. One decode a
+    /// period, and the relay to GridTracker still carries each of them, once.
+    #[test]
+    fn wsjtx_udp_source_does_not_decode_its_own_sink_again() {
+        use std::net::UdpSocket;
+        use std::time::Duration;
+        use tempo_net::wsjtx::{encode_decode, parse_inbound, Decode as WxDecode, Inbound};
+
+        let mut src = WsjtxUdpSource::bind("127.0.0.1:0").expect("bind ephemeral");
+        let companion = src.local_addr().expect("bound addr");
+        let gridtracker = UdpSocket::bind("127.0.0.1:0").expect("gridtracker socket");
+        gridtracker.set_nonblocking(true).unwrap();
+        let sink = tempo_net::WsjtxServer::new_multi(
+            "127.0.0.1:0".parse().unwrap(),
+            vec![companion, gridtracker.local_addr().unwrap()],
+        )
+        .expect("sink");
+        let _ = sink.send_heartbeat(3, "test", "Nexus");
+        let upstream = UdpSocket::bind("127.0.0.1:0").expect("upstream socket");
+        fn wx(message: &str) -> WxDecode<'_> {
+            WxDecode {
+                new: true,
+                time_ms: 0,
+                snr: -10,
+                delta_time: 0.1,
+                delta_freq: 1500,
+                mode: "~",
+                message,
+                low_confidence: false,
+                off_air: false,
+            }
+        }
+        let relayed = || -> Vec<String> {
+            let mut buf = [0u8; 4096];
+            let mut out = Vec::new();
+            while let Ok((n, _)) = gridtracker.recv_from(&mut buf) {
+                if let Some(Inbound::Decode { message, .. }) = parse_inbound(&buf[..n]) {
+                    out.push(message);
+                }
+            }
+            out
+        };
+
+        let no_audio: Vec<i16> = Vec::new();
+        let calls = [
+            "CQ K0ABC FN31",
+            "CQ K1ABC FN31",
+            "CQ K2ABC FN31",
+            "CQ K3ABC FN31",
+        ];
+        let (mut counts, mut heard, mut relays) = (Vec::new(), Vec::new(), Vec::new());
+        for call in calls {
+            upstream
+                .send_to(&encode_decode("WSJT-X", &wx(call)), companion)
+                .unwrap();
+            // Loopback is near-instant but asynchronous: give this period's datagrams, and any
+            // echo of the last period's, time to land.
+            std::thread::sleep(Duration::from_millis(100));
+            let decs = src.decode(&DecodeRequest::full_band(&no_audio));
+            counts.push(decs.len());
+            for d in &decs {
+                sink.send_decode(&wx(&d.message)).unwrap();
+            }
+            heard.extend(decs.into_iter().map(|d| d.message));
+            std::thread::sleep(Duration::from_millis(100));
+            relays.extend(relayed());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        counts.push(src.decode(&DecodeRequest::full_band(&no_audio)).len());
+        assert_eq!(
+            counts,
+            [1, 1, 1, 1, 0],
+            "one decode a period, never an echo"
+        );
+        assert_eq!(heard, calls, "each period's own CQ");
+        assert_eq!(relays, calls, "GridTracker hears each of them, once");
+    }
+
+    /// A Decode under Nexus's own id is its own sink's; any other sender's — WSJT-X, JTDX, MSHV —
+    /// is the upstream stream and decodes as before.
+    #[test]
+    fn wsjtx_udp_source_drops_a_decode_under_its_own_id_only() {
+        use tempo_net::wsjtx::{encode_decode, Decode as WxDecode};
+        let d = WxDecode {
+            new: true,
+            time_ms: 0,
+            snr: -10,
+            delta_time: 0.1,
+            delta_freq: 1500,
+            mode: "~",
+            message: "CQ W1AW FN31",
+            low_confidence: false,
+            off_air: false,
+        };
+        let mut src = WsjtxUdpSource::new();
+        assert!(!src.ingest_datagram(&encode_decode(tempo_net::APP_ID, &d)));
+        assert!(src.ingest_datagram(&encode_decode("WSJT-X", &d)));
+        assert!(src.ingest_datagram(&encode_decode("JTDX", &d)));
+        let local: std::net::SocketAddr = "127.0.0.1:50123".parse().unwrap();
+        assert!(!src.ingest_datagram_from(&encode_decode(tempo_net::APP_ID, &d), local));
+        assert!(src.ingest_datagram_from(&encode_decode("WSJT-X", &d), local));
+        let no_audio: Vec<i16> = Vec::new();
+        assert_eq!(src.decode(&DecodeRequest::full_band(&no_audio)).len(), 3);
+    }
+
+    /// The contact the upstream app logs (Logged ADIF, type 12) is kept for the log's import —
+    /// from this computer, and under an id that is not Nexus's own — and never becomes a decode.
+    /// Its QsoLogged (type 5) twin, a sender off this computer, Nexus's own sink heard back and a
+    /// datagram whose sender is not known are all left out.
+    #[test]
+    fn wsjtx_udp_source_keeps_a_logged_contact_from_this_computer_only() {
+        use tempo_net::wsjtx::{encode_logged_adif, encode_qso_logged, QsoLogged};
+        const RECORD: &str = "<call:5>W1ABC <mode:3>FT8 <band:3>20m <qso_date:8>20260923 \
+            <time_on:6>120015";
+        let local: std::net::SocketAddr = "127.0.0.1:50123".parse().unwrap();
+        let lan: std::net::SocketAddr = "192.168.1.20:50123".parse().unwrap();
+        let logged = encode_logged_adif("WSJT-X", RECORD);
+        let mut src = WsjtxUdpSource::new();
+        let no_audio: Vec<i16> = Vec::new();
+
+        assert!(!src.ingest_datagram_from(&logged, local), "not a decode");
+        assert!(src.decode(&DecodeRequest::full_band(&no_audio)).is_empty());
+        let kept = src.take_logged_adif();
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].contains(RECORD) && kept[0].ends_with("<EOR>"));
+        assert!(src.take_logged_adif().is_empty(), "taken once");
+
+        let qso = encode_qso_logged(
+            "WSJT-X",
+            &QsoLogged {
+                dx_call: "W1ABC",
+                ..QsoLogged::default()
+            },
+        );
+        src.ingest_datagram_from(&qso, local);
+        src.ingest_datagram_from(&logged, lan);
+        src.ingest_datagram_from(&encode_logged_adif(tempo_net::APP_ID, RECORD), local);
+        src.ingest_datagram(&logged);
+        assert!(src.take_logged_adif().is_empty());
+    }
+
     /// Native and companion sources are interchangeable behind the trait object.
     #[test]
     fn sources_are_polymorphic() {

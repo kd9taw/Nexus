@@ -295,6 +295,7 @@ fn all_txt_names_each_js8_frames_speed_with_js8calls_letter() {
         epoch: e.decode_epoch,
         heard_on: None,
         failed: false,
+        logged_adif: Vec::new(),
     });
     assert!(
         matches!(applied, DecodeApplied::Early { n: 5 }),
