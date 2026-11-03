@@ -42,6 +42,8 @@ use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
 
 mod js8_lead;
 mod monitor_claims;
+/// The diagnostic log's PTT lines (who keyed, how, and the radio keyed by something else). Log only.
+mod ptt_diag;
 mod remote_radio;
 mod remote_selection;
 mod selection_connection;
@@ -4573,6 +4575,8 @@ struct RadioLoop {
     /// something that is not Nexus (mic PTT, straight key). Polled only while Nexus is
     /// idle; gates the TX-meter poll and mirrors into the engine (`observe_rig_ptt`).
     rig_keyed: bool,
+    /// The diagnostic log's PTT lines' memory ([`ptt_diag`]): edges only, and it gates nothing.
+    ptt_diag: ptt_diag::PttDiag,
     /// The rig is transmitting, INFERRED from the frequency it reported rather
     /// than from its PTT line (`Engine::sat_inferred_keyed`). Mirrored once per
     /// tick from the engine, which owns the belief — this is a per-tick copy for
@@ -5076,6 +5080,7 @@ impl RadioLoop {
             last_tx_meter_poll: 0.0,
             tx_rf: TxRfWatch::default(),
             rig_keyed: false,
+            ptt_diag: ptt_diag::PttDiag::default(),
             sat_inferred_keyed: false,
             sat_pass_engaged: false,
             last_ptt_poll: 0.0,
@@ -8383,6 +8388,8 @@ impl RadioLoop {
                 // answering from this tick's truth.
                 self.sat_inferred_keyed = eng.sat_inferred_keyed();
                 self.sat_pass_engaged = eng.sat_pass_engaged();
+                // For the PTT method line only (`ptt_diag`).
+                self.ptt_diag.share = (eng.cat_share_port(), eng.settings().cat_broker_ptt);
                 // Consume the Test-CAT request ONLY when this tick's transport branch will
                 // actually probe — the same consume-only-when-acting rule as the retune/split
                 // one-shots below. A rebuild tick (a settings Save, a port hold, a deferred
@@ -14472,6 +14479,9 @@ impl RadioLoop {
                 || self.tuning_keyed
                 || self.manual_ptt_applied
                 || cw_keying;
+            // The diagnostic log's PTT key/unkey and method lines: on an edge only, and nothing
+            // in it keys or unkeys (`service/ptt_diag.rs`).
+            self.log_ptt_edges(engine, rig, keyed_now, now);
             // ⚠️ THE METERS RUN DURING A TUNE-UP TOO — BOUNDED, NOT STOOD DOWN. From 2026-08-28
             // to 1.10.1 the poll stood down for a tune as a starvation fix: a tune carrier is fed
             // one chunk per tick from a lead of [`TUNE_LEAD_MS`], and ONE slow blocking read (a
@@ -14556,6 +14566,7 @@ impl RadioLoop {
                         if on != self.rig_keyed {
                             self.rig_keyed = on;
                             eng.observe_rig_ptt(on);
+                            self.log_foreign_ptt(on, now, "the radio reports its PTT off");
                             // ⚠️ SOMEONE ELSE HAS THE TRANSMITTER, AND NEXUS IS ARMED. Said
                             // ONCE, on the rising edge, and it does NOT gate anything — see the
                             // long note on `may_key` for why this signal is not fit to refuse a
@@ -14580,6 +14591,7 @@ impl RadioLoop {
             } else if keyed_now && self.rig_keyed {
                 // Nexus took the transmitter — the radio-side claim is stale by definition.
                 self.rig_keyed = false;
+                self.log_foreign_ptt(false, now, "Nexus keyed, so its PTT is no longer read");
                 engine_lock(engine).observe_rig_ptt(false);
             }
             if (meters_now || self.rig_keyed) && self.cat_ok != Some(false) {
@@ -14690,6 +14702,7 @@ impl RadioLoop {
             // never leave a stale "the rig is keyed" claim standing.
             if self.cat_ok == Some(false) && self.rig_keyed {
                 self.rig_keyed = false;
+                self.log_foreign_ptt(false, now, "the CAT link went down");
                 engine_lock(engine).observe_rig_ptt(false);
             }
         }
@@ -19837,6 +19850,7 @@ mod tests {
     mod late_key;
     mod omnirig_coverage;
     mod pc_mic;
+    mod ptt_lines;
     mod readback_coverage;
     mod receive_source;
     mod refused_key;

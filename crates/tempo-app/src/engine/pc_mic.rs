@@ -647,6 +647,7 @@ impl Engine {
             match why {
                 MicDrop::Watchdog => {
                     // A trip disarms TX so it stays stopped, as every other over's does.
+                    self.note_tx_watchdog_trip("the computer microphone's over");
                     self.tx_watchdog = true;
                     self.tx_enabled = false;
                     self.drop_pc_mic_for(PcMicCause::Watchdog);

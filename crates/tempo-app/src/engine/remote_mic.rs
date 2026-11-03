@@ -286,6 +286,7 @@ impl Engine {
         if let Some(why) = res.drop {
             if why == MicDrop::Watchdog {
                 // A trip disarms TX so it stays stopped, exactly as the keyboard modes' does.
+                self.note_tx_watchdog_trip("the Remote microphone's over");
                 self.tx_watchdog = true;
                 self.tx_enabled = false;
             }
