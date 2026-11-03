@@ -6323,6 +6323,7 @@ export const FR: PartialCatalog = {
   "rotor.pane.aim.title": "Azimut et distance vers {{call}}, chemin court ({{to}})",
   "rotor.pane.aim.point.label": "Pointer",
   "rotor.pane.aim.point.title": "Pointer l'antenne vers {{call}}, chemin court",
+  "rotor.pane.aim.pointLong.title": "Pointer l'antenne vers {{call}}, chemin long (cap réciproque)",
   "rotor.pane.aim.unknown": "position inconnue",
   "rotor.pane.aim.noGrid": "indiquez votre locator dans Réglages pour un azimut",
   "rotor.pane.aim.off": "{{deg}}° d'écart",

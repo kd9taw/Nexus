@@ -27,7 +27,9 @@
 // distance to it, and Point. The bearing is the station's own answer to "where would a point at
 // this call turn the antenna" (`rotatorBearingToCall`: the point's resolver, read only), never one
 // worked out here, so the number shown is the number Point turns to. Point is the cockpits'
-// point-at-call (`rotorPointAt`), short path. It turns the antenna and nothing else: it keys
+// point-at-call (`rotorPointAt`), short path, and LP beside it the long way round (#338, the
+// cockpit strip's pair: two buttons, never a toggle, since every bearing Nexus shows is short path
+// and a state misread points the beam 180° wrong). They turn the antenna and nothing else: they key
 // nothing, and this pane's ■ STOP stops rotation, never a transmission. No bearing is said in words
 // (the station is not placed, or the operator's own grid is not set), never drawn as a number
 // nobody resolved; no call, no line. A browser has no line 2 at all: the bearing read is the
@@ -80,6 +82,9 @@ import { useRotorFit } from './rotorFit'
 
 const SIZE = 148
 const R = SIZE / 2 - 10
+
+/** The on-air abbreviation for the reciprocal heading: an invariant token, as on RotorStrip. */
+const LONG_PATH = 'LP'
 
 /** The Moon's mark on its line. */
 const MOON = '☾'
@@ -359,14 +364,14 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
       )
   }
 
-  const pointAtEntry = (call: string) => {
+  const pointAtEntry = (call: string, longPath = false) => {
     // The mast goes where the station sends it now, so nothing this pane sent before may be handed
     // over after it (features/rotorTargets), and its own target needle and "→" lines no longer say
     // where the mast is going.
     pendingAz.current = pendingEl.current = null
     setTarget(null)
     setTargetEl(null)
-    rotorPointAt()(call)
+    rotorPointAt()(call, longPath)
   }
 
   return (
@@ -558,6 +563,19 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
                   title={t('rotor.pane.aim.point.title', { call: aimCall })}
                 >
                   {t('rotor.pane.aim.point.label')}
+                </button>
+              )}
+              {/* LONG PATH (#338), beside Point and under the same guard: no station placed, no
+                  slew either way. Desktop only, as line 2 is: a browser on Nexus Remote has no
+                  line 2, as the strip's browser branch keeps its short-path button alone. */}
+              {entryWhy == null && (
+                <button
+                  type="button"
+                  className="rotor-aim-point"
+                  onClick={() => pointAtEntry(aimCall, true)}
+                  title={t('rotor.pane.aim.pointLong.title', { call: aimCall })}
+                >
+                  {LONG_PATH}
                 </button>
               )}
             </div>

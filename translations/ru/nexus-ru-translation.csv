@@ -8366,6 +8366,7 @@ Click for internet feed controls.","{{detail}}
 "5","rotor.pane.aim.title","Bearing and distance to {{call}}, short path ({{to}})","Азимут и расстояние до {{call}}, короткий путь ({{to}})","{{call}} | {{to}}",""
 "5","rotor.pane.aim.point.label","Point","Навести","",""
 "5","rotor.pane.aim.point.title","Point the antenna at {{call}}, short path","Навести антенну на {{call}}, короткий путь","{{call}}",""
+"5","rotor.pane.aim.pointLong.title","Point the antenna at {{call}} the long way round (reciprocal heading)","Навести антенну на {{call}} длинным путём (обратный азимут)","{{call}}","Tooltip on LP beside Point on the Rotor pane's line 2: the long-path (reciprocal) turn. The same words as rotor.strip.pointAtLong.title."
 "5","rotor.pane.aim.unknown","location unknown","местоположение неизвестно","",""
 "5","rotor.pane.aim.noGrid","set your grid in Settings for a bearing","укажите локатор в Настройках, чтобы получить азимут","",""
 "5","rotor.pane.aim.off","{{deg}}° off","отклонение {{deg}}°","{{deg}}",""

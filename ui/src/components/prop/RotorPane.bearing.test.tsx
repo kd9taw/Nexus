@@ -219,8 +219,10 @@ describe('"N° off" on line 2: the short way round from the live heading to the 
       await waitFor(() => expect(line()?.getAttribute('transform')).toBe('rotate(227.4 74 74)'))
       expect(screen.queryByText('—°T')).not.toBeNull()
       expect(off()).toBeNull()
-      // Nor anywhere else on line 2: the call, the bearing and distance, and Point.
-      expect(document.querySelector('.rotor-aim')!.textContent).toBe('→ EC1DD 227° (1531 km)' + t('rotor.pane.aim.point.label'))
+      // Nor anywhere else on line 2: the call, the bearing and distance, Point, and LP (#338).
+      expect(document.querySelector('.rotor-aim')!.textContent).toBe(
+        '→ EC1DD 227° (1531 km)' + t('rotor.pane.aim.point.label') + 'LP',
+      )
     })
   }
 })

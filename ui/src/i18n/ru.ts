@@ -7740,6 +7740,7 @@ export const RU: PartialCatalog = {
   "rotor.pane.aim.title": "Азимут и расстояние до {{call}}, короткий путь ({{to}})",
   "rotor.pane.aim.point.label": "Навести",
   "rotor.pane.aim.point.title": "Навести антенну на {{call}}, короткий путь",
+  "rotor.pane.aim.pointLong.title": "Навести антенну на {{call}} длинным путём (обратный азимут)",
   "rotor.pane.aim.unknown": "местоположение неизвестно",
   "rotor.pane.aim.noGrid": "укажите локатор в Настройках, чтобы получить азимут",
   "rotor.pane.aim.off": "отклонение {{deg}}°",

@@ -9704,6 +9704,7 @@ export const JA: PartialCatalog = {
   "rotor.pane.aim.title": "{{call}}までの方位と距離・ショートパス ({{to}})",
   "rotor.pane.aim.point.label": "向ける",
   "rotor.pane.aim.point.title": "アンテナを{{call}}に向ける・ショートパス",
+  "rotor.pane.aim.pointLong.title": "アンテナを{{call}}に向ける・ロングパス（反対方位）",
   "rotor.pane.aim.unknown": "位置不明",
   "rotor.pane.aim.noGrid": "方位を出すには設定で自局のグリッドを入力",
   "rotor.pane.aim.off": "{{deg}}°ずれ",

@@ -15225,6 +15225,8 @@ export const EN = {
   'rotor.pane.aim.title': 'Bearing and distance to {{call}}, short path ({{to}})',
   'rotor.pane.aim.point.label': 'Point',
   'rotor.pane.aim.point.title': 'Point the antenna at {{call}}, short path',
+  'rotor.pane.aim.pointLong.title':
+    'Point the antenna at {{call}} the long way round (reciprocal heading)',
   'rotor.pane.aim.unknown': 'location unknown',
   'rotor.pane.aim.noGrid': 'set your grid in Settings for a bearing',
   // How far the antenna's live heading is from line 2's bearing, the short way round: `{{deg}}` is

@@ -7952,6 +7952,7 @@ Click for internet feed controls.","{{detail}}
 "5","rotor.pane.aim.title","Bearing and distance to {{call}}, short path ({{to}})","到 {{call}} 的方位與距離，短路徑（{{to}}）","{{call}} | {{to}}",""
 "5","rotor.pane.aim.point.label","Point","指向","",""
 "5","rotor.pane.aim.point.title","Point the antenna at {{call}}, short path","把天線按短路徑指向 {{call}}","{{call}}",""
+"5","rotor.pane.aim.pointLong.title","Point the antenna at {{call}} the long way round (reciprocal heading)","把天線按長路徑指向 {{call}}（反向方位）","{{call}}","Filled by the maintainer, pending translator review."
 "5","rotor.pane.aim.unknown","location unknown","位置未知","",""
 "5","rotor.pane.aim.noGrid","set your grid in Settings for a bearing","請在設定中填寫網格以計算方位","",""
 "5","rotor.pane.aim.off","{{deg}}° off","偏離 {{deg}}°","{{deg}}",""

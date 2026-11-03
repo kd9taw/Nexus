@@ -6323,6 +6323,7 @@ export const ES: PartialCatalog = {
   "rotor.pane.aim.title": "Rumbo y distancia a {{call}}, camino corto ({{to}})",
   "rotor.pane.aim.point.label": "Apuntar",
   "rotor.pane.aim.point.title": "Apuntar la antena a {{call}}, camino corto",
+  "rotor.pane.aim.pointLong.title": "Apuntar la antena a {{call}}, camino largo (rumbo recíproco)",
   "rotor.pane.aim.unknown": "ubicación desconocida",
   "rotor.pane.aim.noGrid": "pon tu locator en Ajustes para ver un rumbo",
   "rotor.pane.aim.off": "{{deg}}° de desvío",

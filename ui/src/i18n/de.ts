@@ -9621,6 +9621,7 @@ export const DE: PartialCatalog = {
   "rotor.pane.aim.title": "Peilung und Entfernung zu {{call}}, kurzer Weg ({{to}})",
   "rotor.pane.aim.point.label": "Ausrichten",
   "rotor.pane.aim.point.title": "Antenne auf {{call}} ausrichten, kurzer Weg",
+  "rotor.pane.aim.pointLong.title": "Antenne auf {{call}} ausrichten, langer Weg (Gegenrichtung)",
   "rotor.pane.aim.unknown": "Standort unbekannt",
   "rotor.pane.aim.noGrid": "für eine Peilung den eigenen Locator in den Einstellungen eintragen",
   "rotor.pane.aim.off": "{{deg}}° Abweichung",

@@ -7334,6 +7334,7 @@ export const ZH: PartialCatalog = {
   "rotor.pane.aim.title": "到 {{call}} 的方位与距离，短路径（{{to}}）",
   "rotor.pane.aim.point.label": "指向",
   "rotor.pane.aim.point.title": "把天线按短路径指向 {{call}}",
+  "rotor.pane.aim.pointLong.title": "把天线按长路径指向 {{call}}（反向方位）",
   "rotor.pane.aim.unknown": "位置未知",
   "rotor.pane.aim.noGrid": "请在设置中填写网格以计算方位",
   "rotor.pane.aim.off": "偏离 {{deg}}°",
