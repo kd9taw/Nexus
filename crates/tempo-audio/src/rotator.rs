@@ -295,6 +295,13 @@ pub fn link_label(addr: &str) -> String {
     watch::label(addr)
 }
 
+/// A diagnostic-log line that names the rotator's Port box, with the box's host masked when it is a
+/// network address off this computer (a serial device and the port number stay). The log is built
+/// to be sent to a stranger, and a serial server's address is the operator's.
+pub fn mask_port(text: &str, port: &str) -> String {
+    watch::mask_port(text, port)
+}
+
 /// Point the rotator at `az_deg` via rotctld at `addr` (host:port). `Ok` only on `RPRT 0`.
 pub fn point(addr: &str, az_deg: f64) -> std::io::Result<()> {
     command(addr, &point_line(az_deg))

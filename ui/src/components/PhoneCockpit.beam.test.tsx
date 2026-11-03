@@ -58,6 +58,8 @@ vi.mock('../api', () => ({
   setFilterWidth: vi.fn(async () => ({})),
   openPanelWindow: vi.fn(async () => {}),
   pointRotatorAtCall: vi.fn(async () => 47),
+  // rotorPointAt ends a pass or a Moon follow before it points.
+  stopSatTrack: vi.fn(async () => {}),
   // LogEntry's, rendered for real.
   contestIMoved: vi.fn(async () => ({})),
   contestLogManual: vi.fn(async () => ({})),

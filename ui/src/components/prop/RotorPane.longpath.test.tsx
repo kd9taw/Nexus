@@ -56,12 +56,13 @@ describe('the long-path beam button on the Rotor pane', () => {
     expect(lp()).not.toBeNull()
 
     fireEvent.click(lp()!)
-    expect(api.pointRotatorAtCall).toHaveBeenCalledWith('DL1ABC', true)
+    // After the tracker stop (rotorPointAt stops a pass or a Moon follow first).
+    await waitFor(() => expect(api.pointRotatorAtCall).toHaveBeenCalledWith('DL1ABC', true))
 
     // ⭐ THE CONTROL: adding the reciprocal must not have turned Point into a long-path slew.
     api.pointRotatorAtCall.mockClear()
     fireEvent.click(point()!)
-    expect(api.pointRotatorAtCall).toHaveBeenCalledWith('DL1ABC', false)
+    await waitFor(() => expect(api.pointRotatorAtCall).toHaveBeenCalledWith('DL1ABC', false))
     expect(lp()!.getAttribute('title')).toBe(t('rotor.pane.aim.pointLong.title', { call: 'DL1ABC' }))
   })
 
@@ -81,5 +82,27 @@ describe('the long-path beam button on the Rotor pane', () => {
     expect(point()).toBeNull()
     expect(api.pointRotatorAtCall).not.toHaveBeenCalled()
     void container
+  })
+
+  it('LP while the rotator follows the Moon ends the follow first, then turns the long way', async () => {
+    const order: string[] = []
+    api.getMoonStatus.mockImplementation(async () => ({
+      azDeg: 104.7,
+      elDeg: 26.4,
+      track: { state: 'following', elevation: true, azDeg: 104.7, elDeg: 26.4 },
+      window: null,
+    }) as never)
+    api.stopSatTrack.mockImplementation(async () => {
+      order.push('stop')
+    })
+    api.pointRotatorAtCall.mockImplementation(async (_c: string, lp?: boolean) => {
+      order.push(lp ? 'point long' : 'point short')
+      return POINTED
+    })
+    render(<RotorPane entryCall="DL1ABC" />)
+    await waitFor(() => expect(screen.queryByText(t('rotor.pane.moon.following'))).not.toBeNull())
+    await waitFor(() => expect(lp()).not.toBeNull())
+    fireEvent.click(lp()!)
+    await waitFor(() => expect(order).toEqual(['stop', 'point long']))
   })
 })

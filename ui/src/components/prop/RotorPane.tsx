@@ -549,7 +549,10 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
                   ` ${Math.round(entryBearing.pointed.bearing) % 360}° (${fmtDistanceKm(entryBearing.km, units)})`}
               </span>
               {off != null && (
-                <span className="rotor-aim-off mono" title={t('rotor.pane.aim.off.title', { call: aimCall, deg: off })}>
+                <span
+                  className={stale ? 'rotor-aim-off mono stale' : 'rotor-aim-off mono'}
+                  title={stale ? t('rotor.pane.stale') : t('rotor.pane.aim.off.title', { call: aimCall, deg: off })}
+                >
                   {t('rotor.pane.aim.off', { deg: off })}
                 </span>
               )}

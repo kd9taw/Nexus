@@ -205,16 +205,37 @@ impl LinkWatch {
 /// remote rotctld and its port when it is not (see the module header).
 pub(crate) fn label(addr: &str) -> String {
     let (host, port) = addr.rsplit_once(':').unwrap_or((addr, ""));
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    let local = host == "localhost"
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback());
-    if local {
+    if is_local(host) {
         format!("the rotator (rotctld {addr})")
     } else {
         format!("the rotator (a remote rotctld, port {port})")
     }
+}
+
+/// Is `host` (an address's host part, IPv6 brackets allowed) this computer?
+pub(crate) fn is_local(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// `text` as the diagnostic log may carry it when it names the rotator's Port box `port`: a serial
+/// device (`COM5`, `/dev/ttyUSB0`) stays as it is, and so does a network address on this computer;
+/// a network address off it (a serial server or a controller's own network port, `host:port`) has
+/// its host replaced, keeping the port number. Every place the text carries the host is masked,
+/// Hamlib's own words included.
+pub(crate) fn mask_port(text: &str, port: &str) -> String {
+    let port = port.trim();
+    let Some((host, number)) = port.rsplit_once(':') else {
+        return text.to_string();
+    };
+    if port.starts_with('/') || host.is_empty() || is_local(host) {
+        return text.to_string();
+    }
+    text.replace(port, &format!("a network address:{number}"))
+        .replace(host, "a network address")
 }
 
 static LINKS: Mutex<Option<HashMap<String, LinkWatch>>> = Mutex::new(None);
@@ -399,6 +420,33 @@ mod tests {
             heard(&Err(late), true, 3000).unwrap_err(),
             "no answer within 3000 ms"
         );
+    }
+
+    #[test]
+    fn a_port_box_holding_a_network_address_is_masked_and_a_serial_port_is_not() {
+        let line = "rotctld launched (model 603 on 203.0.113.9:4001 @ 9600, :4533)";
+        let masked = mask_port(line, "203.0.113.9:4001");
+        assert_eq!(
+            masked,
+            "rotctld launched (model 603 on a network address:4001 @ 9600, :4533)"
+        );
+        // Hamlib's own words name the host alone too.
+        assert_eq!(
+            mask_port("network_open: 203.0.113.9 refused", "203.0.113.9:4001"),
+            "network_open: a network address refused"
+        );
+        // The controls: a serial device, a Mac device path, and this computer stay as they are.
+        for port in [
+            "COM5",
+            "/dev/ttyUSB0",
+            "/dev/cu.usbmodem13201",
+            "127.0.0.1:4001",
+            "localhost:4001",
+            "",
+        ] {
+            let line = format!("rotctld launched (model 603 on {port} @ 9600, :4533)");
+            assert_eq!(mask_port(&line, port), line, "{port}");
+        }
     }
 
     #[test]

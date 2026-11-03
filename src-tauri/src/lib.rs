@@ -17052,10 +17052,7 @@ async fn start_moon_track(state: State<'_, SharedEngine>) -> Result<MoonTrackDto
                 .await
                 .map_err(|e| e.to_string())?
                 .map_err(|e| e.to_string())?;
-        let elevation = limits
-            .as_ref()
-            .and_then(tempo_audio::rotator::Limits::elevation)
-            .is_some();
+        let elevation = moon_drives_elevation(limits.as_ref());
         let (gen, initial) = arm_moon_track(&state, elevation);
         tauri::async_runtime::spawn_blocking(move || {
             run_moon_track(
@@ -17077,6 +17074,16 @@ async fn start_moon_track(state: State<'_, SharedEngine>) -> Result<MoonTrackDto
         let _ = state;
         Err("radio support is not built into this binary".to_string())
     }
+}
+
+/// Does the Moon follow drive the elevation? Exactly when the backend declares an elevation axis
+/// (`Limits::elevation`, from rotctld's own `\dump_state`): a G-5500 on its GS-232B does, Hamlib's
+/// "GS-232B azimuth" model (611, `rot_type=Az`, 0–0) does not, and a daemon that declares nothing
+/// is sent the azimuth-only line it always gets.
+fn moon_drives_elevation(limits: Option<&tempo_audio::rotator::Limits>) -> bool {
+    limits
+        .and_then(tempo_audio::rotator::Limits::elevation)
+        .is_some()
 }
 
 /// Take the mast for the Moon: a live pass is disarmed exactly as Stop disarms it (its dial
@@ -24001,7 +24008,7 @@ fn reconcile_rotctld(
     match (running, want) {
         (Some((true, true)), true) => RotctldSync::Running, // running, with the right params
         (was, true) => {
-            if let (Some((_, false)), Some((proc, _))) = (was, g.as_mut()) {
+            if let (Some((_, false)), Some((proc, old))) = (was, g.as_mut()) {
                 let line = tempo_audio::service::with_daemon_error(
                     "rotctld exited — the rotator is not under control. Restarting it.".to_string(),
                     &proc.said(),
@@ -24013,7 +24020,7 @@ fn reconcile_rotctld(
                     "rotator",
                     "rotctld-exited",
                     std::time::Duration::from_secs(60),
-                    &line,
+                    &tempo_audio::rotator::mask_port(&line, &old.1),
                 );
                 conn_log("Rotator", "error", line);
             }
@@ -24064,7 +24071,7 @@ fn reconcile_rotctld(
                             "rotator",
                             "rotctld-started",
                             std::time::Duration::from_secs(60),
-                            &what,
+                            &tempo_audio::rotator::mask_port(&what, &params.1),
                         );
                         conn_log("Rotator", "info", what);
                         *slot = Some((proc, params));
@@ -24094,8 +24101,13 @@ fn reconcile_rotctld(
                                 ),
                                 &proc.said(),
                             );
-                            // Once per episode, as on the Connections log.
-                            tempo_core::applog::warn("rotator", &line);
+                            // Once per episode, as on the Connections log. The Connections log
+                            // is on screen only; this copy is built to be sent, so a network
+                            // address in the Port box goes in masked.
+                            tempo_core::applog::warn(
+                                "rotator",
+                                &tempo_audio::rotator::mask_port(&line, &params.1),
+                            );
                             conn_log("Rotator", "error", line);
                         }
                         owner.failing = Some(params);
@@ -25316,6 +25328,13 @@ async fn point_at_call(
         } else {
             short
         };
+        // ⭐ THE MAST GOES TO THE STATION NOW, so whatever tracker was steering it lets go first,
+        // exactly as Stop does (a live pass hands its dial back). Without this a Moon follow kept
+        // its badge and, once the Moon had moved past the deadband — minutes later — swung the
+        // antenna back off the station nobody had told it to leave. Done here, not only in the
+        // UI, so no caller (a cockpit strip, the Needed board, a computer driving from afar) can
+        // turn the beam under a tracker that still thinks it owns it.
+        let _ = disarm_sat_track(engine);
         // The elevation stays where it is, as for every manual azimuth move (`point_rotator`).
         tauri::async_runtime::spawn_blocking(move || {
             tempo_audio::rotator::point_keeping(&host, Some(bearing), None)
@@ -25512,6 +25531,41 @@ mod point_at_call_tests {
             }
         });
         (addr, rx)
+    }
+
+    /// A point at a call ends a Moon follow (and a pass): the mast is the station's now. It used to
+    /// leave the follow running, and the loop swung the antenna back to the Moon minutes later.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn a_point_at_call_ends_the_moon_follow() {
+        let _alone = crate::sat_track_alone();
+        let (addr, _sent) = rotctld();
+        let mut eng = Engine::with_settings(tempo_app::settings::Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: ME.into(),
+            rotator_host: addr,
+            ..Default::default()
+        });
+        eng.note_callbook_fix(
+            "EC1DD",
+            CallbookFix {
+                grid: Some("IN52TK".into()),
+                position: None,
+            },
+        );
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        arm_moon_track(&engine, true);
+        assert!(
+            moon_track_now().is_some(),
+            "the control: following the Moon"
+        );
+        tauri::async_runtime::block_on(point_at_call(&engine, "EC1DD".into(), Some(true)))
+            .expect("the long-path point went out");
+        assert_eq!(
+            moon_track_now(),
+            None,
+            "the point took the mast from the Moon"
+        );
     }
 
     /// ⭐ THE BEARING THE ROTOR BOX SHOWS IS THE BEARING ITS POINT TURNS TO, by value, for the
@@ -56215,17 +56269,18 @@ mod tests {
         arm_moon_track, assistance_posture_changed, b64_decode, b64_encode, callbook_candidates,
         catalog_marks, cluster_spot_heards, dxped_page_url, engine_lock, install_block_reason,
         is_complete_lotw_body, iso_from_stamp, iss_pass_from_tles, jtty_heards,
-        load_tle_snapshot_from, migrate_sstv_gallery_between, moon_track_now, own_decode_heards,
-        parse_sstv_mode, profile_dir_name, qso_is_sat, reconcile_gallery, rect_lands_on_work_area,
-        redact_for_backup, resolve_bird, resolve_birds, roster_local_spots, roster_spot_age_secs,
-        run_moon_track, run_sat_track, sanitize_profile, sat_excluded, set_operator_qth,
-        spotter_evidence_rank, spotter_evidence_rank_at, test_live_sat_track, tle_absorb_foreign,
-        tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
-        tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path, tle_set_currency, view_passes,
-        write_json_atomic, write_qso_wav_in, AssistanceEvent, AssistanceSourceState, MoonRun,
-        MoonTrackDto, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun, SatnogsFetchState,
-        SharedEngine, SpotIotaLog, TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN,
-        SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
+        load_tle_snapshot_from, migrate_sstv_gallery_between, moon_drives_elevation,
+        moon_track_now, own_decode_heards, parse_sstv_mode, profile_dir_name, qso_is_sat,
+        reconcile_gallery, rect_lands_on_work_area, redact_for_backup, resolve_bird, resolve_birds,
+        roster_local_spots, roster_spot_age_secs, run_moon_track, run_sat_track, sanitize_profile,
+        sat_excluded, set_operator_qth, spotter_evidence_rank, spotter_evidence_rank_at,
+        test_live_sat_track, tle_absorb_foreign, tle_act_gate, tle_extend_aliases,
+        tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor,
+        tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
+        AssistanceEvent, AssistanceSourceState, MoonRun, MoonTrackDto, SatBird, SatTrackDto,
+        SatTrackLoss, SatTrackRun, SatnogsFetchState, SharedEngine, SpotIotaLog, TleFlightGuard,
+        TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING,
+        TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -60575,6 +60630,32 @@ mod tests {
             );
         }
         assert!(badges.iter().all(|b| !b.elevation && b.el_deg.is_none()));
+    }
+
+    #[test]
+    fn the_moon_follow_drives_elevation_exactly_when_the_backend_declares_an_axis() {
+        use tempo_audio::rotator::parse_limits;
+        // What rotctld 4.6.5 answers `\dump_state` with for each, on a pty.
+        let gs232b = parse_limits(
+            "1\n603\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+             max_el=180.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n",
+        );
+        let gs232b_az = parse_limits(
+            "1\n611\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+             max_el=0.000000\nsouth_zero=0\nrot_type=Az\ndone\n",
+        );
+        assert!(
+            moon_drives_elevation(gs232b.as_ref()),
+            "a G-5500 on its GS-232B"
+        );
+        assert!(
+            !moon_drives_elevation(gs232b_az.as_ref()),
+            "Hamlib's GS-232B azimuth model"
+        );
+        assert!(
+            !moon_drives_elevation(None),
+            "a daemon that declares nothing"
+        );
     }
 
     #[test]

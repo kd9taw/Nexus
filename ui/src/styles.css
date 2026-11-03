@@ -1392,7 +1392,8 @@ button.nb-chip:hover {
   stroke: var(--text-dim);
 }
 .rotor-az.stale,
-.rotor-el.stale {
+.rotor-el.stale,
+.rotor-aim-off.stale {
   color: var(--text-dim);
 }
 /* The station's bearing (line 2's call; RotorPane's header): told from the needle and the dashed target

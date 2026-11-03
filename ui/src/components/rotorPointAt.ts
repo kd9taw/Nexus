@@ -12,11 +12,17 @@
 // Every key below is written out literally, with its params as an object literal, so the catalog
 // scanners can read each call site.
 //
+// ⚠️ A POINT ENDS WHATEVER TRACKER HELD THE MAST. A satellite pass or a Moon follow is stopped
+// first (`stopSatTrack`, as the Rotor pane's manual moves and ■ STOP do), and only then is the
+// point sent, so the stop's halt can never land after it. A Moon follow left running kept its
+// badge and swung the antenna back to the Moon minutes later; `point_rotator_at_call` ends it on
+// the station's side too, for any caller.
+//
 // ⚠️ THE TOAST ALSO SAYS WHAT THE BEARING WAS TAKEN TO. Until 2026-09-29 every point-at-call aimed
 // at the centre of the station's country, 20° wide from the Netherlands to Galicia, and a tester
 // lining the beam up for a pile-up had no way to tell. It now aims at the station's own grid or
 // callbook position when Nexus knows one, and the toast says which it got (`pointedTo`).
-import { pointRotatorAtCall } from '../api'
+import { pointRotatorAtCall, stopSatTrack } from '../api'
 import { pushToast } from '../toast'
 import { t } from '../i18n'
 import type { PointedAt } from '../types'
@@ -32,7 +38,8 @@ export function pointedTo(pointed: PointedAt): string {
 /** The strip's `onPointAt` for a cockpit. */
 export function rotorPointAt(): (call: string, longPath?: boolean) => void {
   return (call, longPath = false) => {
-    pointRotatorAtCall(call, longPath)
+    stopSatTrack()
+      .then(() => pointRotatorAtCall(call, longPath))
       .then((pointed: PointedAt | null | undefined) =>
         // A browser gets nothing back: the station resolves it.
         pushToast(

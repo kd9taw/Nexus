@@ -1140,10 +1140,21 @@ pub fn rotctld_args(model: u32, port: &str, baud: u32, tcp_port: u16) -> Vec<Str
 /// Safe on a cable: a controller that answers in tens of milliseconds never reaches either
 /// number. What changes there is only how long a controller that is OFF takes to be called
 /// silent: `(1 + 1) × (1 000 + post_write_delay)`, 2.1 s for a GS-232 and 2.6 s for a SPID,
-/// against Hamlib's 1.8 s and 2.8 s; Nexus's read deadline covers both (`rotator.rs`).
+/// against Hamlib's 1.8 s and 2.8 s (on the backends that use the retry, below); Nexus's read
+/// deadline covers both (`rotator.rs`).
 ///
-/// One retry, not three, because three would make a dead controller's budget 4.2 s, past every
-/// tick that waits on it. Measured with 15 % of the answers lost and a jittered 240–980 ms round
+/// ⚠️ **The `retry` half reaches only some of these backends** (read in Hamlib's source): the
+/// `gs232a.c`/`gs232b.c` models (601, 603, 605, 606 and their axis variants 609–612) and the SPIDs
+/// use the port's retry; EasyComm's transaction takes its retry from the model's own caps and does
+/// not retry a failed read at all; and the `gs232.c` family (602 GS-232 Generic, 604, 607, 608) sets
+/// the port's retry to 0 on its first position read. For those two only the timeout changes, and
+/// that is the half that helps: a dead GS-232 Generic is called silent after 1.0 s instead of 0.4 s.
+/// (Edge: a 602 that answers without a carriage return is switched by Hamlib to three retries, and
+/// with the 1 s timeout a dead read there takes 4 s, past Nexus's 3 s read deadline: a miss, which
+/// the grace absorbs.)
+///
+/// One retry, not three, where it applies, because three would make a dead controller's budget
+/// 4.2 s, past every tick that waits on it. Measured with 15 % of the answers lost and a jittered 240–980 ms round
 /// trip, this missed one read in twenty, which the Rotor pane's grace and the pass's miss limit
 /// both absorb.
 ///
@@ -1188,10 +1199,13 @@ pub fn spawn_rotctld(
     let rot_bin = resolve_rotctld();
     tempo_core::applog::info(
         "proc",
-        &format!(
-            "rotctld for model {model} on {} @ {baud} baud (tcp {tcp_port}) — {}",
-            if port.is_empty() { "(NO PORT)" } else { port },
-            rot_bin.to_string_lossy()
+        &crate::rotator::mask_port(
+            &format!(
+                "rotctld for model {model} on {} @ {baud} baud (tcp {tcp_port}) — {}",
+                if port.is_empty() { "(NO PORT)" } else { port },
+                rot_bin.to_string_lossy()
+            ),
+            port,
         ),
     );
     let mut cmd = tempo_core::process::command(rot_bin);

@@ -39,7 +39,7 @@ import {
   type ModeSet,
   NEED_TYPE_VALUES,
 } from '../neededFilters'
-import { pointRotator, readRotator, openQrzPage } from '../api'
+import { pointRotator, readRotator, openQrzPage, stopSatTrack } from '../api'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { pushToast, withErrorToast } from '../toast'
@@ -86,6 +86,9 @@ function RotatorWidget() {
     const norm = ((deg % 360) + 360) % 360
     setBusy(true)
     try {
+      // A manual turn ends whatever tracker held the mast (a pass, a Moon follow) first, as the
+      // Rotor pane's moves do; otherwise the tracker turns it back.
+      await stopSatTrack()
       await pointRotator(norm)
       pushToast(t('needed.rotator.pointed', { deg: Math.round(norm) }), 'success', 2500)
     } catch (e) {

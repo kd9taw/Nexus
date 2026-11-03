@@ -9,11 +9,11 @@
 // gets nothing back (the station resolves the bearing) and its toast is unchanged.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { rotorPointAt, pointedTo } from './rotorPointAt'
-import { pointRotatorAtCall } from '../api'
+import { pointRotatorAtCall, stopSatTrack } from '../api'
 import { pushToast } from '../toast'
 import type { PointedAt } from '../types'
 
-vi.mock('../api', () => ({ pointRotatorAtCall: vi.fn() }))
+vi.mock('../api', () => ({ pointRotatorAtCall: vi.fn(), stopSatTrack: vi.fn(() => Promise.resolve()) }))
 vi.mock('../toast', () => ({ pushToast: vi.fn() }))
 
 const mockedPoint = vi.mocked(pointRotatorAtCall)
@@ -78,5 +78,23 @@ describe('a failed point-at-call keeps each path’s own words', () => {
     rotorPointAt()('EC1DD')
     await vi.waitFor(() => expect(mockedToast).toHaveBeenCalledTimes(1))
     expect(mockedToast.mock.calls.map((call) => call[0])).toEqual(['Rotator: no rotator'])
+  })
+})
+
+describe('a point ends whatever tracker held the mast', () => {
+  it('stops a pass or a Moon follow first, then points, on both paths', async () => {
+    const order: string[] = []
+    vi.mocked(stopSatTrack).mockImplementation(async () => {
+      order.push('stop')
+    })
+    mockedPoint.mockImplementation(async (_c: string, lp?: boolean) => {
+      order.push(lp ? 'point long' : 'point short')
+      return TO_GRID
+    })
+    rotorPointAt()('EC1DD', true)
+    await vi.waitFor(() => expect(order).toEqual(['stop', 'point long']))
+    order.length = 0
+    rotorPointAt()('EC1DD')
+    await vi.waitFor(() => expect(order).toEqual(['stop', 'point short']))
   })
 })
