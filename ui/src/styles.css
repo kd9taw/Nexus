@@ -290,8 +290,30 @@ html {
    totally covers the NEWEST toast (z 80, column-appended) — including its `Work →` button.
    Lift the whole toast stack above the banner's ~60px + a gap for that window; both live
    inside `.app`, so :has() sees the banner directly. */
-.app:has(.update-banner) .ui-toast-viewport {
+.app:has(.update-banner) .ui-toast-viewport:not([data-corner^='top']) {
   bottom: calc(var(--space-4) + 72px);
+}
+/* #445: THE POP-UP CORNER (Settings ▸ Spots & Alerts ▸ Alerts ▸ Pop-up corner, `data-corner` from
+   Toasts.tsx). Bottom right is the rule above, as it always was; each other corner moves the column's
+   two insets and keeps everything else, the zoom-corrected caps included. An inset a corner does not
+   use is `auto`, never left set: a column with both `top` and `bottom` would stretch. */
+.ui-toast-viewport[data-corner='bottom-left'] {
+  right: auto;
+  left: var(--space-4);
+}
+.ui-toast-viewport[data-corner='top-right'] {
+  bottom: auto;
+  top: var(--space-4);
+}
+.ui-toast-viewport[data-corner='top-left'] {
+  bottom: auto;
+  right: auto;
+  top: var(--space-4);
+  left: var(--space-4);
+}
+/* A toast slides in from its corner's own edge (`ui-toast-in`): from the right, or from the left. */
+.ui-toast-viewport[data-corner$='left'] .ui-toast {
+  --toast-in-x: -16px;
 }
 /* CLICK-THROUGH (D#19). An error toast stays 12 s, and for those 12 s it sits over whatever is
    beneath it — on a 390 px screen that is a control the operator cannot reach (the Remote
@@ -301,6 +323,7 @@ html {
    replaces swipe-to-dismiss (Radix swipes the body), so the × close button is now the only
    pointer dismissal and must always render. */
 .ui-toast {
+  --toast-in-x: 16px;
   pointer-events: none;
   display: flex;
   align-items: flex-start;
@@ -373,7 +396,7 @@ html {
 @keyframes ui-toast-in {
   from {
     opacity: 0;
-    transform: translateX(16px) scale(0.97);
+    transform: translateX(var(--toast-in-x, 16px)) scale(0.97);
   }
   to {
     opacity: 1;

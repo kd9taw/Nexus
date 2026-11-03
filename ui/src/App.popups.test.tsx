@@ -165,3 +165,25 @@ describe('pop-up notifications off in Settings', () => {
     }
   })
 })
+
+// #445: the corner follows the settings the app loads; one it does not know is bottom right.
+describe('the pop-up corner from Settings', () => {
+  const corner = () => document.querySelector('.ui-toast-viewport')?.getAttribute('data-corner')
+  it('stands the column in the corner the settings name', async () => {
+    await openApp({ ...settingsFixture, popupCorner: 'top-left' })
+    act(() => {
+      pushToast('Logged W1AW', 'success')
+    })
+    await waitFor(() => expect(corner()).toBe('top-left'))
+  })
+
+  it('reads a corner this build does not know, or none, as bottom right', async () => {
+    await openApp({ ...settingsFixture, popupCorner: 'middle' })
+    await waitFor(() => expect(corner()).toBe('bottom-right'))
+    cleanup()
+    const old: Record<string, unknown> = { ...settingsFixture }
+    delete old.popupCorner
+    await openApp(old)
+    await waitFor(() => expect(corner()).toBe('bottom-right'))
+  })
+})

@@ -118,6 +118,7 @@ import {
   callbookCacheClear,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import { popupCornerOf } from '../features/popupCorner'
 import {
   TCI_DEFAULT_HOST,
   TCI_DEFAULT_PORT,
@@ -11702,6 +11703,27 @@ export function SettingsPanel({
                   </select>
                 </label>
                 <span className="settings-hint">{t('settings.alerts.popupDwell.hint')}</span>
+              </div>
+
+              {/* #445: which corner they stand in. A stored corner this build does not know shows
+                  (and saves) as bottom right, where they always stood (`popupCornerOf`). */}
+              <div className="settings-field">
+                <label className="settings-inline-label">
+                  <span className="settings-label">{t('settings.alerts.popupCorner.label')}</span>
+                  <select
+                    className="settings-input"
+                    value={popupCornerOf(form.popupCorner)}
+                    aria-label={t('settings.alerts.popupCorner.label')}
+                    onChange={(e) => update('popupCorner', popupCornerOf(e.target.value))}
+                  >
+                    {/* The <option> VALUES are the persisted corners; only the labels are prose. */}
+                    <option value="bottom-right">{t('settings.alerts.popupCorner.bottomRight')}</option>
+                    <option value="bottom-left">{t('settings.alerts.popupCorner.bottomLeft')}</option>
+                    <option value="top-right">{t('settings.alerts.popupCorner.topRight')}</option>
+                    <option value="top-left">{t('settings.alerts.popupCorner.topLeft')}</option>
+                  </select>
+                </label>
+                <span className="settings-hint">{t('settings.alerts.popupCorner.hint')}</span>
               </div>
 
               <div className="settings-field">

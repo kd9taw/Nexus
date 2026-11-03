@@ -4996,7 +4996,7 @@ export const EN = {
   'settings.alerts.legend': 'Alerts',
   'settings.alerts.popups.label': 'Pop-up notifications',
   'settings.alerts.popups.hint':
-    'The messages in the bottom-right corner. Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
+    'The messages in the corner of the window (Pop-up corner, below, picks which). Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
   // #321. The pop-up's own time is set where it is raised (4 s for most, longer for errors and
   // alerts); the choice can only make a pop-up stay longer, never shorter.
   'settings.alerts.popupDwell.label': 'Keep pop-ups up for at least',
@@ -5004,6 +5004,12 @@ export const EN = {
   'settings.alerts.popupDwell.secs': '{{secs}} seconds',
   'settings.alerts.popupDwell.hint':
     'Most pop-ups go after 4 seconds, errors after 12. Pick a longer time if you look away and miss them. A pop-up that stays until you close it still does.',
+  'settings.alerts.popupCorner.label': 'Pop-up corner',
+  'settings.alerts.popupCorner.bottomRight': 'Bottom right',
+  'settings.alerts.popupCorner.bottomLeft': 'Bottom left',
+  'settings.alerts.popupCorner.topRight': 'Top right',
+  'settings.alerts.popupCorner.topLeft': 'Top left',
+  'settings.alerts.popupCorner.hint': 'Which corner of the window the pop-ups appear in. Bottom right is where they have always been.',
   'settings.alerts.myCall.label': 'My call',
   'settings.alerts.myCall.hint': 'Beep + flash when someone directs a call at you.',
   'settings.alerts.confirmTier.label': 'Confirmation opportunities',

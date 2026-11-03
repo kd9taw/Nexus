@@ -5,10 +5,21 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). A toast's MESSAGE
 // and its action label arrive already translated from whoever raised it; what lives here is
 // the chrome — the default action word and the close button's name.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import * as RToast from '@radix-ui/react-toast'
 import { t } from '../i18n'
 import { dismissToast, keepToast, subscribePopups, type Toast, type ToastKind } from '../toast'
+import { getPopupCorner, subscribePopupCorner, type PopupCorner } from '../features/popupCorner'
+
+/** #445: a toast swipes away toward the side of the window its corner is on. (The body is
+ *  click-through, styles.css CLICK-THROUGH, so it is a touch of the toast's own controls' area at most;
+ *  it must still never point back across the window.) */
+const SWIPE: Record<PopupCorner, 'left' | 'right'> = {
+  'bottom-right': 'right',
+  'top-right': 'right',
+  'bottom-left': 'left',
+  'top-left': 'left',
+}
 
 const KIND_CLASS: Record<ToastKind, string> = {
   error: 'kind-error',
@@ -29,9 +40,11 @@ export function Toasts() {
   const held = useRef(new Set<number>())
   // `held` changed: its buttons are drawn disabled while their action is in flight.
   const [, redraw] = useState(0)
+  // #445: the corner the column stands in (Settings ▸ Spots & Alerts ▸ Alerts ▸ Pop-up corner).
+  const corner = useSyncExternalStore(subscribePopupCorner, getPopupCorner)
 
   return (
-    <RToast.Provider swipeDirection="right" duration={Infinity}>
+    <RToast.Provider swipeDirection={SWIPE[corner]} duration={Infinity}>
       {/* The bound toast is `toast`, not `t` — `t` is the translator here. */}
       {toasts.map((toast) => (
         <RToast.Root
@@ -122,7 +135,9 @@ export function Toasts() {
           </RToast.Close>
         </RToast.Root>
       ))}
-      <RToast.Viewport className="ui-toast-viewport" />
+      {/* Where it stands is styles.css's, by `data-corner`: the column keeps its zoom-corrected
+          caps (`--vh-eff`, `--vw-eff`) in every corner. */}
+      <RToast.Viewport className="ui-toast-viewport" data-corner={corner} />
     </RToast.Provider>
   )
 }
