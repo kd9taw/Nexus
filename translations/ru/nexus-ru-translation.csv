@@ -944,6 +944,7 @@
 "1","topbar.field.label","Field","Полевой","","One-word control on: top bar. Out of context this could be a noun or a verb — open that screen (or read the key name) before choosing the Russian word. The same English text ""Field"" is used by 3 different keys (e.g. logbook.tools.bulk.field, contactCard.field.tag) — each can take a different Russian word, so choose the one that fits THIS screen."
 "1","topbar.stationProfile.label","Station profile","Профиль станции","",""
 "1","topbar.stationProfile.title","My station profile: its call, grid and location go on new contacts. Set them up in Settings ▸ Station.","Профиль моей станции: его позывной, локатор и место попадают в новые связи. Настройка: Настройки ▸ Станция.","",""
+"1","topbar.stationProfile.active","Profile: {{name}}","Профиль: {{name}}","",""
 "1","topbar.stationProfile.atStation","Switched at the station only.","Переключается только на станции.","",""
 "1","topbar.stationProfile.busy","Waits for the run or contact to end: stop transmitting and press S&P, then switch.","Ждёт окончания серии или связи: остановите передачу и нажмите S&P, затем переключите.","",""
 "1","topbar.field.on.title","Field mode is on: larger type, maximum contrast. Click to turn off.","Полевой режим включён: крупный шрифт, максимальная контрастность. Щёлкните, чтобы выключить.","",""

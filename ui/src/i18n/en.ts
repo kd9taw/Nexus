@@ -15298,6 +15298,7 @@ export const EN = {
   'topbar.field.label': 'Field',
   'topbar.stationProfile.label': 'Station profile',
   'topbar.stationProfile.title': 'My station profile: its call, grid and location go on new contacts. Set them up in Settings ▸ Station.',
+  'topbar.stationProfile.active': 'Profile: {{name}}',
   'topbar.stationProfile.atStation': 'Switched at the station only.',
   'topbar.stationProfile.busy': 'Waits for the run or contact to end: stop transmitting and press S&P, then switch.',
   'topbar.field.on.title': 'Field mode is on: larger type, maximum contrast. Click to turn off.',

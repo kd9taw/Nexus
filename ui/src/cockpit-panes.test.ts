@@ -1595,6 +1595,9 @@ describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and h
     expect(classChainWinner(sel, 'width')?.value).toBe('calc(100% + 10px)')
     expect(classChainWinner(sel, 'background-position')?.value).toBe('right 5px center, right 0 center !important')
     expect(classChainWinner(sel, 'max-width')?.value, 'nothing caps it short of the callsign').toBe('none')
+    // High Contrast forces a select's text to CanvasText; with its own text drawn, it covers the call.
+    expect(classChainWinner(sel, 'forced-color-adjust')?.value).toBe('none')
+    expect(classChainWinner(sel, 'color')?.value).toBe('transparent')
     // Control: the callsign block without profiles is the plain block, no containing block of its own.
     expect(classChainWinner([['topbar'], ['topbar-group', 'brand'], ['mycall']], 'position')).toBeNull()
   })

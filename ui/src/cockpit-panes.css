@@ -633,6 +633,8 @@
   background-color: transparent;
   background-position: right 5px center, right 0 center !important;
   color: transparent;
+  /* High Contrast forces a select's colour to CanvasText, which drew its own text over the call. */
+  forced-color-adjust: none;
   font-size: inherit;
   cursor: pointer;
 }

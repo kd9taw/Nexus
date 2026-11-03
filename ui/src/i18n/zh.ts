@@ -10219,6 +10219,7 @@ export const ZH: PartialCatalog = {
   "amp.op.waiting": "已发送 — 正在等待功放",
   "topbar.stationProfile.label": "台站配置",
   "topbar.stationProfile.title": "我的台站配置：其呼号、网格与位置会写入新通联。在 设置 ▸ 本台 中设置。",
+  "topbar.stationProfile.active": "配置：{{name}}",
   "topbar.stationProfile.atStation": "只能在台站处切换。",
   "topbar.stationProfile.busy": "需等这一轮呼叫或通联结束：停止发射并按 S&P，然后再切换。",
 }

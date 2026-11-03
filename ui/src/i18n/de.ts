@@ -7262,6 +7262,7 @@ export const DE: PartialCatalog = {
   "topbar.field.label": "Feld",
   "topbar.stationProfile.label": "Stationsprofil",
   "topbar.stationProfile.title": "Mein Stationsprofil: Rufzeichen, Locator und Standort gehen in neue QSOs. Einrichten unter Einstellungen ▸ Station.",
+  "topbar.stationProfile.active": "Profil: {{name}}",
   "topbar.stationProfile.atStation": "Nur an der Station umschaltbar.",
   "topbar.stationProfile.busy": "Wartet, bis der Run oder das QSO endet: Senden stoppen und S&P drücken, dann umschalten.",
   "topbar.field.on.title": "Feldmodus ist an: größere Schrift, maximaler Kontrast. Zum Ausschalten klicken.",

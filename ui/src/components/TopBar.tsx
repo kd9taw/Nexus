@@ -540,6 +540,9 @@ export function TopBar({
   )
 
   const showStationPicker = stationProfiles != null && stationProfiles.length > 1
+  // The bar draws only the call and grid, so the tooltip names the profile: two with one call and grid
+  // are told apart there.
+  const activeProfile = stationProfiles?.find((p) => p.id === activeStationProfile)
   const nowSlot = nowBar != null ? <div className="topbar-now">{nowBar}</div> : null
 
   return (
@@ -559,11 +562,14 @@ export function TopBar({
             <select
               className="station-profile-picker"
               aria-label={t('topbar.stationProfile.label')}
-              title={drivesAnotherStation()
-                ? t('topbar.stationProfile.atStation')
-                : stationProfileLocked
-                  ? t('topbar.stationProfile.busy')
-                  : t('topbar.stationProfile.title')}
+              title={[
+                activeProfile && t('topbar.stationProfile.active', { name: stationProfileName(activeProfile) }),
+                drivesAnotherStation()
+                  ? t('topbar.stationProfile.atStation')
+                  : stationProfileLocked
+                    ? t('topbar.stationProfile.busy')
+                    : t('topbar.stationProfile.title'),
+              ].filter(Boolean).join('\n')}
               disabled={drivesAnotherStation() || stationProfileLocked || !onSwitchStationProfile}
               value={activeStationProfile ?? ''}
               onChange={(e) => onSwitchStationProfile?.(e.target.value)}

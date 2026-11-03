@@ -10881,5 +10881,6 @@ Click for internet feed controls.","{{detail}}
 "5","amp.op.waiting","Sent — waiting for the amplifier","已傳送 — 正在等待功放","","Filled by the maintainer, pending translator review."
 "1","topbar.stationProfile.label","Station profile","台站設定檔","","Filled by the maintainer, pending translator review."
 "1","topbar.stationProfile.title","My station profile: its call, grid and location go on new contacts. Set them up in Settings ▸ Station.","我的台站設定檔：其呼號、網格與位置會寫入新通聯。在 設定 ▸ 本台 中設定。","","Filled by the maintainer, pending translator review."
+"1","topbar.stationProfile.active","Profile: {{name}}","設定檔：{{name}}","","Filled by the maintainer, pending translator review."
 "1","topbar.stationProfile.atStation","Switched at the station only.","只能在台站處切換。","","Filled by the maintainer, pending translator review."
 "1","topbar.stationProfile.busy","Waits for the run or contact to end: stop transmitting and press S&P, then switch.","需等這一輪呼叫或通聯結束：停止發射並按 S&P，然後再切換。","S&P","Filled by the maintainer, pending translator review."
