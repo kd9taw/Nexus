@@ -420,6 +420,11 @@ fn wsjtx_mode_to_kind(m: &str) -> Option<ModeKind> {
 /// logged contacts to this very port. Its `QsoLogged` (type 5) twin stays
 /// ignored, so a contact is imported once.
 ///
+/// A `Decode` under Nexus's own id is dropped by the same rule: the sink re-sends
+/// every decode it folds (the WSJT-X → Nexus → GridTracker relay), and aimed at
+/// this socket that came back each period as a new decode, every period's piling
+/// up on the next. Any other sender's — WSJT-X, JTDX, MSHV — decodes as before.
+///
 /// Either [`bind`](WsjtxUdpSource::bind) a non-blocking UDP socket (the real
 /// path), or feed raw datagrams via
 /// [`ingest_datagram`](WsjtxUdpSource::ingest_datagram) (tests / an external
@@ -478,6 +483,7 @@ impl WsjtxUdpSource {
     fn ingest(&mut self, bytes: &[u8], from: Option<SocketAddr>) -> bool {
         match tempo_net::wsjtx::parse_inbound(bytes) {
             Some(tempo_net::wsjtx::Inbound::Decode {
+                id,
                 snr,
                 delta_time,
                 delta_freq,
@@ -485,7 +491,7 @@ impl WsjtxUdpSource {
                 message,
                 low_confidence,
                 ..
-            }) => {
+            }) if id != tempo_net::APP_ID => {
                 self.queue.push_back(Decode {
                     message,
                     sync: 0.0,
