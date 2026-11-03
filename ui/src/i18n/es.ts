@@ -10276,7 +10276,7 @@ export const ES: PartialCatalog = {
   "settings.alerts.popupCorner.bottomLeft": "Abajo a la izquierda",
   "settings.alerts.popupCorner.topRight": "Arriba a la derecha",
   "settings.alerts.popupCorner.topLeft": "Arriba a la izquierda",
-  "settings.alerts.popupCorner.hint": "En qué esquina de la ventana aparecen los avisos. Abajo a la derecha es donde han estado siempre.",
+  "settings.alerts.popupCorner.hint": "En qué esquina de la ventana aparecen los avisos. Abajo a la derecha es donde han estado siempre. Dejan libres los controles de transmisión y usan el espacio de más arriba cuando abajo no hay sitio.",
   "meters.tx.enlarge.aria": "Ver los medidores de transmisión más grandes",
   "meters.tx.enlarge.title": "Medidores de transmisión",
   "meters.tx.enlarge.desc": "Las mismas lecturas en vivo que la barra de TX, más grandes. Escape detiene la transmisión, como en toda esta pantalla; «Cerrar» solo cierra esto.",

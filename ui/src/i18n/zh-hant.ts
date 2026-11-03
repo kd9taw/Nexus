@@ -10232,7 +10232,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.alerts.popupCorner.bottomLeft": "左下角",
   "settings.alerts.popupCorner.topRight": "右上角",
   "settings.alerts.popupCorner.topLeft": "左上角",
-  "settings.alerts.popupCorner.hint": "彈窗出現在視窗的哪個角落。右下角是它們一直以來的位置。",
+  "settings.alerts.popupCorner.hint": "彈窗出現在視窗的哪個角落。右下角是它們一直以來的位置。彈窗會避開發射控制項；底部沒有空間時，會改用上方的空間。",
   "meters.tx.enlarge.aria": "放大顯示發射表",
   "meters.tx.enlarge.title": "發射表",
   "meters.tx.enlarge.desc": "與 TX 列相同的即時讀數，放大顯示。Esc 會停止發射，與本畫面其他地方一樣；「關閉」只關閉此視窗。",

@@ -10259,7 +10259,7 @@ export const JA: PartialCatalog = {
   "settings.alerts.popupCorner.bottomLeft": "左下",
   "settings.alerts.popupCorner.topRight": "右上",
   "settings.alerts.popupCorner.topLeft": "左上",
-  "settings.alerts.popupCorner.hint": "ポップアップをウィンドウのどの隅に表示するかを選びます。右下はこれまでどおりの位置です。",
+  "settings.alerts.popupCorner.hint": "ポップアップをウィンドウのどの隅に表示するかを選びます。右下はこれまでどおりの位置です。送信用の操作部は避けて表示し、下に空きがないときはその上の空いた場所に表示します。",
   "meters.tx.enlarge.aria": "送信メーターを大きく表示",
   "meters.tx.enlarge.title": "送信メーター",
   "meters.tx.enlarge.desc": "送信ストリップと同じリアルタイムの値を大きく表示します。Escはこの画面のどこでもそうであるように送信を停止します。「閉じる」はこの表示を閉じるだけです。",

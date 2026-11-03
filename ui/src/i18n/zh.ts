@@ -10230,7 +10230,7 @@ export const ZH: PartialCatalog = {
   "settings.alerts.popupCorner.bottomLeft": "左下角",
   "settings.alerts.popupCorner.topRight": "右上角",
   "settings.alerts.popupCorner.topLeft": "左上角",
-  "settings.alerts.popupCorner.hint": "弹窗出现在窗口的哪个角落。右下角是它们一直以来的位置。",
+  "settings.alerts.popupCorner.hint": "弹窗出现在窗口的哪个角落。右下角是它们一直以来的位置。弹窗会避开发射控件；底部没有空间时，会改用上方的空间。",
   "meters.tx.enlarge.aria": "放大显示发射表",
   "meters.tx.enlarge.title": "发射表",
   "meters.tx.enlarge.desc": "与 TX 栏相同的实时读数，放大显示。Esc 会停止发射，与本界面其他地方一样；“关闭”只关闭此窗口。",

@@ -10266,7 +10266,7 @@ export const DE: PartialCatalog = {
   "settings.alerts.popupCorner.bottomLeft": "Unten links",
   "settings.alerts.popupCorner.topRight": "Oben rechts",
   "settings.alerts.popupCorner.topLeft": "Oben links",
-  "settings.alerts.popupCorner.hint": "In welcher Fensterecke die Pop-ups erscheinen. Unten rechts ist, wo sie schon immer waren.",
+  "settings.alerts.popupCorner.hint": "In welcher Fensterecke die Pop-ups erscheinen. Unten rechts ist, wo sie schon immer waren. Sie halten die Sendebedienelemente frei und weichen nach oben aus, wenn unten kein Platz ist.",
   "meters.tx.enlarge.aria": "Sendeanzeigen größer anzeigen",
   "meters.tx.enlarge.title": "Sendeanzeigen",
   "meters.tx.enlarge.desc": "Dieselben Live-Werte wie in der TX-Leiste, größer. Escape beendet das Senden, wie überall auf diesem Bildschirm; „Schließen“ schließt nur dieses Fenster.",

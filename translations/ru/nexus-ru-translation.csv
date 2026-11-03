@@ -10891,7 +10891,7 @@ Click for internet feed controls.","{{detail}}
 "4","settings.alerts.popupCorner.bottomLeft","Bottom left","Слева внизу","",""
 "4","settings.alerts.popupCorner.topRight","Top right","Справа вверху","",""
 "4","settings.alerts.popupCorner.topLeft","Top left","Слева вверху","",""
-"4","settings.alerts.popupCorner.hint","Which corner of the window the pop-ups appear in. Bottom right is where they have always been.","В каком углу окна появляются всплывающие уведомления. Справа внизу — там, где они были всегда.","",""
+"4","settings.alerts.popupCorner.hint","Which corner of the window the pop-ups appear in. Bottom right is where they have always been. They keep clear of the transmit controls, and use the room higher up when the bottom has none.","В каком углу окна появляются всплывающие уведомления. Справа внизу — там, где они были всегда. Они не закрывают органы управления передачей, а когда внизу нет места, появляются выше.","",""
 "3","meters.tx.enlarge.aria","Show the transmit meters larger","Показать индикаторы передачи крупнее","",""
 "3","meters.tx.enlarge.title","Transmit meters","Индикаторы передачи","",""
 "3","meters.tx.enlarge.desc","The same live readings as the TX strip, larger. Escape stops transmitting, as everywhere on this screen; Close only closes this.","Те же текущие показания, что и в полосе TX, только крупнее. Escape останавливает передачу, как везде на этом экране; «Закрыть» только закрывает это окно.","",""

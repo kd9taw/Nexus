@@ -78,4 +78,20 @@ describe('toastRoom at a zoom (#445)', () => {
     const at175 = toastRoom('bottom-right', VIEW, W, [strip, dock], GAP, TOAST_MIN_ROOM * 1.75)!
     expect(at175, 'a toast at 175 % was clipped into the 72 px stretch').toEqual({ inset: 768 - (300 - GAP), maxHeight: 300 - GAP - GAP })
   })
+
+  it('CW at 1920×1080, 175 %: the bottom corners skip the 72 px sliver above the dock that clipped one toast', () => {
+    // Measured in real Chrome (toastcorner probe): the TX strip and the dock leave a 72 px stretch
+    // between them on the column's side, and a toast there is 76 px tall.
+    const view = { w: 1920, h: 1080 }
+    const zoom = 1.75
+    const gap = 16 * zoom
+    const strip = box(0, 664, 1920, 731)
+    const dock = box(0, 859, 1920, 1080)
+    const unscaled = toastRoom('bottom-right', view, 595, [strip, dock], gap)!
+    expect(unscaled, 'the sliver the probe saw').toEqual({ inset: 1080 - 831, maxHeight: 72 })
+    const scaled = toastRoom('bottom-right', view, 595, [strip, dock], gap, TOAST_MIN_ROOM * zoom)!
+    expect(scaled).toEqual({ inset: 1080 - 636, maxHeight: 636 - 28 })
+    expect(scaled.maxHeight).toBeGreaterThanOrEqual(76)
+    expect(toastRoom('bottom-left', view, 595, [strip, dock], gap, TOAST_MIN_ROOM * zoom)!.maxHeight).toBe(636 - 28)
+  })
 })

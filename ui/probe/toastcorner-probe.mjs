@@ -8,14 +8,14 @@
 //
 // The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and src/api.ts
 // swapped for probe/toastcorner-api.ts. For each screen (FT, Phone, CW, PSK: the docks and strips the corners meet), at 1024×768 (the supported
-// floor) and 1920×1080, and Phone and CW again at the pinned 65 % and 175 % zooms, in each of the four
+// floor) and 1920×1080, and Phone and CW again at the pinned 65 % and 175 % zooms (175 % at 1920×1080 too), in each of the four
 // corners, with a burst of nine (its newest toast stands where a lone
 // toast would, so the burst covers the one-toast case too; PROBE_BURSTS=1,9 runs both), it pushes the
 // toasts through the real toast bus and asserts:
 //   1. NO TOAST COVERS A TRANSMIT CONTROL: no toast's box (inside the column's box) meets any button of the
 //      window's transmit surfaces (`TX_AVOID`: the TX strip, the TX dock, FT's QSO strip, the top bar's
 //      cluster, any Stop button);
-//   2. the column is inside the window, and stands in the corner chosen.
+//   2. the column is inside the window, stands in the corner chosen, and is never shorter than one toast.
 // Then the first visits: FT with a burst of twenty up, switched to PSK and to JTTY, in each corner at both sizes.
 // THE CONTROL, at one page: Phone, 1024×768, bottom left, one toast, with the column forced back to the bare
 // corner (16 px, no height cap). The probe must see the toast over PTT; if it does not, the check cannot
@@ -42,7 +42,7 @@ const BURSTS = (process.env.PROBE_BURSTS ?? '9').split(',').map(Number)
 // corner meets (Phone's PTT, CW's Send): the column's room is window px divided by the zoom, and a wrong
 // division is exactly a toast on PTT at 65 %. PROBE_SET=base, =zoom or =switch runs one part (a loaded
 // box's foreground budget); unset, all three.
-const ZOOMED = [[[1024, 768], '65'], [[1920, 1080], '65'], [[1024, 768], '175'], [[1366, 768], '175']]
+const ZOOMED = [[[1024, 768], '65'], [[1920, 1080], '65'], [[1024, 768], '175'], [[1366, 768], '175'], [[1920, 1080], '175']]
 const SET = process.env.PROBE_SET ?? 'all'
 const PAGES = [
   ...(SET === 'all' || SET === 'base' ? SIZES.map((size) => [size, 'auto', SCREENS]) : []),
@@ -74,6 +74,9 @@ const MEASURE = (n, control, then = null) => `(async () => {
   const vp = document.querySelector('.ui-toast-viewport')
   if (!vp) return { error: 'no toast column' }
   const v = box(vp)
+  // The tallest toast against the column: a column shorter than one toast clips it (CW at 1920×1080,
+  // 175 %, once got a 72 px sliver at the bottom for a 74 px toast).
+  const tallest = Math.max(0, ...[...vp.querySelectorAll('.ui-toast')].map((t) => t.getBoundingClientRect().height))
   const toasts = [...vp.querySelectorAll('.ui-toast')].map(box)
     .map((t) => [t[0], Math.max(t[1], v[1]), t[2], Math.min(t[3], v[3])]).filter((t) => t[3] > t[1])
   const controls = [...document.querySelectorAll(${JSON.stringify(TX_AVOID)})]
@@ -87,6 +90,7 @@ const MEASURE = (n, control, then = null) => `(async () => {
     column: v.map(Math.round),
     inside: v[0] >= 0 && v[1] >= 0 && v[2] <= innerWidth + 0.5 && v[3] <= innerHeight + 0.5,
     shown: toasts.length,
+    clipped: tallest > v[3] - v[1] + 0.5 ? [Math.round(tallest), Math.round(v[3] - v[1])] : null,
     controls: controls.length,
     covered,
   }
@@ -189,6 +193,7 @@ try {
           const faults = []
           if (m.corner !== corner) faults.push(`the column stands in ${m.corner}, not ${corner}`)
           if (!m.inside) faults.push(`the column is not inside the window (${m.column})`)
+          if (m.clipped) faults.push(`a toast ${m.clipped[0]} px tall is clipped by a ${m.clipped[1]} px column`)
           if (m.controls === 0) faults.push('no transmit control found on the page (the probe would see nothing)')
           for (const c of m.covered) faults.push(`a toast covers ${c}`)
           if (faults.length) red++
@@ -209,6 +214,7 @@ try {
           }
           const faults = []
           if (!m.inside) faults.push(`the column is not inside the window (${m.column})`)
+          if (m.clipped) faults.push(`a toast ${m.clipped[0]} px tall is clipped by a ${m.clipped[1]} px column`)
           if (m.controls === 0) faults.push('no transmit control found on the page (the probe would see nothing)')
           for (const c of m.covered) faults.push(`a toast covers ${c}`)
           if (faults.length) red++

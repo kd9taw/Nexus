@@ -5009,7 +5009,7 @@ export const EN = {
   'settings.alerts.popupCorner.bottomLeft': 'Bottom left',
   'settings.alerts.popupCorner.topRight': 'Top right',
   'settings.alerts.popupCorner.topLeft': 'Top left',
-  'settings.alerts.popupCorner.hint': 'Which corner of the window the pop-ups appear in. Bottom right is where they have always been.',
+  'settings.alerts.popupCorner.hint': 'Which corner of the window the pop-ups appear in. Bottom right is where they have always been. They keep clear of the transmit controls, and use the room higher up when the bottom has none.',
   'settings.alerts.myCall.label': 'My call',
   'settings.alerts.myCall.hint': 'Beep + flash when someone directs a call at you.',
   'settings.alerts.confirmTier.label': 'Confirmation opportunities',
