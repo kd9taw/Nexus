@@ -2670,6 +2670,7 @@ export const EN = {
   // localised. The prose around it is the part a translator owns.
   'logEntry.park.ref.placeholderPota': 'Park (reference or name)',
   'logEntry.park.ref.placeholderSota': 'Summit (reference)',
+  'logEntry.park.ref.placeholderWwff': 'Area (reference)',
   'logEntry.park.ref.title':
     'Park/summit reference of the station you worked — logged to ADIF (POTA→SIG_INFO, SOTA→SOTA_REF)',
   'logEntry.park.live.label': 'live',
@@ -3498,6 +3499,7 @@ export const EN = {
     'This entity/zone/grid is worked on this band but not yet confirmed — a LoTW match or a paper card would close it (eQSL and QRZ do not count toward awards, so they do not clear this). Not a claim about this callsign: B4 is the worked-this-call chip.',
   'need.badge.pota.title': 'Live POTA activator',
   'need.badge.sota.title': 'Live SOTA activator',
+  'need.badge.wwff.title': 'Live WWFF activator',
   'need.badge.wanted.title': 'On your watch list',
 
   // The board/roster chip. `short` is the dense-column form — a translation needs both, and
@@ -3543,6 +3545,7 @@ export const EN = {
   'need.chip.dxped.title': 'Active announced DXpedition — a limited-time window',
   'need.chip.pota.title': "Live POTA activator — the row's call is on a park right now",
   'need.chip.sota.title': "Live SOTA activator — the row's call is on a summit right now",
+  'need.chip.wwff.title': "Live WWFF activator — the row's call is in a flora & fauna area right now",
   'need.chip.wanted.title': 'On your watch list',
 
   // ── Status roles (the colour+glyph pairing table) ───────────────────────────────────
@@ -5030,13 +5033,16 @@ export const EN = {
   'ota.subtitle': 'Hunt activators on the air now',
   'ota.popOut.title': 'Open the POTA/SOTA board in its own window (a POTA board beside a SOTA board)',
   'ota.popOut.label': '⧉ Pop out',
-  // The programme picker. POTA and SOTA are names the operator reads on the programmes' own
-  // sites; "Both" is an English word and this is the only part of that row a translator sees.
+  // The programme picker. POTA, SOTA and WWFF are names the operator reads on the programmes' own
+  // sites; "Both" (an observed station's board: POTA and SOTA) and "All" (this station's board:
+  // POTA, SOTA and WWFF) are English words, and the only part of that row a translator sees.
   'ota.program.aria': 'Program',
   'ota.program.both': 'Both',
+  'ota.program.all': 'All',
   // Which programmes the empty state below is speaking about, as a CLAUSE — the sentence it
-  // sits in is one message, so the two names and the conjunction between them arrive whole.
+  // sits in is one message, so the names and the conjunction between them arrive whole.
   'ota.programs.both': 'POTA or SOTA',
+  'ota.programs.all': 'POTA, SOTA or WWFF',
 
   // The hunt target — the next QSO with this call gets the park stamped on it.
   'ota.hunt.banner':

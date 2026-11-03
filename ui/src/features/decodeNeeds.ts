@@ -21,6 +21,7 @@ const TAG_TO_CAT: Record<NeedTag, NeedCat> = {
   Dxped: 'dxped',
   Pota: 'pota',
   Sota: 'sota',
+  Wwff: 'wwff',
   Wanted: 'wanted',
 }
 

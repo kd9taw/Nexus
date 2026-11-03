@@ -3533,6 +3533,8 @@ export type NeedTag =
   | 'Dxped'
   | 'Pota'
   | 'Sota'
+  /** A live WWFF (World Wide Flora & Fauna) activator — a label, like Pota/Sota. */
+  | 'Wwff'
   | 'Wanted'
 
 /** One phone voice-keyer slot: an F-key-numbered label bound to a recorded WAV.

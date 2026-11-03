@@ -3770,7 +3770,9 @@ impl StationCore {
 
     /// One-click HUNT: remember the activator + park so the NEXT QSO logged
     /// with that call auto-tags `SIG`/`SIG_INFO` (POTA) / `SOTA_REF` — the
-    /// hunter-side ADIF credit. Validates like [`Self::set_activation`].
+    /// hunter-side ADIF credit. Validates like [`Self::set_activation`]; a WWFF
+    /// area is hunted too ([`tempo_core::pota::normalize_wwff_ref`]), and it alone,
+    /// since WWFF is no programme an activation runs under.
     ///
     /// `places` are where the park or summit is ("US-ND"; see [`Self::pending_hunt`]): the
     /// contact's state comes from them, never from the activator's licence.
@@ -3781,21 +3783,22 @@ impl StationCore {
         reference: &str,
         places: Vec<String>,
     ) -> Result<(), String> {
-        let prog = tempo_core::pota::OtaProgram::from_code(program)
-            .ok_or_else(|| format!("unknown program {program:?} (POTA/SOTA)"))?;
-        let normalized = tempo_core::pota::normalize_ref(prog, reference)
-            .ok_or_else(|| format!("invalid {} reference {reference:?}", prog.code()))?;
+        let (code, normalized) = if program.trim().eq_ignore_ascii_case("WWFF") {
+            let r = tempo_core::pota::normalize_wwff_ref(reference)
+                .ok_or_else(|| format!("invalid WWFF reference {reference:?}"))?;
+            ("WWFF", r)
+        } else {
+            let prog = tempo_core::pota::OtaProgram::from_code(program)
+                .ok_or_else(|| format!("unknown program {program:?} (POTA/SOTA/WWFF)"))?;
+            let r = tempo_core::pota::normalize_ref(prog, reference)
+                .ok_or_else(|| format!("invalid {} reference {reference:?}", prog.code()))?;
+            (prog.code(), r)
+        };
         let c = call.trim().to_uppercase();
         if c.is_empty() {
             return Err("no activator callsign".into());
         }
-        self.pending_hunt = Some((
-            prog.code().to_string(),
-            normalized,
-            c,
-            now_unix_secs(),
-            places,
-        ));
+        self.pending_hunt = Some((code.to_string(), normalized, c, now_unix_secs(), places));
         Ok(())
     }
 

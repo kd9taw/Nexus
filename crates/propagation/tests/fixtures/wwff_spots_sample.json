@@ -1,0 +1,57 @@
+[
+    {
+        "id": 900003,
+        "activator": "DL0XYZ/P",
+        "frequency_khz": 14244,
+        "mode": "SSB",
+        "reference": "DLFF-0001",
+        "reference_name": "Sample Nature Park",
+        "remarks": "QRV now",
+        "spotter": "DL1ABC",
+        "latitude": 52.5,
+        "longitude": 13.4,
+        "spot_time": 1793691094,
+        "spot_time_formatted": "2026-11-03 07:31:34"
+    },
+    {
+        "id": 900002,
+        "activator": "K1ABC",
+        "frequency_khz": 7032.5,
+        "mode": "CW",
+        "reference": "KFF-1234",
+        "reference_name": "Sample Wildlife Refuge",
+        "remarks": "",
+        "spotter": "K1ABC",
+        "latitude": 44.1,
+        "longitude": -71.2,
+        "spot_time": 1793689629,
+        "spot_time_formatted": "2026-11-03 07:07:09"
+    },
+    {
+        "id": 900001,
+        "activator": "VK9ZZZ",
+        "frequency_khz": 7144,
+        "mode": "SSB",
+        "reference": "VKFF-0001",
+        "reference_name": "Sample Conservation Reserve",
+        "remarks": "Auto-spotted via RBN",
+        "spotter": "VK2XYZ",
+        "latitude": -37.16,
+        "longitude": 144.3,
+        "spot_time": 1793688235,
+        "spot_time_formatted": "2026-11-03 06:43:55"
+    },
+    {
+        "id": 900000,
+        "activator": "G0XYZ",
+        "mode": "CW",
+        "reference": "GFF-0001",
+        "reference_name": "No Frequency Here",
+        "remarks": "",
+        "spotter": "G0XYZ",
+        "latitude": 51.5,
+        "longitude": -0.1,
+        "spot_time": 1793688000,
+        "spot_time_formatted": "2026-11-03 06:40:00"
+    }
+]

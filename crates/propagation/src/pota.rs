@@ -133,6 +133,38 @@ pub fn parse_sota_spots(json: &str) -> Vec<OtaSpot> {
         .collect()
 }
 
+/// Parse the WWFF Spotline spots JSON (`https://spots.wwff.co/static/spots.json`, see
+/// [`crate::live::wwff`] for its terms): an array of objects with `activator`, `reference`
+/// (`KFF-1234`), `reference_name`, `frequency_khz` (a NUMBER, kHz), `mode`, `spotter`, `remarks`,
+/// `latitude`/`longitude` and `spot_time` (unix seconds, a number). Rows missing the required
+/// call/reference/frequency are skipped. Malformed JSON → empty.
+pub fn parse_wwff_spots(json: &str) -> Vec<OtaSpot> {
+    let arr: Vec<serde_json::Value> = serde_json::from_str(json).unwrap_or_default();
+    arr.iter()
+        .filter_map(|v| {
+            let activator = s(v, "activator")?;
+            let reference = s(v, "reference")?;
+            let freq_khz = freq_field(v, "frequency_khz")?;
+            Some(OtaSpot {
+                program: "WWFF".into(),
+                reference,
+                name: s(v, "reference_name").unwrap_or_default(),
+                activator,
+                freq_khz,
+                mode: s(v, "mode").unwrap_or_default(),
+                spotter: s(v, "spotter"),
+                comment: s(v, "remarks"),
+                grid: None,
+                lat: num_field(v, "latitude").filter(|x| (-90.0..=90.0).contains(x)),
+                lon: num_field(v, "longitude").filter(|x| (-180.0..=180.0).contains(x)),
+                spot_time_unix: v.get("spot_time").and_then(|t| t.as_i64()),
+                // WWFF areas are not filed by state; the board places none.
+                states: Vec::new(),
+            })
+        })
+        .collect()
+}
+
 /// The US states and Canadian provinces in a POTA `locationDesc`, in the feed's order:
 /// "US-ND", or "US-MT,US-ND" for a park on a state line. Kept are the subdivisions ADIF gives a
 /// STATE for: the 50 states and DC (Alaska and Hawaii are POTA's US-AK and US-HI) and the 13
@@ -581,5 +613,36 @@ mod tests {
         let json = r#"[{"reference":"K-1","frequency":"14074"},
                        {"activator":"K1ABC","reference":"K-1234","frequency":"14074"}]"#;
         assert_eq!(parse_pota_spots(json).len(), 1);
+    }
+
+    /// A WWFF Spotline answer in the feed's own shape (a synthetic sample: no real activator or
+    /// spotter). The frequency is a kHz NUMBER, the time unix seconds, and every row carries the
+    /// reference area's coordinates; a row with no frequency is skipped.
+    #[test]
+    fn parses_wwff_spotline_spots() {
+        let spots = parse_wwff_spots(include_str!("../tests/fixtures/wwff_spots_sample.json"));
+        assert_eq!(spots.len(), 3, "the row with no frequency is skipped");
+        let s = &spots[0];
+        assert_eq!(s.program, "WWFF");
+        assert_eq!(s.reference, "DLFF-0001");
+        assert_eq!(s.name, "Sample Nature Park");
+        assert_eq!(s.activator, "DL0XYZ/P");
+        assert_eq!(s.freq_khz, 14244.0);
+        assert_eq!(s.mode, "SSB");
+        assert_eq!(s.spotter.as_deref(), Some("DL1ABC"));
+        assert_eq!(s.comment.as_deref(), Some("QRV now"));
+        assert_eq!((s.lat, s.lon), (Some(52.5), Some(13.4)));
+        assert_eq!(s.spot_time_unix, Some(1_793_691_094));
+        assert_eq!(s.grid, None);
+        assert!(s.states.is_empty(), "WWFF names no state or province");
+        // A fractional kHz is kept; an empty remark is no comment; a western longitude is kept.
+        assert_eq!(spots[1].freq_khz, 7032.5);
+        assert_eq!(spots[1].comment, None);
+        assert_eq!(spots[1].lon, Some(-71.2));
+        assert_eq!(spots[2].reference, "VKFF-0001");
+        assert_eq!(spots[2].lat, Some(-37.16));
+        // Junk is no spot list.
+        assert!(parse_wwff_spots("<html>blocked</html>").is_empty());
+        assert!(parse_wwff_spots("{}").is_empty());
     }
 }

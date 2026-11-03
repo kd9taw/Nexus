@@ -29,11 +29,16 @@ pub const EVERY: Duration = Duration::from_secs(10);
 
 /// The colour a need is drawn in, as ARGB, opaque: the Needed board's own colours, the dark
 /// theme's (`--need-*` in `ui/src/styles.css`), since an SDR program's panadapter is dark. The
-/// first tag that is a reason to work the station colours it, as on the board: DXpedition, POTA and
-/// SOTA only label a station (`NEED_VISUALS`' `iconOnly`), so they colour one only when nothing else
-/// does.
+/// first tag that is a reason to work the station colours it, as on the board: DXpedition, POTA,
+/// SOTA and WWFF only label a station (`NEED_VISUALS`' `iconOnly`), so they colour one only when
+/// nothing else does.
 pub fn argb(tags: &[NeedTag]) -> u32 {
-    let labels = |t: &NeedTag| matches!(t, NeedTag::Dxped | NeedTag::Pota | NeedTag::Sota);
+    let labels = |t: &NeedTag| {
+        matches!(
+            t,
+            NeedTag::Dxped | NeedTag::Pota | NeedTag::Sota | NeedTag::Wwff
+        )
+    };
     let lead = tags
         .iter()
         .find(|t| !labels(t))
@@ -48,7 +53,8 @@ pub fn argb(tags: &[NeedTag]) -> u32 {
         Some(NeedTag::NewGrid) => 0x34d399,
         Some(NeedTag::NewBand) => 0xf59e0b,
         Some(NeedTag::NewMode) => 0x22d3ee,
-        Some(NeedTag::NewPark | NeedTag::Pota) => 0x4ade80,
+        // WWFF is drawn in POTA's green, as the board draws its chip.
+        Some(NeedTag::NewPark | NeedTag::Pota | NeedTag::Wwff) => 0x4ade80,
         Some(NeedTag::Sota) => 0xa78bfa,
         Some(NeedTag::Dxped) => 0x38bdf8,
         Some(NeedTag::Confirm) | None => 0x9ca3af,
@@ -282,6 +288,7 @@ mod tests {
             (NeedTag::Dxped, "--need-dxped"),
             (NeedTag::Pota, "--need-pota"),
             (NeedTag::Sota, "--need-sota"),
+            (NeedTag::Wwff, "--need-pota"),
         ];
         for (tag, var) in pairs {
             assert_eq!(argb(&[tag]), colour(var), "{tag:?} is {var}");

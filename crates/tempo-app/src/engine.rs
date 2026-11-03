@@ -50912,6 +50912,36 @@ mod tests {
         assert!(!e.park_worked("K-9999"));
     }
 
+    /// A WWFF spot clicked on the hunter board hunts like a POTA one: the next contact with the
+    /// activator is filed under WWFF with the area's reference (exported `SIG`=WWFF and
+    /// `WWFF_REF`), which is what the Awards page's WWFF count reads. A malformed reference is
+    /// refused, as a malformed park is, and an unknown programme still is.
+    #[test]
+    fn a_wwff_hunt_tags_the_matching_qso_as_wwff() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_hunt_target("DL0XYZ", "wwff", " dlff-0001 ", Vec::new())
+            .unwrap();
+        assert_eq!(
+            e.hunt_target(),
+            Some(("WWFF".into(), "DLFF-0001".into(), "DL0XYZ".into()))
+        );
+        let mut rec = e.qso_record("DL0XYZ/P".into(), None, Some(-7));
+        rec.when_unix = 2;
+        e.log_qso(rec);
+        let log = e.stored_log();
+        let hit = log.iter().find(|r| r.call == "DL0XYZ/P").unwrap();
+        assert_eq!(hit.ota.their_program.as_deref(), Some("WWFF"));
+        assert_eq!(hit.ota.their_ref.as_deref(), Some("DLFF-0001"));
+        assert!(e.park_worked("DLFF-0001"));
+        // Refusals: a POTA-shaped reference is no WWFF one, and the programme list is closed.
+        assert!(e
+            .set_hunt_target("DL0XYZ", "WWFF", "DE-0001", Vec::new())
+            .is_err());
+        assert!(e
+            .set_hunt_target("DL0XYZ", "IOTA", "EU-001", Vec::new())
+            .is_err());
+    }
+
     pub(super) fn dec_snr(msg: &str, snr: i32) -> Decode {
         Decode {
             message: msg.to_string(),

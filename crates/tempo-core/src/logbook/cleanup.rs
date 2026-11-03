@@ -648,12 +648,21 @@ fn always_guarded(tag: &str) -> bool {
 
 /// Each side's passthrough references, by the part that holds the side: where the copies' sides
 /// differ they follow the copy whose side the merge took; where they agree they are unioned.
-const SIDE_EXTRAS: [(&str, [&str; 4]); 2] = [
+const SIDE_EXTRAS: [(&str, [&str; 5]); 2] = [
     (
         "MY_SIG",
-        ["MY_SIG", "MY_SIG_INFO", "MY_SOTA_REF", "MY_POTA_REF"],
+        [
+            "MY_SIG",
+            "MY_SIG_INFO",
+            "MY_SOTA_REF",
+            "MY_POTA_REF",
+            "MY_WWFF_REF",
+        ],
     ),
-    ("SIG", ["SIG", "SIG_INFO", "SOTA_REF", "POTA_REF"]),
+    (
+        "SIG",
+        ["SIG", "SIG_INFO", "SOTA_REF", "POTA_REF", "WWFF_REF"],
+    ),
 ];
 
 /// The passthrough field an upload stamp is read back from: the kept copy's own, like a stamp.
@@ -676,10 +685,7 @@ fn with_twofer_parked(copies: &[QsoRecord]) -> Vec<QsoRecord> {
         .iter()
         .map(|r| {
             let written = super::ota_fields(
-                "SIG",
-                "SIG_INFO",
-                "SOTA_REF",
-                "POTA_REF",
+                super::OTA_THEIR_TAGS,
                 &r.ota.their_program,
                 &r.ota.their_ref,
             );
@@ -1453,14 +1459,18 @@ pub fn changed(
         rec.extra.retain(|(k, _)| {
             !matches!(
                 k.as_str(),
-                "MY_SIG" | "MY_SIG_INFO" | "MY_SOTA_REF" | "MY_POTA_REF"
+                "MY_SIG" | "MY_SIG_INFO" | "MY_SOTA_REF" | "MY_POTA_REF" | "MY_WWFF_REF"
             )
         });
     }
     if (&rec.ota.their_program, &rec.ota.their_ref) != (&row.ota.their_program, &row.ota.their_ref)
     {
-        rec.extra
-            .retain(|(k, _)| !matches!(k.as_str(), "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF"));
+        rec.extra.retain(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF" | "WWFF_REF"
+            )
+        });
     }
     canonical::contact(&mut rec);
     (rec != *row).then_some(rec)

@@ -32397,11 +32397,7 @@ fn live_activations<'a>(
         .filter(|sp| tempo_core::message::same_call(&sp.activator, call))
         .map(|sp| {
             // The hunt target is set with the programme CODE, never the feed's own spelling.
-            let program = if sp.program.eq_ignore_ascii_case("SOTA") {
-                "SOTA"
-            } else {
-                "POTA"
-            };
+            let (_, program) = propagation::program_chip(&sp.program);
             (program.to_string(), sp.reference.clone())
         })
         .collect();
@@ -33912,11 +33908,7 @@ fn read_need_alerts(
                 // A chip per programme the activator is live on — both, when they are on a
                 // summit that is also a park. The chip is a label, so it is safe either way.
                 for (program, _) in &live {
-                    let tag = if program == "SOTA" {
-                        propagation::NeedTag::Sota
-                    } else {
-                        propagation::NeedTag::Pota
-                    };
+                    let (tag, _) = propagation::program_chip(program);
                     if !a.tags.contains(&tag) {
                         a.tags.push(tag);
                     }
@@ -41489,7 +41481,7 @@ fn activation_now(eng: &tempo_app::engine::Engine) -> tempo_app::dto::Activation
     eng.activation_dto(u64::try_from(now_unix()).unwrap_or(0))
 }
 
-/// Activators currently on the air for `program` ("POTA" | "SOTA") — the hunter
+/// Activators currently on the air for `program` ("POTA" | "SOTA" | "WWFF") — the hunter
 /// feed. Network fetch (no auth); empty/Err only on a feed problem.
 /// One hunter-feed row: the raw activator spot annotated with what THIS
 /// operator cares about — is the park a new one, and is the band currently
@@ -41654,7 +41646,17 @@ async fn get_ota_spots(
                 })
                 .await
             }
-            other => return Err(format!("Unknown program '{other}' — use POTA or SOTA.")),
+            // WWFF Spotline, at most once per 30 s whoever asks (its terms; see
+            // `propagation::live::wwff`).
+            "WWFF" => {
+                tauri::async_runtime::spawn_blocking(propagation::live::wwff::fetch_wwff_spots)
+                    .await
+            }
+            other => {
+                return Err(format!(
+                    "Unknown program '{other}' — use POTA, SOTA or WWFF."
+                ))
+            }
         }
         .map_err(|e| e.to_string())??;
         // Refresh the lock-only cache the Needed scorer reads for POTA/SOTA tags —
@@ -47398,10 +47400,10 @@ pub fn run() {
     std::thread::spawn(|| {
         let _ = propagation::live::dxped::fetch_plans();
     });
-    // Warm the POTA/SOTA activator cache in the background on a slow cadence (~3 min;
+    // Warm the POTA/SOTA/WWFF activator cache in the background on a slow cadence (~3 min;
     // activations run minutes-to-hours), so the Needed board surfaces live park/summit
     // chase rows from launch — without waiting for the operator to open the POTA/SOTA
-    // panel. Both programs each cycle; failures are ignored (transient feed hiccup) and
+    // panel. Every programme each cycle; failures are ignored (transient feed hiccup) and
     // retried next tick. Lock-only writes to the same per-program cache the panel + the
     // need scorer read. SOTA fetches a wider window (50) since it's sparse and count-based.
     {
@@ -47410,6 +47412,7 @@ pub fn run() {
             for (prog, fetched) in [
                 ("POTA", propagation::live::pota::fetch_pota_spots()),
                 ("SOTA", propagation::live::pota::fetch_sota_spots(50)),
+                ("WWFF", propagation::live::wwff::fetch_wwff_spots()),
             ] {
                 if let Ok(v) = fetched {
                     if let Ok(mut c) = ota.lock() {
@@ -64456,6 +64459,40 @@ mod tests {
         assert_eq!(
             board_park(&alerts, "W9XYZ", "Phone"),
             Some(("POTA".into(), "US-0002".into()))
+        );
+    }
+
+    /// A WWFF activator on the hunter feed is WWFF's on the board, on both of its rows: the WWFF
+    /// chip (never POTA's), and the park a Work from the board hunts with, WWFF and the area.
+    /// The roster call logs the contact the same way. A live POTA activator beside it is the
+    /// control: still POTA.
+    #[test]
+    fn a_wwff_activator_is_filed_as_wwff_on_the_board_and_in_the_log() {
+        let wwff = [live_spot("WWFF", "K1ABC", "KFF-1234", 60)];
+        let pota = [live_spot("POTA", "W9XYZ", "US-0002", 60)];
+        let feed: [(&str, &[propagation::OtaSpot]); 2] = [("WWFF", &wwff), ("POTA", &pota)];
+        let alerts = needed_board(&["K1ABC"], &feed);
+        for mode in ["CW", "Phone"] {
+            let row = board_row(&alerts, "K1ABC", mode);
+            assert!(
+                row.tags.contains(&propagation::NeedTag::Wwff)
+                    && !row.tags.contains(&propagation::NeedTag::Pota),
+                "{mode} row: {:?}",
+                row.tags
+            );
+            assert_eq!(
+                board_park(&alerts, "K1ABC", mode),
+                Some(("WWFF".into(), "KFF-1234".into())),
+                "{mode} row"
+            );
+        }
+        assert_eq!(
+            board_park(&alerts, "W9XYZ", "Phone"),
+            Some(("POTA".into(), "US-0002".into()))
+        );
+        assert_eq!(
+            work_then_log(fresh_engine(), &feed, "K1ABC"),
+            Some(("WWFF".into(), "KFF-1234".into()))
         );
     }
 

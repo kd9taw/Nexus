@@ -51,6 +51,14 @@ describe('filterAlerts — needType', () => {
     expect(filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['newGrid'] })).toHaveLength(0)
   })
 
+  // A live WWFF activator is its own chip on the Needed board, never filed under POTA: the WWFF
+  // chip finds it, and the POTA and SOTA chips do not.
+  it('wwff: returns only Wwff-tagged rows, and pota/sota never do', () => {
+    const rows = [...ALERTS, a('DL0XYZ', ['Wwff'], '20m', 'Phone')]
+    expect(filterAlerts(rows, { ...DEFAULT_FILTERS, needTypes: ['wwff'] }).map((x) => x.call)).toEqual(['DL0XYZ'])
+    expect(filterAlerts(rows, { ...DEFAULT_FILTERS, needTypes: ['pota', 'sota'] }).map((x) => x.call)).toEqual(['K1ABC', 'W7B'])
+  })
+
   it('pota: returns only Pota-tagged rows', () => {
     const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['pota'] })
     expect(r.map((a) => a.call)).toEqual(['K1ABC'])

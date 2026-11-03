@@ -17,20 +17,21 @@ The board can be popped out into its own window (**⧉ Pop out**) — a POTA boa
 
 ## Spot feeds and poll cadence
 
-Two feeds are supported, selectable via program toggle chips at the top of the view:
+Three feeds are supported, selectable via program toggle chips at the top of the view:
 
 | Program | Source | Endpoint |
 |---------|--------|----------|
 | POTA | pota.app public API | `https://api.pota.app/spot/activator` |
 | SOTA | SOTAwatch | `https://api-db2.sota.org.uk/api/spots/30/all` |
+| WWFF | WWFF Spotline | `https://spots.wwff.co/static/spots.json` |
 
-All HTTP requests carry a `nexus-pota/0.1 (+ham radio parks/summits on the air)` User-Agent and a 15-second timeout. No credentials are required for either feed.
+All HTTP requests carry a `nexus-pota/0.1 (+ham radio parks/summits on the air)` User-Agent and a 15-second timeout. No credentials are required for any feed. WWFF Spotline publishes its spot list for other programs to read, asking that each feed be fetched no more than once every 30 seconds and that the User-Agent name the program and a contact ([spots.wwff.co/info](https://spots.wwff.co/info)); Nexus asks Spotline at most once per 30 seconds however many boards show it, with a User-Agent naming Nexus and its project page.
 
 **Poll cadence:** the view auto-refreshes every **60 seconds**. A manual **Refresh** button is always available. After each successful fetch, a `HH:MM:SS` last-updated timestamp appears next to the Refresh button so you know exactly how stale the data is.
 
 When you log a contact (or anything else changes your log), the board updates its badges and its hidden rows from the spots it already has — it does **not** fetch the feeds again for that, because your log also changes each time an upload to QRZ, ClubLog or LoTW is recorded.
 
-Selecting **Both** fetches POTA and SOTA concurrently (parallel HTTP) and merges the results into a single sorted list.
+Selecting **All** fetches POTA, SOTA and WWFF concurrently (parallel HTTP) and merges the results into a single sorted list. (A remote station's board, which shows the station's POTA and SOTA lists, calls this tab **Both**.)
 
 > **SOTA cap:** the SOTA fetch is hard-coded to the **30 most recent spots**. On a busy summit day with more than 30 simultaneous activators, older spots will not appear. There is no workaround short of checking SOTAwatch directly.
 
@@ -97,12 +98,13 @@ Clicking **HUNT** on a spot card does three things atomically:
 1. Validates and normalizes the park or summit reference:
    - POTA: requires a 1–4 character alphanumeric prefix, a hyphen, and 4–5 digits (e.g. `K-1234` or `US-12345`)
    - SOTA: requires `association/region-NNN` format (e.g. `W4C/EM-023`)
+   - WWFF: requires a 1–4 character alphanumeric prefix, `FF-`, and 4 digits (e.g. `KFF-1234` or `DLFF-0001`)
 2. Records a **pending hunt** tagged with the current Unix timestamp and the activator's base call
 3. QSYs your radio to the spot's exact frequency and opens the matching cockpit (Digital for FT8/FT4, CW, or Phone). For CW and Phone cockpits the activator's callsign is prefilled in the log strip. The Digital (FT8/FT4) cockpit receives no callsign prefill — double-click a decode to start the QSO as normal
 
 An active-hunt banner appears at the top of the hunter view showing the program, reference, and activator call. Clear it with the **X** button if you decide not to work the contact.
 
-The same pending hunt is recorded when you double-click a park on the Conditions map, or click **Work** on a POTA/SOTA row of the Needed board.
+The same pending hunt is recorded when you double-click a park on the Conditions map, or click **Work** on a POTA/SOTA/WWFF row of the Needed board.
 
 ### Pending-hunt TTL
 
@@ -122,14 +124,15 @@ When a QSO is tagged with a pending hunt, the correct ADIF fields are written:
 |---------|-------------------|
 | POTA | `SIG=POTA`, `SIG_INFO=<reference>` |
 | SOTA | `SOTA_REF=<reference>` |
+| WWFF | `SIG=WWFF`, `SIG_INFO=<reference>`, `WWFF_REF=<reference>` |
 
-These are the fields accepted by pota.app upload and the SOTA database import. No manual ADIF editing is needed.
+These are the fields accepted by pota.app upload and the SOTA database import; a WWFF-aware logger reads `WWFF_REF` (ADIF 3.1.3 and later). Importing an ADIF file reads a WWFF reference from `WWFF_REF` alone, or from `SIG=WWFF` with its `SIG_INFO`, and the Awards page counts it toward WWFF-H. In the log form, pick **WWFF** in the program list to type a WWFF reference by hand. No manual ADIF editing is needed.
 
 ## Needed-board integration
 
-The **Needed board** automatically injects a **POTA** or **SOTA** chip onto any row whose callsign matches a live activator in the cache — provided the cache is no older than **10 minutes** (600 seconds). The activator cache is warmed by a background poller from app launch on a ~3-minute cadence (both POTA and SOTA), so the chips — and standalone park/summit chase rows — appear on the Needed board without opening this view first.
+The **Needed board** automatically injects a **POTA**, **SOTA** or **WWFF** chip onto any row whose callsign matches a live activator in the cache — provided the cache is no older than **10 minutes** (600 seconds). The activator cache is warmed by a background poller from app launch on a ~3-minute cadence (POTA, SOTA and WWFF), so the chips — and standalone park/summit chase rows — appear on the Needed board without opening this view first.
 
-A park or summit you have **not** worked in the activation running now also earns a **New park** need, which ranks the row above a mere confirmation and below every DX award. Once you have logged it today, the row keeps only its POTA/SOTA label and sinks below the real needs; the same park tomorrow is a new opportunity again. Use the POTA/SOTA filter chips on the Needed board to isolate these rows.
+A park or summit you have **not** worked in the activation running now also earns a **New park** need, which ranks the row above a mere confirmation and below every DX award. Once you have logged it today, the row keeps only its POTA/SOTA/WWFF label and sinks below the real needs; the same park tomorrow is a new opportunity again. Use the POTA/SOTA/WWFF filter chips on the Needed board to isolate these rows.
 
 Clicking **Work** on one of these rows records a pending hunt for that park before it QSYs, so the contact you make is logged with the park — exactly as HUNT does.
 

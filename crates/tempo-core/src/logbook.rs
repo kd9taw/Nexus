@@ -3210,14 +3210,18 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
         rec.extra.retain(|(k, _)| {
             !matches!(
                 k.as_str(),
-                "MY_SIG" | "MY_SIG_INFO" | "MY_SOTA_REF" | "MY_POTA_REF"
+                "MY_SIG" | "MY_SIG_INFO" | "MY_SOTA_REF" | "MY_POTA_REF" | "MY_WWFF_REF"
             )
         });
     }
     if (&rec.ota.their_program, &rec.ota.their_ref) != (&old.ota.their_program, &old.ota.their_ref)
     {
-        rec.extra
-            .retain(|(k, _)| !matches!(k.as_str(), "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF"));
+        rec.extra.retain(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF" | "WWFF_REF"
+            )
+        });
     }
     // The same, for a mode. A SUBMODE the reader does not promote rides in `extra` (fldigi's PSK31
     // under MODE=PSK, Log4OM's USB under SSB, a VARA variant under DYNAMIC) and describes the mode
@@ -3800,20 +3804,11 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     out.push_str(&upload_field("APP_TEMPO_UL_QRZ", &r.upload.qrz));
     out.push_str(&upload_field("APP_TEMPO_UL_CLUBLOG", &r.upload.clublog));
     // Parks/Summits On The Air — standard ADIF so pota.app / the SOTA DB accept the
-    // export. POTA (and WWFF) → SIG/SIG_INFO; SOTA → its dedicated *_SOTA_REF fields.
+    // export. POTA (and WWFF) → SIG/SIG_INFO, each beside its dedicated field (*_POTA_REF,
+    // *_WWFF_REF); SOTA → its dedicated *_SOTA_REF fields.
+    out.push_str(&ota_fields(OTA_MY_TAGS, &r.ota.my_program, &r.ota.my_ref));
     out.push_str(&ota_fields(
-        "MY_SIG",
-        "MY_SIG_INFO",
-        "MY_SOTA_REF",
-        "MY_POTA_REF",
-        &r.ota.my_program,
-        &r.ota.my_ref,
-    ));
-    out.push_str(&ota_fields(
-        "SIG",
-        "SIG_INFO",
-        "SOTA_REF",
-        "POTA_REF",
+        OTA_THEIR_TAGS,
         &r.ota.their_program,
         &r.ota.their_ref,
     ));
@@ -4063,9 +4058,37 @@ pub fn adif_record_with_station(r: &QsoRecord, station_call: &str, my_grid: &str
     }
 }
 
+/// One OTA side's ADIF tags: `SIG`, `SIG_INFO`, the dedicated `SOTA_REF`, `POTA_REF` and
+/// `WWFF_REF`, or the `MY_` five.
+pub(crate) struct OtaTags {
+    pub sig: &'static str,
+    pub sig_info: &'static str,
+    pub sota: &'static str,
+    pub pota: &'static str,
+    pub wwff: &'static str,
+}
+
+/// The operator's side.
+pub(crate) const OTA_MY_TAGS: OtaTags = OtaTags {
+    sig: "MY_SIG",
+    sig_info: "MY_SIG_INFO",
+    sota: "MY_SOTA_REF",
+    pota: "MY_POTA_REF",
+    wwff: "MY_WWFF_REF",
+};
+
+/// The worked station's side.
+pub(crate) const OTA_THEIR_TAGS: OtaTags = OtaTags {
+    sig: "SIG",
+    sig_info: "SIG_INFO",
+    sota: "SOTA_REF",
+    pota: "POTA_REF",
+    wwff: "WWFF_REF",
+};
+
 /// Emit the ADIF fields for one OTA side. SOTA uses its dedicated `*_SOTA_REF` field;
-/// every other program (POTA, WWFF) uses the generic `SIG`/`SIG_INFO` pair. Empty
-/// when not activating/hunting that side.
+/// every other program (POTA, WWFF) uses the generic `SIG`/`SIG_INFO` pair, POTA and WWFF
+/// each with their dedicated field beside it. Empty when not activating/hunting that side.
 /// The ADIF `(MODE, SUBMODE)` pair for a mode whose OWN spelling is not in the ADIF Mode
 /// enumeration, or `None` for anything already in it (FT8, CW, SSB, RTTY, ...), which is
 /// emitted verbatim.
@@ -4367,14 +4390,14 @@ fn submode_for_new_mode(rec: &mut QsoRecord) {
     }
 }
 
-fn ota_fields(
-    sig: &str,
-    sig_info: &str,
-    sota: &str,
-    pota: &str,
-    program: &Option<String>,
-    reference: &Option<String>,
-) -> String {
+fn ota_fields(tags: OtaTags, program: &Option<String>, reference: &Option<String>) -> String {
+    let OtaTags {
+        sig,
+        sig_info,
+        sota,
+        pota,
+        wwff,
+    } = tags;
     match (program.as_deref(), reference.as_deref()) {
         (Some(p), Some(r)) if p.eq_ignore_ascii_case("SOTA") => field(sota, r),
         // POTA emits BOTH conventions. SIG/SIG_INFO is what pota.app's own exports use and
@@ -4401,6 +4424,11 @@ fn ota_fields(
                 .find(|s| !s.is_empty())
                 .unwrap_or("");
             field(sig, p) + &field(sig_info, first) + &field(pota, r)
+        }
+        // WWFF the same way: `SIG`/`SIG_INFO`, which every logger reads, and the dedicated
+        // `WWFF_REF` ADIF has carried since 3.1.3, which a WWFF-aware logger keys on.
+        (Some(p), Some(r)) if p.eq_ignore_ascii_case("WWFF") => {
+            field(sig, p) + &field(sig_info, r) + &field(wwff, r)
         }
         (Some(p), Some(r)) => field(sig, p) + &field(sig_info, r),
         _ => String::new(),
@@ -5024,7 +5052,10 @@ fn take_upload(f: &mut std::collections::HashMap<String, String>, k: &str) -> Op
 /// Consume one OTA side (my_* or their_*): a SOTA ref (dedicated field) takes
 /// precedence; else, on a POTA side, the ADIF 3.1.4 dedicated POTA_REF when SIG_INFO
 /// agrees with it; else a SIG=POTA/WWFF pair; else a lone POTA_REF (what pota.app's
-/// exports carry — may hold a comma list, verbatim).
+/// exports carry — may hold a comma list, verbatim); else a lone WWFF_REF.
+///
+/// On a WWFF side its `WWFF_REF` is consumed with it ([`ota_fields`] writes it back); beside
+/// any other programme it is left in the map like the other programmes' tags below.
 ///
 /// ⛔ **A TWO-FER'S LIST IS IN `POTA_REF`, SO THAT IS WHERE IT IS READ** (the read half of
 /// operator-review finding A2). [`ota_fields`] names ONE park in `SIG_INFO` and keeps the whole
@@ -5042,14 +5073,19 @@ fn take_upload(f: &mut std::collections::HashMap<String, String>, k: &str) -> Op
 /// [`ota_fields`] writes them back.
 fn take_ota_side(
     f: &mut std::collections::HashMap<String, String>,
-    sig: &str,
-    sig_info: &str,
-    sota: &str,
-    pota: &str,
+    tags: OtaTags,
 ) -> (Option<String>, Option<String>) {
+    let OtaTags {
+        sig,
+        sig_info,
+        sota,
+        pota,
+        wwff,
+    } = tags;
     let sota_v = f.remove(sota).filter(|s| !s.is_empty());
     let (sig_v, sig_info_v) = (f.remove(sig), f.remove(sig_info));
     let pota_v = f.remove(pota).filter(|s| !s.is_empty());
+    let wwff_v = f.remove(wwff).filter(|s| !s.trim().is_empty());
     let parks = |s: &str| -> Vec<String> {
         s.split([',', ';'])
             .map(|p| p.trim().to_ascii_uppercase())
@@ -5076,8 +5112,10 @@ fn take_ota_side(
         park(sig, sig_v);
         park(sig_info, sig_info_v);
         park(pota, pota_v);
+        park(wwff, wwff_v);
         (Some("SOTA".to_string()), Some(r.to_ascii_uppercase()))
     } else if list_wins {
+        park(wwff, wwff_v);
         (
             Some("POTA".to_string()),
             pota_v.map(|r| r.to_ascii_uppercase()),
@@ -5086,9 +5124,21 @@ fn take_ota_side(
         if !pota_side {
             park(pota, pota_v);
         }
+        // On a WWFF side the dedicated field is the side's own and is consumed, `SIG_INFO`
+        // winning a disagreement as it does over `POTA_REF` on a POTA side: parked, it would be
+        // written as a second `WWFF_REF`. Beside any other programme it rides along.
+        if !p.trim().eq_ignore_ascii_case("WWFF") {
+            park(wwff, wwff_v);
+        }
         (Some(p.to_ascii_uppercase()), Some(r.to_ascii_uppercase()))
     } else if let Some(r) = pota_v {
+        park(wwff, wwff_v);
         (Some("POTA".to_string()), Some(r.to_ascii_uppercase()))
+    } else if let Some(r) = wwff_v {
+        (
+            Some("WWFF".to_string()),
+            Some(r.trim().to_ascii_uppercase()),
+        )
     } else {
         (None, None)
     }
@@ -5197,9 +5247,8 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
         qrz: take_upload(f, "APP_TEMPO_UL_QRZ"),
         clublog: take_upload(f, "APP_TEMPO_UL_CLUBLOG"),
     };
-    let (my_program, my_ref) =
-        take_ota_side(f, "MY_SIG", "MY_SIG_INFO", "MY_SOTA_REF", "MY_POTA_REF");
-    let (their_program, their_ref) = take_ota_side(f, "SIG", "SIG_INFO", "SOTA_REF", "POTA_REF");
+    let (my_program, my_ref) = take_ota_side(f, OTA_MY_TAGS);
+    let (their_program, their_ref) = take_ota_side(f, OTA_THEIR_TAGS);
     let ota = Ota {
         my_program,
         my_ref,
@@ -7174,6 +7223,81 @@ mod tests {
             assert_eq!(again.ota, r.ota, "{out}");
             assert_eq!(again.extra, r.extra, "{out}");
         }
+    }
+
+    /// ⭐ WWFF GOES OUT IN ITS DEDICATED FIELD AS WELL, AND COMES IN FROM IT. ADIF (3.1.3 on, and
+    /// 3.1.8, the version this writer declares) has `WWFF_REF`/`MY_WWFF_REF`; a WWFF side is
+    /// written as `SIG`=WWFF/`SIG_INFO` (what every logger reads) AND the dedicated field, the
+    /// way a POTA side writes `POTA_REF` beside its pair. Read back, a lone `WWFF_REF` is the
+    /// side's WWFF reference, and one agreeing with `SIG_INFO` is consumed rather than parked, so
+    /// it is written once. One beside another programme's side (a POTA park that is also a WWFF
+    /// area) still rides in `extra`.
+    #[test]
+    fn wwff_is_written_to_and_read_from_its_dedicated_field() {
+        let mut r = rec("DL0XYZ", "20m", 1_790_000_000);
+        r.ota.their_program = Some("WWFF".into());
+        r.ota.their_ref = Some("DLFF-0001".into());
+        r.ota.my_program = Some("WWFF".into());
+        r.ota.my_ref = Some("KFF-1234".into());
+        let out = adif_record(&r);
+        for want in [
+            "<SIG:4>WWFF<SIG_INFO:9>DLFF-0001<WWFF_REF:9>DLFF-0001",
+            "<MY_SIG:4>WWFF<MY_SIG_INFO:8>KFF-1234<MY_WWFF_REF:8>KFF-1234",
+        ] {
+            assert!(out.contains(want), "{want} missing: {out}");
+        }
+        let back = &parse_adif(&out)[0];
+        assert_eq!(back.ota, r.ota, "{out}");
+        assert!(back.extra.is_empty(), "{:?}", back.extra);
+        assert_eq!(adif_record(back).matches("<WWFF_REF:").count(), 1);
+
+        // A file with the dedicated fields alone (another logger's, or a WWFF log search export).
+        let lone = "<CALL:6>DL0XYZ<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <WWFF_REF:9>dlff-0001<MY_WWFF_REF:8>KFF-1234<EOR>\n";
+        let rec = &parse_adif(lone)[0];
+        assert_eq!(
+            (
+                rec.ota.their_program.as_deref(),
+                rec.ota.their_ref.as_deref()
+            ),
+            (Some("WWFF"), Some("DLFF-0001"))
+        );
+        assert_eq!(
+            (rec.ota.my_program.as_deref(), rec.ota.my_ref.as_deref()),
+            (Some("WWFF"), Some("KFF-1234"))
+        );
+        assert!(rec.extra.is_empty(), "{:?}", rec.extra);
+
+        // CONTROL: beside a POTA park the WWFF area is not the side; it rides along, once.
+        let both = "<CALL:5>K1ABC<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <SIG:4>POTA<SIG_INFO:7>US-1234<WWFF_REF:8>KFF-1234<EOR>\n";
+        let rec = &parse_adif(both)[0];
+        assert_eq!(rec.ota.their_program.as_deref(), Some("POTA"));
+        assert_eq!(rec.ota.their_ref.as_deref(), Some("US-1234"));
+        assert_eq!(
+            rec.extra,
+            vec![("WWFF_REF".to_string(), "KFF-1234".to_string())]
+        );
+        assert_eq!(adif_record(rec).matches("<WWFF_REF:").count(), 1);
+    }
+
+    /// An edit that moves a side to WWFF takes along a `WWFF_REF` the side carried beside its old
+    /// park: left behind, the record would be written with two of them, and the first one, the
+    /// old area, is what a reader keeping the first copy takes.
+    #[test]
+    fn an_edit_to_a_wwff_side_writes_one_wwff_reference() {
+        let text = "<CALL:5>K1ABC<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <SIG:4>POTA<SIG_INFO:7>US-1234<WWFF_REF:8>KFF-1234<EOR>\n";
+        let mut lb = Logbook::new();
+        lb.import_adif(text);
+        let mut edited = lb.records()[0].as_ref().clone();
+        edited.extra = Vec::new(); // the edit payload always arrives without it
+        edited.ota.their_program = Some("WWFF".into());
+        edited.ota.their_ref = Some("KFF-9999".into());
+        assert!(lb.update_record(0, edited));
+        let out = lb.adif();
+        assert_eq!(out.matches("<WWFF_REF:").count(), 1, "{out}");
+        assert!(out.contains("<WWFF_REF:8>KFF-9999"), "{out}");
     }
 
     /// ⭐ AN EDIT THAT CHANGES THE MODE TAKES ALONG A SUBMODE THE NEW MODE DOES NOT HAVE. A SUBMODE

@@ -252,7 +252,7 @@ const LOG_EXAMPLES = {
  * On-the-air programs for the park/summit picker. The ADIF SIG value and the label the operator
  * reads are the SAME token here, which is why this is one list and not a value/label pair.
  */
-const PARK_PROGRAMS = ['POTA', 'SOTA'] as const
+const PARK_PROGRAMS = ['POTA', 'SOTA', 'WWFF'] as const
 
 /** Now, split into a UTC date (YYYY-MM-DD) + time (HH:MM) for the override's inputs. */
 function utcNowParts(): { date: string; time: string } {
@@ -3713,7 +3713,11 @@ export function LogEntry({
             onKeyDown={onEnter}
             onBlur={() => window.setTimeout(() => setParkHits([]), 150)}
             placeholder={
-              logParkProgram === 'SOTA' ? t('logEntry.park.ref.placeholderSota') : t('logEntry.park.ref.placeholderPota')
+              logParkProgram === 'SOTA'
+                ? t('logEntry.park.ref.placeholderSota')
+                : logParkProgram === 'WWFF'
+                  ? t('logEntry.park.ref.placeholderWwff')
+                  : t('logEntry.park.ref.placeholderPota')
             }
             title={t('logEntry.park.ref.title')}
             autoComplete="off"
