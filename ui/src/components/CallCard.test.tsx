@@ -289,6 +289,40 @@ describe('opening and closing', () => {
     expect(sent.filter((c) => c === 'qrz_lookup')).toHaveLength(1)
   })
 
+  // A station heard HASHED is the station inside the brackets: WSJT-X strips them before it reads a
+  // call off a decode. The card shows the call as it was sent and asks about K2ABC; `<...>` names
+  // nobody and opens nothing.
+  it('a hashed <K2ABC> asks the log, the stats and the callbook about K2ABC; <...> opens nothing', async () => {
+    const asked: string[] = []
+    const invoke = window.__TAURI_INTERNALS__!.invoke!
+    window.__TAURI_INTERNALS__ = {
+      invoke: (cmd: string, args?: Record<string, unknown>) => {
+        asked.push(`${cmd} ${JSON.stringify(args ?? {})}`)
+        return invoke(cmd, args)
+      },
+    } as never
+    render(
+      <>
+        <CallCardHost snap={SNAP} spots={[]} needAlertsByCall={new Map()} />
+        <button type="button" {...callCardTrigger('<K2ABC>')}>hashed</button>
+        <button type="button" {...callCardTrigger('<...>')}>unresolved</button>
+      </>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'unresolved' }))
+    expect(screen.queryByRole('dialog'), 'a card for an unresolved hash').toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'hashed' }))
+    expect(screen.getByRole('dialog', { name: 'Station card for <K2ABC>' })).not.toBeNull()
+    await waitFor(() => expect(asked.some((a) => a.startsWith('get_call_stats'))).toBe(true))
+    fireEvent.click(screen.getByRole('button', { name: 'Lookup' }))
+    await waitFor(() => expect(asked.some((a) => a.startsWith('qrz_lookup'))).toBe(true))
+    for (const cmd of ['ask_log', 'get_call_stats', 'qrz_lookup']) {
+      const sentFor = asked.filter((a) => a.startsWith(cmd))
+      expect(sentFor.length, `${cmd} was asked`).toBeGreaterThan(0)
+      expect(sentFor.every((a) => a.includes('"K2ABC"') && !a.includes('<')), sentFor.join('\n')).toBe(true)
+    }
+  })
+
   it('Esc closes it, and the key is not swallowed (it is the stop key too)', () => {
     render(<Window />)
     fireEvent.click(screen.getByRole('button', { name: 'EC1DD' }))

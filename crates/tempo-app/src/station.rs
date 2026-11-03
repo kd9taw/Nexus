@@ -3717,12 +3717,14 @@ impl StationCore {
     }
 
     /// Whether a heard call uploads to LoTW (via the injected resolver); `false`
-    /// when unwired — the honest default is no highlight, never a guess.
+    /// when unwired — the honest default is no highlight, never a guess. Asked about the call
+    /// inside a hash's brackets ([`lookup_call`](tempo_core::message::lookup_call)), as WSJT-X
+    /// asks about the bracket-stripped call; the unresolved `<...>` is nobody.
     pub(crate) fn lotw_user(&self, call: Option<&str>) -> bool {
         let (Some(c), Some(f)) = (call, self.lotw_resolve.as_ref()) else {
             return false;
         };
-        !c.trim().is_empty() && f(c.trim())
+        tempo_core::message::lookup_call(c).is_some_and(|c| f(&c))
     }
 
     /// Write the fills the background job found (SPEC-2 v3 D2-A, [`crate::logfill`]) into the

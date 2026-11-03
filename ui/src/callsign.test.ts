@@ -6,7 +6,7 @@
 //
 // The first block is the Rust unit test `base_call_strips_portable_affixes`, case for case.
 import { describe, expect, it } from 'vitest'
-import { baseCall, sameCall } from './callsign'
+import { baseCall, lookupCall, sameCall } from './callsign'
 
 describe('baseCall', () => {
   it('matches the engine’s own cases', () => {
@@ -53,5 +53,21 @@ describe('sameCall', () => {
     expect(sameCall('KE7G/P', 'KF7XYZ/P')).toBe(false)
     expect(sameCall('VE7/KE7G', 'VE7/W7ABC')).toBe(false)
     expect(sameCall('KD9TAW', 'KD9TAX')).toBe(false)
+  })
+})
+
+// The call a decoded token names in the LOG: `tempo_core::message::lookup_call`. WSJT-X strips the
+// brackets off a decode before it reads a call and then matches that call exactly.
+describe('lookupCall', () => {
+  it('is the call inside a hash’s brackets, whole and upper-cased', () => {
+    expect(lookupCall('<K1ABC>')).toBe('K1ABC')
+    expect(lookupCall(' <k1abc> ')).toBe('K1ABC')
+    expect(lookupCall('K1ABC')).toBe('K1ABC')
+    expect(lookupCall('<PJ4/K1ABC>')).toBe('PJ4/K1ABC')
+  })
+
+  it('is no call for an unresolved hash', () => {
+    expect(lookupCall('<...>')).toBe('')
+    expect(lookupCall('')).toBe('')
   })
 })

@@ -29,7 +29,7 @@ import { isRxOnly, isBeacon } from '../types'
 import type { NeedBandScopes } from '../features/needs'
 import { bandKey, modeKey } from '../features/callHistory'
 import { potaDupe } from '../features/potaActivation'
-import { sameCall } from '../callsign'
+import { lookupCall, sameCall } from '../callsign'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
 import { contestDupe } from '../features/contestDupe'
@@ -709,7 +709,8 @@ export function OperateCockpit({
   // so a clear never outlives the thing it cleared. The ref exists so `clearDx` (created once)
   // can read the current value without taking it as a dependency.
   recallCallRef.current = recallCall
-  const shownRecallCall = recallCall && recallCall === dismissedCall ? null : recallCall
+  // An unresolved hash (`<...>`) names no station (`lookupCall`): no card, so no slot and no question.
+  const shownRecallCall = !recallCall || !lookupCall(recallCall) || recallCall === dismissedCall ? null : recallCall
   // #204: the callsign card joins the side rail — and Classic's third column — only while
   // there is a card to show. panelHost counts any listed side panel that is not removed, so a
   // standing 'recall' entry would mount an EMPTY rail with Stations hidden and nothing selected.
@@ -1320,7 +1321,7 @@ export function OperateCockpit({
     shown('stats') ? (
       <CallStatsFrame
         close={closeProps('stats')}
-        call={shownRecallCall}
+        call={shownRecallCall && lookupCall(shownRecallCall)}
         band={snap.radio.band}
         mode={tier}
         logTick={snap.logTick}
@@ -2493,7 +2494,9 @@ function OperateRecall({
   /** #204: open the card of the station this one is calling. */
   onShowCall?: (call: string) => void
 }) {
-  const cu = call.trim().toUpperCase()
+  // The call the LOG knows (`lookupCall`): a station heard hashed, `<K1ABC>`, is K1ABC — its prior
+  // contacts, its callbook entry, its dupe — and the unresolved `<...>` is nobody, so it gets no card.
+  const cu = lookupCall(call)
   const [book, setBook] = useState<QrzLookup | null>(null)
   const [entity, setEntity] = useState<string | null>(null)
 
@@ -2531,7 +2534,7 @@ function OperateRecall({
     }
   }, [cu])
 
-  const station = snap.stations.find((s) => s.call.trim().toUpperCase() === cu) ?? null
+  const station = (cu && snap.stations.find((s) => lookupCall(s.call) === cu)) || null
   // ⭐ THE CONTEST-SCOPED DUPE, the second verdict on this card — and the only one that is
   // right during a contest. `hist.dupeThisBand` below it asks the GENERAL log "ever worked on
   // this band", which lights for a 2019 QSO that is a perfectly fresh contest contact; the
