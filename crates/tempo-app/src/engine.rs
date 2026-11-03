@@ -13925,17 +13925,33 @@ impl Engine {
     /// radio's figure ([`Self::note_measured_power`]): the active radio's amplifier only, only
     /// while one is set up on it, none during a tune carrier, and no zero (receiving, or the
     /// amplifier in standby with nothing to measure).
+    ///
+    /// ⚠️ ONLY WHILE AN OVER IS UNDER WAY. The radio's figure is read only while the radio loop
+    /// sees the rig keyed; the amplifier is polled all the time, on its own thread, so a poll
+    /// sampled on the air can arrive after the unkey, and an amplifier meter can still be falling
+    /// just after it. Such a reading may only extend an over that is still open: it never starts
+    /// a new one, which would replace the over's peak with its tail (or a tune-up's late sample
+    /// with a contact's power). The station is keyed when the rig says so over CAT, a satellite
+    /// pass infers it, or Nexus itself owns the transmitter for anything but a tune carrier.
     fn note_amp_output(&mut self, id: u32, w: Option<u16>) {
         let Some(w) = w.filter(|w| *w > 0) else {
             return;
         };
+        let owner = self.tx_owner();
         if id != self.settings.active_radio
             || !self.settings.amp_configured()
-            || self.tx_owner() == Some(TxOwner::Tune)
+            || owner == Some(TxOwner::Tune)
         {
             return;
         }
-        self.fold_over_power(f32::from(w));
+        let keyed = self.rig_keyed || self.sat_inferred_keyed || owner.is_some();
+        let now = now_unix_secs();
+        let extends_open_over = self
+            .measured_over
+            .is_some_and(|o| o.open && now.saturating_sub(o.last_unix) <= MEASURED_OVER_GAP_SECS);
+        if keyed || extends_open_over {
+            self.fold_over_power(f32::from(w));
+        }
     }
 
     /// Is the active radio's amplifier linked and in STANDBY by its latest poll? A missed poll
@@ -51812,12 +51828,15 @@ mod tests {
             e.log_qso(rec);
             e.stored_log()[0].tx_power
         };
-        // The radio drives 40 W; the amplifier puts out up to 950 W.
+        // The radio drives 40 W; the amplifier puts out up to 950 W. The radio loop sees the rig
+        // keyed over CAT, then the unkey.
         let amp_over = |e: &mut Engine| {
+            e.observe_rig_ptt(true);
             for w in [0, 610, 950, 920] {
                 amp_poll(e, true, w);
                 e.observe_rig_tx_meters(None, None, Some(40.0), None);
             }
+            e.observe_rig_ptt(false);
             e.clear_rig_tx_meters();
             amp_poll(e, true, 0);
         };
@@ -51846,14 +51865,35 @@ mod tests {
             Some(100.0),
             "an earlier contact's"
         );
-        // A tune-up through the amplifier is not the contact's power.
+        // A tune-up through the amplifier is not the contact's power, nor is a sample of it the
+        // amplifier delivers after the tune carrier has gone.
         let tune = |e: &mut Engine| {
             e.tuning = true;
             amp_poll(e, true, 500);
             e.tuning = false;
             e.clear_rig_tx_meters();
+            amp_poll(e, true, 480);
         };
-        assert_eq!(logged(&with_amp, &tune), Some(100.0));
+        assert_eq!(logged(&with_amp, &tune), Some(100.0), "a late tune sample");
+        // A poll sampled on the air but delivered after the unkey (or a meter still falling)
+        // is the over's tail: it never replaces the peak.
+        let late = |e: &mut Engine| {
+            amp_over(e);
+            amp_poll(e, true, 300);
+            amp_poll(e, true, 0);
+        };
+        assert_eq!(
+            logged(&with_amp, &late),
+            Some(950.0),
+            "a late poll after the unkey"
+        );
+        // Nexus's own over (an FT slot, a mic key) counts as keyed without a CAT PTT read-back;
+        // readings with nothing keyed and no open over count for nothing.
+        let unkeyed = |e: &mut Engine| {
+            amp_poll(e, true, 700);
+            e.clear_rig_tx_meters();
+        };
+        assert_eq!(logged(&with_amp, &unkeyed), Some(100.0), "nothing keyed");
         // Another radio's amplifier is not this radio's.
         let other = |e: &mut Engine| {
             let id = e.settings.active_radio + 7;
@@ -51894,6 +51934,23 @@ mod tests {
         };
         assert_eq!(logged(false), Some(40.0), "standby: the radio's own output");
         assert_eq!(logged(true), Some(100.0), "operate: the radio's is drive");
+
+        // Standby, then the amplifier goes quiet: a missed poll clears its standby reading, so
+        // the radio's figure is drive again for all Nexus knows, and Settings is logged.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = Some(100.0);
+        with_amp(&mut e);
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        amp_poll(&mut e, false, 0);
+        let id = e.settings.active_radio;
+        e.observe_amp_miss(id, "spe", "noAnswer");
+        an_over(&mut e, &[40.0]);
+        e.log_qso(rec);
+        assert_eq!(
+            e.stored_log()[0].tx_power,
+            Some(100.0),
+            "quiet after standby"
+        );
     }
 
     /// An everyday contact carries your state from Settings ▸ Station ▸ State (ADIF

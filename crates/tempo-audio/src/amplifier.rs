@@ -327,7 +327,9 @@ pub struct SpeStatus {
     /// `20K` (2K-FA) or `13K` (1.3K-FA), kept raw: an id we do not recognise is a newer
     /// amplifier, not a bad frame.
     pub model: String,
-    /// `true` = OPERATE, `false` = STANDBY.
+    /// `true` = OPERATE (`O`), `false` = STANDBY (`S`). Any other letter refuses the frame: a
+    /// standby reading tells the log the radio's own power is the power on the air, so it is
+    /// never a default.
     pub operate: bool,
     /// `true` = the amplifier sees the exciter keyed.
     pub transmitting: bool,
@@ -434,7 +436,11 @@ pub fn parse_spe_status(frame: &[u8]) -> Option<SpeStatus> {
 
     Some(SpeStatus {
         model: f[0].trim().to_string(),
-        operate: first(1) == Some('O'),
+        operate: match first(1)? {
+            'O' => true,
+            'S' => false,
+            _ => return None,
+        },
         transmitting: first(2) == Some('T'),
         bank: first(3).filter(|c| *c == 'A' || *c == 'B'),
         input: num(4).parse().ok()?,
@@ -667,6 +673,17 @@ pub fn kpa_parse_ws(payload: &str) -> Option<(u16, Option<f32>)> {
     Some((watts, (swr > 0.0).then_some(swr)))
 }
 
+/// Decode an `^OS` payload: `"1"` is operate, `"0"` is standby, and anything else is not a
+/// reading. Strict on purpose: a standby reading tells the log the radio's own power is the
+/// power on the air, so a payload this cannot read must never fall through to standby.
+pub fn kpa_parse_os(payload: &str) -> Option<bool> {
+    match payload.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
 /// Three digits with an implied decimal before the last: `"480"` → `48.0`.
 fn implied_tenth(digits: &str) -> Option<f32> {
     let d = digits.trim();
@@ -680,7 +697,7 @@ fn implied_tenth(digits: &str) -> Option<f32> {
 /// KPA1500, so this struct is the same for either amplifier.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KpaStatus {
-    /// `^OS` — `true` = operate, `false` = standby.
+    /// `^OS` — `true` = operate, `false` = standby ([`kpa_parse_os`]).
     pub operate: bool,
     /// `^BN` — 0 = 160 m … 10 = 6 m. Elecraft publishes this ladder in full and notes it matches
     /// the K3S/K3, so unlike the SPE index this one needs no bench confirmation.
@@ -712,8 +729,8 @@ impl KpaStatus {
 #[cfg(feature = "serial")]
 mod imp {
     use super::{
-        kpa_network_target, kpa_parse_vi, kpa_parse_ws, kpa_payload, kpa_ping, kpa_ping_ok,
-        kpa_query, kpa_set, parse_spe_status, spe_command, spe_looks_like_1k_fa,
+        kpa_network_target, kpa_parse_os, kpa_parse_vi, kpa_parse_ws, kpa_payload, kpa_ping,
+        kpa_ping_ok, kpa_query, kpa_set, parse_spe_status, spe_command, spe_looks_like_1k_fa,
         spe_status_reply_len, spe_status_request, AmpIntent, KpaStatus, SpeCommand, SpeStatus,
         KPA_BAUDS, KPA_TOP_BAND, SPE_HEADER_LEN,
     };
@@ -1042,7 +1059,8 @@ mod imp {
         }
 
         pub fn poll(&mut self) -> std::io::Result<KpaStatus> {
-            let operate = self.ask("OS")? == "1";
+            let operate =
+                kpa_parse_os(&self.ask("OS")?).ok_or_else(|| malformed("^OS operate state"))?;
             let band_index = self.ask("BN")?.parse().map_err(bad("^BN band"))?;
             let temp_c = self.ask("TM")?.parse().map_err(bad("^TM temperature"))?;
             let (volts, amps) =
@@ -2272,6 +2290,28 @@ mod tests {
         assert_eq!(kpa_network_target("kpa.lan:0"), None);
         assert_eq!(kpa_network_target("kpa.lan:65536"), None);
         assert_eq!(kpa_network_target("kpa.lan:15x0"), None);
+    }
+
+    /// Operate and standby are read strictly on both families: only the documented letters and
+    /// digits are a state, and anything else is a refused reading (a miss), never standby.
+    #[test]
+    fn operate_and_standby_are_only_the_documented_values() {
+        let spe = |state: &str| {
+            parse_spe_status(&status_frame(&format!(
+                "13K,{state},R,A,1,01,1a,0r,L,0000, 0.00, 0.00, 0.0, 0.0, 33,  0,  0,N,N"
+            )))
+            .map(|s| s.operate)
+        };
+        assert_eq!(spe("O"), Some(true), "O = operate");
+        assert_eq!(spe("S"), Some(false), "S = standby");
+        assert_eq!(spe("X"), None, "an unknown letter is not standby");
+        assert_eq!(spe(" "), None, "a blank field is not standby");
+
+        assert_eq!(kpa_parse_os("1"), Some(true));
+        assert_eq!(kpa_parse_os("0"), Some(false));
+        assert_eq!(kpa_parse_os(""), None, "an empty payload is not standby");
+        assert_eq!(kpa_parse_os("2"), None);
+        assert_eq!(kpa_parse_os("01"), None);
     }
 
     #[test]
