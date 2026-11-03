@@ -48360,7 +48360,12 @@ fn start_on_the_logbook(
                 // acknowledges, so there is no success to distinguish from failure and
                 // nothing meaningful to retry. A failed connect almost always just means
                 // DXLab is not running. Fire it and move on.
-                if let Some((host, base, uploads)) = dxk.clone() {
+                // …but never a contact another program logged into Nexus (`tempo_app::log_intake`):
+                // DXKeeper may be the program that sent it, and it would come back in.
+                if let Some((host, base, uploads)) = dxk
+                    .clone()
+                    .filter(|_| !tempo_app::log_intake::from_another_program(&rec))
+                {
                     // ⭐ THE PRIVATE NOTE RIDES ALONG HERE, deliberately — the one outbound
                     // call site that does. DXKeeper is the operator's OWN logging software on
                     // their OWN machine (the comment above says it: a failed connect just means
@@ -48527,16 +48532,19 @@ fn start_on_the_logbook(
     // cross-platform resource dir is available — the DeepCW model ships as a bundled
     // resource, and resolving it by hand from the exe path only worked on Windows.
 
-    // FreeDV's own app beside Nexus, RECEIVE ONLY: its logged contacts (127.0.0.1 alone) and,
-    // when the operator asks for them, the calls it hears. The manager follows the settings once
-    // a second; nothing it reads can key or tune the radio (`tempo_app::freedv`).
+    // The contact port, RECEIVE ONLY: the contacts FreeDV and other programs log (127.0.0.1
+    // alone unless "Accept from devices on my network" is on, `tempo_app::log_intake`) and, when
+    // the operator asks for them, the calls FreeDV hears. The manager follows the settings once a
+    // second; nothing it reads can key or tune the radio (`tempo_app::freedv`).
     {
         let freedv_engine = engine.clone();
         let note: tempo_app::freedv::Note =
             std::sync::Arc::new(|level, msg| conn_log("FreeDV", level, msg));
+        let intake_note: tempo_app::freedv::Note =
+            std::sync::Arc::new(|level, msg| conn_log("Other programs", level, msg));
         let spawned = std::thread::Builder::new()
             .name("nexus-freedv".into())
-            .spawn(move || tempo_app::freedv::run(freedv_engine, note));
+            .spawn(move || tempo_app::freedv::run(freedv_engine, note, intake_note));
         if let Err(e) = spawned {
             tempo_core::applog::error(
                 "freedv",

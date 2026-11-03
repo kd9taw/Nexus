@@ -93,3 +93,20 @@ describe('the FreeDV contacts address in Settings', () => {
     expect(block.textContent).not.toContain('127.0.0.1:')
   })
 })
+
+describe('contacts other programs log, in the same block', () => {
+  it('keeps the port this computer\'s alone until devices on the network are let in', async () => {
+    const block = await freedvBlock({ freedvLog: true, freedvLogPort: 2239 })
+    expect(block.textContent).toContain(t('settings.transmit.freedv.log.label'))
+    const lan = block.querySelector(`[aria-label="${t('settings.transmit.freedv.lan.label')}"]`)
+    expect(lan?.getAttribute('aria-checked')).toBe('false')
+    expect(block.textContent).not.toContain(t('settings.transmit.freedv.peer.label'))
+  })
+
+  it('with the network let in, shows every adapter and the one-address box', async () => {
+    const block = await freedvBlock({ freedvLog: true, freedvLogPort: 2239, logIntakeLan: true, logIntakePeer: '192.168.1.40' })
+    expect(block.textContent).toContain('0.0.0.0:2239')
+    expect(block.textContent).toContain(t('settings.transmit.freedv.peer.label'))
+    expect((block.querySelector('input[placeholder="192.168.1.40"]') as HTMLInputElement | null)?.value).toBe('192.168.1.40')
+  })
+})

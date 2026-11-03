@@ -356,6 +356,14 @@ tag off a record that earned it. A blank box on that form would have to mean
 decision, so it has its own menu entry and cannot happen as a side effect of
 saving the form.
 
+### A contact logged on the S.A.T. tracker
+
+If a CSN S.A.T. tracker runs the radio, its logged contacts can land in the Nexus log by
+themselves. **S.A.T. satellite tracker:** on the S.A.T., set **QSO LOG TYPE** to **Log4OM** or **HRD**, **QSO LOG IP** to this computer's address, and the port to **2239**; in Nexus, turn on **Accept from devices on my network**. Each contact keeps the satellite, propagation mode and uplink and
+downlink frequencies the S.A.T. sends. See [Accept contacts other programs
+log](settings-reference.md#transmit-limits--sharing). *(The fields the S.A.T. sends have not yet
+been checked against a real capture.)*
+
 ### Pin the radio a pass uses
 
 On a multi-radio station the readiness rail names the rig a pick routed to, and

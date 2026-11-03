@@ -925,6 +925,33 @@ full power on every mode.*
     refused it, and **Disconnect**.
 
   See [Share by TCI](../rigs/tci-server.md).
+- **Accept contacts other programs log**: on by default. Other programs hand the
+  contacts they log to Nexus on the **Contact port** (2239 unless you change it),
+  and each lands in your log: FreeDV (its QSO Logging), WSJT-X, JTDX or MSHV (their
+  secondary UDP server), JTAlert or GridTracker forwards, N1MM (its contact
+  broadcast) and anything that sends ADIF over UDP. Nexus reads WSJT-X's QSO Logged
+  and Logged ADIF messages from any program, raw ADIF (one or a few records, with or
+  without a header) and N1MM's `<contactinfo>`; N1MM's edits and deletes
+  (`<contactreplace>`, `<contactdelete>`) are not read yet, so a contact changed in
+  N1MM stays as it was first logged. A contact is taken only under your own station
+  call (one under another call is refused, and the reason shows here), is checked
+  against the contacts you logged in Nexus in the last five minutes so it is not
+  written twice, takes your running POTA or SOTA activation when it names no park
+  of its own, and goes to QRZ, Club Log, eQSL and your other services like your own
+  contacts (held while contest mode is on). It is not sent on to WSJT-X UDP, HRD,
+  N1MM or DXKeeper, so nothing comes back in. The line here says the last contact
+  and the program it came from; each one also shows a short "Logged K1ABC from
+  WSJT-X" message, and the contact's card says **Logged via** that program. A port
+  Nexus itself sends to (its WSJT-X UDP, HRD or N1MM address) is refused, with the
+  reason. Receive only: nothing sent here can key or tune the radio.
+  - **Accept from devices on my network**: off by default. On, the port also takes
+    contacts from private network addresses (a home network's 192.168.x.x, 10.x.x.x
+    and the like), never from the internet; Windows may ask once whether Nexus may
+    use the network. **S.A.T. satellite tracker:** on the S.A.T., set **QSO LOG TYPE** to **Log4OM** or **HRD**, **QSO LOG IP** to this computer's address, and the port to **2239**; in Nexus, turn on **Accept from devices on my network**.
+    *(The fields the S.A.T. sends have not yet been checked against a real capture.)*
+  - **Only from this address**: optional, once the network is let in. The one
+    network address allowed to send contacts (the S.A.T.'s, say); empty takes any
+    device on your network. This computer is always allowed.
 
 ---
 

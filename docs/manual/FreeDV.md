@@ -90,9 +90,34 @@ What happens when you press **Log QSO** in FreeDV:
   FreeDV station is a new mode for a country until you log a FreeDV contact with it.
 
 The switch, the port and the listener's state are under **Settings ▸ Radio ▸ Transmit limits &
-sharing ▸ FreeDV contacts into the log**. The port is bound to this computer only: nothing on the
-network can send Nexus a contact. If another program already holds the port, the address there is
-replaced by the reason; pick another port in Nexus and the same one in FreeDV.
+sharing ▸ Accept contacts other programs log**. The port is bound to this computer only, unless
+you turn on **Accept from devices on my network** there. If another program already holds the
+port, the address there is replaced by the reason; pick another port in Nexus and the same one in
+FreeDV.
+
+FreeDV's contacts go to QRZ, Club Log, eQSL and your other services like the contacts you log in
+Nexus (held while contest mode is on), and one you also logged in Nexus within five minutes is
+not written twice.
+
+### Contacts from other programs
+
+The same port takes the contacts other programs log, so Nexus can stay your log while another
+program runs the radio:
+
+- **WSJT-X, JTDX, MSHV:** add `127.0.0.1:2239` as a second UDP server (or forward to it from
+  JTAlert or GridTracker). Nexus reads their QSO Logged and Logged ADIF messages; a program that
+  sends both for one contact is logged once.
+- **N1MM:** add `127.0.0.1:2239` to its contact broadcast. Edits and deletes in N1MM are not read
+  yet: a contact changed there stays as it was first logged in Nexus.
+- **Anything that sends ADIF over UDP**, Ham Radio Deluxe or Log4OM style.
+- **The S.A.T. satellite tracker** (it sits on your network, not on this computer): on the S.A.T.,
+  set **QSO LOG TYPE** to **Log4OM** or **HRD**, **QSO LOG IP** to this computer's address, and the
+  port to **2239**; in Nexus, turn on **Accept from devices on my network**. *(The fields the
+  S.A.T. sends have not yet been checked against a real capture.)*
+
+The same rules apply to every program: only under your own station call, a toast and a line in
+the connection log for each contact, **Logged via** the program on the contact's card, and nothing
+sent back to WSJT-X UDP, HRD, N1MM or DXKeeper.
 
 Nothing FreeDV sends to this port can key, tune or change the radio.
 

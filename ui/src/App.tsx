@@ -58,6 +58,7 @@ import {
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
+import { intakeToast } from './features/logIntake'
 import { flexVoiceNeedsDax } from './features/flexDaxNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
@@ -952,6 +953,20 @@ function App() {
       }
     }
   }, [snap?.uploadTick, snap?.uploadNote, snap?.uploadOk])
+
+  // A contact another program logged into Nexus through the contact port (WSJT-X, N1MM, the
+  // S.A.T. box, FreeDV: `tempo_app::log_intake`): "Logged K1ABC from WSJT-X", once per contact.
+  // The first value is adopted: a fresh window is not a contact.
+  const intakeTickRef = useRef<number | null>(null)
+  useEffect(() => {
+    const f = snap?.freedv
+    const tick = f?.intakeTick
+    if (tick == null) return
+    if (intakeTickRef.current != null && tick !== intakeTickRef.current && f?.intakeCall && f.intakeProgram) {
+      pushToast(intakeToast(f.intakeCall, f.intakeProgram), 'success', 4000)
+    }
+    intakeTickRef.current = tick
+  }, [snap?.freedv?.intakeTick, snap?.freedv?.intakeCall, snap?.freedv?.intakeProgram])
 
   // The logbook database could not be opened at launch, so this session keeps the log in
   // log.adi. Said ONCE a session, sticky until the operator dismisses it, and never in the way
