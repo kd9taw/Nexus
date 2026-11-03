@@ -11,7 +11,8 @@
 //! unwritable folder, a filesystem without locks) leaves the window logging in for itself, as
 //! before this existed. A window already following does not fail open at once: it has seen a
 //! holder, which may still be up, so on a lock error it keeps following and tries again; only after
-//! [`BROKEN_LOCK_TRIES`] such tries with no relay file naming a holder does it log in itself. The holder runs every cluster feed, human nodes and RBN alike, under ITS
+//! [`BROKEN_LOCK_TRIES`] such tries with the relay file provably absent (not merely unreadable) does
+//! it log in itself. The holder runs every cluster feed, human nodes and RBN alike, under ITS
 //! settings: its node list and its SSID. The lock is keyed by the bare callsign, so windows set up
 //! for different calls stay independent. It lives in the base config dir, never in the shared data
 //! dir: that one can be a network folder for a multi-PC shack, and each computer there logs in for
@@ -54,6 +55,15 @@
 //! it starts the feeds (the normal start path) and becomes the new holder. That is one new login
 //! per node after at most one retry interval, with no storm. A follower that cannot reach a relay
 //! also waits [`RETRY`] between attempts.
+//!
+//! **Accepted double faults.** Each needs the lock to break AND something else to go wrong, and
+//! none is closed:
+//! - a live holder whose relay could not start has no relay file, so a follower whose lock path
+//!   then stays broken logs in beside it after [`BROKEN_LOCK_TRIES`] tries;
+//! - a holder that crashed leaves its relay file behind, so a follower whose lock path is also
+//!   broken keeps waiting until it restarts;
+//! - a window that logged in without a lease (here or in `claim`) never tries the lease again, so
+//!   once the lock path works, the next window to start takes it and logs in beside it.
 //!
 //! **Lifetime.** A holder keeps the lease while its feeds run, as the RBN feeds keep their
 //! once-latch. It lets go ([`Share::release`]) when its feeds have stopped and will not start again
@@ -608,14 +618,20 @@ impl Share {
                     // has seen another hold the lease, which may still be up. A login of its own
                     // beside that holder is the very thing the lease exists to stop, so it keeps
                     // following and tries again. A live holder always has its relay file, so only
-                    // when the lock stays unusable AND no file names a holder for
+                    // when the lock stays unusable AND the file is provably absent for
                     // [`BROKEN_LOCK_TRIES`] tries does this window log in for itself, as `claim`
                     // would have; otherwise a lock that stays broken after the holder has gone
-                    // would keep it from the cluster until it restarts.
+                    // would keep it from the cluster until it restarts. A file that is there but
+                    // cannot be read or parsed proves nothing (the usual broken lock is a folder
+                    // that cannot be read, holder alive), so it counts as a holder.
                     lease => {
                         let relay = read_relay(&self.dir, key);
+                        let gone = matches!(
+                            std::fs::metadata(relay_path(&self.dir, key)),
+                            Err(e) if e.kind() == ErrorKind::NotFound
+                        );
                         unproven = match (&lease, &relay) {
-                            (Lease::Broken(_), None) => unproven + 1,
+                            (Lease::Broken(_), None) if gone => unproven + 1,
                             _ => 0,
                         };
                         if unproven >= BROKEN_LOCK_TRIES {

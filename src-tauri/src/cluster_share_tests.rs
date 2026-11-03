@@ -861,6 +861,48 @@ fn a_live_holder_keeps_its_follower_through_a_lock_that_stays_broken() {
     b.close();
 }
 
+/// The usual way a lock breaks mid-session: the shared folder itself becomes unreadable. The live
+/// holder's relay file is still there, merely unreadable, so it is no proof the holder has gone:
+/// the follower never logs in beside it. Needs a user the folder's mode binds, so it says so and
+/// passes trivially as root (inside `unshare -r`); run it outside the namespace.
+#[cfg(unix)]
+#[test]
+fn a_live_holder_whose_folder_cannot_be_read_keeps_its_follower() {
+    use std::os::unix::fs::PermissionsExt;
+    /// Gives the folder its mode back however the test ends, so it can be cleaned up.
+    struct Restore<'a>(&'a Path);
+    impl Drop for Restore<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    let dir = scratch("unreadable");
+    let n = FakeNode::start();
+    let a = Window::open(&dir, "W1AW", &[&n]);
+    let b = Window::open(&dir, "W1AW", &[&n]);
+    assert!(until(Duration::from_secs(10), || following_connected(&b)));
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = Restore(&dir);
+    if std::fs::read_dir(&dir).is_ok() {
+        eprintln!("skipped: this user reads a mode-000 folder (root), so it cannot break the lock");
+        a.close();
+        b.close();
+        return;
+    }
+    for _ in 0..BROKEN_LOCK_TRIES + 2 {
+        b.hooks.active.store(false, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(500));
+        b.hooks.active.store(true, Ordering::SeqCst);
+        std::thread::sleep(RETRY);
+        assert_eq!(n.logins.load(Ordering::SeqCst), 1, "no second login");
+    }
+    assert_eq!(n.max_live.load(Ordering::SeqCst), 1, "never two at once");
+    assert_eq!(b.hooks.feeds_started.load(Ordering::SeqCst), 0);
+    assert!(b.share.following().is_some(), "it still follows");
+    a.close();
+    b.close();
+}
+
 #[test]
 fn a_silent_connection_gives_its_handshake_slot_back_within_a_second() {
     let dir = scratch("silent");
