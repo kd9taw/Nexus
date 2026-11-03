@@ -11,7 +11,7 @@
 //! to the choice.
 
 use std::collections::VecDeque;
-use std::net::{ToSocketAddrs, UdpSocket};
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 
 use crate::decode::Decode;
 use crate::mode::{make_mode, Mode, ModeKind, PassCarry};
@@ -142,6 +142,13 @@ pub trait SignalSource: Send {
     fn decode_a7(&mut self, req: &DecodeRequest, a7_final: bool) -> Vec<Decode> {
         let _ = a7_final;
         self.decode(req)
+    }
+
+    /// The contacts the upstream app logged since the last call (a WSJT-X companion source: each
+    /// one ADIF record from a Logged ADIF datagram, in arrival order), for the log's import.
+    /// Every other source logs nothing; this default is empty.
+    fn take_logged_adif(&mut self) -> Vec<String> {
+        Vec::new()
     }
 
     /// [`decode_a7`](SignalSource::decode_a7), telling `sink` of each decode the moment the
@@ -404,6 +411,15 @@ fn wsjtx_mode_to_kind(m: &str) -> Option<ModeKind> {
 /// [`tempo_net::wsjtx::parse_inbound`]; `Decode` messages are mapped to the
 /// unified [`Decode`] and queued, then drained each interval.
 ///
+/// The upstream app sends EVERY datagram to this one address, the contact it logs
+/// among them: a `LoggedAdif` (type 12) from this computer is kept too, for
+/// [`take_logged_adif`](SignalSource::take_logged_adif), so the contact reaches the
+/// log. Loopback only — WSJT-X's own trust model, and the sink socket's for any
+/// sender it was not pointed at — and never one under Nexus's own id
+/// ([`tempo_net::APP_ID`]): with the stock addresses Nexus's sink sends its own
+/// logged contacts to this very port. Its `QsoLogged` (type 5) twin stays
+/// ignored, so a contact is imported once.
+///
 /// Either [`bind`](WsjtxUdpSource::bind) a non-blocking UDP socket (the real
 /// path), or feed raw datagrams via
 /// [`ingest_datagram`](WsjtxUdpSource::ingest_datagram) (tests / an external
@@ -411,6 +427,8 @@ fn wsjtx_mode_to_kind(m: &str) -> Option<ModeKind> {
 pub struct WsjtxUdpSource {
     socket: Option<UdpSocket>,
     queue: VecDeque<Decode>,
+    /// The ADIF records of the contacts the upstream app logged, not yet taken.
+    logged: VecDeque<String>,
 }
 
 impl WsjtxUdpSource {
@@ -419,6 +437,7 @@ impl WsjtxUdpSource {
         Self {
             socket: None,
             queue: VecDeque::new(),
+            logged: VecDeque::new(),
         }
     }
 
@@ -430,6 +449,7 @@ impl WsjtxUdpSource {
         Ok(Self {
             socket: Some(socket),
             queue: VecDeque::new(),
+            logged: VecDeque::new(),
         })
     }
 
@@ -440,7 +460,22 @@ impl WsjtxUdpSource {
 
     /// Parse one inbound datagram; if it is a WSJT-X `Decode`, map it to the
     /// unified [`Decode`] and queue it. Returns `true` if a decode was queued.
+    /// The sender is not known here, so a logged contact is never kept: see
+    /// [`ingest_datagram_from`](Self::ingest_datagram_from).
     pub fn ingest_datagram(&mut self, bytes: &[u8]) -> bool {
+        self.ingest(bytes, None)
+    }
+
+    /// [`ingest_datagram`](Self::ingest_datagram) for a datagram `from` a known
+    /// sender, as the bound socket receives it: a `LoggedAdif` from this computer,
+    /// under an id that is not Nexus's own, is kept for
+    /// [`take_logged_adif`](SignalSource::take_logged_adif). Returns `true` if a
+    /// decode was queued.
+    pub fn ingest_datagram_from(&mut self, bytes: &[u8], from: SocketAddr) -> bool {
+        self.ingest(bytes, Some(from))
+    }
+
+    fn ingest(&mut self, bytes: &[u8], from: Option<SocketAddr>) -> bool {
         match tempo_net::wsjtx::parse_inbound(bytes) {
             Some(tempo_net::wsjtx::Inbound::Decode {
                 snr,
@@ -471,6 +506,12 @@ impl WsjtxUdpSource {
                 });
                 true
             }
+            Some(tempo_net::wsjtx::Inbound::LoggedAdif { id, adif })
+                if from.is_some_and(|f| f.ip().is_loopback()) && id != tempo_net::APP_ID =>
+            {
+                self.logged.push_back(adif);
+                false
+            }
             _ => false,
         }
     }
@@ -478,19 +519,19 @@ impl WsjtxUdpSource {
     /// Drain all datagrams currently pending on the bound socket into the queue.
     fn drain_socket(&mut self) {
         // Collect first (immutable socket borrow), then parse (mutable self).
-        let mut packets: Vec<Vec<u8>> = Vec::new();
+        let mut packets: Vec<(Vec<u8>, SocketAddr)> = Vec::new();
         if let Some(sock) = &self.socket {
             let mut buf = [0u8; 4096];
             loop {
                 match sock.recv_from(&mut buf) {
-                    Ok((n, _)) => packets.push(buf[..n].to_vec()),
+                    Ok((n, from)) => packets.push((buf[..n].to_vec(), from)),
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                     Err(_) => break,
                 }
             }
         }
-        for p in packets {
-            self.ingest_datagram(&p);
+        for (p, from) in packets {
+            self.ingest_datagram_from(&p, from);
         }
     }
 }
@@ -514,5 +555,9 @@ impl SignalSource for WsjtxUdpSource {
         // The audio in `_req` is irrelevant: decodes come from the network.
         self.drain_socket();
         self.queue.drain(..).collect()
+    }
+
+    fn take_logged_adif(&mut self) -> Vec<String> {
+        self.logged.drain(..).collect()
     }
 }

@@ -2323,6 +2323,13 @@ pub struct DecodeResult {
     /// the radio loop clears its in-flight latch when a result lands, so a job that
     /// never returns one stops decoding forever.
     failed: bool,
+    /// The contacts a WSJT-X companion source received this decode (its Logged ADIF records,
+    /// [`modes::SignalSource::take_logged_adif`]): the upstream app sends them to the address the
+    /// decodes come from. They are the log's, not the decode's — an epoch change does not make a
+    /// contact stale — so the radio loop takes them ([`Self::take_logged_adif`]) before it folds
+    /// the result, and hands them to the import. A contained panic carries none: what the source
+    /// holds stays there for the next decode.
+    logged_adif: Vec<String>,
 }
 
 /// One decode a running pass has just found, on its way to the engine before the pass ends
@@ -2431,6 +2438,10 @@ impl DecodeResult {
     pub fn slot(&self) -> u64 {
         self.slot
     }
+    /// The contacts the companion source received this decode, taken (see the field).
+    pub fn take_logged_adif(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.logged_adif)
+    }
 }
 
 /// One multi-speed JS8 decode job: the due speeds' windows (each `speed.frames_needed()`
@@ -2515,6 +2526,7 @@ pub fn run_js8_multi_job(job: Js8MultiJob) -> Vec<DecodeResult> {
             epoch,
             heard_on: None,
             failed: false,
+            logged_adif: Vec::new(),
         })
         .collect()
 }
@@ -2629,6 +2641,7 @@ pub fn run_decode_job_streaming(job: DecodeJob, progress: &mut dyn DecodeProgres
                 epoch,
                 heard_on: None,
                 failed: true,
+                logged_adif: Vec::new(),
             }
         }
     }
@@ -2762,6 +2775,9 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         // and pre-existing in shape, but it must be closed before two chains transmit.
         Some(ctx) => ctx.lock().unwrap_or_else(|e| e.into_inner()).scoped(decode),
     };
+    // What the companion source received besides decodes, taken before a decoder swapped in below
+    // drops the source holding it.
+    let logged_adif = src.take_logged_adif();
     // A decoder asked for while this decode ran takes over before the lock is let go.
     // The lock on it is held until the decoder's is released, so one asked for in
     // between finds the decoder free and is swapped in by the asker instead.
@@ -2779,6 +2795,7 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         epoch,
         heard_on,
         failed: false,
+        logged_adif,
     }
 }
 

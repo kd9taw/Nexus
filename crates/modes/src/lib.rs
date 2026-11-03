@@ -528,6 +528,42 @@ mod tests {
         );
     }
 
+    /// The contact the upstream app logs (Logged ADIF, type 12) is kept for the log's import —
+    /// from this computer, and under an id that is not Nexus's own — and never becomes a decode.
+    /// Its QsoLogged (type 5) twin, a sender off this computer, Nexus's own sink heard back and a
+    /// datagram whose sender is not known are all left out.
+    #[test]
+    fn wsjtx_udp_source_keeps_a_logged_contact_from_this_computer_only() {
+        use tempo_net::wsjtx::{encode_logged_adif, encode_qso_logged, QsoLogged};
+        const RECORD: &str = "<call:5>W1ABC <mode:3>FT8 <band:3>20m <qso_date:8>20260923 \
+            <time_on:6>120015";
+        let local: std::net::SocketAddr = "127.0.0.1:50123".parse().unwrap();
+        let lan: std::net::SocketAddr = "192.168.1.20:50123".parse().unwrap();
+        let logged = encode_logged_adif("WSJT-X", RECORD);
+        let mut src = WsjtxUdpSource::new();
+        let no_audio: Vec<i16> = Vec::new();
+
+        assert!(!src.ingest_datagram_from(&logged, local), "not a decode");
+        assert!(src.decode(&DecodeRequest::full_band(&no_audio)).is_empty());
+        let kept = src.take_logged_adif();
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].contains(RECORD) && kept[0].ends_with("<EOR>"));
+        assert!(src.take_logged_adif().is_empty(), "taken once");
+
+        let qso = encode_qso_logged(
+            "WSJT-X",
+            &QsoLogged {
+                dx_call: "W1ABC",
+                ..QsoLogged::default()
+            },
+        );
+        src.ingest_datagram_from(&qso, local);
+        src.ingest_datagram_from(&logged, lan);
+        src.ingest_datagram_from(&encode_logged_adif(tempo_net::APP_ID, RECORD), local);
+        src.ingest_datagram(&logged);
+        assert!(src.take_logged_adif().is_empty());
+    }
+
     /// Native and companion sources are interchangeable behind the trait object.
     #[test]
     fn sources_are_polymorphic() {
