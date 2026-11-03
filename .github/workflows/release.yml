@@ -248,8 +248,9 @@ jobs:
       # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
       # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
       # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202 or 5xx (15/30/60 s); if it still fails, the run's summary says
-      # so in a heading, not only in an annotation (1.22.0 shipped without the list unnoticed).
+      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
+      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
+      # list unnoticed).
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
           if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
@@ -519,8 +520,9 @@ jobs:
       # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
       # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
       # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202 or 5xx (15/30/60 s); if it still fails, the run's summary says
-      # so in a heading, not only in an annotation (1.22.0 shipped without the list unnoticed).
+      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
+      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
+      # list unnoticed).
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
           if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
@@ -928,8 +930,9 @@ jobs:
       # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
       # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
       # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202 or 5xx (15/30/60 s); if it still fails, the run's summary says
-      # so in a heading, not only in an annotation (1.22.0 shipped without the list unnoticed).
+      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
+      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
+      # list unnoticed).
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
           if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
@@ -1399,8 +1402,9 @@ jobs:
       # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
       # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
       # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202 or 5xx (15/30/60 s); if it still fails, the run's summary says
-      # so in a heading, not only in an annotation (1.22.0 shipped without the list unnoticed).
+      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
+      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
+      # list unnoticed).
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
           if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then

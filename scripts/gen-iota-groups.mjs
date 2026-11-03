@@ -12,8 +12,9 @@
 //
 // Retry: iota-world.org answers HTTP 202 with no file while it is rebuilding groups.json (a
 // release once built in that window and shipped without the list). A 202 or a 5xx is asked again
-// after 15 s, 30 s and 60 s; after the fourth attempt the run fails, and release.yml makes that
-// failure visible on the run's summary. Any other status fails at once.
+// after 15 s, 30 s and 60 s, and so is a network failure with no answer at all (a timeout, DNS, a
+// reset); after the fourth attempt the run fails, and release.yml makes that failure visible on
+// the run's summary. Any other status, and a file refused for its size, fails at once.
 //
 // The checks — any miss exits 1 and writes nothing, so a short or changed file never replaces
 // a copy already staged:
@@ -52,12 +53,13 @@ const REF = /^(AF|AN|AS|EU|NA|OC|SA)-\d{3}$/
 /** The waits before the second, third and fourth attempt. */
 export const RETRY_DELAYS_MS = [15_000, 30_000, 60_000]
 
-/** A status the server passes through on its own: worth asking again. */
-const passing = (status) => status === 202 || (status >= 500 && status <= 599)
+/** A failure that passes on its own: a 202 or 5xx status, or no answer at all. */
+const passing = (e) => e.network === true || e.status === 202 || (e.status >= 500 && e.status <= 599)
 
 /**
- * `fetchOnce()` until it returns the file, asking again after each of `delays` when it fails with
- * a passing status (a thrown error's `status`). Anything else fails at once.
+ * `fetchOnce()` until it returns the file, asking again after each of `delays` when it fails in a
+ * passing way: a thrown error's `status` 202 or 5xx, or `network` (no HTTP answer). Anything else
+ * fails at once.
  */
 export async function downloadWithRetry({
   fetchOnce = downloadOnce,
@@ -69,7 +71,7 @@ export async function downloadWithRetry({
     try {
       return await fetchOnce()
     } catch (e) {
-      if (!passing(e.status)) throw e
+      if (!passing(e)) throw e
       const wait = delays[attempt - 1]
       if (wait === undefined) throw new Error(`${e.message}, after ${attempt} attempts`)
       log(`gen-iota-groups: attempt ${attempt}: ${e.message}; asking again in ${wait / 1000} s`)
@@ -78,11 +80,19 @@ export async function downloadWithRetry({
   }
 }
 
+/** `e` (a fetch or body-stream failure: timeout, DNS, reset) as a network failure. */
+const unreachable = (e) =>
+  Object.assign(new Error(`the IOTA list server could not be reached (${e.cause?.code ?? e.name}: ${e.message})`), {
+    network: true,
+  })
+
 async function downloadOnce() {
   const resp = await fetch(GROUPS_URL, {
     headers: { 'User-Agent': UA },
     redirect: 'manual',
     signal: AbortSignal.timeout(60_000),
+  }).catch((e) => {
+    throw unreachable(e)
   })
   if (resp.status !== 200) {
     throw Object.assign(
@@ -94,7 +104,14 @@ async function downloadOnce() {
   if (len > MAX_BYTES) throw new Error(`the IOTA list is ${len} bytes, larger than ${MAX_BYTES}`)
   const chunks = []
   let total = 0
-  for await (const chunk of resp.body) {
+  const reader = resp.body[Symbol.asyncIterator]()
+  for (;;) {
+    // A reset or timeout part-way through the file is a network failure too; the size refusal
+    // below is not.
+    const { value: chunk, done } = await reader.next().catch((e) => {
+      throw unreachable(e)
+    })
+    if (done) break
     total += chunk.length
     if (total > MAX_BYTES) throw new Error(`the IOTA list is larger than ${MAX_BYTES} bytes`)
     chunks.push(chunk)

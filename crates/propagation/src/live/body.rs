@@ -205,6 +205,37 @@ mod tests {
         ".copy_to(",
     ];
 
+    /// Reads through `std::io::Read`, which a blocking reqwest response implements. Uncapped unless
+    /// the statement bounds them with `.take(`; one whose call is `.await`ed is tokio's AsyncRead
+    /// (a socket in a test), which a reqwest response never is.
+    const IO_READS: [&str; 3] = [".read_to_end(", ".read_to_string(", "io::copy("];
+
+    /// Whether `code` (whitespace removed) has an `IO_READS` call `p` with no `.take(` in its
+    /// statement and no `.await` on its result.
+    fn unbounded_io_read(code: &str, p: &str) -> bool {
+        code.match_indices(p).any(|(at, _)| {
+            let start = code[..at].rfind([';', '{', '}']).map_or(0, |i| i + 1);
+            let end = code[at..].find(';').map_or(code.len(), |i| at + i);
+            // The call's closing paren, then whether `.await` follows it.
+            let mut depth = 0usize;
+            let mut close = code.len();
+            for (i, c) in code[at + p.len() - 1..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = at + p.len() - 1 + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            !code[start..end].contains(".take(") && !code[close..].starts_with(".await")
+        })
+    }
+
     /// `source` with `//` comments dropped (whole-line, or trailing after ` // `, so a URL's
     /// `https://` stays) and all whitespace removed.
     fn code_of(source: &str) -> String {
@@ -223,6 +254,7 @@ mod tests {
         UNCAPPED_READS
             .into_iter()
             .filter(|p| code.contains(p))
+            .chain(IO_READS.into_iter().filter(|p| unbounded_io_read(&code, p)))
             .collect()
     }
 
@@ -242,6 +274,21 @@ mod tests {
             [".json::<"]
         );
         assert!(uncapped_reads("super::body::read_capped(resp, L, \"X\")").is_empty());
+        // CONTROLS for the `std::io::Read` route: an unbounded read, `io::copy` included, is seen;
+        // one bounded by `.take(` and a tokio socket's `.await`ed read are not.
+        assert_eq!(
+            uncapped_reads("let mut v = Vec::new();\n resp.read_to_end(&mut v)?;"),
+            [".read_to_end("]
+        );
+        assert_eq!(
+            uncapped_reads("std::io::copy(&mut resp, &mut file)?;"),
+            ["io::copy("]
+        );
+        assert!(uncapped_reads(
+            "resp.take(LIMIT + 1)\n    .read_to_end(&mut body)\n    .map_err(f)?;"
+        )
+        .is_empty());
+        assert!(uncapped_reads("let _ = stream.read_to_string(&mut page).await;").is_empty());
 
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/live");
         let mut checked = 0;

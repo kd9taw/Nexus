@@ -3,7 +3,8 @@
 // iota-world.org has answered HTTP 202 with no file while it is (re)building groups.json, and a
 // release built in that window shipped without the list. A 202 or a 5xx is the server's own
 // passing state, so the download asks again after a growing wait; anything else (a 404, a
-// redirect) is an answer that will not change and fails at once. A fake fetch and sleep stand in
+// redirect) is an answer that will not change and fails at once. A network failure with no answer
+// at all (a timeout, DNS, a reset) is retried the same way. A fake fetch and sleep stand in
 // for the network and the clock.
 //
 // Run: node --test scripts/gen-iota-groups.test.mjs
@@ -13,12 +14,18 @@ import assert from 'node:assert/strict'
 
 import { downloadWithRetry, RETRY_DELAYS_MS } from './gen-iota-groups.mjs'
 
-/** A fetch answering `statuses` in turn (200 carries `body`), and the calls it saw. */
+/**
+ * A fetch answering `statuses` in turn (200 carries `body`), and the calls it saw. `'net'` is a
+ * network failure with no HTTP answer (a timeout, DNS, a reset), marked as the script marks one;
+ * `'big'` is a refusal of the file itself (larger than the limit), which carries no status either.
+ */
 function fakeFetch(statuses, body = '[]') {
   const calls = []
   const fetchOnce = async () => {
     const status = statuses[calls.length]
     calls.push(status)
+    if (status === 'net') throw Object.assign(new Error('the IOTA list server could not be reached (fetch failed)'), { network: true })
+    if (status === 'big') throw new Error('the IOTA list is larger than 2097152 bytes')
     if (status !== 200) throw Object.assign(new Error(`HTTP ${status}`), { status })
     return Buffer.from(body)
   }
@@ -80,5 +87,31 @@ test('CONTROL: a file on the first ask is used with no wait', async () => {
   const { sleep, waits } = fakeSleep()
   await downloadWithRetry({ fetchOnce, sleep, log: quiet })
   assert.deepEqual(calls, [200])
+  assert.deepEqual(waits, [])
+})
+
+test('a network failure with no HTTP answer is asked again, with the same waits and the same end', async () => {
+  const { fetchOnce, calls } = fakeFetch(['net', 202, 200])
+  const { sleep, waits } = fakeSleep()
+  await downloadWithRetry({ fetchOnce, sleep, log: quiet })
+  assert.deepEqual(calls, ['net', 202, 200])
+  assert.deepEqual(waits, RETRY_DELAYS_MS.slice(0, 2))
+
+  const attempts = RETRY_DELAYS_MS.length + 1
+  const dead = fakeFetch(Array(attempts + 5).fill('net'))
+  const slept = fakeSleep()
+  await assert.rejects(
+    downloadWithRetry({ fetchOnce: dead.fetchOnce, sleep: slept.sleep, log: quiet }),
+    new RegExp(`could not be reached.*after ${attempts} attempts`),
+  )
+  assert.equal(dead.calls.length, attempts)
+  assert.deepEqual(slept.waits, RETRY_DELAYS_MS)
+})
+
+test('CONTROL: a refused file (no status, not a network failure) fails at once', async () => {
+  const { fetchOnce, calls } = fakeFetch(['big', 200])
+  const { sleep, waits } = fakeSleep()
+  await assert.rejects(downloadWithRetry({ fetchOnce, sleep, log: quiet }), /larger than/)
+  assert.deepEqual(calls, ['big'])
   assert.deepEqual(waits, [])
 })

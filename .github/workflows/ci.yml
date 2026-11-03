@@ -729,8 +729,8 @@ jobs:
       - name: Test the TLE mirror generator
         run: node --test scripts/gen-tles.test.mjs
 
-      # The release's IOTA staging step leans on this script's retry of a 202/5xx; a regression
-      # would ship installers without the island list.
+      # The release's IOTA staging step leans on this script's retry of a 202/5xx or a network
+      # failure; a regression would ship installers without the island list.
       - name: Test the IOTA list download retry
         run: node --test scripts/gen-iota-groups.test.mjs
 

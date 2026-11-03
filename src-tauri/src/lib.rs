@@ -70489,6 +70489,37 @@ mod fetch_cap_tests {
         ".copy_to(",
     ];
 
+    /// Reads through `std::io::Read`, which a blocking reqwest response implements. Uncapped unless
+    /// the statement bounds them with `.take(`; one whose call is `.await`ed is tokio's AsyncRead
+    /// (a socket in a test), which a reqwest response never is.
+    const IO_READS: [&str; 3] = [".read_to_end(", ".read_to_string(", "io::copy("];
+
+    /// Whether `code` (whitespace removed) has an `IO_READS` call `p` with no `.take(` in its
+    /// statement and no `.await` on its result.
+    fn unbounded_io_read(code: &str, p: &str) -> bool {
+        code.match_indices(p).any(|(at, _)| {
+            let start = code[..at].rfind([';', '{', '}']).map_or(0, |i| i + 1);
+            let end = code[at..].find(';').map_or(code.len(), |i| at + i);
+            // The call's closing paren, then whether `.await` follows it.
+            let mut depth = 0usize;
+            let mut close = code.len();
+            for (i, c) in code[at + p.len() - 1..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = at + p.len() - 1 + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            !code[start..end].contains(".take(") && !code[close..].starts_with(".await")
+        })
+    }
+
     /// The uncapped reads in `source`: `//` comments dropped (whole-line, or trailing after
     /// ` // `, so a URL's `https://` stays) and whitespace removed.
     fn uncapped_reads(source: &str) -> Vec<&'static str> {
@@ -70502,6 +70533,28 @@ mod fetch_cap_tests {
         UNCAPPED_READS
             .into_iter()
             .filter(|p| code.contains(p))
+            .chain(IO_READS.into_iter().filter(|p| unbounded_io_read(&code, p)))
+            .collect()
+    }
+
+    /// Names `source` gives a reqwest type of its own: `use reqwest::…::Response as Reply;` or
+    /// `type Reply = reqwest::…;`. A file that uses one of them speaks HTTP too.
+    fn reqwest_aliases(source: &str) -> Vec<String> {
+        source
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.contains("reqwest"))
+            .filter_map(|l| {
+                let name =
+                    if let Some(rest) = l.strip_prefix("type ").or(l.strip_prefix("pub type ")) {
+                        rest.split(['=', '<', ' ']).next()?
+                    } else {
+                        l.rsplit_once(" as ")?.1
+                    };
+                let name = name.trim_end_matches([';', ',', '}']).trim();
+                (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                    .then(|| name.to_string())
+            })
             .collect()
     }
 
@@ -70516,6 +70569,27 @@ mod fetch_cap_tests {
             [".text()"]
         );
         assert!(uncapped_reads("body::read_capped(resp, L, \"X\")").is_empty());
+        // CONTROLS for the `std::io::Read` route: an unbounded read, `io::copy` included, is seen;
+        // one bounded by `.take(` and a tokio socket's `.await`ed read are not.
+        assert_eq!(
+            uncapped_reads("let mut v = Vec::new();\n resp.read_to_end(&mut v)?;"),
+            [".read_to_end("]
+        );
+        assert_eq!(
+            uncapped_reads("std::io::copy(&mut resp, &mut file)?;"),
+            ["io::copy("]
+        );
+        assert!(uncapped_reads(
+            "resp.take(LIMIT + 1)\n    .read_to_end(&mut body)\n    .map_err(f)?;"
+        )
+        .is_empty());
+        assert!(uncapped_reads("let _ = stream.read_to_string(&mut page).await;").is_empty());
+        // CONTROLS for the alias rule.
+        assert_eq!(
+            reqwest_aliases("use reqwest::blocking::Response as Reply;\npub type Wire = reqwest::blocking::Client;"),
+            ["Reply", "Wire"]
+        );
+        assert!(reqwest_aliases("use std::io::Read as _;").is_empty());
 
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).expect("dir") {
@@ -70532,10 +70606,31 @@ mod fetch_cap_tests {
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
             &mut files,
         );
+        let sources: Vec<(std::path::PathBuf, String)> = files
+            .into_iter()
+            .map(|path| {
+                let source = std::fs::read_to_string(&path).expect("source");
+                (path, source)
+            })
+            .collect();
+        let aliases: Vec<String> = sources
+            .iter()
+            .flat_map(|(_, source)| reqwest_aliases(source))
+            .collect();
+        let speaks_http = |source: &str| {
+            source.contains("reqwest")
+                || aliases.iter().any(|a| {
+                    source.match_indices(a.as_str()).any(|(i, _)| {
+                        let word =
+                            |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+                        !word(source[..i].chars().next_back())
+                            && !word(source[i + a.len()..].chars().next())
+                    })
+                })
+        };
         let mut checked = 0;
-        for path in files {
-            let source = std::fs::read_to_string(&path).expect("source");
-            if !source.contains("reqwest::") {
+        for (path, source) in &sources {
+            if !speaks_http(source) {
                 continue;
             }
             // This scan's own patterns.
