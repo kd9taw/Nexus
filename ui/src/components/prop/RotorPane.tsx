@@ -450,7 +450,7 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
           </div>
           {elRange && (
             <div
-              className="rotor-el mono"
+              className={stale ? 'rotor-el mono stale' : 'rotor-el mono'}
               title={t('rotor.pane.el.title', { min: elRange[0], max: elRange[1] })}
             >
               {EL_PLATE} {el == null ? '—' : Math.round(el)}°

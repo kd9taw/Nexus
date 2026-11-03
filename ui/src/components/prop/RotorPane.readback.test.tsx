@@ -136,13 +136,19 @@ describe('a controller that is switched off (a tester read "Error 61" on every c
     // turned the pane to "isn't answering". Now it keeps the last reading, shown as stale.
     let n = 0
     api.readRotatorState.mockImplementation(() =>
-      Promise.resolve(n++ === 0 ? { azDeg: 213, reading: 'position' } : { azDeg: null, reading: 'notAnswering' }),
+      Promise.resolve(
+        n++ === 0
+          ? { azDeg: 213, reading: 'position', elDeg: 45, elRange: [0, 180] }
+          : { azDeg: null, reading: 'notAnswering' },
+      ),
     )
     const { container } = render(<RotorPane />)
     await waitFor(() => expect(screen.queryByText(/213°T/)).not.toBeNull())
     // The second poll misses: the bearing stays, marked stale, and the pane does not cry wolf.
     await waitFor(() => expect(container.querySelector('.rotor-az.stale')).not.toBeNull(), { timeout: 4_000 })
     expect(screen.queryByText(/213°T/)).not.toBeNull()
+    // …and on an az/el rotator (a G-5500) the elevation is kept the same way.
+    expect(container.querySelector('.rotor-el.stale')?.textContent).toBe('EL 45°')
     expect(container.querySelector('.rotor-needle.stale')).not.toBeNull()
     expect(screen.queryByText(t('rotor.pane.stale'))).not.toBeNull()
     expect(screen.queryByText(t('rotor.pane.notAnswering'))).toBeNull()

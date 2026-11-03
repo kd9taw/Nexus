@@ -312,9 +312,17 @@ impl TrackDriver {
     /// The rotator answered a re-probe: the pass has its mast back. The misses are forgiven, and
     /// nothing commanded before the give-up is assumed to still hold — the operator may have
     /// turned the mast by hand meanwhile — so the next tick commands afresh.
+    ///
+    /// ⚠️ **With the elevation offered again.** Whatever was learned about the elevation before the
+    /// link went was learned over a link that was failing; an az/el mount (a G-5500) gets its
+    /// elevation back on the first tick, and a mount that really has none says so again, twice,
+    /// and is tracked flat as before.
     pub fn answered(&mut self) {
         self.misses = 0;
         self.lost_ticks = 0;
+        self.azel_ok = true;
+        self.el_refusals = 0;
+        self.az_only_ticks = 0;
         self.last_cmd = None;
         self.last_aim = None;
     }
@@ -913,6 +921,25 @@ mod tests {
             RotStep::PointAzEl { az: 10.0, el: 20.0 }
         );
         assert!(!d.reprobe_due());
+
+        // An az/el mount that had been dropped to azimuth only before the link went gets its
+        // elevation back when the rotator answers again.
+        let mut d = TrackDriver::new(RotatorConfig::default());
+        let s = d.step(10.0, 20.0);
+        d.record(s, RotOutcome::AzOnly, 10.0, 20.0);
+        d.record(s, RotOutcome::AzOnly, 10.0, 20.0);
+        assert!(!d.azel_ok());
+        for i in 1..=MISS_LIMIT {
+            let s = d.step(10.0 + i as f64 * 5.0, 20.0);
+            d.record(s, RotOutcome::Failed, 10.0 + i as f64 * 5.0, 20.0);
+        }
+        assert!(d.gave_up());
+        d.answered();
+        assert!(d.azel_ok(), "the elevation is offered again");
+        assert_eq!(
+            d.step(40.0, 30.0),
+            RotStep::PointAzEl { az: 40.0, el: 30.0 }
+        );
     }
 
     #[test]
