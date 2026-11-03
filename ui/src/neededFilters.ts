@@ -2,6 +2,7 @@
 // Imported by NeededPanel.tsx and tested in neededFilters.test.ts.
 
 import type { NeedAlert, NeedTag } from './types'
+import { bandOk, privilegeOk, searchMatcher, stateOk } from './spotFilters'
 
 /** Need-type filter buckets surfaced in the filter bar. */
 export type NeedTypeFilter =
@@ -33,12 +34,20 @@ export interface NeededFilters {
   needTypes: NeedTypeFilter[]  // multi-select; empty = All. Never contains 'all'.
   bands: string[]              // multi-select; empty = All
   modes: ModeSet               // each mode independently on/off; default all on
+  // The Spots board's filters, by its rules (spotFilters.ts). Each OFF by default, and off for a
+  // record written before they existed, so an operator's board never hides more on upgrade.
+  licensedOnly: boolean        // "My privileges"
+  states: string[]             // US-state multi-select; empty = All
+  query: string                // the head's search box; '' = everything
 }
 
 export const DEFAULT_FILTERS: NeededFilters = {
   needTypes: [],
   bands: [],
   modes: { ...ALL_MODES_ON },
+  licensedOnly: false,
+  states: [],
+  query: '',
 }
 
 /** NeedTag → filter bucket mapping. TOTAL (`Record`, not `Partial`) on
@@ -70,7 +79,17 @@ export const NEED_TYPE_VALUES: readonly NeedTypeFilter[] = [
 
 /** True when the alert matches the given filter set (all filters AND together). */
 export function filterAlerts(alerts: NeedAlert[], filters: NeededFilters): NeedAlert[] {
+  const search = searchMatcher(filters.query)
   return alerts.filter((a) => {
+    // ---- The rules the Spots board shares (spotFilters.ts) ----
+    if (!privilegeOk(filters.licensedOnly, a.licensed)) return false
+    if (!stateOk(filters.states, a.state)) return false
+    // What a need row holds that a search can mean: call, entity, mode, band, frequency (as the
+    // Spots board's, which also has a spotter a need row does not).
+    if (search && !search([a.call, a.entity, a.mode, a.band, a.freqMhz != null ? a.freqMhz.toFixed(4) : ''])) {
+      return false
+    }
+
     // ---- Need-type multi-select (OR across the picked buckets; empty = all) ----
     if (filters.needTypes.length > 0) {
       const matches = a.tags.some((t) => {
@@ -81,9 +100,7 @@ export function filterAlerts(alerts: NeedAlert[], filters: NeededFilters): NeedA
     }
 
     // ---- Band multi-select ----
-    if (filters.bands.length > 0) {
-      if (!filters.bands.includes(a.band)) return false
-    }
+    if (!bandOk(filters.bands, a.band)) return false
 
     // ---- Mode multi-select: keep only the operator's enabled modes (an unknown mode
     // class always shows, so the board never silently swallows a need it can't classify).

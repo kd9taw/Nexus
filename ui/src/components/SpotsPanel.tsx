@@ -14,7 +14,8 @@ import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { alertsByCall, alertsForSurface, isActivityTag } from '../features/needs'
 import { CONTINENT_CODES } from '../features/dxccGeo'
-import { compileTerm, searchTerms } from '../searchQuery'
+import { bandOk, presentStates, privilegeOk, searchMatcher, stateOk } from '../spotFilters'
+import { FilterSearch, PrivilegesChip, StateChips } from './SharedFilterChips'
 import { t } from '../i18n'
 import { spotMarkWords, spotMultTag, useContestSpotMarker } from '../features/contestSpotMarks'
 import { useWatchMatch } from '../watchlist'
@@ -342,11 +343,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
     return [...set].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
   }, [spots])
   // US states present (resolved for stations heard before with a grid).
-  const availableStates = useMemo(() => {
-    const set = new Set<string>()
-    for (const s of spots) if (s.state) set.add(s.state)
-    return [...set].sort()
-  }, [spots])
+  const availableStates = useMemo(() => presentStates(spots), [spots])
 
   // Is a mode's chip lit? The view keeps the HIDDEN set, a pane naming its modes the SHOWN one.
   const modeShown = (m: string) => (allowModes ? shownModes.includes(m) : !hiddenModes.includes(m))
@@ -404,26 +401,24 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
     // that a term may now carry `*`/`?` and be matched as a whole-word pattern — `PA*` finds
     // the PA prefix here exactly as it does in the Stations list. A term without a wildcard
     // behaves as it always has, so nobody's saved habits move.
-    const terms = searchTerms(query).map(compileTerm)
+    const search = searchMatcher(query)
     // How many rows Hide worked is holding back RIGHT NOW — counted LAST, after everything else
     // the operator asked for, so the number on the chip is exactly what one click brings back.
     let worked = 0
     const filtered = spots.filter((s) => {
-      if (licensedOnly && !s.licensed) return false
+      // The privilege, band, state and search rules are the Needed board's too (spotFilters.ts).
+      if (!privilegeOk(licensedOnly, s.licensed)) return false
       if (localOnly && s.spotterLocal === false) return false
       const mode = s.submode ?? s.mode
       if (allowModes ? !shownModes.includes(mode) : hiddenModes.includes(mode)) return false
-      if (shownBands.length > 0 && !shownBands.includes(s.band)) return false
+      if (!bandOk(shownBands, s.band)) return false
       // A state filter hides spots whose state is unknown (cluster spots of unheard stations).
-      if (states.length > 0 && (!s.state || !states.includes(s.state))) return false
+      if (!stateOk(states, s.state)) return false
       // Spotted-from (#174): ANY voice on a chosen continent / in a chosen country keeps the
       // spot. A spot whose voices could not be placed matches nothing, like an unknown state.
       if (spotterConts.length > 0 && !(s.spotterConts ?? []).some((c) => spotterConts.includes(c))) return false
       if (spotterEntities.length > 0 && !(s.spotterEntities ?? []).some((e) => spotterEntities.includes(e))) return false
-      if (terms.length > 0) {
-        const hay = `${s.call} ${s.entity} ${s.spotter} ${s.mode} ${s.submode ?? ''} ${s.band} ${s.freqMhz.toFixed(4)}`.toUpperCase()
-        for (const t of terms) if (!t(hay)) return false
-      }
+      if (search && !search([s.call, s.entity, s.spotter, s.mode, s.submode ?? '', s.band, s.freqMhz.toFixed(4)])) return false
       // Worked LAST, and the rescue rides with it: a station you still need on THIS band and
       // mode stays whatever the log says, which is what makes hiding by callsign safe. So does
       // a station on your watch list — it counts as a need, worked or not (maintainer,
@@ -509,23 +504,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
         {spots.length !== rows.length && <span className="np-count np-count-filtered">{t('spots.countFiltered', { count: spots.length })}</span>}
         {/* Not in a pane: "every spot on the air" is untrue of a filtered pane. */}
         {!pane && <span className="np-hint">{t('spots.hint')}</span>}
-        <span className="np-search">
-          <input
-            type="search"
-            value={query}
-            placeholder={t('spots.search.placeholder')}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') setQuery('')
-            }}
-            aria-label={t('spots.search.label')}
-          />
-          {query && (
-            <button type="button" className="np-search-clear" onClick={() => setQuery('')} title={t('spots.search.clear')}>
-              ✕
-            </button>
-          )}
-        </span>
+        <FilterSearch query={query} onQuery={setQuery} placeholder={t('spots.search.placeholder')} label={t('spots.search.label')} />
         <button
           type="button"
           className={`np-filter-toggle${filtersOpen || hasActiveFilters ? ' active' : ''}`}
@@ -601,25 +580,13 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
             </>
           )}
           {/* US-state chips — only states we could resolve (a station heard before with a grid). */}
-          {availableStates.length > 0 && (
-            <>
-              <div className="np-filter-sep" aria-hidden="true" />
-              <div className="np-filter-group" role="group" aria-label={t('spots.filters.states.aria')}>
-                {availableStates.map((st) => (
-                  <button
-                    key={st}
-                    type="button"
-                    className={`np-chip${states.includes(st) ? ' active' : ''}`}
-                    aria-pressed={states.includes(st)}
-                    onClick={() => toggleState(st)}
-                    title={t('spots.filter.state.title', { state: st })}
-                  >
-                    {st}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
+          <StateChips
+            available={availableStates}
+            picked={states}
+            onToggle={toggleState}
+            ariaLabel={t('spots.filters.states.aria')}
+            titleFor={(st) => t('spots.filter.state.title', { state: st })}
+          />
           {/* Spotted from (#174) — continents, then countries, of the voices in this feed. */}
           {availableSpotterConts.length > 0 && (
             <>
@@ -660,15 +627,7 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
             </>
           )}
           <div className="np-filter-sep" aria-hidden="true" />
-          <button
-            type="button"
-            className={`np-chip${licensedOnly ? ' active' : ''}`}
-            aria-pressed={licensedOnly}
-            onClick={() => setLicensedOnly((v) => !v)}
-            title={t('spots.filter.privileges.title')}
-          >
-            {t('spots.filter.privileges.label')}
-          </button>
+          <PrivilegesChip on={licensedOnly} onToggle={() => setLicensedOnly((v) => !v)} title={t('spots.filter.privileges.title')} />
           {/* Locality. The count of what it is hiding rides ON the chip, so the answer to
               "where are my spots" is on screen rather than in a support thread. */}
           <button

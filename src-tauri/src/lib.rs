@@ -33125,11 +33125,89 @@ fn read_need_alerts(
             a.freq_mhz = h.freq_mhz;
             a.admitted_at = h.admitted_at;
             a.evidence = h.evidence.clone();
+            a.state = h.us_state.as_ref().map(|(state, _)| state.clone());
             alerts.push(a);
         }
         alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
     }
+    // "My privileges" on the Needed board: each row says whether the operator may transmit to it,
+    // as each Spots row does. A flag, never a drop — the gates above already keep out what the
+    // board must never show; this is the operator's chip to ask for the rest.
+    for a in &mut alerts {
+        a.licensed = need_licensed(license_class, a);
+    }
     Ok(alerts)
+}
+
+/// May the operator TRANSMIT to this need? The Spots board's `licensed` question, asked of a need
+/// row: [`tempo_app::privileges::tx_allowed`] at the row's frequency, in its mode class (CW, Phone,
+/// anything else Digital — the mapping `read_spots_with` uses). A row with no frequency is a
+/// band-level reception need, judged as Digital at the band's FT8 dial, as the digital evidence
+/// gate in [`read_need_alerts`] judges it; a band-level CW or Phone row, or a band off the plan, is
+/// allowed (fail open, never wrongly hide). The Open class is allowed everywhere.
+fn need_licensed(class: tempo_app::settings::LicenseClass, a: &propagation::NeedAlert) -> bool {
+    use tempo_app::settings::OperatingMode;
+    let mode = match a.mode.as_str() {
+        "Phone" => OperatingMode::Phone,
+        "CW" => OperatingMode::Cw,
+        _ => OperatingMode::Digital,
+    };
+    let freq = a.freq_mhz.or_else(|| {
+        (mode == OperatingMode::Digital)
+            .then(|| propagation::Band::from_label(&a.band).map(propagation::band_digital_mhz))
+            .flatten()
+    });
+    freq.is_none_or(|f| tempo_app::privileges::tx_allowed(class, f, mode))
+}
+
+#[cfg(test)]
+mod need_licensed_tests {
+    use super::need_licensed;
+    use tempo_app::settings::LicenseClass;
+
+    fn row(band: &str, mode: &str, freq: Option<f64>) -> propagation::NeedAlert {
+        serde_json::from_value(serde_json::json!({
+            "call": "LU6HL", "entity": "Argentina", "band": band, "zone": 13, "tags": ["NewBand"],
+            "priority": 50, "headline": "New band", "mode": mode, "freqMhz": freq,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_need_is_judged_by_the_tables_the_spots_board_uses() {
+        // 7.140 SSB is in the Extra-only 40 m phone segment: a General may not transmit there…
+        let phone = row("40m", "Phone", Some(7.140));
+        assert!(!need_licensed(LicenseClass::General, &phone));
+        assert!(need_licensed(LicenseClass::Extra, &phone));
+        // …and the Open class (outside the US) is never restricted, here or anywhere.
+        assert!(need_licensed(LicenseClass::Open, &phone));
+        // An FT8 row is Digital, judged at its frequency.
+        let ft8 = row("20m", "FT8", Some(14.074));
+        assert!(!need_licensed(LicenseClass::Technician, &ft8));
+        assert!(need_licensed(LicenseClass::General, &ft8));
+    }
+
+    #[test]
+    fn a_band_level_need_is_judged_at_the_digital_dial_or_kept() {
+        // No frequency: a reception-report need is digital, judged at the band's FT8 dial.
+        assert!(!need_licensed(
+            LicenseClass::Technician,
+            &row("20m", "Digital", None)
+        ));
+        assert!(need_licensed(
+            LicenseClass::Technician,
+            &row("10m", "Digital", None)
+        ));
+        // A band-level CW or Phone row, or a band off the plan, is kept: never wrongly hide.
+        assert!(need_licensed(
+            LicenseClass::Technician,
+            &row("20m", "Phone", None)
+        ));
+        assert!(need_licensed(
+            LicenseClass::Technician,
+            &row("", "Digital", None)
+        ));
+    }
 }
 
 /// Import an external ADIF logbook (deduped merge → real "needs"). Takes the
