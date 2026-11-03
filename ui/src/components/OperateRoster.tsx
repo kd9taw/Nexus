@@ -38,7 +38,7 @@ import { WatchTile } from './WatchTile'
 import { WorkedWindowSelect, workedWithin } from './WorkedWindowSelect'
 import { useWatchMatch, watchLabel } from '../watchlist'
 import { PaneCloseButton } from './panes/PaneCloseButton'
-import { CallRowMenu, isMenuKey } from './CallRowMenu'
+import { CallRowMenu, isMenuKey, useMenuFocusReturn } from './CallRowMenu'
 
 interface Props {
   /** THE PANE'S OWN ✕ (panelHost.closeProps) — the SAME setPanelState the ⊞ Panels tick
@@ -450,17 +450,23 @@ export function OperateRoster({
     selectedCall,
   ])
 
+  // #357 — the Park column takes room only while it has something to say: a station on the roster
+  // is at a park, or the operator has sorted by it (so the sort they picked stays on screen). With
+  // neither, the row keeps its old columns and its old minimum width (`.or-has-park` adds the track).
+  const showPark = sort.key === 'park' || rows.some((r) => r.park != null)
+
   // #346 — the row whose menu is open (right-click, or the Menu key / Shift+F10 on the focused row),
-  // and that row's element, to give the keyboard back to when the menu closes.
-  const [menu, setMenu] = useState<{ call: string; row: HTMLElement } | null>(null)
+  // and where the keyboard goes back to when it closes (`useMenuFocusReturn`).
+  const [menu, setMenu] = useState<{ call: string } | null>(null)
+  const menuFocus = useMenuFocusReturn('.or-row:not(.or-header)')
   const openMenu = (call: string) => (e: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
     if ('key' in e && !isMenuKey(e)) return
     e.preventDefault()
-    setMenu({ call, row: e.currentTarget })
+    menuFocus.remember(e.currentTarget)
+    setMenu({ call })
   }
   const closeMenu = () => {
-    menu?.row.focus({ preventScroll: true })
-    menu?.row.scrollIntoView?.({ block: 'nearest' })
+    menuFocus.returnFocus()
     setMenu(null)
   }
 
@@ -504,7 +510,7 @@ export function OperateRoster({
   )
 
   return (
-    <div className="operate-roster">
+    <div className={`operate-roster${showPark ? ' or-has-park' : ''}`}>
       <div className="or-filters" data-pane-grip={grip}>
         <strong>{t('operate.roster.title')}</strong>
         <span className="or-count">{rows.length}</span>
@@ -594,6 +600,8 @@ export function OperateRoster({
       </div>
       <div
         className="or-grid"
+        // Focusable from code only: where the keyboard lands when a row's menu hid the last row.
+        tabIndex={-1}
         role="grid"
         aria-label={t('operate.roster.grid.aria')}
         aria-rowcount={rows.length + 1}
@@ -607,7 +615,7 @@ export function OperateRoster({
             t('operate.roster.col.calling.title'),
           )}
           {th('need', t('operate.roster.col.need'))}
-          {th('park', t('operate.roster.col.park'), t('operate.roster.col.park.title'))}
+          {showPark && th('park', t('operate.roster.col.park'), t('operate.roster.col.park.title'))}
           {th('country', t('operate.roster.col.country'))}
           {/* Header stays "State" — the column is two letters wide and GridTracker/WSJT-X call
               it that — with the full meaning in the tooltip. */}
@@ -751,6 +759,7 @@ export function OperateRoster({
                   <RarityChip rarity={s.gridRarity} />
                 </span>
                 {/* #357 — the park or summit: the spotted reference, or the program a CQ names. */}
+                {showPark && (
                 <span
                   className={`or-park${park ? '' : ' none'}`}
                   title={
@@ -763,6 +772,7 @@ export function OperateRoster({
                 >
                   {park?.label ?? '—'}
                 </span>
+                )}
                 <span className="or-country">{s.country ?? '—'}</span>
                 {/* State or province, from the callsign (FCC index / the Canadian regional
                     numeral) or the heard grid — the same hint the needed board resolves with,

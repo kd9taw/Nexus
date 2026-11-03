@@ -38,7 +38,7 @@ import { RarityChip } from './RarityChip'
 import { azimuthLabel, azimuthTitle, azimuthTo, type LatLon } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { callCardTrigger, qrzPageOf } from './CallCard'
-import { CallRowMenu, isMenuKey } from './CallRowMenu'
+import { CallRowMenu, isMenuKey, useMenuFocusReturn } from './CallRowMenu'
 import { useWatchMatch, watchColorStyle, type WatchColor } from '../watchlist'
 
 /**
@@ -704,19 +704,19 @@ export function OperateDecodes({
     else onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
   })
 
-  // #346 — the row whose menu is open (by its entry id: one call can have many rows), and that row's
-  // element, to give the keyboard back to when the menu closes.
-  const [menu, setMenu] = useState<{ id: string; row: HTMLElement } | null>(null)
+  // #346 — the row whose menu is open (by its entry id: one call can have many rows), and where the
+  // keyboard goes back to when it closes (`useMenuFocusReturn`).
+  const [menu, setMenu] = useState<{ id: string } | null>(null)
+  const menuFocus = useMenuFocusReturn('.decode-row')
   const closeMenu = () => {
-    menu?.row.focus({ preventScroll: true })
-    menu?.row.scrollIntoView?.({ block: 'nearest' })
+    menuFocus.returnFocus()
     setMenu(null)
   }
 
   // The row handlers read the LATEST render's values through `live`, so `rowActions` can be one
   // object for the pane's lifetime and leave the memoised rows' props alone.
-  const live = useRef({ roving, handleDouble, onSelectDecode, closeMenu })
-  live.current = { roving, handleDouble, onSelectDecode, closeMenu }
+  const live = useRef({ roving, handleDouble, onSelectDecode, closeMenu, menuFocus })
+  live.current = { roving, handleDouble, onSelectDecode, closeMenu, menuFocus }
   const rowActions = useMemo<RowActions>(
     () => ({
       click: (index, d) => {
@@ -731,7 +731,8 @@ export function OperateDecodes({
         if ('key' in e && !isMenuKey(e)) return
         if (!d.from) return
         e.preventDefault()
-        setMenu({ id: d.id, row: e.currentTarget as HTMLElement })
+        live.current.menuFocus.remember(e.currentTarget as HTMLElement)
+        setMenu({ id: d.id })
       },
       closeMenu: () => live.current.closeMenu(),
       focus: (index) => live.current.roving.rowProps(index).onFocus(),
@@ -932,6 +933,8 @@ export function OperateDecodes({
 
       <div
         className="od-scroll"
+        // Focusable from code only: where the keyboard lands when a row's menu hid the last row.
+        tabIndex={-1}
         role="listbox"
         aria-label={t('operate.decodes.list.aria')}
         ref={scrollRef}

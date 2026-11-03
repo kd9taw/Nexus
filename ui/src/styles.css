@@ -8754,7 +8754,8 @@ select optgroup {
   --pota-dim: #52836a;
   --need-watch: #3f6212; /* lime — on your watch list (the WATCH tile) */
   --watch-pink: #be185d;
-  --watch-red: #b91c1c;
+  /* One step lighter than #b91c1c: a grey LoTW chip's border on a red-tinted watch row read 2.99:1 in light night. */
+  --watch-red: #c62828;
   --watch-orange: #c2410c;
   --watch-yellow: #a16207;
   --watch-cyan: #0e7490;
@@ -22964,12 +22965,9 @@ button.cq-skiptx1.on {
      `.or-need` rather than bleeding into the next column. State is a fixed two letters. */
   /* The fixed tracks hold text (state, grid, distance, bearing, SNR, age), so they grow with
      Settings ▸ Workspace ▸ Text size (#215); at Normal each is exactly its px. */
-  /* #357 — Park, after Need: a POTA reference (US-1234) at its floor, a longer SOTA summit ellipsized
-     with the whole reference in its tooltip. */
   grid-template-columns:
     minmax(calc(124px * var(--text-scale)), 1fr) minmax(calc(68px * var(--text-scale)), 0.8fr)
-    minmax(calc(105px * var(--text-scale)), 1.13fr) minmax(calc(60px * var(--text-scale)), 0.6fr)
-    minmax(calc(50px * var(--text-scale)), 0.85fr)
+    minmax(calc(105px * var(--text-scale)), 1.13fr) minmax(calc(50px * var(--text-scale)), 0.85fr)
     calc(40px * var(--text-scale)) calc(54px * var(--text-scale)) calc(56px * var(--text-scale))
     calc(48px * var(--text-scale)) calc(44px * var(--text-scale)) calc(48px * var(--text-scale));
   align-items: center;
@@ -22978,6 +22976,18 @@ button.cq-skiptx1.on {
   padding: calc(3px * var(--density-scale)) var(--space-2);
   font-size: 0.82rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+/* #357 — the Park column, after Need, only while the roster shows it (a station on it is at a park,
+   or it is sorted by Park): a POTA reference (US-1234) at its floor, a longer SOTA summit ellipsized
+   with the whole reference in its tooltip. Without it the row keeps the track list above, and with it
+   its minimum width. The same tracks otherwise, so header and data rows always agree. */
+.operate-roster.or-has-park .or-row {
+  grid-template-columns:
+    minmax(calc(124px * var(--text-scale)), 1fr) minmax(calc(68px * var(--text-scale)), 0.8fr)
+    minmax(calc(105px * var(--text-scale)), 1.13fr) minmax(calc(60px * var(--text-scale)), 0.6fr)
+    minmax(calc(50px * var(--text-scale)), 0.85fr)
+    calc(40px * var(--text-scale)) calc(54px * var(--text-scale)) calc(56px * var(--text-scale))
+    calc(48px * var(--text-scale)) calc(44px * var(--text-scale)) calc(48px * var(--text-scale));
 }
 .or-row.or-header {
   position: sticky;

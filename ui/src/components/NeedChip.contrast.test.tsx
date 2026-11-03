@@ -38,7 +38,7 @@ import { PaneFrame } from './connect/PaneFrame'
 import type { PaneContext } from './connect/paneContext'
 import type { PaneId } from '../features/connectConfig'
 import { NEED_TIER } from '../features/needs'
-import { saveWatchlist } from '../watchlist'
+import { WATCH_COLORS, saveWatchlist } from '../watchlist'
 import { SKINS } from '../features/skins'
 import {
   BASE_MODES,
@@ -794,6 +794,39 @@ describe('a need chip reads in every theme, wherever it sits', () => {
     expect(TINTED_ROWS.filter((n) => !chips.some((w) => isLead(w) && rowNeedOf(w) === n)), 'tinted rows with no lead chip').toEqual([])
     expect(TINTED_ROWS, 'the tinted rows').toEqual(['need-band', 'need-confirm', 'need-entity', 'need-grid', 'need-iota', 'need-mode', 'need-pota', 'need-state', 'need-watch', 'need-zone'])
   }, 240_000)
+
+  // #299 — A WATCH ENTRY'S OWN COLOUR, STACKED. An operator can paint a watched call pink, red, orange, yellow, cyan or
+  // violet instead of the lime; the entry's mark re-points --need-watch at that colour (`watchColorStyle`). Every check
+  // above is run again here, at the same floors, for each colour: on the WATCH chip wherever it sits (a selected or
+  // worked roster row, the row being worked, a selected or worked card, the Needed board, Spots) and for every chip on a
+  // Band Activity row tinted in the watch colour (its own outline chip, and another need's chip stacked on the tint). The
+  // colour is set on the root here, which reaches every one of those as the inline style does.
+  const WATCH_ROW = (w: Chip) => w.cls === 'watch' || rowNeedOf(w) === 'need-watch'
+  it('every palette colour reads like the lime does: the word and the border, on every row that tints, selects or dims', () => {
+    const watchy = chips.filter(WATCH_ROW)
+    expect(watchy.filter((w) => w.cls === 'watch').length, 'WATCH chips measured').toBeGreaterThan(10)
+    expect(watchy.filter((w) => rowNeedOf(w) === 'need-watch' && w.cls !== 'watch').length, 'chips on a watched row').toBeGreaterThan(5)
+    const low: string[] = []
+    for (const colour of WATCH_COLORS) {
+      const rules = parseRules(sheet('styles.css') + '\n' + sheet('cockpit-panes.css') + `\n:root { --need-watch: var(--watch-${colour}); }`)
+      for (const w of watchy)
+        for (const mode of [...LIGHT, ...DARK]) {
+          const dark = DARK.includes(mode)
+          const word = wordOf(rules, mode, w)
+          const wordFloor = !dark
+            ? 4.5
+            : isNight(mode)
+              ? tintsOrDims(w) || NIGHT_TINTS.some(([, is]) => w.chain.some(is)) ? 4.4 : 4.5
+              : dipOf(w) === "a worked station's card" ? 4.25 : tintsOrDims(w) ? 4.3 : 4.5
+          if (word.ratio < wordFloor) low.push(`${colour}: ${w.what} ${mode}: ${hex(word.fg)} on ${hex(word.bg)} = ${word.ratio.toFixed(2)}:1`)
+          const e = edgeOf(rules, mode, w)
+          if (!e) continue
+          const edgeFloor = dipOf(w) ? (dark ? 2.6 : 2.7) : dark && rowNeedOf(w) != null && !isLead(w) ? 2.6 : 3
+          if (e.ratio < edgeFloor) low.push(`${colour}: ${w.what} ${mode}: the border ${hex(e.c)} on ${hex(e.under)} = ${e.ratio.toFixed(2)}:1`)
+        }
+    }
+    expect(low).toEqual([])
+  }, 480_000)
 
   // POTA AND SOTA (operator, 2026-09-30: "SOTA/POTA's fixed colours give way"): a fixed green and purple, set for the
   // Needed board's chips, overrode the theme's own in the dark themes. Each chip now takes the theme's colour in every theme.

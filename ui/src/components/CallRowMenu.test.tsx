@@ -236,3 +236,38 @@ describe('#346 the menu is display only and leaves the row’s own gestures alon
     expect(rosterRow('W1AW'), 'still hidden after the hour').not.toBeNull()
   })
 })
+
+// THE KEYBOARD KEEPS ITS PLACE AFTER A HIDE. The menu used to hand focus back to its row, and a hide
+// takes that row away, so focus fell to <body> and a keyboard user was thrown out of the list. Now
+// it lands on the row that took the hidden one's place, the last row when it was the last, or the
+// list itself when no row is left. The control: a choice that keeps the row puts focus back on it.
+describe('#346 focus after the menu closes', () => {
+  for (const pane of PANES) {
+    const listOf = () =>
+      document.querySelector(pane.name === 'Call Roster' ? '.or-grid' : '.od-scroll') as HTMLElement
+
+    it(`${pane.name}: after a hide, focus is on the row that took its place, not on <body>`, async () => {
+      pane.mount()
+      const first = pane.row('W1AW')!
+      first.focus()
+      await choose(first, /Hide on every band/, /For 1 hour/)
+      await waitFor(() => expect(pane.row('W1AW')).toBeNull())
+      await waitFor(() => expect(document.activeElement).toBe(pane.row('DL1ABC')))
+    })
+
+    it(`${pane.name}: hiding the only row left puts focus on the list itself`, async () => {
+      pane.mount()
+      await choose(pane.row('W1AW')!, /Hide on every band/, /For 1 hour/)
+      await waitFor(() => expect(document.activeElement).toBe(pane.row('DL1ABC')))
+      await choose(pane.row('DL1ABC')!, /Hide on every band/, /For 1 hour/)
+      await waitFor(() => expect(pane.row('DL1ABC')).toBeNull())
+      await waitFor(() => expect(document.activeElement).toBe(listOf()))
+    })
+
+    it(`${pane.name}: the control — a choice that keeps the row puts focus back on it`, async () => {
+      pane.mount()
+      await choose(pane.row('W1AW')!, /Add to watch list/)
+      await waitFor(() => expect(document.activeElement).toBe(pane.row('W1AW')))
+    })
+  }
+})

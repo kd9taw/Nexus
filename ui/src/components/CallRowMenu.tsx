@@ -18,6 +18,7 @@
 // ⚠️ Migrated from birth (i18n/hardcoded-strings.test.ts): every word arrives from the catalog; the
 // callsign, the band and the country are data.
 import * as RM from '@radix-ui/react-dropdown-menu'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { Entries, type Js8MenuEntry } from './Js8ListMenu'
 import { addCallToWatchlist, exactCallEntry, loadWatchlist, removeWatchEntry } from '../watchlist'
@@ -32,6 +33,49 @@ export function isMenuKey(e: { key: string; shiftKey: boolean }): boolean {
 }
 
 const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
+
+/**
+ * Where the keyboard goes when a row's menu closes: back to the row, or — when the choice took the
+ * row away (a hide) — to the row that now stands in its place, else the last row, else the list
+ * itself. Without this, focus fell to <body> after "Hide…" and a keyboard user lost their place.
+ *
+ * `remember(row)` when the menu OPENS (the row, its list and its place in it — by the time the menu
+ * closes a hide may already have taken the row out of the list); `returnFocus()` when it closes. The
+ * move happens after the render that follows, when it is known whether the row is still there.
+ * `rowSelector` picks the list's rows inside the row's parent; the parent must be focusable
+ * (tabIndex -1) for the empty-list case.
+ */
+export function useMenuFocusReturn(rowSelector: string): { remember: (row: HTMLElement) => void; returnFocus: () => void } {
+  const opened = useRef<{ row: HTMLElement; list: HTMLElement | null; index: number } | null>(null)
+  const pending = useRef(false)
+  const [asked, setAsked] = useState(0)
+  useEffect(() => {
+    const p = opened.current
+    if (!pending.current || !p) return
+    pending.current = false
+    opened.current = null
+    let target: HTMLElement | null = p.row.isConnected ? p.row : null
+    if (!target && p.list?.isConnected) {
+      const rows = [...p.list.querySelectorAll<HTMLElement>(rowSelector)]
+      target = rows[Math.min(p.index, rows.length - 1)] ?? p.list
+    }
+    target?.focus({ preventScroll: true })
+    target?.scrollIntoView?.({ block: 'nearest' })
+  }, [asked, rowSelector])
+  const remember = useCallback(
+    (row: HTMLElement) => {
+      const list = row.parentElement
+      const index = list ? [...list.querySelectorAll(rowSelector)].indexOf(row) : 0
+      opened.current = { row, list, index: Math.max(0, index) }
+    },
+    [rowSelector],
+  )
+  const returnFocus = useCallback(() => {
+    pending.current = true
+    setAsked((n) => n + 1)
+  }, [])
+  return { remember, returnFocus }
+}
 
 export function CallRowMenu({
   call,

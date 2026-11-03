@@ -13,6 +13,9 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { OperateRoster } from './OperateRoster'
 import type { NeedAlert, NeedTag, Station } from '../types'
 import { NEED_TIER } from '../features/needs'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { chainOf, parseRules, winnerAt } from '../cssCascade'
 
 vi.mock('../api', () => ({
   getDeclination: vi.fn(() => Promise.resolve(0)),
@@ -119,5 +122,88 @@ describe('#357 the Call Roster Park column', () => {
   it('the control: the default Need sort does not group the parks', () => {
     mount()
     expect(order()[0]).toBe('W1LOUD')
+  })
+})
+
+// THE COLUMN TAKES NO ROOM UNTIL IT HAS SOMETHING TO SAY. A Park track on every roster grew the row's
+// minimum width by a whole column for an operator who never hunts parks, at the 1024×768 floor where
+// the roster sits on its minimum. So the column (header, cells and grid track) appears only while a
+// station on the roster is at a park, or while the roster is sorted by Park. Measured on the cascade
+// the RENDERED roster reaches: the track list that wins on its rows, and that header and data rows
+// carry exactly as many cells as that list has tracks (so they can never fall out of line).
+
+const RULES = parseRules(readFileSync(resolve(process.cwd(), 'src', 'styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''))
+/** The winning grid-template-columns on a rendered row, split into its tracks. */
+function tracksOf(row: Element): string[] {
+  const won = winnerAt(RULES, 'dark', chainOf(row), 'grid-template-columns')
+  expect(won, 'no grid-template-columns reaches the roster row').not.toBeNull()
+  // Top-level tracks: split on whitespace outside parentheses.
+  const out: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const ch of won!.value) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) out.push(cur)
+      cur = ''
+    } else cur += ch
+  }
+  if (cur) out.push(cur)
+  return out
+}
+/** The sum of each track's px floor at Normal text — the row's minimum width before gaps. */
+const floorPx = (tracks: string[]) =>
+  tracks.reduce((sum, t) => sum + Number(/(\d+(?:\.\d+)?)px/.exec(t)?.[1] ?? 0), 0)
+
+function mountWith(stations: Station[], alerts: Map<string, NeedAlert[]>, sort?: { key: 'park' | 'need'; dir: 'asc' | 'desc' }) {
+  return render(
+    <OperateRoster
+      stations={stations}
+      myGrid="EN52"
+      currentSlot={SLOT}
+      needByCall={new Map()}
+      needAlertsByCall={alerts}
+      band="20m"
+      feedMode="FT8"
+      selectedCall={null}
+      onSelect={() => {}}
+      onCall={() => {}}
+      sort={sort}
+      onSort={sort ? () => {} : undefined}
+    />,
+  )
+}
+const header = () => document.querySelector('.or-row.or-header')!
+const firstRow = () => document.querySelector('.or-row:not(.or-header)')!
+
+describe('#357 the Park column takes no width until it is needed', () => {
+  it('with no station at a park: no Park heading, no Park cells, and the row keeps its old ten tracks', () => {
+    mountWith([station('W1LOUD'), station('KA5ABC')], new Map())
+    expect(screen.queryByRole('button', { name: /^Park/ })).toBeNull()
+    expect(document.querySelector('.or-park')).toBeNull()
+    const tracks = tracksOf(firstRow())
+    expect(tracks).toHaveLength(10)
+    expect(header().children).toHaveLength(10)
+    expect(firstRow().children).toHaveLength(10)
+    // The floor main shipped: Call 124 · Calling 68 · Need 105 · Country 50 · State 40 · Grid 54 ·
+    // Dist 56 · Brg 48 · SNR 44 · Age 48.
+    expect(floorPx(tracks)).toBe(637)
+  })
+
+  it('with a station at a park: the Park track joins, after Need, and every row carries its cell', () => {
+    mountWith(STATIONS, ALERTS)
+    const tracks = tracksOf(firstRow())
+    expect(tracks).toHaveLength(11)
+    expect(tracks[3]).toContain('60px')
+    expect(floorPx(tracks)).toBe(697)
+    expect(header().children).toHaveLength(11)
+    for (const row of document.querySelectorAll('.or-row:not(.or-header)')) expect(row.children).toHaveLength(11)
+  })
+
+  it('sorted by Park, the column stays even when no station is at a park, so the sort stays on screen', () => {
+    mountWith([station('W1LOUD')], new Map(), { key: 'park', dir: 'asc' })
+    expect(screen.getByRole('button', { name: /^Park/ })).not.toBeNull()
+    expect(tracksOf(firstRow())).toHaveLength(11)
   })
 })
