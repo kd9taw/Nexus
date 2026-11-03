@@ -44,10 +44,10 @@
 //! [`init`]. Before that, and in a process that never calls it (tests, headless tools), [`claims`] is
 //! `None` and nothing is claimed, watched or refused: behaviour is exactly as before.
 //!
-//! ⚠️ TESTS: a test that calls [`init`] turns claims on for EVERY test in its binary (one process,
-//! one folder). Endpoints in tests are therefore pid-unique made-up paths (`/dev/nexus-…-<pid>`);
-//! a test that claimed a common name such as `serial:COM4` from a second [`Claims`] in that folder
-//! would refuse other tests' switches and make the suite order-dependent.
+//! ⚠️ TESTS never call [`init`]: it would turn claims on for EVERY test in the binary, and another
+//! test's switch would move "this window's" claim. A test that needs the engine to claim uses
+//! `claims_for_this_thread`, which only its own thread sees. Endpoints in tests are still
+//! pid-unique made-up paths (`/dev/nexus-…-<pid>`), so two test processes never meet.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions, TryLockError};
@@ -142,11 +142,47 @@ fn serial_endpoint(port: &str) -> Option<String> {
 }
 
 /// The claims of this process: the folder, the endpoint it drives with the lock's handle, and the
-/// endpoints its monitor watches with theirs.
+/// endpoints it watches with theirs.
+///
+/// Lock order, everywhere: `watching` before `held`.
 pub struct Claims {
     dir: PathBuf,
     held: Mutex<Option<(String, File)>>,
-    watching: Mutex<HashMap<String, File>>,
+    watching: Mutex<HashMap<String, Watch>>,
+}
+
+/// A shared watch lock this process holds on an endpoint.
+struct Watch {
+    _file: File,
+    /// `Some` for a radio this window LEFT (a switch, a save, a Remote selection): watched only to
+    /// cover the daemon it still ran there, for [`LEFT_GRACE`] from then. `None` for the monitor's
+    /// own watch, held while the monitor wants the radio.
+    left_at: Option<Instant>,
+}
+
+/// A claim taken but not yet this window's ([`Claims::tentative`]): the new radio's lock is held,
+/// and the old one is untouched. [`Tentative::commit`] makes the switch of claims; dropping it
+/// (the switch it was for was refused) lets go of the new radio and moves nothing.
+pub struct Tentative<'a> {
+    claims: &'a Claims,
+    /// The endpoint to drive, `None` for a radio with no endpoint (commit then lets go of the old).
+    endpoint: Option<String>,
+    /// The new radio's lock, `None` when this window already drove it or the file could not be
+    /// made (fail-open).
+    file: Option<File>,
+}
+
+impl Tentative<'_> {
+    /// The switch went through: the new radio is this window's, and the old one is let go of,
+    /// still watched for a while to cover its daemon.
+    pub fn commit(self) {
+        let Tentative {
+            claims,
+            endpoint,
+            file,
+        } = self;
+        claims.install(endpoint, file);
+    }
 }
 
 impl Claims {
@@ -181,65 +217,123 @@ impl Claims {
             .is_some_and(|(h, _)| h == endpoint)
     }
 
-    /// Take `endpoint` for this process, letting go of the one it held. `Err(REFUSAL)` when
-    /// another live window holds it; this process then keeps what it had.
-    ///
-    /// "Would block" is asked a few times over [`CLAIM_RETRY`] before it is believed: another
-    /// window's peek holds the lock shared for an instant, and must never read as a claim. A
-    /// window that really drives the radio holds it for as long as it runs.
-    ///
-    /// The window's own monitor lets go of its watch on the radio now driven here: what it
-    /// watched is this window's radio from now on, and its open must wait only for OTHER
-    /// windows' watches (`wait_unwatched` peeks every one, its own included).
-    pub fn claim(&self, endpoint: &str) -> Result<(), String> {
-        let mut held = lock(&self.held);
-        if held.as_ref().is_some_and(|(h, _)| h == endpoint) {
-            return Ok(());
-        }
+    /// The new radio's lock, taken: `Ok(Some)`, or `Ok(None)` when the file cannot be made or this
+    /// filesystem cannot lock (fail-open). "Would block" is asked again for up to `patience`
+    /// before it is believed: another window's peek holds the lock shared for an instant, and must
+    /// not read as a claim. Takes no lock of this process's.
+    fn take(&self, endpoint: &str, patience: Duration) -> Result<Option<File>, String> {
         let _ = std::fs::create_dir_all(&self.dir);
         let Ok(f) = open_for_lock(&self.file("radio", endpoint)) else {
-            return Ok(()); // cannot make the file: fail-open
+            return Ok(None);
         };
-        let until = Instant::now() + CLAIM_RETRY;
+        let until = Instant::now() + patience;
         loop {
             match f.try_lock() {
-                Ok(()) => {
-                    *held = Some((endpoint.to_string(), f)); // the old handle drops, its lock with it
-                    drop(held);
-                    lock(&self.watching).remove(endpoint);
-                    return Ok(());
-                }
+                Ok(()) => return Ok(Some(f)),
                 Err(TryLockError::WouldBlock) if Instant::now() < until => {
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 Err(TryLockError::WouldBlock) => return Err(REFUSAL.to_string()),
-                Err(_) => return Ok(()),
+                Err(_) => return Ok(None),
             }
         }
+    }
+
+    /// Make `endpoint` (with its lock `file`) this window's radio, and let go of the old one.
+    ///
+    /// The old radio is WATCHED (shared) before its lock drops, and stays watched for
+    /// [`LEFT_GRACE`]: this window's loop or monitor still runs its daemon until the next tick or
+    /// pass closes it, and another window that claims it in that moment must wait for that before
+    /// it opens (its `wait_unwatched`). This window's own watch on the new radio goes: from now on
+    /// it is this window's radio, and its open must wait only for OTHER windows' watches.
+    fn install(&self, endpoint: Option<String>, file: Option<File>) {
+        let mut watching = lock(&self.watching);
+        let mut held = lock(&self.held);
+        let old = held.as_ref().map(|(e, _)| e.clone());
+        if old.is_some() && old == endpoint {
+            return; // already this window's
+        }
+        if let Some(old) = &old {
+            if let Ok(f) = open_for_lock(&self.file("watch", old)) {
+                if f.try_lock_shared().is_ok() {
+                    watching.insert(
+                        old.clone(),
+                        Watch {
+                            _file: f,
+                            left_at: Some(Instant::now()),
+                        },
+                    );
+                }
+            }
+        }
+        *held = match (endpoint.as_ref(), file) {
+            (Some(e), Some(f)) => Some((e.clone(), f)),
+            // No endpoint (VOX, Rig None), or a lock this filesystem cannot take: nothing held.
+            _ => None,
+        }; // the old handle drops here, its lock with it
+        if let Some(e) = &endpoint {
+            watching.remove(e);
+        }
+    }
+
+    /// Take `endpoint` for this process, letting go of the one it held. `Err(REFUSAL)` when
+    /// another live window holds it; this process then keeps what it had. Patient: asks "would
+    /// block" again for up to [`CLAIM_RETRY`]. For callers that hold no lock; under the engine
+    /// lock, use [`Claims::claim_at_once`].
+    pub fn claim(&self, endpoint: &str) -> Result<(), String> {
+        self.claim_with(Some(endpoint), CLAIM_RETRY)
+    }
+
+    /// [`Claims::claim`] without waiting: for a claim made under the engine lock, which must not
+    /// sleep. A peek of another window's at that instant refuses it; the operator's own switch
+    /// therefore claims patiently BEFORE it takes the engine lock, and the engine's claim then
+    /// finds the radio already this window's.
+    pub fn claim_at_once(&self, endpoint: &str) -> Result<(), String> {
+        self.claim_with(Some(endpoint), Duration::ZERO)
     }
 
     /// Claim `endpoint`, or, for a radio with no endpoint (VOX, Rig None), let go of whatever
-    /// this process held: it no longer drives that port.
+    /// this process held: it no longer drives that port. Patient, like [`Claims::claim`].
     pub fn claim_endpoint(&self, endpoint: Option<&str>) -> Result<(), String> {
-        match endpoint {
-            Some(e) => self.claim(e),
-            None => {
-                *lock(&self.held) = None; // the handle drops, its lock with it
-                Ok(())
-            }
-        }
+        self.claim_with(endpoint, CLAIM_RETRY)
+    }
+
+    fn claim_with(&self, endpoint: Option<&str>, patience: Duration) -> Result<(), String> {
+        self.tentative(endpoint, patience).map(Tentative::commit)
+    }
+
+    /// Reserve `endpoint` without moving this window's claim yet ([`Tentative`]): for a switch that
+    /// can still be refused after the radio is reserved (a Remote selection's write boundary).
+    pub fn tentative(
+        &self,
+        endpoint: Option<&str>,
+        patience: Duration,
+    ) -> Result<Tentative<'_>, String> {
+        let file = match endpoint {
+            Some(e) if !self.holds(e) => self.take(e, patience)?,
+            _ => None,
+        };
+        // Already this window's: `file` is None and commit keeps the lock it has (`install`
+        // returns before touching it). Never a cloned handle: on Windows closing one can unlock.
+        Ok(Tentative {
+            claims: self,
+            endpoint: endpoint.map(str::to_string),
+            file,
+        })
     }
 
     /// The monitor may watch `endpoint`: true when it now holds (or already held) the shared watch,
-    /// false when another live window drives the radio. The drive is asked again after the watch
-    /// is taken, so a window that claims in between is never missed: either its open sees the
-    /// watch and waits for it, or this sees its claim and lets go.
+    /// false when another live window drives the radio, or this one does. The drive is asked again
+    /// after the watch is taken, so a window that claims in between is never missed: either its
+    /// open sees the watch and waits for it, or this sees its claim and lets go.
     pub fn watch(&self, endpoint: &str) -> bool {
-        // This window drives it: never watched, it is not another window's radio.
-        if self.holds(endpoint) {
-            return false;
-        }
+        // The `watching` lock first (the lock order), and only then whether this window drives
+        // the radio: a claim lands either before (then this sees it) or after (then the claim
+        // removes the watch this takes), never between.
         let mut watching = lock(&self.watching);
+        if self.holds(endpoint) {
+            return false; // this window drives it: never watched, it is not another window's
+        }
         let taken_now = !watching.contains_key(endpoint);
         if taken_now {
             if self.held_elsewhere(endpoint) {
@@ -255,7 +349,13 @@ impl Claims {
                 // the next pass rather than watch without the lock.
                 Err(TryLockError::WouldBlock) => return false,
             }
-            watching.insert(endpoint.to_string(), f);
+            watching.insert(
+                endpoint.to_string(),
+                Watch {
+                    _file: f,
+                    left_at: None,
+                },
+            );
         }
         if self.held_elsewhere(endpoint) {
             // A watch taken in this very call has opened nothing yet, so it goes at once. One held
@@ -267,13 +367,24 @@ impl Claims {
             }
             return false;
         }
+        // Wanted by the monitor: a radio this window left is the monitor's to cover from now on.
+        if let Some(w) = watching.get_mut(endpoint) {
+            w.left_at = None;
+        }
         true
     }
 
-    /// Let go of every watch not in `keep`. Called AFTER the monitor has closed its connections, so
-    /// a window waiting in [`Claims::wait_unwatched`] goes on only once the daemon is gone.
+    /// Let go of every watch not in `keep`, except a radio this window left less than
+    /// [`LEFT_GRACE`] ago. Called AFTER the monitor has closed its connections, so a window waiting
+    /// in [`Claims::wait_unwatched`] goes on only once the daemon is gone.
     pub fn unwatch_all_but(&self, keep: &[String]) {
-        lock(&self.watching).retain(|e, _| keep.contains(e));
+        self.unwatch_all_but_at(keep, Instant::now());
+    }
+
+    /// [`Claims::unwatch_all_but`] as of `now`.
+    pub fn unwatch_all_but_at(&self, keep: &[String], now: Instant) {
+        lock(&self.watching)
+            .retain(|e, w| keep.contains(e) || w.left_at.is_some_and(|t| now < t + LEFT_GRACE));
     }
 
     /// Wait, up to `limit`, until no OTHER window's monitor watches `endpoint`. True when none
@@ -281,7 +392,7 @@ impl Claims {
     /// limit passed, and the open goes on as it always did.
     pub fn wait_unwatched(&self, endpoint: &str, limit: Duration) -> bool {
         // Every watch is peeked, this window's own included: a claim let go of this window's own
-        // watch on the radio (`claim`), so a watch still there is another window's.
+        // watch on the radio (`install`), so a watch still there is another window's.
         let path = self.file("watch", endpoint);
         let until = Instant::now() + limit;
         // Peeked EXCLUSIVE: watches are held shared, so only an exclusive try sees one.
@@ -294,6 +405,11 @@ impl Claims {
         true
     }
 }
+
+/// How long a radio this window LEFT stays watched ([`Claims::install`]): long enough for the
+/// radio loop's next tick to tear down its daemon there, or hand it to the monitor (which then
+/// watches it as its own), even a tick held up by a slow CAT read.
+const LEFT_GRACE: Duration = Duration::from_secs(3);
 
 /// How long a claim retries "would block" before it is believed (another window's peek).
 const CLAIM_RETRY: Duration = Duration::from_millis(50);
@@ -350,7 +466,26 @@ pub fn init(dir: PathBuf) {
 
 /// This process's claims, or `None` before [`init`] (and in a process that never calls it).
 pub fn claims() -> Option<&'static Claims> {
+    #[cfg(test)]
+    if let Some(c) = THIS_THREAD.with(std::cell::Cell::get) {
+        return Some(c);
+    }
     CLAIMS.get()
+}
+
+#[cfg(test)]
+thread_local! {
+    static THIS_THREAD: std::cell::Cell<Option<&'static Claims>> = const { std::cell::Cell::new(None) };
+}
+
+/// TESTS: claims for the calling thread only, in `dir`, standing in for [`init`]'s. A test's engine
+/// runs on its own thread, so its switches claim here and nowhere else: no other test running
+/// beside it can move "this window's" claim, and nothing it claims can refuse another test.
+#[cfg(test)]
+pub fn claims_for_this_thread(dir: PathBuf) -> &'static Claims {
+    let c: &'static Claims = Box::leak(Box::new(Claims::new(dir)));
+    THIS_THREAD.with(|t| t.set(Some(c)));
+    c
 }
 
 /// Is `p` driven by another live window? False with no claims, and for a radio with no endpoint.
@@ -361,11 +496,33 @@ pub fn profile_held_elsewhere(p: &RadioProfile) -> bool {
     }
 }
 
-/// Claim `p` for this process. `Ok` with no claims, and for a radio with no endpoint.
+/// Claim `p` for this process, at once: for a claim made under the engine lock (the engine's own
+/// switch), which must not sleep. `Ok` with no claims; a radio with no endpoint lets go of the old.
 pub fn claim_profile(p: &RadioProfile) -> Result<(), String> {
+    match claims() {
+        Some(c) => c.claim_with(cat_endpoint(p).as_deref(), Duration::ZERO),
+        None => Ok(()),
+    }
+}
+
+/// [`claim_profile`], patiently ([`CLAIM_RETRY`]): for a caller that holds no lock.
+pub fn claim_profile_patiently(p: &RadioProfile) -> Result<(), String> {
     match claims() {
         Some(c) => c.claim_endpoint(cat_endpoint(p).as_deref()),
         None => Ok(()),
+    }
+}
+
+/// Reserve `p` for this process without moving the claim yet ([`Claims::tentative`]). `None` with
+/// no claims set up. At once when `patient` is false (under the engine lock).
+pub fn tentative_profile(
+    p: &RadioProfile,
+    patient: bool,
+) -> Result<Option<Tentative<'static>>, String> {
+    let patience = if patient { CLAIM_RETRY } else { Duration::ZERO };
+    match claims() {
+        Some(c) => c.tentative(cat_endpoint(p).as_deref(), patience).map(Some),
+        None => Ok(None),
     }
 }
 
@@ -694,6 +851,78 @@ mod tests {
             ui.contains(&format!("'{REFUSAL}'")),
             "ui/src/radioRefusal.ts must carry REFUSAL exactly"
         );
+    }
+
+    /// M1 (review 3): a claim taken tentatively and never committed (the switch it was for was
+    /// refused, e.g. at the write boundary) leaves the window's claim exactly where it was, and the
+    /// new radio free. Committed, it moves.
+    #[test]
+    fn a_tentative_claim_moves_nothing_until_it_is_committed() {
+        let dir = temp_dir("tentative");
+        let me = Claims::new(dir.clone());
+        let other = Claims::new(dir.clone());
+        me.claim("serial:COM4").unwrap();
+        let t = me.tentative(Some("serial:COM8"), Duration::ZERO).unwrap();
+        assert!(me.holds("serial:COM4"), "still on the radio it drives");
+        assert!(
+            other.held_elsewhere("serial:COM8"),
+            "the new radio is reserved meanwhile"
+        );
+        drop(t); // the switch was refused
+        assert!(me.holds("serial:COM4"));
+        assert!(
+            soon_free(&other, "serial:COM8"),
+            "the new radio is free again"
+        );
+        assert!(other.held_elsewhere("serial:COM4"));
+        // Committed: the claim moves.
+        let t = me.tentative(Some("serial:COM8"), Duration::ZERO).unwrap();
+        t.commit();
+        assert!(me.holds("serial:COM8"));
+        assert!(!me.holds("serial:COM4"));
+        // Refused while another window holds it: nothing moves.
+        other.claim("serial:COM9").unwrap();
+        assert!(me.tentative(Some("serial:COM9"), Duration::ZERO).is_err());
+        assert!(me.holds("serial:COM8"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S1 (review 3): a window leaving a radio keeps a watch on it for a while, so another window
+    /// that claims it at once waits for this window's daemon on it to be closed before it opens.
+    #[test]
+    fn a_radio_left_stays_watched_until_its_daemon_can_be_closed() {
+        let dir = temp_dir("left");
+        let a = Claims::new(dir.clone());
+        let b = Claims::new(dir.clone());
+        a.claim("serial:COM8").unwrap();
+        a.claim("serial:COM9").unwrap(); // a switch: A's daemon on COM8 still runs for a moment
+        assert_eq!(b.claim("serial:COM8"), Ok(()), "COM8 is free to claim");
+        assert!(
+            !b.wait_unwatched("serial:COM8", Duration::ZERO),
+            "but B's open waits: A has not closed its COM8 daemon yet"
+        );
+        // A monitor pass right away keeps it (the grace covers the loop's teardown)…
+        a.unwatch_all_but(&[]);
+        assert!(!b.wait_unwatched("serial:COM8", Duration::ZERO));
+        // …and a pass after the grace lets it go.
+        a.unwatch_all_but_at(&[], Instant::now() + LEFT_GRACE + Duration::from_millis(1));
+        assert!(b.wait_unwatched("serial:COM8", Duration::from_secs(2)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// N5 (review 3): a claim made under the engine lock never sleeps: it is taken at once or
+    /// refused. (The operator's own switch claims patiently BEFORE it takes the engine lock.)
+    #[test]
+    fn a_claim_at_once_never_waits() {
+        let dir = temp_dir("atonce");
+        let me = Claims::new(dir.clone());
+        let other = Claims::new(dir.clone());
+        other.claim("serial:COM4").unwrap();
+        let started = Instant::now();
+        assert!(me.claim_at_once("serial:COM4").is_err());
+        assert!(started.elapsed() < CLAIM_RETRY, "refused at once");
+        assert_eq!(me.claim_at_once("serial:COM6"), Ok(()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     const CHILD: &str = "NEXUS_CLAIM_CHILD_DIR";

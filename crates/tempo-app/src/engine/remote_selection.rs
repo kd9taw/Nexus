@@ -592,21 +592,31 @@ impl Request {
         } else {
             None
         };
-        // The claim moves to the incoming radio BEFORE anything is written: refused (another
-        // window took it since the ready check), nothing below runs, `install` included, so the
-        // engine, the loop, the settings and the browser all stay on the radio they were on.
-        // Taken here, the engine's own switch below finds it this window's and goes ahead.
-        if let Some(incoming) = self.incoming_profile() {
-            if crate::radio_claim::claim_profile(incoming).is_err() {
-                self.refuse(Reason::HardwareUnavailable);
-                return false;
-            }
-        }
+        // The incoming radio is RESERVED before anything is written (`radio_claim::Tentative`):
+        // refused (another window took it since the ready check), nothing below runs, `install`
+        // included. The window's claim moves only once the write has begun: a refusal at
+        // `begin_write` drops the reservation, and the claim stays on the radio this window still
+        // drives and keys. At once, never sleeping: this runs under the engine lock.
+        let reserved = match self.incoming_profile() {
+            Some(incoming) => match crate::radio_claim::tentative_profile(incoming, false) {
+                Ok(reserved) => reserved,
+                Err(_) => {
+                    self.refuse(Reason::HardwareUnavailable);
+                    return false;
+                }
+            },
+            None => None,
+        };
         // Selection changes station state even when CAT setup was a no-op.
         // Never wait behind a decoder after crossing this boundary.
         if let Err(reason) = self.permission.begin_write(Instant::now()) {
             self.refuse(reason);
-            return false;
+            return false; // `reserved` drops: the claim never moved
+        }
+        // The switch is written from here on: the claim moves with it. The engine's own switch
+        // below then finds the radio already this window's.
+        if let Some(reserved) = reserved {
+            reserved.commit();
         }
         let incoming = self.settings().active_radio;
         if let Some(tune) = &self.tune {
@@ -1067,7 +1077,7 @@ mod tests {
     fn a_selection_onto_a_radio_another_window_drives_is_refused_before_anything() {
         let pid = std::process::id();
         let dir = std::env::temp_dir().join(format!("nexus-claims-engine-{pid}"));
-        crate::radio_claim::init(dir.clone());
+        crate::radio_claim::claims_for_this_thread(dir.clone());
         let (mut engine, incoming, connection) = station();
         let port = format!("/dev/nexus-remote-select-{pid}");
         let profile = engine
@@ -1135,6 +1145,89 @@ mod tests {
             }
         ));
         drop(other_window);
+    }
+
+    /// Review 3's probe, kept as the regression test: a selection refused at the write boundary
+    /// (the browser's authority lapses while another window's peek holds up the claim) leaves the
+    /// claim on the radio the window still drives, never on the radio it never switched to.
+    #[test]
+    fn a_selection_refused_at_the_write_boundary_keeps_the_claim_on_the_radio_it_drives() {
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("nexus-claims-engine-{pid}"));
+        crate::radio_claim::claims_for_this_thread(dir.clone());
+        let claims = crate::radio_claim::claims().unwrap(); // this thread's
+        let (mut engine, incoming, connection) = station();
+        let in_port = format!("/dev/nexus-rv3-in-{pid}");
+        let old_port = format!("/dev/nexus-rv3-old-{pid}");
+        for p in engine.settings.radios.iter_mut() {
+            p.rig_model = 1029;
+            p.ptt_method = "cat".into();
+            p.serial_port = if p.id == incoming {
+                in_port.clone()
+            } else {
+                old_port.clone()
+            };
+        }
+        let in_ep = format!("serial:{in_port}");
+        let old_ep = format!("serial:{old_port}");
+        claims.claim(&old_ep).unwrap();
+        let authority = Revocation::default();
+        let _completion = engine
+            .queue_remote_radio_selection(incoming, connection, permit(&authority))
+            .unwrap();
+        let request = engine.take_remote_radio_selection().unwrap();
+        // Another window peeks at the incoming radio (shared lock, 40 ms), so the claim cannot be
+        // taken at once; meanwhile the browser's authority lapses.
+        let hex: String = in_ep.bytes().map(|b| format!("{b:02x}")).collect();
+        let path = dir.join(format!("radio-{hex}.lock"));
+        let peek = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        peek.try_lock_shared().unwrap();
+        let a = authority.clone();
+        let t1 = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            drop(peek);
+        });
+        let t2 = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(15));
+            a.revoke();
+        });
+        assert!(!commit(request, &mut engine, |_| panic!("no install")));
+        t1.join().unwrap();
+        t2.join().unwrap();
+        assert_eq!(
+            engine.settings.active_radio, 0,
+            "station stayed on the old radio"
+        );
+        assert!(
+            claims.holds(&old_ep),
+            "the claim must stay on the radio still driven"
+        );
+        assert!(
+            !claims.holds(&in_ep),
+            "and not move to the radio never switched to"
+        );
+    }
+
+    /// The order the write boundary depends on, source-scanned because a refusal AT
+    /// `begin_write` cannot be produced on demand (it needs the permit to lapse in the
+    /// microseconds between the ready check and the write): the incoming radio is reserved
+    /// before the write begins, and the claim moves only after it has. (`radio_claim`'s
+    /// `a_tentative_claim_moves_nothing_until_it_is_committed` pins what a dropped reservation
+    /// leaves.)
+    #[test]
+    fn the_claim_moves_only_once_the_selection_is_written() {
+        let src = include_str!("remote_selection.rs");
+        let body = &src[src.find("    pub fn commit_with_install(").unwrap()..];
+        let body = &body[..body.find("\n    }\n").unwrap()];
+        let at = |needle: &str| body.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        assert!(at("tentative_profile(incoming, false)") < at("self.permission.begin_write("));
+        assert!(at("self.permission.begin_write(") < at("reserved.commit()"));
+        assert!(at("reserved.commit()") < at("install(engine)"));
     }
 
     #[test]

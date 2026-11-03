@@ -3084,11 +3084,23 @@ fn use_single_radio(state: State<'_, SharedEngine>) -> Result<(), String> {
 
 /// Claim this window's active radio ([`tempo_app::radio_claim`], by its port): `Err` with the
 /// operator's words when another live Nexus window runs it.
+///
+/// Patient, and OFF the engine lock: the radio is read under the lock, the claim (which may wait a
+/// moment for another window's peek) is made after it is released.
 fn claim_active_radio(engine: &SharedEngine) -> Result<(), String> {
-    claim_active_radio_of(engine_lock(engine).settings())
+    let active = {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        s.radios.iter().find(|r| r.id == s.active_radio).cloned()
+    };
+    match active {
+        Some(p) => tempo_app::radio_claim::claim_profile_patiently(&p),
+        None => Ok(()),
+    }
 }
 
-/// [`claim_active_radio`] on settings already in hand.
+/// [`claim_active_radio`] on settings already in hand, at once: for a caller that holds the engine
+/// lock (the launch's radio start, a settings save), which must not sleep.
 fn claim_active_radio_of(s: &Settings) -> Result<(), String> {
     match s.radios.iter().find(|r| r.id == s.active_radio) {
         Some(p) => tempo_app::radio_claim::claim_profile(p),
@@ -3532,11 +3544,21 @@ mod picker_radio_hold_tests {
         );
         let retry = body_of("fn retry_the_refused_radio(");
         assert!(
-            at(retry, "PICKER_HELD_RADIO.is_held()") < at(retry, "claim_active_radio_of(&now)")
-                && at(retry, "claim_active_radio_of(&now)")
-                    // (rustfmt puts `.release(` on its own line after `PICKER_HELD_RADIO`)
-                    < at(retry, ".release(|(engine, cfg)|")
-                && retry.contains("radio_config_now(cfg, &now)")
+            at(retry, "PICKER_HELD_RADIO.is_held()") < at(retry, "claim_active_radio(&engine)")
+                && at(retry, "claim_active_radio(&engine)") < at(retry, ".release(|(engine, cfg)|")
+        );
+        // N2: the settings the loop starts on are read inside the release, not before it.
+        let release_closure = &retry[at(retry, ".release(|(engine, cfg)|")..];
+        assert!(
+            at(release_closure, "engine_lock(&engine).settings().clone()")
+                < at(release_closure, "radio_config_now(cfg, &now)")
+        );
+        // N5 / M1: the switch reserves the radio off the lock and moves the claim right before
+        // the engine switches.
+        assert!(
+            at(switch, "tentative_profile(p, true)?")
+                < at(switch, "let mut eng = engine_lock(&state);")
+                && at(switch, "reserved.commit()") < at(switch, "eng.set_active_radio(id)")
         );
 
         // A settings save: refused before it is applied, and the claim moved after.
@@ -17384,6 +17406,11 @@ fn apply_and_persist(
     // the feeds bind to are the station's after the save, not the form's: with station profiles a
     // form loaded before a switch carries the call the station has left (`save_and_publish`).
     let (snap, mycall, mygrid) = save_and_publish(&state, settings, authoritative_roster)?;
+    // The claim moved under the save's lock, at once; if a peek of another window's refused that
+    // instant, it is taken now, patiently, off the lock. Already this window's: nothing to do.
+    if let Err(why) = claim_active_radio(&state) {
+        tempo_core::applog::warn("radio", &why);
+    }
     // Resolve the authoritative merged profile after the Engine commit.
     sync_rotctld(&state);
 
@@ -27165,24 +27192,37 @@ fn set_rx_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot,
 #[tauri::command(async)]
 fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
     // One radio, one window: a radio another live Nexus window runs (by its port) is refused with
-    // the operator's words, and this window stays on the radio it had. The engine's switch itself
-    // claims the new radio and refuses one taken in the meantime (`Engine::set_active_radio`).
-    let (held_elsewhere, station) = {
+    // the operator's words, and this window stays on the radio it had.
+    let (held_elsewhere, station, target) = {
         let eng = engine_lock(&state);
         let s = eng.settings();
+        let target = s.radios.iter().find(|r| r.id == id).cloned();
         (
-            s.radios
-                .iter()
-                .find(|r| r.id == id)
+            target
+                .as_ref()
                 .is_some_and(tempo_app::radio_claim::profile_held_elsewhere),
             !opens_on_the_radio_picker(s, active_profile()),
+            // A real switch (an enabled radio, not the one already active) is the only one that
+            // moves the claim; the engine leaves every other pick alone.
+            target.filter(|r| r.enabled && r.id != s.active_radio),
         )
     };
     if held_elsewhere {
         return Err(tempo_app::radio_claim::REFUSAL.to_string());
     }
+    // The new radio is RESERVED here, patiently and off the engine lock (a peek of another
+    // window's must not refuse it, and the engine lock must not wait on one), and the claim moves
+    // under the lock right before the engine switches, so the window never drives a radio it does
+    // not hold. The engine's own claim in the switch then finds it this window's.
+    let reserved = match &target {
+        Some(p) if station => tempo_app::radio_claim::tentative_profile(p, true)?,
+        _ => None,
+    };
     let snap = {
         let mut eng = engine_lock(&state);
+        if let Some(reserved) = reserved {
+            reserved.commit();
+        }
         eng.set_active_radio(id);
         persist_settings(eng.settings().clone(), |e| {
             eprintln!("tempo: set_active_radio save failed: {e}")
@@ -47175,11 +47215,16 @@ fn retry_the_refused_radio(engine: SharedEngine) {
         {
             return;
         }
-        let now = engine_lock(&engine).settings().clone();
-        if claim_active_radio_of(&now).is_ok() {
+        // Patient, off the engine lock.
+        if claim_active_radio(&engine).is_ok() {
             tempo_core::applog::info("radio", "the radio is free again; starting it");
-            PICKER_HELD_RADIO
-                .release(|(engine, cfg)| start_radio_loop((engine, radio_config_now(cfg, &now))));
+            // The settings are read again INSIDE the release, under the gate's lock: a switch
+            // between the claim and here moved the claim itself, and the loop must start on the
+            // radio the station is on now, not the one asked about a moment ago.
+            PICKER_HELD_RADIO.release(|(engine, cfg)| {
+                let now = engine_lock(&engine).settings().clone();
+                start_radio_loop((engine, radio_config_now(cfg, &now)))
+            });
             return;
         }
     });

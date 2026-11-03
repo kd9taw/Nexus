@@ -157,7 +157,7 @@ fn a_form_save_cannot_move_the_switch_policy() {
 fn a_switch_to_a_radio_another_window_drives_is_refused_and_said() {
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("nexus-claims-engine-{pid}"));
-    crate::radio_claim::init(dir.clone());
+    crate::radio_claim::claims_for_this_thread(dir.clone());
     let (mut e, vhf) = two_radios();
     let (hf_port, vhf_port) = (
         format!("/dev/nexus-route-hf-{pid}"),
@@ -206,8 +206,10 @@ fn a_switch_to_a_radio_another_window_drives_is_refused_and_said() {
     assert_eq!(e.settings.active_radio, vhf, "now the routing takes it");
     let note = e.snapshot().auto_radio_switch.expect("recorded");
     assert!(!note.refused);
-    // (That the claim moves with a switch is `radio_claim`'s own test: this process's claims are
-    // shared by every engine test running beside this one, so which one holds last is theirs.)
+    assert!(
+        claims.holds(&vhf_endpoint),
+        "and this window's claim moved to it (this test's own claims: no other test moves them)"
+    );
 }
 
 /// ONE RADIO, ONE WINDOW, for a Settings save: the operator edits the active radio's CAT port (the
@@ -217,7 +219,7 @@ fn a_switch_to_a_radio_another_window_drives_is_refused_and_said() {
 fn a_save_that_moves_the_active_radio_onto_another_windows_port_is_refused() {
     let pid = std::process::id();
     let dir = std::env::temp_dir().join(format!("nexus-claims-engine-{pid}"));
-    crate::radio_claim::init(dir.clone());
+    crate::radio_claim::claims_for_this_thread(dir.clone());
     let (mut e, _vhf) = two_radios();
     let taken = format!("/dev/nexus-save-taken-{pid}");
     let free = format!("/dev/nexus-save-free-{pid}");
