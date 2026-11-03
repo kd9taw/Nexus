@@ -75,3 +75,11 @@ OpenCC 的 `s2twp`（簡體轉繁體、台灣詞彙）打底，再蓋一張人�
 
 表格的「行／列」照原文：簡體稿用「行」指 row、「列」指 column，台灣正好相反。整批對調會撞到
 「執行」「進行」「放行」這些常用詞，所以只改了「欄標題」「欄寬」兩處。
+
+---
+
+## 致謝與授權
+
+英文原文、術語約定與檢查腳本的形式來自上游 `translations/ru`（loloka）與 `translations/pt-BR` 兩套；繁體中文譯文由 **BG5EQA**（業餘無線電呼號，GitHub [@kmno4891](https://github.com/kmno4891)）整理，借助 AI 助理逐條校對。譯文全部經人工複核，術語取捨見 [`GLOSSARY.md`](../zh/GLOSSARY.md)。
+
+譯文與套件腳本隨 Nexus 一同以 **GPL-3.0-only** 發布。
