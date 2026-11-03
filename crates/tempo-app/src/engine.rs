@@ -1406,7 +1406,7 @@ pub struct AmpLive {
 }
 use modes::{NativeSource, SignalSource, WsjtxUdpSource};
 use std::sync::{Arc, Mutex};
-use tempo_core::message::{names_whole_call, same_call, Msg};
+use tempo_core::message::{lookup_call, names_whole_call, same_call, Msg};
 
 /// The decoder ([`SignalSource`]) behind its OWN lock, independent of the engine
 /// mutex. The heavy per-slot decode runs on a persistent worker thread that locks
@@ -30454,14 +30454,17 @@ contact yourself."
         let now = now_unix_secs() as i64;
         for st in &mut s.stations {
             let up = st.call.to_ascii_uppercase();
-            match &session_b4 {
-                Some(b4) => {
-                    st.worked = b4.worked_this_session(&up);
-                    st.worked_band = b4.is_dupe(&up);
+            // Asked as the call the log knows (`lookup_call`): a station heard hashed, `<K1ABC>`,
+            // is K1ABC's B4, and the unresolved `<...>` is nobody's. The row shows it as sent.
+            match (&session_b4, lookup_call(&st.call)) {
+                (_, None) => {}
+                (Some(b4), Some(key)) => {
+                    st.worked = b4.worked_this_session(&key);
+                    st.worked_band = b4.is_dupe(&key);
                 }
-                None => {
-                    st.worked = hot.worked_call(&up);
-                    st.worked_band = hot.worked_call_band(&up, &cur_band_key, fold_mode);
+                (None, Some(key)) => {
+                    st.worked = hot.worked_call(&key);
+                    st.worked_band = hot.worked_call_band(&key, &cur_band_key, fold_mode);
                 }
             }
             // How long ago, for the roster's timed Hide worked: the spot row's rule, a contact
@@ -31014,15 +31017,14 @@ contact yourself."
                 // `worked_before()` this replaces was the exact O(rows × log)
                 // sweep the set was built to end, re-grown 240 lines below the
                 // comment explaining the 1–2 s waterfall stall it caused.
-                let worked = from
-                    .as_deref()
-                    .map(|c| hot.worked_call(&c.to_ascii_uppercase()))
-                    .unwrap_or(false);
+                // Keyed as the roster is (`lookup_call`): a hashed sender is its plain call,
+                // `<...>` no call.
+                let key = from.as_deref().and_then(lookup_call);
+                let worked = key.as_deref().is_some_and(|c| hot.worked_call(c));
                 // The stronger scope, same set as the roster above.
-                let worked_band = from
+                let worked_band = key
                     .as_deref()
-                    .map(|c| hot.worked_call_band(&c.to_ascii_uppercase(), cur_band_key, fold_mode))
-                    .unwrap_or(false);
+                    .is_some_and(|c| hot.worked_call_band(c, cur_band_key, fold_mode));
                 // New-grid (B3): the decode carries a Maidenhead grid we've never
                 // worked ON THIS BAND. Grid is present on CQ/grid forms. Per band
                 // because that is how grids are awarded (VUCC) — a grid worked on
@@ -44554,6 +44556,74 @@ mod tests {
             marks(&e, "W3CCC"),
             (true, false),
             "under the mode fold, a CW contact is not a B4 for FT8"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A station heard HASHED (`<K1ABC>`, an i3=4 frame) is the station the log knows as K1ABC:
+    /// the feed and the roster mark it B4 as they mark its plain form, and keep showing it as
+    /// sent. A compound `<PJ4/K1ABC>` is PJ4/K1ABC, whole — WSJT-X strips the brackets and
+    /// matches the call exactly, so a K1ABC contact is not a B4 for it. The unresolved `<...>`
+    /// names no station and is never marked.
+    #[test]
+    fn a_hashed_call_is_marked_worked_before_as_its_plain_call() {
+        let dir = std::env::temp_dir().join(format!("nexus-b4-hashed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_log_path(dir.join("log.adi"));
+        assert_eq!(e.settings.band, "20m", "fixture: the band scope is 20m");
+        e.log_qso(qrec("K1ABC", "20m"));
+        let rows: Vec<modes::Decode> = [
+            "PJ4/W9XYZ <K1ABC> RR73",
+            "W9XYZ <PJ4/K1ABC> RR73",
+            "PJ4/W9XYZ <...> RR73",
+        ]
+        .iter()
+        .map(|m| dec_snr(m, -8))
+        .collect();
+        e.ingest_decodes_for_test(&rows, 2);
+        let marks = |e: &Engine, call: &str| -> (bool, bool) {
+            let snap = e.snapshot();
+            let row = snap
+                .recent_decodes
+                .iter()
+                .find(|d| d.from.as_deref() == Some(call))
+                .unwrap_or_else(|| panic!("a decode row shown as sent, {call}"));
+            let st = snap
+                .stations
+                .iter()
+                .find(|s| s.call == call)
+                .unwrap_or_else(|| panic!("a roster row shown as sent, {call}"));
+            assert_eq!(
+                (st.worked, st.worked_band),
+                (row.worked, row.worked_band),
+                "{call}: the roster and the feed disagree"
+            );
+            (row.worked, row.worked_band)
+        };
+        assert_eq!(
+            marks(&e, "<K1ABC>"),
+            (true, true),
+            "<K1ABC> is K1ABC, worked on 20m"
+        );
+        assert_eq!(
+            marks(&e, "<PJ4/K1ABC>"),
+            (false, false),
+            "a compound call is its whole self: K1ABC's contact is not PJ4/K1ABC's"
+        );
+        assert_eq!(
+            marks(&e, "<...>"),
+            (false, false),
+            "an unresolved hash matches nothing"
+        );
+
+        e.log_qso(qrec("PJ4/K1ABC", "40m"));
+        assert_eq!(
+            marks(&e, "<PJ4/K1ABC>"),
+            (true, false),
+            "…and is B4 once PJ4/K1ABC is in the log (on 40m, so not this band)"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -354,6 +354,21 @@ pub fn unhash_call(s: &str) -> &str {
     }
 }
 
+/// The call a decoded token names in the LOG — the key a worked-before (B4), dupe or
+/// previous-contacts lookup asks with: [`unhash_call`], upper-cased. `<K1ABC>` is K1ABC and
+/// `<PJ4/K1ABC>` is PJ4/K1ABC, whole, never a base call: WSJT-X drops every `<`/`>` from a
+/// decode before it reads a call off it (`decodedtext.cpp`, `message_.remove
+/// (QRegularExpression {"[<>]"})`) and then matches that call exactly (`WorkedBefore::call_worked`,
+/// `call.toUpper ()`). `None` for the unresolved `<...>` (and an empty token), which names no
+/// station and must match nothing — WSJT-X's `appendWorkedB4` returns on a call with no letter
+/// or digit.
+///
+/// Display keeps the token as sent; only the lookup goes through here.
+pub fn lookup_call(token: &str) -> Option<String> {
+    let c = unhash_call(token);
+    (!c.is_empty() && c != "...").then(|| c.to_ascii_uppercase())
+}
+
 /// Resolve an i3=4 hashed token to the plain call it stands for — but ONLY when the plain form
 /// can legally go back on the air.
 ///
@@ -1520,5 +1535,22 @@ mod signed_by_tests {
         for (text, was, now, want) in cases {
             assert_eq!(signed(text, was, now).to_text(), want, "{text}");
         }
+    }
+}
+
+#[cfg(test)]
+mod lookup_call_tests {
+    use super::*;
+
+    /// A hashed call is looked up as the call inside its brackets, whole (a compound call keeps
+    /// its prefix, as WSJT-X keeps it); the unresolved `<...>` is no call at all.
+    #[test]
+    fn a_hashed_call_is_looked_up_without_its_brackets_and_an_unresolved_one_never() {
+        assert_eq!(lookup_call("<K1ABC>").as_deref(), Some("K1ABC"));
+        assert_eq!(lookup_call(" <k1abc> ").as_deref(), Some("K1ABC"));
+        assert_eq!(lookup_call("K1ABC").as_deref(), Some("K1ABC"));
+        assert_eq!(lookup_call("<PJ4/K1ABC>").as_deref(), Some("PJ4/K1ABC"));
+        assert_eq!(lookup_call("<...>"), None);
+        assert_eq!(lookup_call(""), None);
     }
 }

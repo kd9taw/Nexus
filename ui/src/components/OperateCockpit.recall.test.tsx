@@ -522,6 +522,43 @@ describe('the FT cockpit shows the callsign card for the selected station (#168)
   })
 })
 
+// ── a station heard HASHED (field report: "<CALL> is treated as a different callsign") ─────
+//
+// An i3=4 frame carries one of its calls hashed, and the decode shows it in brackets. The card
+// is about the STATION, so it asks the log, the callbook and the contest log about the call
+// inside the brackets — WSJT-X strips them before it reads a call off a decode — and an
+// unresolved `<...>` names nobody, so it gets no card and asks nothing.
+describe('a hashed call is the station inside its brackets', () => {
+  const asked = () =>
+    askLog.mock.calls.map(([q]) => q).filter((q) => q.kind === 'callHistory').map((q) => (q as { call: string }).call)
+
+  it('<W1ABC> shows W1ABC’s previous contacts and looks W1ABC up', async () => {
+    renderCockpit('<W1ABC>')
+    const c = await card()
+    expect(within(c.querySelector('.recall-log-list') as HTMLElement).getAllByRole('listitem')).toHaveLength(2)
+    expect(c.querySelector('.recall-log-list')!.textContent).toContain('40m FT8')
+    expect(asked()).toContain('W1ABC')
+    expect(asked().some((call) => call.includes('<')), 'a log question with the brackets on').toBe(false)
+    await waitFor(() => expect(qrzLookup).toHaveBeenCalledWith('W1ABC'))
+  })
+
+  it('<PJ4/W1ABC> is PJ4/W1ABC, whole — W1ABC’s contacts are not its contacts (WSJT-X matches exactly)', async () => {
+    renderCockpit('<PJ4/W1ABC>')
+    await waitFor(() => expect(asked()).toContain('PJ4/W1ABC'))
+    expect(asked()).not.toContain('W1ABC')
+    await waitFor(() => expect(document.querySelector('.recall-card')?.textContent).toContain('PJ4/W1ABC'))
+    expect(document.querySelector('.recall-card .recall-log-list'), 'W1ABC’s history on a PJ4/W1ABC card').toBeNull()
+  })
+
+  it('<...> is nobody: no card, no log question, no callbook request', async () => {
+    renderCockpit('<...>')
+    await new Promise((r) => setTimeout(r, 600))
+    expect(document.querySelector('.recall-card')).toBeNull()
+    expect(asked().filter((call) => call !== ''), 'asked the log about an unresolved hash').toEqual([])
+    expect(qrzLookup, 'a callbook request for an unresolved hash').not.toHaveBeenCalled()
+  })
+})
+
 // ── the delivery path for the contest-dupe sentence (the Sweepstakes report) ───────────
 //
 // RecallPanel.test.tsx proves the card can say either sentence; this proves the cockpit hands

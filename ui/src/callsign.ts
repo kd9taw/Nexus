@@ -38,3 +38,13 @@ export function baseCall(call: string): string {
 export function sameCall(a: string, b: string): boolean {
   return baseCall(a) === baseCall(b)
 }
+
+/** The call a decoded token names in the LOG, the key a previous-contacts, worked-before or dupe
+ *  lookup asks with: `tempo_core::message::lookup_call`. A hash's brackets dropped and nothing
+ *  else (`<K1ABC>` → `K1ABC`, `<PJ4/K1ABC>` → `PJ4/K1ABC`, never a base call), upper-cased; `''`
+ *  for the unresolved `<...>`, which names no station. Display keeps the token as sent. */
+export function lookupCall(token: string): string {
+  const t = token.trim()
+  const c = /^<.*>$/.test(t) ? t.slice(1, -1).trim() : t
+  return c === '...' ? '' : c.toUpperCase()
+}
