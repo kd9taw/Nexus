@@ -3523,3 +3523,71 @@ fn the_path_filter_sees_contacts_graded_after_it_was_first_asked() {
     );
     forget_grades();
 }
+
+/// ★ The park name column (#437) sorts in the engine on the names the station's park list gives:
+/// a two-fer by every park it knows, a contact with no name last both ways. A park list loaded,
+/// imported or downloaded later orders it again from the new names — the order kept from the old
+/// list is not handed back. With no park list read, every contact is empty and the time order
+/// stands.
+#[test]
+fn the_park_name_column_sorts_on_the_stations_park_list() {
+    let d = Dir::new("sort-park-name");
+    let mut records = adif_rows(&[
+        "<CALL:3>AAA<QSO_DATE:8>20240101<TIME_ON:6>010000<BAND:3>20m<MODE:2>CW<EOR>",
+        "<CALL:3>BBB<QSO_DATE:8>20240101<TIME_ON:6>010100<BAND:3>20m<MODE:2>CW<EOR>",
+        "<CALL:3>CCC<QSO_DATE:8>20240101<TIME_ON:6>010200<BAND:3>20m<MODE:2>CW<EOR>",
+        "<CALL:3>EEE<QSO_DATE:8>20240101<TIME_ON:6>010300<BAND:3>20m<MODE:2>CW<EOR>",
+    ]);
+    for (r, park) in records
+        .iter_mut()
+        .zip(["US-0003", "US-1234,US-0001", "US-0001", "US-9999"])
+    {
+        r.ota.their_program = Some("POTA".into());
+        r.ota.their_ref = Some(park.into());
+    }
+    let engine = on_store(&d, &records);
+    let calls = |queries: &LogQueries, asc: bool| -> Vec<String> {
+        let a = answered(
+            queries,
+            &engine,
+            json!({"kind": "page", "offset": 0, "limit": 10, "query": {"sort": "parkName",
+                "asc": asc, "search": "", "needsConfirmOnly": false}}),
+            &|_| None,
+        );
+        a["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|r| r["call"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // No park list read: every contact empty, the time order (ascending, as asked).
+    let queries = LogQueries::default();
+    assert_eq!(calls(&queries, true), ["AAA", "BBB", "CCC", "EEE"]);
+
+    let parks = crate::SharedParks::default();
+    crate::swap_parks(
+        &parks,
+        tempo_core::pota::ParkIndex::parse_csv(
+            "reference,name\nUS-0001,Acadia National Park\nUS-0003,Zion National Park\n\
+             US-1234,Lake Park\n",
+        ),
+    )
+    .unwrap();
+    let queries = LogQueries::default();
+    queries.reads_parks(&parks);
+    // Acadia, Lake Park / Acadia, Zion; US-9999 is not in the list.
+    assert_eq!(calls(&queries, true), ["CCC", "BBB", "AAA", "EEE"]);
+    assert_eq!(calls(&queries, false), ["AAA", "BBB", "CCC", "EEE"]);
+
+    // A new list: the kept order is not handed back.
+    crate::swap_parks(
+        &parks,
+        tempo_core::pota::ParkIndex::parse_csv(
+            "reference,name\nUS-0001,Yellow Park\nUS-0003,Zion National Park\n\
+             US-1234,Lake Park\nUS-9999,Badlands\n",
+        ),
+    )
+    .unwrap();
+    assert_eq!(calls(&queries, true), ["EEE", "BBB", "CCC", "AAA"]);
+}

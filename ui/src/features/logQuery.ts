@@ -64,6 +64,12 @@ export type LogSortKey =
   | 'exchSent'
   | 'exchRcvd'
   | 'notes'
+  // A satellite contact's bird and propagation mode (#423).
+  | 'satName'
+  | 'propMode'
+  // The park's name, from the station's park list (#437): the engine sorts it; this reference
+  // holds no park list, and reads every contact's as empty.
+  | 'parkName'
 
 /** What the Logbook list shows: the rows the search and the filter chip let through, in the
  *  order the sorted column gives. The same four fields identify an order everywhere — the view,
@@ -229,6 +235,12 @@ export function sortVal(q: LoggedQso, k: LogSortKey): string | number | null {
       return naturalKey(contestExchange(q, 'rcvd'))
     case 'notes':
       return notesKey(q.comment?.trim() || q.notes)
+    case 'satName':
+      return textOrNull(q.satName)
+    case 'propMode':
+      return textOrNull(q.propMode)
+    case 'parkName':
+      return null
   }
 }
 

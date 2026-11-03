@@ -1279,6 +1279,8 @@ export const JA: PartialCatalog = {
   "logbook.column.ituz": "ITUゾーン",
   "logbook.column.cont": "大陸",
   "logbook.column.distance": "距離（km）",
+  "logbook.column.parkName": "公園名",
+  "logbook.column.parkName.noList": "公園リストがまだないため、この列は空です。POTA/SOTA画面でダウンロードするか、CSVをインポートしてください。",
   "logbook.column.path": "伝搬経路",
   "logbook.column.path.title": "各交信がたどった可能性が高い経路：▸ ショート、◂ ロング、▸◂ どちらでも、? モデル外、⊕ 極冠越え。明るい表示：ログ時に判定。薄い表示：後からモデルで算出。",
   "logbook.filters.path": "伝搬経路",

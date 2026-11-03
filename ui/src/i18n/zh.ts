@@ -1712,6 +1712,8 @@ export const ZH: PartialCatalog = {
   "logbook.column.ituz": "ITU 分区",
   "logbook.column.cont": "大洲",
   "logbook.column.distance": "距离（km）",
+  "logbook.column.parkName": "公园名称",
+  "logbook.column.parkName.noList": "尚无公园列表，因此此列为空。请在 POTA/SOTA 界面下载，或导入 CSV。",
   "logbook.column.qslSentDate": "卡片已寄出",
   "logbook.column.qslRcvdDate": "卡片已收到",
   "logbook.column.lotwRcvdDate": "LoTW 已接收",

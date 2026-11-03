@@ -253,6 +253,15 @@ impl ParkIndex {
         ref_hits
     }
 
+    /// Every park's name, by reference: what the Logbook's park name column sorts on.
+    pub fn names(&self) -> std::collections::HashMap<String, String> {
+        self.parks
+            .iter()
+            .filter(|p| !p.name.is_empty())
+            .map(|p| (p.reference.clone(), p.name.clone()))
+            .collect()
+    }
+
     /// Exact lookup of one park by reference (normalized first). Unlike `search`'s prefix/substring
     /// matching, this is deterministic — used to auto-fill a park's details the moment a complete
     /// ref is typed (so `K-1234` never resolves to `K-12340`). `None` if the ref is malformed or

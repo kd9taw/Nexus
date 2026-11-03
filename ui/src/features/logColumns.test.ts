@@ -13,6 +13,7 @@ import {
   LOG_COLUMNS,
   logGridTemplate,
   logTableMinWidth,
+  parkNameText,
   renderedColumns,
   uploadMark,
   visibleColumns,
@@ -270,6 +271,11 @@ describe('the values the added columns print', () => {
       // The path is not printed from the record: its cell asks the shack for the grade
       // (components/prop/PathGradeCell.tsx, features/pathGrade).
       path: null,
+      // Not a satellite contact.
+      satName: null,
+      propMode: null,
+      // Nor is the park's name: its cell reads it from the station's park list (parkNameText).
+      parkName: null,
     })
   })
 
@@ -293,5 +299,76 @@ describe('the values the added columns print', () => {
     expect(addedColumnText(plain, 'contest')).toBeNull()
     expect(addedColumnText(plain, 'exchSent')).toBeNull()
     expect(addedColumnText(plain, 'county')).toBeNull()
+  })
+})
+
+describe('the satellite columns (#423) and the park name (#437)', () => {
+  const ADDED = ['satName', 'propMode', 'parkName']
+
+  it('are in the chooser, off by default, and each sorts', () => {
+    for (const id of ADDED) {
+      const c = LOG_COLUMNS.find((x) => x.id === id)
+      expect(c, id).toBeDefined()
+      expect(c?.base || c?.more || c?.fixed, id).toBeFalsy()
+      expect(c?.sort, id).toBe(id)
+    }
+    for (const id of ADDED) expect(ids(DEFAULT_LOG_COLUMNS)).not.toContain(id)
+    expect(ids(legacyLogColumns(true)).filter((id) => ADDED.includes(id))).toEqual([])
+  })
+
+  it('an old saved choice, an old saved order among them, loads without them, and each turns on', () => {
+    const old = { shown: ['iota'], hidden: ['freq'], widths: { country: 210 } }
+    const got = clampLogColumns(old, 1366)
+    expect(got).toStrictEqual(old)
+    for (const id of ADDED) expect(ids(got)).not.toContain(id)
+    const oldOrder = clampLogColumns({ ...old, order: ['notes', 'call', 'country'] }, 1366)
+    for (const id of ADDED) expect(ids(oldOrder)).not.toContain(id)
+    let on = got
+    for (const id of ADDED) on = withColumnShown(on, id, true)
+    expect(on.shown).toEqual(['iota', ...ADDED])
+    expect(ids(on)).toEqual(expect.arrayContaining(ADDED))
+    expect(tracksOf(template(on))).toHaveLength(ids(on).length)
+    // …and back off, to the choice it was.
+    let off = on
+    for (const id of ADDED) off = withColumnShown(off, id, false)
+    expect(off).toStrictEqual(old)
+  })
+
+  it('print the satellite and the propagation mode as the contact keeps them', () => {
+    const sat = { call: 'RL1F', ota: {}, satName: ' RS-44 ', propMode: 'SAT' } as unknown as LoggedQso
+    expect(addedColumnText(sat, 'satName')).toBe('RS-44')
+    expect(addedColumnText(sat, 'propMode')).toBe('SAT')
+    const plain = { call: 'RL1F', satName: '  ', propMode: null } as unknown as LoggedQso
+    expect(addedColumnText(plain, 'satName')).toBeNull()
+    expect(addedColumnText(plain, 'propMode')).toBeNull()
+  })
+
+  describe('the park name, read from the park list', () => {
+    const LIST: Record<string, string> = { 'US-0001': 'Acadia National Park', 'US-1234': 'Lake Park', 'K-0005': 'Old Style Park' }
+    const nameOf = (ref: string) => LIST[ref] ?? null
+    const at = (ota: LoggedQso['ota']) => parkNameText({ call: 'K1ABC', ota } as unknown as LoggedQso, nameOf)
+
+    it('names the park the Park column shows: theirs, else mine', () => {
+      expect(at({ theirProgram: 'POTA', theirRef: 'US-0001' })).toBe('Acadia National Park')
+      expect(at({ myProgram: 'POTA', myRef: 'US-1234' })).toBe('Lake Park')
+      // Theirs first, as the Park column prints it.
+      expect(at({ theirProgram: 'POTA', theirRef: 'US-0001', myProgram: 'POTA', myRef: 'US-1234' })).toBe('Acadia National Park')
+      // No program recorded reads as POTA, as the Park column's hover does; case and spaces do not matter.
+      expect(at({ theirRef: ' us-0001 ' })).toBe('Acadia National Park')
+    })
+
+    it('names every park of a two-fer it knows, in the order logged', () => {
+      expect(at({ theirProgram: 'POTA', theirRef: 'US-1234,US-0001' })).toBe('Lake Park / Acadia National Park')
+      expect(at({ theirProgram: 'POTA', theirRef: 'US-1234; US-9999 ;US-1234' })).toBe('Lake Park')
+    })
+
+    it('is empty with no reference, an unknown one, or a summit', () => {
+      expect(at(undefined)).toBeNull()
+      expect(at({})).toBeNull()
+      expect(at({ theirProgram: 'POTA', theirRef: 'US-9999' })).toBeNull()
+      // SOTA has no name list: a summit is never looked up, even one the list happens to hold.
+      expect(at({ theirProgram: 'SOTA', theirRef: 'K-0005' })).toBeNull()
+      expect(at({ theirProgram: 'SOTA', theirRef: 'W7A/MN-001', myProgram: 'POTA', myRef: 'US-1234' })).toBeNull()
+    })
   })
 })
