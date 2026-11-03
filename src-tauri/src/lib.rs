@@ -17086,6 +17086,25 @@ fn moon_drives_elevation(limits: Option<&tempo_audio::rotator::Limits>) -> bool 
         .is_some()
 }
 
+/// Is a tracker steering the mast right now — a Moon follow, or a pass prepositioning or tracking?
+/// An ARMED pass (waiting for AOS, the rotor left to the operator) is not.
+fn tracker_steering() -> bool {
+    moon_track_now().is_some()
+        || SAT_TRACK
+            .lock()
+            .map(|g| g.as_ref().is_some_and(|t| t.state != "armed"))
+            .unwrap_or(false)
+}
+
+/// End the tracker that is steering the mast, as Stop does (a pass hands its dial back), and leave
+/// an armed pass armed: a manual point is an HF move, and the armed phase is exactly when the
+/// operator has the rotor for HF.
+fn disarm_steering_tracker(engine: &SharedEngine) {
+    if tracker_steering() {
+        let _ = disarm_sat_track(engine);
+    }
+}
+
 /// Take the mast for the Moon: a live pass is disarmed exactly as Stop disarms it (its dial
 /// handed back), then the Moon gets the next generation and its first badge.
 fn arm_moon_track(engine: &SharedEngine, elevation: bool) -> (u64, MoonTrackDto) {
@@ -23973,6 +23992,30 @@ fn external_rotctld_note(was: Option<&str>, now: Option<&str>) -> Option<String>
     }
 }
 
+/// The two copies of "rotctld could not start", with Hamlib's own words (`said`): the Connections
+/// log's, on screen only and verbatim, and the diagnostic log's, which is built to be sent to a
+/// stranger and so has a network address in the Port box masked (`tempo_audio::rotator::mask_port`).
+fn rotctld_start_failed_lines(params: &RotctldParams, said: &[String]) -> (String, String) {
+    let screen = tempo_audio::service::with_daemon_error(
+        format!(
+            "rotctld could not start for model {} on {} @ {} — the rotator will not answer. Is \
+             the controller switched on and plugged in? Nexus keeps trying every {} s. If it is, \
+             check the port and that the baud matches what this model needs.",
+            params.0,
+            if params.1.is_empty() {
+                "(no port set)"
+            } else {
+                &params.1
+            },
+            params.2,
+            ROTCTLD_RETRY.as_secs()
+        ),
+        said,
+    );
+    let diag = tempo_audio::rotator::mask_port(&screen, &params.1);
+    (screen, diag)
+}
+
 /// The reconcile itself, with the spawn handed in so a test can count its attempts.
 fn reconcile_rotctld(
     owner: &mut RotctldOwner,
@@ -24083,32 +24126,10 @@ fn reconcile_rotctld(
                         // there, port already open, a `-C` value it will not parse — and every
                         // one of them was being discarded.
                         if report {
-                            let line = tempo_audio::service::with_daemon_error(
-                                format!(
-                                    "rotctld could not start for model {} on {} @ {} — the \
-                                     rotator will not answer. Is the controller switched on \
-                                     and plugged in? Nexus keeps trying every {} s. If it \
-                                     is, check the port and that the baud matches what this \
-                                     model needs.",
-                                    params.0,
-                                    if params.1.is_empty() {
-                                        "(no port set)"
-                                    } else {
-                                        &params.1
-                                    },
-                                    params.2,
-                                    ROTCTLD_RETRY.as_secs()
-                                ),
-                                &proc.said(),
-                            );
-                            // Once per episode, as on the Connections log. The Connections log
-                            // is on screen only; this copy is built to be sent, so a network
-                            // address in the Port box goes in masked.
-                            tempo_core::applog::warn(
-                                "rotator",
-                                &tempo_audio::rotator::mask_port(&line, &params.1),
-                            );
-                            conn_log("Rotator", "error", line);
+                            let (screen, diag) = rotctld_start_failed_lines(&params, &proc.said());
+                            // Once per episode, as on the Connections log.
+                            tempo_core::applog::warn("rotator", &diag);
+                            conn_log("Rotator", "error", screen);
                         }
                         owner.failing = Some(params);
                         RotctldSync::StartFailed { reported: report }
@@ -24231,6 +24252,26 @@ mod rotctld_supervisor_tests {
             failing: None,
             external: None,
         }
+    }
+
+    #[test]
+    fn the_diagnostic_copy_of_a_failed_start_masks_a_network_port_box() {
+        // A Port box holding a serial server's address (path B2), and Hamlib naming it too.
+        let said = vec!["serial_open: 203.0.113.9:4001 does not exist".to_string()];
+        let (screen, diag) =
+            rotctld_start_failed_lines(&(603, "203.0.113.9:4001".into(), 9600, 4533), &said);
+        assert!(
+            screen.contains("203.0.113.9"),
+            "the screen keeps it: {screen}"
+        );
+        assert!(!diag.contains("203.0.113.9"), "{diag}");
+        assert!(diag.contains("a network address:4001"), "{diag}");
+        // A bare address with no port is the likely paste, and is masked too.
+        let (_, diag) = rotctld_start_failed_lines(&(603, "203.0.113.9".into(), 9600, 4533), &[]);
+        assert!(!diag.contains("203.0.113.9"), "{diag}");
+        // The control: a serial port is the diagnosis, and stays.
+        let (_, diag) = rotctld_start_failed_lines(&(603, "COM4".into(), 9600, 4533), &[]);
+        assert!(diag.contains("on COM4 @ 9600"), "{diag}");
     }
 
     #[test]
@@ -25328,13 +25369,15 @@ async fn point_at_call(
         } else {
             short
         };
-        // ⭐ THE MAST GOES TO THE STATION NOW, so whatever tracker was steering it lets go first,
+        // ⭐ THE MAST GOES TO THE STATION NOW, so a tracker that is STEERING it lets go first,
         // exactly as Stop does (a live pass hands its dial back). Without this a Moon follow kept
         // its badge and, once the Moon had moved past the deadband — minutes later — swung the
         // antenna back off the station nobody had told it to leave. Done here, not only in the
         // UI, so no caller (a cockpit strip, the Needed board, a computer driving from afar) can
-        // turn the beam under a tracker that still thinks it owns it.
-        let _ = disarm_sat_track(engine);
+        // turn the beam under a tracker that still thinks it owns it. An ARMED pass is not
+        // steering: it promises the rotor is free for HF until 5 min before AOS, so it stays
+        // armed, staged transponder and all ([`disarm_steering_tracker`]).
+        disarm_steering_tracker(engine);
         // The elevation stays where it is, as for every manual azimuth move (`point_rotator`).
         tauri::async_runtime::spawn_blocking(move || {
             tempo_audio::rotator::point_keeping(&host, Some(bearing), None)
@@ -25566,6 +25609,53 @@ mod point_at_call_tests {
             None,
             "the point took the mast from the Moon"
         );
+    }
+
+    /// A point ends a pass that is STEERING the mast, dial handed back; an ARMED pass, still
+    /// waiting for AOS with the rotor left to the operator, stays armed with its transponder.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn a_point_at_call_ends_a_steering_pass_and_leaves_an_armed_one_armed() {
+        let _alone = crate::sat_track_alone();
+        for (state, ends) in [
+            ("armed", false),
+            ("prepositioning", true),
+            ("tracking", true),
+        ] {
+            let (addr, _sent) = rotctld();
+            let mut eng = Engine::with_settings(tempo_app::settings::Settings {
+                mycall: "KD9TAW".into(),
+                mygrid: ME.into(),
+                rotator_host: addr,
+                ..Default::default()
+            });
+            eng.note_callbook_fix(
+                "EC1DD",
+                CallbookFix {
+                    grid: Some("IN52TK".into()),
+                    position: None,
+                },
+            );
+            eng.set_sat_transponder(Some((
+                "SO-50|FM repeater".into(),
+                0,
+                tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+            )));
+            let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+            test_live_sat_track("SO-50");
+            if let Some(b) = SAT_TRACK.lock().unwrap().as_mut() {
+                b.state = state.into();
+            }
+            tauri::async_runtime::block_on(point_at_call(&engine, "EC1DD".into(), None))
+                .expect("the point went out");
+            let live = SAT_TRACK.lock().unwrap().is_some();
+            let held = engine_lock(&engine).sat_transponder_held().is_some();
+            assert_eq!(
+                (live, held),
+                (!ends, !ends),
+                "a point while the pass is {state}"
+            );
+        }
     }
 
     /// ⭐ THE BEARING THE ROTOR BOX SHOWS IS THE BEARING ITS POINT TURNS TO, by value, for the

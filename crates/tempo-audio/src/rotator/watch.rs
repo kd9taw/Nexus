@@ -221,21 +221,72 @@ pub(crate) fn is_local(host: &str) -> bool {
             .is_ok_and(|ip| ip.is_loopback())
 }
 
-/// `text` as the diagnostic log may carry it when it names the rotator's Port box `port`: a serial
-/// device (`COM5`, `/dev/ttyUSB0`) stays as it is, and so does a network address on this computer;
-/// a network address off it (a serial server or a controller's own network port, `host:port`) has
-/// its host replaced, keeping the port number. Every place the text carries the host is masked,
-/// Hamlib's own words included.
+/// `text` as the diagnostic log may carry it when it names the rotator's Port box `port`.
+///
+/// A serial device stays as it is (`COM5`, `\\.\COM12`, `/dev/ttyUSB0`): it is the diagnosis.
+/// So does an address on this computer (`127.0.0.1:4001`, `localhost`, `::1`, `[::1]:4001`).
+/// Anything else in the Port box is a network address — `host:port`, a bare IP or host name (the
+/// likely paste of a serial server's address), `[v6]:port` or a bare IPv6 address — and every place
+/// `text` carries its host becomes "a network address", the port number kept. The host is matched
+/// as a whole token only, so a host called `rot` never eats `rotctld`.
 pub(crate) fn mask_port(text: &str, port: &str) -> String {
     let port = port.trim();
-    let Some((host, number)) = port.rsplit_once(':') else {
-        return text.to_string();
-    };
-    if port.starts_with('/') || host.is_empty() || is_local(host) {
+    let serial = port.is_empty()
+        || port.starts_with('/')
+        || port.starts_with("\\\\.\\")
+        || port
+            .strip_prefix("COM")
+            .or_else(|| port.strip_prefix("com"))
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    if serial {
         return text.to_string();
     }
-    text.replace(port, &format!("a network address:{number}"))
-        .replace(host, "a network address")
+    // The host, and the port number when the box has one.
+    let (host, number) = if let Some(rest) = port.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((h, tail)) => (h, tail.strip_prefix(':')),
+            None => (rest, None),
+        }
+    } else if port.parse::<std::net::IpAddr>().is_ok() {
+        (port, None) // a bare IPv4 or IPv6 address: its last group is not a port
+    } else {
+        match port.rsplit_once(':') {
+            Some((h, n)) if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) => (h, Some(n)),
+            _ => (port, None),
+        }
+    };
+    if host.is_empty() || is_local(host) {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    if let Some(n) = number {
+        out = out.replace(port, &format!("a network address:{n}"));
+    }
+    out = out.replace(&format!("[{host}]"), "a network address");
+    replace_token(&out, host, "a network address")
+}
+
+/// `text` with every whole-token occurrence of `word` replaced. A token is bounded by anything but a
+/// letter, a digit, `.`, `-`, `_` (and `:` when `word` is an IPv6 address, which is made of them).
+fn replace_token(text: &str, word: &str, with: &str) -> String {
+    let inner = |c: char| {
+        c.is_alphanumeric() || matches!(c, '.' | '-' | '_') || (c == ':' && word.contains(':'))
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(word) {
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + word.len()..].chars().next();
+        out.push_str(&rest[..at]);
+        if before.is_none_or(|c| !inner(c)) && after.is_none_or(|c| !inner(c)) {
+            out.push_str(with);
+        } else {
+            out.push_str(word);
+        }
+        rest = &rest[at + word.len()..];
+    }
+    out.push_str(rest);
+    out
 }
 
 static LINKS: Mutex<Option<HashMap<String, LinkWatch>>> = Mutex::new(None);
@@ -424,29 +475,42 @@ mod tests {
 
     #[test]
     fn a_port_box_holding_a_network_address_is_masked_and_a_serial_port_is_not() {
-        let line = "rotctld launched (model 603 on 203.0.113.9:4001 @ 9600, :4533)";
-        let masked = mask_port(line, "203.0.113.9:4001");
-        assert_eq!(
-            masked,
-            "rotctld launched (model 603 on a network address:4001 @ 9600, :4533)"
-        );
-        // Hamlib's own words name the host alone too.
+        let line = |p: &str| format!("rotctld for model 603 on {p} @ 9600 — /usr/bin/rotctld");
+        for (port, want) in [
+            ("203.0.113.9:4001", line("a network address:4001")),
+            ("203.0.113.9", line("a network address")),
+            (" 203.0.113.9:4001 ", line("a network address:4001")),
+            ("rot.example.net", line("a network address")),
+            ("rot:4001", line("a network address:4001")),
+            ("[2001:db8::7]:4001", line("a network address:4001")),
+            ("2001:db8::7", line("a network address")),
+            ("::1", line("::1")),
+            ("[::1]:4001", line("[::1]:4001")),
+            ("127.0.0.1", line("127.0.0.1")),
+            ("127.0.0.1:4001", line("127.0.0.1:4001")),
+            ("localhost:4001", line("localhost:4001")),
+            ("COM4", line("COM4")),
+            ("\\\\.\\COM12", line("\\\\.\\COM12")),
+            ("/dev/ttyUSB0", line("/dev/ttyUSB0")),
+            ("/dev/cu.usbmodem13201", line("/dev/cu.usbmodem13201")),
+        ] {
+            let p = port.trim();
+            assert_eq!(mask_port(&line(p), port), want, "{port:?}");
+        }
+        // Hamlib's own words name the host alone, and the unbracketed IPv6 form, too.
         assert_eq!(
             mask_port("network_open: 203.0.113.9 refused", "203.0.113.9:4001"),
             "network_open: a network address refused"
         );
-        // The controls: a serial device, a Mac device path, and this computer stay as they are.
-        for port in [
-            "COM5",
-            "/dev/ttyUSB0",
-            "/dev/cu.usbmodem13201",
-            "127.0.0.1:4001",
-            "localhost:4001",
-            "",
-        ] {
-            let line = format!("rotctld launched (model 603 on {port} @ 9600, :4533)");
-            assert_eq!(mask_port(&line, port), line, "{port}");
-        }
+        assert_eq!(
+            mask_port("open 2001:db8::7 port 4001 failed", "[2001:db8::7]:4001"),
+            "open a network address port 4001 failed"
+        );
+        // A host named `rot` is a whole token: `rotctld` and `/usr/bin/rotctld` are not it.
+        assert_eq!(
+            mask_port("rotctld on rot:4001, then rot answered", "rot:4001"),
+            "rotctld on a network address:4001, then a network address answered"
+        );
     }
 
     #[test]

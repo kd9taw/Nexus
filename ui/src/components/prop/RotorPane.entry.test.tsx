@@ -152,15 +152,13 @@ describe('Point', () => {
     fireEvent.click(pointButton()!)
     await waitFor(() => expect(api.pointRotatorAtCall).toHaveBeenCalledTimes(1))
     expect(api.pointRotatorAtCall).toHaveBeenCalledWith('EC1DD', false)
-    // The point-at-call, after the one tracker stop every manual move makes first (a pass or a
-    // Moon follow left running would turn the mast back): no slew of the pane's own, no rotor stop.
-    expect(api.stopSatTrack).toHaveBeenCalledTimes(1)
-    expect(api.stopSatTrack.mock.invocationCallOrder[0]).toBeLessThan(
-      api.pointRotatorAtCall.mock.invocationCallOrder[0],
-    )
+    // The point-at-call alone: no slew of the pane's own, no stop, and — with no tracker steering
+    // the mast — no satellite-track stop either (one that is steering is stopped first:
+    // rotorPointAt.test.ts).
     expect(api.pointRotator).not.toHaveBeenCalled()
     expect(api.pointRotatorElevation).not.toHaveBeenCalled()
     expect(api.stopRotator).not.toHaveBeenCalled()
+    expect(api.stopSatTrack).not.toHaveBeenCalled()
   })
 
   it('hands no earlier target of this pane on: the next move cannot pull the mast back', async () => {

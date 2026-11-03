@@ -13,9 +13,12 @@ import { t } from '../i18n'
 vi.setConfig({ testTimeout: 15_000 })
 
 const order = vi.hoisted(() => [] as string[])
+const status = vi.hoisted(() => ({ sat: null as unknown, moon: null as unknown }))
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   readRotator: vi.fn(async () => 120),
+  getSatTrackStatus: vi.fn(async () => status.sat),
+  getMoonStatus: vi.fn(async () => status.moon),
   stopSatTrack: vi.fn(async () => {
     order.push('stop')
   }),
@@ -30,19 +33,36 @@ vi.mock('../toast', async (importOriginal) => ({
 
 beforeEach(() => {
   order.length = 0
+  status.sat = null
+  status.moon = null
   localStorage.clear()
 })
 afterEach(cleanup)
 
+const go = async (deg: string) => {
+  const { container } = render(
+    <NeededPanel alerts={[]} bandPlan={[]} selectedCall={null} onQsy={() => {}} onSelect={() => {}} onPoint={() => {}} />,
+  )
+  fireEvent.change(container.querySelector<HTMLInputElement>('.np-rotator-input')!, { target: { value: deg } })
+  fireEvent.click(container.querySelector('.np-rotator-go')!)
+  await waitFor(() => expect(order.some((o) => o.startsWith('point'))).toBe(true))
+  expect(container.querySelector('.np-rotator-go')!.getAttribute('title')).toBe(t('needed.rotator.go.title'))
+  cleanup()
+  return [...order]
+}
+
 describe('the Needed board rotator Go', () => {
-  it('stops a tracker first, then turns the antenna', async () => {
-    const { container } = render(
-      <NeededPanel alerts={[]} bandPlan={[]} selectedCall={null} onQsy={() => {}} onSelect={() => {}} onPoint={() => {}} />,
-    )
-    const input = container.querySelector<HTMLInputElement>('.np-rotator-input')!
-    fireEvent.change(input, { target: { value: '90' } })
-    fireEvent.click(container.querySelector('.np-rotator-go')!)
-    await waitFor(() => expect(order).toEqual(['stop', 'point 90']))
-    expect(container.querySelector('.np-rotator-go')!.getAttribute('title')).toBe(t('needed.rotator.go.title'))
+  it('a Moon follow, or a pass under way, is stopped first, then the antenna turns', async () => {
+    status.moon = { azDeg: 100, elDeg: 20, track: { state: 'following' }, window: null }
+    expect(await go('90')).toEqual(['stop', 'point 90'])
+    order.length = 0
+    status.moon = null
+    status.sat = { name: 'SO-50', state: 'tracking' }
+    expect(await go('45')).toEqual(['stop', 'point 45'])
+  })
+
+  it('an armed pass waiting for AOS stays armed: the rotor is yours for HF until then', async () => {
+    status.sat = { name: 'SO-50', state: 'armed' }
+    expect(await go('90')).toEqual(['point 90'])
   })
 })

@@ -1185,6 +1185,18 @@ fn resolve_rotctld() -> std::ffi::OsString {
     }
 }
 
+/// The diagnostic log's line for a rotctld spawn. The log is built to be sent to a stranger, so a
+/// network address in the Port box goes in masked (`rotator::mask_port`); a serial port stays.
+fn rotctld_spawn_line(model: u32, port: &str, baud: u32, tcp_port: u16, bin: &str) -> String {
+    crate::rotator::mask_port(
+        &format!(
+            "rotctld for model {model} on {} @ {baud} baud (tcp {tcp_port}) — {bin}",
+            if port.is_empty() { "(NO PORT)" } else { port },
+        ),
+        port,
+    )
+}
+
 /// Spawn `rotctld` for a ROTATOR `model` on `port`@`baud`, listening on
 /// `tcp_port` — the rotator twin of [`spawn_rigctld`], with the same
 /// kill-on-drop + Windows job-object lifetime guarantees (reuses
@@ -1199,14 +1211,7 @@ pub fn spawn_rotctld(
     let rot_bin = resolve_rotctld();
     tempo_core::applog::info(
         "proc",
-        &crate::rotator::mask_port(
-            &format!(
-                "rotctld for model {model} on {} @ {baud} baud (tcp {tcp_port}) — {}",
-                if port.is_empty() { "(NO PORT)" } else { port },
-                rot_bin.to_string_lossy()
-            ),
-            port,
-        ),
+        &rotctld_spawn_line(model, port, baud, tcp_port, &rot_bin.to_string_lossy()),
     );
     let mut cmd = tempo_core::process::command(rot_bin);
     cmd.args(&args);
@@ -2105,6 +2110,23 @@ mod tests {
         assert_eq!(
             rotctld_args(1, "", 9600, 4533),
             vec!["-vvv", "-m", "1", "-T", "127.0.0.1", "-t", "4533"]
+        );
+    }
+
+    #[test]
+    fn the_spawn_line_masks_a_network_port_box_and_keeps_a_serial_one() {
+        let bin = "/usr/bin/rotctld";
+        for port in ["203.0.113.9:4001", "203.0.113.9", "rot.example.net"] {
+            let line = rotctld_spawn_line(603, port, 9600, 4533, bin);
+            assert!(!line.contains(port), "{line}");
+            assert!(
+                line.contains("/usr/bin/rotctld"),
+                "the binary is not a host: {line}"
+            );
+        }
+        assert_eq!(
+            rotctld_spawn_line(603, "COM4", 9600, 4533, bin),
+            "rotctld for model 603 on COM4 @ 9600 baud (tcp 4533) — /usr/bin/rotctld"
         );
     }
 

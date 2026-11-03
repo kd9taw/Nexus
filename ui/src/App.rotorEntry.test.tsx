@@ -136,20 +136,18 @@ describe('FT: the box follows the QSO its Log QSO would log, not the roster sele
     await waitFor(() => expect(within(ft!).queryByRole('button', { name: '→ AA1AA' })).not.toBeNull())
     expect(within(ft!).queryByRole('button', { name: '→ EC1DD' })).toBeNull()
 
-    // Point: the point-at-call for the ENTRY's call, short path, after the tracker stop every
-    // manual move makes first (a pass or a Moon follow would turn the mast back), and no other
-    // command of any kind.
+    // Point: the point-at-call for the ENTRY's call, short path, and no other command of any kind.
+    // (No tracker is steering the mast here, so none is stopped: rotorPointAt.test.ts.)
     const point = within(rail()!).getByRole('button', { name: t('rotor.pane.aim.point.label') })
     const before = callCounts()
     fireEvent.click(point)
     await waitFor(() => expect(api.pointRotatorAtCall).toHaveBeenCalled())
     const after = callCounts()
-    // Waiting for the point lets the screen's own polls (meters and the like) tick, so what is
-    // held to "nothing else" is every command that can move, stop or start something.
-    const acts = (k: string) => /^(point|stop|start|set|tune|send|key)/.test(k)
-    expect(Object.keys(after).filter((k) => after[k] !== before[k] && acts(k)).sort()).toEqual([
+    // Waiting for the point lets the screen's own polls tick, and the point reads whether a
+    // tracker is steering, so reads are set aside: every other command is held to "nothing else".
+    const reads = (k: string) => /^(get|read)/.test(k)
+    expect(Object.keys(after).filter((k) => after[k] !== before[k] && !reads(k))).toEqual([
       'pointRotatorAtCall',
-      'stopSatTrack',
     ])
     expect(api.pointRotatorAtCall).toHaveBeenCalledWith('EC1DD', false)
     expect(api.pointRotatorAtCall).not.toHaveBeenCalledWith('AA1AA', expect.anything())
