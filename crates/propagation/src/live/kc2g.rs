@@ -26,13 +26,29 @@ pub fn fetch_kc2g_muf() -> Result<Vec<MufStation>, String> {
         .user_agent(UA)
         .build()
         .map_err(|e| e.to_string())?;
-    let v = c
+    let resp = c
         .get(STATIONS_URL)
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json::<Value>()
         .map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_str(&read_body(resp)?).map_err(|e| e.to_string())?;
     Ok(parse_kc2g_stations(&v, now_unix()))
+}
+
+/// The most the station list is read to. It was 42 KB on 2026-11-03.
+const STATIONS_REPLY_BYTES: u64 = 8 * 1024 * 1024;
+
+fn read_body(resp: reqwest::blocking::Response) -> Result<String, String> {
+    super::body::read_capped(resp, STATIONS_REPLY_BYTES, "KC2G")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_station_list_is_read_only_up_to_its_limit() {
+        crate::live::body::assert_body_capped(read_body, STATIONS_REPLY_BYTES, "KC2G");
+    }
 }

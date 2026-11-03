@@ -12,6 +12,10 @@ use std::time::Duration;
 
 const UA: &str = "nexus-propagation/0.1 (+ham radio propagation nowcast)";
 
+/// The most a WRL answer is read to: a small JSON object (a contact result, `/v1/me`, the list
+/// of the operator's logbooks).
+const WRL_REPLY_BYTES: u64 = 1024 * 1024;
+
 fn client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
@@ -35,9 +39,7 @@ pub fn post_contact(url: &str, key: &str, body: String) -> Result<(u16, String),
         .send()
         .map_err(redact)?;
     let status = resp.status().as_u16();
-    let text = resp
-        .text()
-        .map_err(|_| "WRL: could not read the response body".to_string())?;
+    let text = super::body::read_capped(resp, WRL_REPLY_BYTES, "WRL")?;
     Ok((status, text))
 }
 
@@ -46,9 +48,7 @@ pub fn post_contact(url: &str, key: &str, body: String) -> Result<(u16, String),
 pub fn get_json(url: &str, key: &str) -> Result<(u16, String), String> {
     let resp = client()?.get(url).bearer_auth(key).send().map_err(redact)?;
     let status = resp.status().as_u16();
-    let text = resp
-        .text()
-        .map_err(|_| "WRL: could not read the response body".to_string())?;
+    let text = super::body::read_capped(resp, WRL_REPLY_BYTES, "WRL")?;
     Ok((status, text))
 }
 

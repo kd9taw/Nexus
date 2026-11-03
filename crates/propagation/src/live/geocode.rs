@@ -49,10 +49,14 @@ pub fn search_city(query: &str) -> Result<Vec<GeoCandidate>, String> {
             status.as_u16()
         ));
     }
-    let body = resp
-        .text()
-        .map_err(|_| "Geocoding: could not read the response body".to_string())?;
-    Ok(parse_nominatim(&body))
+    Ok(parse_nominatim(&read_body(resp)?))
+}
+
+/// The most a search answer is read to. Five candidates came to 1.4 KB on 2026-11-03.
+const SEARCH_REPLY_BYTES: u64 = 1024 * 1024;
+
+fn read_body(resp: reqwest::blocking::Response) -> Result<String, String> {
+    super::body::read_capped(resp, SEARCH_REPLY_BYTES, "Geocoding")
 }
 
 /// Parse a Nominatim `format=jsonv2` array (lat/lon arrive as strings).
@@ -79,6 +83,11 @@ fn redact(e: reqwest::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_search_answer_is_read_only_up_to_its_limit() {
+        crate::live::body::assert_body_capped(read_body, SEARCH_REPLY_BYTES, "Geocoding");
+    }
 
     #[test]
     fn parses_nominatim_jsonv2() {

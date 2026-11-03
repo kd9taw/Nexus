@@ -266,14 +266,18 @@ fn fetch_text(url: &str) -> Result<String, String> {
         .user_agent(UA)
         .build()
         .map_err(|e| e.to_string())?;
-    c.get(url)
+    let resp = c
+        .get(url)
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    super::body::read_capped(resp, SATNOGS_REPLY_BYTES, "SatNOGS")
 }
+
+/// The most a SatNOGS list is read to. The full transmitter list was 4.0 MB and the satellite
+/// list 1.6 MB on 2026-11-03; both grow as birds are added.
+const SATNOGS_REPLY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A 200 whose body isn't a JSON array is an API-shape surprise, not data —
 /// surface it as `Err` so the caller keeps its cache instead of writing an

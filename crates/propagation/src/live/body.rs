@@ -1,5 +1,7 @@
 //! A reply's body, read only as far as a limit: a server that sends far more than the answer it
-//! was asked for is refused, never read to the end.
+//! was asked for is refused, never read to the end. Every fetcher in this crate reads its answer
+//! here, and so do the app's own blocking downloads (`src-tauri`); a test in this module scans
+//! `live/` for a response read with no limit.
 
 use std::io::Read;
 
@@ -9,31 +11,36 @@ pub(crate) const CALLBOOK_REPLY_BYTES: u64 = 256 * 1024;
 /// `body` read as text, or `Err` with a sentence prefixed `who` when it is longer than `limit`
 /// bytes or cannot be read. Read as UTF-8 with any invalid byte replaced, as `Response::text`
 /// reads it without the `charset` feature.
-pub(crate) fn read_capped(body: impl Read, limit: u64, who: &str) -> Result<String, String> {
+pub fn read_capped(body: impl Read, limit: u64, who: &str) -> Result<String, String> {
+    read_capped_bytes(body, limit, who).map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// [`read_capped`] for a binary answer: the bytes as they came.
+pub fn read_capped_bytes(body: impl Read, limit: u64, who: &str) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
     body.take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|_| format!("{who}: could not read the response body"))?;
     if bytes.len() as u64 > limit {
-        let size = if limit >= 1024 * 1024 {
-            format!("{} MB", limit / (1024 * 1024))
-        } else {
-            format!("{} KB", limit / 1024)
-        };
-        return Err(format!(
-            "{who}: the server's answer was larger than {size}, so it was not read"
-        ));
+        return Err(too_large(limit, who));
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(bytes)
+}
+
+/// The sentence for an answer longer than `limit` bytes, prefixed `who` — for a fetcher that
+/// reads its body in its own loop (LoTW's, which also bounds time).
+pub fn too_large(limit: u64, who: &str) -> String {
+    let size = if limit >= 1024 * 1024 {
+        format!("{} MB", limit / (1024 * 1024))
+    } else {
+        format!("{} KB", limit / 1024)
+    };
+    format!("{who}: the server's answer was larger than {size}, so it was not read")
 }
 
 /// A successful reply's body through [`read_capped`]. Any other status — a redirect the client
 /// did not follow among them — is `Err` with a sentence prefixed `who`, and its body is not read.
-pub(crate) fn read_ok(
-    resp: reqwest::blocking::Response,
-    limit: u64,
-    who: &str,
-) -> Result<String, String> {
+pub fn read_ok(resp: reqwest::blocking::Response, limit: u64, who: &str) -> Result<String, String> {
     if !resp.status().is_success() {
         return Err(format!("{who}: answered HTTP {}", resp.status().as_u16()));
     }
@@ -127,6 +134,34 @@ pub(crate) fn assert_wire_limits(
     );
 }
 
+/// A fetcher's body read keeps its limit: `read`, given a real loopback response, reads a body
+/// of exactly `limit` bytes whole and refuses one byte more with a sentence prefixed `who`.
+/// For the fetchers whose client and URL are fixed inside the module, so their read is the part
+/// a test can reach.
+#[cfg(test)]
+pub(crate) fn assert_body_capped(
+    read: impl Fn(reqwest::blocking::Response) -> Result<String, String>,
+    limit: u64,
+    who: &str,
+) {
+    let get = |body: &[u8]| {
+        let port = serve(vec![ok_reply(body)]);
+        reqwest::blocking::get(format!("http://127.0.0.1:{port}/product")).expect("loopback reply")
+    };
+    let edge = vec![b' '; limit as usize];
+    assert_eq!(
+        read(get(&edge)).map(|s| s.len()),
+        Ok(edge.len()),
+        "a body at the limit is read whole"
+    );
+    let huge = vec![b' '; limit as usize + 1];
+    let err = read(get(&huge)).unwrap_err();
+    assert!(
+        err.starts_with(&format!("{who}: ")) && err.contains("larger than"),
+        "a body past the limit must be refused: {err}"
+    );
+}
+
 /// A `302 Found` response pointing at `/elsewhere`: a client that follows it asks again.
 #[cfg(test)]
 pub(crate) fn redirect_reply() -> Vec<u8> {
@@ -155,6 +190,88 @@ mod tests {
         assert_eq!(
             err,
             "Test: the server's answer was larger than 2 MB, so it was not read"
+        );
+    }
+
+    /// Ways a reqwest response is read to its end with no limit. Matched with whitespace
+    /// removed, so a chain split over lines is still caught.
+    const UNCAPPED_READS: [&str; 7] = [
+        ".text()",
+        ".json()",
+        ".json::<",
+        ".bytes()?",
+        ".bytes().map_err",
+        ".bytes().await",
+        ".copy_to(",
+    ];
+
+    /// `source` with `//` comments dropped (whole-line, or trailing after ` // `, so a URL's
+    /// `https://` stays) and all whitespace removed.
+    fn code_of(source: &str) -> String {
+        source
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.split(" // ").next().unwrap_or_default())
+            .collect::<String>()
+            .split_whitespace()
+            .collect()
+    }
+
+    /// The uncapped reads in `source`, by pattern.
+    fn uncapped_reads(source: &str) -> Vec<&'static str> {
+        let code = code_of(source);
+        UNCAPPED_READS
+            .into_iter()
+            .filter(|p| code.contains(p))
+            .collect()
+    }
+
+    /// Every network fetcher in this crate reads its answer through this module, so none can
+    /// be made to read without end: no module reads a response whole, and every module that
+    /// sends a request outside its tests reads the answer here (`read_capped`, `read_ok`,
+    /// `read_capped_bytes`, or `too_large` for LoTW's own time-bounded loop).
+    #[test]
+    fn every_fetcher_reads_through_a_limit() {
+        // CONTROLS: the scan sees an uncapped read, even split over lines, and passes a capped one.
+        assert_eq!(
+            uncapped_reads("let t = resp\n    .text()\n    .map_err(f)?;"),
+            [".text()"]
+        );
+        assert_eq!(
+            uncapped_reads("let v = r.json::<Value>()?; // .text()"),
+            [".json::<"]
+        );
+        assert!(uncapped_reads("super::body::read_capped(resp, L, \"X\")").is_empty());
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/live");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).expect("src/live") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name == "body.rs" {
+                continue; // the limit itself, and this scan's own patterns
+            }
+            let source = std::fs::read_to_string(&path).expect("source");
+            let found = uncapped_reads(&source);
+            assert!(
+                found.is_empty(),
+                "{name} reads a response with no limit: {found:?}"
+            );
+            let shipped = code_of(source.split("#[cfg(test)]\nmod tests").next().unwrap());
+            if shipped.contains(".send()") || shipped.contains(".execute(") {
+                assert!(
+                    shipped.contains("body::read_") || shipped.contains("body::too_large("),
+                    "{name} sends a request but does not read the answer through live::body"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 25,
+            "only {checked} fetchers were found; is the scan looking?"
         );
     }
 

@@ -11695,6 +11695,14 @@ async fn fetch_lotw_users() -> Result<LotwUsersStatus, String> {
 // --- FCC callsign→state index (downloaded to the SHARED data dir; the WAS New-State hint on
 // grid-less spots). Mirrors the LoTW-users pattern above. ---
 const FCC_STATES_BASE: &str = "https://hamradiotools.io/nexus";
+/// The most a hosted data manifest (`fcc-states.json`, `cty.json`) is read to: a few hundred
+/// bytes of version stamps.
+const DATA_MANIFEST_BYTES: u64 = 1024 * 1024;
+/// The most `fcc-states.bin` is read to. It was 5.7 MB on 2026-11-03.
+const FCC_STATES_BYTES: u64 = 64 * 1024 * 1024;
+/// The most a hosted text data file (`cty.dat`, `fd-rules.json`) is read to. Each was about
+/// 330 KB on 2026-11-03.
+const DATA_FILE_BYTES: u64 = 16 * 1024 * 1024;
 static FCC_STATES: std::sync::LazyLock<std::sync::RwLock<Option<propagation::FccStates>>> =
     std::sync::LazyLock::new(|| std::sync::RwLock::new(None));
 
@@ -12059,14 +12067,18 @@ fn fcc_download_if_newer() -> Result<bool, String> {
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?;
-    let manifest: serde_json::Value = c
+    let resp = c
         .get(format!("{FCC_STATES_BASE}/fcc-states.json"))
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json()
         .map_err(|e| e.to_string())?;
+    let manifest: serde_json::Value = serde_json::from_str(&propagation::live::body::read_capped(
+        resp,
+        DATA_MANIFEST_BYTES,
+        "FCC states manifest",
+    )?)
+    .map_err(|e| e.to_string())?;
     let generated = manifest
         .get("generated")
         .and_then(|v| v.as_str())
@@ -12087,15 +12099,14 @@ fn fcc_download_if_newer() -> Result<bool, String> {
         );
         return Ok(false);
     }
-    let bytes = c
+    let resp = c
         .get(format!("{FCC_STATES_BASE}/fcc-states.bin"))
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .bytes()
-        .map_err(|e| e.to_string())?
-        .to_vec();
+        .map_err(|e| e.to_string())?;
+    let bytes =
+        propagation::live::body::read_capped_bytes(resp, FCC_STATES_BYTES, "FCC states index")?;
     let count = propagation::FccStates::load(bytes.clone())
         .ok_or("downloaded index is not a valid NEXFCCS1 file")?
         .count();
@@ -12251,14 +12262,18 @@ fn cty_download_if_newer() -> Result<bool, String> {
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?;
-    let manifest: serde_json::Value = c
+    let resp = c
         .get(format!("{FCC_STATES_BASE}/cty.json"))
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json()
         .map_err(|e| e.to_string())?;
+    let manifest: serde_json::Value = serde_json::from_str(&propagation::live::body::read_capped(
+        resp,
+        DATA_MANIFEST_BYTES,
+        "cty.dat manifest",
+    )?)
+    .map_err(|e| e.to_string())?;
     let ver = manifest
         .get("ver")
         .and_then(|v| v.as_str())
@@ -12285,14 +12300,13 @@ fn cty_download_if_newer() -> Result<bool, String> {
         );
         return Ok(false);
     }
-    let text = c
+    let resp = c
         .get(format!("{FCC_STATES_BASE}/cty.dat"))
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
         .map_err(|e| e.to_string())?;
+    let text = propagation::live::body::read_capped(resp, DATA_FILE_BYTES, "cty.dat")?;
     let stats = propagation::dxcc::validate(&text)
         .map_err(|e| format!("downloaded cty.dat failed validation: {e}"))?;
     if let Some(dir) = cty_path().parent() {
@@ -12540,14 +12554,13 @@ fn fd_rules_download_if_newer() -> Result<bool, String> {
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| e.to_string())?;
-    let text = c
+    let resp = c
         .get(format!("{FCC_STATES_BASE}/fd-rules.json"))
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
         .map_err(|e| e.to_string())?;
+    let text = propagation::live::body::read_capped(resp, DATA_FILE_BYTES, "fd-rules.json")?;
     let stats = tempo_core::fd_rules::validate(&text)
         .map_err(|e| format!("downloaded fd-rules.json failed validation: {e}"))?;
     if stats.generated == local.generated && have {
@@ -43390,6 +43403,8 @@ fn get_activation(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Acti
 /// endpoint + column layout should be verified against a live response — the parser is header-
 /// aware + tolerant, and `import_parks_csv` is the fallback if this URL ever changes.
 const PARKS_CSV_URL: &str = "https://pota.app/all_parks_ext.csv";
+/// The most the all-parks list is read to. It was 10.3 MB on 2026-11-03 and only grows.
+const PARKS_CSV_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A park directory search result (serde mirror of `tempo_core::pota::Park`).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -43539,7 +43554,7 @@ fn import_hunted_parks_csv(engine: State<'_, SharedEngine>, csv: String) -> Resu
 #[tauri::command]
 async fn download_parks(parks: State<'_, SharedParks>) -> Result<usize, String> {
     let csv = tauri::async_runtime::spawn_blocking(|| -> Result<String, String> {
-        reqwest::blocking::Client::builder()
+        let resp = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .user_agent(concat!("nexus/", env!("CARGO_PKG_VERSION"), " (+parks)"))
             .build()
@@ -43548,9 +43563,8 @@ async fn download_parks(parks: State<'_, SharedParks>) -> Result<usize, String> 
             .send()
             .map_err(|e| e.to_string())?
             .error_for_status()
-            .map_err(|e| e.to_string())?
-            .text()
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        propagation::live::body::read_capped(resp, PARKS_CSV_BYTES, "POTA parks list")
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -45973,7 +45987,16 @@ fn update_route() -> UpdateRoute {
 /// Blocking GET of a text/JSON URL — mirrors the propagation crate's reqwest usage (rustls, short
 /// timeout, a UA). Returns the raw body; call it via `spawn_blocking` from the command.
 fn fetch_text(url: &str) -> Result<String, String> {
-    reqwest::blocking::Client::builder()
+    fetch_text_limited(url, UPDATE_FEED_BYTES)
+}
+
+/// The most an update feed is read to. GitHub's list of the last 20 releases was the largest,
+/// 1.0 MB on 2026-11-03; our own version.json 26 KB, SourceForge's best_release.json 3 KB.
+const UPDATE_FEED_BYTES: u64 = 16 * 1024 * 1024;
+
+/// [`fetch_text`] with its byte ceiling supplied.
+fn fetch_text_limited(url: &str, limit: u64) -> Result<String, String> {
+    let resp = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .user_agent(concat!(
             "nexus/",
@@ -45986,9 +46009,8 @@ fn fetch_text(url: &str) -> Result<String, String> {
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    propagation::live::body::read_capped(resp, limit, "Update check")
 }
 
 /// Resolve the latest released version: try our own endpoint first (authoritative `latest`), then
@@ -70408,5 +70430,130 @@ mod getting_out_since_tests {
         );
         assert_eq!(tv_getting_out_since(&json!({})), None);
         assert_eq!(tv_getting_out_since(&Value::Null), None);
+    }
+}
+
+#[cfg(test)]
+mod fetch_cap_tests {
+    use std::io::{Read, Write};
+
+    /// A loopback server answering one connection with `200 OK` and `body`. Its port.
+    fn serve(body: Vec<u8>) -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = l.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            let Ok((mut s, _)) = l.accept() else { return };
+            let mut head = Vec::new();
+            let mut b = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && matches!(s.read(&mut b), Ok(1)) {
+                head.push(b[0]);
+            }
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = s.write_all(&body);
+            let _ = s.flush();
+        });
+        port
+    }
+
+    /// An update feed is read only up to its limit: a body at the limit whole, one byte more
+    /// refused with a sentence, not read to the end.
+    #[test]
+    fn an_update_feed_past_its_limit_is_refused() {
+        let url = |port: u16| format!("http://127.0.0.1:{port}/version.json");
+        let port = serve(vec![b' '; 4096]);
+        assert_eq!(
+            super::fetch_text_limited(&url(port), 4096).map(|s| s.len()),
+            Ok(4096)
+        );
+        let port = serve(vec![b' '; 4097]);
+        let err = super::fetch_text_limited(&url(port), 4096).unwrap_err();
+        assert!(
+            err.starts_with("Update check: ") && err.contains("larger than"),
+            "{err}"
+        );
+    }
+
+    /// Ways a reqwest response is read to its end with no limit, matched with whitespace removed
+    /// so a chain split over lines is still caught.
+    const UNCAPPED_READS: [&str; 7] = [
+        ".text()",
+        ".json()",
+        ".json::<",
+        ".bytes()?",
+        ".bytes().map_err",
+        ".bytes().await",
+        ".copy_to(",
+    ];
+
+    /// The uncapped reads in `source`: `//` comments dropped (whole-line, or trailing after
+    /// ` // `, so a URL's `https://` stays) and whitespace removed.
+    fn uncapped_reads(source: &str) -> Vec<&'static str> {
+        let code: String = source
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.split(" // ").next().unwrap_or_default())
+            .collect::<String>()
+            .split_whitespace()
+            .collect();
+        UNCAPPED_READS
+            .into_iter()
+            .filter(|p| code.contains(p))
+            .collect()
+    }
+
+    /// No file here that speaks HTTP reads an answer whole: the blocking fetchers go through
+    /// `propagation::live::body` (or `contest_lists`' own `take`), the async service clients
+    /// through their own chunk loops with a limit.
+    #[test]
+    fn no_fetcher_here_reads_an_answer_without_a_limit() {
+        // CONTROLS: the scan sees an uncapped read split over lines, and passes a capped one.
+        assert_eq!(
+            uncapped_reads("let t = resp\n    .text()\n    .map_err(f)?;"),
+            [".text()"]
+        );
+        assert!(uncapped_reads("body::read_capped(resp, L, \"X\")").is_empty());
+
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("dir") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        let mut checked = 0;
+        for path in files {
+            let source = std::fs::read_to_string(&path).expect("source");
+            if !source.contains("reqwest::") {
+                continue;
+            }
+            // This scan's own patterns.
+            let source = source
+                .split("mod fetch_cap_tests {")
+                .next()
+                .unwrap_or_default();
+            let found = uncapped_reads(source);
+            assert!(
+                found.is_empty(),
+                "{} reads a response with no limit: {found:?}",
+                path.display()
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 5,
+            "only {checked} HTTP files were found; is the scan looking?"
+        );
     }
 }

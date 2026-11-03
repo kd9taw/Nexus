@@ -146,14 +146,20 @@ pub fn fetch_tles() -> Result<Vec<Tle>, TleFetchError> {
     if !status.is_success() {
         return Err(TleFetchError::Http(status.as_u16()));
     }
-    let text = resp
-        .text()
-        .map_err(|e| TleFetchError::Network(e.to_string()))?;
+    let text = read_body(resp)?;
     let tles = parse_tles(&text);
     if tles.is_empty() {
         return Err(TleFetchError::Empty);
     }
     Ok(tles)
+}
+
+/// The most either TLE answer is read to. Celestrak's amateur set was 16 KB and the mirror's
+/// `tles.json` 120 KB on 2026-11-03.
+const TLE_REPLY_BYTES: u64 = 8 * 1024 * 1024;
+
+fn read_body(resp: reqwest::blocking::Response) -> Result<String, TleFetchError> {
+    super::body::read_capped(resp, TLE_REPLY_BYTES, "TLE").map_err(TleFetchError::Network)
 }
 
 /// One bird in the mirror's amateur CATALOG (`tles.json` schema 2) — who it
@@ -300,9 +306,7 @@ pub fn fetch_tles_mirror(etag: Option<&str>) -> Result<TleMirrorFetch, TleFetchE
         .get(reqwest::header::ETAG)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
-    let body = resp
-        .text()
-        .map_err(|e| TleFetchError::Network(e.to_string()))?;
+    let body = read_body(resp)?;
     let manifest =
         parse_mirror_manifest(&body).map_err(|e| TleFetchError::Network(e.to_string()))?;
     if manifest.elements.is_empty() {
@@ -540,6 +544,15 @@ pub fn tle_manual_escalation(ct_last_try: i64, blocked_until: i64, now: i64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tle_answer_is_read_only_up_to_its_limit() {
+        crate::live::body::assert_body_capped(
+            |r| read_body(r).map_err(|e| e.to_string()),
+            TLE_REPLY_BYTES,
+            "network: TLE",
+        );
+    }
 
     // Two real, published element sets (AIAA-2006-6753 verification vectors) in
     // Celestrak 3LE form, with `\r\n` and a trailing malformed pair to exercise

@@ -10,6 +10,11 @@
 // (crates/propagation/src/live/iota.rs): HTTPS, the app's User-Agent, no redirect followed,
 // nothing over 2 MB read.
 //
+// Retry: iota-world.org answers HTTP 202 with no file while it is rebuilding groups.json (a
+// release once built in that window and shipped without the list). A 202 or a 5xx is asked again
+// after 15 s, 30 s and 60 s; after the fourth attempt the run fails, and release.yml makes that
+// failure visible on the run's summary. Any other status fails at once.
+//
 // The checks — any miss exits 1 and writes nothing, so a short or changed file never replaces
 // a copy already staged:
 //   - the body is a JSON array of objects carrying `refno` and `name`;
@@ -44,13 +49,47 @@ const NAME_MAX_CHARS = 200
 const CANARIES = ['AF-001', 'EU-005']
 const REF = /^(AF|AN|AS|EU|NA|OC|SA)-\d{3}$/
 
-async function download() {
+/** The waits before the second, third and fourth attempt. */
+export const RETRY_DELAYS_MS = [15_000, 30_000, 60_000]
+
+/** A status the server passes through on its own: worth asking again. */
+const passing = (status) => status === 202 || (status >= 500 && status <= 599)
+
+/**
+ * `fetchOnce()` until it returns the file, asking again after each of `delays` when it fails with
+ * a passing status (a thrown error's `status`). Anything else fails at once.
+ */
+export async function downloadWithRetry({
+  fetchOnce = downloadOnce,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  delays = RETRY_DELAYS_MS,
+  log = (line) => console.error(line),
+} = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fetchOnce()
+    } catch (e) {
+      if (!passing(e.status)) throw e
+      const wait = delays[attempt - 1]
+      if (wait === undefined) throw new Error(`${e.message}, after ${attempt} attempts`)
+      log(`gen-iota-groups: attempt ${attempt}: ${e.message}; asking again in ${wait / 1000} s`)
+      await sleep(wait)
+    }
+  }
+}
+
+async function downloadOnce() {
   const resp = await fetch(GROUPS_URL, {
     headers: { 'User-Agent': UA },
     redirect: 'manual',
     signal: AbortSignal.timeout(60_000),
   })
-  if (resp.status !== 200) throw new Error(`the IOTA list server answered HTTP ${resp.status} instead of the file`)
+  if (resp.status !== 200) {
+    throw Object.assign(
+      new Error(`the IOTA list server answered HTTP ${resp.status} instead of the file`),
+      { status: resp.status },
+    )
+  }
   const len = Number(resp.headers.get('content-length') ?? 0)
   if (len > MAX_BYTES) throw new Error(`the IOTA list is ${len} bytes, larger than ${MAX_BYTES}`)
   const chunks = []
@@ -85,7 +124,7 @@ async function main() {
   const args = process.argv.slice(2).filter((a) => a !== '--dry-run')
   const dryRun = process.argv.includes('--dry-run')
   const [src = '--download', outDir = 'src-tauri/resources/iota'] = args
-  const bytes = src === '--download' ? await download() : readFileSync(src)
+  const bytes = src === '--download' ? await downloadWithRetry() : readFileSync(src)
   const groups = check(bytes)
   const now = new Date()
   const manifest = {

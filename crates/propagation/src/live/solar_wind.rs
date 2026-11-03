@@ -17,14 +17,23 @@ const PLASMA_URL: &str = "https://services.swpc.noaa.gov/json/rtsw/rtsw_wind_1m.
 const UA: &str = "nexus-propagation/0.1 (+ham radio space weather)";
 
 fn get_json(c: &reqwest::blocking::Client, url: &str) -> Result<Value, String> {
-    c.get(url)
+    let resp = c
+        .get(url)
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json::<Value>()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    serde_json::from_str(&super::body::read_capped(
+        resp,
+        WIND_REPLY_BYTES,
+        "NOAA SWPC",
+    )?)
+    .map_err(|e| e.to_string())
 }
+
+/// The most one real-time solar-wind product is read to. The plasma file was 2.4 MB and the
+/// magnetometer file 1.4 MB on 2026-11-03 (a day of one-minute samples from each spacecraft).
+const WIND_REPLY_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Fetch + parse the current solar-wind conditions (Bz, Bt, speed, density).
 pub fn fetch_solar_wind() -> Result<SolarWind, String> {

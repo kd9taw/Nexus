@@ -18,14 +18,18 @@ fn client() -> Result<reqwest::blocking::Client, String> {
 }
 
 fn get_text(c: &reqwest::blocking::Client, url: &str) -> Result<String, String> {
-    c.get(url)
+    let resp = c
+        .get(url)
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    super::body::read_capped(resp, SPOTS_REPLY_BYTES, "POTA/SOTA spots")
 }
+
+/// The most a spot list is read to. POTA's activator list was 2.7 KB compressed on
+/// 2026-11-03 and SOTA's 50 newest under 1 KB; a busy weekend is still far below this.
+const SPOTS_REPLY_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Fetch current POTA activator spots ("who's on the air now").
 pub fn fetch_pota_spots() -> Result<Vec<OtaSpot>, String> {

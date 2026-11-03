@@ -59,6 +59,9 @@ const PROXY_URL: &str = "https://rb.hamradiotools.io/rb/export";
 /// a build whose shared path 403s against a configured Worker.
 const CLIENT_KEY: Option<&str> = option_env!("NEXUS_RB_CLIENT_KEY");
 
+/// The most one state's export is read to. The largest state is a few MB of JSON.
+const STATE_REPLY_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Fetch one state's export through the Nexus proxy (no RepeaterBook token on
 /// this side). Same body/parse contract as [`fetch_state`].
 pub fn fetch_state_proxy(state_id: &str) -> Result<String, String> {
@@ -98,8 +101,7 @@ pub fn fetch_state_proxy(state_id: &str) -> Result<String, String> {
             status.as_u16()
         ));
     }
-    resp.text()
-        .map_err(|_| "RepeaterBook: could not read the response body".to_string())
+    super::body::read_capped(resp, STATE_REPLY_BYTES, "RepeaterBook")
 }
 
 /// Fetch one state's repeater export (JSON body, parsed by
@@ -138,8 +140,7 @@ pub fn fetch_state(token: &str, state_id: &str) -> Result<String, String> {
             status.as_u16()
         ));
     }
-    resp.text()
-        .map_err(|_| "RepeaterBook: could not read the response body".to_string())
+    super::body::read_capped(resp, STATE_REPLY_BYTES, "RepeaterBook")
 }
 
 /// Category-only error mapping — the request carries the token in a header, so
