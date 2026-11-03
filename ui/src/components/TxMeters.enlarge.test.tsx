@@ -112,3 +112,38 @@ describe('the Operate TX meters open larger (#446)', () => {
     expect(pxOf(cellTrack, 'height')).toBe(cellH)
   })
 })
+
+// Between overs the cell holds the last over's readings (dimmed). A dialog opened then must show the
+// same, not what the idle radio reports now: the cell and the dialog never disagree.
+describe('the larger meters hold the same readings as the cell (#446)', () => {
+  const idle = (over: Record<string, unknown> = {}) =>
+    ({ rigKeyed: false, ratedWatts: 100, swrScaleVerified: true, ...over }) as unknown as RadioStatus
+  const cellWith = (radio: RadioStatus) => (
+    <div className="cq-telemetry">
+      <TxMetersCell radio={radio} />
+    </div>
+  )
+
+  for (const [why, after] of [
+    ['reports nothing', idle()],
+    ['reports zeros', idle({ txSwr: 1.0, txAlc: 0, txPoW: 0 })],
+  ] as const) {
+    it(`opened after an over, when the idle radio ${why}`, () => {
+      const r = render(cellWith(keyed()))
+      r.rerender(cellWith(after))
+      const cellValues = values(r.container.querySelector('.cq-telemetry .ph-txmeters')!)
+      expect(cellValues.slice(0, 3), 'the cell no longer holds the over').toEqual(['1.3:1', '40%', '87 W'])
+      fireEvent.click(screen.getByRole('button', { name: /transmit meters larger/i }))
+      expect(values(dialog()!.querySelector('.ph-txmeters')!), 'the dialog disagrees with the cell').toEqual(cellValues)
+    })
+  }
+
+  it('and a fresh over still reads live in both', () => {
+    const r = render(cellWith(keyed()))
+    r.rerender(cellWith(idle()))
+    fireEvent.click(screen.getByRole('button', { name: /transmit meters larger/i }))
+    r.rerender(cellWith(keyed({ txPoW: 52 })))
+    expect(values(dialog()!.querySelector('.ph-txmeters')!)[2]).toBe('52 W')
+    expect(values(r.container.querySelector('.cq-telemetry .ph-txmeters')!)[2]).toBe('52 W')
+  })
+})

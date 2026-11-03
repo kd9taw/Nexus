@@ -5,7 +5,7 @@
 //
 // These are READOUTS, not transmit controls: nothing here keys, gates or stops anything.
 import { useRef, useState } from 'react'
-import type { KeyboardEvent, PointerEvent } from 'react'
+import type { KeyboardEvent, MutableRefObject, PointerEvent } from 'react'
 import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { t } from '../i18n'
@@ -155,15 +155,41 @@ export interface TxMeterControls {
  *  while receiving, so it is shown whenever a reading exists and takes no part in the ⊘ logic. */
 type TempRow = { key: 'rigTemp' | 'ampTemp'; label: string; title: string; frac: number; value: string }
 
+/** A TxMeters panel's memory across overs, as refs (never state: retention must never itself cause a
+ *  render). See `TxMeters`' comments at each use. */
+export interface TxMeterMemory {
+  lastRows: MutableRefObject<MeterRow[]>
+  seen: MutableRefObject<Set<MeterKey>>
+  everRead: MutableRefObject<boolean>
+  overJudged: MutableRefObject<boolean>
+  keyedOnce: MutableRefObject<boolean>
+}
+
+/** A fresh memory, for a panel of its own or for two panels to share (TxMetersCell). */
+export function useTxMeterMemory(): TxMeterMemory {
+  const lastRows = useRef<MeterRow[]>([])
+  const seen = useRef(new Set<MeterKey>())
+  const everRead = useRef(false)
+  const overJudged = useRef(false)
+  const keyedOnce = useRef(false)
+  return { lastRows, seen, everRead, overJudged, keyedOnce }
+}
+
 export function TxMeters({
   radio,
   pinned = false,
   inline: inlineProp = false,
   strip = false,
   controls,
+  memory,
 }: {
   radio: RadioStatus
   pinned?: boolean
+  /** What this panel remembers across overs (the held last readings, which meters the rig has
+   *  reported, whether it has keyed), shared with another panel of the same radio: Operate's cell and
+   *  its larger dialog pass one (`useTxMeterMemory`), so a dialog opened between overs holds the
+   *  readings the cell holds. Absent, the panel keeps its own. */
+  memory?: TxMeterMemory
   /** The COMP row's controls; see [`TxMeterControls`]. */
   controls?: TxMeterControls
   /** Inline telemetry-cell variant (the Operate strip): pinned semantics — always
@@ -179,7 +205,8 @@ export function TxMeters({
   // Retain the last live readings so the pinned strip has something to show between overs.
   // A plain ref (not state): the poll re-renders us anyway, and retention must never
   // itself cause a render. Unconditional hook — declared before any early return.
-  const lastRows = useRef<MeterRow[]>([])
+  const own = useTxMeterMemory()
+  const { lastRows, seen, everRead, overJudged, keyedOnce } = memory ?? own
   // ⭐ WHICH METERS THIS RIG ACTUALLY HAS, and whether we are yet in a position to say.
   //
   // These fields are populated ONLY while transmitting, so a blank row means two different
@@ -187,15 +214,12 @@ export function TxMeters({
   // and after one, a meter that stayed silent through it is one the radio does not report.
   // Telling those apart is the whole reason the row can carry a ⊘ at all — a mark hung on
   // the first case would be writing a radio off for never having been asked.
-  const seen = useRef(new Set<MeterKey>())
-  const everRead = useRef(false)
+  // (`seen`, `everRead`, in `useTxMeterMemory`.)
   // The verdict is due only once an over that read something has ENDED. The keyed poll reads
   // one meter per 150 ms, so 150 ms into the first over ALC/Po/COMP are meters not yet asked,
-  // not meters the rig lacks, and a ⊘ hung on them then would flash and go as they arrive.
-  const overJudged = useRef(false)
-  // Has the rig keyed since this panel mounted? The Operate cell gives every meter its slot
-  // from that moment on (below).
-  const keyedOnce = useRef(false)
+  // not meters the rig lacks, and a ⊘ hung on them then would flash and go as they arrive
+  // (`overJudged`). Has the rig keyed since this panel mounted (`keyedOnce`)? The Operate cell gives
+  // every meter its slot from that moment on (below).
   const units = useUnits()
   // The processor level while a drag is in flight: the marker follows the pointer at once.
   const [dragPct, setDragPct] = useState<number | null>(null)
@@ -561,10 +585,13 @@ export function TxMeters({
  *  was. The dialog box is `ui/Dialog`'s own (its portaled box is the sanctioned raw-unit exception);
  *  only how the meters sit inside it is styled here (`.txmeters-large`).
  *
- *  The dialog's panel is its own TxMeters: it keeps the cell's readings while keyed, and between
- *  overs shows what the radio reports now (the cell's held last readings stay in the cell). */
+ *  The dialog's panel shares the cell's memory (`useTxMeterMemory`): live while keyed, and between
+ *  overs the same held last readings the cell shows, however late it is opened. */
 export function TxMetersCell({ radio }: { radio: RadioStatus }) {
   const [open, setOpen] = useState(false)
+  // One memory for the cell and the dialog: opened between overs, the dialog holds the readings the
+  // cell holds, so the two never disagree.
+  const memory = useTxMeterMemory()
   const returnFocus = useFocusReturn(open)
   return (
     <>
@@ -582,7 +609,7 @@ export function TxMetersCell({ radio }: { radio: RadioStatus }) {
           setOpen(true)
         }}
       >
-        <TxMeters radio={radio} inline />
+        <TxMeters radio={radio} inline memory={memory} />
       </div>
       <Dialog
         open={open}
@@ -592,7 +619,7 @@ export function TxMetersCell({ radio }: { radio: RadioStatus }) {
         onCloseAutoFocus={returnFocus}
       >
         <div className="txmeters-large">
-          <TxMeters radio={radio} pinned />
+          <TxMeters radio={radio} pinned memory={memory} />
         </div>
         <div className="txmeters-actions">
           <button type="button" className="export-btn" aria-label={t('meters.tx.enlarge.close')} onClick={() => setOpen(false)}>
