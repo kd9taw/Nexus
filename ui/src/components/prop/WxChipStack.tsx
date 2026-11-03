@@ -62,7 +62,12 @@ export function WxChipStack({
           aria-haspopup="dialog"
           aria-expanded={listOpen}
           aria-label={t('map.wx.more.aria', { n: hidden.length })}
-          onClick={() => setOpen(true)}
+          onClick={(e) => {
+            // WebKit (the macOS window) does not focus a button on click, so the list would not
+            // know where to give the keyboard back: put it on the chip first.
+            e.currentTarget.focus({ preventScroll: true })
+            setOpen(true)
+          }}
         >
           {t('map.wx.more', { n: hidden.length })}
         </button>

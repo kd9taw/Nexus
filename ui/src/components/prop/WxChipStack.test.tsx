@@ -85,6 +85,18 @@ describe('WxChipStack on a narrow map', () => {
     await waitFor(() => expect(document.activeElement).toBe(more))
   })
 
+  it('a mouse open that did not focus the chip (macOS WebKit) still gives the keyboard back to it', async () => {
+    const { container } = await mount(true, FOUR)
+    const more = moreChip(container)!
+    // WebKit does not focus a button on click: the keyboard is still on the page when it opens.
+    expect(document.activeElement).toBe(document.body)
+    fireEvent.click(more)
+    await screen.findByRole('dialog')
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(more))
+  })
+
   it('shows no "+N more" chip when everything fits', async () => {
     const { container } = await mount(true, FOUR.slice(0, 2))
     expect(inStack(container)).toEqual(['flare', 'cap'])
