@@ -4696,8 +4696,9 @@ pub struct Engine {
     /// [`Self::observe_rig_tx_alc_zone`]. `None` = 1.0 is the top of the zone.
     rig_tx_alc_zone: Option<f32>,
     rig_tx_po_w: Option<f32>,
-    /// The forward power the radio measured during its latest over, for the contact it is logged
-    /// on ([`Self::log_power_now`]). Kept past the unkey, unlike `rig_tx_po_w`.
+    /// The forward power measured during the latest over (the radio's, or the amplifier's when
+    /// one is on the radio), for the contact it is logged on ([`Self::log_power_now`]). Kept
+    /// past the unkey, unlike `rig_tx_po_w`.
     measured_over: Option<MeasuredOver>,
     rig_tx_comp_db: Option<f32>,
     /// The radio's own PA (finals) temperature and its SSB transmit-bandwidth setting: see
@@ -6716,7 +6717,8 @@ fn wsjtx_msgsent(tier: Tier, waveform: &TxWaveform) -> String {
     format!("{text:<width$}")
 }
 
-/// The forward power the radio measured during one over ([`Engine::note_measured_power`]).
+/// The forward power measured during one over: the radio's ([`Engine::note_measured_power`]),
+/// or with an amplifier on the radio the amplifier's ([`Engine::note_amp_output`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MeasuredOver {
     /// The highest reading of the over, in watts.
@@ -10261,13 +10263,16 @@ impl Engine {
     // --- Amplifier: per-radio live status from the amplifier poll thread ---
     //
     // The same contract as the block above — update `amp_live[id]` WITHOUT touching the active
-    // flat state, the decode context or TX. Display-only: it gates nothing and keys nothing.
+    // flat state, the decode context or TX. Display-only: it gates nothing and keys nothing. The
+    // one other reader is the log: the output watts are the contact's power
+    // ([`Self::note_amp_output`]), and STANDBY says the radio's own figure is.
     // Putting an amplifier in standby is not a way to stop a transmission (the exciter keeps
     // keying and the drive passes straight through), so no reading here may ever become a
     // condition on a transmit decision or reach a cockpit's stop-line census.
 
     /// Record a SUCCESSFUL amplifier poll. Clears the miss run and marks the link up.
     pub fn observe_amp_status(&mut self, id: u32, status: crate::dto::AmpStatusDto) {
+        let output_watts = status.output_watts;
         let e = self.amp_live.entry(id).or_default();
         e.misses = 0;
         e.status = crate::dto::AmpStatusDto {
@@ -10275,6 +10280,7 @@ impl Engine {
             reason: String::new(),
             ..status
         };
+        self.note_amp_output(id, output_watts);
     }
 
     /// Record a FAILED amplifier poll — `reason` is one of [`crate::dto::AMP_REASONS`].
@@ -13902,7 +13908,9 @@ impl Engine {
     ///
     /// Only a reading that is the station's output on the radio's own scale counts: none during a
     /// tune carrier (a tune-up's power is not the contact's), none with an amplifier on the radio
-    /// (the radio's power is then the amplifier's drive), none on a path whose watts are not the
+    /// (the radio's power is then the amplifier's drive: [`Self::note_amp_output`] measures that
+    /// over instead) unless the amplifier is linked and says STANDBY (it then passes the drive
+    /// straight through, so the radio's power is the power on the air), none on a path whose watts are not the
     /// radio's own ([`crate::settings::po_watts_scale_known`]), and no zero (between words, or
     /// before the RF rises). The over's figure is its PEAK, which on SSB is the nearest the meter
     /// comes to PEP. A reading more than [`MEASURED_OVER_GAP_SECS`] after the last starts a new
@@ -13911,11 +13919,58 @@ impl Engine {
         if !w.is_finite()
             || w <= 0.0
             || self.tx_owner() == Some(TxOwner::Tune)
-            || self.settings.amp_configured()
+            || (self.settings.amp_configured() && !self.amp_in_standby())
             || !self.settings.po_watts_scale_is_known()
         {
             return;
         }
+        self.fold_over_power(w);
+    }
+
+    /// Fold one amplifier output reading (watts) into the over it was measured on, for the log:
+    /// with an amplifier on the radio, its output is the power on the air. The same rules as the
+    /// radio's figure ([`Self::note_measured_power`]): the active radio's amplifier only, only
+    /// while one is set up on it, none during a tune carrier, and no zero (receiving, or the
+    /// amplifier in standby with nothing to measure).
+    ///
+    /// ⚠️ ONLY WHILE AN OVER IS UNDER WAY. The radio's figure is read only while the radio loop
+    /// sees the rig keyed; the amplifier is polled all the time, on its own thread, so a poll
+    /// sampled on the air can arrive after the unkey, and an amplifier meter can still be falling
+    /// just after it. Such a reading may only extend an over that is still open: it never starts
+    /// a new one, which would replace the over's peak with its tail (or a tune-up's late sample
+    /// with a contact's power). The station is keyed when the rig says so over CAT, a satellite
+    /// pass infers it, or Nexus itself owns the transmitter for anything but a tune carrier.
+    fn note_amp_output(&mut self, id: u32, w: Option<u16>) {
+        let Some(w) = w.filter(|w| *w > 0) else {
+            return;
+        };
+        let owner = self.tx_owner();
+        if id != self.settings.active_radio
+            || !self.settings.amp_configured()
+            || owner == Some(TxOwner::Tune)
+        {
+            return;
+        }
+        let keyed = self.rig_keyed || self.sat_inferred_keyed || owner.is_some();
+        let now = now_unix_secs();
+        let extends_open_over = self
+            .measured_over
+            .is_some_and(|o| o.open && now.saturating_sub(o.last_unix) <= MEASURED_OVER_GAP_SECS);
+        if keyed || extends_open_over {
+            self.fold_over_power(f32::from(w));
+        }
+    }
+
+    /// Is the active radio's amplifier linked and in STANDBY by its latest poll? A missed poll
+    /// clears `operate`, so a quiet amplifier is never taken for one in standby.
+    fn amp_in_standby(&self) -> bool {
+        self.amp_live(self.settings.active_radio)
+            .is_some_and(|a| a.linked && a.operate == Some(false))
+    }
+
+    /// Fold one forward-power reading (watts) into the current over's peak, or start a new over:
+    /// see [`Self::note_measured_power`].
+    fn fold_over_power(&mut self, w: f32) {
         let now = now_unix_secs();
         match &mut self.measured_over {
             Some(over)
@@ -17713,7 +17768,8 @@ impl Engine {
     /// The power to stamp on a contact that started at `start_unix` (ADIF `TX_PWR`), in watts.
     ///
     /// ⭐ WHAT THE RADIO MEASURED FIRST. The forward power the radio reported during its latest
-    /// over ([`Self::note_measured_power`]), when that over ran after the contact started (less
+    /// over ([`Self::note_measured_power`]) — with an amplifier on the radio, the output the
+    /// amplifier reported ([`Self::note_amp_output`]), since the radio's is then its drive — when that over ran after the contact started (less
     /// [`MEASURED_OVER_SLACK_SECS`], for a reply sent before its call was typed): the power that
     /// was actually on the air for this contact, whatever the slider or Settings say. `None` for
     /// `start_unix` takes the latest over whenever it was (a contest row, logged as it is worked).
@@ -51841,6 +51897,174 @@ mod tests {
             logged(&icom(3073), &plain),
             Some(25.0),
             "an IC-7300 on its own curve"
+        );
+    }
+
+    /// Set an amplifier up on the active radio (Settings ▸ Radio ▸ Amplifier).
+    fn with_amp(e: &mut Engine) {
+        e.settings.ensure_radio_profiles();
+        e.settings.sync_active_from_flat();
+        let id = e.settings.active_radio;
+        let p = e.settings.radios.iter_mut().find(|p| p.id == id).unwrap();
+        p.amp_model = "spe".into();
+        p.amp_port = "COM7".into();
+    }
+
+    /// One amplifier poll answer for the active radio.
+    fn amp_poll(e: &mut Engine, operate: bool, watts: u16) {
+        let id = e.settings.active_radio;
+        e.observe_amp_status(
+            id,
+            crate::dto::AmpStatusDto {
+                family: "spe".into(),
+                linked: true,
+                operate: Some(operate),
+                output_watts: Some(watts),
+                ..Default::default()
+            },
+        );
+    }
+
+    /// With an amplifier on the radio, the power on the air is the AMPLIFIER's: a contact logs
+    /// the peak output the amplifier reported on its over (the radio's figure is only the drive),
+    /// on the same over and slack rules as the radio's figure. Where the amplifier said nothing
+    /// usable for this contact it falls back to Settings ▸ Station power: an amplifier that never
+    /// answered, one whose reading is an earlier contact's, and one that went quiet (a missed
+    /// poll clears its watts). Without an amplifier set up, an amplifier reading is no one's
+    /// power and the radio's figure stands.
+    #[test]
+    fn with_an_amplifier_a_contact_logs_the_amplifiers_output_on_its_over() {
+        let logged = |setup: &dyn Fn(&mut Engine), over: &dyn Fn(&mut Engine)| {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.station_power_w = Some(100.0);
+            setup(&mut e);
+            let rec = e.qso_record("W9XYZ".into(), None, None);
+            over(&mut e);
+            e.log_qso(rec);
+            e.stored_log()[0].tx_power
+        };
+        // The radio drives 40 W; the amplifier puts out up to 950 W. The radio loop sees the rig
+        // keyed over CAT, then the unkey.
+        let amp_over = |e: &mut Engine| {
+            e.observe_rig_ptt(true);
+            for w in [0, 610, 950, 920] {
+                amp_poll(e, true, w);
+                e.observe_rig_tx_meters(None, None, Some(40.0), None);
+            }
+            e.observe_rig_ptt(false);
+            e.clear_rig_tx_meters();
+            amp_poll(e, true, 0);
+        };
+        assert_eq!(
+            logged(&with_amp, &amp_over),
+            Some(950.0),
+            "the amplifier's peak, not the radio's drive or Settings"
+        );
+        // Set up, but never linked: no poll ever answered.
+        let unlinked = |e: &mut Engine| an_over(e, &[40.0]);
+        assert_eq!(logged(&with_amp, &unlinked), Some(100.0));
+        // A missed poll: the amplifier went quiet, its readings are gone.
+        let quiet = |e: &mut Engine| {
+            let id = e.settings.active_radio;
+            e.observe_amp_miss(id, "spe", "noAnswer");
+            an_over(e, &[40.0]);
+        };
+        assert_eq!(logged(&with_amp, &quiet), Some(100.0));
+        // An earlier contact's amplifier over.
+        let stale = |e: &mut Engine| {
+            amp_over(e);
+            e.measured_over.as_mut().unwrap().last_unix -= MEASURED_OVER_SLACK_SECS + 60;
+        };
+        assert_eq!(
+            logged(&with_amp, &stale),
+            Some(100.0),
+            "an earlier contact's"
+        );
+        // A tune-up through the amplifier is not the contact's power, nor is a sample of it the
+        // amplifier delivers after the tune carrier has gone.
+        let tune = |e: &mut Engine| {
+            e.tuning = true;
+            amp_poll(e, true, 500);
+            e.tuning = false;
+            e.clear_rig_tx_meters();
+            amp_poll(e, true, 480);
+        };
+        assert_eq!(logged(&with_amp, &tune), Some(100.0), "a late tune sample");
+        // A poll sampled on the air but delivered after the unkey (or a meter still falling)
+        // is the over's tail: it never replaces the peak.
+        let late = |e: &mut Engine| {
+            amp_over(e);
+            amp_poll(e, true, 300);
+            amp_poll(e, true, 0);
+        };
+        assert_eq!(
+            logged(&with_amp, &late),
+            Some(950.0),
+            "a late poll after the unkey"
+        );
+        // Nexus's own over (an FT slot, a mic key) counts as keyed without a CAT PTT read-back;
+        // readings with nothing keyed and no open over count for nothing.
+        let unkeyed = |e: &mut Engine| {
+            amp_poll(e, true, 700);
+            e.clear_rig_tx_meters();
+        };
+        assert_eq!(logged(&with_amp, &unkeyed), Some(100.0), "nothing keyed");
+        // Another radio's amplifier is not this radio's.
+        let other = |e: &mut Engine| {
+            let id = e.settings.active_radio + 7;
+            e.observe_amp_status(
+                id,
+                crate::dto::AmpStatusDto {
+                    linked: true,
+                    operate: Some(true),
+                    output_watts: Some(800),
+                    ..Default::default()
+                },
+            );
+            e.clear_rig_tx_meters();
+        };
+        assert_eq!(logged(&with_amp, &other), Some(100.0));
+        // No amplifier set up: unchanged, the radio's figure.
+        assert_eq!(
+            logged(&|_| {}, &amp_over),
+            Some(40.0),
+            "no amp: the radio's"
+        );
+    }
+
+    /// An amplifier in STANDBY passes the drive straight through: the radio's figure IS the power
+    /// on the air, so it is logged again, while the amplifier is linked and says standby. In
+    /// OPERATE the radio's figure stays drive (the control).
+    #[test]
+    fn with_the_amplifier_in_standby_the_radios_figure_is_the_power() {
+        let logged = |operate: bool| {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.station_power_w = Some(100.0);
+            with_amp(&mut e);
+            let rec = e.qso_record("W9XYZ".into(), None, None);
+            amp_poll(&mut e, operate, 0);
+            an_over(&mut e, &[0.0, 38.6, 40.2]);
+            e.log_qso(rec);
+            e.stored_log()[0].tx_power
+        };
+        assert_eq!(logged(false), Some(40.0), "standby: the radio's own output");
+        assert_eq!(logged(true), Some(100.0), "operate: the radio's is drive");
+
+        // Standby, then the amplifier goes quiet: a missed poll clears its standby reading, so
+        // the radio's figure is drive again for all Nexus knows, and Settings is logged.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = Some(100.0);
+        with_amp(&mut e);
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        amp_poll(&mut e, false, 0);
+        let id = e.settings.active_radio;
+        e.observe_amp_miss(id, "spe", "noAnswer");
+        an_over(&mut e, &[40.0]);
+        e.log_qso(rec);
+        assert_eq!(
+            e.stored_log()[0].tx_power,
+            Some(100.0),
+            "quiet after standby"
         );
     }
 
