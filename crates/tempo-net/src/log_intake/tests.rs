@@ -62,7 +62,7 @@ fn reads_type12() {
     let adif = "<call:5>K1ABC<gridsquare:4>FN42<mode:4>MFSK<submode:3>FT4<freq:9>14.081000\
                 <qso_date:8>20261014<time_on:6>010203<station_callsign:5>K2DEF<EOR>";
     let (format, program, f) = one(read_datagram(&encode_logged_adif("JTDX", adif)));
-    assert_eq!(format, Format::Wsjtx);
+    assert_eq!(format, Format::WsjtxAdif);
     assert_eq!(
         program.as_deref(),
         Some("JTDX"),

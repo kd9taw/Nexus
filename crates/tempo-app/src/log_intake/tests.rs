@@ -62,6 +62,16 @@ impl Station {
         self.send_from("127.0.0.1:50000", bytes);
     }
 
+    /// Let every held type 5 go, as the listener does once its hold runs out.
+    fn settle(&mut self) {
+        flush_held(
+            &self.e,
+            &mut self.gate,
+            &self.note,
+            Instant::now() + HOLD * 2,
+        );
+    }
+
     fn calls(&self) -> Vec<String> {
         self.e.stored_log().iter().map(|r| r.call.clone()).collect()
     }
@@ -146,6 +156,7 @@ fn a_freedv_contact_is_queued_for_the_service_uploads() {
 fn a_wsjtx_contact_from_any_program_lands_in_the_log_via_that_program() {
     let mut st = Station::new();
     st.send(&encode_qso_logged("JTDX", &qso("k2def", "K1ABC")));
+    st.settle(); // a type 5 waits for its type 12, which this sender never sends
     let log = st.e.stored_log();
     assert_eq!(log.len(), 1, "{:?}", st.lines());
     let r = &log[0];
@@ -299,6 +310,7 @@ fn a_lan_datagram_is_dropped_unless_lan_is_on() {
     assert!(st.lines()[0].1.contains("not from this computer"));
     st.settings(|s| s.log_intake_lan = true);
     st.send_from("192.168.1.40:5000", &d);
+    st.settle();
     assert_eq!(st.calls(), ["K1ABC"]);
 }
 
@@ -312,6 +324,7 @@ fn a_public_source_is_dropped_even_with_lan_on() {
     }
     assert!(st.calls().is_empty());
     st.send_from("10.0.0.9:5000", &d);
+    st.settle();
     assert_eq!(st.calls(), ["K1ABC"], "control: a private source is read");
 }
 
@@ -335,6 +348,7 @@ fn a_pinned_peer_admits_only_itself() {
         "127.0.0.1:5000",
         &encode_qso_logged("WSJT-X", &qso("K2DEF", "W1XYZ")),
     );
+    st.settle();
     assert_eq!(st.calls(), ["K1ABC", "W1XYZ"], "the pin, and this computer");
     // A pin that is no address takes no network device at all.
     let a = Admission {
@@ -601,4 +615,229 @@ fn the_companion_road_refuses_another_station_call() {
         take_companion_adif(&st.e, &wsjtx_envelope(COMPANION_RECORD)),
         [Ok(IntakeOutcome::Added)]
     );
+}
+
+/// A QSO Logged (type 5) as stock WSJT-X frames it: it ends at the propagation mode
+/// (`MessageClient::qso_logged`), with no satellite name, satellite mode or receive frequency
+/// after it. A satellite contact therefore says PROP_MODE SAT and names no bird.
+fn stock_type5_sat(call: &str) -> Vec<u8> {
+    use tempo_net::qds::QdsWriter;
+    let mut w = QdsWriter::new();
+    w.put_u32(tempo_net::wsjtx::MAGIC)
+        .put_u32(3)
+        .put_u32(5)
+        .put_utf8(Some("WSJT-X"));
+    w.put_qdatetime(WHEN + 30)
+        .put_utf8(Some(call))
+        .put_utf8(Some("FN42"))
+        .put_u64(145_900_000)
+        .put_utf8(Some("FT4"))
+        .put_utf8(Some("-10"))
+        .put_utf8(Some("-12"))
+        .put_utf8(Some(""))
+        .put_utf8(Some(""))
+        .put_utf8(Some(""))
+        .put_qdatetime(WHEN)
+        .put_utf8(Some(""))
+        .put_utf8(Some("K2DEF"))
+        .put_utf8(Some("FN31"))
+        .put_utf8(Some(""))
+        .put_utf8(Some(""))
+        .put_utf8(Some("SAT"));
+    w.into_bytes()
+}
+
+/// The type 12 WSJT-X sends right after it, which names the bird.
+fn type12_sat(call: &str) -> Vec<u8> {
+    encode_logged_adif(
+        "WSJT-X",
+        &format!(
+            "<call:{}>{call}<mode:4>MFSK<submode:3>FT4<band:2>2m<freq:10>145.900000\
+             <qso_date:8>20261014<time_on:6>010203<station_callsign:5>K2DEF\
+             <prop_mode:3>SAT<sat_name:5>RS-44<EOR>",
+            call.len()
+        ),
+    )
+}
+
+/// Finding (review): a WSJT-X satellite contact lost its SAT_NAME. The type 5 logged first with
+/// PROP_MODE SAT alone (which TQSL refuses, with the batch), and the type 12 naming the bird met
+/// the duplicate check. The type 5 is now held a moment for its type 12, which is logged instead.
+#[test]
+fn a_wsjtx_satellite_contact_keeps_its_sat_name_from_the_type12() {
+    let mut st = Station::new();
+    st.send(&stock_type5_sat("K1ABC"));
+    st.send(&type12_sat("K1ABC"));
+    st.settle();
+    let log = st.e.stored_log();
+    assert_eq!(log.len(), 1, "{:?}", st.lines());
+    assert_eq!(log[0].prop_mode.as_deref(), Some("SAT"));
+    assert_eq!(log[0].sat_name.as_deref(), Some("RS-44"), "SAT_NAME lost");
+    assert_eq!(st.lines().len(), 1, "one line: {:?}", st.lines());
+}
+
+/// A type 5 whose type 12 never comes (FreeDV-like senders, a program that sends only type 5) is
+/// logged once the hold runs out, as it was before.
+#[test]
+fn a_type5_whose_type12_never_comes_is_logged_after_the_hold() {
+    let mut st = Station::new();
+    st.send(&encode_qso_logged("JTDX", &qso("K2DEF", "K1ABC")));
+    assert!(st.calls().is_empty(), "held for its type 12");
+    flush_held(&st.e, &mut st.gate, &st.note, Instant::now() + HOLD / 2);
+    assert!(st.calls().is_empty(), "still inside the hold");
+    st.settle();
+    assert_eq!(st.calls(), ["K1ABC"]);
+    // A second type 5 lets the first go at once rather than replace it.
+    let mut st = Station::new();
+    st.send(&encode_qso_logged("JTDX", &qso("K2DEF", "K1ABC")));
+    st.send(&encode_qso_logged("JTDX", &qso("K2DEF", "W1XYZ")));
+    assert_eq!(st.calls(), ["K1ABC"]);
+    st.settle();
+    assert_eq!(st.calls(), ["K1ABC", "W1XYZ"]);
+}
+
+/// The type 12 first: it is logged at once, and the type 5 after it is the same contact, let go
+/// without a line once its hold runs out.
+#[test]
+fn a_type12_first_then_its_type5_logs_once() {
+    let mut st = Station::new();
+    st.send(&type12_sat("K1ABC"));
+    assert_eq!(st.calls(), ["K1ABC"]);
+    st.send(&stock_type5_sat("K1ABC"));
+    st.settle();
+    let log = st.e.stored_log();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].sat_name.as_deref(), Some("RS-44"));
+    assert_eq!(st.lines().len(), 1, "{:?}", st.lines());
+}
+
+/// A date that does not exist is refused, never rolled over into the next month.
+#[test]
+fn an_impossible_date_is_refused() {
+    let mut st = Station::new();
+    for d in ["20260231", "20260431", "20250229", "21000101"] {
+        st.send(format!("<CALL:5>W1ABC<QSO_DATE:8>{d}<TIME_ON:4>0102<EOR>").as_bytes());
+    }
+    assert!(st.calls().is_empty(), "{:?}", st.lines());
+    st.send(b"<CALL:5>W1ABC<QSO_DATE:8>20240229<TIME_ON:4>0102<EOR>");
+    assert_eq!(st.calls(), ["W1ABC"], "control: a leap day");
+}
+
+/// Nexus's own JS8 API UDP target is one of the ports it sends to, refused for the contact port.
+#[test]
+fn the_js8_api_udp_port_is_refused_for_the_contact_port() {
+    let mut s = Settings::default();
+    s.freedv_log_port = s.js8_api_udp_port;
+    assert!(wanted(&s).is_ok(), "off, it sends nothing");
+    s.js8_api_udp = true;
+    assert!(wanted(&s).unwrap_err().contains("JS8"), "{:?}", wanted(&s));
+}
+
+/// FreeDV's "I am here" datagrams are rate-limited as contacts are, in a bucket of their own so
+/// presence can never starve a contact.
+#[test]
+fn freedvs_presence_is_rate_limited_and_cannot_starve_a_contact() {
+    let mut st = Station::new();
+    let hb = tempo_net::wsjtx::encode_heartbeat("FreeDV", 3, "2.4.0", "");
+    for _ in 0..200 {
+        st.send(&hb);
+    }
+    assert!(
+        !st.gate
+            .alive
+            .take("127.0.0.1".parse().unwrap(), Instant::now()),
+        "the presence bucket is spent"
+    );
+    // A contact still goes in.
+    take_datagram(
+        &st.e,
+        &tempo_net::wsjtx::encode_qso_logged(
+            "FreeDV",
+            &QsoLogged {
+                time_off: WHEN,
+                time_on: WHEN,
+                dx_call: "W5FDV",
+                tx_freq: 14_236_000,
+                mode: "DIGITALVOICE",
+                my_call: "K2DEF",
+                ..Default::default()
+            },
+        ),
+        "127.0.0.1:5000".parse().unwrap(),
+        &mut st.gate,
+        &st.freedv_note,
+        &st.note,
+    );
+    assert_eq!(st.calls(), ["W5FDV"]);
+}
+
+/// What the system says the contact port is bound to, as `/proc/net/udp` writes it
+/// (`ADDR:PORT` in hex): `0100007F` is 127.0.0.1, `00000000` every adapter.
+#[cfg(target_os = "linux")]
+fn bound_addrs(port: u16) -> Vec<String> {
+    std::fs::read_to_string("/proc/net/udp")
+        .unwrap_or_default()
+        .lines()
+        .skip(1)
+        .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
+        .filter(|a| a.ends_with(&format!(":{port:04X}")))
+        .collect()
+}
+
+/// ⛔ THE BIND, read back from the system while the real listener manager runs: with "Accept from
+/// devices on my network" off the port is on 127.0.0.1 alone, never every adapter; on, every
+/// adapter; off again, 127.0.0.1; and a port Nexus sends to is let go, with the reason. (The
+/// admission check inside the listener would still keep a network source out if the bind were
+/// wrong; this holds the bind itself.)
+#[cfg(target_os = "linux")]
+#[test]
+fn the_manager_binds_loopback_while_the_network_is_off_and_every_adapter_while_on() {
+    let port = {
+        let s = UdpSocket::bind("127.0.0.1:0").unwrap();
+        s.local_addr().unwrap().port()
+    };
+    let e = Arc::new(Mutex::new(Engine::new("K2DEF", "FN31", 0)));
+    let set = |f: &dyn Fn(&mut Settings)| {
+        let mut g = engine_lock(&e);
+        let mut s = g.settings().clone();
+        f(&mut s);
+        g.apply_settings(s);
+    };
+    set(&|s| {
+        s.freedv_log = true;
+        s.freedv_log_port = port;
+        s.log_intake_lan = false;
+    });
+    let note: Note = Arc::new(|_, _| {});
+    let (e2, n1, n2) = (Arc::clone(&e), Arc::clone(&note), Arc::clone(&note));
+    std::thread::spawn(move || crate::freedv::run(e2, n1, n2));
+    let until = |want: &[String]| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while bound_addrs(port) != want && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        bound_addrs(port)
+    };
+    let lo = [format!("0100007F:{port:04X}")];
+    let any = [format!("00000000:{port:04X}")];
+    assert_eq!(until(&lo), lo, "off: 127.0.0.1 only");
+    set(&|s| s.log_intake_lan = true);
+    assert_eq!(until(&any), any, "on: every adapter");
+    set(&|s| s.log_intake_lan = false);
+    assert_eq!(until(&lo), lo, "off again: 127.0.0.1 only");
+    set(&|s| {
+        s.wsjtx_udp = true;
+        s.wsjtx_udp_addr = format!("127.0.0.1:{port}");
+    });
+    assert_eq!(
+        until(&[]),
+        Vec::<String>::new(),
+        "a port Nexus sends to is let go"
+    );
+    assert!(engine_lock(&e)
+        .freedv_mut()
+        .log_error
+        .clone()
+        .is_some_and(|m| m.contains("cannot use port")));
+    set(&|s| s.freedv_log = false);
 }

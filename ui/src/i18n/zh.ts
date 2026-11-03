@@ -10058,7 +10058,7 @@ export const ZH: PartialCatalog = {
   "settings.transmit.freedv.log.hint": "其他程序可以把记录的每次通联交给 Nexus，地址如此处所示：FreeDV（打开其 QSO Logging）、WSJT-X、JTDX 或 MSHV（其第二 UDP 服务器）、N1MM（其通联广播），或任何通过 UDP 发送 ADIF 的程序。每次通联只以您自己的电台呼号进入日志：以其他呼号记录的通联会被拒绝，原因显示在此处。仅接收：发到这里的任何内容都无法让电台发射或调谐。",
   "settings.transmit.freedv.logPort.label": "通联接收端口",
   "settings.transmit.freedv.lan.label": "接收我网络中设备发来的通联",
-  "settings.transmit.freedv.lan.hint": "用于您自己网络中的设备或另一台电脑，例如 S.A.T. 卫星跟踪器：在 S.A.T. 上把 QSO LOG TYPE 设为 Log4OM 或 HRD，QSO LOG IP 设为这台电脑的地址，端口设为上面的通联接收端口。只接收私有网络地址，绝不接收来自互联网的地址。Windows 可能会询问一次是否允许 Nexus 使用网络。",
+  "settings.transmit.freedv.lan.hint": "用于您自己网络中的设备或另一台电脑，例如 S.A.T. 卫星跟踪器：在 S.A.T. 上把 QSO LOG TYPE 设为 Log4OM 或 HRD，QSO LOG IP 设为这台电脑的地址，端口设为上面的通联接收端口。只接收私有网络地址，绝不接收来自互联网的地址。Windows 可能会询问一次是否允许 Nexus 使用网络。您网络中任何能向此端口发送数据的设备都能记录通联，这些通联会上传到您的日志服务：请只在您信任的网络中打开。",
   "settings.transmit.freedv.peer.label": "仅限此地址",
   "settings.transmit.freedv.peer.hint": "可选：唯一允许发送通联的网络地址（例如 S.A.T. 的地址）。留空则接收您网络中任何设备发来的通联。这台电脑始终允许。",
   "settings.transmit.freedv.last": "最近的通联：来自 {{program}} 的 {{call}}，{{time}}",

@@ -360,7 +360,7 @@ saving the form.
 
 If a CSN S.A.T. tracker runs the radio, its logged contacts can land in the Nexus log by
 themselves. **S.A.T. satellite tracker:** on the S.A.T., set **QSO LOG TYPE** to **Log4OM** or **HRD**, **QSO LOG IP** to this computer's address, and the port to **2239**; in Nexus, turn on **Accept from devices on my network**. Each contact keeps the satellite, propagation mode and uplink and
-downlink frequencies the S.A.T. sends. See [Accept contacts other programs
+downlink frequencies the S.A.T. sends. Anything on your network that can send to the port can log contacts, and they go on to your logging services under your call: the allowed address narrows who may send, but it is not a password, so turn this on only on a network you trust. See [Accept contacts other programs
 log](settings-reference.md#transmit-limits--sharing). *(The fields the S.A.T. sends have not yet
 been checked against a real capture.)*
 

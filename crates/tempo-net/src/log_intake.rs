@@ -113,8 +113,12 @@ pub type Fields = Vec<(String, String)>;
 /// The form a contact came in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
-    /// WSJT-X binary, type 5 or type 12.
+    /// WSJT-X binary, QSO Logged (type 5).
     Wsjtx,
+    /// WSJT-X binary, Logged ADIF (type 12): one ADIF record, the fuller of the two a sender
+    /// sends for one contact (stock WSJT-X's type 5 stops at the propagation mode, so a satellite
+    /// contact's type 5 names no satellite).
+    WsjtxAdif,
     /// Raw ADIF text.
     Adif,
     /// N1MM `<contactinfo>` XML.
@@ -172,7 +176,7 @@ pub fn read_logged_adif(text: &str, program: Option<&str>) -> Intake {
     if text.len() > MAX_DATAGRAM {
         return Intake::Ignored;
     }
-    read_adif_text(text, Format::Wsjtx, program.and_then(program_name))
+    read_adif_text(text, Format::WsjtxAdif, program.and_then(program_name))
 }
 
 fn read_wsjtx(bytes: &[u8]) -> Intake {
@@ -188,7 +192,7 @@ fn read_wsjtx(bytes: &[u8]) -> Intake {
             records: vec![qso_fields(&qso)],
         },
         Some(Inbound::LoggedAdif { id, adif }) => {
-            read_adif_text(&adif, Format::Wsjtx, program_name(&id))
+            read_adif_text(&adif, Format::WsjtxAdif, program_name(&id))
         }
         _ => Intake::Ignored,
     }

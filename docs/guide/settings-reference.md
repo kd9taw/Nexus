@@ -947,7 +947,7 @@ full power on every mode.*
   - **Accept from devices on my network**: off by default. On, the port also takes
     contacts from private network addresses (a home network's 192.168.x.x, 10.x.x.x
     and the like), never from the internet; Windows may ask once whether Nexus may
-    use the network. **S.A.T. satellite tracker:** on the S.A.T., set **QSO LOG TYPE** to **Log4OM** or **HRD**, **QSO LOG IP** to this computer's address, and the port to **2239**; in Nexus, turn on **Accept from devices on my network**.
+    use the network. Anything on your network that can send to the port can log contacts, and they go on to your logging services under your call: the allowed address narrows who may send, but it is not a password, so turn this on only on a network you trust. **S.A.T. satellite tracker:** on the S.A.T., set **QSO LOG TYPE** to **Log4OM** or **HRD**, **QSO LOG IP** to this computer's address, and the port to **2239**; in Nexus, turn on **Accept from devices on my network**.
     *(The fields the S.A.T. sends have not yet been checked against a real capture.)*
   - **Only from this address**: optional, once the network is let in. The one
     network address allowed to send contacts (the S.A.T.'s, say); empty takes any

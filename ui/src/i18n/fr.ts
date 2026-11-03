@@ -8708,7 +8708,7 @@ export const FR: PartialCatalog = {
   "settings.transmit.freedv.logPort.label": "Port des contacts",
   "settings.transmit.freedv.logPort.off": "Pas à l’écoute : le port 0 le désactive.",
   "settings.transmit.freedv.lan.label": "Accepter les appareils de mon réseau",
-  "settings.transmit.freedv.lan.hint": "Pour un appareil ou un autre ordinateur de votre propre réseau, comme le suiveur de satellites S.A.T. : sur le S.A.T., réglez QSO LOG TYPE sur Log4OM ou HRD, QSO LOG IP sur l'adresse de cet ordinateur, et le port sur le port des contacts ci-dessus. Seules les adresses de réseau privées sont acceptées, jamais une adresse d'internet. Windows peut demander une fois si Nexus peut utiliser le réseau.",
+  "settings.transmit.freedv.lan.hint": "Pour un appareil ou un autre ordinateur de votre propre réseau, comme le suiveur de satellites S.A.T. : sur le S.A.T., réglez QSO LOG TYPE sur Log4OM ou HRD, QSO LOG IP sur l'adresse de cet ordinateur, et le port sur le port des contacts ci-dessus. Seules les adresses de réseau privées sont acceptées, jamais une adresse d'internet. Windows peut demander une fois si Nexus peut utiliser le réseau. Tout ce qui, sur votre réseau, peut envoyer vers ce port peut enregistrer des contacts, et ils partent vers vos services de log : n'activez ceci que sur un réseau de confiance.",
   "settings.transmit.freedv.peer.label": "Uniquement depuis cette adresse",
   "settings.transmit.freedv.peer.hint": "Facultatif : la seule adresse réseau autorisée à envoyer des contacts (celle du S.A.T., par exemple). Laissez vide pour accepter tout appareil de votre réseau. Cet ordinateur est toujours autorisé.",
   "settings.transmit.freedv.last": "Dernier contact : {{call}} depuis {{program}} à {{time}}",

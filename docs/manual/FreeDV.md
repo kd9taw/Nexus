@@ -113,7 +113,7 @@ program runs the radio:
 - **The S.A.T. satellite tracker** (it sits on your network, not on this computer): on the S.A.T.,
   set **QSO LOG TYPE** to **Log4OM** or **HRD**, **QSO LOG IP** to this computer's address, and the
   port to **2239**; in Nexus, turn on **Accept from devices on my network**. *(The fields the
-  S.A.T. sends have not yet been checked against a real capture.)*
+  S.A.T. sends have not yet been checked against a real capture.)* Anything on your network that can send to the port can log contacts, and they go on to your logging services under your call: the allowed address narrows who may send, but it is not a password, so turn this on only on a network you trust.
 
 The same rules apply to every program: only under your own station call, a toast and a line in
 the connection log for each contact, **Logged via** the program on the contact's card, and nothing

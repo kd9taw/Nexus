@@ -8708,7 +8708,7 @@ export const ES: PartialCatalog = {
   "settings.transmit.freedv.logPort.label": "Puerto de contactos",
   "settings.transmit.freedv.logPort.off": "Sin escuchar: el puerto 0 lo desactiva.",
   "settings.transmit.freedv.lan.label": "Aceptar de dispositivos de mi red",
-  "settings.transmit.freedv.lan.hint": "Para un dispositivo u otro ordenador de tu propia red, como el seguidor de satélites S.A.T.: en el S.A.T., pon QSO LOG TYPE en Log4OM o HRD, QSO LOG IP en la dirección de este ordenador y el puerto en el puerto de contactos de arriba. Solo se aceptan direcciones de red privadas, nunca una de internet. Windows puede preguntar una vez si Nexus puede usar la red.",
+  "settings.transmit.freedv.lan.hint": "Para un dispositivo u otro ordenador de tu propia red, como el seguidor de satélites S.A.T.: en el S.A.T., pon QSO LOG TYPE en Log4OM o HRD, QSO LOG IP en la dirección de este ordenador y el puerto en el puerto de contactos de arriba. Solo se aceptan direcciones de red privadas, nunca una de internet. Windows puede preguntar una vez si Nexus puede usar la red. Cualquier cosa de tu red que pueda enviar a este puerto puede registrar contactos, y estos van a tus servicios de registro: actívalo solo en una red de confianza.",
   "settings.transmit.freedv.peer.label": "Solo desde esta dirección",
   "settings.transmit.freedv.peer.hint": "Opcional: la única dirección de red que puede enviar contactos (la del S.A.T., por ejemplo). Déjala vacía para aceptar cualquier dispositivo de tu red. Este ordenador siempre está permitido.",
   "settings.transmit.freedv.last": "Último contacto: {{call}} desde {{program}} a las {{time}}",

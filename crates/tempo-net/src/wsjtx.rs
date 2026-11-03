@@ -194,12 +194,12 @@ pub struct QsoLogged<'a> {
     pub exchange_sent: &'a str,
     pub exchange_recvd: &'a str,
     pub adif_propmode: &'a str,
-    /// ⭐ **The three fields WSJT-X sends after the propagation mode** —
-    /// `MessageClient::qso_logged` writes `propmode << satellite << satmode << freqRx`
-    /// (`Network/MessageClient.cpp` 1081-1083), though the type-5 table in
-    /// `NetworkMessage.hpp` (307-325) stops at the propagation mode. A reader that stops there
-    /// stops there; one that reads on gets the satellite pair and the receive frequency, which a
-    /// logger reading only this message otherwise never sees.
+    /// ⭐ **Three optional fields after the propagation mode, which stock WSJT-X does NOT send.**
+    /// Upstream's type-5 table (`Network/NetworkMessage.hpp`) and `MessageClient::qso_logged`
+    /// (`Network/MessageClient.cpp`) both end at the propagation mode: a satellite contact's
+    /// QSO Logged says `SAT` and names no satellite, and only its Logged ADIF (type 12) carries
+    /// `SAT_NAME`. Nexus writes these three after it, and its reader takes them when a sender
+    /// includes them and does without when it stops at the propagation mode, as WSJT-X does.
     ///
     /// ADIF `SAT_NAME`, `""` unless the propagation mode is `SAT`.
     pub satellite: &'a str,

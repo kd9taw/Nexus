@@ -6444,7 +6444,7 @@ export const DE: PartialCatalog = {
   "settings.transmit.freedv.logPort.label": "Kontakt-Port",
   "settings.transmit.freedv.logPort.off": "Nicht empfangsbereit: Port 0 schaltet es aus.",
   "settings.transmit.freedv.lan.label": "Von Geräten in meinem Netzwerk annehmen",
-  "settings.transmit.freedv.lan.hint": "Für ein Gerät oder einen anderen Computer in Ihrem eigenen Netzwerk, etwa den S.A.T.-Satelliten-Tracker: Am S.A.T. QSO LOG TYPE auf Log4OM oder HRD stellen, QSO LOG IP auf die Adresse dieses Computers und den Port auf den Kontakt-Port oben. Nur private Netzwerkadressen werden angenommen, nie eine aus dem Internet. Windows fragt eventuell einmal, ob Nexus das Netzwerk nutzen darf.",
+  "settings.transmit.freedv.lan.hint": "Für ein Gerät oder einen anderen Computer in Ihrem eigenen Netzwerk, etwa den S.A.T.-Satelliten-Tracker: Am S.A.T. QSO LOG TYPE auf Log4OM oder HRD stellen, QSO LOG IP auf die Adresse dieses Computers und den Port auf den Kontakt-Port oben. Nur private Netzwerkadressen werden angenommen, nie eine aus dem Internet. Windows fragt eventuell einmal, ob Nexus das Netzwerk nutzen darf. Alles in Ihrem Netzwerk, das an diesen Port senden kann, kann Verbindungen loggen, und sie gehen an Ihre Logdienste: Schalten Sie dies nur in einem Netzwerk ein, dem Sie vertrauen.",
   "settings.transmit.freedv.peer.label": "Nur von dieser Adresse",
   "settings.transmit.freedv.peer.hint": "Optional: die eine Netzwerkadresse, die Verbindungen senden darf (z. B. die des S.A.T.). Leer lassen, um jedes Gerät in Ihrem Netzwerk anzunehmen. Dieser Computer ist immer zugelassen.",
   "settings.transmit.freedv.last": "Letzte Verbindung: {{call}} von {{program}} um {{time}}",

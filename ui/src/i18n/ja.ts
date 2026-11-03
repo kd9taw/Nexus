@@ -5938,7 +5938,7 @@ export const JA: PartialCatalog = {
   "settings.transmit.freedv.logPort.label": "交信受信ポート",
   "settings.transmit.freedv.logPort.off": "待ち受けていません：ポート0でオフになります。",
   "settings.transmit.freedv.lan.label": "自分のネットワーク上の機器から受け取る",
-  "settings.transmit.freedv.lan.hint": "S.A.T.衛星トラッカーなど、自分のネットワーク上の機器や別のコンピューター用です。S.A.T.では、QSO LOG TYPEをLog4OMまたはHRDに、QSO LOG IPをこのコンピューターのアドレスに、ポートを上の交信受信ポートに設定します。受け取るのはプライベートネットワークのアドレスだけで、インターネットのアドレスは受け取りません。WindowsがNexusのネットワーク使用を一度確認することがあります。",
+  "settings.transmit.freedv.lan.hint": "S.A.T.衛星トラッカーなど、自分のネットワーク上の機器や別のコンピューター用です。S.A.T.では、QSO LOG TYPEをLog4OMまたはHRDに、QSO LOG IPをこのコンピューターのアドレスに、ポートを上の交信受信ポートに設定します。受け取るのはプライベートネットワークのアドレスだけで、インターネットのアドレスは受け取りません。WindowsがNexusのネットワーク使用を一度確認することがあります。ネットワーク上でこのポートに送信できるものは何でも交信を記録でき、その交信はログサービスに送られます。信頼できるネットワークでのみオンにしてください。",
   "settings.transmit.freedv.peer.label": "このアドレスからのみ",
   "settings.transmit.freedv.peer.hint": "任意：交信を送ってよい唯一のネットワークアドレス（例：S.A.T.のアドレス）。空欄にするとネットワーク上のどの機器からも受け取ります。このコンピューターは常に許可されます。",
   "settings.transmit.freedv.last": "最後の交信：{{program}} から {{call}}（{{time}}）",

@@ -9340,7 +9340,7 @@ export const EN = {
   'settings.transmit.freedv.logPort.label': "Contact port",
   'settings.transmit.freedv.logPort.off': "Not listening: port 0 turns it off.",
   'settings.transmit.freedv.lan.label': "Accept from devices on my network",
-  'settings.transmit.freedv.lan.hint': "For a device or another computer on your own network, such as the S.A.T. satellite tracker: on the S.A.T., set QSO LOG TYPE to Log4OM or HRD, QSO LOG IP to this computer's address, and the port to the contact port above. Only private network addresses are taken, never one from the internet. Windows may ask once whether Nexus may use the network.",
+  'settings.transmit.freedv.lan.hint': "For a device or another computer on your own network, such as the S.A.T. satellite tracker: on the S.A.T., set QSO LOG TYPE to Log4OM or HRD, QSO LOG IP to this computer's address, and the port to the contact port above. Only private network addresses are taken, never one from the internet. Windows may ask once whether Nexus may use the network. Anything on your network that can send to this port can log contacts, and they go to your logging services: turn this on only on a network you trust.",
   'settings.transmit.freedv.peer.label': "Only from this address",
   'settings.transmit.freedv.peer.hint': "Optional: the one network address allowed to send contacts (the S.A.T.'s, for example). Leave it empty to take any device on your network. This computer is always allowed.",
   'settings.transmit.freedv.last': "Last contact: {{call}} from {{program}} at {{time}}",

@@ -147,14 +147,25 @@ pub fn contact_adif(f: &Fields, program: &str, station_call: &str) -> Result<Che
     })
 }
 
-/// `YYYYMMDD` from 2000 to 2099, a real month and a day of 1 to 31.
+/// `YYYYMMDD`, a day that exists, from 2000 to 2099: never one the calendar would roll over
+/// (`20260231` is no date, not 3 March).
 fn is_date(d: &str) -> bool {
     let n = |r: std::ops::Range<usize>| d.get(r).and_then(|s| s.parse::<u32>().ok());
-    d.len() == 8
-        && d.bytes().all(|c| c.is_ascii_digit())
-        && n(0..4).is_some_and(|y| (2000..2100).contains(&y))
-        && n(4..6).is_some_and(|m| (1..=12).contains(&m))
-        && n(6..8).is_some_and(|day| (1..=31).contains(&day))
+    if d.len() != 8 || !d.bytes().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let (Some(y), Some(m), Some(day)) = (n(0..4), n(4..6), n(6..8)) else {
+        return false;
+    };
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let days = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (2000..2100).contains(&y) && (1..=days).contains(&day)
 }
 
 /// `HHMM` or `HHMMSS` on a 24-hour clock.
@@ -338,7 +349,7 @@ impl RateLimit {
 // --- The port Nexus sends to ---------------------------------------------------------------------
 
 /// The sentence refusing `port` for the contact port when Nexus itself sends to that port: its
-/// WSJT-X UDP telemetry, its HRD logging, its N1MM broadcast. A contact Nexus sent there would come
+/// WSJT-X UDP telemetry, its HRD logging, its JS8Call API, its N1MM broadcast. A contact Nexus sent there would come
 /// straight back in. `None` when the port is none of them.
 pub fn outbound_clash(s: &Settings, port: u16) -> Option<String> {
     let mut targets: Vec<(&str, String)> = Vec::new();
@@ -351,6 +362,12 @@ pub fn outbound_clash(s: &Settings, port: u16) -> Option<String> {
         targets.push((
             "Ham Radio Deluxe logging",
             s.hrd_udp_addr.trim().to_string(),
+        ));
+    }
+    if s.js8_api_udp {
+        targets.push((
+            "JS8Call API messages",
+            format!("127.0.0.1:{}", s.js8_api_udp_port),
         ));
     }
     if !s.n1mm_addr.trim().is_empty() {
@@ -394,6 +411,11 @@ pub fn wanted(s: &Settings) -> Result<Option<(u16, bool)>, String> {
 /// admission as the settings last said, and the contact just added (for the pair below).
 pub struct Gate {
     limit: RateLimit,
+    /// FreeDV's "I am here" datagrams (Heartbeat, Status, Decode), each of which takes the Engine
+    /// lock: limited as contacts are, in a bucket of their own so presence never starves one.
+    alive: RateLimit,
+    /// A QSO Logged (type 5) waiting [`HOLD`] for its Logged ADIF (type 12).
+    held: Option<Held>,
     said: HashSet<String>,
     admission: Admission,
     admission_read: Option<Instant>,
@@ -403,6 +425,35 @@ pub struct Gate {
 /// The most refusals remembered as said; past it, a new one is not said (the connection log keeps
 /// what it has, and a flood of addresses cannot flood it).
 const SAID_KEPT: usize = 64;
+/// How long a QSO Logged (type 5) waits for its Logged ADIF (type 12). WSJT-X sends the two back to
+/// back for one contact, and the type 12 is the fuller (stock WSJT-X's type 5 names no satellite
+/// and no submode): when it comes inside the hold it is logged and the type 5 let go; when it does
+/// not, the type 5 is logged as it is.
+pub const HOLD: Duration = Duration::from_secs(2);
+
+/// A checked type 5 waiting for its type 12: the program, the contact's identity
+/// ([`contact_key`]), the record, and when it came.
+struct Held {
+    program: String,
+    key: Option<ContactKey>,
+    checked: Checked,
+    at: Instant,
+}
+
+/// A contact's identity for the hold: call, band, mode and start time, in the log's one form.
+type ContactKey = (String, String, String, u64);
+
+fn contact_key(adif: &str) -> Option<ContactKey> {
+    let mut rec = tempo_core::logbook::parse_adif(adif).pop()?;
+    tempo_core::logbook::canonical::contact(&mut rec);
+    Some((
+        rec.call.to_ascii_uppercase(),
+        rec.band.to_ascii_lowercase(),
+        rec.mode.to_ascii_uppercase(),
+        rec.when_unix,
+    ))
+}
+
 /// How long after a contact the same program's second datagram for it (WSJT-X sends a type 5 and
 /// then a type 12) is let go without a line.
 const PAIR_WINDOW: Duration = Duration::from_secs(10);
@@ -411,6 +462,8 @@ impl Gate {
     pub fn new() -> Self {
         Self {
             limit: RateLimit::new(Instant::now()),
+            alive: RateLimit::new(Instant::now()),
+            held: None,
             said: HashSet::new(),
             admission: Admission {
                 lan: false,
@@ -461,6 +514,7 @@ pub fn take_datagram(
 ) {
     let ip = from.ip();
     let now = Instant::now();
+    flush_held(engine, gate, note, now);
     if gate
         .admission_read
         .is_none_or(|at| now.saturating_duration_since(at) >= Duration::from_secs(1))
@@ -488,16 +542,20 @@ pub fn take_datagram(
             return;
         }
         tempo_net::freedv::LogIntake::Alive => {
-            crate::freedv::take_log_datagram(engine, bytes, freedv_note);
+            if gate.alive.take(ip, now) {
+                crate::freedv::take_log_datagram(engine, bytes, freedv_note);
+            }
             return;
         }
         tempo_net::freedv::LogIntake::Ignored => {}
     }
     let size_key = format!("size {ip}");
-    let (program, records) = match read_datagram(bytes) {
+    let (format, program, records) = match read_datagram(bytes) {
         Intake::Contacts {
-            program, records, ..
-        } => (program, records),
+            format,
+            program,
+            records,
+        } => (format, program, records),
         Intake::TooBig => {
             gate.once(
                 size_key,
@@ -520,7 +578,21 @@ pub fn take_datagram(
             return;
         }
         gate.clear(&rate_key);
-        take_contact(engine, &fields, &program, gate, note, now);
+        take_contact(engine, &fields, &program, format, gate, note, now);
+    }
+}
+
+/// Log the held type 5 once its [`HOLD`] has run out at `now` (no type 12 came for it). The
+/// listener asks on every datagram and every quiet quarter second; a test asks with a `now` of its
+/// own.
+pub fn flush_held(engine: &Mutex<Engine>, gate: &mut Gate, note: &Note, now: Instant) {
+    if gate
+        .held
+        .as_ref()
+        .is_some_and(|h| now.saturating_duration_since(h.at) >= HOLD)
+    {
+        let h = gate.held.take().expect("checked above");
+        log_checked(engine, h.checked, &h.program, gate, note, now);
     }
 }
 
@@ -536,10 +608,12 @@ fn take_contact(
     engine: &Mutex<Engine>,
     fields: &Fields,
     program: &str,
+    format: tempo_net::log_intake::Format,
     gate: &mut Gate,
     note: &Note,
     now: Instant,
 ) {
+    use tempo_net::log_intake::Format;
     let station = engine_lock(engine).settings().mycall.clone();
     let checked = match contact_adif(fields, program, &station) {
         Ok(c) => c,
@@ -550,6 +624,46 @@ fn take_contact(
             return;
         }
     };
+    match format {
+        // A type 5 waits for its type 12 (a held one before it goes now, not lost).
+        Format::Wsjtx => {
+            if let Some(h) = gate.held.take() {
+                log_checked(engine, h.checked, &h.program, gate, note, now);
+            }
+            gate.held = Some(Held {
+                program: program.to_string(),
+                key: contact_key(&checked.adif),
+                checked,
+                at: now,
+            });
+            return;
+        }
+        // The type 12 for the held type 5 is logged in its place.
+        Format::WsjtxAdif => {
+            let key = contact_key(&checked.adif);
+            if key.is_some()
+                && gate
+                    .held
+                    .as_ref()
+                    .is_some_and(|h| h.program == program && h.key == key)
+            {
+                gate.held = None;
+            }
+        }
+        Format::Adif | Format::N1mm => {}
+    }
+    log_checked(engine, checked, program, gate, note, now);
+}
+
+/// One checked contact `program` logged: imported, and said.
+fn log_checked(
+    engine: &Mutex<Engine>,
+    checked: Checked,
+    program: &str,
+    gate: &mut Gate,
+    note: &Note,
+    now: Instant,
+) {
     let (made, _durable) = crate::logwrite::intake_contact(engine, &checked.adif);
     let named = match checked.mhz {
         Some(mhz) => format!("{} · {mhz:.3} MHz", checked.call),
@@ -652,6 +766,7 @@ pub fn serve_within(
     let mut gate = Gate::new();
     while !shutdown.load(Ordering::Relaxed) {
         let Ok((n, from)) = sock.recv_from(&mut buf) else {
+            flush_held(&engine, &mut gate, &note, Instant::now());
             continue;
         };
         if n > bound {
@@ -659,6 +774,9 @@ pub fn serve_within(
         }
         take_datagram(&engine, &buf[..n], from, &mut gate, &freedv_note, &note);
     }
+    // Stopped (a port change, the switch off, the app closing): a held contact is logged, not
+    // lost.
+    flush_held(&engine, &mut gate, &note, Instant::now() + HOLD);
 }
 
 /// Open the contact port on every adapter, for "Accept from devices on my network". The listener,

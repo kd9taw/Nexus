@@ -39567,6 +39567,29 @@ mod upload_record_tests {
     /// the launch wires the station's resolver of that country. These reach the keychain, the
     /// network or the whole launch, which no test drives, so the source is read: what is checked
     /// is that no push is left serialising the row another way. `upload_record` and `sent`
+    /// ⛔ A contact another program logged into Nexus (its `APP_NEXUS_VIA` mark) is pushed to no
+    /// DXKeeper, which may be the program that sent it; the operator's own contact is, while the
+    /// push is on, and nothing is while it is off.
+    #[test]
+    fn a_contact_another_program_logged_is_not_pushed_to_dxkeeper() {
+        let dxk = ("127.0.0.1".to_string(), 52000u16, false);
+        let mut mine = tempo_core::logbook::parse_adif(
+            "<CALL:5>W1ABC<QSO_DATE:8>20261014<TIME_ON:4>0102<BAND:3>20m<MODE:2>CW<EOR>",
+        )
+        .pop()
+        .unwrap();
+        assert_eq!(
+            crate::dxkeeper_target_for(Some(&dxk), &mine),
+            Some(dxk.clone())
+        );
+        assert_eq!(crate::dxkeeper_target_for(None, &mine), None);
+        mine.extra.push((
+            tempo_app::log_intake::VIA_FIELD.to_string(),
+            "WSJT-X".to_string(),
+        ));
+        assert_eq!(crate::dxkeeper_target_for(Some(&dxk), &mine), None);
+    }
+
     /// themselves are held to their answers by value (`log_by_id`'s tests).
     #[test]
     fn every_push_and_the_launch_follow_the_dxcc_number_for_country() {
@@ -40833,6 +40856,18 @@ fn hrd_send_connected(addr: &str, bytes: &[u8]) -> bool {
 /// (`adif_record_own_logger`).
 fn dxkeeper_adif(rec: &tempo_core::logbook::QsoRecord) -> String {
     tempo_core::logbook::adif_record_own_logger(&log_queries::sent(rec.clone()))
+}
+
+/// Where the upload worker pushes `rec` in DXKeeper (`dxk`, the push's host, base port and uploads
+/// switch while it is on): nowhere for a contact another program logged into Nexus
+/// (`tempo_app::log_intake::from_another_program`), since DXKeeper may be the program that sent it
+/// and it would come back in.
+fn dxkeeper_target_for(
+    dxk: Option<&(String, u16, bool)>,
+    rec: &tempo_core::logbook::QsoRecord,
+) -> Option<(String, u16, bool)> {
+    dxk.filter(|_| !tempo_app::log_intake::from_another_program(rec))
+        .cloned()
 }
 
 fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String) {
@@ -48362,10 +48397,7 @@ fn start_on_the_logbook(
                 // DXLab is not running. Fire it and move on.
                 // …but never a contact another program logged into Nexus (`tempo_app::log_intake`):
                 // DXKeeper may be the program that sent it, and it would come back in.
-                if let Some((host, base, uploads)) = dxk
-                    .clone()
-                    .filter(|_| !tempo_app::log_intake::from_another_program(&rec))
-                {
+                if let Some((host, base, uploads)) = dxkeeper_target_for(dxk.as_ref(), &rec) {
                     // ⭐ THE PRIVATE NOTE RIDES ALONG HERE, deliberately — the one outbound
                     // call site that does. DXKeeper is the operator's OWN logging software on
                     // their OWN machine (the comment above says it: a failed connect just means
