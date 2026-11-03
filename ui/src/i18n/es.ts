@@ -9247,6 +9247,8 @@ export const ES: PartialCatalog = {
   "shell.keptFile.other": "Nexus no pudo leer uno de sus archivos, así que conservó ese archivo, intacto, en {{path}} y empezó uno nuevo. No se borró nada.",
   "shell.keptFile.keptInPlace": "Nexus no pudo leer {{path}} ni apartarlo, así que dejó el archivo donde está y no escribirá encima de él. No se borró nada. Mueve o repara el archivo y luego reinicia Nexus.",
   "shell.intake.logged": "{{call}} registrado desde {{program}}",
+  "shell.intake.device.network": "un dispositivo de tu red",
+  "shell.intake.device.local": "este ordenador",
   "shell.keptFile.settingsKeptInPlace": "Nexus no pudo leer tus ajustes en {{path}} ni apartar ese archivo, así que empezó con los ajustes predeterminados y no guardará ningún ajuste encima de él. No se borró nada. Mueve o repara el archivo y luego reinicia Nexus.",
   "quit.logbook.saving.title": "Guardando tu libro de guardia…",
   "quit.logbook.saving.pending": { "one": "{{count}} cambio pendiente de escribir", "other": "{{count}} cambios pendientes de escribir" },

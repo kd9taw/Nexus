@@ -9247,6 +9247,8 @@ export const FR: PartialCatalog = {
   "shell.keptFile.other": "Nexus n'a pas pu lire l'un de ses fichiers : il a donc conservé ce fichier, intact, sous {{path}} et en a commencé un nouveau. Rien n'a été supprimé.",
   "shell.keptFile.keptInPlace": "Nexus n'a pas pu lire {{path}} ni le mettre de côté : il a donc laissé le fichier où il est et n'écrira pas par-dessus. Rien n'a été supprimé. Déplacez ou réparez le fichier, puis redémarrez Nexus.",
   "shell.intake.logged": "{{call}} enregistré depuis {{program}}",
+  "shell.intake.device.network": "un appareil de votre réseau",
+  "shell.intake.device.local": "cet ordinateur",
   "shell.keptFile.settingsKeptInPlace": "Nexus n'a pas pu lire vos réglages dans {{path}} ni mettre ce fichier de côté : il a donc démarré avec les réglages par défaut et n'enregistrera aucun réglage par-dessus ce fichier. Rien n'a été supprimé. Déplacez ou réparez le fichier, puis redémarrez Nexus.",
   "quit.logbook.saving.title": "Enregistrement de votre journal…",
   "quit.logbook.saving.pending": { "one": "{{count}} modification reste à écrire", "other": "{{count}} modifications restent à écrire" },

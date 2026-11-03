@@ -4456,33 +4456,83 @@ fn allow_to_transmit_is_refused_from_afar_so_a_held_device_never_allows_itself()
     assert_eq!(kind(&control), "run");
 }
 
-/// ⛔ From afar, the contact port's "last contact from" names the program, never an address: a
-/// contact from a device that gave no name of its own is shown under its network address at the
-/// shack, and that address stays there. CONTROL: a program's own name goes as it is.
+/// The snapshot a computer driving the station reads, as the dispatcher finishes it, for a
+/// FreeDV block holding `freedv`.
+fn snapshot_from_afar(shack: &Dispatcher<Fake>, id: u64, freedv: Value) -> Value {
+    let Admission::Run { ticket, .. } =
+        shack.admit(&controller(), call(id, "get_snapshot", json!({})))
+    else {
+        panic!("admitted")
+    };
+    ticket
+        .finish(Ok(json!({ "n": 1, "freedv": freedv })))
+        .result
+        .unwrap()
+}
+
+/// ⛔ From afar, the contact port's "last contact from" never names a network address: a contact
+/// from a device that gave no name of its own (named at the shack by where it sent from) shows
+/// as a device on the network, or this computer for loopback, in the other computer's own words
+/// (`tempo_app::log_intake::FROM_A_NETWORK_DEVICE` / `FROM_THIS_COMPUTER`, which its screen
+/// words). CONTROL: a program's own name goes as it is, and so does the rest of the snapshot.
 #[test]
 fn a_snapshot_read_from_afar_names_no_network_address_for_the_last_contact() {
     let shack = shack();
-    let read = |id, program: &str| {
-        let Admission::Run { ticket, .. } =
-            shack.admit(&controller(), call(id, "get_snapshot", json!({})))
-        else {
-            panic!("admitted")
-        };
-        let snap = json!({
-            "n": 1,
-            "freedv": { "intakeProgram": program, "intakeCall": "K1ABC", "logPort": 2239 },
-        });
-        ticket.finish(Ok(snap)).result.unwrap()
-    };
-    for address in ["192.168.1.40", "fd00::9", "127.0.0.1"] {
-        let got = read(1 + address.len() as u64, address);
-        assert_eq!(got["freedv"]["intakeProgram"], Value::Null, "{address}");
+    for (id, address, shown) in [
+        (
+            1,
+            "192.168.1.40",
+            tempo_app::log_intake::FROM_A_NETWORK_DEVICE,
+        ),
+        (2, "fd00::9", tempo_app::log_intake::FROM_A_NETWORK_DEVICE),
+        (3, "127.0.0.1", tempo_app::log_intake::FROM_THIS_COMPUTER),
+    ] {
+        let got = snapshot_from_afar(
+            &shack,
+            id,
+            json!({ "intakeProgram": address, "intakeCall": "K1ABC", "logPort": 2239 }),
+        );
+        assert_eq!(got["freedv"]["intakeProgram"], shown, "{address}");
         assert_eq!(got["freedv"]["intakeCall"], "K1ABC", "the rest goes");
         assert_eq!(got["n"], 1);
     }
-    let got = read(50, "WSJT-X");
+    let got = snapshot_from_afar(&shack, 9, json!({ "intakeProgram": "WSJT-X" }));
     assert_eq!(
         got["freedv"]["intakeProgram"], "WSJT-X",
         "CONTROL: a name goes"
     );
+}
+
+/// ⛔ From afar, a refusal the contact port shows never quotes a device's address either: each
+/// address in it reads as a device on the network, or this computer. CONTROL: the rest of the
+/// sentence, and a sentence quoting none, go as they are.
+#[test]
+fn a_refusal_read_from_afar_quotes_no_network_address() {
+    let shack = shack();
+    let lan = tempo_app::log_intake::NETWORK_DEVICE_WORDS;
+    let local = tempo_app::log_intake::THIS_COMPUTER_WORDS;
+    for (id, notice, shown) in [
+        (
+            1,
+            "192.168.1.40 logged W1ABC · 145.850 MHz, not imported: the log is busy",
+            format!("{lan} logged W1ABC · 145.850 MHz, not imported: the log is busy"),
+        ),
+        (
+            2,
+            "fd00::9 logged W1ABC as W1AW, not imported: this station is K2DEF",
+            format!("{lan} logged W1ABC as W1AW, not imported: this station is K2DEF"),
+        ),
+        (
+            3,
+            "127.0.0.1 logged a contact with no valid call (\"X\"), not imported",
+            format!("{local} logged a contact with no valid call (\"X\"), not imported"),
+        ),
+    ] {
+        let got = snapshot_from_afar(&shack, id, json!({ "notice": notice }));
+        assert_eq!(got["freedv"]["notice"], json!(shown), "{notice}");
+        assert!(!got.to_string().contains("192.168") && !got.to_string().contains("fd00"));
+    }
+    let plain = "WSJT-X logged K1ABC as W1AW, not imported: this station is K2DEF";
+    let got = snapshot_from_afar(&shack, 9, json!({ "notice": plain }));
+    assert_eq!(got["freedv"]["notice"], plain, "CONTROL");
 }

@@ -14415,6 +14415,8 @@ export const EN = {
   'shell.keptFile.keptInPlace':
     'Nexus could not read {{path}} and could not move it aside, so it has left the file where it is and will not write over it. Nothing was deleted. Move or repair the file, then restart Nexus.',
   'shell.intake.logged': "Logged {{call}} from {{program}}",
+  'shell.intake.device.network': "a device on your network",
+  'shell.intake.device.local': "this computer",
   'shell.keptFile.settingsKeptInPlace':
     'Nexus could not read your settings at {{path}} and could not move that file aside, so it started from the default settings and will not save any setting over that file. Nothing was deleted. Move or repair the file, then restart Nexus.',
   // Quitting while the logbook still has changes on their way to disk: Nexus keeps the main

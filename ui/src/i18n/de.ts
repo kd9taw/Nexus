@@ -9281,6 +9281,8 @@ export const DE: PartialCatalog = {
   "shell.keptFile.other": "Nexus konnte eine seiner Dateien nicht lesen. Die Datei ist unverändert unter {{path}} aufbewahrt, und eine neue wurde begonnen. Es wurde nichts gelöscht.",
   "shell.keptFile.keptInPlace": "Nexus konnte {{path}} nicht lesen und die Datei auch nicht beiseitelegen. Sie bleibt, wo sie ist, und Nexus überschreibt sie nicht. Es wurde nichts gelöscht. Verschieben oder reparieren Sie die Datei, und starten Sie Nexus dann neu.",
   "shell.intake.logged": "{{call}} von {{program}} geloggt",
+  "shell.intake.device.network": "einem Gerät in Ihrem Netzwerk",
+  "shell.intake.device.local": "diesem Computer",
   "shell.keptFile.settingsKeptInPlace": "Nexus konnte Ihre Einstellungen unter {{path}} nicht lesen und die Datei auch nicht beiseitelegen. Nexus hat daher mit den Standardeinstellungen begonnen und speichert keine Einstellung über diese Datei. Es wurde nichts gelöscht. Verschieben oder reparieren Sie die Datei, und starten Sie Nexus dann neu.",
   "quit.logbook.saving.title": "Dein Logbuch wird gespeichert…",
   "quit.logbook.saving.pending": { "one": "Noch {{count}} Änderung zu schreiben", "other": "Noch {{count}} Änderungen zu schreiben" },

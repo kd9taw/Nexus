@@ -48,6 +48,18 @@ use crate::settings::Settings;
 /// back with it; shown in the contact's detail as "via <program>".
 pub const VIA_FIELD: &str = "APP_NEXUS_VIA";
 
+/// What a computer driving the station reads in place of the program of a contact from a device
+/// that gave no name of its own (named at the shack by the address it sent from): the address
+/// stays at the shack. Tokens, which that computer's screen puts in its own words.
+pub const FROM_A_NETWORK_DEVICE: &str = "@network";
+/// …for one from this computer (a loopback address).
+pub const FROM_THIS_COMPUTER: &str = "@local";
+/// The words a refusal read from afar says in place of a network device's address. The refusal
+/// sentences are the station's own, in English, so these are too.
+pub const NETWORK_DEVICE_WORDS: &str = "A device on your network";
+/// …in place of a loopback address.
+pub const THIS_COMPUTER_WORDS: &str = "This computer";
+
 /// Whether `rec` came in from another program ([`VIA_FIELD`]): the upload worker sends such a
 /// contact to the services and not to DXKeeper, which may be the program that sent it.
 pub fn from_another_program(rec: &QsoRecord) -> bool {

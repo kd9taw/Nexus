@@ -1,6 +1,6 @@
 // The toast for a contact another program logged, and the "via" the contact card shows.
 import { describe, it, expect } from 'vitest'
-import { intakeToast, viaOf, VIA_FIELD } from './logIntake'
+import { intakeToast, programLabel, viaOf, VIA_FIELD, FROM_A_NETWORK_DEVICE, FROM_THIS_COMPUTER } from './logIntake'
 
 describe('a contact another program logged', () => {
   it('is toasted with its call and the program it came from', () => {
@@ -13,5 +13,14 @@ describe('a contact another program logged', () => {
     expect(viaOf([['SFI', '120']])).toBeNull()
     expect(viaOf([[VIA_FIELD, '  ']])).toBeNull()
     expect(viaOf(undefined)).toBeNull()
+  })
+})
+
+describe('a contact from a device read from afar', () => {
+  it('names a device on the network or this computer, never an address', () => {
+    expect(programLabel(FROM_A_NETWORK_DEVICE)).toBe('a device on your network')
+    expect(programLabel(FROM_THIS_COMPUTER)).toBe('this computer')
+    expect(intakeToast('W1ABC', FROM_A_NETWORK_DEVICE)).toBe('Logged W1ABC from a device on your network')
+    expect(programLabel('WSJT-X')).toBe('WSJT-X')
   })
 })

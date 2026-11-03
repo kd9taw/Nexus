@@ -585,6 +585,8 @@ export const ZH: PartialCatalog = {
   "shell.keptFile.other": "Nexus 无法读取其中一个文件，因此将该文件原样保留在 {{path}}，并新建一个。未删除任何内容。",
   "shell.keptFile.keptInPlace": "Nexus 无法读取 {{path}} 且无法将其移开，因此将文件留在原处且不会覆盖写入。未删除任何内容。请移动或修复该文件，然后重启 Nexus。",
   "shell.intake.logged": "已记录来自 {{program}} 的 {{call}}",
+  "shell.intake.device.network": "您网络中的设备",
+  "shell.intake.device.local": "这台电脑",
   "shell.keptFile.settingsKeptInPlace": "Nexus 无法读取你的设置（位于 {{path}}）且无法将该文件移开，因此从默认设置启动，且不会将任何设置保存到该文件之上。未删除任何内容。请移动或修复该文件，然后重启 Nexus。",
   "quit.logbook.saving.title": "正在保存你的日志簿…",
   "quit.logbook.saving.pending": "还有 {{count}} 处更改待写入",

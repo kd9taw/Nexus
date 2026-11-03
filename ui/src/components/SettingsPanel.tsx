@@ -207,6 +207,7 @@ import { clearCallHistory, getCallHistoryStatus, getScpStatus, importCallHistory
 import type { CallHistoryStatus, ScpStatus } from '../types'
 import { CONTEST_LISTS_CHANGED } from '../features/contestLists'
 import { fmtUtc } from '../features/logQuery'
+import { programLabel } from '../features/logIntake'
 import { EsmRolePicker } from './EsmRolePicker'
 import {
   CW_BUILT_IN_ROLES,
@@ -8903,7 +8904,7 @@ export function SettingsPanel({
               {(form.freedvLog ?? true) && freedv?.intakeProgram && freedv.intakeUnix != null && (
                 <span className="settings-hint" role="status" data-testid="intake-last">
                   {t('settings.transmit.freedv.last', {
-                    program: freedv.intakeProgram,
+                    program: programLabel(freedv.intakeProgram),
                     call: freedv.intakeCall ?? '',
                     time: fmtUtc(freedv.intakeUnix),
                   })}

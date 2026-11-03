@@ -9200,6 +9200,8 @@ export const JA: PartialCatalog = {
   "shell.keptFile.other": "Nexusのファイルの1つを読み込めなかったため、そのファイルを変更せずに{{path}}として残し、新しいファイルを開始しました。削除されたものはありません。",
   "shell.keptFile.keptInPlace": "{{path}}を読み込めず、退避することもできなかったため、ファイルはそのままの場所に残し、上書きしません。削除されたものはありません。ファイルを移動または修復してから、Nexusを再起動してください。",
   "shell.intake.logged": "{{program}} から {{call}} を記録しました",
+  "shell.intake.device.network": "ネットワーク上の機器",
+  "shell.intake.device.local": "このコンピューター",
   "shell.keptFile.settingsKeptInPlace": "{{path}}にある設定を読み込めず、ファイルを退避することもできなかったため、既定の設定で開始し、そのファイルには設定を上書き保存しません。削除されたものはありません。ファイルを移動または修復してから、Nexusを再起動してください。",
   "quit.logbook.saving.title": "ログブックを保存しています…",
   "quit.logbook.saving.pending": "あと{{count}}件の変更を書き込みます",

@@ -1451,24 +1451,69 @@ impl Journal {
     }
 }
 
-/// ⛔ What a computer driving the station reads of the contact port's last contact
-/// (`tempo_app::freedv::FreedvDto::intake_program`, in a snapshot): the program's own name, never
-/// a network address. A device that gives no name of its own (the S.A.T. tracker's raw ADIF) is
-/// named at the shack by where it sent from, and that address stays at the shack. Any other answer
-/// goes as it came.
+/// ⛔ What a computer driving the station reads of the contact port (`tempo_app::freedv::FreedvDto`,
+/// in a snapshot): never a device's network address. A device that gives no name of its own (the
+/// S.A.T. tracker's raw ADIF) is named at the shack by where it sent from, and that address stays
+/// at the shack: the last contact's program reads as a network device or this computer
+/// (`tempo_app::log_intake::FROM_A_NETWORK_DEVICE`, `FROM_THIS_COMPUTER`, which the other
+/// computer's screen words), and each address quoted in the refusal shown beside it reads as words
+/// that say the same. A program's own name, and any other answer, go as they came.
 fn contact_port_from_afar(mut value: Value) -> Value {
-    if let Some(program) = value
-        .get_mut("freedv")
-        .and_then(|f| f.get_mut("intakeProgram"))
-    {
-        if program
+    use tempo_app::log_intake as intake;
+    let Some(freedv) = value.get_mut("freedv").and_then(Value::as_object_mut) else {
+        return value;
+    };
+    if let Some(program) = freedv.get_mut("intakeProgram") {
+        if let Some(ip) = program
             .as_str()
-            .is_some_and(|p| p.trim().parse::<std::net::IpAddr>().is_ok())
+            .and_then(|p| p.trim().parse::<std::net::IpAddr>().ok())
         {
-            *program = Value::Null;
+            *program = Value::from(if ip.is_loopback() || is_mapped_loopback(ip) {
+                intake::FROM_THIS_COMPUTER
+            } else {
+                intake::FROM_A_NETWORK_DEVICE
+            });
         }
     }
+    if let Some(Value::String(notice)) = freedv.get_mut("notice") {
+        *notice = without_addresses(
+            notice,
+            intake::NETWORK_DEVICE_WORDS,
+            intake::THIS_COMPUTER_WORDS,
+        );
+    }
     value
+}
+
+/// `::ffff:127.0.0.1`, loopback carried in IPv6.
+fn is_mapped_loopback(ip: std::net::IpAddr) -> bool {
+    matches!(ip, std::net::IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()))
+}
+
+/// `text` with each word that is an IP address (punctuation around it aside) put as `network`, or
+/// `local` for a loopback address.
+fn without_addresses(text: &str, network: &str, local: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let bare = word.trim_matches(|c: char| matches!(c, ',' | ';' | '(' | ')' | '"' | '.'));
+            let bare = [bare, bare.trim_end_matches(':')]
+                .into_iter()
+                .find_map(|b| b.parse::<std::net::IpAddr>().ok().map(|ip| (b, ip)));
+            match bare {
+                Some((b, ip)) => word.replacen(
+                    b,
+                    if ip.is_loopback() || is_mapped_loopback(ip) {
+                        local
+                    } else {
+                        network
+                    },
+                    1,
+                ),
+                None => word.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What finishing a call does beyond recording it.
