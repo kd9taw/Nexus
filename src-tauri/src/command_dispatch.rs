@@ -1451,6 +1451,26 @@ impl Journal {
     }
 }
 
+/// ⛔ What a computer driving the station reads of the contact port's last contact
+/// (`tempo_app::freedv::FreedvDto::intake_program`, in a snapshot): the program's own name, never
+/// a network address. A device that gives no name of its own (the S.A.T. tracker's raw ADIF) is
+/// named at the shack by where it sent from, and that address stays at the shack. Any other answer
+/// goes as it came.
+fn contact_port_from_afar(mut value: Value) -> Value {
+    if let Some(program) = value
+        .get_mut("freedv")
+        .and_then(|f| f.get_mut("intakeProgram"))
+    {
+        if program
+            .as_str()
+            .is_some_and(|p| p.trim().parse::<std::net::IpAddr>().is_ok())
+        {
+            *program = Value::Null;
+        }
+    }
+    value
+}
+
 /// What finishing a call does beyond recording it.
 enum After {
     Nothing,
@@ -1500,6 +1520,7 @@ impl<S: Stores> Ticket<S> {
             }
             (_, result) => (result, None),
         };
+        let result = result.map(contact_port_from_afar);
         self.close(match &result {
             Ok(_) => Outcome::Done,
             Err(error) => Outcome::Failed(bounded(error)),

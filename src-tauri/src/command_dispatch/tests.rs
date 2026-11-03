@@ -4455,3 +4455,34 @@ fn allow_to_transmit_is_refused_from_afar_so_a_held_device_never_allows_itself()
     let control = shack.admit(&controller(), call(2, "get_snapshot", json!({})));
     assert_eq!(kind(&control), "run");
 }
+
+/// ⛔ From afar, the contact port's "last contact from" names the program, never an address: a
+/// contact from a device that gave no name of its own is shown under its network address at the
+/// shack, and that address stays there. CONTROL: a program's own name goes as it is.
+#[test]
+fn a_snapshot_read_from_afar_names_no_network_address_for_the_last_contact() {
+    let shack = shack();
+    let read = |id, program: &str| {
+        let Admission::Run { ticket, .. } =
+            shack.admit(&controller(), call(id, "get_snapshot", json!({})))
+        else {
+            panic!("admitted")
+        };
+        let snap = json!({
+            "n": 1,
+            "freedv": { "intakeProgram": program, "intakeCall": "K1ABC", "logPort": 2239 },
+        });
+        ticket.finish(Ok(snap)).result.unwrap()
+    };
+    for address in ["192.168.1.40", "fd00::9", "127.0.0.1"] {
+        let got = read(1 + address.len() as u64, address);
+        assert_eq!(got["freedv"]["intakeProgram"], Value::Null, "{address}");
+        assert_eq!(got["freedv"]["intakeCall"], "K1ABC", "the rest goes");
+        assert_eq!(got["n"], 1);
+    }
+    let got = read(50, "WSJT-X");
+    assert_eq!(
+        got["freedv"]["intakeProgram"], "WSJT-X",
+        "CONTROL: a name goes"
+    );
+}
