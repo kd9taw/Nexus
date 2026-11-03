@@ -3581,6 +3581,13 @@ export interface NeedAlert {
    *  station is activating, its licence, or its grid. The STATE chip's tooltip says which. Absent
    *  from an older station, and a newer one may send a value this window does not know. */
   stateFrom?: 'park' | 'license' | 'grid' | null
+  /** The US state itself (ADIF STATE code), when something placed the station in one — what the
+   *  board's state chips filter on, as the Spots board's do on a spot's. Absent otherwise. */
+  state?: string | null
+  /** The operator may transmit here under their licence class (the Spots row's `licensed`, from
+   *  the same tables). Sent only when FALSE: absent means allowed, and an older station's row
+   *  is kept — the "My privileges" chip tests `=== false`, never falsiness. */
+  licensed?: boolean
   /** The WPX prefix this station would be new on this band in this mode class. Sent only while
    *  "Show WPX prefix needs" is on (off as it ships); the board shows a WPX chip for it. */
   wpxNeed?: string | null

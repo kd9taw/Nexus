@@ -3376,6 +3376,14 @@ export const EN = {
   // `{{mode}}` is a mode-class name — the tooltip is prose, the mode is not.
   'needed.filter.mode.show.title': 'Show {{mode}} needs',
   'needed.filter.mode.hide.title': 'Hide {{mode}} needs',
+  'needed.search.placeholder': 'Search call · entity · mode · band · freq…  (PA* works)',
+  'needed.search.label': 'Search needs',
+  'needed.filters.states.aria': 'US states shown',
+  'needed.filter.state.title': 'Show only {{state}} needs',
+  'needed.filter.privileges.title':
+    'Hide the needs you may not transmit to under your license class (Settings ▸ Station). Spotted and decoded needs are already limited to your privileges, so this mostly hides park and summit activations. Open class hides nothing.',
+  'needed.filter.local.title':
+    'Needed only lists spots heard on your continent, so this is not a switch here: a cluster or skimmer spot becomes a need only when someone on your continent heard it (on VHF, two receivers near you). Until your callsign is set in Settings ▸ Station, Nexus cannot tell your continent and lets those spots through. Reception reports count from receivers near you or where your own signal is heard, and your own decodes count as heard here. Park and summit activations show as their programmes post them. For the worldwide feed, use the Spots board.',
   'needed.popOut.label': '⧉ Pop out',
   'needed.popOut.title': 'Open this board in its own window (for a second monitor)',
   'needed.autoPop.label': 'open at launch',

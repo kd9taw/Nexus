@@ -390,7 +390,8 @@ const DEDUPE = [
 ]
 
 /**
- * Keys held in sessionStorage through SpotsPanel's `useSessionState`. sessionStorage is
+ * Keys held in sessionStorage through `useSessionState` (useSessionState.ts: the Spots board's
+ * filters, the Needed board's search). sessionStorage is
  * already per-webview by the platform, so these need no scope suffix — the same guarantee
  * PER_SURFACE buys, by a different mechanism (windowScope.test.ts leans on it for seenSet).
  * Their lifetime is deliberately shorter: the Spots filters are meant to survive a view
@@ -427,6 +428,9 @@ const SESSION_SCOPED = [
   'nexus.spots.spotterEntities',
   'nexus.spots.states',
   'nexus.spots.workedWindow',
+  // The Needed board's search box: the Spots board's, with the same session lifetime. A pane keeps
+  // its own copy, `<key>.<filterKey>`.
+  'nexus.needed.query',
 ]
 
 describe('zero migration: the main window keeps the exact key strings already on disk', () => {
