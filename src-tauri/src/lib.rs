@@ -1144,6 +1144,11 @@ fn start_cluster_feeds(
     health: &SharedHealth,
     restarting: bool,
 ) {
+    // A window still showing the radio picker takes no lease and starts no feed: a settings save
+    // or a callsign restart meanwhile waits for the window to become a station, like the launch.
+    if cluster_held_for_the_picker() {
+        return;
+    }
     // One login per call on this computer: when another Nexus window holds this call's cluster
     // logins, this one follows them through the relay and starts no feed of its own.
     if !is_real_call(mycall) {
@@ -3019,6 +3024,39 @@ fn opens_on_the_radio_picker(s: &Settings, profile: Option<&str>) -> bool {
 static PICKER_HELD_RADIO: RadioGate<(SharedEngine, tempo_audio::service::RadioConfig)> =
     RadioGate::new();
 
+/// The cluster feeds of a launch that opens on the radio picker, held until the window becomes a
+/// station: the same rule ([`opens_on_the_radio_picker`]) and the same answers as
+/// [`PICKER_HELD_RADIO`]. A picker window takes no cluster lease and logs in nowhere: it exits on
+/// a pick, and holding the logins there would hand them over a few seconds later to the radio
+/// window it opened, or win a handover meant for a window that stays. "Use one radio", the
+/// picker's timeout and a picker that could not be asked release it ([`release_held_cluster`]).
+#[cfg(any(feature = "radio", test))]
+static PICKER_HELD_CLUSTER: RadioGate<(SharedSpots, SharedHealth)> = RadioGate::new();
+
+/// Start the cluster feeds from the settings they run under now ([`cluster_nodes::config`]): what
+/// a held cluster does when its window becomes a station, and the launch's start otherwise.
+fn start_cluster_from_config((spots, health): (SharedSpots, SharedHealth)) {
+    let c = cluster_nodes::config();
+    if c.active {
+        start_cluster_feeds(&spots, &c.mycall, &c.ssid, &health, false);
+    }
+}
+
+/// The window is a station now: its cluster, held while the picker was up, starts (or, if the
+/// launch has not reached its cluster start yet, starts the moment it does).
+fn release_held_cluster() {
+    #[cfg(any(feature = "radio", test))]
+    PICKER_HELD_CLUSTER.release(start_cluster_from_config);
+}
+
+/// Is this window's cluster held for the radio picker? Nothing starts it meanwhile.
+fn cluster_held_for_the_picker() -> bool {
+    #[cfg(any(feature = "radio", test))]
+    return PICKER_HELD_CLUSTER.is_held();
+    #[cfg(not(any(feature = "radio", test)))]
+    false
+}
+
 /// Where a [`RadioGate`] is.
 #[cfg(any(feature = "radio", test))]
 enum GateState<T> {
@@ -3269,6 +3307,8 @@ fn use_single_radio(state: State<'_, SharedEngine>) -> Result<(), String> {
     // the launch has not reached its radio start yet, starts the moment it does).
     #[cfg(feature = "radio")]
     PICKER_HELD_RADIO.release(start_radio_loop);
+    // …and so does its cluster.
+    release_held_cluster();
     Ok(())
 }
 
@@ -3305,6 +3345,7 @@ fn release_as_station(engine: &SharedEngine) -> Result<(), String> {
     claim_active_radio(engine)?;
     #[cfg(feature = "radio")]
     PICKER_HELD_RADIO.release(start_radio_loop);
+    release_held_cluster();
     Ok(())
 }
 
@@ -47089,7 +47130,12 @@ pub fn run() {
     let persisted_source = settings.source;
     // Cluster/RBN feed config (captured before `settings` moves into the engine).
     // `cluster_active()` folds in Unassisted mode, so an unassisted entry connects nothing.
+    // Read here only by a build without the radio feature; the others go by
+    // `cluster_nodes::config()`, published from the same settings below.
+    #[cfg(not(any(feature = "radio", test)))]
     let cluster_active = settings.cluster_active();
+    // The window opens on the radio picker: its cluster waits for it (`PICKER_HELD_CLUSTER`).
+    let cluster_held_for_picker = opens_on_the_radio_picker(&settings, active_profile());
     // Mirror the persisted flag to the atomic the feed callbacks read BEFORE any feed can be
     // spawned, so the "atomic always agrees with settings" invariant holds from the earliest
     // possible moment rather than depending on startup ordering.
@@ -47174,6 +47220,15 @@ pub fn run() {
     ))));
     let health: SharedHealth = Arc::new(FeedHealthState::default());
     cluster_nodes::set_config(node_config);
+    // Held while this window shows the radio picker, else started now: `start_cluster_from_config`
+    // reads the node settings just published, the same `cluster_active`, call and SSID.
+    #[cfg(any(feature = "radio", test))]
+    PICKER_HELD_CLUSTER.hold_or_start(
+        || cluster_held_for_picker,
+        (spots.clone(), health.clone()),
+        start_cluster_from_config,
+    );
+    #[cfg(not(any(feature = "radio", test)))]
     if cluster_active {
         start_cluster_feeds(&spots, &cluster_call, &cluster_ssid, &health, false);
     }

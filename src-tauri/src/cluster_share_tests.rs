@@ -1008,3 +1008,94 @@ fn the_follower_pills_claim_only_what_the_relay_proves() {
     );
     assert!(!crate::read_feed_health(&std::sync::Arc::default()).cluster_via_other_window);
 }
+
+/// A launch that opens on the radio picker, as the desktop's launch does it: the cluster start
+/// held by a [`crate::RadioGate`] on [`crate::opens_on_the_radio_picker`], released by "Use one
+/// radio". The picker window takes no lease, so the radio window it opens, or one already open,
+/// holds the logins; once it becomes a station it claims like any window.
+#[test]
+fn a_window_on_the_radio_picker_takes_no_lease_until_it_becomes_a_station() {
+    let dir = scratch("picker");
+    let n = FakeNode::start();
+    let mut settings = tempo_app::settings::Settings {
+        simultaneous_radios: true,
+        ..Default::default()
+    };
+    settings.ensure_radio_profiles();
+    settings.add_radio_profile();
+    let gate: crate::RadioGate<()> = crate::RadioGate::new();
+    let opened: Mutex<Option<Window>> = Mutex::default();
+    let open = |()| *lock(&opened) = Some(Window::open(&dir, "W1AW", &[&n]));
+    gate.hold_or_start(
+        || crate::opens_on_the_radio_picker(&settings, None),
+        (),
+        open,
+    );
+    assert!(lock(&opened).is_none(), "nothing started on the picker");
+    assert!(
+        matches!(try_lease(&dir, "W1AW"), Lease::Held(_)),
+        "the lease is free while the picker is up"
+    );
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(
+        n.logins.load(Ordering::SeqCst),
+        0,
+        "no login from the picker"
+    );
+    // "Use one radio": the window is a station, and claims.
+    gate.release(|()| *lock(&opened) = Some(Window::open(&dir, "W1AW", &[&n])));
+    let w = lock(&opened).take().expect("started on the release");
+    assert_eq!(w.claim, Claim::Hold);
+    assert!(
+        matches!(try_lease(&dir, "W1AW"), Lease::Taken),
+        "it holds the lease now"
+    );
+    assert!(until(Duration::from_secs(10), || n
+        .logins
+        .load(Ordering::SeqCst)
+        == 1));
+    w.close();
+    // CONTROL: a radio window (`--profile r1`) does not open on the picker, and claims at once.
+    let gate: crate::RadioGate<()> = crate::RadioGate::new();
+    gate.hold_or_start(
+        || crate::opens_on_the_radio_picker(&settings, Some("r1")),
+        (),
+        open,
+    );
+    assert!(lock(&opened)
+        .as_ref()
+        .is_some_and(|w| w.claim == Claim::Hold));
+    lock(&opened).take().unwrap().close();
+}
+
+/// The desktop's wiring of the picker hold, read from its source.
+#[test]
+fn the_desktop_holds_its_cluster_for_the_radio_picker() {
+    let src = include_str!("lib.rs");
+    let body = |head: &str| -> &str {
+        let start = src.find(head).unwrap_or_else(|| panic!("no {head}"));
+        let len = src[start..].find("\n}\n").expect("its end");
+        &src[start..start + len]
+    };
+    let at = |hay: &str, needle: &str| hay.find(needle).unwrap_or_else(|| panic!("no {needle}"));
+    // The launch: held by the picker rule itself, never by a copy of it.
+    let run = body("\npub fn run() {");
+    assert!(run.contains(
+        "let cluster_held_for_picker = opens_on_the_radio_picker(&settings, active_profile());"
+    ));
+    let hold = at(run, "PICKER_HELD_CLUSTER.hold_or_start(");
+    assert!(run[hold..]
+        .starts_with("PICKER_HELD_CLUSTER.hold_or_start(\n        || cluster_held_for_picker,"));
+    // Every start while held does nothing, before any lease is claimed.
+    let start = body("\nfn start_cluster_feeds(");
+    assert!(at(start, "if cluster_held_for_the_picker() {") < at(start, ".claim(mycall)"));
+    // The window becomes a station: both answers that make it one release the cluster.
+    for station in ["\nfn use_single_radio(", "\nfn release_as_station("] {
+        let b = body(station);
+        assert!(
+            at(b, "PICKER_HELD_RADIO.release(") < at(b, "release_held_cluster();"),
+            "{station}"
+        );
+    }
+    assert!(body("\nfn release_held_cluster(").contains("PICKER_HELD_CLUSTER.release("));
+}
