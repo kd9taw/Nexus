@@ -8,7 +8,8 @@
 //
 // The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and src/api.ts
 // swapped for probe/toastcorner-api.ts. For each screen (FT, Phone, CW, PSK: the docks and strips the corners meet), at 1024×768 (the supported
-// floor) and 1920×1080, in each of the four corners, with one toast and with a burst of nine, it pushes the
+// floor) and 1920×1080, in each of the four corners, with a burst of nine (its newest toast stands where a lone
+// toast would, so the burst covers the one-toast case too; PROBE_BURSTS=1,9 runs both), it pushes the
 // toasts through the real toast bus and asserts:
 //   1. NO TOAST COVERS A TRANSMIT CONTROL: no toast's box (inside the column's box) meets any button of the
 //      window's transmit surfaces (`TX_AVOID`: the TX strip, the TX dock, FT's QSO strip, the top bar's
@@ -34,7 +35,7 @@ const STUB_API = join(UI, 'probe', '__toastcorner-api.ts')
 const SIZES = [[1024, 768], [1920, 1080]]
 const SCREENS = ['operate', 'phone', 'cw', 'psk']
 const CORNERS = ['bottom-right', 'bottom-left', 'top-right', 'top-left']
-const BURSTS = [1, 9]
+const BURSTS = (process.env.PROBE_BURSTS ?? '9').split(',').map(Number)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // The transmit surfaces, as features/txSurfaces.ts names them (read from the source, so the two cannot drift).
