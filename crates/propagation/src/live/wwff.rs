@@ -12,15 +12,19 @@
 //! * every caller goes through [`fetch_wwff_spots`], which asks Spotline at most once per
 //!   [`MIN_FETCH_INTERVAL`] whoever calls it (the board, its pop-outs, the background poller),
 //!   and answers in between with the last answer, a failure included;
-//! * the User-Agent names Nexus and where to reach the project ([`UA`]).
+//! * the User-Agent names Nexus, its version and the project's public page, as the pota.app spot
+//!   post's does ([`super::hrdlog::user_agent`]): `Nexus/1.22.0 (+https://github.com/kd9taw/Nexus)`.
+//!   Never the operator's callsign or email, nor anything else from Settings.
+//!
+//! How often it is asked in practice: a board showing WWFF polls once a minute (a board that does
+//! not show it asks nothing), and the background poller that warms the Needed board every three
+//! minutes, both well above the 30 s floor.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::pota::{parse_wwff_spots, OtaSpot};
 
-/// Names the application and how to reach the project, as Spotline asks.
-const UA: &str = "Nexus amateur radio logger (+https://github.com/kd9taw/Nexus)";
 const WWFF_SPOTS_URL: &str = "https://spots.wwff.co/static/spots.json";
 
 /// Spotline's own floor: "Fetch each feed no more frequently than once every 30 seconds."
@@ -37,11 +41,15 @@ static LAST: Mutex<Asked> = Mutex::new(None);
 
 /// The WWFF activators on the air now ("who's on the air"), at most one request to Spotline per
 /// [`MIN_FETCH_INTERVAL`] across the whole process. The lock is held across the request, so two
-/// callers at once make one request between them.
-pub fn fetch_wwff_spots() -> Result<Vec<OtaSpot>, String> {
+/// callers at once make one request between them. `app_version` is Nexus's own, for the
+/// User-Agent.
+pub fn fetch_wwff_spots(app_version: &str) -> Result<Vec<OtaSpot>, String> {
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
     throttled(&mut last, Instant::now(), || {
-        Ok(parse_wwff_spots(&get_text(&client()?, WWFF_SPOTS_URL)?))
+        Ok(parse_wwff_spots(&get_text(
+            &client(app_version)?,
+            WWFF_SPOTS_URL,
+        )?))
     })
 }
 
@@ -63,8 +71,9 @@ fn throttled(
 }
 
 /// The client the fetch uses: HTTPS only, on [`builder`]'s timeout and redirect policy.
-fn client() -> Result<reqwest::blocking::Client, String> {
+fn client(app_version: &str) -> Result<reqwest::blocking::Client, String> {
     builder()
+        .user_agent(super::hrdlog::user_agent(app_version))
         .https_only(true)
         .build()
         .map_err(|e| e.to_string())
@@ -75,7 +84,6 @@ fn client() -> Result<reqwest::blocking::Client, String> {
 fn builder() -> reqwest::blocking::ClientBuilder {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
-        .user_agent(UA)
         .redirect(reqwest::redirect::Policy::none())
 }
 
@@ -94,7 +102,7 @@ mod tests {
     fn the_wire_keeps_its_limits() {
         super::super::body::assert_wire_limits(
             builder,
-            client,
+            || client("test"),
             get_text,
             SPOTS_REPLY_BYTES,
             "WWFF Spotline",
@@ -126,10 +134,12 @@ mod tests {
         assert_eq!(asked, 2, "two asks in 45 s");
     }
 
-    /// The User-Agent names the application and a way to reach the project.
+    /// The User-Agent names the application, its version and the project's public page, and
+    /// nothing a caller could smuggle a header into.
     #[test]
-    fn the_user_agent_identifies_nexus_and_a_contact() {
-        assert!(UA.starts_with("Nexus "), "{UA}");
-        assert!(UA.contains("https://github.com/kd9taw/Nexus"), "{UA}");
+    fn the_user_agent_identifies_nexus_its_version_and_the_project() {
+        let ua = crate::live::hrdlog::user_agent("1.22.0");
+        assert_eq!(ua, "Nexus/1.22.0 (+https://github.com/kd9taw/Nexus)");
+        assert!(!crate::live::hrdlog::user_agent("1.0\r\nX: 1").contains('\n'));
     }
 }

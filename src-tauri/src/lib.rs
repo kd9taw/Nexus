@@ -41649,8 +41649,10 @@ async fn get_ota_spots(
             // WWFF Spotline, at most once per 30 s whoever asks (its terms; see
             // `propagation::live::wwff`).
             "WWFF" => {
-                tauri::async_runtime::spawn_blocking(propagation::live::wwff::fetch_wwff_spots)
-                    .await
+                tauri::async_runtime::spawn_blocking(|| {
+                    propagation::live::wwff::fetch_wwff_spots(env!("CARGO_PKG_VERSION"))
+                })
+                .await
             }
             other => {
                 return Err(format!(
@@ -47412,7 +47414,10 @@ pub fn run() {
             for (prog, fetched) in [
                 ("POTA", propagation::live::pota::fetch_pota_spots()),
                 ("SOTA", propagation::live::pota::fetch_sota_spots(50)),
-                ("WWFF", propagation::live::wwff::fetch_wwff_spots()),
+                (
+                    "WWFF",
+                    propagation::live::wwff::fetch_wwff_spots(env!("CARGO_PKG_VERSION")),
+                ),
             ] {
                 if let Ok(v) = fetched {
                     if let Ok(mut c) = ota.lock() {

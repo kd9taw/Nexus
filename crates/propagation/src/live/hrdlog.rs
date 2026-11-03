@@ -120,7 +120,7 @@ fn post(url: &str, app_version: &str, body: &str) -> Result<String, Failure> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// `Nexus/<version> (+project URL)`. Also the pota.app spot post's.
+/// `Nexus/<version> (+project URL)`. Also the pota.app spot post's and the WWFF Spotline fetch's.
 pub(crate) fn user_agent(app_version: &str) -> String {
     format!(
         "{} (+https://github.com/kd9taw/Nexus)",
