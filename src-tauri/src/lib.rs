@@ -27507,6 +27507,10 @@ fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapsh
         let switched = engine_lock(&state).settings().clone();
         PICKER_HELD_RADIO
             .release(|(engine, cfg)| start_radio_loop((engine, radio_config_now(cfg, &switched))));
+        // …and its cluster, if the picker held that too (a picker that could not be asked was
+        // refused its radio, then the settings turned simultaneous radios off): once, as from
+        // every other answer that makes the window a station.
+        release_held_cluster();
     }
     Ok(snap)
 }

@@ -9,8 +9,10 @@
 //! lock a radio window holds on its profile (`hold_profile_lock`), and it fails OPEN the same way:
 //! only "another process holds it" makes a window follow. A lock that cannot be made at all (an
 //! unwritable folder, a filesystem without locks) leaves the window logging in for itself, as
-//! before this existed. A window already following does not fail open: it has seen a holder, which
-//! may still be up, so on a lock error it keeps following and tries again. The holder runs every cluster feed, human nodes and RBN alike, under ITS
+//! before this existed. A window already following does not fail open at once: it has seen a
+//! holder, which may still be up, so on a lock error it keeps following and tries again; only after
+//! [`BROKEN_LOCK_TRIES`] such tries with the relay file provably absent (not merely unreadable) does
+//! it log in itself. The holder runs every cluster feed, human nodes and RBN alike, under ITS
 //! settings: its node list and its SSID. The lock is keyed by the bare callsign, so windows set up
 //! for different calls stay independent. It lives in the base config dir, never in the shared data
 //! dir: that one can be a network folder for a multi-PC shack, and each computer there logs in for
@@ -54,6 +56,15 @@
 //! per node after at most one retry interval, with no storm. A follower that cannot reach a relay
 //! also waits [`RETRY`] between attempts.
 //!
+//! **Accepted double faults.** Each needs the lock to break AND something else to go wrong, and
+//! none is closed:
+//! - a live holder whose relay could not start has no relay file, so a follower whose lock path
+//!   then stays broken logs in beside it after [`BROKEN_LOCK_TRIES`] tries;
+//! - a holder that crashed leaves its relay file behind, so a follower whose lock path is also
+//!   broken keeps waiting until it restarts;
+//! - a window that logged in without a lease (here or in `claim`) never tries the lease again, so
+//!   once the lock path works, the next window to start takes it and logs in beside it.
+//!
 //! **Lifetime.** A holder keeps the lease while its feeds run, as the RBN feeds keep their
 //! once-latch. It lets go ([`Share::release`]) when its feeds have stopped and will not start again
 //! (a callsign change with the cluster off or no real call left), and swaps it when the callsign
@@ -75,6 +86,9 @@ use tempo_net::cluster::ClusterSpot;
 /// How long a follower waits between tries of the lease and the relay: the bound on a handover,
 /// and the most often a follower knocks.
 pub(crate) const RETRY: Duration = Duration::from_secs(5);
+/// Tries in a row, [`RETRY`] apart, on which a follower finds the lock unusable AND no relay file
+/// naming a holder, before it takes the cluster logins itself as `claim` would have.
+pub(crate) const BROKEN_LOCK_TRIES: usize = 3;
 /// How often the holder tells each follower what it is logged into.
 const STATUS_EVERY: Duration = Duration::from_secs(2);
 /// A follower that hears no status for this long takes the relay for dead.
@@ -590,6 +604,8 @@ impl Share {
     /// The follower loop: take the lease when it is free, otherwise follow the relay, and wait
     /// [`RETRY`] between tries either way.
     fn follow(&self, key: &str, stop: &Arc<AtomicBool>, following: &Following) {
+        // Tries in a row on which the lock was unusable and no relay file named a holder.
+        let mut unproven = 0;
         while !stop.load(Ordering::SeqCst) {
             following.up.store(false, Ordering::SeqCst);
             if self.hooks.active() {
@@ -598,12 +614,40 @@ impl Share {
                         self.take_over(key, stop, Some(file));
                         return;
                     }
-                    // Unlike `claim`, a lock error here does NOT fail open: this window has seen
-                    // another hold the lease, which may still be up. A login of its own beside
-                    // that holder is the very thing the lease exists to stop, so it keeps
-                    // following and tries again.
-                    Lease::Taken | Lease::Broken(_) => {
-                        if let Some((port, secret)) = read_relay(&self.dir, key) {
+                    // Unlike `claim`, a lock error here does not fail open at once: this window
+                    // has seen another hold the lease, which may still be up. A login of its own
+                    // beside that holder is the very thing the lease exists to stop, so it keeps
+                    // following and tries again. A live holder always has its relay file, so only
+                    // when the lock stays unusable AND the file is provably absent for
+                    // [`BROKEN_LOCK_TRIES`] tries does this window log in for itself, as `claim`
+                    // would have; otherwise a lock that stays broken after the holder has gone
+                    // would keep it from the cluster until it restarts. A file that is there but
+                    // cannot be read or parsed proves nothing (the usual broken lock is a folder
+                    // that cannot be read, holder alive), so it counts as a holder.
+                    lease => {
+                        let relay = read_relay(&self.dir, key);
+                        let gone = matches!(
+                            std::fs::metadata(relay_path(&self.dir, key)),
+                            Err(e) if e.kind() == ErrorKind::NotFound
+                        );
+                        unproven = match (&lease, &relay) {
+                            (Lease::Broken(_), None) if gone => unproven + 1,
+                            _ => 0,
+                        };
+                        if unproven >= BROKEN_LOCK_TRIES {
+                            if let Lease::Broken(why) = lease {
+                                tempo_core::applog::warn(
+                                    "cluster",
+                                    &format!(
+                                        "no cluster lease could be made ({why}) and no other \
+                                         window serves the logins; this window logs in for itself"
+                                    ),
+                                );
+                            }
+                            self.take_over(key, stop, None);
+                            return;
+                        }
+                        if let Some((port, secret)) = relay {
                             self.session(port, &secret, stop, following);
                             following.up.store(false, Ordering::SeqCst);
                         }
@@ -855,9 +899,21 @@ impl Relay {
 /// The frequencies a spot may name, in kHz: 1 kHz to 300 GHz. (A NaN is in no range.)
 const SPOT_KHZ: std::ops::RangeInclusive<f64> = 1.0..=300_000_000.0;
 
-/// A Unicode bidi or invisible format character, which can make a line read other than it is.
+/// A Unicode bidi or invisible format character, which can make a line read other than it is: the
+/// soft hyphen, the Arabic letter mark, the Mongolian vowel separator, the zero-width and
+/// directional marks, the invisible operators and every bidi embedding, override and isolate.
 fn hidden_format(c: char) -> bool {
-    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
 }
 
 /// A callsign's shape: letters, digits and `/`, with at least one of each of the first two.

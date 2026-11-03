@@ -774,6 +774,17 @@ fn a_follower_never_logs_in_beside_a_held_lease_on_a_lock_error() {
     let Lease::Held(held) = try_lease(&dir, "W1AW") else {
         panic!("the other window's lease");
     };
+    // Like every live holder, the other window has its relay file (its relay is slow to answer).
+    let relay = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    write_owner_only(
+        &relay_path(&dir, "W1AW"),
+        &format!(
+            "{} {}\n",
+            relay.local_addr().unwrap().port(),
+            "1".repeat(64)
+        ),
+    )
+    .unwrap();
     let n = FakeNode::start();
     let b = Window::open(&dir, "W1AW", &[&n]);
     assert_eq!(b.claim, Claim::Follow);
@@ -786,6 +797,110 @@ fn a_follower_never_logs_in_beside_a_held_lease_on_a_lock_error() {
     assert_eq!(b.hooks.feeds_started.load(Ordering::SeqCst), 0);
     b.close();
     drop(held);
+}
+
+/// A lock path that stays broken after the holder has gone: no relay file names a holder, so after
+/// a few tries the follower logs in for itself, once, as `claim` would have.
+#[cfg(unix)]
+#[test]
+fn a_follower_whose_lock_stays_broken_logs_in_once_the_holder_is_gone() {
+    let dir = scratch("broken-gone");
+    let n = FakeNode::start();
+    let a = Window::open(&dir, "W1AW", &[&n]);
+    let b = Window::open(&dir, "W1AW", &[&n]);
+    assert_eq!(b.claim, Claim::Follow);
+    assert!(until(Duration::from_secs(10), || following_connected(&b)));
+    // The lock file can no longer be opened (a folder where it was); then the holder goes, and
+    // its relay file with it.
+    std::fs::remove_file(lock_path(&dir, "W1AW")).unwrap();
+    std::fs::create_dir(lock_path(&dir, "W1AW")).unwrap();
+    a.close();
+    assert!(!relay_path(&dir, "W1AW").exists());
+    assert!(
+        until(
+            RETRY * (BROKEN_LOCK_TRIES as u32 + 1) + Duration::from_secs(5),
+            || n.logins.load(Ordering::SeqCst) == 2
+        ),
+        "the follower never logged in"
+    );
+    assert_eq!(b.hooks.feeds_started.load(Ordering::SeqCst), 1);
+    assert!(b.share.following().is_none(), "it holds now");
+    std::thread::sleep(RETRY + Duration::from_secs(1));
+    assert_eq!(n.logins.load(Ordering::SeqCst), 2, "once");
+    assert_eq!(n.max_live.load(Ordering::SeqCst), 1, "never two at once");
+    b.close();
+}
+
+/// CONTROL for the one above: while the holder lives, its relay file proves it, and a follower
+/// with a broken lock path keeps following however long the lock stays broken.
+#[cfg(unix)]
+#[test]
+fn a_live_holder_keeps_its_follower_through_a_lock_that_stays_broken() {
+    let dir = scratch("broken-live");
+    let n = FakeNode::start();
+    let a = Window::open(&dir, "W1AW", &[&n]);
+    let b = Window::open(&dir, "W1AW", &[&n]);
+    assert!(until(Duration::from_secs(10), || following_connected(&b)));
+    std::fs::remove_file(lock_path(&dir, "W1AW")).unwrap();
+    std::fs::create_dir(lock_path(&dir, "W1AW")).unwrap();
+    // End the follower's session every retry (it stops wanting the cluster for a moment), so it
+    // goes back to the broken lock each time: more tries than it takes to fail open.
+    for _ in 0..BROKEN_LOCK_TRIES + 2 {
+        b.hooks.active.store(false, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(500));
+        b.hooks.active.store(true, Ordering::SeqCst);
+        std::thread::sleep(RETRY);
+        assert_eq!(n.logins.load(Ordering::SeqCst), 1, "no second login");
+    }
+    assert!(until(RETRY + Duration::from_secs(5), || {
+        following_connected(&b)
+    }));
+    assert_eq!(n.logins.load(Ordering::SeqCst), 1, "no second login");
+    assert_eq!(b.hooks.feeds_started.load(Ordering::SeqCst), 0);
+    a.close();
+    b.close();
+}
+
+/// The usual way a lock breaks mid-session: the shared folder itself becomes unreadable. The live
+/// holder's relay file is still there, merely unreadable, so it is no proof the holder has gone:
+/// the follower never logs in beside it. Needs a user the folder's mode binds, so it says so and
+/// passes trivially as root (inside `unshare -r`); run it outside the namespace.
+#[cfg(unix)]
+#[test]
+fn a_live_holder_whose_folder_cannot_be_read_keeps_its_follower() {
+    use std::os::unix::fs::PermissionsExt;
+    /// Gives the folder its mode back however the test ends, so it can be cleaned up.
+    struct Restore<'a>(&'a Path);
+    impl Drop for Restore<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    let dir = scratch("unreadable");
+    let n = FakeNode::start();
+    let a = Window::open(&dir, "W1AW", &[&n]);
+    let b = Window::open(&dir, "W1AW", &[&n]);
+    assert!(until(Duration::from_secs(10), || following_connected(&b)));
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = Restore(&dir);
+    if std::fs::read_dir(&dir).is_ok() {
+        eprintln!("skipped: this user reads a mode-000 folder (root), so it cannot break the lock");
+        a.close();
+        b.close();
+        return;
+    }
+    for _ in 0..BROKEN_LOCK_TRIES + 2 {
+        b.hooks.active.store(false, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(500));
+        b.hooks.active.store(true, Ordering::SeqCst);
+        std::thread::sleep(RETRY);
+        assert_eq!(n.logins.load(Ordering::SeqCst), 1, "no second login");
+    }
+    assert_eq!(n.max_live.load(Ordering::SeqCst), 1, "never two at once");
+    assert_eq!(b.hooks.feeds_started.load(Ordering::SeqCst), 0);
+    assert!(b.share.following().is_some(), "it still follows");
+    a.close();
+    b.close();
 }
 
 #[test]
@@ -926,6 +1041,14 @@ fn only_a_dx_spot_passes_the_relay() {
         "POST DX 14025 K1ABC tnx\u{2066}x\n",
         "POST DX 14025 K1ABC t\u{200B}nx\n",
         "POST DX 14025 K1ABC \u{FEFF}tnx\n",
+        "POST DX 14025 K1ABC tnx\u{061C}37\n",
+        "POST DX 14025 K1ABC t\u{00AD}nx\n",
+        "POST DX 14025 K1ABC t\u{180E}nx\n",
+        "POST DX 14025 K1ABC t\u{2060}nx\n",
+        "POST DX 14025 K1ABC t\u{2061}nx\n",
+        "POST DX 14025 K1ABC t\u{2062}nx\n",
+        "POST DX 14025 K1ABC t\u{2063}nx\n",
+        "POST DX 14025 K1ABC t\u{2064}nx\n",
         &format!("POST DX 14025 K1ABC {}\n", "x".repeat(300)),
     ] {
         assert_eq!(checked_post(bad), None, "{bad:?}");
@@ -1090,12 +1213,18 @@ fn the_desktop_holds_its_cluster_for_the_radio_picker() {
     let start = body("\nfn start_cluster_feeds(");
     assert!(at(start, "if cluster_held_for_the_picker() {") < at(start, ".claim(mycall)"));
     // The window becomes a station: both answers that make it one release the cluster.
-    for station in ["\nfn use_single_radio(", "\nfn release_as_station("] {
+    for (station, radio) in [
+        ("\nfn use_single_radio(", "PICKER_HELD_RADIO.release("),
+        ("\nfn release_as_station(", "PICKER_HELD_RADIO.release("),
+        // A window let off the picker by its settings starts its radio on a switch, and its
+        // cluster with it.
+        (
+            "\nfn set_active_radio(",
+            "PICKER_HELD_RADIO\n            .release(",
+        ),
+    ] {
         let b = body(station);
-        assert!(
-            at(b, "PICKER_HELD_RADIO.release(") < at(b, "release_held_cluster();"),
-            "{station}"
-        );
+        assert!(at(b, radio) < at(b, "release_held_cluster();"), "{station}");
     }
     assert!(body("\nfn release_held_cluster(").contains("PICKER_HELD_CLUSTER.release("));
 }
