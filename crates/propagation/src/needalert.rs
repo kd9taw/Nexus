@@ -238,6 +238,18 @@ pub struct NeedAlert {
     /// chip's tooltip says which.
     #[serde(default)]
     pub state_from: Option<StateSource>,
+    /// The US state itself (ADIF STATE code), when something placed the station in one — the
+    /// same value [`Self::state_from`] says the source of. The Needed board's state chips filter
+    /// on it, as the Spots board's do on a spot's. `None` otherwise, and then not sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// The operator may TRANSMIT here under their licence class — the Needed board's "My
+    /// privileges" chip, the Spots board's `licensed` flag for a need. Set by the command layer,
+    /// which holds the licence class, from the same tables as the TX lockout; true until it does
+    /// (and always for the Open class). A FLAG, NOT A FILTER: the row is sent either way. Sent
+    /// only when false, so a row nothing restricts is on the wire exactly as before.
+    #[serde(default = "licensed_unless_told", skip_serializing_if = "is_licensed")]
+    pub licensed: bool,
     /// The WPX prefix this station would be new on this band in this mode class, when the
     /// operator has turned on "Show WPX prefix needs" ([`crate::awards_more::mark_award_needs`]).
     /// `None` otherwise, and then not sent, so a board with the setting off is unchanged.
@@ -251,6 +263,16 @@ pub struct NeedAlert {
     /// row can name the group; `None` otherwise, and then not sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iota: Option<String>,
+}
+
+/// A row from a station that never judged [`NeedAlert::licensed`] is kept, never hidden.
+fn licensed_unless_told() -> bool {
+    true
+}
+
+/// `licensed` goes on the wire only when it restricts something.
+fn is_licensed(licensed: &bool) -> bool {
+    *licensed
 }
 
 /// For a station YOUR radio is decoding, the grid it sent on the air is the grid every other
@@ -656,6 +678,8 @@ pub fn score_heard(
         grid: grid.map(str::to_string),
         park: None, // set by activation_alert; a scored award row names no activation
         state_from: None, // set by rank and activation_alert, which know where the state came from
+        state: None,
+        licensed: true,
         wpx_need: None,
         wae_need: None,
         iota,
@@ -696,6 +720,7 @@ pub fn rank(spots: &[Heard], needs: &dyn OperatorNeeds, slots: &AwardSlots) -> V
                 a.admitted_at = s.admitted_at;
                 a.evidence = s.evidence.clone();
                 a.state_from = s.us_state.as_ref().map(|(_, from)| *from);
+                a.state = s.us_state.as_ref().map(|(state, _)| state.clone());
                 a
             })
         })
@@ -968,6 +993,8 @@ pub fn activation_alert(
         grid: spot.grid.clone(),
         park: None, // filled in below, on the merged row as well as this one
         state_from: None,
+        state: None,
+        licensed: true,
         wpx_need: None,
         wae_need: None,
         iota: None,
@@ -977,6 +1004,7 @@ pub fn activation_alert(
     alert.mode = mode.label().to_string();
     // The row's state, when it has one, is the park's or the summit's, on the merged row as well.
     alert.state_from = state.map(|_| StateSource::Park);
+    alert.state = state.map(str::to_string);
     // The NEED first, then the LABEL. Order matters: `tags[0]` picks the row's colour and its
     // chip everywhere downstream, and a park still to be worked is a reason, not a decoration.
     if reference_needed && !alert.tags.contains(&NeedTag::NewPark) {
@@ -1087,6 +1115,8 @@ pub fn watched_alert(
         grid: grid.map(str::to_string),
         park: None,
         state_from: None,
+        state: None,
+        licensed: true,
         wpx_need: None,
         wae_need: None,
         iota: None,
@@ -4150,6 +4180,45 @@ mod tests {
         );
         assert_eq!(ranked[0].priority, 60);
         assert_eq!(ranked[0].state_from, Some(StateSource::License));
+        // …and the state itself, which the Needed board's state chips filter on.
+        assert_eq!(ranked[0].state.as_deref(), Some("VT"));
+    }
+
+    #[test]
+    fn licensed_is_on_the_wire_only_when_it_restricts() {
+        // The Needed board's "My privileges" chip hides a row only on an explicit `false`; a row
+        // nothing restricts — and one from a station that never judged it — must read as allowed.
+        let row = |licensed: bool| NeedAlert {
+            call: "W1XY".into(),
+            entity: "United States".into(),
+            band: "20m".into(),
+            zone: 5,
+            tags: vec![NeedTag::NewState],
+            priority: 60,
+            headline: "New state".into(),
+            mode: "Phone".into(),
+            exact_mode: None,
+            freq_mhz: Some(14.160),
+            admitted_at: None,
+            evidence: None,
+            grid_rarity: None,
+            grid: None,
+            park: None,
+            state_from: None,
+            state: None,
+            licensed,
+            wpx_need: None,
+            wae_need: None,
+            iota: None,
+        };
+        let allowed = serde_json::to_value(row(true)).unwrap();
+        assert!(allowed.get("licensed").is_none(), "{allowed}");
+        assert!(allowed.get("state").is_none(), "{allowed}");
+        let refused = serde_json::to_value(row(false)).unwrap();
+        assert_eq!(refused["licensed"], serde_json::json!(false));
+        // An older station's row carries no flag: kept.
+        let old: NeedAlert = serde_json::from_value(allowed).unwrap();
+        assert!(old.licensed);
     }
 
     #[test]
@@ -4187,6 +4256,8 @@ mod tests {
                 grid: None,
                 park: None,
                 state_from: None,
+                state: None,
+                licensed: true,
                 wpx_need: None,
                 wae_need: None,
                 iota: None,

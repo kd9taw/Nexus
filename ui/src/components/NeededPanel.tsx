@@ -10,6 +10,20 @@
 // the rows print (data), the MODE_OPTS labels (mode-class names), and the POTA/SOTA filter
 // chips (the programmes' own names) — all invariant tokens, see `i18n/index.ts`. The need
 // chips' words live in `features/needVisuals.ts`, which is migrated with that registry.
+//
+// FILTERS MATCH THE SPOTS BOARD'S where a need can be judged the same way: the search box, the
+// band and US-state chips and "My privileges" are the Spots board's controls and rules
+// (SharedFilterChips.tsx, spotFilters.ts). What it leaves out, and why:
+//  * "Heard on my continent" is not a switch here — the list arrives already put through it
+//    (`cluster_spot_heards`), so it is drawn as a fixed rule (dashed, unfilled), saying so.
+//  * Hide worked: left out by choice. It would hide little — the Spots board's rescue
+//    (`neededHere`) keeps any station still needed on its band and mode — but not nothing: an
+//    activation-only row (a park hunted today that adds no award) carries only activity tags,
+//    which `neededHere` does not count as a need, so that row would be hidden.
+//  * Spotted from (continent/country): a need carries no list of who heard it, and the spotted
+//    rows all had a voice on the operator's continent already.
+//  * A pane following the radio's band: this board's worth is the bands you are NOT on.
+//  * Mode chips stay mode classes (Digital/CW/Phone), the board's own routing.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRovingList } from '../useRovingList'
 import type { BandChannel, FeedStatus, NeedAlert, NeedTag } from '../types'
@@ -36,6 +50,9 @@ import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { fmtKmTokens, useUnits } from '../units'
+import { presentStates } from '../spotFilters'
+import { FilterSearch, PrivilegesChip, StateChips } from './SharedFilterChips'
+import { useSessionState } from '../useSessionState'
 
 /** Defensive chip lookup — an unknown future tag renders visibly, never throws. */
 function chipFor(tag: NeedTag): { label: string; cls: string; title: string } {
@@ -147,6 +164,10 @@ function loadFilters(key: string, initial: NeededFilters = DEFAULT_FILTERS): Nee
       needTypes,
       bands: Array.isArray(parsed.bands) ? parsed.bands.filter((b) => typeof b === 'string') : [],
       modes,
+      // The Spots board's filters (spotFilters.ts): absent or malformed in an older record ⇒ OFF,
+      // so an upgrade never hides a row the board showed before.
+      licensedOnly: parsed.licensedOnly === true,
+      states: Array.isArray(parsed.states) ? parsed.states.filter((s) => typeof s === 'string') : [],
     }
   } catch {
     return { ...initial }
@@ -382,6 +403,9 @@ export function NeededPanel({
   const [filters, setFilters] = useState<NeededFilters>(() =>
     loadFilters(filterKey, pane?.modes ? openingFilters(pane.modes) : DEFAULT_FILTERS),
   )
+  // The head's search: for the session only, as on the Spots board — through a view switch, gone at
+  // the next launch, never in the saved record. A pane keeps its own (`<key>.<filterKey>`).
+  const [query, setQuery] = useSessionState('nexus.needed.query', '', pane?.filterKey)
   const [filtersOpen, setFiltersOpen] = useState(false)
   // Persisted launch behavior for the detached window (read by App's auto-pop).
   const [autopop, setAutopop] = useState<boolean>(() => {
@@ -409,11 +433,6 @@ export function NeededPanel({
     }
     return result
   }, [alerts])
-
-  const updateFilters = useCallback((next: NeededFilters) => {
-    setFilters(next)
-    saveFilters(filterKey, next)
-  }, [filterKey])
 
   const toggleNeedType = useCallback((value: NeedTypeFilter) => {
     setFilters((prev) => {
@@ -451,17 +470,44 @@ export function NeededPanel({
     })
   }, [filterKey])
 
+  const toggleState = useCallback((st: string) => {
+    setFilters((prev) => {
+      const next: NeededFilters = prev.states.includes(st)
+        ? { ...prev, states: prev.states.filter((x) => x !== st) }
+        : { ...prev, states: [...prev.states, st] }
+      saveFilters(filterKey, next)
+      return next
+    })
+  }, [filterKey])
+
+  const toggleLicensed = useCallback(() => {
+    setFilters((prev) => {
+      const next: NeededFilters = { ...prev, licensedOnly: !prev.licensedOnly }
+      saveFilters(filterKey, next)
+      return next
+    })
+  }, [filterKey])
+
+  // Clear takes every chip off; the search stays, as on the Spots board (it is in the head, not
+  // the bar, and has its own ✕).
   const clearFilters = useCallback(() => {
-    updateFilters({ ...DEFAULT_FILTERS, modes: { ...ALL_MODES_ON } })
-  }, [updateFilters])
+    const next: NeededFilters = { ...DEFAULT_FILTERS, modes: { ...ALL_MODES_ON } }
+    setFilters(next)
+    saveFilters(filterKey, next)
+  }, [filterKey])
+
+  // The US states present on the board — a chip that can never match is a trap.
+  const availableStates = useMemo(() => presentStates(alerts), [alerts])
 
   const hasActiveFilters =
     filters.needTypes.length > 0 ||
     filters.bands.length > 0 ||
-    MODE_CLASSES.some((c) => !filters.modes[c])
+    MODE_CLASSES.some((c) => !filters.modes[c]) ||
+    filters.licensedOnly ||
+    filters.states.length > 0
 
   const rows = useMemo(() => {
-    const filtered = filterAlerts(alerts, filters)
+    const filtered = filterAlerts(alerts, filters, query)
     const dir = sort.dir === 'asc' ? 1 : -1
     filtered.sort((a, b) => {
       let c = 0
@@ -496,7 +542,7 @@ export function NeededPanel({
       return c * dir
     })
     return filtered
-  }, [alerts, sort, filters])
+  }, [alerts, sort, filters, query])
 
   // Keyboard: arrow through rows, Enter selects + works/QSYs (same as a click).
   const roving = useRovingList(rows.length, (i) => {
@@ -543,6 +589,13 @@ export function NeededPanel({
         {/* Not in a pane: a few inches of height, and rows that say what a click does in their
             own tooltip. */}
         {!pane && <span className="np-hint">{t('needed.hint')}</span>}
+        {/* The Spots board's search box, the same control (SharedFilterChips). */}
+        <FilterSearch
+          query={query}
+          onQuery={setQuery}
+          placeholder={t('needed.search.placeholder')}
+          label={t('needed.search.label')}
+        />
         {/* Filter toggle button */}
         <button
           type="button"
@@ -710,6 +763,32 @@ export function NeededPanel({
               </button>
             ))}
           </div>
+
+          {/* US-state chips, as on the Spots board — only states present on the board. */}
+          <StateChips
+            available={availableStates}
+            picked={filters.states}
+            onToggle={toggleState}
+            ariaLabel={t('needed.filters.states.aria')}
+            titleFor={(st) => t('needed.filter.state.title', { state: st })}
+          />
+
+          <div className="np-filter-sep" aria-hidden="true" />
+
+          {/* "My privileges" — the Spots board's chip and rule, on the row's `licensed` flag. */}
+          <PrivilegesChip
+            on={filters.licensedOnly}
+            onToggle={toggleLicensed}
+            title={t('needed.filter.privileges.title')}
+          />
+          {/* "Heard on my continent" is not a switch here: every spotted row was put through
+              that rule before the list reached any window — the same list lights the roster's
+              chips, the map and the alerts, so it cannot be turned off for one board. Drawn as a
+              fixed rule (dashed, unfilled — never a lit toggle), focusable so its reason on hover
+              is reachable by keyboard too, and the two boards' bars still read alike. */}
+          <span className="np-chip np-chip-fixed" tabIndex={0} title={t('needed.filter.local.title')}>
+            {t('spots.filter.local.label')}
+          </span>
 
           {hasActiveFilters && (
             <button

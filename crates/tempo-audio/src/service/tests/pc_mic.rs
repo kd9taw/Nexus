@@ -369,6 +369,59 @@ fn a_tx_audio_output_that_will_not_open_keys_nothing_and_says_so() {
     );
 }
 
+/// THE FTDX10 FIELD CASE, AS IT IS (a pin of today's behaviour, not a change): with "Use this
+/// computer's microphone" on, Nexus keys the radio over CAT with `T 1` in the plain sideband the
+/// Phone screen commands (`M USB`), and plays the voice into the radio's USB audio input. A radio
+/// in plain SSB modulates from the input its SSB MOD SOURCE menu names, MIC from the factory on an
+/// FTDX10, so this voice is heard only with that menu on REAR (USB). Nexus changes no radio menu
+/// and no mode for it, which is why the Settings hint beside the switch says so.
+#[test]
+fn the_press_keys_t1_in_the_plain_sideband_on_a_cat_radio() {
+    let mut s = PcScene::with(true, |st| {
+        st.dial_mhz = 14.250;
+        st.band = "20m".into();
+    });
+    let (addr, log) = mock_rigctld_on(14_250_000, false);
+    s.rig = Rig::rigctld(&addr);
+    s.state = loop_state_for(&s.engine);
+    s.state.mono_origin = Some(s.origin);
+    s.settle();
+    s.ptt(true);
+    let mut t = 60.0;
+    while t <= 460.0 && !s.rig.keyed {
+        s.tick(t, 0.5);
+        t += 20.0;
+    }
+    assert!(
+        s.rig.keyed,
+        "control: the microphone's audio keyed the radio"
+    );
+    // The voice follows the key on the next ticks.
+    for _ in 0..5 {
+        s.tick(t, 0.5);
+        t += 20.0;
+    }
+    assert!(
+        s.backend.played.contains(&0.5),
+        "the voice went to the radio's USB audio"
+    );
+    let lines = log.lock().unwrap().clone();
+    let key = lines
+        .iter()
+        .position(|l| l == "T 1")
+        .unwrap_or_else(|| panic!("the key is T 1 over CAT — {lines:?}"));
+    assert!(
+        lines[..key].iter().any(|l| l.starts_with("M USB")),
+        "the radio is in plain USB at the key — {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.starts_with("M PKT") || l == "T 2" || l == "T 3"),
+        "no data mode and no data key is ever sent for it — {lines:?}"
+    );
+}
+
 #[test]
 fn ft_never_opens_the_microphone() {
     let mut s = PcScene::new(true);

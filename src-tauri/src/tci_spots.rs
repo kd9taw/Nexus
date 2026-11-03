@@ -171,6 +171,8 @@ mod tests {
             grid: None,
             park: None,
             state_from: None,
+            state: None,
+            licensed: true,
             wpx_need: None,
             wae_need: None,
             iota: None,

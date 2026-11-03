@@ -321,6 +321,8 @@ const MIGRATED = [
   'components/SpotsPanel.tsx',
   // The worked window's picker, out of SpotsPanel so the Call Roster can share it.
   'components/WorkedWindowSelect.tsx',
+  // The search box and chips the Spots and Needed boards share, born migrated.
+  'components/SharedFilterChips.tsx',
   // The Phone FreeDV pane (2026-10-14) — born migrated: calls, mode names, SNRs, frequencies and the
   // address are tokens.
   'components/FreedvPane.tsx',
