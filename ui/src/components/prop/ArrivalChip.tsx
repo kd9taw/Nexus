@@ -96,19 +96,23 @@ export function arrivalChipText(o: ArrivalOutlook | null | undefined, now: numbe
   return { lines, title: title.join('\n') }
 }
 
-/** The chip itself, on the window's one poll of the outlook (features/connectFeeds). Re-reads the
- *  clock each minute so the countdown moves between polls. `compact`: the map is too narrow for the
- *  Layers panel and the Conditions rail side by side (the 1024 floor), so the chip draws its first
- *  line only, clear of the rail, and the rest is on hover. */
-export function ArrivalChip({ compact = false }: { compact?: boolean }) {
+/** What the chip says now, on the window's one poll of the outlook (features/connectFeeds). Re-reads
+ *  the clock each minute so the countdown moves between polls. The chip stack reads it too, to know
+ *  whether the chip shows before it counts what fits (WxChipStack). */
+export function useArrivalChipText(): ArrivalChipText | null {
   const outlook = useFeed(ARRIVAL_OUTLOOK).value
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
   useEffect(() => {
     const id = window.setInterval(() => setNow(Math.floor(Date.now() / 1000)), 60_000)
     return () => window.clearInterval(id)
   }, [])
-  const text = arrivalChipText(outlook, now)
-  if (!text) return null
+  return arrivalChipText(outlook, now)
+}
+
+/** The chip for a text already read. `compact`: the map is too narrow for the Layers panel and the
+ *  Conditions rail side by side (the 1024 floor), so the chip draws its first line only, clear of
+ *  the rail, and the rest is on hover. */
+export function ArrivalChipView({ text, compact = false }: { text: ArrivalChipText; compact?: boolean }) {
   const shown = compact ? text.lines.slice(0, 1) : text.lines
   const title = compact && text.lines.length > 1 ? `${text.lines.slice(1).join('\n')}\n${text.title}` : text.title
   return (
@@ -120,4 +124,10 @@ export function ArrivalChip({ compact = false }: { compact?: boolean }) {
       ))}
     </div>
   )
+}
+
+/** The chip on its own feed read; nothing at all when it has nothing to say. */
+export function ArrivalChip({ compact = false }: { compact?: boolean }) {
+  const text = useArrivalChipText()
+  return text ? <ArrivalChipView text={text} compact={compact} /> : null
 }

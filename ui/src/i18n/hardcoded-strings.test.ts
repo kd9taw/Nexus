@@ -281,6 +281,8 @@ const MIGRATED = [
   // The six-hour replay bar and its Layers-panel button, and the sun disc with NOAA's active regions.
   'components/prop/ReplayBar.tsx',
   'components/prop/SunRegionsDisc.tsx',
+  // The space-weather chip stack: two chips and "+N more" on a narrow map, and the list it opens.
+  'components/prop/WxChipStack.tsx',
   'components/prop/DxpedCalendar.tsx',
   'components/prop/DxpedDigest.tsx',
   'components/prop/DxpedMonth.tsx',

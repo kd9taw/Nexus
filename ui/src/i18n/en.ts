@@ -3931,6 +3931,11 @@ export const EN = {
   'map.arrival.title.l1Now': 'Solar wind at L1 now {{speed}} km/s (measured {{at}}, reaches Earth ~{{earth}}).',
   'map.arrival.title.why':
     'Solar wind takes one to three days from the sun. A flare is never "coming": its X-rays arrive at light speed, so it is here the instant it is seen.',
+  // The space-weather chip stack's overflow chip on a narrow map (components/prop/WxChipStack.tsx):
+  // {{n}} is how many chips it stands for; it opens them in a list titled map.wx.more.title.
+  'map.wx.more': '+{{n}} more',
+  'map.wx.more.aria': 'Show {{n}} more space-weather chips',
+  'map.wx.more.title': 'More space weather',
 
   // The flare chip and its tail. Each phase is its OWN statement appended to the chip — see
   // the `logbook.import.dupes` note — because where "recovering" belongs in the sentence is

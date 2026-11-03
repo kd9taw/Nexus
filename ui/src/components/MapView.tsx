@@ -42,7 +42,7 @@ import type {
   WorkableCard,
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
-import { ArrivalChip } from './prop/ArrivalChip'
+import { WxChipStack } from './prop/WxChipStack'
 import { agoLabel } from './prop/SpaceWxGauges'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
@@ -4396,38 +4396,53 @@ export function MapView({
           {/* THE SPACE-WEATHER CHIP STACK — one column beside the Layers panel, so a chip can grow
               (the flare chip unfolds) without covering the next. Later overlays add their chip here.
               Always rendered: the storm-watch chip decides for itself whether it shows, and an empty
-              stack lets the pointer through and takes no room. */}
-          <div className="wx-chip-stack">
-            {replayAt != null && (
-              <ReplayBar
-                atMs={replayAt}
-                win={replayWin}
-                nowMs={nowMs}
-                series={flareNoaa?.series ?? []}
-                flux={replayX}
-                footDrawn={flareShown}
-                onScrub={setReplayMs}
-                onBack={() => setReplayMs(null)}
-              />
-            )}
-            {replayAt == null && flareShown && flareFoot && xrayEff != null && (
-              <FlareChip
-                xrayLong={xrayEff}
-                foot={flareFoot}
-                noaa={noaaNow}
-                qth={myQth ?? me}
-                nowMs={nowMs}
-                snapAt={prop?.spaceWx?.xrayAt ?? null}
-                preview={flarePreview}
-                regions={solarRegions}
-              />
-            )}
-            {pcaChip && pca && capPic && <PcaChip pca={pca} pic={capPic} nowMs={nowMs} />}
-            {auroraPic && auroraOval != null && (storm || auroraPic.mode !== 'ovation') && (
-              <AuroraChip pic={auroraPic} stormWhy={storm ? auroraStormWhy(kn, arrival) : null} />
-            )}
-            <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
-          </div>
+              stack lets the pointer through and takes no room. On a narrow map it shows two chips
+              and one "+N more" for the rest (WxChipStack). */}
+          <WxChipStack
+            compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
+            chips={[
+              replayAt != null && {
+                key: 'replay',
+                node: (
+                  <ReplayBar
+                    atMs={replayAt}
+                    win={replayWin}
+                    nowMs={nowMs}
+                    series={flareNoaa?.series ?? []}
+                    flux={replayX}
+                    footDrawn={flareShown}
+                    onScrub={setReplayMs}
+                    onBack={() => setReplayMs(null)}
+                  />
+                ),
+              },
+              replayAt == null &&
+                flareShown &&
+                flareFoot &&
+                xrayEff != null && {
+                  key: 'flare',
+                  node: (
+                    <FlareChip
+                      xrayLong={xrayEff}
+                      foot={flareFoot}
+                      noaa={noaaNow}
+                      qth={myQth ?? me}
+                      nowMs={nowMs}
+                      snapAt={prop?.spaceWx?.xrayAt ?? null}
+                      preview={flarePreview}
+                      regions={solarRegions}
+                    />
+                  ),
+                },
+              pcaChip && pca && capPic && { key: 'pca', node: <PcaChip pca={pca} pic={capPic} nowMs={nowMs} /> },
+              auroraPic &&
+                auroraOval != null &&
+                (storm || auroraPic.mode !== 'ovation') && {
+                  key: 'aurora',
+                  node: <AuroraChip pic={auroraPic} stormWhy={storm ? auroraStormWhy(kn, arrival) : null} />,
+                },
+            ]}
+          />
           {prop && (
             <MapInsightRail
               prop={prop}

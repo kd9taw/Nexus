@@ -80,7 +80,7 @@ import type { RibbonInk } from '../features/pathRoute'
 import { t, type MessageKey } from '../i18n'
 import { fmtDistanceKm, useUnits } from '../units'
 import { MapInsightRail } from './prop/MapInsightRail'
-import { ArrivalChip } from './prop/ArrivalChip'
+import { WxChipStack } from './prop/WxChipStack'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import { MapLegend, MufLegend } from './MapLegend'
 import { GlobePaused, useGlobeWebgl } from './globeWebgl'
@@ -2179,37 +2179,55 @@ function Globe3DView({
       {/* The space-weather chip stack beside the Layers panel — the 2-D map's, the same chips: the
           flare chip, then NOAA's storm-watch countdown (a chip, not a 3-D object: nothing on the way
           is drawn as if it were measured). Always rendered: the storm-watch chip decides for itself
-          whether it shows, and an empty stack lets the pointer through and takes no room. */}
-      <div className="wx-chip-stack">
-        {replayAt != null && (
-          <ReplayBar
-            atMs={replayAt}
-            win={replayWin}
-            nowMs={nowMs}
-            series={flareNoaa?.series ?? []}
-            flux={replayX}
-            footDrawn={show.flare && flareFoot != null}
-            onScrub={setReplayMs}
-            onBack={() => setReplayMs(null)}
-          />
-        )}
-        {replayAt == null && show.flare && flareFoot && xrayLong != null && (
-          <FlareChip
-            xrayLong={xrayLong}
-            foot={flareFoot}
-            noaa={flareNoaa}
-            qth={qth}
-            nowMs={nowMs}
-            snapAt={prop?.spaceWx?.xrayAt ?? null}
-            regions={solarRegions}
-          />
-        )}
-        {show.pca && pca && capPic && capShown(pca, capPic) && <PcaChip pca={pca} pic={capPic} nowMs={nowMs} />}
-        {auroraPic && auroraOval != null && (storm || auroraPic.mode !== 'ovation') && (
-          <AuroraChip pic={auroraPic} stormWhy={storm ? auroraStormWhy(kn, arrival) : null} />
-        )}
-        <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
-      </div>
+          whether it shows, and an empty stack lets the pointer through and takes no room. On a
+          narrow globe it shows two chips and one "+N more" for the rest (WxChipStack). */}
+      <WxChipStack
+        compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
+        chips={[
+          replayAt != null && {
+            key: 'replay',
+            node: (
+              <ReplayBar
+                atMs={replayAt}
+                win={replayWin}
+                nowMs={nowMs}
+                series={flareNoaa?.series ?? []}
+                flux={replayX}
+                footDrawn={show.flare && flareFoot != null}
+                onScrub={setReplayMs}
+                onBack={() => setReplayMs(null)}
+              />
+            ),
+          },
+          replayAt == null &&
+            show.flare &&
+            flareFoot &&
+            xrayLong != null && {
+              key: 'flare',
+              node: (
+                <FlareChip
+                  xrayLong={xrayLong}
+                  foot={flareFoot}
+                  noaa={flareNoaa}
+                  qth={qth}
+                  nowMs={nowMs}
+                  snapAt={prop?.spaceWx?.xrayAt ?? null}
+                  regions={solarRegions}
+                />
+              ),
+            },
+          show.pca &&
+            pca &&
+            capPic &&
+            capShown(pca, capPic) && { key: 'pca', node: <PcaChip pca={pca} pic={capPic} nowMs={nowMs} /> },
+          auroraPic &&
+            auroraOval != null &&
+            (storm || auroraPic.mode !== 'ovation') && {
+              key: 'aurora',
+              node: <AuroraChip pic={auroraPic} stormWhy={storm ? auroraStormWhy(kn, arrival) : null} />,
+            },
+        ]}
+      />
       {satAllHidden > 0 && (
         // The 2-D map renders this same hint word for word — one key, deliberately.
         <div className="map-empty-hint sats">{t('map.sats.allHidden', { count: satAllHidden })}</div>

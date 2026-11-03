@@ -611,3 +611,43 @@ describe('round 7: the held event goes AT its until, not at the next 60 s tick',
     expect(pcaRow(r.container).textContent).toContain(t('map.layer.pca.stale', { time: wxStampLabel(NOW_S + 90 - 30 * 60) }))
   })
 })
+
+describe('a big-event day on a narrow map: two chips and "+N more"', () => {
+  const WATCH_IN_FORCE = {
+    watch: { serial: 7, code: 'WATA20', issued: NOW_S - 3600, days: [], comment: null, window: [NOW_S - 3600, NOW_S + 86_400], maxG: 2 },
+    model: null,
+    l1: null,
+    rationale: null,
+  }
+  const stackOf = (c: HTMLElement) => c.querySelector('.wx-chip-stack') as HTMLElement
+  const more = (c: HTMLElement) => stackOf(c).querySelector('.wx-chip-more') as HTMLButtonElement | null
+
+  it('a proton event, a storm and a watch at once: the cap and aurora chips show, the watch is behind "+1 more"', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(300)
+    layersOn(['pca'])
+    feeds.pca = PCA
+    feeds.aurora = OVAL
+    feeds.arrival = WATCH_IN_FORCE
+    const r = await mount({ prop: snap(6) })
+    expect(capChip(r.container)).not.toBeNull()
+    expect(auroraChip(r.container)).not.toBeNull()
+    expect(stackOf(r.container).querySelector('.arrival-chip')).toBeNull()
+    expect(more(r.container)!.textContent).toBe(t('map.wx.more', { n: 1 }))
+    fireEvent.click(more(r.container)!)
+    await act(async () => {})
+    const dialog = document.querySelector('.ui-dialog.wx-more-dialog')!
+    expect(dialog.querySelector('.arrival-chip')!.textContent).toContain('G2 watch')
+  })
+
+  it('CONTROL — the same sky on a wide map shows all three chips and no "+N more"', async () => {
+    layersOn(['pca'])
+    feeds.pca = PCA
+    feeds.aurora = OVAL
+    feeds.arrival = WATCH_IN_FORCE
+    const r = await mount({ prop: snap(6) })
+    expect(capChip(r.container)).not.toBeNull()
+    expect(auroraChip(r.container)).not.toBeNull()
+    expect(stackOf(r.container).querySelector('.arrival-chip')).not.toBeNull()
+    expect(more(r.container)).toBeNull()
+  })
+})
