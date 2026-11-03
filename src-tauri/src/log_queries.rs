@@ -324,6 +324,10 @@ struct OrderKey {
     /// The path grades' revision too, for an order a path filter decides: the display-only grades
     /// grow as the log is graded, and move neither of the log's revisions (`path_grades`).
     grades_rev: Option<u64>,
+    /// The park list's revision too, for an order the park name column sorts on: its names live
+    /// in the station's park list, which moves neither of the log's revisions
+    /// ([`crate::parks_rev`]).
+    parks_rev: Option<u64>,
     query: LogQuery,
 }
 
@@ -366,6 +370,8 @@ struct Inner {
     /// The app's whole-log tallies, for the award fold the award-need filter reads — the one the
     /// Awards view keeps, not a second.
     tallies: crate::LogTallies,
+    /// The station's park list, which the park name column sorts on ([`LogQueries::reads_parks`]).
+    parks: OnceLock<crate::SharedParks>,
     #[cfg(test)]
     built: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
@@ -384,6 +390,12 @@ impl LogQueries {
             tallies,
             ..Inner::default()
         }))
+    }
+
+    /// Read park names from `parks`, the station's park list, for the park name column's order.
+    /// The first list handed over is the one kept: the app has one, and swaps what it holds.
+    pub(crate) fn reads_parks(&self, parks: &crate::SharedParks) {
+        let _ = self.0.parks.set(Arc::clone(parks));
     }
 
     /// Answer `q`: take what it needs under the Engine lock, release it, read, answer. `resolve`
@@ -567,6 +579,7 @@ impl LogQueries {
             index_rev: c.index_rev,
             content_rev: query.reads_content().then_some(c.content_rev),
             grades_rev: query.filter.path.map(|_| crate::path_grades::rev()),
+            parks_rev: sorts_park_names(query).then(crate::parks_rev),
             query: query.clone(),
         };
         let slot = {
@@ -627,9 +640,19 @@ impl LogQueries {
                 } else {
                     let decider = Decider::new(&query.filter, resolve, inputs.need, &c.my_grid);
                     let keep = |r: &QsoRecord| decider.keeps(r);
+                    // The park list's names, copied out under its own lock (never held across
+                    // the read), only for an order that sorts on them.
+                    let names = match self.0.parks.get() {
+                        Some(parks) if sorts_park_names(query) => lock(parks).names(),
+                        _ => HashMap::new(),
+                    };
+                    let name_of = |r: &str| names.get(r).cloned();
                     let mut b = OrderBuilder::new(query, resolve);
                     if query.filter.decided_by_caller() {
                         b = b.keep(&keep);
+                    }
+                    if !names.is_empty() {
+                        b = b.park_names(&name_of);
                     }
                     let (mut columns, mut extras) = b.reads(ORDER_COLUMNS);
                     // What the caller's test reads, and only that: each passthrough field is one
@@ -1008,6 +1031,15 @@ impl LogQueries {
 
 // ── the fields a filter leaves to the caller ───────────────────────────────────────────────────
 
+/// Whether `query` orders on the park name column, whose names live in the park list.
+fn sorts_park_names(query: &LogQuery) -> bool {
+    query.sort == query::SortKey::ParkName
+        || query
+            .then_keys()
+            .iter()
+            .any(|t| t.sort == query::SortKey::ParkName)
+}
+
 /// What an order is built with beside its query: a row's DXCC entity (`q.entity`), and for an
 /// award-need filter the slots it asks about.
 struct OrderInputs<'a> {
@@ -1344,8 +1376,10 @@ fn with_app_resolvers(
 pub async fn ask_log(
     state: State<'_, SharedEngine>,
     queries: State<'_, LogQueries>,
+    parks: State<'_, crate::SharedParks>,
     q: LogQuestion,
 ) -> Result<Value, String> {
+    queries.reads_parks(&parks);
     let (engine, queries) = (Arc::clone(&state), queries.inner().clone());
     tauri::async_runtime::spawn_blocking(move || with_app_resolvers(&queries, &engine, &q))
         .await

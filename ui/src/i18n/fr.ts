@@ -3360,6 +3360,7 @@ export const FR: PartialCatalog = {
   "logbook.column.ituz": "Zone UIT",
   "logbook.column.cont": "Continent",
   "logbook.column.distance": "Distance (km)",
+  "logbook.column.parkName": "Nom du parc",
   "logbook.column.path": "Trajet",
   "logbook.column.path.title": "Le trajet que chaque contact a le plus probablement suivi : ▸ court, ◂ long, ▸◂ l’un ou l’autre, ? hors du modèle, ⊕ par la calotte polaire. Vif : évalué à l’enregistrement. Atténué : modélisé après coup.",
   "logbook.filters.path": "Trajet",

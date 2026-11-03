@@ -40,6 +40,9 @@ vi.mock('../api', () => {
     logOperators: vi.fn(() => Promise.resolve([] as string[])), exportLogForOperator: noop(),
     logActivations: vi.fn(() => Promise.resolve([])), exportLogForActivation: noop(),
     lotwSatNames: vi.fn(async () => [] as string[]), setSatTagById: vi.fn(async () => ({})),
+    lookupPark: vi.fn(async (ref: string) =>
+      ({ 'US-0001': { reference: 'US-0001', name: 'Acadia National Park', grid: 'FN54', location: 'US-ME' },
+        'US-1234': { reference: 'US-1234', name: 'Lake Park', grid: 'EN52', location: 'US-WI' } })[ref] ?? null),
     logQso: vi.fn(() => Promise.resolve({})), purgeLog: noop(), qrzLookup: noop(),
     markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
@@ -69,8 +72,10 @@ const CONTACT = {
   ],
 }
 
-async function renderLog(props: { columns?: LogColumnsSaved | null; onColumnsChange?: (c: LogColumnsSaved | null) => void } = {}) {
-  engineLog.mockResolvedValue([CONTACT])
+async function renderLog(
+  { log = [CONTACT], ...props }: { columns?: LogColumnsSaved | null; onColumnsChange?: (c: LogColumnsSaved | null) => void; log?: object[] } = {},
+) {
+  engineLog.mockResolvedValue(log)
   const utils = render(<Logbook defaultBand="20m" defaultFreqMhz={14.074} defaultMode="FT8" {...props} />)
   await waitFor(() => expect(utils.container.querySelector('.logbook-row:not(.head):not(.placeholder)')).not.toBeNull())
   return utils
@@ -173,6 +178,57 @@ describe('the added columns show what the store holds', () => {
     // Shift adds a second key: the CQ zone, ascending.
     fireEvent.click(header('CQ zone'), { shiftKey: true })
     await waitFor(() => expect(asked()).toMatchObject({ query: { sort: 'end', asc: true, then: [{ sort: 'cqz', asc: true }] } }))
+  })
+})
+
+describe('the satellite columns (#423) and the park name (#437)', () => {
+  const SAT = {
+    ...CONTACT, id: 'id-RL1F', call: 'RL1F', propMode: 'SAT', satName: 'RS-44',
+    ota: { myProgram: null, myRef: null, theirProgram: 'POTA', theirRef: 'US-1234,US-0001', iota: null },
+  }
+
+  it('are off in the default table and offered in the chooser', async () => {
+    await renderLog({ log: [SAT] })
+    for (const name of ['Satellite', 'Propagation', 'Park name']) expect(headers()).not.toContain(name)
+    const menu = await openChooser()
+    for (const name of ['Satellite', 'Propagation', 'Park name'])
+      expect(within(menu).getByRole('menuitemcheckbox', { name }).getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('turned on, print the bird, the mode and every park name of a two-fer', async () => {
+    const { container } = await renderLog({ log: [SAT], columns: { shown: ['satName', 'propMode', 'parkName'], hidden: [], widths: {} } })
+    const h = headers()
+    const cells = [...row(container).querySelectorAll(':scope > .log-cell')]
+    const at = (name: string) => cells[h.indexOf(name)]
+    expect(cells).toHaveLength(h.length)
+    expect(at('Satellite').textContent).toBe('RS-44')
+    expect(at('Propagation').textContent).toBe('SAT')
+    await waitFor(() => expect(at('Park name').textContent).toBe('Lake Park / Acadia National Park'))
+    expect(at('Park name').getAttribute('title')).toBe('Lake Park / Acadia National Park')
+    expect(api.lookupPark).toHaveBeenCalledWith('US-1234')
+  })
+
+  it('a park the list does not hold, and a contact with no park, print the dash', async () => {
+    const NONE = { ...CONTACT, id: 'id-K1ABC', call: 'K1ABC', ota: { ...SAT.ota, theirRef: 'US-9999' } }
+    const { container } = await renderLog({ log: [NONE], columns: { shown: ['parkName'], hidden: [], widths: {} } })
+    const cell = () => [...row(container).querySelectorAll(':scope > .log-cell')][headers().indexOf('Park name')]
+    await waitFor(() => expect(api.lookupPark).toHaveBeenCalledWith('US-9999'))
+    expect(cell().textContent).toBe('—')
+    cleanup()
+    const { container: c2 } = await renderLog({ columns: { shown: ['parkName'], hidden: [], widths: {} } })
+    expect([...row(c2).querySelectorAll(':scope > .log-cell')][headers().indexOf('Park name')].textContent).toBe('—')
+  })
+
+  it('each header sorts: a click asks the engine for that order', async () => {
+    await renderLog({ log: [SAT], columns: { shown: ['satName', 'propMode', 'parkName'], hidden: [], widths: {} } })
+    const all = screen.getAllByRole('columnheader')
+    const header = (name: string) => all.find((x) => x.textContent?.startsWith(name)) as HTMLElement
+    const asked = () => vi.mocked(api.askLog).mock.calls.map(([q]) => q).filter((q) => q.kind === 'page').slice(-1)[0]
+    for (const [name, sort] of [['Satellite', 'satName'], ['Propagation', 'propMode'], ['Park name', 'parkName']]) {
+      expect(header(name).tagName).toBe('BUTTON')
+      fireEvent.click(header(name))
+      await waitFor(() => expect(asked()).toMatchObject({ query: { sort, asc: true } }))
+    }
   })
 })
 

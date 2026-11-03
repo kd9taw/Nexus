@@ -2037,6 +2037,170 @@
    ]
   },
   {
+   "name": "satName",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "satName": "so-50"
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "satName": "AO-91"
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "satName": "RS-44"
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "satName",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "satName",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "propMode",
+   "rows": [
+    {
+     "call": "AAA",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000000,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "propMode": "TR"
+    },
+    {
+     "call": "BBB",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000060,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "propMode": "ES"
+    },
+    {
+     "call": "CCC",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000120,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false,
+     "propMode": "sat"
+    },
+    {
+     "call": "EEE",
+     "grid": null,
+     "band": "20m",
+     "freqMhz": 14.074,
+     "mode": "FT8",
+     "rstSent": null,
+     "rstRcvd": null,
+     "whenUnix": 1700000180,
+     "timeKnown": true,
+     "confirmed": false,
+     "awardConfirmed": false
+    }
+   ],
+   "orders": [
+    {
+     "sort": "propMode",
+     "asc": true,
+     "expect": [
+      "BBB",
+      "CCC",
+      "AAA",
+      "EEE"
+     ]
+    },
+    {
+     "sort": "propMode",
+     "asc": false,
+     "expect": [
+      "AAA",
+      "CCC",
+      "BBB",
+      "EEE"
+     ]
+    }
+   ]
+  },
+  {
    "name": "upLotw: a duplicate is done, an auth failure failed",
    "rows": [
     {

@@ -3360,6 +3360,7 @@ export const ES: PartialCatalog = {
   "logbook.column.ituz": "Zona ITU",
   "logbook.column.cont": "Continente",
   "logbook.column.distance": "Distancia (km)",
+  "logbook.column.parkName": "Nombre del parque",
   "logbook.column.path": "Trayecto",
   "logbook.column.path.title": "El trayecto que probablemente siguió cada contacto: ▸ corto, ◂ largo, ▸◂ cualquiera, ? fuera del modelo, ⊕ sobre el casquete polar. Brillante: evaluado al registrarlo. Atenuado: modelado después.",
   "logbook.filters.path": "Trayecto",

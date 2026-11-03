@@ -1217,3 +1217,114 @@ fn the_statistics_count_a_merged_contacts_exchange_state() {
         .collect();
     assert_eq!(states, [("NY", 1)]);
 }
+
+/// ★ The park name column (#437) sorts on the names the park list gives the Park column's
+/// references (theirs, else mine): a two-fer by every park the list knows, in the order logged,
+/// a contact with no park, an unknown one or a summit empty and last both ways. With no park list
+/// handed to the order every contact is empty, and the time order stands.
+#[test]
+fn the_park_name_column_sorts_on_the_park_lists_names() {
+    let at = |call: &str, i: u64, ota: crate::logbook::Ota| {
+        let mut r = parse_adif(&format!(
+            "<CALL:{}>{call}<QSO_DATE:8>20240101<TIME_ON:4>12{i:02}<BAND:3>20m<MODE:2>CW<EOR>",
+            call.len()
+        ))
+        .remove(0);
+        r.ota = ota;
+        r
+    };
+    let pota = |r: &str| crate::logbook::Ota {
+        their_program: Some("POTA".into()),
+        their_ref: Some(r.into()),
+        ..Default::default()
+    };
+    let log = [
+        // "Zion National Park"
+        at("AAA", 0, pota("us-0003")),
+        // "Acadia National Park / Lake Park", a two-fer
+        at("BBB", 1, pota("US-0001;US-1234")),
+        // Mine, with no program recorded: "Lake Park"
+        at(
+            "CCC",
+            2,
+            crate::logbook::Ota {
+                my_ref: Some("US-1234".into()),
+                ..Default::default()
+            },
+        ),
+        // Not in the list.
+        at("DDD", 3, pota("US-9999")),
+        // A summit: never looked up, even one the list holds.
+        at(
+            "EEE",
+            4,
+            crate::logbook::Ota {
+                their_program: Some("SOTA".into()),
+                their_ref: Some("US-0001".into()),
+                my_program: Some("POTA".into()),
+                my_ref: Some("US-0003".into()),
+                ..Default::default()
+            },
+        ),
+        // No park at all.
+        at("FFF", 5, Default::default()),
+    ];
+    let names = |r: &str| -> Option<String> {
+        match r {
+            "US-0001" => Some("Acadia National Park".into()),
+            "US-0003" => Some("Zion National Park".into()),
+            "US-1234" => Some("lake park".into()),
+            _ => None,
+        }
+    };
+    let none = |_: &QsoRecord| None;
+    let sorted = |asc: bool, with_names: bool| -> Vec<String> {
+        let query = LogQuery {
+            sort: SortKey::ParkName,
+            asc,
+            search: String::new(),
+            needs_confirm_only: false,
+            then: Vec::new(),
+            filter: Default::default(),
+        };
+        let mut b = OrderBuilder::new(&query, &none);
+        if with_names {
+            b = b.park_names(&names);
+        }
+        for (i, r) in log.iter().enumerate() {
+            b.push(i, r);
+        }
+        b.finish()
+            .into_iter()
+            .map(|i| log[i].call.clone())
+            .collect()
+    };
+    assert_eq!(
+        sorted(true, true),
+        ["BBB", "CCC", "AAA", "DDD", "EEE", "FFF"],
+        "ascending: Acadia…, lake park, Zion, then the empties in time order"
+    );
+    assert_eq!(
+        sorted(false, true),
+        ["AAA", "CCC", "BBB", "FFF", "EEE", "DDD"],
+        "descending: the empties last too"
+    );
+    assert_eq!(
+        sorted(true, false),
+        ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"],
+        "no park list: every contact empty"
+    );
+    // The name a contact sorts on is the one its cell prints.
+    let text = |r: &QsoRecord| park_name(&r.ota, &names);
+    assert_eq!(
+        log.iter().map(text).collect::<Vec<_>>(),
+        [
+            Some("Zion National Park".to_string()),
+            Some("Acadia National Park / lake park".to_string()),
+            Some("lake park".to_string()),
+            None,
+            None,
+            None
+        ]
+    );
+}

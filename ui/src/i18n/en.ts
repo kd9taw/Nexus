@@ -1941,6 +1941,7 @@ export const EN = {
   'logbook.column.ituz': 'ITU zone',
   'logbook.column.cont': 'Continent',
   'logbook.column.distance': 'Distance (km)',
+  'logbook.column.parkName': 'Park name',
   // Your contacts' paths (features/pathGrade.ts, the Logbook's Path column and filter, the contact
   // card): which way round each logged contact most likely went. A grade stamped when the contact
   // was logged is the station's own (beam heading, receivers, decodes) over the model; one made

@@ -41,6 +41,7 @@ import { LogColumnsMenu } from './LogColumnsMenu'
 import { announce } from '../announce'
 import { LogFilterBar } from './LogFilterBar'
 import { PathGradeCell } from './prop/PathGradeCell'
+import { ParkNameCell } from './ParkNameCell'
 import { usePathGradingStatus, validationLines } from '../features/pathGrade'
 import { clickSort, filterKey, sortPlace, type LogFilter, type LogSort } from '../features/logFilter'
 import { activationFilter } from '../features/potaActivation'
@@ -2256,6 +2257,7 @@ export function Logbook({
       )
     }
     if (c.id === 'path') return <PathGradeCell key={c.id} q={q} />
+    if (c.id === 'parkName') return <ParkNameCell key={c.id} q={q} />
     const v = addedColumnText(q, c.id)
     return (
       <span className="log-cell mono" title={v ?? ''}>

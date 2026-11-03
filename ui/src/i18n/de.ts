@@ -2884,6 +2884,7 @@ export const DE: PartialCatalog = {
   "logbook.column.ituz": "ITU-Zone",
   "logbook.column.cont": "Kontinent",
   "logbook.column.distance": "Entfernung (km)",
+  "logbook.column.parkName": "Parkname",
   "logbook.column.path": "Weg",
   "logbook.column.path.title": "Der Weg, den jede Verbindung wahrscheinlich nahm: ▸ kurz, ◂ lang, ▸◂ beide, ? außerhalb des Modells, ⊕ über die Polkappe. Hell: beim Loggen bewertet. Gedimmt: nachträglich modelliert.",
   "logbook.filters.path": "Weg",

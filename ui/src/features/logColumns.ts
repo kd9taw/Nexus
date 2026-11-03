@@ -27,6 +27,7 @@
 import { t, type MessageKey } from '../i18n'
 import type { LoggedQso, UploadStatus } from '../types'
 import type { LogSortKey } from './logQuery'
+import { parkRefs } from './potaActivation'
 
 export type LogColumnGroup = 'contact' | 'location' | 'qsl' | 'uploads' | 'contest' | 'station'
 
@@ -104,6 +105,13 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { id: 'ituz', labelKey: 'logbook.column.ituz', track: '0.5fr', minPx: 28, group: 'location', sort: 'ituz' },
   { id: 'cont', labelKey: 'logbook.column.cont', track: '0.5fr', minPx: 28, group: 'location', sort: 'cont' },
   { id: 'distance', labelKey: 'logbook.column.distance', track: '0.7fr', minPx: 40, group: 'location', sort: 'distance' },
+  // The park's name (#437): read from the station's POTA park list as the cell is drawn, never
+  // stored on the contact and never exported (ADIF has no field for it). The engine sorts it
+  // from the same list.
+  { id: 'parkName', labelKey: 'logbook.column.parkName', track: '1.2fr', minPx: 48, group: 'location', sort: 'parkName' },
+  // A satellite contact's bird and propagation mode (#423), as the contact card and LoTW read them.
+  { id: 'satName', labelKey: 'qso.detail.satName', track: '0.7fr', minPx: 40, group: 'contact', sort: 'satName' },
+  { id: 'propMode', labelKey: 'qso.detail.propMode', track: '0.6fr', minPx: 32, group: 'contact', sort: 'propMode' },
   // The path each contact took (features/pathGrade): its grade lives partly outside the log (the
   // display-only grading of the existing log), so the engine cannot order by it — the one column
   // beside the actions with no sort. Its filter (`LogFilter.path`) is the engine's.
@@ -483,7 +491,33 @@ export function addedColumnText(q: LoggedQso, id: string): string | null {
       return contestExchange(q, 'sent')
     case 'exchRcvd':
       return contestExchange(q, 'rcvd')
+    case 'satName':
+      return q.satName?.trim() || null
+    case 'propMode':
+      return q.propMode?.trim() || null
     default:
       return null
   }
+}
+
+/** The park name column's text: the name of each POTA park the Park column shows (theirs, else
+ *  mine), every park of a two-fer the list knows, in the order logged; null when there is no
+ *  park, none is in the list, or the reference is not a POTA park — SOTA has no name list, so a
+ *  summit is never looked up. A reference with no program recorded is read as POTA, as the Park
+ *  column's hover reads it. `nameOf` is the park list's answer for one reference
+ *  (`lookupPark`). The engine's sort reads it the same way (`query.rs` `park_name`). */
+export function parkNameText(q: LoggedQso, nameOf: (ref: string) => string | null): string | null {
+  const refs = parkNameRefs(q)
+  const names = refs.map(nameOf).filter((n): n is string => !!n)
+  return names.length ? names.join(' / ') : null
+}
+
+/** The POTA references whose names the park name column shows (see {@link parkNameText}): split,
+ *  trimmed, upper-cased, each once. */
+export function parkNameRefs(q: LoggedQso): string[] {
+  const o = q.ota
+  const theirs = o?.theirRef?.trim()
+  const [ref, program] = theirs ? [theirs, o?.theirProgram] : [o?.myRef?.trim(), o?.myProgram]
+  if (!ref || (program?.trim() && program.trim().toUpperCase() !== 'POTA')) return []
+  return [...new Set(parkRefs(ref))]
 }

@@ -43437,12 +43437,27 @@ impl From<propagation::live::pota::LiveParkDetail> for ParkDto {
     }
 }
 
+/// The park list's revision: moved each time a list is put in ([`swap_parks`]), so an order the
+/// Logbook's park name column sorts on is built again from the new names
+/// (`log_queries::OrderKey`).
+static PARKS_REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn parks_rev() -> u64 {
+    PARKS_REV.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Put `idx` in as the station's park list — loaded, imported or downloaded — and move
+/// [`parks_rev`].
+fn swap_parks(parks: &SharedParks, idx: tempo_core::pota::ParkIndex) -> Result<(), String> {
+    *parks.lock().map_err(|e| e.to_string())? = idx;
+    PARKS_REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
 /// Load the cached park CSV (if any) into the shared index at startup. Best-effort.
 fn load_parks_cache(parks: &SharedParks) {
     if let Ok(csv) = std::fs::read_to_string(parks_cache_path()) {
-        if let Ok(mut idx) = parks.lock() {
-            *idx = tempo_core::pota::ParkIndex::parse_csv(&csv);
-        }
+        let _ = swap_parks(parks, tempo_core::pota::ParkIndex::parse_csv(&csv));
     }
 }
 
@@ -43488,7 +43503,7 @@ fn import_parks_csv(parks: State<'_, SharedParks>, csv: String) -> Result<usize,
     }
     let n = idx.len();
     let _ = std::fs::write(parks_cache_path(), &csv); // cache; failure is non-fatal
-    *parks.lock().map_err(|e| e.to_string())? = idx;
+    swap_parks(&parks, idx)?;
     Ok(n)
 }
 
@@ -43563,7 +43578,7 @@ async fn download_parks(parks: State<'_, SharedParks>) -> Result<usize, String> 
     }
     let n = idx.len();
     let _ = std::fs::write(parks_cache_path(), &csv);
-    *parks.lock().map_err(|e| e.to_string())? = idx;
+    swap_parks(&parks, idx)?;
     Ok(n)
 }
 

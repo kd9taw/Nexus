@@ -1182,8 +1182,17 @@ mod tests {
                     _ => r.notes = Some("Bravo".into()),
                 }),
             ),
+            (
+                // A satellite contact's bird and propagation mode (#423).
+                SortKey::SatName,
+                Box::new(|r, i| r.sat_name = Some(["so-50", "AO-91", "RS-44"][i].into())),
+            ),
+            (
+                SortKey::PropMode,
+                Box::new(|r, i| r.prop_mode = Some(["TR", "ES", "sat"][i].into())),
+            ),
         ];
-        assert_eq!(cases.len(), 22, "every added column");
+        assert_eq!(cases.len(), 24, "every added column");
         for (key, set) in &cases {
             let db = three_and_an_empty(set.as_ref());
             assert_eq!(

@@ -1876,6 +1876,7 @@
 "3","logbook.column.ituz","ITU zone","ITU 分區","ITU",""
 "3","logbook.column.cont","Continent","大洲","",""
 "3","logbook.column.distance","Distance (km)","距離（km）","",""
+"3","logbook.column.parkName","Park name","公園名稱","","Filled by the maintainer, pending translator review."
 "3","logbook.column.qslSentDate","Card sent","卡片已寄出","",""
 "3","logbook.column.qslRcvdDate","Card received","卡片已收到","",""
 "3","logbook.column.lotwRcvdDate","LoTW received","LoTW 已接收","LoTW",""

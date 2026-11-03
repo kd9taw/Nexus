@@ -1777,6 +1777,7 @@ export const RU: PartialCatalog = {
   "logbook.column.ituz": "Зона ITU",
   "logbook.column.cont": "Континент",
   "logbook.column.distance": "Расстояние (км)",
+  "logbook.column.parkName": "Название парка",
   "logbook.column.path": "Путь",
   "logbook.column.path.title": "Путь, которым скорее всего прошла каждая связь: ▸ короткий, ◂ длинный, ▸◂ любой, ? вне модели, ⊕ через полярную шапку. Ярко: оценено при записи в журнал. Тускло: смоделировано позже.",
   "logbook.filters.path": "Путь",

@@ -1876,6 +1876,7 @@
 "3","logbook.column.ituz","ITU zone","ITU 分区","ITU","The same English text ""ITU zone"" is used by 2 different keys (e.g. settings.contestStation.ituZone.label) — each can take a different Russian word, so choose the one that fits THIS screen."
 "3","logbook.column.cont","Continent","大洲","",""
 "3","logbook.column.distance","Distance (km)","距离（km）","",""
+"3","logbook.column.parkName","Park name","公园名称","","Filled by the maintainer, pending translator review."
 "3","logbook.column.qslSentDate","Card sent","卡片已寄出","","The same English text ""Card sent"" is used by 2 different keys (e.g. qso.detail.qsl.sent) — each can take a different Russian word, so choose the one that fits THIS screen."
 "3","logbook.column.qslRcvdDate","Card received","卡片已收到","","The same English text ""Card received"" is used by 3 different keys (e.g. logbook.field.qslCard.label, logbook.row.qslRcvd.card) — each can take a different Russian word, so choose the one that fits THIS screen."
 "3","logbook.column.lotwRcvdDate","LoTW received","LoTW 已接收","LoTW",""

@@ -246,7 +246,7 @@ describe('every column the Logbook shows sorts, a contact with nothing in it las
     // Every key but the four that always hold a value (band, frequency, time, QSL mark) and the
     // call, which names the rows here.
     const keys = new Set(SHARED.cases.flatMap((c) => c.orders.map((o) => o.sort)))
-    expect(keys.size).toBe(32)
+    expect(keys.size).toBe(34)
     for (const c of SHARED.cases)
       for (const { expect: want, ...query } of c.orders)
         expect(order(c.rows, query), `${c.name}: ${query.sort} ${query.asc ? 'ascending' : 'descending'}`).toEqual(want)
