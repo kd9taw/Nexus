@@ -3341,6 +3341,8 @@
 "4","settings.audio.rxGain.failed","Could not apply RX gain","無法應用 RX 增益","RX",""
 "4","settings.audio.txPower.failed","Could not set TX power","無法設定 TX 功率","TX",""
 "4","settings.audio.device.notInList","{{device}} — saved, not in the list","{{device}} — 已儲存，不在清單中","{{device}}",""
+"4","settings.audio.device.useInstead","Use {{device}} instead","改用 {{device}}","{{device}}","Filled by the maintainer, pending translator review."
+"4","settings.audio.device.useInsteadHint","The saved device is not in the list, and this one differs from it only by the number Windows puts in front or by its spacing. Nexus never switches audio devices by itself: press to pick it, then Save.","已儲存的裝置不在清單中，而此裝置與它的差別只在於 Windows 加在前面的編號或空格。Nexus 絕不會自行切換音訊裝置：按一下以選擇它，然後儲存。","Nexus | Windows","Filled by the maintainer, pending translator review."
 "4","settings.betaUpdates.failed","Could not change the update channel","無法更改更新頻道","",""
 "4","settings.radios.thisRadio","this radio","本電台","",""
 "4","settings.radios.unnamed","radio {{id}}","電台 {{id}}","{{id}}",""

@@ -1374,6 +1374,64 @@ mod tests {
         }
     }
 
+    /// ⛔ A FLEX ON OMNIRIG OR TCI TRANSMITS FROM THE SOUND CARD, whatever its Flex switches say.
+    /// Those connections start their own driver before the Flex client is ever asked
+    /// (`service::spawn_cat_daemon`), so the client and its DAX audio never run there, and the
+    /// radio loop plays the over to the TX device: with none set, the system default output. The
+    /// sounds and the monitor must refuse that output, as for any serial rig. Positive control: the
+    /// same Flex on Serial or Network, where the client runs, still leaves it to them.
+    #[test]
+    fn a_flex_on_omnirig_or_tci_counts_its_system_default_tx_device() {
+        let flex_on = |conn: &str| {
+            let mut p = other_radio(conn);
+            p.rig_model = 2036;
+            p.flex_native_cat = true;
+            p.flex_radio_ip = "192.168.1.50".into();
+            p.flex_native_audio = true;
+            // TCI with its own audio off: the TCI client keys card audio.
+            p.tci_audio = false;
+            p
+        };
+        for conn in ["omnirig", "tci"] {
+            let s = station_with(flex_on(conn));
+            assert!(
+                crate::notify_sound::tx_audio_devices(&s).contains(&String::new()),
+                "Flex on {conn}: its system-default TX device was left out"
+            );
+            assert!(
+                monitor_on_default(&s),
+                "Flex on {conn}: the monitor was let through"
+            );
+        }
+        for conn in ["serial", "network"] {
+            let s = station_with(flex_on(conn));
+            assert!(
+                !crate::notify_sound::tx_audio_devices(&s).contains(&String::new()),
+                "Flex client on {conn}: its empty TX device was counted"
+            );
+        }
+        // The flat mirror of the radio in use follows the same rule.
+        let mut s = tempo_app::settings::Settings {
+            radios: Vec::new(),
+            audio_out: String::new(),
+            rig_conn: "omnirig".into(),
+            rig_model: 2036,
+            flex_native_cat: true,
+            flex_radio_ip: "192.168.1.50".into(),
+            flex_native_audio: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::notify_sound::tx_audio_devices(&s),
+            vec![String::new()]
+        );
+        s.rig_conn = "serial".into();
+        assert_eq!(
+            crate::notify_sound::tx_audio_devices(&s),
+            Vec::<String>::new()
+        );
+    }
+
     /// The same rule for the radio in use's flat setting: on TCI with its audio over TCI and no TX
     /// device, it is no TX device; on a serial rig with none, it is the system default.
     #[test]

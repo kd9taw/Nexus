@@ -7011,6 +7011,8 @@ export const FR: PartialCatalog = {
   "settings.aprs.symbol.hint": "L'icône que les autres stations voient sur la carte pour votre balise. Digipeater et iGate viennent de la table de symboles alternative : c'est ce que doit afficher une station fixe qui sert d'infrastructure.",
   "settings.aprs.symbol.label": "Symbole de balise",
   "settings.audio.device.notInList": "{{device}} — enregistré, absent de la liste",
+  "settings.audio.device.useInstead": "Utiliser {{device}} à la place",
+  "settings.audio.device.useInsteadHint": "L'appareil enregistré n'est pas dans la liste, et celui-ci n'en diffère que par le numéro que Windows place devant ou par les espaces. Nexus ne change jamais d'appareil audio de lui-même : cliquez pour le choisir, puis Enregistrer.",
   "settings.audio.device.systemDefault": "Par défaut du système",
   "settings.audio.input.hint": "Carte son qui transporte l'audio de réception.",
   "settings.audio.input.label": "Périphérique d'entrée (RX)",

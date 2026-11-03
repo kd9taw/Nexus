@@ -315,6 +315,7 @@ import { ARRL_SECTIONS_BY_DIVISION, RETIRED_SECTIONS } from '../features/arrlSec
 // end there (mac QA audit, 2026-08-17). The check moved to the shared platform module when
 // the modifier-chord labels needed it too.
 import { IS_LINUX, IS_MAC, IS_WINDOWS } from '../platform'
+import { renumberedTwin, showHiddenSpaces } from '../features/audioDeviceTwin'
 import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from '../settings/ampAddress'
 import { normaliseTyped, upperTyped } from '../typedInput'
 import { IotaListSettings } from './Iota'
@@ -4354,10 +4355,31 @@ export function SettingsPanel({
   // offered_in_picker=false, opens_at_runtime=true). We cannot know from here whether a name
   // will open — so we state the thing we do know and leave the verdict to the open, which is
   // already a visible error naming the device.
+  //
+  // The saved name shows the whitespace a reader cannot see (#425: a stale "USB AUDIO CODEC" beside
+  // the device's real "USB AUDIO  CODEC" read as the same entry twice).
   const audioLabel = (name: string, kind: 'input' | 'output') =>
     audio[kind].includes(name)
       ? (audioLabels[kind][name] ?? name)
-      : t('settings.audio.device.notInList', { device: name })
+      : t('settings.audio.device.notInList', { device: showHiddenSpaces(name) })
+  // A saved RX / TX device not in the list, and the ONE offered device that is it but for the number
+  // Windows puts in front and the spacing (#425): offered as a button, never switched to.
+  const useInstead = (key: 'audioIn' | 'audioOut', kind: 'input' | 'output') => {
+    const twin = renumberedTwin(form[key], audio[kind])
+    return twin === null ? null : (
+      <button
+        type="button"
+        className="settings-refresh"
+        data-testid={`use-instead-${key}`}
+        onClick={() => update(key, twin)}
+        title={t('settings.audio.device.useInsteadHint')}
+      >
+        {t('settings.audio.device.useInstead', {
+          device: showHiddenSpaces(audioLabels[kind][twin] ?? twin),
+        })}
+      </button>
+    )
+  }
 
   // Frequencies tab: last-wins override lookup for the stock table, plus
   // duplicate band+mode keys (flagged in the editor — the last row wins).
@@ -7493,6 +7515,7 @@ export function SettingsPanel({
                     {audioLoading ? '…' : t('settings.audio.refresh.action')}
                   </button>
                 </div>
+                {useInstead('audioIn', 'input')}
                 <span className="settings-hint">{t('settings.audio.input.hint')}</span>
               </label>
 
@@ -7510,6 +7533,7 @@ export function SettingsPanel({
                     </option>
                   ))}
                 </select>
+                {useInstead('audioOut', 'output')}
                 <span className="settings-hint">{t('settings.audio.output.hint')}</span>
               </label>
 

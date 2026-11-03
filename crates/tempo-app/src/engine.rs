@@ -8683,6 +8683,13 @@ impl Engine {
         self.settings.qrz_last_sync_unix = unix;
     }
 
+    /// Record the sound card each TX audio device is on ([`Settings::tx_card_models`], persisted by
+    /// the caller), as `tempo_audio::notify_sound::tx_card_models_after` works it out after a save.
+    /// The narrow write, for the same reason as [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor).
+    pub fn set_tx_card_models(&mut self, models: std::collections::BTreeMap<String, String>) {
+        self.settings.tx_card_models = models;
+    }
+
     /// Advance the automatic-LoTW-upload cursor (persisted by the caller). Same narrow
     /// write and the same #54 reasoning as [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor)
     /// above — never `apply_settings` for one field.

@@ -2956,6 +2956,8 @@ export const ZH: PartialCatalog = {
   "settings.audio.rxGain.failed": "无法应用 RX 增益",
   "settings.audio.txPower.failed": "无法设置 TX 功率",
   "settings.audio.device.notInList": "{{device}} — 已保存，不在列表中",
+  "settings.audio.device.useInstead": "改用 {{device}}",
+  "settings.audio.device.useInsteadHint": "已保存的设备不在列表中，而此设备与它的区别仅在于 Windows 加在前面的编号或空格。Nexus 绝不会自行切换音频设备：点击以选择它，然后保存。",
   "settings.betaUpdates.failed": "无法更改更新频道",
   "settings.radios.thisRadio": "本电台",
   "settings.radios.unnamed": "电台 {{id}}",

@@ -80,7 +80,23 @@ pub fn tx_audio_devices(settings: &Settings) -> Vec<String> {
 
 /// [`tx_audio_devices`], each with the radio whose TX audio it is: a profile's name, or `None` for
 /// the flat setting (the radio in use, or the station's own before it had profiles).
+///
+/// ⛔ On Linux a TX device whose sound card's USB model was recorded when it was chosen
+/// ([`Settings::tx_card_models`]) also brings in every card of that model as it is numbered NOW
+/// (`hw:CARD=<id>`, owned by the same radio), so a reboot that hands the codec's ALSA id to another
+/// card cannot let a sound or the monitor onto the codec under its new id. When the card list
+/// cannot be read the radio's codec could be any card, and the sound server's `default`, which no
+/// card is proven different from, stands in for it (fail closed).
 pub fn tx_audio_device_owners(settings: &Settings) -> Vec<(String, Option<String>)> {
+    tx_audio_device_owners_as(settings, HOST_NAMING, &SystemCards)
+}
+
+/// [`tx_audio_device_owners`] under `naming`, with the cards `cards` lists (tests name their own).
+fn tx_audio_device_owners_as(
+    settings: &Settings,
+    naming: Naming,
+    cards: &dyn CardLookup,
+) -> Vec<(String, Option<String>)> {
     use tempo_app::settings::tx_audio_on_sound_card;
     let counts = |device: &str, on_card: bool| on_card || !device.trim().is_empty();
     let flat = counts(
@@ -88,7 +104,8 @@ pub fn tx_audio_device_owners(settings: &Settings) -> Vec<(String, Option<String
         tx_audio_on_sound_card(&settings.tx_audio_route()),
     )
     .then(|| (settings.audio_out.clone(), None));
-    flat.into_iter()
+    let owners: Vec<_> = flat
+        .into_iter()
         .chain(
             settings
                 .radios
@@ -96,7 +113,71 @@ pub fn tx_audio_device_owners(settings: &Settings) -> Vec<(String, Option<String
                 .filter(|r| counts(&r.audio_out, tx_audio_on_sound_card(&r.tx_audio_route())))
                 .map(|r| (r.audio_out.clone(), Some(r.name.clone()))),
         )
-        .collect()
+        .collect();
+    if naming != Naming::Alsa {
+        return owners;
+    }
+    let mut moved = Vec::new();
+    for (device, who) in &owners {
+        let Some(model) = settings.tx_card_models.get(device) else {
+            continue;
+        };
+        match cards.ids_of_model(model) {
+            Some(ids) => moved.extend(
+                ids.into_iter()
+                    .map(|id| (format!("hw:CARD={id}"), who.clone())),
+            ),
+            None => moved.push(("default".to_string(), who.clone())),
+        }
+    }
+    owners.into_iter().chain(moved).collect()
+}
+
+/// The USB model of the card each named TX audio device in `after` is on, for
+/// [`Settings::tx_card_models`] after a save that turned `before` into `after`. A device `before`
+/// already named as a TX device keeps what `before` recorded for it (nothing, in settings from
+/// before this existed): the card is read only when a TX device is CHOSEN, never again later, when
+/// a reboot may have handed its id to another card. One newly chosen is read now, on Linux, from
+/// the card its name points at, and recorded when that is a USB card. What `after` itself carries
+/// is ignored, so no form can write it. Devices no longer named are dropped.
+pub fn tx_card_models_after(
+    before: &Settings,
+    after: &Settings,
+) -> std::collections::BTreeMap<String, String> {
+    tx_card_models_after_as(before, after, HOST_NAMING, &SystemCards)
+}
+
+/// [`tx_card_models_after`] under `naming`, with the cards `cards` lists (tests name their own).
+fn tx_card_models_after_as(
+    before: &Settings,
+    after: &Settings,
+    naming: Naming,
+    cards: &dyn CardLookup,
+) -> std::collections::BTreeMap<String, String> {
+    let named = |s: &Settings| -> Vec<String> {
+        std::iter::once(s.audio_out.clone())
+            .chain(s.radios.iter().map(|r| r.audio_out.clone()))
+            .filter(|d| !d.trim().is_empty())
+            .collect()
+    };
+    let was_named = named(before);
+    let mut models = std::collections::BTreeMap::new();
+    for device in named(after) {
+        let model = if was_named.contains(&device) {
+            before.tx_card_models.get(&device).cloned()
+        } else if naming == Naming::Alsa {
+            match route(&device, naming, cards) {
+                Route::Card(Card::Id(id)) => cards.model(&id),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(model) = model {
+            models.insert(device, model);
+        }
+    }
+    models
 }
 
 /// The TX outputs the radio's audio path holds now, each by the name of the device it ACTUALLY
@@ -267,7 +348,7 @@ fn route(name: &str, naming: Naming, cards: &dyn CardLookup) -> Route {
 /// start or just inside a parenthesis ("Speakers (2- USB Audio CODEC)" is "Speakers (USB Audio
 /// CODEC)"). Windows renumbers the twins when one is unplugged, so the number does not tell them
 /// apart over time.
-fn without_instance_numbers(name: &str) -> String {
+pub(crate) fn without_instance_numbers(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     let mut rest = name;
     loop {
@@ -368,6 +449,11 @@ pub(crate) trait CardLookup {
     fn model(&self, _id: &str) -> Option<String> {
         None
     }
+    /// The ids of every card here of USB model `model` (compared case-blind), `None` when the card
+    /// list cannot be read.
+    fn ids_of_model(&self, _model: &str) -> Option<Vec<String>> {
+        Some(Vec::new())
+    }
 }
 
 impl<F: Fn(u32) -> Option<String>> CardLookup for F {
@@ -385,6 +471,12 @@ impl CardLookup for SystemCards {
     }
     fn model(&self, id: &str) -> Option<String> {
         system_card_model(id)
+    }
+    fn ids_of_model(&self, model: &str) -> Option<Vec<String>> {
+        if !cfg!(target_os = "linux") {
+            return Some(Vec::new());
+        }
+        card_ids_of_model_in(std::path::Path::new("/proc/asound"), model)
     }
 }
 
@@ -418,6 +510,44 @@ fn card_model_in(root: &std::path::Path, id: &str) -> Option<String> {
         .and_then(|e| std::fs::read_to_string(e.path().join("usbid")).ok())
         .map(|m| m.trim().to_ascii_lowercase())
         .filter(|m| !m.is_empty())
+}
+
+/// The `card<N>` directories under `root` (`/proc/asound`), `None` when it cannot be read. Only
+/// `card` and digits: the `/proc/asound/<id>` symlinks would count a card twice.
+fn card_dirs_in(root: &std::path::Path) -> Option<Vec<std::path::PathBuf>> {
+    Some(
+        std::fs::read_dir(root)
+            .ok()?
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .and_then(|n| n.strip_prefix("card"))
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+            })
+            .map(|e| e.path())
+            .collect(),
+    )
+}
+
+/// The ids of the cards under `root` (`/proc/asound`; tests hand in their own) whose `usbid` is
+/// `model` (case-blind). `None` when the card list cannot be read, or a card of that model has no
+/// readable id.
+fn card_ids_of_model_in(root: &std::path::Path, model: &str) -> Option<Vec<String>> {
+    let model = model.trim();
+    card_dirs_in(root)?
+        .into_iter()
+        .filter(|d| {
+            std::fs::read_to_string(d.join("usbid"))
+                .is_ok_and(|m| m.trim().eq_ignore_ascii_case(model))
+        })
+        .map(|d| {
+            std::fs::read_to_string(d.join("id"))
+                .ok()
+                .map(|id| id.trim().to_string())
+                .filter(|id| !id.is_empty())
+        })
+        .collect()
 }
 
 /// An ALSA card's id from its number, as the kernel lists it (`/proc/asound/card<N>/id`).
@@ -1058,6 +1188,15 @@ mod tests {
                 .find(|(_, k, _)| k.eq_ignore_ascii_case(id))
                 .and_then(|(.., m)| m.map(str::to_string))
         }
+        fn ids_of_model(&self, model: &str) -> Option<Vec<String>> {
+            Some(
+                self.0
+                    .iter()
+                    .filter(|(.., m)| m.is_some_and(|m| m.eq_ignore_ascii_case(model)))
+                    .map(|(_, id, _)| id.to_string())
+                    .collect(),
+            )
+        }
     }
 
     /// The field case: a Linux station whose radio codec (an FTDX10's, `CODEC`) and headphone DAC
@@ -1129,6 +1268,207 @@ mod tests {
             ),
             Some(PlayRefusal::TxUnsure)
         );
+    }
+
+    /// The radio's codec (`08bb:29b3`) and a headphone DAC on the same chip family (`08bb:2902`).
+    const RADIO: &str = "08bb:29b3";
+    const AS_CHOSEN: Cards = Cards(&[
+        (0, "PCH", None),
+        (1, "CODEC", Some("08bb:29b3")),
+        (2, "CODEC_1", Some("08bb:2902")),
+    ]);
+    /// After a reboot that found the two the other way round: the headphones took `CODEC`.
+    const SWAPPED: Cards = Cards(&[
+        (0, "PCH", None),
+        (1, "CODEC", Some("08bb:2902")),
+        (2, "CODEC_1", Some("08bb:29b3")),
+    ]);
+
+    /// A computer whose card list cannot be read.
+    struct Unreadable;
+    impl CardLookup for Unreadable {
+        fn id(&self, _: u32) -> Option<String> {
+            None
+        }
+        fn ids_of_model(&self, _: &str) -> Option<Vec<String>> {
+            None
+        }
+    }
+
+    /// A station whose radio transmits on the codec, picked by card name.
+    fn codec_station(models: &[(&str, &str)]) -> Settings {
+        Settings {
+            audio_out: "plughw:CARD=CODEC,DEV=0".into(),
+            tx_card_models: models
+                .iter()
+                .map(|(d, m)| (d.to_string(), m.to_string()))
+                .collect(),
+            ..Settings::default()
+        }
+    }
+
+    /// ⛔ THE ID SWAP (the twin rule's residual). The TX device was chosen as `CODEC` with the radio's
+    /// codec there, and its USB model recorded. A reboot found the cards the other way round, so
+    /// `CODEC_1` is now the radio's codec, and the twin rule alone (two different models) lets a
+    /// monitor or a sound onto it, into the radio by its VOX. With the model recorded, the card of
+    /// that model is a TX device under its new id, and is refused; the headphones under the old id
+    /// stay refused as the saved name. Controls: in the order it was chosen the headphones
+    /// (`CODEC_1`) still play; settings from before the record keep the guard exactly as it was
+    /// (the residual, pinned); a card list that cannot be read refuses every card (fail closed).
+    #[test]
+    fn a_tx_codec_whose_card_id_moved_is_refused_under_its_new_id() {
+        let verdict = |s: &Settings, dev: &str, cards: &dyn CardLookup| {
+            let tx: Vec<String> = tx_audio_device_owners_as(s, Naming::Alsa, cards)
+                .into_iter()
+                .map(|(d, _)| d)
+                .collect();
+            verdict_with(dev, "", &tx, None, Naming::Alsa, cards)
+        };
+        let recorded = codec_station(&[("plughw:CARD=CODEC,DEV=0", RADIO)]);
+        assert_eq!(
+            verdict(&recorded, "plughw:CARD=CODEC_1,DEV=0", &SWAPPED),
+            Some(PlayRefusal::TxDevice),
+            "the radio's codec under its new id"
+        );
+        assert_eq!(
+            verdict(&recorded, "hw:2,0", &SWAPPED),
+            Some(PlayRefusal::TxDevice),
+            "by number"
+        );
+        assert_eq!(
+            verdict(&recorded, "plughw:CARD=CODEC,DEV=0", &SWAPPED),
+            Some(PlayRefusal::TxDevice),
+            "the saved name itself"
+        );
+        assert_eq!(
+            verdict(&recorded, "plughw:CARD=PCH,DEV=0", &SWAPPED),
+            None,
+            "another card still plays"
+        );
+        // In the order it was chosen, the headphones are another card, as before.
+        assert_eq!(
+            verdict(&recorded, "plughw:CARD=CODEC_1,DEV=0", &AS_CHOSEN),
+            None
+        );
+        // Settings from before the record: today's guard, residual and all.
+        let old = codec_station(&[]);
+        assert_eq!(verdict(&old, "plughw:CARD=CODEC_1,DEV=0", &SWAPPED), None);
+        assert_eq!(
+            tx_audio_device_owners_as(&old, Naming::Alsa, &SWAPPED),
+            tx_audio_device_owners_as(&old, Naming::Alsa, &AS_CHOSEN)
+        );
+        // The card list cannot be read: no card is proven different from the radio's codec.
+        assert_eq!(
+            verdict(&recorded, "plughw:CARD=PCH,DEV=0", &Unreadable),
+            Some(PlayRefusal::TxUnsure)
+        );
+        // Windows / macOS name endpoints, not cards: nothing is added there.
+        assert_eq!(
+            tx_audio_device_owners_as(&recorded, Naming::Endpoint, &SWAPPED),
+            vec![("plughw:CARD=CODEC,DEV=0".to_string(), None)]
+        );
+        // The added card is the same radio's, so the monitor's notice names that radio.
+        let mut profiled = recorded.clone();
+        profiled.radios = vec![tempo_app::settings::RadioProfile {
+            name: "FTDX10".into(),
+            audio_out: "plughw:CARD=CODEC,DEV=0".into(),
+            ..Default::default()
+        }];
+        assert!(tx_audio_device_owners_as(&profiled, Naming::Alsa, &SWAPPED)
+            .contains(&("hw:CARD=CODEC_1".to_string(), Some("FTDX10".to_string()))));
+    }
+
+    /// The model is read when a TX device is CHOSEN, and only then: a device the station already
+    /// had keeps what was recorded for it (or nothing, from before the record), so a save after a
+    /// swapped reboot never records the headphones as the radio's codec. A form cannot write it,
+    /// a device no longer chosen is dropped, and a name that is not a USB card records nothing.
+    #[test]
+    fn a_tx_cards_model_is_recorded_when_the_device_is_chosen_and_only_then() {
+        let none = Settings::default();
+        let chosen = codec_station(&[]);
+        let rec = |before: &Settings, after: &Settings, cards: &dyn CardLookup| {
+            tx_card_models_after_as(before, after, Naming::Alsa, cards)
+        };
+        let want = |pairs: &[(&str, &str)]| -> std::collections::BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(d, m)| (d.to_string(), m.to_string()))
+                .collect()
+        };
+        assert_eq!(
+            rec(&none, &chosen, &AS_CHOSEN),
+            want(&[("plughw:CARD=CODEC,DEV=0", RADIO)]),
+            "chosen now: read now"
+        );
+        let recorded = codec_station(&[("plughw:CARD=CODEC,DEV=0", RADIO)]);
+        assert_eq!(
+            rec(&recorded, &chosen, &SWAPPED),
+            want(&[("plughw:CARD=CODEC,DEV=0", RADIO)]),
+            "kept, never re-read after a swap"
+        );
+        assert_eq!(
+            rec(&chosen, &chosen, &AS_CHOSEN),
+            want(&[]),
+            "settings from before the record are left as they were"
+        );
+        let forged = codec_station(&[("plughw:CARD=CODEC,DEV=0", "ffff:ffff")]);
+        assert_eq!(
+            rec(&recorded, &forged, &SWAPPED),
+            want(&[("plughw:CARD=CODEC,DEV=0", RADIO)]),
+            "a form's own record is ignored"
+        );
+        let mut elsewhere = codec_station(&[]);
+        elsewhere.audio_out = "plughw:CARD=PCH,DEV=0".into();
+        assert_eq!(
+            rec(&recorded, &elsewhere, &AS_CHOSEN),
+            want(&[]),
+            "not a USB card: nothing; the old device: dropped"
+        );
+        // A radio's own TX device is read the same way as the flat one.
+        let second = Settings {
+            radios: vec![tempo_app::settings::RadioProfile {
+                audio_out: "hw:CARD=CODEC_1".into(),
+                ..Default::default()
+            }],
+            ..Settings::default()
+        };
+        assert_eq!(
+            rec(&none, &second, &AS_CHOSEN),
+            want(&[("hw:CARD=CODEC_1", "08bb:2902")])
+        );
+        // Windows / macOS: never.
+        assert_eq!(
+            tx_card_models_after_as(&none, &chosen, Naming::Endpoint, &AS_CHOSEN),
+            want(&[])
+        );
+    }
+
+    /// The cards of one USB model, read from `/proc/asound` as it lays them out; a list that cannot
+    /// be read is `None`.
+    #[test]
+    fn the_cards_of_a_usb_model_are_read_from_the_card_directories() {
+        let root = std::env::temp_dir().join(format!("nexus-asound-ids-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (dir, id, usbid) in [
+            ("card0", "PCH\n", None),
+            ("card1", "CODEC\n", Some("08bb:29b3\n")),
+            ("card2", "CODEC_1\n", Some("08BB:29B3\n")),
+            ("card3", "Headset\n", Some("0d8c:0014\n")),
+            ("cards", "CODEC_9\n", Some("08bb:29b3\n")),
+        ] {
+            let d = root.join(dir);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("id"), id).unwrap();
+            if let Some(u) = usbid {
+                std::fs::write(d.join("usbid"), u).unwrap();
+            }
+        }
+        let mut ids = card_ids_of_model_in(&root, "08bb:29b3").unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["CODEC".to_string(), "CODEC_1".to_string()]);
+        assert_eq!(card_ids_of_model_in(&root, "1234:5678"), Some(Vec::new()));
+        assert_eq!(card_ids_of_model_in(&root.join("gone"), "08bb:29b3"), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// The kernel's card list as `/proc/asound` lays it out: `card<N>/id`, and `card<N>/usbid` for

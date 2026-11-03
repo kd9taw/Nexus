@@ -3486,6 +3486,8 @@
 "4","settings.audio.rxGain.failed","Could not apply RX gain","Не удалось применить усиление RX","RX",""
 "4","settings.audio.txPower.failed","Could not set TX power","Не удалось установить мощность TX","TX",""
 "4","settings.audio.device.notInList","{{device}} — saved, not in the list","{{device}} — сохранено, не в списке","{{device}}",""
+"4","settings.audio.device.useInstead","Use {{device}} instead","Использовать {{device}} вместо него","{{device}}",""
+"4","settings.audio.device.useInsteadHint","The saved device is not in the list, and this one differs from it only by the number Windows puts in front or by its spacing. Nexus never switches audio devices by itself: press to pick it, then Save.","Сохранённого устройства нет в списке, а это отличается от него только номером, который Windows ставит впереди, или пробелами. Nexus никогда не переключает аудиоустройства сам: нажмите, чтобы выбрать его, затем «Сохранить».","Nexus | Windows",""
 "4","settings.betaUpdates.failed","Could not change the update channel","Не удалось изменить канал обновления","",""
 "4","settings.radios.thisRadio","this radio","этот трансивер","","Short label on: Settings ▸ Radios. The same English text ""this radio"" is used by 2 different keys (e.g. sat.binding.thisRadio) — each can take a different Russian word, so choose the one that fits THIS screen."
 "4","settings.radios.unnamed","radio {{id}}","трансивер {{id}}","{{id}}",""

@@ -45,6 +45,7 @@ import { STARTER_PACKS, importPack } from '../features/packs'
 import { memoriesStore } from '../features/memories'
 import { TCI_DEFAULT_HOST, TCI_DEFAULT_PORT, TCI_RIG_MODEL, TCI_RIG_MODEL_NAME, tciProbeMessage, tciServerName } from '../tci'
 import { upperTyped } from '../typedInput'
+import { showHiddenSpaces } from '../features/audioDeviceTwin'
 
 /** What the wizard collects beyond the goal profiles: station identity + rig.
  * Only the fields the operator actually touched are set — App merges this into
@@ -690,7 +691,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   const audioLabel = (name: string, kind: 'input' | 'output') =>
     audio[kind].includes(name)
       ? (audioLabels[kind][name] ?? name)
-      : t('settings.audio.device.notInList', { device: name })
+      : t('settings.audio.device.notInList', { device: showHiddenSpaces(name) })
 
   const runDetect = () => {
     setDetecting(true)

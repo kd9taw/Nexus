@@ -584,14 +584,23 @@ pub fn native_civ_reachable(rig_model: u32, rig_conn: &str, rig_addr: &str) -> b
 pub const FLEX_CLIENT_RIGS: [u32; 2] = [2036, 23005];
 
 /// Could Nexus's own Flex client serve this radio — a FlexRadio profile with the radio's own
-/// address set? The client talks to the radio itself (`flex_radio_ip`, the SmartSDR API's port
-/// 4992), so the profile's CAT connection and address do not enter into it.
+/// address set, on a connection that does not hand the radio to another driver first? The client
+/// talks to the radio itself (`flex_radio_ip`, the SmartSDR API's port 4992), so the profile's
+/// rigctld address does not enter into it, and it serves Serial and Network alike. But OmniRig, the
+/// Icom network connection and TCI each start their own driver before the Flex client is ever asked
+/// (`tempo_audio::service::spawn_cat_daemon`), so on those the client never runs, and neither does
+/// its DAX audio: that radio transmits from the sound card.
 ///
 /// ⭐ THE SINGLE SOURCE OF TRUTH for the daemon choice (`tempo_audio::service` asks this), for
-/// the same reason [`native_civ_reachable`] is one. Not gated on the operator's `flex_native_cat`
-/// opt-in: that is the separate "is it switched on" question.
-pub fn flex_client_reachable(rig_model: u32, flex_radio_ip: &str) -> bool {
-    FLEX_CLIENT_RIGS.contains(&rig_model) && !flex_radio_ip.trim().is_empty()
+/// the same reason [`native_civ_reachable`] is one, and for where the radio's transmit audio goes
+/// ([`tx_audio_on_sound_card`]), so the two cannot disagree. Not gated on the operator's
+/// `flex_native_cat` opt-in: that is the separate "is it switched on" question.
+pub fn flex_client_reachable(rig_model: u32, rig_conn: &str, flex_radio_ip: &str) -> bool {
+    FLEX_CLIENT_RIGS.contains(&rig_model)
+        && !flex_radio_ip.trim().is_empty()
+        && !rig_conn_is_omnirig(rig_conn)
+        && !rig_conn_is_icom_lan(rig_conn)
+        && !rig_conn_is_tci(rig_conn)
 }
 
 /// Is this rig driven over the radio's own network connection, by Nexus's Icom network client
@@ -776,7 +785,7 @@ pub fn tx_audio_on_sound_card(r: &TxAudioRoute) -> bool {
     let icom_lan = rig_conn_is_icom_lan(r.rig_conn);
     let tci = tci_reachable(r.rig_model, r.rig_conn, r.tci_host, r.tci_port) && r.tci_audio;
     let flex = r.flex_native_cat
-        && flex_client_reachable(r.rig_model, r.flex_radio_ip)
+        && flex_client_reachable(r.rig_model, r.rig_conn, r.flex_radio_ip)
         && r.flex_native_audio;
     !(icom_lan || tci || flex)
 }
@@ -3043,6 +3052,20 @@ pub struct Settings {
     pub audio_in: String,
     /// Output (playback) device name. Empty = system default output.
     pub audio_out: String,
+    /// The USB model (`vendor:product`, as Linux's `/proc/asound/card<N>/usbid` gives it) of the
+    /// sound card each TX audio device was on when the operator chose it, by the device's name as
+    /// saved (the flat `audio_out` and every radio's). Linux only, and only a USB card's: empty
+    /// elsewhere and in settings from before it existed, which keep the guard as it was.
+    ///
+    /// ⛔ TX-SAFETY: an ALSA card id is given in the order the cards were found, so a reboot can
+    /// hand the radio's codec's id (`CODEC`) to a headphone DAC on the same chip family and the
+    /// codec `CODEC_1`. The saved name then names the headphones, and the headphone monitor and the
+    /// app's sounds would be let onto the radio's codec. The guard refuses every card of this model
+    /// as well (`tempo_audio::notify_sound::tx_audio_device_owners`). Written only by
+    /// `tempo_audio::notify_sound::tx_card_models_after` when a save chooses a TX device, never
+    /// from a form, so a later save can never record the swapped card as the radio's.
+    #[serde(default)]
+    pub tx_card_models: std::collections::BTreeMap<String, String>,
     /// Microphone device for RECORDING voice-keyer messages. Empty (default) = keep
     /// today's behavior: record from `audio_in`, the shared capture input. But on a
     /// typical digital setup that input is the RIG's RX codec / DAX, so recording a
@@ -6686,6 +6709,7 @@ impl Default for Settings {
             aprs_iss_doppler: true,
             audio_in: String::new(),
             audio_out: String::new(),
+            tx_card_models: std::collections::BTreeMap::new(),
             voice_mic_device: String::new(),
             tx_level: 0.9,
             rx_gain: 1.0,

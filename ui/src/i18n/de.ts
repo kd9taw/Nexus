@@ -1017,6 +1017,8 @@ export const DE: PartialCatalog = {
   "settings.audio.rxGain.failed": "RX-Verstärkung konnte nicht übernommen werden",
   "settings.audio.txPower.failed": "TX-Leistung konnte nicht gesetzt werden",
   "settings.audio.device.notInList": "{{device}} — gespeichert, nicht in der Liste",
+  "settings.audio.device.useInstead": "Stattdessen {{device}} verwenden",
+  "settings.audio.device.useInsteadHint": "Das gespeicherte Gerät ist nicht in der Liste, und dieses unterscheidet sich davon nur durch die Nummer, die Windows davorsetzt, oder durch Leerzeichen. Nexus wechselt Audiogeräte nie von selbst: klicken, um es auszuwählen, dann Speichern.",
   "settings.detect.usb.failed": "USB-Geräteerkennung fehlgeschlagen",
   "settings.detect.flex.scanFailed": "Flex-LAN-Suche: {{error}}",
   "settings.detect.none": "Keine Funkgeräte gefunden — USB: anstecken und einschalten; Flex: muss in diesem Netzwerk sein.",
