@@ -36,6 +36,7 @@ import { blockerTarget } from '../features/contestStart'
 /** Strings that name ANOTHER program's settings (the OS, a browser, a web service), by key. */
 const OTHER_PROGRAMS: Record<string, string> = {
   'remote.stream.mic.denied.system': "the operating system's privacy settings",
+  'shell.lane.pcMic.silent': "Windows' microphone privacy settings",
   'remote.lan.firewall.public': "Windows' network settings",
   'gettingStarted.wsjtx.mac': "macOS's keyboard settings",
   'settings.connections.qrz.test.fail': "QRZ.com's account settings",

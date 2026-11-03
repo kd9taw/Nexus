@@ -877,6 +877,62 @@ fn digital_silence_never_keys() {
     );
 }
 
+/// ⛔ Never a silent PTT. A press held for a second or more whose microphone sent nothing but
+/// digital silence (muted, or kept from Nexus by Windows' microphone privacy setting, which hands a
+/// desktop program zeros), or nothing at all, keys nothing, and its release SAYS so. Controls: a
+/// quick tap says nothing, a press that keyed says nothing new, and a refused press keeps its own
+/// reason.
+#[test]
+fn a_held_press_that_never_got_sound_says_so_at_the_release() {
+    // Zeros for 1.5 s, then the release.
+    let mut e = station();
+    e.set_ptt(true);
+    let t0 = Instant::now();
+    for k in 0..75 {
+        let t = t0 + ms(k * 20);
+        e.push_pc_mic(&audio(20, 0.0), t);
+        assert_ne!(e.poll_pc_mic(t, TICK, 1), MicTick::Key);
+    }
+    e.release_pc_mic_at(t0 + ms(1_500));
+    assert!(!e.pc_mic_armed(), "the release ends the press");
+    assert!(
+        !e.take_pc_mic_abort(),
+        "nothing was keyed, so nothing to unkey"
+    );
+    assert_eq!(lane(&e), Some(PcMicCause::Silent));
+
+    // Nothing at all from the microphone for 1.5 s.
+    let mut e = station();
+    e.set_ptt(true);
+    let t0 = Instant::now();
+    assert_eq!(e.poll_pc_mic(t0, TICK, 1), MicTick::Armed);
+    e.release_pc_mic_at(t0 + ms(1_500));
+    assert_eq!(lane(&e), Some(PcMicCause::Silent), "no delivery at all");
+
+    // CONTROL: a quick tap says nothing.
+    let mut e = station();
+    e.set_ptt(true);
+    let t0 = Instant::now();
+    e.push_pc_mic(&audio(20, 0.0), t0);
+    e.release_pc_mic_at(t0 + ms(300));
+    assert_eq!(lane(&e), None, "CONTROL: a tap");
+
+    // CONTROL: an over that keyed ends by the release as it always has, nothing said.
+    let mut e = station();
+    let t0 = Instant::now();
+    keyed(&mut e, t0);
+    e.release_pc_mic_at(t0 + ms(1_500));
+    assert_eq!(lane(&e), None, "CONTROL: a keyed over");
+
+    // CONTROL: a press refused at the loop keeps its own reason through the release.
+    let mut e = station();
+    e.set_ptt(true);
+    e.pc_mic_refused(PcMicCause::Unsure);
+    let t0 = Instant::now();
+    e.release_pc_mic_at(t0 + ms(1_500));
+    assert_eq!(lane(&e), Some(PcMicCause::Unsure), "CONTROL: a refusal");
+}
+
 /// Once keyed, digital silence is the pause between words of a microphone with a noise gate: a
 /// second of it holds the over (it used to end at the 300 ms gap, mid-sentence), and the voice
 /// after it goes out.

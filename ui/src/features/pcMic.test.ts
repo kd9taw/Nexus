@@ -20,6 +20,7 @@ describe('the status lane after a computer-microphone over ended', () => {
     ['openFailed', 'shell.lane.pcMic.openFailed'],
     ['deviceLost', 'shell.lane.pcMic.deviceLost'],
     ['noAudio', 'shell.lane.pcMic.noAudio'],
+    ['silent', 'shell.lane.pcMic.silent'],
     ['ceiling', 'shell.lane.pcMic.ceiling'],
     ['watchdog', 'shell.lane.pcMic.watchdog'],
     ['busy', 'shell.lane.pcMic.busy'],

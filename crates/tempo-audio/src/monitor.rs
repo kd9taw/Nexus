@@ -69,8 +69,10 @@ pub fn monitor_tx_devices(settings: &tempo_app::settings::Settings) -> Vec<Strin
 /// - Linux: only two different sound cards are proven different (`hw:CARD=PCH` against
 ///   `plughw:CARD=CODEC`). The sound server's default (`default`, `pulse`, `pipewire`…) may be
 ///   the rig's card, and an `~/.asoundrc` PCM routes by a file, so either against a card is
-///   refused; so is a renumbered twin card (`CODEC_1` against `CODEC`). The operator picks the
-///   monitor output by card name.
+///   refused; so is a renumbered twin card (`CODEC_1` against `CODEC`) of the same USB model, or
+///   of a model the kernel does not name. A twin of ANOTHER USB model (a headset or monitor DAC on
+///   the radio codec's chip family) is another card, and monitors. The operator picks the monitor
+///   output by card name.
 /// - An empty name (a system default the host could not name) is refused against anything.
 ///
 /// SmartSDR's DAX transmit device is refused whatever the TX devices are ([`is_flex_dax_tx_device`]).
@@ -84,20 +86,20 @@ pub fn monitor_would_transmit(
         tx_devices,
         default_output,
         crate::notify_sound::HOST_NAMING,
-        &crate::notify_sound::system_card_id,
+        &crate::notify_sound::SystemCards,
     )
 }
 
-/// [`monitor_would_transmit`] under `naming`, a card number resolved through `card_id` (tests name
+/// [`monitor_would_transmit`] under `naming`, a card number resolved through `cards` (tests name
 /// their own platform and cards).
 fn monitor_would_transmit_as(
     monitor_device: &str,
     tx_devices: &[String],
     default_output: Option<&str>,
     naming: crate::notify_sound::Naming,
-    card_id: &dyn Fn(u32) -> Option<String>,
+    cards: &dyn crate::notify_sound::CardLookup,
 ) -> bool {
-    crate::notify_sound::device_verdict(monitor_device, tx_devices, default_output, naming, card_id)
+    crate::notify_sound::device_verdict(monitor_device, tx_devices, default_output, naming, cards)
         .is_some()
 }
 
@@ -116,7 +118,7 @@ pub fn monitor_refusal_notice(
         &crate::notify_sound::open_tx_outputs(),
         default_output,
         crate::notify_sound::HOST_NAMING,
-        &crate::notify_sound::system_card_id,
+        &crate::notify_sound::SystemCards,
     )
 }
 
@@ -128,7 +130,7 @@ fn monitor_refusal_notice_as(
     held: &[String],
     default_output: Option<&str>,
     naming: crate::notify_sound::Naming,
-    card_id: &dyn Fn(u32) -> Option<String>,
+    cards: &dyn crate::notify_sound::CardLookup,
 ) -> String {
     use crate::notify_sound::PlayRefusal;
     const OFF: &str = "Headphone monitor is off";
@@ -162,7 +164,7 @@ fn monitor_refusal_notice_as(
             &[device.to_string()],
             default_output,
             naming,
-            card_id,
+            cards,
         );
         if let Some(v) = verdict {
             if found.as_ref().is_none_or(|(w, ..)| rank(&v) > rank(w)) {
@@ -1468,6 +1470,66 @@ mod tests {
             said.contains("the TX output the radio in use has open (USB Audio CODEC)"),
             "{said}"
         );
+    }
+
+    /// The Linux field case: PipeWire running, the radio's TX audio on its codec by card
+    /// (`plughw:CARD=CODEC`), and the headphones picked by card directly: a USB DAC on the same
+    /// chip family, so the kernel named it `CODEC_1`. The kernel names the two USB models, and they
+    /// differ: the monitor plays. Controls: monitoring into the codec
+    /// itself is still refused as the TX audio, and so is a twin of the same model; the sound
+    /// server's own routes are still refused as unprovable, naming the radio.
+    #[test]
+    fn a_headphone_dac_twin_of_another_model_monitors_on_pipewire() {
+        struct Pc;
+        impl crate::notify_sound::CardLookup for Pc {
+            fn id(&self, n: u32) -> Option<String> {
+                ["PCH", "CODEC", "CODEC_1"]
+                    .get(n as usize)
+                    .map(|s| s.to_string())
+            }
+            fn model(&self, id: &str) -> Option<String> {
+                match id.to_ascii_uppercase().as_str() {
+                    "CODEC" => Some("08bb:29b3".into()),
+                    "CODEC_1" => Some("08bb:2902".into()),
+                    _ => None,
+                }
+            }
+        }
+        let tx = vec!["plughw:CARD=CODEC,DEV=0".to_string()];
+        let refused =
+            |monitor: &str| monitor_would_transmit_as(monitor, &tx, Some("pipewire"), Alsa, &Pc);
+        assert!(!refused("plughw:CARD=CODEC_1,DEV=0"));
+        assert!(!refused("hw:2,0"), "by number");
+        assert!(
+            refused("plughw:CARD=CODEC,DEV=0"),
+            "control: the TX codec itself"
+        );
+        assert!(refused("hw:1,0"), "control: the TX codec by number");
+        for server in ["pipewire", "pulse", "default"] {
+            assert!(refused(server), "control: {server} may be the codec");
+        }
+        let said = monitor_refusal_notice_as(
+            "pipewire",
+            &[(tx[0].clone(), Some("FTDX10".to_string()))],
+            &[],
+            Some("pipewire"),
+            Alsa,
+            &Pc,
+        );
+        assert!(
+            said.contains("cannot be told apart from the TX audio of radio \u{201c}FTDX10\u{201d}"),
+            "{said}"
+        );
+        // Two of one model stay one device.
+        assert!(monitor_would_transmit_as(
+            "plughw:CARD=CODEC_1,DEV=0",
+            &tx,
+            None,
+            Alsa,
+            &|n: u32| ["PCH", "CODEC", "CODEC_1"]
+                .get(n as usize)
+                .map(|s| s.to_string())
+        ));
     }
 
     /// This computer's guard is the JS8 sounds' guard under this computer's naming: the same

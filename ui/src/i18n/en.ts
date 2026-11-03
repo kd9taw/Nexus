@@ -8649,6 +8649,8 @@ export const EN = {
   'settings.audio.pcMic.label': 'Use this computer\'s microphone',
   'settings.audio.pcMic.hint':
     'On: while you hold PTT in Phone, Nexus sends this computer\'s microphone to this radio through its transmit audio (the output device above, or TCI audio on a TCI radio) and keys the radio for computer audio. Off (the default): PTT keys the radio\'s own microphone, as before. Phone only; the digital modes never use it. Stop TX or TX Off cuts it at once; releasing PTT lets the end of your last word finish (at most 0.2 s), then unkeys.',
+  'settings.audio.pcMic.radioInput':
+    'The radio must transmit the audio arriving on its USB or rear input in voice modes too. Where CAT PTT keys its microphone input (Transmit audio source Front/Mic, or a radio without that choice), set that on the radio, for example SSB MOD SOURCE to REAR on a Yaesu FTDX10; otherwise PTT keys the radio and its own microphone goes out, not this one.',
   'settings.audio.pcMic.device.label': 'Microphone',
   'settings.audio.pcMic.device.none': 'Choose a microphone…',
   'settings.audio.pcMic.device.hint':
@@ -14224,6 +14226,8 @@ export const EN = {
   'shell.lane.pcMic.deviceLost':
     'the microphone went away during the over, so Nexus unkeyed the radio.',
   'shell.lane.pcMic.noAudio': 'no audio came from the microphone, so Nexus unkeyed the radio.',
+  'shell.lane.pcMic.silent':
+    'no sound came from the microphone while you held PTT (only silence, or nothing at all), so the radio was not keyed. Check that the microphone is not muted, and on Windows that Settings ▸ Privacy & security ▸ Microphone lets desktop apps use it.',
   'shell.lane.pcMic.ceiling': 'the over reached its 10-minute limit, so Nexus unkeyed the radio.',
   'shell.lane.pcMic.watchdog':
     'the TX watchdog tripped, so Nexus unkeyed the radio and turned TX off.',

@@ -1656,6 +1656,10 @@ pub enum PcMicCause {
     DeviceLost,
     /// No audio came from the microphone for longer than the over's gap.
     NoAudio,
+    /// PTT was held and let go, and the microphone sent nothing but digital silence the whole
+    /// time, or nothing at all (muted, or kept from Nexus by the system's privacy setting): the
+    /// radio was never keyed.
+    Silent,
     /// The over reached its 10-minute ceiling.
     Ceiling,
     /// The TX watchdog tripped.

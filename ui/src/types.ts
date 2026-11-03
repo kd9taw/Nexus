@@ -7086,6 +7086,7 @@ export type PcMicCause =
   | 'openFailed'
   | 'deviceLost'
   | 'noAudio'
+  | 'silent'
   | 'ceiling'
   | 'watchdog'
   | 'busy'

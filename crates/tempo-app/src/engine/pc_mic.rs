@@ -19,7 +19,8 @@
 //!   wall clock before the flush + unkey ([`Engine::release_pc_mic_at`]), so the end of the last
 //!   word is not clipped. The microphone is not even open while no over is armed.
 //! - **Never keys by itself.** An armed over keys on the first audio the microphone delivers after
-//!   the press, and on nothing else; a press that never gets audio keys nothing.
+//!   the press, and on nothing else; a press that never gets audio keys nothing, and its release
+//!   says so when PTT was held a second or more ([`crate::dto::PcMicCause::Silent`]).
 //! - **Every TX gate, every tick.** The TX-enable latch, the licence privileges, no tune, the Phone
 //!   section, this radio's switch still on, the same radio, the same transmit route, the 10-minute
 //!   ceiling and the wall-clock TX watchdog, the release's tail included. Stop TX
@@ -71,6 +72,10 @@ const DIGITAL_SILENCE_LIMIT_MS: u64 = 4_000;
 /// The most of the microphone's audio a PTT release lets play out before the radio unkeys.
 pub const RELEASE_TAIL_MS: u64 = 200;
 
+/// How long PTT must have been held for a release of an over that never keyed to say why
+/// ([`PcMicCause::Silent`]): a quick tap says nothing.
+const SILENT_PRESS: std::time::Duration = std::time::Duration::from_millis(1_000);
+
 /// The computer microphone's over and what it needs.
 pub(crate) struct PcMicState {
     pub(crate) over: MicLatch,
@@ -102,6 +107,9 @@ pub(crate) struct PcMicState {
     /// The radio loop's word, each tick, that the radio takes this over's audio from Nexus's DAX
     /// ([`Engine::observe_pc_mic_dax`]). Read only while `dax_hold` stands.
     on_dax: bool,
+    /// When the over armed (the press): a release of an over that never keyed says why only when
+    /// PTT was held [`SILENT_PRESS`] or more.
+    armed_at: Option<Instant>,
 }
 
 impl Default for PcMicState {
@@ -122,6 +130,7 @@ impl Default for PcMicState {
             held: Vec::new(),
             dax_hold: None,
             on_dax: false,
+            armed_at: None,
         }
     }
 }
@@ -219,6 +228,7 @@ impl Engine {
         // Nexus plays reaches the radio only as DAX: the over rides the client's switch to DAX for
         // as long as PTT is held, and keys nothing until the radio reports it (module header).
         self.pc_mic.dax_hold = self.flex_radio_has_mic.then(Instant::now);
+        self.pc_mic.armed_at = Some(Instant::now());
         self.pc_mic.on_dax = false;
         // A press is an operator action: the unattended-transmit clock restarts here.
         self.reset_tx_watchdog();
@@ -251,7 +261,21 @@ impl Engine {
             return;
         }
         if !self.pc_mic.over.keyed() {
+            // ⛔ Never a silent PTT: an over still armed at a release it was held for a while is one
+            // whose microphone sent nothing but digital silence, or nothing at all (muted, or kept
+            // from Nexus by the system's privacy setting), so the radio was never keyed. Said, and
+            // nothing else changes: it keys nothing. Not for a quick tap, and not while the press
+            // waits on a Flex's switch to DAX, which says its own reason.
+            let held_long = self
+                .pc_mic
+                .armed_at
+                .is_some_and(|armed| at.saturating_duration_since(armed) >= SILENT_PRESS);
+            let waits_on_dax = self.pc_mic.dax_hold.is_some() && !self.pc_mic.on_dax;
+            let silent = self.pc_mic.over.active() && held_long && !waits_on_dax;
             self.drop_pc_mic();
+            if silent {
+                self.note_pc_mic(PcMicCause::Silent);
+            }
             return;
         }
         // The part of a frame captured before the release, made whole with silence.
