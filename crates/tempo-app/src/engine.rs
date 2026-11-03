@@ -228,6 +228,8 @@ pub mod tci_spots;
 #[cfg(test)]
 mod ten_meter_ssb_only_tests;
 mod tx_alarms;
+/// Diagnostic-log words about transmit: who keyed, and why the TX watchdog tripped. Log only.
+mod tx_diag;
 /// A data frame judged across its whole width, and where it keys.
 #[cfg(test)]
 mod tx_frame_width_tests;
@@ -26639,6 +26641,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let now = now_unix_secs();
             let start = *self.tx_watchdog_start.get_or_insert(now);
             if now.saturating_sub(start) >= limit_secs {
+                self.note_tx_watchdog_trip("a PSK over");
                 self.tx_watchdog = true;
                 self.tx_enabled = false;
                 self.psk_queue.clear();
@@ -26764,6 +26767,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             None => res.tick,
             Some(why) => {
                 if why == KbDrop::Watchdog {
+                    self.note_tx_watchdog_trip("a latched PSK over");
                     self.tx_watchdog = true;
                     self.tx_enabled = false;
                     self.psk_queue.clear();
@@ -27051,6 +27055,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let now = now_unix_secs();
             let start = *self.tx_watchdog_start.get_or_insert(now);
             if now.saturating_sub(start) >= limit_secs {
+                self.note_tx_watchdog_trip("an RTTY over");
                 self.tx_watchdog = true;
                 self.tx_enabled = false;
                 self.rtty_queue.clear();
@@ -27492,6 +27497,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 if why == KbDrop::Watchdog {
                     // A trip disarms TX so it stays stopped, and takes the queued
                     // overs with it — identical to `poll_rtty_one`'s.
+                    self.note_tx_watchdog_trip("a latched RTTY over");
                     self.tx_watchdog = true;
                     self.tx_enabled = false;
                     self.rtty_queue.clear();
@@ -32033,6 +32039,7 @@ contact yourself."
                     let now = now_unix_secs();
                     let start = *self.tx_watchdog_start.get_or_insert(now);
                     if now.saturating_sub(start) >= limit_secs {
+                        self.note_tx_watchdog_trip(&format!("{} over", self.app.tier().label()));
                         self.tx_watchdog = true;
                         self.tx_enabled = false;
                         // A trip is a hard kill: the loop's mid-over cut is the
@@ -32066,6 +32073,10 @@ contact yourself."
                     // starting a few seconds before the limit that today goes out.
                     let over_secs = self.tx_over_secs() as u64;
                     if over_secs > limit_secs {
+                        self.note_tx_watchdog_trip(&format!(
+                            "{} over refused: {over_secs} s is longer than the whole limit",
+                            self.app.tier().label()
+                        ));
                         self.tx_watchdog = true;
                         self.tx_enabled = false;
                         self.slot_tx_abort = true; // watchdog = hard kill (see above)
@@ -32208,6 +32219,9 @@ contact yourself."
                         let now = now_unix_secs();
                         let start = *self.tx_watchdog_start.get_or_insert(now);
                         if now.saturating_sub(start) >= limit_secs {
+                            self.note_tx_watchdog_trip(
+                                "a directed call held armed by its call cap",
+                            );
                             self.tx_watchdog = true;
                             self.tx_enabled = false;
                         }
@@ -32238,6 +32252,7 @@ contact yourself."
         let start = *self.tx_watchdog_start.get_or_insert(now);
         let over_secs = self.tx_over_secs() as u64;
         if now.saturating_sub(start) >= limit_secs || over_secs > limit_secs {
+            self.note_tx_watchdog_trip("a JS8 over");
             self.tx_watchdog = true;
             self.tx_enabled = false;
             // A trip is a hard kill: the loop's mid-over cut is the one-shot abort.
@@ -33268,6 +33283,13 @@ contact yourself."
             " — and every sample in that window is zero: the receive audio is silent, which is \
              the rig's audio cable, the input device or a rig stuck in transmit, not the band"
                 .to_string()
+        } else if peak >= 1.0 {
+            // At or over full scale (the window is after RX Gain, which is 1.0 to 8.0): the
+            // input is clipped, not healthy. A clipped chain decodes little or nothing.
+            format!(
+                " (rx peak {peak:.4} — the receive audio is CLIPPED, at or over full scale: lower \
+                 RX Gain, then the input level of the sound card or the radio's audio output)"
+            )
         } else {
             format!(" (rx peak {peak:.4} — audio IS arriving)")
         }
@@ -37078,6 +37100,25 @@ mod tests {
         // sample in the noise floor is enough to make the window alive.
         let floor = Engine::drought_audio_note(&[0.0, 0.0, 3.0e-5, 0.0]);
         assert!(!floor.contains("silent"), "{floor}");
+    }
+
+    /// A peak at or over full scale is not "audio IS arriving": it is a receive chain driven into
+    /// clipping, which decodes nothing on the busiest band. An operator's drought lines read
+    /// `rx peak 2.3` on every band for weeks with the line calling that healthy. The line now
+    /// says clipped and what to turn down; normal and silent input keep their words.
+    #[test]
+    fn the_drought_line_says_a_clipped_input_is_clipped() {
+        for peak in [1.0f32, 2.3013, -2.69] {
+            let clipped = Engine::drought_audio_note(&[0.0, 0.1, peak, -0.2]);
+            assert!(clipped.contains("CLIPPED"), "{clipped}");
+            assert!(clipped.contains("RX Gain"), "{clipped}");
+            assert!(clipped.contains("input level"), "{clipped}");
+            assert!(!clipped.contains("audio IS arriving"), "{clipped}");
+        }
+        // THE CONTROLS: just under full scale is a normal level, worded as before.
+        let loud = Engine::drought_audio_note(&[0.0, 0.9999, -0.5]);
+        assert_eq!(loud, " (rx peak 0.9999 — audio IS arriving)");
+        assert!(Engine::drought_audio_note(&[0.0; 8]).contains("silent"));
     }
 
     /// What `sat_tune_nominal` is told the bird needs the radio to be in. Named

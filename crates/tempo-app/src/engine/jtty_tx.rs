@@ -1668,6 +1668,7 @@ impl Engine {
 
     /// The wall-clock watchdog tripped: TX disarmed, everything dropped and cut.
     fn jtty_watchdog_trip(&mut self) {
+        self.note_tx_watchdog_trip("a JTTY over");
         self.tx_watchdog = true;
         self.tx_enabled = false;
         self.jtty_drop(WATCHDOG_TRIPPED);
