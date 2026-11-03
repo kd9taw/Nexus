@@ -1877,6 +1877,7 @@
 "3","logbook.column.cont","Continent","大洲","",""
 "3","logbook.column.distance","Distance (km)","距離（km）","",""
 "3","logbook.column.parkName","Park name","公園名稱","","Filled by the maintainer, pending translator review."
+"3","logbook.column.parkName.noList","No park list yet, so this column is empty. Download one, or import a CSV, on the POTA/SOTA screen.","尚無公園清單，因此此欄為空。請在 POTA/SOTA 畫面下載，或匯入 CSV。","POTA/SOTA | CSV","Filled by the maintainer, pending translator review."
 "3","logbook.column.qslSentDate","Card sent","卡片已寄出","",""
 "3","logbook.column.qslRcvdDate","Card received","卡片已收到","",""
 "3","logbook.column.lotwRcvdDate","LoTW received","LoTW 已接收","LoTW",""

@@ -11,7 +11,7 @@
 // `a_page_row_carries_what_the_logbook_columns_show` holds the engine to that shape from a real
 // store.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest'
-import { render, waitFor, fireEvent, screen, cleanup, within } from '@testing-library/react'
+import { render, waitFor, fireEvent, screen, cleanup, within, act } from '@testing-library/react'
 import { Logbook } from './Logbook'
 import * as api from '../api'
 import { announce } from '../announce'
@@ -19,6 +19,7 @@ import type { LogQuestion } from '../features/logAnswers'
 import type { LogColumnsSaved } from '../features/logColumns'
 import { chooseRowAction } from './Logbook.rowMenu.testkit'
 import { t } from '../i18n'
+import { parksChanged } from '../features/parkNames'
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -43,6 +44,7 @@ vi.mock('../api', () => {
     lookupPark: vi.fn(async (ref: string) =>
       ({ 'US-0001': { reference: 'US-0001', name: 'Acadia National Park', grid: 'FN54', location: 'US-ME' },
         'US-1234': { reference: 'US-1234', name: 'Lake Park', grid: 'EN52', location: 'US-WI' } })[ref] ?? null),
+    parksCount: vi.fn(async () => 3),
     logQso: vi.fn(() => Promise.resolve({})), purgeLog: noop(), qrzLookup: noop(),
     markQslSentById: noop(), markQslCardById: noop(),
     syncLotwReport: noop(), uploadLotwReport: noop(), qrzPushQso: noop(),
@@ -96,6 +98,8 @@ async function openChooser() {
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  // The park names a window keeps, forgotten as a new park list forgets them.
+  parksChanged()
   localStorage.clear()
   document.documentElement.removeAttribute('data-viewport')
   document.documentElement.style.removeProperty('--vw-eff')
@@ -217,6 +221,51 @@ describe('the satellite columns (#423) and the park name (#437)', () => {
     cleanup()
     const { container: c2 } = await renderLog({ columns: { shown: ['parkName'], hidden: [], widths: {} } })
     expect([...row(c2).querySelectorAll(':scope > .log-cell')][headers().indexOf('Park name')].textContent).toBe('—')
+  })
+
+  it('fifty contacts in one park ask the station once, and a remount asks nothing', async () => {
+    const fifty = Array.from({ length: 50 }, (_, i) => ({ ...SAT, id: `id-P${i}`, call: `K${i}AB`, whenUnix: 1_700_000_000 + i * 60 }))
+    const columns = { shown: ['parkName'], hidden: [], widths: {} }
+    const { container } = await renderLog({ log: fifty, columns })
+    await waitFor(() => expect(container.querySelectorAll('.logbook-row:not(.head):not(.placeholder)').length).toBeGreaterThan(1))
+    await waitFor(() => expect(row(container).textContent).toContain('Lake Park / Acadia National Park'))
+    // One lookup per park, however many rows show it.
+    expect(vi.mocked(api.lookupPark).mock.calls.map(([r]) => r).sort()).toEqual(['US-0001', 'US-1234'])
+    cleanup()
+    vi.mocked(api.lookupPark).mockClear()
+    const again = await renderLog({ log: fifty, columns })
+    await waitFor(() => expect(row(again.container).textContent).toContain('Lake Park / Acadia National Park'))
+    expect(api.lookupPark).not.toHaveBeenCalled()
+  })
+
+  it('a park the list does not hold is asked once; a new park list asks again', async () => {
+    const NONE = { ...SAT, ota: { ...SAT.ota, theirRef: 'US-9999' } }
+    const columns = { shown: ['parkName'], hidden: [], widths: {} }
+    const cell = (c: HTMLElement) => [...row(c).querySelectorAll(':scope > .log-cell')][headers().indexOf('Park name')]
+    const first = await renderLog({ log: [NONE, { ...NONE, id: 'id-2', call: 'K2AB' }], columns })
+    await waitFor(() => expect(api.lookupPark).toHaveBeenCalledTimes(1))
+    expect(cell(first.container).textContent).toBe('—')
+    cleanup()
+    await renderLog({ log: [NONE], columns })
+    expect(api.lookupPark).toHaveBeenCalledTimes(1)
+    // The list is downloaded and now holds it: the cell shown asks again and names it.
+    vi.mocked(api.lookupPark).mockResolvedValueOnce({ reference: 'US-9999', name: 'Badlands', grid: '', location: 'US-SD' })
+    act(() => parksChanged())
+    await waitFor(() => expect(cell(document.body).textContent).toBe('Badlands'))
+    expect(api.lookupPark).toHaveBeenCalledTimes(2)
+  })
+
+  it('with no park list loaded, the header says where to get one', async () => {
+    const columns = { shown: ['parkName'], hidden: [], widths: {} }
+    vi.mocked(api.parksCount).mockResolvedValue(0)
+    await renderLog({ log: [SAT], columns })
+    const header = () => screen.getAllByRole('columnheader').find((x) => x.textContent?.startsWith('Park name')) as HTMLElement
+    await waitFor(() => expect(header().getAttribute('title')).toContain(t('logbook.column.parkName.noList')))
+    // A list loaded: the plain sort hint.
+    vi.mocked(api.parksCount).mockResolvedValue(80_000)
+    act(() => parksChanged())
+    await waitFor(() => expect(header().getAttribute('title')).toBe(t('logbook.sort.shiftHint')))
+    vi.mocked(api.parksCount).mockResolvedValue(3)
   })
 
   it('each header sorts: a click asks the engine for that order', async () => {

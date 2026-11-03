@@ -1942,6 +1942,8 @@ export const EN = {
   'logbook.column.cont': 'Continent',
   'logbook.column.distance': 'Distance (km)',
   'logbook.column.parkName': 'Park name',
+  'logbook.column.parkName.noList':
+    'No park list yet, so this column is empty. Download one, or import a CSV, on the POTA/SOTA screen.',
   // Your contacts' paths (features/pathGrade.ts, the Logbook's Path column and filter, the contact
   // card): which way round each logged contact most likely went. A grade stamped when the contact
   // was logged is the station's own (beam heading, receivers, decodes) over the model; one made

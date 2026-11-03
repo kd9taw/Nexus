@@ -1778,6 +1778,7 @@ export const RU: PartialCatalog = {
   "logbook.column.cont": "Континент",
   "logbook.column.distance": "Расстояние (км)",
   "logbook.column.parkName": "Название парка",
+  "logbook.column.parkName.noList": "Списка парков ещё нет, поэтому этот столбец пуст. Скачайте его или импортируйте CSV на экране POTA/SOTA.",
   "logbook.column.path": "Путь",
   "logbook.column.path.title": "Путь, которым скорее всего прошла каждая связь: ▸ короткий, ◂ длинный, ▸◂ любой, ? вне модели, ⊕ через полярную шапку. Ярко: оценено при записи в журнал. Тускло: смоделировано позже.",
   "logbook.filters.path": "Путь",

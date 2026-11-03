@@ -1715,6 +1715,7 @@ export const ZH_HANT: PartialCatalog = {
   "logbook.column.cont": "大洲",
   "logbook.column.distance": "距離（km）",
   "logbook.column.parkName": "公園名稱",
+  "logbook.column.parkName.noList": "尚無公園清單，因此此欄為空。請在 POTA/SOTA 畫面下載，或匯入 CSV。",
   "logbook.column.qslSentDate": "卡片已寄出",
   "logbook.column.qslRcvdDate": "卡片已收到",
   "logbook.column.lotwRcvdDate": "LoTW 已接收",

@@ -42,6 +42,7 @@ import { announce } from '../announce'
 import { LogFilterBar } from './LogFilterBar'
 import { PathGradeCell } from './prop/PathGradeCell'
 import { ParkNameCell } from './ParkNameCell'
+import { onParksChanged, parkListCount } from '../features/parkNames'
 import { usePathGradingStatus, validationLines } from '../features/pathGrade'
 import { clickSort, filterKey, sortPlace, type LogFilter, type LogSort } from '../features/logFilter'
 import { activationFilter } from '../features/potaActivation'
@@ -446,6 +447,24 @@ export function Logbook({
   // The Path column's hover: what its marks mean, and the grading's success measures.
   const pathStatus = usePathGradingStatus(cols.some((c) => c.id === 'path'))
   const pathHeaderTitle = [t('logbook.column.path.title'), ...(pathStatus ? validationLines(pathStatus) : [])].join('\n')
+  // The Park name column's hover, while the station holds no park list: where to get one (the
+  // column reads every name from it, and is empty without it).
+  const parkNameOn = cols.some((c) => c.id === 'parkName')
+  const [noParkList, setNoParkList] = useState(false)
+  useEffect(() => {
+    if (!parkNameOn) return
+    let live = true
+    const ask = () =>
+      void parkListCount().then((n) => {
+        if (live) setNoParkList(n === 0)
+      })
+    ask()
+    const off = onParksChanged(ask)
+    return () => {
+      live = false
+      off()
+    }
+  }, [parkNameOn])
   const gridTemplate = logGridTemplate(cols, colChoice, narrowWindow)
   const tableMinW = logTableMinWidth(cols, colChoice)
   const changeColumns = (next: LogColumnsSaved) => {
@@ -2277,7 +2296,11 @@ export function Logbook({
         className={`log-cell log-th${at ? ' sorted' : ''}${moveClass(c)}`}
         role="columnheader"
         aria-sort={at?.place === 1 ? (at.asc ? 'ascending' : 'descending') : 'none'}
-        title={t('logbook.sort.shiftHint')}
+        title={
+          c.id === 'parkName' && noParkList
+            ? `${t('logbook.column.parkName.noList')}\n${t('logbook.sort.shiftHint')}`
+            : t('logbook.sort.shiftHint')
+        }
         {...moveHandlers(c)}
         onClick={(e) => {
           // Only a pointer's click (detail ≥ 1) ends a drag. Enter or Space on the header clicks with

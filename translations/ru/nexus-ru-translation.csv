@@ -1951,6 +1951,7 @@
 "3","logbook.column.cont","Continent","Континент","",""
 "3","logbook.column.distance","Distance (km)","Расстояние (км)","",""
 "3","logbook.column.parkName","Park name","Название парка","",""
+"3","logbook.column.parkName.noList","No park list yet, so this column is empty. Download one, or import a CSV, on the POTA/SOTA screen.","Списка парков ещё нет, поэтому этот столбец пуст. Скачайте его или импортируйте CSV на экране POTA/SOTA.","POTA/SOTA | CSV",""
 "5","logbook.column.path","Path","Путь","",""
 "5","logbook.column.path.title","The path each contact most likely took: ▸ short, ◂ long, ▸◂ either, ? outside the model, ⊕ across the polar cap. Bright: graded when it was logged. Dim: modelled afterwards.","Путь, которым скорее всего прошла каждая связь: ▸ короткий, ◂ длинный, ▸◂ любой, ? вне модели, ⊕ через полярную шапку. Ярко: оценено при записи в журнал. Тускло: смоделировано позже.","▸◂ | ▸ | ◂ | ⊕",""
 "5","logbook.filters.path","Path","Путь","",""

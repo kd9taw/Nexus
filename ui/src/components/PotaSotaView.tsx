@@ -49,6 +49,7 @@ import { POTA_SPOTS, SOTA_SPOTS, refreshFeed, useFeed, useFeedAsking } from '../
 import { t } from '../i18n'
 import { T } from '../i18n/T'
 import { upperTyped } from '../typedInput'
+import { parksChanged } from '../features/parkNames'
 
 type Program = 'POTA' | 'SOTA' | 'Both'
 
@@ -593,6 +594,8 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     const n = await withErrorToast(() => downloadParks(), t('ota.parks.downloadFailed'))
     setParkBusy(false)
     if (n != null) {
+      // The Logbook's Park name column reads its names from this list.
+      parksChanged()
       setParkN(n)
       // The count is grouped for display HERE, as it always was — `t()` never formats a
       // number (see the invariant-token rule in i18n/index.ts).
@@ -605,6 +608,7 @@ export function PotaSotaView({ snap, onHunt, onSnap, detached = false, observati
     try {
       const csv = await file.text()
       const n = await importParksCsv(csv)
+      parksChanged()
       setParkN(n)
       pushToast(t('ota.parks.imported', { formatted: n.toLocaleString() }), 'success')
     } catch (e) {
