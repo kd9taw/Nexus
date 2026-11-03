@@ -10895,6 +10895,7 @@ Click for internet feed controls.","{{detail}}
 "4","settings.alerts.popupCorner.hint","Which corner of the window the pop-ups appear in. Bottom right is where they have always been.","弹窗出现在窗口的哪个角落。右下角是它们一直以来的位置。","","Filled by the maintainer, pending translator review."
 "3","meters.tx.enlarge.aria","Show the transmit meters larger","放大显示发射表","","Filled by the maintainer, pending translator review."
 "3","meters.tx.enlarge.title","Transmit meters","发射表","","Filled by the maintainer, pending translator review."
-"3","meters.tx.enlarge.desc","The same live readings as the TX strip, larger. Escape closes this.","与 TX 栏相同的实时读数，放大显示。按 Esc 关闭。","","Filled by the maintainer, pending translator review."
+"3","meters.tx.enlarge.desc","The same live readings as the TX strip, larger. Escape stops transmitting, as everywhere on this screen; Close only closes this.","与 TX 栏相同的实时读数，放大显示。Esc 会停止发射，与本界面其他地方一样；“关闭”只关闭此窗口。","","Filled by the maintainer, pending translator review."
 "5","phone.tune.usbAudioNote","Tune sends its tone over USB audio. If the radio keys with no power, set its SSB MOD SOURCE menu to REAR (USB).","Tune（调谐发射）通过 USB 音频发送音调。如果电台进入发射却没有功率输出，请把电台的 SSB MOD SOURCE 菜单设为 REAR（USB）。","Tune | SSB MOD SOURCE | REAR (USB) | USB","Filled by the maintainer, pending translator review."
 "5","phone.tune.usbAudioNote.aria","About Tune on this radio","关于此电台上的 Tune（调谐发射）","Tune","Filled by the maintainer, pending translator review."
+"3","meters.tx.enlarge.close","Close","关闭","","Filled by the maintainer, pending translator review."

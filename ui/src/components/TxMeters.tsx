@@ -548,11 +548,15 @@ export function TxMeters({
 
 /** #446: OPERATE'S TELEMETRY CELL, WHICH OPENS LARGER. The cell (`.cq-telemetry`) is fixed-width
  *  chrome, so its bars are small; a click on it, or Enter or Space with it focused, opens a dialog
- *  with the same live meters at full size, from the same `radio` on every poll. Escape closes it,
- *  and the keyboard goes back to the cell (`useFocusReturn`).
+ *  with the same live meters at full size, from the same `radio` on every poll. Close closes it, and
+ *  the keyboard goes back to the cell (`useFocusReturn`).
  *
- *  A READOUT, like the cell: the dialog's meters take no `controls`, so nothing in it keys, stops
- *  or sets anything, and the cell keeps its id-free place in the strip (no pane vocabulary). The
+ *  ⚠️ ESCAPE IS ALSO STOP TX on this screen (`useEscStop`, a window listener), and the dialog is opened
+ *  to watch an over. So it never says Escape "closes" it: it says Escape stops transmitting, and the
+ *  visible Close is the way to close it without a stop. Esc-as-stop is not weakened for it.
+ *
+ *  A READOUT, like the cell: the dialog's meters take no `controls`, so Close is its one control and
+ *  nothing in it keys, stops or sets anything, and the cell keeps its id-free place in the strip (no pane vocabulary). The
  *  opener is the cell's own wrapper — a block filling the cell, so the cell's geometry is what it
  *  was. The dialog box is `ui/Dialog`'s own (its portaled box is the sanctioned raw-unit exception);
  *  only how the meters sit inside it is styled here (`.txmeters-large`).
@@ -589,6 +593,11 @@ export function TxMetersCell({ radio }: { radio: RadioStatus }) {
       >
         <div className="txmeters-large">
           <TxMeters radio={radio} pinned />
+        </div>
+        <div className="txmeters-actions">
+          <button type="button" className="export-btn" aria-label={t('meters.tx.enlarge.close')} onClick={() => setOpen(false)}>
+            ✕ {t('meters.tx.enlarge.close')}
+          </button>
         </div>
       </Dialog>
     </>

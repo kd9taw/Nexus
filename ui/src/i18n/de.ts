@@ -10269,7 +10269,8 @@ export const DE: PartialCatalog = {
   "settings.alerts.popupCorner.hint": "In welcher Fensterecke die Pop-ups erscheinen. Unten rechts ist, wo sie schon immer waren.",
   "meters.tx.enlarge.aria": "Sendeanzeigen größer anzeigen",
   "meters.tx.enlarge.title": "Sendeanzeigen",
-  "meters.tx.enlarge.desc": "Dieselben Live-Werte wie in der TX-Leiste, größer. Escape schließt dieses Fenster.",
+  "meters.tx.enlarge.desc": "Dieselben Live-Werte wie in der TX-Leiste, größer. Escape beendet das Senden, wie überall auf diesem Bildschirm; „Schließen“ schließt nur dieses Fenster.",
   "phone.tune.usbAudioNote": "Tune sendet seinen Ton über USB-Audio. Wenn das Funkgerät ohne Leistung sendet, stellen Sie sein Menü SSB MOD SOURCE auf REAR (USB).",
   "phone.tune.usbAudioNote.aria": "Zu Tune an diesem Funkgerät",
+  "meters.tx.enlarge.close": "Schließen",
 }

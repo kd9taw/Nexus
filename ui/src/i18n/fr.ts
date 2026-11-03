@@ -10279,7 +10279,8 @@ export const FR: PartialCatalog = {
   "settings.alerts.popupCorner.hint": "Dans quel coin de la fenêtre apparaissent les notifications. En bas à droite, c’est là où elles ont toujours été.",
   "meters.tx.enlarge.aria": "Afficher les mesures d’émission en plus grand",
   "meters.tx.enlarge.title": "Mesures d’émission",
-  "meters.tx.enlarge.desc": "Les mêmes mesures en direct que la bande TX, en plus grand. Échap ferme cette fenêtre.",
+  "meters.tx.enlarge.desc": "Les mêmes mesures en direct que la bande TX, en plus grand. Échap arrête l’émission, comme partout sur cet écran ; « Fermer » ferme seulement cette fenêtre.",
   "phone.tune.usbAudioNote": "Tune envoie sa tonalité par l’audio USB. Si la radio passe en émission sans puissance, réglez son menu SSB MOD SOURCE sur REAR (USB).",
   "phone.tune.usbAudioNote.aria": "À propos de Tune sur cette radio",
+  "meters.tx.enlarge.close": "Fermer",
 }

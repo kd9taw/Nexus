@@ -10235,7 +10235,8 @@ export const ZH_HANT: PartialCatalog = {
   "settings.alerts.popupCorner.hint": "彈窗出現在視窗的哪個角落。右下角是它們一直以來的位置。",
   "meters.tx.enlarge.aria": "放大顯示發射表",
   "meters.tx.enlarge.title": "發射表",
-  "meters.tx.enlarge.desc": "與 TX 列相同的即時讀數，放大顯示。按 Esc 關閉。",
+  "meters.tx.enlarge.desc": "與 TX 列相同的即時讀數，放大顯示。Esc 會停止發射，與本畫面其他地方一樣；「關閉」只關閉此視窗。",
   "phone.tune.usbAudioNote": "Tune（調諧發射）透過 USB 音訊送出音調。如果電台進入發射卻沒有功率輸出，請把電台的 SSB MOD SOURCE 選單設為 REAR（USB）。",
   "phone.tune.usbAudioNote.aria": "關於此電台上的 Tune（調諧發射）",
+  "meters.tx.enlarge.close": "關閉",
 }

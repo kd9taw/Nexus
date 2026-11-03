@@ -10279,7 +10279,8 @@ export const ES: PartialCatalog = {
   "settings.alerts.popupCorner.hint": "En qué esquina de la ventana aparecen los avisos. Abajo a la derecha es donde han estado siempre.",
   "meters.tx.enlarge.aria": "Ver los medidores de transmisión más grandes",
   "meters.tx.enlarge.title": "Medidores de transmisión",
-  "meters.tx.enlarge.desc": "Las mismas lecturas en vivo que la barra de TX, más grandes. Escape lo cierra.",
+  "meters.tx.enlarge.desc": "Las mismas lecturas en vivo que la barra de TX, más grandes. Escape detiene la transmisión, como en toda esta pantalla; «Cerrar» solo cierra esto.",
   "phone.tune.usbAudioNote": "Tune envía su tono por el audio USB. Si la radio transmite sin potencia, ponga su menú SSB MOD SOURCE en REAR (USB).",
   "phone.tune.usbAudioNote.aria": "Sobre Tune en esta radio",
+  "meters.tx.enlarge.close": "Cerrar",
 }

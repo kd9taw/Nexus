@@ -10242,7 +10242,8 @@ export const RU: PartialCatalog = {
   "settings.alerts.popupCorner.hint": "В каком углу окна появляются всплывающие уведомления. Справа внизу — там, где они были всегда.",
   "meters.tx.enlarge.aria": "Показать индикаторы передачи крупнее",
   "meters.tx.enlarge.title": "Индикаторы передачи",
-  "meters.tx.enlarge.desc": "Те же текущие показания, что и в полосе TX, только крупнее. Escape закрывает окно.",
+  "meters.tx.enlarge.desc": "Те же текущие показания, что и в полосе TX, только крупнее. Escape останавливает передачу, как везде на этом экране; «Закрыть» только закрывает это окно.",
   "phone.tune.usbAudioNote": "Tune подаёт тон через звук USB. Если трансивер переходит на передачу без мощности, установите в его меню SSB MOD SOURCE значение REAR (USB).",
   "phone.tune.usbAudioNote.aria": "О Tune на этом трансивере",
+  "meters.tx.enlarge.close": "Закрыть",
 }

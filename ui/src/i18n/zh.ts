@@ -10233,7 +10233,8 @@ export const ZH: PartialCatalog = {
   "settings.alerts.popupCorner.hint": "弹窗出现在窗口的哪个角落。右下角是它们一直以来的位置。",
   "meters.tx.enlarge.aria": "放大显示发射表",
   "meters.tx.enlarge.title": "发射表",
-  "meters.tx.enlarge.desc": "与 TX 栏相同的实时读数，放大显示。按 Esc 关闭。",
+  "meters.tx.enlarge.desc": "与 TX 栏相同的实时读数，放大显示。Esc 会停止发射，与本界面其他地方一样；“关闭”只关闭此窗口。",
   "phone.tune.usbAudioNote": "Tune（调谐发射）通过 USB 音频发送音调。如果电台进入发射却没有功率输出，请把电台的 SSB MOD SOURCE 菜单设为 REAR（USB）。",
   "phone.tune.usbAudioNote.aria": "关于此电台上的 Tune（调谐发射）",
+  "meters.tx.enlarge.close": "关闭",
 }

@@ -10894,6 +10894,7 @@ Click for internet feed controls.","{{detail}}
 "4","settings.alerts.popupCorner.hint","Which corner of the window the pop-ups appear in. Bottom right is where they have always been.","В каком углу окна появляются всплывающие уведомления. Справа внизу — там, где они были всегда.","",""
 "3","meters.tx.enlarge.aria","Show the transmit meters larger","Показать индикаторы передачи крупнее","",""
 "3","meters.tx.enlarge.title","Transmit meters","Индикаторы передачи","",""
-"3","meters.tx.enlarge.desc","The same live readings as the TX strip, larger. Escape closes this.","Те же текущие показания, что и в полосе TX, только крупнее. Escape закрывает окно.","",""
+"3","meters.tx.enlarge.desc","The same live readings as the TX strip, larger. Escape stops transmitting, as everywhere on this screen; Close only closes this.","Те же текущие показания, что и в полосе TX, только крупнее. Escape останавливает передачу, как везде на этом экране; «Закрыть» только закрывает это окно.","",""
 "5","phone.tune.usbAudioNote","Tune sends its tone over USB audio. If the radio keys with no power, set its SSB MOD SOURCE menu to REAR (USB).","Tune подаёт тон через звук USB. Если трансивер переходит на передачу без мощности, установите в его меню SSB MOD SOURCE значение REAR (USB).","Tune | SSB MOD SOURCE | REAR (USB) | USB",""
 "5","phone.tune.usbAudioNote.aria","About Tune on this radio","О Tune на этом трансивере","Tune",""
+"3","meters.tx.enlarge.close","Close","Закрыть","",""

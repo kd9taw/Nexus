@@ -2,14 +2,15 @@
 //
 // #446: THE FT8 TX METERS, LARGER. On the FT screen the meters live in the TX strip's small
 // fixed-width telemetry cell (`.cq-telemetry`). The cell now opens a dialog with the same live
-// meters at full size: a click, or Enter/Space on it. Escape closes it and the keyboard goes back to
-// the cell. It is a READOUT: no control of any kind in the dialog, nothing that keys or stops.
+// meters at full size: a click, or Enter/Space on it. Close (or Escape, which is also Stop TX) closes
+// it and the keyboard goes back to the cell. It is a READOUT: Close is its one control.
 // The dialog's geometry is computed from the real sheets' cascade on the rendered dialog.
 import { describe, it, expect, afterEach, beforeAll } from 'vitest'
 import { render, cleanup, fireEvent, screen, act, waitFor } from '@testing-library/react'
 import { TxMetersCell } from './TxMeters'
 import type { RadioStatus } from '../types'
 import { loadSheets, pxOf } from '../cssCascade.testkit'
+import { EN } from '../i18n/en'
 
 beforeAll(() => loadSheets())
 afterEach(cleanup)
@@ -74,11 +75,28 @@ describe('the Operate TX meters open larger (#446)', () => {
     expect(dialog()).toBeNull()
   })
 
-  it('is display only: no button, slider or other control in the dialog', () => {
+  it('is display only: Close is its one control, and nothing else in it keys, sets or stops', () => {
     const { opener } = mount(keyed({ compLevel: 0.5 }))
     fireEvent.click(opener)
     const d = dialog()!
-    expect(d.querySelectorAll('button, input, select, textarea, [role="slider"], [role="switch"], [tabindex="0"]').length).toBe(0)
+    const controls = [...d.querySelectorAll('button, input, select, textarea, [role="slider"], [role="switch"], [tabindex="0"]')]
+    expect(controls.map((c) => c.getAttribute('aria-label') ?? c.textContent)).toEqual([EN['meters.tx.enlarge.close']])
+  })
+
+  // Escape is also the cockpit's Stop TX (a window listener, useEscStop), and the dialog is opened to
+  // watch an over: it must never tell the operator Escape just closes it. Close does, without a stop.
+  it('Close closes it and gives the keyboard back; the dialog says Escape stops transmitting', async () => {
+    const { opener } = mount(keyed())
+    opener.focus()
+    fireEvent.keyDown(opener, { key: 'Enter' })
+    const d = dialog()!
+    expect(d.textContent).toContain(EN['meters.tx.enlarge.desc'])
+    expect(EN['meters.tx.enlarge.desc']).toMatch(/Escape stops transmitting/)
+    expect(EN['meters.tx.enlarge.desc']).not.toMatch(/Escape closes/)
+    const close = screen.getByRole('button', { name: EN['meters.tx.enlarge.close'] })
+    fireEvent.click(close)
+    expect(dialog()).toBeNull()
+    await waitFor(() => expect(document.activeElement, 'focus was not returned to the cell').toBe(opener))
   })
 
   it('draws the bars full size: taller than the cell’s, in the dialog box only', () => {

@@ -13106,6 +13106,11 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(18px * var(--text-scale));
   min-width: 4.5em;
 }
+.txmeters-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+}
 /* The COMP row in Phone SETS the processor level as well as metering compression: the fill is
    the meter, the marker line is the level, and the track is the slider (drag / arrow keys).
    `touch-action: none` keeps a finger drag on a touch screen from scrolling the dock instead. */

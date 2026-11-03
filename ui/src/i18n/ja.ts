@@ -10262,7 +10262,8 @@ export const JA: PartialCatalog = {
   "settings.alerts.popupCorner.hint": "ポップアップをウィンドウのどの隅に表示するかを選びます。右下はこれまでどおりの位置です。",
   "meters.tx.enlarge.aria": "送信メーターを大きく表示",
   "meters.tx.enlarge.title": "送信メーター",
-  "meters.tx.enlarge.desc": "送信ストリップと同じリアルタイムの値を大きく表示します。Escで閉じます。",
+  "meters.tx.enlarge.desc": "送信ストリップと同じリアルタイムの値を大きく表示します。Escはこの画面のどこでもそうであるように送信を停止します。「閉じる」はこの表示を閉じるだけです。",
   "phone.tune.usbAudioNote": "TuneはトーンをUSBオーディオで送ります。無線機が送信状態になっても出力が出ない場合は、無線機のSSB MOD SOURCEメニューをREAR（USB）にしてください。",
   "phone.tune.usbAudioNote.aria": "この無線機でのTuneについて",
+  "meters.tx.enlarge.close": "閉じる",
 }
