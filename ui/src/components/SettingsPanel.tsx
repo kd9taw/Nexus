@@ -7640,6 +7640,9 @@ export function SettingsPanel({
                     </select>
                     {setAtStation('pcMicDevice')}
                     <span className="settings-hint">{t('settings.audio.pcMic.device.hint')}</span>
+                    {/* Nexus keys a Front/Mic radio on its microphone input: the radio must be set
+                        to transmit the USB/rear audio this microphone arrives on (engine/pc_mic.rs). */}
+                    <span className="settings-hint">{t('settings.audio.pcMic.radioInput')}</span>
                   </label>
                   <label className="settings-field">
                     <span className="settings-label">

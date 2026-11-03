@@ -1656,6 +1656,10 @@ pub enum PcMicCause {
     DeviceLost,
     /// No audio came from the microphone for longer than the over's gap.
     NoAudio,
+    /// PTT was held and let go, and the microphone sent nothing but digital silence the whole
+    /// time, or nothing at all (muted, or kept from Nexus by the system's privacy setting): the
+    /// radio was never keyed.
+    Silent,
     /// The over reached its 10-minute ceiling.
     Ceiling,
     /// The TX watchdog tripped.
@@ -1680,6 +1684,9 @@ pub enum PcMicCause {
     Interrupted,
     /// The radio did not accept the key.
     KeyRefused,
+    /// The radio's transmit audio output (the sound card that carries the voice to the radio)
+    /// would not open, so the radio was not keyed: it would have gone on the air with no audio.
+    TxAudio,
     /// The chosen microphone cannot be told apart from an input that may carry the band (a sound
     /// server's default input, receive on the system default, an input routed by a sound
     /// configuration file, or a card by a number this computer cannot resolve).

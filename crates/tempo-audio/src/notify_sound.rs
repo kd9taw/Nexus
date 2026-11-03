@@ -28,7 +28,11 @@
 //! codec and the "N- " Windows numbers it by inside its name ("Speakers (2- USB Audio CODEC)"). On
 //! Linux a second card with a taken id is `<id>_N` (`CODEC_1`), and it is compared without the
 //! `_N`. Two identically named codecs are therefore one device here, whichever number each has
-//! today (the numbers move when one is unplugged), which refuses more rather than less.
+//! today (the numbers move when one is unplugged), which refuses more rather than less. The one
+//! exception is on Linux, where the kernel names each card's USB model: two cards whose ids differ
+//! and whose models differ are two devices (a USB headset or monitor DAC built on the same chip
+//! family as the radio's codec gets its id: `CODEC_1` beside `CODEC`, `Device_1` beside `Device`).
+//! Two of one model, or a card whose model is unknown, stay one device.
 //! The refusal says which of these it was ([`PlayRefusal`]), so the operator is told what to change.
 //!
 //! The pure pieces (the guard, the built-in tones) build without the `device` feature so they are
@@ -228,8 +232,8 @@ enum Collision {
     Unsure,
 }
 
-/// The route of `name` under `naming`, a card number resolved to its id through `card_id`.
-fn route(name: &str, naming: Naming, card_id: &dyn Fn(u32) -> Option<String>) -> Route {
+/// The route of `name` under `naming`, a card number resolved to its id through `cards`.
+fn route(name: &str, naming: Naming, cards: &dyn CardLookup) -> Route {
     let name = name.trim();
     let lower = name.to_ascii_lowercase();
     if naming == Naming::Endpoint {
@@ -250,7 +254,7 @@ fn route(name: &str, naming: Naming, card_id: &dyn Fn(u32) -> Option<String>) ->
         // ALSA takes a quoted argument too (`hw:CARD="CODEC"`): the same card.
         let card = card.map(|c| c.trim().trim_matches(|q| q == '"' || q == '\'').trim());
         if let Some(card) = card.filter(|c| !c.is_empty()) {
-            return Route::Card(card_ref(card, card_id));
+            return Route::Card(card_ref(card, cards));
         }
     }
     if args.is_empty() && SOUND_SERVER_ROUTES.contains(&plugin) {
@@ -304,9 +308,10 @@ fn same_card_id(x: &str, y: &str) -> bool {
     bx == by || (cut_x && by.starts_with(bx)) || (cut_y && bx.starts_with(by))
 }
 
-fn card_ref(token: &str, card_id: &dyn Fn(u32) -> Option<String>) -> Card {
+fn card_ref(token: &str, cards: &dyn CardLookup) -> Card {
     match token.parse::<u32>() {
-        Ok(n) => card_id(n)
+        Ok(n) => cards
+            .id(n)
             .map(|id| Card::Id(id.trim().to_ascii_lowercase()))
             .unwrap_or(Card::Number(n)),
         Err(_) => Card::Id(token.to_ascii_lowercase()),
@@ -315,14 +320,19 @@ fn card_ref(token: &str, card_id: &dyn Fn(u32) -> Option<String>) -> Card {
 
 /// Whether two routes may be one device. `None` ONLY where they are proven different: two
 /// different cards (by id, or by number), or two different endpoint names. Identically named
-/// twins are one device ([`same_card_id`], [`without_instance_numbers`]). Every other pair —
+/// twins are one device ([`same_card_id`], [`without_instance_numbers`]), except two Linux cards
+/// whose ids differ and that the kernel reports as two different USB models ([`CardLookup::model`]):
+/// a USB headset or monitor DAC and a radio's codec built on the same chip family share an id
+/// (`CODEC` and `CODEC_1`, `Device` and `Device_1`), and are two devices. Every other pair —
 /// the sound server against anything else, a config-file PCM against anything but its own name,
 /// a card by id against one by a number nobody resolved — is unsure, and refuses.
-fn collide(a: &Route, b: &Route) -> Option<Collision> {
+fn collide(a: &Route, b: &Route, cards: &dyn CardLookup) -> Option<Collision> {
     match (a, b) {
         (Route::Server, Route::Server) => Some(Collision::Same),
         (Route::Card(x), Route::Card(y)) => match (x, y) {
-            (Card::Id(x), Card::Id(y)) if same_card_id(x, y) => Some(Collision::Same),
+            (Card::Id(x), Card::Id(y)) if same_card_id(x, y) => {
+                (x == y || !different_models(cards, x, y)).then_some(Collision::Same)
+            }
             (Card::Number(x), Card::Number(y)) if x == y => Some(Collision::Same),
             (Card::Id(_), Card::Id(_)) | (Card::Number(_), Card::Number(_)) => None,
             (Card::Id(_), Card::Number(_)) | (Card::Number(_), Card::Id(_)) => {
@@ -334,6 +344,80 @@ fn collide(a: &Route, b: &Route) -> Option<Collision> {
         (Route::Named(_), Route::Named(_)) => None,
         _ => Some(Collision::Unsure),
     }
+}
+
+/// Whether two twin card ids (`CODEC` and `CODEC_1`) are cards of two different USB models, as
+/// the kernel reports them NOW. Only then are they proven two devices: identical models (two radios
+/// of one make, two of one interface) stay one device, because nothing but the order they were
+/// found in tells them apart, and so does a card whose model is not known (not USB, or gone).
+fn different_models(cards: &dyn CardLookup, x: &str, y: &str) -> bool {
+    match (cards.model(x), cards.model(y)) {
+        (Some(mx), Some(my)) => !mx.trim().eq_ignore_ascii_case(my.trim()),
+        _ => false,
+    }
+}
+
+/// What this computer knows of its sound cards, for the guard: a card's id from its number, and a
+/// USB card's model. Tests hand in their own; a plain `Fn(u32) -> Option<String>` is the id lookup
+/// of a computer whose card models are unknown.
+pub(crate) trait CardLookup {
+    /// The id of card `n` (`/proc/asound/card<N>/id`), `None` when there is no such card.
+    fn id(&self, n: u32) -> Option<String>;
+    /// The USB model (`vendor:product`, compared case-blind) of the card whose id is `id` (compared
+    /// case-blind), `None` when it is not a USB card, not here, or the host cannot say.
+    fn model(&self, _id: &str) -> Option<String> {
+        None
+    }
+}
+
+impl<F: Fn(u32) -> Option<String>> CardLookup for F {
+    fn id(&self, n: u32) -> Option<String> {
+        self(n)
+    }
+}
+
+/// This computer's cards, as the kernel lists them (`/proc/asound` on Linux; nothing elsewhere).
+pub(crate) struct SystemCards;
+
+impl CardLookup for SystemCards {
+    fn id(&self, n: u32) -> Option<String> {
+        system_card_id(n)
+    }
+    fn model(&self, id: &str) -> Option<String> {
+        system_card_model(id)
+    }
+}
+
+/// The USB model of the card whose id is `id`, as the kernel lists it
+/// (`/proc/asound/card<N>/usbid`, `vendor:product`), lower-cased. `None` off Linux, for a card that
+/// is not USB, and for one that is not here.
+fn system_card_model(id: &str) -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    card_model_in(std::path::Path::new("/proc/asound"), id)
+}
+
+/// [`system_card_model`] under `root` (`/proc/asound`; tests hand in their own): the `card<N>`
+/// directory whose `id` is `id` (case-blind), and its `usbid`.
+fn card_model_in(root: &std::path::Path, id: &str) -> Option<String> {
+    let id = id.trim();
+    std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .and_then(|n| n.strip_prefix("card"))
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+        })
+        .find(|e| {
+            std::fs::read_to_string(e.path().join("id"))
+                .is_ok_and(|card| card.trim().eq_ignore_ascii_case(id))
+        })
+        .and_then(|e| std::fs::read_to_string(e.path().join("usbid")).ok())
+        .map(|m| m.trim().to_ascii_lowercase())
+        .filter(|m| !m.is_empty())
 }
 
 /// An ALSA card's id from its number, as the kernel lists it (`/proc/asound/card<N>/id`).
@@ -356,7 +440,7 @@ pub(crate) fn device_verdict(
     tx_devices: &[String],
     default_output: Option<&str>,
     naming: Naming,
-    card_id: &dyn Fn(u32) -> Option<String>,
+    cards: &dyn CardLookup,
 ) -> Option<PlayRefusal> {
     let device = device.trim();
     if device.is_empty() {
@@ -366,7 +450,7 @@ pub(crate) fn device_verdict(
     if crate::monitor::is_flex_dax_tx_device(device) {
         return Some(PlayRefusal::TxDevice);
     }
-    let dev = route(device, naming, card_id);
+    let dev = route(device, naming, cards);
     let default_output = default_output.map(str::trim).filter(|d| !d.is_empty());
     let mut why: Option<PlayRefusal> = None;
     let rank = |r: &PlayRefusal| match r {
@@ -381,13 +465,13 @@ pub(crate) fn device_verdict(
                 // A TX device that is "the default" on a host that cannot name its default: no
                 // output can be shown to differ from it.
                 None => Some(PlayRefusal::TxDefault),
-                Some(d) => collide(&dev, &route(d, naming, card_id)).map(|c| match c {
+                Some(d) => collide(&dev, &route(d, naming, cards), cards).map(|c| match c {
                     Collision::Same => PlayRefusal::TxDefault,
                     Collision::Unsure => PlayRefusal::TxUnsure,
                 }),
             }
         } else {
-            collide(&dev, &route(tx, naming, card_id)).map(|c| match c {
+            collide(&dev, &route(tx, naming, cards), cards).map(|c| match c {
                 Collision::Same => PlayRefusal::TxDevice,
                 Collision::Unsure => PlayRefusal::TxUnsure,
             })
@@ -409,11 +493,11 @@ fn verdict_with(
     tx_devices: &[String],
     default_output: Option<&str>,
     naming: Naming,
-    card_id: &dyn Fn(u32) -> Option<String>,
+    cards: &dyn CardLookup,
 ) -> Option<PlayRefusal> {
-    let a = device_verdict(opened, tx_devices, default_output, naming, card_id);
+    let a = device_verdict(opened, tx_devices, default_output, naming, cards);
     let b = (!configured.trim().is_empty())
-        .then(|| device_verdict(configured, tx_devices, default_output, naming, card_id))
+        .then(|| device_verdict(configured, tx_devices, default_output, naming, cards))
         .flatten();
     match (a, b) {
         (Some(PlayRefusal::TxDevice), _) | (_, Some(PlayRefusal::TxDevice)) => {
@@ -436,7 +520,7 @@ pub fn would_transmit(device: &str, tx_devices: &[String], default_output: Optio
         tx_devices,
         default_output,
         HOST_NAMING,
-        &system_card_id,
+        &SystemCards,
     )
     .is_some()
 }
@@ -457,7 +541,7 @@ pub fn refuse_tx(
         tx_devices,
         default_output,
         HOST_NAMING,
-        &system_card_id,
+        &SystemCards,
     ) {
         Some(why) => Err(why),
         None => Ok(()),
@@ -474,7 +558,7 @@ pub fn refuse_tx(
 /// named as a sound server's route (`default`, `pulse`, `pipewire`…) captures whatever the server
 /// defaults to, so it is unsure against every input, on every host.
 pub fn same_input(mic: &str, input: &str) -> Option<tempo_app::engine::pc_mic::SameInput> {
-    input_collision(mic, input, HOST_NAMING, &system_card_id)
+    input_collision(mic, input, HOST_NAMING, &SystemCards)
 }
 
 /// [`same_input`] with the naming and the card-number lookup handed in (tests name their own).
@@ -482,7 +566,7 @@ fn input_collision(
     mic: &str,
     input: &str,
     naming: Naming,
-    card_id: &dyn Fn(u32) -> Option<String>,
+    cards: &dyn CardLookup,
 ) -> Option<tempo_app::engine::pc_mic::SameInput> {
     use tempo_app::engine::pc_mic::SameInput;
     let (mic, input) = (mic.trim(), input.trim());
@@ -490,11 +574,15 @@ fn input_collision(
         return Some(SameInput::Unsure); // a device with no name cannot be told apart
     }
     // Whatever this host calls its devices: no Windows or macOS endpoint is named like this.
-    let server = route(mic, Naming::Alsa, card_id) == Route::Server;
+    let server = route(mic, Naming::Alsa, cards) == Route::Server;
     if input.is_empty() {
         return server.then_some(SameInput::Unsure);
     }
-    match collide(&route(mic, naming, card_id), &route(input, naming, card_id)) {
+    match collide(
+        &route(mic, naming, cards),
+        &route(input, naming, cards),
+        cards,
+    ) {
         Some(Collision::Same) => Some(SameInput::Same),
         Some(Collision::Unsure) => Some(SameInput::Unsure),
         None => server.then_some(SameInput::Unsure),
@@ -931,7 +1019,7 @@ mod tests {
                 &s(&["hw:CARD=CODEC"]),
                 None,
                 Naming::Alsa,
-                &|n| { (n == 1).then(|| "CODEC_1".to_string()) }
+                &|n: u32| { (n == 1).then(|| "CODEC_1".to_string()) }
             ),
             Some(PlayRefusal::TxDevice),
             "by number, resolved to the twin's id"
@@ -951,6 +1039,197 @@ mod tests {
         assert!(
             !alsa("hw:CARD=CODECPRO", &s(&["hw:CARD=CODEC_1"]), None),
             "control: a twin id not cut short is not a prefix match"
+        );
+    }
+
+    /// A Linux computer's cards as a test names them: number, id and USB model (`None`: not USB).
+    struct Cards(&'static [(u32, &'static str, Option<&'static str>)]);
+
+    impl CardLookup for Cards {
+        fn id(&self, n: u32) -> Option<String> {
+            self.0
+                .iter()
+                .find(|(k, ..)| *k == n)
+                .map(|(_, id, _)| id.to_string())
+        }
+        fn model(&self, id: &str) -> Option<String> {
+            self.0
+                .iter()
+                .find(|(_, k, _)| k.eq_ignore_ascii_case(id))
+                .and_then(|(.., m)| m.map(str::to_string))
+        }
+    }
+
+    /// The field case: a Linux station whose radio codec (an FTDX10's, `CODEC`) and headphone DAC
+    /// (a USB "Audio CODEC" box on the same chip family, so `CODEC_1`) are two USB models. Picked
+    /// by card, the headphones were refused as "the TX device"; they are another card, and the
+    /// kernel says so. Two of ONE model, a model the kernel does not name, the codec itself under
+    /// any name, and the sound server's routes all stay refused.
+    #[test]
+    fn a_twin_id_of_another_usb_model_is_another_card_on_linux() {
+        let pc = Cards(&[
+            (0, "PCH", None),
+            (1, "CODEC", Some("08bb:29b3")),
+            (2, "CODEC_1", Some("08bb:2902")),
+        ]);
+        let tx = s(&["plughw:CARD=CODEC,DEV=0"]);
+        let verdict = |dev: &str, cards: &dyn CardLookup| {
+            verdict_with(dev, "", &tx, None, Naming::Alsa, cards)
+        };
+        assert_eq!(verdict("plughw:CARD=CODEC_1,DEV=0", &pc), None);
+        assert_eq!(verdict("hw:2,0", &pc), None, "by number");
+        assert_eq!(
+            verdict_with(
+                "plughw:CARD=CODEC,DEV=0",
+                "",
+                &s(&["plughw:CARD=CODEC_1,DEV=0"]),
+                None,
+                Naming::Alsa,
+                &pc
+            ),
+            None,
+            "the other way round"
+        );
+        // Controls: the codec itself, by any name, is still the TX device.
+        assert_eq!(verdict("hw:CARD=CODEC", &pc), Some(PlayRefusal::TxDevice));
+        assert_eq!(verdict("hw:1,0", &pc), Some(PlayRefusal::TxDevice));
+        // Two of one model: nothing but the order they were found in tells them apart.
+        let twins = Cards(&[
+            (1, "CODEC", Some("08bb:29b3")),
+            (2, "CODEC_1", Some("08BB:29B3")),
+        ]);
+        assert_eq!(
+            verdict("plughw:CARD=CODEC_1,DEV=0", &twins),
+            Some(PlayRefusal::TxDevice)
+        );
+        // A model the kernel does not name (not USB, or gone): still one device.
+        let unknown = Cards(&[(1, "CODEC", Some("08bb:29b3")), (2, "CODEC_1", None)]);
+        assert_eq!(
+            verdict("plughw:CARD=CODEC_1,DEV=0", &unknown),
+            Some(PlayRefusal::TxDevice)
+        );
+        // The sound server's routes still cannot be told apart from the codec, models or not.
+        for server in ["default", "pulse", "pipewire"] {
+            assert_eq!(
+                verdict(server, &pc),
+                Some(PlayRefusal::TxUnsure),
+                "{server}"
+            );
+        }
+        // A TX device left on the system default, which the sound server names: a card is not
+        // proven different from it.
+        assert_eq!(
+            verdict_with(
+                "plughw:CARD=CODEC_1,DEV=0",
+                "",
+                &s(&[""]),
+                Some("pipewire"),
+                Naming::Alsa,
+                &pc
+            ),
+            Some(PlayRefusal::TxUnsure)
+        );
+    }
+
+    /// The kernel's card list as `/proc/asound` lays it out: `card<N>/id`, and `card<N>/usbid` for
+    /// a USB card only. The `CODEC` symlink and the non-card entries are not cards.
+    #[test]
+    fn a_cards_usb_model_is_read_from_its_card_directory() {
+        let root = std::env::temp_dir().join(format!("nexus-asound-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (dir, id, usbid) in [
+            ("card0", "PCH\n", None),
+            ("card1", "CODEC\n", Some("08bb:29b3\n")),
+            ("card2", "CODEC_1\n", Some("08BB:2902\n")),
+            ("cards", "CODEC_1\n", Some("ffff:ffff\n")),
+        ] {
+            let d = root.join(dir);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("id"), id).unwrap();
+            if let Some(u) = usbid {
+                std::fs::write(d.join("usbid"), u).unwrap();
+            }
+        }
+        std::fs::write(root.join("version"), "Advanced Linux Sound Architecture\n").unwrap();
+        assert_eq!(card_model_in(&root, "codec").as_deref(), Some("08bb:29b3"));
+        assert_eq!(
+            card_model_in(&root, "CODEC_1").as_deref(),
+            Some("08bb:2902")
+        );
+        assert_eq!(card_model_in(&root, "PCH"), None, "not a USB card");
+        assert_eq!(card_model_in(&root, "Headset"), None, "not here");
+        assert_eq!(
+            card_model_in(&root.join("gone"), "CODEC"),
+            None,
+            "no card list"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Windows, the FTDX10-with-a-webcam station: the webcam's microphone is not the radio's
+    /// receive input, nor the system default input, so the microphone is never refused for it.
+    /// A pin of the guard as shipped (it passes on 1.22.0 too): "PTT keys but no audio" on that
+    /// station is not this guard. Control: the radio's own codec input under Windows' "2-" number
+    /// is still the receive input.
+    #[test]
+    fn a_webcam_microphone_is_not_the_radios_receive_input_on_windows() {
+        use tempo_app::engine::pc_mic::SameInput::Same;
+        let rx = "Microphone (USB Audio CODEC)";
+        for webcam in [
+            "Microphone (HD Pro Webcam C920)",
+            "Microphone (2- HD Pro Webcam C920)",
+            "Microphone (USB Camera)",
+        ] {
+            assert_eq!(
+                input_collision(webcam, rx, Naming::Endpoint, &no_cards),
+                None,
+                "{webcam}"
+            );
+            assert_eq!(
+                input_collision(webcam, "", Naming::Endpoint, &no_cards),
+                None,
+                "{webcam} against the system default input"
+            );
+        }
+        assert_eq!(
+            input_collision(
+                "Microphone (2- USB Audio CODEC)",
+                rx,
+                Naming::Endpoint,
+                &no_cards
+            ),
+            Some(Same),
+            "control: the codec itself"
+        );
+    }
+
+    /// The same rule for the computer microphone's receive check: a USB headset's microphone on
+    /// the chip family of the radio's interface (`Device_1` beside a `Device`) is another input when
+    /// the kernel names two models, and the radio's input when it names one.
+    #[test]
+    fn a_headset_mic_of_another_usb_model_is_not_the_receive_input_on_linux() {
+        use tempo_app::engine::pc_mic::SameInput::Same;
+        let pc = Cards(&[
+            (1, "Device", Some("0d8c:0012")),
+            (2, "Device_1", Some("0d8c:0014")),
+        ]);
+        let twins = Cards(&[
+            (1, "Device", Some("0d8c:0012")),
+            (2, "Device_1", Some("0d8c:0012")),
+        ]);
+        let rx = "plughw:CARD=Device,DEV=0";
+        assert_eq!(
+            input_collision("plughw:CARD=Device_1,DEV=0", rx, Naming::Alsa, &pc),
+            None
+        );
+        assert_eq!(
+            input_collision("plughw:CARD=Device_1,DEV=0", rx, Naming::Alsa, &twins),
+            Some(Same)
+        );
+        assert_eq!(
+            input_collision("dsnoop:CARD=Device", rx, Naming::Alsa, &pc),
+            Some(Same),
+            "control: the radio's own input by another name"
         );
     }
 
@@ -1146,9 +1425,14 @@ mod tests {
             "and the other way round"
         );
         assert_eq!(
-            verdict_with("hw:0,0", "", &tx, Some("default"), Naming::Alsa, &|n| {
-                (n == 0).then(|| "PCH".to_string())
-            }),
+            verdict_with(
+                "hw:0,0",
+                "",
+                &tx,
+                Some("default"),
+                Naming::Alsa,
+                &|n: u32| { (n == 0).then(|| "PCH".to_string()) }
+            ),
             None,
             "control: card 0 is another card"
         );

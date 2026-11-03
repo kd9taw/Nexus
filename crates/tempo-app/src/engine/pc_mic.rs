@@ -19,7 +19,8 @@
 //!   wall clock before the flush + unkey ([`Engine::release_pc_mic_at`]), so the end of the last
 //!   word is not clipped. The microphone is not even open while no over is armed.
 //! - **Never keys by itself.** An armed over keys on the first audio the microphone delivers after
-//!   the press, and on nothing else; a press that never gets audio keys nothing.
+//!   the press, and on nothing else; a press that never gets audio keys nothing, and its release
+//!   says so when PTT was held a second or more ([`crate::dto::PcMicCause::Silent`]).
 //! - **Every TX gate, every tick.** The TX-enable latch, the licence privileges, no tune, the Phone
 //!   section, this radio's switch still on, the same radio, the same transmit route, the 10-minute
 //!   ceiling and the wall-clock TX watchdog, the release's tail included. Stop TX
@@ -71,6 +72,10 @@ const DIGITAL_SILENCE_LIMIT_MS: u64 = 4_000;
 /// The most of the microphone's audio a PTT release lets play out before the radio unkeys.
 pub const RELEASE_TAIL_MS: u64 = 200;
 
+/// How long PTT must have been held for a release of an over that never keyed to say why
+/// ([`PcMicCause::Silent`]): a quick tap says nothing.
+const SILENT_PRESS: std::time::Duration = std::time::Duration::from_millis(1_000);
+
 /// The computer microphone's over and what it needs.
 pub(crate) struct PcMicState {
     pub(crate) over: MicLatch,
@@ -102,6 +107,14 @@ pub(crate) struct PcMicState {
     /// The radio loop's word, each tick, that the radio takes this over's audio from Nexus's DAX
     /// ([`Engine::observe_pc_mic_dax`]). Read only while `dax_hold` stands.
     on_dax: bool,
+    /// When the over armed (the press): a release of an over that never keyed says why only when
+    /// PTT was held [`SILENT_PRESS`] or more.
+    armed_at: Option<Instant>,
+    /// What this over has handed the transmitter: samples, and the loudest of them (full scale 1.0),
+    /// for the diagnostic log's line at its end. A "PTT keys but no audio goes out" report reads
+    /// there whether any voice reached the sound card, and how loud.
+    sent: usize,
+    peak: f32,
 }
 
 impl Default for PcMicState {
@@ -122,6 +135,9 @@ impl Default for PcMicState {
             held: Vec::new(),
             dax_hold: None,
             on_dax: false,
+            armed_at: None,
+            sent: 0,
+            peak: 0.0,
         }
     }
 }
@@ -174,14 +190,24 @@ impl Engine {
             // arms, on its own capture, as a quick re-press always has.
             self.drop_pc_mic();
         }
-        if !self.pc_mic_wanted()
-            || !self.tx_enabled
-            || !self.tx_allowed()
-            || self.tuning
-            || self.clock_repair_holds_tx()
-            || self.remote_transmit_held()
-            || self.connection_tx_refusal().is_some()
-        {
+        let gate = if !self.pc_mic_wanted() {
+            Some("not in Phone with the switch on")
+        } else if !self.tx_enabled {
+            Some("TX is off")
+        } else if !self.tx_allowed() {
+            Some("transmit is not allowed here (licence or connection)")
+        } else if self.tuning {
+            Some("a tune is running")
+        } else if self.clock_repair_holds_tx() {
+            Some("a clock repair holds transmit")
+        } else if self.remote_transmit_held() {
+            Some("a newly signed-in device holds transmit")
+        } else {
+            self.connection_tx_refusal()
+        };
+        if let Some(gate) = gate {
+            // The cockpit says each of these on screen at the press; the log keeps it too.
+            tempo_core::applog::info("tx", &format!("{} over not armed: {gate}", PC_MIC.name));
             return false;
         }
         // Something else holds the transmitter (a voice-keyer message queued or playing among
@@ -219,6 +245,19 @@ impl Engine {
         // Nexus plays reaches the radio only as DAX: the over rides the client's switch to DAX for
         // as long as PTT is held, and keys nothing until the radio reports it (module header).
         self.pc_mic.dax_hold = self.flex_radio_has_mic.then(Instant::now);
+        self.pc_mic.armed_at = Some(Instant::now());
+        self.pc_mic.sent = 0;
+        self.pc_mic.peak = 0.0;
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} over armed: microphone {:?}, gain {:+.1} dB, TX audio level {:.2}",
+                PC_MIC.name,
+                self.pc_mic.device,
+                self.settings.pc_mic_gain_db,
+                self.settings.tx_level
+            ),
+        );
         self.pc_mic.on_dax = false;
         // A press is an operator action: the unattended-transmit clock restarts here.
         self.reset_tx_watchdog();
@@ -251,7 +290,21 @@ impl Engine {
             return;
         }
         if !self.pc_mic.over.keyed() {
+            // ⛔ Never a silent PTT: an over still armed at a release it was held for a while is one
+            // whose microphone sent nothing but digital silence, or nothing at all (muted, or kept
+            // from Nexus by the system's privacy setting), so the radio was never keyed. Said, and
+            // nothing else changes: it keys nothing. Not for a quick tap, and not while the press
+            // waits on a Flex's switch to DAX, which says its own reason.
+            let held_long = self
+                .pc_mic
+                .armed_at
+                .is_some_and(|armed| at.saturating_duration_since(armed) >= SILENT_PRESS);
+            let waits_on_dax = self.pc_mic.dax_hold.is_some() && !self.pc_mic.on_dax;
+            let silent = self.pc_mic.over.active() && held_long && !waits_on_dax;
             self.drop_pc_mic();
+            if silent {
+                self.note_pc_mic(PcMicCause::Silent);
+            }
             return;
         }
         // The part of a frame captured before the release, made whole with silence.
@@ -270,6 +323,23 @@ impl Engine {
     /// End the computer-microphone over NOW: the ONE kill path. The feed closes first, so nothing
     /// captured for this over can reach the next; the abort is armed only when the radio was keyed.
     pub fn drop_pc_mic(&mut self) {
+        if self.pc_mic.over.active() {
+            // What this over put on the transmitter, for a "keys but no audio" report.
+            tempo_core::applog::info(
+                "tx",
+                &format!(
+                    "{} over closed: {}, {} ms of audio sent, peak {}",
+                    PC_MIC.name,
+                    if self.pc_mic.over.keyed() {
+                        "keyed"
+                    } else {
+                        "never keyed"
+                    },
+                    self.pc_mic.sent as u64 * 1000 / u64::from(PC_MIC.rate_hz),
+                    dbfs(self.pc_mic.peak)
+                ),
+            );
+        }
         self.pc_mic.feed.close();
         self.pc_mic.partial.clear();
         self.pc_mic.held.clear();
@@ -597,10 +667,28 @@ impl Engine {
             }
             tempo_core::applog::info("tx", &format!("{} over ended: {why:?}", PC_MIC.name));
         }
-        if res.tick == MicTick::Key {
-            self.pc_mic.ended = None; // this over keyed: the last one's reason is old news
+        match &res.tick {
+            MicTick::Key => {
+                self.pc_mic.ended = None; // this over keyed: the last one's reason is old news
+                tempo_core::applog::info("tx", &format!("{} over keying", PC_MIC.name));
+            }
+            MicTick::Samples(buf) => {
+                self.pc_mic.sent += buf.len();
+                let loudest = buf.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+                self.pc_mic.peak = self.pc_mic.peak.max(loudest);
+            }
+            _ => {}
         }
         res.tick
+    }
+}
+
+/// A level for the diagnostic log, in dBFS ("silent" for exact zero).
+fn dbfs(peak: f32) -> String {
+    if peak > 0.0 {
+        format!("{:.1} dBFS", 20.0 * peak.log10())
+    } else {
+        "silent".to_string()
     }
 }
 

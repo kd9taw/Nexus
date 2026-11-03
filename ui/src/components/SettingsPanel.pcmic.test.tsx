@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { SettingsPanel, radioPatch } from './SettingsPanel'
+import { EN } from '../i18n/en'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
@@ -176,8 +177,12 @@ describe("Use this computer's microphone", () => {
     const sw = await screen.findByRole('switch', { name: "Use this computer's microphone" })
     expect(sw.getAttribute('aria-checked')).toBe('false')
     expect(screen.queryByRole('slider', { name: 'Microphone gain' })).toBeNull()
+    expect(screen.queryByText(EN['settings.audio.pcMic.radioInput'])).toBeNull()
     fireEvent.click(sw)
     expect(sw.getAttribute('aria-checked')).toBe('true')
+    // On, it says where the radio must take this microphone from: a radio keyed on its microphone
+    // input (an FTDX10 in SSB with SSB MOD SOURCE = MIC) keys and sends its own microphone instead.
+    expect(await screen.findByText(EN['settings.audio.pcMic.radioInput'])).toBeTruthy()
     const gain = await screen.findByRole('slider', { name: 'Microphone gain' })
     expect(gain.getAttribute('min')).toBe('-20')
     expect(gain.getAttribute('max')).toBe('20')

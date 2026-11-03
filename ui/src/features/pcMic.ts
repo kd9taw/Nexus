@@ -22,6 +22,8 @@ function why(cause: PcMicCause): string {
       return t('shell.lane.pcMic.deviceLost')
     case 'noAudio':
       return t('shell.lane.pcMic.noAudio')
+    case 'silent':
+      return t('shell.lane.pcMic.silent')
     case 'ceiling':
       return t('shell.lane.pcMic.ceiling')
     case 'watchdog':
@@ -40,6 +42,8 @@ function why(cause: PcMicCause): string {
       return t('shell.lane.pcMic.interrupted')
     case 'keyRefused':
       return t('shell.lane.pcMic.keyRefused')
+    case 'txAudio':
+      return t('shell.lane.pcMic.txAudio')
     case 'unsure':
       return t('shell.lane.pcMic.unsure')
   }

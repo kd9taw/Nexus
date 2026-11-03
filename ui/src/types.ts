@@ -7089,6 +7089,7 @@ export type PcMicCause =
   | 'openFailed'
   | 'deviceLost'
   | 'noAudio'
+  | 'silent'
   | 'ceiling'
   | 'watchdog'
   | 'busy'
@@ -7098,6 +7099,7 @@ export type PcMicCause =
   | 'gateDown'
   | 'interrupted'
   | 'keyRefused'
+  | 'txAudio'
   | 'unsure'
 
 export interface PcMicEnded {

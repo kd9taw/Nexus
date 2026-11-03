@@ -321,6 +321,54 @@ fn a_microphone_that_will_not_open_keys_nothing() {
     );
 }
 
+/// ⛔ NEVER KEY WITH NO AUDIO, the slot overs' rule, for the computer microphone too. The field
+/// case: a sound-card radio on CAT PTT whose TX audio output would not open. The press keyed the
+/// radio on the microphone's first audio and played into an output with no stream, so the radio
+/// went on the air with a dead carrier and nothing said why. Now the output is opened (or tried
+/// again) before the microphone is, and an output that will not open keys nothing, closes nothing
+/// it never opened, and names the reason. CONTROL: the same press with the output opening keys and
+/// plays.
+#[test]
+fn a_tx_audio_output_that_will_not_open_keys_nothing_and_says_so() {
+    let mut s = PcScene::new(true);
+    s.backend.tx_open_error = Some("the device is in use by another program".into());
+    s.ptt(true);
+    for k in 0..20 {
+        s.tick(k as f64 * 20.0, 0.5);
+    }
+    assert!(
+        !s.rig.keyed,
+        "the radio keyed with no transmit audio to carry the voice"
+    );
+    assert!(s.backend.played.is_empty());
+    assert!(
+        !s.backend.pc_mic_open,
+        "the microphone opened for an over that cannot go out"
+    );
+    {
+        let e = s.engine.lock().unwrap();
+        assert!(
+            !e.pc_mic_armed(),
+            "the over stayed armed with no transmit audio"
+        );
+        assert_eq!(
+            e.snapshot().radio.pc_mic_ended.map(|x| x.cause),
+            Some(tempo_app::dto::PcMicCause::TxAudio)
+        );
+    }
+    // CONTROL: the output opens on the next press, which keys and plays.
+    s.ptt(false);
+    s.backend.tx_open_error = None;
+    s.ptt(true);
+    for k in 20..40 {
+        s.tick(k as f64 * 20.0, 0.5);
+    }
+    assert!(
+        s.rig.keyed && s.backend.played.contains(&0.5),
+        "CONTROL: an output that opens"
+    );
+}
+
 #[test]
 fn ft_never_opens_the_microphone() {
     let mut s = PcScene::new(true);

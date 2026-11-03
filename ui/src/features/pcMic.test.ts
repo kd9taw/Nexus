@@ -20,6 +20,7 @@ describe('the status lane after a computer-microphone over ended', () => {
     ['openFailed', 'shell.lane.pcMic.openFailed'],
     ['deviceLost', 'shell.lane.pcMic.deviceLost'],
     ['noAudio', 'shell.lane.pcMic.noAudio'],
+    ['silent', 'shell.lane.pcMic.silent'],
     ['ceiling', 'shell.lane.pcMic.ceiling'],
     ['watchdog', 'shell.lane.pcMic.watchdog'],
     ['busy', 'shell.lane.pcMic.busy'],
@@ -29,6 +30,7 @@ describe('the status lane after a computer-microphone over ended', () => {
     ['gateDown', 'shell.lane.pcMic.gateDown'],
     ['interrupted', 'shell.lane.pcMic.interrupted'],
     ['keyRefused', 'shell.lane.pcMic.keyRefused'],
+    ['txAudio', 'shell.lane.pcMic.txAudio'],
     ['unsure', 'shell.lane.pcMic.unsure'],
   ])('names %s, with the time', (cause, key) => {
     const lane = pcMicLane({ at: AT, cause })
