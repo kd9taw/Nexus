@@ -44560,6 +44560,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A LoTW user heard HASHED keeps its LoTW mark: the resolver is asked about K1ABC, not
+    /// `<K1ABC>` — WSJT-X checks LoTW on the bracket-stripped call (`displaytext.cpp`,
+    /// `lotw_users ().user (decodedText.CQersCall())`). The unresolved `<...>` is never asked.
+    #[test]
+    fn a_hashed_lotw_user_keeps_its_lotw_mark() {
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let log = Arc::clone(&asked);
+        e.set_lotw_resolver(move |c| {
+            log.lock().unwrap().push(c.to_string());
+            c == "K1ABC"
+        });
+        let rows: Vec<modes::Decode> = ["PJ4/W9XYZ <K1ABC> RR73", "PJ4/W9XYZ <...> RR73"]
+            .iter()
+            .map(|m| dec_snr(m, -8))
+            .collect();
+        e.ingest_decodes_for_test(&rows, 2);
+        let snap = e.snapshot();
+        let row = |call: &str| {
+            snap.recent_decodes
+                .iter()
+                .find(|d| d.from.as_deref() == Some(call))
+                .unwrap_or_else(|| panic!("a decode row shown as sent, {call}"))
+                .lotw_user
+        };
+        let st = |call: &str| {
+            snap.stations
+                .iter()
+                .find(|s| s.call == call)
+                .unwrap_or_else(|| panic!("a roster row shown as sent, {call}"))
+                .lotw_user
+        };
+        assert!(row("<K1ABC>"), "the feed lost a hashed LoTW user's mark");
+        assert!(st("<K1ABC>"), "the roster lost a hashed LoTW user's mark");
+        assert!(
+            !row("<...>") && !st("<...>"),
+            "an unresolved hash is nobody's LoTW user"
+        );
+        let asked = asked.lock().unwrap();
+        assert!(
+            asked.iter().all(|c| !c.contains('<') && c != "..."),
+            "the resolver was asked a bracketed or unresolved call: {asked:?}"
+        );
+    }
+
     /// A station heard HASHED (`<K1ABC>`, an i3=4 frame) is the station the log knows as K1ABC:
     /// the feed and the roster mark it B4 as they mark its plain form, and keep showing it as
     /// sent. A compound `<PJ4/K1ABC>` is PJ4/K1ABC, whole — WSJT-X strips the brackets and

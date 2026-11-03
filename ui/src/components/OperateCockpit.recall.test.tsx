@@ -26,6 +26,7 @@ import { setLogSource } from '../features/logSource'
 import { createAskingLogSource } from '../features/askingLogSource'
 import { answerFrom, type LogQuestion } from '../features/logAnswers'
 import { RecallPanel } from './RecallPanel'
+import { resolveEntity } from '../api'
 import type { AppSnapshot, CallBearing, LoggedQso, QrzLookup } from '../types'
 import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
@@ -550,11 +551,22 @@ describe('a hashed call is the station inside its brackets', () => {
     expect(document.querySelector('.recall-card .recall-log-list'), 'W1ABC’s history on a PJ4/W1ABC card').toBeNull()
   })
 
-  it('<...> is nobody: no card, no log question, no callbook request', async () => {
-    renderCockpit('<...>')
+  it('<...> is nobody: no card, no recall slot, no log question, no callbook request', async () => {
+    // The rail as it stands with nothing selected — what an unresolved hash must leave it as.
+    const rail = (c: HTMLElement) => {
+      const side = c.querySelector('aside.cockpit-side')
+      return side ? Array.from(side.children, (el) => el.className) : null
+    }
+    const { container: none } = renderCockpit(null, 'roster')
+    const bare = rail(none)
+    cleanup()
+
+    const { container } = renderCockpit('<...>', 'roster')
     await new Promise((r) => setTimeout(r, 600))
     expect(document.querySelector('.recall-card')).toBeNull()
-    expect(asked().filter((call) => call !== ''), 'asked the log about an unresolved hash').toEqual([])
+    expect(rail(container), 'an unresolved hash reserved a recall slot in the rail').toEqual(bare)
+    expect(asked(), 'asked the log about an unresolved hash').toEqual([])
+    expect(vi.mocked(resolveEntity).mock.calls.filter(([c]) => !c), 'asked for the entity of no call').toEqual([])
     expect(qrzLookup, 'a callbook request for an unresolved hash').not.toHaveBeenCalled()
   })
 })
@@ -646,3 +658,5 @@ describe('no need badge until the call’s answer arrives', () => {
     await waitFor(() => expect(need(), 'the answer, landed').toBe(TODAYS))
   })
 })
+
+

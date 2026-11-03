@@ -709,7 +709,8 @@ export function OperateCockpit({
   // so a clear never outlives the thing it cleared. The ref exists so `clearDx` (created once)
   // can read the current value without taking it as a dependency.
   recallCallRef.current = recallCall
-  const shownRecallCall = recallCall && recallCall === dismissedCall ? null : recallCall
+  // An unresolved hash (`<...>`) names no station (`lookupCall`): no card, so no slot and no question.
+  const shownRecallCall = !recallCall || !lookupCall(recallCall) || recallCall === dismissedCall ? null : recallCall
   // #204: the callsign card joins the side rail — and Classic's third column — only while
   // there is a card to show. panelHost counts any listed side panel that is not removed, so a
   // standing 'recall' entry would mount an EMPTY rail with Stations hidden and nothing selected.
