@@ -270,7 +270,11 @@ html {
      buttons turn pointer events back on. */
   pointer-events: none;
   position: fixed;
-  bottom: var(--space-4);
+  /* #445: `--toast-inset` / `--toast-max-h` are the room Toasts.tsx MEASURES for the column, clear
+     of every transmit surface (the TX dock, the TX strip, FT's QSO strip, the top bar's cluster;
+     features/toastRoom.ts): a toast's own buttons take clicks, and one stood on Phone's PTT. Unset
+     (nothing measured yet), the corner is the 16 px it always was. Every corner below reads them. */
+  bottom: var(--toast-inset, var(--space-4));
   right: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -282,7 +286,7 @@ html {
   list-style: none;
   /* Cap to the viewport and scroll when a burst of toasts (band opening / pileup) stacks up, so the
      oldest toasts + their buttons don't grow off the top edge unreachable. --vh-eff is zoom-corrected. */
-  max-height: calc(var(--vh-eff, 100vh) - 2 * var(--space-4));
+  max-height: var(--toast-max-h, calc(var(--vh-eff, 100vh) - 2 * var(--space-4)));
   overflow-y: auto;
   z-index: 80;
 }
@@ -291,7 +295,7 @@ html {
    Lift the whole toast stack above the banner's ~60px + a gap for that window; both live
    inside `.app`, so :has() sees the banner directly. */
 .app:has(.update-banner) .ui-toast-viewport:not([data-corner^='top']) {
-  bottom: calc(var(--space-4) + 72px);
+  bottom: var(--toast-inset, calc(var(--space-4) + 72px));
 }
 /* #445: THE POP-UP CORNER (Settings ▸ Spots & Alerts ▸ Alerts ▸ Pop-up corner, `data-corner` from
    Toasts.tsx). Bottom right is the rule above, as it always was; each other corner moves the column's
@@ -303,12 +307,12 @@ html {
 }
 .ui-toast-viewport[data-corner='top-right'] {
   bottom: auto;
-  top: var(--space-4);
+  top: var(--toast-inset, var(--space-4));
 }
 .ui-toast-viewport[data-corner='top-left'] {
   bottom: auto;
   right: auto;
-  top: var(--space-4);
+  top: var(--toast-inset, var(--space-4));
   left: var(--space-4);
 }
 /* A toast slides in from its corner's own edge (`ui-toast-in`): from the right, or from the left. */

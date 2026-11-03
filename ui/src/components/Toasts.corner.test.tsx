@@ -5,12 +5,13 @@
 // enum: anything this build does not know reads as bottom right. The swipe that dismisses a toast
 // and the way it slides in follow the corner's side. Placement is COMPUTED from the real sheets'
 // cascade (cssCascade.testkit) on the rendered column, never matched by regex.
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 import { render, cleanup, act } from '@testing-library/react'
 import { Toasts } from './Toasts'
 import { dismissToast, pushToast, subscribeToasts, type Toast } from '../toast'
 import { popupCornerOf, setPopupCorner, type PopupCorner } from '../features/popupCorner'
-import { css, loadSheets, resolveVal } from '../cssCascade.testkit'
+import type { Box } from '../features/toastRoom'
+import { atToken, css, loadSheets, resolveVal } from '../cssCascade.testkit'
 
 beforeAll(() => loadSheets())
 
@@ -123,6 +124,55 @@ describe('the pop-up column stands in the chosen corner (#445)', () => {
         for (const t of toasts) dismissToast(t.id)
       })
       cleanup()
+    }
+  })
+})
+
+// The column stands clear of every transmit surface (features/toastRoom.ts). The stylesheet takes
+// the measured room through two variables, in EVERY corner and with the update banner up too; with
+// none measured (jsdom, a window with no TX surface) the corner is the stylesheet's own.
+describe('the column takes its measured room, clear of the TX surfaces (#445)', () => {
+  it('every corner reads the measured inset and height, the banner lift included', () => {
+    for (const [corner, edge] of [
+      ['bottom-right', 'bottom'],
+      ['bottom-left', 'bottom'],
+      ['top-right', 'top'],
+      ['top-left', 'top'],
+    ] as const) {
+      for (const banner of [false, true]) {
+        const { viewport } = mount(corner, { banner })
+        const at = atToken('--toast-inset', '123px', () => atToken('--toast-max-h', '456px', () => [css(viewport, edge), css(viewport, 'max-height')]))
+        expect(at, `${corner}${banner ? ' with the banner' : ''}`).toEqual(['123px', '456px'])
+        cleanup()
+      }
+    }
+  })
+
+  it('measures the TX dock and puts the room on the column (Phone: PTT at the bottom left)', () => {
+    const rects = new Map<string, Box>([
+      ['cockpit-txdock', { left: 0, top: 700, right: 1024, bottom: 768 }],
+      ['ui-toast-viewport', { left: 16, top: 600, right: 356, bottom: 752 }],
+    ])
+    const spy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const k = [...rects.keys()].find((c) => this.classList.contains(c))
+      const r = k ? rects.get(k)! : { left: 0, top: 0, right: 0, bottom: 0 }
+      return { ...r, x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top, toJSON: () => r } as DOMRect
+    })
+    const was = [window.innerWidth, window.innerHeight]
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true })
+    try {
+      const dock = document.createElement('div')
+      dock.className = 'cockpit-txdock'
+      document.body.appendChild(dock)
+      const { viewport } = mount('bottom-left')
+      expect(viewport.style.getPropertyValue('--toast-inset'), 'the column did not lift above the dock').toBe(`${768 - (700 - 16)}px`)
+      expect(viewport.style.getPropertyValue('--toast-max-h')).toBe(`${700 - 16 - 16}px`)
+      dock.remove()
+    } finally {
+      spy.mockRestore()
+      Object.defineProperty(window, 'innerWidth', { value: was[0], configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: was[1], configurable: true })
     }
   })
 })

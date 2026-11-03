@@ -6057,7 +6057,7 @@ export interface Settings {
    *  (an old station, the Remote page) leaves each pop-up its own time; see `setPopupMinSeconds`. */
   popupMinSecs?: number
   /** #445: the window corner the pop-ups stand in. Optional: absent (an old station, the Remote
-   *  page) or a value this build does not know is bottom right (`popupCornerOf` in toast.ts). */
+   *  page) or a value this build does not know is bottom right (`popupCornerOf` in features/popupCorner.ts). */
   popupCorner?: PopupCorner
   /** Band scope for a new DXCC: 'off' | 'hf' | 'vhf' | 'all'. The Needed boards and the need icons
    *  follow it, and so does the alert while `alertNew` is on. */

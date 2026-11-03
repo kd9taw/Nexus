@@ -5,11 +5,13 @@
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). A toast's MESSAGE
 // and its action label arrive already translated from whoever raised it; what lives here is
 // the chrome — the default action word and the close button's name.
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
 import * as RToast from '@radix-ui/react-toast'
 import { t } from '../i18n'
 import { dismissToast, keepToast, subscribePopups, type Toast, type ToastKind } from '../toast'
 import { getPopupCorner, subscribePopupCorner, type PopupCorner } from '../features/popupCorner'
+import { toastRoom, type Box } from '../features/toastRoom'
+import { TX_AVOID } from '../features/txSurfaces'
 
 /** #445: a toast swipes away toward the side of the window its corner is on. (The body is
  *  click-through, styles.css CLICK-THROUGH, so it is a touch of the toast's own controls' area at most;
@@ -19,6 +21,54 @@ const SWIPE: Record<PopupCorner, 'left' | 'right'> = {
   'top-right': 'right',
   'bottom-left': 'left',
   'top-left': 'left',
+}
+
+/** What the column keeps off (features/toastRoom.ts): every transmit surface the call card keeps
+ *  off, and the update banner, which stands in the bottom-right corner above everything. */
+const TOAST_AVOID = `${TX_AVOID}, .update-banner`
+/** The column's distance from its corner's side edge, and from each surface: `--space-4`. */
+const GAP_PX = 16
+
+/** #445: measure the window's transmit surfaces and give the column the room of its corner that
+ *  touches none of them, as `--toast-inset` and `--toast-max-h` on the column (styles.css reads
+ *  both, in every corner). In the column's own CSS px: `.app` is zoomed, and a fixed box's insets
+ *  are scaled by that zoom, so window px are divided by it (read off the column itself). Again on
+ *  a resize, a scroll anywhere (a sticky strip moves), and whenever a surface or the column changes
+ *  size — a keep-alive cockpit hidden is a surface gone to 0×0. Only while a toast is up. */
+function useToastRoom(viewport: RefObject<HTMLOListElement | null>, corner: PopupCorner, shown: boolean) {
+  useLayoutEffect(() => {
+    const vp = viewport.current
+    if (!vp || !shown) return
+    const place = () => {
+      const r = vp.getBoundingClientRect()
+      const zoom = vp.offsetWidth > 0 && r.width > 0 ? r.width / vp.offsetWidth : 1
+      const avoid: Box[] = []
+      for (const el of document.querySelectorAll(TOAST_AVOID)) {
+        if (vp.contains(el)) continue
+        const b = el.getBoundingClientRect()
+        if (b.width > 0 && b.height > 0) avoid.push({ left: b.left, top: b.top, right: b.right, bottom: b.bottom })
+      }
+      const room = r.width > 0 ? toastRoom(corner, { w: window.innerWidth, h: window.innerHeight }, r.width, avoid, GAP_PX * zoom) : null
+      if (room) {
+        vp.style.setProperty('--toast-inset', `${room.inset / zoom}px`)
+        vp.style.setProperty('--toast-max-h', `${room.maxHeight / zoom}px`)
+      } else {
+        vp.style.removeProperty('--toast-inset')
+        vp.style.removeProperty('--toast-max-h')
+      }
+    }
+    place()
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(place) : null
+    ro?.observe(vp)
+    for (const el of document.querySelectorAll(TOAST_AVOID)) ro?.observe(el)
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      ro?.disconnect()
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  })
 }
 
 const KIND_CLASS: Record<ToastKind, string> = {
@@ -42,6 +92,8 @@ export function Toasts() {
   const [, redraw] = useState(0)
   // #445: the corner the column stands in (Settings ▸ Spots & Alerts ▸ Alerts ▸ Pop-up corner).
   const corner = useSyncExternalStore(subscribePopupCorner, getPopupCorner)
+  const viewport = useRef<HTMLOListElement>(null)
+  useToastRoom(viewport, corner, toasts.length > 0)
 
   return (
     <RToast.Provider swipeDirection={SWIPE[corner]} duration={Infinity}>
@@ -137,7 +189,7 @@ export function Toasts() {
       ))}
       {/* Where it stands is styles.css's, by `data-corner`: the column keeps its zoom-corrected
           caps (`--vh-eff`, `--vw-eff`) in every corner. */}
-      <RToast.Viewport className="ui-toast-viewport" data-corner={corner} />
+      <RToast.Viewport ref={viewport} className="ui-toast-viewport" data-corner={corner} />
     </RToast.Provider>
   )
 }

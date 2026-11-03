@@ -3576,7 +3576,7 @@ pub struct Settings {
     pub popup_min_secs: u32,
     /// Which corner of the window the pop-ups stand in (#445): bottom right (the default, where
     /// they always stood, and what a file from before the field loads), bottom left, top right or
-    /// top left. Only where the UI draws its toast column (`ui/src/toast.ts` `popupCornerOf`, the
+    /// top left. Only where the UI draws its toast column (`ui/src/features/popupCorner.ts` `popupCornerOf`, the
     /// same four values and the same fallback); nothing on the Rust side reads it. Read leniently
     /// ([`lenient_popup_corner`]): a corner this build does not know loads as bottom right rather
     /// than failing the whole file.
@@ -4762,7 +4762,7 @@ pub enum ExperienceLevel {
 }
 
 /// The window corner the pop-up notifications stand in ([`Settings::popup_corner`], #445). The wire
-/// values are the UI's (`PopupCorner` in ui/src/toast.ts): `bottom-right`, `bottom-left`,
+/// values are the UI's (`PopupCorner` in ui/src/features/popupCorner.ts): `bottom-right`, `bottom-left`,
 /// `top-right`, `top-left`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
