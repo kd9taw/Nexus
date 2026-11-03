@@ -760,7 +760,7 @@ pub fn set_rptr_offset(radio: u8, hz: u64) -> Frame {
 /// sent is its own count ([`data_mode_count`]), and the daemon caps the operator's choice at it
 /// before it gets here, so a single-DATA radio is only ever sent `01`.
 ///
-/// The filter byte keeps the rig's current selection when `None`.
+/// `filter` names FIL1–FIL3 for the DATA mode; `None` sends FIL1, as this always has.
 pub fn set_data_mode_n(radio: u8, mode: u8, filter: Option<u8>) -> Frame {
     let m = mode.clamp(1, 3);
     let fil = filter.unwrap_or(0x01);
@@ -1226,10 +1226,26 @@ pub fn set_band_freq(radio: u8, band: u8, hz: u64) -> Frame {
 ///   `06 <mode>` (the mode's default filter) and then `1A 06 00 00` (DATA off) left.
 /// - `data` `Some(n)` → `26 <band> <mode> <n> 01`: DATA mode `n` (clamped to D1–D3, as
 ///   [`set_data_mode_n`] clamps it) with FIL1, the two bytes `1A 06 <n> 01` sent.
-pub fn set_band_mode(radio: u8, band: u8, mode: Mode, data: Option<u8>) -> Frame {
-    match data {
-        Some(n) => Frame::command(radio, 0x26, &[band, mode.to_byte(), n.clamp(1, 3), 0x01]),
-        None => Frame::command(radio, 0x26, &[band, mode.to_byte()]),
+///
+/// `filter` `Some(f)` names the filter instead (#417: the one the radio last had lit in that mode,
+/// clamped to FIL1–FIL3): `26 <band> <mode> 00 <f>` for a plain mode, `26 <band> <mode> <n> <f>`
+/// for a DATA mode. `None` is exactly the two forms above.
+pub fn set_band_mode(
+    radio: u8,
+    band: u8,
+    mode: Mode,
+    data: Option<u8>,
+    filter: Option<u8>,
+) -> Frame {
+    let m = mode.to_byte();
+    match (data, filter) {
+        (Some(n), f) => Frame::command(
+            radio,
+            0x26,
+            &[band, m, n.clamp(1, 3), f.map_or(0x01, |f| f.clamp(1, 3))],
+        ),
+        (None, Some(f)) => Frame::command(radio, 0x26, &[band, m, 0x00, f.clamp(1, 3)]),
+        (None, None) => Frame::command(radio, 0x26, &[band, m]),
     }
 }
 
@@ -2678,12 +2694,12 @@ mod tests {
         // A plain mode: the mode byte alone after the band, which the radio takes as DATA OFF
         // and the mode's default filter — the state `06 <mode>` + `1A 06 00 00` left.
         assert_eq!(
-            set_band_mode(0x98, BAND_MAIN, Mode::Lsb, None).to_bytes(),
+            set_band_mode(0x98, BAND_MAIN, Mode::Lsb, None, None).to_bytes(),
             vec![0xFE, 0xFE, 0x98, 0xE0, 0x26, 0x00, 0x00, 0xFD]
         );
         // A DATA mode: D<n> and FIL1, the two bytes `1A 06 <n> 01` carried, clamped the same way.
         for (n, d) in [(1u8, 0x01u8), (2, 0x02), (3, 0x03), (0, 0x01), (9, 0x03)] {
-            let f = set_band_mode(0x98, BAND_MAIN, Mode::Usb, Some(n));
+            let f = set_band_mode(0x98, BAND_MAIN, Mode::Usb, Some(n), None);
             assert_eq!(f.data, vec![0x00, 0x01, d, 0x01], "D{n}");
             assert_eq!(
                 f.data[2..],

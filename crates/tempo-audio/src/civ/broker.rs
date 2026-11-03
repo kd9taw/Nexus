@@ -213,6 +213,12 @@ pub struct CivBackend {
     /// mode) or one dropped reply does not flip the read-back. Cleared when a `04` read names
     /// another mode, so an answer from before the radio left FM is never served.
     fm_data: Mutex<Option<bool>>,
+    /// The filter (FIL1–FIL3) Main last had lit in each [`FilFamily`], as the `26 00` read ahead of
+    /// every mode write showed it — what a mode change back into that family names (#417), since
+    /// no CI-V write recalls a mode's own remembered filter and no read gives the filter of a mode
+    /// the radio is not in. In memory only, and per daemon: another radio, or a CAT rebuild onto a
+    /// different model or radio id, builds a new backend that starts with nothing remembered.
+    fil_memory: Mutex<[Option<u8>; 3]>,
     /// Which Icom DATA mode to select for digital operating (1..=3, default 1 = today's
     /// behaviour), as the operator saved it; what goes on the wire is
     /// [`Self::data_mode_on_wire`]. Atomic because a settings save must move it under a
@@ -250,6 +256,31 @@ pub struct CivBackend {
     keying: KeyingPolicy,
 }
 
+/// The operator's filter memories a mode change can land in, for [`CivBackend::fil_memory`]: an
+/// Icom keeps the selected filter per mode, and DATA (USB-D/LSB-D) has its own beside Phone's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilFamily {
+    /// USB and LSB with DATA off.
+    Phone,
+    /// USB-D and LSB-D — the FT modes.
+    Data,
+    /// CW and CW-R.
+    Cw,
+}
+
+impl FilFamily {
+    /// The family `mode` with DATA `data` lands in. `None` for the modes nothing is remembered for
+    /// (AM, FM, FM-D, RTTY): their writes go out as they always did.
+    fn of(mode: Mode, data: bool) -> Option<Self> {
+        match (mode, data) {
+            (Mode::Usb | Mode::Lsb, false) => Some(FilFamily::Phone),
+            (Mode::Usb | Mode::Lsb, true) => Some(FilFamily::Data),
+            (Mode::Cw | Mode::CwR, false) => Some(FilFamily::Cw),
+            _ => None,
+        }
+    }
+}
+
 /// How long a timed-out dial read may still serve the last real reading.
 const CIV_CACHE_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -274,6 +305,7 @@ impl CivBackend {
             main_hz: Mutex::new(None),
             main_mode: Mutex::new(None),
             fm_data: Mutex::new(None),
+            fil_memory: Mutex::new([None; 3]),
             data_mode: std::sync::atomic::AtomicU8::new(data_mode.clamp(1, 3)),
             split: AtomicBool::new(false),
             tx_intent,
@@ -385,25 +417,44 @@ impl CivBackend {
         Some(m)
     }
 
-    /// Is Main already in `base` with DATA `want_data` (`0` off, else the DATA mode the write
-    /// would select)? Read fresh with ONE `26 00` — Main by name on the IC-7610, the selected VFO
-    /// on the radios [`commands::selected_mode_by_26`] names — never from the state cache, because
-    /// a stale "yes" would leave the radio in the wrong mode with nothing written. `26` replies are
-    /// not folded into that cache, so asking changes no reported mode. Any other radio, and any read
-    /// that fails, answers `false`, so the caller writes as it always did. Callers hold the band
-    /// lock, with Main selected.
-    fn main_already_in(&self, base: Mode, want_data: u8) -> bool {
+    /// Main's mode, DATA byte (`0` off, else D1–D3) and filter, for the question a mode write asks
+    /// first — is the radio already in the mode it would write — and for [`Self::fil_memory`]. Read
+    /// fresh with ONE `26 00` — Main by name on the IC-7610, the selected VFO on the radios
+    /// [`commands::selected_mode_by_26`] names — never from the state cache, because a stale "yes"
+    /// would leave the radio in the wrong mode with nothing written. `26` replies are not folded
+    /// into that cache, so asking changes no reported mode. Any other radio, and any read that
+    /// fails, answers `None`, so the caller writes as it always did. Callers hold the band lock,
+    /// with Main selected.
+    fn main_mode_now(&self) -> Option<(Mode, u8, Option<u8>)> {
         if !(self.main_dial_by_name() || self.model.is_some_and(commands::selected_mode_by_26)) {
-            return false;
+            return None;
         }
         let band = commands::BAND_MAIN; // `00`: MAIN by name, or the selected VFO
-        self.read(commands::read_band_mode(self.addr, band), 0x26, Some(band))
-            .ok()
-            .and_then(|f| {
-                let (m, _) = commands::parse_band_mode(&f, band)?;
-                Some((m, commands::parse_band_data_mode(&f, band)?))
-            })
-            == Some((base, want_data))
+        let f = self
+            .read(commands::read_band_mode(self.addr, band), 0x26, Some(band))
+            .ok()?;
+        let (m, fil) = commands::parse_band_mode(&f, band)?;
+        Some((m, commands::parse_band_data_mode(&f, band)?, fil))
+    }
+
+    /// [`Self::fil_memory`], poison-recovering like [`Self::band`].
+    fn fils(&self) -> MutexGuard<'_, [Option<u8>; 3]> {
+        self.fil_memory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Remember the filter a `26 00` read showed lit in `mode`/`data`. Only FIL1–FIL3 count: any
+    /// other byte is not a filter this daemon would send back.
+    fn remember_fil(&self, mode: Mode, data: bool, fil: Option<u8>) {
+        if let (Some(family), Some(f @ 1..=3)) = (FilFamily::of(mode, data), fil) {
+            self.fils()[family as usize] = Some(f);
+        }
+    }
+
+    /// The filter last seen lit in the family `mode`/`data` lands in, if any.
+    fn remembered_fil(&self, mode: Mode, data: bool) -> Option<u8> {
+        FilFamily::of(mode, data).and_then(|family| self.fils()[family as usize])
     }
 
     /// Select a band/VFO by token (`Main`/`Sub`), acked. Callers hold the band lock.
@@ -1349,7 +1400,8 @@ impl RigBackend for CivBackend {
     }
 
     /// The mode write, an `FA` told apart from a radio that did not answer. A mode is one frame
-    /// by name (the IC-7610) or the `06` and `1A 06` pair, each sent as before, byte for byte; an
+    /// by name (the IC-7610) or the `06` and `1A 06` pair, each sent as before, byte for byte, but
+    /// for the filter a real mode change names (#417, below); an
     /// `FA` on any frame that has to take makes the whole a refusal, as it always was, and only a
     /// mode the radio said nothing to is silence. A selection stranded on Sub, and a mode word
     /// with no CI-V form, stay refusals: the daemon will not write blind, and the radio was
@@ -1386,20 +1438,41 @@ impl RigBackend for CivBackend {
         // Read first and leave the radio alone when nothing would change, as WSJT-X does. A read
         // that fails is no answer: the write goes out as it always did.
         let want_data = if data { self.data_mode_on_wire() } else { 0 };
-        if self.main_already_in(base, want_data) {
+        let now = self.main_mode_now();
+        if let Some((m, d, fil)) = now {
+            self.remember_fil(m, d != 0, fil);
+        }
+        if now.map(|(m, d, _)| (m, d)) == Some((base, want_data)) {
             return Ok(());
         }
+        // ⛔ …AND A REAL MODE CHANGE NAMES THE FILTER THE RADIO LAST HAD IN THE MODE IT LANDS IN
+        // (#417: FT → Phone brought FIL2 back). No CI-V write recalls a mode's own remembered
+        // filter (a skipped byte is the mode's default), so the filter each read above showed is
+        // remembered per family ([`FilFamily`]) and named on the way back. Nothing remembered for
+        // the target (a fresh daemon; AM, FM, RTTY) sends exactly the bytes it always did.
+        // ⚠️ NEEDS-BENCH on a real Icom: the fake radio models one filter register, not the
+        // radio's per-mode memory.
+        let fil = self.remembered_fil(base, data);
         if self.main_dial_by_name() {
             // IC-7610: MAIN's mode by name — ONE `26 00` frame that leaves the radio where the
             // `06` + `1A 06` pair below did (`commands::set_band_mode`): a plain mode with DATA
-            // off and its default filter, a DATA mode with the operator's D1–D3 and FIL1.
+            // off, a DATA mode with the operator's D1–D3, each on the remembered filter, else the
+            // plain mode's default filter and the DATA mode's FIL1.
             let n = data.then(|| self.data_mode_on_wire());
             return self.answer(commands::set_band_mode(
                 self.addr,
                 commands::BAND_MAIN,
                 base,
                 n,
+                fil,
             ));
+        }
+        if let (false, Some(f)) = (data, fil) {
+            // A plain mode with a remembered filter: DATA off FIRST, so the frame that names the
+            // filter is the last one and lands in the plain mode whatever a `1A 06 00 00` does to
+            // the selection. The DATA-off answer is tolerated, as below.
+            let _ = self.answer(commands::set_data_mode(self.addr, false, None));
+            return self.answer(commands::set_mode(self.addr, base, Some(f)));
         }
         let mode_set = self.answer(commands::set_mode(self.addr, base, None));
         // Data-mode set: tolerate a NAK when turning it OFF (some rigs NAK a redundant
@@ -1409,7 +1482,7 @@ impl RigBackend for CivBackend {
         // whatever it answers, or does not, is tolerated the same way.
         let data_set = if data {
             let n = self.data_mode_on_wire();
-            self.answer(commands::set_data_mode_n(self.addr, n, None))
+            self.answer(commands::set_data_mode_n(self.addr, n, fil))
         } else {
             let _ = self.answer(commands::set_data_mode(self.addr, false, None));
             Ok(())
@@ -3811,7 +3884,7 @@ mod tests {
     /// the DATA and filter bytes, which the radio takes as "DATA OFF and the default filter of
     /// the operating mode" (p. 13) — what `06 <mode>` (default filter, p. 10) followed by
     /// `1A 06 00 00` left. A DATA mode carries the operator's D1–D3 and FIL1, the two bytes the
-    /// `1A 06` sent.
+    /// `1A 06` sent. A mode whose filter an earlier read showed names that filter instead (#417).
     #[test]
     fn an_ic7610_writes_mains_dial_and_mode_by_name_whichever_band_the_panel_selects() {
         let (_e, b, regs) = backend_on(0x98, Some(IcomModel::Ic7610));
@@ -3842,14 +3915,47 @@ mod tests {
             }
             assert_eq!(b.freq_hz(), hz, "the dial Nexus reads follows its own QSY");
 
-            // Mode: each one MAIN's, each one ONE frame, the Sub's LSB untouched.
-            for (mode, main_mode, data_on, frame) in [
-                ("CW", 0x03u8, false, "FE FE 98 E0 26 00 03 FD"),
-                ("PKTUSB", 0x01, true, "FE FE 98 E0 26 00 01 01 01 FD"),
-                ("FM", 0x05, false, "FE FE 98 E0 26 00 05 FD"),
-                ("PKTFM", 0x05, true, "FE FE 98 E0 26 00 05 01 01 FD"),
-                ("USB", 0x01, false, "FE FE 98 E0 26 00 01 FD"),
+            // Mode: each one MAIN's, each one ONE frame, the Sub's LSB untouched. A mode whose
+            // filter an earlier read showed names it (#417): USB has Phone's FIL1 from the first
+            // read, and on the second pass CW has the FIL2 the fake left it on.
+            for (mode, main_mode, data_on, first, again) in [
+                (
+                    "CW",
+                    0x03u8,
+                    false,
+                    "FE FE 98 E0 26 00 03 FD",
+                    "FE FE 98 E0 26 00 03 00 02 FD",
+                ),
+                (
+                    "PKTUSB",
+                    0x01,
+                    true,
+                    "FE FE 98 E0 26 00 01 01 01 FD",
+                    "FE FE 98 E0 26 00 01 01 01 FD",
+                ),
+                (
+                    "FM",
+                    0x05,
+                    false,
+                    "FE FE 98 E0 26 00 05 FD",
+                    "FE FE 98 E0 26 00 05 FD",
+                ),
+                (
+                    "PKTFM",
+                    0x05,
+                    true,
+                    "FE FE 98 E0 26 00 05 01 01 FD",
+                    "FE FE 98 E0 26 00 05 01 01 FD",
+                ),
+                (
+                    "USB",
+                    0x01,
+                    false,
+                    "FE FE 98 E0 26 00 01 00 01 FD",
+                    "FE FE 98 E0 26 00 01 00 01 FD",
+                ),
             ] {
+                let frame = if sel_sub { first } else { again };
                 let n = regs.lock().unwrap().wire.len();
                 assert!(b.set_mode(mode, 0), "M {mode}, Sub selected = {sel_sub}");
                 let r = regs.lock().unwrap();
@@ -4122,6 +4228,222 @@ mod tests {
         }
     }
 
+    /// The mode writes (`06`, a `26` that writes, a `1A 06` that writes) the radio was sent since
+    /// log entry `n`, as hex without the frame envelope: what a mode change put on the wire.
+    fn mode_writes_since(regs: &Arc<Mutex<Regs>>, n: usize) -> Vec<String> {
+        regs.lock().unwrap().log[n..]
+            .iter()
+            .filter(|(c, d)| {
+                *c == 0x06
+                    || (*c == 0x26 && d.len() > 1)
+                    || (*c == 0x1A && d.first() == Some(&0x06) && d.len() > 1)
+            })
+            .map(|(c, d)| {
+                std::iter::once(c)
+                    .chain(d.iter())
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    }
+
+    /// The operator at the panel: the radio in `mode_byte`, DATA `data`, with FIL`fil` lit.
+    fn panel(regs: &Arc<Mutex<Regs>>, mode_byte: u8, data: bool, fil: u8) {
+        let mut r = regs.lock().unwrap();
+        (r.main_mode, r.data_mode, r.fil) = (mode_byte, data, fil);
+    }
+
+    /// `M <mode>`, and what it put on the wire.
+    fn mode_change(b: &CivBackend, regs: &Arc<Mutex<Regs>>, mode: &str) -> Vec<String> {
+        let n = regs.lock().unwrap().log.len();
+        assert!(b.set_mode(mode, 0), "M {mode} refused");
+        mode_writes_since(regs, n)
+    }
+
+    /// The radios whose mode read names the VFO a mode write lands on, and so remember a filter:
+    /// the `06` + `1A 06` pair, and the IC-7610's one `26 00` frame.
+    const FIL_MEMORY_RADIOS: [(u8, IcomModel); 6] = [
+        (0x94, IcomModel::Ic7300),
+        (0xA2, IcomModel::Ic9700),
+        (0xA4, IcomModel::Ic705),
+        (0xAC, IcomModel::Ic905),
+        (0xB6, IcomModel::Ic7300Mk2),
+        (0x98, IcomModel::Ic7610),
+    ];
+
+    /// ⛔ ISSUE #417, FT → PHONE: *"when I go to FT mode then filter mode is preserved, but when I
+    /// go back to Phone mode it changes the filter back to 2"* (IC-7300). Leaving FT is a real mode
+    /// change (USB-D → USB), and it went out as `06 01` with no filter byte, which selects the
+    /// mode's DEFAULT filter (IC-7300 Full Manual A7292-4EX-12 p. 19-9) — FIL2 — and then
+    /// `1A 06 00 00`. No CI-V write recalls a mode's own remembered filter, and no read gives the
+    /// filter of a mode the radio is not in, so the daemon remembers the FIL each `26 00` read
+    /// showed in Phone, and names it on the way back.
+    ///
+    /// DATA goes off FIRST, so the frame that names the filter is the last one and lands in the
+    /// plain mode whatever a `1A 06 00 00` does to the filter. The operator picks FIL3 in FT here,
+    /// so a write that carried the DATA filter across would show up as FIL3, and one that skipped
+    /// the byte as the fake's FIL2.
+    #[test]
+    fn ft_to_phone_puts_back_the_filter_phone_last_had() {
+        for (addr, model) in FIL_MEMORY_RADIOS {
+            let (_e, b, regs) = backend_on(addr, Some(model));
+            panel(&regs, 0x01, false, 0x01); // Phone, USB, FIL1
+            let _ = mode_change(&b, &regs, "PKTUSB");
+            panel(&regs, 0x01, true, 0x03); // in FT the operator has FIL3 lit
+            let want = if model == IcomModel::Ic7610 {
+                vec!["26 00 01 00 01"]
+            } else {
+                vec!["1A 06 00 00", "06 01 01"]
+            };
+            assert_eq!(mode_change(&b, &regs, "USB"), want, "{model:?}: FT → Phone");
+            let r = regs.lock().unwrap();
+            assert_eq!(
+                (r.main_mode, r.data_mode, r.fil),
+                (0x01, false, 0x01),
+                "{model:?}: back in Phone on Phone's FIL1"
+            );
+        }
+    }
+
+    /// The other leg: Phone → FT names the FIL the radio last had in the DATA mode, in place of the
+    /// FIL1 a DATA write always forced (`1A 06 <n> 01`, `26 00 <mode> <n> 01`).
+    #[test]
+    fn phone_to_ft_puts_back_the_data_filter() {
+        for (addr, model) in FIL_MEMORY_RADIOS {
+            let (_e, b, regs) = backend_on(addr, Some(model));
+            panel(&regs, 0x01, true, 0x03); // FT, USB-D, FIL3
+            let _ = mode_change(&b, &regs, "USB");
+            panel(&regs, 0x01, false, 0x01); // in Phone the operator has FIL1 lit
+            let want = if model == IcomModel::Ic7610 {
+                vec!["26 00 01 01 03"]
+            } else {
+                vec!["06 01", "1A 06 01 03"]
+            };
+            assert_eq!(
+                mode_change(&b, &regs, "PKTUSB"),
+                want,
+                "{model:?}: Phone → FT"
+            );
+            let r = regs.lock().unwrap();
+            assert_eq!(
+                (r.main_mode, r.data_mode, r.fil),
+                (0x01, true, 0x03),
+                "{model:?}: back in FT on FT's FIL3"
+            );
+        }
+    }
+
+    /// CW is a memory of its own: Phone FIL1 → CW (nothing remembered for CW yet, so the bytes it
+    /// always had) → the operator picks FIL3 in CW → Phone gets FIL1 back → CW gets FIL3 back. And
+    /// a sideband change inside Phone (a band change to 40 m) keeps Phone's filter too.
+    #[test]
+    fn cw_and_a_sideband_change_keep_their_own_filters() {
+        for (addr, model) in FIL_MEMORY_RADIOS {
+            let by_name = model == IcomModel::Ic7610;
+            let (_e, b, regs) = backend_on(addr, Some(model));
+            panel(&regs, 0x01, false, 0x01); // Phone, USB, FIL1
+            let today = if by_name {
+                vec!["26 00 03"]
+            } else {
+                vec!["06 03", "1A 06 00 00"]
+            };
+            assert_eq!(mode_change(&b, &regs, "CW"), today, "{model:?}: first CW");
+            panel(&regs, 0x03, false, 0x03); // CW, FIL3
+            let (to_phone, to_cw, to_lsb) = if by_name {
+                (
+                    vec!["26 00 01 00 01"],
+                    vec!["26 00 03 00 03"],
+                    vec!["26 00 00 00 01"],
+                )
+            } else {
+                (
+                    vec!["1A 06 00 00", "06 01 01"],
+                    vec!["1A 06 00 00", "06 03 03"],
+                    vec!["1A 06 00 00", "06 00 01"],
+                )
+            };
+            assert_eq!(
+                mode_change(&b, &regs, "USB"),
+                to_phone,
+                "{model:?}: CW → USB"
+            );
+            assert_eq!(regs.lock().unwrap().fil, 0x01, "{model:?}: Phone's FIL1");
+            assert_eq!(mode_change(&b, &regs, "CW"), to_cw, "{model:?}: USB → CW");
+            assert_eq!(regs.lock().unwrap().fil, 0x03, "{model:?}: CW's FIL3");
+            let _ = mode_change(&b, &regs, "USB");
+            assert_eq!(
+                mode_change(&b, &regs, "LSB"),
+                to_lsb,
+                "{model:?}: USB → LSB"
+            );
+            assert_eq!(
+                regs.lock().unwrap().fil,
+                0x01,
+                "{model:?}: LSB on Phone's FIL1"
+            );
+        }
+    }
+
+    /// CONTROL: with nothing remembered for the mode being written, the write is the one it always
+    /// was, byte for byte — a fresh daemon on a radio in FT going to Phone, and a mode with no
+    /// filter memory here (AM, FM, FM-D, RTTY) even after Phone's filter is known.
+    #[test]
+    fn with_nothing_remembered_a_mode_change_sends_todays_bytes() {
+        for (addr, model) in FIL_MEMORY_RADIOS {
+            let by_name = model == IcomModel::Ic7610;
+            let (_e, b, regs) = backend_on(addr, Some(model));
+            panel(&regs, 0x01, true, 0x03); // FT, nothing read yet
+            let want = if by_name {
+                vec!["26 00 01"]
+            } else {
+                vec!["06 01", "1A 06 00 00"]
+            };
+            assert_eq!(mode_change(&b, &regs, "USB"), want, "{model:?}: FT → Phone");
+            for (mode, mode_byte, data, want) in [
+                ("AM", 0x02u8, false, ["06 02", "1A 06 00 00"]),
+                ("FM", 0x05, false, ["06 05", "1A 06 00 00"]),
+                ("PKTFM", 0x05, true, ["06 05", "1A 06 01 01"]),
+                ("RTTY", 0x04, false, ["06 04", "1A 06 00 00"]),
+            ] {
+                panel(&regs, 0x01, false, 0x01); // Phone FIL1 — remembered by this write's read
+                let want: Vec<String> = if by_name {
+                    let d = if data { " 01 01" } else { "" };
+                    vec![format!("26 00 {mode_byte:02X}{d}")]
+                } else {
+                    want.iter().map(|s| s.to_string()).collect()
+                };
+                assert_eq!(mode_change(&b, &regs, mode), want, "{model:?}: M {mode}");
+            }
+        }
+    }
+
+    /// The memory belongs to the daemon serving ONE radio. A CAT rebuild onto another model or
+    /// radio id builds a new backend, and that one starts with nothing remembered — so a FIL1 read
+    /// from the IC-7300 is never sent to the radio that replaced it on the same bus.
+    #[test]
+    fn a_radio_change_forgets_the_remembered_filters() {
+        let (e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        panel(&regs, 0x01, false, 0x01);
+        let _ = mode_change(&b, &regs, "PKTUSB"); // Phone's FIL1 remembered
+        panel(&regs, 0x01, true, 0x03);
+        let rebuilt = CivBackend::new(
+            e.handle(),
+            0x94,
+            Arc::new(AtomicBool::new(false)),
+            1,
+            Some(IcomModel::Ic7300Mk2),
+        );
+        assert_eq!(
+            mode_change(&rebuilt, &regs, "USB"),
+            ["06 01", "1A 06 00 00"],
+            "a rebuilt daemon sends today's bytes"
+        );
+        // CONTROL: the first daemon did remember it.
+        panel(&regs, 0x01, true, 0x03);
+        assert_eq!(mode_change(&b, &regs, "USB"), ["1A 06 00 00", "06 01 01"]);
+    }
+
     /// ⛔ EVERY OTHER RADIO WRITES ITS DIAL AND MODE WITH `05`, `06` AND `1A 06`, BYTE FOR BYTE —
     /// the one-receiver Icoms, a build that does not know its model, and the IC-9700, whose
     /// `25 00` would name its SELECTED VFO (A7508-3EX-4 p. 24). The frames are the ones the tree
@@ -4136,9 +4458,11 @@ mod tests {
             (0xA2, Some(IcomModel::Ic9700)),
         ] {
             let (_e, b, regs) = backend_on(addr, model);
-            // In LSB, so each mode below is a change and is written (#417: one the radio is
-            // already in is not — `a_mode_the_radio_is_already_in_is_not_rewritten_so_its_filter_stays`).
-            regs.lock().unwrap().main_mode = 0x00;
+            // In AM, so each mode below is a change and is written (#417: one the radio is
+            // already in is not — `a_mode_the_radio_is_already_in_is_not_rewritten_so_its_filter_stays`),
+            // and none lands in a mode whose filter an earlier read showed, so none names one
+            // (`ft_to_phone_puts_back_the_filter_phone_last_had`).
+            regs.lock().unwrap().main_mode = 0x02;
             let n = regs.lock().unwrap().wire.len();
             let _ = b.set_freq(14_080_000);
             let _ = b.set_mode("USB", 0);
