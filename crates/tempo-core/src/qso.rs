@@ -440,6 +440,16 @@ impl Station {
         self.state == State::Done && self.pending.is_none()
     }
 
+    /// True once our closing over is on the air and nothing more is queued: our 73 (`Done`), or
+    /// our RR73 (`Confirming`, cleared by [`Self::after_tx`]). Both are WSJT-X 73 messages
+    /// (`message_is_73`, `widgets/mainwindow.cpp` 3.0.2 315-321), whose key its auto-sequencing
+    /// answers by turning Enable Tx off (8125-8141); the engine arms "Disable Tx after sending
+    /// 73" on this. Read right after `after_tx`, where a `Confirming` with nothing queued can only
+    /// be an RR73 that has just gone: no arm puts us in `Confirming` with nothing to send.
+    pub fn closing_sent(&self) -> bool {
+        self.pending.is_none() && matches!(self.state, State::Done | State::Confirming)
+    }
+
     /// True when this PAIR of calls cannot ride the plain Type 1/2 forms, so our
     /// outgoing messages must use the hashed i3=4 forms instead — one call in full, the
     /// other wrapped in `<...>`, both recovered verbatim by the receiver.
@@ -836,7 +846,8 @@ impl Station {
     /// version for the next retransmission of the SAME step (0→1→2→0), and counts
     /// transmissions of this step. (A partner advance in [`observe`] resets both,
     /// so at good SNR — where every transmission is acknowledged — RV stays 0.)
-    /// Also clears `pending` once the QSO is complete so the final 73 goes once.
+    /// Also clears `pending` once the QSO is complete so the final 73 goes once, and once our
+    /// RR73 has gone so it goes once too (#416).
     pub fn after_tx(&mut self) {
         self.tx_count = self.tx_count.saturating_add(1);
         self.rv_count = (self.tx_count % RV_CYCLE) as u8;
@@ -846,6 +857,18 @@ impl Station {
         self.keyed_on_air = true;
         self.keyed_as = Some(self.mycall.clone());
         if self.state == State::Done {
+            self.pending = None;
+        }
+        // ⭐ OUR RR73 GOES ONCE (#416). WSJT-X 3.0.2 counts RR73 as a 73 message
+        // (`message_is_73`, `widgets/mainwindow.cpp` 315-321: the word `73` or `RR73` in a
+        // standard message), and as one keys with auto-sequencing on it turns Enable Tx off and
+        // selects Tx6 (8105-8108, 8125-8141). So a partner that has gone silent hears one RR73,
+        // not one per over until the watchdog. A partner who asks again with its report re-queues
+        // it (the #59 arms in `observe`), and that one goes once too; its 73, RR73 or RRR still
+        // closes the QSO. An RRR is left queued: it is not a 73 message, its key leaves Enable Tx
+        // on, and WSJT-X sends it each over until the partner closes or the watchdog trips. That
+        // includes a roger the packer renders as RRR, which is still our `RReport` here.
+        if self.state == State::Confirming && matches!(self.pending, Some(Msg::Rr73 { .. })) {
             self.pending = None;
         }
     }
@@ -1023,7 +1046,8 @@ impl Station {
                 }
                 // THE PARTNER DID NOT COPY OUR ROGER AND IS ASKING AGAIN (issue #59).
                 //
-                // We are `Confirming`, so we have sent our closing over and cleared `pending`.
+                // We are `Confirming`, so we have sent our closing over, and an RR73 has cleared
+                // `pending` (`after_tx`, #416; an RRR stays queued).
                 // If the DX now repeats their report — bare, or R-prefixed — they did not hear
                 // it, and the only useful thing we can do is send it again. Without these arms
                 // the message fell to `_ => {}`: Nexus went silent at exactly the moment the
@@ -2159,6 +2183,93 @@ mod start_context_tests {
             s.observe(&[dec(closing, -8)]);
             assert_eq!(s.state, State::Done, "{closing}");
             assert_eq!(s.pending_text(), None, "{closing}");
+        }
+    }
+
+    /// #416: our RR73 to a partner who then goes silent went out every over until the watchdog.
+    /// WSJT-X 3.0.2 sends it once: RR73 is a 73 message (`message_is_73`, `mainwindow.cpp`
+    /// 315-321), and as it keys auto-sequencing turns Enable Tx off (8105-8108, 8125-8141). A
+    /// partner who asks again with its report gets it again (the #59 arms), once each time.
+    #[test]
+    fn the_closing_rr73_goes_once_unless_the_partner_asks_again() {
+        let mut s = start("KD9TAW W9XYZ R-02", -8);
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW RR73"));
+        assert!(!s.closing_sent(), "premise: the RR73 has not gone");
+        s.after_tx(); // our RR73 is on the air
+        assert_eq!(s.state, State::Confirming);
+        assert!(s.closing_sent(), "our closing over is on the air");
+        assert!(
+            s.outgoing_rv().is_none(),
+            "nothing more to send at a silent partner"
+        );
+        s.observe(&[]); // a silent period
+        assert!(
+            s.outgoing_rv().is_none(),
+            "still nothing after a silent period"
+        );
+        s.observe(&[dec("KD9TAW W9XYZ R-02", -8)]); // they ask again
+        assert_eq!(s.pending_text().as_deref(), Some("W9XYZ KD9TAW RR73"));
+        assert!(!s.closing_sent(), "a roger owed again is not sent yet");
+        s.after_tx();
+        assert!(s.outgoing_rv().is_none(), "the re-sent roger goes once too");
+        s.observe(&[dec("KD9TAW W9XYZ 73", -8)]);
+        assert_eq!(s.state, State::Done);
+        assert_eq!(s.pending_text(), None);
+    }
+
+    /// #416, every way we come to send RR73: the R-report straight after our grid (a partner who
+    /// skipped its report), a CQ run's caller, and a caller to us we answered with a report.
+    #[test]
+    fn every_rr73_we_send_goes_once() {
+        let mut skipped = Station::answering(ME, MY_GRID, DX);
+        skipped.observe(&[dec("KD9TAW W9XYZ R-04", -6)]);
+        let mut run = Station::calling_cq(ME, MY_GRID);
+        run.observe(&[dec("KD9TAW W9XYZ FN31", -6)]);
+        run.after_tx();
+        run.observe(&[dec("KD9TAW W9XYZ R-04", -6)]);
+        let mut answered = start("KD9TAW W9XYZ FN31", -6);
+        answered.after_tx();
+        answered.observe(&[dec("KD9TAW W9XYZ R-04", -6)]);
+        for (what, mut s) in [
+            ("skipped report", skipped),
+            ("CQ run", run),
+            ("answered", answered),
+        ] {
+            assert_eq!(s.state, State::Confirming, "{what}");
+            assert_eq!(
+                s.pending_text().as_deref(),
+                Some("W9XYZ KD9TAW RR73"),
+                "{what}"
+            );
+            s.after_tx();
+            assert_eq!(s.pending_text(), None, "{what}: once");
+            assert_eq!(s.state, State::Confirming, "{what}: still open for a 73");
+        }
+    }
+
+    /// Control for #416: an RRR is not a 73 message (`message_is_73`, `mainwindow.cpp` 315-321
+    /// looks for the words `73` and `RR73`), so its key leaves Enable Tx on (8125-8141) and WSJT-X
+    /// sends it each over until the partner's 73 or roger, or the Tx watchdog (1409-1411,
+    /// 7788-7791). Ours, chosen as RRR or made RRR by the packer, repeats the same way.
+    #[test]
+    fn an_rrr_still_repeats_until_the_partner_closes() {
+        let mut chosen = rogered_with_rrr();
+        let mut degraded = Station::calling_cq("KD9TAW/P", MY_GRID);
+        degraded.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]);
+        degraded.observe(&[dec("<KD9TAW/P> F4CYH/R", -7)]);
+        degraded.after_tx();
+        for (what, s, rrr) in [
+            ("chosen", &mut chosen, "W9XYZ KD9TAW RRR"),
+            ("degraded", &mut degraded, "<F4CYH/R> KD9TAW/P RRR"),
+        ] {
+            for over in 2..=4 {
+                assert_eq!(s.state, State::Confirming, "{what}");
+                assert_eq!(s.pending_text().as_deref(), Some(rrr), "{what} {over}");
+                assert!(s.outgoing_rv().is_some(), "{what}: over {over} goes");
+                assert!(!s.closing_sent(), "{what}");
+                s.observe(&[]);
+                s.after_tx();
+            }
         }
     }
 

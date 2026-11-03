@@ -31818,11 +31818,15 @@ contact yourself."
                         station.after_tx();
                         // Stock "Disable Tx after sending 73": the over leaving
                         // NOW is our final 73 (after_tx just cleared pending at
-                        // Done). S&P only — a CQ run returns to CQ instead.
+                        // Done), or our RR73, a 73 message too (#416,
+                        // `closing_sent`). S&P only — a CQ run returns to CQ instead.
+                        if station.closing_sent()
+                            && !self.cq_running
+                            && self.settings.disable_tx_after_73
+                        {
+                            self.pending_tx_disable = true;
+                        }
                         if station.state == QsoState::Done && !self.cq_running {
-                            if self.settings.disable_tx_after_73 {
-                                self.pending_tx_disable = true;
-                            }
                             // WSJT-X "CW ID after 73": queue the ID for AFTER
                             // this final over finishes (the service drains it
                             // on TX-idle, same timing as the deferred disable —
@@ -34274,7 +34278,9 @@ contact yourself."
     /// selected (a click on an R-report opens with Tx4): WSJT-X's fallback when it logs,
     /// `now - (m_ntx-2)*int(T/R) - int(fmod(seconds of the minute, T/R))`, with `m_ntx` the Tx
     /// message selected then (`mainwindow_slots.cpp:496-500`, `on_logQSOButton_clicked`). Our
-    /// queued over gives that number, and a contact at Done whose 73 has gone gives Tx5. Tx1 is
+    /// queued over gives that number, a contact at Done whose 73 has gone gives Tx5, and one
+    /// still `Confirming` whose RR73 has gone (#416, `after_tx`) gives Tx4, as it did while the
+    /// RR73 stayed queued. Tx1 is
     /// counted as Tx2, the period's own start, where WSJT-X's formula would put the start AFTER
     /// now. With no contact with `dxcall` in the sequencer (a contact rescued after the run left
     /// it), the start is now, as before.
@@ -34287,8 +34293,11 @@ contact yourself."
                     .as_deref()
                     .is_some_and(|c| same_call(c, dxcall)) =>
             {
-                wsjtx_tx_number(station.pending.as_ref())
-                    .or((station.state == QsoState::Done).then_some(5))
+                wsjtx_tx_number(station.pending.as_ref()).or(match station.state {
+                    QsoState::Done => Some(5),
+                    QsoState::Confirming => Some(4),
+                    _ => None,
+                })
             }
             _ => None,
         };
@@ -50253,6 +50262,74 @@ mod tests {
         r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-05", -8)], 3);
         let _ = r.poll_tx(4); // RR73 → resume CQ
         assert!(!r.take_pending_tx_disable(), "a run never self-disarms");
+    }
+
+    /// #416: our RR73 in a contact we did not reach by calling CQ goes once, and "Disable Tx after
+    /// sending 73" follows it as it follows our 73. WSJT-X 3.0.2 counts RR73 as a 73 message
+    /// (`message_is_73`, `widgets/mainwindow.cpp` 315-321), and at its key either that option or
+    /// auto-sequencing turns Enable Tx off (8125-8141). Controls: with the option off the RR73
+    /// still goes once; an RRR, not a 73 message, repeats and leaves Enable Tx alone; a CQ run's
+    /// RR73 goes once and the run calls CQ again, as before.
+    #[test]
+    fn our_rr73_goes_once_and_disables_tx_like_our_73() {
+        // The over keyed at `slot`, as text, or None when nothing keys.
+        let sent = |e: &mut Engine, slot: u64| -> Option<String> {
+            (!e.poll_tx(slot).is_empty()).then(|| e.wsjtx_tx_status().tx_message.trim().to_string())
+        };
+        // W9XYZ answers our call with its roger and report straight away: we owe RR73.
+        let snp = |disable: bool, rrr: bool| {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.disable_tx_after_73 = disable;
+            e.settings.prefer_rrr = rrr;
+            e.call_station("W9XYZ");
+            e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ R-10", -7)], 3);
+            e
+        };
+        let rr73 = Some("W9XYZ K2DEF RR73".to_string());
+        let mut e = snp(true, false);
+        assert_eq!(sent(&mut e, 4), rr73, "premise: our RR73 keys");
+        assert!(e.tx_enabled(), "not disabled mid-over (deferred)");
+        assert!(e.take_pending_tx_disable(), "Disable Tx after 73 armed");
+        let mut off = snp(false, false);
+        assert_eq!(sent(&mut off, 4), rr73);
+        assert!(
+            !off.take_pending_tx_disable(),
+            "option off: Enable Tx stays"
+        );
+        for (what, e) in [("option on", &mut e), ("option off", &mut off)] {
+            e.ingest_decodes_for_test(&[], 5); // W9XYZ has gone silent
+            assert_eq!(sent(e, 6), None, "{what}: one RR73 at a silent station");
+            e.ingest_decodes_for_test(&[], 7);
+            assert_eq!(sent(e, 8), None, "{what}: and no more");
+        }
+        let mut rrr = snp(true, true);
+        for slot in [4, 6, 8] {
+            assert_eq!(
+                sent(&mut rrr, slot).as_deref(),
+                Some("W9XYZ K2DEF RRR"),
+                "RRR repeats, over {slot}"
+            );
+            assert!(!rrr.take_pending_tx_disable(), "an RRR is not a 73 message");
+            rrr.ingest_decodes_for_test(&[], slot + 1);
+        }
+        let mut r = Engine::new("W9XYZ", "EN37", 0);
+        r.set_mode("qso-run").unwrap();
+        let _ = r.poll_tx(0);
+        r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        let _ = r.poll_tx(2); // report
+        r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-05", -8)], 3);
+        assert_eq!(
+            sent(&mut r, 4).as_deref(),
+            Some("K1ABC W9XYZ RR73"),
+            "the run's RR73"
+        );
+        assert!(!r.take_pending_tx_disable(), "a run never self-disarms");
+        r.ingest_decodes_for_test(&[], 5);
+        assert_eq!(
+            sent(&mut r, 6).as_deref(),
+            Some("CQ W9XYZ EN37"),
+            "the run calls CQ again"
+        );
     }
 
     /// The WSJT-X UDP Status's transmit side as `statusUpdate` fills it (mainwindow.cpp:13979-13989):

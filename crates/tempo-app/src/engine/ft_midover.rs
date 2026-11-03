@@ -38,8 +38,7 @@
 //! started mid-over, nor a CQ switched (contest rules: the operator starts every QSO).
 
 use super::{
-    call_changed_refusal, Engine, Mode, Msg, QsoState, QsoStation, Tier, TxGateStamp, TxPlan,
-    TxWaveform,
+    call_changed_refusal, Engine, Mode, Msg, QsoStation, Tier, TxGateStamp, TxPlan, TxWaveform,
 };
 
 /// The FT8/FT4 over [`Engine::commit_tx`] handed to the radio loop last: what is on the air while
@@ -355,7 +354,8 @@ impl Engine {
                 self.cq_pause_until = None;
                 if station.tx_count == 0 {
                     station.after_tx();
-                    if station.state == QsoState::Done
+                    // Our 73, or our RR73 (#416), as `plan_tx` arms it at a key.
+                    if station.closing_sent()
                         && !self.cq_running
                         && self.settings.disable_tx_after_73
                     {
