@@ -512,7 +512,7 @@ fn rebuild_onto(
 ) {
     if old == OldLink::NexusDaemon {
         // An alive child stands in for the daemon (`is_alive` says healthy); the rebuild drops it.
-        let alive = std::process::Command::new("sleep")
+        let alive = tempo_core::process::command("sleep")
             .arg("300")
             .spawn()
             .unwrap();
