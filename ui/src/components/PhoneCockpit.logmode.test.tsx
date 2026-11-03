@@ -343,6 +343,24 @@ describe('the Phone cockpit logs the mode the rig is actually on', () => {
     expect(loggedMode()).toBe('USB')
   })
 
+  it('takes the data form of the pick as no mismatch only while PTT is held', async () => {
+    // With "Use this computer's microphone" on, a held PTT puts the radio in PKTUSB on purpose
+    // (its voice arrives on the USB input). Held, the chip says nothing; let go, a radio still in
+    // PKTUSB is a real mismatch again (rear-jack audio, dead mic) and the chip says so.
+    renderPhone({ dialMhz: 14.2, rigMode: 'PKTUSB' })
+    expect(screen.getByText('rig: PKTUSB')).toBeTruthy()
+    const ptt = document.querySelector('button.ph-ptt') as HTMLButtonElement
+    fireEvent.pointerDown(ptt)
+    await waitFor(() => expect(screen.queryByText('rig: PKTUSB')).toBeNull())
+    fireEvent.pointerUp(ptt)
+    await waitFor(() => expect(screen.getByText('rig: PKTUSB')).toBeTruthy())
+    cleanup()
+    // CONTROL: held, a mode that is not the pick's data form still shows.
+    renderPhone({ dialMhz: 14.2, rigMode: 'CW' })
+    fireEvent.pointerDown(document.querySelector('button.ph-ptt') as HTMLButtonElement)
+    expect(screen.getByText('rig: CW')).toBeTruthy()
+  })
+
   it('ignores a read-back that does not name a phone mode', async () => {
     // A rig reporting CW / PKTUSB / anything outside the phone family while the Phone cockpit
     // is open is a real operational mismatch — the cockpit's own chip shouts about it — but it

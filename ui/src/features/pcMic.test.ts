@@ -31,6 +31,7 @@ describe('the status lane after a computer-microphone over ended', () => {
     ['interrupted', 'shell.lane.pcMic.interrupted'],
     ['keyRefused', 'shell.lane.pcMic.keyRefused'],
     ['txAudio', 'shell.lane.pcMic.txAudio'],
+    ['dataMode', 'shell.lane.pcMic.dataMode'],
     ['unsure', 'shell.lane.pcMic.unsure'],
   ])('names %s, with the time', (cause, key) => {
     const lane = pcMicLane({ at: AT, cause })

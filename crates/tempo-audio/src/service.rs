@@ -6966,6 +6966,24 @@ impl RadioLoop {
         // latch stays open so a later tick with a derived policy still fires this once.)
     }
 
+    /// Whether the radio is on the commanded DATA submode for a key that needs it (`cur_md` is a
+    /// `PKT…` word): `last_mode` credits it once the radio has taken it, and a key on a mode not yet
+    /// taken writes it now, once. `true` for any other word: nothing is asked of it here.
+    fn data_submode_in_for_key(&mut self, rig: &mut Rig) -> bool {
+        let md = self.cur_md.clone();
+        if !md.starts_with("PKT") || md == self.last_mode {
+            return true;
+        }
+        let width = hamlib_mode_width(&md, self.applied.rig_model, passband_for(&md));
+        match rig.set_mode(&md, width) {
+            Ok(()) => {
+                self.last_mode = md;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// May the loop START a transmission on the active `rig` this tick?
     ///
     /// `false` in the two windows where the `Rig` handle the loop is holding is NOT the
@@ -13744,7 +13762,28 @@ impl RadioLoop {
                     MicTick::Key => backend.prepare_tx(),
                     _ => Ok(()),
                 };
+                // ⛔ …NOR IN A MODE THAT DOES NOT TAKE IT: the over's voice arrives on the radio's
+                // USB/rear input, which only the DATA submode modulates from
+                // (`Engine::rig_mode_effective`). The mode-apply above commands it on the press;
+                // a key with the radio not yet on it writes it here first, and keys nothing if the
+                // radio refuses it (the front mic would go out instead of the operator).
+                let mode_in = !matches!(tick, MicTick::Key)
+                    || tx_audio.is_err()
+                    || self.data_submode_in_for_key(rig);
                 match tick {
+                    MicTick::Key if !mode_in => {
+                        tempo_core::applog::warn(
+                            "tx",
+                            &format!(
+                                "computer microphone over not keyed: the radio did not take {} \
+                                 (its data mode, which transmits the USB audio)",
+                                self.cur_md
+                            ),
+                        );
+                        let mut eng = engine_lock(engine);
+                        eng.pc_mic_refused(tempo_app::dto::PcMicCause::DataMode);
+                        let _ = eng.take_pc_mic_abort();
+                    }
                     MicTick::Key if tx_audio.is_err() => {
                         let why = tx_audio.err().unwrap_or_default();
                         tempo_core::applog::warn(

@@ -11907,6 +11907,34 @@ impl Engine {
                     "PKTUSB"
                 });
             }
+            // ⛔ THE COMPUTER MICROPHONE TRAVELS THE SSTV PICTURE'S ROAD, and needs its mode for
+            // the same reason: its voice is SOUNDCARD audio on the radio's USB/rear input, and in
+            // plain USB/LSB the radio modulates from its MIC (an FTDX10's SSB MOD SOURCE, MIC from
+            // the factory), so it keyed on CAT and radiated its own front mic, not the operator.
+            // Only while a computer-microphone over is armed or keyed on a sound-card route
+            // (`Engine::pc_mic_wants_data_submode`), so receive and the radio's own microphone keep
+            // plain SSB, as an SSTV picture's arm does; the radio loop keys nothing until the radio
+            // has taken the word. The same per-radio opt-out (a mic-jack interface keeps plain SSB).
+            // AM and FM (a pick, or FM in force) keep their own word: no data form is asked of them.
+            if self.pc_mic_wants_data_submode()
+                && !self.phone_fm_in_force(&self.settings.band, self.settings.dial_mhz)
+                && !self
+                    .sideband_override
+                    .as_deref()
+                    .is_some_and(|m| m.eq_ignore_ascii_case("am") || m.eq_ignore_ascii_case("fm"))
+            {
+                let lsb = self
+                    .sideband_override
+                    .as_deref()
+                    .map_or(crate::bandplan::phone_is_lsb(self.settings.dial_mhz), |m| {
+                        m.eq_ignore_ascii_case("lsb")
+                    });
+                return self.settings.plain_ssb_if_configured(if lsb {
+                    "PKTLSB"
+                } else {
+                    "PKTUSB"
+                });
+            }
             if let Some(m) = &self.sideband_override {
                 return m.clone();
             }

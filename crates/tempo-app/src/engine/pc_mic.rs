@@ -167,6 +167,16 @@ impl Engine {
         self.settings.pc_mic && self.settings.operating_mode == OperatingMode::Phone
     }
 
+    /// Whether the radio must be in its DATA submode for this over (`Engine::rig_mode_effective`):
+    /// an over armed or keyed whose voice goes out through this computer's sound card, so it
+    /// arrives on the radio's USB/rear input, which a plain-SSB radio does not modulate from. Not
+    /// on TCI audio, the Icom network connection or a Flex on native audio, whose audio does not
+    /// reach the radio as a sound card's.
+    pub fn pc_mic_wants_data_submode(&self) -> bool {
+        self.pc_mic.over.active()
+            && crate::settings::tx_audio_on_sound_card(&self.settings.tx_audio_route())
+    }
+
     /// Whether a computer-microphone over is armed or keyed.
     pub fn pc_mic_armed(&self) -> bool {
         self.pc_mic.over.active()
