@@ -51,13 +51,24 @@ function agoText(secs: number | null): string {
  * separate "healthy but quiet" (connected — normal on a still band) from "can't
  * reach the server" (connecting/reconnecting) — previously both rendered as an
  * identical, broken-looking "waiting". */
-function FeedPill({ name, status, detail }: { name: string; status: FeedStatus; detail?: string }) {
+function FeedPill({
+  name,
+  status,
+  detail,
+  via = false,
+}: {
+  name: string
+  status: FeedStatus
+  detail?: string
+  /** The feed reaches this window through another Nexus window's cluster logins. */
+  via?: boolean
+}) {
   if (!status.enabled) return null
   const ago = agoText(status.lastEventSecs)
   // Each state is a WHOLE sentence, not a stem with a tail glued on: "retrying" and
   // "retrying, last event 4m ago" are two statements, and a language that orders them
   // differently must be able to.
-  const [cls, val, title] =
+  const [cls, stateVal, stateTitle] =
     status.state === 'live'
       ? [
           'good',
@@ -88,6 +99,10 @@ function FeedPill({ name, status, detail }: { name: string; status: FeedStatus; 
                 ]
               : // Defensive: an unknown future backend state renders visibly, not as a fake idle.
                 ['weak', status.state, t('nowbar.feed.unknown.title', { name, state: status.state })]
+  // A window that holds no cluster login of its own says so on the pill itself, connected or not:
+  // what it shows is the other window's connection, under that window's cluster list and SSID.
+  const val = via ? t('nowbar.feed.via.value', { value: stateVal }) : stateVal
+  const title = via ? t('nowbar.feed.via.title', { title: stateTitle }) : stateTitle
   return (
     <span
       className={`nb-chip nb-feed ${cls}`}
@@ -282,13 +297,14 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
 
       {feedHealth && (
         <>
-          <FeedPill name="Cluster" status={feedHealth.cluster} />
+          <FeedPill name="Cluster" status={feedHealth.cluster} via={feedHealth.clusterViaOtherWindow} />
           {/* The SSB/phone source on its own — RBN keeps the Cluster pill green even when
               this is down, so "is my phone source up?" needs its own at-a-glance pill. */}
           <FeedPill
             name="Phone"
             status={feedHealth.phoneCluster}
             detail={feedHealth.phoneClusterHost ?? undefined}
+            via={feedHealth.clusterViaOtherWindow}
           />
           <FeedPill name="PSKR" status={feedHealth.pskr} />
         </>

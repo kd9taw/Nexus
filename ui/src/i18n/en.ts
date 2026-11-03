@@ -10281,6 +10281,9 @@ export const EN = {
     'We connect to ALL listed nodes and union their human SSB/phone spots — more nodes = wider phone coverage (RBN CW + digital connect automatically; RBN endpoints are ignored here). Nexus never changes this list for you. An added node connects, and a removed one disconnects, on the next Save.',
   'settings.integrations.clusterNodes.mode.auto': 'Pick working nodes automatically (recommended)',
   'settings.integrations.clusterNodes.mode.manual': 'Use my list',
+  // Spot Sources in a window that gets its spots through another window's cluster logins.
+  'settings.integrations.clusterNodes.viaOtherWindow':
+    "Another Nexus window on this computer holds the cluster logins for this callsign, and this window gets its spots through it. While it does, its node list and Cluster login SSID are the ones in use: what you set here takes effect when this window holds the logins.",
   'settings.integrations.clusterNodes.autoHint':
     'Nexus keeps two of these nodes connected for SSB/phone spots and spreads operators across them. A node that stops answering for five minutes, while your other spot feeds are working, is skipped for a day and another takes its place. A quiet band never counts against a node. RBN CW + digital connect automatically either way. Takes effect on the next Save.',
   // How one node is doing. `{{reason}}` is one of the clusterNodes.reason.* phrases below, and
@@ -14598,6 +14601,10 @@ export const EN = {
   // The optional host/detail a pill carries. One entry owns the parenthesis and the space, so
   // no caller ever glues them on.
   'nowbar.feed.title.detail': '{{title}} ({{detail}})',
+  // A window following another window's cluster logins says so on the Cluster and Phone pills.
+  'nowbar.feed.via.value': '{{value}} · other window',
+  'nowbar.feed.via.title':
+    "{{title}}. Through the other Nexus window, which holds this callsign's cluster logins; its cluster list and SSID apply here too.",
 
   // ── The Tempo cockpit header ────────────────────────────────────────────────────────
   // The tier NAMES (TempoFast/TempoDeep and their Fast/Deep slots) are the modes' own.

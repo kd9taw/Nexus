@@ -72,6 +72,11 @@ pub(crate) fn set_config(config: NodeConfig) {
     *lock(&CONFIG) = config;
 }
 
+/// The settings the node feeds run under now.
+pub(crate) fn config() -> NodeConfig {
+    lock(&CONFIG).clone()
+}
+
 /// A poisoned lock still holds a usable registry; a panic elsewhere must not strand the feeds.
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -624,14 +629,23 @@ pub(crate) struct NodesView {
     /// The SAVED choice — the form may hold an unsaved one.
     auto: bool,
     nodes: Vec<NodeView>,
+    /// This window logs into no node: another Nexus window on this computer holds this call's
+    /// cluster logins, under that window's node list and SSID (`cluster_share`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    via_other_window: bool,
 }
 
 /// The node standings, for `get_cluster_nodes`.
 pub(crate) fn view() -> NodesView {
+    // Asked before the registry lock: the share's own lock is never taken under FEEDS.
+    let via_other_window = crate::cluster_following().is_some();
     let feeds = lock(&FEEDS);
     let config = lock(&CONFIG).clone();
     let health = lock(&HEALTH);
-    view_of(&config, &health.pool, &feeds, now_secs())
+    NodesView {
+        via_other_window,
+        ..view_of(&config, &health.pool, &feeds, now_secs())
+    }
 }
 
 fn view_of(config: &NodeConfig, pool: &NodePool, feeds: &Feeds, now: u64) -> NodesView {
@@ -664,6 +678,7 @@ fn view_of(config: &NodeConfig, pool: &NodePool, feeds: &Feeds, now: u64) -> Nod
     NodesView {
         auto: config.auto,
         nodes,
+        via_other_window: false,
     }
 }
 

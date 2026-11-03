@@ -3916,6 +3916,9 @@ export interface ClusterNodes {
   /** The SAVED choice — the form may hold an unsaved one. */
   auto: boolean
   nodes: ClusterNode[]
+  /** Another Nexus window on this computer holds this callsign's cluster logins: its node list
+   * and SSID are the ones in use, and this window logs into no node. */
+  viaOtherWindow?: boolean
 }
 
 /** Liveness of the background live feeds (DX cluster/RBN + PSK Reporter MQTT). */
@@ -3933,6 +3936,10 @@ export interface FeedHealth {
    * "N SSB spots" diagnostic (0 = SSB not arriving; >0 with no phone rows = arriving but
    * not a need). */
   phoneSpotsSeen: number
+  /** This window holds no cluster login of its own: another Nexus window on this computer holds
+   * them for this callsign, under its own cluster list and SSID, and relays its spots here.
+   * `cluster` and `phoneCluster` then say what reaches THIS window. */
+  clusterViaOtherWindow?: boolean
 }
 
 /** Worked All States progress (50 US states; LoTW/paper confirmed). */

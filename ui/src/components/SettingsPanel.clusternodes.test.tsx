@@ -187,3 +187,22 @@ describe('cluster nodes, my list', () => {
     expect((await rowOf('cluster.example.org:23')).textContent).not.toContain('skipped')
   })
 })
+
+describe('cluster nodes, in a window that follows another window', () => {
+  it("says the other window's node list and SSID are the ones in use", async () => {
+    api.get('getClusterNodes').mockImplementation(() =>
+      Promise.resolve({ ...standings(true), viaOtherWindow: true } satisfies ClusterNodes),
+    )
+    await openSpotSources()
+    expect(
+      await screen.findByText(/Another Nexus window on this computer holds the cluster logins for this callsign/),
+    ).toBeTruthy()
+    expect(screen.getByText(/its node list and Cluster login SSID are the ones in use/)).toBeTruthy()
+  })
+
+  it('CONTROL: a window with its own logins says nothing of the kind', async () => {
+    await openSpotSources()
+    await screen.findByText('dxspots.com:7300')
+    expect(screen.queryByText(/Another Nexus window/)).toBeNull()
+  })
+})
