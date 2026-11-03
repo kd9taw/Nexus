@@ -1,5 +1,5 @@
 // A WSJT-X / GridTracker-style Call Roster: one row per heard station as aligned,
-// sortable columns (Call · Calling · Need · Country · State · Grid · Dist · Brg · SNR · Age) with
+// sortable columns (Call · Calling · Need · Park · Country · State · Grid · Dist · Brg · SNR · Age) with
 // roster filters (Needed-only, Hide-worked, a distance cap) and double-click-to-work. This is the
 // "Roster" cockpit layout's primary surface — distinct from the waterfall-first
 // "Classic" layout, not just a reshaped pane.
@@ -9,7 +9,7 @@
 // entity, the state/province, the grid square, the distance, the bearing and the SNR. So do
 // the tokens the roster is built out of (ROSTER_TOKENS below). What moved is the prose around
 // them — the column headings, the filters, and everything a row says out loud.
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { t } from '../i18n'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { useRovingList } from '../useRovingList'
@@ -29,7 +29,7 @@ import { getDeclination } from '../api'
 import { NEED_CHIP } from '../features/needVisuals'
 import { alertsForSurface, chaseRank, confirmOnlyOnWorkedBand, isActivityTag, strongestNeed } from '../features/needs'
 import { isIgnored } from '../txMessages'
-import { isCallHidden, useHideCalls } from '../features/hideCalls'
+import { isCallHidden, isCallHiddenScoped, useHideCalls } from '../features/hideCalls'
 import { loadRosterFilters, saveRosterFilters, type RosterFilters } from '../operateFilters'
 import { hasOverridingNeed, isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { CountryHiddenChip } from './CountryExclude'
@@ -38,6 +38,7 @@ import { WatchTile } from './WatchTile'
 import { WorkedWindowSelect, workedWithin } from './WorkedWindowSelect'
 import { useWatchMatch, watchLabel } from '../watchlist'
 import { PaneCloseButton } from './panes/PaneCloseButton'
+import { CallRowMenu, isMenuKey } from './CallRowMenu'
 
 interface Props {
   /** THE PANE'S OWN ✕ (panelHost.closeProps) — the SAME setPanelState the ⊞ Panels tick
@@ -97,6 +98,7 @@ type SortKey =
   | 'need'
   | 'call'
   | 'calling'
+  | 'park'
   | 'country'
   | 'state'
   | 'grid'
@@ -151,6 +153,22 @@ const byText = (a: string | null | undefined, b: string | null | undefined) =>
   a ? (b ? a.localeCompare(b) : -1) : b ? 1 : 0
 /** Shared empty set so the ignore checks stay allocation-free per render. */
 const EMPTY_IGNORES: ReadonlySet<string> = new Set()
+/** #357 — the CQ modifiers that say a station is out at a park or on a summit. */
+const PARK_PROGRAMS: ReadonlySet<string> = new Set(['POTA', 'SOTA'])
+
+/**
+ * #357 — the station's Park cell: the reference a POTA/SOTA spot names for it (the need alert's
+ * `park`, set on every activation row the station reads from the spot feeds), else the program its
+ * own CQ names (`CQ POTA`, with no reference: nobody has spotted it yet), else null. Read from the
+ * UNGATED alerts: an activation is the station's, whichever band or mode the spot was taken on.
+ */
+function parkOf(s: Station, alerts: readonly NeedAlert[] | undefined): { label: string; spotted: boolean } | null {
+  const ref = alerts?.find((a) => a.park?.reference)?.park?.reference
+  if (ref) return { label: ref, spotted: true }
+  const cq = s.cqDir?.toUpperCase()
+  if (cq && PARK_PROGRAMS.has(cq)) return { label: cq, spotted: false }
+  return null
+}
 /** The Age cell. The unit letter rides inside the message with its number, so a translation
  *  can never separate the two (the Now-Bar's rule). */
 function ageLabel(slots: number): string {
@@ -270,6 +288,7 @@ export function OperateRoster({
         need,
         needAll,
         watch,
+        park: parkOf(s, raw),
         // What Needed only and Hide worked count as a need: everything except a confirmation
         // the first contact on this band is already waiting on (#350) — and a station on the
         // watch list, which counts the way a new park does, worked or not (maintainer,
@@ -343,14 +362,17 @@ export function OperateRoster({
           x.s.call === selectedCall ||
           x.s.call === workingCall,
       )
-    // Wildcard call-hide (VP8* etc.) — display-only; the worked/selected station stays.
-    if (hideCalls.entries.length > 0)
+    // Wildcard call-hide (VP8* etc.) and the row menu's narrower hides (#346: this band, for a
+    // while) — display-only; the worked/selected station stays.
+    if (hideCalls.entries.length > 0 || hideCalls.scoped.length > 0) {
+      const now = Date.now()
       f = f.filter(
         (x) =>
-          !isCallHidden(x.s.call, hideCalls.entries) ||
+          !(isCallHidden(x.s.call, hideCalls.entries) || isCallHiddenScoped(x.s.call, band, hideCalls.scoped, now)) ||
           x.s.call === selectedCall ||
           x.s.call === workingCall,
       )
+    }
     const dir = sort.dir === 'asc' ? 1 : -1
     f.sort((a, b) => {
       let c = 0
@@ -365,6 +387,12 @@ export function OperateRoster({
           // The CQ-ing stations (calling nobody) group at the end — which is the reason to
           // sort this column at all: who is free to answer.
           c = byText(a.s.calling, b.s.calling)
+          break
+        case 'park':
+          // #357 — "so parks stay at the top of the list when hunting": the stations at a park
+          // lead in BOTH directions, which order only the parks among themselves.
+          if (!a.park !== !b.park) return a.park ? -1 : 1
+          c = byText(a.park?.label, b.park?.label)
           break
         case 'country':
           c = (a.s.country ?? '~').localeCompare(b.s.country ?? '~')
@@ -414,12 +442,27 @@ export function OperateRoster({
     filters.hideBlocked,
     filters.maxDistanceKm,
     hideCalls.entries,
+    hideCalls.scoped,
     watchOf,
     ignoredCalls,
     workingCall,
     countries.hidden,
     selectedCall,
   ])
+
+  // #346 — the row whose menu is open (right-click, or the Menu key / Shift+F10 on the focused row),
+  // and that row's element, to give the keyboard back to when the menu closes.
+  const [menu, setMenu] = useState<{ call: string; row: HTMLElement } | null>(null)
+  const openMenu = (call: string) => (e: MouseEvent<HTMLElement> | KeyboardEvent<HTMLElement>) => {
+    if ('key' in e && !isMenuKey(e)) return
+    e.preventDefault()
+    setMenu({ call, row: e.currentTarget })
+  }
+  const closeMenu = () => {
+    menu?.row.focus({ preventScroll: true })
+    menu?.row.scrollIntoView?.({ block: 'nearest' })
+    setMenu(null)
+  }
 
   // Keyboard: arrow through rows, Enter selects, Shift+Enter works, Alt+Enter ignores.
   const roving = useRovingList(rows.length, (i, mods) => {
@@ -444,6 +487,7 @@ export function OperateRoster({
                 dir:
                   key === 'call' ||
                   key === 'calling' ||
+                  key === 'park' ||
                   key === 'country' ||
                   key === 'state' ||
                   key === 'grid' ||
@@ -563,6 +607,7 @@ export function OperateRoster({
             t('operate.roster.col.calling.title'),
           )}
           {th('need', t('operate.roster.col.need'))}
+          {th('park', t('operate.roster.col.park'), t('operate.roster.col.park.title'))}
           {th('country', t('operate.roster.col.country'))}
           {/* Header stays "State" — the column is two letters wide and GridTracker/WSJT-X call
               it that — with the full meaning in the tooltip. */}
@@ -576,7 +621,7 @@ export function OperateRoster({
         {rows.length === 0 ? (
           <div className="or-empty">{t('operate.roster.empty')}</div>
         ) : (
-          rows.map(({ s, need, needAll, age, watch }, i) => {
+          rows.map(({ s, need, needAll, age, watch, park }, i) => {
             const chip = need ? NEED_CHIP[need] : null
             // The station's `Wanted` need IS the watch list (it ranks a watched station first on
             // the Needed board); where the WATCH tile says so, a chip saying it again is noise.
@@ -595,6 +640,7 @@ export function OperateRoster({
                 aria-label={t('operate.roster.row.aria', {
                   call: s.call,
                   grid: s.grid ? t('operate.roster.row.aria.grid', { grid: s.grid }) : '',
+                  park: park ? t('operate.roster.row.aria.park', { park: park.label }) : '',
                   need: need ? t('operate.roster.row.aria.need', { need }) : '',
                   watch: watch ? t('operate.roster.row.aria.watch', { what: watchLabel(watch) }) : '',
                   worked: s.worked ? t('operate.roster.row.aria.worked') : '',
@@ -603,6 +649,9 @@ export function OperateRoster({
                 tabIndex={rp.tabIndex}
                 ref={rp.ref as (el: HTMLDivElement | null) => void}
                 onFocus={rp.onFocus}
+                aria-haspopup="menu"
+                onContextMenu={openMenu(s.call)}
+                onKeyDown={openMenu(s.call)}
                 className={`or-row${s.call === selectedCall ? ' selected' : ''}${
                   s.call === workingCall ? ' working' : ''
                 }${s.worked ? ' worked' : ''}${
@@ -655,6 +704,9 @@ export function OperateRoster({
                   >
                     ↗
                   </button>
+                  {menu?.call === s.call && (
+                    <CallRowMenu call={s.call} band={band} country={s.country} onClose={closeMenu} />
+                  )}
                 </span>
                 {/* Who they are working right now — a station mid-exchange will not answer a
                     call, and "CQ" (addressing nobody) is the row to double-click. */}
@@ -697,6 +749,19 @@ export function OperateRoster({
                   {/* Rarity lives with the needs — both answer "why work this station?" — and the
                       widened Need column has room for the loud 💎 ULTRA pill the grid cell clipped. */}
                   <RarityChip rarity={s.gridRarity} />
+                </span>
+                {/* #357 — the park or summit: the spotted reference, or the program a CQ names. */}
+                <span
+                  className={`or-park${park ? '' : ' none'}`}
+                  title={
+                    park
+                      ? park.spotted
+                        ? t('operate.roster.park.title.spot', { park: park.label })
+                        : t('operate.roster.park.title.cq', { program: park.label })
+                      : undefined
+                  }
+                >
+                  {park?.label ?? '—'}
                 </span>
                 <span className="or-country">{s.country ?? '—'}</span>
                 {/* State or province, from the callsign (FCC index / the Canadian regional

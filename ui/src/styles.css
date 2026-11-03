@@ -8700,6 +8700,17 @@ select optgroup {
      feed (one look for one list). The one hue on those rows nothing else uses — the nearest
      need, rarity or row-state colour is ΔE2000 ≥ 15 away here and ≥ 10 in the light ink. */
   --need-watch: #a3e635;
+  /* #299 — the colours an operator can give one watch entry (Settings ▸ Spots & Alerts), so the call
+     they care about most is not the same lime as the rest. A fixed palette, each defined here for the
+     dark themes and again in the light block below: the entry's mark re-points --need-watch at one of
+     these (watchlist.ts `watchColorStyle`), so the tile and the Band Activity row repaint and nothing
+     else changes. watchColor.test.tsx measures each in every mode, with the lime as its control. */
+  --watch-pink: #f472b6;
+  --watch-red: #f87171;
+  --watch-orange: #fb923c;
+  --watch-yellow: #facc15;
+  --watch-cyan: #22d3ee;
+  --watch-violet: #a78bfa;
   /* Needed-board submode hues (RTTY/FT4 get their own so an RTTY opportunity
      reads apart from an FT8 one). Declared rather than left to a var() fallback:
      a fallback is a DARK value that fires in both themes, which is the whole of
@@ -8742,6 +8753,12 @@ select optgroup {
      3.35:1, a step lighter and with half its chroma. */
   --pota-dim: #52836a;
   --need-watch: #3f6212; /* lime — on your watch list (the WATCH tile) */
+  --watch-pink: #be185d;
+  --watch-red: #b91c1c;
+  --watch-orange: #c2410c;
+  --watch-yellow: #a16207;
+  --watch-cyan: #0e7490;
+  --watch-violet: #6d28d9;
   --need-mode-rtty: #8a5200;
   --need-mode-ft4: #0f7038;
   --need-ink: #ffffff;
@@ -16064,6 +16081,26 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
+/* #299 — an entry's colour: a swatch painted with the very token its marks use (--need-watch, which
+   the entry's style re-points), beside a compact picker. */
+.watchlist-color {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.watchlist-swatch {
+  width: calc(12px * var(--text-scale));
+  height: calc(12px * var(--text-scale));
+  border-radius: 999px;
+  background: var(--need-watch);
+  border: 1px solid var(--border);
+}
+.watchlist-color-select {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 1px var(--space-2);
+  font-size: var(--fs-label);
+}
 .watchlist-remove {
   margin-left: auto;
   color: var(--state-weak);
@@ -22927,9 +22964,12 @@ button.cq-skiptx1.on {
      `.or-need` rather than bleeding into the next column. State is a fixed two letters. */
   /* The fixed tracks hold text (state, grid, distance, bearing, SNR, age), so they grow with
      Settings ▸ Workspace ▸ Text size (#215); at Normal each is exactly its px. */
+  /* #357 — Park, after Need: a POTA reference (US-1234) at its floor, a longer SOTA summit ellipsized
+     with the whole reference in its tooltip. */
   grid-template-columns:
     minmax(calc(124px * var(--text-scale)), 1fr) minmax(calc(68px * var(--text-scale)), 0.8fr)
-    minmax(calc(105px * var(--text-scale)), 1.13fr) minmax(calc(50px * var(--text-scale)), 0.85fr)
+    minmax(calc(105px * var(--text-scale)), 1.13fr) minmax(calc(60px * var(--text-scale)), 0.6fr)
+    minmax(calc(50px * var(--text-scale)), 0.85fr)
     calc(40px * var(--text-scale)) calc(54px * var(--text-scale)) calc(56px * var(--text-scale))
     calc(48px * var(--text-scale)) calc(44px * var(--text-scale)) calc(48px * var(--text-scale));
   align-items: center;
@@ -23024,6 +23064,7 @@ button.cq-skiptx1.on {
   text-overflow: ellipsis;
 }
 .or-calling,
+.or-park,
 .or-country,
 .or-state,
 .or-gridc,
@@ -23036,6 +23077,7 @@ button.cq-skiptx1.on {
   text-overflow: ellipsis;
 }
 .or-calling,
+.or-park,
 .or-state,
 .or-gridc,
 .or-dist,
@@ -23078,6 +23120,18 @@ button.cq-skiptx1.on {
   color: var(--text);
   background: color-mix(in srgb, var(--text-dim) 16%, transparent);
   border: 1px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
+}
+/* #357 — a station at a park reads in the theme's ink, not dimmed: it is the column a hunter scans.
+   --text is defined in both themes. */
+.or-park:not(.none) {
+  color: var(--text);
+  font-weight: 700;
+}
+/* #346 — the anchor a row's menu opens from: no box of its own, so it moves nothing in the row. */
+.call-row-menu-anchor {
+  position: absolute;
+  width: 0;
+  height: 0;
 }
 /* A station calling CQ is the one to work — say so quietly rather than with a chip;
    --text is defined in both themes. */
@@ -23570,6 +23624,40 @@ button.cq-skiptx1.on {
 }
 .country-item[data-state='checked']::before {
   content: '✓';
+}
+/* #346 — the calls a row's menu hid on one band or for a while, each with a ✕ that shows it again. */
+.hide-scoped-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-2) var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hide-scoped-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-label);
+}
+.hide-scoped-what {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.hide-scoped-until {
+  color: var(--text-dim);
+}
+.hide-scoped-remove {
+  margin-left: auto;
+  padding: 0 var(--space-1);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+.hide-scoped-remove:hover {
+  border-color: var(--accent);
 }
 .country-menu-note {
   max-width: 20em;

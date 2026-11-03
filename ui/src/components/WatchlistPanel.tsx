@@ -5,7 +5,10 @@ import {
   loadWatchlist,
   saveWatchlist,
   newWatchFilter,
+  watchColorStyle,
+  WATCH_COLORS,
   WATCHLIST_CHANGED,
+  type WatchColor,
   type WatchFilter,
   type WatchKind,
 } from '../watchlist'
@@ -45,6 +48,41 @@ function EntryNotes({ entry, onSave }: { entry: WatchFilter; onSave: (notes: str
         if (e.key === 'Enter') save()
       }}
     />
+  )
+}
+
+/** Each palette colour's name, looked up when drawn (so a language switch moves it), each key
+ *  written out whole in a t() call. */
+const COLOR_LABEL: Record<WatchColor, () => string> = {
+  pink: () => t('watchlist.color.pink'),
+  red: () => t('watchlist.color.red'),
+  orange: () => t('watchlist.color.orange'),
+  yellow: () => t('watchlist.color.yellow'),
+  cyan: () => t('watchlist.color.cyan'),
+  violet: () => t('watchlist.color.violet'),
+}
+
+/** #299 — one entry's colour, picked from the fixed palette (or the default lime), with a swatch
+ *  that paints with the very token the entry's marks use, so what it shows is what the lists show. */
+function EntryColor({ entry, onSave }: { entry: WatchFilter; onSave: (color: WatchColor | null) => void }) {
+  return (
+    <span className="watchlist-color">
+      <span className="watchlist-swatch" style={watchColorStyle(entry.color)} aria-hidden="true" />
+      <select
+        className="settings-input watchlist-color-select"
+        value={entry.color ?? ''}
+        onChange={(e) => onSave((e.target.value || null) as WatchColor | null)}
+        aria-label={t('watchlist.item.color.aria', { value: entry.value })}
+        title={t('watchlist.item.color.title')}
+      >
+        <option value="">{t('watchlist.color.default')}</option>
+        {WATCH_COLORS.map((c) => (
+          <option key={c} value={c}>
+            {COLOR_LABEL[c]()}
+          </option>
+        ))}
+      </select>
+    </span>
   )
 }
 
@@ -97,6 +135,18 @@ export function WatchlistPanel() {
       }),
     )
 
+  // One entry's colour set, or set back to the default lime. Every other field of every entry is kept.
+  const setEntryColor = (id: string, color: WatchColor | null) =>
+    commit(
+      list.map((f) => {
+        if (f.id !== id) return f
+        const next = { ...f }
+        if (color) next.color = color
+        else delete next.color
+        return next
+      }),
+    )
+
   return (
     <div className="watchlist">
       <div className="watchlist-hint">
@@ -117,6 +167,7 @@ export function WatchlistPanel() {
                 {f.kind === 'dxcc' ? f.value : f.value.toUpperCase()}
               </span>
               {f.cqOnly && <span className="watchlist-flag">{t('watchlist.item.cqOnly')}</span>}
+              <EntryColor entry={f} onSave={(color) => setEntryColor(f.id, color)} />
               <EntryNotes entry={f} onSave={(note) => setEntryNotes(f.id, note)} />
               <button
                 type="button"

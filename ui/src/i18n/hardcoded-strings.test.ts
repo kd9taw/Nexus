@@ -785,6 +785,8 @@ const MIGRATED = [
   'components/Js8InboxPanel.tsx',
   'components/Js8AddStation.tsx',
   'components/Js8ListMenu.tsx',
+  // #346 — the Call Roster's and Band Activity's row menu, migrated from birth.
+  'components/CallRowMenu.tsx',
   'components/js8ListMenus.ts',
   'components/Js8ListsSettings.tsx',
   // Settings ▸ Digital ▸ JS8's JS8Call API switches and ports — migrated from birth.
