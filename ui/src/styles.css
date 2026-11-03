@@ -4949,6 +4949,42 @@ body.resizing-row {
   overflow-y: auto;
   pointer-events: none;
 }
+/* The "+N more" chip (WxChipStack.tsx): on a narrow map it stands for the chips past the first two
+   and opens them in a list. A chip's surface with a neutral rule, as wide as its words; being a
+   button, the whole of it takes the pointer. The theme's :focus-visible ring marks it for the
+   keyboard. */
+.wx-chip-more {
+  align-self: flex-start;
+  max-width: 100%;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-dim);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.wx-chip-more:hover {
+  border-color: var(--accent);
+}
+/* The list it opens: a ui/Dialog box narrower than the 640px default (the sanctioned raw-unit box,
+   see .ui-dialog), the chips stacked as on a wide map. In here every chip takes the pointer, so each
+   one's hover (its sources and times) works over the whole chip. */
+.ui-dialog.wx-more-dialog {
+  width: min(360px, calc(100vw - 2 * var(--space-4)));
+}
+.wx-more-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.wx-more-list .flare-chip,
+.wx-more-list .arrival-chip {
+  pointer-events: auto;
+}
 /* Live solar-flare readout (D-RAP layer) — warm accent, only rendered while a flare is actually
    degrading HF. */
 .flare-chip {

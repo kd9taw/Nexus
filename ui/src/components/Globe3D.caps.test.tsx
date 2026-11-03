@@ -13,7 +13,7 @@ import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import type { PropagationSnapshot } from '../types'
 import type * as THREE_NS from 'three'
 
-const feeds = vi.hoisted(() => ({ aurora: null as unknown, pca: null as unknown, kpForecast: { points: [] } as unknown }))
+const feeds = vi.hoisted(() => ({ aurora: null as unknown, pca: null as unknown, kpForecast: { points: [] } as unknown, arrival: null as unknown }))
 vi.mock('../api', () => ({
   getAurora: vi.fn(async () => feeds.aurora),
   getPca: vi.fn(async () => feeds.pca),
@@ -25,7 +25,7 @@ vi.mock('../api', () => ({
   getLogStats: vi.fn(async () => null),
   getOtaMapSpots: vi.fn(async () => []),
   getPotaActivator: vi.fn(async () => ({ calls: [], parks: [] })),
-  getArrivalOutlook: vi.fn(async () => ({ watch: null, model: null, l1: null, rationale: null })),
+  getArrivalOutlook: vi.fn(async () => feeds.arrival ?? { watch: null, model: null, l1: null, rationale: null }),
 }))
 vi.mock('three/examples/jsm/postprocessing/UnrealBloomPass.js', () => ({
   UnrealBloomPass: class {
@@ -107,6 +107,7 @@ beforeEach(() => {
   feeds.aurora = null
   feeds.pca = null
   feeds.kpForecast = { points: [] }
+  feeds.arrival = null
   localStorage.clear()
   ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
@@ -399,5 +400,40 @@ describe('round 7: on the 3-D globe the held event goes AT its until', () => {
     })
     expect(r.container.querySelector('.pca-chip'), 'gone at until + 1 s, before the next tick').toBeNull()
     expect(group('capEdge')).toBeUndefined()
+  })
+})
+
+describe('a big-event day on a narrow globe: two chips and "+N more"', () => {
+  const WATCH_IN_FORCE = {
+    watch: { serial: 7, code: 'WATA20', issued: NOW_S - 3600, days: [], comment: null, window: [NOW_S - 3600, NOW_S + 86_400], maxG: 2 },
+    model: null,
+    l1: null,
+    rationale: null,
+  }
+  const stackOf = (c: HTMLElement) => c.querySelector('.wx-chip-stack') as HTMLElement
+
+  it('a proton event, a storm and a watch at once: the cap and aurora chips show, the watch is behind "+1 more"', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(300)
+    feeds.pca = PCA
+    feeds.aurora = OVAL
+    feeds.arrival = WATCH_IN_FORCE
+    const r = await mount(6)
+    expect(stackOf(r.container).querySelector('.pca-chip')).not.toBeNull()
+    expect(stackOf(r.container).querySelector('.aurora-chip')).not.toBeNull()
+    expect(stackOf(r.container).querySelector('.arrival-chip')).toBeNull()
+    const more = stackOf(r.container).querySelector('.wx-chip-more') as HTMLButtonElement
+    expect(more.textContent).toBe(t('map.wx.more', { n: 1 }))
+    fireEvent.click(more)
+    await act(async () => {})
+    expect(document.querySelector('.ui-dialog.wx-more-dialog .arrival-chip')!.textContent).toContain('G2 watch')
+  })
+
+  it('CONTROL — the same sky on a wide globe shows all three chips and no "+N more"', async () => {
+    feeds.pca = PCA
+    feeds.aurora = OVAL
+    feeds.arrival = WATCH_IN_FORCE
+    const r = await mount(6)
+    expect(stackOf(r.container).querySelector('.arrival-chip')).not.toBeNull()
+    expect(stackOf(r.container).querySelector('.wx-chip-more')).toBeNull()
   })
 })
