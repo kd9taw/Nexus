@@ -9961,7 +9961,7 @@ export const ZH: PartialCatalog = {
   "settings.audio.pcMic.title": "电脑麦克风（话音）",
   "settings.audio.pcMic.label": "使用这台电脑的麦克风",
   "settings.audio.pcMic.hint": "开启：在话音模式下按住 PTT 时，Nexus 会把这台电脑的麦克风，经该电台的发射音频（上方所选输出设备，或 TCI 电台的 TCI 音频）送入电台，并用电脑音频为该电台键控。关闭（默认）：PTT 键控电台自带的麦克风，与从前一样。仅限话音模式；数字模式从不使用。Stop TX（停止发射）或 TX Off（关闭 TX）会立即切断；松开 PTT 会让你最后一个字的尾音播完（最长 0.2 秒），随后解除键控。",
-  "settings.audio.pcMic.radioInput": "在话音模式下，电台也必须发射从其 USB 或后面板输入送来的音频。若 CAT PTT 键控的是电台的麦克风输入（发射音频来源为“前面板/麦克风”，或电台没有这个选项），请在电台上设置，例如把 Yaesu FTDX10 的 SSB MOD SOURCE 设为 REAR；否则 PTT 会键控电台，但发出去的是电台自己的麦克风，而不是这个麦克风。",
+  "settings.audio.pcMic.radioInput": "在 Yaesu FTDX10 这类电台上，只有电台的 SSB MOD SOURCE 菜单设为 REAR（USB）时，这个麦克风才会被发射出去。PTT 让电台在 USB 或 LSB 下发射；若 SSB MOD SOURCE 为 MIC（出厂设置），电台发射的是它自己的麦克风，而不是这个麦克风。Nexus 不会更改电台的菜单。",
   "settings.audio.pcMic.device.label": "麦克风",
   "settings.audio.pcMic.device.none": "选择麦克风…",
   "settings.audio.pcMic.device.hint": "绝不要用系统默认设备，也绝不要用该电台的接收输入。若发射过程中麦克风消失，电台会解除键控。",
