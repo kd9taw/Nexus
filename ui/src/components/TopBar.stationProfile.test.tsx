@@ -58,6 +58,19 @@ describe('the My station picker', () => {
     expect(onSwitch).toHaveBeenCalledWith('p1')
   })
 
+  it('is the callsign block itself, so it adds nothing to the bar’s line', () => {
+    const { container } = renderBar({ stationProfiles: both, activeStationProfile: 'home', onSwitchStationProfile: vi.fn() })
+    const id = container.querySelector('header.topbar .brand > .mycall')
+    expect(id?.classList.contains('mycall-picker')).toBe(true)
+    expect(id?.querySelector('select.station-profile-picker'), 'the select stands inside the callsign block').toBe(screen.getByLabelText('Station profile'))
+    expect(container.querySelector('.brand > select'), 'no select of its own in the bar’s line').toBeNull()
+    cleanup()
+    // Control: no profiles, the plain callsign block.
+    const plain = renderBar({ stationProfiles: undefined }).container.querySelector('.brand > .mycall')
+    expect(plain?.classList.contains('mycall-picker')).toBe(false)
+    expect(plain?.querySelector('select')).toBeNull()
+  })
+
   it('waits, saying why, while a run, a contact or an over is under way', () => {
     const onSwitch = vi.fn()
     renderBar({
