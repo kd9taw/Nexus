@@ -22804,13 +22804,16 @@ button.cq-skiptx1.on {
   color: var(--accent);
 }
 /* A chip that states a rule the board always applies (the Needed board's "Heard on my continent"):
-   lit like an active chip, but not a control — no pointer, no hover. */
+   not a control, and never drawn like a lit toggle — a dashed outline with no fill, no pointer,
+   no hover change. It takes focus (for its tooltip), so focus shows the usual ring. */
 .np-chip-fixed {
   cursor: default;
+  border-style: dashed;
+  background: transparent;
 }
 .np-chip-fixed:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--border);
+  color: var(--text-dim);
 }
 /* Clear all filters chip — visually distinct (danger-muted). */
 .np-chip-clear {

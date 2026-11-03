@@ -49,8 +49,10 @@ export function PrivilegesChip({ on, onToggle, title }: { on: boolean; onToggle:
   )
 }
 
-/** The US-state chips — only the states present (`spotFilters.presentStates`), behind a separator.
- *  Nothing at all when none is. */
+/** The US-state chips — the states present (`spotFilters.presentStates`) and every picked one,
+ *  behind a separator. A pick outlives the rows that offered it (the feed moves on; the Needed board
+ *  keeps its picks across launches), and while it still filters its chip must be there to untick.
+ *  Nothing at all when there is neither. */
 export function StateChips({
   available,
   picked,
@@ -64,12 +66,13 @@ export function StateChips({
   ariaLabel: string
   titleFor: (state: string) => string
 }) {
-  if (available.length === 0) return null
+  const shown = [...new Set([...available, ...picked])].sort()
+  if (shown.length === 0) return null
   return (
     <>
       <div className="np-filter-sep" aria-hidden="true" />
       <div className="np-filter-group" role="group" aria-label={ariaLabel}>
-        {available.map((st) => (
+        {shown.map((st) => (
           <button
             key={st}
             type="button"

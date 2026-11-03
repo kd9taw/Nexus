@@ -8,6 +8,7 @@
 // value a row prints (callsign, spotter, entity, US state, band, mode/submode, frequency,
 // comment) and the age column below — all data and measurement, invariant in every locale.
 import { useEffect, useMemo, useState } from 'react'
+import { useSessionState } from '../useSessionState'
 import type { BandChannel, FieldDayStatus, NeedAlert, SpotRow } from '../types'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { azimuthLabel, azimuthTitle, azimuthTo } from '../grid'
@@ -128,42 +129,6 @@ export interface SpotsPane {
   readonly scope: string
   readonly modes?: readonly string[]
   readonly band?: string
-}
-
-/** View-session state: the Spots panel unmounts on every view switch, which wiped all
- * filters mid-session (operator report 2026-07-21: "Leaving SPOT and returning resets
- * all filters"). sessionStorage survives the remount and clears on app exit — exactly
- * "retain them until application exit". Falls back to plain state if storage throws.
- *
- * `host` picks WHOSE copy: omitted, the Spots view's own `key`; a pane's scope, that pane's copy
- * (`key.<scope>`); `null`, a filter this host does not keep at all (plain state, nothing stored).
- * The key stays the FIRST argument and a literal: storage-scope.test.ts classifies every one by
- * scanning for exactly that. */
-function useSessionState<T>(
-  key: string,
-  init: T,
-  host?: string | null,
-): [T, React.Dispatch<React.SetStateAction<T>>] {
-  const stored = host === null ? null : host ? `${key}.${host}` : key
-  const [v, setV] = useState<T>(() => {
-    if (stored == null) return init
-    try {
-      const raw = sessionStorage.getItem(stored)
-      if (raw != null) return JSON.parse(raw) as T
-    } catch {
-      /* ignore */
-    }
-    return init
-  })
-  useEffect(() => {
-    if (stored == null) return
-    try {
-      sessionStorage.setItem(stored, JSON.stringify(v))
-    } catch {
-      /* ignore */
-    }
-  }, [stored, v])
-  return [v, setV]
 }
 
 /**

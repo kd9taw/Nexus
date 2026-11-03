@@ -162,6 +162,37 @@ describe('the Needed board keeps its new filters as it keeps the others', () => 
     expect(screen.getByRole('button', { name: 'My privileges' }).getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('the search lives for the session only, as on Spots: never in the saved record', () => {
+    renderNeeded()
+    chip('NY')
+    search('k2')
+    expect(localStorage.getItem(KEY) ?? '', 'the saved record').not.toContain('k2')
+    cleanup()
+    // A new launch: the session is gone, the saved record stays.
+    sessionStorage.clear()
+    renderNeeded()
+    expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('')
+    expect(shownCalls(), 'the state chip is saved; the search is not').toEqual(['K2BBB'])
+  })
+
+  it('a pane keeps its own search, apart from the board', () => {
+    render(
+      <NeededPanel
+        alerts={STATIONS.map(asNeed)}
+        bandPlan={[]}
+        selectedCall={null}
+        onQsy={() => {}}
+        onSelect={() => {}}
+        onWork={() => {}}
+        pane={{ filterKey: 'nexus.cw.neededFilters' }}
+      />,
+    )
+    search('k2')
+    cleanup()
+    renderNeeded()
+    expect((screen.getByRole('searchbox') as HTMLInputElement).value).toBe('')
+  })
+
   it('a stale or hand-edited record cannot empty the board', () => {
     localStorage.setItem(KEY, JSON.stringify({ licensedOnly: 'yes', states: [3, null], query: 7 }))
     renderNeeded()
@@ -196,16 +227,41 @@ describe('the Needed board keeps its new filters as it keeps the others', () => 
 })
 
 describe('"Heard on my continent" on the Needed board', () => {
-  it('is shown as always on, and is not a switch', () => {
+  it('is shown as a fixed rule, not a switch, and its reason is reachable by keyboard', () => {
     // The board's spotted rows were already put through the continent rule before they reach any
     // window (the same list feeds the roster chips, the map and the alerts), so a chip that could
-    // turn it off would be a lie. It says so instead.
+    // turn it off would be a lie. It says so instead, and does not look like a lit toggle.
     renderNeeded()
     openBar()
     expect(screen.queryByRole('button', { name: /heard on my continent/i })).toBeNull()
     const fixed = screen.getByText('Heard on my continent')
-    expect(fixed.getAttribute('title')).toMatch(/always on/i)
+    expect(fixed.classList.contains('active'), 'not drawn as a lit toggle').toBe(false)
+    expect(fixed.getAttribute('tabindex'), 'focusable, so its tooltip is reachable').toBe('0')
+    const title = fixed.getAttribute('title') ?? ''
+    expect(title).toMatch(/only lists spots heard on your continent/i)
+    // The callsign fail-open is said, not hidden.
+    expect(title).toMatch(/callsign/i)
     fireEvent.click(fixed)
+    expect(shownCalls()).toEqual(['JA1CCC', 'K2BBB', 'VE3DDD', 'W1AAA'])
+  })
+})
+
+describe('a picked state that is no longer on the board keeps its chip, on both boards', () => {
+  // A pick outlives the rows that offered it (the feed moves on; Needed keeps its picks across
+  // launches). While it still filters, its chip must be there to untick.
+  it('Needed', () => {
+    localStorage.setItem('neededFilters', JSON.stringify({ needTypes: [], bands: [], modes: { Digital: true, CW: true, Phone: true }, states: ['AK'] }))
+    renderNeeded()
+    expect(shownCalls(), 'the stale pick still filters').toEqual([])
+    chip('AK')
+    expect(shownCalls()).toEqual(['JA1CCC', 'K2BBB', 'VE3DDD', 'W1AAA'])
+  })
+
+  it('Spots', () => {
+    sessionStorage.setItem('nexus.spots.states', JSON.stringify(['AK']))
+    renderSpots()
+    expect(shownCalls()).toEqual([])
+    chip('AK')
     expect(shownCalls()).toEqual(['JA1CCC', 'K2BBB', 'VE3DDD', 'W1AAA'])
   })
 })

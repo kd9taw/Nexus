@@ -38,7 +38,6 @@ export interface NeededFilters {
   // record written before they existed, so an operator's board never hides more on upgrade.
   licensedOnly: boolean        // "My privileges"
   states: string[]             // US-state multi-select; empty = All
-  query: string                // the head's search box; '' = everything
 }
 
 export const DEFAULT_FILTERS: NeededFilters = {
@@ -47,7 +46,6 @@ export const DEFAULT_FILTERS: NeededFilters = {
   modes: { ...ALL_MODES_ON },
   licensedOnly: false,
   states: [],
-  query: '',
 }
 
 /** NeedTag → filter bucket mapping. TOTAL (`Record`, not `Partial`) on
@@ -77,16 +75,18 @@ export const NEED_TYPE_VALUES: readonly NeedTypeFilter[] = [
   'all', 'wanted', 'atno', 'newBand', 'newMode', 'newZone', 'newGrid', 'newState', 'newIota', 'newPark', 'confirm', 'dxped', 'pota', 'sota',
 ]
 
-/** True when the alert matches the given filter set (all filters AND together). */
-export function filterAlerts(alerts: NeedAlert[], filters: NeededFilters): NeedAlert[] {
-  const search = searchMatcher(filters.query)
+/** True when the alert matches the given filter set (all filters AND together). `query` is the
+ *  head's search box, kept apart from the saved filters: it lives for the session, as on Spots. */
+export function filterAlerts(alerts: NeedAlert[], filters: NeededFilters, query = ''): NeedAlert[] {
+  const search = searchMatcher(query)
   return alerts.filter((a) => {
     // ---- The rules the Spots board shares (spotFilters.ts) ----
     if (!privilegeOk(filters.licensedOnly, a.licensed)) return false
     if (!stateOk(filters.states, a.state)) return false
-    // What a need row holds that a search can mean: call, entity, mode, band, frequency (as the
-    // Spots board's, which also has a spotter a need row does not).
-    if (search && !search([a.call, a.entity, a.mode, a.band, a.freqMhz != null ? a.freqMhz.toFixed(4) : ''])) {
+    // What a need row holds that a search can mean: call, entity, mode and the exact mode it was
+    // heard in (the Spots row's mode and submode), band, frequency. A need has no spotter.
+    const freq = a.freqMhz != null ? a.freqMhz.toFixed(4) : ''
+    if (search && !search([a.call, a.entity, a.mode, a.exactMode ?? '', a.band, freq])) {
       return false
     }
 

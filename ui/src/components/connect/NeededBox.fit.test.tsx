@@ -50,6 +50,9 @@ describe('the fixed "Heard on my continent" chip', () => {
     const fixed = document.querySelector('.np-chip-fixed')
     expect(fixed, 'the board states the rule').not.toBeNull()
     expect(css(fixed!, 'cursor')).toBe('default')
+    // Not a lit toggle: an outline in dashes, no fill.
+    expect(css(fixed!, 'border-style')).toBe('dashed')
+    expect(css(fixed!, 'background')).toBe('transparent')
     // The control: a real chip keeps its pointer.
     expect(css(document.querySelector('button.np-chip')!, 'cursor')).toBe('pointer')
   })
