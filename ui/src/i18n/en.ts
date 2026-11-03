@@ -10811,6 +10811,14 @@ export const EN = {
     'Your display is scaled up, so Nexus now fits this screen at {{scaled}}%, where everything shows without crowding. Keep it?',
   'settings.workspace.scale.fit.keep': 'Keep {{scaled}}%',
   'settings.workspace.scale.fit.classic': 'Use {{classic}}%',
+  // The answer to that prompt, shown and changed later under UI scale ▸ Auto (SettingsPanel.tsx).
+  // Auto = the smaller fit on a scaled display; Off = the size Nexus used before.
+  'settings.workspace.scale.fit.label': 'On a scaled display',
+  'settings.workspace.scale.fit.aria': 'Auto-zoom on a scaled display',
+  'settings.workspace.scale.fit.auto': 'Auto',
+  'settings.workspace.scale.fit.off': 'Off',
+  'settings.workspace.scale.fit.hint':
+    'When Windows display scaling is 125% to 175%, Auto makes Nexus smaller so everything fits without crowding (80% at 125%, 70% at 150%). Off keeps the size Nexus used before.',
   // #215 text size: the ids are the persisted tokens (useTextSize.ts); the words are prose.
   'settings.workspace.textSize.label': 'Text size',
   'settings.workspace.textSize.normal': 'Normal',

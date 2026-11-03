@@ -36,4 +36,19 @@ describe('phoneOutsideBandPlan (display only)', () => {
     expect(phoneOutsideBandPlan(432.1, 'USB')).toBeNull()
     expect(phoneOutsideBandPlan(Number.NaN, 'USB')).toBeNull()
   })
+
+  it('speaks at the one home Nexus picks below a phone line: US 160 m phone, on purpose', () => {
+    // A US General, Advanced or Extra picking 160 m Phone parks at the bottom of their phone
+    // privilege, 1.800 MHz (privileges.rs `phone_home`: 1.8028 LSB). That is legal, and it is
+    // below the 1.84 line every IARU plan (and the ARRL plan, from 1.843) draws for phone, so the
+    // chip shows there. The advice is true; hiding it at Nexus's own parking dial would hide it
+    // exactly where the station would transmit into the CW and data end of the band. Moving the
+    // US parking up is a parking change, outside this display-only table.
+    expect(phoneOutsideBandPlan(1.8028, 'LSB')).toBe('160m')
+    // The other US phone homes say nothing: 80 m General 3.8028 and Extra 3.6028, 40 m General
+    // 7.1778 and Extra 7.1278.
+    for (const dial of [3.8028, 3.6028, 7.1778, 7.1278]) {
+      expect(phoneOutsideBandPlan(dial, 'LSB'), `${dial} LSB`).toBeNull()
+    }
+  })
 })

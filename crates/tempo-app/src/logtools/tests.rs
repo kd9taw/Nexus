@@ -1108,6 +1108,40 @@ fn the_check_lists_what_only_the_operator_can_settle() {
     );
 }
 
+/// ADIF names the 135.7–137.8 kHz band `2190m`; Nexus's band table calls it `2200m`. They are one
+/// band, so an imported LoTW/ADIF contact carrying ADIF's own name is not a band/frequency problem
+/// and is never offered a "fix" to the other spelling. CONTROLS: a band that really disagrees with
+/// the frequency is still listed and fixed, and a missing band is still filled in.
+#[test]
+fn the_adif_2190m_band_is_the_2200m_band() {
+    let mut r = tempo_core::logbook::parse_adif(&adif("W1AW", "120000", "")).remove(0);
+    r.id = Some("~0000000000000001".parse().unwrap());
+    r.freq_mhz = 0.1365;
+    let kinds = |r: &QsoRecord| -> Vec<(ProblemKind, Option<Option<String>>)> {
+        problems_of(r, &|_: &str, _: u32| None, 1_790_000_000)
+            .into_iter()
+            .map(|p| (p.kind, p.fix.map(|f| f.value)))
+            .collect()
+    };
+    for name in ["2190m", "2190M", " 2190m ", "2200m", "2200M"] {
+        r.band = name.into();
+        assert_eq!(kinds(&r), vec![], "{name:?} at 136.5 kHz is the right band");
+    }
+    r.band = "630m".into();
+    assert_eq!(
+        kinds(&r),
+        vec![(ProblemKind::BandFreq, Some(Some("2200m".to_string())))],
+        "control: a different band is still a problem"
+    );
+    r.band = "2190m".into();
+    r.freq_mhz = 0.4755;
+    assert_eq!(
+        kinds(&r),
+        vec![(ProblemKind::BandFreq, Some(Some("630m".to_string())))],
+        "control: 2190m on 630 m is still a problem"
+    );
+}
+
 /// ⛔ A run of more than the writer's chunk is refused while the FT sequencer is armed and changes
 /// nothing — as a large undo is — while a small one is made; disarmed, the large one is made.
 #[test]

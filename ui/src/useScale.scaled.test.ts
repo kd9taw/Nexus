@@ -244,6 +244,42 @@ describe('the one-time prompt', () => {
   })
 })
 
+describe('the answer, changed later in Settings', () => {
+  // The prompt asks once; Settings ▸ Appearance ▸ Workspace shows the answer and changes it, on
+  // the same `setFitRule` the prompt's buttons use, and the fit follows on the next frame.
+  it('reads as auto before anyone answers, and as each answer after', async () => {
+    setWin(1536, 824, 1.25)
+    const { result } = renderHook(() => useScale())
+    expect(result.current.fitRule).toBe('scaled')
+    act(() => result.current.setFitRule('classic'))
+    expect(result.current.fitRule).toBe('classic')
+  })
+
+  it('off goes back to the classic size live, and auto comes back to 80, each one stored', async () => {
+    setWin(1536, 824, 1.25)
+    const { result } = renderHook(() => useScale())
+    await act(frame)
+    expect(result.current.scale).toBe(80)
+    act(() => result.current.setFitRule('classic'))
+    await act(frame)
+    expect(result.current.scale).toBe(90)
+    expect(localStorage.getItem(RULE_KEY)).toBe('classic')
+    act(() => result.current.setFitRule('scaled'))
+    await act(frame)
+    expect(result.current.scale).toBe(80)
+    expect(localStorage.getItem(RULE_KEY)).toBe('scaled')
+  })
+
+  it('is not offered where the rule can never apply: a pop-out, or a browser', () => {
+    setWin(1536, 824, 1.25)
+    window.history.replaceState(null, '', '/?panel=operate')
+    expect(renderHook(() => useScale()).result.current.fitRule).toBeUndefined()
+    window.history.replaceState(null, '', '/')
+    desktop(false)
+    expect(renderHook(() => useScale()).result.current.fitRule).toBeUndefined()
+  })
+})
+
 describe('corrupt saved values are clamped on load', () => {
   it('a damaged rule reads as the default rule and never re-asks', async () => {
     localStorage.setItem(RULE_KEY, '{"oops":')
