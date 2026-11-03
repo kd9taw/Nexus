@@ -12,6 +12,7 @@
 // and stay in the code.
 import { localizeRefusal } from '../radioRefusal'
 import { Fragment, useEffect, useMemo, useState, useRef } from 'react'
+import { dismissTuneNote, useTuneNote } from '../features/yaesuTuneNote'
 import { BOX_IDS, PHONE_PANEL_IDS, PHONE_PANELS, boxEntries, isBoxId, type BoxId, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { panelHost } from '../features/panelHost'
@@ -2732,6 +2733,10 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   // scope, or after the contact in the hosted Quick presentation (below). Space as PTT is a WINDOW
   // listener and stays one: with focus on a strip button, Space still goes to the PTT handler,
   // which calls preventDefault, so the focused button does not click.
+  // #441: on a Yaesu whose own USB audio carries Tune's tone, the note comes up once a Tune reads about no
+  // power (features/yaesuTuneNote.ts), or an ⓘ holds it where the radio reports no power. Text only.
+  const tuneNote = useTuneNote(!!yaesuTuneNote, snap.radio)
+  const [tuneNoteOpen, setTuneNoteOpen] = useState(false)
   const txStrip = (
     <CockpitTxStrip
       radio={snap.radio}
@@ -2765,12 +2770,29 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
       // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
       // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
       meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip controls={txMeterControls} /> : undefined}
-      // #441: Phone keys plain USB/LSB, so a newcat Yaesu takes its audio from its SSB modulation
-      // source menu; on MIC, Tune's USB-audio tone keys the radio with no RF. Nexus changes no menu.
+      // #441: Phone keys plain USB/LSB, so these Yaesus take their audio from the SSB MOD SOURCE menu;
+      // on MIC, Tune's USB-audio tone keys the radio with no RF. Nexus changes no menu.
+      tuneHint={
+        tuneNote === 'icon' ? (
+          <button
+            type="button"
+            className="tune-note-info"
+            aria-expanded={tuneNoteOpen}
+            aria-label={t('phone.tune.usbAudioNote.aria')}
+            title={t('phone.tune.usbAudioNote')}
+            onClick={() => setTuneNoteOpen((o) => !o)}
+          >
+            ⓘ
+          </button>
+        ) : undefined
+      }
       tuneNote={
-        yaesuTuneNote ? (
+        tuneNote === 'line' || (tuneNote === 'icon' && tuneNoteOpen) ? (
           <span className="radio-tune-note" role="note">
             {t('phone.tune.usbAudioNote')}
+            <button type="button" className="settings-linkbtn" onClick={dismissTuneNote}>
+              {t('common.dismiss')}
+            </button>
           </span>
         ) : undefined
       }

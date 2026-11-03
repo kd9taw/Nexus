@@ -13798,6 +13798,7 @@ export const EN = {
   // `absent` has no per-control wording on purpose: it collapses into `phone.chain.absent`
   // at the pane's foot, so an IC-7300 does not open to four grey rows.
   'phone.tune.usbAudioNote': 'Tune sends its tone over USB audio. If the radio keys with no power, set its SSB MOD SOURCE menu to REAR (USB).',
+  'phone.tune.usbAudioNote.aria': 'About Tune on this radio',
   'phone.unavail.mark': 'not reported',
   'phone.unavail.noCat':
     '{{plate}} needs CAT control — this radio is set up for VOX or serial PTT only. Add rig ' +

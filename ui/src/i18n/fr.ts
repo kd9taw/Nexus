@@ -10281,4 +10281,5 @@ export const FR: PartialCatalog = {
   "meters.tx.enlarge.title": "Mesures d’émission",
   "meters.tx.enlarge.desc": "Les mêmes mesures en direct que la bande TX, en plus grand. Échap ferme cette fenêtre.",
   "phone.tune.usbAudioNote": "Tune envoie sa tonalité par l’audio USB. Si la radio passe en émission sans puissance, réglez son menu SSB MOD SOURCE sur REAR (USB).",
+  "phone.tune.usbAudioNote.aria": "À propos de Tune sur cette radio",
 }

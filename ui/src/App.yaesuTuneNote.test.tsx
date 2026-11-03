@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 //
-// #441: THE TUNE NOTE IN PHONE, ON A NEWCAT YAESU, IN THE REAL APP. Phone keys plain USB/LSB, so these
-// radios take their transmit audio from the SSB modulation source menu (MIC from the factory: the front
-// jack only), and Tune's tone over USB audio then goes out as no RF. App reads the radio from Settings;
-// Phone hands the TX strip a line beside Tune saying where the radio's menu is. Text only: Nexus never
-// changes a radio menu, and Tune keys exactly as before. Harness: App.flexDaxNote.test.tsx's.
+// #441: THE TUNE NOTE IN PHONE, ON A YAESU WITH BUILT-IN USB AUDIO, IN THE REAL APP. Phone keys plain
+// USB/LSB, so these radios take their transmit audio from the SSB MOD SOURCE menu (MIC from the factory:
+// the front jack only), and Tune's tone over USB audio then goes out as no RF. App reads the radio from
+// Settings; Phone watches a Tune's measured power and, once a Tune reads about none for 2 s, shows a line
+// beside Tune for the session (dismissible), or an ⓘ that holds it where the radio reports no power. Text
+// only: Nexus never changes a radio menu, and Tune keys exactly as before. Harness: App.flexDaxNote's.
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 
@@ -29,6 +30,9 @@ import { APP_SNAPSHOT } from './appCockpits.testkit'
 import settingsFixture from './components/__fixtures__/defaultSettings.json'
 import type { AppSnapshot, Settings, VoiceMessage } from './types'
 import { EN } from './i18n/en'
+import { resetTuneNote } from './features/yaesuTuneNote'
+
+let push: ((s: AppSnapshot) => void) | null = null
 
 // The real App mounts per case; under the full suite's load that outruns vitest's default 5 s.
 vi.setConfig({ testTimeout: 30_000 })
@@ -59,7 +63,12 @@ beforeEach(() => {
   for (const answer of [api.getSnapshot, api.setOperatingMode, api.setArea, api.selectPeer]) {
     vi.mocked(answer as Mock).mockImplementation(async () => TX_ON)
   }
-  vi.mocked(api.subscribeSnapshot).mockImplementation(() => () => {})
+  vi.mocked(api.subscribeSnapshot).mockImplementation((next: (s: AppSnapshot) => void) => {
+    push = next
+    return () => {}
+  })
+  localStorage.removeItem('nexus.phone.yaesuTuneNote')
+  resetTuneNote()
   vi.mocked(api.playVoiceMessage).mockClear()
 })
 
@@ -76,35 +85,79 @@ const NOTE = EN['phone.tune.usbAudioNote']
 const COCKPIT: Record<string, string> = { phone: 'main.phone-cockpit', cw: 'main.cw-cockpit' }
 const tuneIn = (view: string) =>
   [...document.querySelectorAll(`${COCKPIT[view]} .cockpit-txstrip button`)].find((b) => /^tune$/i.test(b.textContent?.trim() ?? ''))
-/** The note, where it must be: in this screen's TX strip, the one that holds its Tune. */
+/** The note's line, where it must be: in this screen's TX strip, the one that holds its Tune. */
 function noteIn(view: string): Element | null {
   const strip = tuneIn(view)?.closest('.cockpit-txstrip')
-  return [...(strip?.querySelectorAll('[role="note"]') ?? [])].find((n) => n.textContent === NOTE) ?? null
+  return [...(strip?.querySelectorAll('[role="note"]') ?? [])].find((n) => n.textContent?.startsWith(NOTE)) ?? null
 }
-/** Mount `view` on the radio `over`, let the settings land, and read the note in its strip. */
-async function noteOn(view: string, over: Partial<Settings>): Promise<Element | null> {
+const infoIn = (view: string) => tuneIn(view)?.closest('.cockpit-txstrip')?.querySelector('button.tune-note-info') ?? null
+/** Mount `view` on the radio `over` and let the settings land. */
+async function open(view: string, over: Partial<Settings>): Promise<void> {
   await mountOn(view, over)
   await waitFor(() => expect(vi.mocked(api.getSettings)).toHaveBeenCalled(), WAIT)
   await act(async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   })
   await waitFor(() => expect(tuneIn(view), `no Tune on the ${view} screen`).toBeTruthy(), WAIT)
-  return noteIn(view)
+}
+/** The station reports a Tune keyed with `txPoW` watts (undefined: no reading), for `ms`. */
+async function tuneFor(ms: number, txPoW?: number) {
+  await waitFor(() => expect(push).not.toBeNull(), WAIT)
+  const radio = { ...TX_ON.radio, tuning: true, txBusyReason: 'tune', ...(txPoW === undefined ? {} : { txPoW }) }
+  await act(async () => push!({ ...TX_ON, radio } as AppSnapshot))
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, ms))
+  })
 }
 
-describe('the Tune note on a newcat Yaesu (#441)', () => {
-  it('shows beside Tune in Phone for an FTDX10 on serial CAT', async () => {
-    await noteOn('phone', { rigModel: 1042, rigConn: 'serial' })
-    await waitFor(() => expect(noteIn('phone'), 'no note beside Tune').not.toBeNull(), WAIT)
+describe('the Tune note on a Yaesu with USB audio (#441)', () => {
+  it('is not there before a Tune; a Tune that reads no power for 2 s brings the line, and Dismiss takes it away', async () => {
+    await open('phone', { rigModel: 1042, rigConn: 'serial' })
+    expect(noteIn('phone'), 'a permanent line').toBeNull()
+    expect(infoIn('phone')).toBeNull()
+    await tuneFor(2600, 0)
+    await waitFor(() => expect(noteIn('phone'), 'no note beside Tune after a Tune with no power').not.toBeNull(), WAIT)
+    const dismiss = [...noteIn('phone')!.querySelectorAll('button')].find((b) => b.textContent === EN['common.dismiss'])!
+    await act(async () => dismiss.click())
+    expect(noteIn('phone')).toBeNull()
+    expect(localStorage.getItem('nexus.phone.yaesuTuneNote')).toBe('1')
   })
 
-  it('does not show for another radio, a TCI program, or outside Phone', async () => {
-    expect(await noteOn('phone', { rigModel: 3073, rigConn: 'serial' }), 'an IC-7300').toBeNull()
-    cleanup()
-    expect(await noteOn('phone', { rigModel: 1051, rigConn: 'serial' }), 'the FTX-1, not newcat').toBeNull()
-    cleanup()
-    expect(await noteOn('phone', { rigModel: 1042, rigConn: 'tci' }), 'TCI').toBeNull()
-    cleanup()
-    expect(await noteOn('cw', { rigModel: 1042, rigConn: 'serial' }), 'the CW screen').toBeNull()
+  it('a Tune that reads power brings nothing', async () => {
+    await open('phone', { rigModel: 1042, rigConn: 'serial' })
+    await tuneFor(2600, 40)
+    expect(noteIn('phone')).toBeNull()
+    expect(infoIn('phone')).toBeNull()
+  })
+
+  it('with no power reading, an ⓘ beside Tune holds the note', async () => {
+    await open('phone', { rigModel: 1035, rigConn: 'serial' })
+    await tuneFor(2600)
+    const info = await waitFor(() => {
+      const b = infoIn('phone')
+      expect(b, 'no ⓘ beside Tune').not.toBeNull()
+      return b as HTMLButtonElement
+    }, WAIT)
+    expect(noteIn('phone'), 'the line before the ⓘ was pressed').toBeNull()
+    expect(info.getAttribute('title')).toBe(NOTE)
+    await act(async () => info.click())
+    expect(noteIn('phone')).not.toBeNull()
+    expect(info.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('never for another radio, a TCI program, or outside Phone', async () => {
+    for (const [view, over, why] of [
+      ['phone', { rigModel: 3073, rigConn: 'serial' }, 'an IC-7300'],
+      ['phone', { rigModel: 1036, rigConn: 'serial' }, 'the FT-891 (USB for CAT only)'],
+      ['phone', { rigModel: 1042, rigConn: 'tci' }, 'TCI'],
+      ['cw', { rigModel: 1042, rigConn: 'serial' }, 'the CW screen'],
+    ] as const) {
+      resetTuneNote()
+      await open(view, over)
+      await tuneFor(2600, 0)
+      expect(noteIn(view), why).toBeNull()
+      expect(infoIn(view), why).toBeNull()
+      cleanup()
+    }
   })
 })

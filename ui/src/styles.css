@@ -10524,6 +10524,25 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--state-weak);
   font-weight: 700;
 }
+/* #441: Phone's ⓘ for the Tune note, right after the TX cluster (never between its controls): a small
+   round button that opens the note's line. Both variables exist in each theme. */
+.tune-note-info {
+  flex: none;
+  align-self: center;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  line-height: 1.3;
+  cursor: pointer;
+}
+.tune-note-info:hover,
+.tune-note-info[aria-expanded='true'] {
+  color: var(--text);
+  border-color: var(--accent);
+}
 /* Tune (ATU/amp carrier) + Stop-TX utilities — shared look across the Phone & CW cockpits.
    Restored after the de-FT8 pass dropped them; reuse the Operate cockpit's set_tune/halt_tx. */
 .ph-tx-utils {
