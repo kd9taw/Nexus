@@ -1457,8 +1457,9 @@ impl Journal {
 /// at the shack: the last contact's program reads as a network device or this computer
 /// (`tempo_app::log_intake::FROM_A_NETWORK_DEVICE`, `FROM_THIS_COMPUTER`, which the other
 /// computer's screen words), and each address quoted in the refusal shown beside it reads as words
-/// that say the same. A program's own name, and any other answer, go as they came.
-fn contact_port_from_afar(mut value: Value) -> Value {
+/// that say the same. A program's own name, and any other answer, go as they came. Applied to every
+/// call's answer ([`Ticket::finish`]) and to every pushed feed (`remote_service::lan::commands`).
+pub(crate) fn contact_port_from_afar(mut value: Value) -> Value {
     use tempo_app::log_intake as intake;
     let Some(freedv) = value.get_mut("freedv").and_then(Value::as_object_mut) else {
         return value;

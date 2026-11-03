@@ -684,6 +684,9 @@ async fn push(context: Arc<Context>, feed: &'static Feed) {
         let Ok(Some(Ok(value))) = ran else {
             continue;
         };
+        // ⛔ What crosses names no device's network address, as a call's answer does
+        // (`contact_port_from_afar`): a no-op for a feed with no contact port in it.
+        let value = crate::command_dispatch::contact_port_from_afar(value);
         let Ok(json) = serde_json::to_vec(&value) else {
             continue;
         };
