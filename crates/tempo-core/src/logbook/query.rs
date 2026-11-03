@@ -178,10 +178,12 @@ pub fn mode_key(mode: &str) -> String {
 }
 
 /// The UI's band table (`ui/src/band.ts` `BAND_RANGES`), low to high: `(lo, hi, label)` in MHz.
-pub(crate) const UI_BANDS: [(f64, f64, &str); 22] = [
+pub(crate) const UI_BANDS: [(f64, f64, &str); 26] = [
+    (0.1357, 0.1378, "2200m"),
+    (0.472, 0.479, "630m"),
     (1.8, 2.0, "160m"),
     (3.5, 4.0, "80m"),
-    (5.3, 5.41, "60m"),
+    (5.06, 5.5, "60m"),
     (7.0, 7.3, "40m"),
     (10.1, 10.15, "30m"),
     (14.0, 14.35, "20m"),
@@ -189,7 +191,9 @@ pub(crate) const UI_BANDS: [(f64, f64, &str); 22] = [
     (21.0, 21.45, "15m"),
     (24.89, 24.99, "12m"),
     (28.0, 29.7, "10m"),
+    (40.0, 45.0, "8m"),
     (50.0, 54.0, "6m"),
+    (54.0, 69.9, "5m"),
     (70.0, 71.0, "4m"),
     (144.0, 148.0, "2m"),
     (222.0, 225.0, "1.25m"),
@@ -204,10 +208,10 @@ pub(crate) const UI_BANDS: [(f64, f64, &str); 22] = [
 ];
 
 /// Every band label of the UI's table, in its order.
-pub(crate) const UI_BAND_LABELS: [&str; 22] = {
-    let mut out = [""; 22];
+pub(crate) const UI_BAND_LABELS: [&str; UI_BANDS.len()] = {
+    let mut out = [""; UI_BANDS.len()];
     let mut i = 0;
-    while i < 22 {
+    while i < UI_BANDS.len() {
         out[i] = UI_BANDS[i].2;
         i += 1;
     }
