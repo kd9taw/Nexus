@@ -16915,6 +16915,291 @@ fn sat_track_status() -> Result<Option<SatTrackDto>, String> {
     Ok(SAT_TRACK.lock().map_err(|e| e.to_string())?.clone())
 }
 
+// ── FOLLOW THE MOON (EME) ────────────────────────────────────────────────────────────────────
+// A rotator pointed at the Moon and kept there: the satellite track's pointing half, with the
+// Moon in place of a TLE (`propagation::moon`, topocentric, parallax included). Rotators only:
+// nothing here keys, tunes or corrects Doppler.
+//
+// ⭐ ONE TRACKER AT A TIME, by construction rather than by convention: the Moon follow takes its
+// generation from `SAT_TRACK_GEN`, the counter the satellite track owns the mast by. Arming a
+// pass bumps it, so the Moon loop exits on its next tick; Stop (`stop_sat_track`, which every
+// manual move in the Rotor pane calls first) bumps it too; and starting the Moon follow disarms a
+// live pass the way Stop does, dial handback included. The Moon's badge is stamped with the
+// generation it was published under and reads as idle the moment the counter moves on.
+
+/// How often the Moon loop looks again. The Moon crosses the sky at about a quarter of a degree a
+/// minute, so with the rotator's 2° deadband a command goes out every several minutes; 10 s keeps
+/// the readout current and costs nothing on the wire between commands.
+const MOON_TICK: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The Moon follow's state, as the Rotor pane draws it.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct MoonTrackDto {
+    /// "following", "belowHorizon" (the Moon is down: the antenna is held where it was, and
+    /// nothing is sent until it rises) or "rotorLost" (the rotator stopped answering; Nexus asks
+    /// it again every `REPROBE_AFTER_TICKS` ticks).
+    state: &'static str,
+    /// Is the elevation being driven? False on a rotator whose backend declares no elevation axis.
+    elevation: bool,
+    /// Where the antenna was last commanded (boresight, after the deadband); `None` until a
+    /// command has gone out. `el_deg` is `None` whenever the elevation is not driven.
+    az_deg: Option<f64>,
+    el_deg: Option<f64>,
+}
+
+/// The Moon follow's badge and the generation it was published under.
+static MOON_TRACK: Mutex<Option<(u64, MoonTrackDto)>> = Mutex::new(None);
+
+/// The live Moon follow, or `None` when another owner (a pass, a Stop) has taken the mast since.
+fn moon_track_now() -> Option<MoonTrackDto> {
+    let g = MOON_TRACK.lock().ok()?;
+    let (gen, dto) = g.as_ref()?;
+    (*gen == SAT_TRACK_GEN.load(std::sync::atomic::Ordering::SeqCst)).then(|| dto.clone())
+}
+
+/// An EME window with the station in line 2's entry: the Moon above the horizon at both ends.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct EmeWindowDto {
+    /// Unix seconds; `start` is now when the window is open now.
+    start: i64,
+    end: i64,
+    open_now: bool,
+}
+
+/// What the Rotor pane shows of the Moon.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct MoonStatusDto {
+    /// Where the Moon is from this station now (topocentric, geometric).
+    az_deg: f64,
+    el_deg: f64,
+    /// The follow, while it owns the mast.
+    track: Option<MoonTrackDto>,
+    /// The next EME window with `dx_grid` in the next 48 h, when one was asked for and there is
+    /// one; `None` otherwise (the pane says which).
+    window: Option<EmeWindowDto>,
+}
+
+/// The first EME window with `dx` in the 48 hours from `now`, in 5-minute steps.
+fn eme_window_dto(obs: (f64, f64), dx: (f64, f64), now: i64) -> Option<EmeWindowDto> {
+    propagation::moon::eme_window(obs, dx, now, 48, 300, 0.0).map(|(start, end)| EmeWindowDto {
+        start,
+        end,
+        open_now: start == now,
+    })
+}
+
+/// The Moon from this station, and the follow's state. `None` when the station's own grid is not
+/// set: where the Moon stands depends on where you are. `dx_grid` asks for an EME window with
+/// that grid as well.
+#[tauri::command]
+async fn moon_status(
+    state: State<'_, SharedEngine>,
+    dx_grid: Option<String>,
+) -> Result<Option<MoonStatusDto>, String> {
+    let grid = with_engine(&state, |eng| eng.settings().mygrid.clone()).await?;
+    let Some(obs) = propagation::geo::maidenhead_to_latlon(grid.trim()) else {
+        return Ok(None);
+    };
+    let now = now_unix();
+    let m = propagation::moon::look(obs, now);
+    let window = dx_grid
+        .as_deref()
+        .and_then(|g| propagation::geo::maidenhead_to_latlon(g.trim()))
+        .and_then(|dx| eme_window_dto(obs, dx, now));
+    Ok(Some(MoonStatusDto {
+        az_deg: m.az_deg,
+        el_deg: m.el_deg,
+        track: moon_track_now(),
+        window,
+    }))
+}
+
+/// Start following the Moon with the rotator. Refused, with the reason, when there is no rotator,
+/// no station grid, or a rotctld that does not say whether the rotator has an elevation axis
+/// (sending `P <az> 0` to an az/el mount would lay the antenna on the horizon).
+#[tauri::command]
+async fn start_moon_track(state: State<'_, SharedEngine>) -> Result<MoonTrackDto, String> {
+    #[cfg(feature = "radio")]
+    {
+        let (addr, grid, cfg) = {
+            let eng = engine_lock(&state);
+            let st = eng.settings();
+            (
+                effective_rotator_addr(st),
+                st.mygrid.clone(),
+                st.rotator_config(),
+            )
+        };
+        let Some(addr) = addr else {
+            return Err(
+                "Set up your rotator in Settings (pick a model + port; Nexus runs rotctld for you)."
+                    .to_string(),
+            );
+        };
+        let Some(obs) = propagation::geo::maidenhead_to_latlon(grid.trim()) else {
+            return Err(
+                "Set your grid square in Settings ▸ Station first: where the Moon stands depends \
+                 on where you are."
+                    .to_string(),
+            );
+        };
+        let probe = addr.clone();
+        let limits =
+            tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::read_limits(&probe))
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
+        let elevation = limits
+            .as_ref()
+            .and_then(tempo_audio::rotator::Limits::elevation)
+            .is_some();
+        let (gen, initial) = arm_moon_track(&state, elevation);
+        tauri::async_runtime::spawn_blocking(move || {
+            run_moon_track(
+                MoonRun {
+                    addr,
+                    obs,
+                    cfg,
+                    elevation,
+                    gen,
+                },
+                &now_unix,
+                &|| std::thread::sleep(MOON_TICK),
+            );
+        });
+        Ok(initial)
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = state;
+        Err("radio support is not built into this binary".to_string())
+    }
+}
+
+/// Take the mast for the Moon: a live pass is disarmed exactly as Stop disarms it (its dial
+/// handed back), then the Moon gets the next generation and its first badge.
+fn arm_moon_track(engine: &SharedEngine, elevation: bool) -> (u64, MoonTrackDto) {
+    let _ = disarm_sat_track(engine);
+    let gen = SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let initial = MoonTrackDto {
+        state: "following",
+        elevation,
+        az_deg: None,
+        el_deg: None,
+    };
+    if let Ok(mut g) = MOON_TRACK.lock() {
+        *g = Some((gen, initial.clone()));
+    }
+    (gen, initial)
+}
+
+/// What one Moon follow runs on, fixed when it starts.
+struct MoonRun {
+    addr: String,
+    obs: (f64, f64),
+    cfg: tempo_core::rotator::RotatorConfig,
+    /// Drive the elevation (the backend declares an elevation axis)?
+    elevation: bool,
+    gen: u64,
+}
+
+/// THE MOON LOOP: point at the Moon every tick it is up, through the satellite track's own
+/// driver (deadband, calibration trim, misses, the give-up and its re-probe) and `send_rot_step`.
+/// Ends when the generation moves on — a pass, a Stop, a manual move, another Moon follow. `clock`
+/// and `tick_wait` are the wall clock and a [`MOON_TICK`] sleep in production, a simulation in a
+/// test.
+fn run_moon_track(run: MoonRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()) {
+    use std::sync::atomic::Ordering;
+    use tempo_core::rotator::{RotOutcome, RotStep};
+    let MoonRun {
+        addr,
+        obs,
+        cfg,
+        elevation,
+        gen,
+    } = run;
+    let mut driver = tempo_core::rotator::TrackDriver::new(cfg);
+    let mut rotor_lost = false;
+    loop {
+        if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
+            return; // a newer owner, or a Stop: it halts the mast itself
+        }
+        let t = clock();
+        if rotor_lost && driver.reprobe_due() && tempo_audio::rotator::read_position(&addr).is_ok()
+        {
+            driver.answered();
+            rotor_lost = false;
+            conn_log(
+                "Rotator",
+                "info",
+                "the rotator is answering again — following the Moon again.",
+            );
+            tempo_core::applog::info("rotator", "Moon follow: the rotator answered again");
+        }
+        let m = propagation::moon::look(obs, t);
+        let state = if rotor_lost {
+            "rotorLost"
+        } else if m.el_deg < 0.0 {
+            // BELOW THE HORIZON: hold. The antenna stays where it was last sent and nothing goes
+            // out until the Moon rises; parking a mast nobody asked to move is not this loop's.
+            "belowHorizon"
+        } else {
+            // An azimuth-only rotator is sent the line it always is (`point`, `P <az> 0`): the
+            // elevation fed to the driver is held at 0, so only the azimuth moves the deadband.
+            let el = if elevation { m.el_deg } else { 0.0 };
+            let step = match driver.step(m.az_deg, el) {
+                RotStep::PointAzEl { az, .. } if !elevation => RotStep::PointAz { az },
+                step => step,
+            };
+            if step != RotStep::Hold {
+                if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
+                    return;
+                }
+                let outcome = send_rot_step(&addr, step);
+                driver.record(step, outcome, m.az_deg, el);
+                if outcome == RotOutcome::Failed && driver.gave_up() {
+                    rotor_lost = true;
+                    conn_log(
+                        "Rotator",
+                        "error",
+                        format!(
+                            "the rotator stopped answering while following the Moon ({} commands \
+                             in a row). Nexus asks it again every {} s.",
+                            tempo_core::rotator::MISS_LIMIT,
+                            tempo_core::rotator::REPROBE_AFTER_TICKS as u64 * MOON_TICK.as_secs()
+                        ),
+                    );
+                    tempo_core::applog::warn(
+                        "rotator",
+                        "Moon follow: the rotator stopped answering",
+                    );
+                }
+            }
+            if rotor_lost {
+                "rotorLost"
+            } else {
+                "following"
+            }
+        };
+        let aim = (!rotor_lost).then(|| driver.last_aim()).flatten();
+        let dto = MoonTrackDto {
+            state,
+            elevation: elevation && driver.azel_ok(),
+            az_deg: aim.map(|a| a.0),
+            el_deg: aim.and_then(|a| (elevation && driver.azel_ok()).then_some(a.1)),
+        };
+        if let Ok(mut g) = MOON_TRACK.lock() {
+            if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
+                *g = Some((gen, dto));
+            }
+        }
+        tick_wait();
+    }
+}
+
 /// The transponder the ENGINE holds right now — read-back for
 /// [`set_sat_transponder`]. `name` is the bird, `index` the raw row into the
 /// list `get_sat_detail` returned. `None` = the dial is the operator's.
@@ -49686,6 +49971,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         start_sat_track,
         stop_sat_track,
         sat_track_status,
+        moon_status,
+        start_moon_track,
         point_rotator_at_call,
         rotator_bearing_to_call,
         read_rotator,
@@ -55925,19 +56212,20 @@ mod tests {
     }
 
     use super::{
-        assistance_posture_changed, b64_decode, b64_encode, callbook_candidates, catalog_marks,
-        cluster_spot_heards, dxped_page_url, engine_lock, install_block_reason,
+        arm_moon_track, assistance_posture_changed, b64_decode, b64_encode, callbook_candidates,
+        catalog_marks, cluster_spot_heards, dxped_page_url, engine_lock, install_block_reason,
         is_complete_lotw_body, iso_from_stamp, iss_pass_from_tles, jtty_heards,
-        load_tle_snapshot_from, migrate_sstv_gallery_between, own_decode_heards, parse_sstv_mode,
-        profile_dir_name, qso_is_sat, reconcile_gallery, rect_lands_on_work_area,
+        load_tle_snapshot_from, migrate_sstv_gallery_between, moon_track_now, own_decode_heards,
+        parse_sstv_mode, profile_dir_name, qso_is_sat, reconcile_gallery, rect_lands_on_work_area,
         redact_for_backup, resolve_bird, resolve_birds, roster_local_spots, roster_spot_age_secs,
-        run_sat_track, sanitize_profile, sat_excluded, set_operator_qth, spotter_evidence_rank,
-        spotter_evidence_rank_at, tle_absorb_foreign, tle_act_gate, tle_extend_aliases,
-        tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor,
-        tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
-        AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun,
-        SatnogsFetchState, SharedEngine, SpotIotaLog, TleFlightGuard, TleSnapshot, SAT_TRACK,
-        SAT_TRACK_GEN, SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
+        run_moon_track, run_sat_track, sanitize_profile, sat_excluded, set_operator_qth,
+        spotter_evidence_rank, spotter_evidence_rank_at, test_live_sat_track, tle_absorb_foreign,
+        tle_act_gate, tle_extend_aliases, tle_merge_imports, tle_merged_elements,
+        tle_record_aliases, tle_seed, tle_seed_floor, tle_seed_path, tle_set_currency, view_passes,
+        write_json_atomic, write_qso_wav_in, AssistanceEvent, AssistanceSourceState, MoonRun,
+        MoonTrackDto, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun, SatnogsFetchState,
+        SharedEngine, SpotIotaLog, TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN,
+        SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -60185,6 +60473,129 @@ mod tests {
         // …and the browser going away ends the pass for the same reason the bird setting does:
         // there is nobody the correction is being made for any more.
         assert!(SatTrackLoss::RemoteAuthorityEnded.ends_pass());
+    }
+
+    /// FOLLOW THE MOON, through the shipped loop against a rotctld socket: a G-5500 from Greenwich
+    /// over 2026-11-03, the Moon rising at 03:00 and setting a little after 14:00 (JPL Horizons:
+    /// `propagation::moon`'s tests). An hour a tick, so every tick moves it past the deadband.
+    fn fly_moon(rot: &FakeRotctld, elevation: bool, ticks: usize) -> (Vec<MoonTrackDto>, u64) {
+        const T0: i64 = 1_793_674_800; // 2026-11-03 03:00 UTC
+        let now = std::cell::Cell::new(T0);
+        let seen = std::cell::RefCell::new(Vec::new());
+        let gen = SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        run_moon_track(
+            MoonRun {
+                addr: rot.addr.clone(),
+                obs: (51.4769, 0.0),
+                cfg: tempo_core::rotator::RotatorConfig::default(),
+                elevation,
+                gen,
+            },
+            &|| now.get(),
+            &|| {
+                now.set(now.get() + 3_600);
+                if let Some(d) = moon_track_now() {
+                    seen.borrow_mut().push(d);
+                }
+                // The Stop: the generation moves on, and the loop is gone on its next tick.
+                if seen.borrow().len() >= ticks {
+                    SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            },
+        );
+        (seen.into_inner(), gen)
+    }
+
+    #[test]
+    fn following_the_moon_points_at_it_while_it_is_up_and_holds_while_it_is_down() {
+        let _alone = crate::sat_track_alone();
+        let rot = FakeRotctld::start(usize::MAX);
+        let (badges, gen) = fly_moon(&rot, true, 16);
+        assert_eq!(badges.len(), 16);
+        let cmds = rot.commands();
+        let points: Vec<&String> = cmds.iter().filter(|c| c.starts_with('P')).collect();
+        let at =
+            |i: usize| propagation::moon::look((51.4769, 0.0), 1_793_674_800 + 3_600 * i as i64);
+        // The hours the Moon is up: from 03:00 (26.4°, Horizons) until it sets after 14:00.
+        let up = (0..16).take_while(|&i| at(i).el_deg >= 0.0).count();
+        assert!((11..=12).contains(&up), "{up}");
+        assert!(
+            (up..16).all(|i| at(i).el_deg < 0.0),
+            "it does not rise again that day"
+        );
+        // One command an hour while it is up, each where the Moon is.
+        assert_eq!(points.len(), up, "{cmds:?}");
+        for (i, line) in points.iter().enumerate() {
+            let m = at(i);
+            assert_eq!(
+                **line,
+                format!("P {:.1} {:.1}", m.az_deg, m.el_deg),
+                "hour {i}"
+            );
+        }
+        assert!(badges[..up]
+            .iter()
+            .all(|b| b.state == "following" && b.elevation));
+        assert!(
+            badges[0].el_deg.is_some_and(|e| (e - 26.38).abs() < 0.1),
+            "{:?}",
+            badges[0]
+        );
+        // Once it is down: held, nothing sent, and the pane is told why.
+        assert!(
+            badges[up..].iter().all(|b| b.state == "belowHorizon"),
+            "{badges:?}"
+        );
+        // …and after the Stop the follow is gone: no stale badge claims the mast.
+        assert!(SAT_TRACK_GEN.load(std::sync::atomic::Ordering::SeqCst) > gen);
+        assert_eq!(moon_track_now(), None);
+        assert!(
+            !cmds.iter().any(|c| c == "S"),
+            "holding is not a halt: {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn an_azimuth_only_rotator_follows_the_moon_with_the_line_it_always_gets() {
+        let _alone = crate::sat_track_alone();
+        let rot = FakeRotctld::start(usize::MAX);
+        let (badges, _) = fly_moon(&rot, false, 3);
+        let points: Vec<String> = rot
+            .commands()
+            .into_iter()
+            .filter(|c| c.starts_with('P'))
+            .collect();
+        assert_eq!(points.len(), 3);
+        for (i, line) in points.iter().enumerate() {
+            let m = propagation::moon::look((51.4769, 0.0), 1_793_674_800 + 3_600 * i as i64);
+            assert_eq!(
+                format!("{line}\n"),
+                tempo_audio::rotator::point_line(m.az_deg),
+                "hour {i}"
+            );
+        }
+        assert!(badges.iter().all(|b| !b.elevation && b.el_deg.is_none()));
+    }
+
+    #[test]
+    fn the_moon_and_a_satellite_pass_never_hold_the_mast_together() {
+        let _alone = crate::sat_track_alone();
+        let eng = sat_station();
+        // A pass is live, with its transponder held: following the Moon disarms it as Stop
+        // does, dial handed back.
+        test_live_sat_track("SO-50");
+        assert!(engine_lock(&eng).sat_transponder_held().is_some());
+        let (gen, _) = arm_moon_track(&eng, true);
+        assert!(SAT_TRACK.lock().unwrap().is_none(), "the pass is disarmed");
+        assert!(
+            engine_lock(&eng).sat_transponder_held().is_none(),
+            "…and its dial handed back"
+        );
+        assert!(moon_track_now().is_some());
+        // Arming a pass (or any Stop) moves the generation on: the Moon follow is over at once.
+        SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(moon_track_now(), None);
+        assert!(SAT_TRACK_GEN.load(std::sync::atomic::Ordering::SeqCst) > gen);
     }
 
     /// ⛔ **A PASS A BROWSER ARMED DOES NOT OUTLIVE THAT BROWSER.** A track steers the dial, the

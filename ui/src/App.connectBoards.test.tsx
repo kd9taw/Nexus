@@ -136,6 +136,8 @@ vi.mock('./api', async (importOriginal) => {
     previewCw: vi.fn(async () => ''),
     readRotator: vi.fn(async () => null),
     readRotatorState: vi.fn(async () => null),
+    getMoonStatus: vi.fn(async () => null),
+    startMoonTrack: vi.fn(async () => ({ state: 'following', elevation: true, azDeg: null, elDeg: null })),
     cwDecode: vi.fn(async () => ({ text: '', wpm: 0, sent: [], keyerError: null, candidates: [], rst: null, name: null })),
   }
 })

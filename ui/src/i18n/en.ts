@@ -15188,6 +15188,32 @@ export const EN = {
     "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.",
   'rotor.pane.stale':
     'Last reading: the rotator did not answer the latest poll. Nexus keeps asking.',
+  'rotor.pane.moon.at':
+    'Moon {{az}}° · {{el}}°',
+  'rotor.pane.moon.at.title':
+    'Where the Moon is from your station: azimuth from true north and elevation, without refraction',
+  'rotor.pane.moon.follow':
+    'Follow the Moon',
+  'rotor.pane.moon.follow.title':
+    'Turn the rotator to the Moon and keep it there as the Moon moves (the elevation too, on a rotator that has one). It holds while the Moon is below the horizon, and stops when you press Stop following or ■ STOP, move the rotator yourself, or start a satellite pass.',
+  'rotor.pane.moon.stop':
+    'Stop following',
+  'rotor.pane.moon.following':
+    'Following the Moon',
+  'rotor.pane.moon.following.azOnly':
+    'Following the Moon (azimuth only: this rotator has no elevation axis)',
+  'rotor.pane.moon.below':
+    'The Moon is below the horizon: the antenna stays put until it rises',
+  'rotor.pane.moon.lost':
+    'The rotator stopped answering: Nexus keeps asking it and follows again when it answers',
+  'rotor.pane.moon.failed':
+    'Could not follow the Moon: {{error}}',
+  'rotor.pane.moon.window.now':
+    'EME window with {{call}}: open now, until {{end}}Z',
+  'rotor.pane.moon.window.next':
+    'Next EME window with {{call}}: {{start}}–{{end}}Z',
+  'rotor.pane.moon.window.none':
+    'No EME window with {{call}} in the next 48 hours',
   'rotor.pane.slew.failed': 'Rotator: {{error}}',
   // The elevation, on a rotator whose backend declares an elevation axis (the Yaesu G-5500 on a
   // GS-232B: 0–180°). `{{min}}` and `{{max}}` are the range that backend declares, in degrees.

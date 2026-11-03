@@ -3746,6 +3746,25 @@ export interface RotatorState {
   elRange?: [number, number] | null
 }
 
+/** The rotator's Moon follow (`MoonTrackDto`): following, holding while the Moon is below the
+ *  horizon, or waiting on a rotator that stopped answering. `elevation` is whether the elevation is
+ *  driven; `azDeg`/`elDeg` where the antenna was last commanded (absent until a command went out). */
+export interface MoonTrack {
+  state: 'following' | 'belowHorizon' | 'rotorLost'
+  elevation: boolean
+  azDeg: number | null
+  elDeg: number | null
+}
+
+/** The Moon from the station (`moon_status`): topocentric, geometric. `window` is the next EME window
+ *  with the grid asked about (unix seconds), null when none was asked for or there is none in 48 h. */
+export interface MoonStatus {
+  azDeg: number
+  elDeg: number
+  track: MoonTrack | null
+  window: { start: number; end: number; openNow: boolean } | null
+}
+
 /** What a point-at-call aimed at (`point_rotator_at_call`): the bearing, and what it was taken
  *  to — the station's own grid (`grid` names it), the position its callbook gives, or, when
  *  Nexus knows neither, the centre of its country (`country` names it). The toast says which. */

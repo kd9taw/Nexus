@@ -1504,6 +1504,21 @@ button.nb-chip:hover {
 .rotor-aim-point:hover {
   border-color: var(--accent);
 }
+/* The Moon's line (EME): where it stands, Follow / Stop following, the follow's state and the EME window with
+   line 2's station. Under the controls for the reason line 2 is: above them it would move ■ STOP. */
+.rotor-moon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.rotor-moon-at {
+  white-space: nowrap;
+}
+.rotor-moon-state,
+.rotor-moon-window {
+  color: var(--text-dim);
+}
 .rotor-hint {
   margin: 0;
   font-size: var(--fs-micro);
@@ -1564,6 +1579,7 @@ button.nb-chip:hover {
   grid-column: 2;
 }
 .dash-boxes .pane-body .rotor-aim,
+.dash-boxes .pane-body .rotor-moon,
 .dash-boxes .pane-body .rotor-slewing,
 .dash-boxes .pane-body .rotor-hint {
   grid-column: 1 / -1;

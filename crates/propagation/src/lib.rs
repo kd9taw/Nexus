@@ -45,6 +45,7 @@ pub mod likelihood;
 pub mod mapspots;
 pub mod memchan;
 pub mod model;
+pub mod moon;
 pub mod needalert;
 pub mod opening;
 pub mod oval;
