@@ -17,6 +17,12 @@ struct Radio {
 
 impl Radio {
     fn start() -> Radio {
+        Radio::start_with_hang(Duration::ZERO)
+    }
+
+    /// [`Radio::start`] for a radio that still reports transmit for `hang` after its `T 0` (VOX or
+    /// break-in hang, a slow changeover).
+    fn start_with_hang(hang: Duration) -> Radio {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let keyed = Arc::new(AtomicBool::new(false));
@@ -38,8 +44,16 @@ impl Radio {
                                 keyed.store(true, Ordering::SeqCst);
                                 "RPRT 0\n".to_string()
                             }
-                            "T 0" => {
+                            "T 0" if hang.is_zero() => {
                                 keyed.store(false, Ordering::SeqCst);
+                                "RPRT 0\n".to_string()
+                            }
+                            "T 0" => {
+                                let keyed = keyed.clone();
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(hang);
+                                    keyed.store(false, Ordering::SeqCst);
+                                });
                                 "RPRT 0\n".to_string()
                             }
                             "t" => format!("{}\n", u8::from(keyed.load(Ordering::SeqCst))),
@@ -76,6 +90,11 @@ struct Scene {
 impl Scene {
     /// Phone on 20 m, TX armed, nothing keyed.
     fn new(radio: &Radio) -> Scene {
+        Scene::on(Rig::rigctld(&radio.addr))
+    }
+
+    /// [`Scene::new`] on `rig`.
+    fn on(rig: Rig) -> Scene {
         let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
         {
             let mut e = engine.lock().unwrap();
@@ -88,7 +107,7 @@ impl Scene {
             engine,
             state: loop_state(),
             backend: MockBackend::new(),
-            rig: Rig::rigctld(&radio.addr),
+            rig,
             t: 100.0,
         }
     }
@@ -104,6 +123,14 @@ impl Scene {
             &mut self.t,
             until,
         );
+    }
+
+    /// Tick until `done` or `limit` of real time.
+    fn run_until(&mut self, limit: Duration, done: impl Fn() -> bool) {
+        let start = std::time::Instant::now();
+        while !done() && start.elapsed() < limit {
+            self.run(20.0);
+        }
     }
 
     /// The PTT lines written since the last call.
@@ -232,4 +259,85 @@ fn the_radio_keyed_by_something_else_is_said_and_so_is_its_end() {
         "{lines:?}"
     );
     assert_eq!(radio.keys(), sent_before, "control: Nexus keyed nothing");
+}
+
+/// ⭐ A RADIO STILL REPORTING TRANSMIT JUST AFTER NEXUS LET GO IS THAT OVER'S TAIL. A radio whose
+/// `t` reads 1 for 600 ms after its `T 0` (VOX or break-in hang, a slow changeover) was logged as
+/// "keyed by something else" at the end of every over. It is said as the tail, with how long after
+/// the release. CONTROL: a key reaching the radio well after the over is still "something else".
+#[test]
+fn a_radio_still_transmitting_just_after_the_release_is_the_overs_tail() {
+    let radio = Radio::start_with_hang(Duration::from_millis(600));
+    let mut s = Scene::new(&radio);
+    s.run(200.0);
+    s.lines();
+    s.engine.lock().unwrap().set_ptt(true);
+    s.run(1_000.0);
+    assert!(
+        radio.keyed.load(Ordering::SeqCst),
+        "premise: the press keys"
+    );
+    s.lines();
+    s.engine.lock().unwrap().set_ptt(false);
+    s.run_until(Duration::from_secs(5), || {
+        !radio.keyed.load(Ordering::SeqCst)
+    });
+    assert!(
+        !radio.keyed.load(Ordering::SeqCst),
+        "premise: the hang ended"
+    );
+    s.run(2_500.0);
+    let lines = s.key_lines();
+    assert!(lines[0].starts_with("PTT unkey: manual PTT"), "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("radio still reports transmit ")
+                && l.contains("s after Nexus let go")),
+        "the tail is said as the tail: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("something else")),
+        "the tail is never another keyer: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("radio no longer reports transmit")),
+        "{lines:?}"
+    );
+
+    // THE CONTROL: well after the over, a key from elsewhere is something else.
+    s.run(3_000.0);
+    s.lines();
+    radio.keyed.store(true, Ordering::SeqCst);
+    s.run(2_500.0);
+    let lines = s.lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].starts_with("radio keyed by something else"),
+        "{lines:?}"
+    );
+}
+
+/// On a VOX radio the operator's PTT plays no Nexus audio, so its key line never says it does.
+#[test]
+fn a_vox_key_nexus_plays_no_audio_for_is_not_said_as_playing_it() {
+    let mut s = Scene::on(Rig::vox());
+    s.run(200.0);
+    s.lines();
+    s.engine.lock().unwrap().set_ptt(true);
+    s.run(600.0);
+    assert!(s.rig.keyed, "control: the loop keys its PTT as before");
+    let lines = s.key_lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].starts_with("PTT KEY: manual PTT, via VOX"),
+        "{lines:?}"
+    );
+    assert!(lines[0].contains("plays no audio"), "{lines:?}");
+    assert!(!lines[0].contains("Nexus plays the audio"), "{lines:?}");
+    s.engine.lock().unwrap().set_ptt(false);
+    s.run(600.0);
+    assert!(!s.rig.keyed, "control: and releases it");
 }

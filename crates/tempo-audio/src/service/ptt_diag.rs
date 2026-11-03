@@ -32,6 +32,11 @@ const KEY_LINES_PER_MIN: u32 = 20;
 /// The shortest gap between two method lines (loop ms).
 const METHOD_MIN_GAP_MS: f64 = 5_000.0;
 
+/// How long after Nexus's own unkey a radio still reporting transmit is that over's tail (VOX or
+/// break-in hang, an ATU cycle, a slow changeover), not a key from something else (loop ms). The
+/// loop's own CW hang is 1 s (`CW_HANG_MS`); this allows the poll's lag on top.
+const TAIL_GRACE_MS: f64 = 1_500.0;
+
 /// The CAT share's port while it runs, and its "Other programs may key transmit" switch.
 type Share = (Option<u16>, bool);
 
@@ -40,6 +45,8 @@ type Share = (Option<u16>, bool);
 struct Held {
     since_ms: f64,
     who: String,
+    /// A radio reading that began inside [`TAIL_GRACE_MS`] of Nexus's unkey: the tail of that over.
+    tail: bool,
     /// Its key line was written, so its unkey line is.
     logged: bool,
 }
@@ -49,6 +56,8 @@ struct Held {
 pub(super) struct PttDiag {
     nexus: Option<Held>,
     foreign: Option<Held>,
+    /// When Nexus's own key last ended (loop ms), for [`TAIL_GRACE_MS`].
+    last_unkey_ms: Option<f64>,
     /// The CAT share's port while it runs, and "Other programs may key transmit", mirrored from the
     /// engine on the tick's one unconditional engine lock.
     pub(super) share: Share,
@@ -120,20 +129,23 @@ impl PttDiag {
                 self.nexus = Some(Held {
                     since_ms: now_ms,
                     who,
+                    tail: false,
                     logged,
                 });
                 logged.then(|| self.emit(line)).flatten()
             }
-            (false, Some(held)) => held
-                .logged
-                .then(|| {
-                    self.emit(format!(
-                        "PTT unkey: {}, after {:.1} s",
-                        held.who,
-                        (now_ms - held.since_ms).max(0.0) / 1000.0
-                    ))
-                })
-                .flatten(),
+            (false, Some(held)) => {
+                self.last_unkey_ms = Some(now_ms);
+                held.logged
+                    .then(|| {
+                        self.emit(format!(
+                            "PTT unkey: {}, after {:.1} s",
+                            held.who,
+                            (now_ms - held.since_ms).max(0.0) / 1000.0
+                        ))
+                    })
+                    .flatten()
+            }
             (_, held) => {
                 self.nexus = held;
                 None
@@ -152,28 +164,43 @@ impl PttDiag {
                 } else {
                     String::new()
                 };
+                // ⚠️ A radio still reporting transmit just after Nexus's own release is that over's
+                // tail, not a key from something else: said as such, with how long after.
+                let after_unkey = self
+                    .last_unkey_ms
+                    .map(|at| (now_ms - at).max(0.0))
+                    .filter(|ms| *ms < TAIL_GRACE_MS);
                 self.foreign = Some(Held {
                     since_ms: now_ms,
                     who: String::new(),
+                    tail: after_unkey.is_some(),
                     logged,
                 });
-                logged
-                    .then(|| {
-                        self.emit(format!(
-                            "radio keyed by something else, with no Nexus over: another program \
-                             on a shared rigctld or CAT port, VOX, or the radio's own PTT or \
-                             front panel{note}"
-                        ))
-                    })
-                    .flatten()
+                let line = match after_unkey {
+                    Some(ms) => format!(
+                        "radio still reports transmit {:.1} s after Nexus let go: the over's \
+                         tail (VOX or break-in hang, an ATU cycle or a slow changeover){note}",
+                        ms / 1000.0
+                    ),
+                    None => format!(
+                        "radio keyed by something else, with no Nexus over: another program on \
+                         a shared rigctld or CAT port, VOX, or the radio's own PTT or front \
+                         panel{note}"
+                    ),
+                };
+                logged.then(|| self.emit(line)).flatten()
             }
             (false, Some(held)) => held
                 .logged
                 .then(|| {
-                    self.emit(format!(
-                        "radio no longer keyed by something else, after {:.1} s ({ended})",
-                        (now_ms - held.since_ms).max(0.0) / 1000.0
-                    ))
+                    let secs = (now_ms - held.since_ms).max(0.0) / 1000.0;
+                    self.emit(if held.tail {
+                        format!("radio no longer reports transmit, after {secs:.1} s ({ended})")
+                    } else {
+                        format!(
+                            "radio no longer keyed by something else, after {secs:.1} s ({ended})"
+                        )
+                    })
                 })
                 .flatten(),
             (_, held) => {
@@ -214,13 +241,22 @@ impl PttDiag {
     }
 }
 
-/// How the transmitter is keyed, in short, for a key line.
-fn key_words(mode: &PttMode) -> String {
+/// How the transmitter is keyed, in short, for a key line. `plays`: Nexus plays this key's
+/// transmit audio (an over, a tune carrier, a microphone over). The operator's PTT, a CAT-share
+/// program's key and a CW word on the radio's keyer play none: they never key the DATA input
+/// (`Rig::ptt_plain`), and under VOX nothing of Nexus's puts the radio on the air.
+fn key_words(mode: &PttMode, plays: bool) -> String {
     match mode {
         PttMode::Cat => "CAT".to_string(),
-        PttMode::CatData => "CAT (DATA input)".to_string(),
+        PttMode::CatData if plays => "CAT (DATA input)".to_string(),
+        PttMode::CatData => "CAT".to_string(),
         PttMode::Serial { port, line } => format!("{} on {port}", line_name(*line)),
-        PttMode::Vox => "VOX (Nexus plays the audio; the radio keys itself on it)".to_string(),
+        PttMode::Vox if plays => {
+            "VOX (Nexus plays the audio; the radio keys itself on it)".to_string()
+        }
+        PttMode::Vox => "VOX (Nexus sends no key and plays no audio for this; only the radio's \
+                         own VOX, key or keyer puts it on the air)"
+            .to_string(),
     }
 }
 
@@ -303,9 +339,12 @@ impl RadioLoop {
                 .ptt_keyer()
                 .unwrap_or_else(|| fallback.to_string())
         };
+        // Field reads only: what of this key's audio Nexus plays, for its "via".
+        let plays =
+            self.tx_until_ms.is_some() || self.tuning_keyed || self.mic_keyed || self.pc_mic_keyed;
         if let Some(line) = self
             .ptt_diag
-            .nexus(keyed, now, who, &key_words(rig.ptt_mode()))
+            .nexus(keyed, now, who, &key_words(rig.ptt_mode(), plays))
         {
             tempo_core::applog::info("ptt", &line);
         }
@@ -400,5 +439,43 @@ mod tests {
         assert!(line.starts_with("PTT method: RTS on COM4"), "{line}");
         let vox = d.method(&t, &PttMode::Vox, 18_000.0).unwrap();
         assert!(vox.contains("VOX"), "{vox}");
+    }
+
+    /// Inside the grace after Nexus's unkey the radio's reading is that over's tail; after it, it is
+    /// something else.
+    #[test]
+    fn a_reading_just_after_the_unkey_is_the_tail_and_later_one_is_something_else() {
+        let mut d = PttDiag::default();
+        d.nexus(true, 0.0, || "FT8 over".into(), "CAT");
+        d.nexus(false, 12_600.0, || unreachable!(), "CAT");
+        let tail = d.foreign(true, 13_200.0, "").unwrap();
+        assert!(
+            tail.starts_with("radio still reports transmit 0.6 s after Nexus let go"),
+            "{tail}"
+        );
+        let end = d
+            .foreign(false, 13_400.0, "the radio reports its PTT off")
+            .unwrap();
+        assert!(
+            end.starts_with("radio no longer reports transmit, after 0.2 s"),
+            "{end}"
+        );
+        let later = d.foreign(true, 12_600.0 + TAIL_GRACE_MS + 1.0, "").unwrap();
+        assert!(
+            later.starts_with("radio keyed by something else"),
+            "{later}"
+        );
+    }
+
+    /// The key line's "via" follows what keyed: no DATA input and no "Nexus plays the audio" for a
+    /// key whose audio Nexus does not play.
+    #[test]
+    fn the_via_follows_whether_nexus_plays_the_audio() {
+        assert!(key_words(&PttMode::Vox, true).contains("Nexus plays the audio"));
+        let ptt = key_words(&PttMode::Vox, false);
+        assert!(!ptt.contains("Nexus plays the audio"), "{ptt}");
+        assert!(ptt.contains("plays no audio"), "{ptt}");
+        assert_eq!(key_words(&PttMode::CatData, true), "CAT (DATA input)");
+        assert_eq!(key_words(&PttMode::CatData, false), "CAT");
     }
 }
