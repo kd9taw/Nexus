@@ -8023,6 +8023,8 @@ export const EN = {
   // What one sound-card option READS when the saved device is not among the ones we offer.
   // The device NAME is the OS's, and it is never translated — only the note after it is.
   'settings.audio.device.notInList': '{{device}} — saved, not in the list',
+  'settings.audio.device.useInstead': 'Use {{device}} instead',
+  'settings.audio.device.useInsteadHint': 'The saved device is not in the list, and this one differs from it only by the number Windows puts in front or by its spacing. Nexus never switches audio devices by itself: press to pick it, then Save.',
 
   'settings.betaUpdates.failed': 'Could not change the update channel',
   'settings.satellites.vfoMap.failed': 'Could not confirm the VFO mapping',

@@ -170,7 +170,13 @@ const openRadioTab = async () => {
 describe("Use this computer's microphone", () => {
   it('is off by default, and on it offers the microphone and the gain', async () => {
     api.get('getAudioDevices').mockImplementation(() =>
-      Promise.resolve({ input: ['in-0', 'Desk Mic'], output: ['out-0'] }),
+      Promise.resolve({
+        input: [
+          { name: 'in-0', label: 'in-0' },
+          { name: 'Desk Mic', label: 'Desk Mic' },
+        ],
+        output: [{ name: 'out-0', label: 'out-0' }],
+      }),
     )
     renderPanel()
     await openRadioTab()

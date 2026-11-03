@@ -68,6 +68,7 @@ import {
 import { checkRigForm, NO_CAT_PTT_TRANSCEIVERS, type RigCheck, type RigFormFacts } from '../rigFormChecks'
 import { patchRadio } from '../settings/patch'
 import { radioPatch } from './SettingsPanel'
+import { showHiddenSpaces } from '../features/audioDeviceTwin'
 
 type Step = 'radios' | 'bands' | 'shared' | 'rest' | 'switching' | 'audio' | 'check'
 /** A step's name on the step dots. Literal keys, so the catalog guards read every one. */
@@ -318,7 +319,7 @@ export function RadioSetupWizard({
       ...(value && !listed.some((d) => d.name === value)
         ? [
             <option key={value} value={value}>
-              {t('settings.audio.device.notInList', { device: value })}
+              {t('settings.audio.device.notInList', { device: showHiddenSpaces(value) })}
             </option>,
           ]
         : []),

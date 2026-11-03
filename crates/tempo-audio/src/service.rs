@@ -192,8 +192,9 @@ fn native_civ_model(t: &Transport) -> Option<crate::civ::commands::IcomModel> {
 /// client could serve it ([`tempo_app::settings::flex_client_reachable`], the single source of
 /// truth). `None` on every radio not opted in, so nothing about the default path depends on it.
 fn flex_client_ip(t: &Transport) -> Option<&str> {
-    (t.flex_native_cat && tempo_app::settings::flex_client_reachable(t.rig_model, &t.flex_radio_ip))
-        .then(|| t.flex_radio_ip.trim())
+    (t.flex_native_cat
+        && tempo_app::settings::flex_client_reachable(t.rig_model, &t.rig_conn, &t.flex_radio_ip))
+    .then(|| t.flex_radio_ip.trim())
 }
 
 /// Whether the CAT keyer tells the radio Nexus's speed at the start of every message, changed or
@@ -39566,6 +39567,34 @@ mod tests {
 
     /// Nexus's own Flex client is chosen only where the operator opted the radio in AND the client
     /// could serve it (a Flex profile with the radio's own address), from the first launch on; an
+    /// OmniRig, the Icom network connection and TCI start their own driver before the Flex client is
+    /// asked (`spawn_cat_daemon`), so an opted-in Flex there has no client: no address the client
+    /// would dial, and an address edit restarts nothing. Serial and Network keep it.
+    #[test]
+    fn the_flex_client_is_not_in_play_on_omnirig_icomlan_or_tci() {
+        let flex = |conn: &str| {
+            let mut t = cat_transport(4534, Some(4532));
+            t.rig_model = 2036;
+            t.rig_conn = conn.into();
+            t.flex_native_cat = true;
+            t.flex_radio_ip = "192.0.2.20".into();
+            t
+        };
+        for conn in ["omnirig", "icomlan", "tci"] {
+            let t = flex(conn);
+            assert_eq!(flex_client_ip(&t), None, "{conn}");
+            let mut moved = t.clone();
+            moved.flex_radio_ip = "192.0.2.21".into();
+            assert!(
+                !moved.rig_differs(&t),
+                "{conn}: an address edit restarted CAT"
+            );
+        }
+        for conn in ["serial", "network"] {
+            assert_eq!(flex_client_ip(&flex(conn)), Some("192.0.2.20"), "{conn}");
+        }
+    }
+
     /// address edit on a radio not opted in restarts nothing, exactly as before the client existed.
     #[test]
     fn the_flex_client_serves_only_an_opted_in_flex_with_its_address() {

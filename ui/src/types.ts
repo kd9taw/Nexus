@@ -5649,6 +5649,10 @@ export interface Settings {
   audioIn: string
   /** Output (TX) audio device name. "" = system default. */
   audioOut: string
+  /** The USB model of the sound card each TX device was on when it was chosen (Linux), written by
+   *  the station only. A form may name a device it just chose with "" to have the station read its
+   *  card now; any other value it sends is ignored (`tx_card_models_after`, notify_sound.rs). */
+  txCardModels?: Record<string, string>
   /** Microphone device for RECORDING voice-keyer messages. "" (default) = record from
    * audioIn (the shared input) — but on a digital setup that's the rig's RX codec, so a
    * voice message would capture the band, not the operator. Set to the real mic and each

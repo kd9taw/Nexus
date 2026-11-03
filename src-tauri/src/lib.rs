@@ -17817,6 +17817,7 @@ fn save_and_publish(
             // copies), so saving the raw form here would write a roster that diverges from the engine and
             // revert the active radio on the next launch. Persist eng.settings() post-merge, like every
             // light verb does.
+            let before = eng.settings().clone();
             if authoritative_roster {
                 // The incoming settings REPLACE the station — see `apply_and_persist`. Keeping the
                 // live roster here would leave a factory reset with every radio it promised to erase.
@@ -17824,6 +17825,7 @@ fn save_and_publish(
             } else {
                 eng.apply_settings(settings);
             }
+            note_tx_cards(eng, &before);
             // The claim follows the radio's port: a save that moved it lets go of the old port and
             // takes the new one (refused above if another window had it). Under the same hold of
             // the lock as the check, so no other save of this window comes between.
@@ -28060,11 +28062,60 @@ fn update_radio_profile(
         &mut patch,
         afar.as_ref(),
     );
+    let before = eng.settings().clone();
     eng.update_radio_profile(id, patch)?;
+    note_tx_cards(&mut eng, &before);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: update_radio_profile save failed: {e}")
     });
     Ok(eng.snapshot())
+}
+
+/// Record the sound card of each TX audio device a save just chose (`Settings::tx_card_models`),
+/// from the settings `before` it: the headphone monitor's and the app sounds' TX-device guard
+/// refuses that card under whatever id a later reboot gives it
+/// (`tempo_audio::notify_sound::tx_card_models_after`). Every settings save and radio edit passes
+/// here after it applies, and before it persists.
+/// Without the radio there is no guard to feed, and the record stays as it was: never a form's.
+fn note_tx_cards(eng: &mut Engine, before: &Settings) {
+    #[cfg(feature = "radio")]
+    let models = tempo_audio::notify_sound::tx_card_models_after(before, eng.settings());
+    #[cfg(not(feature = "radio"))]
+    let models = before.tx_card_models.clone();
+    eng.set_tx_card_models(models);
+}
+
+#[cfg(test)]
+mod tx_card_record_tests {
+    /// Both ways a TX audio device is chosen, a settings save and a radio edit, record its sound
+    /// card from the settings before the change, after the change applies and before it persists.
+    #[test]
+    fn every_tx_device_choice_records_its_card_before_it_persists() {
+        let src = include_str!("lib.rs");
+        let body_of = |sig: &str| {
+            let rest = &src[src.find(&format!("\n{sig}")).expect(sig) + 1..];
+            &rest[..rest.find("\n}\n").expect("the end of the function")]
+        };
+        for (sig, apply) in [
+            ("fn save_and_publish(", "eng.apply_settings(settings);"),
+            (
+                "fn update_radio_profile(",
+                "eng.update_radio_profile(id, patch)?;",
+            ),
+        ] {
+            let body = body_of(sig);
+            let at = |needle: &str| {
+                body.find(needle)
+                    .unwrap_or_else(|| panic!("{sig} has {needle}"))
+            };
+            assert!(
+                at("let before = eng.settings().clone();") < at(apply)
+                    && at(apply) < at("note_tx_cards(")
+                    && at("note_tx_cards(") < at("persist_settings("),
+                "{sig}"
+            );
+        }
+    }
 }
 
 /// Hold (`true`) or release (`false`) a steady tune carrier for ATU/amp tuning.

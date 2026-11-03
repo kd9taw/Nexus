@@ -1099,6 +1099,30 @@ fn same_name(a: &str, b: &str) -> bool {
     a.trim() == b.trim()
 }
 
+/// The ONE device in `offered` that is the saved name `wanted` but for the "N- " Windows numbers
+/// a codec by and the spacing (#425): Windows renamed "Speakers (USB AUDIO CODEC)" to "Speakers
+/// (2- USB AUDIO  CODEC)" after a USB change, its real name has two spaces before CODEC, and the
+/// saved name matched neither. `None` when no device or more than one is such a match, so an
+/// ambiguous list offers nothing. The " #N" ordinal still counts, so a second codec's saved name
+/// never points at the first.
+///
+/// ⚠️ AN OFFER, NEVER A SUBSTITUTE. [`resolve_configured`] names it in its error for the operator
+/// to pick; nothing opens it in the saved device's place, because transmit audio sent to the
+/// wrong device is worse than none.
+fn renumbered_twin<'a>(wanted: &str, offered: &'a [String]) -> Option<&'a str> {
+    let key = |name: &str| {
+        crate::notify_sound::without_instance_numbers(
+            &name.split_whitespace().collect::<Vec<_>>().join(" "),
+        )
+    };
+    let want = key(wanted);
+    let mut twins = offered.iter().filter(|n| key(n) == want);
+    match (twins.next(), twins.next()) {
+        (Some(one), None) => Some(one.as_str()),
+        _ => None,
+    }
+}
+
 /// The ALSA `CARD=<id>` token of a device name, e.g. `plughw:CARD=Device,DEV=0` →
 /// `CARD=Device`. Two names sharing it are the SAME physical card reached by DIFFERENT
 /// access paths (`hw:` / `plughw:` / `dsnoop:` / `default:` …). `None` when the name carries
@@ -1277,11 +1301,18 @@ where
                     }
                 }
             }
+            let instead = renumbered_twin(wanted, &seen).map_or(String::new(), |twin| {
+                format!(
+                    " {twin:?} looks like the same device under a new Windows number or \
+                     different spacing: to use it instead, pick it in Settings ▸ Radio ▸ Audio. \
+                     Nexus does not switch audio devices by itself."
+                )
+            });
             Err(format!(
                 "audio {what} device {wanted:?} is not available. The audio backend offered \
                  {n} {what} device(s) when opening{list} If it is on the menu but not in \
                  that list, the backend dropped it while probing — commonly because it is \
-                 already open in another application.",
+                 already open in another application.{instead}",
                 n = seen.len(),
                 list = if seen.is_empty() {
                     ".".to_string()
@@ -4911,6 +4942,76 @@ mod tests {
             !err.contains("in use by another application"),
             "must not assert a cause it has not established: {err}"
         );
+    }
+
+    /// #425: Windows renumbered the radio's codec ("2- ") and its real name has two spaces before
+    /// CODEC, so the saved name opens nothing. The error offers the ONE enumerated device that is
+    /// the saved one but for that number and the spacing, by its exact name, for the operator to
+    /// pick. It is never opened in its place: an unresolvable choice stays an error.
+    /// Negative controls: two such devices (ambiguous), a different device, and a different " #N"
+    /// ordinal offer nothing.
+    #[test]
+    fn a_renumbered_or_respaced_device_is_offered_by_name_never_opened() {
+        let windows = |names: &[&str]| -> Vec<(String, u32)> {
+            names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.to_string(), i as u32))
+                .collect()
+        };
+        let resolve = |names: Vec<(String, u32)>, saved: &str| {
+            resolve_configured(
+                || Some(names.clone().into_iter()),
+                Some(saved),
+                None,
+                "output",
+            )
+        };
+        let err = resolve(
+            windows(&["Speakers (Realtek)", "Speakers (2- USB AUDIO  CODEC)"]),
+            "Speakers (USB AUDIO CODEC)",
+        )
+        .unwrap_err();
+        assert!(
+            err.contains(
+                "\"Speakers (2- USB AUDIO  CODEC)\" looks like the same device under a new \
+                 Windows number or different spacing"
+            ),
+            "{err}"
+        );
+        // The reporter's hand edit: the number right, one space where the device has two.
+        let err = resolve(
+            windows(&["Line (2- USB AUDIO  CODEC)"]),
+            "Line (2- USB AUDIO CODEC)",
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("\"Line (2- USB AUDIO  CODEC)\" looks like"),
+            "{err}"
+        );
+        for (names, saved) in [
+            (
+                windows(&[
+                    "Speakers (2- USB AUDIO CODEC)",
+                    "Speakers (3- USB AUDIO CODEC)",
+                ]),
+                "Speakers (USB AUDIO CODEC)",
+            ),
+            (
+                windows(&["Speakers (Realtek)"]),
+                "Speakers (USB AUDIO CODEC)",
+            ),
+            (
+                windows(&["Speakers (USB AUDIO CODEC)"]),
+                "Speakers (USB AUDIO CODEC) #2",
+            ),
+        ] {
+            let err = resolve(names, saved).unwrap_err();
+            assert!(
+                !err.contains("looks like the same device"),
+                "{saved}: {err}"
+            );
+        }
     }
 
     #[test]

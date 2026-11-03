@@ -5149,6 +5149,8 @@ export const JA: PartialCatalog = {
   "settings.audio.rxGain.failed": "受信ゲインを適用できませんでした",
   "settings.audio.txPower.failed": "送信出力を設定できませんでした",
   "settings.audio.device.notInList": "{{device}} — 保存済み（リストにありません）",
+  "settings.audio.device.useInstead": "代わりに {{device}} を使う",
+  "settings.audio.device.useInsteadHint": "保存済みのデバイスはリストにありません。このデバイスとの違いは、Windows が先頭に付ける番号か空白だけです。Nexus がオーディオデバイスを勝手に切り替えることはありません。押して選び、保存してください。",
   "settings.betaUpdates.failed": "更新チャンネルを変更できませんでした",
   "settings.satellites.vfoMap.failed": "VFOマッピングを確認できませんでした",
   "settings.workingFreq.reset.confirm.title": "運用周波数の上書きをすべてクリアしますか？",

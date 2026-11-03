@@ -3135,6 +3135,8 @@ export const RU: PartialCatalog = {
   "settings.audio.rxGain.failed": "Не удалось применить усиление RX",
   "settings.audio.txPower.failed": "Не удалось установить мощность TX",
   "settings.audio.device.notInList": "{{device}} — сохранено, не в списке",
+  "settings.audio.device.useInstead": "Использовать {{device}} вместо него",
+  "settings.audio.device.useInsteadHint": "Сохранённого устройства нет в списке, а это отличается от него только номером, который Windows ставит впереди, или пробелами. Nexus никогда не переключает аудиоустройства сам: нажмите, чтобы выбрать его, затем «Сохранить».",
   "settings.betaUpdates.failed": "Не удалось изменить канал обновления",
   "settings.radios.thisRadio": "этот трансивер",
   "settings.radios.unnamed": "трансивер {{id}}",
