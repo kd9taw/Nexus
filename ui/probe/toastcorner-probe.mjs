@@ -8,7 +8,8 @@
 //
 // The probe serves the REAL app (index.html, main.tsx, App) with the app's own Vite config and src/api.ts
 // swapped for probe/toastcorner-api.ts. For each screen (FT, Phone, CW, PSK: the docks and strips the corners meet), at 1024×768 (the supported
-// floor) and 1920×1080, in each of the four corners, with a burst of nine (its newest toast stands where a lone
+// floor) and 1920×1080, and Phone and CW again at the pinned 65 % and 175 % zooms, in each of the four
+// corners, with a burst of nine (its newest toast stands where a lone
 // toast would, so the burst covers the one-toast case too; PROBE_BURSTS=1,9 runs both), it pushes the
 // toasts through the real toast bus and asserts:
 //   1. NO TOAST COVERS A TRANSMIT CONTROL: no toast's box (inside the column's box) meets any button of the
@@ -36,6 +37,16 @@ const SIZES = [[1024, 768], [1920, 1080]]
 const SCREENS = ['operate', 'phone', 'cw', 'psk']
 const CORNERS = ['bottom-right', 'bottom-left', 'top-right', 'top-left']
 const BURSTS = (process.env.PROBE_BURSTS ?? '9').split(',').map(Number)
+// The pinned zooms the UI offers at its ends (65 % and 175 %), on the two screens whose dock a bottom
+// corner meets (Phone's PTT, CW's Send): the column's room is window px divided by the zoom, and a wrong
+// division is exactly a toast on PTT at 65 %. PROBE_SET=base or =zoom runs one half (a loaded box's
+// foreground budget); unset, both.
+const ZOOMED = [[[1024, 768], '65'], [[1920, 1080], '65'], [[1024, 768], '175'], [[1366, 768], '175']]
+const SET = process.env.PROBE_SET ?? 'all'
+const PAGES = [
+  ...(SET === 'zoom' ? [] : SIZES.map((size) => [size, 'auto', SCREENS])),
+  ...(SET === 'base' ? [] : ZOOMED.map(([size, scale]) => [size, scale, ['phone', 'cw']])),
+]
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // The transmit surfaces, as features/txSurfaces.ts names them (read from the source, so the two cannot drift).
@@ -114,7 +125,7 @@ const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { js8: true, jtty: true, rtty: true, psk: true, sstv: true } })
 
-async function run(screen, [W, H], corner, n, control) {
+async function run(screen, [W, H], corner, n, control, scale = 'auto') {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -141,6 +152,7 @@ async function run(screen, [W, H], corner, n, control) {
       'tempo-theme': 'dark',
       'nexus.features.wizardSeen': '1',
       'probe.settings': JSON.stringify({ popupCorner: corner }),
+      'nexus-ui-scale-mode': scale,
     }
     await evaluate(`localStorage.clear(); ${Object.entries(store).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')}; 1`)
     await call('Page.navigate', { url: `${origin}/#${screen}` })
@@ -156,12 +168,12 @@ async function run(screen, [W, H], corner, n, control) {
 let red = 0
 let undrawn = 0
 try {
-  for (const size of SIZES)
-    for (const screen of SCREENS)
+  for (const [size, scale, screens] of PAGES)
+    for (const screen of screens)
       for (const corner of CORNERS)
         for (const n of BURSTS) {
-          const at = `${screen} ${size.join('×')} ${corner} ×${n}`
-          const m = await run(screen, size, corner, n, false)
+          const at = `${screen} ${size.join('×')}${scale === 'auto' ? '' : ` at ${scale}%`} ${corner} ×${n}`
+          const m = await run(screen, size, corner, n, false, scale)
           if (m.error) {
             undrawn++
             console.log(`NOT DRAWN ${at}: ${m.error}`)
