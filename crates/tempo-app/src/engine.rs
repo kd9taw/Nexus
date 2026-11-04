@@ -26873,12 +26873,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// May the operator's class key the Keyboard section's EMISSION at `dial`? USB always (the
-    /// section's convention): the WHOLE of [`Self::keyboard_span_hz`] inside ONE privileged data
-    /// range ([`crate::privileges::tx_span_allowed`], the data-frame rule FT8, JS8 and RTTY are
-    /// judged by): PSK31's narrow signal at the tuned audio offset (one point), or JTTY's four
+    /// section's convention): the WHOLE of [`Self::keyboard_emission_span_hz`] inside ONE
+    /// privileged data range ([`crate::privileges::tx_span_allowed`], the data-frame rule FT8, JS8
+    /// and RTTY are judged by): PSK's occupied width about the tuned audio offset, or JTTY's four
     /// tones from its Tx offset up.
     fn psk_emission_ok(&self, dial: f64) -> bool {
-        let (lo, hi) = self.keyboard_span_hz();
+        let (lo, hi) = self.keyboard_emission_span_hz();
         crate::privileges::tx_span_allowed(
             self.settings.license_class,
             dial + lo / 1_000_000.0,
@@ -26899,6 +26899,29 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let c = self.psk_center_hz() as f64;
             (c, c)
         }
+    }
+
+    /// What the licence gates judge ([`Self::psk_emission_ok`], [`Self::keyboard_emission_allowed`]):
+    /// [`Self::keyboard_span_hz`] widened to the signal's OCCUPIED width — PSK's centre ± one
+    /// symbol rate of its sub-mode ([`tempo_core::psk::PskModeKind::baud`]: ±31.25 Hz for PSK31
+    /// and QPSK31, ±62.5 Hz for PSK63). JTTY's span is its own and is judged as it was.
+    ///
+    /// ⭐ JUDGED ACROSS ITS WIDTH, NOT AT ONE POINT. Judging the centre alone let a signal netted
+    /// within half its width of a segment edge put its sidebands across that edge. Measured on
+    /// the shaped waveform the −26 dB width is ±27 Hz for PSK31 and ±54 Hz for PSK63, and the 99 %
+    /// power width ±22.5 / ±45 Hz; ±baud covers the −26 dB points with 4–8 Hz to spare and scales
+    /// with the sub-mode from the one rate both directions key by.
+    ///
+    /// ⚠️ NOT [`Self::keyboard_span_hz`] ITSELF: its low edge is the frequency a contact LOGS
+    /// ([`Self::logged_signal_offset`]), which stays the netted centre. And it can only ever
+    /// refuse more: the widened span contains the point that was judged before.
+    fn keyboard_emission_span_hz(&self) -> (f64, f64) {
+        let (lo, hi) = self.keyboard_span_hz();
+        if self.jtty_section() {
+            return (lo, hi);
+        }
+        let half = f64::from(self.psk_mode.baud());
+        (lo - half, hi + half)
     }
 
     // ----- RTTY transmit — operator-initiated, mirroring the CW send path. -----
@@ -29784,7 +29807,7 @@ contact yourself."
             // RTTY: judge the real mark/space RF span per keying backend (AFSK tones
             // below the LSB dial; FSK shift below the RTTY-mode dial) — both edges.
             OperatingMode::Rtty => self.rtty_emission_ok(dial),
-            // Keyboard (PSK31): a ~60 Hz signal at the tuned audio offset
+            // Keyboard (PSK): its occupied width about the tuned audio offset
             // above the always-USB dial.
             OperatingMode::Keyboard => self.psk_emission_ok(dial),
         }
@@ -29881,14 +29904,14 @@ contact yourself."
 
     /// May the operator's class key a KEYBOARD-mode emission (PSK31's, or JTTY's while it is the
     /// modem) from the transmit dial `dial`, with the transmitting VFO commanded `word`? The span
-    /// [`Self::keyboard_span_hz`] sits on the side the WORD names — where
+    /// [`Self::keyboard_emission_span_hz`] sits on the side the WORD names — where
     /// [`Self::psk_emission_ok`] judges it above the dial always, by the section's USB
     /// convention. The whole span must lie in one privileged range, as there.
     ///
     /// A word that names no side adds nothing, so, like [`Self::digital_emission_allowed`], this
     /// can only ever refuse more than the gate did before it knew the commanded word.
     fn keyboard_emission_allowed(&self, dial: f64, word: &str) -> bool {
-        let (lo, hi) = self.keyboard_span_hz();
+        let (lo, hi) = self.keyboard_emission_span_hz();
         let (lo, hi) = (lo / 1_000_000.0, hi / 1_000_000.0);
         let span = |a: f64, b: f64| {
             crate::privileges::tx_span_allowed(
@@ -79798,6 +79821,10 @@ mod digital_side_licence_tests {
         /// The carrier on the side the transmit VFO's commanded word names; `None` for a word
         /// that names no side (FM).
         commanded: Option<bool>,
+        /// Away from a pass, in Keyboard and RTTY: the verdict before PSK was judged across its
+        /// occupied width, PSK at ONE point at its centre ([`Soundcard::old_as_a_point`]), which
+        /// is RTTY's own `stored`. `None` everywhere else.
+        point: Option<bool>,
         case: String,
     }
 
@@ -79895,6 +79922,7 @@ mod digital_side_licence_tests {
                                     stored: side_allows(class, tx, off, stored_lsb),
                                     commanded: named_side(word)
                                         .map(|lsb| side_allows(class, tx, off, lsb)),
+                                    point: None,
                                     case,
                                 });
                             }
@@ -79936,6 +79964,7 @@ mod digital_side_licence_tests {
                                 got: e.tx_allowed(),
                                 stored,
                                 commanded: Some(stored),
+                                point: None,
                                 case,
                             });
                         }
@@ -80036,8 +80065,8 @@ mod digital_side_licence_tests {
     /// table alone.
     #[derive(Clone, Copy, Debug)]
     enum Soundcard {
-        /// PSK31: one narrow signal at the netted centre; the old model put it ABOVE the dial
-        /// always, by the section's USB convention.
+        /// PSK31: its occupied width, the netted centre ± the sub-mode's symbol rate; the old
+        /// model put it ABOVE the dial always, by the section's USB convention.
         Psk,
         /// RTTY by AFSK: the mark/space pair from `mark` to `mark + shift` off the dial; the old
         /// model took the side the rig reports or, failing that, the dial's own word, and both
@@ -80167,14 +80196,33 @@ mod digital_side_licence_tests {
         }
 
         /// May `class` key this section's signal from transmit dial `tx` (MHz) on the side `lsb`
-        /// names? PSK31 one point at the centre, CW one at the pitch; AFSK both edges of the
-        /// mark/space span.
+        /// names? PSK both edges of its occupied width, the centre ± the sub-mode's baud; CW one
+        /// point at the pitch; AFSK both edges of the mark/space span.
         fn side_ok(self, e: &Engine, class: LicenseClass, tx: f64, lsb: bool) -> bool {
+            self.side_judged(e, class, tx, lsb, true)
+        }
+
+        /// [`Self::side_ok`], with PSK judged across its width (`wide`) or, as it was before, at
+        /// one point at its centre.
+        fn side_judged(
+            self,
+            e: &Engine,
+            class: LicenseClass,
+            tx: f64,
+            lsb: bool,
+            wide: bool,
+        ) -> bool {
             let allow = |f: f64| crate::privileges::tx_allowed(class, f, self.mode());
             match self {
                 Soundcard::Psk => {
                     let c = f64::from(e.psk_center_hz()) / 1e6;
-                    allow(if lsb { tx - c } else { tx + c })
+                    let c = if lsb { tx - c } else { tx + c };
+                    let half = if wide {
+                        f64::from(e.psk_mode().0.baud()) / 1e6
+                    } else {
+                        0.0
+                    };
+                    allow(c - half) && allow(c + half)
                 }
                 Soundcard::CwTone | Soundcard::CwKeyer => {
                     let p = f64::from(e.cw_pitch_hz()) / 1e6;
@@ -80210,6 +80258,15 @@ mod digital_side_licence_tests {
                 Soundcard::CwTone | Soundcard::CwKeyer => {
                     crate::privileges::tx_allowed(class, tx, self.mode())
                 }
+            }
+        }
+
+        /// [`Self::old`] as it was before PSK was judged across its width: PSK at one point at its
+        /// centre, above the dial. Every other section's `old`.
+        fn old_as_a_point(self, e: &Engine, class: LicenseClass, tx: f64, dial_word: &str) -> bool {
+            match self {
+                Soundcard::Psk => self.side_judged(e, class, tx, false, false),
+                _ => self.old(e, class, tx, dial_word),
             }
         }
 
@@ -80462,6 +80519,7 @@ mod digital_side_licence_tests {
                                     got: e.tx_allowed(),
                                     stored: sc.old(&e, class, tx, dial_word),
                                     commanded: sc.commanded(&e, class, tx, tx_word),
+                                    point: None,
                                     case,
                                 });
                             }
@@ -80513,6 +80571,7 @@ mod digital_side_licence_tests {
                                 got: e.tx_allowed(),
                                 stored: sc.old(&e, class, dial, word),
                                 commanded: sc.commanded(&e, class, dial, word),
+                                point: Some(sc.old_as_a_point(&e, class, dial, word)),
                                 case,
                             });
                         }
@@ -80526,17 +80585,229 @@ mod digital_side_licence_tests {
     /// Away from a pass Keyboard and RTTY are judged exactly as they were, at every data edge,
     /// for every class and centre, while the rig reports nothing (for when it reports the other
     /// side, see [`rtty_judges_the_commanded_side_even_when_the_rig_reports_the_other`]).
+    ///
+    /// ⚠️ RE-PINNED ON PURPOSE, FOR PSK ONLY: PSK is judged across its occupied width now (the
+    /// netted centre ± the sub-mode's baud, [`Engine::keyboard_emission_span_hz`]), not at one
+    /// point at its centre. So its verdict CHANGES wherever that centre sits within one baud of a
+    /// data edge — in this sweep, a centre exactly ON an edge — from allowed to refused: the
+    /// signal's lower half is outside. Those changes are counted and pinned below, each is a
+    /// refusal where the point allowed, and every other verdict, PSK's and RTTY's, is still what
+    /// it was.
     #[test]
     fn away_from_a_pass_psk_and_rtty_are_judged_as_they_were() {
         let v = soundcard_terrestrial_verdicts();
         let (moved, first) = first_cases(v.iter().filter(|r| r.got != r.stored), 20);
         assert_eq!(moved, 0, "verdicts moved away from a pass: {first:#?}");
+        let (rtty_moved, first) = first_cases(
+            v.iter()
+                .filter(|r| !r.case.starts_with("Psk ") && Some(r.got) != r.point),
+            20,
+        );
+        assert_eq!(rtty_moved, 0, "RTTY verdicts moved: {first:#?}");
+        let widened: Vec<&Verdict> = v
+            .iter()
+            .filter(|r| r.point.is_some_and(|p| p != r.got))
+            .collect();
+        let (not_a_psk_refusal, first) = first_cases(
+            widened
+                .iter()
+                .copied()
+                .filter(|r| !(r.case.starts_with("Psk ") && r.point == Some(true) && !r.got)),
+            20,
+        );
+        assert_eq!(
+            not_a_psk_refusal, 0,
+            "the width may only refuse PSK where its centre was allowed: {first:#?}"
+        );
+        assert_eq!(
+            widened.len(),
+            WIDENED_PSK_VERDICTS,
+            "PSK verdicts the width refuses: {:#?}",
+            widened.iter().map(|r| r.case.as_str()).collect::<Vec<_>>()
+        );
         let allowed = v.iter().filter(|r| r.stored).count();
         assert!(
             allowed > 1_000 && v.len() - allowed > 1_000,
             "the sweep must straddle the edges: {allowed} allowed of {}",
             v.len()
         );
+    }
+
+    /// How many of [`away_from_a_pass_psk_and_rtty_are_judged_as_they_were`]'s PSK verdicts the
+    /// occupied width turns from allowed to refused: each a centre exactly on a data edge.
+    const WIDENED_PSK_VERDICTS: usize = 84;
+
+    /// A General in the Keyboard section keying `mode`, netted at 1000 Hz, TX armed.
+    fn psk_station(mode: tempo_core::psk::PskModeKind) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.license_class = LicenseClass::General;
+        e.set_operating_mode("keyboard", false);
+        e.set_psk_mode(mode, false)
+            .expect("unkeyed: the sub-mode is taken");
+        e.psk_net(1_000.0);
+        e
+    }
+
+    /// A General's 20 m data segment, from 14.025 up to (not including) 14.150 MHz.
+    const DATA_20M: (f64, f64) = (14.025, 14.150);
+
+    /// Each sub-mode with its symbol rate, the closest whole-Hz distance from a segment edge at
+    /// which its centre keeps the whole signal inside (`inside`), and the farthest at which the
+    /// edge is inside its width (`across`): ±31.25 Hz for PSK31, ±62.5 Hz for PSK63.
+    const PSK_WIDTHS: [(tempo_core::psk::PskModeKind, f32, f64, f64); 2] = [
+        (tempo_core::psk::PskModeKind::Bpsk31, 31.25, 32.0, 31.0),
+        (tempo_core::psk::PskModeKind::Bpsk63, 62.5, 63.0, 62.0),
+    ];
+
+    /// ⭐ PSK IS JUDGED ACROSS ITS OCCUPIED WIDTH, at the top and the bottom of a segment, on
+    /// either side of the dial. A General's 20 m data runs 14.025–14.150: PSK31 netted 31 Hz
+    /// inside an edge puts its signal 0.25 Hz across it and is refused, 32 Hz inside is allowed;
+    /// PSK63 the same at 62 and 63 Hz. The centre itself is inside in every case, so each refusal
+    /// is the width's. Comfortably inside, both are allowed, and the frequency a contact logs is
+    /// still the netted centre.
+    #[test]
+    fn psk_is_judged_across_its_occupied_width_at_both_edges_on_both_sides() {
+        let (general, kb) = (LicenseClass::General, OperatingMode::Keyboard);
+        let (bottom, top) = DATA_20M;
+        for (mode, baud, inside, across) in PSK_WIDTHS {
+            let mut e = psk_station(mode);
+            assert_eq!(e.psk_mode().0.baud(), baud, "precondition: {mode:?}'s rate");
+            assert_eq!(e.psk_center_hz(), 1_000.0, "precondition: the centre");
+            for (centre, want, at) in [
+                (top - inside / 1e6, true, "just inside the top"),
+                (top - across / 1e6, false, "across the top"),
+                (bottom + inside / 1e6, true, "just inside the bottom"),
+                (bottom + across / 1e6, false, "across the bottom"),
+            ] {
+                assert!(
+                    crate::privileges::tx_allowed(general, centre, kb),
+                    "precondition, {mode:?} {at}: the centre {centre:.6} itself is inside"
+                );
+                for (word, dial) in [("PKTUSB", centre - 0.001), ("PKTLSB", centre + 0.001)] {
+                    assert_eq!(
+                        e.keyboard_emission_allowed(dial, word),
+                        want,
+                        "{mode:?} {at}, centre {centre:.6}, {word} dial {dial:.6}"
+                    );
+                }
+                // The section's own USB side, end to end through the gate the cockpit reads.
+                let dial = centre - 0.001;
+                assert_eq!(
+                    e.psk_emission_ok(dial),
+                    want,
+                    "{mode:?} {at}: USB convention"
+                );
+                e.set_frequency(dial, "20m", "USB");
+                assert_eq!(
+                    e.tx_mode_effective(),
+                    "PKTUSB",
+                    "precondition, {mode:?} {at}"
+                );
+                assert_eq!(
+                    e.tx_allowed(),
+                    want,
+                    "{mode:?} {at}: tx_allowed, dial {dial:.6}"
+                );
+            }
+
+            // Comfortably inside: unchanged, on either side.
+            e.set_frequency(14.070, "20m", "USB");
+            assert!(e.tx_allowed(), "{mode:?}: 14.071 is well inside");
+            assert!(
+                e.keyboard_emission_allowed(14.072, "PKTLSB"),
+                "{mode:?}: LSB inside"
+            );
+
+            // The gate judges the centre ± one baud; the logged frequency is still the netted
+            // centre, not the gate's widened low edge.
+            let half = f64::from(baud);
+            assert_eq!(
+                e.keyboard_emission_span_hz(),
+                (1_000.0 - half, 1_000.0 + half),
+                "{mode:?}: the gate judges the centre ± one baud"
+            );
+            assert_eq!(
+                e.keyboard_span_hz(),
+                (1_000.0, 1_000.0),
+                "{mode:?}: the signal's own span is the centre"
+            );
+            assert_eq!(
+                e.logged_signal_offset(),
+                (0.001, false),
+                "{mode:?}: a contact logs dial + the netted centre"
+            );
+        }
+    }
+
+    /// ⛔ A PSK SIGNAL WHOSE WIDTH CROSSES AN EDGE NEVER REACHES PTT, AND A REFUSAL NEVER ARMS THE
+    /// LATCH. Netted 31 Hz (PSK31) or 62 Hz (PSK63) under the top of a General's 20 m data, a send
+    /// is refused up front with nothing queued for the radio loop to key, and continuous TX stays
+    /// down. An over queued just inside, then netted 1 Hz up into that width, is dropped at the
+    /// poll — the last step before the loop keys — instead of keyed. The control: just inside,
+    /// both key.
+    #[test]
+    fn a_psk_signal_across_an_edge_is_refused_before_ptt_and_never_latches() {
+        let top = DATA_20M.1;
+        for (mode, _, inside, across) in PSK_WIDTHS {
+            let mut e = psk_station(mode);
+            assert!(e.tx_enabled, "precondition, {mode:?}: TX is armed");
+            e.set_frequency(top - across / 1e6 - 0.001, "20m", "USB");
+            assert!(
+                !e.tx_allowed(),
+                "{mode:?}: netted {across} Hz under the top, the signal crosses it"
+            );
+            let err = e.psk_send_text("cq cq").unwrap_err();
+            assert!(
+                err.contains("outside your license privileges"),
+                "{mode:?}: the send says why: {err}"
+            );
+            assert!(e.psk_queue.is_empty(), "{mode:?}: nothing queued");
+            assert_eq!(
+                e.poll_psk_one(),
+                None,
+                "{mode:?}: nothing for the loop to key"
+            );
+            assert!(
+                e.set_psk_latched(true).is_err(),
+                "{mode:?}: the latch is refused"
+            );
+            assert!(!e.psk_latched(), "{mode:?}: a refusal never arms the latch");
+            assert!(
+                e.psk_type("cq").is_err(),
+                "{mode:?}: no typing into a latch that is down"
+            );
+
+            // Control: just inside, a send keys and the latch arms.
+            e.set_frequency(top - inside / 1e6 - 0.001, "20m", "USB");
+            assert!(e.tx_allowed(), "control, {mode:?}: just inside the top");
+            e.psk_send_text("cq cq").unwrap();
+            assert_eq!(
+                e.poll_psk_one().as_deref(),
+                Some("cq cq"),
+                "control, {mode:?}"
+            );
+            e.set_psk_latched(true).unwrap();
+            assert!(e.psk_latched(), "control, {mode:?}: the latch arms");
+            e.psk_stop();
+
+            // Queued just inside, then netted 1 Hz up: the width is across, the over drops.
+            e.psk_send_text("de w9xyz").unwrap();
+            e.psk_net(1_000.0 + (inside - across) as f32);
+            assert!(
+                !e.tx_allowed(),
+                "precondition, {mode:?}: netted across the top"
+            );
+            assert_eq!(
+                e.poll_psk_one(),
+                None,
+                "{mode:?}: the netted-up over never keys"
+            );
+            assert_eq!(
+                e.psk_state().keyer_error.as_deref(),
+                Some(PSK_REFUSED_PRIVILEGES),
+                "{mode:?}: the cockpit says it was dropped"
+            );
+        }
     }
 
     /// ⛔ THE INVARIANT FOR KEYBOARD AND RTTY: knowing the commanded side only ever refuses MORE,
