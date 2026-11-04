@@ -410,8 +410,8 @@ pub fn freedv_band_plan(us_station: bool) -> Vec<BandChannel> {
 ///     scatter. Handing it 14.074 points the rig at a band the mode is not used
 ///     on.
 ///   * Q65 is likewise VHF+ (6 m through 1.2 cm); its HF entries do not exist.
-///   * FST4/FST4W are LF/MF — 2200 m, 630 m, 160 m — the opposite end of the
-///     spectrum from FT8.
+///   * FST4 is LF/MF — 2200 m, 630 m, 160 m — the opposite end of the spectrum
+///     from FT8. FST4W sits on WSPR's beacon dials, 2200 m to 2 m.
 ///   * WSPR's HF frequencies differ from FT8's everywhere (20 m is 14.0956, not
 ///     14.074), so an operator on "20 m WSPR" would have been listening to FT8.
 ///   * JT65 is 14.076 on 20 m, not 14.074.
@@ -694,14 +694,31 @@ pub fn fst4_band_plan() -> Vec<BandChannel> {
     ]
 }
 
-/// FST4W calling/beacon frequencies, taken verbatim from WSJT-X's own
-/// frequency table (see the module note). 3 entries.
+/// FST4W beacon frequencies: WSJT-X's whole FST4W table, row for row (#184). Source: WSJT-X
+/// release v3.0.2 (github.com/WSJTX/wsjtx, the WSJT development team's own repository),
+/// `models/FrequencyList.cpp`, the `Modes::FST4W` rows at lines 60, 66, 69, 107, 148, 187, 229,
+/// 270, 277, 286, 293, 306-307, 317 and 330. The HF/VHF rows came in with WSJT-X 3.0 (commit
+/// 2506a3e1e); 2.7.0 and the SourceForge-era mirrors of it carry only the first three. 14
+/// frequencies; WSJT-X lists 50.293 twice (Regions 2 and 3 only) and 70.091 for Region 1 only,
+/// which the notes say. Every dial is shared with WSPR ([`wspr_band_plan`]) except 160 m (1.8368
+/// against WSPR's 1.8366). Listing a channel is not a permission: the transmit gate judges each.
 pub fn fst4w_band_plan() -> Vec<BandChannel> {
     let n = "WSJT-X FST4W beacon frequency (from WSJT-X's default table)";
     vec![
         ch("2200m", "HF", 0.136000, "USB", "2200 m · FST4W", n),
         ch("630m", "HF", 0.474200, "USB", "630 m · FST4W", n),
         ch("160m", "HF", 1.836800, "USB", "160 m · FST4W", n),
+        ch("80m", "HF", 3.568600, "USB", "80 m · FST4W", n),
+        ch("40m", "HF", 7.038600, "USB", "40 m · FST4W", n),
+        ch("30m", "HF", 10.138700, "USB", "30 m · FST4W", n),
+        ch("20m", "HF", 14.095600, "USB", "20 m · FST4W", n),
+        ch("17m", "HF", 18.104600, "USB", "17 m · FST4W", n),
+        ch("15m", "HF", 21.094600, "USB", "15 m · FST4W", n),
+        ch("12m", "HF", 24.924600, "USB", "12 m · FST4W", n),
+        ch("10m", "HF", 28.124600, "USB", "10 m · FST4W", n),
+        ch("6m", "VHF", 50.293000, "USB", "6 m · FST4W", "WSJT-X FST4W beacon frequency (from WSJT-X's default table) — listed there for IARU Regions 2 and 3"),
+        ch("4m", "VHF", 70.091000, "USB", "4 m · FST4W", "WSJT-X FST4W beacon frequency (from WSJT-X's default table) — IARU Region 1 only, no US allocation; 4 m band edges vary widely by country, confirm yours before transmitting"),
+        ch("2m", "VHF", 144.489000, "USB", "2 m · FST4W", n),
     ]
 }
 
@@ -1940,10 +1957,11 @@ mod wsjtx_parity_tests {
         }
     }
 
-    /// FST4/FST4W are the converse: LF/MF, nothing above 160 m.
+    /// FST4 is the converse: LF/MF, nothing above 160 m (WSJT-X's own FST4 rows are 136.0,
+    /// 474.2 and 1839.0 kHz). FST4W is not: see `fst4w_is_wsjtx_own_table`.
     #[test]
-    fn fst4_family_is_lf_mf_only() {
-        for t in [Tier::Fst4, Tier::Fst4w] {
+    fn fst4_is_lf_mf_only() {
+        for t in [Tier::Fst4] {
             for c in band_plan_for(t) {
                 assert!(
                     c.dial_mhz < 2.0,
@@ -1953,5 +1971,57 @@ mod wsjtx_parity_tests {
                 );
             }
         }
+    }
+
+    /// #184: FST4W carries WSJT-X's whole FST4W table, row for row (models/FrequencyList.cpp,
+    /// `Modes::FST4W` rows; see `fst4w_band_plan`). It held only 2200 m, 630 m and 160 m.
+    #[test]
+    fn fst4w_is_wsjtx_own_table() {
+        let got: Vec<(String, f64)> = band_plan_for(Tier::Fst4w)
+            .into_iter()
+            .map(|c| (c.band, c.dial_mhz))
+            .collect();
+        let want: Vec<(String, f64)> = [
+            ("2200m", 0.136),
+            ("630m", 0.4742),
+            ("160m", 1.8368),
+            ("80m", 3.5686),
+            ("40m", 7.0386),
+            ("30m", 10.1387),
+            ("20m", 14.0956),
+            ("17m", 18.1046),
+            ("15m", 21.0946),
+            ("12m", 24.9246),
+            ("10m", 28.1246),
+            ("6m", 50.293),
+            ("4m", 70.091),
+            ("2m", 144.489),
+        ]
+        .iter()
+        .map(|(b, f)| (b.to_string(), *f))
+        .collect();
+        assert_eq!(got.len(), want.len(), "{got:?}");
+        for ((gb, gf), (wb, wf)) in got.iter().zip(&want) {
+            assert_eq!(gb, wb);
+            assert!((gf - wf).abs() < 1e-9, "{gb}: {gf} != {wf}");
+            assert_eq!(band_for_dial(*gf), Some(wb.as_str()), "{wf} MHz is on {wb}");
+        }
+        // The licence gate still judges every row: a listed channel is not a permission.
+        use crate::privileges::tx_allowed;
+        use crate::settings::{LicenseClass, OperatingMode};
+        assert!(!tx_allowed(
+            LicenseClass::Technician,
+            14.0956 + 0.0015,
+            OperatingMode::Digital
+        ));
+        assert!(tx_allowed(
+            LicenseClass::General,
+            14.0956 + 0.0015,
+            OperatingMode::Digital
+        ));
+        assert!(
+            !tx_allowed(LicenseClass::Extra, 70.091 + 0.0015, OperatingMode::Digital),
+            "no US 4 m"
+        );
     }
 }

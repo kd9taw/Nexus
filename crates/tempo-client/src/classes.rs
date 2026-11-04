@@ -213,6 +213,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("get_custom_awards",              RunsAtShack, "The shack's custom awards and their standing in its logbook."),
     ("get_data_folder",                RunsAtShack, "The shack's data folder, for display."),
     ("get_declination",                RunsAtShack, "At the shack's location."),
+    ("get_decode_refill",              RefusedHere, "Refills the shack's own decode panes from its history; another computer's panes draw the shack's feed."),
     ("get_dxcc_chart",                 RunsAtShack, "From the shack's logbook."),
     ("get_dxped_windows",              RunsAtShack, "From the shack's location."),
     ("get_fast_power",                 RunsAtShack, "The shack's meters."),

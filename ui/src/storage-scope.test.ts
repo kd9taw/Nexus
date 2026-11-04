@@ -118,6 +118,9 @@ export const PER_SURFACE = [
   'nexus.jtty.includeTime',
   'nexus.jtty.lowerCase',
   'nexus.logbook.globespin',
+  // The 2-D maps' style, Atlas or Dark (features/mapStyle): how THIS window's flat map and 2-D globe
+  // look, one record for Connect's map and the APRS map, like the Layers panel's fold.
+  'nexus.map.style',
   'nexus.operate.layout',
   // Which side Operate's rail stands on (layout L5): a layout choice of THIS window, like the
   // Classic / Roster pick on either side of it.

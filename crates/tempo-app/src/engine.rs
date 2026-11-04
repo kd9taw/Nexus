@@ -197,6 +197,9 @@ mod tx_extras_tests;
 #[cfg(test)]
 mod upload_start_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
+/// A decode pane's refill (#452): the periods it missed, from the history, read only.
+#[cfg(test)]
+mod decode_refill_tests;
 /// The experience answer's one writer (the first-run wizard and Settings ▸ Station).
 #[cfg(test)]
 mod experience_level_tests;
@@ -1923,6 +1926,8 @@ pub const FLEX_VOICE_MAX_SAMPLES: usize = 20 * 12_000;
 /// The decodes Band Activity keeps, and so the most a logger's Replay re-sends: the pane's own
 /// store (`MAX_HISTORY`, `ui/src/decodeHistory.ts`).
 const BAND_ACTIVITY_DEPTH: usize = 3000;
+/// The received decodes the engine keeps across periods (`decode_history`), newest kept.
+const DECODE_HISTORY_DEPTH: usize = 240;
 /// A logger's free text refused while TX is off ([`Engine::udp_free_text`]).
 const UDP_FREE_TEXT_TX_OFF: &str =
     "TX is off: turn TX on in Nexus before sending a logger's free text";
@@ -21254,14 +21259,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.source_kind == SourceKind::Native && self.sat_dial_owner.is_none() {
             // ⭐ FALL BACK TO THE MODE'S PRIMARY CHANNEL when the current band has
             // none. The tier-aware plans are not all all-band: MSK144 and Q65 are
-            // VHF+ only, FST4/FST4W are 2200/630/160 m only. `find()` therefore
+            // VHF+ only, FST4 is 2200/630/160 m only. `find()` therefore
             // MISSES for the common case — an operator sitting on 20 m FT8 clicks
             // MSK144 — and the whole QSY used to be a silent no-op: tier, decoder
             // and slot clock all moved to MSK144 while the radio stayed on 14.074.
             // The mode then decodes an FT8 watering hole forever and reads as
-            // broken, which is how this was found. WSJT-X moves you to the new
-            // mode's own frequency in exactly this situation; the first plan entry
-            // is that mode's calling channel (MSK144 → 6 m 50.260, FST4 → 2200 m).
+            // broken, which is how this was found. ⚠️ NEXUS DIFFERS FROM WSJT-X HERE, ON
+            // PURPOSE: WSJT-X leaves the dial alone (`MainWindow::switch_mode` asks
+            // `best_working_frequency` for a row on the SAME band and does not QSY when
+            // there is none). Nexus moves to the mode's own channel instead, the first one
+            // on a band a radio here is set for (#184), else the plan's first entry
+            // (MSK144 → 6 m 50.260, FST4 → 2200 m).
             //
             // ⚠️ Scoped to the SPECIALTY modes only. For the FT8↔FT4↔FT2 family a
             // flip is a timing change and the operator expects to STAY on band —
@@ -21387,7 +21395,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Js8);
         plan.iter()
             .find(|c| c.band.eq_ignore_ascii_case(band))
-            .or_else(|| if stay_on_miss { None } else { plan.first() })
+            .or_else(|| {
+                if stay_on_miss {
+                    return None;
+                }
+                // #184: the mode's first channel a radio in the shack is set for, so an HF rig
+                // set to 160 m–4 m picking FST4 lands on 160 m, not 2200 m. A radio with no bands
+                // set covers everything, so a one-radio station still gets the first channel;
+                // `first()` stays the answer when no radio claims any of them.
+                plan.iter()
+                    .find(|c| {
+                        self.settings
+                            .any_radio_covers(&crate::bandplan::canonical_band(&c.band))
+                    })
+                    .or_else(|| plan.first())
+            })
             .filter(|ch| (ch.dial_mhz - dial_mhz).abs() > 0.0005)
             .cloned()
     }
@@ -30577,6 +30599,232 @@ contact yourself."
         }
     }
 
+    /// One received decode as the decode panes draw it: the B4, new-one, country, rarity and
+    /// addressed-to-me marks, coloured for `cur_band` (`None` off the bands) and labelled `link_tier`
+    /// when the decode names no mode. The snapshot's live feed and the panes' refill
+    /// ([`Self::decode_refill`]) both build their rows here, so a refilled row is the row the live
+    /// feed would have drawn for it. `hot` is taken once by the caller (see `StationCore::hot`).
+    fn decode_row(
+        &self,
+        d: &modes::Decode,
+        hot: &crate::station::Hot<'_>,
+        cur_band: Option<&str>,
+        cur_band_key: &str,
+        fold_mode: bool,
+        link_tier: Tier,
+    ) -> DecodeRow {
+        // #64, display side only: a DXpedition Fox packs two messages into one frame —
+        // "K1ABC RR73; W9XYZ <FOX> -08". In Hound mode `hound_split` has already split it
+        // upstream for everything; in STANDARD mode the sequencer must never see the halves
+        // (a Fox frame must not arm a non-Hound TX — that half of #64 is gated on operator
+        // sign-off), but the ROW must still be recognized the way WSJT-X shows it: the
+        // single on-air line, highlighted when either half is ours. Returns
+        // (first-half addressee, second half) only for the strict Fox shape — first half
+        // exactly "<call> RR73|RRR|73", second half a directed message with a sender — so
+        // free text carrying ';' is untouched.
+        fn fox_multiplex(msg: &str) -> Option<(&str, &str)> {
+            let (a, b) = msg.split_once(';')?;
+            let (a, b) = (a.trim(), b.trim());
+            let [to, fin] = a.split_whitespace().collect::<Vec<_>>()[..] else {
+                return None;
+            };
+            if !matches!(fin, "RR73" | "RRR" | "73") || !tempo_core::message::is_callsign(to) {
+                return None;
+            }
+            let second = Msg::parse(b);
+            (second.sender().is_some() && second.addressee().is_some()).then_some((to, b))
+        }
+        let mycall = &self.settings.mycall;
+        // A Fox multiplex row classifies by its SECOND half (the one carrying the
+        // Fox's call as sender — country, B4 and rarity are about the transmitter);
+        // the first half contributes only its addressee and its RR73-ness below.
+        let fox_mux = fox_multiplex(&d.message);
+        let parsed = Msg::parse(fox_mux.map_or(d.message.as_str(), |(_, b)| b));
+        // #55: a WSPR spot is "CALL GRID DBM" — a different grammar entirely.
+        // Run through the FT8 parser, the trailing dBm (typ. 23–47, inside the
+        // −50..=49 report range) reads as a signal report and the GRID lands in
+        // the sender slot: "TI4JWC EK70 30" filed its country under EK →
+        // Armenia, and TI4JWC (Costa Rica) was never looked up. WSPR rows parse
+        // by the WSPR field order; they are never CQs and address nobody. #408: so
+        // do FST4W's, the same lines, and a Type 2 beacon (`KI4TWB/0 23`) has no
+        // grid, where its power used to show as one.
+        let wspr_fields = tempo_core::beacon::is_beacon_mode(d.mode).then(|| {
+            let beacon = tempo_core::beacon::parse_report(&d.message);
+            (
+                beacon.map(|b| b.call.to_string()),
+                beacon.and_then(|b| b.grid),
+            )
+        });
+        let is_cq = wspr_fields.is_none() && matches!(parsed, Msg::Cq { .. });
+        let from = match &wspr_fields {
+            Some((call, _)) => call.clone(),
+            None => parsed.sender().map(|c| c.to_string()),
+        };
+        // `same_call`, not an exact string compare: a decode addressed with a hashed,
+        // portable or compound form of our call — `<YS/WE9G>` for YS/WE9G, `W1ABC/P`
+        // for W1ABC — is still to us, and WSJT-X highlights it (its report() matches on
+        // the `/`-aware base call). The auto-sequencer already matches on `same_call`
+        // (see `to_me` in the QSO observer); this is the display path catching up, so a
+        // row the sequencer would answer no longer looks unaddressed. (#64)
+        let directed_to_me = wspr_fields.is_none()
+            && (parsed
+                .addressee()
+                .map(|a| same_call(a, mycall))
+                .unwrap_or(false)
+                // A Fox multiplex is to us when EITHER half is: `parsed` covers
+                // the second, this covers the first (the Fox's RR73 that ends
+                // OUR QSO — the exact line the #64 reporter watched go dark).
+                || fox_mux.is_some_and(|(to, _)| same_call(to, mycall)));
+        // Worked-before (B4): the decode's sender is in the logbook —
+        // via the SAME prebuilt set as the roster above. The per-row
+        // `worked_before()` this replaces was the exact O(rows × log)
+        // sweep the set was built to end, re-grown 240 lines below the
+        // comment explaining the 1–2 s waterfall stall it caused.
+        // Keyed as the roster is (`lookup_call`): a hashed sender is its plain call,
+        // `<...>` no call.
+        let key = from.as_deref().and_then(lookup_call);
+        let worked = key.as_deref().is_some_and(|c| hot.worked_call(c));
+        // The stronger scope, same set as the roster above.
+        let worked_band = key
+            .as_deref()
+            .is_some_and(|c| hot.worked_call_band(c, cur_band_key, fold_mode));
+        // New-grid (B3): the decode carries a Maidenhead grid we've never
+        // worked ON THIS BAND. Grid is present on CQ/grid forms. Per band
+        // because that is how grids are awarded (VUCC) — a grid worked on
+        // 20 m is a genuinely new one on 2 m.
+        let grid = match &wspr_fields {
+            Some((_, g)) => *g,
+            None => match &parsed {
+                Msg::Cq { grid, .. } | Msg::Grid { grid, .. } => Some(grid.as_str()),
+                _ => None,
+            },
+        };
+        let new_grid = match (cur_band, grid) {
+            (Some(b), Some(g)) => !g.is_empty() && !hot.grid_worked_on(g, b),
+            // No band claimed (off the bands), or the frame carried no grid.
+            _ => false,
+        };
+        // Country + New-DXCC (B3): resolve the sender's DXCC entity once.
+        // `country` rides every decode (DX chasers scan by country); the
+        // entity also drives new-DXCC. Needs the injected resolver; both
+        // stay None/false in headless tests.
+        let entity = match (&from, &self.station.dxcc_resolve) {
+            (Some(c), Some(resolve)) => resolve(c),
+            _ => None,
+        };
+        // Split the highlight (operator ruling, option 2): a TRUE all-time-new DXCC
+        // entity (never worked on any band) reads as `DXCC` — matching the Needed
+        // board's NEW ONE / ATNO — while an entity worked elsewhere but new on THIS band
+        // (DXCC is awarded per band: Challenge slots, VHF DXCC) reads as the dimmer
+        // `BAND`. The two are mutually exclusive by construction, so a chaser never
+        // mistakes a band-slot for a new country.
+        let (new_dxcc, new_band) = match &entity {
+            Some(e) => {
+                let ever = hot.entity_worked_ever(e);
+                // ATNO is all-time and stays answerable off the bands; the band slot
+                // is not — with no band there is no slot for it to be new in.
+                (
+                    !ever,
+                    ever && cur_band.is_some_and(|b| !hot.entity_worked_on(e, b)),
+                )
+            }
+            None => (false, false),
+        };
+        // Confirmed (award-grade) on THIS band — for the hide-confirmed filter.
+        // A still-new-on-band station is never marked confirmed (mutually exclusive
+        // by construction), so the filter can never hide a slot that's still open.
+        // Off the bands this stays false, which is the safe direction for a FILTER:
+        // "hide what is confirmed here" hides nothing rather than hiding rows on the
+        // strength of a band that does not exist.
+        let confirmed_band = match (cur_band, entity.as_deref()) {
+            (Some(b), Some(e)) => hot.entity_confirmed_on(e, b),
+            _ => false,
+        };
+        // Rarity: prefer the grid on THIS frame, but on report/R/RR73/73
+        // frames (which carry no grid) fall back to the sender's grid
+        // remembered in the roster — so an ULTRA-rare station keeps its
+        // badge through the whole QSO, not just on its CQ. (Backfills only
+        // the rarity marker; the row's own `grid` text stays unchanged.)
+        let grid_rarity = self.station.rarity_of(grid.or_else(|| {
+            from.as_deref()
+                .and_then(|c| self.app.inbox.roster.get(c))
+                .and_then(|h| h.grid.as_deref())
+        }));
+        DecodeRow {
+            lotw_user: self.station.lotw_user(from.as_deref()),
+            from,
+            snr: d.snr,
+            dt_sec: d.dt,
+            freq_hz: d.freq,
+            message: d.message.clone(),
+            is_cq,
+            directed_to_me,
+            // QSO-ending RR73/73, by parse type (token-positional — a DM73
+            // grid or an RRR roger never counts). Feeds the CQ+73 chip. A Fox
+            // multiplex's first half is RR73/RRR/73 by the shape gate, so a
+            // matched frame is a signoff by construction.
+            signoff: parsed.is_signoff() || fox_mux.is_some(),
+            worked,
+            worked_band,
+            country: entity,
+            new_dxcc,
+            new_band,
+            confirmed_band,
+            new_grid,
+            grid: grid.filter(|g| !g.is_empty()).map(str::to_string),
+            grid_rarity,
+            // WSJT-X decode markers: trailing 'a' = AP-assisted decode,
+            // '?' = low-confidence (qual below the stock 0.17 line).
+            ap: d.nap > 0,
+            low_conf: d.qual < 0.17,
+            // Label each decode by the mode that actually produced it
+            // (native source's mode, or a companion stream's per-decode
+            // WSJT-X mode); fall back to the selected tier when unknown
+            // (DX1's robust path, or an unrecognized companion mode).
+            tier: d.mode.map(Tier::from_mode_kind).unwrap_or(link_tier),
+            // DTO wire contract keeps rv as i32 (-1 = N/A); collapse the
+            // unified Option<i32> at this boundary.
+            rv: d.rv.unwrap_or(-1),
+            mine: false,
+            tx_at: None,
+        }
+    }
+
+    /// The decodes still held for slots `from_slot..=to_slot`, as the live feed draws them, for a
+    /// decode pane that missed those periods (#452; [`crate::dto::DecodeRefill`]). Coloured for the
+    /// band and mode on now: the history is cleared on every QSY and mode change
+    /// (`clear_decode_context`), so everything it holds was heard on them.
+    ///
+    /// ⚠️ READ ONLY. `&self`, and nothing it calls writes: the sequencer, the alerts and the
+    /// auto-actions read the same history and must see exactly what they saw before the ask.
+    pub fn decode_refill(&self, from_slot: u64, to_slot: u64) -> crate::dto::DecodeRefill {
+        // A full store has dropped decodes from its oldest slot, possibly some of them: only the
+        // slots after it are whole. One not yet full has dropped nothing since it began.
+        let covered_from = match self.decode_history.front() {
+            Some((oldest, _)) if self.decode_history.len() >= DECODE_HISTORY_DEPTH => oldest + 1,
+            _ => 0,
+        };
+        let cur_band = (!self.settings.band.is_empty()).then_some(self.settings.band.as_str());
+        let fold_mode = self.settings.b4_match_mode;
+        let cur_band_key = tempo_core::logbook::Logbook::band_key(
+            &self.settings.band,
+            self.adif_mode_for_tier(),
+            fold_mode,
+        );
+        let link_tier = self.app.tier();
+        let hot = self.station.hot();
+        let rows = self
+            .decode_history
+            .iter()
+            .filter(|(slot, _)| (from_slot..=to_slot).contains(slot) && *slot >= covered_from)
+            .map(|(slot, d)| crate::dto::RefillRow {
+                slot: *slot,
+                row: self.decode_row(d, &hot, cur_band, &cur_band_key, fold_mode, link_tier),
+            })
+            .collect();
+        crate::dto::DecodeRefill { covered_from, rows }
+    }
+
     /// Full snapshot, with mode + per-mode (QSO / Field Day) status filled in.
     pub fn snapshot(&self) -> AppSnapshot {
         let mut s = self.app.snapshot();
@@ -31064,30 +31312,7 @@ contact yourself."
                 .count() as u32;
         }
 
-        // #64, display side only: a DXpedition Fox packs two messages into one frame —
-        // "K1ABC RR73; W9XYZ <FOX> -08". In Hound mode `hound_split` has already split it
-        // upstream for everything; in STANDARD mode the sequencer must never see the halves
-        // (a Fox frame must not arm a non-Hound TX — that half of #64 is gated on operator
-        // sign-off), but the ROW must still be recognized the way WSJT-X shows it: the
-        // single on-air line, highlighted when either half is ours. Returns
-        // (first-half addressee, second half) only for the strict Fox shape — first half
-        // exactly "<call> RR73|RRR|73", second half a directed message with a sender — so
-        // free text carrying ';' is untouched.
-        fn fox_multiplex(msg: &str) -> Option<(&str, &str)> {
-            let (a, b) = msg.split_once(';')?;
-            let (a, b) = (a.trim(), b.trim());
-            let [to, fin] = a.split_whitespace().collect::<Vec<_>>()[..] else {
-                return None;
-            };
-            if !matches!(fin, "RR73" | "RRR" | "73") || !tempo_core::message::is_callsign(to) {
-                return None;
-            }
-            let second = Msg::parse(b);
-            (second.sender().is_some() && second.addressee().is_some()).then_some((to, b))
-        }
-
         // Project this slot's decodes into the live feed (alerts + coloring).
-        let mycall = &self.settings.mycall;
         // The band these decodes arrived on — new-grid / new-band / confirmed-on-band are
         // per-band questions, and this chain's dial is the only honest answer to "on what
         // band did I just hear this?".
@@ -31137,159 +31362,7 @@ contact yourself."
                     Some(l) if heard_before => (late_band, late_band_key.as_str(), l.heard.tier),
                     _ => (cur_band, cur_band_key.as_str(), s.link.tier),
                 };
-                // A Fox multiplex row classifies by its SECOND half (the one carrying the
-                // Fox's call as sender — country, B4 and rarity are about the transmitter);
-                // the first half contributes only its addressee and its RR73-ness below.
-                let fox_mux = fox_multiplex(&d.message);
-                let parsed = Msg::parse(fox_mux.map_or(d.message.as_str(), |(_, b)| b));
-                // #55: a WSPR spot is "CALL GRID DBM" — a different grammar entirely.
-                // Run through the FT8 parser, the trailing dBm (typ. 23–47, inside the
-                // −50..=49 report range) reads as a signal report and the GRID lands in
-                // the sender slot: "TI4JWC EK70 30" filed its country under EK →
-                // Armenia, and TI4JWC (Costa Rica) was never looked up. WSPR rows parse
-                // by the WSPR field order; they are never CQs and address nobody. #408: so
-                // do FST4W's, the same lines, and a Type 2 beacon (`KI4TWB/0 23`) has no
-                // grid, where its power used to show as one.
-                let wspr_fields = tempo_core::beacon::is_beacon_mode(d.mode).then(|| {
-                    let beacon = tempo_core::beacon::parse_report(&d.message);
-                    (
-                        beacon.map(|b| b.call.to_string()),
-                        beacon.and_then(|b| b.grid),
-                    )
-                });
-                let is_cq = wspr_fields.is_none() && matches!(parsed, Msg::Cq { .. });
-                let from = match &wspr_fields {
-                    Some((call, _)) => call.clone(),
-                    None => parsed.sender().map(|c| c.to_string()),
-                };
-                // `same_call`, not an exact string compare: a decode addressed with a hashed,
-                // portable or compound form of our call — `<YS/WE9G>` for YS/WE9G, `W1ABC/P`
-                // for W1ABC — is still to us, and WSJT-X highlights it (its report() matches on
-                // the `/`-aware base call). The auto-sequencer already matches on `same_call`
-                // (see `to_me` in the QSO observer); this is the display path catching up, so a
-                // row the sequencer would answer no longer looks unaddressed. (#64)
-                let directed_to_me = wspr_fields.is_none()
-                    && (parsed
-                        .addressee()
-                        .map(|a| same_call(a, mycall))
-                        .unwrap_or(false)
-                        // A Fox multiplex is to us when EITHER half is: `parsed` covers
-                        // the second, this covers the first (the Fox's RR73 that ends
-                        // OUR QSO — the exact line the #64 reporter watched go dark).
-                        || fox_mux.is_some_and(|(to, _)| same_call(to, mycall)));
-                // Worked-before (B4): the decode's sender is in the logbook —
-                // via the SAME prebuilt set as the roster above. The per-row
-                // `worked_before()` this replaces was the exact O(rows × log)
-                // sweep the set was built to end, re-grown 240 lines below the
-                // comment explaining the 1–2 s waterfall stall it caused.
-                // Keyed as the roster is (`lookup_call`): a hashed sender is its plain call,
-                // `<...>` no call.
-                let key = from.as_deref().and_then(lookup_call);
-                let worked = key.as_deref().is_some_and(|c| hot.worked_call(c));
-                // The stronger scope, same set as the roster above.
-                let worked_band = key
-                    .as_deref()
-                    .is_some_and(|c| hot.worked_call_band(c, cur_band_key, fold_mode));
-                // New-grid (B3): the decode carries a Maidenhead grid we've never
-                // worked ON THIS BAND. Grid is present on CQ/grid forms. Per band
-                // because that is how grids are awarded (VUCC) — a grid worked on
-                // 20 m is a genuinely new one on 2 m.
-                let grid = match &wspr_fields {
-                    Some((_, g)) => *g,
-                    None => match &parsed {
-                        Msg::Cq { grid, .. } | Msg::Grid { grid, .. } => Some(grid.as_str()),
-                        _ => None,
-                    },
-                };
-                let new_grid = match (cur_band, grid) {
-                    (Some(b), Some(g)) => !g.is_empty() && !hot.grid_worked_on(g, b),
-                    // No band claimed (off the bands), or the frame carried no grid.
-                    _ => false,
-                };
-                // Country + New-DXCC (B3): resolve the sender's DXCC entity once.
-                // `country` rides every decode (DX chasers scan by country); the
-                // entity also drives new-DXCC. Needs the injected resolver; both
-                // stay None/false in headless tests.
-                let entity = match (&from, &self.station.dxcc_resolve) {
-                    (Some(c), Some(resolve)) => resolve(c),
-                    _ => None,
-                };
-                // Split the highlight (operator ruling, option 2): a TRUE all-time-new DXCC
-                // entity (never worked on any band) reads as `DXCC` — matching the Needed
-                // board's NEW ONE / ATNO — while an entity worked elsewhere but new on THIS band
-                // (DXCC is awarded per band: Challenge slots, VHF DXCC) reads as the dimmer
-                // `BAND`. The two are mutually exclusive by construction, so a chaser never
-                // mistakes a band-slot for a new country.
-                let (new_dxcc, new_band) = match &entity {
-                    Some(e) => {
-                        let ever = hot.entity_worked_ever(e);
-                        // ATNO is all-time and stays answerable off the bands; the band slot
-                        // is not — with no band there is no slot for it to be new in.
-                        (
-                            !ever,
-                            ever && cur_band.is_some_and(|b| !hot.entity_worked_on(e, b)),
-                        )
-                    }
-                    None => (false, false),
-                };
-                // Confirmed (award-grade) on THIS band — for the hide-confirmed filter.
-                // A still-new-on-band station is never marked confirmed (mutually exclusive
-                // by construction), so the filter can never hide a slot that's still open.
-                // Off the bands this stays false, which is the safe direction for a FILTER:
-                // "hide what is confirmed here" hides nothing rather than hiding rows on the
-                // strength of a band that does not exist.
-                let confirmed_band = match (cur_band, entity.as_deref()) {
-                    (Some(b), Some(e)) => hot.entity_confirmed_on(e, b),
-                    _ => false,
-                };
-                // Rarity: prefer the grid on THIS frame, but on report/R/RR73/73
-                // frames (which carry no grid) fall back to the sender's grid
-                // remembered in the roster — so an ULTRA-rare station keeps its
-                // badge through the whole QSO, not just on its CQ. (Backfills only
-                // the rarity marker; the row's own `grid` text stays unchanged.)
-                let grid_rarity = self.station.rarity_of(grid.or_else(|| {
-                    from.as_deref()
-                        .and_then(|c| self.app.inbox.roster.get(c))
-                        .and_then(|h| h.grid.as_deref())
-                }));
-                DecodeRow {
-                    lotw_user: self.station.lotw_user(from.as_deref()),
-                    from,
-                    snr: d.snr,
-                    dt_sec: d.dt,
-                    freq_hz: d.freq,
-                    message: d.message.clone(),
-                    is_cq,
-                    directed_to_me,
-                    // QSO-ending RR73/73, by parse type (token-positional — a DM73
-                    // grid or an RRR roger never counts). Feeds the CQ+73 chip. A Fox
-                    // multiplex's first half is RR73/RRR/73 by the shape gate, so a
-                    // matched frame is a signoff by construction.
-                    signoff: parsed.is_signoff() || fox_mux.is_some(),
-                    worked,
-                    worked_band,
-                    country: entity,
-                    new_dxcc,
-                    new_band,
-                    confirmed_band,
-                    new_grid,
-                    grid: grid.filter(|g| !g.is_empty()).map(str::to_string),
-                    grid_rarity,
-                    // WSJT-X decode markers: trailing 'a' = AP-assisted decode,
-                    // '?' = low-confidence (qual below the stock 0.17 line).
-                    ap: d.nap > 0,
-                    low_conf: d.qual < 0.17,
-                    // Label each decode by the mode that actually produced it
-                    // (native source's mode, or a companion stream's per-decode
-                    // WSJT-X mode); fall back to the selected tier when unknown
-                    // (DX1's robust path, or an unrecognized companion mode).
-                    tier: d.mode.map(Tier::from_mode_kind).unwrap_or(link_tier),
-                    // DTO wire contract keeps rv as i32 (-1 = N/A); collapse the
-                    // unified Option<i32> at this boundary.
-                    rv: d.rv.unwrap_or(-1),
-                    mine: false,
-                    tx_at: None,
-                }
+                self.decode_row(d, &hot, cur_band, cur_band_key, fold_mode, link_tier)
             })
             .collect();
         s.late_decodes = late.map(|l| crate::dto::LateDecodes {
@@ -33206,7 +33279,7 @@ contact yourself."
         for d in &fresh {
             self.decode_history.push_back((slot, d.clone()));
         }
-        while self.decode_history.len() > 240 {
+        while self.decode_history.len() > DECODE_HISTORY_DEPTH {
             self.decode_history.pop_front();
         }
         let pend_before = self.app.pending_count();
@@ -33487,7 +33560,7 @@ contact yourself."
         for d in &decodes {
             self.decode_history.push_back((slot, d.clone()));
         }
-        while self.decode_history.len() > 240 {
+        while self.decode_history.len() > DECODE_HISTORY_DEPTH {
             self.decode_history.pop_front();
         }
         // JS8: parse the typed words behind these rows into the message layer (activity
@@ -34702,7 +34775,7 @@ contact yourself."
         for d in decodes.iter() {
             self.decode_history.push_back((slot, d.clone()));
         }
-        while self.decode_history.len() > 240 {
+        while self.decode_history.len() > DECODE_HISTORY_DEPTH {
             self.decode_history.pop_front();
         }
         self.last_decodes = decodes.to_vec();
@@ -73635,6 +73708,55 @@ mod tests {
         assert!(
             e.settings.dial_mhz > 30.0,
             "MSK144 from HF still moves to its VHF calling channel, got {}",
+            e.settings.dial_mhz
+        );
+    }
+
+    /// #184: an HF rig set to 160 m–4 m and a dual-bander set to 2 m/70 cm. Picking FST4 from
+    /// 20 m FT8 sent the dial to 2200 m, a band neither radio is set for, because the fallback
+    /// took the mode's FIRST channel. It now takes the first channel a radio in the shack covers.
+    #[test]
+    fn a_specialty_mode_falls_back_to_a_channel_a_radio_covers() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        let hf: Vec<String> = [
+            "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m",
+        ]
+        .iter()
+        .map(|b| b.to_string())
+        .collect();
+        e.set_radio_bands(0, hf);
+        let vhf = e.add_radio();
+        e.set_radio_bands(vhf, vec!["2m".into(), "70cm".into()]);
+        e.set_active_radio(0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+
+        e.set_tier(Tier::Fst4);
+        assert!(
+            (e.settings.dial_mhz - 1.839).abs() < 1e-9,
+            "FST4 lands on 160 m, the one FST4 band a radio here is set for, got {}",
+            e.settings.dial_mhz
+        );
+        // FST4W carries WSJT-X's whole table, 20 m included, so from 20 m it stays on 20 m.
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tier(Tier::Fst4w);
+        assert!(
+            (e.settings.dial_mhz - 14.0956).abs() < 1e-9,
+            "FST4W has a 20 m channel, got {}",
+            e.settings.dial_mhz
+        );
+
+        // CONTROL: one radio with no bands set covers everything, so the mode's first channel
+        // stays the answer (FST4 → 2200 m), as before.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tier(Tier::Fst4);
+        assert!(
+            (e.settings.dial_mhz - 0.136).abs() < 1e-9,
+            "a catch-all radio keeps FST4's first channel, got {}",
             e.settings.dial_mhz
         );
     }

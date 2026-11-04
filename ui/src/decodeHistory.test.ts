@@ -4,6 +4,7 @@ import {
   DecodeHistory,
   fmtUtc,
   MAX_HISTORY,
+  missedBetween,
   MAX_ROWS,
   orderEntries,
   passesFilter,
@@ -602,5 +603,57 @@ describe('an unchanged re-poll changes nothing', () => {
     v = h.version
     h.reset()
     expect(h.version).toBeGreaterThan(v)
+  })
+})
+
+// #452: the periods a pane missed, owed a refill from the station's history.
+describe('decode history — refill after missed periods', () => {
+  const cq = row({ message: 'CQ W9XYZ EN52', freqHz: 1200 })
+  const call = row({ message: 'KD9TAW W9XYZ EN52', freqHz: 1228, directedToMe: true })
+
+  it('owes a refill only for a jump past the last slot, once, spanning every jump since', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([cq], 100)
+    h.ingest([cq], 101)
+    expect(h.takeRefill()).toBeNull()
+    h.ingest([cq], 103)
+    h.ingest([cq], 106)
+    expect(h.takeRefill()).toMatchObject({ from: 101, to: 106 })
+    expect(h.takeRefill()).toBeNull()
+  })
+
+  it('drops an answer to an ask made before a band change or an Erase', () => {
+    for (const wipe of [(h: DecodeHistory) => h.setScope('40m', 'FT8'), (h: DecodeHistory) => h.erase()]) {
+      const h = new DecodeHistory()
+      h.setScope('20m', 'FT8')
+      h.ingest([cq], 100)
+      h.ingest([cq], 104)
+      const ask = h.takeRefill()!
+      wipe(h)
+      const v = h.version
+      expect(h.applyRefill(ask, { coveredFrom: 0, rows: [{ slot: 102, row: call }] }, () => 0)).toBe(false)
+      expect(h.version).toBe(v)
+      expect(h.entries().some((d) => d.message === call.message)).toBe(false)
+    }
+  })
+
+  it('a live re-poll of a refilled line is the live row again, never a second row', () => {
+    const h = new DecodeHistory()
+    h.setScope('20m', 'FT8')
+    h.ingest([cq], 100)
+    h.ingest([], 103)
+    h.applyRefill(h.takeRefill()!, { coveredFrom: 0, rows: [{ slot: 103, row: call }] }, () => 1)
+    expect(h.entries().filter((d) => d.message === call.message).map((d) => d.refilled)).toEqual([true])
+    h.ingest([call], 103)
+    expect(h.entries().filter((d) => d.message === call.message).map((d) => d.refilled)).toEqual([undefined])
+  })
+
+  it('places a gap marker where the missing stretch begins', () => {
+    const gaps = [{ from: 101, to: 102 }]
+    expect(missedBetween(gaps, 100, 101)).toBe(2)
+    expect(missedBetween(gaps, 101, 100)).toBe(2)
+    expect(missedBetween(gaps, 101, 103)).toBe(0)
+    expect(missedBetween(gaps, 99, 100)).toBe(0)
   })
 })

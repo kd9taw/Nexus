@@ -315,6 +315,30 @@ pub struct DecodeRow {
     pub rv: i32,
 }
 
+/// What a decode pane missed while it was not taking the feed in (#452), from the decodes the
+/// engine still holds (`Engine::decode_refill`). The snapshot's feed is the CURRENT period only, so
+/// a pane that was closed, or a window the OS stopped painting, came back with the periods in
+/// between gone for good while our own overs (a 30-deep ring) came back whole: a contact that read
+/// as never answered. A read of history; nothing in the station changes for asking.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecodeRefill {
+    /// The oldest slot whose decodes are all still held. A missed period before it can no longer
+    /// be refilled, and the pane marks it as not received. 0 while nothing has been dropped.
+    pub covered_from: u64,
+    /// The held decodes in the slots asked for, oldest first, each with the slot it was ingested
+    /// at (the snapshot's `radio.slot` numbering).
+    pub rows: Vec<RefillRow>,
+}
+
+/// One refilled decode and the slot it was ingested at.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefillRow {
+    pub slot: u64,
+    pub row: DecodeRow,
+}
+
 /// A period heard before a band or mode change, as [`AppSnapshot::late_decodes`] carries it.
 /// Its rows are coloured (B4, new grid, new band, confirmed) for `band` and `tier`, never for the
 /// band or mode now selected, and nothing they show can be worked.

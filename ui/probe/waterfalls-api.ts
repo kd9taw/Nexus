@@ -48,6 +48,12 @@ export async function uiStateLoad(): Promise<any> { return {} }
 export async function getAllSpots(): Promise<any> { return [] }
 export async function getNeedAlerts(): Promise<any> { return [] }
 export async function getPropagation(): Promise<any> { return null }
+// The path and band outlooks are a PathPrediction or null; the generated `{}` / `[]` default has no
+// `bands`, and Connect's panes read `outlook?.bands`, so it crashed Connect in every probe.
+export async function getPathOutlook(): Promise<any> { return null }
+export async function getBandOutlook(): Promise<any> { return null }
+export async function getGettingOut(): Promise<any> { return { count: 0, maxKm: 0, reports: [] } }
+export async function getKc2gMuf(): Promise<any> { return [] }
 export async function getFeedHealth(): Promise<any> { return null }
 export async function getXrayNow(): Promise<any> { return null }
 export async function getDxpedWindows(): Promise<any> { return [] }

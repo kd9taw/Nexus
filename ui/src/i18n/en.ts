@@ -4079,6 +4079,11 @@ export const EN = {
   'map.coverage.dim.title': 'What to color: your worked grid squares (VUCC) or CQ zones (WAZ)',
   'map.coverage.dim.grids': 'Grids',
   'map.coverage.dim.zones': 'CQ zones',
+  'map.style.label': 'Map style',
+  'map.style.title': 'How the Globe, Flat and Beam maps paint land and sea: Atlas is light, Dark is dark in either theme. A dark theme brings its own map until you pick one. The 3D globe keeps its photo of the Earth.',
+  'map.style.atlas': 'Atlas',
+  'map.style.dark': 'Dark',
+  'map.style.theme': "Theme's own",
 
   // Hover tooltips. The station line is pure measurement and is not here at all. Each of
   // these carries its own leading separator where it is an appended clause.
@@ -12269,6 +12274,12 @@ export const EN = {
   // A received row's time is its period's start, as WSJT-X and ALL.TXT show it; {{time}} is when
   // the line reached the list (UTC, hhmmss), seconds later for a full-pass decode.
   'operate.decodes.utc.period.title': 'Start of the period it was heard in (UTC). Arrived at {{time}}.',
+  // #452: a row filled in from the station's decode history after this pane missed its period.
+  'operate.decodes.utc.refilled.title': 'Start of the period it was heard in (UTC). Filled in afterwards from the station history: this pane was not showing when it was decoded.',
+  // #452: a dim marker between two rows for periods this pane missed and could not fill in;
+  // {{n}} is how many. A label with a number after it, so no plural form is needed.
+  'operate.decodes.gap': 'Periods not received: {{n}}',
+  'operate.decodes.gap.title': 'This pane was not taking decodes in for these periods, and the station no longer holds them. ALL.TXT has every decode.',
   'operate.decodes.dt.title': 'DT — time offset (s); large = clock/sync skew',
   'operate.decodes.dt.title.msk144': 'T — when in the period the ping landed (s)',
   'operate.decodes.marker.lowConf.title': 'Low-confidence decode',
