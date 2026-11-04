@@ -13126,6 +13126,129 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   padding: 1px var(--space-1);
 }
+/* THE NEEDLE METERS (#343, components/TxNeedles.tsx): PO, ALC and SWR as analog faces, in place of
+   their bars, when Settings ▸ Workspace ▸ TX meters is Needle. Each face is a display well: a dial
+   (an SVG whose viewBox is the dial's own shape, so it scales with the face) over a band carrying the
+   meter's name and value, laid over the dial's lower half (the needle's pivot sits under it).
+
+   THE FACE'S SIZE IS ITS WIDTH, set per host here; its height is the dial's, from the dial's aspect
+   ratio, so the whole face is in em and follows --ui-zoom and the text size as the bars' type does. It never changes with the TX cycle: the faces are drawn from the
+   first moment the bars' slots would be, at rest until a reading arrives.
+   - The dock (Phone and CW below md, `pinned`): the faces get the meters' first row to themselves,
+     at the same size keyed or not (the bars' compact/full switch does not reach them).
+   - Operate's cell (`inline`) and the TX strip's (`strip`) keep their compact type, and the faces
+     are no taller than the strip's buttons (measured in Chrome at 1920×1080 and 1366×768), and
+     narrow enough that the strip's COMP row keeps the room it has beside the bars. */
+.ph-txmeters.needle .ph-txneedles {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+.ph-txneedle {
+  flex: none;
+  width: 8em;
+  min-width: 0;
+}
+.ph-txmeters.inline .ph-txneedle {
+  width: 5em;
+}
+.ph-txmeters.inline .ph-txneedles {
+  gap: 2px var(--space-1);
+}
+.ph-txneedle-face {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.ph-txneedle-dial {
+  position: relative;
+  aspect-ratio: 100 / 38;
+}
+.ph-txneedle-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.ph-txneedle-scale,
+.ph-txneedle-tick {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.2;
+}
+.ph-txneedle-zone {
+  fill: none;
+  stroke-width: 3;
+}
+.ph-txneedle-peak {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+.ph-txneedle-needle {
+  stroke: var(--text);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  transform-box: view-box;
+  transform-origin: 50px 63px;
+  transition: transform 120ms linear;
+}
+.ph-txneedle-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1);
+  padding: 0 3px;
+  line-height: 1.15;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ph-txneedle-label {
+  font-family: var(--font-mono);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 800;
+  color: var(--text-dim);
+}
+.ph-txneedle-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.86rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ph-txmeters.inline .ph-txneedle-label {
+  font-size: calc(10px * var(--text-scale));
+}
+.ph-txmeters.inline .ph-txneedle-value {
+  font-size: 0.74rem;
+}
+/* The strip's two rows: the faces take both, in a first column of their own width; COMP and the
+   temperatures fill the columns after it as they do beside the bars. */
+.ph-txmeters.inline.strip.needle {
+  grid-template-columns: max-content;
+}
+.ph-txmeters.inline.strip.needle .ph-txneedles {
+  grid-column: auto;
+  grid-row: 1 / -1;
+  flex-wrap: nowrap;
+}
+/* Between overs the needle rests and the marker holds the last over's peak, dimmed like the bars. */
+.ph-txmeters.idle .ph-txneedle-value,
+.ph-txmeters.idle .ph-txneedle-label,
+.ph-txmeters.idle .ph-txneedle-peak {
+  opacity: 0.55;
+}
 /* THE TRANSMIT CONTRACT — the dock's top line (2026-09-20). ONE LINE, ALWAYS: `nowrap` is
    not tidiness, it is the whole reason this sits where it does. The dock is bottom-anchored,
    so a strip that wrapped to two lines on a narrow window would push the PTT button out from

@@ -243,6 +243,9 @@ const SHARED = [
   // The optional local-time clock beside UTC (#253). Per MACHINE, like density and field mode:
   // local time is a fact about this computer's time zone, and every window of it agrees.
   'nexus-local-clock',
+  // How the TX meters are drawn, Bars or Needle (#343, txMeterStyle.ts): a display preference about
+  // this screen, so a popped-out cockpit draws its meters as the main window does.
+  'nexus-txmeter-style',
   // The colour roles (Settings ▸ Appearance ▸ Colours), one key per role: a preference about this
   // screen and the eyes in front of it, the same class as the theme, so every window agrees. The
   // role table is their one source (`classifies every colour-role key`, below).

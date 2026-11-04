@@ -694,6 +694,9 @@ const MIGRATED = [
   // a named constant exactly as this file's sibling `TxMeters.tsx` holds its four.
   'components/SMeter.tsx',
   'components/TxMeters.tsx',
+  // The needle faces TxMeters draws in place of its PO, ALC and SWR bars (#343). Born migrated: the
+  // meter names arrive from TxMeters' constants, the rest is through `t()`.
+  'components/TxNeedles.tsx',
   // The Phone cockpit's Sub receiver strip (dual-receiver radios). Migrated from birth: its
   // only bare literals are the rig's own plate `SUB` and the em dash for a value not known,
   // both held as named constants.

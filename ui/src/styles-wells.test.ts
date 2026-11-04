@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { SMeter } from './components/SMeter'
 import { TxMeters } from './components/TxMeters'
+import { TX_METER_STYLE_KEY } from './txMeterStyle'
 import { LevelMeter } from './components/LevelMeter'
 import { CockpitHeader } from './components/CockpitHeader'
 import { Waterfall } from './components/Waterfall'
@@ -248,6 +249,18 @@ const INSTRUMENTS: Instrument[] = [
     display: '.ph-txmeter-track',
     fills: '.ph-txmeter-fill',
   },
+  // #343: the needle faces (Settings ▸ Workspace ▸ TX meters ▸ Needle). Stored before the render and
+  // cleared after it (`rendered`), so no other instrument here is drawn as needles.
+  {
+    name: 'the needle TX meters (Phone/CW dock)',
+    mount: () => (localStorage.setItem(TX_METER_STYLE_KEY, 'needle'), createElement(TxMeters, { radio: radio(true), pinned: true })),
+    display: '.ph-txneedle-face',
+  },
+  {
+    name: "the needle TX meters (Operate's strip cell)",
+    mount: () => (localStorage.setItem(TX_METER_STYLE_KEY, 'needle'), createElement(TxMeters, { radio: radio(true), inline: true })),
+    display: '.ph-txneedle-face',
+  },
   { name: 'the RX audio level meter', mount: () => createElement(LevelMeter, { value: 0.5 }), display: '.level-meter', fills: '.level-fill' },
   {
     name: 'the VFO readout',
@@ -310,6 +323,7 @@ function rendered(i: Instrument): Rendered {
     : []
   const out = { display: chainOf(el!), fills }
   cleanup()
+  localStorage.clear()
   RENDERED.set(i, out)
   return out
 }

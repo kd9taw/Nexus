@@ -319,6 +319,7 @@ import { renumberedTwin, showHiddenSpaces } from '../features/audioDeviceTwin'
 import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from '../settings/ampAddress'
 import { normaliseTyped, upperTyped } from '../typedInput'
 import { IotaListSettings } from './Iota'
+import { setTxMeterStyle, useTxMeterStyle } from '../txMeterStyle'
 
 /** The call a running contest entry is operated under, when saving `form` over `saved` would
  *  change the station's call (`mycall`) while the entry runs (the live snapshot, `fieldDay`) and
@@ -1292,6 +1293,7 @@ export function SettingsPanel({
   const [logbookGlobe, setLogbookGlobe] = useLogbookGlobe()
   // Browser-local like the globe: whether resting the pointer on a call opens its station card.
   const [callCardHover, setCallCardHover] = useCallCardHover()
+  const txMeterStyle = useTxMeterStyle()
   // APPEARANCE IN THE BACKUP (features/appearanceBackup.ts). The look on screen, as the backup
   // carries it: what this host wires, both waterfall palettes and the Logbook globe — and, by
   // design, not Field mode or UI scale. A restore puts it back through the very setters the rows
@@ -4853,6 +4855,30 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.workspace.localClock.hint')}</span>
                 </div>
               )}
+              {/* #343: how the TX meters are drawn — bars, or needles with a peak marker. Per
+                  machine, Bars by default (txMeterStyle.ts); the meters read it themselves. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.workspace.txMeters.label')}</span>
+                <div className="theme-switcher" role="group" aria-label={t('settings.workspace.txMeters.label')}>
+                  <button
+                    type="button"
+                    className={`theme-chip${txMeterStyle === 'bars' ? ' active' : ''}`}
+                    aria-pressed={txMeterStyle === 'bars'}
+                    onClick={() => setTxMeterStyle('bars')}
+                  >
+                    {t('settings.workspace.txMeters.bars')}
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-chip${txMeterStyle === 'needle' ? ' active' : ''}`}
+                    aria-pressed={txMeterStyle === 'needle'}
+                    onClick={() => setTxMeterStyle('needle')}
+                  >
+                    {t('settings.workspace.txMeters.needle')}
+                  </button>
+                </div>
+                <span className="settings-hint">{t('settings.workspace.txMeters.hint')}</span>
+              </div>
 
               <div className="settings-field">
                 <span className="settings-label">{t('settings.workspace.panes.label')}</span>

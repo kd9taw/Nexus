@@ -10,6 +10,8 @@ import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { t } from '../i18n'
 import { fmtTempC, useUnits } from '../units'
+import { useTxMeterStyle } from '../txMeterStyle'
+import { NEEDLE_KEYS, TxNeedles, type NeedleKey, type NeedleRow } from './TxNeedles'
 
 /** The rig's own meter names, as they are printed on a radio's front panel — technical tokens
  *  exactly as a mode name is, gathered here so the catalog guard reads them as the deliberate
@@ -195,6 +197,9 @@ export function TxMeters({
   // from that moment on (below).
   const keyedOnce = useRef(false)
   const units = useUnits()
+  // #343: Settings ▸ Workspace ▸ TX meters. Needle draws PO, ALC and SWR as needles (TxNeedles) in
+  // place of their bars; COMP and the temperatures stay bars. Bars is the default.
+  const needle = useTxMeterStyle() === 'needle'
   // The processor level while a drag is in flight: the marker follows the pointer at once.
   const [dragPct, setDragPct] = useState<number | null>(null)
   // The level last set here, held on the marker until the radio's reported level moves. Mid-over
@@ -473,11 +478,22 @@ export function TxMeters({
   }
   return (
     <div
-      className={`ph-txmeters${variant}${!live && pin ? ' idle' : ''}`}
+      className={`ph-txmeters${variant}${!live && pin ? ' idle' : ''}${needle ? ' needle' : ''}`}
       role="group"
       aria-label={t('meters.tx.aria')}
     >
-      {shown.map((r) => {
+      {needle && (
+        <TxNeedles
+          rows={rows.filter((r): r is NeedleRow => isNeedle(r.key))}
+          live={live}
+          swrVerified={radio.swrScaleVerified === true}
+          alcZoneTop={radio.txAlcZone ?? 1}
+          unreported={overJudged.current ? NEEDLE_KEYS.filter((k) => !seen.current.has(k)) : []}
+        />
+      )}
+      {/* With needles, Operate's fixed-width cell has room for the three faces only, so its COMP slot
+          goes (FT does not use the speech processor); everywhere else COMP stays a bar beside them. */}
+      {shown.filter((r) => !needle || (!isNeedle(r.key) && !(r.key === 'comp' && inline && !strip))).map((r) => {
         const slider = r.key === 'comp' && levelPct != null
         const hasCtl = r.key === 'comp' && (slider || procOn != null || bwSteps.length > 1)
         return (
@@ -543,3 +559,5 @@ export function TxMeters({
     </div>
   )
 }
+
+const isNeedle = (k: MeterKey): k is NeedleKey => (NEEDLE_KEYS as readonly string[]).includes(k)

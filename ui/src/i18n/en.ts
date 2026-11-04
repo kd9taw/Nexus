@@ -10928,6 +10928,10 @@ export const EN = {
   // ── Settings ▸ Appearance: the other Display sections ─────────────────────────────
   // Theme holds the theme cards and the High contrast, Night and Field mode rows, whose keys keep
   // their `settings.workspace.*` ids: an id is an invariant token, and the rows only moved.
+  'settings.workspace.txMeters.label': 'TX meters',
+  'settings.workspace.txMeters.bars': 'Bars',
+  'settings.workspace.txMeters.needle': 'Needle',
+  'settings.workspace.txMeters.hint': 'How the power, ALC and SWR meters look on the FT8, Phone and CW screens. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over\'s peak.',
   'settings.theme.legend': 'Theme',
   'settings.waterfallScopes.legend': 'Waterfall & scopes',
   'settings.waterfallScopes.note':
@@ -15028,6 +15032,7 @@ export const EN = {
     "Antenna match — this is the radio's own raw figure, and Nexus has no verified scale for this model, so it cannot tell you what counts as high here. Watch which way it moves as you tune; the absolute number may be well out, and nothing stops your transmission on it.",
   'meters.tx.alc.title': 'ALC — set mic gain so SSB peaks just tickle the zone, never peg it',
   'meters.tx.po.title': 'Actual output power',
+  'meters.tx.needle.peak.title': 'The bright mark is the peak: it holds the highest reading for a second, then falls back. Between overs it shows the last over\'s peak.',
   'meters.tx.comp.title': 'Speech compression',
   'meters.tx.comp.level.aria': 'Speech processor level',
   'meters.tx.comp.level.title': 'Speech compression — the bar is the meter, the line is the processor level ({{level}}%). Drag the bar or use the arrow keys to set the level.',
