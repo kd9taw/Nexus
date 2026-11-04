@@ -91,6 +91,11 @@ export interface CockpitHeaderProps {
   power?: CockpitHeaderPower
   /** Override the derived CAT ✓/✗ pill. */
   catStatus?: ReactNode
+  /** PINNED: the header parks at the top of its shell when the shell scrolls, so the mode, the
+   *  dial, the band, ⊞ Panels, power and CAT never leave the window (`.cockpit-header-pinned`,
+   *  cockpit-panes.css). The cockpit's TX strip then parks under it, not over it (CockpitTxStrip
+   *  measures it). SSTV, RTTY and PSK pin theirs. */
+  pinned?: boolean
 }
 
 /** What to say when a wheel burst PARKS on a band edge, naming the edge it stopped at — the
@@ -134,6 +139,7 @@ export function CockpitHeader({
   actions,
   power,
   catStatus,
+  pinned = false,
 }: CockpitHeaderProps) {
   const powerValue = power?.value
   const radio = snap.radio
@@ -287,7 +293,7 @@ export function CockpitHeader({
   )
 
   return (
-    <div className="cockpit-header">
+    <div className={pinned ? 'cockpit-header cockpit-header-pinned' : 'cockpit-header'}>
       <div className="ch-identity">{modeIndicator}</div>
 
       <div className="ch-freq">

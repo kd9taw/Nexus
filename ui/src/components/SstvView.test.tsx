@@ -307,10 +307,11 @@ function installCanvasStubs() {
   return ctx
 }
 
-/** Load a fake image through the file picker and wait for Send to enable. */
-async function loadPicture() {
+/** Load a fake image through the file picker and wait for Send to enable. `bytes` is the picture's
+ *  content (its identity for the remembered "already shows my callsign" tick); `name` its file name. */
+async function loadPicture(bytes: number[] = [1, 2, 3], name = 'photo.png') {
   const input = document.querySelector('input[type=file]') as HTMLInputElement
-  const file = new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' })
+  const file = new File([new Uint8Array(bytes)], name, { type: 'image/png' })
   fireEvent.change(input, { target: { files: [file] } })
   const send = (await screen.findByText('Send')) as HTMLButtonElement
   await waitFor(() => expect(send.disabled).toBe(false))
@@ -515,8 +516,10 @@ describe('SstvView TX panel', () => {
 
   // #50 (akhepcat): a pre-made QSO card already shows the call; the plate would cover art to
   // repeat it. The affirmation is PER-IMAGE — the danger designed against is a sticky opt-out
-  // carrying one picture's affirmation onto the next, which may identify nobody.
+  // carrying one picture's affirmation onto the next, which may identify nobody. Since #456 it is
+  // REMEMBERED for the same picture (by the hash of its bytes), and only for it.
   it('the affirmation sends without the plate, for THIS image', async () => {
+    localStorage.clear()
     render(<SstvView snap={snap} />)
     const send = await loadPicture()
     fireEvent.click(screen.getByLabelText(/already shows my callsign/i))
@@ -529,15 +532,75 @@ describe('SstvView TX panel', () => {
   })
 
   it('loading another image RESETS the affirmation', async () => {
+    localStorage.clear()
     render(<SstvView snap={snap} />)
     const send = await loadPicture()
     fireEvent.click(screen.getByLabelText(/already shows my callsign/i))
-    // A second picture arrives — the first picture's affirmation says nothing about it.
-    await loadPicture()
+    // A second, DIFFERENT picture arrives — the first picture's affirmation says nothing about it.
+    await loadPicture([9, 8, 7, 6])
+    await waitFor(() => expect((screen.getByLabelText(/already shows my callsign/i) as HTMLInputElement).checked).toBe(false))
     fireEvent.click(send)
     await waitFor(() => expect(sstvSend).toHaveBeenCalled())
     const last = sstvSend.mock.calls[sstvSend.mock.calls.length - 1]
     expect(last[4], 'an affirmation must never outlive its image').toBe(false)
+  })
+
+  // #456: the operator's QSO cards are the same few pictures, loaded again and again. Ticked once, a
+  // card comes back ticked — keyed by its CONTENT, so a different picture under the same name, or a
+  // picture this browser cannot hash, still starts unticked.
+  const idBox = () => screen.getByLabelText(/already shows my callsign/i) as HTMLInputElement
+  it('the SAME picture loaded again comes back ticked, under any name, and sends without the plate', async () => {
+    localStorage.clear()
+    const { unmount } = render(<SstvView snap={snap} />)
+    await loadPicture([4, 4, 4, 4], 'qso-card.png')
+    expect(idBox().checked, 'a picture never ticked starts unticked').toBe(false)
+    fireEvent.click(idBox())
+    unmount()
+    // A new session of the view (the next QSO), the same card picked from somewhere else.
+    render(<SstvView snap={snap} />)
+    const send = await loadPicture([4, 4, 4, 4], 'copy of my card.png')
+    await waitFor(() => expect(idBox().checked, 'the same picture lost its tick').toBe(true))
+    fireEvent.click(send)
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    expect(sstvSend.mock.calls[sstvSend.mock.calls.length - 1][4], 'the remembered tick did not reach the transmitter').toBe(true)
+  })
+
+  it('a DIFFERENT picture under the same name starts unticked and gets the plate', async () => {
+    localStorage.clear()
+    render(<SstvView snap={snap} />)
+    await loadPicture([4, 4, 4, 4], 'qso-card.png')
+    fireEvent.click(idBox())
+    // Yesterday's card overwritten with today's: same name, different picture.
+    const send = await loadPicture([5, 5, 5, 5], 'qso-card.png')
+    await waitFor(() => expect(idBox().checked).toBe(false))
+    fireEvent.click(send)
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    expect(sstvSend.mock.calls[sstvSend.mock.calls.length - 1][4], 'a name carried one picture’s tick onto another').toBe(false)
+  })
+
+  it('unticking forgets: the picture comes back unticked the next time', async () => {
+    localStorage.clear()
+    render(<SstvView snap={snap} />)
+    await loadPicture([4, 4, 4, 4])
+    fireEvent.click(idBox())
+    fireEvent.click(idBox())
+    expect(idBox().checked).toBe(false)
+    await loadPicture([7, 7])
+    await loadPicture([4, 4, 4, 4])
+    await waitFor(() => expect(screen.getByText(/photo\.png/)).toBeTruthy())
+    expect(idBox().checked, 'an untick was not remembered').toBe(false)
+  })
+
+  it('where the browser cannot hash a picture, nothing is remembered and every load starts unticked', async () => {
+    localStorage.clear()
+    vi.stubGlobal('crypto', {})
+    render(<SstvView snap={snap} />)
+    await loadPicture([4, 4, 4, 4])
+    fireEvent.click(idBox())
+    await loadPicture([7, 7])
+    await loadPicture([4, 4, 4, 4])
+    await waitFor(() => expect(screen.getByText(/photo\.png/)).toBeTruthy())
+    expect(idBox().checked, 'remembered with no key: the failure direction must be "ask again"').toBe(false)
   })
 
   // ---------------------------------------------------------------------------

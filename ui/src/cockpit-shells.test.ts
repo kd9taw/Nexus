@@ -555,19 +555,79 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
     '.layout.single.psk-cockpit',
     '.layout.single.sstv-view',
   ]) {
-    it(`${shell} sets the fill-frame floor knob (--cockpit-fill-min, em units)`, () => {
-      // Region-less cockpits: the bare fill frame's inline `min-height:
-      // var(--cockpit-fill-min, 0)` is the ONLY floor channel a sheet cannot outrank —
-      // `.rtty-cockpit > .pane-frame { min-height: 10em }` shipped dead against the
-      // frame's inline `min-height: 0`. cockpit-panes.test.ts fences who may set it.
-      const v = finalDecl(shell, '--cockpit-fill-min')
-      expect(v, `${shell}: --cockpit-fill-min not set — its fill frame floors at 0`).not.toBeNull()
-      // An em length, or RTTY's short-cockpit knob over one (`var(--rtty-fill-floor, 10em)`, set in
-      // cockpit-panes.css `.rtty-cockpit`): the stock em value stands wherever nothing sets the knob, as on
-      // PSK and SSTV, which share this rule.
-      expect(/^(\d+(\.\d+)?em|var\(--rtty-fill-floor, \d+(\.\d+)?em\))$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
+    it(`${shell} no longer sets the fill-frame floor knob: its frames are in a pane region`, () => {
+      // While these cockpits were region-less, their bare fill frames' inline `min-height:
+      // var(--cockpit-fill-min, 0)` was floored from the shell. Since 2026-11-04 the frames stand in
+      // the shell's one `.cockpit-panes` region, whose bounded flow sets the yielding floor itself
+      // (cockpit-panes.css); a shell value would only be dead weight inherited past it.
+      expect(finalDecl(shell, '--cockpit-fill-min')).toBeNull()
     })
   }
+})
+
+// THE PINNED HEADER (SSTV, RTTY, PSK — 2026-11-04). On a short or zoomed window these shells' deficit
+// valve scrolls, and the header (mode, dial, band, ⊞ Panels, power, CAT) scrolled out of the window with
+// the scope, while only the TX strip and the dock stayed. CockpitHeader `pinned` adds
+// `.cockpit-header-pinned` (cockpit-panes.css, loaded after this sheet): sticky at the top of the shell's
+// scrollport. COMPUTED over both sheets in load order, against the header's real chain in each shell, so a
+// later or heavier styles.css rule that took position, top, the background or the stacking back would
+// turn this red — the dead-fix mechanism this file exists for.
+const PANES_RULES = parseRules(
+  readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+)
+function winningAcross<T>(chain: Array<Set<string>>, blockValue: (body: string) => T | null): { value: T; selector: string } | null {
+  let win: { value: T; selector: string; spec: number; order: number } | null = null
+  const all = [...RULES, ...PANES_RULES.map((r) => ({ ...r, order: r.order + RULES.length + 1 }))]
+  for (const r of all) {
+    if (r.media !== null || !matchesChain(r.selector, chain)) continue
+    const v = blockValue(r.body)
+    if (v === null) continue
+    const spec = specificity(r.selector)
+    if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) win = { value: v, selector: r.selector, spec, order: r.order }
+  }
+  return win && { value: win.value, selector: win.selector }
+}
+const declOf = (prop: string) => (body: string) => {
+  let v: string | null = null
+  for (const d of body.split(';')) {
+    const m = new RegExp(`^\\s*${prop}\\s*:\\s*([^]*?)\\s*$`).exec(d)
+    if (m) v = m[1].replace(/\s+/g, ' ')
+  }
+  return v
+}
+describe('SSTV, RTTY and PSK pin their header: it never scrolls out of the window', () => {
+  for (const shell of ['sstv-view', 'rtty-cockpit', 'psk-cockpit']) {
+    const head = [...shellChain(shell), new Set(['cockpit-header', 'cockpit-header-pinned'])]
+    it(`.${shell}: the header resolves sticky at top 0, opaque, stacked over the strip`, () => {
+      expect(winningAcross(head, declOf('position'))?.value).toBe('sticky')
+      expect(winningAcross(head, declOf('top'))?.value).toBe('0')
+      expect(winningAcross(head, declOf('background'))?.value).toBe('var(--bg)')
+      const strip = [...shellChain(shell), new Set(['cockpit-txstrip'])]
+      expect(Number(winningAcross(head, declOf('z-index'))?.value)).toBeGreaterThan(Number(winningAcross(strip, declOf('z-index'))?.value))
+      // The strip parks UNDER it, at the height the strip measures.
+      expect(winningAcross(strip, declOf('top'))?.value).toBe('var(--cockpit-txstrip-top, 0px)')
+    })
+    it(`.${shell}: the band the header's shadow covers is exactly the shell's top padding`, () => {
+      // A sticky box parks inside its scroller's padding, so the shell's top padding stays open above
+      // the header and content scrolled through it in view. The shadow lifts the header's box by the
+      // padding the shell actually computes; a different padding would leave a band or cover the header.
+      const pad = winningAcross(shellChain(shell), declOf('padding'))?.value
+      expect(pad, 'the shell declares no padding').toBeTruthy()
+      const top = pad!.split(' ')[0]
+      // (One pixel more, for a shell edge on a subpixel; it lies outside the scrollport.)
+      expect(winningAcross(head, declOf('box-shadow'))?.value).toBe(`0 calc(-1 * ${top} - 1px) 0 var(--bg)`)
+      expect(winningAcross(shellChain(shell), declOf('padding-top')), 'a padding-top longhand would move the band').toBeNull()
+    })
+    it(`.${shell}: the header is still a direct shell child the valve scrolls past, and the shell still scrolls`, () => {
+      // Sticky needs a scrolling ancestor to stick in: the shell's own valve.
+      expect(winningOverflowY(shellChain(shell), null)?.value).toBe('auto')
+    })
+  }
+  it('the control: every other cockpit header is not pinned by any rule (FT, Phone, CW, JS8, JTTY keep theirs)', () => {
+    for (const shell of ['phone-cockpit', 'cw-cockpit', 'js8-cockpit', 'jtty-cockpit', 'operate-cockpit']) {
+      expect(winningAcross([...shellChain(shell), new Set(['cockpit-header'])], declOf('position')), shell).toBeNull()
+    }
+  })
 })
 
 /** Final flex-shrink a block computes (longhand + shorthand, in-block order). */

@@ -76,12 +76,19 @@ export function classifyRegionCols(width: number): RegionCols {
  * on: the number of `.cockpit-col` groups never exceeds `cols`. Same collapse Operate
  * ships as `dataCols: 'one' | 'two'` (features/panelHost.ts).
  *
+ * `oneGroup`: the cockpit has ONE column group, ever (SSTV, RTTY, PSK — header, scope, a single
+ * column of panes, the dock). Stacking is what a narrow region does with SEVERAL groups; with one
+ * there is nothing to stack, and the stacking flow would only make its fill panes content height
+ * and strand their divider. So such a region is always 'fill' — the same (1, fill) state the ⊞
+ * menu reaches on a wide window, not a new one: bounded, its column the scroller.
+ *
  * Resize bursts are collapsed to one measurement per frame; a hidden or mid-layout region
  * (0×0 — the keep-alive host, a view switch) keeps the tier it last had, so being hidden
  * never costs a single-column flash on the way back.
  */
 export function useRegionCols<T extends HTMLElement>(
   maxCols: RegionCols = 3,
+  oneGroup = false,
 ): {
   ref: React.RefObject<T>
   cols: RegionCols
@@ -92,7 +99,7 @@ export function useRegionCols<T extends HTMLElement>(
 } {
   const ref = useRef<T>(null)
   const [cols, setCols] = useState<RegionCols>(1)
-  const [flow, setFlow] = useState<RegionFlow>('stack')
+  const [flow, setFlow] = useState<RegionFlow>(oneGroup ? 'fill' : 'stack')
   // The MEASURED tier, kept across effect re-runs (a maxCols change must not forget the
   // last measurement and re-stamp 1 while the region happens to be hidden).
   const measured = useRef<RegionCols>(1)
@@ -110,7 +117,7 @@ export function useRegionCols<T extends HTMLElement>(
       const next = Math.min(measured.current, maxCols) as RegionCols
       el.setAttribute('data-cols', String(next))
       // The MEASUREMENT, uncapped: `maxCols` may narrow the template, never the flow.
-      const f: RegionFlow = measured.current === 1 ? 'stack' : 'fill'
+      const f: RegionFlow = measured.current === 1 && !oneGroup ? 'stack' : 'fill'
       el.setAttribute('data-flow', f)
       setCols(next) // same value ⇒ React bails out, no re-render
       setFlow(f)
@@ -127,7 +134,7 @@ export function useRegionCols<T extends HTMLElement>(
       cancelAnimationFrame(raf)
       ro.disconnect()
     }
-  }, [maxCols])
+  }, [maxCols, oneGroup])
 
   return { ref, cols, flow }
 }

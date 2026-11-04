@@ -217,18 +217,33 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
   )
 }
 
-/** THE STICKY EDGES' TWO PLACEMENT INPUTS, measured because CSS cannot read a sibling's box.
+/** THE STICKY EDGES' PLACEMENT INPUTS, measured because CSS cannot read a sibling's box.
  *  · `--cockpit-txstrip-bottom` on the strip: the dock's height. The dock is sticky at `bottom: 0`,
  *    so a strip parked at 0 would park UNDER it — Stop TX covered by the PTT row, the exact defect
  *    at the 150–175 % pins. A dock that is not sticky clears nothing.
- *  · `--cockpit-txstrip-h` on the SHELL: the strip's rendered height while it is sticky, which the
- *    shell's `scroll-padding-top` reads so whatever is scrolled to the start lands below a strip
- *    parked at the top. RENDERED, not offsetHeight: under the UI zoom Chrome applies
- *    `scroll-padding` unzoomed (measured: at 175 % a 42 px offsetHeight padded 42 screen px under a
- *    74 px strip), and more padding than the strip only scrolls a target a little lower.
+ *  · `--cockpit-txstrip-top` on the strip: the height of a PINNED header (`.cockpit-header-pinned`,
+ *    sticky at `top: 0` — SSTV, RTTY, PSK). A strip parked at 0 would park OVER it and cover the
+ *    dial and the band; it parks right under it instead. A header that is not sticky clears nothing.
+ *  · `--cockpit-txstrip-h` on the SHELL: what is parked at the top while the strip is sticky — the
+ *    strip's rendered height, plus a pinned header's — which the shell's `scroll-padding-top` reads
+ *    so whatever is scrolled to the start lands below it. RENDERED, not offsetHeight: under the UI
+ *    zoom Chrome applies `scroll-padding` unzoomed (measured: at 175 % a 42 px offsetHeight padded
+ *    42 screen px under a 74 px strip), and more padding than the strip only scrolls a target a
+ *    little lower.
  *  Re-read on every render as well as on a resize. */
 const isDock = (c: Element): c is HTMLElement =>
   c instanceof HTMLElement && (c.classList.contains('cockpit-txdock') || c.classList.contains('sstv-tx-bar'))
+/** What is parked at the top ABOVE the strip: a sticky shell child before it — the pinned header
+ *  (CockpitHeader `pinned`). Read off the computed style rather than a class, so the strip clears
+ *  whatever actually sticks there and nothing that does not. */
+function pinnedAbove(shell: HTMLElement, strip: HTMLElement): HTMLElement | undefined {
+  const kids = Array.from(shell.children)
+  const at = kids.findIndex((c) => c === strip || c.contains(strip))
+  return kids
+    .slice(0, Math.max(0, at))
+    .filter((c): c is HTMLElement => c instanceof HTMLElement && getComputedStyle(c).position === 'sticky')
+    .pop()
+}
 
 /** The cockpit shell the strip stands in: its parent — or, where layout wrappers stand between them
  *  (Phone's stage and the left side's row, 2026-10-03), the nearest ancestor holding the dock, up to
@@ -247,10 +262,17 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     const shell = strip && shellOf(strip)
     if (!strip || !shell) return
     const dock = Array.from(shell.children).find(isDock)
+    const head = pinnedAbove(shell, strip)
     strip.style.setProperty('--cockpit-txstrip-bottom',
       dock && getComputedStyle(dock).position === 'sticky' ? `${dock.offsetHeight}px` : '0px')
+    // Only where something is pinned above: every other cockpit's strip keeps exactly the inline style
+    // it always had (the sheet's fallback is 0), so their documents are unchanged.
+    if (head) strip.style.setProperty('--cockpit-txstrip-top', `${head.offsetHeight}px`)
+    else strip.style.removeProperty('--cockpit-txstrip-top')
     shell.style.setProperty('--cockpit-txstrip-h',
-      getComputedStyle(strip).position === 'sticky' ? `${Math.ceil(strip.getBoundingClientRect().height)}px` : '0px')
+      getComputedStyle(strip).position === 'sticky'
+        ? `${Math.ceil(strip.getBoundingClientRect().height + (head ? head.getBoundingClientRect().height : 0))}px`
+        : '0px')
   }
   useLayoutEffect(apply)
   useLayoutEffect(() => {
@@ -258,9 +280,11 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     const shell = strip && shellOf(strip)
     if (!strip || !shell) return
     const dock = Array.from(shell.children).find(isDock)
+    const head = pinnedAbove(shell, strip)
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(apply)
     observer?.observe(strip)
     if (dock) observer?.observe(dock)
+    if (head) observer?.observe(head)
     return () => {
       observer?.disconnect()
       shell.style.removeProperty('--cockpit-txstrip-h')

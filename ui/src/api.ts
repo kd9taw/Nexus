@@ -4905,7 +4905,8 @@ export async function sstvSend(
   height: number,
   mode: string,
   /** #50: the operator affirms THIS picture already shows their callsign (a pre-made QSO
-   *  card), so the ID plate is skipped rather than drawn over it. Per-image, never sticky. */
+   *  card), so the ID plate is skipped rather than drawn over it. Per-image: the view remembers
+   *  it for that same picture only (by content, features/sstvIdInImage), never for another. */
   idInImage?: boolean,
   /** The station calls the picture's preset text carries (`OverlayItem.call`): the backend
    *  refuses the picture when one is not the station's call now. */
