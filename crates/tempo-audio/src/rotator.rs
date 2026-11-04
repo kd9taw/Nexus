@@ -169,6 +169,7 @@ fn exchange(
     };
     let heard = watch::heard(&result, connected, deadline_ms);
     watch::note(addr, line, heard, started.elapsed());
+    watch::note_controller(addr, watch::controller_failed(&result));
     result
 }
 
@@ -303,6 +304,24 @@ pub fn link_label(addr: &str) -> String {
 /// to be sent to a stranger, and a serial server's address is the operator's.
 pub fn mask_port(text: &str, port: &str) -> String {
     watch::mask_port(text, port)
+}
+
+/// How many answers in a row from the rotctld at `addr` said the controller behind it is not
+/// there (`RPRT -5` or `RPRT -6`): `0` once one did not, `None` when rotctld has answered nothing
+/// since [`forget_controller`]. rotctld not answering at all does not count either way.
+///
+/// ⚠️ **What a dropped network link looks like** (measured on rotctld 4.6.5's GS-232B backend with
+/// `127.0.0.1:<port>` in its `-r`): once the TCP connection under rotctld is gone, by a hang-up or
+/// a reset, rotctld stays up and answers EVERY command `RPRT -6`, and never connects again. Hamlib
+/// opens a network port once, when the rotator is opened. The supervisor in src-tauri restarts
+/// rotctld on this streak.
+pub fn controller_streak(addr: &str) -> Option<u32> {
+    watch::controller_streak(addr)
+}
+
+/// Count the rotctld at `addr` afresh, for a new rotctld on that address.
+pub fn forget_controller(addr: &str) {
+    watch::forget_controller(addr);
 }
 
 /// Point the rotator at `az_deg` via rotctld at `addr` (host:port). `Ok` only on `RPRT 0`.

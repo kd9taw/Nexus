@@ -314,6 +314,51 @@ pub(crate) fn note(addr: &str, line: &str, heard: Heard, elapsed: Duration) {
     }
 }
 
+/// Did rotctld answer that the CONTROLLER behind it is not there (`RPRT -5`, Hamlib's timeout, or
+/// `RPRT -6`, an I/O error on its port)? `None` when rotctld itself did not answer, which says
+/// nothing about the controller: rotctld down, or Nexus's own deadline.
+pub(crate) fn controller_failed(result: &std::io::Result<String>) -> Option<bool> {
+    let text = result.as_ref().ok()?;
+    let code = text
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("RPRT"))
+        .and_then(super::rprt_code);
+    Some(matches!(code, Some(-5 | -6)))
+}
+
+/// Per rotctld address: how many answers in a row said the controller is not there, `0` once one
+/// did not. No entry until rotctld answers something after a [`forget_controller`].
+static CONTROLLER: Mutex<Option<HashMap<String, u32>>> = Mutex::new(None);
+
+/// Count one answer from the rotctld at `addr` ([`controller_failed`]).
+pub(crate) fn note_controller(addr: &str, failed: Option<bool>) {
+    let Some(failed) = failed else { return };
+    let Ok(mut map) = CONTROLLER.lock() else {
+        return;
+    };
+    let streak = map
+        .get_or_insert_with(HashMap::new)
+        .entry(addr.to_string())
+        .or_insert(0);
+    *streak = if failed { streak.saturating_add(1) } else { 0 };
+}
+
+/// The answers in a row from the rotctld at `addr` that said its controller is not there; `None`
+/// when it has answered nothing since it was last forgotten.
+pub(crate) fn controller_streak(addr: &str) -> Option<u32> {
+    CONTROLLER.lock().ok()?.as_ref()?.get(addr).copied()
+}
+
+/// Start counting the rotctld at `addr` afresh (a new rotctld is on that address).
+pub(crate) fn forget_controller(addr: &str) {
+    if let Ok(mut map) = CONTROLLER.lock() {
+        if let Some(m) = map.as_mut() {
+            m.remove(addr);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,5 +579,34 @@ mod tests {
         let far = label("203.0.113.9:4533");
         assert_eq!(far, "the rotator (a remote rotctld, port 4533)");
         assert!(!label("shack.example.net:4533").contains("example"));
+    }
+
+    #[test]
+    fn only_rotctlds_own_timeout_and_io_answers_count_against_the_controller() {
+        let answer = |t: &str| controller_failed(&Ok(t.to_string()));
+        assert_eq!(answer("RPRT -6\n"), Some(true));
+        assert_eq!(answer("RPRT -5\n"), Some(true));
+        assert_eq!(answer("123.000000\n45.000000\n"), Some(false));
+        assert_eq!(answer("RPRT 0\n"), Some(false));
+        // A refusal is the controller answering no.
+        assert_eq!(answer("RPRT -1\n"), Some(false));
+        // rotctld not answering at all says nothing about the controller.
+        let silent = Err(std::io::Error::from(std::io::ErrorKind::TimedOut));
+        assert_eq!(controller_failed(&silent), None);
+    }
+
+    #[test]
+    fn the_streak_counts_in_a_row_and_starts_over_when_forgotten() {
+        let a = "127.0.0.1:59001";
+        assert_eq!(controller_streak(a), None);
+        note_controller(a, Some(true));
+        note_controller(a, None);
+        note_controller(a, Some(true));
+        assert_eq!(controller_streak(a), Some(2));
+        note_controller(a, Some(false));
+        assert_eq!(controller_streak(a), Some(0));
+        note_controller(a, Some(true));
+        forget_controller(a);
+        assert_eq!(controller_streak(a), None);
     }
 }
