@@ -80589,10 +80589,11 @@ mod digital_side_licence_tests {
     /// ⚠️ RE-PINNED ON PURPOSE, FOR PSK ONLY: PSK is judged across its occupied width now (the
     /// netted centre ± the sub-mode's baud, [`Engine::keyboard_emission_span_hz`]), not at one
     /// point at its centre. So its verdict CHANGES wherever that centre sits within one baud of a
-    /// data edge — in this sweep, a centre exactly ON an edge — from allowed to refused: the
-    /// signal's lower half is outside. Those changes are counted and pinned below, each is a
-    /// refusal where the point allowed, and every other verdict, PSK's and RTTY's, is still what
-    /// it was.
+    /// data edge — in this sweep, a centre exactly ON an edge — from allowed to refused: the half
+    /// of the signal on the far side of that edge is outside (the lower half at the bottom of a
+    /// segment, the upper half at the top of one). Those changes are counted and pinned below,
+    /// each is a refusal where the point allowed, and every other verdict, PSK's and RTTY's, is
+    /// still what it was.
     #[test]
     fn away_from_a_pass_psk_and_rtty_are_judged_as_they_were() {
         let v = soundcard_terrestrial_verdicts();
@@ -80653,9 +80654,12 @@ mod digital_side_licence_tests {
 
     /// Each sub-mode with its symbol rate, the closest whole-Hz distance from a segment edge at
     /// which its centre keeps the whole signal inside (`inside`), and the farthest at which the
-    /// edge is inside its width (`across`): ±31.25 Hz for PSK31, ±62.5 Hz for PSK63.
-    const PSK_WIDTHS: [(tempo_core::psk::PskModeKind, f32, f64, f64); 2] = [
+    /// edge is inside its width (`across`): ±31.25 Hz for PSK31 and QPSK31, ±62.5 Hz for PSK63.
+    /// Each rate is a literal, so a wrong [`tempo_core::psk::PskModeKind::baud`] — the one input
+    /// the gate and the sweeps' model share — fails here for every sub-mode.
+    const PSK_WIDTHS: [(tempo_core::psk::PskModeKind, f32, f64, f64); 3] = [
         (tempo_core::psk::PskModeKind::Bpsk31, 31.25, 32.0, 31.0),
+        (tempo_core::psk::PskModeKind::Qpsk31, 31.25, 32.0, 31.0),
         (tempo_core::psk::PskModeKind::Bpsk63, 62.5, 63.0, 62.0),
     ];
 
@@ -80806,6 +80810,51 @@ mod digital_side_licence_tests {
                 e.psk_state().keyer_error.as_deref(),
                 Some(PSK_REFUSED_PRIVILEGES),
                 "{mode:?}: the cockpit says it was dropped"
+            );
+        }
+    }
+
+    /// ⛔ A LATCHED STREAM NETTED INTO THE WIDTH IS DROPPED ON ITS NEXT TICK. Continuous TX up just
+    /// inside the top of a General's 20 m data, then the waterfall netted 1 Hz up so the edge is
+    /// inside the signal's width: the next stream tick ([`Engine::poll_psk_stream`], the only path
+    /// from the latch to the transmitter) hands the loop nothing to send, drops the latch with
+    /// what was typed, and raises the abort that flushes the audio and releases PTT.
+    #[test]
+    fn a_latched_psk_stream_netted_into_the_width_is_dropped() {
+        let top = DATA_20M.1;
+        for (mode, _, inside, across) in PSK_WIDTHS {
+            let mut e = psk_station(mode);
+            e.set_frequency(top - inside / 1e6 - 0.001, "20m", "USB");
+            assert!(
+                e.tx_allowed(),
+                "precondition, {mode:?}: just inside the top"
+            );
+            e.set_psk_latched(true).unwrap();
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Diddle,
+                "control, {mode:?}: the latched stream runs just inside"
+            );
+            e.psk_type("cq cq").unwrap();
+            e.psk_net(1_000.0 + (inside - across) as f32);
+            assert!(
+                !e.tx_allowed(),
+                "precondition, {mode:?}: netted across the top"
+            );
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Idle,
+                "{mode:?}: nothing more is keyed once the width is across"
+            );
+            assert!(!e.psk_latched(), "{mode:?}: the latch is dropped");
+            assert!(
+                e.take_psk_abort(),
+                "{mode:?}: the loop is told to flush and unkey"
+            );
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Idle,
+                "{mode:?}: what was typed never keys"
             );
         }
     }
