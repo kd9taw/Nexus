@@ -79,6 +79,12 @@ impl ScopeQueue {
     }
 }
 
+/// How long a radio must have said nothing at all, with a request going unanswered, before the
+/// engine takes it as GONE (switched off, CI-V lead out) rather than one lost reply. A connected
+/// radio is polled several times a second, so a live one is never this quiet. The engine uses
+/// the larger of this and three request deadlines, so a slow transport is not mistaken for it.
+const RADIO_GONE_AFTER: Duration = Duration::from_secs(1);
+
 /// What reply resolves a request.
 #[derive(Debug, Clone, Copy)]
 pub enum Expect {
@@ -365,6 +371,17 @@ fn engine_loop(
     // would resolve a later caller's command on the half-duplex bus.
     let mut internal: std::collections::VecDeque<CivRequest> = std::collections::VecDeque::new();
     let mut scope_sent: Option<bool> = None; // last commanded waveform-output state
+
+    // ⭐ A RADIO SWITCHED OFF AND ON AGAIN FORGETS ITS WAVEFORM OUTPUT, and when the port stays
+    // open through it (the USB bridge stays enumerated) this engine never restarts, so the scope
+    // enable latched in `scope_sent` would never go out again: a scope that stays dark until
+    // Nexus is restarted. So the engine notices the radio going away (a request unanswered after
+    // `gone_after` of total silence) and, on the first frame the radio sends after that, re-arms
+    // a WANTED scope once. One lost reply from a talking radio is not "gone", an unwanted scope
+    // is sent nothing, and nothing is written into the silence.
+    let gone_after = RADIO_GONE_AFTER.max(deadline * 3);
+    let mut last_heard = Instant::now();
+    let mut radio_gone = false;
     let mut buf = [0u8; 512];
     let mut stopped = false; // left because the owner stopped us, not because the port died
     loop {
@@ -437,6 +454,13 @@ fn engine_loop(
             Err(_) => break, // hard I/O error — port unplugged
         };
         for f in frames {
+            if f.from == radio_addr {
+                last_heard = Instant::now();
+                if std::mem::take(&mut radio_gone) && scope_sent == Some(true) {
+                    super::diag::note("CivEngine: the radio is back, re-enabling its scope");
+                    scope_sent = None;
+                }
+            }
             // Scope WAVEFORM frames go to the assembler, never to request matching.
             //
             // ⚠️ THE SUB-COMMAND IS PART OF THE TEST, and leaving it out meant NO `27`-family READ
@@ -473,6 +497,9 @@ fn engine_loop(
             if Instant::now() > *deadline {
                 let (req, _) = pending.take().unwrap();
                 req.resolve(Err(CivError::Timeout));
+                if last_heard.elapsed() >= gone_after {
+                    radio_gone = true;
+                }
             }
         }
     }
@@ -2016,5 +2043,221 @@ mod tests {
             "the port took none of it"
         );
         assert_eq!(answers, vec![Err(CivError::Gone)]);
+    }
+
+    /// The scope-stream frames an IC-9700 (`A2`) is sent, byte for byte: Main pin, scope on,
+    /// waveform output on.
+    const SCOPE_ON_9700: [[u8; 8]; 3] = [
+        [0xFE, 0xFE, 0xA2, 0xE0, 0x27, 0x12, 0x00, 0xFD],
+        [0xFE, 0xFE, 0xA2, 0xE0, 0x27, 0x10, 0x01, 0xFD],
+        [0xFE, 0xFE, 0xA2, 0xE0, 0x27, 0x11, 0x01, 0xFD],
+    ];
+
+    /// How many times `frame` went out on the wire so far.
+    fn sent(regs: &Arc<Mutex<tests_support::Regs>>, frame: &[u8]) -> usize {
+        regs.lock()
+            .unwrap()
+            .wire
+            .iter()
+            .filter(|w| w.as_slice() == frame)
+            .count()
+    }
+
+    /// The radio loop's dial poll, run for `dur`: one `03` read after another, the way the service
+    /// keeps asking while a radio is connected. A reply or a timeout, it just asks again.
+    fn poll_dial_for(h: &CivHandle, dur: Duration) {
+        let until = Instant::now() + dur;
+        while Instant::now() < until {
+            let _ = h.transact(
+                read_freq(0xA2),
+                Expect::Reply {
+                    cmd: 0x03,
+                    sub: None,
+                },
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Waits up to 2 s for the scope-enable to have gone out `n` times.
+    fn wait_enables(regs: &Arc<Mutex<tests_support::Regs>>, n: usize) -> usize {
+        let until = Instant::now() + Duration::from_secs(2);
+        while sent(regs, &SCOPE_ON_9700[2]) < n && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        sent(regs, &SCOPE_ON_9700[2])
+    }
+
+    /// ⭐ A RADIO SWITCHED OFF AND ON AGAIN WHILE THE PORT STAYS OPEN GETS ITS SCOPE BACK. The
+    /// radio forgets that its waveform output was switched on when it powers down, and the port
+    /// staying open means the engine never restarts, so the enable it sent once is not sent
+    /// again unless the engine notices the radio was gone. Here the dial poll goes unanswered for
+    /// 1.5 s (the radio is off), then is answered again: the whole enable sequence goes out a
+    /// second time, byte for byte, exactly once.
+    #[test]
+    fn a_radio_switched_off_and_on_gets_the_scope_enable_again() {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let h = eng.handle();
+        eng.set_scope_enabled(true);
+        poll_dial_for(&h, Duration::from_millis(300));
+        assert_eq!(wait_enables(&regs, 1), 1, "the first enable");
+
+        regs.lock().unwrap().off = true; // switched off, the port stays open
+        poll_dial_for(&h, Duration::from_millis(1_500));
+        assert_eq!(
+            sent(&regs, &SCOPE_ON_9700[2]),
+            1,
+            "nothing re-sent into the silence"
+        );
+
+        regs.lock().unwrap().off = false; // switched back on
+        poll_dial_for(&h, Duration::from_millis(400));
+        assert_eq!(wait_enables(&regs, 2), 2, "the enable went out again");
+        for f in SCOPE_ON_9700 {
+            assert_eq!(sent(&regs, &f), 2, "{f:02X?} re-sent once");
+        }
+        // And once only: a radio that stays on is not sent it again.
+        poll_dial_for(&h, Duration::from_millis(600));
+        assert_eq!(
+            sent(&regs, &SCOPE_ON_9700[2]),
+            2,
+            "no repeat while it stays on"
+        );
+    }
+
+    /// The radio is off when the scope is switched on, so the enable itself goes unanswered: it
+    /// goes out again when the radio comes on.
+    #[test]
+    fn a_scope_enable_the_radio_never_answered_goes_out_again_when_it_answers() {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        regs.lock().unwrap().off = true;
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let h = eng.handle();
+        eng.set_scope_enabled(true);
+        poll_dial_for(&h, Duration::from_millis(1_500));
+        assert_eq!(
+            sent(&regs, &SCOPE_ON_9700[2]),
+            1,
+            "sent once into the silence"
+        );
+        regs.lock().unwrap().off = false;
+        poll_dial_for(&h, Duration::from_millis(400));
+        assert_eq!(
+            wait_enables(&regs, 2),
+            2,
+            "sent again once the radio answers"
+        );
+    }
+
+    /// The controls. One lost reply from a radio that is otherwise talking is not a power cycle,
+    /// and a radio whose scope Nexus does not want is sent nothing when it comes back.
+    #[test]
+    fn a_lost_reply_or_an_unwanted_scope_sends_no_enable_again() {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let h = eng.handle();
+        eng.set_scope_enabled(true);
+        poll_dial_for(&h, Duration::from_millis(300));
+        assert_eq!(wait_enables(&regs, 1), 1);
+        // One poll goes unanswered (a lost reply), then the radio answers again.
+        regs.lock().unwrap().off = true;
+        let _ = h.transact(
+            read_freq(0xA2),
+            Expect::Reply {
+                cmd: 0x03,
+                sub: None,
+            },
+        );
+        regs.lock().unwrap().off = false;
+        poll_dial_for(&h, Duration::from_millis(600));
+        assert_eq!(
+            sent(&regs, &SCOPE_ON_9700[2]),
+            1,
+            "a lost reply is not a power cycle"
+        );
+
+        // Scope not wanted: a power cycle re-sends neither the enable nor the disable.
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let h = eng.handle();
+        poll_dial_for(&h, Duration::from_millis(300));
+        let before = regs.lock().unwrap().wire.len();
+        regs.lock().unwrap().off = true;
+        poll_dial_for(&h, Duration::from_millis(1_500));
+        regs.lock().unwrap().off = false;
+        poll_dial_for(&h, Duration::from_millis(400));
+        let scope_frames = regs.lock().unwrap().wire[before..]
+            .iter()
+            .filter(|w| w.get(4) == Some(&0x27))
+            .count();
+        assert_eq!(
+            scope_frames, 0,
+            "nothing about the scope when it is not wanted"
+        );
+    }
+
+    /// While the radio is off, a frame from ANOTHER radio on the bus (`94`) and an echo of our
+    /// own dial read are not the radio coming back: only a frame from the radio's own address is.
+    #[test]
+    fn another_address_or_an_echo_is_not_the_radio_coming_back() {
+        let (radio, push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let h = eng.handle();
+        eng.set_scope_enabled(true);
+        poll_dial_for(&h, Duration::from_millis(300));
+        assert_eq!(wait_enables(&regs, 1), 1);
+        regs.lock().unwrap().off = true;
+        poll_dial_for(&h, Duration::from_millis(1_500));
+        // A second radio's transceive push and an echo of our own dial read.
+        push.lock().unwrap().extend([
+            0xFE, 0xFE, 0x00, 0x94, 0x00, 0x00, 0x00, 0x74, 0x14, 0x00, 0xFD,
+        ]);
+        push.lock()
+            .unwrap()
+            .extend([0xFE, 0xFE, 0xA2, 0xE0, 0x03, 0xFD]);
+        poll_dial_for(&h, Duration::from_millis(500));
+        assert_eq!(
+            sent(&regs, &SCOPE_ON_9700[2]),
+            1,
+            "another address is not the radio"
+        );
+        // The control: the radio itself answering does re-arm.
+        regs.lock().unwrap().off = false;
+        poll_dial_for(&h, Duration::from_millis(400));
+        assert_eq!(wait_enables(&regs, 2), 2);
+    }
+
+    /// A lost reply from a radio that has been talking for well over the gone threshold is still
+    /// not a power cycle: every frame the radio sends keeps it heard.
+    #[test]
+    fn a_lost_reply_after_long_talking_is_not_a_power_cycle() {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let h = eng.handle();
+        eng.set_scope_enabled(true);
+        poll_dial_for(&h, Duration::from_millis(1_500));
+        assert_eq!(wait_enables(&regs, 1), 1);
+        regs.lock().unwrap().off = true;
+        let _ = h.transact(
+            read_freq(0xA2),
+            Expect::Reply {
+                cmd: 0x03,
+                sub: None,
+            },
+        );
+        regs.lock().unwrap().off = false;
+        poll_dial_for(&h, Duration::from_millis(600));
+        assert_eq!(
+            sent(&regs, &SCOPE_ON_9700[2]),
+            1,
+            "a late lost reply is not a power cycle"
+        );
     }
 }
