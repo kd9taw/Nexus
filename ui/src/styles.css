@@ -13174,6 +13174,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(18px * var(--text-scale));
   min-width: 4.5em;
 }
+/* The needle faces (#343) at the dialog's size too. The cockpit hosts share one 5em face, sized to the
+   TX strip's buttons; the dialog is opened to read the meters, so its faces take the room it has and
+   their name and value grow as the bars' do. They still wrap onto a second line on a narrow window. */
+.txmeters-large .ph-txneedle {
+  width: 12em;
+}
+.txmeters-large .ph-txneedle-label {
+  font-size: calc(14px * var(--text-scale));
+}
+.txmeters-large .ph-txneedle-value {
+  font-size: calc(16px * var(--text-scale));
+}
+/* Beside faces that large, COMP and the temperatures take a line of their own, at the dialog's bar size. */
+.txmeters-large .ph-txmeters.needle .ph-txmeter {
+  flex: 1 1 100%;
+}
 .txmeters-actions {
   display: flex;
   justify-content: flex-end;

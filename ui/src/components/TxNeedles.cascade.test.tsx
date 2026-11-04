@@ -157,6 +157,26 @@ describe('a face’s size is its host’s, and the TX cycle does not touch it', 
   })
 })
 
+describe('the larger TX meters dialog (#446) draws its faces larger', () => {
+  it('in the dialog’s wrapper a face is wider than in any cockpit host, in em', () => {
+    localStorage.setItem(TX_METER_STYLE_KEY, 'needle')
+    const { container } = render(
+      <div className="txmeters-large">
+        <TxMeters radio={KEYED} pinned />
+      </div>,
+    )
+    const face = container.querySelector('.ph-txneedle')!
+    expect(win(face, 'width')).toBe('12em')
+    // Its name and value grow with it, as the dialog's bars' do.
+    expect(win(container.querySelector('.ph-txneedle-value')!, 'font-size')).toBe('calc(16px * var(--text-scale))')
+    // Beside faces that large, COMP takes a line of its own rather than squeezing past its type.
+    expect(win(container.querySelector('.ph-txmeter')!, 'flex')).toBe('1 1 100%')
+    // The control: the same meters outside the dialog keep the cockpit size.
+    cleanup()
+    expect(win(mount('dock', KEYED).face, 'width')).toBe('5em')
+  })
+})
+
 describe('the dial is drawn to its own shape', () => {
   it('the dial box has the viewBox’s aspect, and the SVG fills it out of flow', () => {
     const { container } = mount('dock', KEYED)
