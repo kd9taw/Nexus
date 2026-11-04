@@ -3032,6 +3032,16 @@ export interface LateDecodes {
   rows: DecodeRow[]
 }
 
+/** The received decodes a decode pane missed (#452), from the station's decode history
+ *  (`get_decode_refill`). Mirrors dto.rs `DecodeRefill`. */
+export interface DecodeRefill {
+  /** The oldest slot whose decodes are all still held; a missed period before it cannot be
+   *  refilled. 0 while nothing has been dropped. */
+  coveredFrom: number
+  /** Oldest first, each with the slot it was ingested at (`radio.slot` numbering). */
+  rows: { slot: number; row: DecodeRow }[]
+}
+
 /** A single decoded signal in the most-recent RX slot (WSJT-X style row). */
 export interface DecodeRow {
   from: string | null

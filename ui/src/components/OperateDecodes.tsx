@@ -16,6 +16,7 @@ import {
   DECODE_FILTERS,
   DecodeHistory,
   fmtUtc,
+  missedBetween,
   orderEntries,
   passesFilter,
   periodStartMs,
@@ -26,6 +27,7 @@ import {
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
+import { getDecodeRefill } from '../api'
 import { DECODE_HIDE_B4_EVENT, DECODE_HIDE_B4_SCOPE_EVENT, type DecodeHideB4Scope, loadDecodeFilter, loadDecodeHideB4, loadDecodeHideB4Scope, loadDecodeHideBlocked, loadDecodeHideConfirmed, loadDecodeNewestTop, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideB4Scope, saveDecodeHideBlocked, saveDecodeHideConfirmed, saveDecodeNewestTop } from '../operateFilters'
 import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
 import { isCallHidden, isCallHiddenScoped, useHideCalls } from '../features/hideCalls'
@@ -573,6 +575,8 @@ export function OperateDecodes({
   // Everything below counts `shown`, not `list`: the "N heard" readout means what is on screen,
   // and the roving-keyboard index must address the rows that exist.
   const shown = useMemo(() => renderWindow(list), [list])
+  // A new array only when the history changes one, which bumps its version (a re-render follows).
+  const gaps = hist.gaps()
   // The order rows are DRAWN in. Everything that addresses a row by position (the roving index,
   // the period separators) reads `drawn`; counts read `shown`, which is the same set.
   const drawn = useMemo(() => (newestTop ? [...shown].reverse() : shown), [shown, newestTop])
@@ -618,6 +622,21 @@ export function OperateDecodes({
     // DECODED period (see DecodeHistory.ingest).
     const clock = { periodMs: (periodS ?? TIER_PERIOD_SECS[tier]) * 1000, offsetMs: clockOffsetMs ?? 0 }
     histRef.current.ingest(decodes, slot, Date.now(), clock)
+    // #452: periods this pane missed (closed, or its window not painted) are filled in from the
+    // station's decode history, which only READS: the alerts, sounds and the sequencer all run off
+    // the live feed, which a refill never touches. A refused or failed read leaves the pane as it
+    // was. Answered after a wipe, the history drops it itself (its epoch).
+    const owner = histRef.current
+    const ask = owner.takeRefill()
+    if (ask) {
+      const atOf = (s: number) => periodStartMs(s, tier, periodS)
+      Promise.resolve()
+        .then(() => getDecodeRefill(ask.from, ask.to))
+        .then((refill) => {
+          if (owner.applyRefill(ask, refill, atOf)) setTick((t) => t + 1)
+        })
+        .catch(() => {})
+    }
     // Re-render only if the history moved past what this render drew. Not "did MY ingest change
     // it": a history the cockpit shares may already have been moved by another pane.
     if (histRef.current.version !== histVersion) setTick((t) => t + 1)
@@ -977,8 +996,20 @@ export function OperateDecodes({
           // changes, not on every poll. Everything it draws arrives as a prop.
           const up = d.from ? d.from.toUpperCase() : null
           const selectedRow = !!up && !!selectedUp && up === selectedUp
+          // #452: periods this pane missed and could no longer fill in, between this row and
+          // the one drawn before it (time-sorted view only, like the separators).
+          const missed = sort === 'time' && i > 0 ? missedBetween(gaps, drawn[i - 1].slot, d.slot) : 0
           return (
             <Fragment key={d.id}>
+              {missed > 0 && (
+                <div
+                  className="od-period-sep od-gap"
+                  role="separator"
+                  title={t('operate.decodes.gap.title')}
+                >
+                  <span>{t('operate.decodes.gap', { n: missed })}</span>
+                </div>
+              )}
               {/* WSJT-X period separator: a dim bar with the period's UTC start +
                   band, whenever the T/R period changes (time-sorted view only).
                   A decode ingested at boundary slot s carries AUDIO from slot s-1 —
@@ -1140,7 +1171,7 @@ const DecodeRowView = memo(function DecodeRowView({
   const azText = azimuthLabel(az)
   return (
       <div
-        className={`decode-row ${rowClass(d, needs.rowNeed)}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}`}
+        className={`decode-row ${rowClass(d, needs.rowNeed)}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}${d.refilled ? ' refilled' : ''}`}
         role="option"
         data-pin-key={d.id}
         aria-selected={selected}
@@ -1196,7 +1227,9 @@ const DecodeRowView = memo(function DecodeRowView({
           title={
             d.mine
               ? t('operate.decodes.utc.title')
-              : t('operate.decodes.utc.period.title', { time: fmtUtc(d.at) })
+              : d.refilled
+                ? t('operate.decodes.utc.refilled.title')
+                : t('operate.decodes.utc.period.title', { time: fmtUtc(d.at) })
           }
         >
           {fmtUtc(rowTimeMs(d, tier, periodS))}
