@@ -59,21 +59,32 @@ export function mapStyleOf(v: unknown): MapStyle | null {
 const STYLE_KEY = 'nexus.map.style'
 const STYLE_EVENT = 'nexus-map-style'
 
+/** The pick this session made when storage would not keep it (full, or unavailable): the pick still
+ *  applies until the window closes, as surfaceSet promises. Undefined while storage keeps the record. */
+let unstored: MapStyle | null | undefined
+
 /** This window's pick, clamped on load. */
 export function loadMapStyle(): MapStyle | null {
-  return mapStyleOf(surfaceGet(STYLE_KEY))
+  return unstored !== undefined ? unstored : mapStyleOf(surfaceGet(STYLE_KEY))
 }
 
 /** Store this window's pick (null: no pick, the theme's map) and tell this window's other maps. No pick
  *  is stored as an empty record, so a pop-out that cleared its pick stops following the main window's. */
 export function saveMapStyle(style: MapStyle | null): void {
   surfaceSet(STYLE_KEY, style ?? '')
+  unstored = surfaceGet(STYLE_KEY) === (style ?? '') ? undefined : style
   window.dispatchEvent(new Event(STYLE_EVENT))
 }
 
+/** A pick made on another map in this window (STYLE_EVENT), or in another window (`storage`): a
+ *  pop-out still reading the main window's record follows a change made there at once. */
 const subscribe = (onChange: () => void) => {
   window.addEventListener(STYLE_EVENT, onChange)
-  return () => window.removeEventListener(STYLE_EVENT, onChange)
+  window.addEventListener('storage', onChange)
+  return () => {
+    window.removeEventListener(STYLE_EVENT, onChange)
+    window.removeEventListener('storage', onChange)
+  }
 }
 
 /** [this window's pick, its setter]: every 2-D map in the window follows a change made on any of them. */

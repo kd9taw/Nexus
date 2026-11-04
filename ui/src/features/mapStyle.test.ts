@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { act, renderHook } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   MODES,
   SKIN_MODES,
@@ -47,7 +47,10 @@ import { BAND_COLOR, GETTING_OUT, GREYLINE_INK, NIGHT_INK, PATH_RX, needColor } 
 import type { NeedTag } from '../types'
 
 beforeEach(() => localStorage.clear())
-afterEach(() => window.history.replaceState({}, '', '/'))
+afterEach(() => {
+  vi.restoreAllMocks()
+  window.history.replaceState({}, '', '/')
+})
 
 describe('the pick is a validated enum, clamped on load', () => {
   it('names exactly Atlas and Dark', () => {
@@ -82,6 +85,31 @@ describe('the pick is a validated enum, clamped on load', () => {
     expect(loadMapStyle()).toBe('atlas')
     window.history.replaceState({}, '', '/')
     expect(loadMapStyle()).toBe('dark')
+  })
+
+  it('a pop-out that follows the main window’s pick follows a change made there, live', () => {
+    window.history.replaceState({}, '', '/?panel=connect&instance=w2')
+    const popout = renderHook(() => useMapStyle())
+    expect(popout.result.current[0]).toBeNull()
+    // The main window writes its record; this window hears it through the storage event.
+    act(() => {
+      localStorage.setItem('nexus.map.style', 'dark')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'nexus.map.style', newValue: 'dark' }))
+    })
+    expect(popout.result.current[0]).toBe('dark')
+  })
+
+  it('with storage refusing writes, a pick still applies for the session', () => {
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    const { result } = renderHook(() => useMapStyle())
+    act(() => result.current[1]('dark'))
+    expect(result.current[0]).toBe('dark')
+    expect(loadMapStyle()).toBe('dark')
+    act(() => result.current[1](null))
+    expect(result.current[0]).toBeNull()
+    expect(set).toHaveBeenCalled()
   })
 
   it('the hook follows a pick made by another map in the same window', () => {
@@ -149,6 +177,24 @@ const MARKER_TOKENS = [
   '--band-marginal',
   '--band-closed',
   '--state-good',
+  '--text-dim',
+  '--need-pota',
+  '--need-sota',
+  '--need-dxped',
+  // The APRS map's station categories, and the path's stretches (a flare or a proton event on it).
+  '--aprs-cat-mobile',
+  '--aprs-cat-fixed',
+  '--aprs-cat-infra',
+  '--aprs-cat-wx',
+  '--aprs-cat-marine',
+  '--aprs-cat-air',
+  '--aprs-cat-object',
+  '--aprs-cat-other',
+  '--route-polar',
+  '--route-grey',
+  '--route-flare-weak',
+  '--route-flare-out',
+  '--route-pca',
 ] as const
 /** A display well, the dark palette's scope (styles.css DISPLAY WELLS): what a Dark map reads its
  *  marker inks from. */

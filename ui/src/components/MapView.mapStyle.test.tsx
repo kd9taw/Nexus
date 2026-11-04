@@ -31,6 +31,9 @@ import { MapView } from './MapView'
 import { PALETTE_EVENT } from '../usePaletteRoles'
 import { MAP_TOKENS, SKINS, STANDARD_MAP } from '../features/skins'
 import { DARK_MAP } from '../features/mapStyle'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { MODES, chainOf, parseRules, winnerAt } from '../cssCascade'
 
 vi.setConfig({ testTimeout: 15_000 })
 
@@ -162,6 +165,18 @@ describe('the Map style row', () => {
       fireEvent.change(both[0], { target: { value: 'dark' } })
     })
     expect(both[1].value).toBe('dark')
+  })
+
+  it('its words stay on one line beside the select, in every mode (they wrapped on Amber LCD)', async () => {
+    await open()
+    const words = pick().closest('label')!.querySelector('.map-style-label') as HTMLElement
+    expect(words?.textContent).toBe('Map style')
+    const strip = (n: string) =>
+      readFileSync(resolve(process.cwd(), 'src', n), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    const rules = parseRules(strip('styles.css') + '\n' + strip('cockpit-panes.css'))
+    const chain = chainOf(words)
+    const faults = MODES.filter((m) => winnerAt(rules, m, chain, 'white-space')?.value !== 'nowrap')
+    expect(faults).toEqual([])
   })
 
   it.each([['photo'], ['{"dark":true}'], ['Dark']])('a stored %j opens on the theme’s map', async (raw) => {

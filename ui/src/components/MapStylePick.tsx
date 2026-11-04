@@ -17,7 +17,8 @@ export function MapStylePick({ pick, onPick }: { pick: MapStyle | null; onPick: 
   return (
     <div className="map-layer map-style">
       <label>
-        {t('map.style.label')}
+        {/* One line, whatever the select leaves it: the row's flex would otherwise wrap the words. */}
+        <span className="map-style-label">{t('map.style.label')}</span>
         <select
           className="map-style-pick"
           value={mapStyleShown(pick, skin)}
