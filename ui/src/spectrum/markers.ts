@@ -108,6 +108,62 @@ export function passbandOnAxis(a: AxisKind, widthHz: number): AxisPassband | nul
   return { lo: e.loHz, hi: e.hiHz, anchor }
 }
 
+/**
+ * Where the radio's reported filter sits on a plain AUDIO row (a digital-mode waterfall: 0 Hz at the
+ * left, the demodulated audio running up), or null where a width alone cannot place it.
+ *
+ * ⚠️ THE RADIO REPORTS ONLY A WIDTH (see the module header), so the placement is the protocol's, not
+ * a measurement, and it is stated per mode:
+ *  - USB, LSB and their data modes (PKTUSB, DATA-U, …): demodulated audio runs up from 0 Hz on
+ *    either sideband, so the passband is 0..width — `passbandOnAxis`'s plain-audio case, the same
+ *    `boxEdges` placement the Phone scope draws. The radio's low cut (typically 100–300 Hz) is never
+ *    reported, so the TRUE upper edge sits that much above the drawn one; the drawn edge errs low.
+ *  - AM, FM, DSB and their data modes: the audio is the carrier's baseband, with no edge a width
+ *    places (the Phone scope draws none on audio either).
+ *  - CW: centred on the radio's pitch, which a digital waterfall is not told.
+ *  - FSK RTTY: centred on the radio's own tone pair, which a width does not say.
+ * Those draw nothing rather than an edge in the wrong place.
+ */
+export function audioRowPassband(
+  widthHz: number | null | undefined,
+  mode: string | null | undefined,
+): { loHz: number; hiHz: number } | null {
+  if (widthHz == null || !(widthHz > 0) || !mode) return null
+  const m = mode.trim().toUpperCase()
+  if (!m || /AM|FM|DSB|CW|RTTY/.test(m)) return null
+  const p = passbandOnAxis(
+    { rf: false, carrierCentered: false, sideband: m, dialHz: null, pitchHz: 0, cwPitchRefDial: true },
+    widthHz,
+  )
+  return p ? { loHz: p.lo, hiHz: p.hi } : null
+}
+
+/**
+ * The ROW-Hz span an audio scope measures its noise floor over: the radio's passband where it is in
+ * the drawn window, else the window itself.
+ *
+ * ⚠️ WHY NOT JUST THE WINDOW. The floor is the window's MEDIAN, which is a noise statistic only while
+ * most of the window is passband. Audio is post-filter, so wherever the window is wider than the
+ * radio's filter the rest is its stopband, ~40 dB down: a 500 Hz CW filter in the 200–3000 Hz Std
+ * view is 82 % stopband, a 2.4 kHz SSB filter in the 0–5000 Hz Full view 52 %. The median then
+ * lands IN the stopband, the floor sits 40 dB under the receiver's noise, and the whole passband
+ * renders as the bright slab the median was chosen to prevent. Inside the passband the median is the
+ * receiver's noise again, whatever the window. `p` is `passbandOnAxis`'s answer on the drawn axis;
+ * a mirrored (LSB) axis runs the row backwards, so its edges are negated and swapped. Under 8 bins'
+ * worth of overlap (`minHz`) the window is kept, as the window's own rule keeps the whole row.
+ */
+export function noiseFloorWindowHz(
+  win: { lo: number; hi: number },
+  p: AxisPassband | null,
+  mirrored: boolean,
+  minHz: number,
+): { lo: number; hi: number } {
+  if (!p) return win
+  const lo = Math.max(win.lo, mirrored ? -p.hi : p.lo)
+  const hi = Math.min(win.hi, mirrored ? -p.lo : p.hi)
+  return hi - lo >= minHz ? { lo, hi } : win
+}
+
 /** The width that puts `edge` at `axisHz` — the inverse of `passbandOnAxis` for one edge. On a
  *  plain audio axis an SSB passband grows upward whatever the sideband. Unclamped. */
 export function widthForEdge(a: AxisKind, p: AxisPassband, edge: Edge, axisHz: number): number {

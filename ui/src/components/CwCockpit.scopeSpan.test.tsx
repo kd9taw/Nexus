@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 //
-// The CW audio scope's span chips: Filter (the rig's filter round the pitch, the default and the
-// zero-beating view), Std (200–3000 Hz) and Full (200–4000 Hz), the waterfalls' own views. The
-// pick is kept per window; a stored value no chip names reads as Filter.
+// The CW audio scope's span chips: Filter (the rig's filter round the pitch, the zero-beating view),
+// Std (200–3000 Hz, the default) and Full (200–5000 Hz), the waterfalls' own views. The pick is kept
+// per window, Filter included; a window that never pressed one, or holds a value no chip names,
+// opens on Std (operator decision, 2026-11-03: audio views open wide, the filter drawn as edges).
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import { CwCockpit } from './CwCockpit'
@@ -156,11 +157,21 @@ const chip = (name: string) => screen.getByRole('button', { name })
 const group = () => screen.getByRole('group', { name: 'Audio scope span' })
 
 describe('the CW audio scope span', () => {
-  it('opens on Filter: the rig filter round the pitch, as before', async () => {
+  it('opens on Std: 200–3000 Hz, with the radio’s filter drawn on it as its passband', async () => {
     await renderCw()
     expect(group()).toBeTruthy()
+    expect(chip('Std').getAttribute('aria-pressed')).toBe('true')
+    expect(chip('Filter').getAttribute('aria-pressed')).toBe('false')
+    expect(view()).toEqual({ lo: 200, hi: 3000 })
+    // The filter is still on screen: the scope is handed the reported width for its passband marks.
+    expect(scopeProps[scopeProps.length - 1].passbandHz).toBe(500)
+    expect(localStorage.getItem('nexus.cw.scope.span'), 'opening writes nothing').toBeNull()
+  })
+
+  it('a stored Filter pick is kept: the rig filter round the pitch, for zero-beating', async () => {
+    localStorage.setItem('nexus.cw.scope.span', 'filter')
+    await renderCw()
     expect(chip('Filter').getAttribute('aria-pressed')).toBe('true')
-    expect(chip('Std').getAttribute('aria-pressed')).toBe('false')
     // 500 Hz filter ⇒ 625 Hz round the 600 Hz default pitch.
     const w = cwScopeWindow(600, 500)
     expect(view()).toEqual({ lo: w.loHz, hi: w.hiHz })
@@ -174,22 +185,22 @@ describe('the CW audio scope span', () => {
     expect(chip('Std').getAttribute('aria-pressed')).toBe('true')
     expect(localStorage.getItem('nexus.cw.scope.span')).toBe('std')
     fireEvent.click(chip('Full'))
-    expect(view()).toEqual({ lo: 200, hi: 4000 })
+    expect(view()).toEqual({ lo: 200, hi: 5000 })
     cleanup()
     await renderCw()
     expect(chip('Full').getAttribute('aria-pressed')).toBe('true')
-    expect(view()).toEqual({ lo: 200, hi: 4000 })
+    expect(view()).toEqual({ lo: 200, hi: 5000 })
     // And back: Filter follows the pitch and the filter again.
     fireEvent.click(chip('Filter'))
     expect(view()).toEqual({ lo: 288, hi: 913 })
     expect(localStorage.getItem('nexus.cw.scope.span')).toBe('filter')
   })
 
-  it('a stored value no chip names opens on Filter', async () => {
+  it('a stored value no chip names opens on Std', async () => {
     localStorage.setItem('nexus.cw.scope.span', 'wide')
     await renderCw()
-    expect(chip('Filter').getAttribute('aria-pressed')).toBe('true')
-    expect(view()).toEqual({ lo: 288, hi: 913 })
+    expect(chip('Std').getAttribute('aria-pressed')).toBe('true')
+    expect(view()).toEqual({ lo: 200, hi: 3000 })
   })
 
   it('the chips stand at the start of the scope\'s own toolbar, not on a row of their own', async () => {
@@ -209,7 +220,7 @@ describe('the CW audio scope span', () => {
     expect(chip('Std').getAttribute('aria-pressed')).toBe('true')
     expect(view()).toEqual({ lo: 200, hi: 3000 })
     fireEvent.click(chip('Full'))
-    expect(view()).toEqual({ lo: 200, hi: 4000 })
+    expect(view()).toEqual({ lo: 200, hi: 5000 })
     expect(localStorage.getItem('nexus.cw.scope.span')).toBe('full')
     // The radio's own selects stay beside them.
     expect(screen.getByLabelText('Panadapter span (sets the radio)')).toBeTruthy()
@@ -248,6 +259,7 @@ describe('the CW audio scope says when the radio\'s filter is what limits it', (
   })
 
   it('never in Filter, which frames the filter by design', async () => {
+    localStorage.setItem('nexus.cw.scope.span', 'filter')
     await renderCw({ filterWidthHz: 500 })
     expect(chip('Filter').getAttribute('aria-pressed')).toBe('true')
     expect(note()).toBeNull()

@@ -5,7 +5,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   PASSBAND_LIMITS,
+  audioRowPassband,
   clampPassband,
+  noiseFloorWindowHz,
   draggableEdges,
   drawPassband,
   edgeNear,
@@ -206,5 +208,48 @@ describe('drawing a passband', () => {
       'line rgba(255, 255, 255, 0.85) w2 x340',
       'fill rgba(255, 255, 255, 0.85) 337,0,6,6',
     ])
+  })
+})
+
+describe('the radio filter on a digital waterfall’s audio row', () => {
+  it('USB, LSB and their data modes: 0..width, the drag box’s placement on a plain audio axis', () => {
+    for (const mode of ['USB', 'LSB', 'PKTUSB', 'PKTLSB', 'DATA-U', 'usb ']) {
+      expect(audioRowPassband(2400, mode), mode).toEqual({ loHz: 0, hiHz: 2400 })
+    }
+    // The same edges the Phone scope's box puts on its own plain audio axis.
+    const e = boxEdges(0, 'USB', 3000)
+    expect(audioRowPassband(3000, 'USB')).toEqual({ loHz: e.loHz, hiHz: e.hiHz })
+  })
+
+  it('no edge where a width alone cannot place one: AM/FM baseband, CW round its pitch, FSK RTTY', () => {
+    for (const mode of ['AM', 'FM', 'PKTFM', 'FMN', 'SAM', 'DSB', 'CW', 'CWR', 'RTTY', 'RTTYR']) {
+      expect(audioRowPassband(2400, mode), mode).toBeNull()
+    }
+  })
+
+  it('no edge without a reported width or a mode', () => {
+    expect(audioRowPassband(null, 'USB')).toBeNull()
+    expect(audioRowPassband(undefined, 'USB')).toBeNull()
+    expect(audioRowPassband(0, 'USB')).toBeNull()
+    expect(audioRowPassband(-5, 'USB')).toBeNull()
+    expect(audioRowPassband(2400, '')).toBeNull()
+    expect(audioRowPassband(2400, null)).toBeNull()
+  })
+})
+
+describe('the noise floor is measured inside the passband', () => {
+  const win = { lo: 200, hi: 3000 }
+  it('the passband where it is in the window, clipped to it', () => {
+    expect(noiseFloorWindowHz(win, { lo: 350, hi: 850, anchor: 600 }, false, 50)).toEqual({ lo: 350, hi: 850 })
+    expect(noiseFloorWindowHz(win, { lo: 0, hi: 2400, anchor: 0 }, false, 50)).toEqual({ lo: 200, hi: 2400 })
+  })
+  it('a mirrored (LSB) axis runs the row backwards: its edges negated and swapped', () => {
+    // LSB on the carrier-centred axis: the passband is −2400..0, the row 0..2400.
+    expect(noiseFloorWindowHz({ lo: 0, hi: 5000 }, { lo: -2400, hi: 0, anchor: 0 }, true, 50)).toEqual({ lo: 0, hi: 2400 })
+  })
+  it('the window where there is no passband, or too little of it in view', () => {
+    expect(noiseFloorWindowHz(win, null, false, 50)).toEqual(win)
+    expect(noiseFloorWindowHz(win, { lo: 2980, hi: 3500, anchor: 3200 }, false, 50)).toEqual(win)
+    expect(noiseFloorWindowHz(win, { lo: 4000, hi: 4500, anchor: 4200 }, false, 50)).toEqual(win)
   })
 })

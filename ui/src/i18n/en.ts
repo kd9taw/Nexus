@@ -8619,7 +8619,7 @@ export const EN = {
   'settings.rigControl.yaesuScope.title':
     "Read the FT-710's own spectrum over its internal USB-SPI bridge instead of the sound card",
   'settings.rigControl.yaesuScope.hint':
-    "Draws the radio's own band scope instead of the sound card's 4 kHz slice. Needs <b>SCU-LAN10 enabled in the radio's EX menu</b>, and a build that carries FTDI's LibFT4222 — which is not bundled, because it is closed source and Nexus is GPL-3.0-only. If either is missing the app says which, rather than leaving the panel empty.",
+    "Draws the radio's own band scope instead of the sound card's 5 kHz slice. Needs <b>SCU-LAN10 enabled in the radio's EX menu</b>, and a build that carries FTDI's LibFT4222 — which is not bundled, because it is closed source and Nexus is GPL-3.0-only. If either is missing the app says which, rather than leaving the panel empty.",
   'settings.rigControl.flexAudio.label': 'Flex native DAX audio (Beta)',
   'settings.rigControl.flexAudio.hint':
     'Carry this FlexRadio\'s audio over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices, which are <b>invisible under Remote Desktop</b>. <b>Needs Flex native client (Beta) on.</b> With SmartSDR CAT this does nothing: audio stays on the sound devices, and the setting is kept for the client. On the client, the decoders read receive audio straight from the radio, and <b>digital modes</b> and the Remote stream\'s voice transmit over DAX. Phone at the shack keeps the radio\'s own mic, so the voice keyer can\'t play there. Turning this off or disconnecting puts your own DAX setting back, and Nexus never changes it while SmartSDR\'s DAX is connected. <b>Beta, unverified on hardware:</b> if decodes or transmit stop, turn it back off. Save to apply.',
@@ -14028,6 +14028,13 @@ export const EN = {
   'phone.scope.audio.title':
     'Receiver AUDIO spectrum on your rig’s axis: the centre line is your dial, and the passband sits on the side your sideband is on (USB above, LSB below) — the other half is quiet because an SSB receiver only hears one side. Not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.',
   'phone.scope.audio.sub': 'RX audio',
+  // The Phone audio scope's notes under its span chips, the CW scope's own: `{{hz}}` is the radio's
+  // filter width; the <link> runs open Settings at the place they name.
+  'phone.scope.filterLimit': "Showing your radio's {{hz}} Hz filter — widen it on the radio to see more.",
+  'phone.scope.nativeHint.civOff':
+    'Your Icom can show its own wide scope here: turn on <link>Native Icom CI-V in Settings ▸ Radio ▸ Rig & CAT ▸ Advanced</link>.',
+  'phone.scope.nativeHint.baud':
+    "Your Icom's own wide scope needs 115,200 baud: set it in <link>Settings ▸ Radio ▸ Rig & CAT</link>, and the radio's CI-V USB Baud Rate to match.",
   'phone.scope.splitter.label': 'scope height',
   'phone.scope.span.aria': 'Bandscope span',
   'phone.span.auto.label': 'Auto',
@@ -14866,7 +14873,7 @@ export const EN = {
   'waterfall.hint': 'left = RX · right / Shift = TX · {{mod}} = both',
   'waterfall.zoom.aria': 'Waterfall zoom span',
   'waterfall.zoom.title':
-    'Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–4 kHz), or zoom in around the RX marker',
+    'Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–5 kHz), or zoom in around the RX marker',
   'waterfall.span.aria': 'Waterfall span',
   'waterfall.span.title': 'Show {{hz}} Hz of the passband',
   'waterfall.gain.title': 'Gain — contrast (how punchy strong signals look). Center = auto.',

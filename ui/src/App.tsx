@@ -3361,6 +3361,8 @@ function App() {
         stripRef={tempoWfRef}
         zoomKey="nexus.waterfall.tempo.zoom"
         transmitting={snap.radio.transmitting}
+        passbandHz={snap.radio.filterWidthHz ?? null}
+        passbandMode={snap.radio.rigMode || snap.radio.sideband}
         rxOffsetHz={snap.radio.rxOffsetHz}
         txOffsetHz={snap.radio.txOffsetHz}
         theme={theme}

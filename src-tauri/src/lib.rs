@@ -58861,7 +58861,11 @@ mod tests {
         // CONTROL: a free engine answers with its own row, window and all.
         let free = super::spectrum_fallback(&engine);
         assert_eq!(free, engine_lock(&engine).spectrum_row());
-        assert_eq!(free.hi_hz, 4000.0, "the engine's answer, not the busy one");
+        assert_eq!(
+            free.hi_hz,
+            f64::from(tempo_app::engine::SPECTRUM_HI_HZ),
+            "the engine's answer (its 0-5000 Hz row), not the busy one"
+        );
 
         let (held, is_held) = std::sync::mpsc::channel();
         let holder = {

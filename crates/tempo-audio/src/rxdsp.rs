@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tempo_app::dto::Spectrum;
-use tempo_app::engine::{MeterFeed, SpectrumFeed};
+use tempo_app::engine::{MeterFeed, SpectrumFeed, SPECTRUM_BINS, SPECTRUM_HI_HZ};
 use tempo_core::spectrum::{HiDefZoom, ScopeAnalysis, WindowN};
 
 use crate::capture_resample::CaptureResampler;
@@ -413,29 +413,44 @@ impl RxDsp {
 /// Halved from 4096 (341 ms) for display LIVELINESS (2026-08-01, operator report "smoothed out
 /// to remove response"): the Hann taper weights the newest samples near zero, so a signal edge
 /// only reaches full brightness a full window later — the window IS the display's time smear.
-/// 2048 keeps raw bins at 5.86 Hz, still finer than the 512-bin display's 7.81 Hz over
-/// 0-4000 Hz, so visible resolution was unchanged while the edge-to-full-brightness lag halved
-/// (and the FFT got cheaper). Pinned by `the_analysis_window_fits_the_display_liveliness_budget`.
+/// 2048 keeps raw bins at 5.86 Hz, still finer than the display's 7.81 Hz bins, so visible
+/// resolution was unchanged while the edge-to-full-brightness lag halved (and the FFT got
+/// cheaper). Pinned by `the_analysis_window_fits_the_display_liveliness_budget`.
+///
+/// THE SPAN IS 0-5000 Hz IN 640 BINS (was 0-4000 in 512): the reference FT program's wide graph
+/// computes to 5000 Hz at this same 12 kHz rate, and the audio waterfalls now reach as high. The
+/// bin count grew with the span, so a bin is still 7.8125 Hz and every bin below 4000 Hz is the
+/// bin it always was — the old 512-bin reference row is this row's first 512 bins
+/// (`the_row_for_a_known_input_is_byte_stable`). Cost: the FFT is the same 2048 points; only the
+/// scatter into display bins covers 853 raw bins instead of 682, and the row is 128 numbers longer
+/// (measured in `the_wider_row_costs_what_it_says`). DISPLAY ONLY: no decoder reads this row.
 ///
 /// ⚠️ NO LONGER THE ONLY WINDOW (2026-08-15). The rig scope may run ITS row at
 /// [`WindowN::Fast`] or [`WindowN::Sharp`] — see `compute_row_over`. This one does not move,
 /// because changing it would move the FT waterfall's picture too.
 fn compute_row(audio: &[f32]) -> Spectrum {
-    // Widened from 200-2900: shows the full SSB/DATA passband and the filter-slope shelf. The
-    // 6 kHz Nyquist (12 kHz capture) caps the top; 4000 covers every voice/data passband in use.
+    // Widened from 200-2900, then from 0-4000: shows the full SSB/DATA passband, the filter
+    // slope and the stopband above it. The 6 kHz Nyquist (12 kHz capture) caps the top.
     const LO_HZ: f32 = 0.0;
-    const HI_HZ: f32 = 4000.0;
     // Always Balanced: every other consumer reads this row, and the window control is the
     // SCOPE's alone. Changing it here would move the FT waterfall's picture too.
-    compute_row_over(audio, LO_HZ, HI_HZ, WindowN::Balanced)
+    row_over(
+        audio,
+        LO_HZ,
+        SPECTRUM_HI_HZ,
+        SPECTRUM_BINS,
+        WindowN::Balanced,
+    )
 }
 
 /// The same row over an arbitrary span.
 ///
 /// THE BIN COUNT IS FIXED AT 512 WHATEVER THE SPAN, which is the whole point: the payload is
 /// the same 512 numbers either way, and narrowing the span is therefore free resolution rather
-/// than a bigger message. Over the full 0-4000 that is 7.81 Hz per bin; over the CW cockpit's
-/// 300-1100 window it is 1.5625 Hz — FIVE TIMES FINER for the same bytes on the wire.
+/// than a bigger message. Over 0-4000 that is 7.81 Hz per bin; over the CW cockpit's 300-1100
+/// window it is 1.5625 Hz — FIVE TIMES FINER for the same bytes on the wire. (The full waterfall
+/// row is the one row with its own count, [`SPECTRUM_BINS`], so its bins keep that 7.81 Hz over
+/// its wider 0-5000 span.)
 ///
 /// ⚠️ BE HONEST ABOUT WHAT THIS DOES NOT DO. It does not make a carrier thinner. Apparent
 /// width is set by the Hann main lobe (23.4 Hz at N=2048), not by the display grid, and only
@@ -443,11 +458,15 @@ fn compute_row(audio: &[f32]) -> Spectrum {
 /// the full span and by 15 over the CW window, so the scope draws a lobe instead of
 /// interpolating a spike across 75 px.
 fn compute_row_over(audio: &[f32], lo_hz: f32, hi_hz: f32, win: WindowN) -> Spectrum {
-    const BINS: usize = 512;
+    row_over(audio, lo_hz, hi_hz, 512, win)
+}
+
+/// A row of `bins` display bins over `lo_hz..hi_hz`.
+fn row_over(audio: &[f32], lo_hz: f32, hi_hz: f32, bins: usize, win: WindowN) -> Spectrum {
     let row = if audio.is_empty() {
         Vec::new()
     } else {
-        tempo_core::spectrum::power_spectrum_n(audio, ANALYSIS_RATE, lo_hz, hi_hz, BINS, win)
+        tempo_core::spectrum::power_spectrum_n(audio, ANALYSIS_RATE, lo_hz, hi_hz, bins, win)
     };
     Spectrum {
         row,
@@ -499,9 +518,10 @@ mod tests {
             .collect()
     }
 
-    /// Which 512-bin index covers `hz` over the 0-4000 Hz span.
+    /// Which display bin covers `hz`: 7.8125 Hz each, from 0 Hz (640 over 0-5000, as 512 over
+    /// 0-4000 were before it).
     fn bin_of(hz: f32) -> usize {
-        ((hz / 4000.0) * 512.0) as usize
+        ((hz / SPECTRUM_HI_HZ) * SPECTRUM_BINS as f32) as usize
     }
 
     fn peak_bin(row: &[f32]) -> usize {
@@ -784,7 +804,7 @@ mod tests {
         }
 
         let wide = feed.row().expect("a wide row is published");
-        assert_eq!((wide.lo_hz, wide.hi_hz), (0.0, 4000.0));
+        assert_eq!((wide.lo_hz, wide.hi_hz), (0.0, 5000.0));
         let wide_lobe = lobe_bins(&wide.row);
 
         // THE FIRST CALL ONLY REGISTERS THE REQUEST and is answered from the wide row. That
@@ -794,7 +814,7 @@ mod tests {
             .scope_row(300.0, 1100.0, WindowN::Balanced)
             .expect("a row either way");
         assert_eq!(
-            first.hi_hz, 4000.0,
+            first.hi_hz, 5000.0,
             "until the producer has answered, the request falls back to the full row"
         );
 
@@ -804,10 +824,13 @@ mod tests {
             .scope_row(300.0, 1100.0, WindowN::Balanced)
             .expect("the narrow row");
         assert_eq!((narrow.lo_hz, narrow.hi_hz), (300.0, 1100.0));
-        assert_eq!(
-            narrow.row.len(),
-            wide.row.len(),
-            "SAME PAYLOAD — the win is resolution per byte, not more bytes"
+        // The scope row is 512 numbers whatever its span; the full row is 640 since it reached
+        // 5000 Hz at the same bin width. The scope's win is still resolution per byte: never more
+        // bytes than the full row.
+        assert_eq!(narrow.row.len(), 512, "the scope row's payload is 512 bins");
+        assert!(
+            narrow.row.len() <= wide.row.len(),
+            "NO BIGGER PAYLOAD — the win is resolution per byte, not more bytes"
         );
 
         let narrow_lobe = lobe_bins(&narrow.row);
@@ -821,7 +844,7 @@ mod tests {
         );
         assert!(
             narrow_lobe >= wide_lobe * 3,
-            "the 800 Hz window must sample the lobe far more finely than the 4000 Hz one \
+            "the 800 Hz window must sample the lobe far more finely than the full row \
              (wide={wide_lobe} bins, narrow={narrow_lobe})"
         );
     }
@@ -989,6 +1012,119 @@ mod tests {
         );
     }
 
+    /// THE ROW REACHES 5000 Hz AT THE SAME 7.8125 Hz BINS, through the capture resampler from a
+    /// real sound card's rate. A tone anywhere in the span lands in its own bin.
+    ///
+    /// ⚠️ THE TOP 500 Hz SHOWS THE CAPTURE PATH'S ANTI-ALIAS ROLL-OFF, AND THAT IS HONEST. The
+    /// resampler that feeds this row also feeds every decoder, and it low-passes at 4500 Hz before
+    /// decimating to 12 kHz, the same cutoff as the reference FT program's own input filter
+    /// (`tempo_codec::capture_resample`). Its wide graph to 5000 Hz therefore rolls off over the
+    /// same 4500-5000 Hz. Measured here from a 48 kHz card: within 1 dB to 3000 Hz, 2.6 dB down at
+    /// 4000 (inside the old 0-4000 span, so nothing new), 6 dB at 4500, 10.4 at 4800 and 13 at
+    /// 4950, still far above the floor; a native 12 kHz card has no filter and stays flat to 5000.
+    /// The filter is NOT moved for the display: it is the decoders' input, and this change is
+    /// display only.
+    #[test]
+    fn the_display_row_reaches_5000_hz_at_the_same_resolution() {
+        let level_at = |rate: u32, hz: f32| {
+            let tap = RxTap::new();
+            let ring = Arc::new(SpscRing::new(400_000));
+            tap.publish_card(ring.clone(), rate);
+            let feed = SpectrumFeed::default();
+            let meters = MeterFeed::default();
+            let mut dsp = RxDsp::new();
+            ring.push_slice(&tone(rate, hz, rate as usize / 2));
+            for _ in 0..8 {
+                dsp.tick(&tap, &feed, &meters);
+            }
+            let row = feed.row().expect("published");
+            assert_eq!(
+                (row.lo_hz, row.hi_hz),
+                (0.0, 5000.0),
+                "the row spans 0-5000 Hz"
+            );
+            assert_eq!(row.row.len(), 640, "640 bins");
+            assert_eq!(
+                row.hi_hz / row.row.len() as f64,
+                7.8125,
+                "the bins kept their width"
+            );
+            let (want, got) = (bin_of(hz), peak_bin(&row.row));
+            assert!(
+                got.abs_diff(want) <= 3,
+                "{hz} Hz at {rate} Hz should peak near bin {want}, got {got}"
+            );
+            row.row[got]
+        };
+        for rate in [12_000, 48_000, 44_100] {
+            let mid = level_at(rate, 1500.0);
+            let down = |hz: f32| (mid - level_at(rate, hz)) * tempo_core::spectrum::DB_SPAN;
+            let (at3000, at4000, at4500, at4800, at4950) = (
+                down(3000.0),
+                down(4000.0),
+                down(4500.0),
+                down(4800.0),
+                down(4950.0),
+            );
+            println!(
+                "{rate} Hz card, dB below 1500 Hz: 3000 {at3000:.2}, 4000 {at4000:.2}, \
+                 4500 {at4500:.2}, 4800 {at4800:.2}, 4950 {at4950:.2}"
+            );
+            assert!(
+                at3000.abs() < 1.0,
+                "{rate}: flat to 3000 Hz ({at3000:.2} dB)"
+            );
+            assert!(
+                at4000 < 3.5,
+                "{rate}: 4000 Hz as it always was ({at4000:.2} dB)"
+            );
+            if rate == 12_000 {
+                assert!(
+                    at4950.abs() < 1.0,
+                    "a native 12 kHz card is flat to the top ({at4950:.2} dB)"
+                );
+            } else {
+                assert!(
+                    at4800 < 20.0,
+                    "{rate}: 4800 Hz still shows above the roll-off ({at4800:.2} dB down)"
+                );
+            }
+        }
+    }
+
+    /// WHAT THE WIDER ROW COSTS, measured rather than asserted from the arithmetic. The FFT is the
+    /// same 2048 points; the scatter into display bins covers 853 raw bins instead of 682, and the
+    /// row is 128 numbers longer. The bytes are what the screen polls and what Remote's waterfall
+    /// feed carries (before its deflate). Timing is printed, not asserted: a debug build on a
+    /// shared box is no clock.
+    #[test]
+    fn the_wider_row_costs_what_it_says() {
+        let audio = tone(12_000, 1500.0, WindowN::Balanced.n());
+        let time = |hi: f32, bins: usize| {
+            let t = std::time::Instant::now();
+            for _ in 0..200 {
+                std::hint::black_box(row_over(&audio, 0.0, hi, bins, WindowN::Balanced));
+            }
+            t.elapsed().as_secs_f64() * 1e6 / 200.0
+        };
+        let (old_us, new_us) = (time(4000.0, 512), time(SPECTRUM_HI_HZ, SPECTRUM_BINS));
+        let old = row_over(&audio, 0.0, 4000.0, 512, WindowN::Balanced);
+        let new = compute_row(&audio);
+        let (old_b, new_b) = (
+            serde_json::to_string(&old).expect("json").len(),
+            serde_json::to_string(&new).expect("json").len(),
+        );
+        println!(
+            "row: 512 bins/0-4000 {old_us:.1} us, {old_b} B json; \
+             640 bins/0-5000 {new_us:.1} us, {new_b} B json"
+        );
+        assert_eq!(new.row.len(), old.row.len() + 128);
+        assert!(
+            (new_b as f64) < old_b as f64 * 1.3,
+            "the row's bytes grow with its bins (+25%), no more: {old_b} -> {new_b}"
+        );
+    }
+
     /// A device swap must not blend the old rate into the new window.
     #[test]
     fn an_epoch_change_rebuilds_the_resampler_and_clears_the_window() {
@@ -1083,7 +1219,7 @@ mod tests {
         );
         let raw_bin_hz = ANALYSIS_RATE / WindowN::Balanced.n() as f32;
         assert!(
-            raw_bin_hz <= 4000.0 / 512.0,
+            raw_bin_hz <= SPECTRUM_HI_HZ / SPECTRUM_BINS as f32,
             "raw FFT bins ({raw_bin_hz:.2} Hz) must stay finer than the 512-bin display \
              (7.81 Hz) — liveliness may not be bought with visible resolution"
         );
@@ -1155,6 +1291,10 @@ mod tests {
     ///   unconditionally (`flat4.f90:18-20`, "If nflatten=0, convert to dB but do not flatten")
     ///   and indexes its palette linearly in dB (`plotter.cpp:194`). Axis behaviour is proved by
     ///   the three tests in `tempo_core::spectrum`; this digest only pins that it does not drift.
+    /// - 2026-11-03: the row reached 0-5000 Hz in 640 bins (was 0-4000 in 512), the same 7.8125 Hz
+    ///   per bin. THE FIRST 512 LINES OF THE REFERENCE ARE THE OLD FILE UNCHANGED, and the row still
+    ///   matches them: every bin that existed kept its frequencies and its value. Only the 128 bins
+    ///   for 4000-5000 Hz were appended, generated by this test's own input on the new tree.
 
     #[test]
     fn the_row_for_a_known_input_is_byte_stable() {
@@ -1172,16 +1312,16 @@ mod tests {
         assert!(dsp.tick(&tap, &feed, &meters), "a row is produced");
         let row = feed.row().expect("published").row;
 
-        assert_eq!(row.len(), 512, "bin count is part of the contract");
+        assert_eq!(row.len(), 640, "bin count is part of the contract");
         let reference = reference_row();
-        assert_eq!(reference.len(), 512, "the reference fixture is 512 bins");
+        assert_eq!(reference.len(), 640, "the reference fixture is 640 bins");
         let (worst_bin, worst) = row
             .iter()
             .zip(&reference)
             .map(|(a, b)| (a - b).abs())
             .enumerate()
             .max_by(|a, b| a.1.total_cmp(&b.1))
-            .expect("512 bins");
+            .expect("640 bins");
         assert!(
             worst <= ROW_TOLERANCE,
             "waterfall row drifted for a fixed input: bin {worst_bin} is off by {worst}, \

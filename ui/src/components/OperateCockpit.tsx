@@ -1988,6 +1988,8 @@ export function OperateCockpit({
                   onPopOut={popOutWaterfall}
                   fixedWindow={tier === 'WSPR' ? WSPR_WATERFALL_WINDOW : undefined}
                   transmitting={snap.radio.transmitting}
+                  passbandHz={snap.radio.filterWidthHz ?? null}
+                  passbandMode={snap.radio.rigMode || snap.radio.sideband}
                   rxOffsetHz={snap.radio.rxOffsetHz}
                   txOffsetHz={snap.radio.txOffsetHz}
                   theme={theme}
