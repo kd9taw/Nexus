@@ -25,35 +25,43 @@ describe('the picture key', () => {
 
 describe('the remembered tick', () => {
   it('holds for the picture ticked and no other; an untick forgets it', () => {
-    rememberIdInImage('aa', true)
-    expect(idInImageRemembered('aa')).toBe(true)
-    expect(idInImageRemembered('bb')).toBe(false)
-    rememberIdInImage('aa', false)
-    expect(idInImageRemembered('aa')).toBe(false)
+    rememberIdInImage('K1ABC', 'aa', true)
+    expect(idInImageRemembered('K1ABC', 'aa')).toBe(true)
+    expect(idInImageRemembered('K1ABC', 'bb')).toBe(false)
+    rememberIdInImage('K1ABC', 'aa', false)
+    expect(idInImageRemembered('K1ABC', 'aa')).toBe(false)
   })
 
-  it('without a key nothing is stored and nothing is remembered', () => {
-    rememberIdInImage(null, true)
+  it('holds only under the call it was ticked under (the picture shows THAT call)', () => {
+    rememberIdInImage('K1ABC', 'aa', true)
+    expect(idInImageRemembered('W1AW', 'aa'), 'a tick crossed to another station call').toBe(false)
+    expect(idInImageRemembered('k1abc ', 'aa'), 'the same call, spelled loosely').toBe(true)
+  })
+
+  it('without a key or a call nothing is stored and nothing is remembered', () => {
+    rememberIdInImage('K1ABC', null, true)
+    rememberIdInImage('', 'aa', true)
     expect(localStorage.getItem(SSTV_ID_IN_IMAGE_KEY)).toBeNull()
-    expect(idInImageRemembered(null)).toBe(false)
+    expect(idInImageRemembered('K1ABC', null)).toBe(false)
+    expect(idInImageRemembered('', 'aa')).toBe(false)
   })
 
   it('keeps the most recent pictures, forgetting the oldest past the cap; a re-tick is recent again', () => {
-    for (let i = 0; i < MAX_REMEMBERED; i++) rememberIdInImage(`k${i}`, true)
-    rememberIdInImage('k0', true) // ticked again: now the newest
-    rememberIdInImage('new', true)
-    expect(idInImageRemembered('k1'), 'the oldest was not forgotten').toBe(false)
-    expect(idInImageRemembered('k0')).toBe(true)
-    expect(idInImageRemembered('new')).toBe(true)
+    for (let i = 0; i < MAX_REMEMBERED; i++) rememberIdInImage('K1ABC', `k${i}`, true)
+    rememberIdInImage('K1ABC', 'k0', true) // ticked again: now the newest
+    rememberIdInImage('K1ABC', 'new', true)
+    expect(idInImageRemembered('K1ABC', 'k1'), 'the oldest was not forgotten').toBe(false)
+    expect(idInImageRemembered('K1ABC', 'k0')).toBe(true)
+    expect(idInImageRemembered('K1ABC', 'new')).toBe(true)
     expect(JSON.parse(localStorage.getItem(SSTV_ID_IN_IMAGE_KEY)!)).toHaveLength(MAX_REMEMBERED)
   })
 
   it('a damaged store remembers nothing and is replaced by the next tick', () => {
     localStorage.setItem(SSTV_ID_IN_IMAGE_KEY, '{not json')
-    expect(idInImageRemembered('aa')).toBe(false)
-    rememberIdInImage('aa', true)
-    expect(idInImageRemembered('aa')).toBe(true)
-    localStorage.setItem(SSTV_ID_IN_IMAGE_KEY, JSON.stringify({ aa: true }))
-    expect(idInImageRemembered('aa'), 'a non-list store must not read as a tick').toBe(false)
+    expect(idInImageRemembered('K1ABC', 'aa')).toBe(false)
+    rememberIdInImage('K1ABC', 'aa', true)
+    expect(idInImageRemembered('K1ABC', 'aa')).toBe(true)
+    localStorage.setItem(SSTV_ID_IN_IMAGE_KEY, JSON.stringify({ 'K1ABC:aa': true }))
+    expect(idInImageRemembered('K1ABC', 'aa'), 'a non-list store must not read as a tick').toBe(false)
   })
 })

@@ -13,6 +13,9 @@
 //   · NOTHING IS REMEMBERED WITHOUT A KEY. Where the browser cannot hash (no Web Crypto), every
 //     picture starts unticked, as before: the failure direction is "ask again", never "assume".
 //   · UNTICKING FORGETS. Untick a card and it is a new picture again the next time it is loaded.
+//   · AND BY THE STATION'S CALL. The tick says the picture shows MY call; a card ticked under one
+//     call (another profile, an old call) must not come back ticked under another, so each tick is
+//     stored as `<call>:<hash>`. With no call there is nothing to remember a tick under.
 //
 // Shared by every window (a fact about a picture, not about a window), kept in this computer's
 // browser storage, capped at the most recent MAX pictures.
@@ -42,16 +45,24 @@ function load(): string[] {
   }
 }
 
-/** Whether the operator ticked "already shows my callsign" for THIS picture. */
-export function idInImageRemembered(key: string | null): boolean {
-  return key != null && load().includes(key)
+/** The stored entry for a picture under a call; null without either. */
+function entry(call: string, key: string | null): string | null {
+  const c = call.trim().toUpperCase()
+  return key == null || c === '' ? null : `${c}:${key}`
 }
 
-/** Remember (or forget) the tick for this picture. Without a key nothing is stored. */
-export function rememberIdInImage(key: string | null, on: boolean): void {
-  if (key == null) return
-  const rest = load().filter((k) => k !== key)
-  const next = on ? [...rest, key].slice(-MAX_REMEMBERED) : rest
+/** Whether the operator ticked "already shows my callsign" for THIS picture under THIS call. */
+export function idInImageRemembered(call: string, key: string | null): boolean {
+  const e = entry(call, key)
+  return e != null && load().includes(e)
+}
+
+/** Remember (or forget) the tick for this picture under this call. Without both nothing is stored. */
+export function rememberIdInImage(call: string, key: string | null, on: boolean): void {
+  const e = entry(call, key)
+  if (e == null) return
+  const rest = load().filter((k) => k !== e)
+  const next = on ? [...rest, e].slice(-MAX_REMEMBERED) : rest
   try {
     localStorage.setItem(SSTV_ID_IN_IMAGE_KEY, JSON.stringify(next))
   } catch {

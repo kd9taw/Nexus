@@ -598,14 +598,19 @@ const declOf = (prop: string) => (body: string) => {
 describe('SSTV, RTTY and PSK pin their header: it never scrolls out of the window', () => {
   for (const shell of ['sstv-view', 'rtty-cockpit', 'psk-cockpit']) {
     const head = [...shellChain(shell), new Set(['cockpit-header', 'cockpit-header-pinned'])]
-    it(`.${shell}: the header resolves sticky at top 0, opaque, stacked over the strip`, () => {
+    it(`.${shell}: the header resolves sticky at top 0, opaque, never stacked over the strip`, () => {
       expect(winningAcross(head, declOf('position'))?.value).toBe('sticky')
       expect(winningAcross(head, declOf('top'))?.value).toBe('0')
       expect(winningAcross(head, declOf('background'))?.value).toBe('var(--bg)')
       const strip = [...shellChain(shell), new Set(['cockpit-txstrip'])]
-      expect(Number(winningAcross(head, declOf('z-index'))?.value)).toBeGreaterThan(Number(winningAcross(strip, declOf('z-index'))?.value))
+      // The strip wins any overlap (equal z, later sibling): a broken parking hides the dial, not Stop TX.
+      expect(Number(winningAcross(head, declOf('z-index'))?.value)).toBeLessThanOrEqual(Number(winningAcross(strip, declOf('z-index'))?.value))
       // The strip parks UNDER it, at the height the strip measures.
       expect(winningAcross(strip, declOf('top'))?.value).toBe('var(--cockpit-txstrip-top, 0px)')
+      // …and the dock (SSTV's TX bar or `.cockpit-txdock`) is no lower than the header either: Send and
+      // Stop win any overlap.
+      const dock = [...shellChain(shell), new Set([shell === 'sstv-view' ? 'sstv-tx-bar' : 'cockpit-txdock'])]
+      expect(Number(winningAcross(head, declOf('z-index'))?.value)).toBeLessThanOrEqual(Number(winningAcross(dock, declOf('z-index'))?.value))
     })
     it(`.${shell}: the band the header's shadow covers is exactly the shell's top padding`, () => {
       // A sticky box parks inside its scroller's padding, so the shell's top padding stays open above

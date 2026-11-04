@@ -29728,7 +29728,11 @@ button.sat-chip:disabled {
   flex: 0 0 auto;
   position: sticky;
   bottom: 0;
-  z-index: 2;
+  /* 4, the TX strip's and `.cockpit-txdock`'s level and the pinned header's (cockpit-panes.css):
+     the bar comes after the header in the shell, so at equal z it wins any overlap — Send and Stop
+     are never under the dial. (It was 2, under the header's 4, and at 900×600 / 175 % the header
+     covered Send and Stop.) Above the region's column dividers (3) for the dock's reason. */
+  z-index: 4;
   display: flex;
   align-items: center;
   gap: var(--space-3);

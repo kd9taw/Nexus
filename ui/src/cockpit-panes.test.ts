@@ -97,7 +97,8 @@ const STYLES_RULES = parseStylesRules(STYLES)
  *  attribute (`[data-cols=…]` or `[data-flow=…]`). Anything else — a descendant, a
  *  combinator, a second class, a tag, an id, a pseudo — is a specificity gradient, i.e.
  *  a future cascade war. */
-const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)')\])?$/
+// `[data-pin='off']`: the pinned header's one state, written by the TX strip (CockpitTxStrip decidePin).
+const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)'|pin='off')\])?$/
 
 /** (classes+attributes, ids) — flat rules are all (0,1,0) or (0,2,0). */
 function specificity(sel: string): number {
@@ -986,7 +987,7 @@ describe('panes are sized by the grid, never by themselves', () => {
   // band, ⊞ Panels, power and CAT stay in the window when the shell's valve scrolls. The fence makes
   // this one rule its whole cascade (styles.css may not name the class); the shells' side is computed
   // in cockpit-shells.test.ts.
-  it('the pinned header is sticky at the top, opaque, and stacks over the strip, the dock and the dividers', () => {
+  it('the pinned header is sticky at the top, opaque, over the dividers, and NEVER over the strip or the dock', () => {
     const r = RULES.filter((x) => x.selector === '.cockpit-header-pinned')
     expect(r.length, 'exactly one .cockpit-header-pinned rule').toBe(1)
     const decl = (prop: string) => {
@@ -1004,9 +1005,19 @@ describe('panes are sized by the grid, never by themselves', () => {
     // …and the shell's top padding above it, which a sticky box leaves open, is covered in that colour.
     expect(decl('box-shadow')).toBe('0 calc(-1 * var(--space-4) - 1px) 0 var(--bg)')
     const z = (rules: Rule[], selector: string) => Number(/(?:^|;)\s*z-index\s*:\s*(-?\d+)/.exec(rules.find((x) => x.selector === selector)!.body)![1])
-    expect(Number(decl('z-index'))).toBeGreaterThan(z(RULES, '.cockpit-txstrip'))
-    expect(Number(decl('z-index'))).toBeGreaterThan(z(RULES, '.cockpit-txdock'))
+    // In any overlap the stop surfaces win: the header is no higher than the strip or the dock, and
+    // it is their EARLIER sibling (the structure tests hold it first), so at equal z it paints under.
+    expect(Number(decl('z-index'))).toBeLessThanOrEqual(z(RULES, '.cockpit-txstrip'))
+    expect(Number(decl('z-index'))).toBeLessThanOrEqual(z(RULES, '.cockpit-txdock'))
     expect(Number(decl('z-index'))).toBeGreaterThan(z(STYLES_RULES, '.pane-splitter'))
+    // …and where the three would not fit, the strip turns the pin off: static, nothing parked.
+    const off = RULES.filter((x) => x.selector === ".cockpit-header-pinned[data-pin='off']")
+    expect(off.length, "no .cockpit-header-pinned[data-pin='off'] rule").toBe(1)
+    expect(/(?:^|;)\s*position\s*:\s*static\s*(?:;|$)/.test(off[0].body), 'the unpinned header still sticks').toBe(true)
+    // A flex item's z-index stacks even when it is static: unpinned, the header must drop it.
+    expect(/(?:^|;)\s*z-index\s*:\s*auto\s*(?:;|$)/.test(off[0].body), 'a static header at z 4 still paints over a dock').toBe(true)
+    // It comes AFTER the pinned rule (same specificity, so source order decides).
+    expect(RULES.indexOf(off[0])).toBeGreaterThan(RULES.indexOf(r[0]))
     // Not a size: the header stays exactly as tall as what it holds (cockpit-header-crush.test.tsx).
     for (const p of ['height', 'min-height', 'max-height', 'flex', 'overflow', 'overflow-y']) expect(decl(p), p).toBeNull()
   })

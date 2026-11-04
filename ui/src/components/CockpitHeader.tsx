@@ -94,7 +94,8 @@ export interface CockpitHeaderProps {
   /** PINNED: the header parks at the top of its shell when the shell scrolls, so the mode, the
    *  dial, the band, ⊞ Panels, power and CAT never leave the window (`.cockpit-header-pinned`,
    *  cockpit-panes.css). The cockpit's TX strip then parks under it, not over it (CockpitTxStrip
-   *  measures it). SSTV, RTTY and PSK pin theirs. */
+   *  measures it). SSTV, RTTY and PSK pin theirs. Where the header, the strip and the dock would not
+   *  all fit the window the strip unpins it again (`data-pin="off"`), so it never covers a stop control. */
   pinned?: boolean
 }
 
@@ -293,7 +294,9 @@ export function CockpitHeader({
   )
 
   return (
-    <div className={pinned ? 'cockpit-header cockpit-header-pinned' : 'cockpit-header'}>
+    // `data-pin`: the TX strip turns it "off" where the header, the strip and the dock do not all fit
+    // the window (CockpitTxStrip decidePin); it starts "on".
+    <div className={pinned ? 'cockpit-header cockpit-header-pinned' : 'cockpit-header'} data-pin={pinned ? 'on' : undefined}>
       <div className="ch-identity">{modeIndicator}</div>
 
       <div className="ch-freq">

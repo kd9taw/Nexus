@@ -245,6 +245,32 @@ function pinnedAbove(shell: HTMLElement, strip: HTMLElement): HTMLElement | unde
     .pop()
 }
 
+/** A header that ASKS to be pinned (CockpitHeader `pinned` renders `data-pin`), before the strip. */
+function pinCandidate(shell: HTMLElement, strip: HTMLElement): HTMLElement | undefined {
+  const kids = Array.from(shell.children)
+  const at = kids.findIndex((c) => c === strip || c.contains(strip))
+  return kids.slice(0, Math.max(0, at)).find((c): c is HTMLElement => c instanceof HTMLElement && c.hasAttribute('data-pin'))
+}
+
+/** How much of the shell's scrollport must stay free for what scrolls (the scope and the panes) before
+ *  a header may pin itself, in the shell's em. */
+export const PIN_ROOM_EM = 6
+
+/** PIN THE HEADER ONLY WHERE THE THREE PARKED SURFACES FIT. Pinned, the header parks at the top, the
+ *  strip under it and the dock at the bottom; on a small window at a large zoom (900×600 or 700×800 at
+ *  175 %) the three are taller than the scrollport, and the header — first and topmost — sat over Stop
+ *  TX, Send and Esc/Stop at every scroll position (measured). So the header is pinned (`data-pin="on"`)
+ *  only while its padding, its height, the strip's and the dock's leave PIN_ROOM_EM of the scrollport
+ *  free, and otherwise unpinned (`"off"`: it scrolls, as every other cockpit's header does). The
+ *  decision reads the header's height, which pinning does not change, so it cannot flap. */
+function decidePin(shell: HTMLElement, head: HTMLElement, strip: HTMLElement, dock: HTMLElement | undefined): void {
+  const cs = getComputedStyle(shell)
+  const em = parseFloat(cs.fontSize) || 16
+  const need = (parseFloat(cs.paddingTop) || 0) + head.offsetHeight + strip.offsetHeight + (dock?.offsetHeight ?? 0) + PIN_ROOM_EM * em
+  const pin = need <= shell.clientHeight ? 'on' : 'off'
+  if (head.getAttribute('data-pin') !== pin) head.setAttribute('data-pin', pin)
+}
+
 /** The cockpit shell the strip stands in: its parent — or, where layout wrappers stand between them
  *  (Phone's stage and the left side's row, 2026-10-03), the nearest ancestor holding the dock, up to
  *  the cockpit's own `<main>`. With no dock that far up, the parent, as before. */
@@ -262,6 +288,8 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     const shell = strip && shellOf(strip)
     if (!strip || !shell) return
     const dock = Array.from(shell.children).find(isDock)
+    const candidate = pinCandidate(shell, strip)
+    if (candidate) decidePin(shell, candidate, strip, dock)
     const head = pinnedAbove(shell, strip)
     strip.style.setProperty('--cockpit-txstrip-bottom',
       dock && getComputedStyle(dock).position === 'sticky' ? `${dock.offsetHeight}px` : '0px')
@@ -280,11 +308,15 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     const shell = strip && shellOf(strip)
     if (!strip || !shell) return
     const dock = Array.from(shell.children).find(isDock)
-    const head = pinnedAbove(shell, strip)
+    const head = pinCandidate(shell, strip) ?? pinnedAbove(shell, strip)
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(apply)
     observer?.observe(strip)
     if (dock) observer?.observe(dock)
-    if (head) observer?.observe(head)
+    if (head) {
+      observer?.observe(head)
+      // The pin decision is against the shell's own height: a shorter window may unpin it.
+      observer?.observe(shell)
+    }
     return () => {
       observer?.disconnect()
       shell.style.removeProperty('--cockpit-txstrip-h')

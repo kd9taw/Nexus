@@ -1214,6 +1214,21 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   idInImageRef.current = idInImage
   /** The loaded picture's content key (null until one loads, or where the browser cannot hash). */
   const pictureKeyRef = useRef<string | null>(null)
+  /** The newest picture load; an older one that finishes later commits nothing (loadImage). */
+  const loadGenRef = useRef(0)
+  // The tick says the picture shows THIS station's call. When the call changes under a loaded
+  // picture (a profile switch), it is re-read from memory for the new call — so a card ticked
+  // for one call is never left ticked under another.
+  useEffect(() => {
+    if (pictureKeyRef.current == null && !idInImageRef.current) return
+    const remembered = idInImageRemembered(callsign, pictureKeyRef.current)
+    if (remembered === idInImageRef.current) return
+    setIdInImage(remembered)
+    idInImageRef.current = remembered
+    if (srcRef.current) renderTx(modeSlugRef.current, true)
+    // Keyed on the call alone: the picture's own loads set the tick themselves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callsign])
 
   // Operator text overlays (text composed onto the picture). State drives the item strip;
   // the ref is what renderTx and the drag read — the same state+ref pairing as
@@ -1275,7 +1290,14 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
   const lastHeardCall = gallery.find((g) => g.fskId)?.fskId ?? null
 
   const loadImage = async (file: File) => {
+    // THIS LOAD'S GENERATION. Every await below is a point where the operator may already have
+    // picked another picture; a load that has been superseded commits nothing — not the picture,
+    // not a notice, and above all not a tick. Without it, a slow unticked picture landing after
+    // a fast remembered card could be shown under the card's tick and go out with no plate.
+    const gen = ++loadGenRef.current
+    const superseded = () => gen !== loadGenRef.current
     setIdInImage(false)
+    idInImageRef.current = false
     setNotice(null)
     // Header only, through Blob.slice — a 100 MB file must not land in memory just to
     // be refused for being 100 MB.
@@ -1285,6 +1307,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     } catch {
       /* no Blob.slice/arrayBuffer here — fall through and let the decoder answer */
     }
+    if (superseded()) return
     const kind = sniffImageKind(head)
     const refusal = refusalFor(kind)
     if (refusal) {
@@ -1294,6 +1317,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
       return
     }
     const decoded = await decodeImage(file)
+    if (superseded()) return
     if (!decoded || decoded.w <= 0 || decoded.h <= 0) {
       setNotice({
         kind: 'error',
@@ -1320,6 +1344,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     // The picture's content key, for the remembered "already shows my callsign" tick. Taken
     // only once the picture is accepted (the decode above has read the whole file already).
     const key = await pictureKey(file)
+    if (superseded()) return
 
     // ⭐ ORIENTATION FIRST, and only when the decode did not already do it.
     const tag = readExifOrientation(head)
@@ -1327,18 +1352,19 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
     // the only way to get orientation 3 (upside down) right, which changes no dimensions
     // and so is invisible to the size comparison. Cached, so this awaits real work once.
     const decoderApplies = await probeDecoderAppliesOrientation()
+    if (superseded()) return
     const eff = effectiveOrientation(tag, readIntrinsicSize(head), { w: decoded.w, h: decoded.h }, decoderApplies)
     srcRef.current = eff === 1 ? decoded : orientOnto(decoded, eff)
     centreRef.current = CENTRE
     setSrcSize({ w: srcRef.current.w, h: srcRef.current.h })
     setImageName(file.name)
     pictureKeyRef.current = key
-    // Ticked for this very picture before: ticked again (and drawn without the plate, below).
-    // Any other picture keeps the reset above.
-    if (idInImageRemembered(key)) {
-      setIdInImage(true)
-      idInImageRef.current = true
-    }
+    // The tick is SET from memory as the picture is committed, true OR false — never only
+    // switched on: ticked before for this very picture under this very call, it is ticked again
+    // (and drawn without the plate, below); anything else is unticked, whatever the box said.
+    const remembered = idInImageRemembered(callsignRef.current, key)
+    setIdInImage(remembered)
+    idInImageRef.current = remembered
     if (kind === 'gif') {
       setNotice({ kind: 'warn', text: t('sstv.tx.notice.gif') })
     }
@@ -2321,7 +2347,7 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
                   checked={idInImage}
                   onChange={(e) => {
                     setIdInImage(e.target.checked)
-                    rememberIdInImage(pictureKeyRef.current, e.target.checked)
+                    rememberIdInImage(callsign, pictureKeyRef.current, e.target.checked)
                     // The preview must show what will actually transmit, immediately.
                     idInImageRef.current = e.target.checked
                     renderTx(modeSlugRef.current, true)

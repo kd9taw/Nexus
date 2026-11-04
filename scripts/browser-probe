@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|firstrun|journeys|clublog|aprsmap|logbook|profiles
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|firstrun|journeys|clublog|aprsmap|logbook|profiles
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -175,6 +175,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         Tune, the Esc/Stop macro, the TX latch and the scope's nudges are on
                         screen, with a planted margin that must be caught
                         (ui/probe/rttyfit-probe.mjs; it builds nothing)
+  --desktop digishell   the SSTV, RTTY and PSK screens in the real app, from 900×600 and 700×800
+                        at 175 % up to 1920×1080, scrolled to the top and to the end: nothing in
+                        the cockpit header covers a TX strip or dock control, a stop control is
+                        on screen and topmost, and a pinned header's controls stay on screen,
+                        with a header forced on top that must be caught
+                        (ui/probe/digishell-probe.mjs; it builds nothing)
   --desktop firstrun    a fresh install's first-run wizard in the real app, at 1024×768 and
                         1920×1080: the About-you question and its answers on screen, Finish
                         writes the answer, the Getting started guide then the first-contact
@@ -227,7 +233,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|firstrun|journeys|clublog|aprsmap|logbook|profiles) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, radiosetup, toastcorner, logwaiting, topbar, header, rttyfit, firstrun, journeys, clublog, aprsmap, logbook or profiles" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|firstrun|journeys|clublog|aprsmap|logbook|profiles) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, radiosetup, toastcorner, logwaiting, topbar, header, rttyfit, digishell, firstrun, journeys, clublog, aprsmap, logbook or profiles" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -263,6 +269,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = topbar ] && exec node "$ROOT/ui/probe/topbar-probe.mjs"
   [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
+  [ "$DESKTOP" = digishell ] && exec node "$ROOT/ui/probe/digishell-probe.mjs"
   [ "$DESKTOP" = clublog ] && exec node "$ROOT/ui/probe/clublog-probe.mjs"
   [ "$DESKTOP" = aprsmap ] && exec node "$ROOT/ui/probe/aprsmap-probe.mjs"
   [ "$DESKTOP" = logbook ] && exec node "$ROOT/ui/probe/logbook-probe.mjs"

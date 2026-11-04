@@ -38,12 +38,19 @@ afterEach(cleanup)
 
 describe('a pinned cockpit header stays at the top of its shell', () => {
   for (const shell of ['sstv-view', 'rtty-cockpit', 'psk-cockpit']) {
-    it(`${shell}: the rendered header is sticky at top 0, over the strip`, () => {
+    it(`${shell}: the rendered header is sticky at top 0, and never stacked over the strip`, () => {
       const head = mount(shell, true)
       expect(head.parentElement!.tagName, 'a sticky box must be a direct shell child').toBe('MAIN')
+      expect(head.getAttribute('data-pin'), 'it starts pinned').toBe('on')
       expect(css(head, 'position')).toBe('sticky')
       expect(css(head, 'top')).toMatch(/^0(px)?$/)
-      expect(Number(css(head, 'z-index'))).toBeGreaterThanOrEqual(5)
+      expect(Number(css(head, 'z-index'))).toBe(4)
+    })
+
+    it(`${shell}: turned off (the three parked surfaces do not fit), the rendered header is static`, () => {
+      const head = mount(shell, true)
+      head.setAttribute('data-pin', 'off')
+      expect(css(head, 'position')).toBe('static')
     })
   }
 

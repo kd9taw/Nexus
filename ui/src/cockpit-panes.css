@@ -538,14 +538,20 @@
    measures because CSS cannot read a sibling's box); what scrolls under the two is the scope and the
    pane region, never a control in either. It must be a DIRECT shell child for the reason the strip
    must: a sticky box never leaves its containing block.
-   Z-INDEX 5: over the strip and the dock (4) and the region's dividers (3), so a menu the header
-   opens (⊞ Panels, the band list) paints over them; the header itself never overlaps the strip,
-   which parks under it. Opaque (the page's own `--bg`, defined in both themes) because content
-   scrolls under it. Not a size: the header stays exactly as tall as what it holds. */
+   Z-INDEX 4, THE STRIP'S AND THE DOCK'S OWN, and FIRST in the shell: at equal z the later box
+   paints on top, so in any overlap the TX strip and the dock win and the header loses — a broken
+   parking can hide the dial, never Stop TX. Over the region's dividers (3). Opaque (the page's own
+   `--bg`, defined in both themes) because content scrolls under it. Not a size: the header stays
+   exactly as tall as what it holds.
+   ONLY WHERE IT FITS (`[data-pin='off']` below): pinned, the header, the strip and the dock all
+   park; on a small window at a large zoom (900×600 / 700×800 at 175 %) the three are taller than
+   the scrollport and the header sat over Stop TX, Send and Esc/Stop at every scroll position. The
+   strip measures the three and turns the pin off there (CockpitTxStrip decidePin), and the header
+   scrolls as every other cockpit's does. */
 .cockpit-header-pinned {
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 4;
   background: var(--bg);
   /* A sticky box parks INSIDE its scroller's padding (Chrome), so `top: 0` leaves the shell's own
      top padding (`--space-4`, the three shells' rule in styles.css) open above the header, and the
@@ -555,6 +561,16 @@
      zoom the shell's top edge falls on a subpixel and the last row of the band leaked (measured at
      1366×768 / 175 %); the extra pixel lies outside the scrollport, which clips it. */
   box-shadow: 0 calc(-1 * var(--space-4) - 1px) 0 var(--bg);
+}
+/* …UNPINNED where the header, the strip and the dock do not all fit (see above). Static: it scrolls
+   away with the scope, it parks over nothing, and the strip's top offset falls back to 0. */
+.cockpit-header-pinned[data-pin='off'] {
+  position: static;
+  /* `auto`, not merely ignored: the header is a FLEX ITEM of the shell, and a flex item's z-index
+     makes a stacking context even when it is static — a static header at 4 still painted over
+     SSTV's TX bar (measured at 900×600 / 175 %). Unpinned, it stacks as every other header does. */
+  z-index: auto;
+  box-shadow: none;
 }
 /* THE STRIP'S METERS CELL (Phone and CW from md up, the compact dock): the read-only TX meters in the
    strip's empty right side, as Operate's QSO strip carries its own (`.cq-telemetry`). Right-packed by

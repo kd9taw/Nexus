@@ -591,6 +591,83 @@ describe('SstvView TX panel', () => {
     expect(idBox().checked, 'an untick was not remembered').toBe(false)
   })
 
+  // A SUPERSEDED LOAD COMMITS NOTHING, and the tick is SET at commit, never only switched on. Picture A
+  // (unticked, slow to hash) is picked, then card B (remembered, fast); B lands ticked; then A finishes.
+  // Before the generation guard A landed on screen under B's tick and went out with no plate.
+  const pick = (bytes: number[], name: string) => {
+    const input = document.querySelector('input[type=file]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File([new Uint8Array(bytes)], name, { type: 'image/png' })] } })
+  }
+  it('RACE: a slow picture that was superseded never lands, and never under another picture’s tick', async () => {
+    localStorage.clear()
+    const real = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle)
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: async (alg: AlgorithmIdentifier, data: ArrayBuffer) => {
+          if (data.byteLength === 5) await gate
+          return real(alg, data)
+        },
+      },
+    })
+    render(<SstvView snap={snap} />)
+    await loadPicture([4, 4, 4, 4], 'card.png')
+    fireEvent.click(idBox())
+    pick([1, 2, 3, 4, 5], 'unidentified.png') // slow hash
+    await new Promise((r) => setTimeout(r, 20))
+    pick([4, 4, 4, 4], 'card.png') // fast, remembered
+    await waitFor(() => expect(idBox().checked).toBe(true))
+    release()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByText(/unidentified\.png/), 'a superseded load committed its picture').toBeNull()
+    fireEvent.click(screen.getByText('Send'))
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    // What goes out is the card, with the card's own tick.
+    expect(sstvSend.mock.calls[sstvSend.mock.calls.length - 1][4]).toBe(true)
+  })
+
+  it('RACE, the other order: the newest picture is unticked, so the box is unticked whatever landed before', async () => {
+    localStorage.clear()
+    render(<SstvView snap={snap} />)
+    await loadPicture([4, 4, 4, 4], 'card.png')
+    fireEvent.click(idBox())
+    pick([4, 4, 4, 4], 'card.png') // remembered…
+    pick([6, 6, 6], 'unidentified.png') // …superseded at once by an unticked picture
+    await waitFor(() => expect(screen.getByText(/unidentified\.png/)).toBeTruthy())
+    await new Promise((r) => setTimeout(r, 50))
+    expect(idBox().checked).toBe(false)
+    fireEvent.click(screen.getByText('Send'))
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    expect(sstvSend.mock.calls[sstvSend.mock.calls.length - 1][4], 'an unidentified picture went out with no plate').toBe(false)
+  })
+
+  it('CALLSIGN: a card ticked under one station call does not come back ticked under another', async () => {
+    localStorage.clear()
+    const { unmount } = render(<SstvView snap={snap} />)
+    await loadPicture([4, 4, 4, 4], 'card.png')
+    fireEvent.click(idBox())
+    unmount()
+    render(<SstvView snap={{ ...snap, mycall: 'W1AW' } as typeof snap} />)
+    const send = await loadPicture([4, 4, 4, 4], 'card.png')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(idBox().checked, 'ticked for KD9TAW, now on the air as W1AW without a plate').toBe(false)
+    fireEvent.click(send)
+    await waitFor(() => expect(sstvSend).toHaveBeenCalled())
+    expect(sstvSend.mock.calls[sstvSend.mock.calls.length - 1][4]).toBe(false)
+  })
+
+  it('CALLSIGN, mid-session: switching to a profile with another call unticks the loaded card, and back re-ticks it', async () => {
+    localStorage.clear()
+    const { rerender } = render(<SstvView snap={snap} />)
+    await loadPicture([4, 4, 4, 4], 'card.png')
+    fireEvent.click(idBox())
+    rerender(<SstvView snap={{ ...snap, mycall: 'W1AW' } as typeof snap} />)
+    await waitFor(() => expect(idBox().checked, 'the card kept KD9TAW’s tick under W1AW').toBe(false))
+    rerender(<SstvView snap={snap} />)
+    await waitFor(() => expect(idBox().checked).toBe(true))
+  })
+
   it('where the browser cannot hash a picture, nothing is remembered and every load starts unticked', async () => {
     localStorage.clear()
     vi.stubGlobal('crypto', {})

@@ -85,3 +85,63 @@ describe('the TX strip under a pinned header', () => {
     expect(strip().style.getPropertyValue('--cockpit-txstrip-top')).toBe('')
   })
 })
+
+// PINNED ONLY WHERE IT FITS. On a small window at a large zoom the pinned header, the strip and the dock
+// are together taller than the scrollport, and the header covered Stop TX, Send and Esc/Stop at every
+// scroll position (900×600 / 700×800 at 175 %, measured in Chrome). The strip measures the three against
+// the shell and turns the pin off there; the header then scrolls and the strip parks at 0 again.
+// Heights stubbed: header 90, strip 0, dock 117, the room PIN_ROOM_EM × 16 = 96 ⇒ the three need 303 px.
+describe('the strip unpins the header where the three parked surfaces do not fit', () => {
+  const SHEET =
+    ".cockpit-header-pinned { position: sticky } .cockpit-header-pinned[data-pin='off'] { position: static } " +
+    '.cockpit-txstrip { position: sticky } .cockpit-txdock { position: sticky }'
+  const stubShell = (h: number) =>
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.tagName === 'MAIN' ? h : 0
+    })
+  const mount = () =>
+    render(
+      <main className="layout single sstv-view">
+        <div className="cockpit-header cockpit-header-pinned" data-pin="on" />
+        <CockpitTxStrip radio={radio} onSetTxEnabled={() => {}} onTune={() => {}} onStopTx={() => {}} />
+        <div className="cockpit-txdock" />
+      </main>,
+    )
+  const head = () => document.querySelector<HTMLElement>('.cockpit-header')!
+
+  it('a scrollport with room keeps it pinned, and the strip parks under it', () => {
+    injectSheet(SHEET)
+    stubShell(303)
+    mount()
+    expect(head().getAttribute('data-pin')).toBe('on')
+    expect(strip().style.getPropertyValue('--cockpit-txstrip-top')).toBe(`${HEAD_H}px`)
+  })
+
+  it('one pixel short of room unpins it: the header scrolls, and the strip parks at the top again', () => {
+    injectSheet(SHEET)
+    stubShell(302)
+    mount()
+    expect(head().getAttribute('data-pin'), 'the header stays pinned over Stop TX and the dock').toBe('off')
+    expect(strip().style.getPropertyValue('--cockpit-txstrip-top')).toBe('')
+    expect(main().style.getPropertyValue('--cockpit-txstrip-h'), 'the scroll padding still counts the header').toBe(`${Math.ceil(STRIP_RENDERED)}px`)
+  })
+
+  it('a window that grows back pins it again on the next measurement', () => {
+    injectSheet(SHEET)
+    const spy = stubShell(200)
+    const r = mount()
+    expect(head().getAttribute('data-pin')).toBe('off')
+    spy.mockImplementation(function (this: HTMLElement) {
+      return this.tagName === 'MAIN' ? 900 : 0
+    })
+    r.rerender(
+      <main className="layout single sstv-view">
+        <div className="cockpit-header cockpit-header-pinned" data-pin="on" />
+        <CockpitTxStrip radio={{ ...radio, dialMhz: 14.231 }} onSetTxEnabled={() => {}} onTune={() => {}} onStopTx={() => {}} />
+        <div className="cockpit-txdock" />
+      </main>,
+    )
+    expect(head().getAttribute('data-pin')).toBe('on')
+    expect(strip().style.getPropertyValue('--cockpit-txstrip-top')).toBe(`${HEAD_H}px`)
+  })
+})
