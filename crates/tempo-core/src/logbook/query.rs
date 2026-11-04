@@ -227,7 +227,7 @@ pub(crate) fn ui_band_edges(label: &str) -> Option<(f64, f64)> {
 }
 
 /// `bandLabelForMhz(mhz)`: the first band whose edges hold `mhz`, or `""`.
-fn ui_band_for_mhz(mhz: f64) -> &'static str {
+pub(crate) fn ui_band_for_mhz(mhz: f64) -> &'static str {
     if !mhz.is_finite() {
         return "";
     }

@@ -73,10 +73,25 @@ pub fn mode_class(mode: &str) -> &'static str {
 const MATCH_WINDOW_SECS: u64 = 30 * 60;
 
 type Key = (String, String, &'static str, u64);
+
+/// #163: the band a row is matched on — the band a contact is COUNTED on, its receive leg. A
+/// satellite contact goes to LoTW with BAND = the uplink and BAND_RX = the downlink, and Nexus
+/// counts it on the downlink. The reader maps BAND_RX back to the band where the row's
+/// frequencies say which is which; a row that carries the two bands alone keeps BAND_RX in its
+/// passthrough, and it is that band the row is matched on here, so LoTW's confirmation still
+/// finds the contact.
+fn match_band(r: &QsoRecord) -> String {
+    r.extra
+        .iter()
+        .find(|(k, v)| k == "BAND_RX" && !v.trim().is_empty())
+        .map_or(r.band.as_str(), |(_, v)| v.trim())
+        .to_ascii_lowercase()
+}
+
 fn key(r: &QsoRecord) -> Key {
     (
         r.call.to_ascii_uppercase(),
-        r.band.to_ascii_lowercase(),
+        match_band(r),
         mode_class(&r.mode),
         r.when_unix / 86_400,
     )
@@ -122,7 +137,7 @@ fn fmt_day(unix: u64) -> String {
 fn exact_key(r: &QsoRecord) -> Key {
     (
         r.call.to_ascii_uppercase(),
-        r.band.to_ascii_lowercase(),
+        match_band(r),
         mode_class(&r.mode),
         r.when_unix,
     )
@@ -955,6 +970,30 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(lotw_outcome(&log[0]), Some(UploadOutcome::Accepted));
         assert_eq!(log[0].upload.lotw.as_ref().unwrap().when_unix, 99);
+    }
+
+    /// #163: a satellite contact goes to LoTW with BAND = its uplink band and BAND_RX = its
+    /// downlink, and Nexus counts it on the downlink. LoTW's confirmation comes back in that shape,
+    /// and must still land on the contact — whether the row carries the two frequencies (the
+    /// reader maps BAND_RX back to the band) or only the two bands.
+    #[test]
+    fn a_lotw_satellite_confirmation_lands_on_the_downlink_band_contact() {
+        for row in [
+            "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:4>0100<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm\
+             <FREQ:7>145.850<FREQ_RX:7>436.795<PROP_MODE:3>SAT<SAT_NAME:5>SO-50<QSL_RCVD:1>Y<EOR>",
+            "<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:4>0100<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm\
+             <PROP_MODE:3>SAT<SAT_NAME:5>SO-50<QSL_RCVD:1>Y<EOR>",
+        ] {
+            let report = crate::logbook::parse_adif(&format!("<EOH>{row}"));
+            let mut ours = rec("W1AW", "70cm", "FM", 0);
+            ours.when_unix = report[0].when_unix;
+            ours.freq_mhz = 145.85;
+            ours.freq_rx_mhz = Some(436.795);
+            let mut log = vec![ours];
+            let s = reconcile(&mut log, &report);
+            assert_eq!(s.matched, 1, "the confirmation found its contact: {row}");
+            assert!(s.orphans.is_empty(), "{row}");
+        }
     }
 
     #[test]

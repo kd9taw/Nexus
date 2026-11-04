@@ -18148,8 +18148,11 @@ impl Engine {
         let Some(name) = Self::lotw_sat_name(&st.label) else {
             return;
         };
-        let f_hz = if rec.freq_mhz > 0.0 {
-            (rec.freq_mhz * 1e6) as i64
+        // The RECEIVE leg is what sits in the downlink passband: FREQ_RX when the record carries
+        // one (a same-band pass logged split, whose FREQ is the uplink), FREQ otherwise.
+        let rx_mhz = rec.freq_rx_mhz.unwrap_or(rec.freq_mhz);
+        let f_hz = if rx_mhz > 0.0 {
+            (rx_mhz * 1e6) as i64
         } else {
             (self.settings.dial_mhz * 1e6) as i64
         };
@@ -18158,6 +18161,21 @@ impl Engine {
         if centre > 0 && (f_hz - centre).abs() <= guard {
             rec.prop_mode = Some("SAT".into());
             rec.sat_name = Some(name.to_string());
+            // #163: BOTH LEGS. A contact through the bird arrives with one frequency, the
+            // downlink it was heard on; it is logged as ADIF and TQSL mean it — FREQ the uplink
+            // we transmitted on (the same place in the passband, without Doppler), FREQ_RX the
+            // downlink. The record's band stays the downlink, the band Nexus counts it on; the
+            // ADIF writer sends BAND from FREQ and BAND_RX from the band
+            // (`logbook::cross_band_tx_band`). A record that already carries a receive leg, one
+            // with no frequency, and a simplex channel or a beacon are left as they are.
+            if rec.freq_rx_mhz.is_none() && rec.freq_mhz > 0.0 {
+                let up = tempo_core::doppler::nominal_uplink_hz(&st.transponder, f_hz as u64)
+                    .filter(|&up| up as i64 != f_hz);
+                if let Some(up) = up {
+                    rec.freq_rx_mhz = Some(rec.freq_mhz);
+                    rec.freq_mhz = up as f64 / 1e6;
+                }
+            }
         }
     }
 
@@ -34278,10 +34296,11 @@ contact yourself."
     /// sitting inside the bird's DOWNLINK passband, so it would silently stop matching and
     /// those contacts would lose their LoTW satellite credit outright.
     ///
-    /// Doing it properly means setting `BAND` from the transmit leg and adding `BAND_RX` — and
-    /// `band` is the key every award, needs and B4 path in Nexus reads, which is a far larger
-    /// change than #163. Satellites wait for one that does BAND and BAND_RX together,
-    /// deliberately, rather than getting half of it now.
+    /// A satellite contact's two legs are written where the satellite itself is known, by the
+    /// stamp in [`Self::log_qso`] ([`Self::stamp_satellite`]): FREQ the nominal uplink, FREQ_RX
+    /// the downlink, with `band` kept the downlink (the key every award, needs and B4 path reads)
+    /// and the ADIF writer sending BAND from FREQ and BAND_RX from the band. A record this builds
+    /// still carries the downlink alone, which is what that stamp's passband gate reads.
     ///
     /// Keyed on the BANDS rather than on "is a transponder held" for two reasons: the
     /// satellite hold OUTLIVES THE PASS (an FM hold is never released), so asking `sat_tune`
@@ -55076,6 +55095,102 @@ mod tests {
             next.to_uppercase().starts_with("CQ"),
             "back to CQ after the single answer, got {next:?}"
         );
+    }
+
+    /// #163 — A SATELLITE CONTACT IS LOGGED WITH BOTH LEGS, AND GOES TO LOTW AS TQSL READS ONE.
+    ///
+    /// A contact through a held bird arrives at the log with the downlink it was heard on. The
+    /// stamp that names the satellite writes the uplink too: FREQ the uplink at the same place in
+    /// the passband (no Doppler; mirrored on an inverting bird), FREQ_RX the downlink. The
+    /// record's band stays the downlink, the band awards, Needed, B4 and dupes count it on, and
+    /// the LoTW upload carries BAND = the uplink's band and BAND_RX = the downlink's.
+    #[test]
+    fn a_satellite_contact_logs_both_legs_and_uploads_the_uplink_band() {
+        // SO-50, an FM channel: 145.850 up, 436.795 down.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = e.stored_log()[0].as_ref().clone();
+        assert_eq!(
+            logged.sat_name.as_deref(),
+            Some("SO-50"),
+            "the stamp applied"
+        );
+        assert_eq!(logged.band, "70cm", "counted on the downlink, as before");
+        assert!(
+            (logged.freq_mhz - 145.85).abs() < 1e-9,
+            "FREQ is the uplink: {}",
+            logged.freq_mhz
+        );
+        assert_eq!(logged.freq_rx_mhz, Some(436.795), "FREQ_RX the downlink");
+
+        let lotw = crate::station::lotw_batch_adif(&[logged], false, "K2DEF", "FN31");
+        for want in [
+            "<BAND:2>2m",
+            "<BAND_RX:4>70cm",
+            "<FREQ:10>145.850000",
+            "<FREQ_RX:10>436.795000",
+            "<PROP_MODE:3>SAT",
+            "<SAT_NAME:5>SO-50",
+        ] {
+            assert!(lotw.contains(want), "LoTW upload lacks {want}: {lotw}");
+        }
+        assert_eq!(lotw.matches("<BAND:").count(), 1, "one BAND: {lotw}");
+
+        // An inverting linear bird (RS-44-class): 10 kHz up the downlink passband is 10 kHz DOWN
+        // the uplink one.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "RS-44 & BREEZE-KM R/B|linear".into(),
+            0,
+            tempo_core::doppler::Transponder {
+                uplink_centre_hz: 145_965_000,
+                downlink_centre_hz: 435_640_000,
+                invert: true,
+                half_width_hz: 30_000,
+            },
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "CW".into();
+        rec.freq_mhz = 435.650;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = &e.stored_log()[0];
+        assert_eq!(logged.sat_name.as_deref(), Some("RS-44"));
+        assert!(
+            (logged.freq_mhz - 145.955).abs() < 1e-9,
+            "mirrored: {}",
+            logged.freq_mhz
+        );
+        assert_eq!(logged.freq_rx_mhz, Some(435.650));
+
+        // NEGATIVE CONTROL: a 20 m contact made with the bird still held is not a satellite
+        // contact, and keeps its one frequency.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "20m".into();
+        rec.freq_mhz = 14.074;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = &e.stored_log()[0];
+        assert_eq!(logged.prop_mode, None);
+        assert!((logged.freq_mhz - 14.074).abs() < 1e-9);
+        assert_eq!(logged.freq_rx_mhz, None);
     }
 
     /// #163 — A SPLIT CONTACT LOGS BOTH FREQUENCIES; A SATELLITE CONTACT IS LEFT ALONE.
