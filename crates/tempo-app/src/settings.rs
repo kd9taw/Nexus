@@ -4775,6 +4775,32 @@ pub enum PopupCorner {
     TopLeft,
 }
 
+impl PopupCorner {
+    /// Every corner. [`lenient_string_choices`] names them, since the lenient loader never says.
+    pub const ALL: [PopupCorner; 4] = [
+        PopupCorner::BottomRight,
+        PopupCorner::BottomLeft,
+        PopupCorner::TopRight,
+        PopupCorner::TopLeft,
+    ];
+}
+
+/// The string settings read LENIENTLY (an unknown value loads as the default instead of failing),
+/// by wire name, with every value each knows. A strict choice says its values in the error an
+/// unknown one raises; a lenient one says nothing, so whatever must try each value of every setting
+/// (the save-from-afar probe in src-tauri's command_dispatch tests) asks here. A lenient string
+/// setting missing from this list is one that probe cannot change, and it says so.
+pub fn lenient_string_choices() -> Vec<(&'static str, Vec<String>)> {
+    let wire = |v: serde_json::Value| v.as_str().map(str::to_owned).unwrap_or_default();
+    vec![(
+        "popupCorner",
+        PopupCorner::ALL
+            .iter()
+            .map(|c| wire(serde_json::to_value(c).unwrap()))
+            .collect(),
+    )]
+}
+
 /// What the operator sees when Nexus switches the active radio BY ITSELF — a band or mode the
 /// routing hands to another radio ([`Settings::route_radio`]). The switch is the same either way;
 /// this only says whether the screen tells the operator about it.
@@ -14577,6 +14603,40 @@ mod tests {
     /// surviving a save and a load, and a value this build does not know (a later build's corner,
     /// junk, the wrong type) loading bottom right WITHOUT costing the rest of the file. Then the TS
     /// mirror, read out of `types.ts` itself.
+    #[test]
+    fn lenient_string_choices_name_every_popup_corner_and_each_loads_as_itself() {
+        let choices = lenient_string_choices();
+        let (name, values) = choices
+            .iter()
+            .find(|(n, _)| *n == "popupCorner")
+            .expect("popupCorner is a lenient string setting");
+        assert_eq!(
+            values,
+            &["bottom-right", "bottom-left", "top-right", "top-left"],
+            "{name}"
+        );
+        // Each value is a real choice, not the fallback: it loads as a different corner.
+        let loaded: std::collections::BTreeSet<String> = values
+            .iter()
+            .map(|v| {
+                let s: Settings =
+                    serde_json::from_value(serde_json::json!({ "popupCorner": v })).unwrap();
+                format!("{:?}", s.popup_corner)
+            })
+            .collect();
+        assert_eq!(loaded.len(), PopupCorner::ALL.len());
+        // A variant added to PopupCorner stops this match compiling, which leads here: add it to
+        // ALL and to the values above.
+        for c in PopupCorner::ALL {
+            match c {
+                PopupCorner::BottomRight
+                | PopupCorner::BottomLeft
+                | PopupCorner::TopRight
+                | PopupCorner::TopLeft => {}
+            }
+        }
+    }
+
     #[test]
     fn popup_corner_ships_bottom_right_wire_values_lenient_load_and_ts_mirror() {
         let s = Settings::default();

@@ -4137,7 +4137,7 @@ fn what_a_save_from_afar_keeps_of(
                 // A choice of a few names says which, when it refuses another.
                 let mut asked = file.clone();
                 asked[name] = json!("probe");
-                let others = match serde_json::from_value::<Settings>(asked) {
+                let others: Vec<Value> = match serde_json::from_value::<Settings>(asked) {
                     Err(e) => e
                         .to_string()
                         .split('`')
@@ -4146,7 +4146,19 @@ fn what_a_save_from_afar_keeps_of(
                         .filter(|v| v != s)
                         .map(|v| json!(v))
                         .collect(),
-                    Ok(_) => Vec::new(),
+                    // A LENIENT choice loads the unknown value as its default and says nothing:
+                    // its values come from the setting's own list (`lenient_string_choices`).
+                    Ok(_) => tempo_app::settings::lenient_string_choices()
+                        .into_iter()
+                        .find(|(n, _)| n == name)
+                        .map(|(_, values)| {
+                            values
+                                .into_iter()
+                                .filter(|v| v != s)
+                                .map(|v| json!(v))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 };
                 [json!(format!("{s}probe"))]
                     .into_iter()
