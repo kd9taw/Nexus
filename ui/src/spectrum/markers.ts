@@ -108,29 +108,41 @@ export function passbandOnAxis(a: AxisKind, widthHz: number): AxisPassband | nul
   return { lo: e.loHz, hi: e.hiHz, anchor }
 }
 
+/** The sideband modes a reported width can be placed on (`audioRowPassband`), as the backends name
+ *  them: plain USB/LSB, Hamlib's PKTUSB/PKTLSB, Flex's DIGU/DIGL, Icom's USB-D/USB-D1…3 (and LSB),
+ *  and DATA-U/DATA-L. AN ALLOW-LIST, deliberately: a mode name nobody listed here (FSK, PSK, SAL,
+ *  DV, FAX, a new backend's word) draws nothing rather than an edge in a place nobody checked. */
+const SIDEBAND_MODE = /^(USB|LSB|PKTUSB|PKTLSB|DIGU|DIGL|DATA-U|DATA-L|(USB|LSB)-?D[1-3]?)$/
+
+/** The narrowest reported width drawn on an audio row, Hz. Below it the filter is a narrow DATA
+ *  filter, and several radios centre those on a data shift (Yaesu's DATA SHIFT, default 1500 Hz;
+ *  Kenwood's data filter shift) instead of running them up from the carrier, so 0..width would
+ *  put the edge in the wrong place. At SSB widths a carrier-anchored filter is the norm. */
+export const AUDIO_ROW_PASSBAND_MIN_HZ = 1800
+
 /**
  * Where the radio's reported filter sits on a plain AUDIO row (a digital-mode waterfall: 0 Hz at the
  * left, the demodulated audio running up), or null where a width alone cannot place it.
  *
  * ⚠️ THE RADIO REPORTS ONLY A WIDTH (see the module header), so the placement is the protocol's, not
  * a measurement, and it is stated per mode:
- *  - USB, LSB and their data modes (PKTUSB, DATA-U, …): demodulated audio runs up from 0 Hz on
- *    either sideband, so the passband is 0..width — `passbandOnAxis`'s plain-audio case, the same
- *    `boxEdges` placement the Phone scope draws. The radio's low cut (typically 100–300 Hz) is never
- *    reported, so the TRUE upper edge sits that much above the drawn one; the drawn edge errs low.
- *  - AM, FM, DSB and their data modes: the audio is the carrier's baseband, with no edge a width
- *    places (the Phone scope draws none on audio either).
- *  - CW: centred on the radio's pitch, which a digital waterfall is not told.
- *  - FSK RTTY: centred on the radio's own tone pair, which a width does not say.
+ *  - USB, LSB and their data modes (`SIDEBAND_MODE`), at a width of at least
+ *    `AUDIO_ROW_PASSBAND_MIN_HZ`: demodulated audio runs up from 0 Hz on either sideband, so the
+ *    passband is 0..width — `passbandOnAxis`'s plain-audio case, the same `boxEdges` placement the
+ *    Phone scope draws. The radio's low cut (typically 100–300 Hz) is never reported, so the TRUE
+ *    upper edge sits that much above the drawn one; the drawn edge errs low.
+ *  - A narrower filter in those modes: it may sit on a data shift rather than on the carrier.
+ *  - Every other mode: AM/FM/DSB (baseband, no edge a width places), CW (centred on a pitch the
+ *    waterfall is not told), FSK RTTY (centred on the radio's tone pair), and any name not listed.
  * Those draw nothing rather than an edge in the wrong place.
  */
 export function audioRowPassband(
   widthHz: number | null | undefined,
   mode: string | null | undefined,
 ): { loHz: number; hiHz: number } | null {
-  if (widthHz == null || !(widthHz > 0) || !mode) return null
+  if (widthHz == null || !(widthHz >= AUDIO_ROW_PASSBAND_MIN_HZ) || !mode) return null
   const m = mode.trim().toUpperCase()
-  if (!m || /AM|FM|DSB|CW|RTTY/.test(m)) return null
+  if (!SIDEBAND_MODE.test(m)) return null
   const p = passbandOnAxis(
     { rf: false, carrierCentered: false, sideband: m, dialHz: null, pitchHz: 0, cwPitchRefDial: true },
     widthHz,

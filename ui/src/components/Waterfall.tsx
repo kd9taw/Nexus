@@ -311,8 +311,9 @@ interface Props {
    *  PLACEMENT IS `audioRowPassband` (spectrum/markers.ts) for `passbandMode`, the radio's mode:
    *  on USB/LSB and their data modes the audio runs up from 0 Hz, so the passband is 0..width and
    *  its upper edge is drawn at the width. The radio never reports its low cut, so the true edge sits
-   *  that far higher (typically 100–300 Hz). AM/FM, CW and FSK RTTY have no edge a width alone
-   *  places on an audio row, and draw none.
+   *  that far higher (typically 100–300 Hz). Only the sideband modes are placed, and only at widths
+   *  of 1.8 kHz or more (a narrower data filter may sit on a data shift): every other mode, and any
+   *  mode name the allow-list does not know, draws none.
    *
    *  DRAWN UNDER EVERYTHING ELSE on the overlay, one pixel wide at half strength in the well's scale
    *  ink, never filled: it may not hide a decode, a marker or a tag. PAINT ONLY: no click, gesture or

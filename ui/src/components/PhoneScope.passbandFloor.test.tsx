@@ -82,6 +82,21 @@ describe('the audio scope’s noise floor is the receiver’s, not its stopband�
     expect(readout()).toBe(24)
   })
 
+  it('Phone on LSB, Full over a 2.4 kHz filter: the mirrored axis measures the same passband, 24 dB', async () => {
+    // LSB runs the carrier-centred axis backwards (the passband is −2400..0 on it), so the floor's
+    // window is the passband's edges negated and swapped back into row Hz: 0..2400 of the row.
+    render(<PhoneScope transmitting={false} theme="dark" viewLoHz={0} viewHiHz={5000} carrierCentered sideband="LSB" passbandHz={2400} />)
+    await run(600)
+    expect(src.polls, 'control: the loop polled').toBeGreaterThan(3)
+    expect(readout()).toBe(24)
+  })
+
+  it('CONTROL on LSB: with no reported filter, the stopband’s median', async () => {
+    render(<PhoneScope transmitting={false} theme="dark" viewLoHz={0} viewHiHz={5000} carrierCentered sideband="LSB" passbandHz={null} />)
+    await run(600)
+    expect(readout()).toBe(64)
+  })
+
   it('CW, Std (200–3000 Hz) over a 500 Hz filter round a 600 Hz pitch: 24 dB over the noise', async () => {
     Object.assign(src, { passLo: 350, passHi: 850, carrierHz: 600 })
     render(<PhoneScope transmitting={false} theme="dark" viewLoHz={200} viewHiHz={3000} sideband="CW" pitchHz={600} markerHz={600} passbandHz={500} />)

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   PASSBAND_LIMITS,
+  AUDIO_ROW_PASSBAND_MIN_HZ,
   audioRowPassband,
   clampPassband,
   noiseFloorWindowHz,
@@ -212,8 +213,8 @@ describe('drawing a passband', () => {
 })
 
 describe('the radio filter on a digital waterfall’s audio row', () => {
-  it('USB, LSB and their data modes: 0..width, the drag box’s placement on a plain audio axis', () => {
-    for (const mode of ['USB', 'LSB', 'PKTUSB', 'PKTLSB', 'DATA-U', 'usb ']) {
+  it('the sideband modes, as every backend names them: 0..width, the drag box’s placement on a plain audio axis', () => {
+    for (const mode of ['USB', 'LSB', 'PKTUSB', 'PKTLSB', 'DIGU', 'DIGL', 'DATA-U', 'DATA-L', 'USB-D', 'USB-D1', 'USB-D3', 'LSB-D2', 'USBD1', 'usb ']) {
       expect(audioRowPassband(2400, mode), mode).toEqual({ loHz: 0, hiHz: 2400 })
     }
     // The same edges the Phone scope's box puts on its own plain audio axis.
@@ -221,10 +222,20 @@ describe('the radio filter on a digital waterfall’s audio row', () => {
     expect(audioRowPassband(3000, 'USB')).toEqual({ loHz: e.loHz, hiHz: e.hiHz })
   })
 
-  it('no edge where a width alone cannot place one: AM/FM baseband, CW round its pitch, FSK RTTY', () => {
-    for (const mode of ['AM', 'FM', 'PKTFM', 'FMN', 'SAM', 'DSB', 'CW', 'CWR', 'RTTY', 'RTTYR']) {
+  it('AN ALLOW-LIST: every other mode name draws nothing, a name nobody listed included', () => {
+    for (const mode of [
+      'AM', 'FM', 'PKTFM', 'FMN', 'WFM', 'SAM', 'SAL', 'SAH', 'DSB', 'PKTAM',
+      'CW', 'CWR', 'RTTY', 'RTTYR', 'FSK', 'FSKR', 'PSK', 'PSKR', 'DV', 'FAX', 'ECSSUSB', 'USB-D4', 'XYZ',
+    ]) {
       expect(audioRowPassband(2400, mode), mode).toBeNull()
     }
+  })
+
+  it('a narrow DATA filter draws nothing: it may sit on a data shift, not on the carrier', () => {
+    expect(audioRowPassband(500, 'PKTUSB')).toBeNull()
+    expect(audioRowPassband(1799, 'USB')).toBeNull()
+    // POSITIVE CONTROL at the threshold.
+    expect(audioRowPassband(AUDIO_ROW_PASSBAND_MIN_HZ, 'USB')).toEqual({ loHz: 0, hiHz: 1800 })
   })
 
   it('no edge without a reported width or a mode', () => {
