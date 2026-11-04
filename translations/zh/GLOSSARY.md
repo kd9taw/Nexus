@@ -86,7 +86,7 @@
 | Logbook | 日志簿 | 89 |
 | Waterfall | 瀑布图 | 60 |
 | Panadapter | 全景 | 39 |
-| Orbital elements / element set（CelesTrak TLE 的根数，不写「星历」） | 轨道参数（繁體：軌道參數） | 46 |
+| Orbital elements / element set（CelesTrak TLE 的根数，行业标准叫法，不写「星历」「轨道参数」） | 轨道根数（繁體：軌道根數） | 46 |
 | Contest | 竞赛 | 197 |
 | Activation | 激活 | 85 |
 | Split | 异频 | — |
