@@ -214,36 +214,36 @@ fn an_enter_send_whose_exchange_the_radios_keyer_refuses_takes_nothing() {
 }
 
 /// THE RULE IS THE RADIO'S OWN KEYER'S, AND THE KEYER IS THE ONE THE RADIO LOOP HANDS THE WORDS TO.
-/// A WinKeyer or a key line chosen with no port set keys on the radio's own keyer (the loop falls
-/// through to it), so its message is refused whole too. A WinKeyer, a key line or the soundcard
+/// A WinKeyer or a key line chosen with no port set keys on no keyer at all (#434): its message is
+/// refused whole too, for the missing port. A WinKeyer, a key line or the soundcard
 /// that will key the message puts no text inside a radio command: its message is queued exactly as
 /// before, typed and by Enter alike.
 #[test]
 fn only_a_message_the_radios_own_keyer_will_key_is_refused_before_it_is_queued() {
     let text = format!("CQ TEST;{RETUNE} DE KD9TAW");
     let as_typed = ["CQ", &format!("TEST;{RETUNE}"), "DE", "KD9TAW"];
-    for (keyer, winkeyer_port, key_port, radios_keyer) in [
-        ("cat", "", "", true),
-        ("winkeyer", "", "", true),
-        ("serial", "", "", true),
-        ("winkeyer", "/dev/ttyUSB0", "", false),
-        ("serial", "", "/dev/ttyUSB1", false),
-        ("soundcard", "", "", false),
+    for (keyer, winkeyer_port, key_port, refused) in [
+        ("cat", "", "", Some(SEMICOLON)),
+        ("winkeyer", "", "", Some(CW_NO_WINKEYER_PORT)),
+        ("serial", "", "", Some(CW_NO_KEYLINE_PORT)),
+        ("winkeyer", "/dev/ttyUSB0", "", None),
+        ("serial", "", "/dev/ttyUSB1", None),
+        ("soundcard", "", "", None),
     ] {
         let scene = format!("{keyer}, WinKeyer port {winkeyer_port:?}, key line {key_port:?}");
         let mut typed = station_on(keyer, winkeyer_port, key_port);
         typed.send_cw(&text);
         let mut enter = station_on(keyer, winkeyer_port, key_port);
         let took = enter.send_cw_armed(&text);
-        if radios_keyer {
+        if let Some(why) = refused {
             assert_eq!(
                 (queued(&typed), typed.cw_keyer_error().as_deref()),
-                (vec![], Some(SEMICOLON)),
+                (vec![], Some(why)),
                 "{scene}: typed, refused whole"
             );
             assert_eq!(
                 (took, queued(&enter)),
-                (Err(SEMICOLON.to_string()), vec![]),
+                (Err(why.to_string()), vec![]),
                 "{scene}: Enter, refused"
             );
         } else {

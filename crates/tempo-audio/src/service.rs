@@ -22788,6 +22788,68 @@ mod tests {
         );
     }
 
+    /// ⛔ #434, at the radio. A Serial keyline or a WinKeyer chosen with its port box blank used
+    /// to key the word through the radio's CAT keyer (`b TEST`) without a word to the operator.
+    /// Now nothing reaches the wire, the radio is not keyed, and the CW screen says where to pick
+    /// the port. The CAT keyer through the same loop and the same fake radio is the control: it
+    /// still keys `b TEST`, so a missing line here is the refusal, not a harness that sees
+    /// nothing.
+    #[test]
+    fn a_keyline_or_winkeyer_with_no_port_keys_nothing_through_the_cat_keyer() {
+        let run = |backend: &str| {
+            let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+            {
+                let mut e = engine.lock().unwrap();
+                let mut s = e.settings().clone();
+                s.cw_key_port = String::new();
+                s.winkeyer_port = String::new();
+                e.apply_settings(s);
+                e.set_license_class("extra");
+                e.set_cw_keyer(backend, 600.0);
+                e.set_operating_mode("cw", false);
+                e.set_frequency(7.03, "40m", "CW");
+                e.send_cw("TEST");
+            }
+            let (addr, log) = mock_rigctld_refusing(7_030_000, &[]);
+            let mut rig = Rig::rigctld(&addr);
+            let mut backend = MockBackend::new();
+            let mut state = loop_state_for(&engine);
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    100.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            let keyed = log.lock().unwrap().iter().any(|l| l.starts_with("b "));
+            let said = engine.lock().unwrap().cw_keyer_error();
+            (keyed, rig.keyed, said)
+        };
+        assert!(run("cat").0, "control: the CAT keyer keys `b TEST`");
+        for (backend, says) in [
+            ("serial", "Pick the keyline serial port in Settings ▸ CW"),
+            ("winkeyer", "Pick the WinKeyer port in Settings ▸ CW"),
+        ] {
+            let (keyed, rig_keyed, said) = run(backend);
+            assert!(
+                !keyed,
+                "{backend}, no port: nothing is sent to the CAT keyer"
+            );
+            assert!(!rig_keyed, "{backend}, no port: the radio is not keyed");
+            assert!(
+                said.as_deref().is_some_and(|w| w.contains(says)),
+                "{backend}, no port: the CW screen says where: {said:?}"
+            );
+        }
+    }
+
     /// ⭐ #332 — an FT-710 operator reports the CAT-CW warning on a rig that is NOT on the
     /// unproven-keyer list, and nobody could say why.
     ///
@@ -31156,9 +31218,10 @@ mod tests {
     /// three true-CW rows are the ones that must NOT move with it.
     ///
     /// ⚠️ The harness configures no WinKeyer/serial keyline PORT (there is no such hardware on
-    /// this box), so those two backends' WORDS fall through to the CAT arm — the shipped
-    /// behaviour, and not what this test is about. The MODE word is backend-derived either way,
-    /// which is what is pinned here.
+    /// this box). Those two backends' words used to fall through to the CAT arm; since #434 a
+    /// keyer with no port keys nothing at all, so their rows pin the receive mode word and that
+    /// nothing at all is keyed, and the CAT row is the keyed over. The MODE word is
+    /// backend-derived either way, which is what is pinned here.
     #[test]
     fn the_cw_keyer_backends_command_one_mode_word_for_receive_and_transmit_alike() {
         use tempo_app::settings::CwKeyerBackend;
@@ -31234,11 +31297,19 @@ mod tests {
                     "{keyer:?} on {band}: a keyed over must command NO mode — the receive mode \
                      IS the transmit mode. saw {over:?}"
                 );
-                assert!(
-                    wire.iter().any(|l| l == "b TEST"),
-                    "POSITIVE CONTROL: the over must actually have keyed, or an empty mode list \
-                     proves nothing. wire={wire:?}"
-                );
+                if keyer == CwKeyerBackend::Cat {
+                    assert!(
+                        wire.iter().any(|l| l == "b TEST"),
+                        "POSITIVE CONTROL: the over must actually have keyed, or an empty mode \
+                         list proves nothing. wire={wire:?}"
+                    );
+                } else {
+                    assert!(
+                        !wire.iter().any(|l| l.starts_with("b ")),
+                        "{keyer:?} with no port keys nothing through the CAT keyer (#434). \
+                         wire={wire:?}"
+                    );
+                }
             }
 
             // The SOUNDCARD keyer: a keyed audio tone has to reach the modulator rather than the
