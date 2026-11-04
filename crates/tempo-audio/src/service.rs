@@ -680,6 +680,38 @@ pub fn with_daemon_error(detail: String, said: &[String]) -> String {
     format!("{detail} Hamlib said: {}", picked.join(" / "))
 }
 
+/// Hamlib rigctld's own default TCP port, the one an operator's rigctld answers on unless told
+/// otherwise.
+const RIGCTLD_DEFAULT_PORT: u16 = 4532;
+
+/// #165: the words for a radio model on Connection Network at rigctld's own port, appended to a
+/// failed CAT check. `None` for every other setup.
+///
+/// A radio model there makes Nexus's rigctld open that address as the radio's CAT port and send
+/// it the radio's own commands. When what answers is a rigctld (the operator's own, already
+/// serving the radio to their logger), it hangs up on them, and the failure reads as a radio that
+/// is switched off ("rig power is off? … Connection reset by peer"). The cure is the radio model
+/// NET rigctl, which talks to that rigctld as one more client. Judged by the port alone, so it is
+/// worded as an if: a serial-over-network bridge on 4532 is possible, only unlikely.
+fn rigctld_port_hint(rig_model: u32, rig_conn: &str, rig_addr: &str) -> Option<String> {
+    // 0 is no radio (VOX); 2 is NET rigctl, the right model for this address.
+    if rig_model == 0
+        || rig_model == 2
+        || !tempo_app::settings::rig_conn_is_network(rig_conn, rig_addr)
+    {
+        return None;
+    }
+    let (_, port) = tempo_app::settings::split_host_port(rig_addr)?;
+    (port == RIGCTLD_DEFAULT_PORT).then(|| {
+        format!(
+            "{addr} is rigctld's own port. If a rigctld already serves your radio there, set \
+             Rig Model to NET rigctl (remote rigctld): this model sends the radio's own CAT \
+             commands to that address, and a rigctld hangs up on them.",
+            addr = rig_addr.trim()
+        )
+    })
+}
+
 // How much of the fault a daemon line actually names — `rigctld_proc::Explains`.
 //
 // **It moved, and the move is part of the fix.** Ranking used to happen here, at read time, over
@@ -8864,6 +8896,11 @@ impl RadioLoop {
                 if ok == Some(false) {
                     if let Some(CatDaemon::Spawned(p)) = &self.rigctld_proc {
                         detail = with_daemon_error(detail, &p.said());
+                        if let Some(h) =
+                            rigctld_port_hint(want.rig_model, &want.rig_conn, &want.rig_addr)
+                        {
+                            detail = format!("{detail} {h}");
+                        }
                     }
                 }
                 self.cat_ok = ok;
@@ -19558,6 +19595,9 @@ fn open_cat(
                 match &proc {
                     CatDaemon::Spawned(p) => {
                         probe.detail = with_daemon_error(probe.detail, &p.said());
+                        if let Some(h) = rigctld_port_hint(t.rig_model, &t.rig_conn, &t.rig_addr) {
+                            probe.detail = format!("{} {h}", probe.detail);
+                        }
                     }
                     CatDaemon::Omni(d) => {
                         if let Err(e) = d.health() {
@@ -22458,6 +22498,32 @@ mod tests {
         // A silent daemon adds nothing at all: no trailing "Hamlib said:" with an empty tail.
         assert_eq!(with_daemon_error(ours.clone(), &[]), ours);
         assert_eq!(with_daemon_error(ours.clone(), &["   ".to_string()]), ours);
+    }
+
+    /// #165: a radio model (an FTDX10) on Connection Network at 127.0.0.1:4532, where the
+    /// operator's own rigctld already serves the radio. Nexus's rigctld then sends the FTDX10's
+    /// own CAT commands to that rigctld, which hangs up ("rig power is off? … Connection reset by
+    /// peer"), and nothing said the model was the thing to change.
+    #[test]
+    fn a_radio_model_pointed_at_a_rigctld_port_is_told_to_use_net_rigctl() {
+        let hint = rigctld_port_hint(1042, "network", "127.0.0.1:4532")
+            .expect("a radio model at rigctld's own port gets the hint");
+        assert!(hint.contains("NET rigctl"), "{hint}");
+        assert!(hint.contains("127.0.0.1:4532"), "{hint}");
+        // A rigctld on another computer is the same mistake.
+        assert!(rigctld_port_hint(1042, "network", "192.168.1.20:4532").is_some());
+
+        // CONTROLS. NET rigctl itself is the right setup: no hint.
+        assert_eq!(rigctld_port_hint(2, "network", "127.0.0.1:4532"), None);
+        // Another port is a serial-over-network bridge or a radio's own LAN port: no guess.
+        assert_eq!(
+            rigctld_port_hint(1042, "network", "192.168.1.20:4533"),
+            None
+        );
+        // A serial radio has no address to judge, whatever the field still holds.
+        assert_eq!(rigctld_port_hint(1042, "serial", "127.0.0.1:4532"), None);
+        // No radio model (VOX / none) has no CAT to send there.
+        assert_eq!(rigctld_port_hint(0, "network", "127.0.0.1:4532"), None);
     }
 
     /// ⭐ **THE DELIVERABLE: the sentence an operator actually reads, for each of the four ways
