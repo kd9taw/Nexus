@@ -49269,7 +49269,16 @@ fn start_on_the_logbook(
             std::sync::Arc::new(|level, msg| conn_log("Other programs", level, msg));
         let spawned = std::thread::Builder::new()
             .name("nexus-freedv".into())
-            .spawn(move || tempo_app::freedv::run(freedv_engine, note, intake_note));
+            .spawn(move || {
+                tempo_app::freedv::run(
+                    freedv_engine,
+                    note,
+                    intake_note,
+                    // Shared by every Nexus window of this install (#431: the second radio
+                    // window says the first takes the contacts, rather than an error).
+                    Some(config_dir_for(None)),
+                )
+            });
         if let Err(e) = spawned {
             tempo_core::applog::error(
                 "freedv",

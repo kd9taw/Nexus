@@ -810,7 +810,7 @@ fn the_manager_binds_loopback_while_the_network_is_off_and_every_adapter_while_o
     });
     let note: Note = Arc::new(|_, _| {});
     let (e2, n1, n2) = (Arc::clone(&e), Arc::clone(&note), Arc::clone(&note));
-    std::thread::spawn(move || crate::freedv::run(e2, n1, n2));
+    std::thread::spawn(move || crate::freedv::run(e2, n1, n2, None));
     let until = |want: &[String]| {
         let deadline = Instant::now() + Duration::from_secs(10);
         while bound_addrs(port) != want && Instant::now() < deadline {

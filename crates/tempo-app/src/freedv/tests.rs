@@ -384,6 +384,67 @@ fn a_refused_bind_is_said_once_and_a_new_port_is_tried_at_once() {
     );
 }
 
+/// #431: with two radios in two windows, the first window has the contact port and the second
+/// is refused it at every launch. That is no fault: the other window takes the contacts, and the
+/// second says so once, as INFO. A port held by anything else (no window's lease on it) is still
+/// the ERROR it was, in the same words. Each value is (held by a window, level, sentence).
+#[test]
+fn a_contact_port_another_nexus_window_holds_is_info_not_an_error() {
+    let dir = std::env::temp_dir().join(format!(
+        "nexus-contact-lease-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let refused = |port: u16| {
+        let err = bind_log(port).expect_err("the port is held");
+        let by = port_held_by_a_window(&dir, port);
+        let (level, said) = log_refusal(&format!("127.0.0.1:{port}"), &err, by);
+        (by, level, said, err)
+    };
+    // The first window listens and holds its lease on the port.
+    let first = bind_log(0).unwrap();
+    let ours = first.local_addr().unwrap().port();
+    let lease = take_port_lease(&dir, ours).expect("the listening window takes its lease");
+    let (by, level, said, _) = refused(ours);
+    assert_eq!(
+        (by, level, said),
+        (
+            true,
+            "info",
+            format!(
+                "Contacts from other programs on 127.0.0.1:{ours} are taken by the other Nexus \
+                 window, which listens on that port, so this window leaves it to it"
+            )
+        )
+    );
+    // CONTROL: another program holds a port, with no window's lease on it.
+    let foreign = bind_log(0).unwrap();
+    let theirs = foreign.local_addr().unwrap().port();
+    let (by, level, said, err) = refused(theirs);
+    assert_eq!(
+        (by, level, said),
+        (
+            false,
+            "error",
+            bind_message(
+                "Contacts from other programs",
+                &format!("127.0.0.1:{theirs}"),
+                &err,
+                "the program that sends them"
+            )
+        )
+    );
+    // CONTROL: the first window has gone (its lease with it), something else still holds the port.
+    drop(lease);
+    assert!(!port_held_by_a_window(&dir, ours));
+    drop(first);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_defaults_listen_for_contacts_on_2239_and_not_for_heard_calls() {
     let s = crate::settings::Settings::default();
