@@ -2061,6 +2061,8 @@ export const EN = {
   'logbook.upload.waiting': 'Sent, no answer yet',
   'logbook.upload.failed': 'Refused',
   'logbook.upload.none': 'Not uploaded',
+  // #163: a satellite contact the one-click LoTW fix corrected and has not sent yet.
+  'logbook.upload.resend': 'Corrected, not sent yet',
   'logbook.upload.title': '{{state}}, {{date}}',
   'logbook.field.iota.label': 'IOTA',
   'logbook.field.iota.title':

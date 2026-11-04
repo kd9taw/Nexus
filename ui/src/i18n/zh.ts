@@ -1750,6 +1750,7 @@ export const ZH: PartialCatalog = {
   "logbook.upload.waiting": "已发送，暂无回复",
   "logbook.upload.failed": "已拒绝",
   "logbook.upload.none": "未上传",
+  "logbook.upload.resend": "已更正，尚未发送",
   "logbook.upload.title": "{{state}}，{{date}}",
   "logbook.field.iota.label": "IOTA",
   "logbook.field.iota.title": "对方的 IOTA 岛屿编号，例如 NA-001。留空则保留已存储的编号。",

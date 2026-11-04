@@ -1876,6 +1876,7 @@ export const RU: PartialCatalog = {
   "logbook.upload.waiting": "Отправлено, ответа пока нет",
   "logbook.upload.failed": "Отклонено",
   "logbook.upload.none": "Не отправлено",
+  "logbook.upload.resend": "Исправлено, ещё не отправлено",
   "logbook.upload.title": "{{state}}, {{date}}",
   "logbook.field.iota.label": "IOTA",
   "logbook.field.iota.title": "Номер острова корреспондента по IOTA, например NA-001. Оставьте пустым, чтобы сохранить записанный.",

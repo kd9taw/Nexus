@@ -1752,6 +1752,7 @@ export const ZH_HANT: PartialCatalog = {
   "logbook.upload.waiting": "已傳送，暫無回覆",
   "logbook.upload.failed": "已拒絕",
   "logbook.upload.none": "未上傳",
+  "logbook.upload.resend": "已更正，尚未傳送",
   "logbook.upload.title": "{{state}}，{{date}}",
   "logbook.field.iota.label": "IOTA",
   "logbook.field.iota.title": "對方的 IOTA 島嶼編號，例如 NA-001。留空則保留已儲存的編號。",

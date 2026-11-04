@@ -450,17 +450,19 @@ pub fn mark_lotw_uploaded_all(
 /// rewrite takes the row out of the offer; were the stamp left, any way the re-upload ends without
 /// stamping it — the app closed while TQSL runs, a later run of a multi-location batch that never
 /// starts, an edit mid-run, this loop stopping part-way — would leave it marked sent and offered
-/// nowhere. So the same change stamps it not sent (`when_unix`): the re-upload's own stamp moves it
+/// nowhere. So the same change stamps it not sent (`when_unix`, class `Resend`: "corrected, not
+/// sent yet", which no view calls a failure): the re-upload's own stamp moves it
 /// on, and if that never comes the ordinary Upload to LoTW sends it.
 pub fn fix_sat_bands(
     engine: &Mutex<Engine>,
     ids: &[RecordId],
     when_unix: i64,
 ) -> (Result<Vec<RecordId>, String>, Durability) {
+    // Not sent (owed), as its own class: "corrected, not sent yet", never a failure.
     let owed = UploadStatus {
         outcome: tempo_core::logbook::UploadOutcome::Rejected,
         when_unix,
-        detail: Some(tempo_core::logbook::UploadDetail::Unclassified),
+        detail: Some(tempo_core::logbook::UploadDetail::Resend),
     };
     let (mut fixed, mut durability) = (Vec::new(), Durability::default());
     for &id in ids {

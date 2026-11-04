@@ -622,8 +622,11 @@ fn notes_key(s: Option<&str>) -> SortVal {
     }
 }
 
-/// An upload stamp as its column marks it (`uploadMark`): failed, waiting, done; none is empty.
+/// An upload stamp as its column marks it (`uploadMark`): failed, waiting, done; none (and
+/// corrected-not-sent-yet) is empty.
 fn upload_rank(s: Option<&super::UploadStatus>) -> SortVal {
+    // #163: corrected and not sent yet sorts with the contacts not uploaded, as its mark reads.
+    let s = s.filter(|s| s.detail != Some(super::UploadDetail::Resend));
     s.map_or(SortVal::Empty, |s| {
         SortVal::Num(match s.outcome {
             UploadOutcome::Rejected | UploadOutcome::AuthFail => 0.0,
@@ -1853,3 +1856,34 @@ pub mod reference {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod resend_rank_tests {
+    use super::*;
+    use crate::logbook::{UploadDetail, UploadStatus};
+
+    /// #163: a satellite contact corrected and not sent yet sorts with the contacts not uploaded,
+    /// not with the failures (the Logbook's `uploadMark` says "Corrected, not sent yet", not
+    /// "Refused").
+    #[test]
+    fn a_corrected_contact_not_sent_yet_sorts_with_the_not_uploaded() {
+        let st = |detail| UploadStatus {
+            outcome: UploadOutcome::Rejected,
+            when_unix: 1,
+            detail,
+        };
+        assert_eq!(
+            upload_rank(Some(&st(Some(UploadDetail::Resend)))),
+            SortVal::Empty
+        );
+        assert_eq!(upload_rank(None), SortVal::Empty);
+        assert_eq!(
+            upload_rank(Some(&st(Some(UploadDetail::Unclassified)))),
+            SortVal::Num(0.0)
+        );
+        assert_eq!(
+            UploadDetail::from_code("resend"),
+            Some(UploadDetail::Resend)
+        );
+    }
+}

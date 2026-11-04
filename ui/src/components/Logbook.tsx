@@ -217,7 +217,7 @@ const MORE_LABEL = '⋯'
 /** The QSL column's header is the Q-code itself, not a word for it. */
 const QSL_HEADER = 'QSL'
 /** An upload column's mark, a glyph per state; its words are in the tooltip. */
-const UPLOAD_MARK: Record<UploadMark, string> = { done: '✓', waiting: '…', failed: '✗', none: '—' }
+const UPLOAD_MARK: Record<UploadMark, string> = { done: '✓', waiting: '…', failed: '✗', resend: '↻', none: '—' }
 /** An IOTA reference as the log stores one (tempo-core `valid_iota`): a continent, a hyphen and
  *  three digits. */
 const IOTA_RE = /^(AF|AN|AS|EU|NA|OC|SA)-\d{3}$/

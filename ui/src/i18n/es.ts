@@ -3462,6 +3462,7 @@ export const ES: PartialCatalog = {
   "logbook.upload.waiting": "Enviado, sin respuesta aún",
   "logbook.upload.failed": "Rechazado",
   "logbook.upload.none": "No enviado",
+  "logbook.upload.resend": "Corregido, aún no enviado",
   "logbook.upload.title": "{{state}}, {{date}}",
   "logbook.field.iota.label": "IOTA",
   "logbook.field.iota.title": "Su referencia de isla IOTA, como NA-001. Déjalo en blanco para conservar la guardada.",

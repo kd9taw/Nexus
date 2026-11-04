@@ -1914,6 +1914,7 @@
 "3","logbook.upload.waiting","Sent, no answer yet","已傳送，暫無回覆","",""
 "3","logbook.upload.failed","Refused","已拒絕","",""
 "3","logbook.upload.none","Not uploaded","未上傳","",""
+"3","logbook.upload.resend","Corrected, not sent yet","已更正，尚未傳送","","Filled by the maintainer, pending translator review."
 "3","logbook.upload.title","{{state}}, {{date}}","{{state}}，{{date}}","{{state}} | {{date}}",""
 "3","logbook.field.iota.label","IOTA","IOTA","IOTA",""
 "3","logbook.field.iota.title","Their IOTA island reference, such as NA-001. Leave it blank to keep the one stored.","對方的 IOTA 島嶼編號，例如 NA-001。留空則保留已儲存的編號。","IOTA",""

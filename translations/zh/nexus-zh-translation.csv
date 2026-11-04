@@ -1914,6 +1914,7 @@
 "3","logbook.upload.waiting","Sent, no answer yet","已发送，暂无回复","",""
 "3","logbook.upload.failed","Refused","已拒绝","",""
 "3","logbook.upload.none","Not uploaded","未上传","",""
+"3","logbook.upload.resend","Corrected, not sent yet","已更正，尚未发送","","Filled by the maintainer, pending translator review."
 "3","logbook.upload.title","{{state}}, {{date}}","{{state}}，{{date}}","{{state}} | {{date}}",""
 "3","logbook.field.iota.label","IOTA","IOTA","IOTA","The same English text ""IOTA"" is used by 2 different keys (e.g. logbook.column.iota) — each can take a different Russian word, so choose the one that fits THIS screen."
 "3","logbook.field.iota.title","Their IOTA island reference, such as NA-001. Leave it blank to keep the one stored.","对方的 IOTA 岛屿编号，例如 NA-001。留空则保留已存储的编号。","IOTA",""

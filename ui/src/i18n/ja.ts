@@ -1368,6 +1368,7 @@ export const JA: PartialCatalog = {
   "logbook.upload.waiting": "送信済み、応答待ち",
   "logbook.upload.failed": "拒否",
   "logbook.upload.none": "未アップロード",
+  "logbook.upload.resend": "修正済み、未送信",
   "logbook.upload.title": "{{state}}、{{date}}",
   "logbook.field.iota.label": "IOTA",
   "logbook.field.iota.title": "相手局のIOTA島番号（例：NA-001）。空欄なら保存済みの値を保ちます。",

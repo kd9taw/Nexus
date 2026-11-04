@@ -970,11 +970,15 @@ pub enum UploadDetail {
     /// Nickname is missing (two of the call's accounts cover the contact's date) or matches none
     /// of them. The fix is the nickname in Settings, spelled as eQSL's My Profile page spells it.
     QthNickname,
+    /// Not a failure (#163): a satellite contact the one-click LoTW fix corrected — its uplink
+    /// filled in — and has not sent yet. Owed to LoTW, so Upload to LoTW sends it; the Logbook
+    /// shows it as its own state, and "why isn't this confirmed?" says so, never "bounced".
+    Resend,
 }
 
 impl UploadDetail {
     /// Every class, for exhaustive walks (the round-trip and allow-list tests).
-    pub const ALL: [UploadDetail; 9] = [
+    pub const ALL: [UploadDetail; 10] = [
         UploadDetail::Credentials,
         UploadDetail::CallsignCertificate,
         UploadDetail::StationLocation,
@@ -984,6 +988,7 @@ impl UploadDetail {
         UploadDetail::OperatorDeclared,
         UploadDetail::AccountDates,
         UploadDetail::QthNickname,
+        UploadDetail::Resend,
     ];
 
     /// The token written to ADIF. Short and stable — the sentences may be re-worded, the
@@ -999,6 +1004,7 @@ impl UploadDetail {
             UploadDetail::OperatorDeclared => "declared",
             UploadDetail::AccountDates => "account-dates",
             UploadDetail::QthNickname => "qth-nickname",
+            UploadDetail::Resend => "resend",
         }
     }
 
@@ -1049,6 +1055,10 @@ impl UploadDetail {
                 "The QTH Nickname is missing or matches none of your eQSL accounts, so eQSL \
                  could not tell where this contact belongs. Enter it in Settings exactly as My \
                  Profile at eqsl.cc spells it, capitals included, then upload again."
+            }
+            UploadDetail::Resend => {
+                "Corrected for LoTW (its satellite uplink filled in) and not sent yet — Upload \
+                 to LoTW sends it."
             }
         }
     }

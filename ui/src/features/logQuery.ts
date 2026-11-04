@@ -155,7 +155,8 @@ const notesKey = (s: string | null | undefined): string | null => {
 }
 
 /** An upload mark's place: failed, waiting, done; null with no stamp. */
-const UPLOAD_RANK = { failed: 0, waiting: 1, done: 2, none: null } as const
+// `resend` sorts with `none`, as the engine's `upload_rank` does (#163).
+const UPLOAD_RANK = { failed: 0, waiting: 1, done: 2, resend: null, none: null } as const
 
 /** A row's value in a sorted column. Null is "nothing here", which `logOrder` puts last in either
  *  direction, in every column. The band, frequency, time and QSL mark always hold a value. */

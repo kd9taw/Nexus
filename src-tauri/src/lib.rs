@@ -132,6 +132,8 @@ mod remote_service;
 /// The Stations on this network window: the Connect to my station… window, on the PC an operator
 /// works from (Windows only). The page in it reaches no command — see the module header.
 mod remote_window;
+#[cfg(test)]
+mod sat_fix_tests;
 /// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
 /// the Remote page alike.
 mod self_spot;
