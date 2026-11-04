@@ -1087,17 +1087,38 @@ mod tests {
         let rate = f64::from(WORKING_SAMPLE_RATE_HZ);
         let l = line_samples(spec);
         let frames = (spec.image_lines / 2) as usize;
-        let track = track_with_starts(spec, &|y| y as f64 * l + 150.0 - 1.3 * y as f64);
+        let track = track_with_starts(spec, &|y| y as f64 * l + 150.0 - 3.0 * y as f64);
         let c = frame_skip_corrections(&track, rate, 0, spec);
         assert_eq!(c.len(), frames, "one correction per PD frame (two rows)");
         let tol = 2 * SYNC_PROBE_STRIDE as i64;
         for (y, v) in c.iter().enumerate() {
-            let want = (150.0 - 1.3 * y as f64).round() as i64;
+            let want = (150.0 - 3.0 * y as f64).round() as i64;
             assert!(
                 (v - want).abs() <= tol,
                 "frame {y}: correction {v}, want {want}"
             );
         }
+    }
+
+    /// Pulses that are all readable but disagree line to line (each one at a
+    /// random place) are not a correction: nothing moves. Guards the trust
+    /// gate — the empty and pure-noise tracks below never reach it, because
+    /// they fail the per-pulse score first.
+    #[test]
+    fn frame_corrections_are_zero_when_readable_pulses_disagree() {
+        let spec = modespec::for_mode(crate::modespec::SstvMode::Martin1);
+        let rate = f64::from(WORKING_SAMPLE_RATE_HZ);
+        let l = line_samples(spec);
+        let mut x = 0x0bad_5eed_u32;
+        let jitter: Vec<f64> = (0..spec.image_lines)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (f64::from(x) / f64::from(u32::MAX) - 0.5) * 0.9 * l
+            })
+            .collect();
+        let track = track_with_starts(spec, &|y| y as f64 * l + jitter[y]);
+        let c = frame_skip_corrections(&track, rate, 0, spec);
+        assert!(c.iter().all(|v| *v == 0), "{:?}", &c[..20]);
     }
 
     /// No pulses, or pulses that are pure noise, move nothing: the decode is
