@@ -57,6 +57,10 @@
   "fdJoinAddr",
   "icomLanHost",
   "icomLanPort",
+  "freedvLog",
+  "freedvLogPort",
+  "logIntakeLan",
+  "logIntakePeer",
   "clublogApiKey",
   "cloudlogKey"
 ]

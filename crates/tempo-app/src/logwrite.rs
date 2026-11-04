@@ -569,8 +569,20 @@ fn bulk_as<R, T>(
     engine: &Mutex<Engine>,
     context: &str,
     origin: Option<crate::loghistory::Origin>,
-    mut plan_it: impl FnMut(&station::LogPlan) -> Result<(R, station::Planned), String>,
+    plan_it: impl FnMut(&station::LogPlan) -> Result<(R, station::Planned), String>,
     then: impl FnOnce(&mut Engine, R) -> T,
+) -> (Result<T, String>, Durability) {
+    bulk_rows(engine, context, origin, plan_it, |e, out, _| then(e, out))
+}
+
+/// [`bulk_as`], with `then` handed the rows the change appended as well, each with the id the
+/// log gave it: what a change that queues its new contacts for the uploads needs.
+fn bulk_rows<R, T>(
+    engine: &Mutex<Engine>,
+    context: &str,
+    origin: Option<crate::loghistory::Origin>,
+    mut plan_it: impl FnMut(&station::LogPlan) -> Result<(R, station::Planned), String>,
+    then: impl FnOnce(&mut Engine, R, &[Arc<QsoRecord>]) -> T,
 ) -> (Result<T, String>, Durability) {
     let mut then = Some(then);
     for _ in 0..PLANS {
@@ -583,15 +595,16 @@ fn bulk_as<R, T>(
         tests::race();
         let mut out = Some(out);
         let (made, durability) = engine_lock(engine).with_log_tickets(|e| {
+            let mut appended = Vec::new();
             if !planned.is_empty() {
                 e.station_mut().origin = origin.clone();
                 let made = e.station_mut().commit_bulk(&plan, planned, context);
                 // Taken by the change it was set for — or by none, when the plan went stale.
                 e.station_mut().origin = None;
-                made.ok()?;
+                appended = made.ok()?.1;
             }
             let then = then.take()?;
-            Some(then(e, out.take()?))
+            Some(then(e, out.take()?, &appended))
         });
         if let Some(made) = made {
             return (Ok(made), durability);
@@ -712,6 +725,60 @@ pub fn import_logged_contact(
 ) -> (Result<usize, String>, Durability) {
     let (made, durability) = import(engine, adif, None);
     (made.map(|(added, _, _)| added), durability)
+}
+
+/// What became of a contact another program logged ([`intake_contact`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntakeOutcome {
+    /// Written to the log, and queued for the service uploads.
+    Added,
+    /// The log already holds it: by the log funnel's 300 s duplicate check (the operator logged
+    /// it in Nexus too, or the sender sent it twice), or by the import's own (the same contact,
+    /// to the second). Nothing written, nothing queued.
+    InLog,
+}
+
+/// ★ A contact ANOTHER PROGRAM logged (one ADIF record, already checked and cleaned by
+/// [`crate::log_intake`]) into the log — by the import, never the log funnel, so Nexus's own FT
+/// exchange is left exactly as it was (`engine::log_intake`'s header says what is borrowed from
+/// the funnel and why). "Import new only": a contact the log holds is left as it is, nothing a
+/// program on the network restates about it merged in. Its own run in the history, undone as one.
+/// Added, it is queued for the service uploads (held while contest mode is on) and sent to none
+/// of the local loggers.
+///
+/// Made beside the radio loop, never in its tick; made once (a change the store turns back is
+/// not made again here).
+pub fn intake_contact(
+    engine: &Mutex<Engine>,
+    adif: &str,
+) -> (Result<IntakeOutcome, String>, Durability) {
+    let Some(mut rec) = tempo_core::logbook::parse_adif(adif).into_iter().next() else {
+        return (Err("no contact in it".into()), Durability::default());
+    };
+    if engine_lock(engine).intake_ready(&mut rec) {
+        return (Ok(IntakeOutcome::InLog), Durability::default());
+    }
+    let text = tempo_core::logbook::adif_record_own_log(&rec);
+    let (made, durability) = bulk_rows(
+        engine,
+        "import_adif",
+        None,
+        |plan| station::plan_import_new_only(plan, &text),
+        |e, (added, _, _), appended| {
+            for row in appended {
+                e.intake_queue_upload(QsoRecord::clone(row));
+            }
+            added
+        },
+    );
+    let made = made.map(|added| {
+        if added > 0 {
+            IntakeOutcome::Added
+        } else {
+            IntakeOutcome::InLog
+        }
+    });
+    (made, durability)
 }
 
 /// The call in Settings: the one a LoTW merge takes a contact or a row naming no call of its own

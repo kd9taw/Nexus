@@ -11,7 +11,7 @@
 //!   because 2237 is where Nexus SENDS its WSJT-X telemetry and where GridTracker and JTAlert
 //!   listen. Bound to loopback, so nothing on the network can reach it. Each contact becomes one
 //!   ADIF record ([`contact_adif`]) handed to the same import the companion mode's contacts use
-//!   ([`crate::logwrite::import_logged_contact`]): the same duplicate check, worked-before marks
+//!   ([`crate::logwrite::intake_contact`]): the same duplicate check, worked-before marks
 //!   and durable write. No new write path.
 //! - **The calls it hears**, FreeDV 2.4's callsign broadcast (JSON to `224.0.0.1:7177` by
 //!   default). OFF by default (`freedv_heard`); the Phone screen's FreeDV pane turns it on. Bound
@@ -31,10 +31,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tempo_net::freedv::{read_heard, read_log_datagram, HeardCall, LogIntake, MAX_DATAGRAM};
+use tempo_net::freedv::{
+    read_heard, read_log_datagram, HeardCall, LogIntake, FREEDV_ID, MAX_DATAGRAM,
+};
 use tempo_net::wsjtx::LoggedQso;
 
 use crate::engine::{engine_lock, Engine};
+use crate::logwrite::IntakeOutcome;
 
 /// The port Nexus listens on for FreeDV's logged contacts, by default.
 pub const DEFAULT_LOG_PORT: u16 = 2239;
@@ -66,6 +69,24 @@ pub struct FreedvDto {
     pub heard_error: Option<String>,
     /// The calls FreeDV heard this session, newest first.
     pub heard: Vec<FreedvHeardDto>,
+    /// The contact port is bound on every adapter ("Accept from devices on my network",
+    /// [`crate::log_intake`]), not on 127.0.0.1 alone.
+    #[serde(default)]
+    pub log_lan: bool,
+    /// The program the last contact added through the contact port came from — FreeDV, WSJT-X,
+    /// N1MM, a network device's address — for Settings' "last contact from".
+    #[serde(default)]
+    pub intake_program: Option<String>,
+    /// That contact's call.
+    #[serde(default)]
+    pub intake_call: Option<String>,
+    /// When it was added (Unix seconds).
+    #[serde(default)]
+    pub intake_unix: Option<i64>,
+    /// Counts the contacts added through the contact port: the screen says "Logged K1ABC from
+    /// WSJT-X" once each time it moves.
+    #[serde(default)]
+    pub intake_tick: u32,
 }
 
 impl FreedvDto {
@@ -75,6 +96,14 @@ impl FreedvDto {
             || self.log_error.is_some()
             || self.heard_port.is_some()
             || self.heard_error.is_some()
+    }
+
+    /// A contact added through the contact port, from `program`.
+    pub fn note_intake(&mut self, program: &str, call: &str, now_unix: i64) {
+        self.intake_program = Some(program.to_string());
+        self.intake_call = Some(call.to_string());
+        self.intake_unix = Some(now_unix);
+        self.intake_tick = self.intake_tick.wrapping_add(1);
     }
 
     /// One heard call, newest first, one row per call, capped.
@@ -172,6 +201,7 @@ pub fn contact_adif(q: &LoggedQso, station_call: &str) -> Result<String, String>
     if is_grid(my_grid) {
         put("MY_GRIDSQUARE", my_grid);
     }
+    put(crate::log_intake::VIA_FIELD, FREEDV_ID);
     out.push_str("<EOR>\n");
     Ok(out)
 }
@@ -262,7 +292,10 @@ pub fn take_log_datagram(engine: &Mutex<Engine>, bytes: &[u8], note: &Note) {
                     note("error", why);
                 }
                 Ok(adif) => {
-                    let (added, _durable) = crate::logwrite::import_logged_contact(engine, &adif);
+                    // By the import, as every contact another program logs ([`crate::log_intake`]):
+                    // the log funnel's 300 s duplicate check, then the service uploads.
+                    let (added, _durable) = crate::logwrite::intake_contact(engine, &adif);
+                    let added = added.map(|made| usize::from(made == IntakeOutcome::Added));
                     let mhz = q.tx_freq as f64 / 1e6;
                     let call = q.dx_call.trim().to_ascii_uppercase();
                     let named = if q.tx_freq > 0 {
@@ -282,6 +315,9 @@ pub fn take_log_datagram(engine: &Mutex<Engine>, bytes: &[u8], note: &Note) {
                         f.last_contact = Some(named);
                         f.last_contact_unix = Some(now);
                         f.notice = added.as_ref().err().map(|_| line.clone());
+                        if matches!(added, Ok(1..)) {
+                            f.note_intake(FREEDV_ID, &call, now);
+                        }
                     }
                     let level = if added.is_ok() { "info" } else { "error" };
                     if added.is_err() {
@@ -316,19 +352,10 @@ pub(crate) fn serve_log_within(
     note: Note,
     bound: usize,
 ) {
-    let _ = sock.set_read_timeout(Some(Duration::from_millis(250)));
-    let mut buf = vec![0u8; bound + 1];
-    while !shutdown.load(Ordering::Relaxed) {
-        let Ok((n, from)) = sock.recv_from(&mut buf) else {
-            continue;
-        };
-        // Bound to 127.0.0.1, so only this computer can reach it; said again here so a change to
-        // the bind cannot quietly open it.
-        if n > bound || !from.ip().is_loopback() {
-            continue;
-        }
-        take_log_datagram(&engine, &buf[..n], &note);
-    }
+    // The contact port takes other programs' contacts too ([`crate::log_intake`]), each
+    // datagram judged by its source first: this computer alone unless the operator turned on
+    // "Accept from devices on my network", so a change to the bind cannot quietly open it.
+    crate::log_intake::serve_within(sock, engine, shutdown, Arc::clone(&note), note, bound);
 }
 
 /// Serve the heard-call port until `shutdown`: each datagram from this computer read as one
@@ -433,62 +460,123 @@ impl Slot {
     }
 }
 
-/// The sentence for a port that would not bind.
-fn bind_message(what: &str, addr: &str, e: &std::io::Error) -> String {
+/// The sentence for a port that would not bind; `sender` is the program to set the same port in.
+fn bind_message(what: &str, addr: &str, e: &std::io::Error, sender: &str) -> String {
     if e.kind() == std::io::ErrorKind::AddrInUse {
         format!(
             "{what} cannot listen on {addr}: another program holds that port. Pick another port \
-             in Settings ▸ Radio ▸ Transmit limits & sharing, and the same one in FreeDV"
+             in Settings ▸ Radio ▸ Transmit limits & sharing, and the same one in {sender}"
         )
     } else {
         format!("{what} cannot listen on {addr}: {e}")
     }
 }
 
-/// Run both FreeDV listeners for as long as the app runs, following the settings once a
-/// second: `freedv_log` / `freedv_log_port` for contacts, `freedv_heard` / `freedv_heard_port`
-/// for heard calls. Port 0 is "not listening".
-pub fn run(engine: Arc<Mutex<Engine>>, note: Note) {
+/// Run both listeners for as long as the app runs, following the settings once a second: the
+/// contact port (`freedv_log` / `freedv_log_port`, bound on every adapter while `log_intake_lan`
+/// is on, refused on a port Nexus sends to: [`crate::log_intake::wanted`]) for FreeDV's contacts
+/// and every other program's, and `freedv_heard` / `freedv_heard_port` for heard calls. Port 0 is
+/// "not listening". FreeDV's lines go to `note`, every other program's to `intake_note`.
+pub fn run(engine: Arc<Mutex<Engine>>, note: Note, intake_note: Note) {
     let mut log = Slot::default();
     let mut heard = Slot::default();
+    // The running contact listener's bind (every adapter or 127.0.0.1) and its thread.
+    let mut log_lan = false;
+    let mut log_thread: Option<std::thread::JoinHandle<()>> = None;
+    let mut clash_said: Option<String> = None;
     loop {
-        let (want_log, want_heard) = {
+        let (wanted, want_heard) = {
             let e = engine_lock(&engine);
             let s = e.settings();
             (
-                s.freedv_log
-                    .then_some(s.freedv_log_port)
-                    .filter(|p| *p != 0),
+                crate::log_intake::wanted(s),
                 s.freedv_heard
                     .then_some(s.freedv_heard_port)
                     .filter(|p| *p != 0),
             )
         };
-        let eng = Arc::clone(&engine);
-        let n = Arc::clone(&note);
-        let changed = log.reconcile(want_log, bind_log, move |sock, sd| {
-            spawn("nexus-freedv-log", move || {
-                serve_log_until(sock, eng, sd, n)
-            })
-        });
+        let (want_log, clash) = match wanted {
+            Ok(want) => (want, None),
+            Err(why) => (None, Some(why)),
+        };
+        // Between 127.0.0.1 and every adapter on the same port, the old listener lets go of the
+        // port before the new one binds it.
+        if log.running.is_some() && want_log.is_some_and(|(_, lan)| lan != log_lan) {
+            log.reconcile(None, bind_log, |_, _| {});
+            if let Some(t) = log_thread.take() {
+                let _ = t.join();
+            }
+        }
+        let lan = want_log.is_some_and(|(_, lan)| lan);
+        let (eng, n, ni) = (
+            Arc::clone(&engine),
+            Arc::clone(&note),
+            Arc::clone(&intake_note),
+        );
+        let mut started = None;
+        let changed = log.reconcile(
+            want_log.map(|(port, _)| port),
+            |port| {
+                if lan {
+                    crate::log_intake::bind_lan(port)
+                } else {
+                    bind_log(port)
+                }
+            },
+            |sock, sd| {
+                started = spawn("nexus-freedv-log", move || {
+                    crate::log_intake::serve_within(sock, eng, sd, n, ni, MAX_DATAGRAM)
+                })
+            },
+        );
+        if started.is_some() {
+            log_thread = started;
+            log_lan = lan;
+        }
+        let addr = |port: u16| {
+            if lan {
+                format!("port {port} on every network adapter")
+            } else {
+                format!("127.0.0.1:{port}")
+            }
+        };
         {
             let mut e = engine_lock(&engine);
             let f = e.freedv_mut();
             f.log_port = log.running.as_ref().map(|r| r.port);
-            if want_log.is_none() || f.log_port.is_some() {
+            f.log_lan = f.log_port.is_some() && log_lan;
+            if (want_log.is_none() && clash.is_none()) || f.log_port.is_some() {
                 f.log_error = None;
             }
+            if let Some(why) = &clash {
+                f.log_error = Some(why.clone());
+            }
             if let Some(Err((port, err))) = &changed {
-                let msg = bind_message("FreeDV contacts", &format!("127.0.0.1:{port}"), err);
+                let msg = bind_message(
+                    "Contacts from other programs",
+                    &addr(*port),
+                    err,
+                    "the program that sends them",
+                );
                 f.log_error = Some(msg.clone());
                 tempo_core::applog::error("freedv", &msg);
                 note("error", msg);
             }
         }
+        if clash != clash_said {
+            if let Some(why) = &clash {
+                tempo_core::applog::error("log-intake", why);
+                intake_note("error", why.clone());
+            }
+            clash_said = clash;
+        }
         if let Some(Ok(port)) = changed {
             note(
                 "info",
-                format!("listening for FreeDV's logged contacts on 127.0.0.1:{port}"),
+                format!(
+                    "listening for the contacts FreeDV and other programs log on {}",
+                    addr(port)
+                ),
             );
         }
         let eng = Arc::clone(&engine);
@@ -498,7 +586,7 @@ pub fn run(engine: Arc<Mutex<Engine>>, note: Note) {
             move |sock, sd| {
                 spawn("nexus-freedv-heard", move || {
                     serve_heard_until(sock, eng, sd)
-                })
+                });
             },
         );
         {
@@ -512,7 +600,8 @@ pub fn run(engine: Arc<Mutex<Engine>>, note: Note) {
                 f.heard.clear();
             }
             if let Some(Err((port, err))) = &changed {
-                let msg = bind_message("FreeDV heard calls", &format!("port {port}"), err);
+                let msg =
+                    bind_message("FreeDV heard calls", &format!("port {port}"), err, "FreeDV");
                 f.heard_error = Some(msg.clone());
                 tempo_core::applog::error("freedv", &msg);
                 note("error", msg);
@@ -522,9 +611,13 @@ pub fn run(engine: Arc<Mutex<Engine>>, note: Note) {
     }
 }
 
-fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
-    if let Err(e) = std::thread::Builder::new().name(name.into()).spawn(f) {
-        tempo_core::applog::error("freedv", &format!("{name} could not start: {e}"));
+fn spawn(name: &str, f: impl FnOnce() + Send + 'static) -> Option<std::thread::JoinHandle<()>> {
+    match std::thread::Builder::new().name(name.into()).spawn(f) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            tempo_core::applog::error("freedv", &format!("{name} could not start: {e}"));
+            None
+        }
     }
 }
 

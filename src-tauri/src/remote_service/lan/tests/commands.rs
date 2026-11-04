@@ -67,7 +67,15 @@ impl App {
                     }
                     json!("answered")
                 }
-                "get_snapshot" => json!({"n": app.snapshots.fetch_add(1, Ordering::SeqCst) + 1}),
+                // With a contact port that heard a device which gave no program name: what this
+                // computer reads of it must name no address (`contact_port_from_afar`).
+                "get_snapshot" => json!({
+                    "n": app.snapshots.fetch_add(1, Ordering::SeqCst) + 1,
+                    "freedv": {
+                        "intakeProgram": "192.168.1.40",
+                        "notice": "192.168.1.40 logged W1ABC, not imported: x",
+                    },
+                }),
                 "get_settings" => json!({"settings":"as read"}),
                 "dxcc_entity_names" => json!("x".repeat(200_000)),
                 _ => json!({"ran": cmd, "args": args}),
@@ -1164,4 +1172,60 @@ async fn only_a_forwarded_event_reaches_only_the_computer_in_control() {
         ),
         "something else crossed"
     );
+}
+
+/// ⛔ The snapshot a computer driving the station reads names no device's network address, both
+/// ways it reads it: the call's answer and the pushed `snapshot/1` feed (`push`, which no
+/// `Ticket::finish` sees). The stand-in's snapshot carries one in the contact port's last
+/// contact and its refusal.
+#[tokio::test]
+async fn the_pushed_snapshot_names_no_network_address() {
+    let app = App::new();
+    let s = running(&app);
+    let (_stop, stop) = watch::channel(false);
+    let (_task, socket) = dial(&s, &s.computer.key, PEER, stop).await;
+    let mut socket = socket.unwrap();
+    s.shared.authority.permit_station(&s.device, true).unwrap();
+    assert_eq!(hello(&mut socket, VERSIONS).await["type"], "welcome");
+    assert_eq!(
+        open(&mut socket, "desktop", wire::APP, wire::contract(), 1).await,
+        json!({"type":"opened"})
+    );
+    let mut pieces = Assembly::new(wire::ANSWER_BYTES);
+    let state = ask(&mut socket, json!({"type":"state","requestId":id()})).await;
+    let acquired = ask(
+        &mut socket,
+        json!({"type":"acquire","requestId":id(),"stationBootId":state["value"]["stationBootId"]}),
+    )
+    .await;
+    assert_eq!(acquired["value"]["phase"], "controlling", "{acquired}");
+    let called = call(&mut socket, &mut pieces, 1, "get_snapshot", json!({})).await;
+    assert!(
+        !called.to_string().contains("192.168"),
+        "the called snapshot: {called}"
+    );
+    send(&mut socket, json!({"type":"watch","feeds":["snapshot/1"]})).await;
+    let mut inflate = Inflate::default();
+    loop {
+        match got(&mut socket, &mut pieces).await {
+            Got::Feed(frame) => {
+                let (_, _, deflated) = wire::read_feed(&frame).expect("a feed frame");
+                let value: Value =
+                    serde_json::from_slice(&inflate.value(deflated).expect("inflates")).unwrap();
+                assert!(
+                    !value.to_string().contains("192.168"),
+                    "the pushed snapshot: {}",
+                    value["freedv"]
+                );
+                assert_eq!(
+                    value["freedv"]["intakeProgram"],
+                    tempo_app::log_intake::FROM_A_NETWORK_DEVICE,
+                    "CONTROL: the rest of the contact port goes"
+                );
+                break;
+            }
+            Got::Text(_) => {}
+            other => panic!("{other:?}"),
+        }
+    }
 }

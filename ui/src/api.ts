@@ -261,6 +261,12 @@ export async function getSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_snapshot')
 }
 
+/** The received decodes the station still holds for slots `fromSlot..=toSlot`, for a decode pane
+ *  that missed those periods (#452). A read: it raises no alert and changes nothing. */
+export async function getDecodeRefill(fromSlot: number, toSlot: number): Promise<import('./types').DecodeRefill> {
+  return invoke('get_decode_refill', { fromSlot, toSlot })
+}
+
 /** The propagation & opening-intelligence nowcast (adaptive bands, openings,
  *  DXpedition cards, space weather). */
 export async function getPropagation(): Promise<PropagationSnapshot> {
@@ -400,6 +406,18 @@ export async function stopSatTrack(): Promise<void> {
 /** The live auto-track state (poll while the section is open); null = idle. */
 export async function getSatTrackStatus(): Promise<import('./types').SatTrackStatus | null> {
   return invoke<import('./types').SatTrackStatus | null>('sat_track_status')
+}
+
+/** Where the Moon stands from the station, and the rotator's Moon follow (`moon_status`); null when
+ *  the station's grid is not set. `dxGrid` also asks for the next EME window with that grid. */
+export async function getMoonStatus(dxGrid?: string | null): Promise<import('./types').MoonStatus | null> {
+  return invoke<import('./types').MoonStatus | null>('moon_status', { dxGrid: dxGrid ?? null })
+}
+
+/** Turn the rotator to follow the Moon (`start_moon_track`). It ends with stopSatTrack — the one
+ *  Stop for whatever tracker owns the mast — or when a pass is armed. */
+export async function startMoonTrack(): Promise<import('./types').MoonTrack> {
+  return invoke<import('./types').MoonTrack>('start_moon_track')
 }
 
 /** Put the radio under Doppler control for one transponder on `name`; `null`

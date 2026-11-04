@@ -12,11 +12,12 @@
 // and stay in the code.
 import { localizeRefusal } from '../radioRefusal'
 import { Fragment, useEffect, useMemo, useState, useRef } from 'react'
+import { dismissTuneNote, useTuneNote } from '../features/yaesuTuneNote'
 import { BOX_IDS, PHONE_PANEL_IDS, PHONE_PANELS, boxEntries, isBoxId, type BoxId, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { panelHost } from '../features/panelHost'
 import { composingText } from '../features/contestExchange'
-import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
+import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { BandStrip } from './BandStrip'
@@ -120,7 +121,7 @@ import type { Memory } from '../features/memories'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { setFrequency, openPanelWindow, getSettings } from '../api'
 import { bandLabelForMhz, sidebandForMhz, sidebandForQsy } from '../band'
-import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
+import { isRfScopeSource, NO_NATIVE_SCOPE_REASON, WF_F_MAX } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
 import { PASSBAND_LIMITS } from '../spectrum/markers'
@@ -136,6 +137,8 @@ import {
 } from '../spectrum/rfSpan'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
+import { T } from '../i18n/T'
+import { icomScopeCure } from '../rigFormChecks'
 import { catDetailText } from '../features/catDetail'
 import { SplitControl } from './SplitControl'
 import type { MessageKey } from '../i18n'
@@ -281,6 +284,10 @@ interface Props {
   /** The active radio is a Flex on SmartSDR CAT or Hamlib (App, from Settings): the voice keyer
    *  notes once that SSB goes out only with DAX on for voice. Absent on the hosted page. */
   flexDaxNote?: boolean
+  /** The active radio is a Yaesu on Hamlib's newcat backend (App, from Settings; #441): a line beside
+   *  Tune says its tone goes over USB audio, so the radio's SSB modulation source must be REAR (USB).
+   *  Text only. Absent on the hosted page. */
+  yaesuTuneNote?: boolean
   /** Contest mode is on but this station is out of the contest (App's: the switch on, the session not):
    *  the log line says so, with Resume, which re-enters the contest in S&P. Absent otherwise. */
   onResumeContest?: () => void
@@ -501,6 +508,9 @@ function TruthMark({ kind, title, word }: { kind: 'rig' | 'cmd' | 'off'; title: 
   )
 }
 
+/** The Phone audio scope's Full width, Hz: the whole audio row (`WF_F_MAX`, 0–5000 Hz). */
+const PHONE_FULL_HZ = WF_F_MAX
+
 /** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
  *  is the rig's: RF offset from the dial, dial at the 1/9 mark and the sideband filling the
  *  rest (PhoneScope's `carrierCentered`). The engine is asked for exactly 0..width — receiver
@@ -510,7 +520,15 @@ function TruthMark({ kind, title, word }: { kind: 'rig' | 'cmd' | 'off'; title: 
  *  These were briefly labelled ±4k/±2.7k/±1.5k/±800, from the fortnight the axis was
  *  symmetric. The Hz never changed meaning; the ± did, and the labels came off with it.
  *
- *  FROM THE OLD SLICES: 'Full' (0–4000) and 'Voice' (300–2700) are unchanged in meaning.
+ *  FROM THE OLD SLICES: 'Full' (0–4000, now 0–5000 with the wider audio row) and 'Voice'
+ *  (300–2700) are unchanged in meaning.
+ *
+ *  ⭐ FULL IS THE DEFAULT (operator decision, 2026-11-03; Auto was the default before). Every audio
+ *  view opens on the mode's useful audio range, never on the radio's filter: the filter is drawn
+ *  as its passband box on that range, the note under the chips names it when it is what limits the
+ *  picture, and the Auto chip stays for framing exactly the filter. A stored chip is kept: it is
+ *  written only when the operator presses one, so a stored 'auto' is a choice, honoured like any
+ *  other. Only a window that never pressed a chip opens at Full.
  *  'Low' (200–1500) is now the plain 1.5k zoom. 'High' (1500–2900) has no carrier-referenced
  *  equivalent — a window that excludes the dial cannot be drawn from it — so its slot became
  *  the tighter 800 Hz zoom.
@@ -524,7 +542,7 @@ const SPANS = [
   // ⭐ 'Auto' tracks the rig's reported filter width (operator, 2026-08-16: a fixed span
   // wider than the filter shows a dead stopband — on the audio feed those pixels can never
   // light). widthHz 0 is the sentinel; the render resolves it from filterWidthHz, clamped
-  // 800..4000, falling back to the full 4 kHz when the rig doesn't report one.
+  // 800..PHONE_FULL_HZ, falling back to Full when the rig doesn't report one.
   {
     id: 'auto',
     widthHz: 0,
@@ -533,9 +551,9 @@ const SPANS = [
   },
   {
     id: 'full',
-    widthHz: 4000,
+    widthHz: PHONE_FULL_HZ,
     label: () => t('phone.span.full.label'),
-    title: () => t('phone.span.full.title', { khz: 4 }),
+    title: () => t('phone.span.full.title', { khz: PHONE_FULL_HZ / 1000 }),
   },
   {
     id: 'voice',
@@ -556,6 +574,9 @@ const SPANS = [
     title: () => t('phone.span.tight.title', { hz: 800 }),
   },
 ] as const
+
+/** The span a window that never pressed a chip opens on: Full (see `SPANS`). */
+const PHONE_DEFAULT_SPAN = SPANS.find((sp) => sp.id === 'full') ?? SPANS[0]
 
 /** RF panadapter zoom presets (used only when a native RF scope is streaming). 'Band' is the band
  *  the dial is in, edge to edge with a small margin (`spectrum/rfSpan.ts` `bandWindow`), drawn as an
@@ -661,7 +682,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active = true, snap, theme, pendingWork, freedvPane, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeContest, active = true, snap, theme, pendingWork, freedvPane, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   // The compact chrome (features/compactChrome): md and up, the meters stand in the TX strip and the
   // dock is one row.
   const chrome = useCompactChrome()
@@ -855,7 +876,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // soundcard audio, not RF IQ, so "span" means which slice of the passband
   // fills the scope).
   const [span, setSpan] = useState<(typeof SPANS)[number]>(
-    () => SPANS.find((sp) => sp.id === surfaceGet(PHONE_SCOPE_SPAN_KEY)) ?? SPANS[0],
+    () => SPANS.find((sp) => sp.id === surfaceGet(PHONE_SCOPE_SPAN_KEY)) ?? PHONE_DEFAULT_SPAN,
   )
   const [rfSpan, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
     const id = loadRfSpan('phone', RF_SPANS.map((sp) => sp.id), 'band')
@@ -1037,9 +1058,43 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
     onSnap,
   })
 
+  // The settings the scope's Icom hint reads (`icomScopeCure`): the ACTIVE radio's model,
+  // connection, baud and CI-V switch, so it is read again on a radio switch. Display only.
+  const [scopeSettings, setScopeSettings] = useState<Settings | null>(null)
+  useEffect(() => {
+    if (!active) return
+    let alive = true
+    void getSettings()
+      .then((s) => {
+        if (alive && s) setScopeSettings(s)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [active, snap.activeRadioId])
+
   // RX filter / passband width — the rig's read-back (null = unknown/default). The ± stepper
   // nudges it 100 Hz within a sane SSB/CW span, seeded from the current value or a 2.4 kHz default.
   const filterHz = snap.radio.filterWidthHz ?? null
+  // The audio scope's width: the chip's own, or Auto's — the filter, clamped 800..Full, and Full
+  // when the radio reports none.
+  const phoneAudioWidth = span.widthHz || Math.min(PHONE_FULL_HZ, Math.max(800, filterHz ?? PHONE_FULL_HZ))
+  // The audio is what came through the RADIO's filter, so where the window is wider than that
+  // filter the rest of it is the stopband and can never show a signal. Say so (the CW scope's note),
+  // or a 2.4 kHz filter in Full reads as a scope cut short. Never in Auto, which frames the filter.
+  const filterLimits =
+    !nativeRf && span.id !== 'auto' && filterHz != null && filterHz > 0 && filterHz < phoneAudioWidth
+  // An Icom whose own wide scope is one setting away (`icomScopeCure`, the CW scope's hint): the
+  // audio view is all an operator on Hamlib ever sees, with nothing saying the radio's panadapter
+  // can be drawn here.
+  const scopeCure = !nativeRf && scopeSettings ? icomScopeCure(scopeSettings) : null
+  const settingsLink = (where: string) =>
+    onOpenSettings ? (
+      <button type="button" className="settings-linkbtn" onClick={() => onOpenSettings(where)} />
+    ) : (
+      <strong />
+    )
   const bumpFilter = (deltaHz: number) => {
     const base = filterHz ?? 2400
     const next = Math.min(PASSBAND_LIMITS.phone.maxHz, Math.max(PASSBAND_LIMITS.phone.minHz, base + deltaHz))
@@ -2663,6 +2718,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         esm={esm.host}
         // App unmounts this cockpit on a page switch; the contact in its strip waits for it.
         draft="phone"
+        // #438: a long contact whose call went in early restarts its start time here.
+        startButton
         onResumeContest={onResumeContest}
       />
       {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
@@ -2726,6 +2783,10 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // scope, or after the contact in the hosted Quick presentation (below). Space as PTT is a WINDOW
   // listener and stays one: with focus on a strip button, Space still goes to the PTT handler,
   // which calls preventDefault, so the focused button does not click.
+  // #441: on a Yaesu whose own USB audio carries Tune's tone, the note comes up once a Tune reads about no
+  // power (features/yaesuTuneNote.ts), or an ⓘ holds it where the radio reports no power. Text only.
+  const tuneNote = useTuneNote(!!yaesuTuneNote, snap.radio)
+  const [tuneNoteOpen, setTuneNoteOpen] = useState(false)
   const txStrip = (
     <CockpitTxStrip
       radio={snap.radio}
@@ -2759,6 +2820,32 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
       // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
       // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
       meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip controls={txMeterControls} /> : undefined}
+      // #441: Phone keys plain USB/LSB, so these Yaesus take their audio from the SSB MOD SOURCE menu;
+      // on MIC, Tune's USB-audio tone keys the radio with no RF. Nexus changes no menu.
+      tuneHint={
+        tuneNote === 'icon' ? (
+          <button
+            type="button"
+            className="tune-note-info"
+            aria-expanded={tuneNoteOpen}
+            aria-label={t('phone.tune.usbAudioNote.aria')}
+            title={t('phone.tune.usbAudioNote')}
+            onClick={() => setTuneNoteOpen((o) => !o)}
+          >
+            ⓘ
+          </button>
+        ) : undefined
+      }
+      tuneNote={
+        tuneNote === 'line' || (tuneNote === 'icon' && tuneNoteOpen) ? (
+          <span className="radio-tune-note" role="note">
+            {t('phone.tune.usbAudioNote')}
+            <button type="button" className="settings-linkbtn" onClick={dismissTuneNote}>
+              {t('common.dismiss')}
+            </button>
+          </span>
+        ) : undefined
+      }
     />
   )
   // The header's occasional controls, each drawn once: inline, or behind its ⋯ (see the header).
@@ -3264,6 +3351,20 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
                   {sp.label()}
                 </button>
               ))}
+              {filterLimits && (
+                <span className="ph-scope-sub" role="status">
+                  {t('phone.scope.filterLimit', { hz: filterHz })}
+                </span>
+              )}
+              {scopeCure && (
+                <span className="ph-scope-sub">
+                  {scopeCure === 'native-off' ? (
+                    <T k="phone.scope.nativeHint.civOff" tags={{ link: settingsLink('rig-advanced') }} />
+                  ) : (
+                    <T k="phone.scope.nativeHint.baud" tags={{ link: settingsLink('rig-control') }} />
+                  )}
+                </span>
+              )}
             </div>
           )}
           <PhoneScope
@@ -3274,7 +3375,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
             theme={theme}
             smeterDb={smeterDb}
             viewLoHz={yaesuRf ? -1e9 : nativeRf ? rfSpan.lo : 0}
-            viewHiHz={yaesuRf ? 1e9 : nativeRf ? rfSpan.hi : (span.widthHz || Math.min(4000, Math.max(800, filterHz ?? 4000)))}
+            viewHiHz={yaesuRf ? 1e9 : nativeRf ? rfSpan.hi : phoneAudioWidth}
             carrierCentered={!nativeRf}
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}

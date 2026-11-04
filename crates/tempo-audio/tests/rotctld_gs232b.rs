@@ -39,8 +39,39 @@ struct Gs232b {
     reader: Option<std::thread::JoinHandle<()>>,
 }
 
+/// How the stand-in controller answers `C2`.
+#[derive(Clone, Copy)]
+enum Answer {
+    /// At once, with this position.
+    At(u32, u32),
+    /// After this long, as a controller across a network would — and with an azimuth that
+    /// counts the `C2`s it has answered (1, 2, 3 …), so a read can tell its own answer from the
+    /// answer to an earlier one.
+    LateCounting(Duration),
+}
+
 impl Gs232b {
     fn start(bin: &str, az: u32, el: u32) -> Gs232b {
+        Gs232b::start_on(bin, Answer::At(az, el), |path, port| {
+            [
+                "-m",
+                "603",
+                "-r",
+                path,
+                "-s",
+                "9600",
+                "-T",
+                "127.0.0.1",
+                "-t",
+                port,
+            ]
+            .map(String::from)
+            .to_vec()
+        })
+    }
+
+    /// A GS-232B answering as `answer` says, driven by a rotctld started with `args(pty, port)`.
+    fn start_on(bin: &str, answer: Answer, args: impl Fn(&str, &str) -> Vec<String>) -> Gs232b {
         let (mut master, slave) = TTYPort::pair().expect("a pseudo-terminal pair");
         let path = slave.name().expect("the pty's path");
         let wire = Arc::new(Mutex::new(Vec::new()));
@@ -49,7 +80,19 @@ impl Gs232b {
         master
             .set_timeout(Duration::from_millis(50))
             .expect("a read timeout");
+        // The late answers go out from a thread of their own, each at its due time.
+        let (late, due) = std::sync::mpsc::channel::<(Instant, u32)>();
+        let mut writer = master
+            .try_clone_native()
+            .expect("a second handle on the pty");
+        std::thread::spawn(move || {
+            for (at, n) in due {
+                std::thread::sleep(at.saturating_duration_since(Instant::now()));
+                let _ = writer.write_all(format!("AZ={n:03}  EL=045\r\n").as_bytes());
+            }
+        });
         let reader = std::thread::spawn(move || {
+            let mut answered = 0u32;
             let mut pending = Vec::new();
             let mut buf = [0u8; 256];
             while !halt.load(Ordering::SeqCst) {
@@ -65,7 +108,17 @@ impl Gs232b {
                         continue; // Hamlib writes a second CR after each set command
                     }
                     if cmd == "C2" {
-                        let _ = master.write_all(format!("AZ={az:03}  EL={el:03}\r\n").as_bytes());
+                        answered += 1;
+                        match answer {
+                            Answer::At(az, el) => {
+                                let _ = master
+                                    .write_all(format!("AZ={az:03}  EL={el:03}\r\n").as_bytes());
+                            }
+                            // Every answer is late by the same round trip, and in order.
+                            Answer::LateCounting(rtt) => {
+                                let _ = late.send((Instant::now() + rtt, answered));
+                            }
+                        }
                     }
                     log.lock().expect("the wire log").push(cmd);
                 }
@@ -81,18 +134,7 @@ impl Gs232b {
                     .expect("its number")
                     .port();
                 let mut daemon = Command::new(bin)
-                    .args([
-                        "-m",
-                        "603",
-                        "-r",
-                        &path,
-                        "-s",
-                        "9600",
-                        "-T",
-                        "127.0.0.1",
-                        "-t",
-                        &port.to_string(),
-                    ])
+                    .args(args(&path, &port.to_string()))
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .spawn()
@@ -219,4 +261,67 @@ fn the_pane_reads_both_axes_from_a_gs232b() {
         (123.0, Some(45.0))
     );
     assert_eq!(g5500.take(), ["C2"]);
+}
+
+/// ⭐ A GS-232B across a network (2026-11-03, a tester's rotators "losing connection" over the
+/// internet): every answer arrives 700 ms after its `C2`. Hamlib's own 400 ms timeout gives up on
+/// each read, flushes, writes `C2` again, and then reads the answer to the EARLIER `C2` — so a
+/// read returns an old position and the controller is sent more commands than were asked for.
+/// Under the integrated daemon's own arguments (`rotctld_args`, with its `-C`), each read gets
+/// its own answer.
+#[test]
+fn a_gs232b_across_a_slow_link_answers_each_read_with_its_own_position() {
+    let bin = require_rotctld!();
+    let _alone = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let rtt = Duration::from_millis(700);
+    let reads = |g: &mut Gs232b| -> (Vec<f64>, usize) {
+        let az: Vec<f64> = (0..4)
+            .map(|_| {
+                let (az, _) = rotator::read_position(&g.addr).expect("a position, late or not");
+                // A poll's pace, so a stale answer has time to land where it would on a pane.
+                std::thread::sleep(Duration::from_millis(300));
+                az
+            })
+            .collect();
+        std::thread::sleep(Duration::from_millis(1500));
+        let c2 = g.take().iter().filter(|c| *c == "C2").count();
+        (az, c2)
+    };
+
+    // THE DEFECT, as Hamlib's defaults run it: more `C2`s than reads, and reads answered by an
+    // earlier `C2`.
+    let mut plain = Gs232b::start_on(&bin, Answer::LateCounting(rtt), |path, port| {
+        [
+            "-m",
+            "603",
+            "-r",
+            path,
+            "-s",
+            "9600",
+            "-T",
+            "127.0.0.1",
+            "-t",
+            port,
+        ]
+        .map(String::from)
+        .to_vec()
+    });
+    let (az, c2) = reads(&mut plain);
+    assert!(
+        c2 > 4,
+        "Hamlib's 400 ms timeout re-sends C2 on a 700 ms link ({c2} for 4 reads, {az:?})"
+    );
+    drop(plain);
+
+    // The integrated daemon's arguments: one `C2` per read, each answered in turn.
+    let mut nexus = Gs232b::start_on(&bin, Answer::LateCounting(rtt), |path, port| {
+        tempo_audio::rigctld_proc::rotctld_args(603, path, 9600, port.parse().expect("a port"))
+    });
+    let (az, c2) = reads(&mut nexus);
+    assert_eq!(c2, 4, "one C2 per read: {az:?}");
+    assert_eq!(
+        az,
+        [1.0, 2.0, 3.0, 4.0],
+        "each read is answered by its own C2"
+    );
 }

@@ -270,7 +270,11 @@ html {
      buttons turn pointer events back on. */
   pointer-events: none;
   position: fixed;
-  bottom: var(--space-4);
+  /* #445: `--toast-inset` / `--toast-max-h` are the room Toasts.tsx MEASURES for the column, clear
+     of every transmit surface (the TX dock, the TX strip, FT's QSO strip, the top bar's cluster;
+     features/toastRoom.ts): a toast's own buttons take clicks, and one stood on Phone's PTT. Unset
+     (nothing measured yet), the corner is the 16 px it always was. Every corner below reads them. */
+  bottom: var(--toast-inset, var(--space-4));
   right: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -282,7 +286,7 @@ html {
   list-style: none;
   /* Cap to the viewport and scroll when a burst of toasts (band opening / pileup) stacks up, so the
      oldest toasts + their buttons don't grow off the top edge unreachable. --vh-eff is zoom-corrected. */
-  max-height: calc(var(--vh-eff, 100vh) - 2 * var(--space-4));
+  max-height: var(--toast-max-h, calc(var(--vh-eff, 100vh) - 2 * var(--space-4)));
   overflow-y: auto;
   z-index: 80;
 }
@@ -290,8 +294,32 @@ html {
    totally covers the NEWEST toast (z 80, column-appended) — including its `Work →` button.
    Lift the whole toast stack above the banner's ~60px + a gap for that window; both live
    inside `.app`, so :has() sees the banner directly. */
-.app:has(.update-banner) .ui-toast-viewport {
-  bottom: calc(var(--space-4) + 72px);
+.app:has(.update-banner) .ui-toast-viewport:not([data-corner^='top']) {
+  /* Never lower than the banner's own lift: the measured room (which keeps off the banner too) may
+     date from before a banner that has just arrived. */
+  bottom: max(var(--toast-inset, var(--space-4)), calc(var(--space-4) + 72px));
+}
+/* #445: THE POP-UP CORNER (Settings ▸ Spots & Alerts ▸ Alerts ▸ Pop-up corner, `data-corner` from
+   Toasts.tsx). Bottom right is the rule above, as it always was; each other corner moves the column's
+   two insets and keeps everything else, the zoom-corrected caps included. An inset a corner does not
+   use is `auto`, never left set: a column with both `top` and `bottom` would stretch. */
+.ui-toast-viewport[data-corner='bottom-left'] {
+  right: auto;
+  left: var(--space-4);
+}
+.ui-toast-viewport[data-corner='top-right'] {
+  bottom: auto;
+  top: var(--toast-inset, var(--space-4));
+}
+.ui-toast-viewport[data-corner='top-left'] {
+  bottom: auto;
+  right: auto;
+  top: var(--toast-inset, var(--space-4));
+  left: var(--space-4);
+}
+/* A toast slides in from its corner's own edge (`ui-toast-in`): from the right, or from the left. */
+.ui-toast-viewport[data-corner$='left'] .ui-toast {
+  --toast-in-x: -16px;
 }
 /* CLICK-THROUGH (D#19). An error toast stays 12 s, and for those 12 s it sits over whatever is
    beneath it — on a 390 px screen that is a control the operator cannot reach (the Remote
@@ -301,6 +329,7 @@ html {
    replaces swipe-to-dismiss (Radix swipes the body), so the × close button is now the only
    pointer dismissal and must always render. */
 .ui-toast {
+  --toast-in-x: 16px;
   pointer-events: none;
   display: flex;
   align-items: flex-start;
@@ -373,7 +402,7 @@ html {
 @keyframes ui-toast-in {
   from {
     opacity: 0;
-    transform: translateX(16px) scale(0.97);
+    transform: translateX(var(--toast-in-x, 16px)) scale(0.97);
   }
   to {
     opacity: 1;
@@ -1386,6 +1415,16 @@ button.nb-chip:hover {
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
+/* A stale reading (features/rotorLiveness): the last bearing the rotator reported, kept through a missed
+   poll or two, drawn in the dim ink so it does not read as live. */
+.rotor-needle.stale {
+  stroke: var(--text-dim);
+}
+.rotor-az.stale,
+.rotor-el.stale,
+.rotor-aim-off.stale {
+  color: var(--text-dim);
+}
 /* The station's bearing (line 2's call; RotorPane's header): told from the needle and the dashed target
    needle by its shape, dotted with a bug on the rim, and by its colour, the amber role in either theme.
    Drawn under both needles, and never a click's target, so a click on it slews as the rose does.
@@ -1496,6 +1535,21 @@ button.nb-chip:hover {
 .rotor-aim-point:hover {
   border-color: var(--accent);
 }
+/* The Moon's line (EME): where it stands, Follow / Stop following, the follow's state and the EME window with
+   line 2's station. Under the controls for the reason line 2 is: above them it would move ■ STOP. */
+.rotor-moon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.rotor-moon-at {
+  white-space: nowrap;
+}
+.rotor-moon-state,
+.rotor-moon-window {
+  color: var(--text-dim);
+}
 .rotor-hint {
   margin: 0;
   font-size: var(--fs-micro);
@@ -1556,6 +1610,7 @@ button.nb-chip:hover {
   grid-column: 2;
 }
 .dash-boxes .pane-body .rotor-aim,
+.dash-boxes .pane-body .rotor-moon,
 .dash-boxes .pane-body .rotor-slewing,
 .dash-boxes .pane-body .rotor-hint {
   grid-column: 1 / -1;
@@ -10537,6 +10592,25 @@ input.cw-pitch::-webkit-inner-spin-button {
   color: var(--state-weak);
   font-weight: 700;
 }
+/* #441: Phone's ⓘ for the Tune note, right after the TX cluster (never between its controls): a small
+   round button that opens the note's line. Both variables exist in each theme. */
+.tune-note-info {
+  flex: none;
+  align-self: center;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  line-height: 1.3;
+  cursor: pointer;
+}
+.tune-note-info:hover,
+.tune-note-info[aria-expanded='true'] {
+  color: var(--text);
+  border-color: var(--accent);
+}
 /* Tune (ATU/amp carrier) + Stop-TX utilities — shared look across the Phone & CW cockpits.
    Restored after the de-FT8 pass dropped them; reuse the Operate cockpit's set_tune/halt_tx. */
 .ph-tx-utils {
@@ -11642,6 +11716,21 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .le-lookup:hover:not(:disabled) {
   color: var(--text);
+}
+/* #438: Start's two labels ("Start", "Start 14:33") share one grid cell, so the wider sizes the
+   button from the start and a press widens nothing after it; tabular digits keep every time as wide
+   as the placeholder's 00:00. The label not shown keeps its room, unseen (LogEntry.tsx). */
+.le-start {
+  font-variant-numeric: tabular-nums;
+}
+.le-start-label {
+  display: inline-grid;
+}
+.le-start-label > * {
+  grid-area: 1 / 1;
+}
+.le-start-label > [data-off] {
+  visibility: hidden;
 }
 .le-log-btn {
   flex: 0 0 auto;
@@ -13069,6 +13158,41 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   grid-template-rows: repeat(2, auto);
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
+}
+/* #446: OPERATE'S CELL OPENS LARGER (TxMetersCell). The opener is the cell's own block wrapper, so
+   the fixed-width cell keeps its geometry; its focus ring is drawn INSIDE, since the cell clips.
+   The dialog (`ui/Dialog`, its box the default .ui-dialog) shows the same meters one per row at
+   full size. Declared after the pinned/inline rules at the same specificity, so source order is
+   what carries them, and scoped to `.txmeters-large`, which only the dialog renders. */
+.txmeters-open {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.txmeters-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.txmeters-large .ph-txmeters {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+.txmeters-large .ph-txmeters .ph-txmeter-track {
+  height: 22px;
+  border-radius: 6px;
+}
+.txmeters-large .ph-txmeters .ph-txmeter-label {
+  font-size: calc(16px * var(--text-scale));
+  min-width: 3.6em;
+}
+.txmeters-large .ph-txmeters .ph-txmeter-value {
+  font-size: calc(18px * var(--text-scale));
+  min-width: 4.5em;
+}
+.txmeters-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-3);
 }
 /* The COMP row in Phone SETS the processor level as well as metering compression: the fill is
    the meter, the marker line is the level, and the track is the slider (drag / arrow keys).
@@ -18607,6 +18731,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   opacity: 0.3;
   filter: grayscale(0.8);
 }
+/* #452: a row filled in afterwards from the station's history — its time reads as history. */
+.decode-row.refilled .decode-utc {
+  font-style: italic;
+}
 .decode-tag {
   font-size: calc(10px * var(--text-scale));
   font-weight: 800;
@@ -23788,6 +23916,11 @@ button.cq-skiptx1.on {
   content: '';
   flex: 1;
   border-top: 1px solid var(--border-soft);
+}
+/* #452: periods this pane missed that the station no longer held — the rule is dashed. */
+.od-period-sep.od-gap::before,
+.od-period-sep.od-gap::after {
+  border-top-style: dashed;
 }
 .od-sep-utc {
   font-family: var(--font-mono);

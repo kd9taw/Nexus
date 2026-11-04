@@ -55,6 +55,7 @@ pub mod flexvita;
 pub mod freedv;
 pub mod icom;
 pub mod js8net;
+pub mod log_intake;
 pub mod mqtt;
 pub mod n1mm;
 pub mod n3fjp;

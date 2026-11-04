@@ -56,9 +56,12 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
+import { setPopupCorner } from './features/popupCorner'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
+import { intakeToast } from './features/logIntake'
 import { flexVoiceNeedsDax } from './features/flexDaxNote'
+import { phoneTuneNeedsRearSource } from './features/yaesuTuneNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
@@ -953,6 +956,20 @@ function App() {
     }
   }, [snap?.uploadTick, snap?.uploadNote, snap?.uploadOk])
 
+  // A contact another program logged into Nexus through the contact port (WSJT-X, N1MM, the
+  // S.A.T. box, FreeDV: `tempo_app::log_intake`): "Logged K1ABC from WSJT-X", once per contact.
+  // The first value is adopted: a fresh window is not a contact.
+  const intakeTickRef = useRef<number | null>(null)
+  useEffect(() => {
+    const f = snap?.freedv
+    const tick = f?.intakeTick
+    if (tick == null) return
+    if (intakeTickRef.current != null && tick !== intakeTickRef.current && f?.intakeCall && f.intakeProgram) {
+      pushToast(intakeToast(f.intakeCall, f.intakeProgram), 'success', 4000)
+    }
+    intakeTickRef.current = tick
+  }, [snap?.freedv?.intakeTick, snap?.freedv?.intakeCall, snap?.freedv?.intakeProgram])
+
   // The logbook database could not be opened at launch, so this session keeps the log in
   // log.adi. Said ONCE a session, sticky until the operator dismisses it, and never in the way
   // (a toast, not a dialog); the ref, not the snapshot, is what stops every poll re-raising it.
@@ -1447,6 +1464,10 @@ function App() {
   useEffect(() => {
     setPopupMinSeconds(settings?.popupMinSecs ?? 0)
   }, [settings?.popupMinSecs])
+  // #445: and which corner they stand in. Absent, or a corner this build does not know, is bottom right.
+  useEffect(() => {
+    setPopupCorner(settings?.popupCorner)
+  }, [settings?.popupCorner])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
   // the master switch off), so the fetch just re-runs when the configured event changes —
@@ -3361,6 +3382,8 @@ function App() {
         stripRef={tempoWfRef}
         zoomKey="nexus.waterfall.tempo.zoom"
         transmitting={snap.radio.transmitting}
+        passbandHz={snap.radio.filterWidthHz ?? null}
+        passbandMode={snap.radio.rigMode || snap.radio.sideband}
         rxOffsetHz={snap.radio.rxOffsetHz}
         txOffsetHz={snap.radio.txOffsetHz}
         theme={theme}
@@ -3625,6 +3648,7 @@ function App() {
     <PhoneCockpit
       esmSetting={esmSettingFor('phone')}
       flexDaxNote={settings ? flexVoiceNeedsDax(settings) : false}
+      yaesuTuneNote={settings ? phoneTuneNeedsRearSource(settings) : false}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}

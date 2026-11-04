@@ -2692,7 +2692,21 @@ pub struct Settings {
     pub freedv_log: bool,
     /// UDP port on 127.0.0.1 for FreeDV's logged contacts. 2239, NOT 2237: 2237 is where Nexus
     /// sends its own WSJT-X telemetry and where GridTracker and JTAlert listen. 0 = not listening.
+    ///
+    /// Since the contact port takes every program's logged contacts ([`crate::log_intake`]), this
+    /// switch and port are "Accept contacts other programs log": the persisted names stay, so a
+    /// FreeDV operator's settings mean what they meant. A port Nexus itself sends to (its WSJT-X
+    /// UDP, HRD or N1MM target) is refused with a sentence rather than bound.
     pub freedv_log_port: u16,
+    /// "Accept from devices on my network": bind the contact port on every adapter, and take
+    /// contacts from private network addresses as well as this computer (the S.A.T. satellite
+    /// tracker, a second PC). OFF by default: Windows asks once whether Nexus may use the network,
+    /// and the port is this computer's alone until the operator says otherwise. A public address
+    /// is never taken ([`crate::log_intake::Admission`]).
+    pub log_intake_lan: bool,
+    /// The one network address allowed to send contacts while [`Self::log_intake_lan`] is on
+    /// (the S.A.T.'s); empty = any private address. This computer is always allowed.
+    pub log_intake_peer: String,
     /// Listen for FreeDV's callsign broadcast (FreeDV 2.4) and list the calls it hears in the
     /// Phone screen's FreeDV pane ([`crate::freedv`]). OFF by default: the listener joins
     /// FreeDV's group on every adapter (dropping anything not from this computer), and Windows
@@ -3599,6 +3613,14 @@ pub struct Settings {
     /// its own longer floor and one that stays until dismissed still does (`pushToast`,
     /// ui/src/toast.ts).
     pub popup_min_secs: u32,
+    /// Which corner of the window the pop-ups stand in (#445): bottom right (the default, where
+    /// they always stood, and what a file from before the field loads), bottom left, top right or
+    /// top left. Only where the UI draws its toast column (`ui/src/features/popupCorner.ts` `popupCornerOf`, the
+    /// same four values and the same fallback); nothing on the Rust side reads it. Read leniently
+    /// ([`lenient_popup_corner`]): a corner this build does not know loads as bottom right rather
+    /// than failing the whole file.
+    #[serde(deserialize_with = "lenient_popup_corner")]
+    pub popup_corner: PopupCorner,
     /// Put the exchanged dB reports into the logged QSO's COMMENT field, WSJT-X's
     /// "dB reports to comments" (`dBtoComments`, default false there — logqso.cpp:143
     /// builds `"<mode>  Sent: <rpt>  Rcvd: <rpt>"`, two spaces, parts omitted when
@@ -4665,6 +4687,12 @@ fn lenient_experience_level<'de, D: serde::Deserializer<'de>>(
     Ok(serde_json::from_value(serde_json::Value::deserialize(de)?).ok())
 }
 
+/// The lenient loader of [`Settings::popup_corner`]: a known corner, else bottom right. A corner
+/// from a later build, or junk, must not cost the file around it (see [`lenient_list`]'s WHY).
+fn lenient_popup_corner<'de, D: serde::Deserializer<'de>>(de: D) -> Result<PopupCorner, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(de)?).unwrap_or_default())
+}
+
 /// [`lenient_list`]'s scalar twin: a string, or empty for any other JSON value.
 fn lenient_string<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::Error> {
     Ok(match serde_json::Value::deserialize(de)? {
@@ -4770,6 +4798,46 @@ pub enum ExperienceLevel {
     NewToDigital,
     /// Experienced: everything on, Settings as it always was.
     Experienced,
+}
+
+/// The window corner the pop-up notifications stand in ([`Settings::popup_corner`], #445). The wire
+/// values are the UI's (`PopupCorner` in ui/src/features/popupCorner.ts): `bottom-right`, `bottom-left`,
+/// `top-right`, `top-left`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PopupCorner {
+    /// Where the pop-ups always stood.
+    #[default]
+    BottomRight,
+    BottomLeft,
+    TopRight,
+    TopLeft,
+}
+
+impl PopupCorner {
+    /// Every corner. [`lenient_string_choices`] names them, since the lenient loader never says.
+    pub const ALL: [PopupCorner; 4] = [
+        PopupCorner::BottomRight,
+        PopupCorner::BottomLeft,
+        PopupCorner::TopRight,
+        PopupCorner::TopLeft,
+    ];
+}
+
+/// The string settings read LENIENTLY (an unknown value loads as the default instead of failing),
+/// by wire name, with every value each knows. A strict choice says its values in the error an
+/// unknown one raises; a lenient one says nothing, so whatever must try each value of every setting
+/// (the save-from-afar probe in src-tauri's command_dispatch tests) asks here. A lenient string
+/// setting missing from this list is one that probe cannot change, and it says so.
+pub fn lenient_string_choices() -> Vec<(&'static str, Vec<String>)> {
+    let wire = |v: serde_json::Value| v.as_str().map(str::to_owned).unwrap_or_default();
+    vec![(
+        "popupCorner",
+        PopupCorner::ALL
+            .iter()
+            .map(|c| wire(serde_json::to_value(c).unwrap()))
+            .collect(),
+    )]
 }
 
 /// What the operator sees when Nexus switches the active radio BY ITSELF — a band or mode the
@@ -6635,6 +6703,8 @@ impl Default for Settings {
             sdrconnect_follow: default_sdrconnect_follow(),
             freedv_log: true,
             freedv_log_port: crate::freedv::DEFAULT_LOG_PORT,
+            log_intake_lan: false,
+            log_intake_peer: String::new(),
             freedv_heard: false,
             freedv_heard_port: crate::freedv::DEFAULT_HEARD_PORT,
             flex_radio_ip: String::new(),
@@ -6807,6 +6877,7 @@ impl Default for Settings {
             pota_new_activation_alert: false,
             popup_notifications: true,
             popup_min_secs: 0,
+            popup_corner: PopupCorner::BottomRight,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
             // Empty = every continent and every entity alerts, which is precisely the behaviour
@@ -14567,6 +14638,128 @@ mod tests {
         );
         // CONTROL: the scan finds only what is declared.
         assert!(!declares("popupMinSecss") && !declares("popupMin"));
+    }
+
+    /// #445's pop-up corner — ships bottom right (the corner as it always was), its exact wire key
+    /// and values, an upgrader's file loading bottom right through the real load path, each corner
+    /// surviving a save and a load, and a value this build does not know (a later build's corner,
+    /// junk, the wrong type) loading bottom right WITHOUT costing the rest of the file. Then the TS
+    /// mirror, read out of `types.ts` itself.
+    #[test]
+    fn lenient_string_choices_name_every_popup_corner_and_each_loads_as_itself() {
+        let choices = lenient_string_choices();
+        let (name, values) = choices
+            .iter()
+            .find(|(n, _)| *n == "popupCorner")
+            .expect("popupCorner is a lenient string setting");
+        assert_eq!(
+            values,
+            &["bottom-right", "bottom-left", "top-right", "top-left"],
+            "{name}"
+        );
+        // Each value is a real choice, not the fallback: it loads as a different corner.
+        let loaded: std::collections::BTreeSet<String> = values
+            .iter()
+            .map(|v| {
+                let s: Settings =
+                    serde_json::from_value(serde_json::json!({ "popupCorner": v })).unwrap();
+                format!("{:?}", s.popup_corner)
+            })
+            .collect();
+        assert_eq!(loaded.len(), PopupCorner::ALL.len());
+        // A variant added to PopupCorner stops this match compiling, which leads here: add it to
+        // ALL and to the values above.
+        for c in PopupCorner::ALL {
+            match c {
+                PopupCorner::BottomRight
+                | PopupCorner::BottomLeft
+                | PopupCorner::TopRight
+                | PopupCorner::TopLeft => {}
+            }
+        }
+    }
+
+    #[test]
+    fn popup_corner_ships_bottom_right_wire_values_lenient_load_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(
+            s.popup_corner,
+            PopupCorner::BottomRight,
+            "ships bottom right"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"popupCorner\":\"bottom-right\""),
+            "missing wire key in {json}"
+        );
+
+        let dir = scratch_dir("popup-corner");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            Settings::load(&path).popup_corner,
+            PopupCorner::BottomRight,
+            "an old settings file moved the pop-ups"
+        );
+        for (corner, wire) in [
+            (PopupCorner::BottomRight, "bottom-right"),
+            (PopupCorner::BottomLeft, "bottom-left"),
+            (PopupCorner::TopRight, "top-right"),
+            (PopupCorner::TopLeft, "top-left"),
+        ] {
+            let mut moved = Settings::default();
+            moved.popup_corner = corner;
+            moved.save(&path).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(&format!("\"popupCorner\": \"{wire}\""))
+                    || text.contains(&format!("\"popupCorner\":\"{wire}\"")),
+                "{wire} is not the wire value in {text}"
+            );
+            assert_eq!(
+                Settings::load(&path).popup_corner,
+                corner,
+                "{wire} did not survive"
+            );
+        }
+        for junk in [
+            r#""middle""#,
+            r#""TOP-LEFT""#,
+            r#""top_left""#,
+            "3",
+            "null",
+            r#"["top-left"]"#,
+        ] {
+            std::fs::write(
+                &path,
+                format!(r#"{{"mycall":"W9XYZ","popupCorner":{junk}}}"#),
+            )
+            .unwrap();
+            let loaded = Settings::load(&path);
+            assert_eq!(loaded.popup_corner, PopupCorner::BottomRight, "{junk}");
+            assert_eq!(loaded.mycall, "W9XYZ", "{junk} cost the rest of the file");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let declares = |key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        assert!(
+            declares("popupCorner"),
+            "ui/src/types.ts Settings is missing `popupCorner`"
+        );
+        // CONTROL: the scan finds only what is declared.
+        assert!(!declares("popupCornerr") && !declares("popupCorn"));
     }
 
     /// The tune carrier's own power level, on the exact wire key the UI hand-writes.
