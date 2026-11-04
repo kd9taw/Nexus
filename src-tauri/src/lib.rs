@@ -9393,6 +9393,18 @@ async fn get_snapshot(
     .await
 }
 
+/// The received decodes a decode pane missed, slots `from_slot..=to_slot`, from the history the
+/// engine keeps (#452, `Engine::decode_refill`). A READ: it decides no alert, drains nothing and
+/// changes nothing the sequencer reads; the pane draws what it returns as history.
+#[tauri::command]
+async fn get_decode_refill(
+    state: State<'_, SharedEngine>,
+    from_slot: u64,
+    to_slot: u64,
+) -> Result<tempo_app::dto::DecodeRefill, String> {
+    with_engine(&state, move |eng| eng.decode_refill(from_slot, to_slot)).await
+}
+
 /// The operator's area filter for the needed-station alerts (`alertContinents`,
 /// `alertEntities`) as the entity names it admits, by the country file's continent table; `None`
 /// for no filter, the default.
@@ -50216,6 +50228,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         ui_state_load,
         ui_state_save,
         get_snapshot,
+        get_decode_refill,
         remote_monitor::get_remote_monitor_frame,
         remote_service::get_remote_station_status,
         get_stream_watched,

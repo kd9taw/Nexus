@@ -18716,6 +18716,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   opacity: 0.3;
   filter: grayscale(0.8);
 }
+/* #452: a row filled in afterwards from the station's history — its time reads as history. */
+.decode-row.refilled .decode-utc {
+  font-style: italic;
+}
 .decode-tag {
   font-size: calc(10px * var(--text-scale));
   font-weight: 800;
@@ -23897,6 +23901,11 @@ button.cq-skiptx1.on {
   content: '';
   flex: 1;
   border-top: 1px solid var(--border-soft);
+}
+/* #452: periods this pane missed that the station no longer held — the rule is dashed. */
+.od-period-sep.od-gap::before,
+.od-period-sep.od-gap::after {
+  border-top-style: dashed;
 }
 .od-sep-utc {
   font-family: var(--font-mono);

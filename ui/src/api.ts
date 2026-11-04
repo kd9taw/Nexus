@@ -261,6 +261,12 @@ export async function getSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_snapshot')
 }
 
+/** The received decodes the station still holds for slots `fromSlot..=toSlot`, for a decode pane
+ *  that missed those periods (#452). A read: it raises no alert and changes nothing. */
+export async function getDecodeRefill(fromSlot: number, toSlot: number): Promise<import('./types').DecodeRefill> {
+  return invoke('get_decode_refill', { fromSlot, toSlot })
+}
+
 /** The propagation & opening-intelligence nowcast (adaptive bands, openings,
  *  DXpedition cards, space weather). */
 export async function getPropagation(): Promise<PropagationSnapshot> {
