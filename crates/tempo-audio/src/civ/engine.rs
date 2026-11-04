@@ -1984,4 +1984,64 @@ mod tests {
             "nothing about the scope when it is not wanted"
         );
     }
+
+    /// While the radio is off, a frame from ANOTHER radio on the bus (`94`) and an echo of our
+    /// own dial read are not the radio coming back: only a frame from the radio's own address is.
+    #[test]
+    fn another_address_or_an_echo_is_not_the_radio_coming_back() {
+        let (radio, push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let h = eng.handle();
+        eng.set_scope_enabled(true);
+        poll_dial_for(&h, Duration::from_millis(300));
+        assert_eq!(wait_enables(&regs, 1), 1);
+        regs.lock().unwrap().off = true;
+        poll_dial_for(&h, Duration::from_millis(1_500));
+        // A second radio's transceive push and an echo of our own dial read.
+        push.lock().unwrap().extend([
+            0xFE, 0xFE, 0x00, 0x94, 0x00, 0x00, 0x00, 0x74, 0x14, 0x00, 0xFD,
+        ]);
+        push.lock()
+            .unwrap()
+            .extend([0xFE, 0xFE, 0xA2, 0xE0, 0x03, 0xFD]);
+        poll_dial_for(&h, Duration::from_millis(500));
+        assert_eq!(
+            sent(&regs, &SCOPE_ON_9700[2]),
+            1,
+            "another address is not the radio"
+        );
+        // The control: the radio itself answering does re-arm.
+        regs.lock().unwrap().off = false;
+        poll_dial_for(&h, Duration::from_millis(400));
+        assert_eq!(wait_enables(&regs, 2), 2);
+    }
+
+    /// A lost reply from a radio that has been talking for well over the gone threshold is still
+    /// not a power cycle: every frame the radio sends keeps it heard.
+    #[test]
+    fn a_lost_reply_after_long_talking_is_not_a_power_cycle() {
+        let (radio, _push) = FakeRadio::new(0xA2);
+        let regs = radio.regs();
+        let eng = CivEngine::start(Box::new(radio), 0xA2, Some(IcomModel::Ic9700));
+        let h = eng.handle();
+        eng.set_scope_enabled(true);
+        poll_dial_for(&h, Duration::from_millis(1_500));
+        assert_eq!(wait_enables(&regs, 1), 1);
+        regs.lock().unwrap().off = true;
+        let _ = h.transact(
+            read_freq(0xA2),
+            Expect::Reply {
+                cmd: 0x03,
+                sub: None,
+            },
+        );
+        regs.lock().unwrap().off = false;
+        poll_dial_for(&h, Duration::from_millis(600));
+        assert_eq!(
+            sent(&regs, &SCOPE_ON_9700[2]),
+            1,
+            "a late lost reply is not a power cycle"
+        );
+    }
 }
