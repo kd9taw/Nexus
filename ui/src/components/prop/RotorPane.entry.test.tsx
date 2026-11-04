@@ -26,6 +26,8 @@ const G5500: RotatorState = { azDeg: 123, reading: 'position', elDeg: 45, elRang
 const api = vi.hoisted(() => ({
   readRotator: vi.fn((): Promise<number | null> => Promise.resolve(123)),
   readRotatorState: vi.fn((): Promise<RotatorState | null> => Promise.resolve(null)),
+  getMoonStatus: vi.fn(async () => null),
+  startMoonTrack: vi.fn(async () => ({ state: 'following', elevation: true, azDeg: null, elDeg: null })),
   pointRotator: vi.fn((..._args: number[]) => Promise.resolve()),
   pointRotatorElevation: vi.fn((..._args: number[]) => Promise.resolve()),
   pointRotatorAtCall: vi.fn((_call: string, _longPath?: boolean): Promise<PointedAt> => Promise.reject(new Error('unset'))),
@@ -150,7 +152,9 @@ describe('Point', () => {
     fireEvent.click(pointButton()!)
     await waitFor(() => expect(api.pointRotatorAtCall).toHaveBeenCalledTimes(1))
     expect(api.pointRotatorAtCall).toHaveBeenCalledWith('EC1DD', false)
-    // The point-at-call alone: no slew of the pane's own, no stop, no satellite-track stop.
+    // The point-at-call alone: no slew of the pane's own, no stop, and — with no tracker steering
+    // the mast — no satellite-track stop either (one that is steering is stopped first:
+    // rotorPointAt.test.ts).
     expect(api.pointRotator).not.toHaveBeenCalled()
     expect(api.pointRotatorElevation).not.toHaveBeenCalled()
     expect(api.stopRotator).not.toHaveBeenCalled()

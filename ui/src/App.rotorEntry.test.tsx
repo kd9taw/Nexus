@@ -137,11 +137,18 @@ describe('FT: the box follows the QSO its Log QSO would log, not the roster sele
     expect(within(ft!).queryByRole('button', { name: '→ EC1DD' })).toBeNull()
 
     // Point: the point-at-call for the ENTRY's call, short path, and no other command of any kind.
+    // (No tracker is steering the mast here, so none is stopped: rotorPointAt.test.ts.)
     const point = within(rail()!).getByRole('button', { name: t('rotor.pane.aim.point.label') })
     const before = callCounts()
     fireEvent.click(point)
+    await waitFor(() => expect(api.pointRotatorAtCall).toHaveBeenCalled())
     const after = callCounts()
-    expect(Object.keys(after).filter((k) => after[k] !== before[k])).toEqual(['pointRotatorAtCall'])
+    // Waiting for the point lets the screen's own polls tick, and the point reads whether a
+    // tracker is steering, so reads are set aside: every other command is held to "nothing else".
+    const reads = (k: string) => /^(get|read)/.test(k)
+    expect(Object.keys(after).filter((k) => after[k] !== before[k] && !reads(k))).toEqual([
+      'pointRotatorAtCall',
+    ])
     expect(api.pointRotatorAtCall).toHaveBeenCalledWith('EC1DD', false)
     expect(api.pointRotatorAtCall).not.toHaveBeenCalledWith('AA1AA', expect.anything())
   })

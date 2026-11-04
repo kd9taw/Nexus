@@ -4,6 +4,7 @@
 
 import type { EsmRoleMap } from './features/esmRoles'
 import type { MacroSetId } from './features/macroSets'
+import type { PopupCorner } from './features/popupCorner'
 
 export type Presence = 'active' | 'idle' | 'stale'
 
@@ -3748,6 +3749,25 @@ export interface RotatorState {
   elRange?: [number, number] | null
 }
 
+/** The rotator's Moon follow (`MoonTrackDto`): following, holding while the Moon is below the
+ *  horizon, or waiting on a rotator that stopped answering. `elevation` is whether the elevation is
+ *  driven; `azDeg`/`elDeg` where the antenna was last commanded (absent until a command went out). */
+export interface MoonTrack {
+  state: 'following' | 'belowHorizon' | 'rotorLost'
+  elevation: boolean
+  azDeg: number | null
+  elDeg: number | null
+}
+
+/** The Moon from the station (`moon_status`): topocentric, geometric. `window` is the next EME window
+ *  with the grid asked about (unix seconds), null when none was asked for or there is none in 48 h. */
+export interface MoonStatus {
+  azDeg: number
+  elDeg: number
+  track: MoonTrack | null
+  window: { start: number; end: number; openNow: boolean } | null
+}
+
 /** What a point-at-call aimed at (`point_rotator_at_call`): the bearing, and what it was taken
  *  to — the station's own grid (`grid` names it), the position its callbook gives, or, when
  *  Nexus knows neither, the centre of its country (`country` names it). The toast says which. */
@@ -5589,8 +5609,16 @@ export interface Settings {
   /** Listen on 127.0.0.1:`freedvLogPort` for the contacts FreeDV's own app logs, and put each
    *  in the log as a FreeDV contact (`tempo_app::freedv`). ON by default; receive only. */
   freedvLog?: boolean
-  /** UDP port for FreeDV's logged contacts (2239; 2237 is Nexus's own telemetry). */
+  /** UDP port for FreeDV's logged contacts (2239; 2237 is Nexus's own telemetry). Since the port
+   *  takes every program's logged contacts (`tempo_app::log_intake`), `freedvLog` /
+   *  `freedvLogPort` are "Accept contacts other programs log". */
   freedvLogPort?: number
+  /** "Accept from devices on my network": bind the contact port on every adapter and take
+   *  contacts from private network addresses too. OFF by default. */
+  logIntakeLan?: boolean
+  /** The one network address allowed to send contacts while `logIntakeLan` is on; empty = any
+   *  private address. */
+  logIntakePeer?: string
   /** List the calls FreeDV hears (its callsign broadcast) in the Phone FreeDV pane. OFF by
    *  default: it joins FreeDV's group, so Windows may ask once about the network. */
   freedvHeard?: boolean
@@ -6061,6 +6089,9 @@ export interface Settings {
   /** #321: the least time, in seconds, a pop-up stays before it goes by itself. 0 or absent
    *  (an old station, the Remote page) leaves each pop-up its own time; see `setPopupMinSeconds`. */
   popupMinSecs?: number
+  /** #445: the window corner the pop-ups stand in. Optional: absent (an old station, the Remote
+   *  page) or a value this build does not know is bottom right (`popupCornerOf` in features/popupCorner.ts). */
+  popupCorner?: PopupCorner
   /** Band scope for a new DXCC: 'off' | 'hf' | 'vhf' | 'all'. The Needed boards and the need icons
    *  follow it, and so does the alert while `alertNew` is on. */
   alertDxccBands: string
@@ -6657,6 +6688,15 @@ export interface FreedvState {
   heardError: string | null
   /** The calls FreeDV heard this session, newest first. */
   heard: FreedvHeard[]
+  /** The contact port is bound on every adapter ("Accept from devices on my network"). */
+  logLan?: boolean
+  /** The program the last contact added through the contact port came from (FreeDV, WSJT-X,
+   *  N1MM, a network device's address), its call and when. */
+  intakeProgram?: string | null
+  intakeCall?: string | null
+  intakeUnix?: number | null
+  /** Moves once per contact added through the contact port: the shell toasts each. */
+  intakeTick?: number
 }
 
 /** One call FreeDV heard. */

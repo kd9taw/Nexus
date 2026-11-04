@@ -174,9 +174,19 @@ function spec(sel: string): number {
 export function resolveVal(raw: string, depth = 0): string {
   if (depth > 8) return raw
   let v = raw.trim()
-  v = v.replace(/var\(\s*(--[\w-]+)\s*(?:,\s*([^)]*))?\)/g, (_m, name, fallback) =>
-    resolveVal(TOKENS.get(name) ?? fallback ?? '0', depth + 1),
-  )
+  // `var(--a, var(--b))`: a fallback can hold parentheses of its own, so each `var(` is closed at
+  // ITS matching parenthesis, not the first one (which cut `var(--b` short and left a stray `)`).
+  for (let at = v.indexOf('var('); at !== -1; at = v.indexOf('var(')) {
+    let depthP = 0
+    let end = at + 3
+    for (; end < v.length; end++) {
+      if (v[end] === '(') depthP++
+      else if (v[end] === ')' && --depthP === 0) break
+    }
+    const m = /^\s*(--[\w-]+)\s*(?:,\s*([\s\S]*))?$/.exec(v.slice(at + 4, end))
+    const value = m ? resolveVal(TOKENS.get(m[1]) ?? m[2]?.trim() ?? '0', depth + 1) : '0'
+    v = v.slice(0, at) + value + v.slice(end + 1)
+  }
   v = v.replace(/calc\(\s*([\d.]+)px\s*\*\s*([\d.]+)\s*\)/g, (_m, a, b) => `${Number(a) * Number(b)}px`)
   return v.trim()
 }

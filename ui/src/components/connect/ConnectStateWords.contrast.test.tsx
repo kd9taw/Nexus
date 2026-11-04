@@ -104,6 +104,8 @@ vi.mock('../../api', async (importOriginal) => ({
   })),
   getSatTrackStatus: vi.fn(async () => ({ name: 'ISS', state: 'tracking', mode: 'rotor-only', dopplerDownlink: false, dopplerUplink: false })),
   readRotatorState: vi.fn(async () => ({ azDeg: 120, reading: 'position', elDeg: null, elRange: null })),
+  getMoonStatus: vi.fn(async () => null),
+  startMoonTrack: vi.fn(async () => ({ state: 'following', elevation: true, azDeg: null, elDeg: null })),
   readRotator: vi.fn(async () => 120),
   getSettings: vi.fn(async () => ({ rotatorModel: 2, rotatorHost: '' })),
   getDeclination: vi.fn(async () => null),

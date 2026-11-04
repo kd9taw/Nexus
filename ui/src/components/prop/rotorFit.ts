@@ -151,7 +151,9 @@ export function fitRotor(pane: HTMLElement): void {
       w,
       h: body.clientHeight - px(b.paddingTop) - px(b.paddingBottom),
       line2H: Math.max(fixed.controlsH, line2),
-      hintH: hint.offsetHeight,
+      // The Moon line (the Rotor pane's ☾) stands under the controls with the hint, so it is room the
+      // rose cannot have either; it is there only while the station's grid places the Moon.
+      hintH: hint.offsetHeight + (pane.querySelector<HTMLElement>('.rotor-moon')?.offsetHeight ?? 0),
     })
   }
   const first = measure()

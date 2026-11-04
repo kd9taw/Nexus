@@ -204,6 +204,39 @@ Two pills — **Cluster** and **PSKR** — distinguish five states:
 
 ---
 
+## Rotor Box
+
+With a rotator set up in Settings ▸ Radio ▸ Rotator, the Rotor box draws a compass rose with the antenna's
+heading. Click the rose or type a bearing to turn it; ■ STOP stops it. A rotator that misses a reading or two
+keeps its last bearing on the rose, dimmed and marked "Last reading"; only after three readings in a row go
+unanswered (about six seconds) does the box say the controller is not answering. That keeps a rotator
+reached over the internet from looking disconnected every time one reply is lost.
+
+### Following the Moon (EME)
+
+Once your grid square is set in Settings ▸ Station, the Rotor box shows a ☾ line with where the Moon is
+from your station: azimuth from true north and elevation, computed for your own location on the Earth's
+surface (the Moon is close enough that this differs from the Earth-centred position by up to about a
+degree) and without atmospheric refraction.
+
+- **Follow the Moon** turns the rotator to the Moon and keeps it there. The rotator is sent a new position
+  whenever the Moon has moved past the rotator's deadband (Settings ▸ Radio ▸ Rotator), so it moves every
+  few minutes, not continuously. On a rotator with an elevation axis (a Yaesu G-5500 on its GS-232, for
+  example) the elevation follows too; on an azimuth-only rotator only the azimuth does, and the line says
+  so.
+- While the Moon is **below the horizon** the antenna stays where it was, nothing is sent, and the line
+  says so; it starts following again when the Moon rises.
+- If the rotator stops answering, Nexus stops commanding it, says so, asks it again now and then, and
+  follows again when it answers.
+- **Stop following**, ■ STOP, turning the rotator yourself, or starting a satellite pass all end it: one
+  tracker owns the rotator at a time, so following the Moon also ends a satellite pass that was running.
+- Beside a cockpit whose station's grid square Nexus knows, the line also gives the **EME window** with
+  that station: when the Moon is next above the horizon at both ends (within two days), or that it is open
+  now and until when, in UTC.
+
+Following the Moon moves the rotator only. It never keys the radio, tunes it, or corrects Doppler. It is
+started from the shack's own screen, not from a computer driving the station from afar.
+
 ## Live Feed Architecture
 
 Four feeds are merged into a single spot window before the advisor and opening detector run:

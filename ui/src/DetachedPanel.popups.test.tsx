@@ -77,3 +77,15 @@ describe('a pop-out window follows the pop-up switch (#391)', () => {
     expect(inCorner('Exported 12 QSOs')).toBe(true)
   })
 })
+
+// #445: and the corner, from the same settings.
+describe('a pop-out window follows the pop-up corner (#445)', () => {
+  it('stands its column in the corner its settings name', async () => {
+    held.settings = { popupCorner: 'bottom-left' }
+    render(<DetachedPanel panel="needed" />)
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(document.querySelector('.ui-toast-viewport')?.getAttribute('data-corner')).toBe('bottom-left'),
+    )
+  })
+})

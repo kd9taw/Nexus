@@ -531,6 +531,16 @@ pub(crate) fn save_before_the_installer(app: &tauri::AppHandle) {
         return;
     }
     let engine = app.state::<SharedEngine>().inner().clone();
+    // The contact port's listeners log what they hold (a contact another program logged, still in
+    // its 2 s wait for the fuller second message) before the save below: the installer ends the
+    // process without the quit's own flush. They keep listening, as a failed install leaves a
+    // working station. Bounded.
+    if !tempo_app::log_intake::flush_for_update(std::time::Duration::from_secs(2)) {
+        tempo_core::applog::warn(
+            "log-intake",
+            "a contact listener did not answer in time before the update",
+        );
+    }
     // Caught for the reason `quit_then` gives: whatever happens here, the stage must move on.
     let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         save_the_logbook(
@@ -708,6 +718,50 @@ mod tests {
         assert_eq!(quit.join().expect("the quit"), Outcome::Saved);
         assert!(marked_on_disk(&dir, &engine, 3), "the change landed");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ The Windows self-update, whose installer ends the process without the quit, has the
+    /// contact port's listeners log what they hold before its logbook save and flush
+    /// (`tempo_app::log_intake::flush_for_update`, whose own test holds the flush on a real socket,
+    /// and that the listener keeps listening): source-scanned, as the order is what is under test.
+    #[test]
+    fn the_update_flushes_the_contact_listeners_before_its_log_save() {
+        let quit = include_str!("quit.rs");
+        let lib = include_str!("lib.rs");
+        let save = body_of(quit, "pub(crate) fn save_before_the_installer(");
+        let at = |hay: &str, needle: &str| {
+            hay.find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` is there"))
+        };
+        assert!(
+            at(save, "log_intake::flush_for_update(") < at(save, "save_the_logbook("),
+            "the listeners flush before the logbook save"
+        );
+        let update = body_of(lib, "async fn prepare_update_install(");
+        assert!(
+            at(update, "quit::save_before_the_installer(&app);")
+                < at(update, "quit::flush_logbook_unlocked("),
+            "and so before the update's last log flush"
+        );
+    }
+
+    /// ⛔ A quit lets the contact port's listeners log what they hold before the log's last flush
+    /// (`tempo_app::log_intake::stop_for_quit`, whose own test holds the flush on a real socket):
+    /// source-scanned, as the order of the steps is what is under test.
+    #[test]
+    fn quit_cleanup_stops_the_contact_listeners_before_the_log_flush() {
+        let lib = include_str!("lib.rs");
+        let cleanup = body_of(lib, "fn quit_cleanup(");
+        let at = |needle: &str| {
+            cleanup
+                .find(needle)
+                .unwrap_or_else(|| panic!("`{needle}` is there"))
+        };
+        let stops = at("log_intake::stop_for_quit(");
+        assert!(at("stop_the_radio();") < stops, "the radio first");
+        for after in ["persist_journals(", "flush_logbook("] {
+            assert!(stops < at(after), "the listeners stop before `{after}`");
+        }
     }
 
     /// The wiring the test above cannot see, source-scanned because what is under test is which

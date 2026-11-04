@@ -27,7 +27,9 @@
 // distance to it, and Point. The bearing is the station's own answer to "where would a point at
 // this call turn the antenna" (`rotatorBearingToCall`: the point's resolver, read only), never one
 // worked out here, so the number shown is the number Point turns to. Point is the cockpits'
-// point-at-call (`rotorPointAt`), short path. It turns the antenna and nothing else: it keys
+// point-at-call (`rotorPointAt`), short path, and LP beside it the long way round (#338, the
+// cockpit strip's pair: two buttons, never a toggle, since every bearing Nexus shows is short path
+// and a state misread points the beam 180° wrong). They turn the antenna and nothing else: they key
 // nothing, and this pane's ■ STOP stops rotation, never a transmission. No bearing is said in words
 // (the station is not placed, or the operator's own grid is not set), never drawn as a number
 // nobody resolved; no call, no line. A browser has no line 2 at all: the bearing read is the
@@ -42,32 +44,62 @@
 // one Point sends the rotator as it stands, so no declination touches either. No reading from the
 // rotator, no number: an "off" from a needle nobody read would be a guess.
 //
+// THE MOON (EME, 2026-11-03): with the station's grid set, a line under the controls says where the
+// Moon stands from the station (`moon_status`: topocentric, parallax included, no refraction) and
+// offers Follow the Moon, which turns the rotator after it — the elevation too where the backend
+// declares one — and holds the antenna while the Moon is below the horizon. It is one tracker with
+// the satellite pass: arming a pass ends it, it disarms a live pass, and stopSatTrack (Stop following,
+// ■ STOP and every manual move here) ends it. Beside a cockpit whose call's grid the station knows,
+// the line also gives the next EME window with that station (the Moon above the horizon at both
+// ends). Rotators only: nothing here keys, tunes or corrects Doppler.
+//
 // IN THE DASHBOARD RAIL the pane is compact in a short box and grows into a taller or wider one: the
 // rose and the readings as big as the box holds, centred (rotorFit.ts measures the box; styles.css draws).
 import { useEffect, useRef, useState } from 'react'
 import {
   getDeclination,
+  getMoonStatus,
   getSatTrackStatus,
   getSettings,
   pointRotator,
   pointRotatorElevation,
   readRotatorState,
   rotatorBearingToCall,
+  startMoonTrack,
   stopRotator,
   stopSatTrack,
 } from '../../api'
-import type { CallBearing, RotatorState, SatTrackStatus } from '../../types'
+import type { CallBearing, MoonStatus, MoonTrack, RotatorState, SatTrackStatus } from '../../types'
 import { magneticDeg } from '../../grid'
 import { pushToast } from '../../toast'
 import { t } from '../../i18n'
 import { pollSingleFlight } from '../../singleFlight'
 import { follow, gap, pending, ROTATOR_POLL_MS, type Pending } from '../../features/rotorTargets'
+import { FRESH, observe, shown as liveView, type Liveness } from '../../features/rotorLiveness'
 import { fmtDistanceKm, useUnits } from '../../units'
 import { pointedTo, rotorPointAt } from '../rotorPointAt'
 import { useRotorFit } from './rotorFit'
 
 const SIZE = 148
 const R = SIZE / 2 - 10
+
+/** The on-air abbreviation for the reciprocal heading: an invariant token, as on RotorStrip. */
+const LONG_PATH = 'LP'
+
+/** The Moon's mark on its line. */
+const MOON = '☾'
+
+/** The words for each state of the Moon follow. */
+function moonState(tr: MoonTrack): string {
+  if (tr.state === 'belowHorizon') return t('rotor.pane.moon.below')
+  if (tr.state === 'rotorLost') return t('rotor.pane.moon.lost')
+  return tr.elevation ? t('rotor.pane.moon.following') : t('rotor.pane.moon.following.azOnly')
+}
+
+/** A unix time as the UTC clock the operator logs by. */
+function utcHm(unix: number): string {
+  return new Date(unix * 1000).toISOString().slice(11, 16)
+}
 
 /** The instrument's own marks: the compass points, and the abbreviation the bearing field asks
  *  for. Tokens, named so the catalog guard reads them as a decision. */
@@ -124,6 +156,17 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
   // controller that is switched off answers nothing, and "pointing still works" is then untrue
   // (a tester read "Error 61" on every command).
   const [reading, setReading] = useState<RotatorState['reading'] | null>(null)
+  // The grace (features/rotorLiveness): a rotator that has answered keeps its last reading, drawn
+  // as stale, until it has missed a few polls in a row, so one lost reply is not a lost rotator.
+  const live = useRef<Liveness>(FRESH)
+  const [stale, setStale] = useState(false)
+  // THE MOON (EME): where it stands from the station, and the rotator's Moon follow while it owns
+  // the mast. Null until the station's grid places it. `dxGrid` is line 2's station grid, when the
+  // station knows it, for the EME window with it.
+  const [moon, setMoon] = useState<MoonStatus | null>(null)
+  const dxGrid = useRef<string | null>(null)
+  // The grid `moon` was asked about: a window answer is for that grid, and none other.
+  const [moonFor, setMoonFor] = useState<string | null>(null)
   const alive = useRef(true)
   const units = useUnits()
   // LINE 2's call: the desktop's only (see the header).
@@ -147,21 +190,38 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
       Promise.allSettled([
         readRotatorState().then((st) => {
           if (!owns()) return
-          setAz(st?.azDeg ?? null)
-          setReading(st?.reading ?? null)
-          setEl(st?.elDeg ?? null)
+          live.current = observe(live.current, st)
+          const v = liveView(live.current)
+          setStale(v.stale)
+          setAz(v.state?.azDeg ?? null)
+          setReading(v.state?.reading ?? null)
+          setEl(v.state?.elDeg ?? null)
           // Absent: rotctld did not answer what the rotator can do this time, so what was
           // known stands. No rotator at all is null.
           if (st == null) setElRange(null)
           else if (st.elRange !== undefined) setElRange(st.elRange)
-          pendingAz.current = follow(pendingAz.current, st?.azDeg ?? null, true)
-          pendingEl.current = follow(pendingEl.current, st?.elDeg ?? null, false)
+          // A stale reading is the last one again: it says nothing new about where a slew got to.
+          if (!v.stale) {
+            pendingAz.current = follow(pendingAz.current, v.state?.azDeg ?? null, true)
+            pendingEl.current = follow(pendingEl.current, v.state?.elDeg ?? null, false)
+          }
         }).catch(() => {
           if (!owns()) return
-          setAz(null)
-          setReading(null)
-          setEl(null)
+          live.current = observe(live.current, 'failed')
+          const v = liveView(live.current)
+          setStale(v.stale)
+          setAz(v.state?.azDeg ?? null)
+          setReading(v.state?.reading ?? null)
+          setEl(v.state?.elDeg ?? null)
         }),
+        (() => {
+          const asked = dxGrid.current
+          return getMoonStatus(asked).then((m) => {
+            if (!owns()) return
+            setMoon(m)
+            setMoonFor(asked)
+          })
+        })(),
         getSatTrackStatus().then((t) => {
           if (!owns()) return
           setSatTrack(t)
@@ -279,16 +339,39 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
   // The station on the rose (the header): line 2's bearing as Point sends it, and how far off it the
   // antenna is, from the two whole numbers the pane shows, so the three agree.
   const toward = entryBearing ? entryBearing.pointed.bearing : null
+  // The EME window is asked about the station's own grid only, never a country's centre.
+  dxGrid.current = entryBearing?.pointed.to === 'grid' ? entryBearing.pointed.grid : null
   const off = toward != null && az != null ? gap(Math.round(az), Math.round(toward) % 360, true) : null
 
-  const pointAtEntry = (call: string) => {
+  // FOLLOW THE MOON: the mast goes where the Moon is from now on, so nothing this pane sent before may
+  // be handed over after it. It ends with the one Stop every tracker answers to (stopSatTrack), which
+  // a manual move and ■ STOP call first, and when a satellite pass is armed.
+  const followMoon = () => {
+    pendingAz.current = pendingEl.current = null
+    setTarget(null)
+    setTargetEl(null)
+    startMoonTrack()
+      .then((track) => setMoon((m) => (m ? { ...m, track } : m)))
+      .catch((e) =>
+        pushToast(t('rotor.pane.moon.failed', { error: e instanceof Error ? e.message : String(e) }), 'error'),
+      )
+  }
+  const stopMoon = () => {
+    stopSatTrack()
+      .then(() => setMoon((m) => (m ? { ...m, track: null } : m)))
+      .catch((e) =>
+        pushToast(t('rotor.stop.failed', { error: e instanceof Error ? e.message : String(e) }), 'error'),
+      )
+  }
+
+  const pointAtEntry = (call: string, longPath = false) => {
     // The mast goes where the station sends it now, so nothing this pane sent before may be handed
     // over after it (features/rotorTargets), and its own target needle and "→" lines no longer say
     // where the mast is going.
     pendingAz.current = pendingEl.current = null
     setTarget(null)
     setTargetEl(null)
-    rotorPointAt()(call)
+    rotorPointAt()(call, longPath)
   }
 
   return (
@@ -341,14 +424,24 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
               className="rotor-needle target"
             />
           )}
-          {cur && <line x1={SIZE / 2} y1={SIZE / 2} x2={cur.x} y2={cur.y} className="rotor-needle" />}
+          {cur && (
+            <line
+              x1={SIZE / 2}
+              y1={SIZE / 2}
+              x2={cur.x}
+              y2={cur.y}
+              className={stale ? 'rotor-needle stale' : 'rotor-needle'}
+            />
+          )}
           <circle cx={SIZE / 2} cy={SIZE / 2} r={3} className="rotor-hub" />
         </svg>
         <div className="rotor-side">
           <div
-            className="rotor-az mono"
+            className={stale ? 'rotor-az mono stale' : 'rotor-az mono'}
             title={
-              az == null
+              stale
+                ? t('rotor.pane.stale')
+                : az == null
                 ? silent
                   ? t('rotor.pane.notAnswering')
                   : t('rotor.pane.az.title.unknown')
@@ -362,7 +455,7 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
           </div>
           {elRange && (
             <div
-              className="rotor-el mono"
+              className={stale ? 'rotor-el mono stale' : 'rotor-el mono'}
               title={t('rotor.pane.el.title', { min: elRange[0], max: elRange[1] })}
             >
               {EL_PLATE} {el == null ? '—' : Math.round(el)}°
@@ -456,7 +549,10 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
                   ` ${Math.round(entryBearing.pointed.bearing) % 360}° (${fmtDistanceKm(entryBearing.km, units)})`}
               </span>
               {off != null && (
-                <span className="rotor-aim-off mono" title={t('rotor.pane.aim.off.title', { call: aimCall, deg: off })}>
+                <span
+                  className={stale ? 'rotor-aim-off mono stale' : 'rotor-aim-off mono'}
+                  title={stale ? t('rotor.pane.stale') : t('rotor.pane.aim.off.title', { call: aimCall, deg: off })}
+                >
                   {t('rotor.pane.aim.off', { deg: off })}
                 </span>
               )}
@@ -470,6 +566,19 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
                   title={t('rotor.pane.aim.point.title', { call: aimCall })}
                 >
                   {t('rotor.pane.aim.point.label')}
+                </button>
+              )}
+              {/* LONG PATH (#338), beside Point and under the same guard: no station placed, no
+                  slew either way. Desktop only, as line 2 is: a browser on Nexus Remote has no
+                  line 2, as the strip's browser branch keeps its short-path button alone. */}
+              {entryWhy == null && (
+                <button
+                  type="button"
+                  className="rotor-aim-point"
+                  onClick={() => pointAtEntry(aimCall, true)}
+                  title={t('rotor.pane.aim.pointLong.title', { call: aimCall })}
+                >
+                  {LONG_PATH}
                 </button>
               )}
             </div>
@@ -487,6 +596,43 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
               ⟳ {satTrack.name}
             </div>
           )}
+          {moon && (
+            <div className="rotor-moon">
+              <span className="rotor-moon-at mono" title={t('rotor.pane.moon.at.title')}>
+                {MOON} {t('rotor.pane.moon.at', { az: Math.round(moon.azDeg), el: Math.round(moon.elDeg) })}
+              </span>
+              {moon.track ? (
+                <>
+                  <span className="rotor-moon-state">{moonState(moon.track)}</span>
+                  <button type="button" className="rotor-aim-point" onClick={stopMoon}>
+                    {t('rotor.pane.moon.stop')}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="rotor-aim-point"
+                  onClick={followMoon}
+                  title={t('rotor.pane.moon.follow.title')}
+                >
+                  {t('rotor.pane.moon.follow')}
+                </button>
+              )}
+              {aimCall && dxGrid.current && moonFor === dxGrid.current && (
+                <span className="rotor-moon-window">
+                  {moon.window == null
+                    ? t('rotor.pane.moon.window.none', { call: aimCall })
+                    : moon.window.openNow
+                      ? t('rotor.pane.moon.window.now', { call: aimCall, end: utcHm(moon.window.end) })
+                      : t('rotor.pane.moon.window.next', {
+                          call: aimCall,
+                          start: utcHm(moon.window.start),
+                          end: utcHm(moon.window.end),
+                        })}
+                </span>
+              )}
+            </div>
+          )}
           {target != null && (az == null || Math.abs(((target - az + 540) % 360) - 180) > 2) && (
             <div className="rotor-slewing" title={t('rotor.pane.commanded.title')}>
               → {target}°
@@ -498,7 +644,9 @@ export function RotorPane({ entryCall = null }: { entryCall?: string | null } = 
             </div>
           )}
           <p className="rotor-hint">
-            {az != null
+            {stale
+              ? t('rotor.pane.stale')
+              : az != null
               ? elRange
                 ? t('rotor.pane.hint.azel')
                 : t('rotor.pane.hint')

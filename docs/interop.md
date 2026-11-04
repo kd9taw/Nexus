@@ -243,7 +243,7 @@ ClubLog, eQSL, and HRDLog.net).
 | Companion decode intake | apps → Nexus | `127.0.0.1:2237` (UDP) | `companion_addr` / source = Companion | no |
 | CAT broker (rigctld) | apps ↔ Nexus | `127.0.0.1:4532` (TCP) | `cat_broker` / `cat_broker_port` | **yes** |
 | PTT via broker | apps → rig | (guarded) | `cat_broker_ptt` | **yes** |
-| FreeDV logged contacts | FreeDV → Nexus | `127.0.0.1:2239` (UDP) | `freedv_log` / `freedv_log_port` | **yes** |
+| Contacts other programs log (FreeDV, WSJT-X type 5/12, ADIF, N1MM `<contactinfo>`) | apps → Nexus | `127.0.0.1:2239` (UDP); private network addresses with `log_intake_lan` | `freedv_log` / `freedv_log_port`, `log_intake_lan`, `log_intake_peer` | **yes** (network: no) |
 | FreeDV heard calls | FreeDV → Nexus | `224.0.0.1:7177` (UDP, this computer only) | `freedv_heard` / `freedv_heard_port` | no |
 | N1MM+ contactinfo | Nexus → dashboard | `:12060` (UDP) | `n1mm_addr` | no |
 | N3FJP contact push | Nexus → N3FJP | `:1100` (TCP) | `n3fjp_host` / `n3fjp_port` | no |
